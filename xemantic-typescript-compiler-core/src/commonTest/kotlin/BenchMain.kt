@@ -984,12 +984,27 @@ fun main(args: Array<String>) {
     // (INV.1) the 8th argument, `nodeAnswers`, arms the per-file node-answer
     // store for the whole process — one arm per JVM, round 867's law, and the
     // ONLY warm instrument for the flag-on recording cost the design asks for.
-    val nodeAnswers: Boolean = when (val f = args.getOrNull(7)?.lowercase()) {
+    // (INV.2) `nodeAnswers:<channel>` records the type plus ONE companion channel
+    // (`symbols` / `calls` / `contextual`), or the type alone (`types`), so the
+    // Stage-2 recording cost can be attributed channel by channel (design § 9b).
+    val nodeAnswersArg = args.getOrNull(7)?.lowercase()
+    val nodeAnswers: Boolean = when (nodeAnswersArg) {
         null, "", "off", "false" -> false
         "nodeanswers", "on", "true" -> true
-        else -> error("usage: 8th argument must be `nodeAnswers`, `off`, or omitted — not '$f'")
+        "nodeanswers:types", "nodeanswers:symbols", "nodeanswers:calls", "nodeanswers:contextual" -> true
+        else -> error(
+            "usage: 8th argument must be `nodeAnswers`, `nodeAnswers:<types|symbols|calls|contextual>`, " +
+                "`off`, or omitted — not '$nodeAnswersArg'",
+        )
     }
     NodeAnswers.enabled = nodeAnswers
+    NodeAnswers.channels = when (nodeAnswersArg) {
+        "nodeanswers:types" -> 0
+        "nodeanswers:symbols" -> NodeAnswers.SYMBOLS
+        "nodeanswers:calls" -> NodeAnswers.CALLS
+        "nodeanswers:contextual" -> NodeAnswers.CONTEXTUAL
+        else -> NodeAnswers.ALL
+    }
     println("""{"mode":"${if (emit) "emit" else "noEmit"}","workers":$workers,"shareBind":$shareBind,"nodeAnswers":$nodeAnswers}""")
 
     repeat(warmup) {
@@ -1025,6 +1040,15 @@ fun main(args: Array<String>) {
         // the SAME program. A drifting errors/files column means state is leaking and
         // the timings below it measure a different compile, not a faster one.
         println("""{"iter":$i,"ms":$ms,"files":${result.programFiles.size},"errors":${result.errorCount}}""")
+        if (nodeAnswers) {
+            // (INV.2) the per-rebuild receipt, as the CLI prints it; cleared per rebuild.
+            println(
+                """{"nodeAnswers":{"channels":${NodeAnswers.channels},"recorded":${NodeAnswers.recordedTotal},""" +
+                    """"symbols":${NodeAnswers.symbolsTotal},"calls":${NodeAnswers.callsTotal},""" +
+                    """"contextual":${NodeAnswers.contextualTotal}}}""",
+            )
+            NodeAnswers.reset()
+        }
     }
 
     val sorted = times.sorted()

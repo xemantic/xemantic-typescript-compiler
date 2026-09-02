@@ -190,6 +190,14 @@ class ProjectCompiler(private val vfs: Vfs) {
          * the case that matters: the answer is needed per EDIT, not per program.
          */
         exportSignatures: Boolean = false,
+        /**
+         * (INV.2) When non-null, this build records the (INV.1) node-answer store for
+         * every program file and hands a [TypeOracle] over the finished check back
+         * here — the post-hoc query surface of `docs/INVERSION-DESIGN.md` § 4.
+         * Forces the sequential checker and refuses [recheckOnly], as a sink does.
+         * The oracle is valid for THIS program text only: close it on any edit.
+         */
+        oracleHolder: OracleHolder? = null,
     ): Result {
         // (INC.55) Installed for exactly this build and restored however it ends, so a
         // cancelled build leaves nothing armed for the next one. The work is delegated
@@ -206,6 +214,7 @@ class ProjectCompiler(private val vfs: Vfs) {
                 checkedSink = checkedSink,
                 recheckHolder = recheckHolder,
                 exportSignatures = exportSignatures,
+                oracleHolder = oracleHolder,
             )
         } finally {
             Cancellation.restore(previousSignal)
@@ -221,6 +230,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         checkedSink: CheckedNodeSink?,
         recheckHolder: RecheckHolder?,
         exportSignatures: Boolean,
+        oracleHolder: OracleHolder?,
     ): Result {
         // (INC.4) A partition may not EMIT. The Transformer queries the checker it is
         // handed (`isReferencedAliasDeclaration` and friends decide import elision),
@@ -377,6 +387,7 @@ class ProjectCompiler(private val vfs: Vfs) {
                 typeCapture = typeCapture,
                 checkedSink = checkedSink,
                 recheckHolder = recheckHolder,
+                oracleHolder = oracleHolder,
             )
         } finally {
             ExportSignatures.enabled = expSigWas

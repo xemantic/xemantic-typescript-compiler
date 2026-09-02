@@ -754,7 +754,11 @@ private fun runCliCore(args: Array<String>, modes: ModeLedger): Int {
     if (NodeAnswers.enabled) {
         // (INV.1) the receipt, then the counters dropped — the ledger restores
         // the FLAG; counters are each object's own reset(), as for PassTiming.
-        println("nodeAnswers: recorded ${NodeAnswers.recordedTotal} expression type(s) in ${NodeAnswers.filesTotal} file(s)")
+        println(
+            "nodeAnswers: recorded ${NodeAnswers.recordedTotal} expression type(s) in " +
+                "${NodeAnswers.filesTotal} file(s); symbols ${NodeAnswers.symbolsTotal}, " +
+                "calls ${NodeAnswers.callsTotal}, contextual ${NodeAnswers.contextualTotal}",
+        )
         NodeAnswers.reset()
     }
     if (passTiming) PassTiming.dump(::println)

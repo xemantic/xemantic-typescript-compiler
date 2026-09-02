@@ -1,3 +1,16 @@
+**(P18.3) — THE LSP IS FEATURE-COMPLETE FOR A FIRST RELEASE, AND THE HONEST tsgo NUMBER IS
+30-50x AGAINST US (2026-09-01).** (LSP.2): the full feature map onto `Project` — lifecycle,
+navigation, completion, signatureHelp, rename-with-refusals-as-errors, pull diagnostics,
+PROJECT-WIDE publishDiagnostics off the narrowed `diagnostics()` — 16 new pins (module 58/0,
+warning-clean), nativeImage task wired (build needs a GraalVM host). (LSP.3), both servers
+long-lived on tsc's 78 sources: tsgo `--lsp` answers a per-edit hover in **12-18 ms** where we
+take **398-630** (their lazy NodeLinks answering vs our narrowed-build-per-question —
+`docs/INVERSION-DESIGN.md`'s bin-B gap measured end-to-end); first open **255 ms vs 24.8 s**
+(different work: we eagerly publish the whole 46-row project error list, which their LSP
+cannot do at all — our wave: **524 ms, 5 files, exactly 46 rows**). Receipts caught the
+46-vs-65 gap per-file. Published in `docs/perf/incremental-vs-tsgo.md` (LSP arm) + § 3b.
+Suite unchanged **16,734 / 0 / 3** plus the 16 new LSP pins → next count on the full run.
+
 **(P18.1/P18.2) — THE DOC ARC, THE 142-METHOD CENSUS, AND THE FIRST TWO PHASE-18 CONSUMERS
 (2026-09-01).** (LIC.1)/(DOC.1)/(DOC.2 on `docs/reposition`)/(INV.D) landed in the main
 context; then ONE two-agent worktree wave landed **(EXT.1)** — Kotlin externals from the

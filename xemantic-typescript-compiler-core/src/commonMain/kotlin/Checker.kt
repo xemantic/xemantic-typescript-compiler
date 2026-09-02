@@ -123,6 +123,12 @@ class Checker(
      */
     private val recordNodeAnswers: Boolean = NodeAnswers.enabled,
     /**
+     * (INV.2) Which companion channels the store records beside the type — a
+     * measurement seam, see [NodeAnswers.channels]. Read once, here; an oracle
+     * needs [NodeAnswers.ALL] and [typeOracle] refuses anything less.
+     */
+    private val nodeAnswerChannels: Int = NodeAnswers.channels,
+    /**
      * (INC.17) When true this checker is a RE-ENTRANT one: it records which `init`
      * passes read the partition, and [recheckAdditionalFiles] may later widen that
      * partition and re-enter exactly those passes — answering about a file the
@@ -5730,6 +5736,79 @@ class Checker(
         }
 
     /**
+     * (INV.2) The post-hoc oracle over this checker's (INV.1) stores — Stage 2
+     * of `docs/INVERSION-DESIGN.md`. Only for a checker that RECORDED: without
+     * the store the walk-scoped rows have nothing to answer from, and an oracle
+     * that fell back to post-hoc resolution there would be round 911's wrong
+     * answer with a public API in front of it.
+     *
+     * The lens is the at-rest twin of [checkedLens]: every forwarder here reads
+     * the retained graph under an EMPTY instantiation context, which is the
+     * round-778 cacheable case, so a first ask from the oracle persists what
+     * the walk would have persisted. Nothing walk-scoped is forwarded.
+     */
+    internal fun typeOracle(): TypeOracle {
+        require(recordNodeAnswers) {
+            "a TypeOracle needs the (INV.1) store: construct the checker with recordNodeAnswers = true"
+        }
+        require(nodeAnswerChannels == NodeAnswers.ALL) {
+            "a TypeOracle needs every store channel: NodeAnswers.channels is a measurement seam"
+        }
+        return TypeOracle(nodeAnswerStores, oracleLens())
+    }
+
+    private fun oracleLens(): OracleLens = object : OracleLens {
+
+        override fun typeOfSymbol(symbol: Symbol): Type = getTypeOfSymbol(symbol)
+
+        override fun declaredTypeOfSymbol(symbol: Symbol): Type = getDeclaredTypeOfSymbol(symbol)
+
+        override fun aliasTarget(symbol: Symbol): Symbol? =
+            if (symbol.flags.hasAny(SymbolFlags.Alias)) resolveAliasTarget(symbol) else null
+
+        override fun membersOf(type: Type, name: String): List<Symbol> {
+            val out = ArrayList<Symbol>(2)
+            typeCaptureCollectMembers(type, name, out, 0)
+            return out
+        }
+
+        override fun propertiesOf(type: Type): List<Symbol> = when (type) {
+            is Type.Object -> getPropertiesOfType(type)
+            is Type.TypeParam, is Type.Intrinsic, is Type.StringLiteral,
+            is Type.NumberLiteral, is Type.BigIntLiteral -> {
+                val apparent = getApparentType(type)
+                if (apparent is Type.Object) getPropertiesOfType(apparent) else emptyList()
+            }
+            else -> emptyList()
+        }
+
+        override fun apparentType(type: Type): Type = getApparentType(type)
+
+        override fun baseTypesOf(type: Type): List<Type> {
+            val iface = type as? Type.Interface ?: return emptyList()
+            if (iface.baseTypes == null) resolveBaseTypesLazy(iface)
+            return iface.baseTypes ?: emptyList()
+        }
+
+        override fun callSignaturesOf(type: Type): List<Signature> = getCallSignaturesOfType(type)
+
+        override fun constructSignaturesOf(type: Type): List<Signature> =
+            getConstructSignaturesOfType(type)
+
+        override fun declaredParameters(signature: Signature): List<Parameter>? =
+            typeCaptureDeclaredParameters(signature.declaration)
+
+        override fun isAssignable(source: Type, target: Type): Boolean =
+            isTypeAssignableTo(source, target)
+
+        override fun render(type: Type): String = typeToString(type)
+
+        override fun typeOfTypeNode(node: TypeNode): Type = getTypeFromTypeNode(node)
+
+        override fun enumMemberValue(node: Node): ConstantValue? = getEnumMemberValue(node)
+    }
+
+    /**
      * The captured type answers, keyed by the span asked about, FIRST WINS.
      *
      * See [typeCaptureRecord] for why first: the walk reaches a node under the
@@ -5993,10 +6072,116 @@ class Checker(
         currentCheckFileName = spineFileName
         try {
             store.record(node, typeCaptureReportedType(node))
+            // (INV.2) The three companion channels, from the SAME visit under the
+            // SAME ambient, behind the type's own first-wins gate above — so a node
+            // holds all four or none. Each is the capture's own rule generalised:
+            // the symbol is what the definition channel resolves (alias NOT
+            // followed — that is `aliasedSymbol`'s question), the call is what the
+            // KIR sink's `CallFact` records, the contextual type is (API.10)'s walk.
+            if (nodeAnswerChannels and NodeAnswers.SYMBOLS != 0 &&
+                (node is Identifier || typeCaptureIsMemberNameLiteral(node))
+            ) {
+                store.recordSymbols(node, typeCaptureSymbolsAt(node))
+            }
+            if (nodeAnswerChannels and NodeAnswers.CALLS != 0) when (node) {
+                is CallExpression -> {
+                    val signatures = typeCaptureCallSignaturesOf(node.expression)
+                    val selected =
+                        if (signatures.isEmpty()) null else resolveCallOverload(signatures, node.arguments)
+                    store.recordCall(node, ResolvedCall(selected, signatures.size))
+                }
+                is NewExpression -> {
+                    val signatures = typeCaptureConstructSignaturesOf(node)
+                    val selected =
+                        if (signatures.isEmpty()) null
+                        else resolveCallOverload(signatures, node.arguments ?: emptyList())
+                    store.recordCall(node, ResolvedCall(selected, signatures.size))
+                }
+                else -> {}
+            }
+            if (nodeAnswerChannels and NodeAnswers.CONTEXTUAL != 0) {
+                typeCaptureContextualType(node, 0)?.let { store.recordContextual(node, it) }
+            }
         } finally {
             currentCheckFileName = saved
         }
     }
+
+    /**
+     * (INV.2) What the name [id] resolves to, as the walk's own state answers it
+     * RIGHT NOW — the symbol half of [typeCaptureDefinitionAt], with two
+     * deliberate differences. An import ALIAS is answered as itself (tsgo's
+     * `getSymbolAtLocation` / `getAliasedSymbol` split; the definition channel
+     * follows the alias because a user navigating wants the declaration), and a
+     * declaration NAME answers its own symbol rather than a location list.
+     *
+     * The order of the legs is the definition path's and is load-bearing in the
+     * same way: a member DECLARATION name and an object-literal KEY must be
+     * answered through their OWNER before the free-name path can resolve their
+     * SPELLING to whatever unrelated binding shares it (BUG.4's collider).
+     */
+    private fun typeCaptureSymbolsAt(id: Node): List<Symbol> {
+        if (id is Identifier) typeCaptureMemberDeclarationSymbols(id)?.let { return it }
+        typeCaptureObjectLiteralKeySymbols(id)?.let { return it }
+        if (id is Identifier && typeCaptureIsFreeName(id)) {
+            val resolved = spineScopeLookup(id.text) ?: lookupPerFileForNode(id, id.text) ?: return emptyList()
+            return listOf(resolved)
+        }
+        return typeCaptureMemberSymbols(id)
+    }
+
+    /**
+     * (INV.2) The symbol a member DECLARATION name declares, or null when [id] is
+     * not one — [typeCaptureMemberDeclarationType]'s rule, answering the symbol
+     * instead of its type. An enum member is the enum symbol's export of that
+     * name; an object literal's own member is left to the key leg. Empty (not
+     * null) when the owner resolves but declares no such member, so the caller
+     * never falls through to the free-name path for a member position.
+     */
+    private fun typeCaptureMemberDeclarationSymbols(nodeIn: Identifier): List<Symbol>? {
+        val member = (nodeIn as NodeBase).parent ?: return null
+        val node = typeCaptureMemberNameIdentifier(member)?.takeIf { it === nodeIn } ?: return null
+        val owner = (member as NodeBase).parent ?: return null
+        if (owner is ObjectLiteralExpression) return null
+        if (owner is EnumDeclaration) {
+            return typeCaptureOwnerSymbol(owner)?.exports?.get(node.text)?.let { listOf(it) } ?: emptyList()
+        }
+        val ownerType = when (owner) {
+            is TypeLiteral -> getTypeFromTypeNode(owner)
+            else -> typeCaptureOwnerSymbol(owner)?.let { getDeclaredTypeOfSymbol(it) }
+        } ?: return emptyList()
+        val symbols = ArrayList<Symbol>(2)
+        typeCaptureCollectMembers(ownerType, node.text, symbols, 0)
+        return symbols
+    }
+
+    /**
+     * (INV.2) The symbol an object-literal KEY declares — the literal's OWN
+     * property, which is tsc's `getSymbolAtLocation` answer for a declaration
+     * name — or, where the literal's type carries none, the CONTEXTUAL type's
+     * member ((API.10)'s leg). Null when [id] is not a key.
+     */
+    private fun typeCaptureObjectLiteralKeySymbols(id: Node): List<Symbol>? {
+        val (assignment, name) = typeCaptureObjectLiteralKey(id) ?: return null
+        val literal = (assignment as NodeBase).parent as? ObjectLiteralExpression ?: return emptyList()
+        val own = ArrayList<Symbol>(1)
+        typeCaptureCollectMembers(nodeAnswerTypeOrCompute(literal), name, own, 0)
+        if (own.isNotEmpty()) return own
+        return typeCaptureContextualMembers(literal, name)
+    }
+
+    /**
+     * (INV.2) The type of [expression] as the store ALREADY holds it, else
+     * computed now. The spine is preorder, so a literal or a receiver is recorded
+     * before its keys and member names are reached — and `getTypeOfExpression`
+     * has no per-node memo (round 737): an object literal MINTS its member table
+     * on every call, which made the key leg O(keys²) on tsc's message tables
+     * (measured: `IntKeyMap.set` under `getTypeOfObjectLiteral` was 11% of the
+     * symbols arm's samples, design § 9b). Off the store this is exactly the
+     * old computation, so the capture path is unchanged.
+     */
+    private fun nodeAnswerTypeOrCompute(expression: Expression): Type =
+        nodeAnswerStoreCurrentFile?.typeAt(expression) ?: getTypeOfExpression(expression)
 
     /**
      * (API.3) Records everything a capture records at [node] — its type, and, when
@@ -7838,7 +8023,9 @@ class Checker(
         }
         typeCaptureExportedMember(receiver, name)?.let { return listOf(it) }
         val receiverExpression = receiver as? Expression ?: return emptyList()
-        typeCaptureCollectMembers(getTypeOfExpression(receiverExpression), name, symbols, 0)
+        // (INV.2) the recorded receiver type where the store has it — see
+        // [nodeAnswerTypeOrCompute]; identical to the old computation otherwise.
+        typeCaptureCollectMembers(nodeAnswerTypeOrCompute(receiverExpression), name, symbols, 0)
         return symbols
     }
 
@@ -28517,7 +28704,12 @@ class Checker(
             // (INV.1) the CLI report's receipt — once per checker, on this thread.
             if (nodeAnswerStores.isNotEmpty()) {
                 NodeAnswers.filesTotal += nodeAnswerStores.size
-                for (store in nodeAnswerStores.values) NodeAnswers.recordedTotal += store.recorded
+                for (store in nodeAnswerStores.values) {
+                    NodeAnswers.recordedTotal += store.recorded
+                    NodeAnswers.symbolsTotal += store.symbolsRecorded
+                    NodeAnswers.callsTotal += store.callsRecorded
+                    NodeAnswers.contextualTotal += store.contextualRecorded
+                }
             }
         } finally {
             currentFileLocals = savedLocals

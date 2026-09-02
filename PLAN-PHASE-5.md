@@ -25,6 +25,58 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.8) — Stage 2 of the inversion: the post-hoc type oracle lands, and its price is attributed before it is recorded (2026-09-02)
+
+**(INV.2) LANDED, owner-approved this session.** `TypeOracle` (`TypeOracle.kt`, core): the
+proto.go-shaped, node-addressed query surface over ONE finished check — `typeAt`,
+`symbolAt`/`symbolsAt`, `resolvedCallAt`/`resolvedSignatureAt`, `contextualTypeAt`,
+`typeOfSymbolAt` served from the (INV.1) store, the bin-A rows (`typeOfSymbol`,
+`declaredTypeOfSymbol`, `aliasedSymbol`, `propertyOfType` as the COLLECTION question,
+`propertiesOfType`, `apparentType`, `baseTypes`, `typeArguments`, `typesOfType`,
+`callSignaturesOfType`, `constructSignaturesOfType`, `returnTypeOfSignature`,
+`parametersOfSignature` + the declaration-read `parameterDeclarationsOfSignature`,
+`isAssignableTo`, `typeToString`, `typeFromTypeNode`, `constantValue`, `intrinsicType`)
+through an `OracleLens` — the at-rest twin of `CheckedLens` — and `resolveName` /
+`symbolsInScope` REFUSED with an `OracleRefusal` naming Stage 3 / B83.5. Per-build
+`OracleHandles` (generation-checked, refused after release or `close()`); `close()` on edit.
+Entries: `typeOracleOf(files, options)` and `ProjectCompiler.build(…, oracleHolder)`
+(threaded like `recheckHolder`, sequential forced, `recheckOnly` refused). Per-row
+divergence table: `docs/type-oracle.md`. **The store grew three channels** — `symbols`
+(Symbol-or-List per name, alias NOT followed), `calls` (`IntKeyMap<ResolvedCall>` with the
+candidate count), `contextual` ((API.10)'s walk) — all from the one visit behind the type's
+first-wins gate. 23 pins (`TypeOracleTest`), every walk-scoped row on a VALUE the post-hoc
+path gets wrong, refusals pinned as refusals, the handle table on its three refusals, the
+project entry on the file set + a recorded answer + the partition refusal, a channel-mask
+pin. Suite **16,838 → 16,860 / 0 / 3**; cost_gate +0.00 % on all 20; huge_methods clean;
+build warning-clean.
+
+**THE MEASUREMENT, AND WHAT IT FOUND.** The design says measure flag-on before any later
+stage is priced, so the Stage-2 store was priced warm, rotated, on both shapes. First
+full-on arm on the compiler profile: **8,337 / 8,466 ms against 5,073 / 5,385 — +57-64 %**,
+against Stage 1's +14.9 %. Rather than record it, a `NodeAnswers.channels` measurement seam
+(`BenchMain … nodeAnswers:<types|symbols|calls|contextual>`) attributed it in four arms:
+types-only 5,998 (Stage 1 reproduced), calls +220 ms (4.1 µs per call, KIR's own price),
+contextual +145 ms, **symbols +2,142 ms**. A JFR of the symbols arm charged **11.3 % of all
+samples to `IntKeyMap.set`/`grow` under `getTypeOfObjectLiteral` ← `getTypeOfExpression`**:
+the object-literal KEY leg re-typed its literal once per key, and `getTypeOfExpression` has
+no per-node memo (round 737) — `getTypeOfObjectLiteral` mints the member table on every
+call — so tsc's diagnostic-message tables cost O(keys²). The spine is preorder, so the
+literal's type is in the store before its keys: `nodeAnswerTypeOrCompute` reads it (and the
+member-access receiver likewise; off the store it is the old computation verbatim, the
+capture measurement pins re-run green). After: symbols +258 ms, and the whole store
+**compiler profile 5,270 → 6,404 ms, +21.5 %, 1.90 µs per recorded expression** (598,455:
+360,627 symbols, 53,066 calls, 78,127 contextual); **many-small-2400-dom 3,457/3,439 →
+3,654/3,685, +5.7 / +7.1 %, 0.95 µs** (232,106). (INV.1b) is half-answered: the companions
+are pure RESOLUTION (+6 % on top of the type), the reconstruction is paid once per node.
+
+**What did NOT happen.** `Project` does not hand out an oracle — queued as (INV.2b) with the
+invalidation question stated; EXT/LSP were not migrated (served today). The
+`leaf_owner_profile.py --inclusive-of` filter printed the same table for every method name
+it was given (it did not filter); the attribution came from a three-frame caller census of
+the `IntKeyMap.set` stacks instead — worth knowing before trusting that flag. One CLAUDE.md
+entry: a store channel may not re-type what the walk already recorded, and a flag-on cost
+is attributed per channel before it is recorded.
+
 ### Round (P18.7) — two owner decisions land: the POM licence and Stage 1 of the inversion (2026-09-02)
 
 **(LIC.2) LANDED.** The root POM's `licenses` block now carries the SPDX expression the
@@ -591,36 +643,6 @@ diagnostics are missing), and only one row skips real checking. `build/tools/tsc
 provisioned by nothing in the repo and vanishes on a `clean` — a harness reading it must REFUSE
 when it is absent rather than fall back to tsgo.
 
-### Round (INC.91) — the reopened closure, censused the same day and refused on soundness
-
-**(INC.90) REOPENED THE CLOSURE ON A 12.7x MEASUREMENT AND THIS CENSUS REFUSES THE PROPOSAL
-WITHOUT TOUCHING THAT NUMBER** — the prize is real, the stopping signal is not.
-`Inc91ClosureCensusMain`, counts not milliseconds, two reproducing runs.
-**THREE OF MY OWN FRAMINGS WERE WRONG AND THE CENSUS SAYS SO.** The transitive importer closure
-of a `layer00` module is **187 of 2,401 files (7.8%)**, not "most of the program" — the
-fixture's fan-out is ~4 per hop, not ~50. The offset-sensitivity worry I raised (foreign types
-keyed by `(fileName, pos, end)`, so any byte shift moves every importer) is **refuted**: it is
-real (`Checker.kt:57089`) and costs exactly **ONE extra hop** — 1 fingerprint moved for an
-append-at-END edit, **3** for the identical edit at the TOP, and **0 beyond hop 2**, because an
-unedited importer's own declarations do not move. A barrel probe shows the cascade SKIPS
-barrels and lands on real consumers, since `foreignKey` names the DECLARING file.
-**THE REAL BLOCKER WAS WRITTEN IN THE FINGERPRINT'S OWN KDoc THE WHOLE TIME** (`:57050`):
-the cut gives up TRANSITIVITY, and `incrementalDiagnostics` is sound BECAUSE a moved signature
-anywhere falls back. The proposal kept the signal and deleted the fallback. **Refuting number:
-on a length-preserving three-file edit the only error is at HOP 2, hop 1 is silent in every
-channel (0 rows, fingerprint unmoved, `.d.ts` unchanged), and the walk would report 0 rows
-where the truth is 1** — a missing diagnostic, the one outcome the five gates exist to prevent.
-tsgo answers 1/1 on the same probe and ITS hop-1 `.d.ts` is textually unchanged too, so the
-feature is achievable and its soundness simply cannot come from a signature.
-**WHAT SURVIVES IS MOST OF THE WIN AND NEEDS NO NEW ANALYSIS:** narrow a signature edit to the
-transitive importer CLOSURE (`Result.importEdges`, already computed), splice the rest, use the
-fingerprint for nothing. **2,401 -> 187 files, 12.8x**, sound because a superset always is, and
-it degrades to today's behaviour on barrels — which turns (INC.35)'s finding into a property of
-the mechanism rather than a reason not to have one.
-**AND THE METHOD IS THE REUSABLE PART:** the census cost one probe runner and no wall clock,
-and it killed a design that had a real 12.7x measurement behind it. A prize being real is not
-evidence that a mechanism for collecting it is sound.
-
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
 
 **THE PROJECT IS RE-POINTED.** The JetBrains WebStorm evaluation paused: their need was a
@@ -952,7 +974,20 @@ Owner decisions 2026-09-02:
   `withCtaFrameLocals`. Instrument: two `--nodeAnswers` arms in one binary — one recording
   `anyType` without resolving (reconstruction only) — and the difference is the resolution.
   Nothing in Stage 1 depends on the answer (the flag ships off); Stage 2's facade does.
-- [ ] **(INV.2) BLOCKED-PENDING-USER — STAGE 2 OF `docs/INVERSION-DESIGN.md`: THE ORACLE
+  **HALF-ANSWERED by (INV.2) (design § 9b): the three companion channels cost +6 % on top of
+  the type, i.e. the reconstruction is paid once per node and the companions are pure
+  resolution; the types-only 1.34 µs is still unsplit, and `NodeAnswers.channels` +
+  `BenchMain … nodeAnswers:types` is the arm to split it from.**
+- [x] **(INV.2) DONE 2026-09-02 (owner-approved 2026-09-02) — STAGE 2 OF `docs/INVERSION-DESIGN.md`: THE
+  ORACLE FACADE OVER THE (INV.1) STORE.** Landed as `TypeOracle` (`TypeOracle.kt`) over the
+  store + retained graph + live checker (`OracleLens`), with `typeOracleOf(files)` and
+  `ProjectCompiler.build(…, oracleHolder)` as the entries, per-build `OracleHandles`,
+  `close()` on edit, `resolveName`/`symbolsInScope` refused naming Stage 3; the store
+  grew the `symbols` / `calls` / `contextual` channels; per-row divergences in
+  `docs/type-oracle.md`; 23 pins; suite 16,860/0/3; cost_gate +0.00%; flag-on measured
+  **+21.5 % compiler profile (1.90 µs/expr), +6-7 % many-small (0.95 µs/expr)** after a
+  quadratic re-typing in the key leg was found by JFR and removed (+60 % before). Record:
+  design § 9b, the (P18.8) note. ORIGINAL ITEM: STAGE 2 OF `docs/INVERSION-DESIGN.md`: THE ORACLE
   FACADE OVER THE (INV.1) STORE.** Proposal (§ 4 "The facade" / § 6 Stage 2): a `TypeOracle`
   over store + retained graph + live checker, exposing the proto.go-shaped B rows
   (`getTypeAtLocation`, `getTypeOfSymbolAtLocation`, …) with per-build handles, REFUSING
@@ -960,6 +995,15 @@ Owner decisions 2026-09-02:
   documented per row. Consumers (EXT, LSP) migrate only if it beats what they use.
   Implementation does not start without owner approval — the (INV.1) approval covered
   Stage 1 only.
+- [ ] **(INV.2b) HAND `Project` AN ORACLE, WITH THE INVALIDATION DECIDED — the Stage-2 facade
+  is core-only today.** `Project` runs a NARROWED build per keystroke ((INC.1)) and keeps a
+  whole-program `cached` result; an oracle is valid for ONE build of ONE text ((INC.46)) and
+  the store may never serve `diagnostics` ((INC.14)'s capture rule). Design: a
+  `Project.typeOracle()` that builds whole-program with an `OracleHolder`, retains the oracle
+  beside `cached`, and `close()`s it in `updateFile` / `edit` — then decide whether
+  `quickInfoAt`/`definitionsAt` may be served from it (only if it beats the ~93-217 ms
+  narrowed query and the capture-equivalence sweep agrees row for row). Position→node is
+  `SourceIndex` (round 910's span rules). Not a latency item: do not touch `Checker.kt` for it.
 - [x] **(INV.1) DONE 2026-09-02 (owner-approved 2026-09-02) — STAGE 1 OF `docs/INVERSION-DESIGN.md`: THE
   PER-FILE NODE-ANSWER STORE, OFF BY DEFAULT, ONE COMMIT.** Landed as `NodeAnswerStore`
   (`Type` slots, not ids — § 9a records why: there is no id→Type lookup to resolve through);

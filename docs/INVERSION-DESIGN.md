@@ -386,6 +386,7 @@ Each stage is many small commits; every commit passes the full corpus suite,
 - **Stage 2 = the oracle facade** over store+graph, refusing what it cannot answer,
   with the handle table. The A°-divergences ship DOCUMENTED per row. The EXT and LSP
   consumers migrate onto it only if it beats what they use (they are served today).
+  **LANDED 2026-09-02 as (INV.2) — § 9b; consumer contract `docs/type-oracle.md`.**
 - **Stage 3 = tree-derived scope resolution** — dissolve B83.5 (bind block-scoped
   declarations into the retained tables; ARCHITECTURE-RETHINK INV.2's "Bind the
   world", the separate-id-space rule already proven by INV.2(c)); `resolveName` and
@@ -483,6 +484,78 @@ per-FILE request and this is the per-EXPRESSION population, ~7,700 expressions p
 the compiler profile. **Whether the 1.3-1.5 µs is the resolution or the reconstruction is
 the first question of Stage 2's pricing** ((INV.1b) in the queue), and nothing in this
 stage depends on the answer: the flag ships off.
+
+## 9b. Stage 2 — (INV.2), APPROVED 2026-09-02, LANDED the same day
+
+**What landed.** `TypeOracle` (`TypeOracle.kt`, core) over the (INV.1) store, the retained
+graph and the live checker through an `OracleLens` — the at-rest twin of `CheckedLens`,
+forwarding only what is a function of the graph under an EMPTY instantiation context
+(round 778's cacheable case). Entry points: `typeOracleOf(files, options)` for an in-memory
+program, and `ProjectCompiler.build(…, oracleHolder = OracleHolder())` for a project on disk
+(threaded through `TypeScriptCompiler.compileParsed` exactly like `recheckHolder`; forces
+the SEQUENTIAL checker as a sink does; refuses `recheckOnly`). The per-build handle table
+is `OracleHandles` (`TypeHandle` / `SymbolHandle` / `SignatureHandle`, generation-checked,
+refused once released or after `close()`); `close()` is the owner's answer to an edit and
+every later question throws `OracleRefusal`. `resolveName` / `symbolsInScope` throw an
+`OracleRefusal` that names Stage 3 and B83.5. The per-row divergence table a consumer reads
+is `docs/type-oracle.md` § 3. 23 pins in `TypeOracleTest`, every walk-scoped row on a value
+the post-hoc path answers wrongly ((INC.28)'s law — never "two arms agree").
+
+**The store grew the three companion channels § 4 named beside the type**: `symbols` (an
+`Array<Any?>` holding a `Symbol` or a `List<Symbol>` at every `Identifier` and member-name
+literal — what `typeCaptureDefinitionAt` resolves, the import ALIAS not followed, so that
+`getSymbolAtLocation` and `getAliasedSymbol` stay two questions), `calls` (an
+`IntKeyMap<ResolvedCall>` at every `CallExpression` / `NewExpression`: the overload picked
+plus the candidate count that separates "not callable" from "none accepted" — KIR's
+`CallFact` generalised), and `contextual` (an `Array<Type?>` from (API.10)'s syntactic
+walk). All four are written from the ONE visit behind the type's first-wins gate, so a
+node holds all of them or none.
+
+**Measured, flag ON, both shapes, rotated across JVMs** (warm `BenchMain`, 6 warm-up /
+8 measured, one arm per JVM):
+
+| shape | off (ms) | on (ms) | delta | recorded | per recorded expression |
+|---|---|---|---|---|---|
+| compiler profile, 78 files | 5,270 (5,073 / 5,385 earlier draws) | 6,404 / 6,579 | **+21.5 %** (+22-30 % against the earlier off draws) | 598,455 (symbols 360,627 · calls 53,066 · contextual 78,127) | **1.90 µs** |
+| many-small-2400-dom, 2,401 files | 3,457 / 3,439 | 3,654 / 3,685 | **+5.7 % / +7.1 %** | 232,106 (symbols 153,004 · calls 12,000 · contextual 38,301) | **0.95 µs** |
+
+**Per channel** (compiler profile, one draw each, against a types-only arm at 5,998 ms —
+the `NodeAnswers.channels` measurement seam, `BenchMain … nodeAnswers:<channel>`): calls
+**+220 ms** (4.1 µs per call — an un-memoised overload resolution each, KIR's shipping
+price), contextual **+145 ms** (0.24 µs per expression WALKED, 1.9 µs per answer), symbols
+**+2,142 ms before the fix below and +258 ms after** (0.7 µs per name).
+
+**The finding.** The first full-on arm read **8,337 / 8,466 ms — +57-64 %** — and a JFR of
+the symbols arm charged **11.3 % of all samples to `IntKeyMap.set`/`grow` under
+`getTypeOfObjectLiteral` ← `getTypeOfExpression`**: the object-literal KEY leg asked
+`getTypeOfExpression(literal)` once per KEY, and that function has no per-node memo (round
+737) — `getTypeOfObjectLiteral` MINTS the literal's member table on every call — so a
+table-shaped literal (tsc's diagnostic-message tables) cost O(keys²). The spine is
+preorder, so the literal's own type is in the store BEFORE its keys are reached: the leg
+now reads it (`Checker.nodeAnswerTypeOrCompute`, and the member-access RECEIVER leg
+likewise), which took the whole store from +60 % to +21 %. Off the store the helper is the
+old computation verbatim, so the capture and definition paths are unchanged (their
+measurement pins were re-run).
+
+**What this says about (INV.1b).** The companions' price is RESOLUTION, not
+reconstruction: the ambient reconstruction is paid once per node whatever is recorded, and
+three more channels on top of it cost +6 % of the compiler profile once the re-typing was
+removed. Stage 1's own 1.34 µs per expression is still unsplit; (INV.1b) stays open for
+that half only, and the channel seam is its instrument.
+
+**Receipts, flag OFF** (the § 10 contract's control): full suite 16,860 / 0 / 3 (+22 pins);
+`cost_gate.py` exit 0, all 20 counters +0.00 %; `huge_methods.py --fail-over 0` clean; no
+production path changed — the four channels live inside `nodeAnswerRecord` behind
+`recordNodeAnswers`, and the two `nodeAnswerTypeOrCompute` sites read a null store in
+production and compute exactly what they computed before. `Checker.kt` 190,878 → 191,070
+(+192, the hook, three helpers and the lens — additions, not extractions; the shrinkage
+metric is unchanged in kind).
+
+**Not in Stage 2, deliberately.** `Project` does not hand out an oracle ((INV.2b) in the
+queue): its per-keystroke narrowed build and the oracle's one-build validity need an
+invalidation story decided together, and (INC.14)'s rule that a capture never serves
+`diagnostics` carries over to the store. The EXT and LSP consumers are served today and were
+not migrated. Tagged templates and decorators are not in the `calls` channel.
 
 ## 10. Cost-neutrality contract (owner additions, 2026-09-02)
 

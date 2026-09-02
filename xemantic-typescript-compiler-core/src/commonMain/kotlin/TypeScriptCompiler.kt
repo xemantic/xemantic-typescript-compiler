@@ -211,13 +211,23 @@ class TypeScriptCompiler {
          *  Null, the default, retains nothing, which is every compile that did not
          *  ask. */
         recheckHolder: RecheckHolder? = null,
+        /** (INV.2) When non-null, the compile records the (INV.1) node-answer store
+         *  for every walked file and hands a [TypeOracle] over the finished check
+         *  back here — the post-hoc query surface of `docs/INVERSION-DESIGN.md`
+         *  § 4. Forces the SEQUENTIAL checker and needs the whole program, for the
+         *  reasons a [CheckedNodeSink] does. Null, the default, records nothing. */
+        oracleHolder: OracleHolder? = null,
     ): CompilationResult {
         require(checkedSink == null || recheckOnly == null) {
             "a CheckedNodeSink needs the whole program: recheckOnly walks a partition"
         }
+        require(oracleHolder == null || recheckOnly == null) {
+            "a TypeOracle needs the whole program: recheckOnly walks a partition"
+        }
         return runWithDeepStack {
             compileParsedCore(
                 parsed, baseOptions, fileName, recheckOnly, typeCapture, checkedSink, recheckHolder,
+                oracleHolder,
             )
         }
     }
@@ -235,6 +245,7 @@ class TypeScriptCompiler {
         typeCapture: TypeCaptureRequest? = null,
         checkedSink: CheckedNodeSink? = null,
         recheckHolder: RecheckHolder? = null,
+        oracleHolder: OracleHolder? = null,
     ): CompilationResult {
         var options = baseOptions
         // Scan multi-file sources for `package.json` files declaring `"type": "module"` or
@@ -292,6 +303,7 @@ class TypeScriptCompiler {
                 diagnostics = diagnostics,
                 typeCapture = typeCapture,
                 checkedSink = checkedSink,
+                oracleHolder = oracleHolder,
             )
         } else {
             return cpcCompileMultiFile(
@@ -303,6 +315,7 @@ class TypeScriptCompiler {
                 typeCapture = typeCapture,
                 checkedSink = checkedSink,
                 recheckHolder = recheckHolder,
+                oracleHolder = oracleHolder,
             )
         }
     }
@@ -1092,6 +1105,7 @@ class TypeScriptCompiler {
         diagnostics: MutableList<Diagnostic>,
         typeCapture: TypeCaptureRequest? = null,
         checkedSink: CheckedNodeSink? = null,
+        oracleHolder: OracleHolder? = null,
     ): CompilationResult {
         // Single-file compilation
         val file = parsed.files[0]
@@ -1132,8 +1146,15 @@ class TypeScriptCompiler {
         val binder = Binder(options)
         val binderResult = binder.bind(sourceFile)
         val checker =
-            Checker(options, listOf(binderResult), typeCapture = typeCapture, checkedSink = checkedSink)
+            Checker(
+                options, listOf(binderResult), typeCapture = typeCapture, checkedSink = checkedSink,
+                // (INV.2) recorded only when an oracle was asked for (or the CLI mode is on).
+                recordNodeAnswers = NodeAnswers.enabled || oracleHolder != null,
+            )
         diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
+        // (INV.2) hand the oracle back AFTER the diagnostics, so a holder never
+        // observes a half-built checker — [recheckHolder]'s own rule.
+        oracleHolder?.oracle = checker.typeOracle()
         // disallowedBlockScopedInPresenceOfParseErrors1 (#61734): the parser FP-emits TS1434
         // "Unexpected keyword or identifier." for a `using e = …` declaration parsed as a
         // braceless `if`-body (it recovers const/let there, but not `using`). tsc emits TS1156
@@ -1246,6 +1267,7 @@ class TypeScriptCompiler {
         typeCapture: TypeCaptureRequest? = null,
         checkedSink: CheckedNodeSink? = null,
         recheckHolder: RecheckHolder? = null,
+        oracleHolder: OracleHolder? = null,
     ): CompilationResult {
         // All source files including tsconfig.json (for error baselines)
         val allFiles = parsed.files.map { it.fileName to it.content }
@@ -1440,6 +1462,7 @@ class TypeScriptCompiler {
             typeCapture = typeCapture,
             checkedSink = checkedSink,
             recheckHolder = recheckHolder,
+            oracleHolder = oracleHolder,
         )
         val fePostT0 = FrontEnd.t()
         // (WARM.8) round 861 — the four blocks of [FrontEnd.POST] abut from here
@@ -2247,6 +2270,7 @@ class TypeScriptCompiler {
         typeCapture: TypeCaptureRequest? = null,
         checkedSink: CheckedNodeSink? = null,
         recheckHolder: RecheckHolder? = null,
+        oracleHolder: OracleHolder? = null,
     ): Checker {
         // Phase 2: Bind all files and create shared checker
         //
@@ -2270,7 +2294,9 @@ class TypeScriptCompiler {
         // subset too). Overridden HERE, at the branch, rather than by writing the
         // global ledger: a bare write to a mode object from a compile is the
         // round-848 hazard — it survives the request and reconfigures the next one.
-        val parallelCheck = ParallelCheckMode.workers > 1 && checkedSink == null
+        // (INV.2) …and an oracle forces it for the same reason: a worker rebases
+        // its ids into a disjoint slice, so stores from two workers would conflate.
+        val parallelCheck = ParallelCheckMode.workers > 1 && checkedSink == null && oracleHolder == null
         val feBindT0 = FrontEnd.t()
         val binderResults =
             if (parallelCheck) emptyList()
@@ -2375,6 +2401,9 @@ class TypeScriptCompiler {
                 // (KIR) and the sink, for which sequential is FORCED above rather
                 // than assumed.
                 checkedSink = checkedSink,
+                // (INV.2) the node-answer store, recorded only when an oracle was asked
+                // for (or the CLI mode is on) — the walk-scoped half of its answers.
+                recordNodeAnswers = NodeAnswers.enabled || oracleHolder != null,
                 // (INC.17) recording the partition classification, and retaining the
                 // state a later [ProgramRecheck.recheck] re-enters. Only when a caller
                 // asked: it keeps every Type and Symbol of the build alive.
@@ -2398,6 +2427,8 @@ class TypeScriptCompiler {
             // (INC.17) hand the LIVE program back. Deliberately after the diagnostics
             // are read, so a holder can never observe a half-built checker.
             recheckHolder?.recheck = CheckerRecheck(checker, options)
+            // (INV.2) likewise after the diagnostics, for the same reason.
+            oracleHolder?.oracle = checker.typeOracle()
             if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(
                 options, parsedSourceFiles.values.toList(), parsed, checker.getDiagnostics(),
             )

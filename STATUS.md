@@ -1,13 +1,27 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **190,878** lines (was 191,155 at the metric's creation; +107 of those are
-(INV.1)'s store hook, an ADDITION and not an extraction;
+extraction):** `Checker.kt` **191,070** lines (was 191,155 at the metric's creation; +107 of those are
+(INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
 checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE, 16,838 → 16,860 / 0 / 3 (2026-09-02).**
+**(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained
+graph + live checker — `typeAt` / `symbolAt` / `resolvedCallAt` / `contextualTypeAt` /
+`typeOfSymbolAt` recorded during the walk, the bin-A rows forwarded at rest, `resolveName` /
+`symbolsInScope` refused naming Stage 3, per-build handles, `close()` on edit; entries
+`typeOracleOf(files)` and `ProjectCompiler.build(…, oracleHolder)`; the store grew
+`symbols` / `calls` / `contextual`; per-row divergences in `docs/type-oracle.md`; 23 pins;
+cost_gate +0.00 %. **Flag ON measured: compiler profile +21.5 % (1.90 µs per recorded
+expression), many-small-2400-dom +6-7 % (0.95 µs)** — after the first arm read +57-64 % and
+a per-channel attribution + JFR found the object-literal KEY leg re-typing its literal per
+key (`getTypeOfExpression` has no per-node memo; O(keys²) on tsc's message tables), fixed by
+reading the store. (INV.2b) queued: `Project` integration with the invalidation decided.
+Design record: `docs/INVERSION-DESIGN.md` § 9b.
 
 **(P18.7) — TWO OWNER DECISIONS LAND: THE POM LICENCE AND STAGE 1 OF THE INVERSION, 16,828 → 16,838 / 0 / 3 (2026-09-02).**
 (LIC.2) the root POM's `licenses` block now declares `AGPL-3.0-only WITH
@@ -69,17 +83,4 @@ wired); (API.18) honestly refused twice with the mechanism recorded. `cost_gate.
 counter unchanged all session — the INC-closure directive holding by construction. Next
 top items: (EXT.4…n) ladder, (INV.0) split (Stage 0 of the inversion), (API.18)'s
 sibling-bound descent.
-
-**(P18.3) — THE LSP IS FEATURE-COMPLETE FOR A FIRST RELEASE, AND THE HONEST tsgo NUMBER IS
-30-50x AGAINST US (2026-09-01).** (LSP.2): the full feature map onto `Project` — lifecycle,
-navigation, completion, signatureHelp, rename-with-refusals-as-errors, pull diagnostics,
-PROJECT-WIDE publishDiagnostics off the narrowed `diagnostics()` — 16 new pins (module 58/0,
-warning-clean), nativeImage task wired (build needs a GraalVM host). (LSP.3), both servers
-long-lived on tsc's 78 sources: tsgo `--lsp` answers a per-edit hover in **12-18 ms** where we
-take **398-630** (their lazy NodeLinks answering vs our narrowed-build-per-question —
-`docs/INVERSION-DESIGN.md`'s bin-B gap measured end-to-end); first open **255 ms vs 24.8 s**
-(different work: we eagerly publish the whole 46-row project error list, which their LSP
-cannot do at all — our wave: **524 ms, 5 files, exactly 46 rows**). Receipts caught the
-46-vs-65 gap per-file. Published in `docs/perf/incremental-vs-tsgo.md` (LSP arm) + § 3b.
-Suite unchanged **16,734 / 0 / 3** plus the 16 new LSP pins → next count on the full run.
 

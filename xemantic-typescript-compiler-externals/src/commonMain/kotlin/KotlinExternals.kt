@@ -751,7 +751,7 @@ private class ExternalsCollector(
         members: MutableList<ExternalMember>,
         scope: TypeScope,
     ) {
-        val (name, isGetter) = when (member) {
+        val (name, _) = when (member) {
             is GetAccessor -> (member.name as? Identifier)?.text to true
             is SetAccessor -> (member.name as? Identifier)?.text to false
             else -> return
@@ -1065,7 +1065,7 @@ private class ExternalsCollector(
             val keyword = clause.token.name.removeSuffix("Keyword").lowercase()
             for (base in clause.types) {
                 val baseName = (base.expression as? Identifier)?.text
-                val rendered = baseName?.let { name ->
+                val rendered = baseName?.let { _ ->
                     // Resolved as the checker resolves the clause itself (the
                     // lexical `resolveName` offers no import); an imported base
                     // is its import ALIAS, and the identity test needs the
@@ -1124,7 +1124,6 @@ private class ExternalsCollector(
             val name = when (member) {
                 is GetAccessor -> member.name
                 is SetAccessor -> member.name
-                else -> return@filter false
             }
             (ModifierFlag.Static in modifiers) == isStatic &&
                 ModifierFlag.Private !in modifiers && ModifierFlag.Protected !in modifiers &&

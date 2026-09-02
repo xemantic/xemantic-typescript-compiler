@@ -1,3 +1,34 @@
+### Round (INC.91) — the reopened closure, censused the same day and refused on soundness
+
+**(INC.90) REOPENED THE CLOSURE ON A 12.7x MEASUREMENT AND THIS CENSUS REFUSES THE PROPOSAL
+WITHOUT TOUCHING THAT NUMBER** — the prize is real, the stopping signal is not.
+`Inc91ClosureCensusMain`, counts not milliseconds, two reproducing runs.
+**THREE OF MY OWN FRAMINGS WERE WRONG AND THE CENSUS SAYS SO.** The transitive importer closure
+of a `layer00` module is **187 of 2,401 files (7.8%)**, not "most of the program" — the
+fixture's fan-out is ~4 per hop, not ~50. The offset-sensitivity worry I raised (foreign types
+keyed by `(fileName, pos, end)`, so any byte shift moves every importer) is **refuted**: it is
+real (`Checker.kt:57089`) and costs exactly **ONE extra hop** — 1 fingerprint moved for an
+append-at-END edit, **3** for the identical edit at the TOP, and **0 beyond hop 2**, because an
+unedited importer's own declarations do not move. A barrel probe shows the cascade SKIPS
+barrels and lands on real consumers, since `foreignKey` names the DECLARING file.
+**THE REAL BLOCKER WAS WRITTEN IN THE FINGERPRINT'S OWN KDoc THE WHOLE TIME** (`:57050`):
+the cut gives up TRANSITIVITY, and `incrementalDiagnostics` is sound BECAUSE a moved signature
+anywhere falls back. The proposal kept the signal and deleted the fallback. **Refuting number:
+on a length-preserving three-file edit the only error is at HOP 2, hop 1 is silent in every
+channel (0 rows, fingerprint unmoved, `.d.ts` unchanged), and the walk would report 0 rows
+where the truth is 1** — a missing diagnostic, the one outcome the five gates exist to prevent.
+tsgo answers 1/1 on the same probe and ITS hop-1 `.d.ts` is textually unchanged too, so the
+feature is achievable and its soundness simply cannot come from a signature.
+**WHAT SURVIVES IS MOST OF THE WIN AND NEEDS NO NEW ANALYSIS:** narrow a signature edit to the
+transitive importer CLOSURE (`Result.importEdges`, already computed), splice the rest, use the
+fingerprint for nothing. **2,401 -> 187 files, 12.8x**, sound because a superset always is, and
+it degrades to today's behaviour on barrels — which turns (INC.35)'s finding into a property of
+the mechanism rather than a reason not to have one.
+**AND THE METHOD IS THE REUSABLE PART:** the census cost one probe runner and no wall clock,
+and it killed a design that had a real 12.7x measurement behind it. A prize being real is not
+evidence that a mechanism for collecting it is sound.
+
+
 ### Round (INC.89) — three inherited refusals re-derived, one API member pinned, one split landed
 
 **(INC.88) LEFT A STANDING INSTRUCTION — "anything larger needs the refusals re-derived rather
