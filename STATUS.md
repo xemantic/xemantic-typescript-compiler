@@ -9,6 +9,22 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
+**(P18.9) — THE RxJS CORE RUNG COMPILES, 16,867 → 16,881 / 0 / 3 (2026-09-02).** (EXT.11a):
+`rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
+the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
+Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
+nameless method) are now function-type aliases — `public typealias UnaryFunction<T, R> =
+(T) -> R`, and an empty interface over one is an alias to it
+(`OperatorFunction<T, R> = UnaryFunction<Observable<T>, Observable<R>>`, transitively),
+nameable but never a supertype; `typeof Action` (rendered as the un-instantiated instance
+type, CHK.73) now refuses with a marker naming the written query, plus an ARITY GUARD in
+the type mapper. One silent defect fixed: a function type's `this:` parameter rendered
+positionally — now a Kotlin RECEIVER (`SchedulerAction<T>.(T) -> Unit`). New instrument:
+`ExternalsLibraryProbe` (env-gated; generated Kotlin, compile errors, diagnostics, a marker
+census per mechanism). 10 exact pins, each red by stash-ablation; externals 94/0. Census
+after: 97 markers / 0 errors — nullable unions, `any`, arrays and literals are the next
+rung ((EXT.11b), queued); a `val plain: Plain` class-value defect queued as (CHK.73b).
+
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained
 graph + live checker — `typeAt` / `symbolAt` / `resolvedCallAt` / `contextualTypeAt` /
@@ -75,18 +91,4 @@ recorded-edge pin flipped to healed, punctuation-final files pinned conservative
 (EXT.6) default exports + generic references to generated targets — **the mitt rung is
 GREEN** (verbatim mitt@3.0.1 d.ts generates and metadata-compiles; externals 52/0);
 (INV.0) step 2: `Relation`+`Ternary` relocated to `TypeRelationCache.kt` (suite 16,803/0/3).
-
-**(P18.4) — SESSION CLOSE: THE PHASE 18 FIRST ARC IS LANDED END-TO-END, 16,764 / 0 / 3
-(2026-09-01).** In one session under the re-pointing directive: the directive persisted;
-licence strings aligned ((LIC.1), with (LIC.2) POM drift flagged BLOCKED-PENDING-USER); the
-tsgo comparison made honest ((DOC.1)) and then MEASURED against the right tsgo ((LSP.3));
-README repositioned on `docs/reposition` ((DOC.2), awaiting owner review); the 142-method
-census written ((INV.D): A=94 / B=15 / C=33, (INV.1) proposal BLOCKED-PENDING-USER); the
-externals generator through THREE rungs ((EXT.1-3): interfaces, generics, references,
-typealiases, functions, function types — 29 pins, zero-classpath metadata compile gate);
-the LSP server feature-complete for a first release ((LSP.1-2): 58 pins, nativeImage
-wired); (API.18) honestly refused twice with the mechanism recorded. `cost_gate.py`: every
-counter unchanged all session — the INC-closure directive holding by construction. Next
-top items: (EXT.4…n) ladder, (INV.0) split (Stage 0 of the inversion), (API.18)'s
-sibling-bound descent.
 

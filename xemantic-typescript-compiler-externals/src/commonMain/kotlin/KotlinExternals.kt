@@ -49,8 +49,10 @@ import com.xemantic.typescript.compiler.MethodDeclaration
 import com.xemantic.typescript.compiler.ModifierFlag
 import com.xemantic.typescript.compiler.NamedExports
 import com.xemantic.typescript.compiler.Node
+import com.xemantic.typescript.compiler.Parameter
 import com.xemantic.typescript.compiler.Parser
 import com.xemantic.typescript.compiler.PropertyDeclaration
+import com.xemantic.typescript.compiler.QualifiedName
 import com.xemantic.typescript.compiler.SemicolonClassElement
 import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.SourceFile
@@ -62,6 +64,7 @@ import com.xemantic.typescript.compiler.TypeAliasDeclaration
 import com.xemantic.typescript.compiler.TypeNode
 import com.xemantic.typescript.compiler.TypeParameter
 import com.xemantic.typescript.compiler.TypeFlags
+import com.xemantic.typescript.compiler.TypeQuery
 import com.xemantic.typescript.compiler.TypeReference
 import com.xemantic.typescript.compiler.VariableDeclaration
 import com.xemantic.typescript.compiler.VariableStatement
@@ -460,6 +463,15 @@ private class ExternalsCollector(
     ): String {
         val mapped = annotationTextOrNull(annotation, returnPosition, lens, scope)
         return when {
+            // (EXT.11a) A `typeof X` query is marked by what was WRITTEN, not
+            // by what it resolved to: this checker types a class value as its
+            // INSTANCE type (CHK.73 — a class value has no static-side type
+            // here), so `lens.render` would print `Action` for `typeof
+            // Action` and the marker would read as a plain, mappable
+            // reference that somehow fell back. `typeof Action` says what the
+            // consumer actually lacks: the constructor side.
+            mapped == null && annotation is TypeQuery ->
+                "Any? /* xtsc: unmapped typeof ${commentSafe(entityNameText(annotation.exprName))} */"
             mapped == null -> {
                 val type = annotation?.let { lens.typeOfTypeNode(it) } ?: anyType
                 "Any? /* xtsc: unmapped ${commentSafe(lens.render(type))} */"
@@ -484,6 +496,12 @@ private class ExternalsCollector(
      * function type, an OPTIONAL parameter (`(x?: s) => v` changes ARITY,
      * which `(String?) -> Unit` does not express — a caller may omit the
      * argument, not pass null), and a REST parameter.
+     *
+     * (EXT.11a) A `typeof X` query refuses OUTRIGHT, before the lens is
+     * asked: the lens answers the INSTANCE type for a class value (CHK.73),
+     * which is a plausible, mappable, WRONG type — `constructor(ctor: typeof
+     * Action)` rendered `ctor: Action`, un-instantiated, and only Kotlin's
+     * own arity check made it loud. The marker names the query ([annotationText]).
      */
     private fun annotationTextOrNull(
         annotation: TypeNode?,
@@ -492,6 +510,7 @@ private class ExternalsCollector(
         scope: TypeScope,
     ): String? {
         if (annotation == null) return null
+        if (annotation is TypeQuery) return null
         val ownParam = ((annotation as? TypeReference)?.typeName as? Identifier)
             ?.text
             ?.takeIf { annotation.typeArguments == null && it in scope.ownTypeParams }
@@ -556,30 +575,120 @@ private class ExternalsCollector(
         }
         if (annotation is FunctionType) {
             if (annotation.typeParameters != null) return null
-            val parameters = annotation.parameters
-                .filterNot { it.isCommentPlaceholder }
-                .map { parameter ->
-                    if (parameter.questionToken || parameter.dotDotDotToken) return null
-                    annotationTextOrNull(
-                        parameter.type ?: return null,
-                        returnPosition = false,
-                        lens = lens,
-                        scope = scope,
-                    ) ?: return null
-                }
-            val returnType = annotationTextOrNull(
-                annotation.type,
-                returnPosition = true,
-                lens = lens,
-                scope = scope,
-            ) ?: return null
-            return "(${parameters.joinToString(", ")}) -> $returnType"
+            return functionTypeText(annotation.parameters, annotation.type, lens, scope)
         }
         return kotlinTypeTextOrNull(
             lens.typeOfTypeNode(annotation),
             returnPosition = returnPosition,
             scope = scope,
         )
+    }
+
+    /**
+     * (EXT.11a) The SYNTACTIC function-type rendering shared by a written
+     * function type and a callable interface's one call signature: every
+     * parameter and the return type through [annotationTextOrNull] under the
+     * enclosing scope, null where any piece refuses (the (EXT.3) rules: an
+     * optional or rest parameter, an unannotated one, an unmappable type).
+     *
+     * A `this` parameter is a Kotlin RECEIVER, never a positional parameter:
+     * `(this: SchedulerAction<T>, state: T) => void` is
+     * `SchedulerAction<T>.(T) -> Unit`. Rendered positionally — the pre-(EXT.11a)
+     * behaviour — it compiled, and a Kotlin lambda written against it would
+     * have received the action where JavaScript passes the state: the SILENT
+     * direction, which is why this is a rule and not a marker. The receiver
+     * is the FIRST parameter named `this` (TypeScript allows no other
+     * position; one found elsewhere refuses the whole type), goes through the
+     * same mapping, and a function-typed receiver is parenthesised so
+     * `(() -> Unit).(T) -> Unit` parses.
+     */
+    private fun functionTypeText(
+        declaredParameters: List<Parameter>,
+        returnAnnotation: TypeNode?,
+        lens: CheckedLens,
+        scope: TypeScope,
+    ): String? {
+        val declared = declaredParameters.filterNot { it.isCommentPlaceholder }
+        val receiver = declared.firstOrNull()?.takeIf(::isThisParameter)
+        val ordinary = if (receiver == null) declared else declared.drop(1)
+        if (ordinary.any(::isThisParameter)) return null
+        val receiverText = receiver?.let { parameter ->
+            val text = annotationTextOrNull(
+                parameter.type ?: return null,
+                returnPosition = false,
+                lens = lens,
+                scope = scope,
+            ) ?: return null
+            if (" -> " in text) "($text)." else "$text."
+        } ?: ""
+        val parameters = ordinary.map { parameter ->
+            if (parameter.questionToken || parameter.dotDotDotToken) return null
+            annotationTextOrNull(
+                parameter.type ?: return null,
+                returnPosition = false,
+                lens = lens,
+                scope = scope,
+            ) ?: return null
+        }
+        val returnType = annotationTextOrNull(
+            returnAnnotation ?: return null,
+            returnPosition = true,
+            lens = lens,
+            scope = scope,
+        ) ?: return null
+        return "$receiverText(${parameters.joinToString(", ")}) -> $returnType"
+    }
+
+    /** (EXT.11a) The `this` parameter of a signature — its name is the keyword, parsed as an [Identifier]. */
+    private fun isThisParameter(parameter: Parameter): Boolean =
+        (parameter.name as? Identifier)?.text == "this"
+
+    /**
+     * (EXT.11a) A DECLARATION's parameter list with its `this` parameter set
+     * aside: `function f(this: Window, x: string)` declares ONE runtime
+     * parameter, and `this` only constrains the call's receiver — a Kotlin
+     * parameter list cannot say that, so the parameter is dropped and the
+     * constraint becomes a loud marker ([thisMarker]) rather than a phantom
+     * first argument. The marker spells the type as the mapping would render
+     * it where it maps, and as the checker renders it otherwise — the same
+     * split [annotationText] makes, minus the `Any?` a marker has no use for.
+     */
+    private class DeclaredParameters(
+        /** The marker text for the `this` parameter, or null when there is none. */
+        val thisMarker: String?,
+        /** The parameters that remain, comment placeholders excluded. */
+        val parameters: List<Parameter>,
+    )
+
+    private fun declaredParameters(
+        parameters: List<Parameter>,
+        lens: CheckedLens,
+        scope: TypeScope,
+    ): DeclaredParameters {
+        val declared = parameters.filterNot { it.isCommentPlaceholder }
+        val thisParameter = declared.firstOrNull(::isThisParameter)
+            ?: return DeclaredParameters(null, declared)
+        val type = thisParameter.type
+        val rendered = when {
+            type == null -> "any"
+            else -> annotationTextOrNull(type, returnPosition = false, lens = lens, scope = scope)
+                ?: commentSafe(lens.render(lens.typeOfTypeNode(type)))
+        }
+        return DeclaredParameters(
+            thisMarker = "this parameter $rendered not carried",
+            parameters = declared.filterNot { it === thisParameter },
+        )
+    }
+
+    /**
+     * (EXT.11a) The written spelling of a `typeof` query's entity name —
+     * `Action`, `NS.Action` — for the marker. Syntax, deliberately: the
+     * resolved type is the one thing the marker must NOT show (CHK.73).
+     */
+    private fun entityNameText(name: Node): String = when (name) {
+        is Identifier -> name.text
+        is QualifiedName -> "${entityNameText(name.left)}.${name.right.text}"
+        else -> "an expression"
     }
 
     /**
@@ -607,8 +716,9 @@ private class ExternalsCollector(
         val scope = scopeOf(typeParameters.toSet())
         val markers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, markers)
-        val parameters = node.parameters
-            .filterNot { it.isCommentPlaceholder }
+        val declared = declaredParameters(node.parameters, lens, scope)
+        declared.thisMarker?.let { markers.add(it) }
+        val parameters = declared.parameters
             .mapIndexed { index, parameter ->
                 val parameterName =
                     (parameter.name as? Identifier)?.text ?: "p$index"
@@ -916,8 +1026,12 @@ private class ExternalsCollector(
             constructors.size > 1 ->
                 members.add(SkippedMember("multiple constructors"))
             constructors.size == 1 -> {
-                constructorParameters = constructors.single().parameters
-                    .filterNot { it.isCommentPlaceholder }
+                // (EXT.11a) A `this` parameter on a constructor is dropped
+                // like a function's, with the marker among the members —
+                // the constructor line has no marker list of its own.
+                val declared = declaredParameters(constructors.single().parameters, lens, scope)
+                declared.thisMarker?.let { members.add(SkippedMember("constructor $it")) }
+                constructorParameters = declared.parameters
                     .mapIndexed { index, parameter ->
                         val parameterName =
                             (parameter.name as? Identifier)?.text ?: "p$index"
@@ -1065,10 +1179,173 @@ private class ExternalsCollector(
         return ExternalTypeAlias(name, emptyList(), emptyList(), mapped)
     }
 
+    /**
+     * (EXT.11a) The parser's spelling of an interface CALL SIGNATURE —
+     * `(source: T): R;` is a [MethodDeclaration] whose name is the EMPTY
+     * identifier (`Parser.kt`'s type-member arm) — and of a CONSTRUCT
+     * SIGNATURE, `new (x: T): R;`, a [MethodDeclaration] named `new`. Both
+     * spellings are unambiguous INSIDE an interface: an interface member
+     * cannot be nameless otherwise, and `new` followed by `(` or `<` is a
+     * construct signature by the parser's own lookahead (a PROPERTY named
+     * `new` is a [PropertyDeclaration]). Neither test is applied to a CLASS
+     * member, where `new(): void` is an ordinary method named `new`.
+     */
+    private fun isCallSignature(member: Node): Boolean =
+        member is MethodDeclaration && (member.name as? Identifier)?.text == ""
+
+    private fun isConstructSignature(member: Node): Boolean =
+        member is MethodDeclaration && (member.name as? Identifier)?.text == "new"
+
+    /**
+     * (EXT.11a) The one call signature of a CALLABLE interface — an exported
+     * interface whose members are EXACTLY one call signature (no other member,
+     * no type parameters on the signature itself, no heritage) — or null.
+     * `interface UnaryFunction<T, R> { (source: T): R }` is RxJS's spine, and
+     * its Kotlin shape is a function TYPE, not an interface: the whole
+     * `pipe(...)` surface is typed by it and a consumer passes lambdas.
+     * Decided from SYNTAX, once, up front ([callableInterfaces]).
+     */
+    private fun soleCallSignatureOf(node: InterfaceDeclaration): MethodDeclaration? {
+        if (!node.heritageClauses.isNullOrEmpty()) return null
+        val member = node.members.singleOrNull() as? MethodDeclaration ?: return null
+        if (!isCallSignature(member)) return null
+        if (member.typeParameters != null) return null
+        return member
+    }
+
+    /**
+     * (EXT.11a) The base an EMPTY-bodied interface with exactly one `extends`
+     * base spells, resolved BY NAME over the exported interfaces (first wins,
+     * the same rule [finish] applies to a name two files export) — the
+     * syntactic half of the chain test; the identity half is asked of the
+     * lens at the callback ([collectCallableChain]).
+     */
+    private fun soleExtendsBaseOf(node: InterfaceDeclaration): InterfaceDeclaration? {
+        if (node.members.isNotEmpty()) return null
+        val clause = node.heritageClauses?.singleOrNull() ?: return null
+        if (clause.token != SyntaxKind.ExtendsKeyword) return null
+        val base = clause.types.singleOrNull() ?: return null
+        val baseName = (base.expression as? Identifier)?.text ?: return null
+        return exportedInterfaces.firstOrNull { it.name.text == baseName }
+    }
+
+    /**
+     * (EXT.11a) The exported interfaces that render as a `typealias` to a
+     * FUNCTION type rather than as an interface: those with exactly one call
+     * signature ([soleCallSignatureOf]) and, transitively, every EMPTY-bodied
+     * interface whose only `extends` base is one of them —
+     * `MonoTypeOperatorFunction<T> extends OperatorFunction<T, T> {}` over
+     * `OperatorFunction<T, R> extends UnaryFunction<Observable<T>,
+     * Observable<R>> {}` over `UnaryFunction`. An empty interface over one
+     * base declares nothing of its own; Kotlin lets a `typealias` name a
+     * parameterised `typealias`, which is exactly the chain.
+     *
+     * Membership is decided from SYNTAX because the set is consulted at every
+     * callback (a use may be walked before its target's declaration is) and
+     * because a callable interface must NEVER be offered as a Kotlin
+     * SUPERTYPE — a function type has no subtypes to declare — so
+     * [collectHeritage] refuses a base in this set with the usual marker,
+     * whatever the class or the non-empty interface naming it does.
+     *
+     * The transitive step resolves the base by NAME ([soleExtendsBaseOf]); a
+     * cross-file name collision makes that guess wrong in the direction the
+     * callback catches — the lens's identity test there falls the interface
+     * back to the ordinary path, where its heritage is marked, never to a
+     * silently wrong alias.
+     */
+    private val callableInterfaces: List<InterfaceDeclaration> = run {
+        val callable = exportedInterfaces.filter { soleCallSignatureOf(it) != null }.toMutableList()
+        while (true) {
+            val added = exportedInterfaces.filter { candidate ->
+                callable.none { it === candidate } &&
+                    soleExtendsBaseOf(candidate)?.let { base -> callable.any { it === base } } == true
+            }
+            if (added.isEmpty()) break
+            callable += added
+        }
+        callable
+    }
+
+    private fun isCallableInterface(declaration: Node): Boolean =
+        callableInterfaces.any { it === declaration }
+
+    /**
+     * (EXT.11a) A callable interface as `public typealias Name<TPs> =
+     * (P1, P2) -> R`, its signature rendered SYNTACTICALLY under the
+     * interface's own type-parameter scope (the generic-alias path, for
+     * (EXT.5)'s measured reason: the lens ambient carries no declaration's
+     * own parameters). An unmappable piece refuses the WHOLE declaration,
+     * loudly — `typealias U<T, R> = Any?` would flatten every `pipe`
+     * signature that names it, silently.
+     */
+    private fun collectCallableInterface(
+        node: InterfaceDeclaration,
+        signature: MethodDeclaration,
+        lens: CheckedLens,
+    ): ExternalDeclaration {
+        val name = node.name.text
+        val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
+        val markers = typeParameterMarkers(node.typeParameters, lens)
+        defaultExportMarker(node.modifiers, markers)
+        val body = functionTypeText(
+            signature.parameters,
+            signature.type,
+            lens,
+            scopeOf(typeParameters.toSet()),
+        ) ?: return SkippedDeclaration("callable interface $name with unmappable signature")
+        return ExternalTypeAlias(name, typeParameters, markers, body)
+    }
+
+    /**
+     * (EXT.11a) An empty-bodied link of a callable chain as `public typealias
+     * Name<TPs> = Base<args>`, the arguments by the heritage rule (their own
+     * annotations under the interface's scope). Null where the lens does not
+     * confirm the syntactic guess — the base resolves, import alias followed,
+     * to a declaration OTHER than the exported interface [soleExtendsBaseOf]
+     * picked by name — so the caller takes the ordinary interface path and
+     * the heritage is marked there.
+     */
+    private fun collectCallableChain(
+        node: InterfaceDeclaration,
+        expectedBase: InterfaceDeclaration,
+        lens: CheckedLens,
+    ): ExternalDeclaration? {
+        val base = node.heritageClauses!!.single().types.single()
+        val symbol = lens.heritageBaseSymbol(base.expression)
+            ?.let { lens.aliasTarget(it) ?: it }
+            ?: return null
+        if (symbol.declarations.none { it === expectedBase }) return null
+        val name = node.name.text
+        val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
+        val scope = scopeOf(typeParameters.toSet())
+        val markers = typeParameterMarkers(node.typeParameters, lens)
+        defaultExportMarker(node.modifiers, markers)
+        val arguments = base.typeArguments.orEmpty().map { argument ->
+            annotationTextOrNull(argument, returnPosition = false, lens = lens, scope = scope)
+                ?: return SkippedDeclaration(
+                    "callable interface $name with unmappable base ${expectedBase.name.text}"
+                )
+        }
+        val body =
+            if (arguments.isEmpty()) kotlinIdentifier(expectedBase.name.text)
+            else "${kotlinIdentifier(expectedBase.name.text)}<${arguments.joinToString(", ")}>"
+        return ExternalTypeAlias(name, typeParameters, markers, body)
+    }
+
     private fun collectInterface(
         node: InterfaceDeclaration,
         lens: CheckedLens,
     ): ExternalDeclaration {
+        // (EXT.11a) A callable interface is a function type; a link of a
+        // callable chain is an alias to one — unless the lens refutes the
+        // syntactic chain guess, in which case the interface path below marks
+        // the heritage as it always did.
+        if (isCallableInterface(node)) {
+            soleCallSignatureOf(node)?.let { return collectCallableInterface(node, it, lens) }
+            soleExtendsBaseOf(node)?.let { base ->
+                collectCallableChain(node, base, lens)?.let { return it }
+            }
+        }
         // (EXT.2) A generic interface renders its type-parameter NAMES; what
         // Kotlin externals cannot carry — a constraint, a default — becomes a
         // loud header marker, never a silent widening.
@@ -1086,7 +1363,15 @@ private class ExternalsCollector(
         for (member in node.members) {
             when (member) {
                 is PropertyDeclaration -> collectProperty(member, lens, members, scope)
-                is MethodDeclaration -> collectMethod(member, lens, members, scope)
+                // (EXT.11a) A call or construct signature among OTHER members
+                // has no Kotlin member shape (an interface cannot be invoked
+                // or constructed) and is a loud skip — before this it rendered
+                // `fun ``(...)`, a compile error, or a method named `new`.
+                is MethodDeclaration -> when {
+                    isCallSignature(member) -> members.add(SkippedMember("call signature"))
+                    isConstructSignature(member) -> members.add(SkippedMember("construct signature"))
+                    else -> collectMethod(member, lens, members, scope)
+                }
                 is GetAccessor, is SetAccessor ->
                     collectAccessor(member, node.members, lens, members, scope)
                 // A stray `;` between members is pure syntax — there is
@@ -1149,6 +1434,9 @@ private class ExternalsCollector(
                         nameableDeclarations.any { it === declared }
                     } ?: return@let null
                     if (!kindOk(declaration, isExtends)) return@let null
+                    // (EXT.11a) A callable interface renders as a function
+                    // TYPE alias, which nothing can extend or implement.
+                    if (isCallableInterface(declaration)) return@let null
                     val arguments = base.typeArguments.orEmpty().map { argument ->
                         annotationTextOrNull(
                             argument,
@@ -1252,6 +1540,10 @@ private class ExternalsCollector(
         val methodScope =
             if (methodTypeParameters.isEmpty()) scope
             else TypeScope(scope.ownTypeParams + methodTypeParameters, scope.generatedNameOf)
+        // (EXT.11a) A method's `this` parameter is dropped with a marker, as
+        // a function's is — for a method the receiver is the declaring
+        // object anyway, and the constraint is a TypeScript-only fact.
+        val declared = declaredParameters(member.parameters, lens, methodScope)
         if (member.questionToken) {
             if (methodTypeParameters.isNotEmpty()) {
                 // A nullable function-typed PROPERTY cannot carry type
@@ -1259,12 +1551,12 @@ private class ExternalsCollector(
                 members.add(SkippedMember("optional generic method $name"))
                 return
             }
+            declared.thisMarker?.let { members.add(SkippedMember("$it - optional method $name")) }
             // (EXT.3) An optional METHOD is a nullable function-typed
             // property: `m?(x: string): void` -> `var m: ((String) -> Unit)?`.
             // Refused to the marker when any piece does not map — a
             // half-translated signature is the silent direction.
-            val parameterTypes = member.parameters
-                .filterNot { it.isCommentPlaceholder }
+            val parameterTypes = declared.parameters
                 .map { parameter ->
                     if (parameter.questionToken || parameter.dotDotDotToken) null
                     else annotationTextOrNull(
@@ -1293,8 +1585,7 @@ private class ExternalsCollector(
             )
             return
         }
-        val parameters = member.parameters
-            .filterNot { it.isCommentPlaceholder }
+        val parameters = declared.parameters
             .mapIndexed { index, parameter ->
                 // A destructuring parameter has no name of its own; a
                 // positional one keeps the declaration readable.
@@ -1311,11 +1602,13 @@ private class ExternalsCollector(
                     ),
                 )
             }
+        val markers = typeParameterMarkers(member.typeParameters, lens)
+        declared.thisMarker?.let { markers.add(it) }
         members.add(
             ExternalFunction(
                 name = name,
                 typeParameters = methodTypeParameters,
-                markers = typeParameterMarkers(member.typeParameters, lens),
+                markers = markers,
                 parameters = parameters,
                 returnType = annotationText(
                     member.type,

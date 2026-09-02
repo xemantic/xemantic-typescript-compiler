@@ -64,7 +64,10 @@ internal class ExternalInterface(
  * consumer's vocabulary, the resolution is what the checker knows. (EXT.10)
  * adds the second chance, not a first: where the resolved body has no Kotlin
  * spelling — a generic instantiation, a function-typed body — a use names the
- * emitted alias instead of falling back.
+ * emitted alias instead of falling back. (EXT.11a) A CALLABLE interface — one
+ * call signature and nothing else, or an empty interface over one such base —
+ * is rendered through this same declaration: its Kotlin shape is a function
+ * type, not an interface, and uses name it exactly as they name an alias.
  */
 internal class ExternalTypeAlias(
     val name: String,
@@ -415,11 +418,26 @@ private fun mappedText(type: Type, returnPosition: Boolean, scope: TypeScope): S
     }
     // A reference to an interface THIS generation emits — a bare use...
     scope.generatedNameOf(type)?.let { name ->
-        if (type !is Type.Reference) return kotlinIdentifier(name)
+        // (EXT.11a) The ARITY guard: a generated target that DECLARES type
+        // parameters is rendered only as an instantiation. The bare
+        // `Type.Interface` of a generic class reaches here through a VALUE
+        // typed by the class itself — `export const ctor = Box` where `Box` is
+        // generic — because this checker types a class value as its INSTANCE
+        // type (CHK.73: a class value has no static-side type here), and the
+        // un-instantiated instance type has no Kotlin spelling: `val ctor:
+        // Box` is a compile error (`one type argument expected`), which is
+        // the loud direction only by luck of Kotlin's own check. The
+        // `resolvedTypeArguments == null` leg is the same question one
+        // constructor over; a target without parameters keeps its bare name.
+        if (type !is Type.Reference) {
+            if (type is Type.Interface && !type.typeParameters.isNullOrEmpty()) return null
+            return kotlinIdentifier(name)
+        }
         // ...or a generic instantiation, rendered only when EVERY argument
         // maps: one unmappable argument falls the whole reference back, so a
         // half-translated `Box<...>` never appears.
-        val args = type.resolvedTypeArguments ?: return kotlinIdentifier(name)
+        val args = type.resolvedTypeArguments
+            ?: return if (type.target.typeParameters.isNullOrEmpty()) kotlinIdentifier(name) else null
         val mappedArgs = args.map { argument ->
             mappedText(argument, returnPosition = false, scope) ?: return null
         }

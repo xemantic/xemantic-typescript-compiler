@@ -1,3 +1,17 @@
+**(P18.4) — SESSION CLOSE: THE PHASE 18 FIRST ARC IS LANDED END-TO-END, 16,764 / 0 / 3
+(2026-09-01).** In one session under the re-pointing directive: the directive persisted;
+licence strings aligned ((LIC.1), with (LIC.2) POM drift flagged BLOCKED-PENDING-USER); the
+tsgo comparison made honest ((DOC.1)) and then MEASURED against the right tsgo ((LSP.3));
+README repositioned on `docs/reposition` ((DOC.2), awaiting owner review); the 142-method
+census written ((INV.D): A=94 / B=15 / C=33, (INV.1) proposal BLOCKED-PENDING-USER); the
+externals generator through THREE rungs ((EXT.1-3): interfaces, generics, references,
+typealiases, functions, function types — 29 pins, zero-classpath metadata compile gate);
+the LSP server feature-complete for a first release ((LSP.1-2): 58 pins, nativeImage
+wired); (API.18) honestly refused twice with the mechanism recorded. `cost_gate.py`: every
+counter unchanged all session — the INC-closure directive holding by construction. Next
+top items: (EXT.4…n) ladder, (INV.0) split (Stage 0 of the inversion), (API.18)'s
+sibling-bound descent.
+
 **(P18.3) — THE LSP IS FEATURE-COMPLETE FOR A FIRST RELEASE, AND THE HONEST tsgo NUMBER IS
 30-50x AGAINST US (2026-09-01).** (LSP.2): the full feature map onto `Project` — lifecycle,
 navigation, completion, signatureHelp, rename-with-refusals-as-errors, pull diagnostics,

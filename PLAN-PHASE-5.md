@@ -25,6 +25,74 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.9) — the RxJS core rung COMPILES: callable interfaces, `typeof`, and the `this` receiver (2026-09-02)
+
+**(EXT.11a) LANDED — the externals ladder's third rung, `rxjs@7.8.2` core (15 files under
+`dist/types/internal`), generates with ZERO checker diagnostics and its Kotlin now COMPILES.**
+Measured first with a new reusable instrument, `ExternalsLibraryProbe` (jvmTest, env-gated —
+`XTSC_EXTERNALS_PROBE_FILES`/`_ROOT`/`_OUT`, mirroring `LibraryProbe`), which writes the
+generated Kotlin, the metadata-compile errors, every checker diagnostic and a marker CENSUS
+per mechanism: before the round the core read 96 markers, **3 compile errors, 0 diagnostics**.
+The three errors were two mechanisms: (1) an interface CALL SIGNATURE — the parser spells it
+as a `MethodDeclaration` named `Identifier("")`, and `collectMethod` rendered
+`public fun ``(source: T): R`; (2) `typeof Action` — no `TypeQuery` arm, so the annotation
+fell to the resolved type, which this checker types as the INSTANCE type (CHK.73), and the
+generated name `Action` was emitted WITHOUT its type argument (one type argument expected).
+Plus one SILENT defect no gate saw: a function type's `this:` parameter rendered as a
+POSITIONAL parameter (`(SchedulerAction<T>, T) -> Unit` for `(this: SchedulerAction<T>,
+state: T) => void`), i.e. a Kotlin lambda would receive the wrong arguments at run time.
+
+**The rules.** An exported interface whose members are exactly one call signature (no own
+TPs on it, no heritage) is a function-type alias, `public typealias UnaryFunction<T, R> =
+(T) -> R`, through the shared syntactic function-type path under the interface's own TP
+scope; an EMPTY interface whose only base is such a callable interface — transitively,
+`MonoTypeOperatorFunction<T> extends OperatorFunction<T, T>` over `OperatorFunction<T, R>
+extends UnaryFunction<Observable<T>, Observable<R>>` — is `public typealias
+OperatorFunction<T, R> = UnaryFunction<Observable<T>, Observable<R>>` (Kotlin allows an alias
+to a parameterised alias). The chain is closed syntactically up front (first-wins by name,
+the `finish()` rule) and the lens confirms the direct base's IDENTITY at the callback
+(`heritageBaseSymbol` → `aliasTarget` → `===`), so a cross-file collision fails loud. A
+callable interface stays NAMEABLE for members and parameters (`pipe(op1:
+OperatorFunction<T, A>)`) and is never a SUPERTYPE (a function type has no subtypes — a
+class `implements` it keeps the per-base marker). A call signature beside other members and a
+construct signature (`new (…)`, a method named `new` — unambiguous inside an interface only)
+are loud `SkippedMember`s. A `TypeQuery` annotation refuses, with the marker naming what was
+WRITTEN (`unmapped typeof Action` — the resolved type is the one thing it must not show), and
+`mappedText` gained the ARITY GUARD: a bare generated `Type.Interface` that declares type
+parameters (or a `Reference` with null arguments to one) answers null, never its bare name —
+reached by `export const ctor = Box` (the checker types a class value as its instance type).
+A function type's `this` parameter is a Kotlin RECEIVER, `SchedulerAction<T>.(T) -> Unit`
+(the faithful shape, and the nullable wrapping still parenthesises); a DECLARATION's `this`
+parameter is dropped from the Kotlin parameter list with a loud `this parameter <type> not
+carried` marker (function/method markers, a `SkippedMember` for a constructor).
+
+**Gate.** `KotlinExternalsRxjsGateTest` embeds the 15 files verbatim (Apache-2.0, the
+LICENSE.txt copyright line retained in the class KDoc; the two `source$` occurrences escaped
+`${'$'}`): compiles + zero checker errors; the spine renders (the three typealiases,
+`pipe` typed by the alias, `public open external class Subject<T>() : Observable<T>,
+SubscriptionLike {`, `AsyncSubject<T>() : Subject<T>`, `schedule(work:
+SchedulerAction<T>.(T) -> Unit, delay: Double, state: T)`, `EMPTY_SUBSCRIPTION`); the
+inexpressible shapes stay loud. Ten generator pins (exact full text), each measured RED
+against the pre-change collector by stash-ablation, 70 pre-existing pins green on both arms.
+Externals module 84 → 94/0, warning-clean; suite 16,867 → 16,881 / 0 / 3. No core change
+(cost_gate/huge_methods not applicable; the externals module reads the checker through the
+lens only).
+
+**After: 97 markers, 0 compile errors** — the census for the next rung ((EXT.11b), queued):
+74 `unmapped` in 42 distinct shapes, of which nullable unions (`X | null`, `X | undefined`,
+optional parameters inside function types) ~24, bare `any`/`(err: any) => void` ~18,
+`Promise<…>` 8, arrays 3, string literals 4, intersections 4, utility types
+(`Partial<Observer<T>>`) 4; 16 skipped generic aliases (conditional/`infer`/mapped bodies —
+correctly loud), 2 `extends <class>` on an interface, `TeardownLogic`/`Falsy`, one
+symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload collapse.
+**Marker text over-reports `any`**: `lens.render` substitutes the declaration's own TPs to
+`any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
+`any` from the `.d.ts`, never from the marker.
+
+**Silent defect found, queued (CHK.73 shape):** `export const plain = Plain` for a
+NON-generic class renders `val plain: Plain` — the instance type — which compiles and is
+wrong; only the generic case is refused by the arity guard.
+
 ### Round (P18.8) — Stage 2 of the inversion: the post-hoc type oracle lands, and its price is attributed before it is recorded (2026-09-02)
 
 **(INV.2) LANDED, owner-approved this session.** `TypeOracle` (`TypeOracle.kt`, core): the
@@ -853,6 +921,19 @@ Owner decisions 2026-09-02:
   `typeReferenceSymbol` (import alias followed); the Dukat pin holds (a
   mapped body still renders resolved, `Species` → `String`); a skipped
   alias, a lib alias and a same-named non-exported alias keep the fallback.
+  DONE 2026-09-02 ((EXT.11a), (P18.9) note): the **RxJS core rung COMPILES** —
+  `rxjs@7.8.2`'s 15 `internal/` declaration files (`KotlinExternalsRxjsGateTest`,
+  verbatim, Apache-2.0) generate with zero checker diagnostics and zero Kotlin
+  compile errors. A single-call-signature interface is a function-type alias
+  (`public typealias UnaryFunction<T, R> = (T) -> R`), an empty interface over
+  one is an alias to it (`OperatorFunction<T, R> = UnaryFunction<Observable<T>,
+  Observable<R>>`, transitively), nameable but never a supertype; other call
+  and construct signatures are loud skips; `typeof X` refuses with a marker
+  naming the WRITTEN query; the arity guard refuses an un-instantiated generic
+  name; a function type's `this:` parameter is a Kotlin RECEIVER
+  (`SchedulerAction<T>.(T) -> Unit`) and a declaration's is dropped loudly.
+  New instrument: `ExternalsLibraryProbe` (env-gated jvmTest; generated Kotlin +
+  compile errors + diagnostics + a marker census per mechanism).
   Still to emit: namespaces/modules, index signatures, parameter properties;
   module wiring; next ladder rung: RxJS (`class Subject<T> extends
   Observable<T>` is (EXT.8)'s shape; `export declare const EMPTY:
@@ -968,6 +1049,37 @@ Owner decisions 2026-09-02:
   as one commit. Use the two consumers being built (EXT, LSP) as the concrete query
   inventory the design must serve. Queue (INV.1) as BLOCKED-PENDING-USER with the
   proposal — implementation does NOT start in the session that writes the design.
+
+- [ ] **(EXT.11b) THE RxJS CORE CENSUS'S CHEAP MAPPING WINS — 74 `unmapped` markers in 42
+  shapes after (EXT.11a), and the top mechanisms are Kotlin-expressible.** In order of
+  occurrences (probe census, (P18.9) note): (1) NULLABLE UNIONS — `X | null`, `X |
+  undefined`, `X | null | undefined` → `X?` where X maps, both syntactically (a `UnionType`
+  annotation, so it composes inside function types) and on the resolved `Type.Union`
+  (members filtered by the `null`/`undefined` intrinsics; exactly one survivor); any other
+  union stays the marker. (2) `any` and `unknown` → `Any?` WITHOUT a marker — the fallback
+  is already `Any?`, so this is marker removal that unblocks every composite carrying an
+  `any` (`(err: any) => void`, arrays, unions); `errorType` (intrinsic name `error`, a
+  DEGRADED resolution) must stay marked. (3) ARRAYS — `T[]`, `Array<T>`, `ReadonlyArray<T>`
+  → `Array<T>` (syntactic `ArrayType`; a `TypeReference` named `Array`/`ReadonlyArray`
+  whose symbol's declarations all sit in a `lib.*.d.ts` file — positive lib evidence, never
+  spelling); a REST parameter of a declaration `...xs: T[]` → `vararg xs: T` (inside a
+  function TYPE still refused). (4) LITERAL TYPES widen to their base (`"N"` → `String`,
+  `1` → `Double`, `true` → `Boolean`) — the same widening `collectValue` already applies.
+  (5) OPTIONAL PARAMETERS INSIDE A FUNCTION TYPE stay refused (arity), as documented.
+  `Promise<T>` stays a marker: the gate has no classpath and `kotlin.js.Promise` is not a
+  built-in. Gate: the RxJS core census must drop accordingly (pin the new counts in the
+  gate test: e.g. `public var observers: Array<Observer<T>>`, `error: (Any?) -> Unit`,
+  `source: Observable<Any?>?`), all three library gates green, pins per rule with a
+  negative control each (a two-member union stays marked; `errorType` stays marked; a
+  same-named non-lib `Array` is not an array).
+
+- [ ] **(CHK.73b) A CLASS VALUE IS TYPED AS ITS INSTANCE TYPE, AND THE EXTERNALS GENERATOR
+  RENDERS `export const plain = Plain` AS `val plain: Plain` — WRONG AND COMPILING (found by
+  (EXT.11a)).** The generic case is refused by the arity guard; the non-generic one is
+  silent. Either the checker grows a static-side type for a class value ((CHK.73)'s blocker)
+  or the generator refuses a value whose initializer/annotation resolves to a class's
+  instance type through an identifier naming the CLASS (`lens.typeReferenceSymbol`-style
+  identity: the value's symbol IS a class declaration). Pin both directions.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

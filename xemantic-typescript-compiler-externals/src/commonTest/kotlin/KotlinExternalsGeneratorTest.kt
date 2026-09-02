@@ -1533,4 +1533,341 @@ class KotlinExternalsGeneratorTest {
         assert(errorCodes.isEmpty())
     }
 
+    // --- (EXT.11a) the RxJS rung: call signatures, typeof, this parameters --
+
+    @Test
+    fun `an interface with exactly one call signature renders as a function typealias`() {
+        // RxJS's spine: `interface UnaryFunction<T, R> { (source: T): R }`.
+        // The parser spells the signature as a method with an EMPTY name, and
+        // the pre-(EXT.11a) output was `public fun ``(source: T): R` — a
+        // compile error — inside an interface a consumer could not invoke.
+        val result = generate(
+            """
+            export interface UnaryFunction<T, R> {
+                (source: T): R;
+            }
+            export interface Cb {
+                (done: boolean): void;
+            }
+            """
+        )
+        val expected = """
+            public typealias UnaryFunction<T, R> = (T) -> R
+
+            public typealias Cb = (Boolean) -> Unit
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `an empty interface chain over a callable interface renders as aliases to the base`() {
+        // `OperatorFunction`/`MonoTypeOperatorFunction`: an empty body over ONE
+        // base is an alias, and Kotlin lets a typealias name a parameterised
+        // typealias. Before: `public external interface OperatorFunction<T, R>
+        // : UnaryFunction<Box<T>, Box<R>> {` — extending the nameless-method
+        // interface, so uncompilable one declaration up.
+        val result = generate(
+            """
+            export interface UnaryFunction<T, R> {
+                (source: T): R;
+            }
+            export interface OperatorFunction<T, R> extends UnaryFunction<Box<T>, Box<R>> {
+            }
+            export interface MonoTypeOperatorFunction<T> extends OperatorFunction<T, T> {
+            }
+            export interface Box<T> {
+                value: T;
+            }
+            """
+        )
+        val expected = """
+            public typealias UnaryFunction<T, R> = (T) -> R
+
+            public typealias OperatorFunction<T, R> = UnaryFunction<Box<T>, Box<R>>
+
+            public typealias MonoTypeOperatorFunction<T> = OperatorFunction<T, T>
+
+            public external interface Box<T> {
+                public var value: T
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a call signature beside other members and a construct signature are loud skips`() {
+        // Before: `public fun ``(x: String): Double` (a compile error) and a
+        // construct signature rendered as a method named `new`. A signature
+        // with its OWN type parameters is not the callable shape either.
+        val result = generate(
+            """
+            export interface Mixed {
+                (x: string): number;
+                name: string;
+            }
+            export interface Factory<T> {
+                new (x: string): T;
+                make(): T;
+            }
+            export interface Poly {
+                <U>(x: U): U;
+            }
+            """
+        )
+        val expected = """
+            public external interface Mixed {
+                /* xtsc: skipped call signature */
+                public var name: String
+            }
+
+            public external interface Factory<T> {
+                /* xtsc: skipped construct signature */
+                public fun make(): T
+            }
+
+            public external interface Poly {
+                /* xtsc: skipped call signature */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `negative control - a callable interface is never a supertype`() {
+        // A function type has no subtypes to declare: a class implementing a
+        // callable interface and a non-empty interface extending one keep the
+        // per-base heritage marker. Before: `class Impl : Cb {` and
+        // `interface Extended : Cb {`, against an interface that no longer exists.
+        val result = generate(
+            """
+            export interface Cb {
+                (done: boolean): void;
+            }
+            export declare class Impl implements Cb {
+                run(): void;
+            }
+            export interface Extended extends Cb {
+                extra: string;
+            }
+            """
+        )
+        val expected = """
+            public typealias Cb = (Boolean) -> Unit
+
+            public open external class Impl {
+                /* xtsc: skipped heritage clause implements Cb */
+                public fun run(): Unit
+            }
+
+            public external interface Extended {
+                /* xtsc: skipped heritage clause extends Cb */
+                public var extra: String
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a member typed by a callable interface renders by name with its arguments`() {
+        // The alias is a NAMED type for every use — member, optional member,
+        // parameter, return — exactly as an interface reference was; only the
+        // declarations changed shape (before: interfaces with a nameless fun).
+        val result = generate(
+            """
+            export interface UnaryFunction<T, R> {
+                (source: T): R;
+            }
+            export interface Cb {
+                (done: boolean): void;
+            }
+            export interface Uses<T> {
+                fn: UnaryFunction<T, string>;
+                cb: Cb;
+                maybe?: Cb;
+                apply(f: UnaryFunction<T, number>): Cb;
+            }
+            """
+        )
+        val expected = """
+            public typealias UnaryFunction<T, R> = (T) -> R
+
+            public typealias Cb = (Boolean) -> Unit
+
+            public external interface Uses<T> {
+                public var fn: UnaryFunction<T, String>
+                public var cb: Cb
+                public var maybe: Cb?
+                public fun apply(f: UnaryFunction<T, Double>): Cb
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a callable interface with an unmappable signature is a loud skip`() {
+        val result = generate(
+            """
+            export interface Unmappable {
+                (x: string | number): void;
+            }
+            """
+        )
+        val rendered = result.kotlin
+        assert(rendered == "/* xtsc: skipped callable interface Unmappable with unmappable signature */\n")
+    }
+
+    @Test
+    fun `a typeof query refuses with a marker naming the query`() {
+        // The lens types a class VALUE as its INSTANCE type (CHK.73), so the
+        // resolved rendering would say `Action` — before: `ctor: Action`, the
+        // un-instantiated generic, a compile error (`one type argument
+        // expected`), and `plain: Plain`, which compiled and was WRONG.
+        val result = generate(
+            """
+            export declare class Action<T> {
+                schedule(state: T): void;
+            }
+            export declare class Plain {
+                x: number;
+            }
+            export declare class Scheduler {
+                constructor(ctor: typeof Action, plain: typeof Plain);
+                ctor: typeof Action;
+            }
+            """
+        )
+        val expected = """
+            public open external class Action<T> {
+                public fun schedule(state: T): Unit
+            }
+
+            public open external class Plain {
+                public var x: Double
+            }
+
+            public open external class Scheduler(ctor: Any? /* xtsc: unmapped typeof Action */, plain: Any? /* xtsc: unmapped typeof Plain */) {
+                public var ctor: Any? /* xtsc: unmapped typeof Action */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `the arity guard - a value typed by an un-instantiated generic class falls back`() {
+        // `export const ctor = Box` is typed by the checker as `Box`'s INSTANCE
+        // type (CHK.73), a bare generic `Type.Interface` — the one shape that
+        // reaches the renderer's bare-name leg with type parameters declared.
+        // Before: `public external val ctor: Box` — one type argument expected.
+        val result = generate(
+            """
+            export declare class Box<T> { value: T; }
+            export const ctor = Box;
+            """
+        )
+        val expected = """
+            public open external class Box<T> {
+                public var value: T
+            }
+
+            public external val ctor: Any? /* xtsc: unmapped Box<T> */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a this parameter in a function type renders as a Kotlin receiver`() {
+        // Before: `handler: (Box<T>, T) -> Unit`, positionally — it compiled,
+        // and a Kotlin lambda written against it would have received the
+        // action where JavaScript passes the state. The nullable wrapping
+        // still parenthesises, and a function-typed receiver is parenthesised.
+        val result = generate(
+            """
+            export interface Box<T> { value: T; }
+            export interface Work<T> {
+                handler: (this: Box<T>, state: T) => void;
+                maybe?: (this: Box<T>, state: T) => void;
+                schedule(work: (this: Box<T>, state: T) => void, delay: number): void;
+                nested: (this: () => void, x: string) => void;
+            }
+            """
+        )
+        val expected = """
+            public external interface Box<T> {
+                public var value: T
+            }
+
+            public external interface Work<T> {
+                public var handler: Box<T>.(T) -> Unit
+                public var maybe: (Box<T>.(T) -> Unit)?
+                public fun schedule(work: Box<T>.(T) -> Unit, delay: Double): Unit
+                public var nested: (() -> Unit).(String) -> Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a declaration's this parameter is dropped with a loud marker`() {
+        // A `this` parameter is not a runtime parameter. Before: `fun run(this:
+        // Box<T>, state: T)`, `fun bound(this: Box<String>, x: String)` and
+        // `class Ctor(this: Box<String>, x: String)` — a phantom first
+        // argument in every one, and `later: ((Box<T>, T) -> Unit)?`.
+        val result = generate(
+            """
+            export interface Box<T> { value: T; }
+            export interface Work<T> {
+                run(this: Box<T>, state: T): void;
+                later?(this: Box<T>, state: T): void;
+            }
+            export declare function bound(this: Box<string>, x: string): number;
+            export declare class Ctor {
+                constructor(this: Box<string>, x: string);
+            }
+            """
+        )
+        val expected = """
+            public external interface Box<T> {
+                public var value: T
+            }
+
+            public external interface Work<T> {
+                /* xtsc: this parameter Box<T> not carried */
+                public fun run(state: T): Unit
+                /* xtsc: skipped this parameter Box<T> not carried - optional method later */
+                public var later: ((T) -> Unit)?
+            }
+
+            /* xtsc: this parameter Box<String> not carried */
+            public external fun bound(x: String): Double
+
+            public open external class Ctor(x: String) {
+                /* xtsc: skipped constructor this parameter Box<String> not carried */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
 }
