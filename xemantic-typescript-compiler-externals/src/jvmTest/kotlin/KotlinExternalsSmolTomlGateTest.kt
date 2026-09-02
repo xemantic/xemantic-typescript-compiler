@@ -45,6 +45,12 @@ import kotlin.test.Test
  * with heritage to LIB types (`extends Date`, `extends Error`) and an
  * ECMAScript `#private` member, top-level function OVERLOADS in a `.d.ts`,
  * a destructured optional parameter, and recursive/index-signature aliases.
+ *
+ * (EXT.16) Generated WIRED to the package — `ModuleWiring("smol-toml",
+ * "/smol-toml/dist/index.d.ts")`, the `types` entry of its `package.json` —
+ * so the real output carries `@file:JsModule("smol-toml")` and the
+ * default value's `@JsName("default")`; the gate compiles the
+ * annotation-free variant.
  */
 class KotlinExternalsSmolTomlGateTest {
 
@@ -334,9 +340,13 @@ export type TomlValueWithoutBigInt = Exclude<TomlPrimitive, bigint> | TomlValueW
         SourceFileEntry("/smol-toml/dist/util.d.ts", utilDts),
     )
 
+    /** (EXT.16) Wired to the package: `smol-toml`'s `types` entry is `dist/index.d.ts`. */
+    private fun generateSmolToml(): KotlinExternals =
+        generateKotlinExternals(smolTomlDist, module = ModuleWiring("smol-toml", "/smol-toml/dist/index.d.ts"))
+
     @Test
     fun `smol-toml generates and the generated kotlin compiles`() {
-        val result = generateKotlinExternals(smolTomlDist)
+        val result = generateSmolToml()
         val check = compileCheck(result.compileCheckSource)
         val compileErrors = check.errors
         assert(compileErrors.isEmpty())
@@ -345,7 +355,7 @@ export type TomlValueWithoutBigInt = Exclude<TomlPrimitive, bigint> | TomlValueW
 
     @Test
     fun `smol-toml's classes render with lib heritage marked and the private name omitted`() {
-        val result = generateKotlinExternals(smolTomlDist)
+        val result = generateSmolToml()
         val rendered = result.kotlin
         val dateHeader = "public open external class TomlDate(date: Any? /* xtsc: unmapped string | Date */) {\n" +
             "    /* xtsc: skipped heritage clause extends Date */\n" in rendered
@@ -366,8 +376,8 @@ export type TomlValueWithoutBigInt = Exclude<TomlPrimitive, bigint> | TomlValueW
     }
 
     @Test
-    fun `smol-toml's overloaded parse renders both signatures and its wiring is loud`() {
-        val result = generateKotlinExternals(smolTomlDist)
+    fun `smol-toml's overloaded parse renders both signatures and its wiring binds every export`() {
+        val result = generateSmolToml()
         val rendered = result.kotlin
         // The two `.d.ts` overloads map to DIFFERENT Kotlin signatures (an
         // intersection falls back, a plain optional interface parameter maps
@@ -378,25 +388,32 @@ export type TomlValueWithoutBigInt = Exclude<TomlPrimitive, bigint> | TomlValueW
         // options parameter keeps its marker.
         val destructured = "public external fun stringify(obj: Any?, p1: Any? /* xtsc: unmapped { maxDepth?: number | undefined; numbersAsFloat?: boolean | undefined; } */): String\n" in rendered
         val options = "public external interface ParseOptions {\n    public var maxDepth: Double?\n" in rendered
-        val defaultValue = "/* xtsc: skipped default export of _default - module wiring is a later rung */" in rendered
-        val reExport = "/* xtsc: skipped re-export { parse, stringify, TomlDate, TomlError } - module wiring is a later rung */" in rendered
-        val typeReExport = "/* xtsc: skipped re-export type { TomlValue as TomlPrimitive } from './util.js' - module wiring is a later rung */" in rendered
-        // error.d.ts ends in `export {};` — the module-marker idiom wires
-        // nothing, so it is the one export statement that is silent.
-        val emptyExportSilent = "re-export {  }" !in rendered && "re-export { }" !in rendered
+        // (EXT.16) Wired to the package: `declare const _default` carries
+        // no `export` and IS the package's default, so it joins the surface
+        // as `@JsName("default")`; `export { parse, stringify, TomlDate,
+        // TomlError }` re-exports IMPORTS, each bound under its own name in
+        // the file declaring it, and the type-only re-exports bind no
+        // runtime name — so no export statement of the entry keeps a marker,
+        // and nothing in the seven files is an internal path.
+        val header = rendered.startsWith("@file:JsModule(\"smol-toml\")\n\n")
+        val defaultValue = "@JsName(\"default\")\npublic external val _default: Any? /* xtsc: unmapped { parse: " in rendered
+        val noWiringMarkers = "module wiring is a later rung" !in rendered && "re-export" !in rendered
+        val everythingReachable = "not exported by the package entry" !in rendered
+        val noOtherJsName = Regex("@JsName").findAll(rendered).count() == 1
         assert(bigIntOverload)
         assert(plainOverload)
         assert(destructured)
         assert(options)
+        assert(header)
         assert(defaultValue)
-        assert(reExport)
-        assert(typeReExport)
-        assert(emptyExportSilent)
+        assert(noWiringMarkers)
+        assert(everythingReachable)
+        assert(noOtherJsName)
     }
 
     @Test
     fun `smol-toml's recursive and union aliases refuse loudly`() {
-        val result = generateKotlinExternals(smolTomlDist)
+        val result = generateSmolToml()
         val rendered = result.kotlin
         val primitive = "/* xtsc: skipped type alias TomlPrimitive with unmappable body string | number | boolean | bigint | TomlDate */" in rendered
         val bigInt = "/* xtsc: skipped type alias IntegersAsBigInt with unmappable body" in rendered

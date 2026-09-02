@@ -161,7 +161,9 @@ public fun generateKotlinExternals(
     fileName: String,
     source: String,
     options: CompilerOptions = CompilerOptions(useRealLibs = true),
-): KotlinExternals = generateKotlinExternals(files = listOf(SourceFileEntry(fileName, source)), options = options)
+    module: ModuleWiring? = null,
+): KotlinExternals =
+    generateKotlinExternals(files = listOf(SourceFileEntry(fileName, source)), options = options, module = module)
 
 /**
  * (EXT.7) The MULTI-FILE entry point: one program over every [files] entry —
@@ -184,10 +186,21 @@ public fun generateKotlinExternals(
  * share one Kotlin package, so a TYPE name exported by two files is a loud
  * skip for the second (Kotlin refuses the redeclaration); functions share a
  * signature space instead and go through the overload collapse.
+ *
+ * (EXT.16) [module] wires the generation to an npm package: the real output
+ * opens with `@file:JsModule("<name>")`, the package's public surface is
+ * computed through the re-export graph from the entry file ([ExportPlan])
+ * and every value-bearing declaration renders its binding — nothing for
+ * one reachable under its own name, `@JsName("<exported>")` for one
+ * reachable under another, a loud marker for one the entry does not
+ * export. `null` keeps the global-script output of every earlier rung
+ * exactly. The entry must be one of [files]; naming another is a caller
+ * error, not a marker.
  */
 public fun generateKotlinExternals(
     files: List<SourceFileEntry>,
     options: CompilerOptions = CompilerOptions(useRealLibs = true),
+    module: ModuleWiring? = null,
 ): KotlinExternals {
     val parseDiagnostics = mutableListOf<Diagnostic>()
     val sourceFiles = files.map { file ->
@@ -206,7 +219,8 @@ public fun generateKotlinExternals(
     }
     val binder = Binder(options)
     val binderResults = sourceFiles.map { binder.bind(it) }
-    val collector = ExternalsCollector(Surface(sourceFiles))
+    val plan = module?.let { ExportPlan(sourceFiles, it) }
+    val collector = ExternalsCollector(Surface(sourceFiles, plan), plan)
     val checker = runWithDeepStack {
         Checker(
             options,
@@ -216,8 +230,9 @@ public fun generateKotlinExternals(
         )
     }
     val declarations = collector.finish()
+    val header = plan?.let { ModuleHeader(it.moduleName, it.umd) }
     return KotlinExternals(
-        kotlin = renderKotlinExternals(declarations, external = true),
+        kotlin = renderKotlinExternals(declarations, external = true, header = header),
         compileCheckSource = renderKotlinExternals(declarations, external = false),
         diagnostics = parseDiagnostics + checker.getDiagnostics(),
     )
@@ -312,8 +327,16 @@ private class NamespaceEntry(
  * modifier — so `export import X = ts.X` is collected and a bare `import
  * X = ts.X` is a local. Ambient-ness is the `declare` modifier, the
  * enclosing container's, or the whole file's (`.d.ts`).
+ *
+ * (EXT.16) Under a module wiring a top-level declaration WITHOUT the
+ * modifier joins the surface too when the entry REACHES it — `declare
+ * const _default: …; export default _default;` (smol-toml's entry),
+ * `declare class Foo {} export = Foo;` — because a consumer binds it, and
+ * the bodiless `namespace X` the parser leaves behind for the UMD `export
+ * as namespace X` line ([ExportPlan.umdNames]) is not a namespace at all
+ * and is scanned as nothing.
  */
-private class Surface(sourceFiles: List<SourceFile>) {
+private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPlan?) {
 
     val interfaces = mutableListOf<Declared<InterfaceDeclaration>>()
     val classes = mutableListOf<Declared<ClassDeclaration>>()
@@ -346,6 +369,7 @@ private class Surface(sourceFiles: List<SourceFile>) {
                 exportContext = false,
                 ambient = sourceFile.fileName.endsWith(".d.ts"),
                 inModule = false,
+                fileName = sourceFile.fileName,
             )
         }
     }
@@ -357,28 +381,32 @@ private class Surface(sourceFiles: List<SourceFile>) {
         exportContext: Boolean,
         ambient: Boolean,
         inModule: Boolean,
+        fileName: String,
     ) {
-        fun exported(modifiers: Set<ModifierFlag>): Boolean =
-            ModifierFlag.Export in modifiers || (!topLevel && exportContext)
+        fun exported(modifiers: Set<ModifierFlag>, name: String?): Boolean =
+            ModifierFlag.Export in modifiers ||
+                (!topLevel && exportContext) ||
+                (topLevel && plan != null && name != null && plan.reachesLocal(fileName, name))
         for (statement in statements) {
             when (statement) {
                 is InterfaceDeclaration ->
-                    if (exported(statement.modifiers)) interfaces += Declared(statement, path, inModule)
+                    if (exported(statement.modifiers, statement.name.text)) interfaces += Declared(statement, path, inModule)
                 is ClassDeclaration ->
-                    if (exported(statement.modifiers)) classes += Declared(statement, path, inModule)
+                    if (exported(statement.modifiers, statement.name?.text)) classes += Declared(statement, path, inModule)
                 is EnumDeclaration ->
-                    if (exported(statement.modifiers)) enums += Declared(statement, path, inModule)
+                    if (exported(statement.modifiers, statement.name.text)) enums += Declared(statement, path, inModule)
                 is TypeAliasDeclaration ->
-                    if (exported(statement.modifiers)) aliases += Declared(statement, path, inModule)
+                    if (exported(statement.modifiers, statement.name.text)) aliases += Declared(statement, path, inModule)
                 is FunctionDeclaration ->
-                    if (exported(statement.modifiers)) functions += Declared(statement, path, inModule)
-                is VariableStatement ->
-                    if (exported(statement.modifiers)) {
-                        val readOnly = statement.declarationList.flags == SyntaxKind.ConstKeyword
-                        for (declaration in statement.declarationList.declarations) {
+                    if (exported(statement.modifiers, statement.name?.text)) functions += Declared(statement, path, inModule)
+                is VariableStatement -> {
+                    val readOnly = statement.declarationList.flags == SyntaxKind.ConstKeyword
+                    for (declaration in statement.declarationList.declarations) {
+                        if (exported(statement.modifiers, (declaration.name as? Identifier)?.text)) {
                             values += ExportedValue(declaration, readOnly, path, inModule)
                         }
                     }
+                }
                 is ImportEqualsDeclaration ->
                     if (ModifierFlag.Export in statement.modifiers) {
                         importAliases += Declared(statement, path, inModule)
@@ -390,7 +418,7 @@ private class Surface(sourceFiles: List<SourceFile>) {
                         (statement.moduleSpecifier != null ||
                             (statement.exportClause as? NamedExports)?.elements?.isNotEmpty() ?: true)
                     ) exportWiring += statement
-                is ModuleDeclaration -> scanNamespace(statement, path, topLevel, ambient, inModule)
+                is ModuleDeclaration -> scanNamespace(statement, path, topLevel, ambient, inModule, fileName)
                 else -> {}
             }
         }
@@ -402,10 +430,16 @@ private class Surface(sourceFiles: List<SourceFile>) {
         topLevel: Boolean,
         ambient: Boolean,
         inModule: Boolean,
+        fileName: String,
     ) {
         val ambientHere = ambient || ModifierFlag.Declare in node.modifiers
         val block = node.body as? ModuleBlock
         val name = node.name
+        // (EXT.16) The UMD line's phantom: `export as namespace X` parses as
+        // a bodiless `namespace X`; the plan read the line, so this is nothing.
+        if (plan != null && topLevel && block == null && name is Identifier &&
+            name.text in plan.umdNames && fileName == plan.entry.fileName
+        ) return
         val segments = namespaceSegments(name)
         var header: String? = null
         var bodyPath: List<String> = path
@@ -451,6 +485,7 @@ private class Surface(sourceFiles: List<SourceFile>) {
                 exportContext = exportContext,
                 ambient = ambientHere,
                 inModule = inModule || name is StringLiteralNode,
+                fileName = fileName,
             )
         }
     }
@@ -479,10 +514,18 @@ private class Surface(sourceFiles: List<SourceFile>) {
  * namespace's members land in the root scope beside the file's own
  * top-level declarations, in walk order.
  */
-private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink {
+private class ExternalsCollector(
+    private val surface: Surface,
+    /** (EXT.16) The module wiring's surface plan, or null in global-script mode. */
+    private val plan: ExportPlan?,
+) : CheckedNodeSink {
 
-    /** One collected entry: the declaration and the file it came from (the same-scope collision wording). */
-    private class Collected(val declaration: ExternalDeclaration, val fileName: String?) : Entry
+    /**
+     * One collected entry: the declaration, the file it came from (the
+     * same-scope collision wording) and (EXT.16) the declaration NODE, what
+     * the plan decides a root declaration's [Reach] from.
+     */
+    private class Collected(val declaration: ExternalDeclaration, val fileName: String?, val node: Node?) : Entry
 
     private sealed interface Entry
 
@@ -504,7 +547,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
     }
 
     private fun add(path: List<String>, node: Node?, declaration: ExternalDeclaration) {
-        scope(path).entries.add(Collected(declaration, node?.let(::fileNameOf)))
+        scope(path).entries.add(Collected(declaration, node?.let(::fileNameOf), node))
     }
 
     /** The file a node was parsed from, by [NodeBase.parent] up to the [SourceFile]. */
@@ -601,61 +644,138 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
             if (name != null) typeDeclarations.putIfAbsent(name, declaration)
         }
         return entries.mapIndexed { index, entry ->
-            when (entry) {
-                is ScopeBuilder -> {
-                    val name = entry.name!!
-                    if (seenTypeNames.containsKey(name)) {
-                        SkippedDeclaration("namespace $name declared again in the same scope - one Kotlin scope cannot hold both")
-                    } else {
-                        seenTypeNames[name] = null
-                        ExternalObject(name, entry.path.dropLast(1), reduce(entry, inheritance))
-                    }
-                }
-                is Collected -> when (val declaration = entry.declaration) {
-                    is ExternalTopLevelFunction -> {
-                        val signature = overloadSignature(
-                            declaration.name,
-                            declaration.typeParameters,
-                            declaration.parameters,
-                        )
-                        val collidingType = typeDeclarations[declaration.name]
-                        val winner = winners[index]
-                        when {
-                            winner != index -> SkippedDeclaration(overloadCollapseDescription(functions[winner]!!))
-                            collidingType != null &&
-                                signature in constructorSignatures(collidingType, inheritance, scope.path) ->
-                                SkippedDeclaration(
-                                    "function ${declaration.name} shares its signature with the constructor of " +
-                                        "${declaration.name} - module wiring is a later rung"
-                                )
-                            else -> declaration
-                        }
-                    }
-                    is ExternalInterface ->
-                        typeNameOnce(entry, declaration.name, seenTypeNames).let { kept ->
-                            if (kept !== declaration) kept else prunedHeritage(declaration, inheritance)
-                        }
-                    is ExternalClass ->
-                        typeNameOnce(entry, declaration.name, seenTypeNames).let { kept ->
-                            if (kept !== declaration) kept else prunedHeritage(declaration, inheritance)
-                        }
-                    is ExternalEnum -> typeNameOnce(entry, declaration.name, seenTypeNames)
-                    is ExternalTypeAlias -> typeNameOnce(entry, declaration.name, seenTypeNames)
-                    is ExternalTopLevelValue -> when (val colliding = typeDeclarations[declaration.name]) {
-                        null -> typeNameOnce(entry, declaration.name, seenValueNames)
-                        is ExternalObject -> SkippedDeclaration(
-                            "value ${declaration.name} shares its name with the namespace object " +
-                                "${declaration.name} - module wiring is a later rung"
-                        )
-                        else -> SkippedDeclaration(
-                            "value ${declaration.name} shares its name with the type ${declaration.name}" +
-                                " - module wiring is a later rung"
-                        )
-                    }
-                    is SkippedDeclaration, is ExternalMarker, is ExternalObject -> declaration
+            val reduced = reduceEntry(entry, index, scope, inheritance, functions, winners, seenTypeNames, seenValueNames, typeDeclarations)
+            if (plan == null || scope.path.isNotEmpty()) reduced else wired(entry, reduced, plan)
+        }
+    }
+
+    /** One entry of [reduce]'s fold — the per-scope rules its KDoc lists, applied to [entry]. */
+    private fun reduceEntry(
+        entry: Entry,
+        index: Int,
+        scope: ScopeBuilder,
+        inheritance: Inheritance,
+        functions: List<ExternalTopLevelFunction?>,
+        winners: IntArray,
+        seenTypeNames: MutableMap<String, String?>,
+        seenValueNames: MutableMap<String, String?>,
+        typeDeclarations: Map<String, ExternalDeclaration>,
+    ): ExternalDeclaration =
+        when (entry) {
+            is ScopeBuilder -> {
+                val name = entry.name!!
+                if (seenTypeNames.containsKey(name)) {
+                    SkippedDeclaration("namespace $name declared again in the same scope - one Kotlin scope cannot hold both")
+                } else {
+                    seenTypeNames[name] = null
+                    ExternalObject(name, entry.path.dropLast(1), reduce(entry, inheritance))
                 }
             }
+            is Collected -> when (val declaration = entry.declaration) {
+                is ExternalTopLevelFunction -> {
+                    val signature = overloadSignature(
+                        declaration.name,
+                        declaration.typeParameters,
+                        declaration.parameters,
+                    )
+                    val collidingType = typeDeclarations[declaration.name]
+                    val winner = winners[index]
+                    when {
+                        winner != index -> SkippedDeclaration(overloadCollapseDescription(functions[winner]!!))
+                        collidingType != null &&
+                            signature in constructorSignatures(collidingType, inheritance, scope.path) ->
+                            SkippedDeclaration(
+                                "function ${declaration.name} shares its signature with the constructor of " +
+                                    "${declaration.name} - module wiring is a later rung"
+                            )
+                        else -> declaration
+                    }
+                }
+                is ExternalInterface ->
+                    typeNameOnce(entry, declaration.name, seenTypeNames).let { kept ->
+                        if (kept !== declaration) kept else prunedHeritage(declaration, inheritance)
+                    }
+                is ExternalClass ->
+                    typeNameOnce(entry, declaration.name, seenTypeNames).let { kept ->
+                        if (kept !== declaration) kept else prunedHeritage(declaration, inheritance)
+                    }
+                is ExternalEnum -> typeNameOnce(entry, declaration.name, seenTypeNames)
+                is ExternalTypeAlias -> typeNameOnce(entry, declaration.name, seenTypeNames)
+                is ExternalTopLevelValue -> when (val colliding = typeDeclarations[declaration.name]) {
+                    null -> typeNameOnce(entry, declaration.name, seenValueNames)
+                    is ExternalObject -> SkippedDeclaration(
+                        "value ${declaration.name} shares its name with the namespace object " +
+                            "${declaration.name} - module wiring is a later rung"
+                    )
+                    else -> SkippedDeclaration(
+                        "value ${declaration.name} shares its name with the type ${declaration.name}" +
+                            " - module wiring is a later rung"
+                    )
+                }
+                is SkippedDeclaration, is ExternalMarker, is ExternalObject -> declaration
+            }
         }
+
+    /**
+     * (EXT.16) The ROOT-scope [reduced] declaration with its [JsBinding]
+     * attached — the [ExportPlan]'s [Reach] for the declaration's node
+     * rendered as the rules [ModuleWiring]'s KDoc states:
+     *
+     *  - reachable under its OWN name, spelled as Kotlin spells it: nothing;
+     *  - under its own name but backticked in Kotlin (`$`, a hard keyword):
+     *    `@JsName` with the JavaScript spelling;
+     *  - under ANOTHER name: `@JsName("<exported>")` — `default` for an
+     *    `export default`; several names: the FIRST in entry order, a loud
+     *    marker listing the others (one `@JsName` per declaration);
+     *  - only QUALIFIED (`ns.x`): a marker — `@file:JsQualifier` is a
+     *    file-level fact, inexpressible on one module member;
+     *  - the `export =` target: no `@JsName`, a marker saying the module
+     *    object itself is what a consumer binds (`@JsModule("m") external
+     *    <kind> X` in a file of its own);
+     *  - a member of a flattened root whose header states the reach: nothing;
+     *  - NOT reachable: the marker naming an internal path — the
+     *    declaration stays, so types naming it still compile.
+     *
+     * A skipped or collapsed declaration, a type and a marker carry no
+     * binding; a nested object's members inherit the object's.
+     */
+    private fun wired(entry: Entry, reduced: ExternalDeclaration, plan: ExportPlan): ExternalDeclaration {
+        val (node, name, kind) = when (reduced) {
+            is ExternalTopLevelFunction -> Triple((entry as? Collected)?.node, reduced.name, "function")
+            is ExternalClass -> Triple((entry as? Collected)?.node, reduced.name, "class")
+            is ExternalEnum -> Triple((entry as? Collected)?.node, reduced.name, "enum")
+            is ExternalTopLevelValue -> Triple((entry as? Collected)?.node, reduced.name, "value")
+            is ExternalObject -> Triple(
+                surface.namespaces.firstOrNull { it.skip == null && it.bodyPath == listOf(reduced.name) }?.node,
+                reduced.name,
+                "namespace object",
+            )
+            else -> return reduced
+        }
+        if (node == null) return reduced
+        val markers = mutableListOf<String>()
+        var jsName: String? = null
+        when (val reach = plan.reachOf(node, name)) {
+            is Reach.Names -> {
+                val first = reach.names.first()
+                if (first != name || kotlinIdentifier(name) != name) jsName = first
+                if (reach.names.size > 1) {
+                    markers += "$kind $name is also exported as ${reach.names.drop(1).joinToString(", ")} - " +
+                        "one @JsName per declaration, bound as $first"
+                }
+            }
+            is Reach.Qualified ->
+                markers += "$kind $name is exported only as ${reach.paths.joinToString(", ")} - " +
+                    "a nested export needs @file:JsQualifier in a file of its own"
+            is Reach.ModuleObject ->
+                markers += "export = $name - $name is the module object itself: bind it as " +
+                    "@JsModule(\"${plan.moduleName}\") external $kind $name in a file of its own, no @JsName"
+            is Reach.ViaHeader -> {}
+            is Reach.Unreachable ->
+                markers += "$kind $name is not exported by the package entry - an internal path a consumer cannot bind"
+        }
+        if (jsName == null && markers.isEmpty()) return reduced
+        return withBinding(reduced, JsBinding(jsName, markers))
     }
 
     /**
@@ -1655,6 +1775,8 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
         modifiers: Set<ModifierFlag>,
         markers: MutableList<String>,
     ) {
+        // (EXT.16) Under a wiring the default export IS wired — `@JsName("default")`.
+        if (plan != null) return
         if (ModifierFlag.Default in modifiers) {
             markers.add(0, "default export - consumers bind the module's default")
         }
@@ -1764,7 +1886,10 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
             is ExportAssignment, is ExportDeclaration -> {
                 if (surface.exportWiring.none { it === node }) return
                 if (!firstVisit(node)) return
-                add(emptyList(), node, collectExportWiring(node))
+                // (EXT.16) Under a wiring the statement IS the wiring: it
+                // renders only what could NOT be expressed.
+                val declaration = if (plan == null) collectExportWiring(node) else plan.statementMarker(node) ?: return
+                add(emptyList(), node, declaration)
             }
             // (EXT.13) A namespace: the flattened root's loud header, the
             // nested object's scope (created here so an EMPTY namespace still
@@ -1775,7 +1900,8 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                 when {
                     entry.skip != null -> add(entry.ownerPath, node, SkippedDeclaration(entry.skip))
                     else -> {
-                        entry.header?.let { add(entry.ownerPath, node, ExternalMarker(it)) }
+                        // (EXT.16) A wired header states what the root's members bind as.
+                        entry.header?.let { add(entry.ownerPath, node, ExternalMarker(plan?.namespaceHeader(node) ?: it)) }
                         scope(entry.bodyPath)
                     }
                 }
@@ -1794,7 +1920,8 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                     node,
                     ExternalMarker(
                         "alias ${node.name.text} = ${commentSafe(moduleReferenceText(node.moduleReference))}" +
-                            " - re-exported name, wiring is a later rung"
+                            if (plan == null) " - re-exported name, wiring is a later rung"
+                            else " - re-exported name, a nested object member cannot carry @JsName"
                     ),
                 )
             }

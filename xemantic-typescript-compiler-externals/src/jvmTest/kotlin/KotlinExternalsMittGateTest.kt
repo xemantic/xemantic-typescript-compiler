@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler.externals
 
 import com.xemantic.kotlin.test.assert
+import com.xemantic.typescript.compiler.SourceFileEntry
 import kotlin.test.Test
 
 /**
@@ -40,6 +41,11 @@ import kotlin.test.Test
  * defaults and constraints, `keyof`/indexed-access/conditional shapes (all
  * LOUD fallbacks), a generic interface with overloaded generic methods, an
  * optional parameter, and the DEFAULT-exported generic entry function.
+ *
+ * (EXT.16) Generated WIRED to the package — `ModuleWiring("mitt",
+ * "/mitt/index.d.ts")`, its `types` entry being its one file — so the real
+ * output carries `@file:JsModule("mitt")` and the default export's
+ * `@JsName("default")`; the gate still compiles the annotation-free variant.
  */
 class KotlinExternalsMittGateTest {
 
@@ -67,9 +73,18 @@ export interface Emitter<Events extends Record<EventType, unknown>> {
 export default function mitt<Events extends Record<EventType, unknown>>(all?: EventHandlerMap<Events>): Emitter<Events>;
 """
 
+    /**
+     * (EXT.16) The generation WIRED to the package: `mitt`'s `types` entry is
+     * its one file, and its default export binds as `@JsName("default")`.
+     */
+    private fun generateMitt(): KotlinExternals = generateKotlinExternals(
+        listOf(SourceFileEntry("/mitt/index.d.ts", mittIndexDts)),
+        module = ModuleWiring("mitt", "/mitt/index.d.ts"),
+    )
+
     @Test
     fun `mitt generates and the generated kotlin compiles`() {
-        val result = generateKotlinExternals("index.d.ts", mittIndexDts)
+        val result = generateMitt()
         val check = compileCheck(result.compileCheckSource)
         val compileErrors = check.errors
         assert(compileErrors.isEmpty())
@@ -78,7 +93,7 @@ export default function mitt<Events extends Record<EventType, unknown>>(all?: Ev
 
     @Test
     fun `mitt's spine renders - the handler typealias and the generic entry function`() {
-        val result = generateKotlinExternals("index.d.ts", mittIndexDts)
+        val result = generateMitt()
         val rendered = result.kotlin
         val handler = "public typealias Handler<T> = (T) -> Unit\n" in rendered
         val entry = "public external fun <Events> mitt(" in rendered
@@ -87,17 +102,27 @@ export default function mitt<Events extends Record<EventType, unknown>>(all?: Ev
         // measured by this gate's first run): the target's identity comes from
         // the checker, the arguments from their own annotations.
         val returnsEmitter = "): Emitter<Events>\n" in rendered
-        val defaultMarker =
-            "/* xtsc: default export - consumers bind the module's default */" in rendered
+        // (EXT.16) Wired: the file opens with the package's `@file:JsModule`,
+        // and the default export binds as `@JsName("default")` on the line
+        // above the fun (below the fun's own constraint marker) — the
+        // "consumers bind the module's default" marker IS the wiring now.
+        val header = rendered.startsWith("@file:JsModule(\"mitt\")\n\n")
+        val defaultBinding =
+            "/* xtsc: constraint on Events: any not carried */\n@JsName(\"default\")\npublic external fun <Events> mitt(" in rendered
+        val noDefaultMarker = "consumers bind the module's default" !in rendered
+        val everythingReachable = "not exported by the package entry" !in rendered
         assert(handler)
         assert(entry)
         assert(returnsEmitter)
-        assert(defaultMarker)
+        assert(header)
+        assert(defaultBinding)
+        assert(noDefaultMarker)
+        assert(everythingReachable)
     }
 
     @Test
     fun `mitt's inexpressible shapes fall back loudly - never silently`() {
-        val result = generateKotlinExternals("index.d.ts", mittIndexDts)
+        val result = generateMitt()
         val rendered = result.kotlin
         // The keyof/indexed-access aliases refuse as declarations...
         val wildcardSkip = "skipped generic type alias WildcardHandler" in rendered

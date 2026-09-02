@@ -51,6 +51,13 @@ import kotlin.test.Test
  * (`AsyncSubject` -> `Subject` -> `Observable` -> `Subscribable`), a
  * string-valued enum, a symbol-keyed member and a dozen conditional and
  * mapped aliases that stay loud.
+ *
+ * (EXT.16) Generated WIRED to the package — `ModuleWiring("rxjs",
+ * "/rxjs/index.d.ts")`, the verbatim `dist/types/index.d.ts` entry added
+ * to the fixture — so the real output carries `@file:JsModule("rxjs")`,
+ * the internal paths the entry does not reach are loud, and the entry's
+ * re-exports of files outside this fixture are loud at the statement; the
+ * gate compiles the annotation-free variant.
  */
 class KotlinExternalsRxjsGateTest {
 
@@ -1159,7 +1166,189 @@ export declare class Action<T> extends Subscription {
 }
 //# sourceMappingURL=Action.d.ts.map"""
 
+    /**
+     * (EXT.16) The package's `types` entry, `dist/types/index.d.ts` of
+     * `rxjs@7.8.2`, verbatim — the file whose re-export graph is the
+     * public surface the wiring binds. Most of its lines name files this
+     * rung's fixture does not carry, and each of those is a loud marker.
+     */
+    private val rxjsIndexDts = """
+/// <reference path="operators/index.d.ts" />
+/// <reference path="testing/index.d.ts" />
+export { Observable } from './internal/Observable';
+export { ConnectableObservable } from './internal/observable/ConnectableObservable';
+export { GroupedObservable } from './internal/operators/groupBy';
+export { Operator } from './internal/Operator';
+export { observable } from './internal/symbol/observable';
+export { animationFrames } from './internal/observable/dom/animationFrames';
+export { Subject } from './internal/Subject';
+export { BehaviorSubject } from './internal/BehaviorSubject';
+export { ReplaySubject } from './internal/ReplaySubject';
+export { AsyncSubject } from './internal/AsyncSubject';
+export { asap, asapScheduler } from './internal/scheduler/asap';
+export { async, asyncScheduler } from './internal/scheduler/async';
+export { queue, queueScheduler } from './internal/scheduler/queue';
+export { animationFrame, animationFrameScheduler } from './internal/scheduler/animationFrame';
+export { VirtualTimeScheduler, VirtualAction } from './internal/scheduler/VirtualTimeScheduler';
+export { Scheduler } from './internal/Scheduler';
+export { Subscription } from './internal/Subscription';
+export { Subscriber } from './internal/Subscriber';
+export { Notification, NotificationKind } from './internal/Notification';
+export { pipe } from './internal/util/pipe';
+export { noop } from './internal/util/noop';
+export { identity } from './internal/util/identity';
+export { isObservable } from './internal/util/isObservable';
+export { lastValueFrom } from './internal/lastValueFrom';
+export { firstValueFrom } from './internal/firstValueFrom';
+export { ArgumentOutOfRangeError } from './internal/util/ArgumentOutOfRangeError';
+export { EmptyError } from './internal/util/EmptyError';
+export { NotFoundError } from './internal/util/NotFoundError';
+export { ObjectUnsubscribedError } from './internal/util/ObjectUnsubscribedError';
+export { SequenceError } from './internal/util/SequenceError';
+export { TimeoutError } from './internal/operators/timeout';
+export { UnsubscriptionError } from './internal/util/UnsubscriptionError';
+export { bindCallback } from './internal/observable/bindCallback';
+export { bindNodeCallback } from './internal/observable/bindNodeCallback';
+export { combineLatest } from './internal/observable/combineLatest';
+export { concat } from './internal/observable/concat';
+export { connectable } from './internal/observable/connectable';
+export { defer } from './internal/observable/defer';
+export { empty } from './internal/observable/empty';
+export { forkJoin } from './internal/observable/forkJoin';
+export { from } from './internal/observable/from';
+export { fromEvent } from './internal/observable/fromEvent';
+export { fromEventPattern } from './internal/observable/fromEventPattern';
+export { generate } from './internal/observable/generate';
+export { iif } from './internal/observable/iif';
+export { interval } from './internal/observable/interval';
+export { merge } from './internal/observable/merge';
+export { never } from './internal/observable/never';
+export { of } from './internal/observable/of';
+export { onErrorResumeNext } from './internal/observable/onErrorResumeNext';
+export { pairs } from './internal/observable/pairs';
+export { partition } from './internal/observable/partition';
+export { race } from './internal/observable/race';
+export { range } from './internal/observable/range';
+export { throwError } from './internal/observable/throwError';
+export { timer } from './internal/observable/timer';
+export { using } from './internal/observable/using';
+export { zip } from './internal/observable/zip';
+export { scheduled } from './internal/scheduled/scheduled';
+export { EMPTY } from './internal/observable/empty';
+export { NEVER } from './internal/observable/never';
+export * from './internal/types';
+export { config, GlobalConfig } from './internal/config';
+export { audit } from './internal/operators/audit';
+export { auditTime } from './internal/operators/auditTime';
+export { buffer } from './internal/operators/buffer';
+export { bufferCount } from './internal/operators/bufferCount';
+export { bufferTime } from './internal/operators/bufferTime';
+export { bufferToggle } from './internal/operators/bufferToggle';
+export { bufferWhen } from './internal/operators/bufferWhen';
+export { catchError } from './internal/operators/catchError';
+export { combineAll } from './internal/operators/combineAll';
+export { combineLatestAll } from './internal/operators/combineLatestAll';
+export { combineLatestWith } from './internal/operators/combineLatestWith';
+export { concatAll } from './internal/operators/concatAll';
+export { concatMap } from './internal/operators/concatMap';
+export { concatMapTo } from './internal/operators/concatMapTo';
+export { concatWith } from './internal/operators/concatWith';
+export { connect, ConnectConfig } from './internal/operators/connect';
+export { count } from './internal/operators/count';
+export { debounce } from './internal/operators/debounce';
+export { debounceTime } from './internal/operators/debounceTime';
+export { defaultIfEmpty } from './internal/operators/defaultIfEmpty';
+export { delay } from './internal/operators/delay';
+export { delayWhen } from './internal/operators/delayWhen';
+export { dematerialize } from './internal/operators/dematerialize';
+export { distinct } from './internal/operators/distinct';
+export { distinctUntilChanged } from './internal/operators/distinctUntilChanged';
+export { distinctUntilKeyChanged } from './internal/operators/distinctUntilKeyChanged';
+export { elementAt } from './internal/operators/elementAt';
+export { endWith } from './internal/operators/endWith';
+export { every } from './internal/operators/every';
+export { exhaust } from './internal/operators/exhaust';
+export { exhaustAll } from './internal/operators/exhaustAll';
+export { exhaustMap } from './internal/operators/exhaustMap';
+export { expand } from './internal/operators/expand';
+export { filter } from './internal/operators/filter';
+export { finalize } from './internal/operators/finalize';
+export { find } from './internal/operators/find';
+export { findIndex } from './internal/operators/findIndex';
+export { first } from './internal/operators/first';
+export { groupBy, BasicGroupByOptions, GroupByOptionsWithElement } from './internal/operators/groupBy';
+export { ignoreElements } from './internal/operators/ignoreElements';
+export { isEmpty } from './internal/operators/isEmpty';
+export { last } from './internal/operators/last';
+export { map } from './internal/operators/map';
+export { mapTo } from './internal/operators/mapTo';
+export { materialize } from './internal/operators/materialize';
+export { max } from './internal/operators/max';
+export { mergeAll } from './internal/operators/mergeAll';
+export { flatMap } from './internal/operators/flatMap';
+export { mergeMap } from './internal/operators/mergeMap';
+export { mergeMapTo } from './internal/operators/mergeMapTo';
+export { mergeScan } from './internal/operators/mergeScan';
+export { mergeWith } from './internal/operators/mergeWith';
+export { min } from './internal/operators/min';
+export { multicast } from './internal/operators/multicast';
+export { observeOn } from './internal/operators/observeOn';
+export { onErrorResumeNextWith } from './internal/operators/onErrorResumeNextWith';
+export { pairwise } from './internal/operators/pairwise';
+export { pluck } from './internal/operators/pluck';
+export { publish } from './internal/operators/publish';
+export { publishBehavior } from './internal/operators/publishBehavior';
+export { publishLast } from './internal/operators/publishLast';
+export { publishReplay } from './internal/operators/publishReplay';
+export { raceWith } from './internal/operators/raceWith';
+export { reduce } from './internal/operators/reduce';
+export { repeat, RepeatConfig } from './internal/operators/repeat';
+export { repeatWhen } from './internal/operators/repeatWhen';
+export { retry, RetryConfig } from './internal/operators/retry';
+export { retryWhen } from './internal/operators/retryWhen';
+export { refCount } from './internal/operators/refCount';
+export { sample } from './internal/operators/sample';
+export { sampleTime } from './internal/operators/sampleTime';
+export { scan } from './internal/operators/scan';
+export { sequenceEqual } from './internal/operators/sequenceEqual';
+export { share, ShareConfig } from './internal/operators/share';
+export { shareReplay, ShareReplayConfig } from './internal/operators/shareReplay';
+export { single } from './internal/operators/single';
+export { skip } from './internal/operators/skip';
+export { skipLast } from './internal/operators/skipLast';
+export { skipUntil } from './internal/operators/skipUntil';
+export { skipWhile } from './internal/operators/skipWhile';
+export { startWith } from './internal/operators/startWith';
+export { subscribeOn } from './internal/operators/subscribeOn';
+export { switchAll } from './internal/operators/switchAll';
+export { switchMap } from './internal/operators/switchMap';
+export { switchMapTo } from './internal/operators/switchMapTo';
+export { switchScan } from './internal/operators/switchScan';
+export { take } from './internal/operators/take';
+export { takeLast } from './internal/operators/takeLast';
+export { takeUntil } from './internal/operators/takeUntil';
+export { takeWhile } from './internal/operators/takeWhile';
+export { tap, TapObserver } from './internal/operators/tap';
+export { throttle, ThrottleConfig } from './internal/operators/throttle';
+export { throttleTime } from './internal/operators/throttleTime';
+export { throwIfEmpty } from './internal/operators/throwIfEmpty';
+export { timeInterval } from './internal/operators/timeInterval';
+export { timeout, TimeoutConfig, TimeoutInfo } from './internal/operators/timeout';
+export { timeoutWith } from './internal/operators/timeoutWith';
+export { timestamp } from './internal/operators/timestamp';
+export { toArray } from './internal/operators/toArray';
+export { window } from './internal/operators/window';
+export { windowCount } from './internal/operators/windowCount';
+export { windowTime } from './internal/operators/windowTime';
+export { windowToggle } from './internal/operators/windowToggle';
+export { windowWhen } from './internal/operators/windowWhen';
+export { withLatestFrom } from './internal/operators/withLatestFrom';
+export { zipAll } from './internal/operators/zipAll';
+export { zipWith } from './internal/operators/zipWith';
+//# sourceMappingURL=index.d.ts.map"""
+
     private val rxjsCore: List<SourceFileEntry> = listOf(
+        SourceFileEntry("/rxjs/index.d.ts", rxjsIndexDts),
         SourceFileEntry("/rxjs/internal/types.d.ts", typesDts),
         SourceFileEntry("/rxjs/internal/Observable.d.ts", observableDts),
         SourceFileEntry("/rxjs/internal/Subject.d.ts", subjectDts),
@@ -1177,20 +1366,27 @@ export declare class Action<T> extends Subscription {
         SourceFileEntry("/rxjs/internal/scheduler/Action.d.ts", actionDts),
     )
 
+    /** (EXT.16) Wired to the package: `rxjs`, entry `/rxjs/index.d.ts`. */
+    private fun generateRxjsCore(): KotlinExternals =
+        generateKotlinExternals(rxjsCore, module = ModuleWiring("rxjs", "/rxjs/index.d.ts"))
+
     @Test
     fun `rxjs core generates and the generated kotlin compiles`() {
-        val result = generateKotlinExternals(rxjsCore)
+        val result = generateRxjsCore()
         val check = compileCheck(result.compileCheckSource)
         val compileErrors = check.errors
         val errorCodes = result.errors.map { it.code }
         assert(compileErrors.isEmpty())
         assert(check.successful)
-        assert(errorCodes.isEmpty())
+        // (EXT.16) The entry's two `/// <reference path="…/index.d.ts" />`
+        // lines name the `operators` and `testing` entries, which this
+        // fixture does not carry: TS6053 twice, and nothing else.
+        assert(errorCodes == listOf(6053, 6053))
     }
 
     @Test
     fun `rxjs core's spine renders - the callable chain, the class hierarchy, the receiver and the value`() {
-        val result = generateKotlinExternals(rxjsCore)
+        val result = generateRxjsCore()
         val rendered = result.kotlin
         // The three callable interfaces are function-type aliases, each
         // naming the one below it — a Kotlin typealias may name a
@@ -1223,6 +1419,25 @@ export declare class Action<T> extends Subscription {
         val restPipe = "op9: OperatorFunction<H, I>, vararg operations: OperatorFunction<Any?, Any?>): Observable<Any?>\n" in rendered
         val subscription = "public open external class Subscription(initialTeardown: (() -> Unit)?) : SubscriptionLike {\n" in rendered
         val anonymous = "public open external class AnonymousSubject<T>(destination: Observer<T>?, source: Observable<T>?) : Subject<T> {\n" in rendered
+        // (EXT.16) Wired to the package: every declaration the entry
+        // re-exports binds under its own name (rxjs renames nothing, so no
+        // `@JsName` at all), the SEVEN value-bearing declarations the entry
+        // does not reach are loud — `EMPTY_SUBSCRIPTION`, `EMPTY_OBSERVER`,
+        // `Action`, `AnonymousSubject`, `SafeSubscriber`, `isSubscription`,
+        // `observeNotification`, each an internal path — and the 156 entry
+        // lines naming files outside the fixture are loud at the statement.
+        val header = rendered.startsWith("@file:JsModule(\"rxjs\")\n\n")
+        val internalValue = "/* xtsc: value EMPTY_SUBSCRIPTION is not exported by the package entry - an internal path a consumer cannot bind */\npublic external val EMPTY_SUBSCRIPTION: Subscription\n" in rendered
+        val internalPaths = Regex("not exported by the package entry").findAll(rendered).count() == 7
+        val noJsName = "@JsName" !in rendered
+        val outsideFixture = Regex("resolves to no file in this generation").findAll(rendered).count() == 156
+        val noLaterRung = "module wiring is a later rung" !in rendered
+        assert(header)
+        assert(internalValue)
+        assert(internalPaths)
+        assert(noJsName)
+        assert(outsideFixture)
+        assert(noLaterRung)
         assert(unary)
         assert(operator)
         assert(mono)
@@ -1244,7 +1459,7 @@ export declare class Action<T> extends Subscription {
 
     @Test
     fun `rxjs core's inexpressible shapes stay loud - never silent`() {
-        val result = generateKotlinExternals(rxjsCore)
+        val result = generateRxjsCore()
         val rendered = result.kotlin
         // The union-of-everything input alias and the literal-union falsy
         // alias refuse as declarations...

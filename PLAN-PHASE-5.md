@@ -89,6 +89,44 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.16) LANDED — module wiring, the umbrella's last rung; the ladder item is CHECKED OFF.**
+`generateKotlinExternals(files, options, module = ModuleWiring("rxjs", "/rxjs/index.d.ts"))`
+(null keeps today's global-script output byte-for-byte). The PUBLIC SURFACE is a syntactic
+`ExportPlan` over the given files: per-file lazily-memoised export tables (`export`-modified
+declarations, `export { a as b }` through the file's IMPORT bindings first — `import {p as a}`,
+`import a from`, `import * as a`, `import a = require()` — then its own group; `export { } from`
+and `export * as ns from` read the resolved file's table; `export * from` merges with tsc's rules
+— `default` excluded, explicit wins, a name two stars disagree on dropped; type-only exports bind
+nothing; `export = X` records the module object), relative specifiers resolved against the
+importer's directory over the file names, a bare or unresolved specifier a loud marker, a cycle
+guard, and a walk from the entry giving each value-bearing declaration a `Reach` (own name /
+another name / qualified / module object / via a flattened root's header / unreachable).
+Rendering, real variant only (the gate compiles the annotation-free variant — a renderer flag):
+`@file:JsModule("m")` first, `@file:JsNonModule` after it for UMD (`export as namespace X` has NO
+AST node — a documented misparse into a phantom bodiless `namespace X` — so the ENTRY's text is
+scanned line-anchored and the phantom dropped), a declaration reachable under its own name gets
+nothing, under another name `@JsName("<first in entry order>")` plus a marker listing the rest, a
+backticked own name `@JsName("$")`, `export default` → `@JsName("default")`, a qualified-only
+reach (`export * as ns`) a marker (`@JsQualifier` is file-level), and an UNREACHABLE value a loud
+`<kind> X is not exported by the package entry - an internal path a consumer cannot bind` with
+the declaration kept so types still compile. **The `export =` decision, pinned:** the target
+renders with NO `@JsName` and a marker saying it IS the module object (`@JsName("default")` is
+wrong for CommonJS); an `export =` NAMESPACE (typescript.d.ts's shape) binds cleanly through its
+flattened members. 20 pins, nine single-mistake ablation arms each red only on the pins naming
+it; the four library gates re-pinned with the annotations in the real output (mitt's default
+export → `@JsName("default")`, smol-toml's `_default`, rxjs 0 renames); the rxjs 250-file
+probe with `XTSC_EXTERNALS_PROBE_MODULE=rxjs:<entry>`: **re-export markers 291 → 0, 0
+`@JsName`, 101 `not exported by the package entry`** (85 truly internal — `innerFrom`,
+`combineLatestInit`…; 16 exported only by sibling entries `rxjs/operators`/`ajax`/`fetch`/
+`webSocket`/`testing`, which need one generation per `exports` entry), 0 compile errors. A real
+defect found by the probe on the way: a ROOT-level entry (`/index.d.ts`) lost its leading `/`
+in resolution — fixed and pinned. Externals 159 → 179/0; suite 17,031 → 17,051 / 0 / 3.
+**Caveat, queued as (EXT.17):** Kotlin/JS itself is not compiled by any gate, so the
+JS-side legality of `external var` under a file-level `JsModule` and `@JsName` on a `sealed
+external interface` is unverified (the 2.4.10 compiler jar was read for the declaration-level
+diagnostics; none forbids them). (EXT.18) queued: renaming through `@JsName` where Kotlin
+refuses a collision TypeScript allows.
+
 **(EXT.15) LANDED — index signatures and parameter properties, the umbrella's last two member
 rungs.** `[key: string]: T` → `public operator fun get(key: String): T?` + `set(key: String,
 value: T)` (a number key → `Double`; the READ is nullable because an absent key is `undefined`,
@@ -1173,7 +1211,7 @@ Owner decisions 2026-09-02:
   return type, built from language built-ins alone, which is what a zero-classpath
   metadata compile allows. Module 29/0; gate fixture carries every new shape.
 
-- [ ] **(EXT.4…n) EXTERNALS MVP LADDER, REMAINING RUNGS — decompose as the work
+- [x] **(EXT.4…n) DONE 2026-09-02 — every rung the item named has landed and the fixture ladder is green end to end (mitt → smol-toml → RxJS → typescript.d.ts); the residue is (EXT.17)/(EXT.18)/(CHK.77) below. EXTERNALS MVP LADDER, REMAINING RUNGS — decompose as the work
   progresses.** DONE 2026-09-02 ((P18.5) note): classes (`external class` +
   primary ctor + companion statics) and enums (`sealed external interface` +
   companion entry vals; `const enum` a loud skip); generic ALIASES (syntactic
@@ -1485,7 +1523,7 @@ Owner decisions 2026-09-02:
   body reports no TS2304 for an undeclared name (tsgo does) — the unresolved-names family's
   declaration-file gate, separate item if it survives a reproduction.
 
-- [ ] **(EXT.16) MODULE WIRING — THE LAST LADDER RUNG THE UMBRELLA NAMES.** The generation
+- [x] **(EXT.16) DONE 2026-09-02 ((P18.9) note; `ModuleWiring(moduleName, entryFileName)`, the surface through the re-export graph, `@file:JsModule`/`@JsNonModule`/`@JsName`, rxjs re-export markers 291 → 0 and 101 honest internal paths; externals 179/0, suite 17,051/0/3) — MODULE WIRING — THE LAST LADDER RUNG THE UMBRELLA NAMES.** The generation
   takes the npm MODULE NAME (`generateKotlinExternals(files, moduleName = "rxjs")`, null = a
   global script) and an ENTRY file (the package's `types` entry, `index.d.ts`); the real
   output opens with `@file:JsModule("rxjs")` (the gate variant renders neither `external` nor
@@ -1501,6 +1539,25 @@ Owner decisions 2026-09-02:
   vanish. `export as namespace X` (UMD) → `@file:JsNonModule` + `@file:JsQualifier`? — measure
   what Kotlin/JS needs and pin. Gate: the smol-toml/rxjs gates re-pinned with the annotations,
   the 250-file probe's re-export markers → 0.
+
+- [ ] **(EXT.17) BLOCKED-PENDING-USER — A KOTLIN/JS COMPILE GATE FOR THE *REAL* EXTERNALS
+  OUTPUT.** The metadata gate compiles the annotation-free, `external`-free variant only, so
+  `@file:JsModule` + `external var`, `@JsName` on a `sealed external interface`, nested
+  `external object`s and the JS-side rules of every annotation are UNVERIFIED by any compiler
+  ((EXT.16)'s caveat; (EXT.16) read the 2.4.10 compiler jar for the declaration-level
+  diagnostics but could not run them). Proposal: a `js()` target (or a jvmTest that drives
+  `K2JSCompiler` from the already-present `kotlin-compiler-embeddable`, the way
+  `MetadataCompileCheck` drives `KotlinMetadataCompiler` — check whether that class and the JS
+  stdlib klib are on the test classpath; if they are, NO build change is needed and this item
+  is not blocked) compiling each gate's real `kotlin` output. A build-file change is an
+  owner decision; the in-test compiler route is not.
+
+- [ ] **(EXT.18) RENAME THROUGH `@JsName` WHERE KOTLIN REFUSES A COLLISION TS ALLOWS.** With
+  wiring in hand, a VALUE sharing a generated TYPE's name (`const AjaxError: AjaxErrorCtor`
+  beside `interface AjaxError`, 6 in rxjs extras / 11 in typescript.d.ts) and a function
+  equal to a class's constructor can render under a Kotlin-legal name with
+  `@JsName("<original>")` instead of the loud skip; decide the renaming scheme (a suffix the
+  consumer can predict), keep the skip without wiring, pin both.
 
 - [ ] **(CHK.77) THE FOUR NAMESPACE-RESOLUTION RESIDUES (EXT.14) MEASURED AFTER (CHK.76), each
   with probe evidence in the (P18.9) note — the generator keeps a written-name fallback for

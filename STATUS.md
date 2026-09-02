@@ -9,7 +9,7 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,031 / 0 / 3 (2026-09-02).** (EXT.11a):
+**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,051 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
 Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
@@ -69,7 +69,13 @@ for qualified names and `declare module` bodies, `typescript.d.ts` byte-identica
 residues queued as (CHK.77); externals 149/0. **(EXT.15), 17,021 → 17,031 / 0 / 3:** index
 signatures as an `operator fun get`/`set` pair (measured against the metadata compiler) and
 parameter properties as explicit members; `typescript.d.ts`'s 7 signatures render; externals
-159/0. Module wiring ((EXT.16)) is the umbrella's last rung.
+159/0. **(EXT.16), 17,031 → 17,051 / 0 / 3 — THE LADDER ITEM IS CHECKED OFF:** module
+wiring (`ModuleWiring(name, entry)`; the public surface through the re-export graph;
+`@file:JsModule`/`@JsNonModule`/`@JsName`, the `export =` object bound without a rename);
+rxjs's 291 re-export markers → 0 with 101 honest "not exported by the package entry" markers;
+externals 179/0. Residue: a Kotlin/JS compile gate for the real output ((EXT.17),
+build-file route owner-gated), `@JsName` renaming for Kotlin-refused collisions ((EXT.18)), the
+four checker namespace residues ((CHK.77)).
 
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained

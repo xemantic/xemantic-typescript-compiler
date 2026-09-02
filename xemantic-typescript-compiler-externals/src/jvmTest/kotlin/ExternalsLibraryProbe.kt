@@ -47,7 +47,13 @@ import kotlin.test.Test
  *   path so the [SourceFileEntry] names stay PATH-shaped (`/rxjs/internal/x.d.ts`),
  *   the shape the multi-file entry point's import resolution wants;
  * - `XTSC_EXTERNALS_PROBE_OUT` — the directory receiving `generated.kt`,
- *   `compile-check.kt`, `compile-errors.txt`, `diagnostics.txt` and `census.txt`.
+ *   `compile-check.kt`, `compile-errors.txt`, `diagnostics.txt` and `census.txt`;
+ * - `XTSC_EXTERNALS_PROBE_MODULE` — optional, `<name>:<entry>` ((EXT.16)): the
+ *   npm module name and its `types` entry file, the entry as the absolute
+ *   path or as its root-stripped name (`rxjs:/index.d.ts`); with it the
+ *   generation is WIRED (`@file:JsModule`, `@JsName`, the surface graph) and
+ *   the census reports the internal paths — the declarations the entry does
+ *   not export, i.e. what a consumer cannot bind — with examples.
  *
  * The census groups each `/* xtsc: … */` marker by its MECHANISM (the concrete
  * declaration name and rendered type replaced by a placeholder), so two runs
@@ -63,11 +69,17 @@ class ExternalsLibraryProbe {
         val out = Path.of(System.getenv("XTSC_EXTERNALS_PROBE_OUT") ?: "build/externals-probe")
         Files.createDirectories(out)
 
-        val files = fileList.split(':').filter { it.isNotBlank() }.map { path ->
+        fun entryName(path: String): String {
             val name = if (root != null && path.startsWith(root)) path.removePrefix(root) else path
-            SourceFileEntry(if (name.startsWith("/")) name else "/$name", Path.of(path).readText())
+            return if (name.startsWith("/")) name else "/$name"
         }
-        val result = generateKotlinExternals(files)
+        val files = fileList.split(':').filter { it.isNotBlank() }.map { path ->
+            SourceFileEntry(entryName(path), Path.of(path).readText())
+        }
+        val wiring = System.getenv("XTSC_EXTERNALS_PROBE_MODULE")?.let { spec ->
+            ModuleWiring(spec.substringBefore(':'), entryName(spec.substringAfter(':')))
+        }
+        val result = generateKotlinExternals(files, module = wiring)
         val check = compileCheck(result.compileCheckSource)
 
         out.resolve("generated.kt").writeText(result.kotlin)
@@ -93,6 +105,11 @@ class ExternalsLibraryProbe {
             .groupingBy { it }.eachCount()
         val errorCount = result.diagnostics.count { it.category == DiagnosticCategory.Error }
         val diagnosticsByCode = result.diagnostics.groupingBy { it.code }.eachCount()
+        // (EXT.16) The wiring's own census: internal paths, bindings, the
+        // statements that stayed loud.
+        val internalPaths = markerTexts.filter { internalPathRegex.matches(it) }
+        val jsNames = result.kotlin.lineSequence().count { it.trimStart().startsWith("@JsName(") }
+        val reExportMarkers = markerTexts.count { it.startsWith("skipped re-export ") }
         return buildString {
             appendLine("== input files (${files.size}) ==")
             for (file in files) appendLine(file.fileName)
@@ -108,6 +125,13 @@ class ExternalsLibraryProbe {
             appendLine()
             appendLine("== checker diagnostics by code (${result.diagnostics.size}, $errorCount errors) ==")
             appendCounts(diagnosticsByCode.mapKeys { "TS${it.key}" })
+            appendLine()
+            appendLine("== module wiring ==")
+            appendLine("header: ${result.kotlin.lineSequence().firstOrNull { it.startsWith("@file:") } ?: "-"}")
+            appendLine("@JsName annotations: $jsNames")
+            appendLine("re-export markers: $reExportMarkers")
+            appendLine("not exported by the package entry: ${internalPaths.size}")
+            for (example in internalPaths.take(5)) appendLine("        $example")
             appendLine()
             appendLine("== totals ==")
             appendLine("generated lines: ${result.kotlin.lines().size}")
@@ -140,6 +164,7 @@ class ExternalsLibraryProbe {
     private companion object {
         val markerRegex = Regex("""/\* xtsc: (.*?) \*/""")
         val unmappedRegex = Regex("""unmapped (.*)""")
+        val internalPathRegex = Regex(""".* is not exported by the package entry - an internal path a consumer cannot bind""")
         // (EXT.13) Declarations at any depth (a nested object's members are
         // indented) and the `object` kind.
         val declarationRegex =
@@ -211,6 +236,35 @@ class ExternalsLibraryProbe {
                 "skipped heritage clause <BASE> - its <MEMBER> clashes with the one inherited from <BASE>",
             Regex("""skipped value \S+ shares its name with the namespace object \S+ - module wiring is a later rung""") to
                 "skipped value <NAME> shares its name with the namespace object <NAME> - module wiring",
+            // (EXT.16) The wired generation's markers.
+            Regex("""\S+ \S+ is not exported by the package entry - .*""") to
+                "<KIND> <NAME> is not exported by the package entry - an internal path",
+            Regex("""\S+ \S+ is also exported as .* - one @JsName per declaration, bound as \S+""") to
+                "<KIND> <NAME> is also exported as <NAMES> - one @JsName per declaration",
+            Regex("""\S+ \S+ is exported only as .* - a nested export needs @file:JsQualifier in a file of its own""") to
+                "<KIND> <NAME> is exported only as <PATHS> - a nested export needs @file:JsQualifier",
+            Regex("""export = \S+ - \S+ is the module object itself: .*""") to
+                "export = <NAME> - the module object itself",
+            Regex("""skipped re-export .* - '.*' resolves to no file in this generation""") to
+                "skipped re-export <CLAUSE> - <SPEC> resolves to no file in this generation",
+            Regex("""skipped re-export .* - .* resolves to no declaration""") to
+                "skipped re-export <CLAUSE> - <NAME> resolves to no declaration",
+            Regex("""skipped re-export .* - .* is not exported by '.*'""") to
+                "skipped re-export <CLAUSE> - <NAME> is not exported by <FILE>",
+            Regex("""skipped namespace export \S+ from '.*' - .*""") to
+                "skipped namespace export <NS> from <SPEC> - needs @file:JsQualifier",
+            Regex("""skipped (?:export = |default export of |re-export ).* inside .* - outside the package entry's surface""") to
+                "skipped <EXPORT> inside <MODULE> - outside the package entry's surface",
+            Regex("""namespace \S+ - the module object \(export = \S+\); members rendered at top level""") to
+                "namespace <NAME> - the module object; members rendered at top level",
+            Regex("""namespace \S+ - the module member \S+; members rendered at top level .*""") to
+                "namespace <NAME> - the module member; members rendered at top level",
+            Regex("""namespace \S+ - not exported by the package entry; members rendered at top level""") to
+                "namespace <NAME> - not exported by the package entry; members rendered at top level",
+            Regex("""module "[^"]*" - the package's own module; members rendered at top level""") to
+                "module <NAME> - the package's own module; members rendered at top level",
+            Regex("""alias \S+ = .* - re-exported name, a nested object member cannot carry @JsName""") to
+                "alias <NAME> = <TARGET> - re-exported name, a nested object member cannot carry @JsName",
         )
     }
 
