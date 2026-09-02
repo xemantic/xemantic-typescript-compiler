@@ -89,6 +89,30 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(CHK.75) LANDED — the ambient-initializer rule is tsc's, at both emitters.** Read from
+`grammarchecks.go:1942` (`checkAmbientInitializer`): for a `readonly` property or a const-like
+variable (`const`/`using`/`await using`) WITHOUT a type annotation the initializer must be a
+string/numeric literal, a no-substitution template, `-<numeric>`, `true`/`false`, a bigint
+literal, or an enum-member reference (a property access typing enum-like, or an element access
+with a STRING-literal argument) — otherwise **TS1254, the `'const'` wording, on a `readonly`
+PROPERTY too** (the queue item assumed TS1039; measured on tsgo and mirrored); everything else
+(annotated, `let`/`var`, non-readonly property) is TS1039 at the initializer. Ours had the
+variable arm counting `const` only with a literal set missing `true`/`false`/template/enum
+(`declare const c = E.A` was a false TS1254) and the PROPERTY arm with no exemption at all
+(every ambient property initializer was TS1039) — one shared `isValidAmbientInitializer` now,
+plus a SYNTACTIC second chance for the enum leg (`ambientInitializerNamesEnumMember`, a
+round-936-shaped descent over the enclosing `ModuleBlock`s), needed because `E["A"]` is not typed
+as the enum literal here and a bare `LE.Q` inside the `declare namespace` declaring `LE` types
+`any` — (CHK.76)'s family, live in this exact path. Matrix: 73 lines over `.d.ts` and `.ts
+declare class` projects, byte-identical to tsgo 7.0.2 in codes and positions; `typescript.d.ts`
+TS1039+TS1254 1 → 0. Pristine: 8 ACTIVE 1039 fixtures and 2 ACTIVE 1254 ones stay byte-exact,
+the 5 ungated 1039 fixtures `--extract`ed and matched row for row; no pristine fixture has the
+readonly-literal POSITIVE shape, so the corpus is a control here. 48 pins; cost_gate +0.00% on all
+20 counters; huge_methods 0 over; suite 16,947 → 16,995 / 0 / 3. **Instrument defect fixed on the
+way:** `pristine_oracle.py --extract` wrote a baseline's `~~~~` squiggle lines into the
+reconstructed source of a TAB-indented fixture (`strip("~ ")` missed `\t`) — four extra lines
+and every row misaligned, round 941's alignment trap in a new costume.
+
 **(EXT.13) LANDED — the namespace rung: `typescript.d.ts` (11,448 lines, ONE `declare namespace
 ts` with `export = ts`) now generates 9,792 lines of Kotlin that metadata-compile at 0 errors.**
 The design: the ROOT ambient namespace (and `declare module "m"`) FLATTENS to the module surface
@@ -1334,7 +1358,7 @@ Owner decisions 2026-09-02:
   `KotlinExternalsTypescriptGateTest` over the local `typescript.d.ts` (env/default path,
   loud skip when absent — the receipt is the note's census) plus hermetic pins.
 
-- [ ] **(CHK.75) TS1039 FALSE POSITIVE ON `typescript.d.ts:2610` — `protected readonly
+- [x] **(CHK.75) DONE 2026-09-02 ((P18.9) note; tsc's `checkAmbientInitializer` mirrored at both emitters, 73-row matrix byte-identical to tsgo, 48 pins, cost_gate +0.00%, suite 16,995/0/3) — TS1039 FALSE POSITIVE ON `typescript.d.ts:2610` — `protected readonly
   latestDistTag = "latest";` IN AN AMBIENT (`declare namespace`) ABSTRACT CLASS (found
   2026-09-02 by the externals probe; tsc 6.0.3's own declaration file, so pristine is silent
   by construction).** tsc permits a LITERAL initializer on a `readonly` property in an ambient

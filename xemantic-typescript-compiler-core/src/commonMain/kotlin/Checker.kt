@@ -34722,29 +34722,19 @@ class Checker(
         val chainAmbient = spineAmbientInitContext(node) ?: return
         val ambient = chainAmbient || ModifierFlag.Declare in node.modifiers
         if (ambient) {
-            // TypeScript allows `declare const x = 123` (without type
-            // annotation) — the literal initializer serves as the type
-            // annotation. With explicit type annotation, TS1039 still fires.
-            val isConst = node.declarationList.flags == SyntaxKind.ConstKeyword
+            // tsc's `checkAmbientInitializer` (grammarchecks.go), variable arm:
+            // a const-like declaration (`const` / `using` / `await using` —
+            // `isVarConstLike`) with NO type annotation is judged by
+            // [isValidAmbientInitializer] and refused with TS1254; every other
+            // initializer (an annotated const, a `let`, a `var`) is TS1039.
+            val flags = node.declarationList.flags
+            val isConstLike = flags == SyntaxKind.ConstKeyword ||
+                flags == SyntaxKind.UsingKeyword || flags == SyntaxKind.AwaitUsingKeyword
             for (d in node.declarationList.declarations) {
                 val init = d.initializer ?: continue
-                if (isConst && d.type == null && isLiteralExpression(init)) continue
-                val start = init.pos
-                val length = (init.end - 1 - start).coerceAtLeast(1)
-                val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
-                // TS1254 for `declare const x = <non-literal>` without type annotation
-                val useTs1254 = isConst && d.type == null && !isLiteralExpression(init)
-                diagnostics.add(Diagnostic(
-                    message = if (useTs1254) "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference."
-                        else "Initializers are not allowed in ambient contexts.",
-                    category = DiagnosticCategory.Error,
-                    code = if (useTs1254) 1254 else 1039,
-                    fileName = spineFileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = length,
-                ))
+                val useTs1254 = isConstLike && d.type == null
+                if (useTs1254 && isValidAmbientInitializer(init)) continue
+                emitAmbientInitializerDiagnostic(init, useTs1254, spineSource, spineFileName)
             }
         }
         // Also walk initializers for ClassExpressions (fires TS1031 regardless
@@ -87268,13 +87258,179 @@ interface DataView {
         else -> expr.end // fallback — may overshoot by one token for complex expressions
     }
 
-    /** Check if an expression is a simple literal (allowed in `declare const x = ...`). */
-    private fun isLiteralExpression(expr: Expression): Boolean = when (expr) {
-        is NumericLiteralNode -> true
-        is StringLiteralNode -> true
-        is BigIntLiteralNode -> true
-        is PrefixUnaryExpression -> expr.operator == SyntaxKind.Minus && isLiteralExpression(expr.operand)
+    /**
+     * (CHK.75) tsc's legal initializer set for an ambient `const`-like variable or
+     * `readonly` property WITHOUT a type annotation — a verbatim mirror of
+     * `checkAmbientInitializer`'s `isInvalidInitializer` complement in
+     * `typescript-go-repo/internal/checker/grammarchecks.go`:
+     *
+     *  - `isInitializerStringOrNumberLiteralExpression`: a string literal, a
+     *    NO-substitution template literal, a numeric literal, or `-<numeric>`;
+     *  - `true` / `false` (parsed here as [Identifier]s spelling the keyword);
+     *  - `isInitializerBigIntLiteralExpression`: a bigint literal or `-<bigint>`;
+     *  - `isInitializerSimpleLiteralEnumReference`: a property access whose TYPE is
+     *    enum-like (`E.A`, a const enum's member too), or an element access
+     *    `E["A"]` / `E[0]` / `E[-1]` — literal argument, entity-name receiver,
+     *    enum-like type.
+     *
+     * Everything else — `null`, a call, an identifier, `+1`, `(1)`, a substituting
+     * template, a negated string — is refused, and the caller decides the code
+     * (TS1254 for the un-annotated const/readonly, TS1039 otherwise).
+     *
+     * The enum leg asks [getTypeOfExpression] exactly as tsc asks
+     * `checkExpressionCached`; the population is "property/element-access
+     * initializers of ambient const-like declarations", which is a handful of
+     * nodes per program, so the counters do not move.
+     */
+    private fun isValidAmbientInitializer(expr: Expression): Boolean = when (expr) {
+        is StringLiteralNode, is NoSubstitutionTemplateLiteralNode, is NumericLiteralNode, is BigIntLiteralNode -> true
+        is PrefixUnaryExpression -> expr.operator == SyntaxKind.Minus &&
+            (expr.operand is NumericLiteralNode || expr.operand is BigIntLiteralNode)
+        is Identifier -> expr.text == "true" || expr.text == "false"
+        is PropertyAccessExpression -> isEnumLikeAmbientInitializerType(getTypeOfExpression(expr)) ||
+            ambientInitializerNamesEnumMember(expr)
+        is ElementAccessExpression -> isAmbientStringOrNumberLiteralInitializer(expr.argumentExpression) &&
+            isEntityNameExpression(expr.expression) &&
+            (isEnumLikeAmbientInitializerType(getTypeOfExpression(expr)) || ambientInitializerNamesEnumMember(expr))
         else -> false
+    }
+
+    /**
+     * (CHK.75) the SYNTACTIC second chance behind the enum leg of
+     * [isValidAmbientInitializer]: does the dotted path `A.B.C` / `A.B["C"]` name an
+     * `enum` member declaration in an enclosing statement list?
+     *
+     * Two measured rows need it where tsc's type answer alone does not carry here: a
+     * bare `LE.Q` written INSIDE the `declare namespace` that declares `LE` — where
+     * [getTypeOfExpression] answers `any`, the (CHK.76) resolver family — and `E["A"]`,
+     * which this checker does not type as the enum literal `E.A`. Both are ordinary
+     * declaration-file shapes and both were TS1254 false positives. The descent is
+     * round 936's ([qualifiedLateBoundKeyValue]): innermost-first over the statement
+     * lists the reference is nested in, every statement of a level scanned so a MERGED
+     * namespace's second block is reached, a dotted `namespace A.B` matched by its whole
+     * name path. It answers only when the leaf is an `EnumDeclaration` carrying a member
+     * of that name, so a same-named `const`/`class` never satisfies it, and a NUMERIC
+     * element access (`E[0]`, a reverse mapping typed `string`, refused by tsc too) never
+     * reaches it — the argument must be a string-like literal.
+     */
+    private fun ambientInitializerNamesEnumMember(expr: Expression): Boolean {
+        val segs = ArrayList<String>(4)
+        var cur: Expression = expr
+        if (cur is ElementAccessExpression) {
+            segs.add(when (val arg = cur.argumentExpression) {
+                is StringLiteralNode -> arg.text
+                is NoSubstitutionTemplateLiteralNode -> arg.text
+                else -> return false
+            })
+            cur = cur.expression
+        }
+        while (cur is PropertyAccessExpression) {
+            segs.add(cur.name.text)
+            cur = cur.expression
+        }
+        val head = cur as? Identifier ?: return false
+        segs.add(head.text)
+        segs.reverse()
+        if (segs.size < 2) return false
+        var node: Node? = (expr as NodeBase).parent
+        while (node != null) {
+            lateBindStatementsOf(node)?.let { stmts ->
+                if (enumMemberDeclaredInStatements(stmts, segs, 0, 0)) return true
+            }
+            node = (node as NodeBase).parent
+        }
+        return false
+    }
+
+    /** [ambientInitializerNamesEnumMember]'s per-level descent — the shape of
+     *  [resolveDottedInStatements], answering a member's EXISTENCE rather than its value. */
+    private fun enumMemberDeclaredInStatements(
+        stmts: List<Statement>,
+        path: List<String>,
+        from: Int,
+        hops: Int,
+    ): Boolean {
+        if (hops > LATE_BIND_ALIAS_HOPS) return false
+        val remaining = path.size - from
+        if (remaining < 2) return false
+        for (st in stmts) {
+            when (st) {
+                is EnumDeclaration ->
+                    if (remaining == 2 && st.name.text == path[from] &&
+                        st.members.any { enumMemberDeclaredName(it) == path[from + 1] }
+                    ) return true
+                is ModuleDeclaration -> {
+                    val np = moduleNamePath(st) ?: continue
+                    if (np.isEmpty() || np.size >= remaining) continue
+                    var matches = true
+                    for (i in np.indices) if (np[i] != path[from + i]) { matches = false; break }
+                    if (!matches) continue
+                    val body = st.body as? ModuleBlock ?: continue
+                    if (enumMemberDeclaredInStatements(body.statements, path, from + np.size, hops + 1)) return true
+                }
+                else -> {}
+            }
+        }
+        return false
+    }
+
+    /** The name an enum member DECLARES (`A`, `"a-b"`); a computed name answers null. */
+    private fun enumMemberDeclaredName(m: EnumMember): String? = when (val n = m.name) {
+        is Identifier -> n.text
+        is StringLiteralNode -> n.text
+        else -> null
+    }
+
+    /** tsc's `isInitializerStringOrNumberLiteralExpression` (no bigint, no boolean). */
+    private fun isAmbientStringOrNumberLiteralInitializer(expr: Expression): Boolean = when (expr) {
+        is StringLiteralNode, is NoSubstitutionTemplateLiteralNode, is NumericLiteralNode -> true
+        is PrefixUnaryExpression -> expr.operator == SyntaxKind.Minus && expr.operand is NumericLiteralNode
+        else -> false
+    }
+
+    /** tsc's `ast.IsEntityNameExpression`: an identifier or a dotted chain of them. */
+    private fun isEntityNameExpression(expr: Expression): Boolean = when (expr) {
+        is Identifier -> true
+        is PropertyAccessExpression -> isEntityNameExpression(expr.expression)
+        else -> false
+    }
+
+    /**
+     * tsc's `flags & TypeFlagsEnumLike` for the ambient-initializer question. Our
+     * enum member types carry [TypeFlags.EnumLiteral] and the enum's own type
+     * [TypeFlags.Enum] (both minted in `getDeclaredTypeOfSymbolWorker`'s enum arm);
+     * [isEnumFlavoredObjectType] is the symbol-side reading of the same fact and is
+     * consulted as well so an enum member typed through an older path still counts.
+     */
+    private fun isEnumLikeAmbientInitializerType(type: Type): Boolean =
+        type.flags.hasAny(TypeFlags.EnumLike) || isEnumFlavoredObjectType(type)
+
+    /**
+     * Emits tsc's `checkAmbientInitializer` refusal at [init]: TS1254 (*A 'const'
+     * initializer in an ambient context must be a string or numeric literal or
+     * literal enum reference.*) when [constOrReadonlyUnannotated] — the declaration
+     * is a const-like variable or a `readonly` property with no type annotation
+     * (tsc emits the CONST wording for a readonly PROPERTY too, measured against
+     * tsgo 7.0.2) — and TS1039 (*Initializers are not allowed in ambient
+     * contexts.*) otherwise. The span is the initializer expression.
+     */
+    private fun emitAmbientInitializerDiagnostic(
+        init: Expression, constOrReadonlyUnannotated: Boolean, source: String, fileName: String,
+    ) {
+        val start = init.pos
+        val length = (init.end - 1 - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = if (constOrReadonlyUnannotated) "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference."
+                else "Initializers are not allowed in ambient contexts.",
+            category = DiagnosticCategory.Error,
+            code = if (constOrReadonlyUnannotated) 1254 else 1039,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
     }
 
     /**
@@ -87287,20 +87443,19 @@ interface DataView {
             if (m is PropertyDeclaration && m.initializer != null) {
                 val memberAmbient = ambient || ModifierFlag.Declare in m.modifiers
                 if (memberAmbient) {
+                    // (CHK.75) tsc's `checkAmbientInitializer`, property arm: a
+                    // `readonly` property (`isDeclarationReadonly` — a parameter
+                    // property is not a PropertyDeclaration, so the exclusion is
+                    // structural here) with NO type annotation may carry a literal
+                    // / enum-member initializer and is otherwise TS1254; an
+                    // annotated or non-readonly property's initializer is TS1039.
+                    // `typescript.d.ts:2610`'s `protected readonly latestDistTag =
+                    // "latest"` is the shape that found it.
                     val init = m.initializer
-                    val start = init.pos
-                    val length = (init.end - 1 - start).coerceAtLeast(1)
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Initializers are not allowed in ambient contexts.",
-                        category = DiagnosticCategory.Error,
-                        code = 1039,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
+                    val readonlyUnannotated = ModifierFlag.Readonly in m.modifiers && m.type == null
+                    if (!(readonlyUnannotated && isValidAmbientInitializer(init))) {
+                        emitAmbientInitializerDiagnostic(init, readonlyUnannotated, source, fileName)
+                    }
                 }
             }
             val exportStart = getModifierKeywordStart(m, "export", source) ?: continue

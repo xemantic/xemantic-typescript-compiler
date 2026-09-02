@@ -307,9 +307,9 @@ def extract_sources(stem: str) -> dict[str, str]:
                 continue
             if cur is None:
                 continue
-            if line.startswith("!!!") or line.strip(" ~") == "" and set(line.strip()) == {"~"}:
+            if line.startswith("!!!") or line.strip(" \t~") == "" and set(line.strip()) == {"~"}:
                 continue
-            if line.lstrip().startswith("~") and line.strip("~ ") == "":
+            if line.lstrip().startswith("~") and line.strip("~ \t") == "":
                 continue
             buf.append(line[4:] if line.startswith("    ") else line)
         if cur:
