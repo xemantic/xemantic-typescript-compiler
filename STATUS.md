@@ -9,7 +9,7 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,135 / 0 / 3 (2026-09-02).** (EXT.11a):
+**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,150 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
 Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
@@ -109,8 +109,12 @@ rxjs/`@types/node`/`typescript.d.ts` at 0 errors in both compilers; externals 24
 **(CHK.79), 17,126 → 17,135 / 0 / 3:** a dotted heritage base whose head is a namespace import
 inside an ambient block resolves through the target module's surface (`export =`/`export *`
 chains, fileless carriers only); 9 pins, grid unchanged; the generator's syntactic route for
-it retired (40 `@types/node` bases were carried by it); (CHK.80) queued; (EXT.21)
-BLOCKED-PENDING-USER on the package-naming scheme.
+it retired (40 `@types/node` bases were carried by it); (EXT.21) BLOCKED-PENDING-USER on the package-naming scheme. **(CHK.80), 17,135 → 17,150 / 0 / 3:**
+annotations through a block's namespace-import alias, TS2339 at a missing namespace member in
+a heritage clause (tsgo's exact `typeof import("node:net")` wording), named-import and
+`declare global` heritage heads, and the script-local carrier merge that let an unrelated
+file's `import * as net` hijack `require("net")` — all matching tsgo; 19 pins, grid unchanged;
+`@types/node` heritage refusals 95 → 82; (CHK.81) queued.
 
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained

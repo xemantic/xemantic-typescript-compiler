@@ -5039,6 +5039,8 @@ object FrontEnd {
     var mergeMutates: Long = 0
     var mergeMutatesAdopted: Long = 0
     var mergeDeclarationsAppended: Long = 0
+    /** (CHK.80)(d) one row per alias-with-module merge on a `globals` carrier. */
+    val mergeAliasModuleRows: MutableList<String> = ArrayList()
 
     var workerNanos: LongArray = LongArray(0)
     var workerFiles: LongArray = LongArray(0)
@@ -5527,7 +5529,7 @@ object FrontEnd {
         pathNormalizeCalls = 0; pathNormalizeFast = 0; pathJoinCalls = 0; pathJoinFast = 0
         sequentialFileBinds = 0
         mergeAdopts = 0; mergeMutates = 0; mergeMutatesAdopted = 0
-        mergeDeclarationsAppended = 0
+        mergeDeclarationsAppended = 0; mergeAliasModuleRows.clear()
         workerNanos = LongArray(0); workerFiles = LongArray(0); workerChars = LongArray(0)
         parsedReused = 0; parsedFresh = 0
         lexNodePops = 0; flowNodesBuilt = 0; flowGraphsBuilt = 0
@@ -6059,6 +6061,8 @@ object FrontEnd {
                     "(of which reach an adopted symbol: $mergeMutatesAdopted), " +
                     "declarations appended $mergeDeclarationsAppended"
             )
+            // (CHK.80)(d) the alias/module merges on `globals` carriers, one row each.
+            for (row in mergeAliasModuleRows) appendLine("    alias+module merge: $row")
         }
         // (PERF.HW.d) — the per-worker spread the single `checker construct` wall
         // hides. `slowest/mean` is the factor by which the partition, not the

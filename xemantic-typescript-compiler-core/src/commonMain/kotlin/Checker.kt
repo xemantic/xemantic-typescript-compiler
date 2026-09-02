@@ -236,6 +236,17 @@ class Checker(
     private val mergeAdoptedSymbolIds = HashSet<Int>()
 
     /**
+     * (CHK.80)(d) The names of MODULE-file import aliases that share a name with an
+     * ambient module CARRIER (`import * as net from "./mynet"` beside `declare module
+     * "net"`) and were therefore refused by `init:mergeFileLocalsIntoGlobals`. The
+     * fast path of [lookupPerFileForNode] answers `globals[name]` for a non-module-only
+     * name without looking at the owning file; for these names the owning MODULE file's
+     * own alias must shadow the global, as tsc's file scope does. Empty on every
+     * program without such a collision, which is what keeps that path one probe.
+     */
+    private val moduleImportAliasNames = HashSet<String>()
+
+    /**
      * (PERF.HW.k) tsc's `mergedSymbols` / tsgo's `c.mergedSymbols`: binder symbol
      * -> the CHECKER-OWNED copy the merge writes to.
      *
@@ -352,6 +363,18 @@ class Checker(
         }
         val enclosing = levels ?: return null
         val merged = mergedNamespaceLevels(enclosing, owner)
+        // (CHK.80)(c) the index of the innermost `declare global` level, if any: every
+        // level INSIDE it is a GLOBAL namespace whose merged instance lives in
+        // `globals` (`init:mergeGlobalAugmentations` folds each file's `NodeJS` into
+        // one), where the per-file symbol and the (CHK.77) merged view hold this
+        // file's members only — `interface ProcessEnv extends Dict<string>` inside
+        // `declare module "process" { global { namespace NodeJS { … } } }` read the
+        // `Dict` of `globals.d.ts`'s `declare namespace NodeJS` as `any` (a false
+        // TS2339 on every member the base declares).
+        var globalIdx = -1
+        for ((i, decl) in enclosing.withIndex()) {
+            if ((decl.name as? Identifier)?.text == "global") { globalIdx = i; break }
+        }
         for ((i, decl) in enclosing.withIndex()) {
             fun accept(hit: Symbol?): Symbol? =
                 if (hit != null && (hit.flags.hasAny(meaning) || hit.flags.hasAny(SymbolFlags.Alias))) hit else null
@@ -365,8 +388,11 @@ class Checker(
                     accept(mergedLevel[k].exports?.get(name))?.let { return it }
                     k--
                 }
-                continue
             }
+            if (globalIdx > i) {
+                accept(globalAugmentationLevelSymbol(enclosing, globalIdx, i)?.exports?.get(name))?.let { return it }
+            }
+            if (mergedLevel != null) continue
             var segments = 0
             var nameExpr: Expression = decl.name
             while (nameExpr is PropertyAccessExpression) {
@@ -390,6 +416,37 @@ class Checker(
             }
         }
         return null
+    }
+
+    /**
+     * (CHK.80)(c) The MERGED global symbol of level [i] of [enclosing], which sits
+     * inside the `declare global` block at index [globalIdx]: descend from
+     * `globals[<outermost segment inside global>]` along every segment down to
+     * level [i] (a dotted `namespace A.B` contributes two). Null where a segment
+     * is not a merged namespace.
+     */
+    private fun globalAugmentationLevelSymbol(enclosing: List<ModuleDeclaration>, globalIdx: Int, i: Int): Symbol? {
+        var sym: Symbol? = null
+        var j = globalIdx - 1
+        while (j >= i) {
+            val segments = ArrayList<String>(2)
+            var nameExpr: Expression = enclosing[j].name
+            while (nameExpr is PropertyAccessExpression) {
+                segments.add(0, nameExpr.name.text)
+                nameExpr = nameExpr.expression
+            }
+            when (nameExpr) {
+                is Identifier -> segments.add(0, nameExpr.text)
+                else -> return null
+            }
+            for (seg in segments) {
+                val next = if (sym == null) globals[seg] else sym.exports?.get(seg)
+                if (next == null || !next.flags.hasAny(SymbolFlags.Module)) return null
+                sym = next
+            }
+            j--
+        }
+        return sym
     }
 
     /**
@@ -11106,6 +11163,27 @@ class Checker(
         for (result in binderResults) {
             if (isModuleFile(result.sourceFile.statements)) {
                 for ((name, symbol) in result.locals) {
+                    // (CHK.80)(d) A module file's IMPORT ALIAS sharing its name with an
+                    // AMBIENT MODULE CARRIER (`import * as net from "./mynet"` beside
+                    // `declare module "net"` — the carrier is a SCRIPT-file local, so a
+                    // SHARED name under 0e) does not merge: merged, the carrier carried the
+                    // Alias bit and the foreign ImportDeclaration, and `resolveAlias` on the
+                    // carrier — every `import x = require("net")` in the program — followed
+                    // that declaration to `./mynet`: a false TS2339 and a false TS2833 in an
+                    // UNRELATED file, and its own `zzSock` probe lost (measured; tsgo reports
+                    // the probe). Census on `@types/node` 20.19.43: one such merge (`stream`,
+                    // from `undici-types/index.d.ts`), on the (CHK.79) fixtures one each
+                    // (`net`, `ann`). CARRIERS ONLY: an alias merging into an ordinary
+                    // script global by name is the legacy shape a JS `module.exports`
+                    // augmentation still resolves through (`jsExportMemberMergedWithModule
+                    // Augmentation` — refusing it there loses the corpus's TS2741), so that
+                    // half stays as it was and is recorded, not fixed.
+                    if (symbol.declarations.isNotEmpty() && symbol.declarations.all { isImportBindingDecl(it) } &&
+                        globals[name]?.declarations?.any { it is ModuleDeclaration && it.name is StringLiteralNode } == true
+                    ) {
+                        moduleImportAliasNames.add(name)
+                        continue
+                    }
                     if (moduleLocalContributesGlobally(name, symbol)) {
                         mergeSingleSymbol(globals, name, symbol)
                     }
@@ -13238,6 +13316,8 @@ class Checker(
         // Approximation vs tsc: tsc keeps a TS2454 reported BEFORE the trip point within
         // the same container (single in-order pass); we drop those too — observable only
         // on synthetic deep-CFG files (zero trips on the corpus and tsc's own sources).
+        // (CHK.80)(b) a class `extends A.B` whose namespace/module head lacks `B`.
+        pass("checkClassExtendsMissingNamespaceMember") { checkClassExtendsMissingNamespaceMember() }
         pass("init:flowDisabledTs2454Retraction") {
         if (flowDisabledRanges.isNotEmpty()) {
             diagnostics.removeAll { d ->
@@ -14909,6 +14989,22 @@ class Checker(
                 FrontEnd.mergeMutates++
                 if (existing.id in mergeAdoptedSymbolIds) FrontEnd.mergeMutatesAdopted++
                 FrontEnd.mergeDeclarationsAppended += symbol.declarations.size.toLong()
+                // (CHK.80)(d) an ALIAS merging with a MODULE (either way round) on a
+                // `globals` carrier: which name, which declarations, from which file.
+                if (target === globals) {
+                    val aliasIn = symbol.flags.hasAny(SymbolFlags.Alias) && !symbol.flags.hasAny(SymbolFlags.Module)
+                    val moduleIn = symbol.flags.hasAny(SymbolFlags.Module)
+                    val existingAlias = existing.flags.hasAny(SymbolFlags.Alias)
+                    val existingModule = existing.flags.hasAny(SymbolFlags.Module)
+                    if ((aliasIn && existingModule) || (moduleIn && existingAlias && !existingModule)) {
+                        fun describe(sym: Symbol) = sym.declarations.joinToString(",") { d ->
+                            d::class.simpleName + "@" + (owningSourceFile(d)?.fileName?.substringAfterLast('/') ?: "?")
+                        }
+                        FrontEnd.mergeAliasModuleRows.add(
+                            "$name: existing[${describe(existing)}] += incoming[${describe(symbol)}]"
+                        )
+                    }
+                }
             }
             // (PERF.HW.k) COPY-ON-WRITE, exactly tsc's shape: a non-transient
             // target is binder-owned, so clone it, mutate the clone, and write the
@@ -16745,7 +16841,8 @@ class Checker(
             NameCensus.publish(moduleOnlyGlobals(), globals.keys)
             NameCensus.nameProbe(name, name in moduleOnlyGlobals(), node = true)
         }
-        if (name !in moduleOnlyGlobals()) return globals[name]
+        val moduleOnly = name in moduleOnlyGlobals()
+        if (!moduleOnly && (moduleImportAliasNames.isEmpty() || name !in moduleImportAliasNames)) return globals[name]
         // Walk to the owning SourceFile, capturing the INNERMOST enclosing
         // `declare module "<spec>"` block on the way (the INV.3(c)(iv)
         // augmentation-visibility rule below needs it). Mirrors
@@ -16762,6 +16859,13 @@ class Checker(
             cur = (cur as NodeBase).parent
         }
         if (owner == null) return globals[name]
+        // (CHK.80)(d) a script-global name some MODULE file imports under the same
+        // name: that file's own alias shadows the global (the per-file scope layers
+        // the file's locals over the script ones); any other file keeps the global.
+        if (!moduleOnly) {
+            val scope = perFileScopeOf(owner.fileName) ?: return globals[name]
+            return lookupInFileScope(scope, name) ?: globals[name]
+        }
         globalsForFile(owner.fileName, name)?.let { return it }
         // INV.3(c)(iv): a node inside a `declare module "<relative-spec>"`
         // AUGMENTATION block additionally sees the AUGMENTED module's exports
@@ -17734,7 +17838,15 @@ class Checker(
                         // prebuilt index (no parent pointers; round 432 — was a
                         // program-wide structural scan re-run on every call for
                         // unresolvable barrel aliases).
-                        for ((_, stmt) in enclosingImportsOf(decl)) {
+                        // (CHK.80)(c) The index holds TOP-LEVEL imports only; a specifier
+                        // written inside a `declare module` block (`import { EventEmitter }
+                        // from "node:events"` — 29 bare heritage bases of `@types/node`)
+                        // reaches its ImportDeclaration through the INV.2(a) parent chain,
+                        // and was left unresolved (`any`) here before.
+                        val enclosingImports = enclosingImportsOf(decl).ifEmpty {
+                            blockLevelImportOf(decl)?.let { listOf(it) } ?: emptyList()
+                        }
+                        for ((_, stmt) in enclosingImports) {
                             val specifier2 = (stmt.moduleSpecifier as? StringLiteralNode)?.text
                                 ?: continue
                             // Round 512 (the round-511 dir-relative lesson): the bare
@@ -17762,6 +17874,15 @@ class Checker(
                                             return resolveAlias(target, visited)
                                         }
                                     }
+                                    // (CHK.80)(c) the (CHK.79) surface walk: an `export * from
+                                    // "m"` block (`node:net`), and an `export = <alias>` whose
+                                    // target block itself ends in `export = Stream` — the
+                                    // NAMESPACE's members (`import { Readable } from
+                                    // "node:stream"`), which the leg above cannot see.
+                                    ambientModuleSurfaceMember(ambient, originalName, HashSet())?.let { target ->
+                                        setSymbolTarget(symbol, target)
+                                        return resolveAlias(target, visited)
+                                    }
                                 }
                                 continue
                             }
@@ -17776,6 +17897,26 @@ class Checker(
             }
         }
         return symbol
+    }
+
+    /**
+     * (CHK.80)(c) The ImportDeclaration a NAMED-import specifier belongs to, through
+     * the parent chain (`ImportSpecifier` → `NamedImports` → `ImportClause` →
+     * `ImportDeclaration`), with its owning file — for a specifier the top-level
+     * [enclosingImportIndex] does not hold, i.e. one written inside a `declare
+     * module` block. Null for an unindexed (synthesized) node.
+     */
+    private fun blockLevelImportOf(spec: ImportSpecifier): Pair<String, ImportDeclaration>? {
+        var cur: Node? = (spec as NodeBase).parent
+        var hops = 0
+        while (cur != null && hops++ < 4) {
+            if (cur is ImportDeclaration) {
+                val owner = owningSourceFile(cur)?.fileName ?: return null
+                return owner to cur
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return null
     }
 
     /**
@@ -17979,15 +18120,24 @@ class Checker(
             is QualifiedName -> resolveQualifiedName(l)
             else -> null
         }
-        if (left != null) {
-            val resolved = resolveAlias(left)
-            resolved.exports?.get(qn.right.text)?.let { return it }
-        }
+        val resolved = left?.let { resolveAlias(it) }
+        resolved?.exports?.get(qn.right.text)?.let { return it }
         // INV.3(d): a namespace-IMPORT-rooted chain (`ts.DocumentRegistry`,
         // `ts.server.Session`) — resolveAlias cannot follow NamespaceImports
         // (round 444) and the retired merge no longer leaks the member name;
         // resolve through the target modules' exports directly.
         return resolveNsQualifiedFromQualifiedName(qn)
+            // (CHK.80)(a) LAST: the head is a namespace import / `require` alias of a
+            // FILELESS ambient module (`import * as net from "node:net"` inside a
+            // `declare module` block), which `resolveAlias` leaves unresolved, or an
+            // ambient carrier whose own exports lack the name because its body is
+            // wiring (`export = X`, `export * from "m"`) — the (CHK.79) surface walk,
+            // which the heritage arm already takes. Consulted only after every
+            // other leg missed, so a resolvable name costs nothing here; without it
+            // `x: net.Socket` written in such a block typed `any` while `class X
+            // extends net.Socket` beside it inherited (measured: 14 of 15 probes
+            // silent on a (CHK.79)-shaped fixture, tsgo reporting all 15).
+            ?: resolved?.let { ambientModuleSurfaceMember(it, qn.right.text, HashSet()) }
     }
 
     /**
@@ -18009,6 +18159,8 @@ class Checker(
         } ?: return null
         val resolved = resolveAlias(left)
         return resolved.exports?.get(expr.name.text)
+            // (CHK.80)(a) the value-position twin of [resolveQualifiedName]'s last leg.
+            ?: ambientModuleSurfaceMember(resolved, expr.name.text, HashSet())
     }
 
     /**
@@ -114788,6 +114940,122 @@ interface DataView {
             if (!carrier.flags.hasAny(SymbolFlags.Module)) continue
             if (carrier.declarations.none { it is ModuleDeclaration && it.name is StringLiteralNode }) continue
             return carrier
+        }
+        return null
+    }
+
+    /**
+     * (CHK.80)(b) TS2339 at the MEMBER of a class `extends A.B` base whose head is a
+     * namespace or a module and whose surface does not offer `B` — tsc's
+     * `checkPropertyAccessExpression` over the base expression: `Property 'B' does
+     * not exist on type 'typeof M'` for a namespace head (the INNERMOST segment's
+     * name — `typeof Inner2` for `Outer.Inner2.Nope`, `typeof B` for a dotted
+     * `namespace A.B`; measured on tsgo 7.0.2) and `'typeof import("m")'` for a
+     * namespace-import / `require` alias of an ambient module, `m` as WRITTEN in the
+     * import. Pristine's `undeclaredBase` (`class C extends M.I`, no `I`),
+     * `classExtendingQualifiedName` (an `I` that is declared but NOT exported reports
+     * the same) and `extBaseClass2` (a namespace declared later in the file) gate the
+     * namespace half; the (CHK.79) fixture's `class Bad extends net.Nope` inside
+     * `declare module "neg"` the alias half — silent here before, TS2339 in tsgo.
+     *
+     * Emitted ONLY where the head RESOLVED to such a symbol, which is what makes the
+     * absence a fact about the program: an unresolved head (`Unknown.Foo`) is a
+     * TS2304 shape, a value head (`notNs.Foo`: tsc says `typeof number`), a class
+     * head (`net.Socket.Nope`: `typeof Socket`) and an enum head are left alone, and
+     * so is a FILE-backed module head (a namespace import of a program file — this
+     * checker's module symbol for a file does not enumerate its `export *`
+     * re-exports, so its "absent" is not evidence). `extends` only: an interface's
+     * `extends X.Y` is TS2694 in tsc, a different diagnostic. Class declarations at
+     * the top level and inside namespace / ambient-module bodies.
+     */
+    private fun checkClassExtendsMissingNamespaceMember() {
+        for (result in checkedResults) {
+            checkClassExtendsMissingNamespaceMemberIn(
+                result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName,
+            )
+        }
+    }
+
+    private fun checkClassExtendsMissingNamespaceMemberIn(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ModuleDeclaration -> {
+                    var body: Node? = stmt.body
+                    while (body is ModuleDeclaration) body = body.body
+                    (body as? ModuleBlock)?.let {
+                        checkClassExtendsMissingNamespaceMemberIn(it.statements, source, fileName)
+                    }
+                }
+                is ClassDeclaration -> {
+                    for (clause in stmt.heritageClauses ?: continue) {
+                        if (clause.token != SyntaxKind.ExtendsKeyword) continue
+                        for (t in clause.types) {
+                            val base = t.expression as? PropertyAccessExpression ?: continue
+                            val display = missingNamespaceMemberHeadDisplay(base) ?: continue
+                            val prop = base.name
+                            if (prop.pos < 0 || prop.text.isEmpty()) continue
+                            // The spine's namespace-receiver TS2339 (`checkMemberAccessMissing`)
+                            // already reports a SCRIPT-file namespace head at this position
+                            // (`undeclaredBase`'s `M.I`); this pass adds only what it does not
+                            // reach — alias heads, nested heads, `.d.ts` bodies.
+                            if (diagnostics.any { it.code == 2339 && it.fileName == fileName && it.start == prop.pos }) continue
+                            val (line, character) = getLineAndCharacterOfPosition(source, prop.pos)
+                            diagnostics.add(Diagnostic(
+                                message = "Property '${prop.text}' does not exist on type '$display'.",
+                                category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                                line = line, character = character, start = prop.pos, length = prop.text.length,
+                            ))
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * (CHK.80)(b) The `typeof …` display of [base]'s head when the head is a
+     * namespace or an ambient module whose surface lacks [base]'s member (or
+     * declares it without exporting it), null for every other shape — see
+     * [checkClassExtendsMissingNamespaceMember] for the shapes that answer null.
+     */
+    private fun missingNamespaceMemberHeadDisplay(base: PropertyAccessExpression): String? {
+        if (resolveHeritageBaseSymbol(base) != null) return null
+        // A module file's `import * as net from "node:net"` shares its NAME with the
+        // ambient carrier `globals["net"]`; the head consult answers the file's OWN
+        // alias ((CHK.80)(d)), so the display is the specifier as WRITTEN
+        // (`import("node:net")`, tsgo) and not the carrier's.
+        val head = resolveHeritageBaseHead(base.expression) ?: return null
+        if (head.flags.hasAny(SymbolFlags.Alias) && !head.flags.hasAny(SymbolFlags.Module)) {
+            // A namespace-import / `require` alias of a FILELESS ambient module: the
+            // surface walk [resolveHeritageBaseSymbol] took answered nothing.
+            ambientModuleOfImportAlias(head) ?: return null
+            val spec = importAliasWrittenSpecifier(head) ?: return null
+            return "typeof import(\"$spec\")"
+        }
+        val resolved = resolveAlias(head)
+        if (!resolved.flags.hasAny(SymbolFlags.Module)) return null
+        val decl = resolved.declarations.firstOrNull { it is ModuleDeclaration } as? ModuleDeclaration ?: return null
+        return when (val n = decl.name) {
+            is Identifier -> "typeof ${n.text}"
+            is PropertyAccessExpression -> "typeof ${n.name.text}"
+            is StringLiteralNode -> "typeof import(\"${n.text}\")"
+            else -> null
+        }
+    }
+
+    /** The module specifier a namespace-import / `require` [alias] was written with. */
+    private fun importAliasWrittenSpecifier(alias: Symbol): String? {
+        for (decl in alias.declarations) {
+            val spec = when (decl) {
+                is ImportDeclaration ->
+                    if (decl.importClause?.namedBindings is NamespaceImport)
+                        (decl.moduleSpecifier as? StringLiteralNode)?.text else null
+                is ImportEqualsDeclaration ->
+                    ((decl.moduleReference as? ExternalModuleReference)?.expression as? StringLiteralNode)?.text
+                else -> null
+            }
+            if (spec != null) return spec
         }
         return null
     }

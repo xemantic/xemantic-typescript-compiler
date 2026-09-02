@@ -89,6 +89,50 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(CHK.80) LANDED — the four (CHK.79) follow-ups, each reproduced against tsgo on its own fixture
+(`scratchpad/chk80/`), all matching row for row after.** (a) ANNOTATIONS through a block's
+namespace-import alias (`x: net.Socket`, `Array<net.Socket>`, a `require` alias, a type alias):
+`ambientModuleSurfaceMember` is now the LAST leg of `resolveQualifiedName` and
+`resolveQualifiedValueSymbol` — 1 → 11 of 15 consumer rows match; the 4 that stay silent are
+(CHK.73)'s "a module symbol has no type" (`p.v`/`p.f()`/`new p.ctor()` through `import p =
+require("p")` are untyped on HEAD too). (b) `class X extends A.B` with a namespace/module head
+lacking `B`: tsgo reports **TS2339 at the member name, `Property 'Nope' does not exist on type
+'typeof import("node:net")'`** — the specifier as WRITTEN, `typeof NS` for a script namespace, the
+innermost segment for a dotted head, the same for a declared-but-not-exported member; a new pass
+`checkClassExtendsMissingNamespaceMember` emits it only where `resolveHeritageBaseSymbol` is null
+AND the head resolves to a namespace or a namespace-import/`require` alias of a fileless carrier,
+deduped against the spine's existing row; the three pristine fixtures the oracle names
+(`undeclaredBase`, `classExtendingQualifiedName`, `extBaseClass2`) match byte for byte. (c)
+NAMED-import heads inside ambient blocks and `declare global` names: `resolveAlias`'s
+`ImportSpecifier` arm reaches a BLOCK-level specifier's declaration through the parent chain (the
+round-432 index holds top-level imports only) and takes the (CHK.79) surface walk; and
+`lookupInEnclosingNamespaces` consults the MERGED global namespace (`globals[seg]`, which
+`init:mergeGlobalAugmentations` already folds each file's `NodeJS` into — only the
+enclosing-namespace consult was reading the per-file twin) — no (CHK.50) design needed; 4 false
+TS2339 and every named-import base silent → all 12 rows match. (d) The alias-into-carrier
+MERGE, censused (`--mergeCensus` now prints one row per alias-with-module merge on `globals`):
+`init:mergeSharedKeepNames` makes every SCRIPT-file local a shared name and an ambient carrier
+`"net"` IS a script local, so a MODULE file's same-named import alias merged into it — the
+concrete defect on HEAD: `import * as net from "./mynet"` in one file makes `import net2 =
+require("net")` in an UNRELATED file resolve to `./mynet`. One guard in
+`init:mergeFileLocalsIntoGlobals` (a pure-import-alias local whose name is an ambient CARRIER is
+skipped) plus the read side it forces (`lookupPerFileForNode`'s fast path answered `globals[name]`
+before the owning module file's own alias — `moduleImportAliasNames`, empty on every program
+without a collision, keeps the hot path one probe); the GENERAL "an import alias never merges"
+guard was built and REVERTED — it reddens corpus `jsExportMemberMergedWithModuleAugmentation` (a
+JS `module.exports` augmentation resolves through that legacy merge). Post-fix census 0 rows.
+15 pins in `NamespaceResolutionFollowUpTest` + 4 re-scoped in `NamespaceImportHeritageTest`
+(**pin ablation NOT run this time — the fixtures are the reproduction evidence**); filtered
+1,300/0; cost_gate exit 0 (deltas inherited, HEAD identical on all 20); huge_methods 0 over; the
+8-profile grid `added=0 removed=0`; externals 242/0 (one (EXT.19) pin moved: `f: net.Family` →
+`String`, the same-file Dukat rule now that the lens answers the alias). **`@types/node` probe:
+BETTER, not identical** — markers 5,343 → 5,323, heritage refusals 95 → 82, unmapped 3,198 →
+3,186, 0 errors in both compilers; the generator's bare-name heritage route now carries 8 of the
+29 bases (measured by ablation: five `extends EventEmitter` whose head is `import EventEmitter =
+require("node:events")` — B113 resolves a `require` of an `export = <class>` block to the CARRIER
+— and three `extends Stream` inside `namespace Stream`) and stays, KDoc'd. Suite 17,135 →
+17,150 / 0 / 3. Follow-ups queued as (CHK.81).
+
 **(CHK.79) LANDED — a dotted heritage base whose head is a namespace import inside an ambient
 module block resolves through the target module's SURFACE.** Reproduced on a four-file
 `@types/node`-shaped fixture (`declare module "stream"` with `export = Stream` + a
@@ -1924,7 +1968,7 @@ Owner decisions 2026-09-02:
   `resolveHeritageBaseSymbol`/`resolveHeritageBaseHead`, pin, and retire the generator's
   syntactic path for it where the lens then answers.
 
-- [ ] **(CHK.80) THE (CHK.79) FOLLOW-UPS, MEASURED ON ITS OWN FIXTURES.** (a) The ANNOTATION
+- [x] **(CHK.80) DONE 2026-09-02 ((P18.9) note; all four sub-items landed — annotations through a block's namespace-import alias, TS2339 at a missing namespace member in a heritage clause, named-import and `declare global` heritage heads, the alias-into-carrier merge refused; 15 + 4 pins, grid unchanged, cost_gate exit 0, suite 17,150/0/3; (CHK.81) queued) — THE (CHK.79) FOLLOW-UPS, MEASURED ON ITS OWN FIXTURES.** (a) The ANNOTATION
   side: `x: net.Socket` / `net.ServerOpts` written inside an ambient block still types `any` —
   `resolveQualifiedName`'s alias leg leaves a fileless `NamespaceImport` alias unresolved; the
   same `ambientModuleSurfaceMember` would serve it, but it reaches EVERY qualified-name consumer,
@@ -1938,6 +1982,21 @@ Owner decisions 2026-09-02:
   file's `import net = require("net")` and block-scoped `net` aliases by NAME — a pre-existing
   merge to census and probably refuse. Each with pins; retire the generator's bare-name
   heritage route where the lens then answers (KDoc'd numbers in `collectHeritage`).
+
+- [ ] **(CHK.81) `import X = require("m")` OF A BLOCK WHOSE SURFACE IS `export = <class>`
+  RESOLVES TO THE CARRIER (B113), NOT THE CLASS — the 8 bare heritage bases `@types/node` still
+  carries on the generator's written route after (CHK.80) (five `extends EventEmitter` with
+  `import EventEmitter = require("node:events")`, three `extends Stream` written inside
+  `namespace Stream`).** Resolving the `require` alias to `m`'s `export =` target touches the
+  whole B113 family — corpus + 8-profile grid gated. Smaller siblings from the same census,
+  each pre-existing: TS2694's display prints `Namespace '"mod".net'` where tsgo prints
+  `'"node:net"'`; no TS2694 for an interface `extends X.Missing` or an annotation `X.Missing`;
+  no TS2304 for `Unknown.Foo`; a false TS2833 `Cannot find namespace 'net2'` for a `require`
+  alias of an ambient module; `import { Stream } from "node:stream"` resolves to the `export =`
+  class where tsgo says TS2305 (`resolveAmbientModuleExportEquals` over-approximates); tsgo
+  displays a literal-union alias as `string` in a TS2322 where we print the union (display).
+  Also (CHK.73)'s shadow, measured again: `p.v` / `p.f()` / `new p.ctor()` through `import p =
+  require("p")` are untyped (a module symbol has no type).
 
 - [ ] **(CHK.78) TWO PRE-EXISTING AUGMENTATION DIVERGENCES, MEASURED ON (CHK.77)'s NEGATIVE
   CONTROL, PLUS ONE IN-WALK LENS ANSWER.** With `types.ts` beside `declare module "./types.js"

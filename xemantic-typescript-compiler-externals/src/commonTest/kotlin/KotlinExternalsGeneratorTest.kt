@@ -4615,13 +4615,16 @@ class KotlinExternalsGeneratorTest {
 
     @Test
     fun `a base or a type written through a namespace import inside an ambient module resolves through the module surface`() {
-        // The lens answers nothing for `net.Socket` where `net` is `import *
+        // The lens answered nothing for `net.Socket` where `net` is `import *
         // as net` (measured: every such base on `@types/node`); the module
         // surface does — `node:net` re-exports `net` with `export *`,
         // `node:stream` is `export = stream` over `import stream =
         // require("stream")`, whose own `export = Stream` names the namespace
         // holding `Readable`. A member the module does not hold keeps the
-        // marker.
+        // marker. Since (CHK.79)/(CHK.80) the lens answers these itself, and
+        // `f: net.Family` then follows the Dukat rule a same-file `k: Kind`
+        // follows (the resolved literal union widens to `String`) instead of
+        // the written route's by-name `Family`.
         val result = generateKotlinExternals(
             listOf(
                 SourceFileEntry(
@@ -4723,7 +4726,7 @@ class KotlinExternalsGeneratorTest {
             public external interface Uses {
                 public var s: Socket
                 public var o: ServerOpts
-                public var f: Family
+                public var f: String
                 public var r: Stream.Readable
                 public var ro: Stream.ReadableOptions
                 public var missing: Any? /* xtsc: unmapped net.Nope - resolved to any */

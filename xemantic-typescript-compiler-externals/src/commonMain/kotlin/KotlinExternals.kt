@@ -3653,13 +3653,22 @@ private class ExternalsCollector(
                     // so the (EXT.19) syntactic `moduleMember` route is retired
                     // here — measured on `@types/node` 20.19.43: with the whole
                     // written-name fallback removed, ZERO dotted bases were
-                    // lost and 29 BARE ones were, so the bare-name half stays:
-                    // a NAMED import's alias (`import { EventEmitter } from
-                    // "node:events"` — 14 `extends EventEmitter`, `Stream`,
-                    // `Readable`, `Writable`, `AsyncResource`, …), and a name
-                    // declared by `declare global`'s `NodeJS` namespace (`Dict`,
-                    // `RefCounted`, `ReadWriteStream`), which the lens still
-                    // answers nothing for ((CHK.50)'s open half).
+                    // lost and 29 BARE ones were, so the bare-name half stays.
+                    // (CHK.80)(c) closed 21 of those 29 — a NAMED import's
+                    // alias inside the block (`import { EventEmitter } from
+                    // "node:events"`, `Readable`, `AsyncResource`, …) and a
+                    // bare name a `declare global { namespace NodeJS }` block
+                    // reads from ANOTHER file's `NodeJS` (`Dict`, `RefCounted`,
+                    // `ReadWriteStream`) — and the same ablation then loses
+                    // EIGHT bases (heritage markers 82 → 90 on `@types/node`
+                    // 20.19.43): five `extends EventEmitter` whose head is
+                    // `import EventEmitter = require("node:events")` (cluster's
+                    // `Worker`, `Domain`, inspector's two `Session`s, …), an
+                    // `import X = require` of a block whose surface is `export
+                    // = <class>` resolving to the CARRIER (B113) rather than
+                    // to the class; and three `extends Stream` written INSIDE
+                    // `namespace Stream` (`Readable`, `Writable`, `Duplex`).
+                    // The written route stays for those eight.
                     val resolved = lens.heritageBaseSymbol(base.expression)
                         ?.let { lens.aliasTarget(it) ?: it }
                         ?.declarations?.firstNotNullOfOrNull { declared ->

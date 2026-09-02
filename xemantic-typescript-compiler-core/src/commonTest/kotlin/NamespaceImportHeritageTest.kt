@@ -149,7 +149,7 @@ class NamespaceImportHeritageTest {
             "Type 'string' is not assignable to type 'number'.",
             "Type 'string' is not assignable to type 'number'.",
         ))
-        assert(messages(d, 2339).isEmpty())
+        assert(d.none { it.code == 2339 && it.fileName == "main.ts" })
     }
 
     @Test
@@ -162,7 +162,7 @@ class NamespaceImportHeritageTest {
             """
         )
         assert(messages(d, 2322) == listOf("Type 'boolean' is not assignable to type 'string'."))
-        assert(messages(d, 2339).isEmpty())
+        assert(d.none { it.code == 2339 && it.fileName == "main.ts" })
     }
 
     @Test
@@ -183,7 +183,7 @@ class NamespaceImportHeritageTest {
             "Type 'boolean' is not assignable to type 'string'.",
             "Type 'number' is not assignable to type 'string'.",
         ))
-        assert(messages(d, 2339).isEmpty())
+        assert(d.none { it.code == 2339 && it.fileName == "main.ts" })
     }
 
     @Test
@@ -201,7 +201,7 @@ class NamespaceImportHeritageTest {
             "Type 'boolean' is not assignable to type 'string'.",
             "Type 'number' is not assignable to type 'string'.",
         ))
-        assert(messages(d, 2339).isEmpty())
+        assert(d.none { it.code == 2339 && it.fileName == "main.ts" })
     }
 
     // --- the lens ----------------------------------------------------------------------
@@ -319,7 +319,8 @@ class NamespaceImportHeritageTest {
     @Test
     fun `negative control - a consumer of an unresolvable base stays silent on the derived members`() {
         // The base of `Bad` is unresolvable; its OWN member still types. tsgo reports
-        // TS2339 at the base expression, which this checker does not emit (pre-existing).
+        // TS2339 at the base expression, which (CHK.80)(b) emits at the member name
+        // (`NamespaceResolutionFollowUpTest` pins the rows); nothing reaches the consumer.
         val d = program(
             """
             import neg = require("neg");
@@ -328,5 +329,7 @@ class NamespaceImportHeritageTest {
             """
         )
         assert(messages(d, 2322) == listOf("Type 'number' is not assignable to type 'string'."))
+        assert(d.none { it.code == 2339 && it.fileName == "main.ts" })
+        assert(d.any { it.code == 2339 && it.fileName == "neg.d.ts" && it.message == "Property 'Nope' does not exist on type 'typeof import(\"node:net\")'." })
     }
 }
