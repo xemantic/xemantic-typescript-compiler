@@ -482,18 +482,85 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
      */
     private class Base(val declaration: ExternalDeclaration, val substitution: Map<String, String>)
 
-    private fun basesOf(declaration: ExternalDeclaration, outer: Map<String, String>): List<Base> {
+    /**
+     * The bases of [declaration], each with the substitution its members are
+     * read through, in the vocabulary of the declaration at [toPath] — the
+     * one whose chain is being walked ([declaration] itself, or a derived
+     * declaration further down); the supertype's own arguments are
+     * (EXT.19) respelled from [declaration]'s scope to [toPath] before
+     * [outer] rewrites the type parameters in them.
+     */
+    private fun basesOf(
+        declaration: ExternalDeclaration,
+        outer: Map<String, String>,
+        toPath: List<String> = pathOf(declaration),
+    ): List<Base> {
         val pruned = prunedSupertypes(declaration)
         val texts = listOfNotNull(pruned.superClass) + pruned.interfaces
         val fromPath = pathOf(declaration)
+        val skip = typeParametersOf(declaration).toSet()
         return texts.mapNotNull { text ->
             val base = declarationNamed(text, fromPath) ?: return@mapNotNull null
             val parameters = typeParametersOf(base)
-            val arguments = typeArgumentTexts(text).orEmpty().map { substituteTypeParameters(it, outer) }
+            val arguments = typeArgumentTexts(text).orEmpty().map {
+                substituteTypeParameters(respell(it, fromPath, toPath, skip), outer)
+            }
             val substitution =
                 if (parameters.size == arguments.size) parameters.zip(arguments).toMap() else emptyMap()
             Base(base, substitution)
         }
+    }
+
+    /**
+     * (EXT.19) [text] — a type text written in the scope at [fromPath] —
+     * respelled so that it denotes the same declarations from inside
+     * [toPath]: every generated name in it is resolved as Kotlin resolves
+     * it at [fromPath] ([resolveSpelling]) and spelled again as the shortest
+     * spelling that resolves at [toPath] ([shortestSpelling]). What makes a
+     * base's member usable in a DERIVED declaration of another scope — an
+     * inherited constructor parameter typed `ReadableOptions<Readable>`
+     * inside `object Stream` rendered on a top-level `ReadStream :
+     * Stream.Readable` was `Unresolved reference`, and an inherited
+     * `(Readable) -> Unit` compared textually with the derived class's own
+     * `(Stream.Readable) -> Unit` hid the override (measured on
+     * `@types/node`, four and nine errors). A name in [skip] — the base's
+     * and the member's own type parameters — and a name the generation does
+     * not declare (`String`, a lib type) are kept as they are; a generated
+     * name with no spelling at [toPath] (shadowed there) turns the whole
+     * text into the marked `Any?`, the one loud shape a type text has.
+     */
+    private fun respell(text: String, fromPath: List<String>, toPath: List<String>, skip: Set<String>): String {
+        if (fromPath == toPath) return text
+        val parsed = parseKotlinTypeText(text) ?: return text
+        val marker = text.substring(typeTextWithoutMarker(text).length)
+        var shadowed: String? = null
+        fun map(type: KotlinTypeText): KotlinTypeText = when (type) {
+            is NamedTypeText -> {
+                val name = when {
+                    type.name in skip -> type.name
+                    else -> respelledName(type.name, fromPath, toPath) ?: type.name.also { shadowed = it }
+                }
+                NamedTypeText(name, type.arguments.map(::map), type.nullable)
+            }
+            is FunctionTypeText -> FunctionTypeText(
+                type.receiver?.let(::map),
+                type.parameters.map(::map),
+                map(type.returnType),
+                type.nullable,
+            )
+        }
+        val mapped = map(parsed)
+        shadowed?.let { name ->
+            return "Any? /* xtsc: unmapped ${typeTextWithoutMarker(text)} - $name is shadowed inside " +
+                "${toPath.joinToString(".")}, no Kotlin spelling reaches it */"
+        }
+        return mapped.toKotlinText() + marker
+    }
+
+    /** One generated name respelled from [fromPath] to [toPath]; a name the generation does not declare stays; null when shadowed. */
+    private fun respelledName(name: String, fromPath: List<String>, toPath: List<String>): String? {
+        val full = resolveSpelling(spellingSegments(name), fromPath, declared) ?: return name
+        return shortestSpelling(toPath, full.dropLast(1), full.last(), declared)
     }
 
     private fun ownMembers(declaration: ExternalDeclaration): List<ExternalMember> = when (declaration) {
@@ -502,27 +569,57 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         else -> emptyList()
     }
 
-    /** [member] with every type text read through [substitution]. */
-    private fun substituted(member: ExternalMember, substitution: Map<String, String>): ExternalMember =
-        if (substitution.isEmpty()) member else when (member) {
+    /**
+     * [member] of the declaration at [fromPath] as read from the declaration
+     * at [toPath]: every type text (EXT.19) respelled between the scopes,
+     * then read through [substitution]. [skip] holds the owning
+     * declaration's type-parameter names, which a respelling leaves alone.
+     */
+    private fun substituted(
+        member: ExternalMember,
+        substitution: Map<String, String>,
+        fromPath: List<String>,
+        toPath: List<String>,
+        skip: Set<String>,
+    ): ExternalMember =
+        if (substitution.isEmpty() && fromPath == toPath) member else when (member) {
             is ExternalProperty -> ExternalProperty(
                 name = member.name,
-                type = substituteTypeParameters(member.type, substitution),
+                type = adapted(member.type, substitution, fromPath, toPath, skip),
                 readOnly = member.readOnly,
             )
-            is ExternalFunction -> ExternalFunction(
-                name = member.name,
-                typeParameters = member.typeParameters,
-                markers = member.markers,
-                parameters = member.parameters.map { substitutedParameter(it, substitution) },
-                returnType = substituteTypeParameters(member.returnType, substitution),
-                operator = member.operator,
-            )
+            is ExternalFunction -> {
+                val own = skip + member.typeParameters
+                ExternalFunction(
+                    name = member.name,
+                    typeParameters = member.typeParameters,
+                    markers = member.markers,
+                    parameters = member.parameters.map { substitutedParameter(it, substitution, fromPath, toPath, own) },
+                    returnType = adapted(member.returnType, substitution, fromPath, toPath, own),
+                    operator = member.operator,
+                )
+            }
             is SkippedMember -> member
         }
 
-    private fun substitutedParameter(parameter: ExternalParameter, substitution: Map<String, String>) =
-        ExternalParameter(parameter.name, substituteTypeParameters(parameter.type, substitution), parameter.vararg)
+    private fun adapted(
+        text: String,
+        substitution: Map<String, String>,
+        fromPath: List<String>,
+        toPath: List<String>,
+        skip: Set<String>,
+    ): String = substituteTypeParameters(respell(text, fromPath, toPath, skip), substitution)
+
+    private fun substitutedParameter(
+        parameter: ExternalParameter,
+        substitution: Map<String, String>,
+        fromPath: List<String>,
+        toPath: List<String>,
+        skip: Set<String>,
+    ) = ExternalParameter(parameter.name, adapted(parameter.type, substitution, fromPath, toPath, skip), parameter.vararg)
+
+    /** The type-parameter names of a declaration as a set — what [respell] must not touch. */
+    private fun ownNamesOf(declaration: ExternalDeclaration): Set<String> = typeParametersOf(declaration).toSet()
 
     /** Member key: `p:` + name for a property, `f:` + [overrideSignature] for a function. */
     fun keyOf(member: ExternalMember): String? = when (member) {
@@ -578,38 +675,86 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         owedCache[qualified] = emptyList()
         val declaredKeys = HashSet<String>()
         val declaredNames = HashSet<String>()
+        // (EXT.19) The OVERLOAD signatures the chain's classes declare: an
+        // inherited member of that signature under another override key is
+        // not owed — the class renders its own member in the inherited shape
+        // instead ([liftedOverride]).
+        val declaredOverloads = HashSet<String>()
         val owed = LinkedHashMap<String, OwedMember>()
         val visited = HashSet<String>()
+        val toPath = pathOf(declaration)
         fun walk(d: ExternalDeclaration, outer: Map<String, String>) {
             val name = qualifiedNameOf(d) ?: return
             if (!visited.add(name)) return
+            val fromPath = pathOf(d)
+            val skip = ownNamesOf(d)
             when (d) {
                 is ExternalClass -> {
                     for (m in ownMembers(d)) {
-                        val seen = substituted(m, outer)
+                        val seen = substituted(m, outer, fromPath, toPath, skip)
                         keyOf(seen)?.let(declaredKeys::add)
+                        overloadKeyOf(seen)?.let(declaredOverloads::add)
                         declaredNames += memberNameOf(seen)
                     }
                     if (d !== declaration) {
-                        for (o in owedMembers(d)) keyOf(substituted(o.member, outer))?.let(declaredKeys::add)
+                        for (o in owedMembers(d)) keyOf(substituted(o.member, outer, fromPath, toPath, skip))?.let(declaredKeys::add)
                     }
                 }
                 is ExternalInterface -> {
                     for (m in renderedOwnMembers(d)) {
-                        val seen = substituted(m, outer)
+                        val seen = substituted(m, outer, fromPath, toPath, skip)
                         val key = keyOf(seen) ?: continue
                         owed.putIfAbsent(key, OwedMember(seen, name, nameDeclared = false))
                     }
                 }
                 else -> return
             }
-            for (base in basesOf(d, outer)) walk(base.declaration, base.substitution)
+            for (base in basesOf(d, outer, toPath)) walk(base.declaration, base.substitution)
         }
         walk(declaration, emptyMap())
-        val result = owed.filterKeys { it !in declaredKeys }.values
+        val result = owed.values
+            .filter { keyOf(it.member) !in declaredKeys && overloadKeyOf(it.member) !in declaredOverloads }
             .map { OwedMember(it.member, it.from, nameDeclared = memberNameOf(it.member) in declaredNames) }
         owedCache[qualified] = result
         return result
+    }
+
+    /**
+     * (EXT.19) The overload-conflict key of a function member
+     * ([overloadSignature]) with the own type-parameter COUNT dropped —
+     * measured against the metadata compiler on `@types/node`: `fun
+     * on(event: Any?, listener: Any?)` beside `fun <K> on(eventName: Any?,
+     * listener: Any?)` is `Conflicting overloads` (a type parameter that
+     * pins no parameter type is not part of the signature Kotlin compares),
+     * where the collapse key keeps the count. Null for a non-function.
+     */
+    fun overloadKeyOf(member: ExternalMember): String? =
+        (member as? ExternalFunction)?.let {
+            overloadSignature(it.name, it.typeParameters, it.parameters).replaceFirst(typeParameterCount, "<>")
+        }
+
+    private val typeParameterCount = Regex("<\\d+>")
+
+    /**
+     * (EXT.19) The inherited function an OWN function must be rendered AS:
+     * one of the same overload signature under another override key — a
+     * generic `on<K>(eventName, listener)` inherited from `NodeJS.EventEmitter`
+     * that the class implements with a non-generic `on(event, listener)`,
+     * which TypeScript accepts as the implementation and Kotlin reads as
+     * two functions of one signature (`Conflicting overloads`, 17 times on
+     * `@types/node` once the supertype resolved; `hides member of supertype`
+     * where the base is a class). The class renders the inherited shape
+     * with `override`, loudly — the member's name and parameters are the
+     * base's, its meaning is the class's own implementation — and the
+     * inherited member is then declared, not owed. Null for a function
+     * that overrides by key or is a genuine new overload.
+     */
+    fun liftedOverride(member: ExternalMember, inherited: Map<String, ExternalMember>): ExternalFunction? {
+        if (member !is ExternalFunction) return null
+        val key = keyOf(member) ?: return null
+        if (key in inherited) return null
+        val overload = overloadKeyOf(member) ?: return null
+        return inherited.values.firstOrNull { it is ExternalFunction && overloadKeyOf(it) == overload } as? ExternalFunction
     }
 
     /** One inherited member: the base declaring it, its raw form there, and its form read through the chain. */
@@ -623,12 +768,15 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
     private fun inheritedMembers(declaration: ExternalDeclaration): List<InheritedMember> {
         val result = mutableListOf<InheritedMember>()
         val visited = HashSet<String>()
+        val toPath = pathOf(declaration)
         fun walk(d: ExternalDeclaration, outer: Map<String, String>) {
             val name = qualifiedNameOf(d) ?: return
             if (!visited.add(name)) return
-            for (base in basesOf(d, outer)) {
+            for (base in basesOf(d, outer, toPath)) {
+                val fromPath = pathOf(base.declaration)
+                val skip = ownNamesOf(base.declaration)
                 for (member in ownMembers(base.declaration)) {
-                    result += InheritedMember(base.declaration, member, substituted(member, base.substitution))
+                    result += InheritedMember(base.declaration, member, substituted(member, base.substitution, fromPath, toPath, skip))
                 }
                 walk(base.declaration, base.substitution)
             }
@@ -653,6 +801,8 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         val inherited = inherited(declaration)
         val path = pathOf(declaration)
         return ownMembers(declaration).map { member ->
+            // (EXT.19) A function rendered in an inherited shape IS that shape below.
+            if (member is ExternalFunction) return@map liftedOverride(member, inherited) ?: member
             if (member !is ExternalProperty) return@map member
             val base = inherited[keyOf(member)] as? ExternalProperty ?: return@map member
             val baseIsVar = !base.readOnly
@@ -726,10 +876,13 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         inheritedCache[qualified]?.let { return it }
         inheritedCache[qualified] = emptyMap()
         val result = LinkedHashMap<String, ExternalMember>()
+        val toPath = pathOf(declaration)
         for (base in basesOf(declaration, emptyMap())) {
             val members = renderedOwnMembers(base.declaration) + inherited(base.declaration).values
+            val fromPath = pathOf(base.declaration)
+            val skip = ownNamesOf(base.declaration)
             for (member in members) {
-                val seen = substituted(member, base.substitution)
+                val seen = substituted(member, base.substitution, fromPath, toPath, skip)
                 val key = keyOf(seen) ?: continue
                 result.putIfAbsent(key, seen)
             }
@@ -783,7 +936,7 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
             val substitution =
                 if (parameters.size == arguments.size) parameters.zip(arguments).toMap() else emptyMap()
             val members = (renderedOwnMembers(base) + inherited(base).values)
-                .map { substituted(it, substitution) }
+                .map { substituted(it, substitution, pathOf(base), path, ownNamesOf(base)) }
             for (member in members) {
                 val key = keyOf(member) ?: continue
                 val earlier = seen[key] ?: continue
@@ -844,7 +997,12 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
             val inherited = inheritedMembers(declaration)
             for (member in ownMembers(declaration)) {
                 val key = keyOf(member) ?: continue
-                val nearest = inherited.firstOrNull { keyOf(it.seen) == key } ?: continue
+                // (EXT.19) An own function rendered in an inherited shape
+                // ([liftedOverride]) overrides the base member of that shape.
+                val overload = overloadKeyOf(member)
+                val nearest = inherited.firstOrNull { keyOf(it.seen) == key }
+                    ?: inherited.firstOrNull { it.seen is ExternalFunction && overload != null && overloadKeyOf(it.seen) == overload }
+                    ?: continue
                 if (nearest.base is ExternalClass) {
                     val rawKey = keyOf(nearest.raw) ?: continue
                     opened.getOrPut(qualifiedName(nearest.base.path, nearest.base.name)) { HashSet() }.add(rawKey)
@@ -872,11 +1030,15 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         val visited = HashSet<String>()
         while (current != null && visited.add(qualifiedName(current.path, current.name))) {
             current.constructorParameters?.let { parameters ->
-                return parameters.map { substitutedParameter(it, substitution) }
+                val skip = current.typeParameters.toSet()
+                return parameters.map { substitutedParameter(it, substitution, current.path, declaration.path, skip) }
             }
             val superClass = current.superClass ?: return null
             val base = classNamed(superClass, current.path) ?: return null
-            val arguments = typeArgumentTexts(superClass).orEmpty().map { substituteTypeParameters(it, substitution) }
+            val skip = current.typeParameters.toSet()
+            val arguments = typeArgumentTexts(superClass).orEmpty().map {
+                substituteTypeParameters(respell(it, current.path, declaration.path, skip), substitution)
+            }
             substitution =
                 if (base.typeParameters.size == arguments.size) base.typeParameters.zip(arguments).toMap()
                 else emptyMap()
@@ -1112,7 +1274,20 @@ internal class TypeScope(
      * checker's position-derived resolver skips a string-named module.
      */
     val inAmbientModule: Boolean = false,
+    /**
+     * (EXT.19) The NAMESPACE IMPORTS visible at the current declaration —
+     * `import * as net from "node:net"` / `import net = require("net")` in
+     * the enclosing `declare module` block or at the file's top level —
+     * alias to specifier. What a written `net.Socket` resolves through when
+     * the lens answers nothing for it ([TypeScope] carries the syntax; the
+     * collector's `writtenTarget` walks the module surface).
+     */
+    val namespaceImports: Map<String, String> = emptyMap(),
 ) {
+    /** This scope with [ownTypeParams] replaced — everything else, the imports included, kept. */
+    fun withTypeParams(ownTypeParams: Set<String>): TypeScope =
+        TypeScope(ownTypeParams, generatedNameOf, path, inAmbientModule, namespaceImports)
+
     internal companion object {
         val EMPTY: TypeScope = TypeScope(emptySet(), { null })
     }
@@ -1179,6 +1354,14 @@ private fun mappedText(type: Type, returnPosition: Boolean, scope: TypeScope): S
         val mappedArgs = args.map { argument ->
             mappedText(argument, returnPosition = false, scope) ?: return null
         }
+        // (EXT.19) The ARITY guard on the resolved path: a reference the
+        // checker carries with fewer arguments than the target declares (a
+        // bare `Server` whose parameters are all defaulted resolves with NO
+        // arguments here) has no Kotlin spelling — `Server` alone is
+        // `2 type arguments expected`. The written path fills such a
+        // reference from the declared defaults before this leg is reached;
+        // what arrives here without them refuses to the marker.
+        if (mappedArgs.size != (type.target.typeParameters?.size ?: 0)) return null
         return if (mappedArgs.isEmpty()) name
         else "$name<${mappedArgs.joinToString(", ")}>"
     }
@@ -1323,7 +1506,14 @@ private fun StringBuilder.appendDeclaration(
                 appendLine("$member/* xtsc: $marker */")
             }
             val inherited = inheritance.inherited(declaration)
+            val renderedKeys = HashSet<String>()
             for (m in declaration.members) {
+                val lifted = inheritance.liftedOverride(m, inherited)
+                if (appendCollapsedOverride(m, lifted, inherited, renderedKeys, inheritance, member)) continue
+                if (lifted != null) {
+                    appendLiftedOverride(m as ExternalFunction, lifted, indent = member, needsBody = false)
+                    continue
+                }
                 appendMember(m, indent = member, inherited = inherited[inheritance.keyOf(m)], inheritance = inheritance, path = declaration.path)
             }
             appendLine("$indent}")
@@ -1404,8 +1594,18 @@ private fun StringBuilder.appendDeclaration(
                 }
                 val inherited = inheritance.inherited(declaration)
                 val opened = inheritance.openedByClass[qualifiedName(declaration.path, declaration.name)].orEmpty()
+                val renderedKeys = HashSet<String>()
                 for (m in declaration.members) {
                     val key = inheritance.keyOf(m)
+                    val lifted = inheritance.liftedOverride(m, inherited)
+                    if (appendCollapsedOverride(m, lifted, inherited, renderedKeys, inheritance, member)) continue
+                    if (lifted != null) {
+                        appendLiftedOverride(
+                            m as ExternalFunction, lifted, indent = member, needsBody = !external,
+                            open = key != null && key in opened,
+                        )
+                        continue
+                    }
                     appendMember(
                         m,
                         needsBody = !external,
@@ -1465,6 +1665,84 @@ private fun StringBuilder.appendDeclaration(
     }
 }
 
+/**
+ * (EXT.19) Whether a rendered function REDECLARES a member of Kotlin's `Any`
+ * — `toString(): String`, `equals(other: Any?): Boolean`, `hashCode(): Int` —
+ * which every Kotlin class and interface inherits, so the declaration must
+ * say `override` whatever its TypeScript base is (measured: `'toString'
+ * hides member of supertype 'Any' and needs an 'override' modifier`, four
+ * times on `@types/node`, in interfaces and classes alike). Decided on the
+ * marker-stripped texts; a same-named function of another signature is an
+ * ordinary overload and needs nothing.
+ */
+private fun overridesAnyMember(member: ExternalFunction): Boolean {
+    if (member.typeParameters.isNotEmpty() || member.parameters.any { it.vararg }) return false
+    val parameters = member.parameters.map { typeTextWithoutMarker(it.type).trim() }
+    val returnType = typeTextWithoutMarker(member.returnType).trim()
+    return when (member.name) {
+        "toString" -> parameters.isEmpty() && returnType == "String"
+        "hashCode" -> parameters.isEmpty() && returnType == "Int"
+        "equals" -> parameters == listOf("Any?") && returnType == "Boolean"
+        else -> false
+    }
+}
+
+/**
+ * (EXT.19) An own function rendered as the inherited function it implements
+ * under another override key ([Inheritance.liftedOverride]): a loud record
+ * naming both shapes, then the inherited shape with `override`.
+ */
+/**
+ * (EXT.19) Whether [member] would render a function of an override key
+ * ALREADY rendered in this declaration — an own function lifted to an
+ * inherited shape another own function overrides by key (`on<K>(event: K,
+ * listener)` beside `on(event: string | symbol, listener)` over a base's
+ * `on(event, listener)`), two Kotlin functions of one signature — in which
+ * case the second is appended as a loud skip and true is answered.
+ * [renderedKeys] records every function key rendered so far.
+ */
+private fun StringBuilder.appendCollapsedOverride(
+    member: ExternalMember,
+    lifted: ExternalFunction?,
+    inherited: Map<String, ExternalMember>,
+    renderedKeys: MutableSet<String>,
+    inheritance: Inheritance,
+    indent: String,
+): Boolean {
+    if (member !is ExternalFunction) return false
+    val target = lifted ?: (inherited[inheritance.keyOf(member)] as? ExternalFunction)
+    val key = inheritance.keyOf(lifted ?: member) ?: return false
+    if (renderedKeys.add(key)) return false
+    val shape = target?.let(::signatureText) ?: signatureText(member)
+    appendLine("$indent/* xtsc: skipped overload ${signatureText(member)} collapsing to the inherited $shape already rendered */")
+    return true
+}
+
+private fun StringBuilder.appendLiftedOverride(
+    own: ExternalFunction,
+    inherited: ExternalFunction,
+    indent: String,
+    needsBody: Boolean,
+    open: Boolean = false,
+) {
+    val ownText = signatureText(own)
+    val inheritedText = signatureText(inherited)
+    appendLine(
+        "$indent/* xtsc: $ownText implements the inherited $inheritedText - rendered in the inherited shape, " +
+            "a generic and a non-generic function of one parameter list are one Kotlin signature */"
+    )
+    appendMember(inherited, needsBody = needsBody, indent = indent, inherited = inherited, open = open)
+}
+
+/** `<K> name(A, B)` — a function's shape for a marker, markers stripped. */
+private fun signatureText(function: ExternalFunction): String {
+    val typeParams =
+        if (function.typeParameters.isEmpty()) ""
+        else function.typeParameters.joinToString(", ", "<", "> ") { kotlinIdentifier(it) }
+    return typeParams + function.name +
+        function.parameters.joinToString(", ", "(", ")") { typeTextWithoutMarker(it.type) }
+}
+
 private fun memberKindOf(member: ExternalMember): String = when (member) {
     is ExternalProperty -> if (member.readOnly) "readonly property" else "property"
     is ExternalFunction -> "method"
@@ -1497,7 +1775,7 @@ private fun StringBuilder.appendMember(
 ) {
     val body = if (needsBody) " = null!!" else ""
     val modifiers = buildString {
-        if (inherited != null) append("override ")
+        if (inherited != null || (member is ExternalFunction && overridesAnyMember(member))) append("override ")
         if (open) append("open ")
     }
     when (member) {

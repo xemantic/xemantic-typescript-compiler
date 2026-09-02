@@ -4350,4 +4350,456 @@ class KotlinExternalsGeneratorTest {
         assert(errorCodes.isEmpty())
     }
 
+
+    // --- (EXT.19) --------------------------------------------------------
+    //
+    // Measured on `@types/node` 20.19.43 (66 files): the 86 metadata compile
+    // errors after (CHK.77) were six mechanisms, none of them the spelling
+    // rule the queue item named — `shortestSpelling` already resolves a
+    // nearer scope's shadow innermost-first (the pins below say so) — and
+    // every one of them is a fixture here: a heritage base spelled without
+    // its generic target's defaulted arguments (the 45 `overrides nothing`
+    // were that one error's cascade: a Kotlin supertype in error contributes
+    // no members), a reference to a declaration that lost its scope's name,
+    // a refused callable interface named by a reference, `toString` without
+    // `override`, an inherited member's text read in another scope, and a
+    // generic and a non-generic function of one parameter list.
+
+    @Test
+    fun `a heritage base or a reference written without the type arguments its generic target defaults takes them from the declared defaults`() {
+        // `Emitter<T = any>`, `Box<T = string>`, `Pair<A, B = A>`: a
+        // mappable default renders (`Box<String>`, `Pair<Double, Double>`
+        // with `B = A` read through the argument given for `A`); one that
+        // does not map is supplied as `Any?` with a loud record — on the
+        // declaration's header for a base, after the type for a member. A
+        // target with no default for a missing argument has no spelling.
+        val result = generateDts(
+            """
+            export interface Emitter<T = any> { on(e: string): void; }
+            export interface Box<T = string> { v: T; }
+            export interface Pair<A, B = A> { a: A; b: B; }
+            export interface Readable extends Emitter { readable: boolean; }
+            export interface Holder extends Box { x: Box; p: Pair<number>; e: Emitter; }
+            export declare class Server<Request = typeof Holder, Response = string> { r: Request; }
+            export declare function createServer(): Server;
+            export interface Plain<T> { t: T; }
+            export declare const plain: Plain;
+            """
+        )
+        val expected = """
+            public external interface Emitter<T> {
+                /* xtsc: default for T: any not carried */
+                public fun on(e: String): Unit
+            }
+
+            public external interface Box<T> {
+                /* xtsc: default for T: string not carried */
+                public var v: T
+            }
+
+            public external interface Pair<A, B> {
+                /* xtsc: default for B: any not carried */
+                public var a: A
+                public var b: B
+            }
+
+            public external interface Readable : Emitter<Any?> {
+                public var readable: Boolean
+            }
+
+            public external interface Holder : Box<String> {
+                public var x: Box<String>
+                public var p: Pair<Double, Double>
+                public var e: Emitter<Any?>
+            }
+
+            public open external class Server<Request, Response> {
+                /* xtsc: default for Request: Holder not carried */
+                /* xtsc: default for Response: string not carried */
+                public var r: Request
+            }
+
+            public external fun createServer(): Server<Any?, String> /* xtsc: default for Request of Server: typeof Holder not carried - Any? supplied */
+
+            public external interface Plain<T> {
+                public var t: T
+            }
+
+            public external val plain: Any? /* xtsc: unmapped Plain<T> */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a reference to a declaration that lost its name to an earlier one in its scope refuses with a marker naming the scope`() {
+        // Two files export a `Stream`; the first keeps the name, so a
+        // reference to the second's generic `Stream<R>` must not spell
+        // `Stream<Double>` against a non-generic declaration. A namespace
+        // object takes the name of the class it merges with, and a class
+        // extending that class cannot extend the object.
+        val result = generateKotlinExternals(
+            listOf(
+                SourceFileEntry(
+                    "/a.d.ts",
+                    """
+                    export interface Stream { readable: boolean; }
+                    export declare namespace ts {
+                        namespace Module { interface Inner { i: number; } }
+                        class Module { m: number; }
+                        class SourceTextModule extends Module { s: string; }
+                    }
+                    """.trimIndent(),
+                ),
+                SourceFileEntry(
+                    "/b.d.ts",
+                    """
+                    export interface Stream<R = any> { r: R; }
+                    export interface Uses { a: Stream<number>; b: Stream; }
+                    """.trimIndent(),
+                ),
+            )
+        )
+        val expected = """
+            public external interface Stream {
+                public var readable: Boolean
+            }
+
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object Module {
+                public interface Inner {
+                    public var i: Double
+                }
+            }
+
+            /* xtsc: skipped Module declared again in the same scope - TypeScript merges the declarations, one Kotlin scope cannot hold both */
+
+            public open external class SourceTextModule {
+                /* xtsc: skipped heritage clause extends Module - the name Module is taken by an earlier declaration in the top level */
+                public var s: String
+            }
+
+            /* xtsc: skipped Stream declared again by another file - one Kotlin package cannot hold both */
+
+            public external interface Uses {
+                public var a: Any? /* xtsc: unmapped Stream<number> - the name Stream is taken by an earlier declaration in the top level */
+                public var b: Any? /* xtsc: unmapped Stream - the name Stream is taken by an earlier declaration in the top level */
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a reference to a refused callable interface refuses and a member of Any renders override`() {
+        val result = generateDts(
+            """
+            export interface Cb { (x: string): void; }
+            export interface BadCb { (x?: string): void; }
+            export interface UsesCb { ok: Cb; bad: BadCb; toString(): string; }
+            export declare class Model { toString(): string; equals(other: any): boolean; toString(radix: number): string; }
+            """
+        )
+        val expected = """
+            public typealias Cb = (String) -> Unit
+
+            /* xtsc: skipped callable interface BadCb with unmappable signature */
+
+            public external interface UsesCb {
+                public var ok: Cb
+                public var bad: Any? /* xtsc: unmapped BadCb - callable interface BadCb has no Kotlin function type */
+                public override fun toString(): String
+            }
+
+            public open external class Model {
+                public override fun toString(): String
+                public override fun equals(other: Any?): Boolean
+                public fun toString(radix: Double): String
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a nearer scope shadowing an outer name is spelled by its path in heritage and members and an inherited member is respelled at the deriving scope`() {
+        // `Node` is declared at the root, in `outer` and in `outer.inner`.
+        // From `inner`, `outer.Node` reaches the middle one (a supertype, a
+        // member, an override key: `owner: Node` written in `outer` is
+        // `owner: outer.Node` inside `inner`, so the redeclaration there is
+        // an override), the bare `Node` is `inner`'s own, and the root's
+        // `ts.Node` has no spelling at all — refused loudly in both
+        // positions. `Holder`'s constructor parameter, inherited by `Sub`,
+        // is respelled the same way.
+        val result = generateDts(
+            """
+            declare namespace ts {
+                interface Node { kind: number; }
+                namespace outer {
+                    interface Node { kind: number; owner: Node; }
+                    class Holder { constructor(node: Node); node: Node; }
+                    namespace inner {
+                        interface Node { left: string; }
+                        interface Derived extends outer.Node { own: Node; owner: outer.Node; }
+                        class Sub extends outer.Holder { extra: Node; }
+                        interface Root extends ts.Node { }
+                        interface RootUse { r: ts.Node; }
+                    }
+                }
+            }
+            export = ts;
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ts - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface Node {
+                public var kind: Double
+            }
+
+            public external object outer {
+                public interface Node {
+                    public var kind: Double
+                    public var owner: Node
+                }
+
+                public open class Holder(node: Node) {
+                    public var node: Node
+                }
+
+                public object inner {
+                    public interface Node {
+                        public var left: String
+                    }
+
+                    public interface Derived : outer.Node {
+                        public var own: Node
+                        public override var owner: outer.Node
+                    }
+
+                    public open class Sub(node: outer.Node) : Holder {
+                        public var extra: Node
+                    }
+
+                    public interface Root {
+                        /* xtsc: skipped heritage clause extends ts.Node - shadowed inside outer.inner, no Kotlin spelling reaches it */
+                    }
+
+                    public interface RootUse {
+                        public var r: Any? /* xtsc: unmapped ts.Node - shadowed inside outer.inner, no Kotlin spelling reaches it */
+                    }
+                }
+            }
+
+            /* xtsc: skipped export = ts - module wiring is a later rung */
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a base or a type written through a namespace import inside an ambient module resolves through the module surface`() {
+        // The lens answers nothing for `net.Socket` where `net` is `import *
+        // as net` (measured: every such base on `@types/node`); the module
+        // surface does — `node:net` re-exports `net` with `export *`,
+        // `node:stream` is `export = stream` over `import stream =
+        // require("stream")`, whose own `export = Stream` names the namespace
+        // holding `Readable`. A member the module does not hold keeps the
+        // marker.
+        val result = generateKotlinExternals(
+            listOf(
+                SourceFileEntry(
+                    "/net.d.ts",
+                    """
+                    declare module "net" {
+                        interface ServerOpts { allowHalfOpen?: boolean | undefined; }
+                        class Socket { ref(): this; }
+                        type Family = "IPv4" | "IPv6";
+                    }
+                    declare module "node:net" { export * from "net"; }
+                    """.trimIndent(),
+                ),
+                SourceFileEntry(
+                    "/stream.d.ts",
+                    """
+                    declare module "stream" {
+                        class Stream { pipe(): void; }
+                        namespace Stream {
+                            class Readable extends Stream { read(): string; }
+                            interface ReadableOptions { highWaterMark?: number | undefined; }
+                        }
+                        export = Stream;
+                    }
+                    declare module "node:stream" { import stream = require("stream"); export = stream; }
+                    """.trimIndent(),
+                ),
+                SourceFileEntry(
+                    "/tls.d.ts",
+                    """
+                    declare module "tls" {
+                        import * as net from "node:net";
+                        import * as stream from "node:stream";
+                        interface TlsOptions extends net.ServerOpts { handshakeTimeout?: number | undefined; }
+                        class TLSSocket extends net.Socket { authorized: boolean; }
+                        class ReadStream extends stream.Readable { bytesRead: number; }
+                        interface Uses { s: net.Socket; o: net.ServerOpts; f: net.Family; r: stream.Readable; ro: stream.ReadableOptions; missing: net.Nope; }
+                    }
+                    declare module "tty" {
+                        import net = require("net");
+                        class WriteStream extends net.Socket { columns: number; }
+                    }
+                    """.trimIndent(),
+                ),
+            )
+        )
+        val expected = """
+            /* xtsc: module "net" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface ServerOpts {
+                public var allowHalfOpen: Boolean?
+            }
+
+            public open external class Socket {
+                public fun ref(): Any? /* xtsc: unmapped any */
+            }
+
+            public typealias Family = String
+
+            /* xtsc: module "node:net" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            /* xtsc: skipped re-export * from 'net' - module wiring is a later rung */
+
+            /* xtsc: module "stream" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object Stream {
+                public open class Readable {
+                    /* xtsc: skipped heritage clause extends Stream */
+                    public fun read(): String
+                }
+
+                public interface ReadableOptions {
+                    public var highWaterMark: Double?
+                }
+            }
+
+            /* xtsc: skipped export = Stream - module wiring is a later rung */
+
+            /* xtsc: module "node:stream" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            /* xtsc: skipped export = stream - module wiring is a later rung */
+
+            /* xtsc: module "tls" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface TlsOptions : ServerOpts {
+                public var handshakeTimeout: Double?
+            }
+
+            public open external class TLSSocket : Socket {
+                public var authorized: Boolean
+            }
+
+            public open external class ReadStream : Stream.Readable {
+                public var bytesRead: Double
+            }
+
+            public external interface Uses {
+                public var s: Socket
+                public var o: ServerOpts
+                public var f: Family
+                public var r: Stream.Readable
+                public var ro: Stream.ReadableOptions
+                public var missing: Any? /* xtsc: unmapped net.Nope - resolved to any */
+            }
+
+            /* xtsc: module "tty" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public open external class WriteStream : Socket {
+                public var columns: Double
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a non-generic function implementing an inherited generic one of the same parameter list renders in the inherited shape`() {
+        // TypeScript accepts `on(event, listener)` as the implementation of
+        // `on<K>(eventName, listener)`; Kotlin reads the two as one
+        // signature. The class renders the inherited shape with `override`,
+        // loudly, and a derived class reads what the base RENDERS: its own
+        // generic `on<K>(event: K, listener)` lifts to the base's
+        // non-generic `on(event, listener)`, whose second own overload of
+        // that key is then a loud skip. The inherited constructor parameter
+        // is respelled at the top level.
+        val result = generateDts(
+            """
+            declare namespace NodeJS {
+                interface EventEmitter<T = any> { on<K>(eventName: string, listener: () => void): this; }
+            }
+            declare module "stream" {
+                namespace Stream {
+                    interface ReadableOptions { hwm?: number | undefined; }
+                    class Readable implements NodeJS.EventEmitter {
+                        constructor(opts?: ReadableOptions);
+                        on(event: "close", listener: () => void): this;
+                        on(event: string, listener: () => void): this;
+                        on(event: string | symbol, listener: (...args: any[]) => void): this;
+                    }
+                }
+                export = Stream;
+            }
+            declare module "fs" {
+                import * as stream from "stream";
+                class ReadStream extends stream.Readable {
+                    on<K extends keyof Events>(event: K, listener: Events[K]): this;
+                    on(event: string | symbol, listener: (...args: any[]) => void): this;
+                }
+                interface Events { close: () => void; }
+            }
+            """
+        )
+        val expected = """
+            /* xtsc: namespace NodeJS - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external interface EventEmitter<T> {
+                /* xtsc: default for T: any not carried */
+                public fun <K> on(eventName: String, listener: () -> Unit): Any? /* xtsc: unmapped any */
+            }
+
+            /* xtsc: module "stream" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object Stream {
+                public interface ReadableOptions {
+                    public var hwm: Double?
+                }
+
+                public open class Readable(opts: ReadableOptions?) : EventEmitter<Any?> {
+                    /* xtsc: on(String, () -> Unit) implements the inherited <K> on(String, () -> Unit) - rendered in the inherited shape, a generic and a non-generic function of one parameter list are one Kotlin signature */
+                    public override fun <K> on(eventName: String, listener: () -> Unit): Any? /* xtsc: unmapped any */
+                    /* xtsc: skipped overload of on collapsing to a duplicate signature - kept on(event: String, listener: () -> Unit) */
+                    public open fun on(event: Any? /* xtsc: unmapped string | symbol */, listener: Any? /* xtsc: unmapped (...args: any[]) => void */): Any? /* xtsc: unmapped any */
+                }
+            }
+
+            /* xtsc: skipped export = Stream - module wiring is a later rung */
+
+            /* xtsc: module "fs" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public open external class ReadStream(opts: Stream.ReadableOptions?) : Stream.Readable {
+                /* xtsc: <K> on(K, Any?) implements the inherited on(Any?, Any?) - rendered in the inherited shape, a generic and a non-generic function of one parameter list are one Kotlin signature */
+                public override fun on(event: Any? /* xtsc: unmapped string | symbol */, listener: Any? /* xtsc: unmapped (...args: any[]) => void */): Any? /* xtsc: unmapped any */
+                /* xtsc: skipped overload on(Any?, Any?) collapsing to the inherited on(Any?, Any?) already rendered */
+            }
+
+            public external interface Events {
+                public var close: () -> Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
 }

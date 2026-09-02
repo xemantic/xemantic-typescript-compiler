@@ -89,6 +89,38 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.19) LANDED — and the queue item's mechanism was WRONG, which the fixture said before any
+code moved.** `shortestSpelling` already implemented innermost-first resolution correctly (the
+nearer-scope shadow fixtures rendered right on the unmodified binary, and there is no nested
+`ReadableStream` in `@types/node` at all); the 45 `'X' overrides nothing` were a CASCADE OF ONE
+ARITY ERROR — `interface ReadableStream : global.NodeJS.EventEmitter` spelled bare where the
+target is `EventEmitter<T = DefaultEventMap>` (`One type argument expected`), and a Kotlin
+supertype in error contributes no members. Eight rules landed: (1) type-argument FILL — a base
+or reference to a generated generic target renders one argument per declared parameter, the
+missing ones from the parameter's DEFAULT (resolved at its own position, spelled from the use
+site, earlier parameters substituted; an unmappable default is supplied as `Any?` with a loud
+marker; no default and no argument still refuses; the resolved path gained the arity guard);
+(2) NAME OWNERSHIP — a reference to a declaration that loses its scope's name under `finish()`'s
+first-wins rule refuses with `the name X is taken by an earlier declaration in <scope>`; (3) a
+refused callable interface referenced by name is a marker (was `Unresolved reference`, 10
+errors); (4) `toString`/`equals` render `override` (members of `Any`); (5) inherited texts are
+RESPELLED from the base's scope to the deriving scope before keying (override keys differing
+only by spelling read as "hides member of supertype"); (6) the generic-vs-non-generic LIFT —
+a non-generic `on(event, listener)` implementing an inherited `on<K>(…)` is ONE Kotlin
+signature (measured: conflicting overloads), rendered in the inherited shape with `override`,
+loudly; (7) namespace IMPORTS inside ambient modules (`import * as X` / `import X = require`)
+resolve `X.Y` through the module's surface — own exports, `export * from`, `export =
+<namespace>`, `require` alias chains — because the checker's `heritageBaseSymbol` answers NULL
+for all 17 such heads after (CHK.77) (queued (CHK.79)); (8) a class merging with its namespace
+in one file is worded as a merge. **`@types/node` (66 files, unwired and wired alike): metadata
+compile errors 86 → 0 (35 before (CHK.77)), `overrides nothing` 45 → 0, heritage skips 137 →
+110 + 3** (the four `net.*`/`tls.*` bases and 23 `stream.*` ones render; what remains is lib
+types and the vanished `class EventEmitter`/`class Stream`); rxjs and `typescript.d.ts`
+byte-identical. Six pins, none moved; externals 201 → 207/0 with the JS gate running; suite
+17,085 → 17,091 / 0 / 3. **Found, queued:** an un-`export`-modified class inside an `export =`
+module body VANISHES silently ((EXT.20), with the 66-modules-in-one-scope flattening residue),
+and the checker's null answer for a namespace-import head ((CHK.79)).
+
 **(CHK.77) LANDED — the four namespace-resolution residues, each reproduced against tsgo and
 closed at the resolver.** (1) A string-named `declare module "m"` body is consulted by
 `lookupInEnclosingNamespaces` ONLY when the specifier resolves to NO program file
@@ -1655,7 +1687,7 @@ Owner decisions 2026-09-02:
   fallback pins (`KotlinExternalsGeneratorTest`'s (EXT.14) four) are the receipt that the arm
   can then be narrowed further.
 
-- [ ] **(EXT.19) `@types/node` AFTER (CHK.77): +45 `'X' overrides nothing` METADATA ERRORS —
+- [x] **(EXT.19) DONE 2026-09-02 ((P18.9) note — the mechanism named here was WRONG: an ARITY cascade, not a spelling; `@types/node` metadata errors 86 → 0, heritage skips 137 → 113, externals 207/0, suite 17,091/0/3; follow-ups (EXT.20)/(CHK.79)) — `@types/node` AFTER (CHK.77): +45 `'X' overrides nothing` METADATA ERRORS —
   A SPELLED SUPERTYPE RESOLVES TO THE WRONG GENERATED DECLARATION.** `declare module "stream"
   { namespace internal { class Readable extends Stream implements NodeJS.ReadableStream } }`:
   the `implements NodeJS.ReadableStream` clause now RESOLVES (residue 2's head rule), the
@@ -1670,6 +1702,30 @@ Owner decisions 2026-09-02:
   declaration and the generator's kind/spelling step refuses where the written-name fallback
   rendered. Receipt: the `@types/node` probe (`build/chk73/node_modules/@types/node`, 66 files;
   metadata errors 86 → 35 or fewer, heritage skips 137 → ≤ 133) plus the five ladder gates.
+
+- [ ] **(EXT.20) `declare module "m" { class X {} … export = X }` — THE UN-`export`-MODIFIED
+  CLASS/INTERFACE INSIDE AN `export =` MODULE BODY VANISHES SILENTLY (found by (EXT.19) on
+  `@types/node`: events.d.ts's `class EventEmitter`, stream.d.ts's `class Stream` — the 13
+  remaining `extends EventEmitter` skips).** The surface rule treats an un-modified member of a
+  string-named block as non-exported; with `export = X` the reach rule must make `X` (and what
+  it merges with — class + interface + namespace of the same name; a namespace object currently
+  TAKES the merged name) the module's surface. Design the merge: a class merged with a
+  namespace renders the class with the namespace's members as companion/nested; an interface
+  merged with a class is the class's members. Pin each; the `@types/node` probe's heritage
+  skips (113 → ≤ 100) and metadata compile (0 errors) are the receipt. Also the probe's
+  FLATTENING residue: 66 modules in one scope lose `Socket` (dgram vs net), `Module` (vm vs
+  module), `stream/web`'s `ReadableStream` to first-wins — one generation per `declare
+  module` block, or a per-block Kotlin object/package, is the wiring-side answer.
+
+- [ ] **(CHK.79) `heritageBaseSymbol` ANSWERS NULL FOR A DOTTED BASE WHOSE HEAD IS A NAMESPACE
+  IMPORT (`import * as net from "node:net"` / `import net = require("net")`) INSIDE AN AMBIENT
+  MODULE BLOCK — all 17 such bases in `@types/node` after (CHK.77) (before it, the fallback
+  rendered them).** The generator now resolves them syntactically ((EXT.19)'s `Site`/
+  `AmbientModule`/`moduleMember`); the checker should: resolve the head through the block's
+  import bindings to the target module's surface (`export * from`, `export = <namespace>`,
+  `require` alias chains), then the member. Reproduce against tsgo, fix at
+  `resolveHeritageBaseSymbol`/`resolveHeritageBaseHead`, pin, and retire the generator's
+  syntactic path for it where the lens then answers.
 
 - [ ] **(CHK.78) TWO PRE-EXISTING AUGMENTATION DIVERGENCES, MEASURED ON (CHK.77)'s NEGATIVE
   CONTROL, PLUS ONE IN-WALK LENS ANSWER.** With `types.ts` beside `declare module "./types.js"

@@ -48,6 +48,7 @@ import com.xemantic.typescript.compiler.GetAccessor
 import com.xemantic.typescript.compiler.HeritageClause
 import com.xemantic.typescript.compiler.ExternalModuleReference
 import com.xemantic.typescript.compiler.Identifier
+import com.xemantic.typescript.compiler.ImportDeclaration
 import com.xemantic.typescript.compiler.ImportEqualsDeclaration
 import com.xemantic.typescript.compiler.IndexSignature
 import com.xemantic.typescript.compiler.InterfaceDeclaration
@@ -58,6 +59,7 @@ import com.xemantic.typescript.compiler.ModifierFlag
 import com.xemantic.typescript.compiler.ModuleBlock
 import com.xemantic.typescript.compiler.ModuleDeclaration
 import com.xemantic.typescript.compiler.NamedExports
+import com.xemantic.typescript.compiler.NamespaceImport
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NodeBase
 import com.xemantic.typescript.compiler.NumericLiteralNode
@@ -248,18 +250,48 @@ public fun generateKotlinExternals(
  */
 private class Declared<N : Node>(
     val node: N,
-    val path: List<String>,
+    /** (EXT.19) Where the declaration sits — what its type texts resolve and spell against. */
+    val site: Site,
+    /**
+     * (EXT.19) The declaration's position in SCAN order — file order, then
+     * source order, a namespace before its members — which is the order the
+     * checker's walk collects in and so the order [ExternalsCollector.finish]'s
+     * first-wins name rule decides by. What lets a REFERENCE know, before
+     * `finish` has run, whether the declaration it names is the one that
+     * keeps its name in its scope ([ExternalsCollector.ownsName]).
+     */
+    val ordinal: Int,
+) {
+    val path: List<String> get() = site.path
     /** (EXT.14) Inside a `declare module "m"` body (at any depth) — the retained fallback's condition. */
+    val inAmbientModule: Boolean get() = site.inAmbientModule
+}
+
+/**
+ * (EXT.19) The SITE of a declaration: its namespace path, whether it sits in
+ * a `declare module "m"` body, which module's, and the namespace imports
+ * visible to it (alias to specifier — `import * as net from "node:net"`,
+ * `import net = require("net")` — of the enclosing module block, over the
+ * file's own). One value per declaration, threaded from the scan to every
+ * [TypeScope] built for the declaration's members.
+ */
+private class Site(
+    val path: List<String>,
     val inAmbientModule: Boolean,
+    val moduleSpecifier: String?,
+    val namespaceImports: Map<String, String>,
 )
 
-/** (EXT.9) One exported value declaration, its list's `const`-ness (→ `val`) and its path. */
+/** (EXT.9) One exported value declaration, its list's `const`-ness (→ `val`) and its site. */
 private class ExportedValue(
     val node: VariableDeclaration,
     val readOnly: Boolean,
-    val path: List<String>,
-    val inAmbientModule: Boolean,
-)
+    val site: Site,
+    val ordinal: Int,
+) {
+    val path: List<String> get() = site.path
+    val inAmbientModule: Boolean get() = site.inAmbientModule
+}
 
 /**
  * (EXT.13) How one [ModuleDeclaration] renders, decided from SYNTAX up front:
@@ -297,7 +329,24 @@ private class NamespaceEntry(
     val skip: String?,
     /** The identifier a flattened root is written as (`ts`), or null. */
     val rootName: String?,
+    /** (EXT.19) Scan position, before the body's members — see [Declared.ordinal]. */
+    val ordinal: Int,
 )
+
+/**
+ * (EXT.19) What a `declare module "m"` block's SURFACE is made of beyond its
+ * own declarations — the statements a written `net.X` through a namespace
+ * import walks: `export * from "x"` (the `node:net` → `net` idiom), `export
+ * = X` (the block's namespace `X`, or an `import X = require("x")` alias
+ * naming another module — `node:stream` → `stream` → its namespace `Stream`),
+ * and the `require` aliases themselves. Several blocks naming one module
+ * (an augmentation beside the declaration) merge into one record.
+ */
+private class AmbientModule {
+    val starExports = mutableListOf<String>()
+    val exportEquals = mutableListOf<String>()
+    val requireAliases = HashMap<String, String>()
+}
 
 /**
  * (EXT.13) The generated SURFACE of a program, pre-scanned from the SYNTAX
@@ -359,6 +408,13 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
     val namespaces = mutableListOf<NamespaceEntry>()
     /** (EXT.13) `export import X = ts.X` lines — each a loud marker at its path. */
     val importAliases = mutableListOf<Declared<ImportEqualsDeclaration>>()
+    /** (EXT.19) The ambient modules by specifier — what their surfaces re-route. */
+    val modules = HashMap<String, AmbientModule>()
+
+    private var nextOrdinal = 0
+
+    /** The next scan position ([Declared.ordinal]). */
+    private fun ordinal(): Int = nextOrdinal++
 
     init {
         for (sourceFile in sourceFiles) {
@@ -370,8 +426,41 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
                 ambient = sourceFile.fileName.endsWith(".d.ts"),
                 inModule = false,
                 fileName = sourceFile.fileName,
+                moduleSpecifier = null,
+                imports = namespaceImportsOf(sourceFile.statements, HashMap(), null),
             )
         }
+    }
+
+    /**
+     * (EXT.19) The namespace imports [statements] declare — `import * as X
+     * from "m"` and `import X = require("m")` — added to [imports] (a block's
+     * over the file's); a `require` alias is also recorded on [module], the
+     * block's own record, because an `export = X` naming it re-routes the
+     * whole module.
+     */
+    private fun namespaceImportsOf(
+        statements: List<Statement>,
+        imports: HashMap<String, String>,
+        module: AmbientModule?,
+    ): Map<String, String> {
+        for (statement in statements) {
+            when (statement) {
+                is ImportDeclaration -> {
+                    val alias = (statement.importClause?.namedBindings as? NamespaceImport)?.name?.text ?: continue
+                    val specifier = (statement.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                    imports[alias] = specifier
+                }
+                is ImportEqualsDeclaration -> {
+                    val reference = statement.moduleReference as? ExternalModuleReference ?: continue
+                    val specifier = (reference.expression as? StringLiteralNode)?.text ?: continue
+                    imports[statement.name.text] = specifier
+                    module?.requireAliases?.put(statement.name.text, specifier)
+                }
+                else -> {}
+            }
+        }
+        return imports
     }
 
     private fun scan(
@@ -382,34 +471,37 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
         ambient: Boolean,
         inModule: Boolean,
         fileName: String,
+        moduleSpecifier: String?,
+        imports: Map<String, String>,
     ) {
         fun exported(modifiers: Set<ModifierFlag>, name: String?): Boolean =
             ModifierFlag.Export in modifiers ||
                 (!topLevel && exportContext) ||
                 (topLevel && plan != null && name != null && plan.reachesLocal(fileName, name))
+        val site = Site(path, inModule, moduleSpecifier, imports)
         for (statement in statements) {
             when (statement) {
                 is InterfaceDeclaration ->
-                    if (exported(statement.modifiers, statement.name.text)) interfaces += Declared(statement, path, inModule)
+                    if (exported(statement.modifiers, statement.name.text)) interfaces += Declared(statement, site, ordinal())
                 is ClassDeclaration ->
-                    if (exported(statement.modifiers, statement.name?.text)) classes += Declared(statement, path, inModule)
+                    if (exported(statement.modifiers, statement.name?.text)) classes += Declared(statement, site, ordinal())
                 is EnumDeclaration ->
-                    if (exported(statement.modifiers, statement.name.text)) enums += Declared(statement, path, inModule)
+                    if (exported(statement.modifiers, statement.name.text)) enums += Declared(statement, site, ordinal())
                 is TypeAliasDeclaration ->
-                    if (exported(statement.modifiers, statement.name.text)) aliases += Declared(statement, path, inModule)
+                    if (exported(statement.modifiers, statement.name.text)) aliases += Declared(statement, site, ordinal())
                 is FunctionDeclaration ->
-                    if (exported(statement.modifiers, statement.name?.text)) functions += Declared(statement, path, inModule)
+                    if (exported(statement.modifiers, statement.name?.text)) functions += Declared(statement, site, ordinal())
                 is VariableStatement -> {
                     val readOnly = statement.declarationList.flags == SyntaxKind.ConstKeyword
                     for (declaration in statement.declarationList.declarations) {
                         if (exported(statement.modifiers, (declaration.name as? Identifier)?.text)) {
-                            values += ExportedValue(declaration, readOnly, path, inModule)
+                            values += ExportedValue(declaration, readOnly, site, ordinal())
                         }
                     }
                 }
                 is ImportEqualsDeclaration ->
                     if (ModifierFlag.Export in statement.modifiers) {
-                        importAliases += Declared(statement, path, inModule)
+                        importAliases += Declared(statement, site, ordinal())
                     }
                 is ExportAssignment ->
                     if (path.isEmpty()) exportWiring += statement
@@ -418,7 +510,8 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
                         (statement.moduleSpecifier != null ||
                             (statement.exportClause as? NamedExports)?.elements?.isNotEmpty() ?: true)
                     ) exportWiring += statement
-                is ModuleDeclaration -> scanNamespace(statement, path, topLevel, ambient, inModule, fileName)
+                is ModuleDeclaration ->
+                    scanNamespace(statement, path, topLevel, ambient, inModule, fileName, moduleSpecifier, imports)
                 else -> {}
             }
         }
@@ -431,6 +524,8 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
         ambient: Boolean,
         inModule: Boolean,
         fileName: String,
+        moduleSpecifier: String?,
+        imports: Map<String, String>,
     ) {
         val ambientHere = ambient || ModifierFlag.Declare in node.modifiers
         val block = node.body as? ModuleBlock
@@ -475,9 +570,32 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
             bodyPath = bodyPath,
             skip = skip,
             rootName = rootName,
+            ordinal = ordinal(),
         )
         if (skip == null && block != null) {
             val exportContext = block.statements.none { it is ExportDeclaration || it is ExportAssignment }
+            // (EXT.19) A string-named block is a MODULE: its own imports
+            // join the visible ones, and what it re-routes is recorded.
+            var bodySpecifier = moduleSpecifier
+            var bodyImports = imports
+            if (name is StringLiteralNode) {
+                val module = modules.getOrPut(name.text) { AmbientModule() }
+                bodySpecifier = name.text
+                bodyImports = namespaceImportsOf(block.statements, HashMap(imports), module)
+                for (statement in block.statements) {
+                    when (statement) {
+                        is ExportDeclaration ->
+                            if (statement.exportClause == null) {
+                                (statement.moduleSpecifier as? StringLiteralNode)?.text?.let { module.starExports += it }
+                            }
+                        is ExportAssignment ->
+                            if (statement.isExportEquals) {
+                                (statement.expression as? Identifier)?.text?.let { module.exportEquals += it }
+                            }
+                        else -> {}
+                    }
+                }
+            }
             scan(
                 block.statements,
                 bodyPath,
@@ -486,6 +604,8 @@ private class Surface(sourceFiles: List<SourceFile>, private val plan: ExportPla
                 ambient = ambientHere,
                 inModule = inModule || name is StringLiteralNode,
                 fileName = fileName,
+                moduleSpecifier = bodySpecifier,
+                imports = bodyImports,
             )
         }
     }
@@ -529,25 +649,31 @@ private class ExternalsCollector(
 
     private sealed interface Entry
 
-    /** (EXT.13) One namespace scope under construction; [path] is its own qualified path. */
-    private class ScopeBuilder(val name: String?, val path: List<String>) : Entry {
+    /**
+     * (EXT.13) One namespace scope under construction; [path] is its own
+     * qualified path, [fileName] the file of the declaration that created it
+     * ((EXT.19) — what the same-scope collision wording reads, so a class
+     * merging with its namespace in one file is named as the merge it is).
+     */
+    private class ScopeBuilder(val name: String?, val path: List<String>, val fileName: String?) : Entry {
         val entries = mutableListOf<Entry>()
         val children = HashMap<String, ScopeBuilder>()
     }
 
-    private val root = ScopeBuilder(null, emptyList())
+    private val root = ScopeBuilder(null, emptyList(), null)
 
     /** The scope at [path], every object on the way created and appended to its parent on first sight. */
-    private fun scope(path: List<String>): ScopeBuilder {
+    private fun scope(path: List<String>, fileName: String?): ScopeBuilder {
         if (path.isEmpty()) return root
-        val parent = scope(path.dropLast(1))
+        val parent = scope(path.dropLast(1), fileName)
         return parent.children.getOrPut(path.last()) {
-            ScopeBuilder(path.last(), path).also { parent.entries.add(it) }
+            ScopeBuilder(path.last(), path, fileName).also { parent.entries.add(it) }
         }
     }
 
     private fun add(path: List<String>, node: Node?, declaration: ExternalDeclaration) {
-        scope(path).entries.add(Collected(declaration, node?.let(::fileNameOf), node))
+        val fileName = node?.let(::fileNameOf)
+        scope(path, fileName).entries.add(Collected(declaration, fileName, node))
     }
 
     /** The file a node was parsed from, by [NodeBase.parent] up to the [SourceFile]. */
@@ -667,7 +793,7 @@ private class ExternalsCollector(
                 if (seenTypeNames.containsKey(name)) {
                     SkippedDeclaration("namespace $name declared again in the same scope - one Kotlin scope cannot hold both")
                 } else {
-                    seenTypeNames[name] = null
+                    seenTypeNames[name] = entry.fileName
                     ExternalObject(name, entry.path.dropLast(1), reduce(entry, inheritance))
                 }
             }
@@ -896,8 +1022,10 @@ private class ExternalsCollector(
     /** (EXT.11c) The Kotlin built-ins an alias body maps to that expose a default constructor. */
     private val kotlinClassesWithDefaultConstructor = setOf("String", "Double", "Boolean")
 
-    /** (EXT.13) One generated type the naming set may spell: its declaration node, path and name. */
-    private class Nameable(val node: Node, val path: List<String>, val name: String)
+    /** (EXT.13) One generated type the naming set may spell: its declaration node, site, name and scan position. */
+    private class Nameable(val node: Node, val site: Site, val name: String, val ordinal: Int) {
+        val path: List<String> get() = site.path
+    }
 
     /**
      * (EXT.4) The NAMING set — the declarations a resolved type may be
@@ -925,34 +1053,142 @@ private class ExternalsCollector(
      * for the shapes the lens still cannot answer.
      */
     private val nameableDeclarations: List<Nameable> =
-        surface.interfaces.map { Nameable(it.node, it.path, it.node.name.text) } +
-            surface.classes.mapNotNull { d -> d.node.name?.let { Nameable(d.node, d.path, it.text) } } +
+        surface.interfaces.map { Nameable(it.node, it.site, it.node.name.text, it.ordinal) } +
+            surface.classes.mapNotNull { d -> d.node.name?.let { Nameable(d.node, d.site, it.text, d.ordinal) } } +
             surface.enums.filterNot { ModifierFlag.Const in it.node.modifiers }
-                .map { Nameable(it.node, it.path, it.node.name.text) }
+                .map { Nameable(it.node, it.site, it.node.name.text, it.ordinal) }
+
+    /**
+     * (EXT.19) One candidate for a qualified NAME in its Kotlin scope — a
+     * generated type, a namespace object, or a root alias — with the scan
+     * position [ExternalsCollector.finish]'s first-wins rule orders by.
+     */
+    private class NameCandidate(val ordinal: Int, val nameable: Nameable?, val alias: TypeAliasDeclaration?)
+
+    /** (EXT.19) Every name candidate by qualified name, scan order. */
+    private val nameCandidates: Map<String, List<NameCandidate>> = HashMap<String, MutableList<NameCandidate>>().apply {
+        fun add(qualified: String, candidate: NameCandidate) {
+            getOrPut(qualified) { mutableListOf() }.add(candidate)
+        }
+        for (nameable in nameableDeclarations) {
+            add(qualifiedName(nameable.path, nameable.name), NameCandidate(nameable.ordinal, nameable, null))
+        }
+        for (entry in surface.namespaces) {
+            if (entry.skip != null) continue
+            for (depth in 1..entry.bodyPath.size) {
+                add(
+                    qualifiedName(entry.bodyPath.take(depth - 1), entry.bodyPath[depth - 1]),
+                    NameCandidate(entry.ordinal, null, null),
+                )
+            }
+        }
+        for (alias in surface.aliases) {
+            if (alias.path.isEmpty()) add(alias.node.name.text, NameCandidate(alias.ordinal, null, alias.node))
+        }
+        for (candidates in values) candidates.sortBy { it.ordinal }
+    }
+
+    private val nameOwnerCache = HashMap<String, Int?>()
+    private val nameOwnerInProgress = HashSet<String>()
+
+    /**
+     * (EXT.19) The scan position of the declaration that KEEPS the qualified
+     * name in its Kotlin scope — [finish]'s first-wins rule ([typeNameOnce],
+     * a namespace object taking the name) applied ahead of `finish`, over
+     * the candidates that will take a name at all: a generated type, an
+     * object, an alias that RENDERS (a refused alias or callable interface
+     * is a marker and takes nothing). Memoised; a candidate whose
+     * renderability asks this very name back (a callable interface whose
+     * signature names itself) is counted as taking it.
+     */
+    private fun nameOwnerOrdinal(qualified: String, lens: CheckedLens): Int? {
+        nameOwnerCache[qualified]?.let { return it }
+        if (qualified in nameOwnerCache) return null
+        val candidates = nameCandidates[qualified] ?: return null
+        if (!nameOwnerInProgress.add(qualified)) return candidates.firstOrNull()?.ordinal
+        try {
+            val owner = candidates.firstOrNull { candidate ->
+                val nameable = candidate.nameable
+                val alias = candidate.alias
+                when {
+                    nameable != null -> !isCallableInterface(nameable.node) || interfaceRenderable(nameable.node, lens)
+                    alias != null -> aliasRenderable(alias, lens)
+                    else -> true
+                }
+            }?.ordinal
+            nameOwnerCache[qualified] = owner
+            return owner
+        } finally {
+            nameOwnerInProgress.remove(qualified)
+        }
+    }
+
+    /**
+     * (EXT.19) Whether [nameable] is the declaration its qualified name
+     * denotes in the generated Kotlin — the one [finish] keeps, where a
+     * second declaration of the name in one scope (another file's
+     * `ReadableStream`, `vm`'s `Module` beside `module`'s namespace object)
+     * becomes a loud skip. A reference to the OTHER one must refuse: its
+     * spelling would compile against the wrong declaration (measured on
+     * `@types/node`: `readable: ReadableStream<R>` against a non-generic
+     * `ReadableStream`, `class SourceTextModule : Module` against an object).
+     */
+    private fun ownsName(nameable: Nameable, lens: CheckedLens): Boolean =
+        nameOwnerOrdinal(qualifiedName(nameable.path, nameable.name), lens) == nameable.ordinal
+
+    private val interfaceRenderable = HashMap<Int, Boolean>()
+    private val interfaceRenderableInProgress = HashSet<Int>()
+
+    /**
+     * (EXT.19) Whether a CALLABLE interface renders — as the function-type
+     * alias, or as an interface where the lens refutes the chain guess —
+     * rather than refusing (an unmappable signature): decided by running its
+     * own collection, memoised by its position in [callableInterfaces]. A
+     * reference to a refused one has no Kotlin name to render (measured:
+     * nine `Unresolved reference` errors on `stream/web`'s callback
+     * interfaces). Re-entered for the same interface, it answers true — the
+     * signature names the interface itself, and the name is what renders.
+     */
+    private fun interfaceRenderable(node: Node, lens: CheckedLens): Boolean {
+        val index = callableInterfaces.indexOfFirst { it === node }
+        if (index < 0) return true
+        interfaceRenderable[index]?.let { return it }
+        if (!interfaceRenderableInProgress.add(index)) return true
+        try {
+            val declared = surface.interfaces.first { it.node === node }
+            val renderable = collectInterface(declared.node, lens, declared.site) !is SkippedDeclaration
+            interfaceRenderable[index] = renderable
+            return renderable
+        } finally {
+            interfaceRenderableInProgress.remove(index)
+        }
+    }
 
     /** The nested aliases whose bodies are being inlined — a self-referential alias refuses. */
     private val aliasesInProgress = mutableListOf<TypeAliasDeclaration>()
 
     /**
-     * (EXT.17) The `this` parameters [functionTypeText] set aside while a type
-     * text was being built — drained into ONE top-level marker by the producer
-     * of the finished text ([annotationText]; the alias declarations put it
-     * among their markers), and cleared by the same producers before they
-     * start, so a marker is attributed to the text it was found in and to no
-     * other. Top-level, because a marker INSIDE a type text (`Array<(T) ->
-     * Unit /* … */>`) is what [typeTextWithoutMarker] cannot strip.
+     * (EXT.17) The loud records set aside while a type text was being built
+     * — the `this` parameters [functionTypeText] drops, (EXT.19) the defaulted
+     * type arguments [filledTypeArguments] supplies as `Any?` — drained into
+     * ONE top-level marker by the producer of the finished text
+     * ([annotationText]; the alias declarations put it among their markers),
+     * and cleared by the same producers before they start, so a marker is
+     * attributed to the text it was found in and to no other. Top-level,
+     * because a marker INSIDE a type text (`Array<(T) -> Unit` followed by a
+     * comment`>`) is what [typeTextWithoutMarker] cannot strip.
      */
-    private val droppedReceivers = mutableListOf<String>()
+    private val deferredMarkers = mutableListOf<String>()
 
-    private fun drainedReceiverMarkers(): List<String> {
-        if (droppedReceivers.isEmpty()) return emptyList()
-        val markers = droppedReceivers.toList()
-        droppedReceivers.clear()
+    private fun drainedMarkers(): List<String> {
+        if (deferredMarkers.isEmpty()) return emptyList()
+        val markers = deferredMarkers.toList()
+        deferredMarkers.clear()
         return markers
     }
 
     /** [text] with the drained receiver markers appended as one top-level marker. */
-    private fun withReceiverMarkers(text: String, markers: List<String>): String =
+    private fun withDeferredMarkers(text: String, markers: List<String>): String =
         if (markers.isEmpty()) text else "$text /* xtsc: ${markers.joinToString("; ")} */"
 
     /**
@@ -981,12 +1217,7 @@ private class ExternalsCollector(
         if (arguments.size != typeParameters.size) return null
         aliasesInProgress.add(alias.node)
         try {
-            val bodyScope = TypeScope(
-                ownTypeParams = typeParameters.toSet(),
-                generatedNameOf = scope.generatedNameOf,
-                path = scope.path,
-                inAmbientModule = scope.inAmbientModule,
-            )
+            val bodyScope = scope.withTypeParams(typeParameters.toSet())
             val body = annotationTextOrNull(alias.node.type, returnPosition = false, lens = lens, scope = bodyScope)
                 ?: return null
             if (typeParameters.isEmpty()) return body
@@ -1100,15 +1331,56 @@ private class ExternalsCollector(
      * declaration — the (EXT.13) ladder was per-file and answered null
      * there. A [Nameable], a [WrittenAlias], or null.
      */
-    private fun writtenTarget(segments: List<String>, fromPath: List<String>): Any? {
+    private fun writtenTarget(segments: List<String>, scope: TypeScope): Any? {
+        // (EXT.19) A namespace import's alias at the head: the module's surface.
+        if (segments.size > 1) {
+            scope.namespaceImports[segments[0]]?.let { specifier ->
+                return moduleMember(specifier, segments.drop(1), HashSet())
+            }
+        }
         var rest = segments
-        var from = fromPath
+        var from = scope.path
         if (rest.size > 1 && rest[0] in flattenedRootNames) {
             rest = rest.drop(1)
             from = emptyList()
         }
         val full = resolveSpelling(rest, from, writtenNames) ?: return null
         return writtenTargets[qualifiedName(full.dropLast(1), full.last())]
+    }
+
+    /**
+     * (EXT.19) The declaration a MODULE'S SURFACE exposes under [segments]
+     * (`Socket`, or `promises.X` through a nested object): the block's own
+     * exported types and root aliases at that path; then, in this order,
+     * what its `export = X` re-routes — the block's namespace `X` (the
+     * members at path `X`, and `X` itself for the bare name), or another
+     * module through an `import X = require("m")` alias — and what its
+     * `export * from "m"` re-exports. First declared wins, cycles are cut by
+     * [visited]. Null for a module the generation holds nothing of, which
+     * keeps the reference's marker. A [Nameable] or a [WrittenAlias].
+     */
+    private fun moduleMember(specifier: String, segments: List<String>, visited: MutableSet<String>): Any? {
+        if (segments.isEmpty() || !visited.add(specifier)) return null
+        fun own(path: List<String>, name: String): Any? {
+            nameableDeclarations.firstOrNull {
+                it.site.moduleSpecifier == specifier && it.path == path && it.name == name
+            }?.let { return it }
+            surface.aliases.firstOrNull {
+                it.site.moduleSpecifier == specifier && it.path == path && it.node.name.text == name
+            }?.let { return WrittenAlias(it) }
+            return null
+        }
+        own(segments.dropLast(1), segments.last())?.let { return it }
+        val module = surface.modules[specifier] ?: return null
+        for (target in module.exportEquals) {
+            own(listOf(target) + segments.dropLast(1), segments.last())?.let { return it }
+            if (segments.size == 1 && segments[0] == target) own(emptyList(), target)?.let { return it }
+            module.requireAliases[target]?.let { moduleMember(it, segments, visited) }?.let { return it }
+        }
+        for (reExported in module.starExports) {
+            moduleMember(reExported, segments, visited)?.let { return it }
+        }
+        return null
     }
 
     /**
@@ -1129,16 +1401,12 @@ private class ExternalsCollector(
         if (annotation !is TypeReference) return null
         val segments = entityNameText(annotation.typeName).split('.')
         if (!writtenApplies(segments, scope)) return null
-        return when (val target = writtenTarget(segments, scope.path)) {
+        return when (val target = writtenTarget(segments, scope)) {
             is Nameable -> {
-                val spelling = spellingOf(target, scope.path) ?: return null
-                val arguments = annotation.typeArguments.orEmpty()
-                if (arguments.size != typeParameterCountOf(target.node)) return null
-                val mapped = arguments.map { argument ->
-                    annotationTextOrNull(argument, returnPosition = false, lens = lens, scope = scope)
-                        ?: return null
-                }
-                if (mapped.isEmpty()) spelling else "$spelling<${mapped.joinToString(", ")}>"
+                val spelling = spellingOf(target, scope.path, lens) ?: return null
+                val filled = filledTypeArguments(target, annotation.typeArguments.orEmpty(), lens, scope) ?: return null
+                deferredMarkers += filled.markers
+                if (filled.texts.isEmpty()) spelling else "$spelling<${filled.texts.joinToString(", ")}>"
             }
             is WrittenAlias ->
                 if (target.alias.path.isEmpty()) rootAliasUse(target.alias.node, annotation, returnPosition, lens, scope)
@@ -1147,11 +1415,82 @@ private class ExternalsCollector(
         }
     }
 
+    /** The declared type parameters of a nameable's declaration. */
+    private fun typeParameterNodesOf(node: Node): List<TypeParameter> = when (node) {
+        is InterfaceDeclaration -> node.typeParameters.orEmpty()
+        is ClassDeclaration -> node.typeParameters.orEmpty()
+        else -> emptyList()
+    }
+
     /** The declared type-parameter count of a nameable's declaration. */
-    private fun typeParameterCountOf(node: Node): Int = when (node) {
-        is InterfaceDeclaration -> node.typeParameters.orEmpty().size
-        is ClassDeclaration -> node.typeParameters.orEmpty().size
-        else -> 0
+    private fun typeParameterCountOf(node: Node): Int = typeParameterNodesOf(node).size
+
+    /** (EXT.19) The type arguments of one reference, filled, with the loud records of the ones supplied as `Any?`. */
+    private class FilledTypeArguments(val texts: List<String>, val markers: List<String>)
+
+    /**
+     * (EXT.19) The type ARGUMENTS a reference to the generated [target]
+     * renders with — exactly one per declared type parameter, because a
+     * Kotlin reference must spell every argument its target declares (and
+     * the target's declaration dropped its defaults loudly): the WRITTEN
+     * ones through their own annotations (the (EXT.6) rule, one unmappable
+     * argument refusing the whole reference), and every missing one from
+     * the parameter's declared DEFAULT — rendered as a nested alias body is,
+     * its names resolved by the lens at the default's own position and
+     * spelled from the use site, the earlier parameters it names
+     * substituted by the arguments already rendered. A default that does
+     * not map — `typeof IncomingMessage`, a tuple alias — is supplied as
+     * `Any?` with a loud record naming it: the target renders that
+     * parameter unconstrained, so `Any?` is the one argument every consumer
+     * could write, and refusing would lose the supertype (`ReadableStream
+     * extends EventEmitter`, whose bare spelling was `One type argument
+     * expected` and cascaded into 45 `overrides nothing` on `@types/node`).
+     * Null where the reference has no spelling at all: more arguments than
+     * parameters, an unmappable written argument, a missing argument with
+     * no default (the `val ctor: Box` shape, (EXT.11a)).
+     */
+    private fun filledTypeArguments(
+        target: Nameable,
+        written: List<TypeNode>,
+        lens: CheckedLens,
+        scope: TypeScope,
+    ): FilledTypeArguments? {
+        val parameters = typeParameterNodesOf(target.node)
+        if (written.size > parameters.size) return null
+        val texts = mutableListOf<String>()
+        val markers = mutableListOf<String>()
+        for (argument in written) {
+            texts += annotationTextOrNull(argument, returnPosition = false, lens = lens, scope = scope) ?: return null
+        }
+        for (index in written.size until parameters.size) {
+            val parameter = parameters[index]
+            val default = parameter.default ?: return null
+            val earlier = parameters.take(index).map { it.name.text }
+            val defaultScope = TypeScope(
+                ownTypeParams = earlier.toSet(),
+                generatedNameOf = scope.generatedNameOf,
+                path = scope.path,
+                inAmbientModule = target.site.inAmbientModule,
+                namespaceImports = target.site.namespaceImports,
+            )
+            val rendered = annotationTextOrNull(default, returnPosition = false, lens = lens, scope = defaultScope)
+                ?.let { text ->
+                    when {
+                        earlier.isEmpty() -> text
+                        parseKotlinTypeText(text) == null -> null
+                        else -> substituteTypeParameters(text, earlier.zip(texts).toMap())
+                    }
+                }
+            if (rendered != null) {
+                texts += rendered
+            } else {
+                texts += "Any?"
+                val written = if (default is TypeQuery) "typeof ${entityNameText(default.exprName)}"
+                    else lens.render(lens.typeOfTypeNode(default))
+                markers += "default for ${parameter.name.text} of ${target.name}: ${commentSafe(written)} not carried - Any? supplied"
+            }
+        }
+        return FilledTypeArguments(texts, markers)
     }
 
     /**
@@ -1162,7 +1501,7 @@ private class ExternalsCollector(
      * the TARGET for a reference (`kir/api`'s lesson: a Reference's own
      * symbol carries no declaration where its target's does).
      */
-    private fun generatedDeclarationOf(type: Type): Nameable? {
+    private fun generatedDeclarationOf(type: Type, lens: CheckedLens): Nameable? {
         val symbol = when (type) {
             is Type.Reference -> type.target.symbol
             // Type.Interface (interfaces AND class instance types) and the
@@ -1171,10 +1510,17 @@ private class ExternalsCollector(
             is Type.Object -> type.symbol
             else -> null
         } ?: return null
+        // (EXT.19) A MERGED symbol (an interface and a class of one name in
+        // one file) carries several nameable declarations; the one that keeps
+        // the name is the one a reference denotes, the first otherwise — for
+        // the marker that names why it cannot render.
+        var first: Nameable? = null
         for (declaration in symbol.declarations) {
-            nameableDeclarations.firstOrNull { it.node === declaration }?.let { return it }
+            val nameable = nameableDeclarations.firstOrNull { it.node === declaration } ?: continue
+            if (ownsName(nameable, lens)) return nameable
+            if (first == null) first = nameable
         }
-        return null
+        return first
     }
 
     /**
@@ -1185,17 +1531,34 @@ private class ExternalsCollector(
      * `server.protocol.Foo` from the root — or null where none does (a
      * shadowed root type, which [referenceMarkerText] names).
      */
-    private fun generatedNameOf(type: Type, fromPath: List<String>): String? {
-        val nameable = generatedDeclarationOf(type) ?: return null
+    private fun generatedNameOf(type: Type, fromPath: List<String>, lens: CheckedLens): String? {
+        val nameable = generatedDeclarationOf(type, lens) ?: return null
+        return spellingOf(nameable, fromPath, lens)
+    }
+
+    /**
+     * (EXT.13) The spelling of a generated declaration from inside
+     * [fromPath], or null where it has none: shadowed, or (EXT.19) not the
+     * declaration that keeps its name ([ownsName] — a refused callable
+     * interface among them, which takes no name).
+     */
+    private fun spellingOf(nameable: Nameable, fromPath: List<String>, lens: CheckedLens): String? {
+        if (!ownsName(nameable, lens)) return null
         return shortestSpelling(fromPath, nameable.path, nameable.name, declaredQualified)
     }
 
-    /** (EXT.13) The spelling of a generated declaration from inside [fromPath], or null when shadowed. */
-    private fun spellingOf(nameable: Nameable, fromPath: List<String>): String? =
-        shortestSpelling(fromPath, nameable.path, nameable.name, declaredQualified)
+    private fun scopeOf(typeParamNames: Set<String>, site: Site, lens: CheckedLens): TypeScope =
+        TypeScope(
+            typeParamNames,
+            { generatedNameOf(it, site.path, lens) },
+            site.path,
+            site.inAmbientModule,
+            site.namespaceImports,
+        )
 
-    private fun scopeOf(typeParamNames: Set<String>, path: List<String>, inAmbientModule: Boolean): TypeScope =
-        TypeScope(typeParamNames, { generatedNameOf(it, path) }, path, inAmbientModule)
+    /** (EXT.19) The site of a surface interface (the scan's answer). */
+    private fun siteOf(node: InterfaceDeclaration): Site =
+        surface.interfaces.first { it.node === node }.site
 
     /** (EXT.13) The ROOT-scope aliases — the only ones emitted; a nested alias has no Kotlin shape. */
     private val rootAliases: List<TypeAliasDeclaration> =
@@ -1274,7 +1637,7 @@ private class ExternalsCollector(
         if (index < 0) return false
         return aliasRenderable.getOrPut(index) {
             val declared = surface.aliases.first { it.node === alias }
-            collectTypeAlias(alias, lens, emptyList(), declared.inAmbientModule) is ExternalTypeAlias
+            collectTypeAlias(alias, lens, declared.site) is ExternalTypeAlias
         }
     }
 
@@ -1296,13 +1659,13 @@ private class ExternalsCollector(
         lens: CheckedLens,
         scope: TypeScope,
     ): String {
-        droppedReceivers.clear()
+        deferredMarkers.clear()
         val mapped = annotationTextOrNull(annotation, returnPosition, lens, scope)
         // (EXT.17) The receivers set aside while [mapped] was built, as one
         // marker after the whole text — after the nullable wrap, so the
         // marker is never inside a parenthesis. An unmapped text carries the
         // whole written type in its own marker already.
-        val receivers = drainedReceiverMarkers()
+        val receivers = drainedMarkers()
         return when {
             // (EXT.11a) A `typeof X` query is marked by what was WRITTEN, not
             // by what it resolved to: this checker types a class value as its
@@ -1318,9 +1681,9 @@ private class ExternalsCollector(
                 val text = annotation?.let { referenceMarkerText(it, type, lens, scope) }
                 "Any? /* xtsc: unmapped ${text ?: commentSafe(lens.render(type))} */"
             }
-            !optional -> withReceiverMarkers(mapped, receivers)
+            !optional -> withDeferredMarkers(mapped, receivers)
             // (EXT.11b) One nullable-wrapping rule for every producer.
-            else -> withReceiverMarkers(nullableTypeText(mapped), receivers)
+            else -> withDeferredMarkers(nullableTypeText(mapped), receivers)
         }
     }
 
@@ -1434,7 +1797,7 @@ private class ExternalsCollector(
             }
         }
         val referenceArguments = (annotation as? TypeReference)?.typeArguments
-        if (referenceArguments != null) {
+        if (annotation is TypeReference) {
             // (EXT.6) A generic reference names its TARGET by the CHECKER's
             // positive identity (the resolved reference's target declaration is
             // in the generated surface) while its ARGUMENTS render from their
@@ -1442,19 +1805,21 @@ private class ExternalsCollector(
             // measured on mitt: the lens ambient substitutes a declaration's
             // own type parameters to `any` silently, so `Emitter<Events>`
             // resolved as `Emitter<any>` and fell back. One unmappable
-            // argument still refuses the WHOLE reference.
-            val targetName = scope.generatedNameOf(lens.typeOfTypeNode(annotation))
-            if (targetName != null) {
-                val arguments = referenceArguments.map { argument ->
-                    annotationTextOrNull(
-                        argument,
-                        returnPosition = false,
-                        lens = lens,
-                        scope = scope,
-                    ) ?: return null
-                }
+            // argument still refuses the WHOLE reference. (EXT.19) A
+            // reference to a generated GENERIC target takes this leg whether
+            // or not arguments were written: the missing ones are the
+            // target's declared defaults ([filledTypeArguments]), and a
+            // target that lost its name or a shadowed one refuses HERE — the
+            // marker names why ([referenceMarkerText]).
+            val resolved = lens.typeOfTypeNode(annotation)
+            val target = generatedDeclarationOf(resolved, lens)
+            if (target != null && (referenceArguments != null || typeParameterCountOf(target.node) > 0)) {
                 // (EXT.14) `targetName` is a rendered spelling — not wrapped again.
-                return "$targetName<${arguments.joinToString(", ")}>"
+                val targetName = scope.generatedNameOf(resolved) ?: return null
+                val filled = filledTypeArguments(target, referenceArguments.orEmpty(), lens, scope) ?: return null
+                deferredMarkers += filled.markers
+                return if (filled.texts.isEmpty()) targetName
+                else "$targetName<${filled.texts.joinToString(", ")}>"
             }
         }
         // (EXT.11b) `Array<T>` / `ReadonlyArray<T>` written as a reference —
@@ -1527,9 +1892,13 @@ private class ExternalsCollector(
         scope: TypeScope,
     ): String? {
         if (annotation !is TypeReference) return null
-        val target = generatedDeclarationOf(resolved)
+        val target = generatedDeclarationOf(resolved, lens)
         val reason = when {
-            target != null && spellingOf(target, scope.path) == null ->
+            target != null && isCallableInterface(target.node) && !interfaceRenderable(target.node, lens) ->
+                "callable interface ${target.name} has no Kotlin function type"
+            target != null && !ownsName(target, lens) ->
+                "the name ${target.name} is taken by an earlier declaration in ${scopeText(target.path)}"
+            target != null && spellingOf(target, scope.path, lens) == null ->
                 "shadowed inside ${scope.path.joinToString(".")}, no Kotlin spelling reaches it"
             isAnyIntrinsic(resolved) -> "resolved to any"
             (annotation.typeName as? Identifier)?.text in libArrayNames &&
@@ -1540,6 +1909,10 @@ private class ExternalsCollector(
             (annotation.typeArguments?.joinToString(", ", "<", ">") { lens.render(lens.typeOfTypeNode(it)) } ?: "")
         return "${commentSafe(written)} - $reason"
     }
+
+    /** (EXT.19) A scope path for a marker: the objects' dotted path, or the top level. */
+    private fun scopeText(path: List<String>): String =
+        if (path.isEmpty()) "the top level" else path.joinToString(".")
 
     /**
      * (EXT.11a) The SYNTACTIC function-type rendering shared by a written
@@ -1567,7 +1940,7 @@ private class ExternalsCollector(
      * the marker says so. The receiver is the FIRST parameter named `this`
      * (TypeScript allows no other position; one found elsewhere refuses the
      * whole type) and goes through the same mapping — an unmappable one still
-     * refuses the whole type. The marker is set aside in [droppedReceivers]
+     * refuses the whole type. The marker is set aside in [deferredMarkers]
      * for the producer of the finished text to attach at the top level.
      */
     private fun functionTypeText(
@@ -1583,9 +1956,9 @@ private class ExternalsCollector(
         // A refusal below takes the markers this call set aside with it: a
         // refused type carries no marker, and the pieces of a refused
         // composite must not be attributed to its neighbour.
-        val mark = droppedReceivers.size
+        val mark = deferredMarkers.size
         fun refuse(): String? {
-            droppedReceivers.subList(mark, droppedReceivers.size).clear()
+            deferredMarkers.subList(mark, deferredMarkers.size).clear()
             return null
         }
         receiver?.let { parameter ->
@@ -1595,7 +1968,7 @@ private class ExternalsCollector(
                 lens = lens,
                 scope = scope,
             ) ?: return refuse()
-            droppedReceivers += "this parameter $text not carried"
+            deferredMarkers += "this parameter $text not carried"
         }
         val parameters = ordinary.map { parameter ->
             if (parameter.questionToken || parameter.dotDotDotToken) return refuse()
@@ -1780,8 +2153,7 @@ private class ExternalsCollector(
     private fun collectFunction(
         node: FunctionDeclaration,
         lens: CheckedLens,
-        path: List<String>,
-        inAmbientModule: Boolean,
+        site: Site,
     ): ExternalDeclaration? {
         val name = node.name?.text
             ?: return SkippedDeclaration("top-level function without a name")
@@ -1790,7 +2162,7 @@ private class ExternalsCollector(
         }
         if (node.body != null && overloadGroup.size > 1) return null
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
-        val scope = scopeOf(typeParameters.toSet(), path, inAmbientModule)
+        val scope = scopeOf(typeParameters.toSet(), site, lens)
         val markers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, markers)
         val declared = declaredParameters(node.parameters, lens, scope)
@@ -1902,12 +2274,12 @@ private class ExternalsCollector(
             is InterfaceDeclaration -> {
                 val declared = surface.interfaces.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(declared.path, node, collectInterface(node, lens, declared.path, declared.inAmbientModule))
+                add(declared.path, node, collectInterface(node, lens, declared.site))
             }
             is ClassDeclaration -> {
                 val declared = surface.classes.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(declared.path, node, collectClass(node, lens, declared.path, declared.inAmbientModule))
+                add(declared.path, node, collectClass(node, lens, declared.site))
             }
             is EnumDeclaration -> {
                 val declared = surface.enums.firstOrNull { it.node === node } ?: return
@@ -1917,12 +2289,12 @@ private class ExternalsCollector(
             is TypeAliasDeclaration -> {
                 val declared = surface.aliases.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                add(declared.path, node, collectTypeAlias(node, lens, declared.path, declared.inAmbientModule))
+                add(declared.path, node, collectTypeAlias(node, lens, declared.site))
             }
             is FunctionDeclaration -> {
                 val declared = surface.functions.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
-                collectFunction(node, lens, declared.path, declared.inAmbientModule)
+                collectFunction(node, lens, declared.site)
                     ?.let { add(declared.path, node, it) }
             }
             is VariableDeclaration -> {
@@ -1949,7 +2321,7 @@ private class ExternalsCollector(
                     else -> {
                         // (EXT.16) A wired header states what the root's members bind as.
                         entry.header?.let { add(entry.ownerPath, node, ExternalMarker(plan?.namespaceHeader(node) ?: it)) }
-                        scope(entry.bodyPath)
+                        scope(entry.bodyPath, fileNameOf(node))
                     }
                 }
             }
@@ -2012,7 +2384,7 @@ private class ExternalsCollector(
         val node = exported.node
         val name = (node.name as? Identifier)?.text
             ?: return SkippedDeclaration("destructuring export - no single name to declare")
-        val scope = scopeOf(emptySet(), exported.path, exported.inAmbientModule)
+        val scope = scopeOf(emptySet(), exported.site, lens)
         val type =
             if (node.type != null) {
                 annotationText(node.type, optional = false, returnPosition = false, lens = lens, scope = scope)
@@ -2199,13 +2571,13 @@ private class ExternalsCollector(
     private fun collectClass(
         node: ClassDeclaration,
         lens: CheckedLens,
-        path: List<String>,
-        inAmbientModule: Boolean,
+        site: Site,
     ): ExternalDeclaration {
         val name = node.name?.text
             ?: return SkippedDeclaration("class without a name")
+        val path = site.path
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
-        val scope = scopeOf(typeParameters.toSet(), path, inAmbientModule)
+        val scope = scopeOf(typeParameters.toSet(), site, lens)
         val headerMarkers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, headerMarkers)
         val members = mutableListOf<ExternalMember>()
@@ -2213,6 +2585,7 @@ private class ExternalsCollector(
         val heritage = collectHeritage(node.heritageClauses, lens, scope, members) { base, isExtends ->
             if (isExtends) base is ClassDeclaration else base is InterfaceDeclaration
         }
+        headerMarkers += heritage.markers
         if (heritage.extends.size > 1) {
             // Unreachable from well-formed TypeScript (one `extends` per
             // class); kept loud rather than picking one.
@@ -2266,7 +2639,7 @@ private class ExternalsCollector(
             if (memberName != null && isPrivateName(memberName)) continue
             val isStatic = ModifierFlag.Static in modifiers
             val target = if (isStatic) staticMembers else members
-            val memberScope = if (isStatic) scopeOf(emptySet(), path, inAmbientModule) else scope
+            val memberScope = if (isStatic) scopeOf(emptySet(), site, lens) else scope
             when (member) {
                 is PropertyDeclaration -> collectProperty(member, lens, target, memberScope)
                 is MethodDeclaration -> collectMethod(member, lens, target, memberScope)
@@ -2340,10 +2713,10 @@ private class ExternalsCollector(
     private fun collectTypeAlias(
         node: TypeAliasDeclaration,
         lens: CheckedLens,
-        path: List<String>,
-        inAmbientModule: Boolean,
+        site: Site,
     ): ExternalDeclaration {
         val name = node.name.text
+        val path = site.path
         // (EXT.13) A Kotlin `typealias` is top-level only: inside a nested
         // namespace object the alias has no shape and is a loud skip. Its
         // USES still resolve through the checker to what the alias denotes
@@ -2356,32 +2729,32 @@ private class ExternalsCollector(
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
         if (typeParameters.isNotEmpty()) {
             val markers = typeParameterMarkers(node.typeParameters, lens)
-            droppedReceivers.clear()
+            deferredMarkers.clear()
             val body = annotationTextOrNull(
                 node.type,
                 returnPosition = false,
                 lens = lens,
-                scope = scopeOf(typeParameters.toSet(), path, inAmbientModule),
+                scope = scopeOf(typeParameters.toSet(), site, lens),
             ) ?: return SkippedDeclaration("generic type alias $name with unmappable body")
             // (EXT.17) A `this` parameter in the body is a marker on the alias.
-            markers += drainedReceiverMarkers()
+            markers += drainedMarkers()
             return ExternalTypeAlias(name, typeParameters, markers, body)
         }
         // (EXT.10) The body through the annotation path — the resolved type
         // where it maps (unchanged: `string` → `String`), and a FUNCTION type
         // syntactically where the resolved one has no Kotlin spelling, so
         // `type Cb = () => void` is a `typealias` its uses can name.
-        droppedReceivers.clear()
+        deferredMarkers.clear()
         val mapped = annotationTextOrNull(
             node.type,
             returnPosition = false,
             lens = lens,
-            scope = scopeOf(emptySet(), path, inAmbientModule),
+            scope = scopeOf(emptySet(), site, lens),
         ) ?: return SkippedDeclaration(
             "type alias $name with unmappable body " +
                 commentSafe(lens.render(lens.typeOfTypeNode(node.type)))
         )
-        return ExternalTypeAlias(name, emptyList(), drainedReceiverMarkers(), mapped)
+        return ExternalTypeAlias(name, emptyList(), drainedMarkers(), mapped)
     }
 
     /**
@@ -2478,10 +2851,6 @@ private class ExternalsCollector(
     private fun isCallableInterface(declaration: Node): Boolean =
         callableInterfaces.any { it === declaration }
 
-    /** (EXT.14) Whether a surface interface sits inside a `declare module "m"` body (the scan's answer). */
-    private fun inAmbientModuleOf(node: InterfaceDeclaration): Boolean =
-        surface.interfaces.firstOrNull { it.node === node }?.inAmbientModule ?: false
-
     /**
      * (EXT.11a) A callable interface as `public typealias Name<TPs> =
      * (P1, P2) -> R`, its signature rendered SYNTACTICALLY under the
@@ -2500,15 +2869,15 @@ private class ExternalsCollector(
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
         val markers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, markers)
-        droppedReceivers.clear()
+        deferredMarkers.clear()
         val body = functionTypeText(
             signature.parameters,
             signature.type,
             lens,
-            scopeOf(typeParameters.toSet(), emptyList(), inAmbientModuleOf(node)),
+            scopeOf(typeParameters.toSet(), siteOf(node), lens),
         ) ?: return SkippedDeclaration("callable interface $name with unmappable signature")
         // (EXT.17) A `this` parameter of the call signature is a marker on the alias.
-        markers += drainedReceiverMarkers()
+        markers += drainedMarkers()
         return ExternalTypeAlias(name, typeParameters, markers, body)
     }
 
@@ -2533,7 +2902,7 @@ private class ExternalsCollector(
         if (symbol.declarations.none { it === expectedBase }) return null
         val name = node.name.text
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
-        val scope = scopeOf(typeParameters.toSet(), emptyList(), inAmbientModuleOf(node))
+        val scope = scopeOf(typeParameters.toSet(), siteOf(node), lens)
         val markers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, markers)
         val arguments = base.typeArguments.orEmpty().map { argument ->
@@ -2551,9 +2920,9 @@ private class ExternalsCollector(
     private fun collectInterface(
         node: InterfaceDeclaration,
         lens: CheckedLens,
-        path: List<String>,
-        inAmbientModule: Boolean,
+        site: Site,
     ): ExternalDeclaration {
+        val path = site.path
         // (EXT.11a) A callable interface is a function type; a link of a
         // callable chain is an alias to one — unless the lens refutes the
         // syntactic chain guess, in which case the interface path below marks
@@ -2568,7 +2937,7 @@ private class ExternalsCollector(
         // Kotlin externals cannot carry — a constraint, a default — becomes a
         // loud header marker, never a silent widening.
         val typeParameters = node.typeParameters.orEmpty().map { it.name.text }
-        val scope = scopeOf(typeParameters.toSet(), path, inAmbientModule)
+        val scope = scopeOf(typeParameters.toSet(), site, lens)
         val headerMarkers = typeParameterMarkers(node.typeParameters, lens)
         defaultExportMarker(node.modifiers, headerMarkers)
         val members = mutableListOf<ExternalMember>()
@@ -2578,6 +2947,7 @@ private class ExternalsCollector(
         val heritage = collectHeritage(node.heritageClauses, lens, scope, members) { base, _ ->
             base is InterfaceDeclaration
         }
+        headerMarkers += heritage.markers
         for (member in node.members) {
             when (member) {
                 is PropertyDeclaration -> collectProperty(member, lens, members, scope)
@@ -2611,6 +2981,8 @@ private class ExternalsCollector(
         val extends: List<String>,
         /** `implements` bases that are GENERATED interfaces, as Kotlin type text. */
         val implements: List<String>,
+        /** (EXT.19) Loud header records — a defaulted type argument supplied as `Any?`. */
+        val markers: List<String>,
     )
 
     /**
@@ -2636,6 +3008,18 @@ private class ExternalsCollector(
      * base inside a namespace body is that namespace's own declaration
      * before the root's or a lib's ((CHK.76); 509 `extends Node`-shaped
      * clauses of `typescript.d.ts` answered null or the DOM's before it).
+     *
+     * (EXT.19) Two refusals the marker NAMES, and one fill: a target that
+     * is not the declaration keeping its name in its Kotlin scope
+     * ([ownsName] — `vm`'s `Module` beside `module`'s namespace object
+     * rendered `Cannot extend an object`), a base written through a
+     * namespace import the lens answers nothing for and the module surface
+     * holds nothing of, and — the fill — the type arguments the base's
+     * generic target declares but the clause does not write, supplied from
+     * the declared defaults ([filledTypeArguments]): `interface
+     * ReadableStream extends EventEmitter` over `EventEmitter<T = …>` was
+     * `One type argument expected` and, because a Kotlin supertype in error
+     * contributes no members, 45 `overrides nothing` on `@types/node`.
      */
     private fun collectHeritage(
         clauses: List<HeritageClause>?,
@@ -2646,11 +3030,13 @@ private class ExternalsCollector(
     ): Heritage {
         val extends = mutableListOf<String>()
         val implements = mutableListOf<String>()
+        val markers = mutableListOf<String>()
         for (clause in clauses.orEmpty()) {
             val isExtends = clause.token == SyntaxKind.ExtendsKeyword
             val keyword = clause.token.name.removeSuffix("Keyword").lowercase()
             for (base in clause.types) {
                 val baseName = expressionNameText(base.expression)
+                var reason: String? = null
                 val rendered = baseName?.let { written ->
                     // Resolved as the checker resolves the clause itself (the
                     // lexical `resolveName` offers no import): an imported
@@ -2663,36 +3049,41 @@ private class ExternalsCollector(
                             nameableDeclarations.firstOrNull { it.node === declared }
                         }
                         ?: written.split('.').let { segments ->
-                            if (writtenApplies(segments, scope)) writtenTarget(segments, scope.path) as? Nameable else null
+                            if (writtenApplies(segments, scope)) writtenTarget(segments, scope) as? Nameable else null
                         }
                         ?: return@let null
                     if (!kindOk(nameable.node, isExtends)) return@let null
                     // (EXT.11a) A callable interface renders as a function
                     // TYPE alias, which nothing can extend or implement.
                     if (isCallableInterface(nameable.node)) return@let null
-                    val spelling = spellingOf(nameable, scope.path) ?: return@let null
-                    val arguments = base.typeArguments.orEmpty().map { argument ->
-                        annotationTextOrNull(
-                            argument,
-                            returnPosition = false,
-                            lens = lens,
-                            scope = scope,
-                        ) ?: return@let null
+                    if (!ownsName(nameable, lens)) {
+                        reason = "the name ${nameable.name} is taken by an earlier declaration in ${scopeText(nameable.path)}"
+                        return@let null
                     }
-                    if (arguments.isEmpty()) spelling
-                    else "$spelling<${arguments.joinToString(", ")}>"
+                    val spelling = spellingOf(nameable, scope.path, lens) ?: run {
+                        reason = "shadowed inside ${scope.path.joinToString(".")}, no Kotlin spelling reaches it"
+                        return@let null
+                    }
+                    val filled = filledTypeArguments(nameable, base.typeArguments.orEmpty(), lens, scope)
+                        ?: return@let null
+                    markers += filled.markers
+                    if (filled.texts.isEmpty()) spelling
+                    else "$spelling<${filled.texts.joinToString(", ")}>"
                 }
                 when {
                     rendered == null ->
                         members.add(
-                            SkippedMember("heritage clause $keyword ${baseName ?: "a base expression"}")
+                            SkippedMember(
+                                "heritage clause $keyword ${baseName ?: "a base expression"}" +
+                                    (reason?.let { " - $it" } ?: "")
+                            )
                         )
                     isExtends -> extends.add(rendered)
                     else -> implements.add(rendered)
                 }
             }
         }
-        return Heritage(extends, implements)
+        return Heritage(extends, implements, markers)
     }
 
     /**
@@ -2903,7 +3294,7 @@ private class ExternalsCollector(
         val methodTypeParameters = member.typeParameters.orEmpty().map { it.name.text }
         val methodScope =
             if (methodTypeParameters.isEmpty()) scope
-            else TypeScope(scope.ownTypeParams + methodTypeParameters, scope.generatedNameOf, scope.path, scope.inAmbientModule)
+            else scope.withTypeParams(scope.ownTypeParams + methodTypeParameters)
         // (EXT.11a) A method's `this` parameter is dropped with a marker, as
         // a function's is — for a method the receiver is the declaring
         // object anyway, and the constraint is a TypeScript-only fact.
