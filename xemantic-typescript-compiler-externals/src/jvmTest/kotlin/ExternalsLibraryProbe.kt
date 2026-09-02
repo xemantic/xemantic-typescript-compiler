@@ -167,7 +167,10 @@ class ExternalsLibraryProbe {
                 "skipped generic type alias <NAME> with unmappable body",
             Regex("""skipped type alias \S+ with unmappable body .*""") to
                 "skipped type alias <NAME> with unmappable body <TYPE>",
-            Regex("""skipped parameter property \S+""") to "skipped parameter property <NAME>",
+            // (EXT.15) A parameter property renders; only the rest form stays a skip.
+            Regex("""skipped rest parameter property \S+""") to "skipped rest parameter property <NAME>",
+            Regex("""skipped index signature keyed by .* - only a string or number key has a Kotlin get/set pair""") to
+                "skipped index signature keyed by <TYPE>",
             Regex("""skipped heritage clause extends .*""") to "skipped heritage clause extends <BASE>",
             Regex("""skipped heritage clause implements .*""") to "skipped heritage clause implements <BASE>",
             Regex("""skipped optional generic method \S+""") to "skipped optional generic method <NAME>",

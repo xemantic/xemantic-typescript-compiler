@@ -222,6 +222,19 @@ internal class ExternalFunction(
     override val markers: List<String>,
     override val parameters: List<ExternalParameter>,
     override val returnType: String,
+    /**
+     * (EXT.15) Rendered with the `operator` modifier — the `get`/`set` pair an
+     * INDEX SIGNATURE becomes (`[key: string]: T` → `operator fun get(key:
+     * String): T?` and `operator fun set(key: String, value: T)`), so a
+     * consumer reads `o["k"]` and writes `o["k"] = v` as JavaScript does.
+     * To every KEY in this module — the overload collapse, the override
+     * relation, the heritage clash test — an operator function is an
+     * ordinary function of its name and parameters: `operator` is a
+     * rendering fact, and Kotlin's own rules agree (an `override` of an
+     * operator is written `override operator`, measured in
+     * `KotlinIndexSignatureCompileTest`).
+     */
+    val operator: Boolean = false,
 ) : ExternalMember, FunctionSignature
 
 /**
@@ -445,6 +458,7 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
                 markers = member.markers,
                 parameters = member.parameters.map { substitutedParameter(it, substitution) },
                 returnType = substituteTypeParameters(member.returnType, substitution),
+                operator = member.operator,
             )
             is SkippedMember -> member
         }
@@ -1342,8 +1356,10 @@ private fun StringBuilder.appendMember(
                         kotlinIdentifier(it)
                     }
             val parameters = member.parameters.joinToString(", ", transform = ::parameterText)
+            // (EXT.15) `operator` sits last among the modifiers, next to `fun`.
+            val operator = if (member.operator) "operator " else ""
             appendLine(
-                "${indent}public ${modifiers}fun $typeParams${kotlinIdentifier(member.name)}($parameters): ${member.returnType}$body"
+                "${indent}public $modifiers${operator}fun $typeParams${kotlinIdentifier(member.name)}($parameters): ${member.returnType}$body"
             )
         }
         is SkippedMember ->

@@ -127,6 +127,18 @@ class KotlinExternalsCompileGateTest {
             pick(x: string): string;
             pick(x: number, y: number): number;
         }
+        export interface Dictionary<T> {
+            [key: string]: T;
+            [index: number]: T;
+        }
+        export interface FrozenDictionary extends Dictionary<string> {
+            readonly [key: string]: string;
+        }
+        export class Registry {
+            constructor(public name: string, readonly size: number, private secret: string) {}
+            [key: string]: any;
+            static [key: string]: string;
+        }
     """.trimIndent()
 
     @Test

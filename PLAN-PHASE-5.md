@@ -89,6 +89,29 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.15) LANDED — index signatures and parameter properties, the umbrella's last two member
+rungs.** `[key: string]: T` → `public operator fun get(key: String): T?` + `set(key: String,
+value: T)` (a number key → `Double`; the READ is nullable because an absent key is `undefined`,
+the WRITE is not; `readonly` drops the set; `symbol`/template/literal-union/alias keys are a loud
+skip naming the key, decided from SYNTAX — a key typed `Any?` would say nothing about which keys
+the object answers); to every key in the module the pair is an ordinary `get`/`set` (`operator`
+is a rendering fact), so a redeclared signature renders `override operator`, a class base `open
+operator`, and an index signature beside a method `get(key: string)` collapses loudly. Measured
+first with the metadata compiler (`KotlinIndexSignatureCompileTest`, 4 pins): a `String` pair
+beside a `Double` pair compiles, `override operator` compiles, the gate's `= null!!` bodies and a
+companion pair compile, a keyless `operator fun get()` is refused. Parameter properties: every
+modified constructor parameter declares a member — `public`/`readonly`/`override` render an
+explicit `var`/`val` at the START of the class body in parameter order (primary-constructor
+`val` syntax deliberately not used: one constructor rendering path for own/inherited/gate
+super-call, and an explicit member reaches `override`/`open` like any property);
+`private`/`protected` omitted silently; the constructor keeps every parameter. Population:
+`typescript.d.ts` 7 interface index signatures (`MapLike<T>` now `get(index: String): T?`) and 0
+parameter properties — STRUCTURAL: TS2369 forbids a parameter property outside a constructor
+IMPLEMENTATION, so `.d.ts` emit never contains one, and both rxjs probes are byte-identical. Two
+fixture defects the checker caught and tsgo confirmed (TS2411 under a string index, TS2369 in a
+`declare class`) — fixtures corrected, not the generator. 8 pins RED by ablation, no gate
+expectation moved. Externals 149 → 159/0; suite 17,021 → 17,031 / 0 / 3.
+
 **(EXT.14) LANDED — the generator's per-file syntactic ladder is RETIRED; a program-wide
 written-name fallback survives for exactly the two shapes the lens cannot answer.** Measured on
 `typescript.d.ts` in three arms: HEAD (9,791 lines, 1,750 markers, 9 heritage skips), arm A (lens
@@ -1214,8 +1237,15 @@ Owner decisions 2026-09-02:
   (`SchedulerAction<T>.(T) -> Unit`) and a declaration's is dropped loudly.
   New instrument: `ExternalsLibraryProbe` (env-gated jvmTest; generated Kotlin +
   compile errors + diagnostics + a marker census per mechanism).
-  Still to emit: namespaces/modules, index signatures, parameter properties;
-  module wiring; next ladder rung: RxJS (`class Subject<T> extends
+  DONE 2026-09-02 ((EXT.13), (P18.9) note): NAMESPACES — the root ambient namespace
+  flattens, nested ones are `external object`s; `typescript.d.ts` compiles.
+  DONE 2026-09-02 ((EXT.15), (P18.9) note): INDEX SIGNATURES as an `operator fun
+  get`/`set` pair (string/number keys, read nullable, `readonly` drops the set,
+  other keys a loud skip) and PARAMETER PROPERTIES as explicit members at the
+  start of the class body (`public`/`readonly` → `var`/`val`, private/protected
+  omitted). Still to emit: module wiring (`@JsModule`/`@JsName`, the package's
+  public surface through its re-export graph) — (EXT.16). Ladder rungs green:
+  mitt, smol-toml, RxJS (core + all 250 files), typescript.d.ts. (`class Subject<T> extends
   Observable<T>` is (EXT.8)'s shape; `export declare const EMPTY:
   Observable<never>` is (EXT.9)'s). Unions and other inexpressible shapes: ONE
   documented fallback per shape, never silent. Fixture ladder: `mitt` → `smol-toml` →
@@ -1454,6 +1484,23 @@ Owner decisions 2026-09-02:
   ladder's four gates are the receipt. Also the residue (CHK.76) recorded: a `.d.ts` namespace
   body reports no TS2304 for an undeclared name (tsgo does) — the unresolved-names family's
   declaration-file gate, separate item if it survives a reproduction.
+
+- [ ] **(EXT.16) MODULE WIRING — THE LAST LADDER RUNG THE UMBRELLA NAMES.** The generation
+  takes the npm MODULE NAME (`generateKotlinExternals(files, moduleName = "rxjs")`, null = a
+  global script) and an ENTRY file (the package's `types` entry, `index.d.ts`); the real
+  output opens with `@file:JsModule("rxjs")` (the gate variant renders neither `external` nor
+  the JS annotations — a renderer flag, as today). The module's PUBLIC SURFACE is computed
+  through the re-export graph from the entry (`export { a } from`, `export * from`, `export
+  { a as b }`, `export default`, `export =`): a declaration reachable under its own name needs
+  nothing; one reachable under ANOTHER name gets `@JsName("<exported name>")` (a default export
+  → `@JsName("default")`; an `export =` of a value/class/function → `@JsName("default")` is
+  WRONG for CJS — it is the module object itself; decide against tsgo's emit and pin); a
+  VALUE/function/class not reachable from the entry is a loud marker ("not exported by the
+  package entry - internal path"), while an unreachable TYPE is fine (no runtime). The
+  `re-export … module wiring is a later rung` markers (291 on rxjs) become the wiring or
+  vanish. `export as namespace X` (UMD) → `@file:JsNonModule` + `@file:JsQualifier`? — measure
+  what Kotlin/JS needs and pin. Gate: the smol-toml/rxjs gates re-pinned with the annotations,
+  the 250-file probe's re-export markers → 0.
 
 - [ ] **(CHK.77) THE FOUR NAMESPACE-RESOLUTION RESIDUES (EXT.14) MEASURED AFTER (CHK.76), each
   with probe evidence in the (P18.9) note — the generator keeps a written-name fallback for

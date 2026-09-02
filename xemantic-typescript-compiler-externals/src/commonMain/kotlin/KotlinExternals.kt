@@ -49,6 +49,7 @@ import com.xemantic.typescript.compiler.HeritageClause
 import com.xemantic.typescript.compiler.ExternalModuleReference
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.ImportEqualsDeclaration
+import com.xemantic.typescript.compiler.IndexSignature
 import com.xemantic.typescript.compiler.InterfaceDeclaration
 import com.xemantic.typescript.compiler.KeywordTypeNode
 import com.xemantic.typescript.compiler.LiteralType
@@ -2061,14 +2062,10 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                 constructorParameters = declared.parameters
                     .mapIndexed { index, parameter ->
                         val external = externalParameter(index, parameter, lens, scope)
-                        if (parameter.modifiers.isNotEmpty()) {
-                            // `constructor(public x: number)` DECLARES a
-                            // member; the expansion is a later rung, so the
-                            // member's absence is loud.
-                            members.add(
-                                SkippedMember("parameter property ${external.name}")
-                            )
-                        }
+                        // (EXT.15) `constructor(public x: number)` DECLARES a
+                        // member, rendered at the start of the body in
+                        // parameter order.
+                        parameterPropertyMember(parameter, external)?.let { members.add(it) }
                         external
                     }
             }
@@ -2079,6 +2076,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                 is MethodDeclaration -> member.modifiers
                 is GetAccessor -> member.modifiers
                 is SetAccessor -> member.modifiers
+                is IndexSignature -> member.modifiers
                 else -> emptySet()
             }
             if (ModifierFlag.Private in modifiers || ModifierFlag.Protected in modifiers) {
@@ -2100,14 +2098,14 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                 is MethodDeclaration -> collectMethod(member, lens, target, memberScope)
                 is GetAccessor, is SetAccessor ->
                     collectAccessor(member, accessorSiblings(node.members, isStatic), lens, target, memberScope)
+                is IndexSignature -> collectIndexSignature(member, lens, target, memberScope)
                 is Constructor -> {}
                 is SemicolonClassElement -> {}
                 // A static initialization block declares nothing a consumer
                 // could name — pure runtime, silently outside the surface.
+                // (EXT.15) With the index signature rendered the `when` is
+                // exhaustive over every class element kind.
                 is ClassStaticBlockDeclaration -> {}
-                else -> target.add(
-                    SkippedMember(member::class.simpleName ?: "member")
-                )
             }
         }
         dedupeOverloads(members)
@@ -2413,6 +2411,7 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                 }
                 is GetAccessor, is SetAccessor ->
                     collectAccessor(member, node.members, lens, members, scope)
+                is IndexSignature -> collectIndexSignature(member, lens, members, scope)
                 // A stray `;` between members is pure syntax — there is
                 // nothing to generate and nothing to mark.
                 is SemicolonClassElement -> {}
@@ -2572,6 +2571,136 @@ private class ExternalsCollector(private val surface: Surface) : CheckedNodeSink
                 ),
                 readOnly = ModifierFlag.Readonly in member.modifiers,
             )
+        )
+    }
+
+    /**
+     * (EXT.15) An INDEX SIGNATURE — `[key: string]: T`, `[i: number]: T` —
+     * as the pair Kotlin reads and writes an indexed member through, the
+     * kotlin-wrappers/Dukat convention: `operator fun get(key: String): T?`
+     * and, unless the signature is `readonly`, `operator fun set(key:
+     * String, value: T)`, so a consumer's `o["k"]` and `o["k"] = v` are the
+     * JavaScript accesses. Measured through the metadata compile
+     * (`KotlinIndexSignatureCompileTest`): an interface holds a `String`
+     * pair and a `Double` pair side by side (two `get` overloads told apart
+     * by the key type alone), a subinterface redeclares them as `override
+     * operator`, and the gate variant's class carries `= null!!` bodies and a
+     * companion pair — a `static` index signature lands in the companion
+     * like every static member.
+     *
+     * The READ is nullable and the WRITE is not, deliberately: a read of an
+     * absent key is `undefined` in JavaScript whatever the signature's value
+     * type says, so `T?` is the honest return type, while a write of `null`
+     * where the signature says `T` would be this generator inventing a
+     * value; the nullability goes through [annotationText]'s one wrapping
+     * rule, so a value type that is already nullable (`T | undefined`, a
+     * marked `Any?`) is not wrapped twice. The value type is the checker's
+     * answer as for every property, the marker carried on both members
+     * where it does not map. The key parameter keeps its WRITTEN name.
+     *
+     * The key TYPE is decided from the syntax: a `string` keyword renders the
+     * `String` pair, a `number` keyword the `Double` pair, and anything else
+     * — `symbol`, a template-literal pattern, a union of literals, an alias
+     * to `string` — is a loud skip naming it, because a Kotlin `get` keyed
+     * by `Any?` would accept every key and say nothing about which ones the
+     * object answers. To the override, overload and heritage keys the two
+     * operators are ordinary functions named `get`/`set`
+     * ([ExternalFunction.operator]) — a subinterface redeclaring the
+     * signature renders `override`, a class member overridden below renders
+     * `open`, and an interface declaring BOTH an index signature and a
+     * method `get(key: string)` collapses the pair by the overload rule,
+     * loudly, exactly as two methods of one Kotlin signature would.
+     */
+    private fun collectIndexSignature(
+        member: IndexSignature,
+        lens: CheckedLens,
+        members: MutableList<ExternalMember>,
+        scope: TypeScope,
+    ) {
+        val parameter = member.parameters.singleOrNull { !it.isCommentPlaceholder }
+        val keyAnnotation = parameter?.type
+        if (parameter == null || keyAnnotation == null) {
+            members.add(SkippedMember("index signature without a key"))
+            return
+        }
+        val keyType = when ((keyAnnotation as? KeywordTypeNode)?.kind) {
+            SyntaxKind.StringKeyword -> "String"
+            SyntaxKind.NumberKeyword -> "Double"
+            else -> {
+                val rendered = commentSafe(lens.render(lens.typeOfTypeNode(keyAnnotation)))
+                members.add(
+                    SkippedMember(
+                        "index signature keyed by $rendered - only a string or number key has a Kotlin get/set pair"
+                    )
+                )
+                return
+            }
+        }
+        val keyName = (parameter.name as? Identifier)?.text ?: "key"
+        val key = ExternalParameter(keyName, keyType)
+        members.add(
+            ExternalFunction(
+                name = "get",
+                typeParameters = emptyList(),
+                markers = emptyList(),
+                parameters = listOf(key),
+                returnType = annotationText(member.type, optional = true, returnPosition = false, lens = lens, scope = scope),
+                operator = true,
+            )
+        )
+        if (ModifierFlag.Readonly in member.modifiers) return
+        members.add(
+            ExternalFunction(
+                name = "set",
+                typeParameters = emptyList(),
+                markers = emptyList(),
+                parameters = listOf(
+                    key,
+                    ExternalParameter(
+                        "value",
+                        annotationText(member.type, optional = false, returnPosition = false, lens = lens, scope = scope),
+                    ),
+                ),
+                returnType = "Unit",
+                operator = true,
+            )
+        )
+    }
+
+    /**
+     * (EXT.15) The member a PARAMETER PROPERTY declares — `constructor(public
+     * x: number, private y: string, readonly z: boolean, protected w: T)`
+     * declares `x` and `z` on the instance (and `y`, `w`, which are not part
+     * of the consumable surface and are omitted silently, the policy every
+     * private/protected member gets) — or null for an ordinary parameter.
+     * Any modifier on a constructor parameter makes it a parameter property
+     * (`override` and `readonly` alone included); `readonly` renders `val`.
+     *
+     * The property is an explicit member typed by the SAME text the
+     * parameter renders with (an optional parameter property is an optional
+     * member, so the `?` carries over), placed at the start of the class
+     * body in parameter order, and the constructor keeps the parameter as
+     * a plain parameter. Kotlin's primary-constructor `val x: Double` would
+     * express both at once and is deliberately NOT used: the constructor
+     * line is rendered by ONE path for an own constructor, an inherited one
+     * ([Inheritance.effectiveConstructor] passes a base's parameters
+     * through BY NAME) and the gate variant's superclass call, and a
+     * property declared in the parameter list would have to be re-derived
+     * at each of those sites. As an explicit member the property reaches
+     * the `override`/`open` machinery like any other (a subclass may
+     * redeclare `x`), and an unmappable type carries its marker like any
+     * property's. A REST parameter property is refused by TypeScript itself
+     * (TS1317) and stays a loud skip here.
+     */
+    private fun parameterPropertyMember(parameter: Parameter, external: ExternalParameter): ExternalMember? {
+        val modifiers = parameter.modifiers
+        if (modifiers.isEmpty()) return null
+        if (ModifierFlag.Private in modifiers || ModifierFlag.Protected in modifiers) return null
+        if (parameter.dotDotDotToken) return SkippedMember("rest parameter property ${external.name}")
+        return ExternalProperty(
+            name = external.name,
+            type = external.type,
+            readOnly = ModifierFlag.Readonly in modifiers,
         )
     }
 

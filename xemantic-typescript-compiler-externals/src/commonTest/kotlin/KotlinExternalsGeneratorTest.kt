@@ -380,7 +380,10 @@ class KotlinExternalsGeneratorTest {
     }
 
     @Test
-    fun `unsupported member shapes are marked rather than dropped`() {
+    fun `a lib base stays marked and an index signature renders as an operator pair`() {
+        // Until (EXT.15) the index signature was the "unsupported member
+        // shape" this pin carried; it now renders, and the lib base stays
+        // the loud marker it always was.
         val result = generate(
             """
             export interface Sub extends Object {
@@ -392,7 +395,8 @@ class KotlinExternalsGeneratorTest {
         val expected = """
             public external interface Sub {
                 /* xtsc: skipped heritage clause extends Object */
-                /* xtsc: skipped IndexSignature */
+                public operator fun get(k: String): String?
+                public operator fun set(k: String, value: String): Unit
                 public var own: String
             }
         """.trimIndent() + "\n"
@@ -740,19 +744,37 @@ class KotlinExternalsGeneratorTest {
     }
 
     @Test
-    fun `a constructor parameter property is loud and the parameter still renders`() {
+    fun `a constructor parameter property declares a member and the parameter still renders`() {
+        // (EXT.15) The four modifiers in one constructor: `public` and
+        // `readonly` declare consumable members (`var` and `val`),
+        // `private` and `protected` are omitted silently like every other
+        // private member, and the constructor keeps all four parameters —
+        // the gate variant included, where the members grow bodies.
         val result = generate(
             """
-            export class Point {
-                constructor(public x: number, y: number) {}
+            export class Point<T> {
+                constructor(public x: number, private y: string, readonly z: boolean, protected w: T) {}
             }
             """
         )
+        val expected = """
+            public open external class Point<T>(x: Double, y: String, z: Boolean, w: T) {
+                public var x: Double
+                public val z: Boolean
+            }
+        """.trimIndent() + "\n"
+        val expectedGate = """
+            public abstract class Point<T>(x: Double, y: String, z: Boolean, w: T) {
+                public var x: Double = null!!
+                public val z: Boolean = null!!
+            }
+        """.trimIndent() + "\n"
         val rendered = result.kotlin
-        val marker = "/* xtsc: skipped parameter property x */" in rendered
-        val header = "public open external class Point(x: Double, y: Double) {" in rendered
-        assert(marker)
-        assert(header)
+        val gateVariant = result.compileCheckSource
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(gateVariant == expectedGate)
+        assert(errorCodes.isEmpty())
     }
 
     @Test
@@ -3951,6 +3973,227 @@ class KotlinExternalsGeneratorTest {
         val rendered = result.kotlin
         val errorCodes = result.errors.map { it.code }
         assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    // --- (EXT.15) index signatures and parameter properties -------------------
+
+    @Test
+    fun `string and number index signatures are two operator pairs and readonly drops the set`() {
+        val result = generate(
+            """
+            export interface Table<T> {
+                [key: string]: T;
+                [index: number]: T;
+            }
+            export interface Frozen {
+                readonly [key: string]: number;
+            }
+            export interface Loose {
+                [key: string]: string | number;
+            }
+            """
+        )
+        val expected = """
+            public external interface Table<T> {
+                public operator fun get(key: String): T?
+                public operator fun set(key: String, value: T): Unit
+                public operator fun get(index: Double): T?
+                public operator fun set(index: Double, value: T): Unit
+            }
+
+            public external interface Frozen {
+                public operator fun get(key: String): Double?
+            }
+
+            public external interface Loose {
+                public operator fun get(key: String): Any? /* xtsc: unmapped string | number */
+                public operator fun set(key: String, value: Any? /* xtsc: unmapped string | number */): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `an index signature keyed by anything but string or number is a loud skip naming the key`() {
+        val result = generate(
+            """
+            export interface Odd {
+                [s: symbol]: string;
+                own: string;
+            }
+            """
+        )
+        val expected = """
+            public external interface Odd {
+                /* xtsc: skipped index signature keyed by symbol - only a string or number key has a Kotlin get/set pair */
+                public var own: String
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    @Test
+    fun `a class index signature grows gate bodies and a static one lands in the companion`() {
+        val result = generate(
+            """
+            export class Registry {
+                [key: string]: any;
+                static [key: string]: string;
+                name: string;
+            }
+            """
+        )
+        val expected = """
+            public open external class Registry {
+                public operator fun get(key: String): Any?
+                public operator fun set(key: String, value: Any?): Unit
+                public var name: String
+                public companion object {
+                    public operator fun get(key: String): String?
+                    public operator fun set(key: String, value: String): Unit
+                }
+            }
+        """.trimIndent() + "\n"
+        val expectedGate = """
+            public abstract class Registry {
+                public operator fun get(key: String): Any? = null!!
+                public operator fun set(key: String, value: Any?): Unit = null!!
+                public var name: String = null!!
+                public companion object {
+                    public operator fun get(key: String): String? = null!!
+                    public operator fun set(key: String, value: String): Unit = null!!
+                }
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val gateVariant = result.compileCheckSource
+        assert(rendered == expected)
+        assert(gateVariant == expectedGate)
+    }
+
+    @Test
+    fun `a redeclared index signature renders override and the class base renders open`() {
+        val result = generate(
+            """
+            export interface Base { [key: string]: string; }
+            export interface Sub extends Base {
+                [key: string]: string;
+                extra: string;
+            }
+            export class B { [key: string]: string; }
+            export class D extends B { [key: string]: string; }
+            """
+        )
+        val expected = """
+            public external interface Base {
+                public operator fun get(key: String): String?
+                public operator fun set(key: String, value: String): Unit
+            }
+
+            public external interface Sub : Base {
+                public override operator fun get(key: String): String?
+                public override operator fun set(key: String, value: String): Unit
+                public var extra: String
+            }
+
+            public open external class B {
+                public open operator fun get(key: String): String?
+                public open operator fun set(key: String, value: String): Unit
+            }
+
+            public open external class D : B {
+                public override operator fun get(key: String): String?
+                public override operator fun set(key: String, value: String): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `readonly parameter properties are vals and an unmappable one carries its marker`() {
+        val result = generate(
+            """
+            export class Config {
+                constructor(readonly name: string, public readonly tags: string[], public raw: string | number, public level?: number) {}
+            }
+            """
+        )
+        val expected = """
+            public open external class Config(name: String, tags: Array<String>, raw: Any? /* xtsc: unmapped string | number */, level: Double?) {
+                public val name: String
+                public val tags: Array<String>
+                public var raw: Any? /* xtsc: unmapped string | number */
+                public var level: Double?
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(errorCodes.isEmpty())
+    }
+
+    @Test
+    fun `a parameter property is inherited by a constructor-less subclass and overridable by a redeclaring one`() {
+        // The (EXT.8) inherited-constructor rule still passes the parameters
+        // through by name; the parameter property itself is an ordinary
+        // member to the override machinery, so `Flat`'s redeclaration is
+        // `override` and `Point`'s member `open`. Implementations, not
+        // `declare` classes: a parameter property is only allowed in a
+        // constructor IMPLEMENTATION (TS2369, tsgo agrees), which is why no
+        // `.d.ts` in the fixture ladder carries one.
+        val result = generate(
+            """
+            export class Point {
+                constructor(public x: number, public y: number) {}
+            }
+            export class Named extends Point { label: string = ""; }
+            export class Flat extends Point {
+                constructor(x: number) { super(x, 0); }
+                x: number = 0;
+            }
+            """
+        )
+        val expected = """
+            public open external class Point(x: Double, y: Double) {
+                public open var x: Double
+                public var y: Double
+            }
+
+            public open external class Named(x: Double, y: Double) : Point {
+                public var label: String
+            }
+
+            public open external class Flat(x: Double) : Point {
+                public override var x: Double
+            }
+        """.trimIndent() + "\n"
+        val expectedGate = """
+            public abstract class Point(x: Double, y: Double) {
+                public open var x: Double = null!!
+                public var y: Double = null!!
+            }
+
+            public abstract class Named(x: Double, y: Double) : Point(x, y) {
+                public var label: String = null!!
+            }
+
+            public abstract class Flat(x: Double) : Point(null!!, null!!) {
+                public override var x: Double = null!!
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        val gateVariant = result.compileCheckSource
+        val errorCodes = result.errors.map { it.code }
+        assert(rendered == expected)
+        assert(gateVariant == expectedGate)
         assert(errorCodes.isEmpty())
     }
 
