@@ -114630,7 +114630,8 @@ interface DataView {
                 val parent = resolveHeritageBaseHead(expr.expression) ?: return null
                 val resolvedParent = resolveAlias(parent)
                 val propName = (expr.name).text
-                val memberSym = resolvedParent.exports?.get(propName) ?: return null
+                val memberSym = resolvedParent.exports?.get(propName)
+                    ?: return ambientModuleSurfaceMember(resolvedParent, propName, HashSet())
                 // Implicit-export rules:
                 //  - Sub-namespaces (Module flag) are always accessible (parent.Sub usage).
                 //  - `declare namespace` members are implicitly exported (any decl carries Declare).
@@ -114672,6 +114673,123 @@ interface DataView {
             }
             else -> null
         }
+    }
+
+    /**
+     * (CHK.79) The symbol [name] denotes on the SURFACE of the ambient module
+     * [module] stands for — [module] being either the alias of a namespace import
+     * (`import * as net from "node:net"` / `import net = require("net")`) that
+     * [resolveAlias] could not follow (a fileless target), or an ambient module
+     * carrier (`globals["node:net"]`) whose own exports lack the name because its
+     * body is WIRING. The walk is the one the externals generator's (EXT.19)
+     * `moduleMember` performs syntactically, on the binder's tables: the block's
+     * own exports; then, in body order, what an `export = X` re-routes (the block's
+     * namespace `X`, or another module through an `import X = require("m")`
+     * alias — `@types/node`'s `node:stream` → `stream` → its namespace `Stream`)
+     * and what each `export * from "m"` re-exports (the `node:net` → `net` idiom).
+     * First declared wins; [visited] cuts a cycle (two blocks re-exporting each
+     * other). An import binding of the block is not a member of its surface
+     * (tsc's `declareModuleMember` exports an import-equals only with the
+     * modifier), so a bare alias declared IN the block is skipped — the `export`
+     * -modified form stays visible, as it is in tsc.
+     *
+     * A FILE-backed target (an ambient block re-exporting a program file) answers
+     * that file's own exported binding, `export *` chains followed
+     * ([resolveExportedSymbolThroughStars]). Null where nothing declares the name,
+     * which is what tsgo reports as TS2339 at the base expression.
+     *
+     * Measured on `@types/node` 20.19.43 after (CHK.77): every dotted heritage base
+     * whose head is such an import answered null here (the lens's
+     * `heritageBaseSymbol` — 40 bases the externals generator reaches, 22 of them
+     * `stream.Transform`; the queue's "17" undercounted), and a consumer of
+     * `tls.TLSSocket` did not inherit `net.Socket`'s members — silently on the class
+     * (an unresolved base is `any`) and as a false TS2339 on an interface
+     * (`TlsOptions extends net.ServerOpts`). `NamespaceImportHeritageTest` pins both
+     * channels; 7 of its 9 pins redden without this.
+     */
+    private fun ambientModuleSurfaceMember(module: Symbol, name: String, visited: MutableSet<Int>): Symbol? {
+        if (!visited.add(module.id)) return null
+        // An alias that is NOT itself a module: a merged carrier may carry the Alias
+        // bit beside its Module one (an `import net = require("net")` alias and the
+        // `"net"` carrier merge by name here), and its own surface comes first.
+        if (module.flags.hasAny(SymbolFlags.Alias) && !module.flags.hasAny(SymbolFlags.Module)) {
+            val target = ambientModuleOfImportAlias(module) ?: return null
+            return ambientModuleSurfaceMember(target, name, visited)
+        }
+        module.exports?.get(name)?.let { hit ->
+            val importOnly = hit.flags.hasAny(SymbolFlags.Alias) &&
+                hit.declarations.isNotEmpty() &&
+                hit.declarations.all { d ->
+                    isImportBindingDecl(d) && !(d is ImportEqualsDeclaration && ModifierFlag.Export in d.modifiers)
+                }
+            if (!importOnly) return hit
+        }
+        for (decl in module.declarations) {
+            val body = ((decl as? ModuleDeclaration)?.body as? ModuleBlock) ?: continue
+            for (stmt in body.statements) {
+                when (stmt) {
+                    is ExportAssignment -> {
+                        if (!stmt.isExportEquals) continue
+                        val id = stmt.expression as? Identifier ?: continue
+                        val target = module.exports?.get(id.text) ?: continue
+                        val resolved = if (target.flags.hasAny(SymbolFlags.Module)) target
+                        else ambientModuleOfImportAlias(target) ?: resolveAlias(target)
+                        if (resolved === target && resolved.exports == null) continue
+                        ambientModuleSurfaceMember(resolved, name, visited)?.let { return it }
+                    }
+                    is ExportDeclaration -> {
+                        if (stmt.exportClause != null) continue
+                        val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                        val ctx = owningSourceFile(stmt)?.fileName
+                        val targetFile = resolveModuleSpecifier(spec, stmt)
+                            ?: ctx?.let { resolveModuleSpecifierRelativeJsAware(spec, it) }
+                            ?: resolveImportTargetFallback(spec, ctx)
+                        if (targetFile != null) {
+                            val tr = fileResults[targetFile] ?: continue
+                            (tr.locals[name] ?: resolveExportedSymbolThroughStars(tr.sourceFile, name))
+                                ?.let { return it }
+                            continue
+                        }
+                        val target = globals[spec] ?: continue
+                        if (!target.flags.hasAny(SymbolFlags.Module)) continue
+                        ambientModuleSurfaceMember(target, name, visited)?.let { return it }
+                    }
+                    else -> {}
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * (CHK.79) The ambient module CARRIER (`globals["node:net"]`, the merged symbol
+     * every `declare module "node:net"` block contributes to) a namespace-import
+     * alias names — `import * as X from "m"` or `import X = require("m")` — where
+     * the specifier resolves to NO program file. Null for a file-backed target
+     * ([resolveAlias] already answers that one as a module symbol) and for any
+     * other alias shape.
+     */
+    private fun ambientModuleOfImportAlias(alias: Symbol): Symbol? {
+        for (decl in alias.declarations) {
+            val spec = when (decl) {
+                is ImportDeclaration ->
+                    if (decl.importClause?.namedBindings is NamespaceImport)
+                        (decl.moduleSpecifier as? StringLiteralNode)?.text else null
+                is ImportEqualsDeclaration ->
+                    ((decl.moduleReference as? ExternalModuleReference)?.expression as? StringLiteralNode)?.text
+                else -> null
+            } ?: continue
+            val ctx = owningSourceFile(decl)?.fileName
+            val targetFile = resolveModuleSpecifier(spec, decl)
+                ?: ctx?.let { resolveModuleSpecifierRelativeJsAware(spec, it) }
+                ?: resolveImportTargetFallback(spec, ctx)
+            if (targetFile != null) continue
+            val carrier = globals[spec] ?: continue
+            if (!carrier.flags.hasAny(SymbolFlags.Module)) continue
+            if (carrier.declarations.none { it is ModuleDeclaration && it.name is StringLiteralNode }) continue
+            return carrier
+        }
+        return null
     }
 
     /** Resolve a base type expression (e.g., `extends Foo<T>`) to a Type. */

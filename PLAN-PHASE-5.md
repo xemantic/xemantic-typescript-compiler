@@ -89,6 +89,34 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(CHK.79) LANDED — a dotted heritage base whose head is a namespace import inside an ambient
+module block resolves through the target module's SURFACE.** Reproduced on a four-file
+`@types/node`-shaped fixture (`declare module "stream"` with `export = Stream` + a
+`declare module "node:stream" { import stream = require("stream"); export = stream }` twin,
+`net` with `import * as stream from "node:stream"` and a `declare module "node:net" { export *
+from "net" }` twin, `tls` with `import * as net from "node:net"`, `tty` with `import net =
+require("net")`): five consumer probes SILENT and two FALSE TS2339 before, all nine matching tsgo
+after. The head resolved all along ((CHK.77)'s consult finds the block's alias in the merged
+carrier's exports); the miss was `resolveAlias` leaving a fileless `NamespaceImport` alias
+unresolved and `alias.exports?.get(name)` answering null. Fix, additive at the PropertyAccess
+arm of `resolveHeritageBaseSymbol`: `ambientModuleSurfaceMember` — an unresolved import alias →
+`ambientModuleOfImportAlias` (`globals["m"]` only when the specifier resolves to NO program file,
+the three resolver legs incl. (CHK.30)'s fallback); a carrier's own exports (skipping the block's
+own non-exported import bindings); then body-order `export = X` (the block's namespace, or another
+module through a `require` alias) and `export * from "m"` (ambient carrier or file-backed target),
+cycle-cut by symbol id. **One trap recorded in code: a merged carrier can carry the ALIAS bit
+beside MODULE** (`globals["net"]` had a module file's `import net = require("net")` merged in by
+name), so the alias arm is gated `Alias && !Module`. Nine pins, 7 RED by ablation; filtered
+725/0; cost_gate exit 0 — and the non-zero deltas it prints (`mapped.hits` +1.22 %,
+`globals.lookups` −0.49 %) are INHERITED: the HEAD jar reads identical values on all 20 counters
+(the baseline was last written at BIND.1); huge_methods 0 over; the 8-profile grid `added=0
+removed=0`. Externals 242/0 with the JS gate; the `@types/node` probe byte-identical on the
+fixed core; **the generator's namespace-import heritage route RETIRED** (`writtenTarget(…,
+namespaceImportHeads = false)` in `collectHeritage`) — measured load-bearing before the fix
+(the ablated core loses 40 dotted bases, not the queue's 17), inert after; the bare-name route
+stays (29 bases: named-import heads and `declare global`/`NodeJS` names the lens still misses).
+Suite 17,126 → 17,135 / 0 / 3. Follow-ups queued as (CHK.80).
+
 **(EXT.23) LANDED — a TypeScript-optional parameter renders `x: T? = definedExternally` (real) /
 `x: T? = null` (gate), everywhere a declaration's parameter is rendered, through ONE
 `ExternalParameter.optional` flag and one `parameterText(parameter, OptionalDefault)`
@@ -1850,7 +1878,15 @@ Owner decisions 2026-09-02:
   Gate variant: `= null` or no default (it is not external); pin the difference. Receipt: the
   JS gate + all five library gates.
 
-- [ ] **(EXT.21) ONE GENERATION PER `declare module` BLOCK — THE `@types/node` FLATTENING
+- [ ] **(EXT.21) BLOCKED-PENDING-USER (2026-09-02) — the first `package` line this generator would
+  emit is an owner-facing choice. PROPOSAL: one generation per declaring module; the Kotlin
+  package is the specifier with `:` and `/` → `.`, a leading `@` dropped, and any segment that
+  is not a Kotlin identifier backticked (`node:net` → `node.net`, `fs/promises` →
+  `fs.promises`, `rxjs` → `rxjs`, `@types/foo` → `types.foo`); a reference into another
+  module's generation is spelled fully qualified (`node.net.Socket`) and each generation carries
+  `@file:JsModule("<specifier>")`; single-module inputs (rxjs, typescript.d.ts) keep today's
+  output with the one added `package` line. Say yes, or give the scheme, and it lands. ONE
+  GENERATION PER `declare module` BLOCK — THE `@types/node` FLATTENING
   RESIDUE, CENSUSED BY (EXT.20) AND LEFT AS A DESIGN.** Today every string-named block flattens
   into ONE Kotlin scope, so a name two modules declare is first-wins: on `@types/node` 20.19.43
   that is **112 names declared by more than one module** (`Socket` dgram/net, `Module`
@@ -1878,7 +1914,7 @@ Owner decisions 2026-09-02:
   global one; each per-module output metadata-compiles at 0 errors; rxjs and
   `typescript.d.ts` byte-identical (single-module generations are the degenerate case).
 
-- [ ] **(CHK.79) `heritageBaseSymbol` ANSWERS NULL FOR A DOTTED BASE WHOSE HEAD IS A NAMESPACE
+- [x] **(CHK.79) DONE 2026-09-02 ((P18.9) note; `ambientModuleSurfaceMember` at the heritage PropertyAccess arm, 9 pins with 7 red by ablation, grid unchanged, cost_gate exit 0, suite 17,135/0/3; the generator's namespace-import heritage route retired — 40 dotted bases on `@types/node` were carried by it; follow-ups (CHK.80)) — `heritageBaseSymbol` ANSWERS NULL FOR A DOTTED BASE WHOSE HEAD IS A NAMESPACE
   IMPORT (`import * as net from "node:net"` / `import net = require("net")`) INSIDE AN AMBIENT
   MODULE BLOCK — all 17 such bases in `@types/node` after (CHK.77) (before it, the fallback
   rendered them).** The generator now resolves them syntactically ((EXT.19)'s `Site`/
@@ -1887,6 +1923,21 @@ Owner decisions 2026-09-02:
   `require` alias chains), then the member. Reproduce against tsgo, fix at
   `resolveHeritageBaseSymbol`/`resolveHeritageBaseHead`, pin, and retire the generator's
   syntactic path for it where the lens then answers.
+
+- [ ] **(CHK.80) THE (CHK.79) FOLLOW-UPS, MEASURED ON ITS OWN FIXTURES.** (a) The ANNOTATION
+  side: `x: net.Socket` / `net.ServerOpts` written inside an ambient block still types `any` —
+  `resolveQualifiedName`'s alias leg leaves a fileless `NamespaceImport` alias unresolved; the
+  same `ambientModuleSurfaceMember` would serve it, but it reaches EVERY qualified-name consumer,
+  so it needs its own 8-profile grid + corpus run. (b) `class X extends net.Nope` /
+  `extends notNs.Foo`: tsgo reports TS2339 at the base expression; we report nothing. (c)
+  NAMED-import heritage heads inside ambient blocks (`import { EventEmitter } from
+  "node:events"; class C extends EventEmitter`) — 29 bare bases in `@types/node` still carried
+  by the generator's syntactic path (14 `EventEmitter`, 3 `Stream`, 3 `RefCounted`, 3 `Dict`
+  …), together with `declare global`/`NodeJS` names ((CHK.50)'s open half). (d) A merged
+  ambient carrier can carry the ALIAS bit beside MODULE: `globals["net"]` adopts a module
+  file's `import net = require("net")` and block-scoped `net` aliases by NAME — a pre-existing
+  merge to census and probably refuse. Each with pins; retire the generator's bare-name
+  heritage route where the lens then answers (KDoc'd numbers in `collectHeritage`).
 
 - [ ] **(CHK.78) TWO PRE-EXISTING AUGMENTATION DIVERGENCES, MEASURED ON (CHK.77)'s NEGATIVE
   CONTROL, PLUS ONE IN-WALK LENS ANSWER.** With `types.ts` beside `declare module "./types.js"

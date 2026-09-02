@@ -9,7 +9,7 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,126 / 0 / 3 (2026-09-02).** (EXT.11a):
+**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,135 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
 Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
@@ -106,6 +106,11 @@ the `= definedExternally` optionality rung is (EXT.23). **(EXT.23), 17,117 → 1
 optional parameters render `= definedExternally` (90 measured rows; an override inherits the
 default, a nested class with two direct declarers of one default is refused and handled);
 rxjs/`@types/node`/`typescript.d.ts` at 0 errors in both compilers; externals 242/0.
+**(CHK.79), 17,126 → 17,135 / 0 / 3:** a dotted heritage base whose head is a namespace import
+inside an ambient block resolves through the target module's surface (`export =`/`export *`
+chains, fileless carriers only); 9 pins, grid unchanged; the generator's syntactic route for
+it retired (40 `@types/node` bases were carried by it); (CHK.80) queued; (EXT.21)
+BLOCKED-PENDING-USER on the package-naming scheme.
 
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained

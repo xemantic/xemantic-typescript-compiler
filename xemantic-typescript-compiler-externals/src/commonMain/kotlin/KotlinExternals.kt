@@ -1893,10 +1893,17 @@ private class ExternalsCollector(
      * qualified `ts.server.A` written in another file names the same
      * declaration — the (EXT.13) ladder was per-file and answered null
      * there. A [Nameable], a [WrittenAlias], or null.
+     *
+     * (CHK.79) The namespace-import head ([moduleMember]) is consulted only
+     * with [namespaceImportHeads] — the ANNOTATION fallback still needs it
+     * (`x: net.Socket` inside a `declare module` body: the lens's
+     * `typeReferenceSymbol` resolves a qualified name through the checker's
+     * `resolveQualifiedName`, which leaves such an alias unresolved), while
+     * a HERITAGE base's head is answered by `heritageBaseSymbol` itself.
      */
-    private fun writtenTarget(segments: List<String>, scope: TypeScope): Any? {
+    private fun writtenTarget(segments: List<String>, scope: TypeScope, namespaceImportHeads: Boolean = true): Any? {
         // (EXT.19) A namespace import's alias at the head: the module's surface.
-        if (segments.size > 1) {
+        if (namespaceImportHeads && segments.size > 1) {
             scope.namespaceImports[segments[0]]?.let { specifier ->
                 return moduleMember(specifier, segments.drop(1), HashSet())
             }
@@ -3638,13 +3645,30 @@ private class ExternalsCollector(
                     // base is its import ALIAS, and the identity test needs
                     // the declaration it names. (EXT.14) The written-name
                     // fallback on a lens miss, where it applies.
+                    // (CHK.79) A DOTTED base whose head is a namespace import
+                    // (`extends net.Socket` under `import * as net from
+                    // "node:net"`) is the lens's: `heritageBaseSymbol` follows
+                    // the block's import to the target module's surface
+                    // (`export * from`, `export = X`, `require` alias chains),
+                    // so the (EXT.19) syntactic `moduleMember` route is retired
+                    // here — measured on `@types/node` 20.19.43: with the whole
+                    // written-name fallback removed, ZERO dotted bases were
+                    // lost and 29 BARE ones were, so the bare-name half stays:
+                    // a NAMED import's alias (`import { EventEmitter } from
+                    // "node:events"` — 14 `extends EventEmitter`, `Stream`,
+                    // `Readable`, `Writable`, `AsyncResource`, …), and a name
+                    // declared by `declare global`'s `NodeJS` namespace (`Dict`,
+                    // `RefCounted`, `ReadWriteStream`), which the lens still
+                    // answers nothing for ((CHK.50)'s open half).
                     val resolved = lens.heritageBaseSymbol(base.expression)
                         ?.let { lens.aliasTarget(it) ?: it }
                         ?.declarations?.firstNotNullOfOrNull { declared ->
                             nameableDeclarations.firstOrNull { it.node === declared }
                         }
                         ?: written.split('.').let { segments ->
-                            if (writtenApplies(segments, scope)) writtenTarget(segments, scope) as? Nameable else null
+                            if (writtenApplies(segments, scope)) {
+                                writtenTarget(segments, scope, namespaceImportHeads = false) as? Nameable
+                            } else null
                         }
                         ?: return@let null
                     // (EXT.20) A MERGED name denotes ONE Kotlin declaration,
