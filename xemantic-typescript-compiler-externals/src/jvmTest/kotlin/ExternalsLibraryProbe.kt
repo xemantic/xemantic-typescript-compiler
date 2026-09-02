@@ -335,8 +335,8 @@ class ExternalsLibraryProbe {
                 "namespace <NAME> - not exported by the package entry; members rendered at top level",
             Regex("""module "[^"]*" - the package's own module; members rendered at top level""") to
                 "module <NAME> - the package's own module; members rendered at top level",
-            Regex("""alias \S+ = .* - re-exported name, a nested object member cannot carry @JsName""") to
-                "alias <NAME> = <TARGET> - re-exported name, a nested object member cannot carry @JsName",
+            Regex("""alias \S+ = .* - re-exported name, a typealias is top-level only and a @JsName value re-export is not built""") to
+                "alias <NAME> = <TARGET> - re-exported name, a typealias is top-level only and a @JsName value re-export is not built",
         )
     }
 

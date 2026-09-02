@@ -89,6 +89,35 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(EXT.22) LANDED — and its queued mechanism was REFUTED by measurement before any code moved.**
+70 Kotlin/JS rows in three batches: an external class may NEVER spell a superclass call
+(`Delegated constructor call in external class is prohibited` for `Base(definedExternally)`,
+pass-through `Base(opts)`, and `Base()` over a nullable/defaulted/vararg parameter alike), so
+"pass `definedExternally` per parameter" was never an option and the real variant's omitted call
+was right all along. What decides it is whether the base is rendered NESTED: a top-level base
+with parameters is accepted call-free in every form; a nested base (in an object or a class) with
+a REQUIRED parameter is `No value passed for parameter` whatever the spelling — qualified,
+sibling, import, alias, inherited pass-through, generic — and accepted only when its parameter is
+defaulted, vararg-only or absent; and the ESCAPE is a SECONDARY constructor on the derived class,
+which carries no implicit call (`class Hash : NS.Inner { constructor() }`) — accepted with
+parameters, inherited by name, generic, vararg, abstract, in chains, over an (EXT.20)-merged
+base, over the full `Stream.Transform` shape, and callable/subclassable by a consumer. All 23
+`@types/node` errors were that one shape. Rule (`Inheritance.secondaryConstructor`, real variant
+only): a class whose generated superclass is rendered nested and whose effective constructor
+has a non-vararg parameter renders that constructor — own or inherited by name — as `public
+constructor(…)` in the body; the base's API is untouched (defaulting its parameters would let a
+Kotlin caller omit what TS requires); the gate variant keeps primary + `null!!`. (EXT.16)'s
+marker `a nested object member cannot carry @JsName` re-worded to what is true (`a typealias is
+top-level only and a @JsName value re-export is not built`). Pins: a new (EXT.22) section
+(own/inherited/chained/sibling secondary constructors, top-level base staying primary, the
+negative control), the JS gate's 32-row measurement plus the `types-node stream` fixture; two
+pins moved (`ReadStream(opts…) : Stream.Readable`, the shadowing pin's respelling surviving into
+the secondary form); ablation 4 RED. **`@types/node` wired: Kotlin/JS errors 23 → 0** (74 diff
+lines = exactly the 23 classes + 2 reworded markers), rxjs and `typescript.d.ts` md5-identical.
+Externals 229 → 233/0; suite 17,113 → 17,117 / 0 / 3. Measured on the way and queued as
+(EXT.23): the honest rendering of a TS-optional parameter is `x: T? = definedExternally`, not
+`x: T?` — an optionality rung across every optional parameter and the override/overload keys.
+
 **(EXT.18) LANDED — a collision Kotlin refuses and TypeScript allows renames through `@JsName`
 under wiring.** The scheme, measured against Kotlin/JS 2.4.10 in the JS gate: the suffix names
 the KIND that had to move — a value colliding with a type or a namespace object is `<Name>Value`,
@@ -1770,7 +1799,7 @@ Owner decisions 2026-09-02:
   module), `stream/web`'s `ReadableStream` to first-wins — one generation per `declare
   module` block, or a per-block Kotlin object/package, is the wiring-side answer.
 
-- [ ] **(EXT.22) AN EXTERNAL SUBCLASS WITH ITS OWN PRIMARY CONSTRUCTOR NEEDS THE SUPERCLASS
+- [x] **(EXT.22) DONE 2026-09-02 ((P18.9) note — the queued mechanism was REFUTED by 70 measured rows: an external class may never spell a superclass call; the real rule is a SECONDARY constructor for a class over a NESTED base; `@types/node` 23 → 0 Kotlin/JS errors, externals 233/0, suite 17,117/0/3; (EXT.23) queued) — AN EXTERNAL SUBCLASS WITH ITS OWN PRIMARY CONSTRUCTOR NEEDS THE SUPERCLASS
   CALL — 23 PRE-EXISTING KOTLIN/JS ERRORS ON `@types/node` (`No value passed for parameter
   'opts'` on `class Hash() : Stream.Transform`), found by (EXT.18)'s probe extension that
   compiles the REAL output as Kotlin/JS; never JS-compiled by any gate before.** Rule: a
@@ -1782,6 +1811,17 @@ Owner decisions 2026-09-02:
   `null!!`). Also re-word (EXT.16)'s marker `a nested object member cannot carry @JsName` —
   refuted by (EXT.18)'s measurement (it can). Receipt: `@types/node` real output 23 → 0
   Kotlin/JS errors, the JS gate's library fixtures green.
+
+- [ ] **(EXT.23) A TypeScript-OPTIONAL PARAMETER'S HONEST KOTLIN/JS RENDERING IS `x: T? =
+  definedExternally`, NOT `x: T?` (measured by (EXT.22): a defaulted parameter is what makes a
+  nested base callable with `()` and lets a consumer omit what TS lets it omit).** Today every
+  optional parameter renders nullable-only, so a Kotlin caller must pass `null` where a TS
+  caller passes nothing. An optionality rung touching every optional parameter (functions,
+  methods, constructors, function TYPES — where a default is inexpressible and the arity rule
+  stays), the override machinery (`override` may not restate defaults — measure) and the
+  overload keys (a defaulted parameter does not change Kotlin's conflict relation — measure).
+  Gate variant: `= null` or no default (it is not external); pin the difference. Receipt: the
+  JS gate + all five library gates.
 
 - [ ] **(EXT.21) ONE GENERATION PER `declare module` BLOCK — THE `@types/node` FLATTENING
   RESIDUE, CENSUSED BY (EXT.20) AND LEFT AS A DESIGN.** Today every string-named block flattens

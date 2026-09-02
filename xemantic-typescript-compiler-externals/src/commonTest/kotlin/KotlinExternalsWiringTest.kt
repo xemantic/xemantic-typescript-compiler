@@ -584,7 +584,7 @@ class KotlinExternalsWiringTest {
             }
 
             public external object server {
-                /* xtsc: alias Info = ts.Info - re-exported name, a nested object member cannot carry @JsName */
+                /* xtsc: alias Info = ts.Info - re-exported name, a typealias is top-level only and a @JsName value re-export is not built */
             }
         """.trimIndent() + "\n"
         val rendered = result.kotlin

@@ -440,6 +440,13 @@ class KotlinExternalsJsGateTest {
         return check.errors.isEmpty()
     }
 
+    /** (EXT.22) Whether the compiler refuses [source] with an error carrying [message] — printed either way. */
+    private fun refusedWith(stdlib: java.nio.file.Path, source: String, message: String): Boolean {
+        val check = jsCompileCheck("@file:JsModule(\"m\")\n\n" + source.trimIndent() + "\n", stdlib)
+        println("  ${if (check.errors.isEmpty()) "accepted" else "refused: " + check.errors.joinToString(" | ")}")
+        return check.errors.any { message in it }
+    }
+
     /**
      * (EXT.20) The measurements behind `mergedDeclaration`'s shapes — every
      * sentence of its KDoc is a row here. The day a Kotlin release moves a
@@ -664,6 +671,209 @@ class KotlinExternalsJsGateTest {
         val check = gate("merged events shape", result) ?: return
         val mergedClassRendered = "public open external class EventEmitter(" in result.kotlin
         assert(mergedClassRendered)
+        assert(check.errors.isEmpty())
+    }
+
+    @Test
+    fun `measured - an external class never calls its superclass constructor and a nested base's parameters need a secondary one`() {
+        // (EXT.22) The measurements behind [Inheritance.secondaryConstructor]
+        // — every sentence of its KDoc is a row here. The queued rule
+        // (`Hash() : Transform(definedExternally)`) is the first refused row.
+        val stdlib = JsStdlib.locate() ?: return
+        val delegated = "Delegated constructor call in external class is prohibited"
+        val noValue = "No value passed for parameter"
+        val topLevelBase = """
+            public open external class Base(opts: String)
+        """
+        val nestedBase = """
+            public external object NS { public open class Inner(x: String) }
+        """
+        // -- a superclass call is refused with ANY arguments
+        val callWithDefinedExternally = refusedWith(stdlib, topLevelBase + "public open external class D() : Base(definedExternally)", delegated)
+        val callByName = refusedWith(stdlib, topLevelBase + "public open external class D(opts: String) : Base(opts)", delegated)
+        val emptyCallOverDefaulted = refusedWith(
+            stdlib,
+            "public open external class Base(opts: String? = definedExternally)\npublic open external class D() : Base()",
+            delegated,
+        )
+        val nestedCall = refusedWith(stdlib, nestedBase + "public open external class D() : NS.Inner(definedExternally)", delegated)
+        // -- no call: a top-level base with parameters is accepted, own or inherited constructor, in a chain
+        val topLevelOwn = accepts(stdlib, topLevelBase + "public open external class D() : Base")
+        val topLevelInherited = accepts(stdlib, topLevelBase + "public open external class D(opts: String) : Base")
+        val topLevelChain = accepts(stdlib, topLevelBase + "public open external class M(o2: String) : Base\npublic open external class D() : M")
+        val nestedDerivedOfTopLevel = accepts(stdlib, "public open external class Outer(o: String) { public open class Inner(x: String) : Outer }")
+        // -- no call: a NESTED base with a parameter is refused, whatever the spelling
+        val nestedQualified = refusedWith(stdlib, nestedBase + "public open external class D() : NS.Inner", noValue)
+        val nestedSibling = refusedWith(
+            stdlib,
+            "public external object NS {\n    public open class Inner(x: String)\n    public open class Sub() : Inner\n}",
+            noValue,
+        )
+        val nestedImported = refusedWith(stdlib, "import NS.Inner\n" + nestedBase + "public open external class D() : Inner", noValue)
+        val nestedAliased = refusedWith(stdlib, nestedBase + "public typealias Inner = NS.Inner\npublic open external class D() : Inner", noValue)
+        val nestedInClass = refusedWith(
+            stdlib,
+            "public open external class Outer(o: String) { public open class Inner(x: String) }\npublic open external class D() : Outer.Inner",
+            noValue,
+        )
+        val nestedInherited = refusedWith(stdlib, nestedBase + "public open external class D(x: String) : NS.Inner", noValue)
+        val nestedNoConstructor = refusedWith(stdlib, nestedBase + "public open external class D : NS.Inner", noValue)
+        val nestedNullable = refusedWith(stdlib, "public external object NS { public open class Inner(x: String?) }\npublic open external class D() : NS.Inner", noValue)
+        // -- what a nested base may carry without a secondary constructor on the derived class
+        val nestedDefaulted = accepts(stdlib, "public external object NS { public open class Inner(x: String = definedExternally) }\npublic open external class D() : NS.Inner")
+        val nestedVarargOnly = accepts(stdlib, "public external object NS { public open class Inner(vararg xs: String) }\npublic open external class D() : NS.Inner")
+        val nestedNoParameters = accepts(stdlib, "public external object NS { public open class Inner() }\npublic open external class D() : NS.Inner")
+        val nestedNoArgSecondary = accepts(
+            stdlib,
+            "public external object NS {\n    public open class Inner(x: String)\n    public open class Inner2 : Inner { public constructor() }\n}\npublic open external class D() : NS.Inner2",
+        )
+        // -- the rule: a secondary constructor on the derived class
+        val secondaryNoArgs = accepts(stdlib, nestedBase + "public open external class D : NS.Inner { public constructor() }")
+        val secondaryWithParameter = accepts(stdlib, nestedBase + "public open external class D : NS.Inner { public constructor(y: Double) }")
+        val secondaryInherited = accepts(stdlib, nestedBase + "public open external class D : NS.Inner { public constructor(x: String) }")
+        val secondaryGeneric = accepts(
+            stdlib,
+            "public external object NS { public open class Inner<T>(x: T) }\npublic open external class D<T> : NS.Inner<T> { public constructor(x: T) }",
+        )
+        val secondaryVararg = accepts(stdlib, nestedBase + "public open external class D : NS.Inner { public constructor(vararg xs: String) }")
+        val secondaryAbstract = accepts(stdlib, nestedBase + "public abstract external class D : NS.Inner { public constructor() }")
+        val secondarySibling = accepts(
+            stdlib,
+            "public external object NS {\n    public open class Inner(x: String)\n    public open class Sub : Inner { public constructor() }\n}",
+        )
+        val secondaryChain = accepts(
+            stdlib,
+            "public external object NS {\n    public open class Inner(x: String)\n    public open class Inner2 : Inner { public constructor(x: String) }\n}\npublic open external class D : NS.Inner2 { public constructor() }",
+        )
+        val primaryOverSecondaryChain = refusedWith(
+            stdlib,
+            "public external object NS {\n    public open class Inner(x: String)\n    public open class Inner2 : Inner { public constructor(x: String) }\n}\npublic open external class D() : NS.Inner2",
+            noValue,
+        )
+        val secondaryInClassBase = accepts(
+            stdlib,
+            "public open external class EventEmitter<T>(o: Any?) {\n    public open class Sub(x: String) : EventEmitter<Any?>\n}\npublic open external class D : EventEmitter.Sub { public constructor() }",
+        )
+        val secondaryBesideMembers = accepts(
+            stdlib,
+            """
+            public external interface I { public var p: Double }
+            public external object NS { public open class Inner(x: String) }
+            public open external class D : NS.Inner, I {
+                public constructor()
+                override var p: Double
+                public fun digest(): String
+                public open class Nested(z: Double)
+                public companion object { public fun make(): D }
+            }
+            public open external class E() : D
+            """,
+        )
+        // -- a consumer calls and subclasses a secondary constructor as it would a primary one
+        val consumer = jsCompileCheck(
+            """
+            @JsModule("m") public external object NS { public open class Inner(x: String) }
+            @JsModule("m") public open external class Hash : NS.Inner { public constructor() }
+            @JsModule("m") public open external class ReadStream : NS.Inner { public constructor(x: String) }
+            public fun consume(): Any = Hash()
+            public fun consume2(): Any = ReadStream("x")
+            public class Mine : Hash()
+            public class Mine2 : ReadStream("y")
+            """.trimIndent() + "\n",
+            stdlib,
+        )
+        val consumerAccepted = consumer.errors.isEmpty()
+        assert(callWithDefinedExternally)
+        assert(callByName)
+        assert(emptyCallOverDefaulted)
+        assert(nestedCall)
+        assert(topLevelOwn)
+        assert(topLevelInherited)
+        assert(topLevelChain)
+        assert(nestedDerivedOfTopLevel)
+        assert(nestedQualified)
+        assert(nestedSibling)
+        assert(nestedImported)
+        assert(nestedAliased)
+        assert(nestedInClass)
+        assert(nestedInherited)
+        assert(nestedNoConstructor)
+        assert(nestedNullable)
+        assert(nestedDefaulted)
+        assert(nestedVarargOnly)
+        assert(nestedNoParameters)
+        assert(nestedNoArgSecondary)
+        assert(secondaryNoArgs)
+        assert(secondaryWithParameter)
+        assert(secondaryInherited)
+        assert(secondaryGeneric)
+        assert(secondaryVararg)
+        assert(secondaryAbstract)
+        assert(secondarySibling)
+        assert(secondaryChain)
+        assert(primaryOverSecondaryChain)
+        assert(secondaryInClassBase)
+        assert(secondaryBesideMembers)
+        assert(consumerAccepted)
+    }
+
+    @Test
+    fun `a class extending a nested base with a constructor parameter compiles as Kotlin JS - the types-node stream shape`() {
+        // (EXT.22) The real output of the `crypto.d.ts` / `zlib.d.ts` shape
+        // over `stream.d.ts` — classes extending the nested `Transform`
+        // (`Stream.Transform` on the real `@types/node`, whose `opts?` was
+        // `No value passed for parameter 'opts'` 23 times there) — through
+        // the Kotlin/JS compiler; every nested subclass of the chain goes
+        // secondary, `Derived` over the top-level `Hash` stays primary.
+        val result = wired(
+            "node", "/index.d.ts",
+            "/index.d.ts" to """
+                /// <reference path="./stream.d.ts" />
+                /// <reference path="./crypto.d.ts" />
+            """.trimIndent(),
+            "/stream.d.ts" to """
+                declare module "stream" {
+                    class internal {
+                        constructor(opts?: internal.StreamOptions);
+                        pipe(): void;
+                    }
+                    namespace internal {
+                        interface StreamOptions { hwm?: number | undefined; }
+                        interface TransformOptions extends StreamOptions { flush?: boolean | undefined; }
+                        class Stream extends internal { constructor(opts?: StreamOptions); }
+                        class Writable extends Stream { constructor(opts?: StreamOptions); write(chunk: string): boolean; }
+                        class Duplex extends Stream { constructor(opts?: StreamOptions); }
+                        class Transform extends Duplex { constructor(opts?: TransformOptions); }
+                        class PassThrough extends Transform {}
+                    }
+                    export = internal;
+                }
+            """.trimIndent(),
+            "/crypto.d.ts" to """
+                declare module "crypto" {
+                    import * as stream from "stream";
+                    interface Zlib { flush(): void; }
+                    class Hash extends stream.Transform {
+                        private constructor();
+                        digest(): string;
+                    }
+                    class Gzip extends stream.Transform implements Zlib {
+                        constructor(options?: string);
+                        flush(): void;
+                    }
+                    class Sign extends stream.Writable { private constructor(); }
+                    class Derived extends Hash { constructor(); }
+                    function createHash(algorithm: string): Hash;
+                }
+            """.trimIndent(),
+        )
+        val check = gate("types-node stream shape", result) ?: return
+        val hashSecondary = "public open external class Hash : internal.Transform {\n    public constructor()\n" in result.kotlin
+        val gzipSecondary = "public open external class Gzip : internal.Transform, Zlib {\n    public constructor(options: String?)\n" in result.kotlin
+        val derivedPrimary = "public open external class Derived() : Hash\n" in result.kotlin
+        assert(hashSecondary)
+        assert(gzipSecondary)
+        assert(derivedPrimary)
         assert(check.errors.isEmpty())
     }
 

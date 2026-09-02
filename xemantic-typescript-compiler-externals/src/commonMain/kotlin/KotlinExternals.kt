@@ -2874,7 +2874,12 @@ private class ExternalsCollector(
             // a `typealias`: it is nested, and a same-name alias to the
             // flattened root's own `X` would be redundant. A loud marker
             // naming the target, whatever the target is — the wiring that
-            // could express it is the module-wiring rung.
+            // could express it is the module-wiring rung. (EXT.22) Under a
+            // wiring the marker used to say a nested object member cannot
+            // carry `@JsName`; (EXT.18) measured that it can. What is true:
+            // a Kotlin `typealias` is top-level only, so a TYPE re-export has
+            // no nested spelling, and a VALUE re-export as a `@JsName`-bound
+            // member is not built.
             is ImportEqualsDeclaration -> {
                 val declared = surface.importAliases.firstOrNull { it.node === node } ?: return
                 if (!firstVisit(node)) return
@@ -2884,7 +2889,7 @@ private class ExternalsCollector(
                     ExternalMarker(
                         "alias ${node.name.text} = ${commentSafe(moduleReferenceText(node.moduleReference))}" +
                             if (plan == null) " - re-exported name, wiring is a later rung"
-                            else " - re-exported name, a nested object member cannot carry @JsName"
+                            else " - re-exported name, a typealias is top-level only and a @JsName value re-export is not built"
                     ),
                 )
             }

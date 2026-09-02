@@ -4590,7 +4590,8 @@ class KotlinExternalsGeneratorTest {
                         public override var owner: outer.Node
                     }
 
-                    public open class Sub(node: outer.Node) : Holder {
+                    public open class Sub : Holder {
+                        public constructor(node: outer.Node)
                         public var extra: Node
                     }
 
@@ -4802,7 +4803,8 @@ class KotlinExternalsGeneratorTest {
 
             /* xtsc: module "fs" - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
 
-            public open external class ReadStream(opts: Stream.ReadableOptions?) : Stream.Readable {
+            public open external class ReadStream : Stream.Readable {
+                public constructor(opts: Stream.ReadableOptions?)
                 /* xtsc: <K> on(K, Any?) implements the inherited on(Any?, Any?) - rendered in the inherited shape, a generic and a non-generic function of one parameter list are one Kotlin signature */
                 public override fun on(event: Any? /* xtsc: unmapped string | symbol */, listener: Any? /* xtsc: unmapped (...args: any[]) => void */): Any? /* xtsc: unmapped any */
                 /* xtsc: skipped overload on(Any?, Any?) collapsing to the inherited on(Any?, Any?) already rendered */
@@ -5163,6 +5165,115 @@ class KotlinExternalsGeneratorTest {
             public external interface Control {
                 /* xtsc: skipped heritage clause extends Gzip - Gzip is the merged class Gzip - an interface cannot extend a class */
                 public fun c(): Unit
+            }
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+    }
+
+    // --- (EXT.22) the secondary constructor against a nested base --------------
+
+    @Test
+    fun `a class extending a nested generated base with a constructor parameter renders a secondary constructor - own inherited and chained`() {
+        // Measured (KotlinExternalsJsGateTest, `measured - an external class
+        // never calls …`): an external class may never spell a superclass
+        // call, a top-level base with parameters needs none, and a NESTED
+        // base's parameters are resolved for the primary constructor's
+        // implicit call — `No value passed for parameter 'x'` — which a
+        // SECONDARY constructor does not carry. So `Own`, `Inherits` and
+        // `Chain` move their constructor into the body (the inherited one
+        // by name, as the primary form did), `Sibling` inside the object
+        // too, and `FromTop` keeps the primary form.
+        val result = generate(
+            """
+            export declare namespace ns {
+                namespace inner {
+                    class Base { constructor(x: string); }
+                    class Sibling extends Base { constructor(x: string); }
+                }
+            }
+            export declare class Own extends ns.inner.Base { constructor(y: number); tag: string; }
+            export declare class Inherits extends ns.inner.Base { tag: string; }
+            export declare class Chain extends ns.inner.Sibling { constructor(); }
+            export declare class Top { constructor(t: string); }
+            export declare class FromTop extends Top { constructor(); }
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ns - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object inner {
+                public open class Base(x: String)
+
+                public open class Sibling : Base {
+                    public constructor(x: String)
+                }
+            }
+
+            public open external class Own : inner.Base {
+                public constructor(y: Double)
+                public var tag: String
+            }
+
+            public open external class Inherits : inner.Base {
+                public constructor(x: String)
+                public var tag: String
+            }
+
+            public open external class Chain : inner.Sibling {
+                public constructor()
+            }
+
+            public open external class Top(t: String)
+
+            public open external class FromTop() : Top
+        """.trimIndent() + "\n"
+        val rendered = result.kotlin
+        assert(rendered == expected)
+        // The gate variant is a plain Kotlin class and keeps the primary
+        // constructor with its `null!!` call, the inherited one by name.
+        val gateVariant = result.compileCheckSource
+        val gateOwn = "public abstract class Own(y: Double) : inner.Base(null!!) {\n" in gateVariant
+        val gateInherits = "public abstract class Inherits(x: String) : inner.Base(x) {\n" in gateVariant
+        val gateChain = "public abstract class Chain() : inner.Sibling(null!!)\n" in gateVariant
+        assert(gateOwn)
+        assert(gateInherits)
+        assert(gateChain)
+    }
+
+    @Test
+    fun `a nested base whose constructor has no parameter or only a rest parameter keeps the primary constructor`() {
+        // Measured: a nested base with no constructor, and one whose only
+        // parameter is a `vararg`, are accepted with the primary form —
+        // the implicit call resolves with no arguments.
+        val result = generate(
+            """
+            export declare namespace ns {
+                namespace inner {
+                    class Plain {}
+                    class Rest { constructor(...xs: string[]); }
+                }
+            }
+            export declare class A extends ns.inner.Plain { constructor(); }
+            export declare class B extends ns.inner.Rest { constructor(n: number); }
+            export declare class C extends ns.inner.Rest { p: number; }
+            """
+        )
+        val expected = """
+            /* xtsc: namespace ns - members rendered at top level; @JsModule/@JsQualifier wiring is a later rung */
+
+            public external object inner {
+                public open class Plain
+
+                public open class Rest(vararg xs: String)
+            }
+
+            public open external class A() : inner.Plain
+
+            public open external class B(n: Double) : inner.Rest
+
+            public open external class C(vararg xs: String) : inner.Rest {
+                public var p: Double
             }
         """.trimIndent() + "\n"
         val rendered = result.kotlin

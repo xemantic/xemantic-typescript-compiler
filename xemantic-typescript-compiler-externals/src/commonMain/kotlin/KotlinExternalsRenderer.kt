@@ -195,10 +195,12 @@ internal class ExternalTopLevelFunction(
 
 /**
  * (EXT.4) An exported class — `public external class`, the one declared
- * constructor as the primary constructor, TS `static` members as the companion
- * object. In the compile-gate variant every member grows a `= null!!` body
- * (class members, unlike interface members, cannot stay abstract without the
- * modifier), decided by the renderer flag, never by text surgery.
+ * constructor as the primary constructor (a secondary one against a nested
+ * base with parameters, (EXT.22) — [Inheritance.secondaryConstructor]), TS
+ * `static` members as the companion object. In the compile-gate variant every
+ * member grows a `= null!!` body (class members, unlike interface members,
+ * cannot stay abstract without the modifier), decided by the renderer flag,
+ * never by text surgery.
  */
 internal class ExternalClass(
     val name: String,
@@ -1171,6 +1173,56 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
         return arguments.joinToString(", ", prefix = "(", postfix = ")")
     }
 
+    /**
+     * (EXT.22) Whether the REAL variant renders the class's constructor as a
+     * SECONDARY constructor — `class Hash : Stream.Transform { constructor() }`
+     * — instead of the primary one: true when the generated superclass is
+     * rendered NESTED (in an object or, merged, in a class — a non-empty
+     * [ExternalClass.path]) and its effective constructor has a parameter
+     * that is not a `vararg`.
+     *
+     * Measured (Kotlin/JS 2.4.10, `KotlinExternalsJsGateTest`'s `measured -
+     * an external class never calls …`): an external class may NEVER spell
+     * a superclass call — `Derived() : Base(definedExternally)`,
+     * `Derived(opts) : Base(opts)`, `Base()` against a defaulted parameter,
+     * every one is `Delegated constructor call in external class is
+     * prohibited` — so the queued `definedExternally` arguments were never an
+     * option. Without a call a TOP-LEVEL base with parameters is accepted
+     * (`class Derived() : Base` over `class Base(opts: String)`), and so is
+     * every chain of them; a NESTED base is not: the compiler resolves the
+     * primary constructor's implicit `super()` against the nested class and
+     * answers `No value passed for parameter 'x'` whatever the spelling —
+     * qualified `NS.Inner`, an unqualified sibling inside the object, an
+     * import, a typealias, a base nested in a class. A nullable parameter
+     * does not help (`Inner(x: String?)` is refused the same way); a
+     * DEFAULTED one does (`x: String = definedExternally`), a `vararg`-only
+     * one needs nothing, and so does a nested base whose constructor is a
+     * no-argument secondary one. A SECONDARY constructor on the derived class
+     * carries no implicit call at all: `class Hash : NS.Inner {
+     * constructor() }` is accepted against a nested base with a REQUIRED
+     * parameter, with parameters of its own, generic, `vararg`, abstract,
+     * beside an interface override, a companion and a nested class, as a
+     * sibling inside the object, in a chain (`Inner2 : Inner { constructor(x) }`
+     * then `Hash : NS.Inner2 { constructor() }` — the primary form is refused
+     * there too), and a consumer calls it (`Hash()`, `ReadStream("x")`) and
+     * subclasses it (`class Mine : Hash()`) exactly as a primary one.
+     *
+     * So the rule leaves the base's API alone (defaulting its parameters
+     * would let a Kotlin caller omit an argument TypeScript requires) and
+     * moves the derived class's constructor — own, or inherited by name — to
+     * the secondary form the compiler does not resolve. The arity is the
+     * consumer's; Kotlin/JS never executes an external super call, the
+     * JavaScript class's own does. The gate variant keeps the primary
+     * constructor and its `null!!` call ([gateSuperCall]): a plain Kotlin
+     * class must call its base.
+     */
+    fun secondaryConstructor(declaration: ExternalClass): Boolean {
+        val superClass = declaration.superClass ?: return false
+        val base = classNamed(superClass, declaration.path) ?: return false
+        if (base.path.isEmpty()) return false
+        return effectiveConstructor(base).orEmpty().any { !it.vararg }
+    }
+
 }
 
 /**
@@ -1678,12 +1730,19 @@ private fun StringBuilder.appendDeclaration(
             }
             val externalModifier = if (externalKeyword) "external " else ""
             val typeParams = typeParameterText(declaration.typeParameters)
-            val constructorText = inheritance.effectiveConstructor(declaration)
-                ?.joinToString(", ", prefix = "(", postfix = ")", transform = ::parameterText) ?: ""
+            val effectiveConstructor = inheritance.effectiveConstructor(declaration)
+            // (EXT.22) Against a nested base with parameters the real
+            // variant's constructor is a SECONDARY one, in the body
+            // ([Inheritance.secondaryConstructor]); the primary otherwise.
+            val secondaryConstructor = external && inheritance.secondaryConstructor(declaration)
+            val constructorText =
+                if (secondaryConstructor) ""
+                else effectiveConstructor?.joinToString(", ", prefix = "(", postfix = ")", transform = ::parameterText) ?: ""
             // (EXT.8) Supertypes: the generated base class first (with the
             // gate variant's `null!!` constructor call — an external class
-            // omits the call, a plain Kotlin class may not), then the
-            // generated interfaces.
+            // omits the call, a plain Kotlin class may not: measured, it is
+            // refused with any arguments, (EXT.22)), then the generated
+            // interfaces.
             val supertypeTexts = buildList {
                 declaration.superClass?.let { base ->
                     add(if (external) base else base + inheritance.gateSuperCall(declaration, base))
@@ -1696,7 +1755,8 @@ private fun StringBuilder.appendDeclaration(
             appendBinding(declaration.binding, indent, external)
             val header = "${indent}public $abstractModifier${externalModifier}class " +
                 "${kotlinIdentifier(declaration.name)}$typeParams$constructorText$supertypes"
-            val hasBody = declaration.headerMarkers.isNotEmpty() ||
+            val hasBody = secondaryConstructor ||
+                declaration.headerMarkers.isNotEmpty() ||
                 declaration.members.isNotEmpty() ||
                 declaration.staticMembers.isNotEmpty() ||
                 declaration.nested.isNotEmpty() ||
@@ -1707,6 +1767,10 @@ private fun StringBuilder.appendDeclaration(
                 appendLine("$header {")
                 for (marker in declaration.headerMarkers) {
                     appendLine("$member/* xtsc: $marker */")
+                }
+                if (secondaryConstructor) {
+                    val parameters = effectiveConstructor.orEmpty().joinToString(", ", transform = ::parameterText)
+                    appendLine("${member}public constructor($parameters)")
                 }
                 val inherited = inheritance.inherited(declaration)
                 val opened = inheritance.openedByClass[qualifiedName(declaration.path, declaration.name)].orEmpty()
