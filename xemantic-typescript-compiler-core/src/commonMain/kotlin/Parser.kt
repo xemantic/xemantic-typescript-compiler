@@ -4933,9 +4933,12 @@ class Parser(
         captureIeSlot() // after `{`, before the first specifier
         val elements = mutableListOf<ExportSpecifier>()
         while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
-            // If we encounter `from` keyword here (before any specifier), it means the `}` was missing.
-            // Stop — parseExpected(CloseBrace) will report '}' expected at `from`.
-            if (token == SyntaxKind.FromKeyword) break
+            // `from` is a CONTEXTUAL keyword and an ordinary specifier name inside the clause
+            // (`export { from } from './x'` — rxjs's own index.d.ts, line 43). Only a `from`
+            // that is FOLLOWED BY A STRING LITERAL means the `}` is missing (tsc
+            // `isListElement(ImportOrExportSpecifiers)`): stop there so that
+            // parseExpected(CloseBrace) reports '}' expected at `from`.
+            if (token == SyntaxKind.FromKeyword && !isImportOrExportSpecifierListElement()) break
             elements.add(parseExportSpecifier())
             captureIeSlot() // after the specifier's binding name, before `,`/`}`
             if (token == SyntaxKind.CloseBrace || token == SyntaxKind.EndOfFile) break

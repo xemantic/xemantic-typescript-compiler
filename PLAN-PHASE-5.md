@@ -25,7 +25,7 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-### Round (P18.9) — the RxJS core rung COMPILES: callable interfaces, `typeof`, and the `this` receiver (2026-09-02)
+### Round (P18.9) — the RxJS core rung COMPILES, its census halves, and a parser defect falls out of the whole-library probe (2026-09-02)
 
 **(EXT.11a) LANDED — the externals ladder's third rung, `rxjs@7.8.2` core (15 files under
 `dist/types/internal`), generates with ZERO checker diagnostics and its Kotlin now COMPILES.**
@@ -88,6 +88,31 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 **Marker text over-reports `any`**: `lens.render` substitutes the declaration's own TPs to
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
+
+**(PARSE.1) LANDED — a parser defect on rxjs's own `index.d.ts:43`, found by the 250-file
+probe.** `export { from } from './x'` reported TS1005/TS1141/TS1434 (plus checker fallout):
+`Parser.parseNamedExports` had a hand-written `if (token == FromKeyword) break` at the
+START-of-specifier position, so an exported name spelled `from` ended the clause; the named
+IMPORTS loop never had it, because it gates on `isImportOrExportSpecifierListElement()` —
+the port of tsc's `isListElement(ImportOrExportSpecifiers)`, which reads `from` as a
+specifier unless a STRING LITERAL follows. One line: the export loop now asks the same
+predicate. Measured on 13 shapes against tsgo 7.0.2 — `from`, `from as f`, `f as from`, a
+local `export { from }`, `a, from`, `from, from as ff` all went 3-10 errors → 0 and the
+emitted JavaScript is byte-identical to tsgo's; the imports, the default import named `from`
+and `type from` were already right; two negative controls unchanged. **The corpus was blind
+by construction**: `pristine_oracle.py` finds NO baseline with a `from` specifier (the nearest,
+`exportsAndImportsWithContextualKeywordNames02`, is the contextual keyword `as`, and its only
+variant is a skipped `es5`). 15 pins in `ExportFromSpecifierTest`; huge_methods exit 0
+(largest 5,388); cost_gate +0.00% on all counters; suite 16,889 → 16,904 / 0 / 3. Pre-existing
+and left: a MISSING module specifier (`export { a } from` at EOF) reports TS1141 where tsc
+reports TS1109 `Expression expected`.
+
+**The 250-file probe** (whole `rxjs@7.8.2` `dist/types`, run between the two rungs): 496
+declarations, 967 markers, 3 diagnostics (the defect above), **37 Kotlin compile errors in
+three mechanisms the core rung could not show** — 24 overload conflicts the textual (EXT.5)
+key cannot see (nullability-only, TP-name-only, TP-list-length-only, bare-TP-vs-`Any?`), 12
+value-vs-type name collisions (`interface AjaxError` + `const AjaxError: AjaxErrorCtor`), one
+narrowed `var` override — queued as (EXT.11c) with the census.
 
 **(EXT.11b) LANDED in the same session — the census's cheap mapping wins.** Nullable unions:
 `X | null` / `X | undefined` / both → `X?` where X maps, SYNTACTICALLY (a `UnionType`
@@ -1110,6 +1135,43 @@ Owner decisions 2026-09-02:
   `source: Observable<Any?>?`), all three library gates green, pins per rule with a
   negative control each (a two-member union stays marked; `errorType` stays marked; a
   same-named non-lib `Array` is not an array).
+
+- [ ] **(EXT.11c) THE WHOLE `rxjs@7.8.2` SURFACE — ALL 250 `dist/types` FILES THROUGH THE
+  PROBE (2026-09-02, after (EXT.11b)): 496 declarations (348 fun, 68 interface, 39 val,
+  32 class, 8 typealias, 1 sealed interface), 967 markers, 3 checker diagnostics (ONE
+  parser defect, (PARSE.1)), **37 COMPILE ERRORS IN THREE MECHANISMS**, none of which the
+  core rung could show.** (1) 24 `Conflicting overloads`: the (EXT.5) collapse key is
+  TEXTUAL and Kotlin's equivalence is not — after (EXT.11b) two overloads differing only in
+  NULLABILITY (`first(…, defaultValue: D)` vs `D?`), in TYPE-PARAMETER NAMES (`<T, D>`
+  vs `<T, S>` on identical shapes), in the TP-list LENGTH with identical parameter texts
+  (`<A> zip(sources: Any?)` vs `<A, R> zip(sourcesAndResultSelector: Any?)`), or between an
+  unbounded bare TP parameter and `Any?` (`<T> of(value: T)` vs `<A> of(x: Any?)`) conflict.
+  Derive the key EMPIRICALLY against the metadata compiler (small pairs through
+  `compileCheck`), then make `overloadSignature` produce it: TP names positional, `?`
+  stripped, an unbounded bare TP parameter ≡ `Any?`, the TP list itself not part of the key —
+  and PIN each equivalence with a pair that compiled-conflicting before. (2) 12
+  `Conflicting declarations`: a VALUE and a TYPE sharing a name in one package
+  (`export interface AjaxError …` + `export declare const AjaxError: AjaxErrorCtor`, the
+  TS "companion value" idiom, seven error classes + `TimeoutError`) — Kotlin cannot hold
+  both at top level; the value becomes a loud skip naming the type it collides with (the
+  `@JsName` wiring that could rename it is the module-wiring rung). (3) 1 override type
+  mismatch: a subclass REDECLARING a base `var` with a narrower type
+  (`ConnectableObservable.source: Observable<T>` over `Observable.source: Observable<any> |
+  undefined` → `var source: Observable<Any?>?`) — Kotlin needs the base's type on a `var`
+  override; render the base's type with a marker naming the TS narrowing (the sibling of the
+  `readonly narrows an inherited var` rule). Gate: a fourth gate test embedding ONLY the
+  files exercising each mechanism verbatim (`internal/ajax/errors.d.ts`,
+  `internal/observable/zip.d.ts`, `internal/operators/first.d.ts`,
+  `internal/observable/ConnectableObservable.d.ts` + what they import), compiling; record
+  the 250-file census in the session note (the 291 `re-export` markers and 123 constraint
+  markers are the expected module-wiring / constraint residue, not defects).
+
+- [x] **(PARSE.1) DONE 2026-09-02 ((P18.9) note; one line in `parseNamedExports`, 15 pins, suite 16,904/0/3, cost_gate +0.00%) — `export { from } from './x'` REPORTS TS1005/TS1141/TS1434 — `from` AS AN
+  EXPORTED NAME ENDS THE CLAUSE (found 2026-09-02 on rxjs's own `index.d.ts:43`; tsc accepts
+  it, `from` is a contextual keyword inside a specifier list).** Fix in the parser's
+  import/export specifier loop mirroring tsc's `parseImportOrExportSpecifier`; pin every
+  sibling shape (`from as f`, `f as from`, `import { from }`, default import named `from`,
+  `type from`, `from` not first) plus a negative control; huge_methods on the parser.
 
 - [ ] **(CHK.73b) A CLASS VALUE IS TYPED AS ITS INSTANCE TYPE, AND THE EXTERNALS GENERATOR
   RENDERS `export const plain = Plain` AS `val plain: Plain` — WRONG AND COMPILING (found by
