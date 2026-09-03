@@ -78,3 +78,42 @@ kotlin {
     }
 
 }
+
+// (EXT.17) THE KOTLIN/JS COMPILE GATE'S STDLIB, DECLARED RATHER THAN LOCATED
+// (owner-approved 2026-09-03).
+//
+// `JsCompileCheck` drives `K2JSCompiler` over the generator's REAL output —
+// `@file:JsModule`, `external`, `@JsName`, nested `external object`s — which
+// the metadata gate cannot see (it compiles the annotation-free variant). A
+// Kotlin/JS compilation resolves every name from the Kotlin/JS stdlib KLIB,
+// and nothing else in this build pulls that artifact: before this block the
+// gate found it in the Gradle cache only by accident of some other build
+// having downloaded it, and on a fresh box (CI) it skipped. It found two
+// SILENT generator defects the day it first ran, so skipping is not free.
+//
+// Artifact-only notation (`@klib`) deliberately: it bypasses variant-aware
+// resolution, so this configuration needs none of the Kotlin/JS platform
+// attributes and cannot be handed a JVM or Native variant by mistake. The
+// version is the compiler's own — a klib carries `abi_version`, the compiler
+// refuses one newer than itself, and an older one measures the wrong stdlib
+// ([JsStdlib] states the same invariant on the locating side, which stays as
+// the fallback for a developer running the gate outside Gradle).
+val kotlinStdlibJsDependencies = configurations.dependencyScope("kotlinStdlibJsDependencies")
+
+val kotlinStdlibJs = configurations.resolvable("kotlinStdlibJs") {
+    extendsFrom(kotlinStdlibJsDependencies.get())
+}
+
+dependencies {
+    kotlinStdlibJsDependencies("org.jetbrains.kotlin:kotlin-stdlib-js:${libs.versions.kotlin.get()}@klib")
+}
+
+tasks.named<Test>("jvmTest") {
+    // `Gradle does not forward -D to the test JVM` (CLAUDE.md, 2026-08-21), so
+    // this is an ENVIRONMENT variable — the same one a developer sets by hand.
+    val klib = kotlinStdlibJs.get().elements.map { it.single().asFile.absolutePath }
+    inputs.files(kotlinStdlibJs).withPropertyName("kotlinStdlibJs")
+    doFirst {
+        environment("XTSC_KOTLIN_STDLIB_JS", klib.get())
+    }
+}

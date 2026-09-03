@@ -1822,13 +1822,20 @@ Owner decisions 2026-09-02:
   `K2JSCompiler` from the embeddable jar already on the test classpath, the JS stdlib klib located
   by `XTSC_KOTLIN_STDLIB_JS` or the Gradle cache, 19 gate tests skipping LOUDLY without it; it
   found and closed two silent generator defects; externals 201/0 with the klib, suite 17,073/0/3).
-  **BLOCKED-PENDING-USER — the CI half:** the klib is on no classpath and in no cache on a fresh
-  box, so making the gate run in CI is a build-file change — the minimal one, for the owner:
-  in `xemantic-typescript-compiler-externals/build.gradle.kts` a resolvable configuration
-  `val kotlinStdlibJs by configurations.creating { isTransitive = false }` +
-  `dependencies { kotlinStdlibJs("org.jetbrains.kotlin:kotlin-stdlib-js:${libs.versions.kotlin.get()}") }`
-  and on the `jvmTest` task `environment("XTSC_KOTLIN_STDLIB_JS", kotlinStdlibJs.singleFile)`
-  (an ENVIRONMENT variable — Gradle does not forward `-D` to the test JVM). A KOTLIN/JS COMPILE GATE FOR THE *REAL* EXTERNALS
+  **THE CI HALF DONE 2026-09-03 (owner-approved the same day) — the klib is DECLARED, not
+  located.** `configurations.dependencyScope("kotlinStdlibJsDependencies")` +
+  `configurations.resolvable("kotlinStdlibJs")` with the artifact-only notation
+  `org.jetbrains.kotlin:kotlin-stdlib-js:<catalog kotlin>@klib` (deliberately artifact-only:
+  it bypasses variant-aware resolution, so the configuration needs no Kotlin/JS platform
+  attributes and cannot be handed a JVM or Native variant), passed to `jvmTest` as the
+  ENVIRONMENT variable the gate already reads (Gradle does not forward `-D` to the test JVM).
+  **The ablation exposed a second defect and it is fixed in the same commit:** with the
+  environment variable pointed at a non-existent path the whole gate read **28 tests, 0
+  failures** having compiled NOTHING — loud on stdout, quietly green in JUnit. `JsStdlib.locate`
+  now splits the two cases: an ABSENT variable is a fact about the BOX (a developer outside
+  Gradle) and still skips loudly; a variable that is SET and names nothing is a fact about the
+  BUILD, which cannot be true on a correct one, and `check`s. Ablated: 28/0 green before, **27
+  of 28 RED** after. Module 242/0, build warning-clean, no new published dependency. A KOTLIN/JS COMPILE GATE FOR THE *REAL* EXTERNALS
   OUTPUT.** The metadata gate compiles the annotation-free, `external`-free variant only, so
   `@file:JsModule` + `external var`, `@JsName` on a `sealed external interface`, nested
   `external object`s and the JS-side rules of every annotation are UNVERIFIED by any compiler

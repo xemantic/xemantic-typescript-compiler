@@ -96,11 +96,29 @@ internal object JsStdlib {
         return hashed.ifEmpty { listOf(versionDir.resolve("<hash>/kotlin-stdlib-js-$version.klib")) }
     }
 
-    /** The klib, or null with the `SKIPPED:` line already printed. */
+    /**
+     * The klib, or null with the `SKIPPED:` line already printed.
+     *
+     * An ABSENT [ENV] is a statement about the BOX — a developer running the
+     * gate outside Gradle — and skips loudly. A [ENV] that is SET and names
+     * nothing is a statement about the BUILD, which since (EXT.17) declares
+     * the klib as a resolvable configuration and passes its single file here:
+     * that cannot be true on a correct build, so it FAILS rather than skips.
+     * Without the split the ablation of that build block reads `28 tests, 0
+     * failures` having compiled nothing — a gate quietly green, which is the
+     * one thing a gate over a located artifact may never be.
+     */
     fun locate(): Path? {
         val candidates = candidates()
         val found = candidates.firstOrNull { it.isRegularFile() }
         if (found == null) {
+            val explicit = System.getenv(ENV)
+            check(explicit == null) {
+                "$ENV names '$explicit', which is not a file. The build declares the " +
+                    "Kotlin/JS stdlib klib (EXT.17, xemantic-typescript-compiler-externals/" +
+                    "build.gradle.kts) and passes it here, so this is a build defect, not a " +
+                    "missing local artifact — the gate refuses to pass without compiling."
+            }
             println(
                 "SKIPPED: Kotlin/JS stdlib klib for compiler $version not present at " +
                     candidates.joinToString(" or ") + " (set $ENV to a kotlin-stdlib-js-$version.klib)"
