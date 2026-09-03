@@ -25,6 +25,75 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.10) — the CI half of the Kotlin/JS gate, the README repositioning lands, and the externals package scheme is measured rather than proposed (2026-09-03)
+
+**Three owner decisions were answered this session** — (EXT.17)'s CI half approved, (DOC.2)
+approved, and (EXT.21)'s package scheme DELEGATED ("I wish to follow your best
+recommendation here").
+
+**(EXT.17) LANDED — the Kotlin/JS stdlib klib is DECLARED, not located, and the gate can no
+longer go quietly green.** A `dependencyScope` + `resolvable` configuration pair declares
+`org.jetbrains.kotlin:kotlin-stdlib-js:<catalog kotlin>@klib` and passes its single file to
+`jvmTest` as `XTSC_KOTLIN_STDLIB_JS`. **Artifact-only notation deliberately**: it bypasses
+variant-aware resolution, so the configuration needs no Kotlin/JS platform attributes and
+cannot be handed a JVM or Native variant. Nothing enters any published artifact; the build
+stays warning-clean under `--warning-mode all`. **The ablation exposed a second defect,
+fixed in the same commit**: with the environment variable pointed at a non-existent path
+the whole gate read **28 tests, 0 failures** having compiled NOTHING — loud on stdout,
+green in JUnit, so no CI arm could tell a compiled gate from a skipped one. `JsStdlib.locate`
+now splits the cases by WHO the absence is a statement about — an UNSET variable is a fact
+about the BOX (a developer outside Gradle) and still skips loudly; a variable that is SET and
+names nothing is a fact about the BUILD, which cannot be true on a correct one, and `check`s.
+Ablated: 28/0 green before, **27 of 28 RED** after. CLAUDE.md gotcha added.
+
+**(DOC.2) LANDED — the approved commit cherry-picked onto main unchanged**, so the audit
+trail separates what the owner signed off from what this session then refreshed. The branch
+was 95 commits behind main and its facts predated the whole (EXT.11…23) arc, so a SECOND
+commit refreshed only what measurement changed: the ladder table (mitt / smol-toml / RxJS 250
+files / `typescript.d.ts` / `@types/node`, all at 0 Kotlin errors) with the `@types/node`
+flattening named as the open limit; the suite count 15,528 → 17,169; and the stale "the
+language service is not incremental — every semantic query is a full rebuild" bullet, replaced
+by the (LSP.3) measurement (93-217 ms narrowed here against tsgo's 12-18 ms, said in their
+favour). Positioning prose untouched.
+
+**(EXT.21a) LANDED — and the queued proposal was REFUTED on its central rule.** The item asked
+for a package-naming scheme; `KotlinPackageNameCompileTest` asked the metadata compiler AND
+`K2JSCompiler` instead of guessing, and they agree on every row: **a backtick rescues a
+hyphenated segment, a hard keyword and a digit-first one, and rescues NOTHING else** — `.`,
+`~`, `@`, `:` and `/` are `Name contains illegal characters` inside one. So "any segment that
+is not a Kotlin identifier backticked" produces a file no compiler accepts. Landed instead:
+`/`, `:` and `.` are SEPARATORS, npm's leading `@` is DROPPED, a keyword/digit-first/hyphenated
+segment is BACKTICKED, and any other character is REFUSED loudly — no `package` line plus a
+marker naming it, which degrades to the pre-(EXT.21) root-package behaviour rather than to a
+broken file. `ModuleWiring.packageRoot` prefixes a multi-module package (`node.fs`, the
+kotlin-wrappers convention) without hard-coding one ecosystem, and the case of a specifier is
+PRESERVED (lowercasing would collapse two specifiers onto one package for a convention that
+costs nothing to honour and everything to enforce).
+
+**The load-bearing measurement is the second one**: every accepted package name is also
+spellable in a QUALIFIED reference, backticked segments included. That is what makes a
+cross-package reference (`node.net.Socket` named from the `dgram` generation) expressible, and
+so what makes (EXT.21b) viable at all — without it the per-module design would have had no way
+to name another module's declarations.
+
+9 measurement rows + 10 end-to-end pins through the generator (including the refusal, whose
+first assertion was VACUOUS — the refusal marker's own text contains the word "package", so a
+substring test passes against a renderer that emitted both; it is a line-start test now).
+27 wiring pins re-pinned for the added line. Externals 242 → **261/0**; suite 17,150 →
+**17,169 / 0 / 3**, exactly the 19 added.
+
+**(EXT.21b) queued** — per-module selection and cross-module qualified spelling, which needs
+no further owner decision. Split from (EXT.21a) because it touches the generator's most
+delicate path (reference spelling under identity evidence and first-wins naming);
+`Site.moduleSpecifier` already exists and is the hook.
+
+**One protocol failure, recorded.** The session's first full-suite run was launched as
+`nohup ./gradlew … &` INSIDE a `run_in_background` call — the double-detach CLAUDE.md
+explicitly forbids. The tool reported exit 0 for the backgrounding rather than the build, and
+the partial result (50 tests, core absent) read as a plausible suite. Caught before anything
+was recorded; the later runs were launched bare. The existing gotcha is correct and was simply
+not followed.
+
 ### Round (P18.9) — the externals ladder goes green at every rung: RxJS core, its census, a parser defect, all of RxJS, and `typescript.d.ts` through the namespace rung (2026-09-02)
 
 **(EXT.11a) LANDED — the externals ladder's third rung, `rxjs@7.8.2` core (15 files under
@@ -1929,8 +1998,24 @@ Owner decisions 2026-09-02:
   Gate variant: `= null` or no default (it is not external); pin the difference. Receipt: the
   JS gate + all five library gates.
 
-- [ ] **(EXT.21) BLOCKED-PENDING-USER (2026-09-02) — the first `package` line this generator would
-  emit is an owner-facing choice. PROPOSAL: one generation per declaring module; the Kotlin
+- [ ] **(EXT.21) IN PROGRESS — the PACKAGE half DONE 2026-09-03 as (EXT.21a) (owner delegated the
+  choice: "I wish to follow your best recommendation here"); the PER-MODULE half is (EXT.21b)
+  below. THE SCHEME, MEASURED RATHER THAN PROPOSED — and the proposal below was WRONG on one
+  rule.** `KotlinPackageNameCompileTest` asked the metadata compiler and `K2JSCompiler` (they
+  agree on every row): a backtick rescues a HYPHENATED segment, a HARD KEYWORD and a
+  DIGIT-FIRST one and **rescues nothing else** — `.`, `~`, `@`, `:` and `/` are `Name contains
+  illegal characters` inside one — so "any segment that is not a Kotlin identifier backticked"
+  cannot be the rule. Landed: `/`, `:` and `.` are SEPARATORS (`fs/promises` → `fs.promises`,
+  `node:net` → `node.net`), npm's leading `@` is DROPPED (`@types/node` → `types.node`, since
+  it cannot be carried in any form), a keyword/digit-first/hyphenated segment is BACKTICKED,
+  and anything else is REFUSED loudly — no `package` line plus a marker naming the character,
+  which degrades to the pre-(EXT.21) root-package behaviour rather than to a file no compiler
+  accepts. `ModuleWiring.packageRoot` prefixes a multi-module package (`node.fs`, the
+  kotlin-wrappers convention) without hard-coding one ecosystem. Every accepted package name is
+  also spellable in a QUALIFIED reference, backticked segments included — the load-bearing
+  measurement, since that is what makes a cross-package reference expressible at all and so
+  what makes (EXT.21b) viable. 9 measurement rows + 10 end-to-end pins; externals 242 → 261/0;
+  suite 17,150 → 17,169 / 0 / 3. ORIGINAL PROPOSAL (kept for the record; its backtick rule is refuted above): one generation per declaring module; the Kotlin
   package is the specifier with `:` and `/` → `.`, a leading `@` dropped, and any segment that
   is not a Kotlin identifier backticked (`node:net` → `node.net`, `fs/promises` →
   `fs.promises`, `rxjs` → `rxjs`, `@types/foo` → `types.foo`); a reference into another
@@ -1964,6 +2049,22 @@ Owner decisions 2026-09-02:
   `net`, `Module` in both `module` and `vm`, `stream/web`'s `ReadableStream` beside the
   global one; each per-module output metadata-compiles at 0 errors; rxjs and
   `typescript.d.ts` byte-identical (single-module generations are the degenerate case).
+
+- [ ] **(EXT.21b) ONE GENERATION PER DECLARING MODULE — the half (EXT.21a) unblocks, and it needs
+  no owner decision.** With the package scheme measured and landed, what remains is selection
+  and reference spelling: `generateKotlinExternals(files, ModuleWiring("net", entry, root))`
+  renders the declarations whose `Site.moduleSpecifier` is that module (through its
+  `export = <require alias>` / `export * from` chains) at the top level, and treats every other
+  block as an IMPORTED module reachable only BY NAME through the block's own `import * as X` /
+  `import X = require` bindings — spelled FULLY QUALIFIED into that module's own Kotlin package
+  ((EXT.21a) measured every accepted package name qualified-referencable, backticked segments
+  included). `Site.moduleSpecifier` already exists and is the hook. Receipt: `Socket` renders in
+  BOTH `dgram` and `net`, `Module` in both `module` and `vm`, `stream/web`'s `ReadableStream`
+  beside the global one; the 57 `declared again by another file` skips vanish by construction;
+  each per-module output metadata- AND Kotlin/JS-compiles at 0 errors; rxjs and `typescript.d.ts`
+  byte-identical but for their one `package` line (single-module generations are the degenerate
+  case). **The delicate part is the reference-spelling path** (identity evidence + first-wins
+  naming), which is why it is split from (EXT.21a) rather than landed with it.
 
 - [x] **(CHK.79) DONE 2026-09-02 ((P18.9) note; `ambientModuleSurfaceMember` at the heritage PropertyAccess arm, 9 pins with 7 red by ablation, grid unchanged, cost_gate exit 0, suite 17,135/0/3; the generator's namespace-import heritage route retired — 40 dotted bases on `@types/node` were carried by it; follow-ups (CHK.80)) — `heritageBaseSymbol` ANSWERS NULL FOR A DOTTED BASE WHOSE HEAD IS A NAMESPACE
   IMPORT (`import * as net from "node:net"` / `import net = require("net")`) INSIDE AN AMBIENT

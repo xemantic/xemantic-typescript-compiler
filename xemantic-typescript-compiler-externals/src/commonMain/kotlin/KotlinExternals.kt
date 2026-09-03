@@ -232,7 +232,11 @@ public fun generateKotlinExternals(
         )
     }
     val declarations = collector.finish()
-    val header = plan?.let { ModuleHeader(it.moduleName, it.umd) }
+    val header = plan?.let {
+        // (EXT.21) The package is derived from the SPECIFIER the wiring names,
+        // under the wiring's optional root prefix.
+        ModuleHeader(it.moduleName, it.umd, kotlinPackageNameFor(it.moduleName, module.packageRoot))
+    }
     return KotlinExternals(
         kotlin = renderKotlinExternals(declarations, external = true, header = header),
         compileCheckSource = renderKotlinExternals(declarations, external = false),

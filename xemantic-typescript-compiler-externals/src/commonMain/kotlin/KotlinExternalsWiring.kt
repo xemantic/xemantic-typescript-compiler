@@ -106,7 +106,116 @@ public class ModuleWiring(
     public val moduleName: String,
     /** The entry file's name, exactly as given in the generation's file list. */
     public val entryFileName: String,
+    /**
+     * (EXT.21) The Kotlin package the generation is emitted into, DERIVED
+     * from [moduleName] when null — see [kotlinPackageNameFor]. A generation
+     * needs one because two npm modules may declare the same name (measured:
+     * `@types/node` declares 112 names in more than one module, `Socket` in
+     * both `dgram` and `net`), and two same-named Kotlin declarations can
+     * only coexist in different packages.
+     *
+     * [packageRoot] namespaces a multi-module package under one prefix — the
+     * `kotlin-wrappers` convention, where node's `fs` module is `node.fs`
+     * rather than a top-level `fs`. It is a prefix, not a replacement: the
+     * module's own derived segments follow it.
+     */
+    public val packageRoot: String? = null,
 )
+
+/**
+ * (EXT.21) The Kotlin package a module SPECIFIER maps to, or a refusal.
+ *
+ * `Derived` carries the package as it is SPELLED in a `package` declaration
+ * and in a qualified reference — the same text, measured equivalent in
+ * `KotlinPackageNameCompileTest`, backticked segments included.
+ */
+public sealed interface KotlinPackageName {
+
+    /** The mapping succeeded; [spelling] is the `package` line's argument. */
+    public class Derived(public val spelling: String) : KotlinPackageName
+
+    /** The specifier carries something no Kotlin package can spell. */
+    public class Refused(public val reason: String) : KotlinPackageName
+
+}
+
+/**
+ * (EXT.21) Kotlin's HARD keywords — the ones that cannot be an identifier
+ * without a backtick. Soft and modifier keywords are ordinary identifiers in
+ * a package position and are deliberately NOT listed: backticking them would
+ * be noise.
+ */
+private val KOTLIN_HARD_KEYWORDS = setOf(
+    "as", "break", "class", "continue", "do", "else", "false", "for", "fun",
+    "if", "in", "interface", "is", "null", "object", "package", "return",
+    "super", "this", "throw", "true", "try", "typealias", "typeof", "val",
+    "var", "when", "while",
+)
+
+/**
+ * (EXT.21) The MEASURED mapping from an npm module specifier to a Kotlin
+ * package name. Every rule below is a row of `KotlinPackageNameCompileTest`,
+ * which asked the metadata compiler AND `K2JSCompiler` (they agree on every
+ * case measured):
+ *
+ *  - `/`, `:` and `.` are SEPARATORS — `fs/promises` is `fs.promises`,
+ *    `node:net` is `node.net`, `lodash.merge` is `lodash.merge`. All three
+ *    are refused INSIDE a segment even when backticked, so mapping them to
+ *    the Kotlin separator is the only thing that can be done with them.
+ *  - a leading `@` on the first segment is npm's SCOPE marker and is dropped
+ *    (`@types/node` is `types.node`); `@` is refused inside a backtick too,
+ *    so it cannot be kept.
+ *  - a segment that is a valid Kotlin identifier and not a hard keyword is
+ *    emitted as written.
+ *  - a segment that is a hard keyword, starts with a digit, or contains `-`
+ *    is BACKTICKED — measured: a backtick rescues exactly these.
+ *  - anything else is REFUSED by name. **The queued proposal said "any
+ *    segment that is not a Kotlin identifier backticked"; that is measurably
+ *    wrong** — a backtick does not rescue `.`, `~`, `@`, `:` or `/`
+ *    (`Name contains illegal characters`), so an unmappable character must
+ *    be refused, never escaped and emitted.
+ *
+ * The specifier's CASE is preserved. Kotlin packages are conventionally
+ * lowercase, but lowercasing loses information (two specifiers differing
+ * only in case would collapse onto one package) and npm names are already
+ * lowercase, so the convention costs nothing to honour and everything to
+ * enforce.
+ */
+public fun kotlinPackageNameFor(
+    moduleName: String,
+    packageRoot: String? = null,
+): KotlinPackageName {
+    val segments = moduleName
+        .split('/', ':', '.')
+        .filter { it.isNotEmpty() }
+    if (segments.isEmpty()) {
+        return KotlinPackageName.Refused("the specifier '$moduleName' has no package segment")
+    }
+    val spelled = mutableListOf<String>()
+    segments.forEachIndexed { index, raw ->
+        // npm's scope marker, and only in the leading position: `@` cannot be
+        // carried into a package name in any form.
+        val segment = if (index == 0 && raw.startsWith("@")) raw.substring(1) else raw
+        if (segment.isEmpty()) {
+            return KotlinPackageName.Refused("the specifier '$moduleName' has an empty package segment")
+        }
+        val illegal = segment.firstOrNull { !it.isLetterOrDigit() && it != '_' && it != '-' }
+        if (illegal != null) {
+            return KotlinPackageName.Refused(
+                "the specifier '$moduleName' carries '$illegal' in the segment '$segment', " +
+                    "which no Kotlin package can spell - a backtick does not rescue it"
+            )
+        }
+        val needsBacktick = segment in KOTLIN_HARD_KEYWORDS ||
+            segment.first().isDigit() ||
+            segment.any { !it.isLetterOrDigit() && it != '_' }
+        spelled += if (needsBacktick) "`$segment`" else segment
+    }
+    val root = packageRoot?.takeIf { it.isNotEmpty() }
+    return KotlinPackageName.Derived(
+        if (root == null) spelled.joinToString(".") else root + "." + spelled.joinToString(".")
+    )
+}
 
 /**
  * (EXT.16) How one value-bearing ROOT declaration is reachable from the

@@ -68,6 +68,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("pkg")
 
+            package pkg
+
             /* xtsc: function f is also exported as g - one @JsName per declaration, bound as f */
             public external fun f(x: String): Unit
 
@@ -106,7 +108,7 @@ class KotlinExternalsWiringTest {
         // `fun` is a hard keyword in Kotlin (backticked) and a plain
         // identifier in JavaScript; `$` is legal in both and backtick-only
         // in Kotlin. Both spell their JavaScript name.
-        val expected = "@file:JsModule(\"pkg\")\n\n" +
+        val expected = "@file:JsModule(\"pkg\")\n\npackage pkg\n\n" +
             "@JsName(\"\\$\")\npublic external val `\$`: Double\n\n" +
             "@JsName(\"fun\")\npublic external fun `fun`(): Unit\n"
         val rendered = result.kotlin
@@ -128,7 +130,7 @@ class KotlinExternalsWiringTest {
         val gate = result.compileCheckSource
         val real = result.kotlin
         assert(gate == expected)
-        assert(real.startsWith("@file:JsModule(\"pkg\")\n@file:JsNonModule\n\n@JsName(\"default\")\npublic external fun f("))
+        assert(real.startsWith("@file:JsModule(\"pkg\")\n@file:JsNonModule\n\npackage pkg\n\n@JsName(\"default\")\npublic external fun f("))
     }
 
     @Test
@@ -152,6 +154,8 @@ class KotlinExternalsWiringTest {
         // no runtime name, so `A` is not "also exported as AT".
         val expected = """
             @file:JsModule("pkg")
+
+            package pkg
 
             public open external class A {
                 public var p: Double
@@ -191,6 +195,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("rxjs")
 
+            package rxjs
+
             public open external class AsyncSubject<T> {
                 public var v: T
             }
@@ -216,6 +222,8 @@ class KotlinExternalsWiringTest {
         )
         val expected = """
             @file:JsModule("pkg")
+
+            package pkg
 
             public external fun b(): Unit
 
@@ -246,6 +254,8 @@ class KotlinExternalsWiringTest {
         )
         val expected = """
             @file:JsModule("pkg")
+
+            package pkg
 
             /* xtsc: function nf is exported only as ns.nf - a nested export needs @file:JsQualifier in a file of its own */
             public external fun nf(): Unit
@@ -281,6 +291,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("m")
 
+            package m
+
             /* xtsc: export = lib - lib is the module object itself: bind it as @JsModule("m") external function lib in a file of its own, no @JsName */
             public external fun lib(x: Double): String
 
@@ -312,6 +324,8 @@ class KotlinExternalsWiringTest {
         )
         val expected = """
             @file:JsModule("typescript")
+
+            package typescript
 
             /* xtsc: namespace ts - the module object (export = ts); members rendered at top level */
 
@@ -345,6 +359,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("w")
 
+            package w
+
             /* xtsc: namespace W - the module member W; members rendered at top level and bind as W.<name>, which needs @file:JsQualifier("W") in a file of its own */
 
             public external fun go(): Unit
@@ -373,6 +389,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("w")
 
+            package w
+
             /* xtsc: namespace W - not exported by the package entry; members rendered at top level */
 
             public external fun go(): Unit
@@ -395,6 +413,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("u")
             @file:JsNonModule
+
+            package u
 
             public external fun run(): Unit
         """.trimIndent() + "\n"
@@ -423,6 +443,8 @@ class KotlinExternalsWiringTest {
         // its own name in the file that declares it.
         val expected = """
             @file:JsModule("smol")
+
+            package smol
 
             public external fun parse(s: String): Double
 
@@ -464,6 +486,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("s")
 
+            package s
+
             /* xtsc: function fa is not exported by the package entry - an internal path a consumer cannot bind */
             public external fun fa(): Unit
 
@@ -493,6 +517,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("pkg")
 
+            package pkg
+
             /* xtsc: function f is also exported as h, f - one @JsName per declaration, bound as g */
             @JsName("g")
             public external fun f(): Unit
@@ -513,6 +539,8 @@ class KotlinExternalsWiringTest {
         )
         val expected = """
             @file:JsModule("pkg")
+
+            package pkg
 
             /* xtsc: module "pkg" - the package's own module; members rendered at top level */
 
@@ -542,6 +570,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("pkg")
 
+            package pkg
+
             /* xtsc: skipped default export of an expression - nothing a consumer can bind by name */
         """.trimIndent() + "\n"
         val rendered = result.kotlin
@@ -555,6 +585,8 @@ class KotlinExternalsWiringTest {
         )
         val equalsExpected = """
             @file:JsModule("m")
+
+            package m
 
             /* xtsc: skipped export = an expression - nothing a consumer can bind by name */
         """.trimIndent() + "\n"
@@ -576,6 +608,8 @@ class KotlinExternalsWiringTest {
         )
         val expected = """
             @file:JsModule("typescript")
+
+            package typescript
 
             /* xtsc: namespace ts - the module object (export = ts); members rendered at top level */
 
@@ -614,6 +648,8 @@ class KotlinExternalsWiringTest {
         val wired = generateWired(pkg, "/pkg/index.d.ts" to source)
         val wiredExpected = """
             @file:JsModule("pkg")
+
+            package pkg
 
             /* xtsc: function f is also exported as g - one @JsName per declaration, bound as f */
             public external fun f(x: String): Unit
@@ -657,6 +693,8 @@ class KotlinExternalsWiringTest {
         )
         val expected = """
             @file:JsModule("pkg")
+
+            package pkg
 
             public external interface AjaxError {
                 public var status: Double
@@ -751,6 +789,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("pkg")
 
+            package pkg
+
             public open external class Box(v: String)
 
             public open external class Empty
@@ -797,6 +837,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("path")
 
+            package path
+
             /* xtsc: module "path" - the package's own module; members rendered at top level */
 
             public external object path {
@@ -834,6 +876,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("pkg")
 
+            package pkg
+
             /* xtsc: namespace outer - not exported by the package entry; members rendered at top level */
 
             public external object path {
@@ -865,6 +909,8 @@ class KotlinExternalsWiringTest {
         )
         val expected = """
             @file:JsModule("pkg")
+
+            package pkg
 
             public external interface Ctor {
                 public var x: Double
@@ -899,6 +945,8 @@ class KotlinExternalsWiringTest {
         )
         val expected = """
             @file:JsModule("pkg")
+
+            package pkg
 
             public external interface AjaxError {
                 public var status: Double
@@ -937,6 +985,8 @@ class KotlinExternalsWiringTest {
         )
         val expected = """
             @file:JsModule("pkg")
+
+            package pkg
 
             /* xtsc: module "pkg" - the package's own module; members rendered at top level */
 
@@ -979,6 +1029,8 @@ class KotlinExternalsWiringTest {
         val expected = """
             @file:JsModule("pkg")
 
+            package pkg
+
             /* xtsc: module "pkg" - the package's own module; members rendered at top level */
 
             public external interface A {
@@ -1019,6 +1071,93 @@ class KotlinExternalsWiringTest {
         val message = failure?.message ?: ""
         assert(isArgumentError)
         assert("/pkg/missing.d.ts" in message)
+    }
+
+
+    // ------------------------------------------------------------------
+    // (EXT.21) The package line, end to end through the generator. The
+    // derivation itself is measured against both Kotlin compilers in
+    // `KotlinPackageNameCompileTest`; these pin that the GENERATOR reaches
+    // it, with the specifier shapes a real npm package produces.
+    // ------------------------------------------------------------------
+
+    /** The one declaration every package pin generates, so only the header varies. */
+    private fun wiredHeaderOf(moduleName: String, packageRoot: String? = null): String =
+        generateWired(
+            ModuleWiring(moduleName, "/pkg/index.d.ts", packageRoot),
+            "/pkg/index.d.ts" to "export declare const v: number;",
+        ).kotlin.substringBefore("public external val")
+
+    @Test
+    fun `a plain specifier is its own package`() {
+        assert(
+            wiredHeaderOf("rxjs") == """
+                @file:JsModule("rxjs")
+
+                package rxjs
+
+
+            """.trimIndent()
+        )
+    }
+
+    @Test
+    fun `a subpath specifier maps its slash to a package separator`() {
+        assert(wiredHeaderOf("fs/promises").contains("\npackage fs.promises\n"))
+    }
+
+    @Test
+    fun `a node prefixed specifier maps its colon to a package separator`() {
+        assert(wiredHeaderOf("node:net").contains("\npackage node.net\n"))
+    }
+
+    @Test
+    fun `an npm scope drops its at sign - a backtick cannot rescue one`() {
+        assert(wiredHeaderOf("@types/node").contains("\npackage types.node\n"))
+    }
+
+    @Test
+    fun `a hyphenated specifier is backticked, which is what Kotlin accepts`() {
+        assert(wiredHeaderOf("smol-toml").contains("\npackage `smol-toml`\n"))
+    }
+
+    @Test
+    fun `a specifier that is a hard keyword is backticked`() {
+        assert(wiredHeaderOf("is").contains("\npackage `is`\n"))
+    }
+
+    @Test
+    fun `a package root prefixes the module's own segments`() {
+        assert(wiredHeaderOf("fs/promises", packageRoot = "node").contains("\npackage node.fs.promises\n"))
+    }
+
+    @Test
+    fun `an unmappable specifier renders no package and a loud marker, never a broken one`() {
+        val header = wiredHeaderOf("we~ird")
+        // A LINE-START test: the refusal marker itself contains the word
+        // "package", so a substring test passes vacuously against a broken
+        // renderer that emitted both.
+        assert(header.lineSequence().none { it.startsWith("package ") })
+        assert(header.contains("/* xtsc: no package -"))
+        assert(header.contains("'~'"))
+    }
+
+    @Test
+    fun `negative control - the gate variant carries no package line`() {
+        val gate = generateWired(
+            ModuleWiring("rxjs", "/pkg/index.d.ts"),
+            "/pkg/index.d.ts" to "export declare const v: number;",
+        ).compileCheckSource
+        assert(gate.lineSequence().none { it.startsWith("package ") })
+    }
+
+    @Test
+    fun `negative control - an unwired generation carries no package line`() {
+        val unwired = generateWired(
+            null,
+            "/pkg/index.d.ts" to "export declare const v: number;",
+        ).kotlin
+        assert(unwired.lineSequence().none { it.startsWith("package ") })
     }
 
 }

@@ -9,6 +9,27 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
+**(P18.10) — THE CI HALF OF THE KOTLIN/JS GATE, THE README REPOSITIONING, AND THE EXTERNALS PACKAGE SCHEME MEASURED RATHER THAN PROPOSED, 17,150 → 17,169 / 0 / 3 (2026-09-03).**
+Three owner decisions answered. **(EXT.17)**: the Kotlin/JS stdlib klib is now DECLARED by the
+build (`dependencyScope` + `resolvable`, artifact-only `@klib` notation so no Kotlin/JS platform
+attributes are needed and no wrong variant can be handed over) and passed to `jvmTest` as the
+environment variable the gate reads — nothing enters a published artifact. Its ablation found a
+second defect: with the path pointed at nothing the gate read **28 tests / 0 failures having
+compiled nothing**, so `JsStdlib.locate` now splits an UNSET locator (a fact about the box —
+skip) from a SET-but-missing one (a fact about the build — fail); ablated 28/0 green → **27 of
+28 RED**. **(DOC.2)**: the approved README commit cherry-picked onto main unchanged, then a
+second commit refreshed only what measurement changed (the ladder table at 0 Kotlin errors, the
+`@types/node` flattening named as the open limit, 15,528 → 17,169, and the stale "the language
+service is not incremental" bullet replaced by (LSP.3)'s numbers, said in tsgo's favour).
+**(EXT.21a)**: the package scheme was MEASURED against both Kotlin compilers and **the queued
+proposal was refuted** — a backtick rescues a hyphenated segment, a hard keyword and a
+digit-first one and **nothing else** (`.`, `~`, `@`, `:`, `/` are illegal inside one), so `/`
+`:` `.` are separators, npm's leading `@` is dropped, and any other character is refused loudly
+with no `package` line rather than escaped into a file no compiler accepts;
+`ModuleWiring.packageRoot` gives the kotlin-wrappers `node.fs` shape without hard-coding an
+ecosystem. Every accepted package name is also QUALIFIED-referencable — the measurement that
+makes per-module generation ((EXT.21b), queued) possible at all. Externals 242 → 261/0.
+
 **(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,150 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,

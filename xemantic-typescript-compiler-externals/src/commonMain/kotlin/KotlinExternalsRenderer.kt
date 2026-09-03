@@ -92,11 +92,22 @@ internal class Rename(
  * (EXT.16) The file header of a wired generation: `@file:JsModule("name")`
  * on the first line and, for a UMD entry (`export as namespace X`),
  * `@file:JsNonModule` after it — what Kotlin/JS needs to bind a module that
- * is also usable as a global. No `package` line, as before.
+ * is also usable as a global.
+ *
+ * (EXT.21) Then the `package` line, which is what lets two modules of one
+ * npm package each declare the same name (`Socket` in both `dgram` and
+ * `net`) without colliding. File annotations precede the package
+ * declaration in Kotlin's grammar, so the order here is the required one,
+ * not a preference. A specifier no Kotlin package can spell renders NO
+ * package line and a loud marker instead — the root package is what every
+ * generation before (EXT.21) emitted, so the refusal degrades to the old
+ * behaviour rather than to a broken file.
  */
 internal class ModuleHeader(
     val moduleName: String,
     val umd: Boolean,
+    /** (EXT.21) The derived package, or the refusal to render as a marker. */
+    val packageName: KotlinPackageName,
 )
 
 internal class ExternalInterface(
@@ -1743,6 +1754,16 @@ internal fun renderKotlinExternals(
     if (external && header != null) {
         appendLine("@file:JsModule(\"${jsStringLiteral(header.moduleName)}\")")
         if (header.umd) appendLine("@file:JsNonModule")
+        // (EXT.21) File annotations come BEFORE the package declaration in
+        // Kotlin's grammar; a blank line separates them as `kotlinc` formats it.
+        when (val packageName = header.packageName) {
+            is KotlinPackageName.Derived -> {
+                appendLine()
+                appendLine("package ${packageName.spelling}")
+            }
+            is KotlinPackageName.Refused ->
+                appendLine("/* xtsc: no package - ${packageName.reason} */")
+        }
         if (declarations.isNotEmpty()) appendLine()
     }
     appendDeclarations(declarations, indent = "", external = external, externalKeyword = external, inheritance = inheritance)
