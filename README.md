@@ -76,9 +76,21 @@ facts interface the JVM backend already consumes — and emits Kotlin `external`
 declarations whose types are the checker's answers, with one **documented** fallback for
 every shape Kotlin cannot express, never a silent `dynamic`.
 
-Status: being built as the current demo — first target is real library `.d.ts` entries
-(`mitt`, `smol-toml`, RxJS, then `typescript.d.ts` itself), with a hard gate that the
-generated Kotlin compiles.
+Status: every rung of the fixture ladder is green, and the gate at each one is that the
+generated Kotlin **compiles** — as Kotlin/JS, annotations and all, not just as metadata:
+
+| library | what is generated | Kotlin errors |
+|---|---|---:|
+| [`mitt`](https://github.com/developit/mitt) 3.0.1 | the whole `index.d.ts` | 0 |
+| [`smol-toml`](https://github.com/squirrelchat/smol-toml) 1.7.1 | 7 declaration files | 0 |
+| [RxJS](https://github.com/ReactiveX/rxjs) 7.8.2 | all 250 files of `dist/types` | 0 |
+| `typescript.d.ts` 6.0.3 | 11,448 lines in, 9,792 lines of Kotlin out | 0 |
+| [`@types/node`](https://www.npmjs.com/package/@types/node) 20.19.43 | 66 files | 0 |
+
+Still open: a type package that declares **many modules** (`@types/node` declares `net`,
+`fs`, `fs/promises`, …) is generated into one flat scope today, so the 112 names it
+declares in more than one module — `Socket` in both `dgram` and `net` — collapse
+first-wins. Per-module generation is the next rung.
 
 ## 3. Run TypeScript on the JVM — as bytecode
 
@@ -144,7 +156,7 @@ series is in [bench-history/](bench-history/README.md).
 
 ## How correct
 
-- **15,528 tests, 0 failures.** 8,837 of them are generated from **TypeScript's own test
+- **17,169 tests, 0 failures.** 8,837 of them are generated from **TypeScript's own test
   suite** and compare emitted JavaScript and error baselines **character-for-character**
   against the output of pristine `tsc`.
 - It **compiles the TypeScript compiler itself** — all eight source profiles, up to 273
@@ -181,8 +193,11 @@ dependencies {
   real defect, and each one gets fixed.
 - **The CLI flag surface is a subset of `tsc`'s** — enough for a `tsconfig.json`-driven
   build, not for every corner of the option space.
-- **The language service is not incremental.** Every semantic query is a full rebuild;
-  batch your carets (`fileSemantics`) and debounce.
+- **The language service is embeddable, and slower than `tsgo`'s LSP.** A semantic query
+  narrows the rebuild to the file you asked about — measured 93–217 ms warm on
+  TypeScript's own 78 sources — where `tsgo`'s LSP answers the same hover in 12–18 ms,
+  because it types nodes lazily and this checker types the file. Batch your carets
+  (`fileSemantics`) and debounce.
 - **The JVM backend is a spike.** It refuses what it cannot lower rather than guessing.
 
 ## License
