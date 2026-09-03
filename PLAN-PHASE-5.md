@@ -82,6 +82,15 @@ substring test passes against a renderer that emitted both; it is a line-start t
 27 wiring pins re-pinned for the added line. Externals 242 → **261/0**; suite 17,150 →
 **17,169 / 0 / 3**, exactly the 19 added.
 
+**The ablation, three single-mistake arms, each restored against its own snapshot.** a1
+(never backtick a segment) — **3 RED**, and the third is the receipt that the rule is not a
+unit-test artefact: `smol-toml's real output compiles as Kotlin JS` goes red, i.e. that
+library's actual generation would emit `package smol-toml` and `K2JSCompiler` would refuse it.
+a2 (keep npm's leading `@`) — **1 RED**, the scope pin. a3 (escape an illegal character
+instead of refusing) — **1 RED**, the refusal pin. Distinct red sets, so no pin is standing in
+for another. Restored and REBUILT before the green re-run (the class dir holds the last arm's
+binary until then, (CHK.54)'s trap): 261/0.
+
 **(EXT.21b) queued** — per-module selection and cross-module qualified spelling, which needs
 no further owner decision. Split from (EXT.21a) because it touches the generator's most
 delicate path (reference spelling under identity evidence and first-wins naming);
