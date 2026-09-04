@@ -100735,6 +100735,18 @@ interface DataView {
         }
     }
 
+    /**
+     * (PARITY.1)(c): [canUseTypeEngine]'s own `sourceIsPrimitive` classifier, as a function,
+     * so the union-lift rule and the single-type rules cannot drift apart. `any`/`error` are
+     * excluded here as they are at the top of the gate — an unresolved constituent makes the
+     * whole comparison unsound exactly as an unresolved whole type does.
+     */
+    private fun isPrimitiveLikeType(t: Type): Boolean {
+        if (t === anyType || t === errorType) return false
+        return t is Type.Intrinsic || t is Type.StringLiteral ||
+            t is Type.NumberLiteral || t is Type.BigIntLiteral
+    }
+
     private fun canUseTypeEngine(sourceType: Type, targetType: Type): Boolean {
         // Never compare when either side is unresolved
         if (sourceType === anyType || sourceType === errorType) return false
@@ -100772,6 +100784,28 @@ interface DataView {
         // Union source → primitive target (safe: primitives don't need control flow narrowing)
         // Skip Union → Object/Interface targets since those often need narrowing we don't implement
         if (sourceType is Type.Union && targetIsPrimitive) return true
+        // (PARITY.1)(c): the UNION LIFT of the two `sourceIsPrimitive && targetType is
+        // Type.Object` rules (one just above for an anonymous target, one near the bottom
+        // for a named one). A union EVERY constituent of which is primitive-like is exactly
+        // N comparisons this gate already admits ONE AT A TIME, so admitting the union adds
+        // no decision the relation engine cannot already make.
+        //
+        // The line above says "skip Union -> Object/Interface targets since those often need
+        // narrowing we don't implement" — that is about a union which CAN narrow INTO the
+        // target. A primitive-only union cannot: every flow narrowing of it is a SUBSET of
+        // its own constituents, and the one subset that would relate to an object target,
+        // `never`, is refused by the readers' own `narrowed !== neverType` guards. An
+        // OBJECT-carrying union keeps the skip (`all` fails), so the round-461 gap this
+        // comment describes is untouched.
+        //
+        // Measured against tsgo 7.0.2 AND pristine typescript@6.0.3: `const t: { x: number }
+        // = u` with `u: "a" | "b"` reports TS2322 there and was SILENT here — likewise
+        // `string | number`, `string | undefined`, and the same union against a named
+        // interface, an array and a function type, at declaration, assignment and return
+        // positions. Argument and object-literal-member positions already reported.
+        if (sourceType is Type.Union && targetType is Type.Object &&
+            sourceType.types.all { isPrimitiveLikeType(it) }
+        ) return true
         if (sourceType is Type.Intersection) return true
         // Anything → Union/Intersection target
         if (targetType is Type.Union || targetType is Type.Intersection) return true
@@ -105388,7 +105422,16 @@ interface DataView {
                 CtaSections.closeNarrow(t0, r !== rawSourceType)
                 r
             } else if (targetType is Type.Interface || targetType is Type.Reference ||
-                targetType is Type.Union || targetType is Type.Intersection) {
+                targetType is Type.Union || targetType is Type.Intersection ||
+                // (PARITY.1)(c): an ANONYMOUS object target (`{ x: number }`) reaches the
+                // relation for the first time now that a primitive-only union source is
+                // admitted, so it needs the same suppression-only narrowing its named
+                // siblings above already have — otherwise a reference the flow has narrowed
+                // to `never` (an unreachable branch) or to a relating subset would read its
+                // DECLARED union and false-positive. Confined to the newly-admitted source
+                // shape, so no other Object-target comparison changes.
+                (targetType is Type.Object && rawSourceType is Type.Union &&
+                    rawSourceType.types.all { isPrimitiveLikeType(it) })) {
                 val t0 = CtaSections.t()
                 val narrowed = getNarrowedTypeForReference(rawSourceType, init)
                 CtaSections.closeNarrow(t0, narrowed !== rawSourceType)
@@ -106514,8 +106557,7 @@ interface DataView {
         // contain literal members (mirrors B69.5 in checkAssignmentExpression).
         // `var b: Boolean = true` displays as `Type 'boolean' is not
         // assignable to type 'Boolean'`, not `'true'`.
-        val displaySourceType = if (ts2322KeepsSourceLiteral(targetType)) sourceType
-            else getWidenedLiteralType(sourceType)
+        val displaySourceType = relationErrorSourceDisplayType(sourceType, targetType)
         // B471: a bare class identifier in value position is its CONSTRUCTOR
         // (`typeof C`), but getTypeOfExpression resolves it to the instance type
         // (display `C`). When the init is a pure class identifier whose display
@@ -109375,7 +109417,12 @@ interface DataView {
                     val ttIsEnumObject = tt is Type.Object && isEnumFlavoredObjectType(tt)
                     val sourceType = if ((narrowRef is Identifier || narrowRef is PropertyAccessExpression) &&
                         (tt is Type.Interface || tt is Type.Reference || tt is Type.Union ||
-                            tt is Type.Intersection || ttIsEnumObject || isNarrowableTarget(tt))) {
+                            tt is Type.Intersection || ttIsEnumObject || isNarrowableTarget(tt) ||
+                            // (PARITY.1)(c): the var-decl path's twin — an anonymous object
+                            // target now reaches the relation for a primitive-only union
+                            // source, so it needs the same suppression-only narrowing.
+                            (tt is Type.Object && sourceTypeRaw is Type.Union &&
+                                sourceTypeRaw.types.all { isPrimitiveLikeType(it) }))) {
                         val narrowed = getNarrowedTypeForReference(sourceTypeRaw, narrowRef)
                         if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, tt, assignableRelation)) narrowed
                         else sourceTypeRaw
@@ -110225,8 +110272,7 @@ interface DataView {
             // (widened) not `false` when target is `{ [n: number]: any }`
             // (no literal context). When target preserves literal (e.g.
             // `false` or `true | false`), keep the literal display.
-            val displaySourceType = if (ts2322KeepsSourceLiteral(tt)) sourceType
-                else getWidenedLiteralType(sourceType)
+            val displaySourceType = relationErrorSourceDisplayType(sourceType, tt)
             val displaySourceRaw = typeToString(displaySourceType)
             // 17.80: For NumberLiteral targets with infinite/NaN value, prefer
             // the resolved type display (`'Infinity'` / `'-Infinity'` / `'NaN'`)
@@ -130469,6 +130515,71 @@ interface DataView {
      */
     private fun ts2322KeepsSourceLiteral(targetType: Type): Boolean =
         propTypeContainsLiteral(targetType) || targetType.flags.hasAny(TypeFlags.EnumLike)
+
+    /**
+     * (PARITY.1)(b): tsc's `reportRelationError` source generalization, transcribed —
+     * `checker.ts`:
+     *
+     * ```
+     * if (!(target.flags & TypeFlags.Never) && isLiteralType(source) &&
+     *     !typeCouldHaveTopLevelSingletonTypes(target)) {
+     *     generalizedSource = getBaseTypeOfLiteralType(source);
+     * }
+     * ```
+     *
+     * Two things this adds over the bare [getWidenedLiteralType] the two TS2322 display
+     * sites used before.
+     *
+     * (1) `getBaseTypeOfLiteralType` MAPS OVER A UNION (`getBaseTypeOfLiteralTypeUnion` =
+     * `mapType(type, getBaseTypeOfLiteralType)`) and [getWidenedLiteralType] has no Union
+     * arm — which is the whole divergence: measured against tsgo 7.0.2 AND pristine
+     * `typescript@6.0.3`, `const t: number = u` with `u: "a" | "b"` reads `Type 'string'`
+     * there and read `Type '"a" | "b"'` here, and `"a" | 1` reads `string | number`.
+     * [getWidenedLiteralType] itself is NOT given a Union arm: it has ~115 call sites and
+     * most are inference/contextual-typing, not display.
+     *
+     * (2) tsc's explicit `never` guard, which we did not have — a `never` TARGET keeps the
+     * source's literal ("we really want the original type to be displayed for use-cases
+     * like 'assertNever'"), so `const t: never = one` with `one: "a"` reads `Type '"a"'`
+     * there and read `Type 'string'` here. Six ACTIVE corpus baselines print a literal
+     * against a `never` target (`controlFlowArrayErrors`'s `99`, `invalidSplice`'s `4`,
+     * `narrowingUnionToNeverAssigment`'s `"c"` / `"c" | "d"`, …), so the guard is the
+     * corpus's rule as much as tsc's.
+     *
+     * The UNION arm is additionally gated to a target kind measured against tsgo —
+     * `Type.Intrinsic` (`number`, `boolean`, `string`) or `Type.Object`/Interface/
+     * Reference (`{ x: number }`, `{ x: 1 }`, `number[]`, a named interface). A Union,
+     * Intersection or TypeParam target keeps the literal union, which is what the two
+     * baselines at risk here spell — `complicatedIndexedAccessKeyofReliesOnKeyofNeverUpperBound`
+     * prints `'"text" | "email"'` against `T & "text"` (an intersection: tsc's
+     * `typeCouldHaveTopLevelSingletonTypes` recurses through `UnionOrIntersection` where
+     * [propTypeContainsLiteral] has no intersection arm) and `exactOptionalPropertyTypesIdentical`
+     * prints `'0 | 1'` against a deferred conditional type. Widening the gate to "anything
+     * [ts2322KeepsSourceLiteral] declines" would collapse both.
+     */
+    private fun relationErrorSourceDisplayType(sourceType: Type, targetType: Type): Type {
+        if (targetType === neverType || targetType.flags.hasAny(TypeFlags.Never)) return sourceType
+        if (ts2322KeepsSourceLiteral(targetType)) return sourceType
+        if (sourceType !is Type.Union) return getWidenedLiteralType(sourceType)
+        if (!(targetType is Type.Intrinsic || targetType is Type.Object)) return sourceType
+        // tsc's `isLiteralType` over a union: EVERY constituent must be a unit type.
+        if (!sourceType.types.all { isUnitLikeType(it) }) return sourceType
+        val widened = sourceType.types.map { getWidenedLiteralType(it) }
+        val distinct = mutableListOf<Type>()
+        for (w in widened) if (distinct.none { it === w }) distinct.add(w)
+        return if (distinct.size == 1) distinct[0] else getUnionType(distinct)
+    }
+
+    /**
+     * (PARITY.1)(b): tsc's `isUnitType` — `!!(type.flags & TypeFlags.Unit)`, where
+     * `Unit = Literal | UniqueESSymbol | Nullable`. Only the literal and nullish halves
+     * are expressible here; a union of these is what tsc's `isLiteralType` generalizes.
+     */
+    private fun isUnitLikeType(t: Type): Boolean {
+        if (t === anyType || t === errorType) return false
+        if (t is Type.StringLiteral || t is Type.NumberLiteral || t is Type.BigIntLiteral) return true
+        return t.flags.hasAny(TypeFlags.BooleanLiteral or TypeFlags.Null or TypeFlags.Undefined)
+    }
 
     /**
      * (REL.1)(c) round 745: the NUMERIC-LITERAL type of [init] when [targetType] is
