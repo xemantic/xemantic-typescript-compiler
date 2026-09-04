@@ -76,19 +76,31 @@ class IndexedAccessOnInstantiationTest {
     /**
      * DISCRIMINATES BY MESSAGE — `'ModifierSK'` fixed, silent ablated. The union arm
      * is what `Modifier["kind"]` needs, and one `any` constituent poisons the whole.
+     *
+     * (PARITY.2): a `never` annotation, not a `string` one. Every constituent of
+     * `Modifier["kind"]` is an enum MEMBER, so at a `string` target tsc's
+     * `reportRelationError` generalization collapses the whole union to `SK` — which a
+     * one-constituent resolution would also produce, i.e. the pin would stop testing the
+     * union arm. **Two things this pin's expectation is NOT.** It is not tsc's string:
+     * tsgo 7.0.2 and pristine `typescript@6.0.3` both print the EXPANSION
+     * (`'SK.AbstractKeyword | SK.AccessorKeyword | SK.AsyncKeyword'`) where we print the
+     * alias name, because INV.5(a) interns a union by its member-id list and
+     * `aliasDisplayMap` is id-keyed — the (INC.27) refusal, which no policy change here
+     * can reach. And the fixture must not `return s`: a `never` value is reported as
+     * unassignable to `string` by this compiler (an ours-only false positive, recorded
+     * by (PARITY.2)), so the return would add a second row.
      */
     @Test
     fun `an indexed access on a union of generic instantiations unions the arguments`() {
         val diagnostics = diagnose(
             prelude +
                 """
-                export function f(x: Modifier["kind"]): string {
-                    const s: string = x;
-                    return s;
+                export function f(x: Modifier["kind"]): void {
+                    const s: never = x;
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2322 && it.message == "Type 'ModifierSK' is not assignable to type 'string'." })
+        assert(diagnostics.any { it.code == 2322 && it.message == "Type 'ModifierSK' is not assignable to type 'never'." })
     }
 
     /**

@@ -114,20 +114,26 @@ class PostSwitchFallThroughNarrowingTest {
      * The narrowed type is read off the MESSAGE, not off an assignability verdict:
      * `checkTypeRelatedToCore` still decides enum-vs-MEMBER vacuously — (REL.2)'s
      * open item — so both `takeC(k)` and `takeA(k)` would pass whatever this edge
-     * answers. An unrelated `string` parameter is the one target that cannot be
-     * satisfied vacuously, so the message names the type the edge actually produced.
+     * answers. A parameter that cannot be satisfied vacuously is what makes the message
+     * name the type the edge actually produced.
+     *
+     * (PARITY.2): that parameter is `never`, not the `string` it was — since the enum arm
+     * of `Checker.baseTypeOfLiteralType` landed, a `string` target generalizes an
+     * enum-member source to its parent enum, so `K.C` and an un-narrowed `K` would read
+     * the same and this pin would go BLIND. Measured byte-identical to tsgo 7.0.2 and
+     * pristine `typescript@6.0.3` at the `never` target.
      */
     @Test
     fun `a partially covering default-less switch subtracts the covered enum members`() {
         diagnose("""
             enum K { A, B, C }
-            declare function takeStr(s: string): void;
+            declare function takeNever(s: never): void;
             function f(k: K) {
                 switch (k) {
                     case K.A: return;
                     case K.B: return;
                 }
-                takeStr(k);
+                takeNever(k);
             }
         """) should {
             have(any { it.code == 2345 && it.message.contains("type 'K.C' is not assignable") })

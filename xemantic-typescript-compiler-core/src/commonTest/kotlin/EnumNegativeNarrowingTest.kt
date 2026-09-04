@@ -44,7 +44,19 @@ import kotlin.test.Test
  * id-ordered permutation — and [Checker.enumMinusMembers] does the subtraction, gated
  * to a target that is entirely members of THIS enum.
  *
- * Probe discipline is round 762/763's: a `string` target is satisfied by no
+ * (PARITY.2): the probe is a `never` parameter, not the PRIMITIVE `string` it was
+ * until the enum arm of `Checker.baseTypeOfLiteralType` landed. tsc's
+ * `reportRelationError` generalizes an enum-member source to its parent enum at any
+ * target that cannot hold a singleton, so at a `string` parameter `K.B | K.C | K.D` and
+ * an un-narrowed `K` render the SAME string and every pin here would go BLIND rather
+ * than red. `never` is a target tsc suppresses the generalization for, so the survivors
+ * are named in full — and every expectation below is byte-identical to tsgo 7.0.2 AND
+ * pristine `typescript@6.0.3`, measured. The one exception, kept on `string`
+ * DELIBERATELY, is the interface control: the round-441 `never`-parameter arm DISCARDS
+ * any narrowed result that is not `never` (outside its enum exception), so at a `never`
+ * target that pin would read the declared `Node0` whatever the subtype test did.
+ *
+ * Probe discipline is round 762/763's: neither target is satisfied by an
  * enum-shaped type, so the narrowed type is always NAMED in the TS2345 message.
  * Note that the corresponding EXHAUSTIVE shape (a guard covering every member, whose
  * false branch is `never`) is deliberately unpinned — `never` is assignable to
@@ -66,6 +78,7 @@ class EnumNegativeNarrowingTest {
         enum J { X = 100, Y = 200 }
         type U = K.A | K.B | K.C;
         declare function probe(x: string): void;
+        declare function probeX(x: never): void;
         declare function isAB(k: K): k is K.A | K.B;
 
     """.trimIndent()
@@ -81,7 +94,7 @@ class EnumNegativeNarrowingTest {
     @Test
     fun `not-equals subtracts the tested member from a bare enum`() {
         narrowedTo(
-            "export function f(k: K) { if (k !== K.A) { probe(k); } }",
+            "export function f(k: K) { if (k !== K.A) { probeX(k); } }",
             "K.B | K.C | K.D",
         )
     }
@@ -89,7 +102,7 @@ class EnumNegativeNarrowingTest {
     @Test
     fun `the else branch of a triple-equals subtracts the tested member`() {
         narrowedTo(
-            "export function f(k: K) { if (k === K.A) { } else { probe(k); } }",
+            "export function f(k: K) { if (k === K.A) { } else { probeX(k); } }",
             "K.B | K.C | K.D",
         )
     }
@@ -97,14 +110,14 @@ class EnumNegativeNarrowingTest {
     @Test
     fun `a type guard's false branch subtracts the guard target from a bare enum`() {
         narrowedTo(
-            "export function f(k: K) { if (!isAB(k)) { probe(k); } }",
+            "export function f(k: K) { if (!isAB(k)) { probeX(k); } }",
             "K.C | K.D",
         )
     }
 
     @Test
     fun `a type guard's false branch subtracts in a ternary`() {
-        narrowedTo("export function f(k: K) { return isAB(k) ? 0 : probe(k); }", "K.C | K.D")
+        narrowedTo("export function f(k: K) { return isAB(k) ? 0 : probeX(k); }", "K.C | K.D")
     }
 
     @Test
@@ -115,7 +128,7 @@ class EnumNegativeNarrowingTest {
         // union carries that alias's display name, so the pin would read `U` and
         // measure the alias table instead of the order.
         narrowedTo(
-            "export function f(k: K) { if (k !== K.B) { probe(k); } }",
+            "export function f(k: K) { if (k !== K.B) { probeX(k); } }",
             "K.A | K.C | K.D",
         )
     }
@@ -126,13 +139,19 @@ class EnumNegativeNarrowingTest {
     fun `negative control - a member of an UNRELATED enum subtracts nothing`() {
         // Fails any version that keys on the EnumLiteral flag without the round-746
         // owner rule: `J.X` is not in `K`'s domain, so the answer stays the whole enum.
-        narrowedTo("export function f(k: K) { if (k !== J.X) { probe(k); } }", "K")
+        narrowedTo("export function f(k: K) { if (k !== J.X) { probeX(k); } }", "K")
     }
 
     @Test
     fun `negative control - an interface-target guard's false branch is untouched`() {
         // The round-760 `!isModifier(node)` shape: `t` is not an enum, so the new
         // subtraction must decline and leave the existing subtype test in charge.
+        // (PARITY.2): DELIBERATELY still the `string` probe — the round-441
+        // `never`-parameter arm discards every narrowed result that is not `never`
+        // outside its enum exception, so a `never` target here would read the declared
+        // `Node0` however the subtype test behaved (measured: tsc reads `Ident0` at
+        // `never`, we read `Node0`). Unaffected by the generalization either way: a
+        // non-literal source is never generalized.
         narrowedTo(
             """
             interface Node0 { pos: number }
@@ -148,12 +167,12 @@ class EnumNegativeNarrowingTest {
     fun `negative control - a reference already declared as a member union is unchanged`() {
         // The pre-existing union path (round 763) must not be re-routed through the
         // decomposition: `U` is already `K.A | K.B | K.C`, so `D` never appears.
-        narrowedTo("export function f(k: U) { if (k !== K.A) { probe(k); } }", "K.B | K.C")
+        narrowedTo("export function f(k: U) { if (k !== K.A) { probeX(k); } }", "K.B | K.C")
     }
 
     @Test
     fun `negative control - the positive direction still answers the tested member`() {
-        narrowedTo("export function f(k: K) { if (k === K.A) { probe(k); } }", "K.A")
+        narrowedTo("export function f(k: K) { if (k === K.A) { probeX(k); } }", "K.A")
     }
 
     // RETIRED round 765: `negative control - a switch default clause still answers the

@@ -130532,32 +130532,61 @@ interface DataView {
             (targetType is Type.Union && targetType.types.any { ts2322KeepsSourceLiteral(it) })
 
     /**
-     * (PARITY.1)(b2): tsc's `getBaseTypeOfLiteralType` for ONE constituent.
+     * (PARITY.1)(b2) / (PARITY.2): tsc's `getBaseTypeOfLiteralType` for ONE constituent.
      *
-     * **The ENUM ARM IS DELIBERATELY ABSENT and its absence is a MEASURED refusal, not
-     * an oversight** — tsc's `getBaseTypeOfEnumLikeType` answers the enum a MEMBER
-     * belongs to, so `const d: string = em` with `em: One.X` reads `Type 'One'` in both
-     * tsgo 7.0.2 and pristine `typescript@6.0.3` where we read `Type 'One.X'`.
+     * ```
+     * function getBaseTypeOfLiteralType(type: Type): Type {
+     *     return type.flags & TypeFlags.EnumLike ? getBaseTypeOfEnumLikeType(type) :
+     *         type.flags & TypeFlags.StringLiteral ? stringType :
+     *         ... ;
+     * }
+     * ```
      *
-     * The (P18.14) note filed that as a value-set difference, i.e. MEANING. **It is not
-     * one, and this round settled it**: both compilers hold the same type `One.X`, which
-     * their own output proves — at the three targets where tsc SUPPRESSES the
-     * generalization (a `never` target, a literal target, an enum-flavored target) tsc
-     * prints `One.X` exactly where we do. It is rendering, i.e. FORM.
-     *
-     * What blocks it is not the corpus — the enum arm moves **zero** baselines, measured
-     * — but the INSTRUMENT of the whole (REL.2) enum-narrowing arc: ~25 hand-written
-     * classes read a narrowed enum type out of a TS2345/TS2322 message at a **primitive**
-     * probe target, by explicit design ("The instrument is a PRIMITIVE probe target …
-     * DISCRIMINATES BY MESSAGE — `'K.A'` fixed, `'K'` ablated"). Generalizing collapses
-     * `K.A`, `K.A | K.B` and the un-narrowed `K` to one string, so 47 assertions in 13 of
-     * those classes go BLIND rather than red. Measured remedy, which also makes those pins
-     * tsc-verifiable for the first time: move the probe target to `never`, where the
-     * generalization is suppressed — nine narrowing shapes then read byte-identical to
-     * tsgo (`K.A`, `K.A | K.B`, `K.B | K.C`, `K.C | K.D`, `K`). That conversion is its own
-     * round, with the full suite as its gate.
+     * The ENUM arm ([baseTypeOfEnumLikeType]) was measured and REFUSED by (P18.15) and
+     * is landed by (PARITY.2). What changed is not the measurement — it read the same
+     * both times: the arm moves **zero** corpus baselines and leaves all 8 profiles
+     * unchanged — but the INSTRUMENT it was blocked on. ~25 hand-written classes of the
+     * (REL.2) enum-narrowing arc read a narrowed enum type out of a TS2345/TS2322
+     * message at a **primitive** probe target, and generalizing collapses `K.A`,
+     * `K.A | K.B` and the un-narrowed `K` to one string there, so those pins stop
+     * discriminating. (PARITY.2) re-pointed every such probe at a `never` target — the
+     * one target tsc suppresses the generalization for — which makes them
+     * tsc-verifiable for the first time (`K.A`, `K.A | K.B`, `K.C | K.D`,
+     * `K.B | K.C | K.D`, `K` all read byte-identical to tsgo 7.0.2 AND pristine
+     * `typescript@6.0.3` there, where `'K.A'` at a primitive target was ours-only).
      */
-    private fun baseTypeOfLiteralType(t: Type): Type = getWidenedLiteralType(t)
+    private fun baseTypeOfLiteralType(t: Type): Type =
+        baseTypeOfEnumLikeType(t) ?: getWidenedLiteralType(t)
+
+    /**
+     * (PARITY.2): tsc's `getBaseTypeOfEnumLikeType` — the ENUM a member belongs to.
+     *
+     * ```
+     * function getBaseTypeOfEnumLikeType(type: Type) {
+     *     return type.flags & TypeFlags.EnumLike && type.flags & TypeFlags.Union
+     *         ? getDeclaredTypeOfSymbol(getParentOfSymbol(type.symbol)!) : type;
+     * }
+     * ```
+     *
+     * `null` for anything that is not an enum MEMBER type, so the caller falls through
+     * to [getWidenedLiteralType] — a literal/nullish source, or the enum's OWN type
+     * (which carries [TypeFlags.Enum], not [TypeFlags.EnumLiteral], and is therefore
+     * not a literal at all: tsc leaves it alone for the same reason and prints
+     * `ZzzEnum` for it with or without this rule).
+     *
+     * The owner is taken through [canonicalEnumSymbol] so the answer does not depend on
+     * which resolution path handed us the member — the same reason
+     * [getDeclaredTypeOfEnumMember] keys on it. **Measured REDUNDANT on every pin this
+     * repo has** ((PARITY.2) ablation a5: dropping it reads 0 RED), and kept because it
+     * is redundant only on the path that already succeeded: [getDeclaredTypeOfEnumMember]
+     * stamps the member type's symbol as `canonicalEnumSymbol(owner).exports[name]`, so
+     * the parent IS canonical whenever that export lookup answered — and on its
+     * `?: memberSym` fallback it is not. A round-927 pair, recorded rather than claimed.
+     */
+    private fun baseTypeOfEnumLikeType(t: Type): Type? {
+        val enumSym = enumOfMemberTypeSymbol(t) ?: return null
+        return getDeclaredTypeOfSymbol(canonicalEnumSymbol(enumSym))
+    }
 
     /**
      * (PARITY.1)(b): tsc's `reportRelationError` source generalization, transcribed —
@@ -130621,12 +130650,17 @@ interface DataView {
     private fun isUnitLikeType(t: Type): Boolean {
         if (t === anyType || t === errorType) return false
         if (t is Type.StringLiteral || t is Type.NumberLiteral || t is Type.BigIntLiteral) return true
-        // (PARITY.1)(b2): `EnumLiteral` is deliberately NOT admitted here — see
-        // [baseTypeOfLiteralType]. tsc's `isUnitType` is true for an enum member (its
-        // type carries `StringLiteral`/`NumberLiteral` beside `EnumLiteral`, where ours
-        // is a member-less `Type.Object` flagged `EnumLiteral` alone), so admitting it
-        // would let a member UNION reach the generalization; the two go together and are
-        // refused together.
+        // (PARITY.2): an enum MEMBER is a unit type in tsc — its type carries
+        // `StringLiteral`/`NumberLiteral` beside `EnumLiteral`, where ours is a
+        // member-less `Type.Object` flagged `EnumLiteral` alone, so the flag test has to
+        // be spelled out. This is what lets a member UNION reach the generalization:
+        // measured on tsgo 7.0.2 AND pristine `typescript@6.0.3`, `const d: string = eu`
+        // with `eu: ZzzEnum.A | ZzzEnum.B` reads `Type 'ZzzEnum'` — the two members
+        // widen to one enum and dedup to a single constituent. The enum's OWN type is
+        // NOT admitted (it carries `TypeFlags.Enum`, disjoint from `EnumLiteral` by
+        // construction in [getDeclaredTypeOfEnumMember]) and needs no rule: it already
+        // displays as the enum.
+        if (t.flags.hasAny(TypeFlags.EnumLiteral)) return true
         return t.flags.hasAny(TypeFlags.BooleanLiteral or TypeFlags.Null or TypeFlags.Undefined)
     }
 

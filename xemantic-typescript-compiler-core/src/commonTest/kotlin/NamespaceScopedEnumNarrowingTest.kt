@@ -60,6 +60,7 @@ class NamespaceScopedEnumNarrowingTest {
     private val prelude = """
         declare function assertNever(x: never): never;
         declare function probe(x: string): void;
+        declare function probeX(x: never): void;
 
     """.trimIndent()
 
@@ -155,13 +156,17 @@ class NamespaceScopedEnumNarrowingTest {
 
     @Test
     fun `a partial switch default on a namespace scoped enum property names the survivors`() {
+        // (PARITY.2): `probeX`, a `never` parameter — the shared `probe` is a `string`
+        // one and tsc's `reportRelationError` generalizes an enum-member source to its
+        // parent enum there, so this pin would read `K` for every narrow and go BLIND.
+        // Expectation measured on tsgo 7.0.2 AND pristine `typescript@6.0.3`.
         narrowedTo(
             """
             export namespace P {
               const enum K { A, B, C }
               interface State { kind: K }
               export function f(s: State) {
-                switch (s.kind) { case K.B: break; default: probe(s.kind); }
+                switch (s.kind) { case K.B: break; default: probeX(s.kind); }
               }
             }
             """.trimIndent(),
@@ -190,13 +195,17 @@ class NamespaceScopedEnumNarrowingTest {
 
     @Test
     fun `a partial guard chain on a namespace scoped enum names the residual members`() {
+        // (PARITY.2): `probeX`, a `never` parameter — the shared `probe` is a `string`
+        // one and tsc's `reportRelationError` generalizes an enum-member source to its
+        // parent enum there, so this pin would read `K` for every narrow and go BLIND.
+        // Expectation measured on tsgo 7.0.2 AND pristine `typescript@6.0.3`.
         narrowedTo(
             """
             export namespace P {
               enum K { A, B, C }
               export function f(k: K) {
                 if (k === K.B) return;
-                probe(k);
+                probeX(k);
               }
             }
             """.trimIndent(),
@@ -314,6 +323,10 @@ class NamespaceScopedEnumNarrowingTest {
 
     @Test
     fun `negative control - a foreign namespace enums like named member does not subtract`() {
+        // (PARITY.2): `probeX`, a `never` parameter — the shared `probe` is a `string`
+        // one and tsc's `reportRelationError` generalizes an enum-member source to its
+        // parent enum there, so this pin would read `K` for every narrow and go BLIND.
+        // Expectation measured on tsgo 7.0.2 AND pristine `typescript@6.0.3`.
         narrowedTo(
             """
             export namespace A { export enum J { X, Y } }
@@ -322,7 +335,7 @@ class NamespaceScopedEnumNarrowingTest {
               export function f(k: K, j: A.J) {
                 if (j === A.J.X) return;
                 if (k === K.X) return;
-                probe(k);
+                probeX(k);
               }
             }
             """.trimIndent(),

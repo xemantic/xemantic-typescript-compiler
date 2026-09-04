@@ -49,10 +49,17 @@ import kotlin.test.Test
  *
  * The rule, tsc's `reportRelationError`: generalize the source to its base type unless
  * the target could hold a top-level singleton (`never`, a literal, an enum, or a union
- * containing one of those). "Base type" is `getBaseTypeOfLiteralType`, whose ENUM arm is
- * measured and deliberately REFUSED here — `Checker.baseTypeOfLiteralType`'s KDoc carries
- * the measurement, the classification (FORM, not the MEANING the (P18.14) note recorded)
- * and the instrument that blocks it.
+ * containing one of those). "Base type" is `getBaseTypeOfLiteralType`, whose ENUM arm
+ * ((PARITY.2), `Checker.baseTypeOfEnumLikeType`) answers the enum a MEMBER belongs to and
+ * is pinned in the last section of this class at all six emitters plus the declaration
+ * and assignment ones.
+ *
+ * TWO ROWS IN THAT SECTION ARE OURS, NOT tsc's, AND BOTH ARE PRE-EXISTING AND SEPARATELY
+ * RECORDED: a NAMESPACE-scoped enum generalizes to `Inner` here and to `Ns.Inner` in both
+ * references (the (PARITY.1)(a) qualification mechanism, refused with its measurement),
+ * and the two references DISAGREE WITH EACH OTHER on the member order of a two-enum member
+ * union (tsgo `Comp | One`, pristine `One | Comp`) — we match pristine. Everything else in
+ * the section is byte-identical to both.
  */
 class TypeDisplayParityPositionsTest {
 
@@ -61,12 +68,24 @@ class TypeDisplayParityPositionsTest {
         enum One { X = 1, Y = 2 }
         enum Comp { A = 1, B = 2 }
         enum Other { Z = 1 }
+        enum Str { S = "s", T = "t" }
+        const enum Konst { K = 1, L = 2 }
+        enum Het { N = 0, M = "m" }
+        enum Bits { P = 1 << 0, Q = 1 << 1 }
+        namespace Ns { export enum Inner { I, J } }
         declare const sU: "a" | "b";
         declare const nU: 1 | 2;
         declare const mU: "a" | 1;
         declare const s1: "a";
         declare const em: One.X;
         declare const eu: One.X | Comp.B;
+        declare const eus: One.X | One.Y;
+        declare const est: Str.S | Str.T;
+        declare const es: Str.S;
+        declare const ek: Konst.K;
+        declare const eh: Het.N;
+        declare const eb: Bits.P;
+        declare const en: Ns.Inner.I;
         declare function argNum(p: number): void;
         declare function argStr(p: string): void;
         declare function argNever(p: never): void;
@@ -75,6 +94,9 @@ class TypeDisplayParityPositionsTest {
         declare function argOne23(p: 123): void;
         declare function argRest(...p: number[]): void;
         declare function argObj(p: { m: number }): void;
+        declare function argRestS(...p: string[]): void;
+        declare function argObjS(p: { m: string }): void;
+        declare let sv: string;
 
     """.trimIndent()
 
@@ -293,20 +315,94 @@ class TypeDisplayParityPositionsTest {
         )
     }
 
-    // --------------------------- (b2) the ENUM-MEMBER arm is measured and REFUSED here
+    // ------------------------ (PARITY.2) the ENUM-MEMBER arm of getBaseTypeOfLiteralType
+    //
+    // tsc's `getBaseTypeOfEnumLikeType`: an enum MEMBER generalizes to the ENUM it belongs
+    // to, at every target that cannot hold a top-level singleton, at every emitter. Every
+    // expected string below is transcribed from a run of BOTH references over one scratch
+    // project, except the two called out at their own pins.
 
     @Test
-    fun `negative control - an enum member source is unchanged by this round`() {
-        // The enum half of `getBaseTypeOfLiteralType` is NOT wired — see
-        // `Checker.baseTypeOfLiteralType`'s KDoc for the measurement and the reason.
-        // This pin is a CONTROL that the round did not move it, not a pin of the
-        // divergence: it asserts what BOTH this compiler and the (REL.2) enum-narrowing
-        // probe families rely on today.
+    fun `an enum member DECLARATION generalizes to its enum`() {
         assert(
             only("const d: string = em;", 2322).message ==
-                "Type 'One.X' is not assignable to type 'string'."
+                "Type 'One' is not assignable to type 'string'."
         )
     }
+
+    @Test
+    fun `an enum member ASSIGNMENT generalizes to its enum`() {
+        assert(
+            only("function f() { sv = em; }", 2322).message ==
+                "Type 'One' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `an enum member ARGUMENT generalizes to its enum`() {
+        assert(
+            only("argStr(em);", 2345).message ==
+                "Argument of type 'One' is not assignable to parameter of type 'string'."
+        )
+    }
+
+    @Test
+    fun `an enum member REST argument generalizes to its enum`() {
+        assert(
+            only("argRestS(em);", 2345).message ==
+                "Argument of type 'One' is not assignable to parameter of type 'string'."
+        )
+    }
+
+    @Test
+    fun `an enum member RETURN generalizes to its enum`() {
+        assert(
+            only("function r(): string { return em; }", 2322).message ==
+                "Type 'One' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `an enum member OBJECT-LITERAL member generalizes to its enum`() {
+        assert(
+            only("const o: { m: string } = { m: em };", 2322).message ==
+                "Type 'One' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `an enum member in an object literal passed as an ARGUMENT generalizes`() {
+        assert(
+            only("argObjS({ m: em });", 2322).message ==
+                "Type 'One' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `an enum member in a NESTED object literal generalizes`() {
+        assert(
+            only("const o: { a: { m: string } } = { a: { m: em } };", 2322).message ==
+                "Type 'One' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `an enum member in an object literal in a RETURN generalizes`() {
+        assert(
+            only("function r(): { m: string } { return { m: em }; }", 2322).message ==
+                "Type 'One' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `an enum member generalizes against a named interface target`() {
+        assert(
+            only("const x: Iface = em;", 2322).message ==
+                "Type 'One' is not assignable to type 'Iface'."
+        )
+    }
+
+    // ---- the three targets tsc SUPPRESSES the generalization for
 
     @Test
     fun `negative control - a never target keeps the enum member`() {
@@ -317,10 +413,129 @@ class TypeDisplayParityPositionsTest {
     }
 
     @Test
+    fun `negative control - a never parameter keeps the enum member ARGUMENT`() {
+        assert(
+            only("argNever(em);", 2345).message ==
+                "Argument of type 'One.X' is not assignable to parameter of type 'never'."
+        )
+    }
+
+    @Test
+    fun `negative control - a never return type keeps the enum member`() {
+        assert(
+            only("function r(): never { return em; }", 2322).message ==
+                "Type 'One.X' is not assignable to type 'never'."
+        )
+    }
+
+    @Test
+    fun `negative control - a never object-literal member target keeps the enum member`() {
+        assert(
+            only("const o: { m: never } = { m: em };", 2322).message ==
+                "Type 'One.X' is not assignable to type 'never'."
+        )
+    }
+
+    @Test
     fun `negative control - another enum target keeps the enum member`() {
         assert(
             only("const x: Other = em;", 2322).message ==
                 "Type 'One.X' is not assignable to type 'Other'."
+        )
+    }
+
+    @Test
+    fun `negative control - a union target holding an enum keeps the enum member`() {
+        assert(
+            only("const x: boolean | Other = em;", 2322).message ==
+                "Type 'One.X' is not assignable to type 'boolean | Other'."
+        )
+    }
+
+    // ---- a member UNION: every constituent widens, then the result dedups
+
+    @Test
+    fun `a member union of ONE enum collapses to that enum`() {
+        assert(
+            only("const d: string = eus;", 2322).message ==
+                "Type 'One' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `a member union of a STRING enum collapses to that enum`() {
+        assert(
+            only("const d: number = est;", 2322).message ==
+                "Type 'Str' is not assignable to type 'number'."
+        )
+    }
+
+    @Test
+    fun `a member union of TWO enums collapses to the two enums`() {
+        // THE ONE ROW WHERE THE TWO REFERENCES DISAGREE WITH EACH OTHER: pristine
+        // `typescript@6.0.3` prints `'One | Comp'` and tsgo 7.0.2 prints `'Comp | One'`.
+        // Union member ORDER is FORM (docs/logical-parity.md); we match pristine, which
+        // is the baseline-bearing reference.
+        assert(
+            only("const d: string = eu;", 2322).message ==
+                "Type 'One | Comp' is not assignable to type 'string'."
+        )
+    }
+
+    // ---- every enum FLAVOUR reaches the same rule
+
+    @Test
+    fun `a const enum member generalizes to its enum`() {
+        assert(
+            only("const d: string = ek;", 2322).message ==
+                "Type 'Konst' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `a string enum member generalizes to its enum`() {
+        assert(
+            only("const d: number = es;", 2322).message ==
+                "Type 'Str' is not assignable to type 'number'."
+        )
+    }
+
+    @Test
+    fun `a heterogeneous enum member generalizes to its enum`() {
+        assert(
+            only("const d: string = eh;", 2322).message ==
+                "Type 'Het' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `a computed enum member generalizes to its enum`() {
+        assert(
+            only("const d: string = eb;", 2322).message ==
+                "Type 'Bits' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `a namespace-scoped enum member generalizes to its enum`() {
+        // OURS, NOT tsc's, AND THE DIVERGENCE IS PRE-EXISTING: both references print
+        // `'Ns.Inner'` here. That prefix is tsc's `symbolToTypeNode` accessibility
+        // qualification — the (PARITY.1)(a) mechanism measured and REFUSED by (P18.14),
+        // which needs a node-builder enclosing-declaration context this `typeToString`
+        // does not have. Note the asymmetry, which is tsc's and not ours: at the `never`
+        // target below BOTH references print the member UNqualified (`'Inner.I'`), which
+        // we match byte for byte.
+        assert(
+            only("const d: string = en;", 2322).message ==
+                "Type 'Inner' is not assignable to type 'string'."
+        )
+    }
+
+    @Test
+    fun `negative control - a never target keeps a namespace-scoped enum member`() {
+        assert(
+            only("const n: never = en;", 2322).message ==
+                "Type 'Inner.I' is not assignable to type 'never'."
         )
     }
 }

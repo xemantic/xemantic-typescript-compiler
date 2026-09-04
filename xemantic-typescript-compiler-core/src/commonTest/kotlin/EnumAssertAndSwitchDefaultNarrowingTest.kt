@@ -53,9 +53,18 @@ import kotlin.test.Test
  * `an interface-target assertion still narrows` and `an unrelated enum's member
  * asserts nothing` protect.
  *
- * Probe discipline is round 762/763's: a `string` target is satisfied by no enum-shaped
- * type, so the narrowed type is always NAMED in the TS2345 message and silence can
- * never be mistaken for narrowing. The order pin removes a MIDDLE member — round 764's
+ * Probe discipline is round 762/763's, with (PARITY.2)'s correction: the shared probe is
+ * a `never` parameter, not the PRIMITIVE `string` it was until the enum arm of
+ * `Checker.baseTypeOfLiteralType` landed. Neither target is satisfied by an enum-shaped
+ * type, so the narrowed type is always NAMED in the TS2345 message and silence can never
+ * be mistaken for narrowing — but tsc's `reportRelationError` generalizes an enum-member
+ * source to its parent enum at any target that cannot hold a singleton, so at a `string`
+ * parameter `K.A | K.B`, `K.B` and the un-narrowed `K` all render `K` and these pins
+ * would go BLIND rather than red. `never` is a target tsc suppresses the generalization
+ * for, which also makes every expectation below byte-identical to tsgo 7.0.2 AND pristine
+ * `typescript@6.0.3` (measured). The interface control keeps its own `string` probe: a
+ * non-literal source is never generalized, and the round-441 `never`-parameter arm would
+ * discard its `Dog` narrow. The order pin removes a MIDDLE member — round 764's
  * first attempt removed the LAST one, whose survivors were exactly its prelude's alias,
  * so the interned union displayed the alias name instead of the member order.
  */
@@ -66,8 +75,7 @@ class EnumAssertAndSwitchDefaultNarrowingTest {
         declare function assertAB(k: K): asserts k is K.A | K.B;
         declare function assertB(k: K): asserts k is K.B;
         declare function isAB(k: K): k is K.A | K.B;
-        declare function probe(x: string): void;
-        declare function probeN(x: number): void;
+        declare function probe(x: never): void;
 
     """.trimIndent()
 
@@ -119,18 +127,13 @@ class EnumAssertAndSwitchDefaultNarrowingTest {
     fun `a literal-union switch default still narrows - the gap is enum-specific`() {
         // Round 425's DefaultClause arm; it has ALWAYS answered this, which is why the
         // switch half of this round is not a change to the switch machinery.
-        // (PARITY.1)(b-residue): the probe target is `never`, not the class's shared
-        // PRIMITIVE `probe`. The source display now takes tsc's `reportRelationError`
-        // generalization, which collapses a LITERAL UNION to its base — so a primitive
-        // target renders `string`/`number` here and the pin would go BLIND rather than
-        // red. A `never` target is the one tsc suppresses the generalization for, so the
-        // narrowed union is named in full; measured identical in tsgo 7.0.2 and pristine
-        // `typescript@6.0.3`.
+        // (PARITY.1)(b-residue) / (PARITY.2): the shared `probe` is now a `never`
+        // parameter — the one target tsc suppresses the source generalization for —
+        // which is what keeps a LITERAL UNION named in full here as well.
         narrowedTo(
             """
             type S = "a" | "b" | "c";
-            declare function probeX(x: never): void;
-            export function f(s: S) { switch (s) { case "a": break; default: probeX(s); } }
+            export function f(s: S) { switch (s) { case "a": break; default: probe(s); } }
             """.trimIndent(),
             "\"b\" | \"c\"",
         )

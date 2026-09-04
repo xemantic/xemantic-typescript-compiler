@@ -44,8 +44,21 @@ import kotlin.test.Test
  * EVERY POSITIVE PIN HERE DISCRIMINATES BY MESSAGE, and it has to: while the
  * enum -> MEMBER relation direction is still decided vacuously, a whole enum IS
  * assignable to one of its own members, so a silence-asserting pin passes on the
- * broken build too. The probe target is therefore a PRIMITIVE (`string`), which
- * rejects every enum-flavored type and NAMES the one it was given.
+ * broken build too. The probe target is therefore one that rejects every enum-flavored
+ * type and NAMES the one it was given.
+ *
+ * (PARITY.2): that target is now `never`, not the PRIMITIVE `string` it was until the
+ * enum arm of `Checker.baseTypeOfLiteralType` landed — tsc's `reportRelationError`
+ * generalizes an enum-member source to its parent enum at any target that cannot hold a
+ * singleton, so at a `string` annotation `K.A`, `K.A | K.B` and the widened `K` all read
+ * `K` and the positive pins would go BLIND rather than red. `never` is a target tsc
+ * suppresses the generalization for, and the three expectations below are byte-identical
+ * to tsgo 7.0.2 AND pristine `typescript@6.0.3` (measured). **The `let` controls keep
+ * their `string` annotation deliberately** — at a `never` target tsc reads the FLOW type
+ * of a `let` initialised from a member (`K.A`) where we read the widened declared type
+ * (`K`), so a converted control would pin a divergence instead of the widening; the
+ * widening itself stays pinned by `a let flags accumulator still accepts another member`,
+ * which is an assignment-legality pin and owes nothing to display.
  */
 class ConstEnumMemberTypeTest {
 
@@ -62,14 +75,13 @@ class ConstEnumMemberTypeTest {
         val diagnostics = diagnose(
             prelude +
                 """
-                export function f(): string {
+                export function f(): void {
                     const k = K.A;
-                    const s: string = k;
-                    return s;
+                    const s: never = k;
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2322 && it.message == "Type 'K.A' is not assignable to type 'string'." })
+        assert(diagnostics.any { it.code == 2322 && it.message == "Type 'K.A' is not assignable to type 'never'." })
     }
 
     /**
@@ -81,14 +93,13 @@ class ConstEnumMemberTypeTest {
         val diagnostics = diagnose(
             prelude +
                 """
-                export function f(): string {
+                export function f(): void {
                     const k = cond() ? K.A : K.B;
-                    const s: string = k;
-                    return s;
+                    const s: never = k;
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2322 && it.message == "Type 'K.A | K.B' is not assignable to type 'string'." })
+        assert(diagnostics.any { it.code == 2322 && it.message == "Type 'K.A | K.B' is not assignable to type 'never'." })
     }
 
     /**
@@ -100,20 +111,26 @@ class ConstEnumMemberTypeTest {
         val diagnostics = diagnose(
             prelude +
                 """
-                export function f(): string {
+                export function f(): void {
                     const k = cond() ? K.A : cond() ? K.B : K.C;
-                    const s: string = k;
-                    return s;
+                    const s: never = k;
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2322 && it.message == "Type 'K.A | K.B | K.C' is not assignable to type 'string'." })
+        assert(diagnostics.any { it.code == 2322 && it.message == "Type 'K.A | K.B | K.C' is not assignable to type 'never'." })
     }
 
     /**
      * HOLDS ON BOTH SIDES ON PURPOSE — a MUTABLE binding must still widen, or
      * `let flags = E.None; flags = E.Other` stops being legal. Asserted by MESSAGE so
      * it FIRES rather than passing by silence.
+     *
+     * (PARITY.2) keeps this one on the `string` annotation, and it is BLIND there since
+     * the generalization landed — a build that failed to widen would print `K.A` and be
+     * generalized back to `K`. It is kept because the alternative is worse: at a `never`
+     * annotation tsc reads the flow type `K.A` and we read `K`, so the converted pin
+     * would assert a divergence rather than the widening. What actually guards the
+     * widening is the assignment-legality pin below.
      */
     @Test
     fun `a let binding still widens an enum member to its enum`() {

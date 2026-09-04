@@ -69,6 +69,7 @@ class EnumExhaustionToNeverTest {
         interface Meta { kw: SK.New | SK.Import }
         declare function assertNever(x: never): never;
         declare function probe(x: string): void;
+        declare function probeX(x: never): void;
 
     """.trimIndent()
 
@@ -189,8 +190,12 @@ class EnumExhaustionToNeverTest {
 
     @Test
     fun `a partial switch default on a property access subject names the uncovered member`() {
+        // (PARITY.2): `probeX`, a `never` parameter — at the shared `string` probe tsc's
+        // `reportRelationError` generalizes an enum-member source to its parent enum, so
+        // this would read `SK` and go BLIND. Measured identical in tsgo 7.0.2 and
+        // pristine `typescript@6.0.3`.
         narrowedTo(
-            "export function f(n: Meta) { switch (n.kw) { case SK.New: break; default: probe(n.kw); } }",
+            "export function f(n: Meta) { switch (n.kw) { case SK.New: break; default: probeX(n.kw); } }",
             "SK.Import",
         )
     }
@@ -239,9 +244,18 @@ class EnumExhaustionToNeverTest {
     }
 
     @Test
-    fun `a string target names the same narrowed member - the harness discriminates`() {
+    fun `a string target still FIRES at the same position - the harness discriminates`() {
         // The silence pins above are only evidence while a non-silent twin proves the
         // argument IS being checked at that position.
+        //
+        // (PARITY.2) re-expected, and DELIBERATELY not converted to a `never` target:
+        // this pin's whole job is to be a twin at a DIFFERENT parameter type, so it stays
+        // on `string`. What it can no longer do is NAME the narrowed member — tsc's
+        // `reportRelationError` generalizes an enum-member source to its parent enum
+        // there, and `K` is exactly what tsgo 7.0.2 and pristine `typescript@6.0.3` both
+        // print for this source (measured). The member-naming witness for this class is
+        // `a partial switch default on a property access subject names the uncovered
+        // member`, which is the converted `never`-target pin above.
         narrowedTo(
             """
             export function f(k: K) {
@@ -251,7 +265,7 @@ class EnumExhaustionToNeverTest {
               probe(k);
             }
             """.trimIndent(),
-            "K.D",
+            "K",
         )
     }
 
@@ -333,7 +347,6 @@ class EnumExhaustionToNeverTest {
             prelude +
                 """
                 type L = "a" | "b" | "c";
-                declare function probeX(x: never): void;
                 export function f(s: L) { switch (s) { case "b": break; default: probeX(s); } }
                 """.trimIndent(),
         ) should {

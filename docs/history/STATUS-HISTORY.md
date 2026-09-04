@@ -1,3 +1,16 @@
+**(P18.11) — PER-MODULE EXTERNALS GENERATION: 51 MODULES OF `@types/node` COMPILE TOGETHER, → 17,196 / 0 / 3 (2026-09-04).**
+(EXT.21b): a generation is scoped to one `declare module` block plus its re-export closure
+(`export * from`, `export = <require alias>`); a global declaration renders in every generation
+unless the module shadows it; a reference to another module's declaration is spelled into that
+module's Kotlin package under the same identity evidence, with first-wins naming keyed per
+module. 51 generations, 51 packages, compiled TOGETHER at 0 metadata and 0 Kotlin/JS errors:
+`Socket` in both `node.dgram` and `node.net`, `Module` in both `node.module` and `node.vm`,
+`declared again by another file` 57 → 2 (the residue is global-vs-global and a `ts5.6/`
+duplicate). rxjs, `typescript.d.ts` and the flattened control are byte-identical. 13 pins, eight
+ablation arms with distinct red sets; externals 275/0. Cross-module HERITAGE is refused loudly
+and queued as (EXT.24): admitting it measured 184 `hides member of supertype` + 27 `inherits
+conflicting members`, because `Inheritance` is built over one generation.
+
 **(P18.10) — THE CI HALF OF THE KOTLIN/JS GATE, THE README REPOSITIONING, AND THE EXTERNALS PACKAGE SCHEME MEASURED RATHER THAN PROPOSED, 17,150 → 17,169 / 0 / 3 (2026-09-03).**
 Three owner decisions answered. **(EXT.17)**: the Kotlin/JS stdlib klib is now DECLARED by the
 build (`dependencyScope` + `resolvable`, artifact-only `@klib` notation so no Kotlin/JS platform

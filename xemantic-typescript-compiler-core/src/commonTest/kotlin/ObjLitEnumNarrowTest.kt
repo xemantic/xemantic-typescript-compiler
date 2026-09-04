@@ -50,12 +50,21 @@ import kotlin.test.Test
  *
  * EVERY POSITIVE PIN DISCRIMINATES BY MESSAGE — a whole enum is still vacuously
  * assignable to a member target, so a silence pin would pass on the broken build.
+ *
+ * (PARITY.2): the probe is a `never` parameter, not the PRIMITIVE `string` it was until
+ * the enum arm of `Checker.baseTypeOfLiteralType` landed. tsc's `reportRelationError`
+ * generalizes an enum-member source to its parent enum at any target that cannot hold a
+ * singleton, so at a `string` parameter the narrowed `K.A | K.B` and the un-narrowed `K`
+ * render the SAME string and every pin here would go BLIND rather than red. Every
+ * expectation below is byte-identical to tsgo 7.0.2 AND pristine `typescript@6.0.3`,
+ * measured — except `an object-literal property initialised from a member expression is
+ * unaffected`, which carries its own note.
  */
 class ObjLitEnumNarrowTest {
 
     private val prelude = """
         enum K { A, B, C, D }
-        declare function probe(s: string): number;
+        declare function probe(s: never): number;
         declare function isAB(k: K): k is K.A | K.B;
     """.trimIndent() + "\n"
 
@@ -74,7 +83,7 @@ class ObjLitEnumNarrowTest {
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K.A | K.B' is not assignable to parameter of type 'string'." })
+        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K.A | K.B' is not assignable to parameter of type 'never'." })
     }
 
     /**
@@ -91,7 +100,7 @@ class ObjLitEnumNarrowTest {
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K.A' is not assignable to parameter of type 'string'." })
+        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K.A' is not assignable to parameter of type 'never'." })
     }
 
     /**
@@ -115,7 +124,7 @@ class ObjLitEnumNarrowTest {
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K.A | K.B' is not assignable to parameter of type 'string'." })
+        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K.A | K.B' is not assignable to parameter of type 'never'." })
     }
 
     /**
@@ -132,7 +141,7 @@ class ObjLitEnumNarrowTest {
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K.A | K.B' is not assignable to parameter of type 'string'." })
+        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K.A | K.B' is not assignable to parameter of type 'never'." })
     }
 
     /**
@@ -149,12 +158,19 @@ class ObjLitEnumNarrowTest {
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K' is not assignable to parameter of type 'string'." })
+        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K' is not assignable to parameter of type 'never'." })
     }
 
     /**
      * HOLDS ON BOTH SIDES ON PURPOSE — a member EXPRESSION as the value was already
      * a member type (round 742) and owes nothing to this acceptance.
+     *
+     * (PARITY.2) MEASURED DIVERGENCE, recorded rather than weakened: at this `never`
+     * target tsgo 7.0.2 and pristine `typescript@6.0.3` both read `'K'`, because tsc
+     * WIDENS a mutable object-literal property's enum member to its enum exactly as it
+     * widens a `let`. We read `'K.A'`. The expectation below is OURS, and it is what
+     * makes this pin discriminate the round-742 path at all; a `string` target would
+     * agree with tsc (`'K'`) and see nothing.
      */
     @Test
     fun `an object-literal property initialised from a member expression is unaffected`() {
@@ -166,7 +182,7 @@ class ObjLitEnumNarrowTest {
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K.A' is not assignable to parameter of type 'string'." })
+        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'K.A' is not assignable to parameter of type 'never'." })
     }
 
     /**
@@ -185,7 +201,7 @@ class ObjLitEnumNarrowTest {
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'Z' is not assignable to parameter of type 'string'." })
+        assert(diagnostics.any { it.code == 2345 && it.message == "Argument of type 'Z' is not assignable to parameter of type 'never'." })
     }
 
     /**

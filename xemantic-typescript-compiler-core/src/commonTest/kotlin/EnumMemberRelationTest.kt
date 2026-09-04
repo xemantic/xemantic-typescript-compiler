@@ -250,14 +250,19 @@ class EnumMemberRelationTest {
 
     @Test
     fun `an enum member type prints qualified by its enum`() {
+        // (PARITY.2): a `never` parameter, not a `string` one. This pin's subject is the
+        // MEMBER rendering, and a `string` target now takes tsc's `reportRelationError`
+        // generalization (`Argument of type 'E'`), which would hide exactly what is
+        // being pinned. `never` is a target tsc suppresses the generalization for;
+        // measured byte-identical in tsgo 7.0.2 and pristine `typescript@6.0.3`.
         val messages = diagnose(
             """
             enum E { A, B }
-            declare function take(s: string): void
+            declare function take(s: never): void
             take(E.A)
             """,
         ).filter { it.code == 2345 }.map { it.message }
-        assert(messages == listOf("Argument of type 'E.A' is not assignable to parameter of type 'string'."))
+        assert(messages == listOf("Argument of type 'E.A' is not assignable to parameter of type 'never'."))
     }
 
     /**

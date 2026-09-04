@@ -250,11 +250,16 @@ class NamespaceBodyResolutionTest {
             export namespace N {
                 export enum LE { Q = 1, R = 2 }
                 export const k: LE.Q = LE.Q;
-                export const bad: string = LE.Q;
+                export const bad: never = LE.Q;
             }
             """
         )
-        assert(messages(d, 2322) == listOf("Type 'LE.Q' is not assignable to type 'string'."))
+        // (PARITY.2): a `never` annotation, not a `string` one — since the enum arm of
+        // `Checker.baseTypeOfLiteralType` landed, a `string` target generalizes the
+        // member to `LE` and this resolution pin would no longer name the member.
+        // `never` is one of the three targets tsc suppresses the generalization for, and
+        // the row is byte-identical to tsgo 7.0.2 and pristine `typescript@6.0.3`.
+        assert(messages(d, 2322) == listOf("Type 'LE.Q' is not assignable to type 'never'."))
     }
 
     @Test
@@ -268,10 +273,12 @@ class NamespaceBodyResolutionTest {
             }
 
             // @Filename: use.ts
-            export const p: boolean = N.m;
+            export const p: never = N.m;
             """
         )
-        assert(messages(d, 2322) == listOf("Type 'LE.Q' is not assignable to type 'boolean'."))
+        // (PARITY.2): see the note on the pin above — a `boolean` target would now
+        // generalize the member to `LE`.
+        assert(messages(d, 2322) == listOf("Type 'LE.Q' is not assignable to type 'never'."))
     }
 
     // --- negative controls ------------------------------------------------------------

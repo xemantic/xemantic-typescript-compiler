@@ -47,8 +47,14 @@ import kotlin.test.Test
  * fired still fires and only its DISPLAY changes.
  *
  * Probe discipline: the target type is what discriminates here, so every `never`-target
- * pin has a `string`-target twin — `a string target names the same narrowed member`
- * fails if the harness ever stops distinguishing the two. The controls are the two ways
+ * pin has a `string`-target twin — `a string target still FIRES at the same position`
+ * fails if the harness ever stops checking that argument at all. (PARITY.2) re-expected
+ * that twin: since the enum arm of `Checker.baseTypeOfLiteralType` landed a `string`
+ * target generalizes an enum-member source to its parent enum, so the twin reads `K`
+ * where it used to read `K.D`. That IS tsc's answer there (measured on tsgo 7.0.2 and
+ * pristine `typescript@6.0.3`), and there is NO other target that both reports and keeps
+ * the member at an argument position here — a literal parameter and an enum parameter are
+ * both silent ((CHK.83)) — so the twin can no longer name the member and says so. The controls are the two ways
  * the exception could go wrong: widening it out of the enum sub-case (the two interface
  * pins, which reach the arm through a ternary and an early return rather than an `if`
  * BLOCK, so they genuinely exercise the discard) and widening it past the owner rule
@@ -159,16 +165,20 @@ class EnumNeverParamNarrowingTest {
     // ---- controls: identical before and after ----
 
     @Test
-    fun `negative control - a string target names the same narrowed member`() {
-        // The twin of the first target. If this ever diverges from `K.D` the harness has
-        // stopped discriminating on the PARAMETER type, which is the whole subject here.
+    fun `negative control - a string target still FIRES at the same position`() {
+        // The twin of the first target: the same source at an ORDINARY parameter must
+        // still be argument-checked, so a TS2345 fires. (PARITY.2): it names the
+        // GENERALIZED enum `K` rather than the narrowed `K.D`, which is what tsgo 7.0.2
+        // and pristine `typescript@6.0.3` both print at a `string` parameter for this
+        // source; the member-naming half of the twin lives at the `never`-target pins
+        // above, and nothing else at an argument position can carry it.
         narrowedTo(
             """
             export function f(k: K) {
               switch (k) { case K.A: break; case K.B: break; case K.C: break; default: probe(k); }
             }
             """.trimIndent(),
-            "K.D",
+            "K",
         )
     }
 

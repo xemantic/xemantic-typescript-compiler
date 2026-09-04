@@ -52,9 +52,17 @@ import kotlin.test.Test
  *    of its two argument shapes, or leaking out of the enum sub-case into the
  *    corpus-pinned Interface arm beside it (the last three).
  *
- * The probe discipline is round 762/763's: a `string` target is satisfied by no
+ * The probe discipline is round 762/763's: neither probe target is satisfied by an
  * enum-shaped type, so the narrowed type is always NAMED in the TS2345 message and
  * silence can never be mistaken for narrowing.
+ *
+ * (PARITY.2): the two ENUM walk-path pins use `probeX`, a `never` parameter, because
+ * tsc's `reportRelationError` generalizes an enum-member source to its parent enum at a
+ * `string` parameter — so they would read `K` for every narrow and go BLIND. The
+ * INTERFACE control keeps the `string` probe: the round-441 `never`-parameter arm
+ * discards a narrowed result that is not `never` outside its enum exception, so at a
+ * `never` target it would read the declared `Node0` however the subtype test behaved
+ * (measured: tsc reads `Ident0` there, we read `Node0`).
  */
 class EnumArgumentSecondChanceTest {
 
@@ -63,6 +71,7 @@ class EnumArgumentSecondChanceTest {
         declare function isAB(k: K): k is K.A | K.B;
         declare function takeK(k: K): void;
         declare function probe(x: string): void;
+        declare function probeX(x: never): void;
 
     """.trimIndent()
 
@@ -114,7 +123,7 @@ class EnumArgumentSecondChanceTest {
 
     @Test
     fun `a rejecting parameter still names the narrowed type for an identifier argument`() {
-        narrowedTo("export function f(k: K) { return isAB(k) ? probe(k) : 0; }", "K.A | K.B")
+        narrowedTo("export function f(k: K) { return isAB(k) ? probeX(k) : 0; }", "K.A | K.B")
     }
 
     @Test
@@ -124,7 +133,7 @@ class EnumArgumentSecondChanceTest {
         narrowedTo(
             """
             interface Holder { k: K }
-            export function g(h: Holder) { return isAB(h.k) ? probe(h.k) : 0; }
+            export function g(h: Holder) { return isAB(h.k) ? probeX(h.k) : 0; }
             """.trimIndent(),
             "K.A | K.B",
         )

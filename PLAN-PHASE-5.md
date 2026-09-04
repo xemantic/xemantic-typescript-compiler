@@ -25,6 +25,82 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.16) — the enum display generalization lands, and the pins it would have blinded become tsc-verifiable instead (2026-09-04)
+
+**Full suite after the round: 17,286 → 17,308 / 0 / 3 — exactly the +22 new pins, no baseline moved, no `LogicalParityDivergence`, as predicted** (run by the orchestrating session).
+
+**(PARITY.2) CLOSED — the conversion was the round, and the population had to be
+re-derived to find it.** The queue named 13 classes / 47 assertions from a grep-based
+sweep; a MECHANICAL re-derivation (build the arm, run **all 170** core test classes whose
+fixtures declare a TypeScript `enum`, read the failures off the XMLs) says **14 classes,
+45 tests**. The extra one is the whole point of not trusting the list:
+`IndexedAccessOnInstantiationTest` expects `'ModifierSK'` — a type ALIAS name for a member
+union — so no grep for a dotted member rendering can see it, and it is the only pin in the
+population whose expectation is an alias. Two more the sweep would have mis-classified in
+the other direction: `EnumNegativeNarrowingTest`'s and `EnumArgumentSecondChanceTest`'s
+INTERFACE controls are NOT convertible, because the round-441 `never`-parameter arm
+DISCARDS every narrowed result that is not `never` outside its enum exception (measured:
+at a `never` target tsc reads `Ident0` and we read the declared `Node0`).
+
+**Every converted expectation is verified against BOTH references, and 50 of the 54 rows
+are byte-identical to them.** One scratch project carrying every converted fixture, run
+through `tools/tsgo-7.0.2/lib/tsc` and pristine `typescript@6.0.3` — which agree with each
+other on all 54 — then through our AFTER binary. The four that differ are all PRE-EXISTING
+and all recorded at their own pins: our alias display for an interned member union
+((INC.27)), our `K.A` where tsc widens a mutable object-literal property to `K`, and two
+rows of a missing TS2367 for an impossible enum-vs-enum equality.
+
+**Three pins were NOT converted, and saying which is part of the deliverable.** The two
+interface controls above (the discard). `ConstEnumMemberTypeTest`'s `let` control, because
+at a `never` annotation tsc reads the FLOW type of a `let` initialised from a member
+(`K.A`) where we read the widened declared type (`K`) — converting it would pin a
+divergence instead of the widening, which stays pinned by the assignment-legality pin
+beside it; it is BLIND at `string` and the note says so. And the two `string`-target twins
+(`EnumExhaustionToNeverTest`, `EnumNeverParamNarrowingTest`) are re-expected to the
+GENERALIZED `K` rather than moved: their job is to be a twin at a DIFFERENT target kind, and
+`K` is exactly what both references print there. **A finding rather than a weakening: at an
+ARGUMENT position there is now NO non-`never` target that both reports and keeps the member
+here** — a literal parameter and an enum parameter are both silent ((CHK.83)) — so the
+member-naming half of that twin cannot be preserved and the note records where it moved.
+
+**The corpus prediction was made from an enumeration, not a sample, and held.** All 3,145
+active `.errors.txt` baselines scanned: **135** declare an enum; exactly **2** carry an
+assignability source (top-level OR chain) naming a member of an enum they declare
+(`enumLiteralAssignableToEnumInsideUnion`, `inferFromGenericFunctionReturnTypes3`), and
+both sit at suppressing targets; three more (`enumAssignmentCompat3`/`6`/`7`) carry a
+dotted source that is an enum's OWN type qualified by a NAMESPACE, which this rule does not
+touch. All 135 families run: **715 subtests, 0 moved**. No `LogicalParityDivergence` needed.
+
+**Ablation, one mistake at a time, five arms.** a1 the enum arm of
+`getBaseTypeOfLiteralType` (**20 RED** — every generalize pin, every flavour, every union,
+and both re-expected twins; every keep pin and every converted `never`-target narrowing pin
+GREEN, which is the receipt that the conversion does not depend on the fix); a2
+`isUnitLikeType`'s `EnumLiteral` admission (**3 RED**, the member-union family — a NESTED
+red set inside a1's, recorded as such rather than claimed independent, since a1 is strictly
+stronger); a3 the `never` guard in `relationErrorSourceDisplayType` (**73 RED** across 12
+classes — it was a 2-pin arm last round and is now what the whole conversion rests on); a4
+`ts2322KeepsSourceLiteral`'s enum-flavoured-target arm (**9 RED**, the keep family,
+disjoint from a1 and a3); a5 `canonicalEnumSymbol` inside `baseTypeOfEnumLikeType`
+(**0 RED** — a measured REDUNDANT guard, kept with its reason in the KDoc, per round 807).
+Source restored from a snapshot (not `git checkout`, since the round is uncommitted),
+rebuilt, and the restored `Checker.class` sha256 matched the gated AFTER binary; the later
+KDoc-only edit was proved bytecode-identical with `javap -c -p | grep -v 'line'` ((CHK.57)).
+
+**Gates.** 170 at-risk core classes + the 135 at-risk corpus families: **2,631 / 0**
+(2,010 → 2,032 on the class half, exactly the +22 new pins in
+`TypeDisplayParityPositionsTest`, 27 → 49 `@Test`). externals **290 / 0**, project
+**848 / 0**, kir at-risk **41 / 0**. `cost_gate.py` **exit 0** (`output.errors` 46
+unchanged; largest move `globals.lookups` −0.49%, i.e. the generalization does LESS work).
+`huge_methods.py --fail-over 0` **exit 0**. 8-profile grid `PARITY1_MARKER=baseTypeOfEnumLikeType`:
+all eight **added=0 removed=0** — a CONTROL, per (P18.15)'s count that 0 of its 417 rows
+carries an assignability message. **Suite prediction: 17,286 → 17,308 / 0 / 3.**
+
+**Four residues queued** — (CHK.84) `never` is unassignable at a RETURN position here and
+nowhere else; (CHK.85) a mutable object-literal property, and a `let`, do not widen an enum
+member the way tsc's flow/widening does; (CHK.86) no TS2367 and no `never` narrow for an
+impossible enum-vs-enum equality; and (PARITY.3) the namespace prefix a generalized
+namespace-scoped enum loses.
+
 ### Round (P18.15) — the literal-union collapse at every position, and an enum generalization refused for a reason worth more than the fix (2026-09-04)
 
 **(PARITY.1) CLOSED.** The queue item named three emitters; a trace over the `Diagnostic`
@@ -2311,22 +2387,55 @@ counter, which is the (INC-closure) directive holding by construction.
   MEANING, not form). ORIGINAL ITEM: the two form divergences (CHK.81)/(CHK.82) measured and
   refused as fixes.
 
-- [ ] **(PARITY.2) THE ENUM DISPLAY GENERALIZATION — BUILT, MEASURED, REFUSED, AND ITS REMEDY
-  MEASURED TOO ((P18.15)).** tsc generalizes an enum-member SOURCE to its parent enum wherever
-  the target cannot hold a singleton (`const d: string = em` → `Type 'ZzzEnum'`), at all six
-  emitters, and prints the MEMBER at exactly the three targets where it suppresses the
-  generalization (`never`, a literal, an enum-flavoured target) — which is where we already print
-  the member, row for row. So it is FORM, not the value-set difference (P18.14) recorded. With
-  the enum arm wired (plus `EnumLiteral` in `isUnitLikeType`), all 80 at-risk baselines stayed
-  GREEN and all 8 profiles unchanged — **what broke was 47 assertions in 13 hand-written classes,
-  which went BLIND rather than red**: the whole (REL.2) enum-narrowing arc reads the narrowed type
-  out of the message at a PRIMITIVE probe target by explicit design, and generalizing collapses
-  `K.A`, `K.A | K.B` and the un-narrowed `K` to one string. **The remedy is measured and works:**
-  re-point those probes at a `never` target, which tsc suppresses the generalization for — nine
-  narrowing shapes then read byte-identical to tsgo AND pristine, which those pins cannot claim
-  today (`'K.A'` at a primitive target is our-specific). A mechanical sweep puts ~25 classes in
-  that population; three were converted this round because the literal half forced them. The
-  conversion is the round; the seam is `Checker.baseTypeOfLiteralType`'s KDoc.
+- [x] **(PARITY.2) DONE 2026-09-04 ((P18.16) note) — the enum arm of
+  `getBaseTypeOfLiteralType` is wired (`Checker.baseTypeOfEnumLikeType`, plus `EnumLiteral`
+  in `isUnitLikeType` for the member-union case), and the ~25-class population it would
+  have blinded was re-derived MECHANICALLY (14 classes, 45 tests — one of them,
+  `IndexedAccessOnInstantiationTest`, invisible to any grep because its expectation is a
+  type ALIAS name) and converted to `never` probe targets, which makes those pins
+  byte-identical to tsgo 7.0.2 AND pristine 6.0.3 for the first time. Three pins refused
+  conversion with their reasons; two `string`-target twins re-expected to the generalized
+  enum. 22 new pins, five arms; 715 at-risk corpus subtests from an enumeration of all
+  3,145 active baselines, 0 moved; no `LogicalParityDivergence`.** ORIGINAL ITEM: tsc
+  generalizes an enum-member SOURCE to its parent enum wherever the target cannot hold a
+  singleton, at all six emitters, and prints the MEMBER at exactly the three targets where
+  it suppresses the generalization — so it is FORM, and the blocker was the (REL.2) probe
+  discipline, not the corpus.
+
+- [ ] **(CHK.84) `never` IS NOT ASSIGNABLE AT A *RETURN* POSITION HERE, AND ONLY THERE —
+  measured ((P18.16)).** `declare const n: never; function f(): string { return n; }` reports
+  `TS2322: Type 'never' is not assignable to type 'string'.` where tsgo 7.0.2 and pristine
+  `typescript@6.0.3` are both silent; the same value at a DECLARATION (`const s: string = n`)
+  and at an ARGUMENT (`takeStr(n)`) is correctly silent in all three. An ours-only false
+  positive, found because it forced every converted (PARITY.2) declaration fixture to drop
+  its `return s`.
+
+- [ ] **(CHK.85) A MUTABLE BINDING DOES NOT WIDEN AN ENUM MEMBER THE WAY tsc DOES, IN TWO
+  PLACES — measured ((P18.16)).** `probe({ v: K.A }.v)` at a `never` parameter reads
+  `'K.A'` here and `'K'` in BOTH references: tsc widens a mutable object-literal property's
+  enum member to its enum exactly as it widens a `let`. The mirror at the same seam: for
+  `let k = K.A; const s: never = k`, tsc reads the FLOW type `'K.A'` and we read the widened
+  declared type `'K'`. Both were invisible before the (PARITY.2) generalization, because a
+  `string` target renders `K` for every one of them.
+
+- [ ] **(CHK.86) AN IMPOSSIBLE ENUM-vs-ENUM EQUALITY PRODUCES NEITHER TS2367 NOR A `never`
+  NARROW — measured ((P18.16)).** For `if (k === J.X) { probe(k) }` with `k: K` and an
+  unrelated enum `J`, both references emit `TS2367: This comparison appears to be
+  unintentional because the types 'K' and 'J' have no overlap.` and NOTHING else (the branch
+  narrows to `never`, which is assignable to every parameter). We emit no TS2367 and report
+  the un-narrowed `K` instead. Two (REL.2) negative controls assert our answer and are
+  ours-only by construction; they say so.
+
+- [ ] **(PARITY.3) A GENERALIZED NAMESPACE-SCOPED ENUM LOSES ITS NAMESPACE PREFIX —
+  measured ((P18.16)).** `const d: string = en` with `en: Ns.Inner.I` reads `Type 'Inner'`
+  here and `Type 'Ns.Inner'` in both references. Note tsc's own asymmetry, which we match:
+  at a `never` target BOTH references print the MEMBER unqualified (`'Inner.I'`), exactly as
+  we do. The prefix is tsc's `symbolToTypeNode` accessibility qualification — the
+  (PARITY.1)(a) mechanism measured and REFUSED by (P18.14), which needs a node-builder
+  enclosing-declaration context this `typeToString` does not have; this is a second,
+  cheaper-looking instance of it (a NAMESPACE chain rather than a module specifier) and may
+  be reachable through `enumTypeQualifiedDisplay`, which already builds that path for the
+  same-string retry. Corpus-gated: 3 active baselines print a namespace-qualified enum name.
 
 - [ ] **(CHK.83) THE ARGUMENT-SIDE REMAINDER OF (P18.14)(c)'s HOLE, MEASURED ((P18.15)) — a
   primitive-only union argument against an ARRAY, FUNCTION, INTERSECTION, ENUM or UNION parameter

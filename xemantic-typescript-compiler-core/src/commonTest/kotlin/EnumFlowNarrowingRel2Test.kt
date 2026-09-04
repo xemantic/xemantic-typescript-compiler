@@ -53,9 +53,18 @@ import kotlin.test.Test
  * `K.A | K.B | ...`: [Checker.narrowByCallPredicate]'s single-type arm already
  * answers correctly once it is reached.
  *
- * **The instrument is a PRIMITIVE probe target.** `declare function probe(x: string)`
- * cannot be satisfied by anything enum-shaped, so the narrowed type is always named
- * in the TS2345 message, and "no diagnostic" can never be mistaken for "narrowed".
+ * **The instrument is a `never` probe target** — (PARITY.2); it was a PRIMITIVE
+ * (`declare function probe(x: string)`) until the enum arm of
+ * `Checker.baseTypeOfLiteralType` landed. Neither target can be satisfied by anything
+ * enum-shaped, so the narrowed type is always named in the TS2345 message and "no
+ * diagnostic" can never be mistaken for "narrowed"; what changed is that a PRIMITIVE
+ * target now takes tsc's `reportRelationError` generalization, which renders `K.A`,
+ * `K.A | K.B` and the un-narrowed `K` as one string — so every pin here would have gone
+ * BLIND rather than red. `never` is one of the three targets tsc suppresses the
+ * generalization for, which additionally makes every expectation below byte-identical to
+ * tsgo 7.0.2 AND pristine `typescript@6.0.3` (measured), where `'K.A'` at a `string`
+ * parameter was ours-only.
+ *
  * A branded-object target reports silence for a member-less enum type (they relate
  * vacuously — the very leniency (REL.2) is about) and a `number` target accepts every
  * numeric enum; round 762 lost a probe to the first and this file nearly lost one to
@@ -67,7 +76,7 @@ class EnumFlowNarrowingRel2Test {
         enum K { A, B, C, D }
         enum J { X = 100, Y = 200 }
         type U = K.A | K.B | K.C;
-        declare function probe(x: string): void;
+        declare function probe(x: never): void;
         declare function isAB(k: K): k is K.A | K.B;
 
     """.trimIndent()
@@ -158,18 +167,10 @@ class EnumFlowNarrowingRel2Test {
 
     @Test
     fun `negative control - a numeric literal union still narrows by value`() {
-        // (PARITY.1)(b-residue): the probe target is `never`, not the class's shared
-        // PRIMITIVE `probe`. The source display now takes tsc's `reportRelationError`
-        // generalization, which collapses a LITERAL UNION to its base — so a primitive
-        // target renders `string`/`number` here and the pin would go BLIND rather than
-        // red. A `never` target is the one tsc suppresses the generalization for, so the
-        // narrowed union is named in full; measured identical in tsgo 7.0.2 and pristine
-        // `typescript@6.0.3`.
-        narrowedTo(
-            "declare function probeX(x: never): void;\n" +
-                "export function f(k: 1 | 2 | 3) { if (k === 1) { probeX(k); } }",
-            "1",
-        )
+        // (PARITY.1)(b-residue) / (PARITY.2): the shared `probe` is now a `never`
+        // parameter — the one target tsc suppresses the source generalization for —
+        // which is what keeps a LITERAL UNION named in full here as well.
+        narrowedTo("export function f(k: 1 | 2 | 3) { if (k === 1) { probe(k); } }", "1")
     }
 
     @Test
