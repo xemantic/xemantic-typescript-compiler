@@ -322,12 +322,19 @@ class EnumExhaustionToNeverTest {
 
     @Test
     fun `negative control - a literal union partial switch default still names the survivors`() {
+        // (PARITY.1)(b-residue): the probe target is `never`, not the class's shared
+        // PRIMITIVE `probe`. The source display now takes tsc's `reportRelationError`
+        // generalization, which collapses a LITERAL UNION to its base — so a primitive
+        // target renders `string`/`number` here and the pin would go BLIND rather than
+        // red. A `never` target is the one tsc suppresses the generalization for, so the
+        // narrowed union is named in full; measured identical in tsgo 7.0.2 and pristine
+        // `typescript@6.0.3`.
         diagnose(
             prelude +
                 """
                 type L = "a" | "b" | "c";
-                declare function probeN(x: number): void;
-                export function f(s: L) { switch (s) { case "b": break; default: probeN(s); } }
+                declare function probeX(x: never): void;
+                export function f(s: L) { switch (s) { case "b": break; default: probeX(s); } }
                 """.trimIndent(),
         ) should {
             have(any { it.code == 2345 && it.message.contains("""Argument of type '"a" | "c"'""") })

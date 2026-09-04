@@ -158,7 +158,18 @@ class EnumFlowNarrowingRel2Test {
 
     @Test
     fun `negative control - a numeric literal union still narrows by value`() {
-        narrowedTo("export function f(k: 1 | 2 | 3) { if (k === 1) { probe(k); } }", "1")
+        // (PARITY.1)(b-residue): the probe target is `never`, not the class's shared
+        // PRIMITIVE `probe`. The source display now takes tsc's `reportRelationError`
+        // generalization, which collapses a LITERAL UNION to its base — so a primitive
+        // target renders `string`/`number` here and the pin would go BLIND rather than
+        // red. A `never` target is the one tsc suppresses the generalization for, so the
+        // narrowed union is named in full; measured identical in tsgo 7.0.2 and pristine
+        // `typescript@6.0.3`.
+        narrowedTo(
+            "declare function probeX(x: never): void;\n" +
+                "export function f(k: 1 | 2 | 3) { if (k === 1) { probeX(k); } }",
+            "1",
+        )
     }
 
     @Test

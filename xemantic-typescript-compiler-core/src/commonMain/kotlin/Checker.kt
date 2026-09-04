@@ -108899,8 +108899,13 @@ interface DataView {
         // literal members (mirrors B69.7 in checkVarDeclAssignability).
         // `return true` against return type `string` displays as
         // `Type 'boolean' is not assignable to type 'string'`, not `'true'`.
-        val displaySourceType = if (propTypeContainsLiteral(targetType)) sourceType
-            else getWidenedLiteralType(sourceType)
+        // (PARITY.1)(b-residue): through [relationErrorSourceDisplayType], which adds the
+        // three halves this line was missing — the union arm (`return sU` with
+        // `sU: "a" | "b"` against `number` read `Type '"a" | "b"'`, tsgo/pristine read
+        // `'string'`), tsc's `never` guard (`function f(): never { return one }` with
+        // `one: "a"` read `Type 'string'`, both references read `'"a"'`) and the
+        // enum-member arm.
+        val displaySourceType = relationErrorSourceDisplayType(sourceType, targetType)
         val displaySource = typeToString(displaySourceType)
         val displayTarget = if (returnTypeNode is TypeQuery && targetType is Type.Object &&
                 targetType !is Type.Interface && !targetType.callSignatures.isNullOrEmpty() &&
@@ -130514,7 +130519,45 @@ interface DataView {
      * the two TS2322 sites that need it.
      */
     private fun ts2322KeepsSourceLiteral(targetType: Type): Boolean =
-        propTypeContainsLiteral(targetType) || targetType.flags.hasAny(TypeFlags.EnumLike)
+        propTypeContainsLiteral(targetType) || targetType.flags.hasAny(TypeFlags.EnumLike) ||
+            // (PARITY.1)(b2): tsc's `typeCouldHaveTopLevelSingletonTypes` RECURSES through
+            // a union (`forEach((type as UnionType).types, typeCouldHaveTopLevelSingletonTypes)`)
+            // and an enum type is itself a union of its members there, so a target of
+            // `boolean | Foo` keeps an enum-member source. [propTypeContainsLiteral] has the
+            // union recursion but no enum arm, so the enum half has to be added here — where
+            // it stays display-only, for the reason the KDoc above gives. Measured against
+            // tsgo 7.0.2 AND pristine `typescript@6.0.3` on
+            // `enumLiteralAssignableToEnumInsideUnion`'s three shapes (`boolean | Foo`,
+            // `boolean | Foo.A`, `boolean | Foo.B`), all of which print `Type 'Foo.A'`.
+            (targetType is Type.Union && targetType.types.any { ts2322KeepsSourceLiteral(it) })
+
+    /**
+     * (PARITY.1)(b2): tsc's `getBaseTypeOfLiteralType` for ONE constituent.
+     *
+     * **The ENUM ARM IS DELIBERATELY ABSENT and its absence is a MEASURED refusal, not
+     * an oversight** — tsc's `getBaseTypeOfEnumLikeType` answers the enum a MEMBER
+     * belongs to, so `const d: string = em` with `em: One.X` reads `Type 'One'` in both
+     * tsgo 7.0.2 and pristine `typescript@6.0.3` where we read `Type 'One.X'`.
+     *
+     * The (P18.14) note filed that as a value-set difference, i.e. MEANING. **It is not
+     * one, and this round settled it**: both compilers hold the same type `One.X`, which
+     * their own output proves — at the three targets where tsc SUPPRESSES the
+     * generalization (a `never` target, a literal target, an enum-flavored target) tsc
+     * prints `One.X` exactly where we do. It is rendering, i.e. FORM.
+     *
+     * What blocks it is not the corpus — the enum arm moves **zero** baselines, measured
+     * — but the INSTRUMENT of the whole (REL.2) enum-narrowing arc: ~25 hand-written
+     * classes read a narrowed enum type out of a TS2345/TS2322 message at a **primitive**
+     * probe target, by explicit design ("The instrument is a PRIMITIVE probe target …
+     * DISCRIMINATES BY MESSAGE — `'K.A'` fixed, `'K'` ablated"). Generalizing collapses
+     * `K.A`, `K.A | K.B` and the un-narrowed `K` to one string, so 47 assertions in 13 of
+     * those classes go BLIND rather than red. Measured remedy, which also makes those pins
+     * tsc-verifiable for the first time: move the probe target to `never`, where the
+     * generalization is suppressed — nine narrowing shapes then read byte-identical to
+     * tsgo (`K.A`, `K.A | K.B`, `K.B | K.C`, `K.C | K.D`, `K`). That conversion is its own
+     * round, with the full suite as its gate.
+     */
+    private fun baseTypeOfLiteralType(t: Type): Type = getWidenedLiteralType(t)
 
     /**
      * (PARITY.1)(b): tsc's `reportRelationError` source generalization, transcribed —
@@ -130560,11 +130603,11 @@ interface DataView {
     private fun relationErrorSourceDisplayType(sourceType: Type, targetType: Type): Type {
         if (targetType === neverType || targetType.flags.hasAny(TypeFlags.Never)) return sourceType
         if (ts2322KeepsSourceLiteral(targetType)) return sourceType
-        if (sourceType !is Type.Union) return getWidenedLiteralType(sourceType)
+        if (sourceType !is Type.Union) return baseTypeOfLiteralType(sourceType)
         if (!(targetType is Type.Intrinsic || targetType is Type.Object)) return sourceType
         // tsc's `isLiteralType` over a union: EVERY constituent must be a unit type.
         if (!sourceType.types.all { isUnitLikeType(it) }) return sourceType
-        val widened = sourceType.types.map { getWidenedLiteralType(it) }
+        val widened = sourceType.types.map { baseTypeOfLiteralType(it) }
         val distinct = mutableListOf<Type>()
         for (w in widened) if (distinct.none { it === w }) distinct.add(w)
         return if (distinct.size == 1) distinct[0] else getUnionType(distinct)
@@ -130578,6 +130621,12 @@ interface DataView {
     private fun isUnitLikeType(t: Type): Boolean {
         if (t === anyType || t === errorType) return false
         if (t is Type.StringLiteral || t is Type.NumberLiteral || t is Type.BigIntLiteral) return true
+        // (PARITY.1)(b2): `EnumLiteral` is deliberately NOT admitted here — see
+        // [baseTypeOfLiteralType]. tsc's `isUnitType` is true for an enum member (its
+        // type carries `StringLiteral`/`NumberLiteral` beside `EnumLiteral`, where ours
+        // is a member-less `Type.Object` flagged `EnumLiteral` alone), so admitting it
+        // would let a member UNION reach the generalization; the two go together and are
+        // refused together.
         return t.flags.hasAny(TypeFlags.BooleanLiteral or TypeFlags.Null or TypeFlags.Undefined)
     }
 
@@ -161790,7 +161839,14 @@ interface DataView {
                         widenOptionalTargetPropType(targetPropType, targetProp, lit),
                         assignableRelation)) continue
             }
-            val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
+            // (PARITY.1)(b-residue): the object-literal MEMBER display takes the same
+            // `reportRelationError` generalization as the declaration/assignment/argument/
+            // return ones — see [relationErrorSourceDisplayType]. The bare
+            // [getWidenedLiteralType] here had NO keep-guard at all, so a `never` member
+            // target read `Type 'string'` where tsgo 7.0.2 and pristine read `'"a"'`, and a
+            // literal-union member value read `'"a" | "b"'` where both read `'string'`.
+            // The TARGET display is deliberately left on the bare widening.
+            val displaySource = typeToString(relationErrorSourceDisplayType(sourcePropType, targetPropType))
             val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
             val related = mutableListOf<Diagnostic>()
@@ -162637,26 +162693,24 @@ interface DataView {
                 return CAAS_CONTINUE
             }
             // Emit TS2345
-            // B98.r126: widen a fresh literal ARG for display UNLESS the PARAM is
-            // itself a literal type. TypeScript shows `boolean`/`string`/`number`
-            // (widened) when the target is a base type (`f(x: string)` called
-            // `f(true)` → 'boolean'), but PRESERVES the literal when the target is
-            // also a literal (`f(x: 123)` called `f(true)` → 'true', per
-            // deepKeysIndexing). getWidenedLiteralType is a no-op for non-literal
-            // args, so object/named/reference arg displays are unaffected. Verified:
-            // zero baselines show a literal-arg-vs-base-param literal display.
-            val paramIsLiteral = getWidenedLiteralType(paramType) !== paramType
-            // tsc widens a FRESH literal-expression arg (`f(true)` → 'boolean')
-            // but PRESERVES the literal type of a variable/reference arg whose
-            // flow-narrowed type is a literal (`isNever(foo)` where foo: "aaa"|"bbb"
-            // narrows to '"bbb"', exhaustiveSwitchCheckCircularity). `literalTypeOfExpression`
-            // is the freshness probe (non-null only for literal expressions/keywords).
-            // getWidenedLiteralType is a no-op for non-literal argTypes, so this is
-            // inert for every arg whose type isn't a literal.
-            val argIsFreshLiteral = literalTypeOfExpression(arg) != null
-            val argTypeStr = typeToString(
-                if (paramIsLiteral || !argIsFreshLiteral) argType else getWidenedLiteralType(argType)
-            )
+            // (PARITY.1)(b-residue): tsc's `reportRelationError` source generalization,
+            // the SAME rule the declaration and assignment displays take — see
+            // [relationErrorSourceDisplayType]. It SUBSUMES both halves of the rule that
+            // stood here, and each of the two baselines they were written for is served
+            // by the transcribed rule instead: `deepKeysIndexing`'s `f(x: 123)` called
+            // `f(true)` keeps `'true'` because the PARAM is a literal
+            // ([propTypeContainsLiteral]), and `exhaustiveSwitchCheckCircularity`'s
+            // `isNever(foo)` keeps `'"bbb"'` because the param is `never` (tsc's explicit
+            // never guard — "we really want the original type to be displayed for
+            // use-cases like 'assertNever'").
+            //
+            // What it FIXES is the freshness half, which tsc does not have: a REFERENCE
+            // argument whose type is a literal or a literal union printed un-generalized,
+            // so `argNum(sU)` with `sU: "a" | "b"` read `Argument of type '"a" | "b"'`
+            // where tsgo 7.0.2 and pristine `typescript@6.0.3` both read `'string'`, and a
+            // single-literal reference read `'"a"'` for their `'string'`. `f(true)` — the
+            // fresh case the old rule DID widen — is unchanged.
+            val argTypeStr = typeToString(relationErrorSourceDisplayType(argType, paramType))
             val paramTypeStr = typeToString(paramType)
             val start = arg.pos
             // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
@@ -162890,7 +162944,8 @@ interface DataView {
                 !(argIsNamedInstance && isSimpleCheckableType(elementType))) continue
             val ok = checkTypeRelatedTo(argType, elementType, assignableRelation)
             if (!ok) {
-                val argDisplay = typeToString(getWidenedLiteralType(argType))
+                // (PARITY.1)(b-residue): a REST argument is an argument — same rule.
+                val argDisplay = typeToString(relationErrorSourceDisplayType(argType, elementType))
                 val paramDisplay = typeToString(elementType)
                 val start = arg.pos
                 val length = expressionTrueEnd(arg) - start
@@ -166360,7 +166415,11 @@ interface DataView {
                     } ?: emptyList()
                 } else emptyList()
                 diagnostics.add(Diagnostic(
-                    message = "Type '${typeToString(getWidenedLiteralType(valueType))}' is not assignable to type '${typeToString(getWidenedLiteralType(tgtMemberType))}'.",
+                    // (PARITY.1)(b-residue): the source display takes
+                    // [relationErrorSourceDisplayType] — the nested / return-position
+                    // object-literal member reaches THIS emitter, not the two per-property
+                    // ones. The TARGET display keeps its bare widening.
+                    message = "Type '${typeToString(relationErrorSourceDisplayType(valueType, tgtMemberType))}' is not assignable to type '${typeToString(getWidenedLiteralType(tgtMemberType))}'.",
                     category = DiagnosticCategory.Error,
                     code = 2322,
                     fileName = fileName,
@@ -167939,7 +167998,14 @@ interface DataView {
                     getPropertyElaborationChain(sourcePropType, targetPropType)?.takeIf { it.isNotEmpty() } ?: continue
                 } else continue
             } else null
-            val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
+            // (PARITY.1)(b-residue): the object-literal MEMBER display takes the same
+            // `reportRelationError` generalization as the declaration/assignment/argument/
+            // return ones — see [relationErrorSourceDisplayType]. The bare
+            // [getWidenedLiteralType] here had NO keep-guard at all, so a `never` member
+            // target read `Type 'string'` where tsgo 7.0.2 and pristine read `'"a"'`, and a
+            // literal-union member value read `'"a" | "b"'` where both read `'string'`.
+            // The TARGET display is deliberately left on the bare widening.
+            val displaySource = typeToString(relationErrorSourceDisplayType(sourcePropType, targetPropType))
             val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
             val related = mutableListOf<Diagnostic>()

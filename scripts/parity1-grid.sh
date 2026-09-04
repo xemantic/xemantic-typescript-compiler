@@ -15,10 +15,16 @@ done
 a="$(sha256sum "$BEFORE/com/xemantic/typescript/compiler/Checker.class" | cut -d' ' -f1)"
 b="$(sha256sum "$AFTER/com/xemantic/typescript/compiler/Checker.class" | cut -d' ' -f1)"
 [[ "$a" == "$b" ]] && { echo "REFUSED: the two arms' Checker.class are byte-identical"; exit 1; }
-javap -p -cp "$AFTER" com.xemantic.typescript.compiler.Checker 2>/dev/null | grep -q isPrimitiveLikeType || {
-  echo "REFUSED: the AFTER arm does not hold the (PARITY.1) code"; exit 1; }
-javap -p -cp "$BEFORE" com.xemantic.typescript.compiler.Checker 2>/dev/null | grep -q isPrimitiveLikeType && {
-  echo "REFUSED: the BEFORE arm already holds the (PARITY.1) code"; exit 1; }
+# POSITIVE CONTROL — a member name the AFTER arm has and the BEFORE arm has not.
+# Per ROUND, because each round's marker is its own: (P18.14) used
+# `isPrimitiveLikeType`, (P18.15) uses `baseTypeOfLiteralType`. Override with
+# PARITY1_MARKER; a grid whose control does not separate the arms is round 853's
+# frozen instrument.
+MARKER="${PARITY1_MARKER:-baseTypeOfLiteralType}"
+javap -p -cp "$AFTER" com.xemantic.typescript.compiler.Checker 2>/dev/null | grep -q "$MARKER" || {
+  echo "REFUSED: the AFTER arm does not hold '$MARKER'"; exit 1; }
+javap -p -cp "$BEFORE" com.xemantic.typescript.compiler.Checker 2>/dev/null | grep -q "$MARKER" && {
+  echo "REFUSED: the BEFORE arm already holds '$MARKER'"; exit 1; }
 shopt -s nullglob
 profiles=()
 for d in build/bench/tsc-*; do [[ -d "$d" && -f "$d/tsconfig.json" ]] && profiles+=("$d"); done

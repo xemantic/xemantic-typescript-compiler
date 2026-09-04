@@ -25,6 +25,36 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.15) — the literal-union collapse at every position, and an enum generalization refused for a reason worth more than the fix (2026-09-04)
+
+**(PARITY.1) CLOSED.** The queue item named three emitters; a trace over the `Diagnostic`
+constructor censused **SIX** — argument (`caasTailGatesAndRelation`), rest argument
+(`checkRestArgsAgainstArrayElementType`), return (`craElaborateReturnMismatch`), and three
+object-literal paths (`emitPerPropertyMismatchesForObjectLiteral`, `caasObjLitPerPropertyMismatch`,
+`checkNestedObjLitPropTypes`, the first of which had NO keep-guard at all). All six now go through
+the one measured helper, whose keep-predicate additionally recurses through a UNION target (tsc's
+`typeCouldHaveTopLevelSingletonTypes` does), and every top-level source display in the
+`Intrinsic`/`Object`-target family matches tsgo 7.0.2 AND pristine 6.0.3 byte for byte. 27 pins,
+seven arms with disjoint red sets. **Prediction and outcome: 17,259 → 17,286 / 0 / 3, exactly the
+new pins, no baseline moved, no `LogicalParityDivergence`** — from an enumeration of all **3,145
+active** baselines over four message shapes (80 families flagged, all 80 run, 0 moved), not a
+sample.
+
+**The enum-member residue was FORM, not the MEANING (P18.14) recorded — and refusing it is the
+round's real finding.** Both references hold `ZzzEnum.A`; only tsc's DISPLAY generalizes it, by
+the same `getBaseTypeOfLiteralType` this arc transcribes. Wired, it left all 80 at-risk baselines
+and all 8 profiles unchanged and **blinded 47 assertions in 13 hand-written classes** — the
+(REL.2) enum-narrowing arc reads the narrowed type out of the message at a PRIMITIVE probe target
+by design, so generalizing collapses `K.A`, `K.A | K.B` and an un-narrowed `K` to one string:
+they go BLIND, not RED, which no gate here can see. The remedy is measured — a `never` probe
+target, which tsc suppresses the generalization for, makes nine narrowing shapes byte-identical
+to both references, something those pins cannot claim today — and three classes were converted
+because the literal half forced them; the rest is (PARITY.2). **Two instrument repairs on the
+way:** `scripts/parity1-grid.sh`'s positive-control marker was HARD-CODED to (P18.14)'s symbol
+and is now a parameter (a round-853 frozen instrument in the making), and the grid's blindness to
+display changes was re-confirmed by counting — **0 of its 417 rows carries an assignability
+message**. New MEANING residues queued as (CHK.83).
+
 ### Round (P18.14) — a primitive-only union stops being invisible to an object annotation, and a literal union starts printing the way tsc prints it (2026-09-04)
 
 **Full suite after the round: 17,236 → 17,259 / 0 / 3** — exactly the 23 new pins, **no baseline moved and no `LogicalParityDivergence` was needed**, which is what the round predicted from its enumeration of the 4 literal-union-source and 18 `not assignable to type 'never'` baselines (run by the orchestrating session).
@@ -2262,7 +2292,7 @@ counter, which is the (INC-closure) directive holding by construction.
   `docs/logical-parity.md` (FORM: identical code, span and verdict), gated by the full corpus
   suite. ORIGINAL ITEM: the four augmentation residues (CHK.78) measured and left.
 
-- [ ] **(PARITY.1) PARTLY DONE 2026-09-04 ((P18.14) note) — (c) the MEANING defect LANDED, (b)
+- [x] **(PARITY.1) CLOSED 2026-09-04 ((P18.15) note) — every position of the literal-union collapse landed (SIX emitters, not the three the item named), the enum-member residue was BUILT, MEASURED and REFUSED with its remedy recorded, and (a) stays refused with its measurement. What is left is genuinely new and queued as (PARITY.2)/(CHK.83). PARTLY DONE 2026-09-04 ((P18.14) note) — (c) the MEANING defect LANDED, (b)
   LANDED at the declaration and assignment displays, (a) MEASURED AND REFUSED. NO
   `LogicalParityDivergence` was needed: nothing was switched off, both landed halves move our
   output TOWARD pristine.** STILL OPEN under this number, both FORM: **(b-residue)** the ARGUMENT
@@ -2280,6 +2310,37 @@ counter, which is the (INC-closure) directive holding by construction.
   rendering `ZzzEnum.A` where tsgo renders the parent `ZzzEnum` (a value-set difference, i.e.
   MEANING, not form). ORIGINAL ITEM: the two form divergences (CHK.81)/(CHK.82) measured and
   refused as fixes.
+
+- [ ] **(PARITY.2) THE ENUM DISPLAY GENERALIZATION — BUILT, MEASURED, REFUSED, AND ITS REMEDY
+  MEASURED TOO ((P18.15)).** tsc generalizes an enum-member SOURCE to its parent enum wherever
+  the target cannot hold a singleton (`const d: string = em` → `Type 'ZzzEnum'`), at all six
+  emitters, and prints the MEMBER at exactly the three targets where it suppresses the
+  generalization (`never`, a literal, an enum-flavoured target) — which is where we already print
+  the member, row for row. So it is FORM, not the value-set difference (P18.14) recorded. With
+  the enum arm wired (plus `EnumLiteral` in `isUnitLikeType`), all 80 at-risk baselines stayed
+  GREEN and all 8 profiles unchanged — **what broke was 47 assertions in 13 hand-written classes,
+  which went BLIND rather than red**: the whole (REL.2) enum-narrowing arc reads the narrowed type
+  out of the message at a PRIMITIVE probe target by explicit design, and generalizing collapses
+  `K.A`, `K.A | K.B` and the un-narrowed `K` to one string. **The remedy is measured and works:**
+  re-point those probes at a `never` target, which tsc suppresses the generalization for — nine
+  narrowing shapes then read byte-identical to tsgo AND pristine, which those pins cannot claim
+  today (`'K.A'` at a primitive target is our-specific). A mechanical sweep puts ~25 classes in
+  that population; three were converted this round because the literal half forced them. The
+  conversion is the round; the seam is `Checker.baseTypeOfLiteralType`'s KDoc.
+
+- [ ] **(CHK.83) THE ARGUMENT-SIDE REMAINDER OF (P18.14)(c)'s HOLE, MEASURED ((P18.15)) — a
+  primitive-only union argument against an ARRAY, FUNCTION, INTERSECTION, ENUM or UNION parameter
+  is SILENT here and reported by both tsgo 7.0.2 and pristine 6.0.3.** (P18.14) lifted the
+  declaration/assignment/return side of `canUseTypeEngine`'s refusal; the argument gate has its
+  own admissibility. Also measured beside it: `const l1: 5 = em` (an enum member against a
+  number-literal target) is silent, and the ELABORATION sub-line picks the LAST failing
+  constituent ungeneralized (`Type '"b"'`) where tsc picks the FIRST passed through the same
+  generalization (`Type 'string'`) — the comment at that site claims it matches tsc and does not;
+  its at-risk population is every union-source chain line, so the corpus is its gate. And the
+  target-kind allowlist in `relationErrorSourceDisplayType` declines an INTERSECTION, UNION or
+  TYPE-PARAMETER target where tsc's `typeCouldHaveTopLevelSingletonTypes` recurses through
+  `UnionOrIntersection` and an `Instantiable`'s constraint — widening it is corpus-gated because
+  that allowlist is what protects two baselines.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

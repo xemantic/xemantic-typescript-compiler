@@ -119,10 +119,18 @@ class EnumAssertAndSwitchDefaultNarrowingTest {
     fun `a literal-union switch default still narrows - the gap is enum-specific`() {
         // Round 425's DefaultClause arm; it has ALWAYS answered this, which is why the
         // switch half of this round is not a change to the switch machinery.
+        // (PARITY.1)(b-residue): the probe target is `never`, not the class's shared
+        // PRIMITIVE `probe`. The source display now takes tsc's `reportRelationError`
+        // generalization, which collapses a LITERAL UNION to its base — so a primitive
+        // target renders `string`/`number` here and the pin would go BLIND rather than
+        // red. A `never` target is the one tsc suppresses the generalization for, so the
+        // narrowed union is named in full; measured identical in tsgo 7.0.2 and pristine
+        // `typescript@6.0.3`.
         narrowedTo(
             """
             type S = "a" | "b" | "c";
-            export function f(s: S) { switch (s) { case "a": break; default: probeN(s); } }
+            declare function probeX(x: never): void;
+            export function f(s: S) { switch (s) { case "a": break; default: probeX(s); } }
             """.trimIndent(),
             "\"b\" | \"c\"",
         )
