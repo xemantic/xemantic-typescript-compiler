@@ -15192,6 +15192,115 @@ class Checker(
         }
     }
 
+    /**
+     * (CHK.82)(3) The file a `declare module "<spec>"` AUGMENTATION targets — ONE home
+     * for the resolver ladder every augmentation consumer needs, so the merge
+     * ([collectModuleAugmentations]), the TS2664 legality walker
+     * ([checkAmbientModuleAugmentations]) and the TS2305 suppression
+     * ([augmentationDeclaredExportNames]) cannot disagree about what a specifier names.
+     *
+     * The legs, in order: the base resolver; the round-443 `.js`-aware wrapper (an ESM
+     * `declare module "../compiler/types.js"`, whose extension the base resolver
+     * deliberately will not strip); the crawl's own `(importer, specifier)` answer for
+     * THIS file ((CHK.30)/(CHK.78)); and — for a BARE specifier only — the crawl's answer
+     * as recorded for any OTHER file.
+     *
+     * WHY THE LAST LEG EXISTS AND WHY IT IS GUARDED. A bare package specifier's target is
+     * named by the package's `package.json` `types`/`main`/`exports` entry, so no string
+     * transformation of the specifier can find it and only the crawl knows; but the crawl
+     * records a resolution per (importer, specifier) pair and only for specifiers it saw
+     * as IMPORTS, so the file that merely AUGMENTS `"some-pkg"` without importing it has
+     * no entry of its own. Node's lookup walks up from the importer's directory, so two
+     * files can legitimately resolve one bare specifier to two packages (a nested
+     * `node_modules`); the leg therefore requires every recording file to AGREE and
+     * answers null otherwise — a wrong target here would merge an augmentation into
+     * another package's module, which (CFG.1) says nothing in this repo would print.
+     * Relative specifiers are excluded from it outright: theirs is a per-directory
+     * meaning, and the earlier legs already resolve them exactly.
+     */
+    private fun augmentationTargetFile(spec: String, declaringFileName: String): String? {
+        resolveModuleSpecifierRelativeJsAware(spec, declaringFileName)?.let { return it }
+        resolveImportTargetFallback(spec, declaringFileName)?.let { return it }
+        if (spec.startsWith("./") || spec.startsWith("../") || moduleResolutions.isEmpty()) return null
+        var agreed: String? = null
+        for ((_, perFile) in moduleResolutions) {
+            val target = perFile[spec] ?: continue
+            if (target !in fileResults) continue
+            if (agreed == null) agreed = target else if (agreed != target) return null
+        }
+        return agreed
+    }
+
+    /**
+     * 17.130 / (CHK.82)(2): does the symbol [augSymbol], declared at the top level of a
+     * `declare module "<spec>"` block with body [body], MERGE into the augmented module?
+     *
+     * TypeScript distinguishes "global augmentations" (no top-level export STATEMENT in
+     * the body — every declaration implicitly merges, which is the ambient-context rule
+     * and is why `interface ZzzNoExp { … }` with no `export` modifier is importable from
+     * the augmented module, measured against tsgo 7.0.2) from true "module augmentations"
+     * (the body carries an `export` statement — only declarations with an explicit
+     * `export` modifier merge). Import statements alone do NOT trigger the strict mode
+     * (`moduleAugmentationImportsAndExports3`'s baseline: an import-only augmentation
+     * still merges everything).
+     *
+     * ONE HOME, TWO CONSUMERS ([collectModuleAugmentations]' merge and
+     * [augmentationDeclaredExportNames]' TS2305 suppression) — a second hand-written copy
+     * of this predicate would be a silent drift the corpus cannot see, since the two
+     * consumers disagree only about names in exactly one block shape.
+     */
+    private fun augmentationMergesSymbol(body: Node?, augSymbol: Symbol): Boolean {
+        val hasModuleSyntax = body is ModuleBlock &&
+            body.statements.any { it is ExportDeclaration || it is ExportAssignment }
+        if (!hasModuleSyntax) return true
+        // Has module-syntax: only declarations with `export` modifier augment.
+        // Detected via `ExportValue` flag (set by the binder when `Export` modifier
+        // is present on the declaration). Aliases without module-export propagation
+        // (`import X = require`, plain `import {X}`, `export {X} from`) are skipped.
+        if (augSymbol.flags.hasAny(SymbolFlags.ExportValue)) return true
+        // Nested string-literal module declarations augment globally without requiring
+        // `export` — `declare module "Outer" { module "Target" { interface T { foo() } } }`
+        // augments globals["Target"] via the outer merge, regardless of `export` on the
+        // inner `module "Target"`. The binder doesn't set ExportValue on these without
+        // an explicit `export`, but they're still augmenting symbols.
+        val firstDecl = augSymbol.declarations.firstOrNull()
+        return firstDecl is ModuleDeclaration && firstDecl.name is StringLiteralNode
+    }
+
+    /**
+     * (CHK.82)(2) The names every `declare module "<spec>"` AUGMENTATION in the program
+     * whose `<spec>` resolves to [targetFileName] contributes to that module's exports.
+     *
+     * The table is the binder's own — `bindModuleDeclaration` binds a string-named
+     * module's body into the block symbol's `exports`, and [nodeSymbolOf] asks the file
+     * that OWNS the declaration ((BIND.1)) — so this reads what the merge reads rather
+     * than re-deriving it from the AST, and [augmentationMergesSymbol] applies the same
+     * export-modifier rule.
+     *
+     * Its one consumer, [checkNamedImportExistence], uses it to SUPPRESS: a name added
+     * here can only remove a TS2305, so a missed augmentation under-fires and never
+     * invents a row. The specifier is resolved by [augmentationTargetFile], the same
+     * ladder the merge uses.
+     */
+    private fun augmentationDeclaredExportNames(targetFileName: String): Set<String> {
+        val out = HashSet<String>()
+        for (r in binderResults) {
+            val augFile = r.sourceFile.fileName
+            for (stmt in r.sourceFile.statements) {
+                val md = stmt as? ModuleDeclaration ?: continue
+                val spec = (md.name as? StringLiteralNode)?.text ?: continue
+                val resolved = resolveModuleSpecifier(spec, md)
+                    ?: augmentationTargetFile(spec, augFile)
+                if (resolved != targetFileName) continue
+                val exports = nodeSymbolOf(md)?.exports ?: continue
+                for ((exportName, augSymbol) in exports) {
+                    if (augmentationMergesSymbol(md.body, augSymbol)) out.add(exportName)
+                }
+            }
+        }
+        return out
+    }
+
     private fun mergeModuleAugmentations() {
         val processedSpecifiers = mutableSetOf<String>()
         for (result in binderResults) {
@@ -15237,8 +15346,20 @@ class Checker(
             // via the .js-aware wrapper (the round-443 rule — the base resolver
             // deliberately won't strip the extension), so the target-locals merge
             // below fires for it and the exports stay module-scoped per-file.
+            //
+            // (CHK.82)(3) …and a NON-RELATIVE PACKAGE augmentation (`declare module
+            // "some-pkg"` with the package present in `node_modules`) resolves through
+            // the crawl's own answer, which is the only channel that carries a bare
+            // specifier's `package.json` `types`/`main`/`exports` entry ((CHK.30);
+            // neither resolver above is directory- or manifest-aware). Without it
+            // `targetFile` was null for every such augmentation, which took BOTH wrong
+            // branches at once: the block's PARTIAL `interface Widget` was published
+            // into `globals` as a fileless-ambient stub (the round-510 mechanism), so
+            // the package's own `Widget` members read TS2339, and the target-locals
+            // merge never fired. Purely additive — a specifier no leg resolves keeps
+            // its null.
             val targetFile = resolveModuleSpecifier(specifier, stmt)
-                ?: resolveModuleSpecifierRelativeJsAware(specifier, declaringFileName)
+                ?: augmentationTargetFile(specifier, declaringFileName)
 
             // 17.130: TypeScript distinguishes "global augmentations" (no top-level export
             // statements inside the augmentation body — declarations implicitly merge) from
@@ -15248,28 +15369,11 @@ class Checker(
             // declarations are explicitly exported. import statements alone don't trigger
             // the strict mode (verified against `moduleAugmentationImportsAndExports3` baseline:
             // import-only augmentation still implicitly merges all declarations).
-            val augHasModuleSyntax = if (body is ModuleBlock) {
-                body.statements.any {
-                    it is ExportDeclaration || it is ExportAssignment
-                }
-            } else false
-
-            fun shouldAugmentSymbol(augSymbol: Symbol): Boolean {
-                if (!augHasModuleSyntax) return true
-                // Has module-syntax: only declarations with `export` modifier augment.
-                // Detected via `ExportValue` flag (set by the binder when `Export` modifier
-                // is present on the declaration). Aliases without module-export propagation
-                // (`import X = require`, plain `import {X}`, `export {X} from`) are skipped.
-                if (augSymbol.flags.hasAny(SymbolFlags.ExportValue)) return true
-                // Nested string-literal module declarations augment globally without requiring
-                // `export` — `declare module "Outer" { module "Target" { interface T { foo() } } }`
-                // augments globals["Target"] via the outer merge, regardless of `export` on the
-                // inner `module "Target"`. The binder doesn't set ExportValue on these without
-                // an explicit `export`, but they're still augmenting symbols.
-                val firstDecl = augSymbol.declarations.firstOrNull()
-                if (firstDecl is ModuleDeclaration && firstDecl.name is StringLiteralNode) return true
-                return false
-            }
+            // (CHK.82)(2) The rule has ONE home — [augmentationMergesSymbol] — so this
+            // merge and [augmentationDeclaredExportNames] (the TS2305 suppression) ask
+            // the same question of the same block.
+            fun shouldAugmentSymbol(augSymbol: Symbol): Boolean =
+                augmentationMergesSymbol(body, augSymbol)
 
             // Merge each augmented export into the corresponding global symbol.
             val declaringFileIsModule = declaringFileName in moduleFiles
@@ -16878,12 +16982,12 @@ class Checker(
         // [owningSourceFile]'s hop-bounded chain walk.
         var cur: Node? = node
         var hops = 0
-        var ambientSpec: String? = null
+        var ambientBlock: ModuleDeclaration? = null
         var owner: SourceFile? = null
         while (cur != null && hops++ < 4096) {
             if (cur is SourceFile) { owner = cur; break }
-            if (ambientSpec == null && cur is ModuleDeclaration) {
-                (cur.name as? StringLiteralNode)?.let { ambientSpec = it.text }
+            if (ambientBlock == null && cur is ModuleDeclaration && cur.name is StringLiteralNode) {
+                ambientBlock = cur
             }
             cur = (cur as NodeBase).parent
         }
@@ -16908,7 +17012,7 @@ class Checker(
         // reads `./types.js`'s `Zzz` under tsc and read `./other.js`'s here.
         // The augmented module's scope is the INNER one; the augmenting file's
         // is the enclosing one, so it may only answer on a miss.
-        augmentationContextSymbol(ambientSpec, owner, name)?.let { return it }
+        augmentationContextSymbol(ambientBlock, owner, name)?.let { return it }
         // (CHK.80)(d) a script-global name some MODULE file imports under the same
         // name: that file's own alias shadows the global (the per-file scope layers
         // the file's locals over the script ones); any other file keeps the global.
@@ -16924,21 +17028,43 @@ class Checker(
      * and both its consumers — [lookupPerFileForNode] and the lens's
      * `typeReferenceSymbol` — ask the same question.
      *
-     * [ambientSpec] is the innermost enclosing `declare module "<spec>"` block's
-     * specifier (null when the node is in none), [owner] the file the node lives
-     * in. Answers the AUGMENTED module's own symbol for [name] when the
+     * [ambientBlock] is the innermost enclosing string-named `declare module
+     * "<spec>"` block (null when the node is in none), [owner] the file the node
+     * lives in. Answers the AUGMENTED module's own symbol for [name] when the
      * specifier names a program file that EXPORTS it (INV.3(d): the merged
      * instance no longer exists — the target file's local is the symbol tsc sees
-     * there), and null everywhere else: a fileless AMBIENT target, a
-     * non-relative one, and a name the target does not export all keep the
-     * resolution they had.
+     * there), and null everywhere else: a fileless AMBIENT target and a
+     * non-relative one keep the resolution they had.
+     *
+     * (CHK.82)(1) SECOND LEG — a name the target does NOT export, declared by the
+     * BLOCK ITSELF (`declare module "./types" { interface ZzzLocal { … };
+     * interface SourceFile { p: ZzzLocal } }`). tsc checks the body in the
+     * augmented module's context, where the block's own declarations are in
+     * scope; here the per-file consult below cannot see them (they live in the
+     * augmentation symbol's `exports`, which the binder filled in
+     * `bindModuleDeclaration`), so `p` typed `any` — silently, since `any` is
+     * legal everywhere.
+     *
+     * THE NARROWING IS LOAD-BEARING AND IS WHY THIS IS TWO LEGS RATHER THAN ONE
+     * TABLE: (CHK.76) measured that consulting a string-named block's body
+     * WHOLESALE costs +43 rows on three profiles, because the block's own
+     * PARTIAL `interface SourceFile` is a separate symbol here (INV.3(c)(iv)) and
+     * would shadow the merged one at every reference. Asking the block only for
+     * a name the target does not export excludes that entire class by
+     * construction — a partial re-declaration is, by definition, of a name the
+     * target exports.
      */
-    private fun augmentationContextSymbol(ambientSpec: String?, owner: SourceFile, name: String): Symbol? {
-        val spec = ambientSpec ?: return null
+    private fun augmentationContextSymbol(
+        ambientBlock: ModuleDeclaration?,
+        owner: SourceFile,
+        name: String,
+    ): Symbol? {
+        val block = ambientBlock ?: return null
+        val spec = (block.name as? StringLiteralNode)?.text ?: return null
         val target = resolveModuleSpecifierRelativeJsAware(spec, owner.fileName) ?: return null
         val targetFile = fileResults[target]?.sourceFile ?: return null
-        if (name !in moduleNamedExportsOf(targetFile)) return null
-        return lookupPerFile(target, name)
+        if (name in moduleNamedExportsOf(targetFile)) return lookupPerFile(target, name)
+        return nodeSymbolOf(block)?.exports?.get(name)
     }
 
     /**
@@ -16951,11 +17077,11 @@ class Checker(
     private fun augmentationContextSymbolForNode(node: Node, name: String): Symbol? {
         var cur: Node? = node
         var hops = 0
-        var ambientSpec: String? = null
+        var ambientBlock: ModuleDeclaration? = null
         while (cur != null && hops++ < 4096) {
-            if (cur is SourceFile) return augmentationContextSymbol(ambientSpec, cur, name)
-            if (ambientSpec == null && cur is ModuleDeclaration) {
-                (cur.name as? StringLiteralNode)?.let { ambientSpec = it.text }
+            if (cur is SourceFile) return augmentationContextSymbol(ambientBlock, cur, name)
+            if (ambientBlock == null && cur is ModuleDeclaration && cur.name is StringLiteralNode) {
+                ambientBlock = cur
             }
             cur = (cur as NodeBase).parent
         }
@@ -53921,7 +54047,15 @@ class Checker(
                 // It is a superset of `resolveModuleSpecifier` (falls back to it), so this
                 // can only SUPPRESS false-positive TS2664 for resolvable relative modules,
                 // never add new TS2664 (a truly-missing module still resolves to null).
-                val resolvesToFile = resolveModuleSpecifierRelativeJsAware(moduleName, fileName) != null ||
+                //
+                // (CHK.82)(3) [augmentationTargetFile] is a strict SUPERSET of the
+                // `.js`-aware leg this used to call — it adds the crawl's own answer,
+                // the only channel that resolves a BARE package specifier — so it can
+                // only SUPPRESS. Without it every `declare module "some-pkg"` over an
+                // installed package read a false TS2664, which no fixture here could
+                // see: the corpus materialises no `node_modules` and tsc's own 78
+                // sources augment no package.
+                val resolvesToFile = augmentationTargetFile(moduleName, fileName) != null ||
                     resolvesAsJsOrJsx(moduleName)
                 val definedElsewhere = moduleName in moduleDefinitions
 
@@ -55366,10 +55500,19 @@ class Checker(
                         // DIRECT file: `export *` never forwards a default export.
                         val starExports = getModuleExportsFollowingStars(targetFile)
                         val hasDefaultExport = moduleHasDefaultExport(targetFile)
+                        // (CHK.82)(2) A cross-file `declare module "<spec>"` AUGMENTATION
+                        // adds its own top-level declarations to the module's exports, and
+                        // [getModuleExportsFollowingStars] is AST-derived from the TARGET
+                        // file alone — so `import { Brand } from "./types.js"` beside
+                        // `declare module "./types.js" { export interface Brand { … } }`
+                        // read a false TS2305, while the TYPE resolved correctly, which is
+                        // what made it a pure absence-check defect. Additive: the extra
+                        // names can only enlarge the known set, i.e. only SUPPRESS.
+                        val augNames = augmentationDeclaredExportNames(resolvedFile)
                         val allExports = when {
                             starExports == null -> null
-                            hasDefaultExport -> starExports + "default"
-                            else -> starExports
+                            hasDefaultExport -> starExports + "default" + augNames
+                            else -> starExports + augNames
                         }
 
                         for (specEl in namedBindings.elements) {
@@ -55547,10 +55690,19 @@ class Checker(
                         // are skipped when the star set is unknowable.
                         val starExports = getModuleExportsFollowingStars(targetFile)
                         val hasDefaultExport = moduleHasDefaultExport(targetFile)
+                        // (CHK.82)(2) A cross-file `declare module "<spec>"` AUGMENTATION
+                        // adds its own top-level declarations to the module's exports, and
+                        // [getModuleExportsFollowingStars] is AST-derived from the TARGET
+                        // file alone — so `import { Brand } from "./types.js"` beside
+                        // `declare module "./types.js" { export interface Brand { … } }`
+                        // read a false TS2305, while the TYPE resolved correctly, which is
+                        // what made it a pure absence-check defect. Additive: the extra
+                        // names can only enlarge the known set, i.e. only SUPPRESS.
+                        val augNames = augmentationDeclaredExportNames(resolvedFile)
                         val allExports = when {
                             starExports == null -> null
-                            hasDefaultExport -> starExports + "default"
-                            else -> starExports
+                            hasDefaultExport -> starExports + "default" + augNames
+                            else -> starExports + augNames
                         }
                         val hasExportEqualsInTarget = targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
 
@@ -114115,6 +114267,15 @@ interface DataView {
                     val segments = mutableListOf(symbol.name)
                     var cur = symbol.parent
                     while (cur != null && cur.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)) {
+                        // (CHK.82)(1) …but a STRING-named module is not a segment of any
+                        // dotted name: its `Symbol.name` is the SPECIFIER, so the ascent
+                        // rendered a type alias declared inside `declare module
+                        // "./types.js"` as `'./types.js.ZzzAl'` — a spelling tsc never
+                        // produces (it qualifies a module member as
+                        // `import("<path>").Name`, and prints the bare name wherever the
+                        // symbol is accessible). Stop rather than skip: everything above
+                        // a string-named module is likewise outside the dotted path.
+                        if (cur.declarations.any { it is ModuleDeclaration && it.name is StringLiteralNode }) break
                         segments.add(0, cur.name)
                         cur = cur.parent
                     }

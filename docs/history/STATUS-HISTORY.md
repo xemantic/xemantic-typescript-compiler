@@ -1,3 +1,24 @@
+
+**(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
+**(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained
+graph + live checker — `typeAt` / `symbolAt` / `resolvedCallAt` / `contextualTypeAt` /
+`typeOfSymbolAt` recorded during the walk, the bin-A rows forwarded at rest, `resolveName` /
+`symbolsInScope` refused naming Stage 3, per-build handles, `close()` on edit; entries
+`typeOracleOf(files)` and `ProjectCompiler.build(…, oracleHolder)`; the store grew
+`symbols` / `calls` / `contextual`; per-row divergences in `docs/type-oracle.md`; 23 pins;
+cost_gate +0.00 %. **Flag ON measured: compiler profile +21.5 % (1.90 µs per recorded
+expression), many-small-2400-dom +6-7 % (0.95 µs)** — after the first arm read +57-64 % and
+a per-channel attribution + JFR found the object-literal KEY leg re-typing its literal per
+key (`getTypeOfExpression` has no per-node memo; O(keys²) on tsc's message tables), fixed by
+reading the store. (INV.2b) queued: `Project` integration with the invalidation decided.
+Design record: `docs/INVERSION-DESIGN.md` § 9b. **(EXT.10)**: references to a generated
+alias render by NAME where the resolved body has no Kotlin spelling (`Handler<string>` →
+`Handler<String>`; function-typed aliases now emitted and named) under identity evidence
+through the new lens member `typeReferenceSymbol`; Dukat pin kept; 7 pins, externals 80/0.
+**(INV.1b)** answered: a reconstruction-only arm (`nodeAnswers:reconstruction`) reads the
+plain check (5,290 / 5,266 vs 5,270 ms) while types-only reads 6,158 / 6,121 — the whole
+1.45 µs per expression is `getTypeOfExpression` re-typing what the walk already typed.
+
 **(P18.4) — SESSION CLOSE: THE PHASE 18 FIRST ARC IS LANDED END-TO-END, 16,764 / 0 / 3
 (2026-09-01).** In one session under the re-pointing directive: the directive persisted;
 licence strings aligned ((LIC.1), with (LIC.2) POM drift flagged BLOCKED-PENDING-USER); the

@@ -56775,3 +56775,266 @@ rebuilt after every restore (the class dir returns to `c1970110` each time, prin
 7.0.2 this round and all recorded with the fixture that shows them; the largest is that
 **a weak union is still silent in the RETURN and ASSIGNMENT positions** and that our
 **TS2560 is emitted for every callable source** where tsc splits on the return type.
+
+## Archived Phase-18 round notes (moved by the trim-on-write rule)
+
+### Round (P18.3) — the LSP is feature-complete for a first release, and the honest tsgo number is 30-50x against us (2026-09-01)
+
+**(LSP.2) LANDED** in the main context: the full feature map onto `Project` (lifecycle
+incl. Full-sync didChange with ranged changes SKIPPED-and-pinned, didClose→reloadFile,
+didSave, watched-files; definition/references/documentHighlight/completion/signatureHelp;
+prepareRename from the parse alone; rename refusals as `-32803` errors CARRYING the
+RenameRefusal name; pull diagnostics; project-wide publishDiagnostics off the narrowed
+`diagnostics()`, on lifecycle events never keystrokes, cleared files republished empty).
+16 new pins, 58/0 module, warning-clean. nativeImage task wired (mirror of -cli, entry
+`XtscLspMainKt`); configures — no GraalVM on this box, first verified image is a
+CI/other-host step, same status as the cli arm. One instructive test defect: `obj("result")
+as? JsonArray` can never succeed (obj() already cast) — the compiler's "cast can never
+succeed" warning was the tell, and the warning-clean rule is what surfaced it.
+
+**(LSP.3) MEASURED, AND THE ANSWER IS HONEST IN THEIR FAVOUR.** Both servers long-lived
+over stdio on tsc's 78 sources ((INC.90) CRLF-preserving variants, probe + row-count
+receipts): tsgo first-open→first-hover **255 ms**, per-edit hover **12-18 ms** either
+shape; ours **24.8 s** cold-JVM first open (including the eager 46-row project-wide
+publish their open never performs) and **398-630 ms** per-edit hover. Their lazy
+NodeLinks-style per-node answering vs our narrowed-build-per-fresh-question —
+**INVERSION-DESIGN.md's bin-B gap measured end-to-end**, the strongest number for its
+Stage 1-2. Ours alone after measurement: the project-wide publish (524 ms, 5 files,
+exactly 46 rows — the receipt matched the known count) — tsgo's session pushed 1
+notification/2 rows (open file only). The per-file pull receipt caught the 46-vs-65 gap
+surfacing per-file (their 1 item in binder.ts, our 0). tsgo `--lsp -stdio` does not exit
+on `exit`. Published: perf doc's new LSP arm + § 3b updated from "pending" to the
+verdict. **Sequencing note: (LSP.2)/(LSP.3) were taken before the (EXT.2…n) ladder
+because the WORK ORDER's own closing line names the tsgo --lsp number as this session's
+sought answer; the ladder is next.**
+
+
+### Round (P18.2) — the first wave: the externals generator and the LSP server both land, and the LSP's first fixture finds a compiler defect (2026-09-01)
+
+**(EXT.1) AND (LSP.1) LANDED FROM ONE TWO-AGENT WORKTREE WAVE** (disjoint pre-scaffolded
+modules; gradle serialized behind a shared flock — the orchestration worked exactly as
+designed, one build holding the lock while the other queued). Merged `--no-ff`, then the
+full suite over all modules on the merged tree plus cost_gate/huge_methods as the gates.
+
+**(EXT.1)**: `generateKotlinExternals(fileName, source)` — every exported non-generic
+interface rendered as a Kotlin `external interface` whose member types are the CHECKER's
+answers, 15 pins all full-string equality. The Dukat/Karakum separation pin: `p: Species`
+with `type Species = string` renders `String` (resolved), not `Species` (syntax). The
+compile gate went branch (ii), decided empirically: `KotlinMetadataCompiler` REFUSES the
+`external` modifier (`only top-level functions can be external` + not-applicable ×2), so
+the gate compiles the renderer's own `external`-omitting variant, with a negative control
+(`NoSuchType` must fail) AND a sentinel pin that reddens the day a Kotlin release accepts
+`external` in metadata. One mapping home (`kotlinTypeText`): string/number/boolean/void
+(return-position only) + optionality; EVERYTHING else is `Any? /* xtsc: unmapped <lens
+render> */`, never silent; `errorType` carries the `any` flag and is classified by
+intrinsic NAME so a degraded resolution lands marked. Consumption fact for EXT.2+:
+at an `InterfaceDeclaration` sink callback, `lens.typeOfTypeNode` is the member-type
+oracle and resolves aliases; `Parameter.isCommentPlaceholder` must be filtered or empty
+parens with a comment grow a phantom parameter.
+
+**(LSP.1)**: JSON-RPC 2.0 + LSP base-protocol framing over kotlinx-io (in-memory-testable
+via `Buffer`), initialize/didOpen/hover/shutdown/exit mapped onto `Project`, 42 pins.
+**The work-order pin answered: LSP UTF-16 code units and `Project` offsets are IDENTICAL
+modulo the 1-base** — astral-char fixture confirms, no compensation layer. Full policy
+set pinned (id-echo incl. string ids, -32601/-32700/-32600, post-shutdown, handler
+Exception → -32603 with the session surviving, `Error` propagating per doctrine).
+
+**AND THE FIRST REAL FIXTURE FOUND A `-project` DEFECT — queued as (API.18)**: a
+file-final token is unreachable by every position lookup when the file lacks a trailing
+newline (`realEndOf` snaps STRICTLY below an EXACT end and clamps to an empty span) —
+round 920's mechanism in a sixth costume. The agent pinned the observed behaviour rather
+than patching a foreign module (per its brief), which is what the disjointness rule is
+for. **This is the mission thesis demonstrating itself: a new consumer finds defect
+classes the corpus structurally cannot** — (CHK.32)'s law, now on the API surface.
+
+**Wave mechanics worth keeping** (recorded in docs/subagent-workflow.md): the
+`.gitignore` `/tools/` and `/typescript-repo/` trailing-slash patterns do NOT match the
+SYMLINKS a fresh worktree needs (dir-only patterns), so agents must remove them before
+ending clean; both agents' first builds were ~6-8 min cold core compiles, serialized.
+
+
+### Round (P18.1) — the doc arc landed, and the 142-method census answers the WebStorm question with three numbers (2026-09-01)
+
+**(LIC.1), (DOC.1), (DOC.2), (INV.D) DONE; two modules scaffolded; (EXT.1)/(LSP.1) in
+flight as a worktree wave.** (LIC.1): README now says `AGPL-3.0-only WITH
+LicenseRef-xtsc-output-exception` like the 1,079 source headers — and the sweep found a
+WORSE drift the item did not name: the root POM declares Apache-2.0; queued as (LIC.2)
+BLOCKED-PENDING-USER because build files are Guardrail-gated. (DOC.1):
+`docs/language-service.md` § 3b retitled as the CLI comparison it is — the 182 ms floor
+is a property of the fresh-process harness, `tsgo --lsp` pays none of it per query, the
+"long-lived host is favourable" conclusion is REMOVED until (LSP.3) measures resident vs
+resident; caveat 5 added to `docs/perf/incremental-vs-tsgo.md` scoping every "floor paid
+per query" claim to the CLI. (DOC.2): README repositioned on `docs/reposition` (pushed,
+awaiting owner review; the verbatim-kept "Honest limits" bullet about non-incremental
+queries is stale since the (INC.\*) arc — flagged in the branch commit, kept verbatim per
+the directive).
+
+**(INV.D) — `docs/INVERSION-DESIGN.md`.** Census source: microsoft/TypeScript main
+`tsc/internal/api/proto.go` @ 253c5e2 (sparse clone; exactly 142 methods — the local
+v7.0.2 clone has 114, so the directive's number is main's). **The answer: A=94 answerable
+post-hoc today from the retained graph (21 with named model divergences — no freshness,
+first-wins alias identity, no subtype reduction, round-916 getPropertyOfType), B=15 need
+walk-scoped state (13 of them served by a record-during-walk NodeLinks store; only
+`resolveName`/`getSymbolsInScope` need tree-derived scopes, i.e. B83.5), C=33 not checker
+questions (25 already behind Project/TsConfigLoader/Emitter).** The design's core finding:
+pillar 4 (canonical identity) is DONE, pillar 3 (on-demand flow) is NOT REQUIRED for the
+census — the walk already computes flow-narrowed answers, so RECORDING (pillar 2) serves
+every B/R row; laziness is a Stage-4 concern only. Neither consumer being built needs the
+inversion at all — EXT rides the sink, LSP rides `Project`. (INV.1) queued
+BLOCKED-PENDING-USER with the one-commit Stage-1 proposal. Numbering bridge to the OLD
+ARCHITECTURE-RETHINK INV.0-7 series is § 8 of the design — do not confuse the two.
+
+
+### Round (P18.0) — the project is re-pointed: TypeScript for the JVM and Kotlin (2026-09-01)
+
+**OWNER DIRECTIVE, PERSISTED BEFORE ANY OTHER WORK.** The WebStorm evaluation paused — their
+need was a post-hoc type oracle (tsgo's `tsc/internal/api/proto.go` query shape, 142 methods)
+and this checker's answers are functions of walk-scoped state (`CheckedProgram.kt`,
+`TypeCapture.kt` document exactly that). tsgo is the free official default; "a TypeScript
+compiler" is not the differentiator. **The mission is now: TypeScript for the JVM and Kotlin**
+— no Node/Go in the toolchain, an embeddable whole-program checker, a Kotlin externals
+generator with resolved types (the Dukat/Karakum gap), the KIR JVM backend, and an LSP.
+
+**WHAT CHANGED IN THIS COMMIT:** CLAUDE.md § "AI agent mission" carries the dated directive
+(Phase 17 history kept); this file gains the WORK ORDER at the top of the QUEUE with the new
+items (LIC.1), (DOC.1), (DOC.2), (EXT.1…n), (LSP.1…n), (INV.D), (INV.0) and the (INC.\*)
+closing note; SESSION-PROMPT.md no longer says "single-thread performance", so `run-loop.sh`
+iterations cannot revert the mission; STATUS.md headlines the re-pointing (trim-on-write
+applied). **The (INC.\*) family is CLOSED at a 94-110 ms floor / 93-217 ms plugin query —
+refuse further INC rounds unless a plugin-facing query measures > 300 ms warm.** No compiler
+code was touched; Checker.kt is off-limits for latency this session per the directive.
+Trim-on-write: rounds (INC.82) and older moved to docs/history/PLAN-PHASE-5-HISTORY.md.
+
+
+### Round (INC.90) — the tsgo incremental comparison, re-taken on a second arm that is finally like-for-like
+
+**THE COMPARISON HAD ONE ARM, AND IT WAS THE WRONG SHAPE AND NOT LIKE-FOR-LIKE.** Every
+tsgo incremental number this repo has ever published came from tsc's own 78 sources —
+huge files, `export *` barrels, and a profile where we report **46** rows against tsgo's
+**65**. This round added a second arm on `many-small-2400-dom` (2,401 files, 48 layers x 50
+modules, edit at `layer00`, i.e. the deepest-dependency worst case) where **both compilers
+report the identical single row** (`src/faulty.ts:3:14 TS2322`, same column and message), so
+the equivalence gate `kir-bench.sh` has and this comparison always lacked passes exactly.
+Full table and caveats: `docs/perf/incremental-vs-tsgo.md` (rewritten); the 46-vs-65
+decomposition is `docs/perf/tsgo-diagnostic-gap.md` (new).
+
+**ARM A DID NOT MOVE SINCE 2026-08-29, AND THAT IS THE EXPECTED ANSWER RATHER THAN A
+DISAPPOINTING ONE** — ours 5,523 ms warm / 226 body / 5,578 signature against the recorded
+5,352 / 232 / 5,694; tsgo 1,667 / 185 no-op / 297 body / 1,695 signature. The ~25 (INC.\*)
+rounds since removed per-FILE costs and this profile has 78 huge files, which (INC.57)'s law
+already predicts.
+
+**ARM B IS THE FINDING, AND IT REOPENS (INC.35).** That item closed the reverse-dependency
+closure on the measurement that a closure buys nothing on tsc's sources — and Arm A
+corroborates it FOR TSGO TOO (its signature edit costs **1,695 ms against its own 1,667 ms
+cold**, i.e. its per-hop pruning recovers nothing there). **Arm B is the counter-example the
+old page explicitly predicted and never tested**: on LAYERED code tsgo's pruning makes a
+signature edit cost what a body edit costs (**304 vs 297 ms**, against its own 427 ms cold),
+while we fall back to a full rebuild at **3,850 ms**. That is **12.7x on the wall and ~96x on
+marginal cost above each side's own floor** — the largest gap this comparison has ever
+measured, and the only one with a named mechanism on the other side. See (INC.91).
+
+**AND THE WALL-VERSUS-MARGINAL SPLIT IS THE PART A ONE-NUMBER SUMMARY GETS WRONG.** On Arm B
+we answer a body-only edit in **137 ms against 297** and a no-op in **0 against 264** — but
+tsgo's floor (process start + `.tsbuildinfo` read + re-stat) is **89% of its own body-edit
+cell**, so its MARGINAL body cost is ~33 ms against our ~137. We win the wall on the
+live-session model; they win the compute on a real invalidation algorithm. Quoting either
+alone is the thing that page now exists to prevent.
+
+**THE PLUGIN'S OWN CALL IS IMMUNE TO THE CLIFF, WHICH NO EARLIER TABLE COULD SHOW BECAUSE NO
+EARLIER TABLE MEASURED IT.** `incrementalDiagnostics()` is reached from `diagnostics()` and
+from nowhere else (`Project.kt:737`), while the IntelliJ plugin asks
+`diagnosticsOf(listOf(fileOnScreen, configPath))` exclusively — which narrows at the SOURCE
+(INV.6) instead. Measured: **93-106 ms on Arm B and 187-217 ms on Arm A, independent of the
+edit shape**, beating tsgo in both cells. It also independently corroborates (INC.86)'s 90 ms
+per-keystroke figure on the same fixture. The trade is coverage, not latency: it answers one
+file's rows, so a cross-file error introduced elsewhere is not shown until that file is
+visited.
+
+**THREE HARNESS DEFECTS FOUND WHILE TAKING THE NUMBERS, AND THE FIRST IS THE ONE WORTH
+REMEMBERING.** (a) The inherited fixture's `orig.ts` was **CRLF** (3,916 CRs) while both edit
+variants were **LF**, so every "one-line edit" was that line PLUS a whole-file newline
+normalisation of all 3,916 lines — the page described the fixture as "a local `const` inside
+an exported function" and it was that plus whole-file churn. Regenerated CRLF-preserving; the
+re-measured cells land within noise, which is EVIDENCE and not proof that it did not matter.
+(b) The tsgo harness called `run` inside a command substitution, so its row count never
+escaped the subshell and every printed count was a stale value from a previous call — an
+equivalence gate reading its own stale output. (c) Both harnesses were hardcoded to
+`binder.ts` and to shared-scratchpad paths that survived only by luck; both are now
+parametrised with durable edit dirs under `build/bench/inc90-edits-*`.
+
+**TWO RECEIPTS THE OLD RUNNER COULD NOT PRINT, BOTH LOAD-BEARING.** A per-cell diagnostic ROW
+COUNT on both sides (`kir-bench.sh`'s law: a wall-clock harness reads a program that does
+LESS as the fastest arm), and a served-vs-fell-back count read from `Project.incrementalAnswers`
+— without which a body-only cell that SILENTLY FELL BACK to a rebuild is indistinguishable
+from one the mechanism served, and both would be reported as "our incremental time" (round
+790). Both arms read `body 3/3 served, signature 0/3`, which is what licenses reading the two
+cells as the two mechanisms rather than as two timings.
+
+**AND THE REFERENCE-COMPILER CLAIM IN CLAUDE.md IS FALSE.** Round 938's "`tools/tsgo-7.0.2/lib/tsc`
+IS THE ONLY REFERENCE COMPILER RUNNABLE ON THIS BOX" is refuted: `tools/node/bin/node` (22.20.0)
+and real `typescript@6.0.3` at `build/tools/tsc-ref/node_modules/typescript/lib/tsc.js` both run.
+Pristine 6.0.3 and tsgo 7.0.2 **agree on all 65 rows, zero divergence either way**, so the 19-row
+gap is **19 genuine false negatives of ours and 0 tsgo divergences** — the queue's hopeful hedge
+is refuted. It is NOT a 29% work gap: 18 of the 19 are emission- or lookup-side on work already
+done (our own header prints `unresolved imports: 8 (e.g. 'fs')`, naming the very specifiers whose
+diagnostics are missing), and only one row skips real checking. `build/tools/tsc-ref` is
+provisioned by nothing in the repo and vanishes on a `clean` — a harness reading it must REFUSE
+when it is absent rather than fall back to tsgo.
+
+### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
+
+**THE PROJECT IS RE-POINTED.** The JetBrains WebStorm evaluation paused: their need was a
+post-hoc TYPE ORACLE with the query shape of tsgo's `tsc/internal/api/proto.go` (142 methods),
+and this checker cannot serve one — its answers are functions of walk-scoped state, which
+`CheckedProgram.kt` and `TypeCapture.kt` already document. tsgo is the free, official default;
+competing with it on "a TypeScript compiler" is not the mission. **The mission is TypeScript
+for the JVM and Kotlin**: no Node and no Go in the toolchain, an embeddable whole-program
+checker, a Kotlin-externals generator with resolved types, a JVM bytecode backend (KIR), and an
+LSP anyone can try in five minutes. See CLAUDE.md § "AI agent mission" for the full directive
+and the pre-approved Guardrails (two new modules, no new dependencies, `docs/reposition` branch
+for README positioning text).
+
+**THE (INC.\*) FAMILY IS CLOSED (closing note).** It ran ~93 rounds and took the incremental
+floor from ~1,219 ms ((INC.3)) to **94-110 ms** ((INC.72b)/(INC.89)) at 2,401 files, with the
+plugin's own `diagnosticsOf` query at **93-217 ms** independent of edit shape ((INC.90)).
+Nothing above — externals generation, the LSP, the inversion — changes outcome at that scale,
+and the one real remaining gap ((INC.90)'s signature-edit cliff, 12.8x) was refused on
+SOUNDNESS by (INC.91)'s own census. **REFUSE a further (INC.\*) round unless a plugin-facing
+query is measured > 300 ms warm**, and do not touch `Checker.kt` for latency without that
+measurement in hand. The remaining unchecked (INC.\*) items below stay as a RECORD, except
+(INC.92)/(INC.93), which remain live as CORRECTNESS items (process-global state under the
+plugin's N-thread shape), not latency ones.
+
+**Work order for this arc, top to bottom:** (LIC.1) → (DOC.1) → (DOC.2, on `docs/reposition`)
+→ (EXT.1…n) → (LSP.1…n) → (INV.D) → (INV.0). Orchestration for the first session: Step 0 +
+(LIC.1) + (DOC.1) + (DOC.2) in the main context (doc-only); then ONE wave of two subagents in
+worktrees (docs/subagent-workflow.md: max 2, disjoint primary files) — A = (EXT.1),
+B = (LSP.1), both new modules so they cannot conflict — while the main context does (INV.D);
+merge per the workflow, run the corpus suite + cost_gate after the merge (new modules must move
+no counter), then continue top-to-bottom.
+
+**§ Approvals (owner decisions — do not re-open).** The 2026-07-02 pre-approvals
+(conformance-category adoption, the real-lib migration, the M5 native re-enable) and the
+2026-09-01 Phase 18 pre-approvals (two new modules, no new dependencies, `docs/reposition`
+for README positioning) are recorded in CLAUDE.md § Guardrails / § "AI agent mission".
+Owner decisions 2026-09-02:
+
+- **The licence is `AGPL-3.0-only` (NOT `-or-later`), decided 2026-09-01.** Rationale: the
+  sole rights holder can widen later; `-or-later` is irrevocable for every distributed
+  copy; the output exception is drafted against the fixed v3 text. **Any doc saying
+  `-or-later` is a defect.**
+- **(LIC.2) Until the contributor agreement exists, CONTRIBUTING.md states that external
+  pull requests cannot be merged; issues and reproductions are welcome. One commit.**
+  (Implementation queued as (LIC.3) below — the queue's (LIC.2) label was already held by
+  the POM-drift item, which remains a separate, still-blocked build-file change.)
+- **(LIC.2) POM licence metadata — APPROVED 2026-09-02**, in the proposed two-entry shape
+  (SPDX expression + a second entry for the output exception, URLs at the repo's own
+  licence texts). Landed the same day.
+- **(INV.1) Stage 1 of `docs/INVERSION-DESIGN.md` — APPROVED 2026-09-02.** The owner asked
+  what the § 10 cost-neutrality contract entails (it was written by an agent from the
+  2026-09-02 conversation and labelled "owner additions"); the answer is recorded in the
+  (P18.7) session note. The bar for (INV.1): flag OFF must be inert on wall time and
+  allocation as well as on `cost_gate.py`; flag ON is MEASURED on both program shapes
+  before any later stage is priced.
+

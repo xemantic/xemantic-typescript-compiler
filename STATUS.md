@@ -9,6 +9,38 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
+**(P18.13) — THE AUGMENTATION RESIDUES: A PACKAGE AUGMENTATION STOPS INVENTING TWO ERRORS, 17,224 → 17,236 / 0 / 3 (2026-09-04; filtered gates only — the full suite was not run this round, so the headline count stands at 17,224 / 0 / 3 plus 12 new pins).**
+(CHK.82) three of four residues, each measured against tsgo 7.0.2 on a scratch project.
+**(3) is the one a real project meets:** `declare module "some-pkg"` over an installed package
+was a false **TS2664** *plus* a false **TS2339 on the package's own member** — ONE cause, since
+no resolver leg can name a bare specifier's target (a `package.json` `types` entry, not a string
+transformation), so `targetFile` was null and the merge took the FILELESS-AMBIENT branch,
+publishing the block's PARTIAL interface into `globals` as a round-510 stub while never merging
+into the real target. `augmentationTargetFile` is the one home for the ladder; its bare leg takes
+the crawl's answer from any file and requires them to AGREE. **(1)** a name the BLOCK declares
+and the target does not export typed `any` — now resolved, narrowed to exactly that case, which
+is what keeps (CHK.76)'s +43 rows away. **(2)** `import { Brand } from "./types.js"` beside an
+augmentation declaring `Brand` was a false TS2305 while the TYPE always resolved — a pure
+absence-check defect, fixed by reading the binder's own block `exports` through the SAME
+export-modifier predicate the merge uses (extracted, one home, two consumers). A B86.4 display
+defect fell out beside them: the namespace-qualification ascent treated a STRING-named module's
+specifier as a name segment, so `@types/node` rendered `events.DefaultEventMap`,
+`zlib.CompressCallback` and even `node:test.test.SuiteFn` — with a colon in it.
+**(4) REFUSED with the measurement:** the enum display `import("…").E` is NOT an augmentation
+residue (it reproduces with no `declare module` in the program, under tsgo AND pristine 6.0.3),
+103 corpus baselines use that form and we satisfy them through hard-coded pins rather than a
+mechanism — a logical-parity conversation. **(CHK.81)'s two remaining sub-items MEASURED and
+REFUSED, both mis-stated in the queue:** the missing diagnostic is TS2503 (not TS2304) and the
+axis is `declare` (not `declare module`), suppressed deliberately by **B367**; and the
+literal-union display is neither an alias nor an ambient question — the rule is *collapse to the
+base primitive exactly when the target holds no literal of that base*, systematic across TS2322
+and TS2345, gated only by the full corpus.
+12 pins, eight single-mistake ablation arms each with its own red set; filtered
+`*Augment*`/`*Module*`/`*Import*`/`*Export*` 1,468/0/0; cost_gate exit 0 (errors 46 unchanged);
+huge_methods 0 over; the 8-profile grid all eight `added=0 removed=0`; externals 290/0; and the
+`@types/node` per-module receipt with its generated Kotlin CODE **byte-identical** and its marker
+text strictly better.
+
 **(P18.12) — CROSS-MODULE HERITAGE: THE 179 REFUSED SUPERTYPES OF `@types/node` BECOME SUPERTYPES, 17,196 → 17,224 / 0 / 3 (2026-09-04).**
 **(CHK.78) landed beside it:** three augmentation divergences, the first far broader than the
 item stated — `resolveModuleSpecifier` is not directory-aware, so on a REAL project every
@@ -179,23 +211,3 @@ the interface/annotation member reports, the false TS2833 gone and TS2305/TS2616
 import absent from the surface; the implementing agent was rate-limited before any gate and the
 verification found a lost diagnostic on real `@types/node` that only the probe's rendered types
 could see, fixed in 11 lines; 13 pins all discriminating; three sub-items still open.
-
-**(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
-**(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained
-graph + live checker — `typeAt` / `symbolAt` / `resolvedCallAt` / `contextualTypeAt` /
-`typeOfSymbolAt` recorded during the walk, the bin-A rows forwarded at rest, `resolveName` /
-`symbolsInScope` refused naming Stage 3, per-build handles, `close()` on edit; entries
-`typeOracleOf(files)` and `ProjectCompiler.build(…, oracleHolder)`; the store grew
-`symbols` / `calls` / `contextual`; per-row divergences in `docs/type-oracle.md`; 23 pins;
-cost_gate +0.00 %. **Flag ON measured: compiler profile +21.5 % (1.90 µs per recorded
-expression), many-small-2400-dom +6-7 % (0.95 µs)** — after the first arm read +57-64 % and
-a per-channel attribution + JFR found the object-literal KEY leg re-typing its literal per
-key (`getTypeOfExpression` has no per-node memo; O(keys²) on tsc's message tables), fixed by
-reading the store. (INV.2b) queued: `Project` integration with the invalidation decided.
-Design record: `docs/INVERSION-DESIGN.md` § 9b. **(EXT.10)**: references to a generated
-alias render by NAME where the resolved body has no Kotlin spelling (`Handler<string>` →
-`Handler<String>`; function-typed aliases now emitted and named) under identity evidence
-through the new lens member `typeReferenceSymbol`; Dukat pin kept; 7 pins, externals 80/0.
-**(INV.1b)** answered: a reconstruction-only arm (`nodeAnswers:reconstruction`) reads the
-plain check (5,290 / 5,266 vs 5,270 ms) while types-only reads 6,158 / 6,121 — the whole
-1.45 µs per expression is `getTypeOfExpression` re-typing what the walk already typed.
