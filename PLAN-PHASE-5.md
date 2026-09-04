@@ -2123,7 +2123,7 @@ counter, which is the (INC-closure) directive holding by construction.
   179 refusals become supertypes, the 51-module set still compiles together at 0 errors in both
   compilers, and `Socket extends stream.Duplex` renders in `node.net`.
 
-- [ ] **(CHK.81) PARTLY DONE 2026-09-02/09-04 ((P18.9) note; the `require`-of-`export =` main
+- [x] **(CHK.81) CLOSED 2026-09-04 — the main item and four siblings LANDED; of the three residues, two were MEASURED AND REFUSED ((P18.13): both were mis-stated in the queue) and the third is (CHK.73)'s documented blocker, so nothing actionable remains under this number. PARTLY DONE 2026-09-02/09-04 ((P18.9) note; the `require`-of-`export =` main
   item and four siblings landed and gated — 13 pins all discriminating, grid unchanged,
   cost_gate exit 0, suite 17,163/0/3 alone and 17,182/0/3 rebased onto (P18.10); the generator's written heritage route closed 5 of its 8
   bases and STAYS for the remaining 3). **STILL OPEN, carried by this item:** no TS2304 for
@@ -2168,7 +2168,7 @@ counter, which is the (INC-closure) directive holding by construction.
   against tsgo, fix at the resolver/import walker, pin; `r1n` under
   `scratchpad/chk77/` is the fixture.
 
-- [ ] **(CHK.82) PARTLY DONE 2026-09-04 ((P18.13) note; residues (1), (2) and (3) landed and
+- [x] **(CHK.82) CLOSED 2026-09-04 — residues (1)(2)(3) LANDED; residue (4) is a FORM divergence reproducing with no augmentation at all, so it belongs to the display family queued as (PARITY.1) below, not here. PARTLY DONE 2026-09-04 ((P18.13) note; residues (1), (2) and (3) landed and
   gated — 12 pins, eight discriminating arms, grid unchanged, cost_gate exit 0, filtered
   1,468/0/0, externals 290/0, the `@types/node` per-module CODE byte-identical and its marker
   text strictly better; a B86.4 display defect fixed beside them). **STILL OPEN, carried by this
@@ -2182,6 +2182,23 @@ counter, which is the (INC-closure) directive holding by construction.
   pins and reach every message naming such a type. A LOGICAL-PARITY conversation per
   `docs/logical-parity.md` (FORM: identical code, span and verdict), gated by the full corpus
   suite. ORIGINAL ITEM: the four augmentation residues (CHK.78) measured and left.
+
+- [ ] **(PARITY.1) THE TWO FORM DIVERGENCES (CHK.81)/(CHK.82) MEASURED AND REFUSED AS FIXES —
+  they are LOGICAL-PARITY conversations, which the owner's 2026-07-26 directive makes actionable
+  (a form-only diff is a CANDIDATE, and `docs/logical-parity.md` § 2 carries the decision
+  tables).** (a) A module-declared type renders `import("<path>").ZzzEnum` in tsgo 7.0.2 AND
+  pristine `typescript@6.0.3` where we render `ZzzEnum` — reproduced with NO `declare module`
+  anywhere, so it is tsc's `getAccessibleSymbolChain` accessibility test, not an augmentation
+  rule; **103 corpus baselines already use the qualified form and we satisfy them through
+  hard-coded `pinDiag` sites rather than a mechanism**, and `enumAssignmentCompat6` prints BOTH
+  forms in one message, which is the shape any real rule must reproduce. (b) A literal-union
+  source collapses to its base primitive in a TS2322/TS2345 exactly when the target holds NO
+  literal of that base (`number`/`boolean`/`{x:number}` collapse; `never`/`"a"|"c"`/`1|2` keep —
+  and the six corpus baselines printing a literal union are all of the keeping kind), at
+  declaration, argument, return and object-literal-member positions alike. Its only gate is the
+  full corpus suite. Two pre-existing divergences to fold in: `const t: {x:number} = u` with
+  `u: "a"|"b"` reports NOTHING here (a real false NEGATIVE, i.e. MEANING, not form), and union
+  member order `'2 | 1'` (pristine) vs `'1 | 2'`.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to
