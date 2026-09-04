@@ -189,6 +189,20 @@ public fun generateKotlinExternals(
  * skip for the second (Kotlin refuses the redeclaration); functions share a
  * signature space instead and go through the overload collapse.
  *
+ * (EXT.21b) ONE GENERATION PER DECLARING MODULE. Where the program declares
+ * ambient modules (`declare module "net" { … }` — every `@types` package),
+ * [module] also SELECTS: the blocks whose specifier is the wiring's module,
+ * plus what that module re-exports (`export * from "net"` — the `node:net`
+ * twin — and `export = <require alias>`), render at the TOP LEVEL, and every
+ * other block is left to its OWN generation and named from here FULLY
+ * QUALIFIED into its own Kotlin package (`node.net.Socket`). So the caller
+ * runs this once per declaring module and gets one Kotlin file per module,
+ * which is what a per-module Kotlin package set is; the outputs are compiled
+ * TOGETHER, since a cross-module reference resolves against another file of
+ * the same compilation. A program with no ambient module block — or a wiring
+ * naming a module none of them declares — selects nothing and renders exactly
+ * what every earlier rung rendered.
+ *
  * (EXT.16) [module] wires the generation to an npm package: the real output
  * opens with `@file:JsModule("<name>")`, the package's public surface is
  * computed through the re-export graph from the entry file ([ExportPlan])
@@ -239,7 +253,7 @@ public fun generateKotlinExternals(
     }
     return KotlinExternals(
         kotlin = renderKotlinExternals(declarations, external = true, header = header),
-        compileCheckSource = renderKotlinExternals(declarations, external = false),
+        compileCheckSource = renderKotlinExternals(declarations, external = false, header = header),
         diagnostics = parseDiagnostics + checker.getDiagnostics(),
     )
 }
@@ -691,6 +705,154 @@ private class ExternalsCollector(
 
     private sealed interface Entry
 
+    // --- (EXT.21b) ONE GENERATION PER DECLARING MODULE ------------------------
+
+    /**
+     * (EXT.21b) The module SPECIFIERS whose declarations this generation
+     * renders at its top level — empty when the generation is not
+     * module-scoped, which is the DEGENERATE case every earlier rung
+     * measured (rxjs, `typescript.d.ts`, mitt, smol-toml: no `declare module
+     * "m"` block at all, so nothing to select and today's output stands).
+     *
+     * The set is the wiring's own module plus what that module's block
+     * RE-ROUTES, transitively: `export * from "x"` — the `node:net` -> `net`
+     * twin `@types/node` spells for every one of its 50 declaring modules —
+     * and `export = X` where `X` is an `import X = require("y")` alias, the
+     * `node:stream` -> `stream` shape. Both are already recorded by the scan
+     * ([AmbientModule]); the closure is over them and nothing else, so
+     * selection is a SYNTACTIC property of the wiring's module and needs no
+     * checker answer.
+     *
+     * A wiring whose module has no block in the program selects NOTHING and
+     * the generation stays flat: that is what makes the degenerate case an
+     * identity rather than a special case.
+     */
+    private val selectedModules: Set<String> = when {
+        plan == null -> emptySet()
+        plan.moduleName !in surface.modules -> emptySet()
+        else -> HashSet<String>().apply {
+            val queue = ArrayDeque<String>()
+            add(plan.moduleName)
+            queue.addLast(plan.moduleName)
+            while (queue.isNotEmpty()) {
+                val module = surface.modules[queue.removeFirst()] ?: continue
+                for (starred in module.starExports) if (add(starred)) queue.addLast(starred)
+                for (target in module.exportEquals) {
+                    val aliased = module.requireAliases[target] ?: continue
+                    if (add(aliased)) queue.addLast(aliased)
+                }
+            }
+        }
+    }
+
+    /** (EXT.21b) Whether this generation renders ONE module rather than every declaration it was given. */
+    private val moduleScoped: Boolean = selectedModules.isNotEmpty()
+
+    /** (EXT.21b) This generation's own Kotlin package — what a cross-module reference is spelled beside. */
+    private val ownPackage: KotlinPackageName? =
+        plan?.let { kotlinPackageNameFor(it.moduleName, it.packageRoot) }
+
+    /**
+     * (EXT.21b) The `declare module "m"` block a declaration sits in, at any
+     * depth — its OWN specifier for the block statement itself — or null for
+     * a declaration at a file's top level (or inside a plain `declare
+     * namespace`, which is a GLOBAL: `@types/node`'s `NodeJS` namespace is
+     * declared by no module and is visible to every one of them).
+     *
+     * Read off the node's parent chain rather than off [Site] so the ONE
+     * function serves every kind, the export statements and the namespace
+     * entries included; the two agree by construction (the scan sets a
+     * block's body specifier from the same name).
+     */
+    private fun moduleHomeOf(node: Node): String? {
+        (node as? ModuleDeclaration)?.name?.let { if (it is StringLiteralNode) return it.text }
+        var current: Node? = (node as? NodeBase)?.parent
+        while (current != null) {
+            val name = (current as? ModuleDeclaration)?.name
+            if (name is StringLiteralNode) return name.text
+            current = (current as? NodeBase)?.parent
+        }
+        return null
+    }
+
+    /**
+     * (EXT.21b) The KEY a declaration's names are owned under: the empty
+     * string for one this generation renders (its own module's declarations
+     * and the globals beside them, which share one Kotlin package), and the
+     * owning SPECIFIER for one belonging to another module — so `Socket` of
+     * `dgram` and `Socket` of `net` are two names, each owned in its own
+     * generation, where before the module split they were one and the second
+     * was a `declared again by another file` skip.
+     */
+    private fun homeKeyOf(node: Node): String {
+        if (!moduleScoped) return ""
+        val home = moduleHomeOf(node) ?: return ""
+        return if (home in selectedModules) "" else home
+    }
+
+    /** (EXT.21b) [qualified] under the generation [node] belongs to — see [homeKeyOf]. */
+    private fun scopedName(node: Node, qualified: String): String {
+        val home = homeKeyOf(node)
+        return if (home.isEmpty()) qualified else "$home\u0000$qualified"
+    }
+
+    /**
+     * (EXT.21b) Every TYPE name the SELECTED module's own declarations take
+     * — what a GLOBAL of the same name is shadowed by.
+     *
+     * TypeScript's rule inside a `declare module "stream/web"` body is
+     * innermost-first: `ReadableStream` there is the module's, not the
+     * `NodeJS.ReadableStream` the generator flattens into the same Kotlin
+     * scope. Without this the module's declaration is the LATER one and the
+     * first-wins rule keeps the global — measured, `ReadableStream` and
+     * `WritableStream` are exactly that pair on `@types/node`. Type names
+     * only: a value or a function collides through its own measured rule
+     * ((EXT.11c), (EXT.18)), which this must not pre-empt.
+     */
+    private val moduleOwnedTypeNames: Set<String> by lazy {
+        if (!moduleScoped) return@lazy emptySet<String>()
+        HashSet<String>().apply {
+            for (nameable in nameableDeclarations) {
+                if (moduleHomeOf(nameable.node) in selectedModules) add(qualifiedName(nameable.path, nameable.name))
+            }
+            for (alias in surface.aliases) {
+                if (moduleHomeOf(alias.node) in selectedModules) {
+                    add(qualifiedName(alias.path, alias.node.name.text))
+                }
+            }
+            for (entry in surface.namespaces) {
+                if (entry.skip != null || moduleHomeOf(entry.node) !in selectedModules) continue
+                for (depth in 1..entry.bodyPath.size) {
+                    add(qualifiedName(entry.bodyPath.take(depth - 1), entry.bodyPath[depth - 1]))
+                }
+            }
+        }
+    }
+
+    /**
+     * (EXT.21b) Whether this generation RENDERS the declaration [node]: its
+     * own module's, or a global the module does not shadow. [name] is the
+     * declaration's TYPE name where it takes one — null for a value, a
+     * function, an export statement or an import alias, which the shadow
+     * rule deliberately leaves to the measured value/function rules.
+     */
+    private fun rendersHere(node: Node, path: List<String>, name: String?): Boolean {
+        if (!moduleScoped) return true
+        val home = moduleHomeOf(node) ?: return !shadowedGlobal(node, path, name)
+        return home in selectedModules
+    }
+
+    /**
+     * (EXT.21b) Whether [node] is a GLOBAL whose TYPE name the selected
+     * module declares too — rendered in every OTHER generation and in none
+     * of this one's scopes, so it owns no name here and a reference to it
+     * keeps its loud marker rather than silently spelling the module's
+     * same-named declaration.
+     */
+    private fun shadowedGlobal(node: Node, path: List<String>, name: String?): Boolean =
+        moduleScoped && name != null && moduleHomeOf(node) == null &&
+            qualifiedName(path, name) in moduleOwnedTypeNames
+
     /**
      * (EXT.13) One namespace scope under construction; [path] is its own
      * qualified path, [fileName] the file of the declaration that created it
@@ -726,7 +888,11 @@ private class ExternalsCollector(
      */
     private fun namespaceOrdinal(path: List<String>): Int =
         surface.namespaces
-            .filter { it.skip == null && it.bodyPath.size >= path.size && it.bodyPath.subList(0, path.size) == path }
+            .filter {
+                it.skip == null && it.bodyPath.size >= path.size && it.bodyPath.subList(0, path.size) == path &&
+                    // (EXT.21b) Another module's namespace is not this scope.
+                    rendersHere(it.node, emptyList(), null)
+            }
             .minOfOrNull { it.ordinal } ?: -1
 
     /** (EXT.20) The scan position of a scope entry; -1 where it has none. */
@@ -1569,29 +1735,39 @@ private class ExternalsCollector(
         fun add(qualified: String, candidate: NameCandidate) {
             getOrPut(qualified) { mutableListOf() }.add(candidate)
         }
+        // (EXT.21b) The key is the name UNDER ITS OWN GENERATION
+        // ([scopedName]): each module's declarations own their names among
+        // themselves, and a global the selected module shadows owns none.
         for (nameable in nameableDeclarations) {
+            if (shadowedGlobal(nameable.node, nameable.path, nameable.name)) continue
             val kind = when (nameable.node) {
                 is ClassDeclaration -> NameKind.CLASS
                 is EnumDeclaration -> NameKind.ENUM
                 else -> NameKind.INTERFACE
             }
             add(
-                qualifiedName(nameable.path, nameable.name),
+                scopedName(nameable.node, qualifiedName(nameable.path, nameable.name)),
                 NameCandidate(nameable.ordinal, nameable, null, kind, fileNameOf(nameable.node)),
             )
         }
         for (entry in surface.namespaces) {
             if (entry.skip != null) continue
             for (depth in 1..entry.bodyPath.size) {
+                val name = entry.bodyPath[depth - 1]
+                val path = entry.bodyPath.take(depth - 1)
+                if (shadowedGlobal(entry.node, path, name)) continue
                 add(
-                    qualifiedName(entry.bodyPath.take(depth - 1), entry.bodyPath[depth - 1]),
+                    scopedName(entry.node, qualifiedName(path, name)),
                     NameCandidate(entry.ordinal, null, null, NameKind.NAMESPACE, fileNameOf(entry.node)),
                 )
             }
         }
         for (alias in surface.aliases) {
-            if (alias.path.isEmpty()) {
-                add(alias.node.name.text, NameCandidate(alias.ordinal, null, alias.node, NameKind.ALIAS, fileNameOf(alias.node)))
+            if (alias.path.isEmpty() && !shadowedGlobal(alias.node, alias.path, alias.node.name.text)) {
+                add(
+                    scopedName(alias.node, alias.node.name.text),
+                    NameCandidate(alias.ordinal, null, alias.node, NameKind.ALIAS, fileNameOf(alias.node)),
+                )
             }
         }
         for (candidates in values) candidates.sortBy { it.ordinal }
@@ -1699,7 +1875,11 @@ private class ExternalsCollector(
     private fun ownsName(nameable: Nameable, lens: CheckedLens): Boolean {
         // (EXT.20) The declarations of one merge group are ONE Kotlin
         // declaration, so each of them owns the name the group's lead does.
-        val owner = nameOwnerOrdinal(qualifiedName(nameable.path, nameable.name), lens) ?: return false
+        if (shadowedGlobal(nameable.node, nameable.path, nameable.name)) return false
+        val owner = nameOwnerOrdinal(
+            scopedName(nameable.node, qualifiedName(nameable.path, nameable.name)),
+            lens,
+        ) ?: return false
         return mergeGroupFirstOf(owner) == mergeGroupFirstOf(nameable.ordinal)
     }
 
@@ -1820,11 +2000,19 @@ private class ExternalsCollector(
      * ([shortestSpelling]).
      */
     private val declaredQualified: Set<String> = HashSet<String>().apply {
-        for (nameable in nameableDeclarations) add(qualifiedName(nameable.path, nameable.name))
+        // (EXT.21b) The names THIS generation declares — another module's
+        // are not in scope here and must never shadow or be spelled bare.
+        for (nameable in nameableDeclarations) {
+            if (!rendersHere(nameable.node, nameable.path, nameable.name)) continue
+            add(qualifiedName(nameable.path, nameable.name))
+        }
         for (entry in surface.namespaces) {
             if (entry.skip != null) continue
             for (depth in 1..entry.bodyPath.size) {
-                add(qualifiedName(entry.bodyPath.take(depth - 1), entry.bodyPath[depth - 1]))
+                val name = entry.bodyPath[depth - 1]
+                val path = entry.bodyPath.take(depth - 1)
+                if (!rendersHere(entry.node, path, name)) continue
+                add(qualifiedName(path, name))
             }
         }
     }
@@ -1833,7 +2021,9 @@ private class ExternalsCollector(
     private class WrittenAlias(val alias: Declared<TypeAliasDeclaration>)
 
     /** (EXT.14) The identifiers of the flattened root namespaces — what a qualified `ts.X` drops. */
-    private val flattenedRootNames: Set<String> = surface.namespaces.mapNotNullTo(HashSet()) { it.rootName }
+    private val flattenedRootNames: Set<String> = surface.namespaces
+        .filter { rendersHere(it.node, emptyList(), null) }
+        .mapNotNullTo(HashSet()) { it.rootName }
 
     /**
      * (EXT.14) Every qualified name a WRITTEN name may resolve through
@@ -1843,13 +2033,22 @@ private class ExternalsCollector(
      * TypeScript name whether or not they have a Kotlin one.
      */
     private val writtenNames: Set<String> = HashSet<String>(declaredQualified).apply {
-        for (alias in surface.aliases) add(qualifiedName(alias.path, alias.node.name.text))
+        for (alias in surface.aliases) {
+            if (!rendersHere(alias.node, alias.path, alias.node.name.text)) continue
+            add(qualifiedName(alias.path, alias.node.name.text))
+        }
     }
 
     /** (EXT.14) Qualified name → what the fallback answers for it, first declared wins (as [ExternalsCollector.finish]). */
     private val writtenTargets: Map<String, Any> = HashMap<String, Any>().apply {
-        for (nameable in nameableDeclarations) putIfAbsent(qualifiedName(nameable.path, nameable.name), nameable)
-        for (alias in surface.aliases) putIfAbsent(qualifiedName(alias.path, alias.node.name.text), WrittenAlias(alias))
+        for (nameable in nameableDeclarations) {
+            if (!rendersHere(nameable.node, nameable.path, nameable.name)) continue
+            putIfAbsent(qualifiedName(nameable.path, nameable.name), nameable)
+        }
+        for (alias in surface.aliases) {
+            if (!rendersHere(alias.node, alias.path, alias.node.name.text)) continue
+            putIfAbsent(qualifiedName(alias.path, alias.node.name.text), WrittenAlias(alias))
+        }
     }
 
     /**
@@ -2118,7 +2317,87 @@ private class ExternalsCollector(
      */
     private fun spellingOf(nameable: Nameable, fromPath: List<String>, lens: CheckedLens): String? {
         if (!ownsName(nameable, lens)) return null
+        val home = homeKeyOf(nameable.node)
+        if (home.isNotEmpty()) {
+            return (foreignSpelling(home, nameable.path, nameable.name, fromPath) as? ForeignName.Spelled)?.text
+        }
         return shortestSpelling(fromPath, nameable.path, nameable.name, declaredQualified)
+    }
+
+    /**
+     * (EXT.21b) The FULLY QUALIFIED spelling of a declaration another
+     * module's generation renders — `node.net.Socket` named from the `dgram`
+     * generation — or null, which keeps the reference's loud marker.
+     *
+     * The identity evidence is the SAME as the same-module path's: the
+     * caller reached this [Nameable] by comparing the resolved type's own
+     * declaration against the surface's nodes by `===`, and [ownsName] has
+     * already said this declaration is the one its OWN generation keeps the
+     * name for ([nameCandidates] is keyed per generation since (EXT.21b), so
+     * the first-wins rule runs once per module rather than once per
+     * program). Nothing here reads a SPELLING.
+     *
+     * Three refusals, each of which would otherwise be a silently wrong
+     * reference rather than a marker:
+     *
+     *  - the target module's specifier carries something no Kotlin package
+     *    can spell ([kotlinPackageNameFor] refuses it), so that generation
+     *    emits no `package` line and its declarations sit in the ROOT
+     *    package, where they are not addressable from here;
+     *  - THIS generation has no `package` line for the same reason. A
+     *    qualified name is legal Kotlin from the root package, but a
+     *    generation that could not be packaged is one the consumer has no
+     *    per-module set for, so naming another module's package would be a
+     *    reference into a file that may not exist. The marker names the
+     *    module instead;
+     *  - the package's FIRST segment is a name this generation declares, so
+     *    the qualified spelling would resolve to that declaration instead
+     *    (Kotlin resolves the head innermost-first, exactly as
+     *    [resolveSpelling] does).
+     */
+    private fun foreignSpelling(
+        specifier: String,
+        targetPath: List<String>,
+        name: String,
+        fromPath: List<String>,
+    ): ForeignName {
+        val own = ownPackage
+        if (own !is KotlinPackageName.Derived) {
+            return ForeignName.Refused(
+                "declared by the module \"$specifier\" and this generation has no package of its own to name it from"
+            )
+        }
+        val target = kotlinPackageNameFor(specifier, plan?.packageRoot)
+        if (target !is KotlinPackageName.Derived) {
+            return ForeignName.Refused("declared by the module \"$specifier\", which maps to no Kotlin package")
+        }
+        val head = target.spelling.substringBefore('.').trim('`')
+        if (resolveSpelling(listOf(head), fromPath, declaredQualified) != null) {
+            return ForeignName.Refused(
+                "declared by the module \"$specifier\", whose package '${target.spelling}' is shadowed by " +
+                    "the declaration $head of this generation"
+            )
+        }
+        return ForeignName.Spelled(
+            target.spelling + "." + (targetPath + name).joinToString(".") { kotlinIdentifier(it) }
+        )
+    }
+
+    /** (EXT.21b) A cross-module spelling, or the reason there is none. */
+    private sealed interface ForeignName {
+        class Spelled(val text: String) : ForeignName
+        class Refused(val reason: String) : ForeignName
+    }
+
+    /**
+     * (EXT.21b) The reason a reference to [nameable] has no cross-module
+     * spelling, for the marker at the use site; null where it has one or
+     * where the declaration is this generation's own.
+     */
+    private fun foreignRefusal(nameable: Nameable, fromPath: List<String>): String? {
+        val home = homeKeyOf(nameable.node)
+        if (home.isEmpty()) return null
+        return (foreignSpelling(home, nameable.path, nameable.name, fromPath) as? ForeignName.Refused)?.reason
     }
 
     private fun scopeOf(typeParamNames: Set<String>, site: Site, lens: CheckedLens): TypeScope =
@@ -2472,8 +2751,13 @@ private class ExternalsCollector(
                 "callable interface ${target.name} has no Kotlin function type"
             target != null && !ownsName(target, lens) ->
                 "the name ${target.name} is taken by an earlier declaration in ${scopeText(target.path)}"
+            // (EXT.21b) A declaration another module owns, whose package
+            // cannot be named from here — never the "shadowed" wording,
+            // which is about THIS generation's own scopes.
+            target != null && foreignRefusal(target, scope.path) != null ->
+                foreignRefusal(target, scope.path)!!
             target != null && spellingOf(target, scope.path, lens) == null ->
-                "shadowed inside ${scope.path.joinToString(".")}, no Kotlin spelling reaches it"
+                "shadowed inside ${scopeText(scope.path)}, no Kotlin spelling reaches it"
             isAnyIntrinsic(resolved) -> "resolved to any"
             (annotation.typeName as? Identifier)?.text in libArrayNames &&
                 !isLibArraySymbol(lens.typeReferenceSymbol(annotation)) -> "not the lib Array"
@@ -2863,37 +3147,46 @@ private class ExternalsCollector(
         when (node) {
             is InterfaceDeclaration -> {
                 val declared = surface.interfaces.firstOrNull { it.node === node } ?: return
+                // (EXT.21b) Another module's declaration is rendered by that
+                // module's OWN generation and named from here fully qualified.
+                if (!rendersHere(node, declared.path, node.name.text)) return
                 if (!firstVisit(node)) return
                 add(declared.path, node, collectInterface(node, lens, declared.site), declared.ordinal)
             }
             is ClassDeclaration -> {
                 val declared = surface.classes.firstOrNull { it.node === node } ?: return
+                if (!rendersHere(node, declared.path, node.name?.text)) return
                 if (!firstVisit(node)) return
                 add(declared.path, node, collectClass(node, lens, declared.site), declared.ordinal)
             }
             is EnumDeclaration -> {
                 val declared = surface.enums.firstOrNull { it.node === node } ?: return
+                if (!rendersHere(node, declared.path, node.name.text)) return
                 if (!firstVisit(node)) return
                 add(declared.path, node, collectEnum(node), declared.ordinal)
             }
             is TypeAliasDeclaration -> {
                 val declared = surface.aliases.firstOrNull { it.node === node } ?: return
+                if (!rendersHere(node, declared.path, node.name.text)) return
                 if (!firstVisit(node)) return
                 add(declared.path, node, collectTypeAlias(node, lens, declared.site), declared.ordinal)
             }
             is FunctionDeclaration -> {
                 val declared = surface.functions.firstOrNull { it.node === node } ?: return
+                if (!rendersHere(node, declared.path, null)) return
                 if (!firstVisit(node)) return
                 collectFunction(node, lens, declared.site)
                     ?.let { add(declared.path, node, it, declared.ordinal) }
             }
             is VariableDeclaration -> {
                 val exported = surface.values.firstOrNull { it.node === node } ?: return
+                if (!rendersHere(node, exported.path, null)) return
                 if (!firstVisit(node)) return
                 add(exported.path, node, collectValue(exported, lens), exported.ordinal)
             }
             is ExportAssignment, is ExportDeclaration -> {
                 if (surface.exportWiring.none { it === node }) return
+                if (!rendersHere(node, emptyList(), null)) return
                 if (!firstVisit(node)) return
                 // (EXT.16) Under a wiring the statement IS the wiring: it
                 // renders only what could NOT be expressed.
@@ -2905,12 +3198,16 @@ private class ExternalsCollector(
             // renders as an object), or the loud skip of one not generated.
             is ModuleDeclaration -> {
                 val entry = surface.namespaces.firstOrNull { it.node === node } ?: return
+                if (!rendersHere(node, entry.ownerPath, entry.rootName)) return
                 if (!firstVisit(node)) return
                 when {
                     entry.skip != null -> add(entry.ownerPath, node, SkippedDeclaration(entry.skip))
                     else -> {
                         // (EXT.16) A wired header states what the root's members bind as.
-                        entry.header?.let { add(entry.ownerPath, node, ExternalMarker(plan?.namespaceHeader(node) ?: it)) }
+                        entry.header?.let {
+                            val selected = moduleScoped && moduleHomeOf(node) in selectedModules
+                            add(entry.ownerPath, node, ExternalMarker(plan?.namespaceHeader(node, selected) ?: it))
+                        }
                         scope(entry.bodyPath, fileNameOf(node))
                     }
                 }
@@ -2928,6 +3225,7 @@ private class ExternalsCollector(
             // member is not built.
             is ImportEqualsDeclaration -> {
                 val declared = surface.importAliases.firstOrNull { it.node === node } ?: return
+                if (!rendersHere(node, declared.path, null)) return
                 if (!firstVisit(node)) return
                 add(
                     declared.path,
@@ -3711,6 +4009,25 @@ private class ExternalsCollector(
                     if (isCallableInterface(nameable.node)) return@let null
                     if (!ownsName(nameable, lens)) {
                         reason = "the name ${nameable.name} is taken by an earlier declaration in ${scopeText(nameable.path)}"
+                        return@let null
+                    }
+                    // (EXT.21b) A base ANOTHER MODULE's generation declares
+                    // is refused, loudly. `Inheritance` — Kotlin's `override`
+                    // and `open` rules, which TypeScript has no counterpart
+                    // for — is built over the declarations of ONE generation
+                    // and resolves a supertype by its TEXT, so a
+                    // cross-package base contributes no members and every
+                    // redeclaration below it loses its `override`: measured
+                    // on `@types/node`, admitting them is 184 `hides member
+                    // of supertype` plus 27 `inherits conflicting members`,
+                    // i.e. a set that does not compile. A marker at the
+                    // clause keeps the class; carrying inheritance across
+                    // generations needs the renderer to know the other
+                    // modules' declarations and is a rung of its own.
+                    val homeModule = homeKeyOf(nameable.node)
+                    if (homeModule.isNotEmpty()) {
+                        reason = "${nameable.name} is declared by the module \"$homeModule\" - a supertype " +
+                            "in another generated package carries no Kotlin override computation here"
                         return@let null
                     }
                     val spelling = spellingOf(nameable, scope.path, lens) ?: run {

@@ -163,6 +163,41 @@ private class RecordingJsMessageCollector : MessageCollector {
 }
 
 /**
+ * (EXT.21b) The MULTI-FILE Kotlin/JS compile — the twin of [compileCheckAll],
+ * and the one that grades the wiring as well as the types: each per-module
+ * source carries its OWN `@file:JsModule` header, which is a per-FILE
+ * annotation, so a set of them is exactly one compilation of several files.
+ */
+@OptIn(kotlin.io.path.ExperimentalPathApi::class)
+internal fun jsCompileCheckAll(
+    sources: List<Pair<String, String>>,
+    stdlib: Path,
+    moduleKind: String = "commonjs",
+): JsCompileCheck {
+    val work = Files.createTempDirectory("xtsc-externals-js-gate-all")
+    try {
+        val files = sources.map { (name, source) ->
+            val file = work.resolve("$name.kt")
+            Files.writeString(file, source)
+            file.toString()
+        }
+        val messages = RecordingJsMessageCollector()
+        val arguments = K2JSCompilerArguments().apply {
+            freeArgs = files
+            libraries = stdlib.toString()
+            outputDir = work.resolve("out").toString()
+            moduleName = "xtsc-externals-js-gate"
+            irProduceKlibDir = true
+            this.moduleKind = moduleKind
+        }
+        K2JSCompiler().exec(messages, Services.EMPTY, arguments)
+        return JsCompileCheck(!messages.hasErrors(), messages.errors, messages.warnings)
+    } finally {
+        work.deleteRecursively()
+    }
+}
+
+/**
  * Compiles [source] as one Kotlin/JS file against [stdlib]. Errors are the
  * gate; warnings are recorded so a caller can print them, never gated on.
  */

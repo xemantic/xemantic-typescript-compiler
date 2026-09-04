@@ -1751,14 +1751,21 @@ internal fun renderKotlinExternals(
     header: ModuleHeader? = null,
 ): String = buildString {
     val inheritance = Inheritance(declarations)
-    if (external && header != null) {
-        appendLine("@file:JsModule(\"${jsStringLiteral(header.moduleName)}\")")
-        if (header.umd) appendLine("@file:JsNonModule")
+    if (header != null) {
+        // (EXT.21b) The JS wiring is the REAL variant's alone (the metadata
+        // compiler knows no `JsModule`), the PACKAGE is BOTH variants' — a
+        // package is not a Kotlin/JS notion, and the gate variant of a
+        // per-module set must be compilable as one set too, which two
+        // generations in the root package are not.
+        if (external) {
+            appendLine("@file:JsModule(\"${jsStringLiteral(header.moduleName)}\")")
+            if (header.umd) appendLine("@file:JsNonModule")
+        }
         // (EXT.21) File annotations come BEFORE the package declaration in
         // Kotlin's grammar; a blank line separates them as `kotlinc` formats it.
         when (val packageName = header.packageName) {
             is KotlinPackageName.Derived -> {
-                appendLine()
+                if (external) appendLine()
                 appendLine("package ${packageName.spelling}")
             }
             is KotlinPackageName.Refused ->

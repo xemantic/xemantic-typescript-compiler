@@ -74,6 +74,36 @@ private class RecordingMessageCollector : MessageCollector {
 
 }
 
+/**
+ * (EXT.21b) The MULTI-FILE metadata compile: one compilation over several
+ * generated sources, each its own file with its own `package` line — what a
+ * per-module generation set IS, and the only way a cross-module reference
+ * (`node.net.Socket` named from the `dgram` generation) can be graded, since
+ * it resolves against another file of the same compilation.
+ */
+@OptIn(kotlin.io.path.ExperimentalPathApi::class)
+internal fun compileCheckAll(sources: List<Pair<String, String>>): CompileCheck {
+    val work = Files.createTempDirectory("xtsc-externals-gate-all")
+    try {
+        val files = sources.map { (name, source) ->
+            val file = work.resolve("$name.kt")
+            Files.writeString(file, source)
+            file.toString()
+        }
+        val messages = RecordingMessageCollector()
+        val arguments = K2MetadataCompilerArguments().apply {
+            freeArgs = files
+            destination = work.resolve("klib").toString()
+            moduleName = "xtsc-externals-gate"
+            metadataKlib = true
+        }
+        KotlinMetadataCompiler().exec(messages, Services.EMPTY, arguments)
+        return CompileCheck(!messages.hasErrors(), messages.errors)
+    } finally {
+        work.deleteRecursively()
+    }
+}
+
 @OptIn(kotlin.io.path.ExperimentalPathApi::class)
 internal fun compileCheck(source: String): CompileCheck {
     val work = Files.createTempDirectory("xtsc-externals-gate")

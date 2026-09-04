@@ -101,6 +101,140 @@ class ExternalsLibraryProbe {
         out.resolve("census.txt").writeText(census(result, check, jsCheck, files))
     }
 
+    /**
+     * (EXT.21b) THE PER-MODULE PROBE: one generation per DECLARING `declare
+     * module "m"` block, each wired to that module and emitted into its own
+     * Kotlin package, then ALL of them compiled TOGETHER — as metadata and as
+     * Kotlin/JS — because a cross-module reference (`node.net.Socket` named
+     * from the `dgram` generation) resolves against another FILE of the same
+     * compilation and can be graded no other way.
+     *
+     * Gated on `XTSC_EXTERNALS_PROBE_MODULES`, the Kotlin package ROOT the
+     * set is emitted under (`node` for `@types/node`; `-` for none), over the
+     * same `XTSC_EXTERNALS_PROBE_FILES`/`_ROOT`/`_OUT` the flattened probe
+     * reads. `XTSC_EXTERNALS_PROBE_MODULE_FILTER` narrows the set to a
+     * `:`-separated list of specifiers, for a quick pass over a few modules.
+     */
+    @Test
+    fun `probe one generation per declaring module when XTSC_EXTERNALS_PROBE_MODULES is set`() {
+        val packageRoot = System.getenv("XTSC_EXTERNALS_PROBE_MODULES") ?: return
+        val fileList = System.getenv("XTSC_EXTERNALS_PROBE_FILES") ?: return
+        val root = System.getenv("XTSC_EXTERNALS_PROBE_ROOT")?.trimEnd('/')
+        val out = Path.of(System.getenv("XTSC_EXTERNALS_PROBE_OUT") ?: "build/externals-probe-modules")
+        val only = System.getenv("XTSC_EXTERNALS_PROBE_MODULE_FILTER")
+            ?.split(':')?.filter { it.isNotBlank() }?.toSet()
+        Files.createDirectories(out)
+
+        fun entryName(path: String): String {
+            val name = if (root != null && path.startsWith(root)) path.removePrefix(root) else path
+            return if (name.startsWith("/")) name else "/$name"
+        }
+        val files = fileList.split(':').filter { it.isNotBlank() }.map { path ->
+            SourceFileEntry(entryName(path), Path.of(path).readText())
+        }
+        val blocks = declaringBlocks(files).filter { only == null || it.first in only }
+        val prefix = packageRoot.takeUnless { it == "-" }
+
+        val rows = mutableListOf<String>()
+        val sources = mutableListOf<Pair<String, String>>()
+        val jsSources = mutableListOf<Pair<String, String>>()
+        for ((specifier, fileName) in blocks) {
+            val started = System.nanoTime()
+            val generated = generateKotlinExternals(files, module = ModuleWiring(specifier, fileName, prefix))
+            val elapsed = (System.nanoTime() - started) / 1_000_000
+            val safe = specifier.replace(Regex("[^A-Za-z0-9]"), "_")
+            out.resolve("$safe.kt").writeText(generated.kotlin)
+            jsSources += safe to generated.kotlin
+            sources += safe to generated.compileCheckSource
+            val markers = markerRegex.findAll(generated.kotlin).map { it.groupValues[1] }.toList()
+            val declaredAgain = markers.count { it.contains("declared again by another file") }
+            val declarations = generated.kotlin.lineSequence()
+                .count { declarationRegex.matchEntire(it) != null }
+            // (EXT.21b) The three cross-module rows: references SPELLED into
+            // another module's package, heritage bases REFUSED because a
+            // supertype cannot cross one, and references refused because no
+            // package could be named.
+            val foreignSpelled = prefix?.let { root ->
+                Regex("(?<![A-Za-z0-9_.`])" + Regex.escape(root) + "\\.[A-Za-z_`]").findAll(generated.kotlin).count()
+            } ?: 0
+            val foreignHeritage = markers.count { it.contains(" - a supertype in another generated package") }
+            val foreignRefused = markers.count {
+                it.contains("maps to no Kotlin package") || it.contains("has no package of its own") ||
+                    it.contains("is shadowed by the declaration")
+            }
+            rows += listOf(
+                specifier,
+                generated.kotlin.lines().size.toString(),
+                declarations.toString(),
+                markers.size.toString(),
+                declaredAgain.toString(),
+                foreignSpelled.toString(),
+                foreignHeritage.toString(),
+                foreignRefused.toString(),
+                generated.kotlin.lineSequence().firstOrNull { it.startsWith("package ") } ?: "-",
+                "${elapsed}ms",
+            ).joinToString("\t")
+        }
+
+        val check = compileCheckAll(sources)
+        val jsCheck = JsStdlib.locate()?.let { jsCompileCheckAll(jsSources, it) }
+        out.resolve("modules-compile-errors.txt").writeText(check.errors.joinToString("") { "$it\n" })
+        out.resolve("modules-js-compile-errors.txt").writeText(
+            jsCheck?.errors?.joinToString("") { "$it\n" } ?: "SKIPPED: no Kotlin/JS stdlib klib\n"
+        )
+        out.resolve("modules-census.txt").writeText(
+            buildString {
+                appendLine("== per-module generations (${blocks.size}) ==")
+                appendLine(
+                    "specifier\tlines\tdeclarations\tmarkers\tdeclaredAgain\t" +
+                        "foreignSpelled\tforeignHeritage\tforeignRefused\tpackage\telapsed"
+                )
+                for (row in rows) appendLine(row)
+                appendLine()
+                appendLine("== compiled together ==")
+                appendLine("metadata errors: ${check.errors.size}, successful: ${check.successful}")
+                appendLine(
+                    "js errors: ${jsCheck?.errors?.size?.toString() ?: "SKIPPED"}, " +
+                        "successful: ${jsCheck?.successful?.toString() ?: "SKIPPED"}"
+                )
+            }
+        )
+    }
+
+    /**
+     * (EXT.21b) Every top-level `declare module "m" { … }` block that
+     * DECLARES something, as (specifier, file) — the 55 `node:x` twins whose
+     * body is one `export * from` re-export declare nothing and get no
+     * generation of their own (they are reached through the selected
+     * module's own closure). A brace-depth scan over the text, which is what
+     * a probe needs; the generator itself reads the parsed tree.
+     */
+    private fun declaringBlocks(files: List<SourceFileEntry>): List<Pair<String, String>> {
+        val blocks = mutableListOf<Pair<String, String>>()
+        for (file in files) {
+            var depth = 0
+            var specifier: String? = null
+            var declares = false
+            for (line in file.content.lineSequence()) {
+                if (specifier == null) {
+                    val match = moduleBlockRegex.find(line) ?: continue
+                    specifier = match.groupValues[1]
+                    depth = 1
+                    declares = false
+                    continue
+                }
+                depth += line.count { it == '{' } - line.count { it == '}' }
+                if (depth > 0) {
+                    if (blockDeclarationRegex.containsMatchIn(line)) declares = true
+                } else {
+                    if (declares) blocks += specifier to file.fileName
+                    specifier = null
+                }
+            }
+        }
+        return blocks.distinctBy { it.first }
+    }
+
     private fun census(result: KotlinExternals, check: CompileCheck, jsCheck: JsCompileCheck?, files: List<SourceFileEntry>): String {
         val markerTexts = markerRegex.findAll(result.kotlin).map { it.groupValues[1] }.toList()
         val byCategory = markerTexts.groupingBy(::categorize).eachCount()
@@ -203,6 +337,11 @@ class ExternalsLibraryProbe {
 
     private companion object {
         val markerRegex = Regex("""/\* xtsc: (.*?) \*/""")
+        // (EXT.21b) A top-level ambient module block and a declaration inside one.
+        val moduleBlockRegex = Regex("""^declare module "([^"]+)"\s*\{""")
+        val blockDeclarationRegex = Regex(
+            """^\s+(?:export\s+)?(?:declare\s+)?(?:abstract\s+)?(?:class|interface|type|namespace|function|const|var|let|enum)\s+[A-Za-z_${'$'}]"""
+        )
         // (EXT.20) A block-level `export = X;` (four-space indent: the body of a top-level module block).
         val exportEqualsRegex = Regex("""^    export = ([A-Za-z_$][A-Za-z0-9_$]*);""", RegexOption.MULTILINE)
         val declaredNameRegex = Regex(

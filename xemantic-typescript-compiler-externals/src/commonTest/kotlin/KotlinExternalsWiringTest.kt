@@ -124,7 +124,13 @@ class KotlinExternalsWiringTest {
                 export as namespace P;
             """,
         )
+        // (EXT.21b) The gate variant carries the PACKAGE and no JS
+        // annotation: a package is not a Kotlin/JS notion, and a per-module
+        // generation set must be gate-compilable as one set, which two
+        // generations in the root package are not.
         val expected = """
+            package pkg
+
             public fun f(x: String): Unit = null!!
         """.trimIndent() + "\n"
         val gate = result.compileCheckSource
@@ -528,7 +534,7 @@ class KotlinExternalsWiringTest {
     }
 
     @Test
-    fun `declare module bodies - the package's own module and another module`() {
+    fun `declare module bodies - the package's own module renders and another module is left to its own generation`() {
         val result = generateWired(
             pkg,
             "/pkg/index.d.ts" to """
@@ -545,12 +551,6 @@ class KotlinExternalsWiringTest {
             /* xtsc: module "pkg" - the package's own module; members rendered at top level */
 
             public external fun own(): Unit
-
-            /* xtsc: module "other" - members rendered at top level; bound by @file:JsModule("other"), not "pkg" - a file of its own */
-
-            public external fun alien(): Unit
-
-            /* xtsc: skipped export = alien inside module "other" - outside the package entry's surface */
 
             public external fun top(): Unit
         """.trimIndent() + "\n"
@@ -757,6 +757,8 @@ class KotlinExternalsWiringTest {
             """,
         )
         val expected = """
+            package pkg
+
             public interface AjaxError {
                 public var status: Double
             }
@@ -851,7 +853,7 @@ class KotlinExternalsWiringTest {
             @JsName("path")
             public external val pathValue: path.P
 
-            /* xtsc: skipped export = path inside module "path" - outside the package entry's surface */
+            /* xtsc: skipped export = path inside module "path" - the module's own surface, rendered at top level */
         """.trimIndent() + "\n"
         val rendered = result.kotlin
         val errorCodes = result.errors.map { it.code }
@@ -1143,12 +1145,17 @@ class KotlinExternalsWiringTest {
     }
 
     @Test
-    fun `negative control - the gate variant carries no package line`() {
+    fun `the gate variant carries the package line and no JS annotation`() {
+        // (EXT.21b) It carries the PACKAGE — a per-module set is gate-compiled
+        // as ONE compilation of several files, which two generations in the
+        // root package cannot be — and none of the Kotlin/JS wiring, which
+        // the metadata compiler does not know.
         val gate = generateWired(
             ModuleWiring("rxjs", "/pkg/index.d.ts"),
             "/pkg/index.d.ts" to "export declare const v: number;",
         ).compileCheckSource
-        assert(gate.lineSequence().none { it.startsWith("package ") })
+        assert(gate.lineSequence().any { it == "package rxjs" })
+        assert(gate.lineSequence().none { it.startsWith("@file:") })
     }
 
     @Test

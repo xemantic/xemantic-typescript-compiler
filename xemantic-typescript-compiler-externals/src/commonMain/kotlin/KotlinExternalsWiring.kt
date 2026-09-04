@@ -118,6 +118,14 @@ public class ModuleWiring(
      * `kotlin-wrappers` convention, where node's `fs` module is `node.fs`
      * rather than a top-level `fs`. It is a prefix, not a replacement: the
      * module's own derived segments follow it.
+     *
+     * (EXT.21b) It is also what a CROSS-MODULE reference is spelled through:
+     * the `dgram` generation names `net`'s `Socket` as `node.net.Socket`, the
+     * target module's own package under the SAME root. A generation whose own
+     * specifier maps to no package ([KotlinPackageName.Refused]) names no
+     * other module's — the reference keeps a loud marker saying so, because a
+     * consumer who could not be given this module as a package has no
+     * per-module set for the others either.
      */
     public val packageRoot: String? = null,
 )
@@ -297,6 +305,9 @@ internal class ExportPlan(
 
     val moduleName: String get() = wiring.moduleName
 
+    /** (EXT.21) The Kotlin package prefix a multi-module generation is emitted under. */
+    val packageRoot: String? get() = wiring.packageRoot
+
     /**
      * Whether the entry declares the UMD global — `export as namespace X`,
      * which this parser keeps no node for (a documented misparse: the `as`
@@ -453,6 +464,9 @@ internal class ExportPlan(
                 else -> "namespace ${rootIdentifierOf(name) ?: "?"}"
             }
         } ?: "a namespace"
+        val own = current?.name.let { it is StringLiteralNode && it.text == moduleName }
+        val tail = if (own) "the module's own surface, rendered at top level"
+            else "outside the package entry's surface"
         val text = when (node) {
             is ExportAssignment -> {
                 val expression = (node.expression as? Identifier)?.text ?: "an expression"
@@ -467,7 +481,7 @@ internal class ExportPlan(
             }
             else -> "export wiring"
         }
-        return SkippedDeclaration("$text inside $container - outside the package entry's surface")
+        return SkippedDeclaration("$text inside $container - $tail")
     }
 
     /**
@@ -478,14 +492,22 @@ internal class ExportPlan(
      * name: the package's own module when the names agree, another module
      * otherwise.
      */
-    fun namespaceHeader(namespace: ModuleDeclaration): String {
+    fun namespaceHeader(namespace: ModuleDeclaration, selected: Boolean = false): String {
         val name = namespace.name
         if (name is StringLiteralNode) {
-            return if (name.text == moduleName) {
-                "module \"${name.text}\" - the package's own module; members rendered at top level"
-            } else {
-                "module \"${name.text}\" - members rendered at top level; bound by @file:JsModule(\"${name.text}\"), " +
-                    "not \"$moduleName\" - a file of its own"
+            return when {
+                name.text == moduleName ->
+                    "module \"${name.text}\" - the package's own module; members rendered at top level"
+                // (EXT.21b) A block this generation SELECTED — reached from
+                // the wiring's own module through `export * from` or an
+                // `export = <require alias>` — is the same surface under
+                // another spelling, not another package's.
+                selected ->
+                    "module \"${name.text}\" - re-exported by \"$moduleName\", which this generation renders; " +
+                        "members rendered at top level"
+                else ->
+                    "module \"${name.text}\" - members rendered at top level; bound by @file:JsModule(\"${name.text}\"), " +
+                        "not \"$moduleName\" - a file of its own"
             }
         }
         val root = rootIdentifierOf(name) ?: "?"
