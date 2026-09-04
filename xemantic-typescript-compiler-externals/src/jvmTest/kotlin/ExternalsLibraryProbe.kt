@@ -138,12 +138,22 @@ class ExternalsLibraryProbe {
         val rows = mutableListOf<String>()
         val sources = mutableListOf<Pair<String, String>>()
         val jsSources = mutableListOf<Pair<String, String>>()
-        for ((specifier, fileName) in blocks) {
-            val started = System.nanoTime()
-            val generated = generateKotlinExternals(files, module = ModuleWiring(specifier, fileName, prefix))
-            val elapsed = (System.nanoTime() - started) / 1_000_000
+        // (EXT.24) ONE call for the whole set: each generation reads the
+        // others, which is what makes a cross-module supertype possible.
+        val startedAll = System.nanoTime()
+        val set = generateKotlinExternalsPerModule(
+            files,
+            blocks.map { (specifier, fileName) -> ModuleWiring(specifier, fileName, prefix) },
+        )
+        val elapsedAll = (System.nanoTime() - startedAll) / 1_000_000
+        for ((specifier, _) in blocks) {
+            val generated = set.getValue(specifier)
+            val elapsed = elapsedAll / blocks.size
             val safe = specifier.replace(Regex("[^A-Za-z0-9]"), "_")
             out.resolve("$safe.kt").writeText(generated.kotlin)
+            // (EXT.24) The gate variant too — it is what the compile errors
+            // name, and a line number in it is unreadable otherwise.
+            out.resolve("$safe.check.kt").writeText(generated.compileCheckSource)
             jsSources += safe to generated.kotlin
             sources += safe to generated.compileCheckSource
             val markers = markerRegex.findAll(generated.kotlin).map { it.groupValues[1] }.toList()
@@ -190,6 +200,8 @@ class ExternalsLibraryProbe {
                         "foreignSpelled\tforeignHeritage\tforeignRefused\tpackage\telapsed"
                 )
                 for (row in rows) appendLine(row)
+                appendLine()
+                appendLine("total generation: ${elapsedAll}ms")
                 appendLine()
                 appendLine("== compiled together ==")
                 appendLine("metadata errors: ${check.errors.size}, successful: ${check.successful}")
@@ -353,7 +365,11 @@ class ExternalsLibraryProbe {
         // (EXT.13) Declarations at any depth (a nested object's members are
         // indented) and the `object` kind.
         val declarationRegex =
-            Regex(""" *public ((?:(?:open|abstract|sealed|external) )*(?:interface|class|typealias|fun|val|var|object))\b.*""")
+            // (EXT.24) `override` too — a cross-module supertype turns
+            // redeclarations into overrides, and a census that cannot count
+            // one reads a rung that ADDS supertypes as a loss of 221
+            // declarations.
+            Regex(""" *public ((?:(?:open|abstract|sealed|external|override) )*(?:interface|class|typealias|fun|val|var|object))\b.*""")
         val categories: List<Pair<Regex, String>> = listOf(
             // (EXT.20) Declaration merging, before the generic heritage rows.
             Regex("""merged with .* of this scope - TypeScript declaration merging""") to

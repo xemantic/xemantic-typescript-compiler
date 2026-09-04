@@ -25,6 +25,49 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.12) — cross-module heritage: the 179 refused supertypes of `@types/node` become supertypes, and the set still compiles (2026-09-04)
+
+**Full suite after the round: 17,196 → 17,211 / 0 / 3** (run by the orchestrating session; the externals module reads 290/0 with the Kotlin/JS gate live).
+
+**(EXT.24) LANDED — a per-module SET is generated in ONE call, so every generation knows the
+others.** `generateKotlinExternalsPerModule(files, modules)` runs each wiring TWICE: pass 1
+collects each module's frozen tree and LIFTS it into that module's Kotlin package (path prefixing
+and nothing else); pass 2 re-runs each generation with the other modules' lifted trees in hand and
+renders it. Only the string-only models cross between the passes — no AST, checker or collector is
+retained — which is what keeps a 51-module set inside an ordinary heap; the price is one extra
+check per module (14.5 s → 29.7 s for `@types/node`). Between the passes the `open` attribution is
+computed ONCE over the whole lifted set (`openedAcrossModules`) and restated per generation
+(`translateOpened`), because a class member that a subclass in ANOTHER package overrides must be
+`open` and the owning generation cannot see that for itself: its own declarations are spelled
+locally while the foreign subclass's supertype names its package, and no single table holds both
+spellings. **Receipt on `@types/node` 20.19.43, 51 modules, program order held:** heritage
+refusals `179 → 0`, cross-package references `283 → 468`, `Socket extends stream.Duplex` renders
+(`public open external class Socket(…) : node.stream.Stream.Duplex`), and the whole set still
+compiles TOGETHER at **0 metadata and 0 Kotlin/JS errors** — the 184 `hides member of supertype` +
+27 `inherits conflicting members` (EXT.21b) measured are gone, as are the 115 `is final and cannot
+be overridden` the first cut produced. Exactly ONE new heritage marker, and it is honest:
+`https.Server` merges an interface whose `extends node.http.Server` is now a real class base while
+the class already extends `node.tls.Server` — a Kotlin class extends one class. rxjs (250 files)
+and `typescript.d.ts` are byte-identical: a single-module generation keeps the (EXT.21b) refusal
+BY CONSTRUCTION, since the gate is the SET of specifiers generated beside it. 9 pins + 6 gate
+cases (a per-module set compiled together in both compilers), eight single-mistake arms.
+**The one thing that had to be measured rather than reasoned, and the trap:** a lifted package is
+NOT an ordinary scope. Modelling it as one — its segments in the spelling set, resolved by
+`resolveSpelling`'s innermost-first walk — makes `node.node.console` (the `node:console` twin
+under the root `node`) declare the name `node` in the scope `node`, so `node.net.Socket` read from
+`node.http` resolves to NOTHING and the whole cross-module override attribution silently reads
+empty. It is invisible at three modules and total at 51; `Inheritance.resolveHere` separates the
+package half from the declaration half, and `spellHere` refuses a partial package prefix as a
+spelling (Kotlin has no relative package resolution). **Two things built and then removed or
+recorded as redundant, measured rather than argued:** rewriting the lifted texts to absolute
+spellings at lift time is byte-inert on the whole 51-module set (`respell` re-resolves every
+inherited text anyway) and is not kept; passing the foreign tables to the REDUCE as well as to the
+renderer is byte-inert too and is kept for consistency, not claimed as a guard. Externals
+275 → 290 / 0. Two probe/gate instruments repaired in passing: a multi-file compile error now
+names its FILE (a line number over 51 generated sources names nothing without it), and the probe's
+declaration-count regex could not count `public override fun`, so a rung that ADDS supertypes read
+as a loss of 221 declarations.
+
 ### Round (P18.11) — per-module externals generation: 51 modules of `@types/node` compile together (2026-09-04)
 
 **(EXT.21b) LANDED — one generation per declaring module, the half (EXT.21a)'s package scheme
@@ -2175,7 +2218,14 @@ Owner decisions 2026-09-02:
   merge to census and probably refuse. Each with pins; retire the generator's bare-name
   heritage route where the lens then answers (KDoc'd numbers in `collectHeritage`).
 
-- [ ] **(EXT.24) CROSS-MODULE HERITAGE — THE ONE THING (EXT.21b) COULD NOT DO, MEASURED AND
+- [x] **(EXT.24) DONE 2026-09-04 ((P18.12) note) — a per-module SET is generated in ONE call
+  (`generateKotlinExternalsPerModule`), two passes, each generation reading the others' lifted
+  models. On `@types/node`: heritage refusals **179 → 0**, `Socket extends stream.Duplex` renders,
+  the 51-module set still compiles TOGETHER at 0 metadata and 0 Kotlin/JS errors, and exactly ONE
+  new (honest) heritage marker. rxjs and `typescript.d.ts` byte-identical. 9 pins + 6 gate cases,
+  eight arms; externals 290/0. Two sub-designs measured INERT and recorded: absolute respelling at
+  lift time (removed) and the reduce's own foreign tables (kept for consistency only).**
+  ORIGINAL: **CROSS-MODULE HERITAGE — THE ONE THING (EXT.21b) COULD NOT DO, MEASURED AND
   REFUSED (2026-09-04).** `Inheritance` is built over ONE generation and resolves supertypes by
   TEXT, so admitting a base owned by another module measured **184 `hides member of supertype`
   + 27 `inherits conflicting members`** on `@types/node` — a set that does not compile; each such

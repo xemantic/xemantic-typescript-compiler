@@ -218,6 +218,119 @@ public fun generateKotlinExternals(
     options: CompilerOptions = CompilerOptions(useRealLibs = true),
     module: ModuleWiring? = null,
 ): KotlinExternals {
+    val run = runGeneration(files, options, module, generatedModules = emptySet())
+    val declarations = run.collector.finish()
+    return KotlinExternals(
+        kotlin = renderKotlinExternals(declarations, external = true, header = run.header),
+        compileCheckSource = renderKotlinExternals(declarations, external = false, header = run.header),
+        diagnostics = run.diagnostics,
+    )
+}
+
+/**
+ * (EXT.24) THE PER-MODULE SET: one generation per [ModuleWiring], all
+ * produced in one call so that each one KNOWS the others — which is what
+ * lets a heritage base another module owns become a Kotlin supertype
+ * instead of the (EXT.21b) loud marker.
+ *
+ * The answer is keyed by [ModuleWiring.moduleName], in the order given.
+ * Every wiring must carry the SAME [ModuleWiring.packageRoot]: a reference
+ * across the set is spelled by [kotlinPackageNameFor] from the READING
+ * generation's root, so two roots would name packages that do not exist.
+ *
+ * ## Why two passes
+ *
+ * What a generation needs from the others is their DECLARATIONS — members,
+ * type parameters and their own bases — because Kotlin's `override`, `open`
+ * and heritage-clash rules are decided over the whole chain and TypeScript
+ * has no counterpart for any of them. Those declarations are a product of
+ * the check, so the set is generated twice: pass 1 collects every module's
+ * frozen tree and lifts it into that module's Kotlin package
+ * ([liftIntoPackage]); pass 2 re-runs each generation with the OTHER
+ * modules' lifted trees in hand and renders it. Only the string-only models
+ * cross between the passes — no AST, no checker and no collector is
+ * retained, which is what keeps a 51-module set inside an ordinary heap.
+ *
+ * Between the passes the `open` attribution is computed ONCE over the whole
+ * lifted set ([openedAcrossModules]) and restated per generation
+ * ([translateOpened]): a class member that a subclass in ANOTHER package
+ * overrides must be `open`, and the owning generation cannot see that for
+ * itself.
+ *
+ * A wiring whose specifier maps to no Kotlin package
+ * ([KotlinPackageName.Refused]) still gets its generation — in the root
+ * package, exactly as before — but contributes nothing to the shared
+ * namespace and receives no cross-module supertype: there is no package to
+ * name it by, and the loud markers say so.
+ */
+public fun generateKotlinExternalsPerModule(
+    files: List<SourceFileEntry>,
+    modules: List<ModuleWiring>,
+    options: CompilerOptions = CompilerOptions(useRealLibs = true),
+): Map<String, KotlinExternals> {
+    val generated = modules.map { it.moduleName }.toSet()
+    // Pass 1: every module's frozen tree, and the same tree lifted into its
+    // own Kotlin package. A module with no package of its own is generated
+    // like any other and simply joins no shared namespace.
+    val frozen = LinkedHashMap<String, List<ExternalDeclaration>>()
+    val lifted = LinkedHashMap<String, ForeignPackage>()
+    for (wiring in modules) {
+        val tree = runGeneration(files, options, wiring, generated).collector.frozenDeclarations()
+        frozen[wiring.moduleName] = tree
+        packageSegmentsOf(wiring)?.let { segments ->
+            lifted[wiring.moduleName] = ForeignPackage(segments, liftIntoPackage(tree, segments))
+        }
+    }
+    val openedAcross = openedAcrossModules(lifted.values.toList())
+    // Pass 2: each generation again, now reading the others.
+    val result = LinkedHashMap<String, KotlinExternals>()
+    for (wiring in modules) {
+        val foreign = lifted.entries.filter { it.key != wiring.moduleName }.map { it.value }
+        val own = lifted[wiring.moduleName]
+        val extraOpen =
+            if (own == null) emptyMap()
+            else translateOpened(frozen.getValue(wiring.moduleName), own.declarations, openedAcross)
+        val run = runGeneration(files, options, wiring, generated)
+        // The REDUCE reads the same tables the renderer will: its heritage
+        // pruning decides the model the renderer then renders, and pruning
+        // with one table and rendering with another is a divergence nothing
+        // here would print. Measured REDUNDANT — an arm passing no tables
+        // here is byte-identical on the 51-module `@types/node` set and on
+        // every pin — and kept for that consistency, not claimed as a guard.
+        val declarations = run.collector.finish(foreign, extraOpen)
+        result[wiring.moduleName] = KotlinExternals(
+            kotlin = renderKotlinExternals(declarations, true, run.header, foreign, extraOpen),
+            compileCheckSource = renderKotlinExternals(declarations, false, run.header, foreign, extraOpen),
+            diagnostics = run.diagnostics,
+        )
+    }
+    return result
+}
+
+/** (EXT.24) The Kotlin package a wiring's generation renders into, as identifier segments; null where the specifier maps to none. */
+private fun packageSegmentsOf(wiring: ModuleWiring): List<String>? =
+    (kotlinPackageNameFor(wiring.moduleName, wiring.packageRoot) as? KotlinPackageName.Derived)
+        ?.spelling?.split('.')?.map { it.trim('`') }
+
+/** (EXT.24) One generation's check, before any reduction or rendering. */
+private class GenerationRun(
+    val collector: ExternalsCollector,
+    val header: ModuleHeader?,
+    val diagnostics: List<Diagnostic>,
+)
+
+/**
+ * (EXT.24) Parses, binds and checks [files] for ONE wiring — the front half
+ * every entry point shares. [generatedModules] names the specifiers whose
+ * generations exist beside this one; empty means this generation is alone
+ * and a cross-module heritage base stays the (EXT.21b) marker.
+ */
+private fun runGeneration(
+    files: List<SourceFileEntry>,
+    options: CompilerOptions,
+    module: ModuleWiring?,
+    generatedModules: Set<String>,
+): GenerationRun {
     val parseDiagnostics = mutableListOf<Diagnostic>()
     val sourceFiles = files.map { file ->
         val flags = computeParserFlags(file.fileName, file.content, options)
@@ -236,7 +349,7 @@ public fun generateKotlinExternals(
     val binder = Binder(options)
     val binderResults = sourceFiles.map { binder.bind(it) }
     val plan = module?.let { ExportPlan(sourceFiles, it) }
-    val collector = ExternalsCollector(Surface(sourceFiles, plan), plan)
+    val collector = ExternalsCollector(Surface(sourceFiles, plan), plan, generatedModules)
     val checker = runWithDeepStack {
         Checker(
             options,
@@ -245,17 +358,12 @@ public fun generateKotlinExternals(
             checkedSink = collector,
         )
     }
-    val declarations = collector.finish()
     val header = plan?.let {
         // (EXT.21) The package is derived from the SPECIFIER the wiring names,
         // under the wiring's optional root prefix.
         ModuleHeader(it.moduleName, it.umd, kotlinPackageNameFor(it.moduleName, module.packageRoot))
     }
-    return KotlinExternals(
-        kotlin = renderKotlinExternals(declarations, external = true, header = header),
-        compileCheckSource = renderKotlinExternals(declarations, external = false, header = header),
-        diagnostics = parseDiagnostics + checker.getDiagnostics(),
-    )
+    return GenerationRun(collector, header, parseDiagnostics + checker.getDiagnostics())
 }
 
 /**
@@ -688,6 +796,19 @@ private class ExternalsCollector(
     private val surface: Surface,
     /** (EXT.16) The module wiring's surface plan, or null in global-script mode. */
     private val plan: ExportPlan?,
+    /**
+     * (EXT.24) The module SPECIFIERS whose generations are produced beside
+     * this one ([generateKotlinExternalsPerModule]) — the one condition
+     * under which a heritage base another module owns may become a Kotlin
+     * supertype rather than a loud marker, and a per-MODULE condition
+     * because the supertype must name a package that some generation
+     * actually renders. Empty means this generation is produced ALONE and
+     * keeps the (EXT.21b) refusal: the renderer would have no model of the
+     * owning module, so every redeclaration below such a base would lose
+     * its `override` (measured on `@types/node`: 184 `hides member of
+     * supertype` plus 27 `inherits conflicting members`).
+     */
+    private val generatedModules: Set<String> = emptySet(),
 ) : CheckedNodeSink {
 
     /**
@@ -1000,10 +1121,27 @@ private class ExternalsCollector(
      * the module object, no `@JsName`); a nested object's member binds its
      * own TypeScript name.
      */
-    fun finish(): List<ExternalDeclaration> {
-        val inheritance = Inheritance(freeze(root))
+    fun finish(
+        foreign: List<ForeignPackage> = emptyList(),
+        extraOpen: Map<String, Set<String>> = emptyMap(),
+    ): List<ExternalDeclaration> {
+        val inheritance = Inheritance(freeze(root), foreign, extraOpen)
         return reduce(root, inheritance)
     }
+
+    /**
+     * (EXT.24) The collected tree BEFORE any per-scope reduction — the model
+     * [liftIntoPackage] carries into a per-module set's shared namespace.
+     *
+     * Frozen rather than reduced, because that is the input every
+     * [Inheritance] rule is written against: `basesOf` prunes supertypes
+     * at USE time, so a foreign declaration whose bases are still the
+     * written ones is pruned by the reader exactly as the owning
+     * generation prunes them for itself, and the two answers agree by
+     * construction. A reduced model would carry ONE generation's pruning
+     * decisions into every other one's tables.
+     */
+    fun frozenDeclarations(): List<ExternalDeclaration> = freeze(root)
 
     /**
      * (EXT.20) The MERGE GROUPS of one scope: entry index → the indices of
@@ -4012,26 +4150,34 @@ private class ExternalsCollector(
                         return@let null
                     }
                     // (EXT.21b) A base ANOTHER MODULE's generation declares
-                    // is refused, loudly. `Inheritance` — Kotlin's `override`
-                    // and `open` rules, which TypeScript has no counterpart
-                    // for — is built over the declarations of ONE generation
-                    // and resolves a supertype by its TEXT, so a
-                    // cross-package base contributes no members and every
-                    // redeclaration below it loses its `override`: measured
-                    // on `@types/node`, admitting them is 184 `hides member
-                    // of supertype` plus 27 `inherits conflicting members`,
-                    // i.e. a set that does not compile. A marker at the
-                    // clause keeps the class; carrying inheritance across
-                    // generations needs the renderer to know the other
-                    // modules' declarations and is a rung of its own.
+                    // is refused, loudly, when this generation is produced
+                    // ALONE. `Inheritance` — Kotlin's `override` and `open`
+                    // rules, which TypeScript has no counterpart for — is
+                    // built over the declarations of ONE generation and
+                    // resolves a supertype by its TEXT, so a cross-package
+                    // base would contribute no members and every
+                    // redeclaration below it would lose its `override`:
+                    // measured on `@types/node`, admitting them alone is
+                    // 184 `hides member of supertype` plus 27 `inherits
+                    // conflicting members`, i.e. a set that does not
+                    // compile. (EXT.24) In a per-module SET the other
+                    // generations ARE known ([ForeignPackage]), so the base
+                    // renders as the supertype it is.
                     val homeModule = homeKeyOf(nameable.node)
-                    if (homeModule.isNotEmpty()) {
+                    if (homeModule.isNotEmpty() && homeModule !in generatedModules) {
                         reason = "${nameable.name} is declared by the module \"$homeModule\" - a supertype " +
                             "in another generated package carries no Kotlin override computation here"
                         return@let null
                     }
                     val spelling = spellingOf(nameable, scope.path, lens) ?: run {
-                        reason = "shadowed inside ${scope.path.joinToString(".")}, no Kotlin spelling reaches it"
+                        // (EXT.24) A cross-module base with no spelling says
+                        // WHY it has none — the target module maps to no
+                        // package, this generation has none, or the package
+                        // head is shadowed here — never the same-generation
+                        // shadowing wording, which would name a scope the
+                        // declaration is not in.
+                        reason = foreignRefusal(nameable, scope.path)
+                            ?: "shadowed inside ${scope.path.joinToString(".")}, no Kotlin spelling reaches it"
                         return@let null
                     }
                     renderedIsClass = nameable.node is ClassDeclaration

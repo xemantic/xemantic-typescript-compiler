@@ -567,6 +567,180 @@ private fun spellingSegments(text: String): List<String> =
     text.substringBefore('<').split('.').map { it.trim().trim('`') }
 
 /**
+ * (EXT.24) One OTHER generation of a per-module set, as this generation's
+ * [Inheritance] sees it: the Kotlin package it renders into, and its type
+ * declarations lifted into that package by [liftIntoPackage].
+ *
+ * Why a package PREFIX and not a second table: Kotlin resolves a supertype
+ * text the same way whichever file declares it, so the cheapest faithful
+ * model of a whole per-module set is ONE namespace tree in which each
+ * generation's declarations sit under its package — `node.stream.Stream.Duplex`
+ * is then an ordinary qualified name, and every rule already written over one
+ * generation (the override key, the `open` attribution, the heritage clash
+ * test, the constructor chain) works across a module boundary with no second
+ * rule.
+ *
+ * What the prefix is NOT is an enclosing SCOPE: [Inheritance]'s `resolveHere`
+ * matches a package head exactly and absolutely, and [segments] never joins
+ * the spelling set, because [resolveSpelling]'s innermost-first walk stops at
+ * the first scope declaring a head and would make a set holding
+ * `node.node.console` resolve `node.net.Socket` to nothing at all.
+ */
+internal class ForeignPackage(
+    /** The package's identifier SEGMENTS, backticks stripped (`node`, `stream`). */
+    val segments: List<String>,
+    /** The generation's type declarations, already lifted. */
+    val declarations: List<ExternalDeclaration>,
+)
+
+/**
+ * (EXT.24) A generation's TYPE declarations moved into the Kotlin package
+ * [segments]: every path prefixed, and nothing else touched.
+ *
+ * Prefixing the PATH is the whole lift, and it is faithful because a path is
+ * what every resolution here is relative to: a member of `stream`'s `Duplex`
+ * written `NodeJS.ReadableStream` resolves, from the lifted path
+ * `[node, stream]`, to `node.stream.NodeJS.ReadableStream` — the generation's
+ * OWN copy of that global, which is what Kotlin sees in that file — and
+ * [Inheritance.respell] then spells it for whoever reads it. Rewriting the
+ * texts to absolute spellings AT LIFT TIME was built and MEASURED INERT (the
+ * whole 51-module `@types/node` set byte-identical with the rewrite disabled),
+ * because `respell` re-resolves every inherited text anyway; it is not kept.
+ *
+ * Only interfaces, classes, objects and enums are carried: they are the whole
+ * of what [Inheritance] reads. Values, functions, aliases, markers and skips
+ * are dropped, and so are the header markers, the companion members and the
+ * wiring of what is kept — none of them is an input to any rule here, and a
+ * per-module set is 51 generations wide.
+ */
+internal fun liftIntoPackage(
+    declarations: List<ExternalDeclaration>,
+    segments: List<String>,
+): List<ExternalDeclaration> = declarations.mapNotNull { declaration ->
+    when (declaration) {
+        is ExternalInterface -> ExternalInterface(
+            name = declaration.name,
+            typeParameters = declaration.typeParameters,
+            headerMarkers = emptyList(),
+            supertypes = declaration.supertypes,
+            members = declaration.members,
+            path = segments + declaration.path,
+            staticMembers = emptyList(),
+            nested = liftIntoPackage(declaration.nested, segments),
+            classBases = declaration.classBases,
+        )
+        is ExternalClass -> ExternalClass(
+            name = declaration.name,
+            typeParameters = declaration.typeParameters,
+            headerMarkers = emptyList(),
+            isAbstract = declaration.isAbstract,
+            superClass = declaration.superClass,
+            interfaces = declaration.interfaces,
+            constructorParameters = declaration.constructorParameters,
+            members = declaration.members,
+            staticMembers = emptyList(),
+            path = segments + declaration.path,
+            binding = null,
+            nested = liftIntoPackage(declaration.nested, segments),
+        )
+        is ExternalObject -> ExternalObject(
+            name = declaration.name,
+            path = segments + declaration.path,
+            declarations = liftIntoPackage(declaration.declarations, segments),
+        )
+        is ExternalEnum -> if (declaration.nested.isEmpty()) null else ExternalEnum(
+            name = declaration.name,
+            entries = emptyList(),
+            markers = emptyList(),
+            binding = null,
+            staticMembers = emptyList(),
+            nested = liftIntoPackage(declaration.nested, segments),
+        )
+        else -> null
+    }
+}
+
+/**
+ * (EXT.24) The `open` attribution over a WHOLE per-module set: every class
+ * member of any generation that a declaration of any generation overrides,
+ * keyed by the LIFTED qualified name. One [Inheritance] over the lifted set
+ * and nothing else — the set is uniform there (every generated name is
+ * package-qualified), so an override that crosses a module boundary is an
+ * ordinary one and [Inheritance.openedByClass] finds it.
+ *
+ * A generation rendering ITSELF cannot compute this: its own declarations
+ * are spelled locally while a foreign subclass's supertype names its
+ * package, and the two spellings do not resolve to one declaration in a
+ * table that holds only one of them. [translateOpened] carries the answer
+ * back.
+ */
+internal fun openedAcrossModules(packages: List<ForeignPackage>): Map<String, Set<String>> =
+    Inheritance(emptyList(), packages).openedByClass
+
+/**
+ * (EXT.24) [openedAcrossModules]' answer for ONE generation, restated in
+ * that generation's OWN vocabulary: qualified class name and member key as
+ * the generation itself spells them.
+ *
+ * [local] and [lifted] are the same declarations before and after
+ * [liftIntoPackage], so a type is paired by NAME within its scope (the lift
+ * drops values, functions and aliases, so positions do not align) and a
+ * member by POSITION within its type (the lift keeps every member, in
+ * order).
+ */
+internal fun translateOpened(
+    local: List<ExternalDeclaration>,
+    lifted: List<ExternalDeclaration>,
+    openedAcross: Map<String, Set<String>>,
+): Map<String, Set<String>> {
+    val result = HashMap<String, MutableSet<String>>()
+    fun walk(here: List<ExternalDeclaration>, there: List<ExternalDeclaration>) {
+        val byName = HashMap<String, ExternalDeclaration>()
+        for (declaration in there) liftedTypeName(declaration)?.let { byName.putIfAbsent(it, declaration) }
+        for (declaration in here) {
+            val twin = byName[liftedTypeName(declaration) ?: continue] ?: continue
+            when {
+                declaration is ExternalClass && twin is ExternalClass -> {
+                    val opened = openedAcross[qualifiedName(twin.path, twin.name)].orEmpty()
+                    if (opened.isNotEmpty()) {
+                        val qualified = qualifiedName(declaration.path, declaration.name)
+                        declaration.members.forEachIndexed { index, member ->
+                            val other = twin.members.getOrNull(index) ?: return@forEachIndexed
+                            if (externalMemberKey(other) in opened) {
+                                externalMemberKey(member)?.let { result.getOrPut(qualified) { HashSet() }.add(it) }
+                            }
+                        }
+                    }
+                    walk(declaration.nested, twin.nested)
+                }
+                declaration is ExternalInterface && twin is ExternalInterface -> walk(declaration.nested, twin.nested)
+                declaration is ExternalObject && twin is ExternalObject -> walk(declaration.declarations, twin.declarations)
+                declaration is ExternalEnum && twin is ExternalEnum -> walk(declaration.nested, twin.nested)
+                else -> {}
+            }
+        }
+    }
+    walk(local, lifted)
+    return result
+}
+
+/** (EXT.24) The name a declaration is paired by in [translateOpened] — the type kinds the lift keeps. */
+private fun liftedTypeName(declaration: ExternalDeclaration): String? = when (declaration) {
+    is ExternalInterface -> declaration.name
+    is ExternalClass -> declaration.name
+    is ExternalObject -> declaration.name
+    is ExternalEnum -> declaration.name
+    else -> null
+}
+
+/** Member key: `p:` + name for a property, `f:` + [overrideSignature] for a function. */
+internal fun externalMemberKey(member: ExternalMember): String? = when (member) {
+    is ExternalProperty -> "p:" + member.name
+    is ExternalFunction -> "f:" + overrideSignature(member.name, member.typeParameters, member.parameters)
+    is SkippedMember -> null
+}
+
+/**
  * (EXT.8) What a declaration INHERITS from its generated bases, transitively —
  * the input to Kotlin's `override` rule, which TypeScript has no counterpart
  * for: a subinterface may simply redeclare a base member, Kotlin must say
@@ -589,13 +763,35 @@ private fun spellingSegments(text: String): List<String> =
  * the override decision itself is the measured [overrideSignature], not the
  * overload-conflict key (`KotlinSignatureKeys.kt` has the two tables).
  */
-internal class Inheritance(declarations: List<ExternalDeclaration>) {
+internal class Inheritance(
+    declarations: List<ExternalDeclaration>,
+    /**
+     * (EXT.24) The OTHER generations of a per-module set, each lifted into
+     * its own Kotlin package by [liftIntoPackage] — what makes a supertype
+     * owned by another module resolvable here.
+     */
+    foreign: List<ForeignPackage> = emptyList(),
+    /**
+     * (EXT.24) Members of THIS generation's classes that a declaration in
+     * ANOTHER generation overrides, by qualified class name — the
+     * cross-module half of [openedByClass], which this generation cannot
+     * see for itself (the foreign subclass's supertype text names this
+     * module's package, which resolves to nothing while this module is
+     * the one being rendered). Computed once over the whole lifted set by
+     * [openedAcrossModules] and translated back to local keys by
+     * [translateOpened].
+     */
+    private val extraOpen: Map<String, Set<String>> = emptyMap(),
+) {
 
     /** Generated interfaces and classes by QUALIFIED name, first wins. */
     private val byQualified = HashMap<String, ExternalDeclaration>()
 
     /** Every qualified name a spelling may resolve through: the types above plus the objects. */
     private val declared = HashSet<String>()
+
+    /** (EXT.24) The PACKAGE segment lists of the foreign generations — see [packageOf]. */
+    private val packagePrefixes: List<List<String>> = foreign.map { it.segments }
 
     init {
         // (EXT.20) A merged namespace's types are NESTED in the class,
@@ -626,6 +822,7 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
             }
         }
         collect(declarations)
+        for (package_ in foreign) collect(package_.declarations)
         declared.addAll(byQualified.keys)
     }
 
@@ -648,8 +845,66 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
 
     /** The generated declaration a supertype text names from inside [fromPath], if any. */
     fun declarationNamed(supertype: String, fromPath: List<String>): ExternalDeclaration? {
-        val full = resolveSpelling(spellingSegments(supertype), fromPath, declared) ?: return null
+        val full = resolveHere(spellingSegments(supertype), fromPath) ?: return null
         return byQualified[qualifiedName(full.dropLast(1), full.last())]
+    }
+
+    /**
+     * (EXT.24) The longest lifted PACKAGE [path] sits in, or empty for a
+     * declaration of the generation being rendered. Longest wins: a set may
+     * hold both `node.stream` and `node.stream.web`, and the more specific
+     * one is the package a path under it belongs to.
+     */
+    private fun packageOf(path: List<String>): List<String> =
+        packagePrefixes
+            .filter { path.size >= it.size && path.subList(0, it.size) == it }
+            .maxByOrNull { it.size }
+            ?: emptyList()
+
+    /**
+     * (EXT.24) [spelling] resolved from inside [fromPath] — [resolveSpelling]
+     * for an ordinary one, and ABSOLUTELY for one whose head is a lifted
+     * package.
+     *
+     * A package is not a scope [resolveSpelling] may walk. Its rule is
+     * Kotlin's innermost-first one, which STOPS at the first scope declaring
+     * the head — correct for declarations, and wrong for a package name,
+     * because a set holding `node.node.console` (the `node:console` twin
+     * under the root `node`) would otherwise make `node` a declared name of
+     * the scope `node`, and `node.net.Socket` read from `node.http` would
+     * resolve to nothing at all. That is not a hypothetical: it silently
+     * emptied the whole cross-module override attribution on `@types/node`
+     * until the package half was separated from the declaration half.
+     */
+    private fun resolveHere(spelling: List<String>, fromPath: List<String>): List<String>? {
+        val absolute = packagePrefixes.any { spelling.size > it.size && spelling.subList(0, it.size) == it }
+        if (absolute) {
+            return spelling.takeIf { qualifiedName(it.dropLast(1), it.last()) in declared }
+        }
+        return resolveSpelling(spelling, fromPath, declared)
+    }
+
+    /**
+     * (EXT.24) The shortest spelling of `targetPath + name` that denotes it
+     * from inside [fromPath], packages honoured: inside the target's own
+     * package (or, with no lifted package at all, the single generation)
+     * every enclosing scope may be dropped as [shortestSpelling] drops it;
+     * from ANY other package only the fully qualified spelling is legal,
+     * Kotlin having no relative package resolution — `alpha.Socket` names
+     * nothing from `node.beta` however `node.alpha.Socket` resolves.
+     */
+    private fun spellHere(fromPath: List<String>, targetPath: List<String>, name: String): String? {
+        val full = targetPath + name
+        val target = packageOf(targetPath)
+        val minimum = if (target == packageOf(fromPath)) target.size else full.size
+        for (drop in targetPath.size downTo 0) {
+            if (drop != 0 && drop < minimum) continue
+            val spelling = full.drop(drop)
+            if (resolveHere(spelling, fromPath) == full) {
+                return spelling.joinToString(".", transform = ::kotlinIdentifier)
+            }
+        }
+        return null
     }
 
     private fun typeParametersOf(declaration: ExternalDeclaration): List<String> = when (declaration) {
@@ -757,8 +1012,8 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
 
     /** One generated name respelled from [fromPath] to [toPath]; a name the generation does not declare stays; null when shadowed. */
     private fun respelledName(name: String, fromPath: List<String>, toPath: List<String>): String? {
-        val full = resolveSpelling(spellingSegments(name), fromPath, declared) ?: return name
-        return shortestSpelling(toPath, full.dropLast(1), full.last(), declared)
+        val full = resolveHere(spellingSegments(name), fromPath) ?: return name
+        return spellHere(toPath, full.dropLast(1), full.last())
     }
 
     private fun ownMembers(declaration: ExternalDeclaration): List<ExternalMember> = when (declaration) {
@@ -820,11 +1075,7 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
     private fun ownNamesOf(declaration: ExternalDeclaration): Set<String> = typeParametersOf(declaration).toSet()
 
     /** Member key: `p:` + name for a property, `f:` + [overrideSignature] for a function. */
-    fun keyOf(member: ExternalMember): String? = when (member) {
-        is ExternalProperty -> "p:" + member.name
-        is ExternalFunction -> "f:" + overrideSignature(member.name, member.typeParameters, member.parameters)
-        is SkippedMember -> null
-    }
+    fun keyOf(member: ExternalMember): String? = externalMemberKey(member)
 
     /** (EXT.17) An inherited interface member a non-abstract class still owes ([owedMembers]). */
     class OwedMember(
@@ -1257,8 +1508,10 @@ internal class Inheritance(declarations: List<ExternalDeclaration>) {
      * declaring the key, and recorded under that base's own (raw) key, which
      * is what the renderer looks the base's members up by.
      */
-    val openedByClass: Map<String, Set<String>> = run {
+    val openedByClass: Map<String, Set<String>> by lazy {
         val opened = HashMap<String, MutableSet<String>>()
+        // (EXT.24) The cross-module half, computed over the lifted set.
+        for ((qualified, keys) in extraOpen) opened.getOrPut(qualified) { HashSet() }.addAll(keys)
         for (declaration in byQualified.values) {
             val inherited = inheritedMembers(declaration)
             for (member in ownMembers(declaration)) {
@@ -1749,8 +2002,12 @@ internal fun renderKotlinExternals(
     external: Boolean,
     /** (EXT.16) The wired module's file header — rendered in the real variant only. */
     header: ModuleHeader? = null,
+    /** (EXT.24) The other generations of a per-module set — read by [Inheritance], never rendered. */
+    foreign: List<ForeignPackage> = emptyList(),
+    /** (EXT.24) The cross-module half of [Inheritance.openedByClass]. */
+    extraOpen: Map<String, Set<String>> = emptyMap(),
 ): String = buildString {
-    val inheritance = Inheritance(declarations)
+    val inheritance = Inheritance(declarations, foreign, extraOpen)
     if (header != null) {
         // (EXT.21b) The JS wiring is the REAL variant's alone (the metadata
         // compiler knows no `JsModule`), the PACKAGE is BOTH variants' — a

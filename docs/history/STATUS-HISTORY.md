@@ -12,6 +12,54 @@ counter unchanged all session — the INC-closure directive holding by construct
 top items: (EXT.4…n) ladder, (INV.0) split (Stage 0 of the inversion), (API.18)'s
 sibling-bound descent.
 
+
+**(P18.7) — TWO OWNER DECISIONS LAND: THE POM LICENCE AND STAGE 1 OF THE INVERSION, 16,828 → 16,838 / 0 / 3 (2026-09-02).**
+(LIC.2) the root POM's `licenses` block now declares `AGPL-3.0-only WITH
+LicenseRef-xtsc-output-exception` plus a second entry for the Output Exception (was
+Apache-2.0; verified on the generated core JVM POM). **(INV.1) the per-file node-answer
+store** (`NodeAnswerStore`, `Type` slots by `nodeId`, filled at the capture/sink hook under
+the reconstructed ambient, first-wins, refusal before resolution), OFF by default behind a
+`Checker` parameter / `--nodeAnswers`; 10 pins incl. the round-911 positive control (body
+local `number` recorded vs `string` post-hoc) and the production-mode computation count at
+0; cost_gate +0.00%, huge_methods clean, warm A/B flag-off NOISE-DOMINATED (3 rotated
+pairs, sd < 1%); **flag ON measured: +14.9 % warm on the compiler profile (1.34 µs per
+recorded expression, 598,455 of them) and +10.3 % on many-small-2400-dom (1.49 µs,
+232,106)** — per-node, attributed next by (INV.1b). (INV.2) Stage 2 queued
+BLOCKED-PENDING-USER. Design record: `docs/INVERSION-DESIGN.md` § 9a.
+
+**(P18.6) — SESSION CLOSE, FIVE LANDINGS, 16,803 → 16,828 / 0 / 3 (2026-09-02).** (EXT.7) the **smol-toml rung is GREEN**: the
+externals generator goes MULTI-FILE (`generateKotlinExternals(List<SourceFileEntry>)`, one
+Binder + one Checker, cross-file by-name rendering, cross-file type-name collisions a loud
+skip), top-level overloads render (implementation signature omitted, duplicates collapsed),
+`#private` omitted, heritage markers name the base, export wiring loud (`export {}` silent);
+`KotlinExternalsSmolTomlGateTest` embeds the verbatim seven `smol-toml@1.7.1` files and
+metadata-compiles the output with zero checker diagnostics (externals 64/0; full suite
+16,815/0/3). (TEST.1) the "order-sensitive" `ProjectTrustedFilesystemTest` control was a
+DATA RACE in the test's own `CountingVfs` under the crawl's 16 concurrent readers (old
+wrapper: 12,880 of 16,000 threaded reads counted); atomics + a CAS-swapped per-path map,
+`CountingVfsConcurrencyTest` reddens the old wrapper (full suite 16,816/0/3). (INV.0) step 3:
+`TypeInstantiator` extracted (the instantiation seam, ~290 lines verbatim, `Checker.kt`
+191,030 → 190,771; ledger row 3 with the first NON-none ambient surface; suite 16,819/0/3 byte-identical, cost_gate +0.00%, ab −0.81% NOISE-DOMINATED, JFR alloc unchanged, the 10 B hop `inline (hot)`). (EXT.8) heritage to GENERATED targets (supertypes, `override`/`open`,
+inherited constructors, `open external class`, cross-file bases via the new lens member
+`heritageBaseSymbol`; externals 70/0; full suite 16,825/0/3). (EXT.9) exported values (`val`/`var`, literal consts widened) and
+accessor pairs as properties (externals 73/0; full suite 16,828/0/3).
+
+**(P18.5) — DONE (2026-09-02).** Owner additions applied ((INV.0) merged with
+receipt protocol, INVERSION-DESIGN § 10 cost-neutrality contract, approvals recorded,
+shrinkage dashboard row); (LIC.3) CONTRIBUTING.md; (EXT.4) classes + enums landed
+(externals 40/0 — `external class` with primary ctor + companion statics;
+`sealed external interface` enums; `const enum` refused loudly; full suite 16,775/0/3);
+(INV.0) STEP 1: `TypeInterner` extracted — first Stage-0 collaborator, ambient surface
+NONE, suite 16,781/0/3 byte-identical, cost_gate +0.00%, wall NOISE-DOMINATED at +0.26%,
+allocation profile unchanged, and the receipt protocol found the split IMPROVED hot
+inlining (the 277 B monolith never hot-inlined; the 13 B hop + body both do);
+(API.18) file-final token healed by an ownership descent (suite 16,791/0/3, the LSP
+recorded-edge pin flipped to healed, punctuation-final files pinned conservative);
+(EXT.5) generic aliases + generic methods + method overloads (externals 47/0);
+(EXT.6) default exports + generic references to generated targets — **the mitt rung is
+GREEN** (verbatim mitt@3.0.1 d.ts generates and metadata-compiles; externals 52/0);
+(INV.0) step 2: `Relation`+`Ternary` relocated to `TypeRelationCache.kt` (suite 16,803/0/3).
+
 **(P18.3) — THE LSP IS FEATURE-COMPLETE FOR A FIRST RELEASE, AND THE HONEST tsgo NUMBER IS
 30-50x AGAINST US (2026-09-01).** (LSP.2): the full feature map onto `Project` — lifecycle,
 navigation, completion, signatureHelp, rename-with-refusals-as-errors, pull diagnostics,

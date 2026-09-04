@@ -152,6 +152,9 @@ private class RecordingJsMessageCollector : MessageCollector {
         if (!severity.isError && !severity.isWarning) return
         val line = buildString {
             if (location != null) {
+                // (EXT.24) The FILE too: a multi-file gate over 51 generated
+                // sources reports a line number that names nothing without it.
+                append(location.path.substringAfterLast('/')).append(':')
                 append(location.line).append(':').append(location.column)
                 append(' ')
             }

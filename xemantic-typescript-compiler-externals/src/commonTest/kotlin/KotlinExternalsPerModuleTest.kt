@@ -371,4 +371,242 @@ class KotlinExternalsPerModuleTest {
         assert(flat.contains("public open external class Engine"))
     }
 
+    // --- (EXT.24) CROSS-MODULE HERITAGE ------------------------------------
+    //
+    // The rules are in [generateKotlinExternalsPerModule], [liftIntoPackage],
+    // [Inheritance]'s `resolveHere`/`spellHere`, [openedAcrossModules] and
+    // [translateOpened]. Each pin below is red under the ablation of exactly
+    // one of them; the negative controls are the two shapes that must keep
+    // the (EXT.21b) refusal.
+
+    /** (EXT.24) A per-module SET, keyed by module name in the wiring's order. */
+    private fun generateSet(
+        source: String,
+        modules: List<String>,
+        packageRoot: String? = "node",
+        fileName: String = "/lib/index.d.ts",
+    ): Map<String, KotlinExternals> = generateKotlinExternalsPerModule(
+        listOf(SourceFileEntry(fileName, source.trimIndent())),
+        modules.map { ModuleWiring(it, fileName, packageRoot) },
+    )
+
+    /** A class in `beta` extending a class in `alpha` and redeclaring one of its two members. */
+    private val crossModuleClasses = """
+        declare module "alpha" {
+            export class Socket { s: number; }
+            export class Engine {
+                run(s: Socket): void;
+                stop(): void;
+            }
+        }
+        declare module "beta" {
+            import * as alpha from "alpha";
+            export class Runner extends alpha.Engine {
+                run(s: alpha.Socket): void;
+            }
+        }
+    """
+
+    @Test
+    fun `a per-module set renders a base another module owns as a supertype`() {
+        assert(
+            generateSet(crossModuleClasses, listOf("alpha", "beta")).getValue("beta").kotlin == """
+                @file:JsModule("beta")
+
+                package node.beta
+
+                /* xtsc: module "beta" - the package's own module; members rendered at top level */
+
+                public open external class Runner : node.alpha.Engine {
+                    public override fun run(s: node.alpha.Socket): Unit
+                }
+
+            """.trimIndent()
+        )
+    }
+
+    @Test
+    fun `the module owning the base opens exactly the member the other generation overrides`() {
+        assert(
+            generateSet(crossModuleClasses, listOf("alpha", "beta")).getValue("alpha").kotlin == """
+                @file:JsModule("alpha")
+
+                package node.alpha
+
+                /* xtsc: module "alpha" - the package's own module; members rendered at top level */
+
+                public open external class Socket {
+                    public var s: Double
+                }
+
+                public open external class Engine {
+                    public open fun run(s: Socket): Unit
+                    public fun stop(): Unit
+                }
+
+            """.trimIndent()
+        )
+    }
+
+    @Test
+    fun `negative control - the same wiring generated alone keeps the heritage refusal`() {
+        assert(
+            generate(ModuleWiring("beta", "/lib/index.d.ts", "node"), crossModuleClasses) == """
+                @file:JsModule("beta")
+
+                package node.beta
+
+                /* xtsc: module "beta" - the package's own module; members rendered at top level */
+
+                public open external class Runner {
+                    /* xtsc: skipped heritage clause extends alpha.Engine - Engine is declared by the module "alpha" - a supertype in another generated package carries no Kotlin override computation here */
+                    public fun run(s: node.alpha.Socket): Unit
+                }
+
+            """.trimIndent()
+        )
+    }
+
+    @Test
+    fun `negative control - a base whose module the set does not generate keeps the refusal`() {
+        assert(
+            generateSet(crossModuleClasses, listOf("beta")).getValue("beta").kotlin == """
+                @file:JsModule("beta")
+
+                package node.beta
+
+                /* xtsc: module "beta" - the package's own module; members rendered at top level */
+
+                public open external class Runner {
+                    /* xtsc: skipped heritage clause extends alpha.Engine - Engine is declared by the module "alpha" - a supertype in another generated package carries no Kotlin override computation here */
+                    public fun run(s: node.alpha.Socket): Unit
+                }
+
+            """.trimIndent()
+        )
+    }
+
+    @Test
+    fun `a member inherited through one module names a THIRD module's declaration in its own package`() {
+        val set = generateSet(
+            """
+                declare module "alpha" {
+                    export interface Payload { id: number; }
+                }
+                declare module "beta" {
+                    import * as alpha from "alpha";
+                    export class Base { take(p: alpha.Payload): void; }
+                }
+                declare module "gamma" {
+                    import * as beta from "beta";
+                    import * as alpha from "alpha";
+                    export class Derived extends beta.Base {
+                        take(p: alpha.Payload): void;
+                    }
+                }
+            """,
+            listOf("alpha", "beta", "gamma"),
+        )
+        assert(
+            set.getValue("gamma").kotlin == """
+                @file:JsModule("gamma")
+
+                package node.gamma
+
+                /* xtsc: module "gamma" - the package's own module; members rendered at top level */
+
+                public open external class Derived : node.beta.Base {
+                    public override fun take(p: node.alpha.Payload): Unit
+                }
+
+            """.trimIndent()
+        )
+        assert(set.getValue("beta").kotlin.contains("public open fun take(p: node.alpha.Payload): Unit"))
+    }
+
+    @Test
+    fun `an inherited member is spelled fully qualified from a package nested under the base's own`() {
+        assert(
+            generateSet(
+                """
+                    declare module "alpha" {
+                        export namespace Group {
+                            interface Item { id: number; }
+                            class Base { take(i: Item): void; }
+                        }
+                    }
+                    declare module "alpha/sub" {
+                        import * as alpha from "alpha";
+                        export class Derived extends alpha.Group.Base {
+                            take(i: alpha.Group.Item): void;
+                        }
+                    }
+                """,
+                listOf("alpha", "alpha/sub"),
+            ).getValue("alpha/sub").kotlin == """
+                @file:JsModule("alpha/sub")
+
+                package node.alpha.sub
+
+                /* xtsc: module "alpha/sub" - the package's own module; members rendered at top level */
+
+                public open external class Derived : node.alpha.Group.Base {
+                    public override fun take(i: node.alpha.Group.Item): Unit
+                }
+
+            """.trimIndent()
+        )
+    }
+
+    @Test
+    fun `a set holding a module whose package nests under the root still resolves a cross-module base`() {
+        val set = generateSet(
+            """
+                declare module "node:thing" {
+                    export interface Thing { t: number; }
+                }
+                declare module "alpha" {
+                    export class Engine { run(): void; }
+                }
+                declare module "beta" {
+                    import * as alpha from "alpha";
+                    export class Runner extends alpha.Engine { run(): void; }
+                }
+            """,
+            listOf("node:thing", "alpha", "beta"),
+        )
+        assert(set.getValue("node:thing").kotlin.contains("package node.node.thing"))
+        assert(set.getValue("beta").kotlin.contains("public open external class Runner : node.alpha.Engine"))
+        assert(set.getValue("alpha").kotlin.contains("public open fun run(): Unit"))
+    }
+
+    @Test
+    fun `a module that maps to no Kotlin package joins no shared namespace and its base keeps a marker`() {
+        val set = generateSet(
+            """
+                declare module "a~b" {
+                    export class Engine { run(): void; }
+                }
+                declare module "beta" {
+                    import * as ab from "a~b";
+                    export class Runner extends ab.Engine { run(): void; }
+                }
+            """,
+            listOf("a~b", "beta"),
+        )
+        assert(set.getValue("a~b").kotlin.contains("/* xtsc: no package - the specifier 'a~b' carries"))
+        assert(
+            set.getValue("beta").kotlin.contains(
+                "skipped heritage clause extends ab.Engine - declared by the module \"a~b\", " +
+                    "which maps to no Kotlin package"
+            )
+        )
+    }
+
+    @Test
+    fun `the set is keyed by module name in the wiring order`() {
+        val set = generateSet(crossModuleClasses, listOf("beta", "alpha"))
+        assert(set.keys.toList() == listOf("beta", "alpha"))
+    }
+
 }
