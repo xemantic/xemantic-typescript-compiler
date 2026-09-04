@@ -10002,6 +10002,15 @@ class Checker(
      */
     private val QUALIFIED_LEFT_MEANING: SymbolFlags = SymbolFlags.Module or SymbolFlags.Enum
 
+    /**
+     * (CHK.81) The meanings an ambient block's `export = X` target may carry for a
+     * `require` alias of the block to name X rather than the block's carrier — a
+     * VALUE (declared before `init`: [ambientRequireAliasTarget] runs in the init
+     * passes, and a field declared below the block reads as zero there).
+     */
+    private val EXPORT_EQUALS_VALUE_TARGET: SymbolFlags =
+        SymbolFlags.Class or SymbolFlags.Function or SymbolFlags.Variable or SymbolFlags.Enum
+
     /** M3.4 (round 409): memo for [resolveExportedSymbolThroughStars] (keyed
      *  "<barrelFile> <name>" → target Symbol, a stored null means "not found /
      *  unresolvable"). The missing half of M1.1: [getModuleExportsFollowingStars]
@@ -12168,6 +12177,7 @@ class Checker(
         pass("checkTypesPackageImports") { checkTypesPackageImports() }
         // 14c''. .d.ts named imports from an `export =` namespace/object (TS2305)
         pass("checkNamedImportFromExportEqualsInDts") { checkNamedImportFromExportEqualsInDts() }
+        pass("checkNamedImportFromAmbientExportEqualsValue") { checkNamedImportFromAmbientExportEqualsValue() }
         // conflictingDeclarationsImportFromNamespace1/2 — `import * as N from '<pkg>'` +
         // self-calling `export const N = () => N()` → TS2497 + TS7023.
         pass("checkConflictingNamespaceImportSelfConst") { checkConflictingNamespaceImportSelfConst() }
@@ -17703,8 +17713,11 @@ class Checker(
                                     val ambient = globals[specifier]
                                     if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module) &&
                                         ambient.exports != null) {
-                                        setSymbolTarget(symbol, ambient)
-                                        return resolveAlias(ambient, visited)
+                                        // (CHK.81) …unless the block's surface is `export = <value>`,
+                                        // in which case the alias names that value, as in tsc.
+                                        val target = ambientRequireAliasTarget(ambient, visited) ?: ambient
+                                        setSymbolTarget(symbol, target)
+                                        return resolveAlias(target, visited)
                                     }
                                     continue
                                 }
@@ -17869,10 +17882,20 @@ class Checker(
                                     // resolve X then look up `originalName` in X's exports.
                                     val exportEqualsTarget = resolveAmbientModuleExportEquals(ambient, visited)
                                     if (exportEqualsTarget != null) {
-                                        exportEqualsTarget.exports?.get(originalName)?.let { target ->
-                                            setSymbolTarget(symbol, target)
-                                            return resolveAlias(target, visited)
-                                        }
+                                        exportEqualsTarget.exports?.get(originalName)
+                                            // (CHK.81) …unless that entry is a LOCAL re-export clause's
+                                            // specifier and nothing else (`namespace Stream { export
+                                            // { Stream } }`, `@types/node`'s own shape): it names the
+                                            // ENCLOSING block's class, which only the surface walk below
+                                            // resolves. Since (CHK.81) made a `require` alias name the
+                                            // `export =` CLASS, this leg started landing on that entry
+                                            // and answering `any` for `import { Stream } from
+                                            // "node:stream"` — a LOST TS2322 on real `@types/node`.
+                                            ?.takeIf { t -> !(t.declarations.isNotEmpty() && t.declarations.all { it is ExportSpecifier }) }
+                                            ?.let { target ->
+                                                setSymbolTarget(symbol, target)
+                                                return resolveAlias(target, visited)
+                                            }
                                     }
                                     // (CHK.80)(c) the (CHK.79) surface walk: an `export * from
                                     // "m"` block (`node:net`), and an `export = <alias>` whose
@@ -17930,6 +17953,33 @@ class Checker(
             }
         }
         return null
+    }
+
+    /**
+     * (CHK.81) tsc's `resolveExternalModuleSymbol` for a FILELESS ambient block: the
+     * symbol an `import X = require("m")` of it stands for is the block's `export =`
+     * target when that target is a VALUE — a class, a function, a variable or an
+     * enum, merged with a namespace or not (`@types/node`'s `events` is `export =
+     * EventEmitter`, a class carrying its namespace; `node:events` re-routes to it
+     * through an `import events = require("events")` alias, which
+     * [resolveAmbientModuleExportEquals] follows). Null keeps B113's answer, the
+     * CARRIER: a block with no `export =`, one whose target is a PURE namespace (the
+     * surface walks reach its members from the carrier, and the corpus pins the
+     * carrier's name in the TS2694 family), or one whose target does not resolve.
+     *
+     * Measured before (2026-09-02, against tsgo 7.0.2): `class Worker extends
+     * EventEmitter` under such an import inside a `declare module` block inherited
+     * NOTHING — the base resolved to the carrier, i.e. `any` — and so did a
+     * file-level `import EE = require("node:events")` used as an annotation, a
+     * constructor and a base: 7 of 9 consumer probes silent, tsgo reporting all 9,
+     * plus a false TS2694 at `EE.Abortable`. Five `extends EventEmitter` bases of
+     * `@types/node` 20.19.43 answered null to the externals generator's lens for the
+     * same reason.
+     */
+    private fun ambientRequireAliasTarget(ambient: Symbol, visited: MutableSet<Int>): Symbol? {
+        val target = resolveAmbientModuleExportEquals(ambient, visited) ?: return null
+        if (target === ambient || target.flags.hasAny(SymbolFlags.Alias)) return null
+        return if (target.flags.hasAny(EXPORT_EQUALS_VALUE_TARGET)) target else null
     }
 
     /**
@@ -42217,6 +42267,19 @@ class Checker(
                                 checkQualifiedNameExports(name, source, fileName)
                                 return
                             }
+                            // (CHK.81) …and so is an `import X = require("m")` of an AMBIENT
+                            // module — the carrier itself, or the `export =` class carrying
+                            // its namespace the alias now names (B113). The alias symbol has
+                            // only the Alias bit, so `net2.Socket` at a module file's top
+                            // level was a false TS2833 (`Did you mean 'net'?`) beside a
+                            // correctly resolved type; the surface is judged below.
+                            if (leftSym.flags.hasAny(SymbolFlags.Alias) &&
+                                getImportEqualsSpecifier(leftSym) != null &&
+                                resolveAlias(leftSym).let { it !== leftSym && it.flags.hasAny(SymbolFlags.Module) }
+                            ) {
+                                checkQualifiedNameExports(name, source, fileName)
+                                return
+                            }
                             val candidates = collectNamespaceNames(fileName)
                             val suggestion = getSpellingSuggestionFromNames(lname, candidates)
                             if (suggestion != null) {
@@ -42501,11 +42564,24 @@ class Checker(
         if (symbol == null) return // leftmost doesn't resolve — already flagged by TS2304
 
         symbol = resolveAlias(symbol)
+        // (CHK.81) `import * as nn from "node:net"` of a FILELESS ambient module: the
+        // alias `resolveAlias` cannot follow (B152b) is judged as the carrier it names —
+        // `nn.Nope` was silent at a module file's top level, TS2694 `'"node:net"'` in
+        // tsgo; before the display rule it would have rendered as `'"main".nn'`.
+        if (symbol.flags.hasAny(SymbolFlags.Alias) && !symbol.flags.hasAny(SymbolFlags.Module)) {
+            val carrier = ambientModuleOfImportAlias(symbol)
+            if (carrier != null) symbol = carrier
+        }
 
         // Walk through intermediate segments (skip first, that's the root namespace)
         for (i in 1 until segments.size) {
             val exports = symbol!!.exports ?: return // not a namespace
+            // (CHK.81) A carrier's surface is not its own `exports` where its body is
+            // wiring (`export * from "net"`, `export = X`): the (CHK.79) walk, which the
+            // resolver takes — `net3.Socket` through `import net3 = require("node:net")`
+            // resolved AND reported TS2694 here once the false TS2833 stopped hiding it.
             val next = exports[segments[i]]
+                ?: if (isAmbientModuleCarrier(symbol)) ambientModuleSurfaceMember(symbol, segments[i], HashSet()) else null
             if (next == null) {
                 // Intermediate segment not found — emit TS2694 (or TS2724 with spelling)
                 // Use resolved symbol's qualified name, not source-level alias
@@ -42550,6 +42626,11 @@ class Checker(
                     member = candidate
                 }
             }
+        }
+        // (CHK.81) …and the surface walk, for an `export * from` carrier and for a
+        // namespace body's local `export { X as Y }` clause ((CHK.79)/(CHK.81)).
+        if (member == null && (isAmbientModuleCarrier(symbol) || symbol.declarations.any { it is ModuleDeclaration })) {
+            member = ambientModuleSurfaceMember(symbol, rightId.text, HashSet())
         }
         // Use resolved symbol's qualified name, not source-level alias
         val namespacePath = symbolToQualifiedName(symbol, fileName)
@@ -42719,10 +42800,33 @@ class Checker(
      * prefixes with the quoted file base name (e.g., `"file".c`).
      */
     private fun symbolToQualifiedName(symbol: Symbol, fileName: String? = null): String {
+        // (CHK.81) An ambient module CARRIER (`declare module "net"`) is named by its quoted
+        // specifier, as tsc names the module symbol: `Namespace '"net"'`. The binder keeps the
+        // name unquoted, so before this the carrier rendered `net` and a member of it rendered
+        // through the IMPORTING file (`"main".events.EventEmitter`).
+        if (isAmbientModuleCarrier(symbol)) {
+            // …and a carrier whose surface is `export = NS` (a namespace, which B113 keeps the
+            // alias on) is what tsc resolves to NS: `Namespace 'NS'` (tsgo 7.0.2, measured).
+            val target = resolveAmbientModuleExportEquals(symbol, HashSet())
+            if (target != null && target !== symbol && !target.flags.hasAny(SymbolFlags.Alias) &&
+                target.flags.hasAny(SymbolFlags.Module) && !isAmbientModuleCarrier(target)
+            ) return symbolToQualifiedName(target, fileName)
+            return "\"${symbol.name}\""
+        }
         val parts = mutableListOf(symbol.name)
         var current = symbol.parent
+        var child = symbol
         while (current != null && current.name.isNotEmpty() && !current.name.startsWith("\"")) {
+            if (isAmbientModuleCarrier(current)) {
+                // (CHK.81) tsgo 7.0.2, measured: the block's `export =` target is named BARE
+                // (`EventEmitter`, `NS`, `EventEmitter.Deep`), any other member through the
+                // quoted carrier (`"net".Sub`).
+                if (!isExportEqualsTargetOf(current, child)) parts.add("\"${current.name}\"")
+                parts.reverse()
+                return parts.joinToString(".")
+            }
             parts.add(current.name)
+            child = current
             current = current.parent
         }
         // For module-level symbols, include the quoted module name
@@ -42761,6 +42865,20 @@ class Checker(
         parts.reverse()
         return parts.joinToString(".")
     }
+
+    /** (CHK.81) A symbol declared by a string-named `declare module "spec"` block. */
+    private fun isAmbientModuleCarrier(symbol: Symbol): Boolean =
+        symbol.flags.hasAny(SymbolFlags.Module) &&
+            symbol.declarations.any { it is ModuleDeclaration && it.name is StringLiteralNode }
+
+    /** (CHK.81) [child] is what an `export = X` statement of one of [carrier]'s blocks names. */
+    private fun isExportEqualsTargetOf(carrier: Symbol, child: Symbol): Boolean =
+        carrier.declarations.any { decl ->
+            val body = (decl as? ModuleDeclaration)?.body as? ModuleBlock
+            body?.statements?.any { st ->
+                st is ExportAssignment && st.isExportEquals && (st.expression as? Identifier)?.text == child.name
+            } == true
+        }
 
     /**
      * B282: TS1272 — a type referenced in a DECORATED member's signature that resolves
@@ -55465,6 +55583,122 @@ class Checker(
             }
         }
         return foundEmptyNs
+    }
+
+    /**
+     * (CHK.81) TS2305 `Module '"m"' has no exported member 'X'` for `import { X } from
+     * "m"` where `m` is a FILELESS ambient block whose surface is `export = <value>` — a
+     * class, a function, a variable, an enum, merged with a namespace or not — and
+     * neither that value's `exports` (the namespace's members) nor an AUGMENTATION of
+     * the block (a member declared in a `declare module "m"` block that carries no
+     * `export =`, which tsc merges into the target) declares `X`. Measured against tsgo
+     * 7.0.2: `import { Stream } from "node:stream"` over `@types/node`-shaped blocks
+     * (`node:stream` → `stream` → `export = Stream`, whose namespace holds `Readable`
+     * but not `Stream` itself) was silent here — the (CHK.79) surface walk answers the
+     * block's OWN `Stream` for the alias, which is what makes the import resolve — and
+     * TS2305 in tsgo. The resolution is left as it is; the diagnostic is what moves.
+     *
+     * Never judged: a file-backed specifier ([checkNamedImportExistence]'s), a block
+     * with no `export =` or one whose target is a pure namespace (B113's carrier
+     * answer), a `default` specifier, a name a declaration of the target CLASS
+     * spells as a static member (tsc imports a class's OWN statics by name — not a
+     * base's, so the heritage clause does not veto), and any body
+     * re-exporting FROM another module (`export * from`, `export { a } from "m"` —
+     * members this checker's tables do not spell; a LOCAL `export { internal as
+     * EventEmitter }` the surface walk follows). Type-only specifiers are judged
+     * too, as tsc judges them. Deduped by position against the `.d.ts` and `@types`
+     * walkers that share the code.
+     */
+    private fun checkNamedImportFromAmbientExportEqualsValue() {
+        for (result in checkedResults) {
+            checkNamedImportFromAmbientExportEqualsValueIn(
+                result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName,
+            )
+        }
+    }
+
+    private fun checkNamedImportFromAmbientExportEqualsValueIn(statements: List<Statement>, source: String, fileName: String) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ModuleDeclaration -> {
+                    var body: Node? = stmt.body
+                    while (body is ModuleDeclaration) body = body.body
+                    (body as? ModuleBlock)?.let { checkNamedImportFromAmbientExportEqualsValueIn(it.statements, source, fileName) }
+                }
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause ?: continue
+                    val named = clause.namedBindings as? NamedImports ?: continue
+                    val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                    if (spec.isEmpty() || spec.startsWith("./") || spec.startsWith("../")) continue
+                    val ctx = owningSourceFile(stmt)?.fileName
+                    val fileBacked = resolveModuleSpecifier(spec, stmt)
+                        ?: ctx?.let { resolveModuleSpecifierRelativeJsAware(spec, it) }
+                        ?: resolveImportTargetFallback(spec, ctx)
+                    if (fileBacked != null) continue
+                    val carrier = globals[spec] ?: continue
+                    if (!isAmbientModuleCarrier(carrier) || carrier.exports == null) continue
+                    val target = ambientRequireAliasTarget(carrier, HashSet()) ?: continue
+                    if (!ambientSurfaceIsEnumerableForImport(carrier) || !ambientSurfaceIsEnumerable(target)) continue
+                    // The block's own `export = X` identifier: importing X BY NAME is tsc's
+                    // TS2616 (`can only be imported by using import X = require`), one shape
+                    // over from TS2305 — only for the block that spells it, not through a
+                    // re-routing alias (`node:stream` → `export = stream` is TS2305 for `Stream`).
+                    val exportEqualsName = carrier.declarations.firstNotNullOfOrNull { decl ->
+                        ((decl as? ModuleDeclaration)?.body as? ModuleBlock)?.statements
+                            ?.firstNotNullOfOrNull { st ->
+                                (st as? ExportAssignment)?.takeIf { it.isExportEquals }?.expression as? Identifier
+                            }?.text
+                    }
+                    for (el in named.elements) {
+                        val nameNode = el.propertyName ?: el.name
+                        val name = nameNode.text
+                        if (name.isEmpty() || name == "default" || nameNode.pos < 0) continue
+                        if (!(name[0].isLetter() || name[0] == '_' || name[0] == '$')) continue
+                        if (ambientModuleSurfaceMember(target, name, HashSet()) != null) continue
+                        if (classDeclaresStatic(target, name)) continue
+                        if (ambientCarrierAugmentationDeclares(carrier, name)) continue
+                        if (diagnostics.any { (it.code == 2305 || it.code == 2616 || it.code == 2617) && it.fileName == fileName && it.start == nameNode.pos }) continue
+                        if (name == exportEqualsName && carrier.exports?.get(name) === target) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                            val (code, message) =
+                                if (options.esModuleInteropExplicitlyFalse) 2617 to
+                                    "'$name' can only be imported by using 'import $name = require(\"$spec\")' or by turning on the 'esModuleInterop' flag and using a default import."
+                                else 2616 to
+                                    "'$name' can only be imported by using 'import $name = require(\"$spec\")' or a default import."
+                            diagnostics.add(Diagnostic(
+                                message = message, category = DiagnosticCategory.Error, code = code, fileName = fileName,
+                                line = line, character = character, start = nameNode.pos, length = name.length,
+                            ))
+                            continue
+                        }
+                        emitTs2305(source, fileName, spec, name, nameNode)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /** (CHK.81) No block of [carrier] re-exports FROM another module (`export * from`, `export { a } from "m"`). */
+    private fun ambientSurfaceIsEnumerableForImport(carrier: Symbol): Boolean =
+        carrier.declarations.none { decl ->
+            val body = (decl as? ModuleDeclaration)?.body as? ModuleBlock
+            body?.statements?.any { it is ExportDeclaration && it.moduleSpecifier != null } == true
+        }
+
+    /**
+     * (CHK.81) [carrier] declares [name] in a block that carries NO `export =` — an
+     * augmentation, whose members tsc merges into the `export =` target's surface.
+     */
+    private fun ambientCarrierAugmentationDeclares(carrier: Symbol, name: String): Boolean {
+        val member = carrier.exports?.get(name) ?: return false
+        return member.declarations.any { d ->
+            var cur: Node? = (d as NodeBase).parent
+            var hops = 0
+            while (cur != null && cur !is ModuleBlock && hops++ < 64) cur = (cur as NodeBase).parent
+            val block = cur as? ModuleBlock ?: return@any false
+            block.statements.none { it is ExportAssignment && it.isExportEquals }
+        }
     }
 
     private fun emitTs2305(
@@ -114890,7 +115124,32 @@ interface DataView {
                         ambientModuleSurfaceMember(resolved, name, visited)?.let { return it }
                     }
                     is ExportDeclaration -> {
-                        if (stmt.exportClause != null) continue
+                        val clause = stmt.exportClause
+                        if (clause != null) {
+                            // (CHK.81) A LOCAL re-export clause — `@types/node`'s `namespace
+                            // EventEmitter { export { internal as EventEmitter } }`, whose
+                            // `internal` is the block's `import internal = require("node:events")`
+                            // — names the member under the EXPORTED spelling; a clause with a
+                            // specifier (`export { a } from "m"`) is not followed.
+                            if (stmt.moduleSpecifier != null || clause !is NamedExports) continue
+                            for (el in clause.elements) {
+                                if (el.name.text != name) continue
+                                val localName = (el.propertyName ?: el.name).text
+                                // The local is the namespace's own member, or — `@types/node`'s
+                                // shape — the ENCLOSING block's `import internal = require(…)`;
+                                // the binder declares the specifier itself under the LOCAL name
+                                // as an alias, which names nothing, so that entry is skipped.
+                                val local = module.exports?.get(localName)
+                                    ?.takeIf { l -> l.declarations.any { it !is ExportSpecifier } }
+                                    ?: enclosingAmbientBlockMember(stmt, localName) ?: continue
+                                val resolved =
+                                    if (local.flags.hasAny(SymbolFlags.Alias) && !local.flags.hasAny(SymbolFlags.Module))
+                                        resolveAlias(local).takeIf { it !== local } ?: ambientModuleOfImportAlias(local) ?: local
+                                    else local
+                                return resolved
+                            }
+                            continue
+                        }
                         val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
                         val ctx = owningSourceFile(stmt)?.fileName
                         val targetFile = resolveModuleSpecifier(spec, stmt)
@@ -114909,6 +115168,23 @@ interface DataView {
                     else -> {}
                 }
             }
+        }
+        return null
+    }
+
+    /**
+     * (CHK.81) The member [name] of the nearest string-named `declare module` block
+     * enclosing [node] — the block's carrier's exports — or null.
+     */
+    private fun enclosingAmbientBlockMember(node: Node, name: String): Symbol? {
+        var cur: Node? = (node as NodeBase).parent
+        var hops = 0
+        while (cur != null && hops++ < 4096) {
+            if (cur is ModuleDeclaration) {
+                val spec = (cur.name as? StringLiteralNode)?.text
+                if (spec != null) return globals[spec]?.exports?.get(name)
+            }
+            cur = (cur as NodeBase).parent
         }
         return null
     }
@@ -114970,23 +115246,48 @@ interface DataView {
      */
     private fun checkClassExtendsMissingNamespaceMember() {
         for (result in checkedResults) {
+            val fileName = result.sourceFile.fileName
             checkClassExtendsMissingNamespaceMemberIn(
-                result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName,
+                result.sourceFile.statements, result.sourceFile.text, fileName,
+                ambient = isDtsFile(fileName),
             )
         }
     }
 
-    private fun checkClassExtendsMissingNamespaceMemberIn(statements: List<Statement>, source: String, fileName: String) {
+    /**
+     * (CHK.81) [ambient]: the statements sit where the unresolved-name family is SILENT
+     * about a qualified name — a `.d.ts` file (the family skips it) or a string-named
+     * `declare module` block (its post-filter keeps TS2304/TS2552 only) — so the
+     * TS2694 half of this pass runs there and nowhere else, and cannot double-report.
+     */
+    private fun checkClassExtendsMissingNamespaceMemberIn(
+        statements: List<Statement>, source: String, fileName: String, ambient: Boolean,
+    ) {
         for (stmt in statements) {
             when (stmt) {
                 is ModuleDeclaration -> {
                     var body: Node? = stmt.body
                     while (body is ModuleDeclaration) body = body.body
                     (body as? ModuleBlock)?.let {
-                        checkClassExtendsMissingNamespaceMemberIn(it.statements, source, fileName)
+                        checkClassExtendsMissingNamespaceMemberIn(
+                            it.statements, source, fileName, ambient || stmt.name is StringLiteralNode,
+                        )
                     }
                 }
+                is InterfaceDeclaration -> {
+                    if (!ambient) continue
+                    for (clause in stmt.heritageClauses ?: emptyList()) {
+                        for (t in clause.types) {
+                            val base = t.expression as? PropertyAccessExpression ?: continue
+                            if (resolveHeritageBaseSymbol(base) != null) continue
+                            val display = ambientAliasNamespaceDisplay(base.expression) ?: continue
+                            emitAmbientAliasTs2694(display, base.name, source, fileName)
+                        }
+                    }
+                    checkAmbientAliasQualifiedTypeRefs(stmt, source, fileName)
+                }
                 is ClassDeclaration -> {
+                    if (ambient) checkAmbientAliasQualifiedTypeRefs(stmt, source, fileName)
                     for (clause in stmt.heritageClauses ?: continue) {
                         if (clause.token != SyntaxKind.ExtendsKeyword) continue
                         for (t in clause.types) {
@@ -115008,9 +115309,105 @@ interface DataView {
                         }
                     }
                 }
-                else -> {}
+                else -> if (ambient) checkAmbientAliasQualifiedTypeRefs(stmt, source, fileName)
             }
         }
+    }
+
+    /**
+     * (CHK.81) TS2694 at the member of a QUALIFIED type reference `X.M` written in an
+     * ambient context whose head `X` is a namespace-import / `require` alias of a
+     * FILELESS ambient module, when nothing on that module's surface declares `M` —
+     * `interface A extends net.Missing`, `const v: net.Missing2`, a member's annotation.
+     * tsgo 7.0.2 reports `Namespace '"node:net"' has no exported member 'Missing'`
+     * (the carrier, quoted) or `Namespace 'EventEmitter' …` (an `export =` target,
+     * bare); this checker reported nothing, because the unresolved-name family skips
+     * `.d.ts` files and post-filters `declare module` bodies to the bare-name codes.
+     *
+     * The evidence standard is (CHK.80)(b)'s: the head must RESOLVE to such a module
+     * (an unresolved head is the family's TS2503 shape and is left alone, as is a
+     * FILE-backed module symbol and a plain namespace — Blocker #3's ambient
+     * cross-namespace gaps are not re-opened here), the resolver
+     * ([resolveQualifiedName], which ends in the (CHK.79) surface walk) must answer
+     * null, and the surface must be ENUMERABLE — a block or namespace body holding an
+     * `export { … } from "m"` clause is a member this checker's tables do not spell,
+     * so such a head is never judged (a LOCAL clause — `@types/node`'s `export
+     * { internal as EventEmitter }` — the surface walk follows).
+     * A deeper chain `X.A.M` is judged at its innermost resolvable namespace.
+     */
+    private fun checkAmbientAliasQualifiedTypeRefs(root: Node, source: String, fileName: String) {
+        forEachChild(root) { walkAmbientAliasQualifiedTypeRefs(it, source, fileName) }
+    }
+
+    private fun walkAmbientAliasQualifiedTypeRefs(node: Node, source: String, fileName: String) {
+        if (node is ModuleDeclaration) return // a nested block is the statement loop's
+        if (node is TypeReference) {
+            (node.typeName as? QualifiedName)?.let { judgeAmbientAliasQualifiedName(it, source, fileName) }
+        }
+        forEachChild(node) { walkAmbientAliasQualifiedTypeRefs(it, source, fileName) }
+    }
+
+    private fun judgeAmbientAliasQualifiedName(qn: QualifiedName, source: String, fileName: String) {
+        if (qn.right.pos < 0 || qn.right.text.isEmpty()) return
+        if (resolveQualifiedName(qn) != null) return
+        val display = when (val l = qn.left) {
+            is Identifier -> ambientAliasNamespaceDisplay(l)
+            is QualifiedName -> {
+                var root: Node = l
+                while (root is QualifiedName) root = root.left
+                if ((root as? Identifier)?.let { ambientAliasNamespaceDisplay(it) } == null) return
+                val left = resolveQualifiedName(l) ?: return
+                val resolved = resolveAlias(left)
+                if (!resolved.flags.hasAny(SymbolFlags.Module) || resolved.exports == null) return
+                if (!ambientSurfaceIsEnumerable(resolved)) return
+                symbolToQualifiedName(resolved)
+            }
+            else -> null
+        } ?: return
+        emitAmbientAliasTs2694(display, qn.right, source, fileName)
+    }
+
+    /**
+     * (CHK.81) The TS2694 display of a dotted name's HEAD when it is a namespace-import
+     * / `require` alias of a fileless ambient module — the carrier (`"node:net"`) or
+     * the `export =` symbol the alias names (`EventEmitter`, a class carrying its
+     * namespace; `NS`) — and null for every other head: an unresolved name, a
+     * file-backed module, a plain namespace, a class without a namespace, or a
+     * surface an `export { … }` clause makes non-enumerable.
+     */
+    private fun ambientAliasNamespaceDisplay(head: Node): String? {
+        val id = head as? Identifier ?: return null
+        val sym = lookupInEnclosingNamespaces(id, id.text, QUALIFIED_LEFT_MEANING)
+            ?: lookupPerFileForNode(id, id.text) ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.Alias) || sym.flags.hasAny(SymbolFlags.Module)) return null
+        val resolved = resolveAlias(sym).takeIf { it !== sym } ?: ambientModuleOfImportAlias(sym) ?: return null
+        if (!resolved.flags.hasAny(SymbolFlags.Module) || resolved.exports == null) return null
+        if (resolved.declarations.none { it is ModuleDeclaration }) return null
+        if (!ambientSurfaceIsEnumerable(resolved)) return null
+        return symbolToQualifiedName(resolved)
+    }
+
+    /**
+     * (CHK.81) No block or namespace body of [module] re-exports through an
+     * `export { … }` clause — the one member shape this checker's `exports` do not
+     * hold, so absence from them is evidence only without it. `export * from "m"`
+     * and `export = X` are followed by the surface walk and do not count.
+     */
+    private fun ambientSurfaceIsEnumerable(module: Symbol): Boolean =
+        module.declarations.none { decl ->
+            val body = (decl as? ModuleDeclaration)?.body as? ModuleBlock
+            body?.statements?.any { it is ExportDeclaration && it.exportClause != null && it.moduleSpecifier != null } == true
+        }
+
+    private fun emitAmbientAliasTs2694(display: String, member: Identifier, source: String, fileName: String) {
+        if (member.pos < 0 || member.text.isEmpty()) return
+        if (diagnostics.any { it.code == 2694 && it.fileName == fileName && it.start == member.pos }) return
+        val (line, character) = getLineAndCharacterOfPosition(source, member.pos)
+        diagnostics.add(Diagnostic(
+            message = "Namespace '$display' has no exported member '${member.text}'.",
+            category = DiagnosticCategory.Error, code = 2694, fileName = fileName,
+            line = line, character = character, start = member.pos, length = member.text.length,
+        ))
     }
 
     /**
@@ -115027,9 +115424,29 @@ interface DataView {
         // (`import("node:net")`, tsgo) and not the carrier's.
         val head = resolveHeritageBaseHead(base.expression) ?: return null
         if (head.flags.hasAny(SymbolFlags.Alias) && !head.flags.hasAny(SymbolFlags.Module)) {
+            // (CHK.81) A `require` alias naming a block's `export =` CLASS (B113 now
+            // resolves it): tsgo's `typeof EventEmitter`. A class's static side is not in
+            // its `exports`, so the absence is evidence only where no declaration of the
+            // class spells a static member of that name and the class extends nothing.
+            val resolvedHead = resolveAlias(head)
+            if (resolvedHead !== head && resolvedHead.flags.hasAny(SymbolFlags.Class)) {
+                return if (classMayDeclareStatic(resolvedHead, base.name.text) || !ambientSurfaceIsEnumerable(resolvedHead)) null
+                else "typeof ${resolvedHead.name}"
+            }
             // A namespace-import / `require` alias of a FILELESS ambient module: the
             // surface walk [resolveHeritageBaseSymbol] took answered nothing.
-            ambientModuleOfImportAlias(head) ?: return null
+            val carrier = ambientModuleOfImportAlias(head) ?: return null
+            if (!ambientSurfaceIsEnumerable(carrier)) return null
+            // (CHK.81) A carrier whose surface is `export = NS`: tsc judges NS itself —
+            // `typeof NS` for an instantiated namespace, and TS2708 (`Cannot use namespace
+            // as a value`, not modelled here) for a non-instantiated one.
+            val eq = resolveAmbientModuleExportEquals(carrier, HashSet())
+            if (eq != null && eq !== carrier && !eq.flags.hasAny(SymbolFlags.Alias) &&
+                eq.flags.hasAny(SymbolFlags.Module) && !isAmbientModuleCarrier(eq)
+            ) {
+                if (!ambientSurfaceIsEnumerable(eq)) return null
+                return if (eq.flags.hasAny(SymbolFlags.ValueModule)) "typeof ${eq.name}" else null
+            }
             val spec = importAliasWrittenSpecifier(head) ?: return null
             return "typeof import(\"$spec\")"
         }
@@ -115042,6 +115459,41 @@ interface DataView {
             is StringLiteralNode -> "typeof import(\"${n.text}\")"
             else -> null
         }
+    }
+
+    /**
+     * (CHK.81) [cls] may carry a STATIC member [name] this checker's `exports` do not
+     * hold: a declaration spells one, or the class extends something (a base's statics
+     * are inherited). Conservative in the reporting direction.
+     */
+    private fun classMayDeclareStatic(cls: Symbol, name: String): Boolean =
+        classDeclaresStatic(cls, name) ||
+            cls.declarations.any { d ->
+                d is ClassDeclaration && d.heritageClauses.orEmpty().any { it.token == SyntaxKind.ExtendsKeyword }
+            }
+
+    /**
+     * (CHK.81) A declaration of [cls] spells a STATIC member [name] — the set tsc's
+     * `resolvedExports` of a class offers to a named import (`import { create } from
+     * "m"` over `export = class { static create() }`); a base's statics are NOT in it.
+     */
+    private fun classDeclaresStatic(cls: Symbol, name: String): Boolean =
+        cls.declarations.any { d ->
+            d is ClassDeclaration && d.members.any { m ->
+                val mods = when (m) {
+                    is PropertyDeclaration -> m.modifiers
+                    is MethodDeclaration -> m.modifiers
+                    else -> emptySet()
+                }
+                ModifierFlag.Static in mods && memberNameText(m) == name
+            }
+        }
+
+    /** The written name of a class member, or null for a computed / unnamed one. */
+    private fun memberNameText(member: ClassElement): String? = when (member) {
+        is PropertyDeclaration -> (member.name as? Identifier)?.text ?: (member.name as? StringLiteralNode)?.text
+        is MethodDeclaration -> (member.name as? Identifier)?.text ?: (member.name as? StringLiteralNode)?.text
+        else -> null
     }
 
     /** The module specifier a namespace-import / `require` [alias] was written with. */

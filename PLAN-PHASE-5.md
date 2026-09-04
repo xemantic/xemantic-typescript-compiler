@@ -167,6 +167,40 @@ symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload
 `any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
 `any` from the `.d.ts`, never from the marker.
 
+**(CHK.81) LANDED IN PART — the `require`-of-`export =` family, verified after a rate-limited
+handover.** The implementing agent was killed by an API limit before ANY gate ran; its 450 lines
+sat unverified in the tree and a second agent verified them rather than redoing the work. What it
+implements: an `import X = require("m")` of a FILELESS ambient block whose surface is `export =
+<value>` now names that VALUE (`ambientRequireAliasTarget`, gated to class/function/variable/enum
+— a pure-namespace or absent `export =` keeps B113's CARRIER, which the corpus's TS2694 family
+pins), so `class Worker extends EventEmitter` under such an import inherits its members where it
+inherited nothing (7 of 9 consumer probes silent before, tsgo reporting all 9); TS2694 quotes an
+ambient carrier (`Namespace '"node:net"'`, not `'"mod".net'`) and names an `export =` target bare;
+a new `checkAmbientAliasQualifiedTypeRefs` reports the missing member for an interface heritage
+and an annotation where the unresolved-name family is silent; the false TS2833 for a `require`
+alias of an ambient module is gone; and `checkNamedImportFromAmbientExportEqualsValue` reports
+TS2305/TS2616 for a named import absent from an `export =` target's surface. **The verification
+found a REGRESSION the handover had introduced and no gate could see**: with the alias naming the
+`Stream` CLASS, the named-import leg read `exports["Stream"]` on it and got the dead
+`ExportSpecifier` of real `@types/node`'s own `namespace Stream { export { Stream, … } }`, so
+`Stream` degraded to `any` and a genuine TS2322 in `child_process.d.ts` was LOST — invisible to
+the 8-profile grid, the corpus filter and the probe's diagnostic count alike; only the probe's
+RENDERED TYPES showed it. The minimal fix (11 lines, that one leg): an `exports[name]` entry
+declared ONLY by `ExportSpecifier`s falls through to the surface walk. A broader fix in
+`ambientModuleSurfaceMember` was built, measured unnecessary and reverted. **A premise of the
+queue item was also wrong**: tsgo reports TS2305 for `import { Stream } from "node:stream"` only
+WITHOUT the local re-export clause — on real `@types/node` it is silent, and so are we. 13 pins,
+**every one discriminating** (12 red against the ablated checker, the 13th against its own
+targeted arm); filtered 1,604/0; cost_gate exit 0 (the recorded deltas are inherited — HEAD reads
+them too); huge_methods 0 over; the 8-profile grid `added=0 removed=0` through a new
+`scripts/chk81-grid.sh` that refuses a self-comparison, fewer than 8 profiles, and a truncated
+capture; externals 242/0; the `@types/node` probe equal on every total and strictly better in
+content (three types stop being `any`; a first census that looked worse was a `LC_ALL=C` sort
+mistake — program ORDER matters, per round 776). The generator's written-name heritage route
+closed **5 of its 8** bases (82 → 85 lost under ablation, against (CHK.80)'s 82 → 90) and STAYS
+for the three `extends Stream` written inside `namespace Stream`; its KDoc carries the numbers.
+Suite 17,150 → 17,163 / 0 / 3 measured alone, and **17,182 / 0 / 3 after the rebase onto (P18.10)'s (EXT.21a)/(DOC.2) work, which had landed on main meanwhile — the combined tree was re-run because a checker resolution change and an externals generator change had never been gated together**. Three sub-items remain unattempted, so the item stays UNCHECKED.
+
 **(CHK.80) LANDED — the four (CHK.79) follow-ups, each reproduced against tsgo on its own fixture
 (`scratchpad/chk80/`), all matching row for row after.** (a) ANNOTATIONS through a block's
 namespace-import alias (`x: net.Socket`, `Array<net.Socket>`, a `require` alias, a type alias):
@@ -2100,7 +2134,13 @@ Owner decisions 2026-09-02:
   merge to census and probably refuse. Each with pins; retire the generator's bare-name
   heritage route where the lens then answers (KDoc'd numbers in `collectHeritage`).
 
-- [ ] **(CHK.81) `import X = require("m")` OF A BLOCK WHOSE SURFACE IS `export = <class>`
+- [ ] **(CHK.81) PARTLY DONE 2026-09-02/09-04 ((P18.9) note; the `require`-of-`export =` main
+  item and four siblings landed and gated — 13 pins all discriminating, grid unchanged,
+  cost_gate exit 0, suite 17,163/0/3 alone and 17,182/0/3 rebased onto (P18.10); the generator's written heritage route closed 5 of its 8
+  bases and STAYS for the remaining 3). **STILL OPEN, carried by this item:** no TS2304 for
+  `Unknown.Foo`; tsgo displays a literal-union alias as `string` in a TS2322 where we print the
+  union (display only); and (CHK.73)'s shadow — `p.v` / `p.f()` / `new p.ctor()` through
+  `import p = require("p")` are untyped, a module symbol having no type. ORIGINAL ITEM: `import X = require("m")` OF A BLOCK WHOSE SURFACE IS `export = <class>`
   RESOLVES TO THE CARRIER (B113), NOT THE CLASS — the 8 bare heritage bases `@types/node` still
   carries on the generator's written route after (CHK.80) (five `extends EventEmitter` with
   `import EventEmitter = require("node:events")`, three `extends Stream` written inside

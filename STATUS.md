@@ -30,7 +30,7 @@ with no `package` line rather than escaped into a file no compiler accepts;
 ecosystem. Every accepted package name is also QUALIFIED-referencable — the measurement that
 makes per-module generation ((EXT.21b), queued) possible at all. Externals 242 → 261/0.
 
-**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,150 / 0 / 3 (2026-09-02).** (EXT.11a):
+**(P18.9) — THE RxJS CORE RUNG COMPILES, THEN ITS CENSUS HALVES, THEN A PARSER DEFECT, THEN ALL 250 rxjs FILES AND typescript.d.ts COMPILE, 16,867 → 17,182 / 0 / 3 (2026-09-02).** (EXT.11a):
 `rxjs@7.8.2`'s 15 `internal/` declaration files generate with zero checker diagnostics and
 the generated Kotlin metadata-compiles (`KotlinExternalsRxjsGateTest`, verbatim,
 Apache-2.0). Three compile errors, two mechanisms: interface CALL SIGNATURES (rendered as a
@@ -135,7 +135,13 @@ annotations through a block's namespace-import alias, TS2339 at a missing namesp
 a heritage clause (tsgo's exact `typeof import("node:net")` wording), named-import and
 `declare global` heritage heads, and the script-local carrier merge that let an unrelated
 file's `import * as net` hijack `require("net")` — all matching tsgo; 19 pins, grid unchanged;
-`@types/node` heritage refusals 95 → 82; (CHK.81) queued.
+`@types/node` heritage refusals 95 → 82. **(CHK.81) PARTLY, → 17,182 / 0 / 3 combined with (P18.10)'s work:** a
+`require` alias of an ambient block whose surface is `export = <value>` names that value, not
+the carrier (five `@types/node` `extends EventEmitter` bases), with TS2694's carrier display,
+the interface/annotation member reports, the false TS2833 gone and TS2305/TS2616 for a named
+import absent from the surface; the implementing agent was rate-limited before any gate and the
+verification found a lost diagnostic on real `@types/node` that only the probe's rendered types
+could see, fixed in 11 lines; 13 pins all discriminating; three sub-items still open.
 
 **(P18.8) — STAGE 2 OF THE INVERSION LANDS: THE POST-HOC TYPE ORACLE; THEN THE EXTERNALS ALIAS-REFERENCE RUNG, 16,838 → 16,867 / 0 / 3 (2026-09-02).**
 **(INV.2)** (owner-approved this session): `TypeOracle` over the (INV.1) store + retained

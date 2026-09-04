@@ -3672,7 +3672,14 @@ private class ExternalsCollector(
                     // = <class>` resolving to the CARRIER (B113) rather than
                     // to the class; and three `extends Stream` written INSIDE
                     // `namespace Stream` (`Readable`, `Writable`, `Duplex`).
-                    // The written route stays for those eight.
+                    // (CHK.81) closed the first FIVE — B113's alias now names
+                    // the `export =` class, so the lens answers those bases —
+                    // and the SAME ablation, re-measured 2026-09-04, loses
+                    // THREE (heritage markers 82 -> 85): exactly `Readable`,
+                    // `Writable` and `Duplex` `extends Stream` written inside
+                    // `namespace Stream`. The written route stays for those
+                    // three; retiring it needs the lens to answer a base whose
+                    // head is the ENCLOSING namespace's own merged class.
                     val resolved = lens.heritageBaseSymbol(base.expression)
                         ?.let { lens.aliasTarget(it) ?: it }
                         ?.declarations?.firstNotNullOfOrNull { declared ->
