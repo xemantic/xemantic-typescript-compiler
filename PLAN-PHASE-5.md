@@ -2082,7 +2082,7 @@ Owner decisions 2026-09-02:
   Gate variant: `= null` or no default (it is not external); pin the difference. Receipt: the
   JS gate + all five library gates.
 
-- [ ] **(EXT.21) IN PROGRESS — the PACKAGE half DONE 2026-09-03 as (EXT.21a) (owner delegated the
+- [x] **(EXT.21) DONE 2026-09-04 — BOTH halves landed: the PACKAGE scheme as (EXT.21a) (2026-09-03, owner-delegated, measured against both Kotlin compilers) and PER-MODULE generation as (EXT.21b) (2026-09-04, (P18.11) note: 51 `@types/node` modules compiling together at 0 errors, the flattening skips 57 → 2). The residue is (EXT.24), cross-module heritage. ORIGINAL: IN PROGRESS — the PACKAGE half DONE 2026-09-03 as (EXT.21a) (owner delegated the
   choice: "I wish to follow your best recommendation here"); the PER-MODULE half is (EXT.21b)
   below. THE SCHEME, MEASURED RATHER THAN PROPOSED — and the proposal below was WRONG on one
   rule.** `KotlinPackageNameCompileTest` asked the metadata compiler and `K2JSCompiler` (they
