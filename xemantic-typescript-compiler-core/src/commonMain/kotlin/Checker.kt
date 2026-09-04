@@ -5982,9 +5982,19 @@ class Checker(
             // ((API.3b): scope chain, then the per-file tables), alias followed.
             override fun typeReferenceSymbol(node: TypeReference): Symbol? {
                 val resolved = when (val typeName = node.typeName) {
+                    // (CHK.78)(c) FIRST: inside a file-backed `declare module
+                    // "<relative-spec>"` AUGMENTATION block the walk-scoped chain answers
+                    // the block's OWN partial interface — `SourceFile` written in
+                    // `declare module "./types" { interface SourceFile { … } }` answered
+                    // that partial rather than `./types.ts`'s declaration, which is what
+                    // the (EXT.10) identity rule reads. `heritageBaseSymbol` never had it
+                    // (it asks no walk-scoped chain), so this was a LENS-ONLY divergence.
+                    // A name the target does NOT export answers null here and falls
+                    // through, so the block's own siblings keep the chain's answer.
                     // (CHK.76) the walk-scoped chain answers only while the walk is inside the
                     // body; the position-derived consult answers at rest as well.
-                    is Identifier -> spineScopeLookup(typeName.text)
+                    is Identifier -> augmentationContextSymbolForNode(typeName, typeName.text)
+                        ?: spineScopeLookup(typeName.text)
                         ?: lookupInEnclosingNamespaces(typeName, typeName.text, SymbolFlags.Type)
                         ?: lookupPerFileForNode(typeName, typeName.text)
                     // (CHK.77) a QUALIFIED name (`ts.Cb`, `server.Gen<number>`) through the
@@ -16851,6 +16861,15 @@ class Checker(
             NameCensus.publish(moduleOnlyGlobals(), globals.keys)
             NameCensus.nameProbe(name, name in moduleOnlyGlobals(), node = true)
         }
+        // (CHK.78)(b) a THIRD clause naming the augmentation-visible names was
+        // built here — so that a name SHARED with a lib global could still reach
+        // the INV.3(c)(iv) leg below — and MEASURED REDUNDANT: (CHK.49) keeps the
+        // LIB key set out of `nonModuleVisible`, so a lib name a MODULE file also
+        // declares IS module-only and never took this path to begin with, and the
+        // only other way to be shared is a SCRIPT-file collision, which
+        // `mergeSharedKeepNames` merges so that `globals[name]` already carries
+        // both declarations. Ablated: the clause plus its index moved neither the
+        // `Node`-collision project fixture nor any pin. The fast path stays one probe.
         val moduleOnly = name in moduleOnlyGlobals()
         if (!moduleOnly && (moduleImportAliasNames.isEmpty() || name !in moduleImportAliasNames)) return globals[name]
         // Walk to the owning SourceFile, capturing the INNERMOST enclosing
@@ -16869,6 +16888,27 @@ class Checker(
             cur = (cur as NodeBase).parent
         }
         if (owner == null) return globals[name]
+        // INV.3(c)(iv): a node inside a `declare module "<relative-spec>"`
+        // AUGMENTATION block sees the AUGMENTED module's exports by bare name —
+        // tsc checks the body in that module's context (the round-443 rule;
+        // mirrors buildNamespaceScope's StringLiteralNode branch, which grants
+        // the same visibility to the TS2304 scope). A services/types.ts
+        // augmentation of "../compiler/types.js" references
+        // Node/SymbolFlags/UnionType without importing them; the per-file
+        // consult alone would null those and silently kill e.g. this-predicate
+        // narrowing whose target type lives in the augmented module.
+        //
+        // (CHK.78)(b) asked FIRST, where it used to be the last leg below the
+        // per-file consult. Two things that ordering got wrong, both measured
+        // against tsgo 7.0.2 on the (CHK.77) fixture: a SHARED name never
+        // reached it at all (the fast path answered `globals["Node"]`), and for
+        // a module-only name the augmenting file's OWN import won where tsc
+        // gives the augmented module's export — `import { Zzz } from
+        // "./other.js"` beside `declare module "./types.js" { … pZ: Zzz }`
+        // reads `./types.js`'s `Zzz` under tsc and read `./other.js`'s here.
+        // The augmented module's scope is the INNER one; the augmenting file's
+        // is the enclosing one, so it may only answer on a miss.
+        augmentationContextSymbol(ambientSpec, owner, name)?.let { return it }
         // (CHK.80)(d) a script-global name some MODULE file imports under the same
         // name: that file's own alias shadows the global (the per-file scope layers
         // the file's locals over the script ones); any other file keeps the global.
@@ -16876,24 +16916,50 @@ class Checker(
             val scope = perFileScopeOf(owner.fileName) ?: return globals[name]
             return lookupInFileScope(scope, name) ?: globals[name]
         }
-        globalsForFile(owner.fileName, name)?.let { return it }
-        // INV.3(c)(iv): a node inside a `declare module "<relative-spec>"`
-        // AUGMENTATION block additionally sees the AUGMENTED module's exports
-        // by bare name — tsc checks the body in that module's context (the
-        // round-443 rule; mirrors buildNamespaceScope's StringLiteralNode
-        // branch, which grants the same visibility to the TS2304 scope). A
-        // services/types.ts augmentation of "../compiler/types.js" references
-        // Node/SymbolFlags/UnionType without importing them; the per-file
-        // consult alone would null those and silently kill e.g. this-predicate
-        // narrowing whose target type lives in the augmented module.
+        return globalsForFile(owner.fileName, name)
+    }
+
+    /**
+     * (CHK.78)(b) INV.3(c)(iv) as a standalone consult, so the rule has ONE home
+     * and both its consumers — [lookupPerFileForNode] and the lens's
+     * `typeReferenceSymbol` — ask the same question.
+     *
+     * [ambientSpec] is the innermost enclosing `declare module "<spec>"` block's
+     * specifier (null when the node is in none), [owner] the file the node lives
+     * in. Answers the AUGMENTED module's own symbol for [name] when the
+     * specifier names a program file that EXPORTS it (INV.3(d): the merged
+     * instance no longer exists — the target file's local is the symbol tsc sees
+     * there), and null everywhere else: a fileless AMBIENT target, a
+     * non-relative one, and a name the target does not export all keep the
+     * resolution they had.
+     */
+    private fun augmentationContextSymbol(ambientSpec: String?, owner: SourceFile, name: String): Symbol? {
         val spec = ambientSpec ?: return null
         val target = resolveModuleSpecifierRelativeJsAware(spec, owner.fileName) ?: return null
         val targetFile = fileResults[target]?.sourceFile ?: return null
         if (name !in moduleNamedExportsOf(targetFile)) return null
-        // Proven visible via the augmentation context: resolve in the AUGMENTED
-        // module's own scope (INV.3(d): the merged instance no longer exists —
-        // the target file's local is the symbol tsc sees there).
         return lookupPerFile(target, name)
+    }
+
+    /**
+     * (CHK.78)(c) [augmentationContextSymbol] for a caller holding only the node —
+     * the innermost enclosing string-named `ModuleDeclaration` and the owning
+     * file are recovered by the same bounded parent walk
+     * [lookupPerFileForNode] does. Off the hot path by construction: its one
+     * caller is the lens, which exists only while a [CheckedNodeSink] is attached.
+     */
+    private fun augmentationContextSymbolForNode(node: Node, name: String): Symbol? {
+        var cur: Node? = node
+        var hops = 0
+        var ambientSpec: String? = null
+        while (cur != null && hops++ < 4096) {
+            if (cur is SourceFile) return augmentationContextSymbol(ambientSpec, cur, name)
+            if (ambientSpec == null && cur is ModuleDeclaration) {
+                (cur.name as? StringLiteralNode)?.let { ambientSpec = it.text }
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return null
     }
 
     /**
@@ -52495,7 +52561,20 @@ class Checker(
                     if (isSideEffectImport) {
                         // Side-effect imports: TS2882
                         if (isRelative) {
-                            if (resolveModuleSpecifier(moduleName) == null) {
+                            // (CHK.78)(a) [resolveModuleSpecifier] matches the specifier against
+                            // [fileResults] KEYS and is NOT directory-aware, so on a REAL project —
+                            // whose keys are absolute paths — a relative side-effect import NEVER
+                            // resolved and EVERY one of them read TS2882: `import "./types"` beside
+                            // `types.ts` was a false positive, extensionless and ESM-`.js` alike,
+                            // with or without an augmentation beside it. The corpus cannot see it
+                            // (its file names are FLAT, so `./types` matches `types.ts` directly)
+                            // and tsc's own 78 sources carry no relative side-effect import, so no
+                            // gate here moved. The crawl's own `(importer, specifier)` answer is
+                            // exact and empty off the project path (CHK.30), so appending it can
+                            // only SUPPRESS a false row and never invent one.
+                            if (resolveModuleSpecifier(moduleName) == null &&
+                                resolveImportTargetFallback(moduleName, fileName) == null
+                            ) {
                                 emitTS2882(specifier, moduleName, source, fileName)
                             }
                         } else if (moduleName !in ambientModuleNames

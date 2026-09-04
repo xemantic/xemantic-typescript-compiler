@@ -27,6 +27,38 @@ it is the live Phase 18 queue.
 
 ### Round (P18.12) — cross-module heritage: the 179 refused supertypes of `@types/node` become supertypes, and the set still compiles (2026-09-04)
 
+**(CHK.78) LANDED — three augmentation divergences, and the first was FAR broader than the item
+stated.** (a) The false **TS2882** has nothing to do with augmentation: `resolveModuleSpecifier`
+matches a specifier against `fileResults` KEYS and is not directory-aware, so on a REAL project
+(absolute-path keys) **every relative side-effect import** read it — `import "./types.js"`,
+`import "./types"`, nested paths, with or without an augmentation beside them. The corpus is
+blind by construction (flat names, so `./types` matches `types.ts`) and tsc's own 78 sources
+carry no relative side-effect import. Fix: the side-effect arm appends
+`resolveImportTargetFallback` — the crawl's own `(importer, specifier)` answer per (CHK.30),
+empty off the project path, so it can only SUPPRESS; the genuinely missing module keeps TS2882
+and the bare-specifier arm is untouched. (b) A bare `node: Node` inside the block typing `any`
+is a LIB-COLLISION axis, not an annotation one: with `lib: ["es2020"]` the same fixture already
+resolved and only DOM degraded it, because INV.3(c)(iv)'s augmentation leg sat BELOW
+`lookupPerFileForNode`'s per-file consult — extracted as `augmentationContextSymbol` and asked
+FIRST. The same fix closed a PRECEDENCE divergence measured beside it: with an
+`import { Zzz } from "./other.js"` beside the augmentation, tsgo resolves the augmented module's
+`Zzz` and we resolved the import's — the augmented module is the inner scope. (c) The lens's
+`typeReferenceSymbol` answered the block's own PARTIAL interface in-walk; it now asks the
+augmentation context first (a bounded parent walk, lens-only, off the hot path), falling through
+where the target does not export the name. **One guard was built, measured REDUNDANT and
+removed**: an `augmentationSharedNames` index plus a third fast-path clause read 0 RED under
+ablation, because (CHK.49) keeps the lib key set out of `nonModuleVisible` — a lib name a module
+file also declares IS module-only and never took the fast path — and a script-file collision is
+already merged by `mergeSharedKeepNames`; the refusal is recorded in source and the fast path
+stays one probe. 13 pins (part (a) pinned through a DIRECT `Checker` construction with
+`moduleResolutions`, since a `diagnose()` pin is vacuous on flat names), three arms RED 3/2/1;
+filtered 1,163/0; cost_gate exit 0; huge_methods 0 over; the 8-profile grid `added=0 removed=0`;
+externals 290/0 with the per-module gates; **the `@types/node` per-module receipt byte-identical
+in all six output files** — the real risk here, since `declare module "fs"` inside `fs.d.ts` can
+make the relative-aware resolver see a BARE specifier, and it does not fire because a script
+`.d.ts` has no named module exports. Suite 17,211 → 17,224 / 0 / 3. Four residues queued as
+(CHK.82).
+
 **Full suite after the round: 17,196 → 17,211 / 0 / 3** (run by the orchestrating session; the externals module reads 290/0 with the Kotlin/JS gate live).
 
 **(EXT.24) LANDED — a per-module SET is generated in ONE call, so every generation knows the
@@ -2257,7 +2289,7 @@ Owner decisions 2026-09-02:
   Also (CHK.73)'s shadow, measured again: `p.v` / `p.f()` / `new p.ctor()` through `import p =
   require("p")` are untyped (a module symbol has no type).
 
-- [ ] **(CHK.78) TWO PRE-EXISTING AUGMENTATION DIVERGENCES, MEASURED ON (CHK.77)'s NEGATIVE
+- [x] **(CHK.78) DONE 2026-09-04 ((P18.12) note; all three parts, and (a) was far broader than stated — EVERY relative side-effect import on a real project read a false TS2882; 13 pins, three arms, grid unchanged, cost_gate exit 0, `@types/node` byte-identical, suite 17,224/0/3; four residues queued as (CHK.82)) — TWO PRE-EXISTING AUGMENTATION DIVERGENCES, MEASURED ON (CHK.77)'s NEGATIVE
   CONTROL, PLUS ONE IN-WALK LENS ANSWER.** With `types.ts` beside `declare module "./types.js"
   { interface SourceFile { extra: number } }`: (a) a FALSE TS2882 on the side-effect
   `import "./types.js"` (tsgo silent); (b) a bare `node: Node` written INSIDE the augmentation
@@ -2266,6 +2298,20 @@ Owner decisions 2026-09-02:
   augmentation block's own PARTIAL interface rather than the merged one. Reproduce each
   against tsgo, fix at the resolver/import walker, pin; `r1n` under
   `scratchpad/chk77/` is the fixture.
+
+- [ ] **(CHK.82) THE FOUR AUGMENTATION RESIDUES (CHK.78) MEASURED AND LEFT (2026-09-04).**
+  (1) A name declared by the AUGMENTATION BLOCK ITSELF that the target does not export types
+  `any` (`declare module "./types" { interface ZzzLocal {…}; interface SourceFile { p: ZzzLocal } }`
+  — tsgo reads `ZzzLocal`): the consumer path never consults the block's own exports, and
+  (CHK.76) measured that consulting them naively costs 43 rows, so it needs the "the target does
+  not export it" narrowing and its own round. (2) An augmentation declaring a NEW EXPORTED name
+  is not added to the module's exports — `import { Brand } from "./types.js"` is a false TS2305
+  where tsgo is silent. (3) A NON-RELATIVE package augmentation (`declare module "some-pkg"` with
+  the package in `node_modules`) is a false **TS2664** *Invalid module name in augmentation* plus
+  a false TS2339 on the package's own member, and the augmented member's type is lost — verified
+  as an unchanged control by (CHK.78). (4) Display: tsgo renders a module enum as
+  `import("…/types").ZzzEnum` where we render `ZzzEnum`. Each against tsgo, pinned, with the
+  8-profile grid and the `@types/node` per-module receipt.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

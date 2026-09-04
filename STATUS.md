@@ -9,7 +9,15 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
-**(P18.12) — CROSS-MODULE HERITAGE: THE 179 REFUSED SUPERTYPES OF `@types/node` BECOME SUPERTYPES, 17,196 → 17,211 / 0 / 3 (2026-09-04).**
+**(P18.12) — CROSS-MODULE HERITAGE: THE 179 REFUSED SUPERTYPES OF `@types/node` BECOME SUPERTYPES, 17,196 → 17,224 / 0 / 3 (2026-09-04).**
+**(CHK.78) landed beside it:** three augmentation divergences, the first far broader than the
+item stated — `resolveModuleSpecifier` is not directory-aware, so on a REAL project every
+relative SIDE-EFFECT import read a false TS2882 (the corpus is blind: flat names; tsc's own
+sources have none); the crawl's own answer now suppresses it. A bare name inside an augmentation
+block typing `any` was a LIB-collision axis (the INV.3(c)(iv) leg sat below the per-file consult),
+which also fixed a precedence divergence against tsgo; the lens no longer answers the block's
+partial interface. One guard measured redundant and removed; 13 pins, `@types/node` byte-identical,
+grid unchanged; four residues queued as (CHK.82).
 (EXT.24): a per-module SET is generated in ONE call (`generateKotlinExternalsPerModule`) in two
 passes — pass 1 collects each module's frozen tree and lifts it into that module's Kotlin package,
 pass 2 re-runs each generation with the others' lifted models in hand — with the `open`
