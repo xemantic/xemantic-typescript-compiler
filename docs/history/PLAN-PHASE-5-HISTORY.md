@@ -1,3 +1,44 @@
+### Round (P18.11) — per-module externals generation: 51 modules of `@types/node` compile together (2026-09-04)
+
+**(EXT.21b) LANDED — one generation per declaring module, the half (EXT.21a)'s package scheme
+unblocked.** SELECTION: a generation is module-scoped iff the wiring's `moduleName` has a
+`declare module` block in the program; the selected set is that module plus its transitive
+re-export closure over what the scan already records — `export * from "x"` (the `node:net` → `net`
+twin) and `export = X` where `X` is an `import X = require("y")` alias (the `node:stream` → `stream`
+shape). A declaration with NO enclosing block is a GLOBAL (`declare namespace NodeJS`) and renders
+in EVERY generation, except where the selected module declares a type of the same qualified name —
+TypeScript's own innermost-first rule inside a module body. `moduleHomeOf` is one parent-chain walk
+serving declarations, export statements and namespace entries alike. SPELLING: a reference to a
+declaration owned by another module renders `<that module's package>.<path>.<name>` under the
+UNCHANGED identity evidence (the caller reached the nameable by `===` against the surface's own
+declaration nodes); what changed is that first-wins naming is keyed by `<home>\u0000<qualified>`,
+so it runs once per MODULE rather than once per program, and every "what this generation declares"
+table is narrowed to its own — a foreign name can neither shadow nor be spelled bare. Three
+refusals, each a marker naming the module: no Kotlin package for the target's specifier, no
+`package` line on THIS generation (a consumer who could not be given this module as a package has
+no per-module set for the others either), and a package whose first segment this generation
+declares. **RECEIPT: 51 declaring blocks → 51 generations → 51 distinct packages, compiled
+TOGETHER at 0 metadata and 0 Kotlin/JS errors** (multi-file `compileCheckAll`/`jsCompileCheckAll`
+— a cross-module reference resolves only against another file of the same compilation, so that is
+the only gradeable form): 18,015 lines, 8,878 declarations, 283 cross-module references, 0 package
+refusals; `Socket` renders in BOTH `node.dgram` and `node.net`, `Module` in both `node.module` and
+`node.vm`, `stream/web`'s `ReadableStream` where its module shadows the global (the global renders
+in the other 50 — the two cannot literally sit in ONE Kotlin scope while `declare namespace NodeJS`
+flattens, reported rather than faked); **`declared again by another file` 57 → 2 per generation**,
+the 47 module-only names vanishing BY CONSTRUCTION and the residue being GLOBAL-vs-GLOBAL
+(`Iterator`/`AsyncIterator` declared by two files) plus a `ts5.6/` duplicate in the input set.
+Degenerate cases confirmed by stash-ablation against the parent binary: rxjs (250 files),
+`typescript.d.ts` and the FLATTENED `@types/node` control are byte-identical, generated text and
+every census total. 13 pins + 5 updated, EIGHT single-mistake arms with distinct red sets (no pin
+stands in for another). **The one thing that did not work, and the honest limit:** a cross-module
+HERITAGE base is refused loudly — `Inheritance` is built over one generation and resolves
+supertypes by text, so admitting them measured 184 `hides member of supertype` + 27 `inherits
+conflicting members` on `@types/node`; carrying inheritance across generations needs the renderer
+to know the other modules' declarations, queued as (EXT.24). Externals 261 → 275/0; suite 17,182 →
+17,196 / 0 / 3. Two traps re-met: a KDoc containing a `/*` sequence unclosed the file to EOF
+(CLAUDE.md's nested-comment entry, hit live), and Gradle treats `environment()` as a NON-input, so
+every env-driven probe run needs `--rerun` or it silently reuses the previous capture.
+
 ### Round (P18.10) — the CI half of the Kotlin/JS gate, the README repositioning lands, and the externals package scheme is measured rather than proposed (2026-09-03)
 
 **Three owner decisions were answered this session** — (EXT.17)'s CI half approved, (DOC.2)

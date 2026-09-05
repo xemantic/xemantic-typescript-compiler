@@ -1371,6 +1371,24 @@ class Checker(
      */
     private var currentArithmeticFlowGraph: FlowGraph? = null
 
+    /** (CHK.85)(b): every enum symbol's NAME, filled where [computeEnumSymbolValues] mints its values. */
+    private val enumDeclaredNames = HashSet<String>()
+
+    /**
+     * (CHK.85)(b): the names an `Enum.Member` access's RECEIVER identifier can spell —
+     * [enumDeclaredNames] plus every import-binding local name in the program (an
+     * imported enum, possibly renamed) — built once at the end of
+     * `init:computeAllEnumValues`. It is a PRE-GATE for [enumMemberTypeOfExprGated]: the
+     * three (CHK.85)(b) readers ask about every `x = a.b` shape in the program, and the
+     * ungated resolver cost `globals.lookups` +4.0% on the compiler profile — one miss per
+     * `const kind = node.kind`. Empty before the pass, so an earlier ask answers "not an
+     * enum" and takes the path it always took.
+     */
+    private var enumReceiverNames: Set<String> = emptySet()
+
+    /** (CHK.85)(b): see [enumMemberTypeOfExprGated] — `"<file>|<name>"` -> the file-level enum symbol. */
+    private val enumReceiverSymCache = HashMap<String, Symbol>()
+
     /**
      * Round 423: the current file's flow graph during the implicit-return pass
      * (TS2355/TS2366/TS7030). Same discipline as [currentArithmeticFlowGraph]:
@@ -15649,6 +15667,16 @@ class Checker(
                 computeEnumValuesRecursive(symbol)
             }
         }
+        // (CHK.85)(b): see [enumReceiverNames]. This loop is NOT under the `bindsEnum`
+        // skip above — an alias of an enum lives in a file that declares none.
+        val receivers = HashSet<String>(enumDeclaredNames)
+        receivers.addAll(lexicalBlockScopedEnumNames)
+        for (result in binderResults) {
+            for ((name, symbol) in result.locals) {
+                if (symbol.flags.hasAny(SymbolFlags.Alias)) receivers.add(name)
+            }
+        }
+        enumReceiverNames = receivers
     }
 
     /**
@@ -15678,6 +15706,7 @@ class Checker(
 
     private fun computeEnumSymbolValues(symbol: Symbol) {
         if (enumValues.containsKey(symbol.id)) return
+        enumDeclaredNames.add(symbol.name)
         val values = mutableMapOf<String, ConstantValue>()
         enumValues[symbol.id] = values
 
@@ -47290,15 +47319,27 @@ class Checker(
      * Returns `anyType` for expressions that can't be reliably inferred.
      * Skips null/undefined initializers (declare-then-assign patterns).
      */
-    private fun inferTypeFromInitializer(init: Expression): Type {
+    private fun inferTypeFromInitializer(init: Expression): Type =
+        inferTypeFromInitializerType(rawTypeOfInitializer(init))
+
+    /**
+     * (CHK.85)(b) S3: the UN-widened half of [inferTypeFromInitializer] — `anyType` for the
+     * `null`/`undefined` "declare then assign" identifiers, else the expression's type —
+     * split out so the const rule can look at the raw type ONCE before it is widened,
+     * rather than typing the initializer a second time.
+     */
+    private fun rawTypeOfInitializer(init: Expression): Type {
         // Skip null/undefined — "declare then assign" pattern
         if (init is Identifier && (init.text == "null" || init.text == "undefined")) return anyType
-        val raw = getTypeOfExpression(init)
-        return if (raw === anyType || raw === errorType) anyType
+        return getTypeOfExpression(init)
+    }
+
+    /** (CHK.85)(b) S3: the widening half of [inferTypeFromInitializer] over an already-computed [raw]. */
+    private fun inferTypeFromInitializerType(raw: Type): Type =
+        if (raw === anyType || raw === errorType) anyType
             // Skip null/undefined/void inferred types
             else if (raw.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) anyType
             else widenType(raw)
-    }
 
     /** Check if a type is simple enough for reliable TS2403 string-based comparison. */
     private fun isSimpleTypeForTs2403(type: Type): Boolean {
@@ -58596,6 +58637,8 @@ class Checker(
         private const val WK_BASE_EXPR = 9
         private const val WK_FLOW_ANCHOR = 10
         private const val WK_RHS = 11
+        /** (CHK.85)(b): the TS2367 emitter's REPORTING walk — its own memo key, see [NarrowFlowMemo.overwriteResetsToDeclared]. */
+        private const val WK_NARROW_REPORT = 12
 
         private const val TPO_STMT = 1
         private const val TPO_NONE = 2
@@ -62432,8 +62475,34 @@ interface DataView {
                 // (WIDEN.1) round 781: this recording runs AFTER the TS2322 walk's and
                 // overwrites it, so the const-ness gate has to be repeated here or the
                 // literal the other site preserved is widened away again.
+                // (CHK.85)(b): a `let` widens an enum MEMBER to its enum here as
+                // [cvdaRecordInferredLocalType] does — `getWidenedLiteralType` alone left
+                // `let variance = m & Out ? … : undefined` (tsc's own checker.ts) recorded
+                // as the MEMBER union, which the `|=` assignment arm then kept (a `number`
+                // relates to a member here) and the TS2367 read reported against
+                // `VarianceFlags.Bivariant`; tsc's declared type is `VarianceFlags |
+                // undefined`. A `const` keeps the members ((REL.2) round 783).
                 currentLocalTypes[declName!!] =
-                    if (WIDEN1_CONST_KEEPS_LITERAL && isConst) lit else getWidenedLiteralType(lit)
+                    if (WIDEN1_CONST_KEEPS_LITERAL && isConst) lit
+                    else widenEnumMemberTypes(getWidenedLiteralType(lit))
+            } else if (declName != null && decl.type == null && decl.initializer != null &&
+                enumMemberAssignedAtoms(decl.initializer) != null) {
+                // (CHK.85)(b) S4: an ENUM-MEMBER initializer records too — [literalTypeOfExpression]
+                // answers null for it (an enum member is not a literal NODE), so a
+                // body-local `const k = K.A` reached this pass's consumers as `any`
+                // (B83.5): `takeB(k)` and `nv(k)` inside a function were silent where
+                // both references report, and `if (k === K.B)` was a lost TS2367. The
+                // const-ness gate is the (WIDEN.1)/(REL.2) one the literal arm above
+                // repeats: a `const` keeps the member, a `let` widens to the enum and is
+                // narrowed back by the flow read at the consumer.
+                // A conditional / `||` / `??` of member accesses records too: the literal
+                // arm above answers null for one whose branches are ALL member accesses
+                // (no branch is a literal NODE), so `let x = c ? K.A : K.B` in a body was
+                // `any` here while its file-level twin read `K` through the symbol half.
+                val atoms = enumMembersInDeclarationOrder(enumMemberAssignedAtoms(decl.initializer)!!)
+                val value = if (atoms.size == 1) atoms[0] else getUnionType(atoms)
+                currentLocalTypes[declName] =
+                    if (WIDEN1_CONST_KEEPS_LITERAL && isConst) value else widenEnumMemberTypes(value)
             } else if (declName != null && decl.type == null && decl.initializer is BinaryExpression) {
                 // A BINARY initializer whose operator pins a concrete primitive
                 // result also records: comparisons → boolean, arithmetic/compound
@@ -100806,6 +100875,18 @@ interface DataView {
         if (sourceType is Type.Union && targetType is Type.Object &&
             sourceType.types.all { isPrimitiveLikeType(it) }
         ) return true
+        // (CHK.85)(b): the ENUM twin of the (PARITY.1)(c) lift. A union every constituent
+        // of which is enum-flavoured (a member type or an enum's own type) against an
+        // enum-flavoured target is N comparisons this gate admits one at a time (both
+        // are `Type.Object`s, judged structurally below), so admitting the union adds no
+        // decision the engine cannot already make — and the union is what a branch join
+        // now hands the var-decl reader (`let k = K.A; if (c) k = K.B; const w: K.B = k`
+        // reads `K.A | K.B`): without this the row that HEAD reported as `Type 'K'` went
+        // SILENT, a lost diagnostic both references keep (`Type 'K.A | K.B' …`).
+        if (sourceType is Type.Union && targetType is Type.Object &&
+            isEnumFlavoredObjectType(targetType) &&
+            sourceType.types.all { isEnumFlavoredObjectType(it) }
+        ) return true
         if (sourceType is Type.Intersection) return true
         // Anything → Union/Intersection target
         if (targetType is Type.Union || targetType is Type.Intersection) return true
@@ -108381,6 +108462,19 @@ interface DataView {
                     checkTypeRelatedTo(narrowed, targetType, assignableRelation)
                 ) {
                     sourceNarrowVerified = true; narrowed
+                } else if (narrowed !== sourceTypeRaw && narrowed !== neverType &&
+                    expr is Identifier &&
+                    isEnumFlavoredObjectType(targetType) &&
+                    typeHasEnumFlavoredConstituent(sourceTypeRaw)
+                ) {
+                    // (CHK.85)(b) S2, the return-position twin of the var-decl reader:
+                    // an enum-flavoured target reads the FLOW type of an enum-flavoured
+                    // identifier source even when it does not relate, so `let k = K.A;
+                    // return k` against `K.B` prints `Type 'K.A'` as both references do
+                    // instead of the declared `'K'`. Confined to that pair of shapes and
+                    // to a non-`never` answer (a `never` is an unreachable position, and
+                    // adopting it would DELETE the diagnostic — CLAUDE.md's rule).
+                    narrowed
                 } else if (expr is PropertyAccessExpression &&
                     !checkTypeRelatedTo(sourceTypeRaw, targetType, assignableRelation)
                 ) {
@@ -116496,7 +116590,25 @@ interface DataView {
                     }
                     // Infer from initializer (widened: literals → base types)
                     decl.initializer?.let { init ->
-                        val inferred = inferTypeFromInitializer(init)
+                        val raw = rawTypeOfInitializer(init)
+                        // (CHK.85)(b) S3: the SYMBOL half of the (REL.2) round-783 const
+                        // rule. The LOCAL half ([cvdaRecordInferredLocalType]) keeps an
+                        // enum MEMBER for a `const`, exactly as tsc's
+                        // `getWidenedLiteralTypeForInitializer` does under
+                        // `NodeFlags.Constant`; this half — what a FILE-level const answers
+                        // to every consumer, including the argument gate, the `never` arm
+                        // and the TS2367 pass — still widened it through [widenType], so
+                        // `const k = K.A; takeB(k)` printed `'K'` and `if (k === K.B)`
+                        // was a lost TS2367 on the shipped build. The id is registered in
+                        // [widen1ImmutableLiteralTypeIds] as the local half registers it,
+                        // so the assignment-target widen-back is unchanged.
+                        if (R783_CONST_KEEPS_ENUM_MEMBER && varDeclIsImmutableBinding(decl) &&
+                            raw.flags.hasAny(TypeFlags.EnumLiteral)
+                        ) {
+                            widen1ImmutableLiteralTypeIds.add(raw.id)
+                            return raw
+                        }
+                        val inferred = inferTypeFromInitializerType(raw)
                         if (inferred !== anyType && inferred !== errorType) return inferred
                     }
                 } finally {
@@ -119594,7 +119706,15 @@ interface DataView {
         is Type.StringLiteral -> true
         is Type.NumberLiteral -> true
         is Type.BigIntLiteral -> true
-        else -> target === neverType
+        // (CHK.85)(b) S2: an enum's own type or one of its MEMBER types — the target
+        // a local initialized from an enum member is compared against (`const w: K.B =
+        // k`). tsc models both as literal-shaped (an enum is the union of its members),
+        // so its var-decl reader has always narrowed the source there; ours refused the
+        // target and never asked the flow walk, which is why `let k = K.A; k = K.B;
+        // const w: K.B = k` was an ours-only TS2322. The substitution at the var-decl
+        // site is UNCONDITIONAL (as for every target this predicate admits), so a wrong
+        // narrow there would be a false positive — the 8-profile grid is the gate.
+        else -> target === neverType || isEnumFlavoredObjectType(target)
     }
 
     /** Look up the [FlowNode] recorded for a node's reference position. */
@@ -119978,7 +120098,10 @@ interface DataView {
      * Conservative bound: walks at most [NARROW_MAX_DEPTH] antecedents to keep
      * the helper cheap.
      */
-    private fun getNarrowedTypeForReference(declaredType: Type, expr: Expression): Type {
+    private fun getNarrowedTypeForReference(
+        declaredType: Type, expr: Expression,
+        kind: Int = WK_NARROW, overwriteResetsToDeclared: Boolean = false,
+    ): Type {
         // 17.34: PropertyAccess narrowing for paths like `A._a`. The path is
         // serialized as a dotted string; the narrowing helpers compare the
         // condition expression's path against this string. Identifiers stay
@@ -119989,11 +120112,13 @@ interface DataView {
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
         val seen = NarrowSeen()
-        return flowWalkWithTripCheck(expr, WK_NARROW, declaredType.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path)) {
+        return flowWalkWithTripCheck(expr, kind, declaredType.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path)) {
             // (ENGINE.2d)(a): the lambda runs iff a real traversal happens — see
             // [narrowWalkLaunches].
             narrowWalkLaunches++
-            narrowTypeFromFlow(declaredType, flow, path, seen, depth = 0)
+            val memo = NarrowFlowMemo()
+            memo.overwriteResetsToDeclared = overwriteResetsToDeclared
+            narrowTypeFromFlow(declaredType, flow, path, seen, depth = 0, memo)
         } ?: declaredType
     }
 
@@ -120724,7 +120849,7 @@ interface DataView {
                 // when [flowAssignmentMightNarrow] gated the fast-forward loop above.
                 val antecedent = narrowTypeFromFlowCore(declaredType, node.antecedent, name, seen, depth + 1, memo)
                 val tA = NarrowSections.t()
-                val r = narrowByAssignmentRhs(node.node, name, antecedent, declaredType)
+                val r = narrowByAssignmentRhs(node.node, name, antecedent, declaredType, memo.overwriteResetsToDeclared)
                 NarrowSections.close(NarrowSections.S_ASSIGN, tA)
                 r
             }
@@ -120854,7 +120979,74 @@ interface DataView {
      *    nullish LHS stays nullish. RHS classification is purely structural
      *    ([rhsIsDefinitelyNonNullish]) — no type resolution inside the walker.
      */
-    private fun narrowByAssignmentRhs(node: Node, name: String, antecedent: Type, declaredType: Type): Type {
+    private fun narrowByAssignmentRhs(
+        node: Node, name: String, antecedent: Type, declaredType: Type,
+        overwriteResetsToDeclared: Boolean = false,
+    ): Type {
+        // (CHK.85)(b): the right-hand side and the enum-member arm come FIRST — the
+        // literal arm below answers a UNION for a conditional of member accesses
+        // (`literalTypeOfExpression` types the branches) and [narrowUnionByRhsAssignment]
+        // then returns our ATOMIC enum unchanged, so `let x = c ? K.A : K.B` read `K` where
+        // tsc reads `K.A | K.B` (measured: a lost TS2367 and a lost TS2345).
+        val rhs: Expression? = unwrapAssignmentChainRhs(when (node) {
+            is VariableDeclaration ->
+                if ((node.name as? Identifier)?.text == name) node.initializer else null
+            is BinaryExpression -> {
+                val op = node.operator
+                val opOk = op == SyntaxKind.Equals ||
+                    op == SyntaxKind.QuestionQuestionEquals ||
+                    op == SyntaxKind.BarBarEquals
+                if (!opOk) null else when (val left = node.left) {
+                    // Cheap pre-gates before any path-string building — this helper
+                    // runs at EVERY FlowAssignment visit of every walk (perf-relevant
+                    // on assignment-dense real code).
+                    is Identifier -> if (left.text == name) node.right else null
+                    is PropertyAccessExpression -> {
+                        val last = left.name.text
+                        val matches = name.length > last.length &&
+                            name.endsWith(last) &&
+                            name[name.length - last.length - 1] == '.' &&
+                            getReferencePath(left) == name
+                        if (matches) node.right else null
+                    }
+                    // Round 461: literal-index element-access target (`x[0] = rhs`) —
+                    // exact-path match, mirroring the PropertyAccess arm (cheap
+                    // bracket pre-gate before the path build).
+                    is ElementAccessExpression ->
+                        if (name.indexOf('[') >= 0 && getReferencePath(left) == name) node.right else null
+                    else -> null
+                }
+            }
+            else -> null
+        })
+        // (CHK.85)(b) S1: an ENUM-MEMBER right-hand side — `let k = K.A` / `k = K.B` —
+        // reduces the DECLARED type to the assigned member (tsc's
+        // `getAssignmentReducedType` over the enum-as-union, checker.ts:28118). Before
+        // this every reducing arm needed `declaredType is Type.Union` and our enum `K`
+        // is an atomic `Type.Object`, so a local initialized from a member read as the
+        // whole enum at every flow consumer: `const w: K.B = k` printed `Type 'K'`, and
+        // after `k = K.B` the same read was an ours-only FALSE POSITIVE (six rows), while
+        // `if (k === K.B)` was a lost TS2367 (both references agree on all 49 rows).
+        //
+        // The receiver is resolved by SYMBOL LOOKUP ([enumMemberTypeOfExpr], never
+        // `getTypeOfExpression` — (CHK.62)'s law: this helper runs at EVERY
+        // `FlowAssignment` visit of every walk), and only after the cheap flag test that
+        // the declared type carries an enum-flavoured constituent at all. A member OUTSIDE
+        // the declared enum FALLS THROUGH to the arms below (never `never`; and not the
+        // declared type either — measured on tsc's own checker.ts, answering the declared
+        // type re-introduced a nullish constituent the older arms strip, and `variance
+        // |= …` read `'variance' is possibly 'undefined'`). The assigned value may be a
+        // conditional or `||`/`??` of member accesses ([enumMemberAssignedAtoms]): `let
+        // x = c ? K.A : K.B` is declared `K` and reads `K.A | K.B`, as tsc reads it.
+        if (rhs != null &&
+            (node is VariableDeclaration ||
+                (node is BinaryExpression && node.operator == SyntaxKind.Equals)) &&
+            typeHasEnumFlavoredConstituent(declaredType)
+        ) {
+            enumMemberAssignedAtoms(rhs)?.let { atoms ->
+                enumMemberAssignmentReducedType(declaredType, atoms)?.let { return it }
+            }
+        }
         if (flowAssignmentTargetsName(node, name)) {
             // (CHK.70)(c) The LITERAL arm is the THIRD arm of this function and the only
             // one (CHK.63)(a) did not route through [assignmentReduceBase]. Without it
@@ -120902,37 +121094,6 @@ interface DataView {
                 return antecedent
             }
         }
-        val rhs: Expression? = unwrapAssignmentChainRhs(when (node) {
-            is VariableDeclaration ->
-                if ((node.name as? Identifier)?.text == name) node.initializer else null
-            is BinaryExpression -> {
-                val op = node.operator
-                val opOk = op == SyntaxKind.Equals ||
-                    op == SyntaxKind.QuestionQuestionEquals ||
-                    op == SyntaxKind.BarBarEquals
-                if (!opOk) null else when (val left = node.left) {
-                    // Cheap pre-gates before any path-string building — this helper
-                    // runs at EVERY FlowAssignment visit of every walk (perf-relevant
-                    // on assignment-dense real code).
-                    is Identifier -> if (left.text == name) node.right else null
-                    is PropertyAccessExpression -> {
-                        val last = left.name.text
-                        val matches = name.length > last.length &&
-                            name.endsWith(last) &&
-                            name[name.length - last.length - 1] == '.' &&
-                            getReferencePath(left) == name
-                        if (matches) node.right else null
-                    }
-                    // Round 461: literal-index element-access target (`x[0] = rhs`) —
-                    // exact-path match, mirroring the PropertyAccess arm (cheap
-                    // bracket pre-gate before the path build).
-                    is ElementAccessExpression ->
-                        if (name.indexOf('[') >= 0 && getReferencePath(left) == name) node.right else null
-                    else -> null
-                }
-            }
-            else -> null
-        })
         // Round 477 (tsc getAssignmentReducedType — the fourslash reassignment idiom):
         // `expected = typeof expected === "string" ? { name: expected } : expected` —
         // the RHS can no longer be the tested primitive, so the post-assignment type
@@ -121192,7 +121353,15 @@ interface DataView {
                 }
             }
         }
-        return antecedent
+        // (CHK.85)(b): an assignment to the walked reference that NO arm above could
+        // classify. The antecedent pass-through is right for every SUPPRESSION consumer
+        // (a stale narrowing can only suppress more), and wrong for a REPORTING one — a
+        // `switch (token) { case CloseBraceToken: token = scanner.reScanTemplateToken();
+        // if (token === TemplateTail) … }` (tsc's own classifier.ts) kept `CloseBraceToken`
+        // past the unresolvable method call and the TS2367 read reported it. An overwrite
+        // of unknown value is the DECLARED type (tsc's own fallback), so a reporting walk
+        // asks for that; see [NarrowFlowMemo.overwriteResetsToDeclared].
+        return if (overwriteResetsToDeclared && rhs != null) declaredType else antecedent
     }
 
     /**
@@ -122102,7 +122271,7 @@ interface DataView {
      * the shape is what a later filter reads.
      */
     private fun flowJoinUnion(branchTypes: List<Type>, declaredType: Type): Type {
-        val joined = getUnionType(branchTypes)
+        val joined = getUnionType(enumMembersInDeclarationOrder(branchTypes))
         val members = (joined as? Type.Union)?.types ?: return joined
         if (members.size < 2) return joined
         val declared = (declaredType as? Type.Union)?.types
@@ -122133,6 +122302,35 @@ interface DataView {
         val k = kept ?: return joined
         if (k.isEmpty()) return joined
         return getUnionType(k)
+    }
+
+    /**
+     * (CHK.85)(b): a join whose atoms are all MEMBERS OF ONE ENUM is handed to
+     * [getUnionType] in the enum's DECLARATION order. That function sorts by flags and
+     * keeps insertion order among equal flags, so a branch join otherwise prints its
+     * BRANCH order (`let k = K.A; if (c) k = K.B` read `'K.B | K.A'`), where tsc orders
+     * a union by type id and mints every member id of an enum at once, in declaration
+     * order — `'K.A | K.B'` in both references. Confined to that one shape: a mixed join
+     * keeps the order it always had, so no existing union changes.
+     */
+    private fun enumMembersInDeclarationOrder(types: List<Type>): List<Type> {
+        if (types.size < 2) return types
+        var owner: Symbol? = null
+        val atoms = ArrayList<Type>(types.size)
+        for (t in types) {
+            val parts = if (t is Type.Union) t.types else listOf(t)
+            for (p in parts) {
+                val o = enumOfMemberTypeSymbol(p) ?: return types
+                val oc = canonicalEnumSymbol(o)
+                if (owner == null) owner = oc else if (owner !== oc) return types
+                atoms.add(p)
+            }
+        }
+        val order = owner?.exports?.keys?.toList() ?: return types
+        return atoms.sortedBy { a ->
+            val i = order.indexOf((a as? Type.Object)?.symbol?.name)
+            if (i < 0) Int.MAX_VALUE else i
+        }
     }
 
     private fun flowJoinMemberIsDeclared(m: Type, declared: List<Type>?, declaredType: Type): Boolean =
@@ -122169,6 +122367,68 @@ interface DataView {
             else -> false
         }
         else -> false
+    }
+
+    /**
+     * (CHK.85)(b) S1: tsc's `getAssignmentReducedType` for an assigned enum MEMBER over a
+     * declared type that carries an enum-flavoured constituent — the ONE reduction our
+     * atomic enum type cannot reach through [narrowUnionByRhsAssignment].
+     *
+     * The declared enum's OWN type is REPLACED by the member (in tsc the enum IS the union
+     * of its members, so the filter keeps exactly the assigned one); every other
+     * constituent is kept iff the member relates to it (`K | undefined` -> `K.A`,
+     * `number | K` -> `number | K.A`) and dropped otherwise. The owner test is the
+     * relation itself — [isSimpleTypeRelatedTo]'s owner-checked `EnumLiteral -> Enum`
+     * leg — so `Z.Foo.A` never replaces an `X.Foo` ((REL.1)(c)'s same-name rule).
+     *
+     * `null` when NOTHING survives (a member of a foreign enum assigned to a declared
+     * type that cannot hold it): the caller answers the declared type, never `never`.
+     */
+    private fun enumMemberAssignmentReducedType(declaredType: Type, atoms: List<Type>): Type? {
+        val constituents = if (declaredType is Type.Union) declaredType.types else listOf(declaredType)
+        val kept = ArrayList<Type>(constituents.size + atoms.size)
+        var changed = false
+        for (c in constituents) {
+            val related = atoms.filter { checkTypeRelatedTo(it, c, assignableRelation) }
+            when {
+                related.isEmpty() -> changed = true
+                enumOwnTypeSymbol(c) != null || c.flags.hasAny(TypeFlags.EnumLiteral) -> {
+                    for (m in related) if (kept.none { it === m }) kept.add(m)
+                    if (related.size != 1 || related[0] !== c) changed = true
+                }
+                else -> kept.add(c)
+            }
+        }
+        if (kept.isEmpty()) return null
+        if (!changed) return declaredType
+        val ordered = enumMembersInDeclarationOrder(kept)
+        return if (ordered.size == 1) ordered[0] else getUnionType(ordered)
+    }
+
+    /**
+     * (CHK.85)(b) S1: the enum-member ATOMS an assigned expression can evaluate to — a
+     * member access, through parentheses, the branches of a conditional, the operands of
+     * `||` / `??` — or `null` when any leaf is something else (the arms below then decide,
+     * exactly as before). Receivers are resolved by SYMBOL LOOKUP through the name
+     * pre-gate ([enumMemberTypeOfExprGated]); nothing here types an expression.
+     */
+    private fun enumMemberAssignedAtoms(expr: Expression, depth: Int = 0): List<Type>? {
+        if (depth > 8) return null
+        return when (val e = unwrapParensExpr(expr)) {
+            is PropertyAccessExpression -> enumMemberTypeOfExprGated(e)?.let { listOf(it) }
+            is ConditionalExpression -> {
+                val t = enumMemberAssignedAtoms(e.whenTrue, depth + 1) ?: return null
+                val f = enumMemberAssignedAtoms(e.whenFalse, depth + 1) ?: return null
+                t + f.filter { m -> t.none { it === m } }
+            }
+            is BinaryExpression ->
+                if (e.operator == SyntaxKind.BarBar || e.operator == SyntaxKind.QuestionQuestion) {
+                    val l = enumMemberAssignedAtoms(e.left, depth + 1) ?: return null
+                    val r = enumMemberAssignedAtoms(e.right, depth + 1) ?: return null
+                    l + r.filter { m -> l.none { it === m } }
+                } else null
+            else -> null
+        }
     }
 
     private fun narrowUnionByRhsAssignment(declared: Type, rhsType: Type): Type {
@@ -126148,6 +126408,38 @@ interface DataView {
      * evaluator never keyed answers `null` — an unknown member must stay unknown rather
      * than narrow to a type nothing else agrees with.
      */
+    /**
+     * (CHK.85)(b): [enumMemberTypeOfExpr] behind the [enumReceiverNames] pre-gate — one
+     * set probe before any lookup — with the FILE-LEVEL leg of the receiver's resolution
+     * memoized per (checking file, name). That leg is position-independent within a file
+     * ([resolveEnumSymbolFileLevel] reads the file's locals and the per-file globals), so
+     * it may be cached; the lexical leg (a body-scoped enum, position-dependent) and the
+     * enclosing-namespace leg (position-dependent, consulted only on a file-level miss)
+     * are resolved fresh every time. Measured: without the memo the S1 arm re-resolved
+     * `SyntaxKind` at every `x = SyntaxKind.Y` every walk passed, `globals.lookups`
+     * +2.37% on the compiler profile.
+     */
+    private fun enumMemberTypeOfExprGated(expr: Expression): Type? {
+        val pa = unwrapParensExpr(expr) as? PropertyAccessExpression ?: return null
+        val recv = pa.expression as? Identifier ?: return null
+        val enumIdent = recv.text
+        if (enumIdent !in enumReceiverNames) return null
+        val member = pa.name.text
+        if (member.isEmpty()) return null
+        val file = currentCheckFileName
+        val key = if (file != null && enumIdent !in lexicalBlockScopedEnumNames) "$file|$enumIdent" else null
+        val sym = key?.let { enumReceiverSymCache[it] }
+            ?: lexicalEnumSymbolForDiscriminant(enumIdent, pa)
+            ?: resolveEnumSymbolFileLevel(enumIdent, pa)?.also { if (key != null) enumReceiverSymCache[key] = it }
+            ?: enumSymbolFromEnclosingNamespace(enumIdent, pa)
+            ?: return null
+        if (enumValues[sym.id]?.containsKey(member) != true) return null
+        val memberSym = sym.exports?.get(member) ?: return null
+        if (memberSym.flags.hasNone(SymbolFlags.EnumMember)) return null
+        val t = getDeclaredTypeOfEnumMember(memberSym)
+        return if (t.flags.hasAny(TypeFlags.EnumLiteral)) t else null
+    }
+
     private fun enumMemberTypeOfExpr(expr: Expression): Type? {
         val pa = unwrapParensExpr(expr) as? PropertyAccessExpression ?: return null
         val enumIdent = (pa.expression as? Identifier)?.text ?: return null
@@ -127065,6 +127357,17 @@ interface DataView {
         if (depth > 8) return false
         return when (val e = unwrapParensExpr(expr)) {
             is PropertyAccessExpression -> enumMemberTypeOfExpr(e) != null
+            // (CHK.85)(b) S3: a `const` initialized from a fresh member IS fresh through
+            // the identifier — tsc's declared type for such a const is the fresh literal
+            // itself (`getWidenedLiteralTypeForInitializer` keeps `type` under
+            // `NodeFlags.Constant`), so `const k = K.A; const o = { v: k }` widens `o.v`
+            // to `K` in both references, where `let k = K.A` reads the flow-REDUCED
+            // regular member and keeps `K.A` (measured, p1/p2). Before S3 the symbol half
+            // answered `K` for the const and the question never arose; with it the
+            // identifier's freshness has to be carried, or p1 regresses. An annotated
+            // const (`const k: K.A = K.A`) is regular, as is a `let` or a parameter.
+            is Identifier -> objLitConstEnumInitializerOf(e)
+                ?.let { objLitInitIsFreshEnumMemberAccess(it, depth + 1) } == true
             is ConditionalExpression ->
                 objLitInitIsFreshEnumMemberAccess(e.whenTrue, depth + 1) ||
                     objLitInitIsFreshEnumMemberAccess(e.whenFalse, depth + 1)
@@ -127074,6 +127377,49 @@ interface DataView {
                         objLitInitIsFreshEnumMemberAccess(e.right, depth + 1))
             else -> false
         }
+    }
+
+    /**
+     * (CHK.85)(b) S3: the initializer of the un-annotated `const` [id] names, or `null`
+     * when [id] resolves to anything else. Resolved by SYMBOL LOOKUP — the INV.2(c)
+     * lexical scopes first ((CHK.47)'s shadow rule; a function-body const lives only
+     * there, B83.5), then the file locals, then the per-file globals.
+     */
+    private fun objLitConstEnumInitializerOf(id: Identifier): Expression? {
+        val name = id.text
+        val sym = lexicalScopeSymbol(id, name)
+            ?: owningFileLexicalScopeSymbol(id, name)
+            ?: currentFileLocals?.get(name)
+            ?: lookupPerFileForNode(id, name)
+            ?: return null
+        val decl = sym.valueDeclaration as? VariableDeclaration ?: return null
+        if (decl.type != null || !varDeclIsImmutableBinding(decl)) return null
+        return decl.initializer
+    }
+
+    /**
+     * (CHK.85)(b) S3: [lexicalScopeSymbol] over the OWNING file's INV.2(c) tables rather
+     * than the ambient [currentLexicalScopes], which the object-literal typing walk does
+     * not install (measured: a function-body `const k3 = K.A` read as non-fresh through
+     * the ambient consult alone). Same walk and same `symbols`-only rule as
+     * [lexicalTypeSymbolForNode], for a VALUE symbol.
+     */
+    private fun owningFileLexicalScopeSymbol(node: Node, name: String): Symbol? {
+        val owner = owningSourceFile(node) ?: return null
+        val scopes = fileResults[owner.fileName]?.lexicalScopes ?: return null
+        if (scopes.isEmpty()) return null
+        var cur: Node? = node
+        var hops = 0
+        while (cur != null && hops++ < 4096) {
+            val nid = (cur as NodeBase).nodeId
+            if (nid >= 0) {
+                val sym = scopes[nid]?.symbols?.get(name)
+                if (sym != null && sym.flags.hasAny(SymbolFlags.Variable)) return sym
+            }
+            if (cur is SourceFile) break
+            cur = cur.parent
+        }
+        return null
     }
 
     /**
@@ -154781,6 +155127,25 @@ interface DataView {
             }
             if (currentLocalTypes.containsKey(nm)) {
                 currentLocalTypes[nm] = anyType
+            } else if (d.type == null && d.initializer != null &&
+                enumMemberAssignedAtoms(d.initializer) != null &&
+                !globals.containsKey(nm) && currentFileLocals?.containsKey(nm) != true) {
+                // (CHK.85)(b) S4, the ccet half: this pre-scan is the ONLY body-local
+                // walk the argument gate's frame has, so a body-local `const k = K.A`
+                // reached `takeB(k)` and `nv(k)` as `any` (B83.5) where both references
+                // report — and a body-local STRING const is equally silent there (a
+                // pre-existing gap this does not open). Confined to an un-annotated,
+                // uncolliding local initialized from an `Enum.Member` access, resolved
+                // by symbol lookup ([enumMemberTypeOfExpr] mints no member table, so the
+                // B420 first-touch hazard the surrounding scan is shaped around does not
+                // apply). A `const` keeps the member and a `let` widens to the enum; the
+                // M34 arm's flow read then narrows the `let` back per use. A SECOND
+                // declaration of the name in this body takes the `containsKey` branch
+                // above and reads `any` — round 460's ambiguity rule, for free.
+                val atoms = enumMembersInDeclarationOrder(enumMemberAssignedAtoms(d.initializer)!!)
+                val value = if (atoms.size == 1) atoms[0] else getUnionType(atoms)
+                currentLocalTypes[nm] =
+                    if (varDeclIsImmutableBinding(d)) value else widenEnumMemberTypes(value)
             } else if (globals.containsKey(nm) || currentFileLocals?.containsKey(nm) == true) {
                 // Round 463: an Identifier local (incl. a for-of/for-in loop-header
                 // const, B83.5-unbound) whose name collides with a GLOBAL binding —
@@ -166327,17 +166692,65 @@ interface DataView {
         return true
     }
 
+    /** (CHK.85)(b) S4: can the operand OPPOSITE a flow-read identifier make an enum rule fire? */
+    private fun enumOperandCanReport(otherDeclared: Type, other: Expression): Boolean {
+        if (typeHasEnumFlavoredConstituent(otherDeclared)) return true
+        val e = unwrapParensExpr(other)
+        return e is NumericLiteralNode || e is StringLiteralNode ||
+            (e is PrefixUnaryExpression && e.operator == SyntaxKind.Minus && e.operand is NumericLiteralNode)
+    }
+
+    /** (CHK.85)(b) S4: see the call site in [checkEqualityComparisonNoOverlap]. */
+    private fun enumOperandFlowType(operand: Expression, declared: Type): Type {
+        if (operand !is Identifier) return declared
+        if (!typeHasEnumFlavoredConstituent(declared)) return declared
+        // The emitter runs under [spineArithInstalled], which installs the pass's graph
+        // as [currentArithmeticFlowGraph] and deliberately NOT as [currentFlowGraph]
+        // (the round-453 78-test hazard: a pass-wide install makes every
+        // `getTypeOfExpression` in the pass flow-aware). Install it around THIS walk
+        // only — [arithFlowNarrowedNonNullish]'s shape.
+        val graph = currentArithmeticFlowGraph ?: currentFlowGraph ?: return declared
+        if (graph.flowAt(operand) == null) return declared
+        val saved = currentFlowGraph
+        currentFlowGraph = graph
+        return try {
+            getNarrowedTypeForReference(declared, operand, WK_NARROW_REPORT, overwriteResetsToDeclared = true)
+        } finally { currentFlowGraph = saved }
+    }
+
     private fun checkEqualityComparisonNoOverlap(
         expr: BinaryExpression, source: String, fileName: String,
     ) {
         if (tryEmitClassValueNoOverlap(expr, source, fileName)) return
-        val leftType = getTypeOfExpression(expr.left)
-        val rightType = getTypeOfExpression(expr.right)
-        if (leftType === anyType || leftType === errorType) return
-        if (rightType === anyType || rightType === errorType) return
-        if (leftType === unknownType || rightType === unknownType) return
-        if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
-        if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+        val leftDeclared = getTypeOfExpression(expr.left)
+        val rightDeclared = getTypeOfExpression(expr.right)
+        if (leftDeclared === anyType || leftDeclared === errorType) return
+        if (rightDeclared === anyType || rightDeclared === errorType) return
+        if (leftDeclared === unknownType || rightDeclared === unknownType) return
+        if (leftDeclared.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+        if (rightDeclared.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+        // (CHK.85)(b) S4: the ONE flow read of this emitter — an IDENTIFIER operand of
+        // enum-flavoured type reads its flow type, so `let k = K.A; if (k === K.B)` and
+        // `if (k !== K.A) return; if (k === K.B)` report as both references do. Only an
+        // identifier (a property-path operand keeps the declared read — the (CHK.86)
+        // discriminant rows are pinned on it), only an enum-flavoured declared type
+        // (bounding the new `narrow.walks`), and a `never` answer ends the check below.
+        // Walked only when the OTHER operand can make one of the enum rules fire (an
+        // enum-flavoured type, or a literal NODE — `getTypeOfExpression` answers the base
+        // primitive for one); against anything else the category rule below decides on
+        // the declared types and no flow answer but `never` could change it. Measured:
+        // ungated, the new walks cost `globals.lookups` +2.3% on the compiler profile (a
+        // walk resolves every callee it passes), all of it on comparisons no rule reaches.
+        val leftType = if (enumOperandCanReport(rightDeclared, expr.right)) enumOperandFlowType(expr.left, leftDeclared) else leftDeclared
+        val rightType = if (enumOperandCanReport(leftDeclared, expr.left)) enumOperandFlowType(expr.right, rightDeclared) else rightDeclared
+        // A `never` operand is an UNREACHABLE position (`function f(k: K.A) { if (k !==
+        // K.A) { if (k === K.B) … } }`) and tsc reports nothing for it — `never` is
+        // comparable to everything. Refusing it back to the declared type manufactured
+        // an ours-only row on that shape (measured; it was a SHIPPED false positive
+        // before the read existed, because the declared `K.A` was all this emitter saw).
+        // No explicit `never` exit is needed: every rule below refuses a `never` operand
+        // on its own (it is neither enum-flavoured nor in any comparability category) —
+        // an early return here was ablated and read 0 RED, a redundant guard.
         // expr.ts: `==`/`!=` between two operands of DIFFERENT primitive comparability
         // categories (number ⇎ string ⇎ boolean) → TS2367 "no overlap". Numeric enums
         // map to the "number" category (a numeric enum vs number does NOT error; enum

@@ -25,6 +25,91 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.22) — a local initialized from an enum member is read at its flow type, at every reader, in both directions (2026-09-05)
+
+**Suite 17,462 → 17,516 / 0 / 3** — the 52 new pins in `EnumMemberLocalFlowTest` plus two
+added to `ObjLitEnumMemberWideningTest`; no baseline moved and no `LogicalParityDivergence`
+is needed. Orchestrated as the two rounds before it: one implementation subagent owned
+Gradle and landed (CHK.85)(b); a read-only recon subagent ran against the committed
+`87a04d80…` snapshot and produced the staged `as const` item (CHK.93), now in the queue.
+
+**(CHK.85)(b) LANDED — and the parent (CHK.85) is CLOSED, (c) having become (CHK.93).** All 49
+of the recon's rows and 60+ further probe rows (including the variance and classifier shapes
+lifted from tsc's own sources) match tsgo 7.0.2 = pristine 6.0.3 byte for byte, bar four
+FORM residues named below. The four seams, as the item specified them, plus what building
+them found:
+**S1** — `narrowByAssignmentRhs` gains an enum-member arm HOISTED above the literal arm (that
+arm answers a union for a ternary of members, and `narrowUnionByRhsAssignment` returns our
+atomic `K` unchanged): `enumMemberAssignedAtoms` reads the RHS leaves (member access, parens,
+conditional, `||`/`??`) by SYMBOL LOOKUP only, and `enumMemberAssignmentReducedType`
+transcribes tsc's `getAssignmentReducedType` — the reference's own enum is REPLACED by the
+atoms that relate, every other constituent kept iff related, and when nothing survives the
+arm FALLS THROUGH to the old arms (answering the declared type re-introduced `undefined` on
+tsc's `variance |= …`). The result is ordered by `enumMembersInDeclarationOrder`, which is
+also applied at `flowJoinUnion`: a branch join printed `'K.B | K.A'` where tsc's id order is
+declaration order.
+**S2** — `isNarrowableTarget` admits an enum-flavoured object type; the return site gets an
+unconditional enum-target substitution for an Identifier source (non-`never`); and
+`canUseTypeEngine` admits an all-enum-flavoured UNION source against an enum target — without
+it the join `K.A | K.B` went SILENT, a lost diagnostic HEAD had been reporting as `'K'`. The
+assignment site stays suppression-only (form residue, pinned).
+**S3** — the symbol half keeps an `EnumLiteral` raw initializer for a `const`
+(`rawTypeOfInitializer` / `inferTypeFromInitializerType`, so the initializer is typed once);
+and this CORRECTED a (CHK.91) pin: both references WIDEN `{ v: k }` for `const k = K.A` (fresh
+through the const) and keep it for `let k = K.A` (flow-reduced, regular) — the freshness gate
+gains an Identifier arm (`objLitConstEnumInitializerOf` + `owningFileLexicalScopeSymbol`).
+**S4** — the arith recorder now WIDENS a `let`'s members (the un-widened union produced three
+false positives on `checker.ts`'s `variance`) and records an atoms initializer; the ccet
+body-local pre-scan records an enum-initialized local (the argument gate's frame had NO
+var-decl recorder at all — a body-local STRING const is equally silent there, pre-existing,
+not opened); and the TS2367 emitter reads `enumOperandFlowType`, installing
+`currentArithmeticFlowGraph` walk-scoped (that pass never installs `currentFlowGraph`).
+**The mechanism the item did not name: a REPORTING walk.** The flow walk's stale-antecedent
+pass-through for an overwrite no arm classifies is sound for a SUPPRESSION consumer and a
+false positive for a REPORTING one — `classifier.ts`'s `token = scanner.reScanTemplateToken()`
+reported an impossible TS2367 through the stale antecedent. The TS2367 read therefore runs its
+own walk kind (`WK_NARROW_REPORT`) with `NarrowFlowMemo.overwriteResetsToDeclared` (per walk,
+never a checker field — a nested walk would store the reporting answer under a suppression
+key), under which an unclassified assignment answers the DECLARED type. A `never` operand
+yields no row (tsc's semantics; an early return was ablated 0 RED and removed as redundant). A
+name pre-gate (`enumMemberTypeOfExprGated`, over `enumDeclaredNames` ∪ import-binding locals
+built at the end of `init:computeAllEnumValues`, the file-level leg memoized per (file,
+name)) keeps the per-`FlowAssignment` classification off every non-enum path.
+
+**Pins and ablation.** 52 pins, rule-organised with negative controls (the function-
+declaration reset, silent-after-reassignment, the loop join recorded as form-only). Seventeen
+arms: a01 S1 off (**29 RED**); a02 the reduction answering `never` (**1** — a deleted row);
+a03 S2 off (**12**); a04 the return branch (**2**); a05 S3 off (**1**, the cross-file import
+pin — every same-file const read is also served by S1 / the local half); a06 the freshness
+Identifier arm (**2**); a07 arith recording (**3**); a08 the TS2367 read (**6**); a09 the
+ccet pre-scan (**3**); a10 the union gate (**1**); a11 join order (**2**); a12 a
+FunctionDeclaration given an outer flow, in Flow.kt (**1**); a14 the reporting reset (**1**,
+after re-pointing the pin at an `any` callee — a resolvable one is served by the call arm);
+a15 arith widening (**1**); a16 atoms (**2**). Two zeros, both explained: a13 (a `never` early
+return) redundant and deleted; a17 (the declared-type fallback) unreachable once a15 lands —
+a round-927 pair, recorded. Restored `Checker.class` sha256 `0a74b2bb…`.
+
+**Gates** (against `0a74b2bb`): core **16,027 / 0 / 3**; corpus **25 classes / 8,837 / 0**;
+full suite 17,516 / 0 / 3 over 963 result files; `cost_gate.py` **exit 0 after `--update`**
+— `output.errors` 46, `spine.nodes` +0.00%, `typeOfExpr.calls` −0.17%, `narrow.walks` +1.23%,
+**`globals.lookups` +2.30%, REBASELINED WITH ATTRIBUTION**: the a08 arm alone reads walks
++0.08% / lookups −0.40%, so the 414 reporting walks cost ~51 callee lookups each and the rest
+of the change is a net saving; `huge_methods.py --fail-over 0` **exit 0**; grid HEAD → final,
+`PARITY1_MARKER=enumMemberAssignmentReducedType`: **8 × `added=0 removed=0`** — an
+INTERMEDIATE build had +3/+4 rows per profile (`checker.ts:25055/25061/25064`,
+`classifier.ts:220`), all closed by the reporting walk and the `let` widening, and the
+variance repro now GAINS tsc's own row.
+
+**Residues (form unless noted).** The loop join answers `'K'` for tsc's `'K.A | K.B'`
+((CHK.69)'s loop-label law); a FILE-level arrow reads the declared type because B464 mints a
+closure `FlowStart` only under `enclosing != null` (Flow.kt) — a flow-graph/cost item, refused
+this round; an object-literal method body and the assignment position stay suppression-only;
+the `never`-arm sub-line picks `K.B` where pristine prints `K.A`; `switch (k) { case K.B }` on
+a `let` narrowed to `K.A` misses TS2678 (meaning, small); round 460's two same-named block
+consts stay `any`; `Type 'J.X' is not assignable to type 'K'` where tsc prints `'J'`
+(pre-existing generalization). Trim-on-write: the (P18.11) note moved to
+`docs/history/PLAN-PHASE-5-HISTORY.md`.
+
 ### Round (P18.21) — an object literal's enum member widens the way tsc widens it, with the freshness gate and the pull-derived keep that make it free of discriminated-union losses (2026-09-05)
 
 **Suite 17,424 → 17,462 / 0 / 3** — exactly the 38 new pins in `ObjLitEnumMemberWideningTest`;
@@ -977,47 +1062,6 @@ names its FILE (a line number over 51 generated sources names nothing without it
 declaration-count regex could not count `public override fun`, so a rung that ADDS supertypes read
 as a loss of 221 declarations.
 
-### Round (P18.11) — per-module externals generation: 51 modules of `@types/node` compile together (2026-09-04)
-
-**(EXT.21b) LANDED — one generation per declaring module, the half (EXT.21a)'s package scheme
-unblocked.** SELECTION: a generation is module-scoped iff the wiring's `moduleName` has a
-`declare module` block in the program; the selected set is that module plus its transitive
-re-export closure over what the scan already records — `export * from "x"` (the `node:net` → `net`
-twin) and `export = X` where `X` is an `import X = require("y")` alias (the `node:stream` → `stream`
-shape). A declaration with NO enclosing block is a GLOBAL (`declare namespace NodeJS`) and renders
-in EVERY generation, except where the selected module declares a type of the same qualified name —
-TypeScript's own innermost-first rule inside a module body. `moduleHomeOf` is one parent-chain walk
-serving declarations, export statements and namespace entries alike. SPELLING: a reference to a
-declaration owned by another module renders `<that module's package>.<path>.<name>` under the
-UNCHANGED identity evidence (the caller reached the nameable by `===` against the surface's own
-declaration nodes); what changed is that first-wins naming is keyed by `<home>\u0000<qualified>`,
-so it runs once per MODULE rather than once per program, and every "what this generation declares"
-table is narrowed to its own — a foreign name can neither shadow nor be spelled bare. Three
-refusals, each a marker naming the module: no Kotlin package for the target's specifier, no
-`package` line on THIS generation (a consumer who could not be given this module as a package has
-no per-module set for the others either), and a package whose first segment this generation
-declares. **RECEIPT: 51 declaring blocks → 51 generations → 51 distinct packages, compiled
-TOGETHER at 0 metadata and 0 Kotlin/JS errors** (multi-file `compileCheckAll`/`jsCompileCheckAll`
-— a cross-module reference resolves only against another file of the same compilation, so that is
-the only gradeable form): 18,015 lines, 8,878 declarations, 283 cross-module references, 0 package
-refusals; `Socket` renders in BOTH `node.dgram` and `node.net`, `Module` in both `node.module` and
-`node.vm`, `stream/web`'s `ReadableStream` where its module shadows the global (the global renders
-in the other 50 — the two cannot literally sit in ONE Kotlin scope while `declare namespace NodeJS`
-flattens, reported rather than faked); **`declared again by another file` 57 → 2 per generation**,
-the 47 module-only names vanishing BY CONSTRUCTION and the residue being GLOBAL-vs-GLOBAL
-(`Iterator`/`AsyncIterator` declared by two files) plus a `ts5.6/` duplicate in the input set.
-Degenerate cases confirmed by stash-ablation against the parent binary: rxjs (250 files),
-`typescript.d.ts` and the FLATTENED `@types/node` control are byte-identical, generated text and
-every census total. 13 pins + 5 updated, EIGHT single-mistake arms with distinct red sets (no pin
-stands in for another). **The one thing that did not work, and the honest limit:** a cross-module
-HERITAGE base is refused loudly — `Inheritance` is built over one generation and resolves
-supertypes by text, so admitting them measured 184 `hides member of supertype` + 27 `inherits
-conflicting members` on `@types/node`; carrying inheritance across generations needs the renderer
-to know the other modules' declarations, queued as (EXT.24). Externals 261 → 275/0; suite 17,182 →
-17,196 / 0 / 3. Two traps re-met: a KDoc containing a `/*` sequence unclosed the file to EOF
-(CLAUDE.md's nested-comment entry, hit live), and Gradle treats `environment()` as a NON-input, so
-every env-driven probe run needs `--rerun` or it silently reuses the previous capture.
-
 - [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
   HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
   LATTER.** The source headers are the licence; the docs drifted. Sweep README.md and docs/
@@ -1813,7 +1857,11 @@ every env-driven probe run needs `--rerun` or it silently reuses the previous ca
   — grade (CHK.85)(b) with a primitive mis-assignment. Fixtures: the recon's scratch set is
   reproduced in the (P18.20) note.
 
-- [ ] **(CHK.85)(b) REWRITTEN 2026-09-05 BY READ-ONLY RECON (`scratchpad/chk85b`, 49 rows,
+- [x] **(CHK.85)(b) LANDED 2026-09-05 ((P18.22) note) — the four seams plus a REPORTING flow walk
+  (`WK_NARROW_REPORT`, `NarrowFlowMemo.overwriteResetsToDeclared`) the item did not name; 49/49 recon rows and
+  60+ probe rows match both references bar four form residues (loop join, file-level arrow, objlit method,
+  assignment position); 52 pins, 17 arms; corpus 8,837/0, core 16,027/0, grid 8×0/0, cost_gate rebaselined
+  (+2.3% `globals.lookups` = 414 reporting walks, attributed). ORIGINAL ITEM: REWRITTEN 2026-09-05 BY READ-ONLY RECON (`scratchpad/chk85b`, 49 rows,
   both references agree on all; Checker.kt lines are commit 7685baf8) — A `let`/`const` LOCAL
   INITIALIZED FROM AN ENUM MEMBER IS READ WRONGLY AT FOUR READERS, IN BOTH DIRECTIONS: MEANING,
   not the "widened declared `K`" form divergence the entry below records.** `let k = K.A` reads
@@ -1860,10 +1908,12 @@ every env-driven probe run needs `--rerun` or it silently reuses the previous ca
   same-flavour literal MEMBER target. Interacts with (CHK.92)(d): d15 `const k = Cmp.X; k === 5`
   prints `'Cmp'` here through the symbol half and `'Cmp.X'` in both references.
 
-- [ ] **(CHK.85) (a) CLOSED 2026-09-05 BY (CHK.91) ((P18.21) note) — `const w: K.A = o.v` and `return o.v`
+- [x] **(CHK.85) CLOSED 2026-09-05 — (a) by (CHK.91) ((P18.21)), (b) by the sub-item above ((P18.22)), (c)
+  re-queued as the staged (CHK.93). ORIGINAL: (a) CLOSED 2026-09-05 BY (CHK.91) ((P18.21) note) — `const w: K.A = o.v` and `return o.v`
   report `Type 'K'`, `o.v = K.B` is legal, and the discriminated-union selections survive; what remains is
-  (b) (the rewritten sub-item above) and (c) `as const` (a FEATURE: `({ v: "a" } as const).v` and `[1, 2] as
-  const` are equally unmodelled, and (CHK.91)'s const-context keep is unobservable until it lands). PREVIOUS
+  (b) (the rewritten sub-item above) and (c) `as const`, now the measured staged item (CHK.93) below (scalars already keep their
+  literal at a declaration; object/array/enum-member assertions are `any` and the readonly half is shared
+  with the no-op `readonly [T, U]` type operator). PREVIOUS
   STATE: STOPPED A SECOND TIME 2026-09-05 ((P18.18) note), NOW WITH THE BLAST
   RADIUS THE ENTRY ASKED FOR — (a) WAS BUILT AND COSTS MEANING: +7 rows on every profile
   and +22 on harness, ALL of them DISCRIMINATED-UNION SELECTION losses** (`UpToDateStatus`
@@ -1893,6 +1943,76 @@ every env-driven probe run needs `--rerun` or it silently reuses the previous ca
   the widening tsc performs is in `getTypeOfObjectLiteral`'s member typing, i.e. a change
   to every object literal's member types program-wide. Fixtures: `chk85a`/`b`/`c` in the
   (P18.17) note.
+
+- [ ] **(CHK.93) CONST ASSERTIONS — `x as const` / `<const>x` — MEASURED 2026-09-05 by read-only
+  recon (fixtures `scratchpad/chk85c/` r01-r30 + probes; tsgo 7.0.2 ≡ pristine 6.0.3 on all 32 rows;
+  Checker.kt lines are commit 1331d33a). The (CHK.85)(c) successor.** Every OBJECT, ARRAY and
+  ENUM-MEMBER const assertion is `any` on HEAD: `getTypeOfExpressionCore` types an
+  `AsExpression`/`TypeAssertionExpression` as `getTypeFromTypeNode(expr.type)` (~119303-119304) and a
+  `const` TypeReference falls off `getTypeFromTypeReference`'s ladder to `errorType` (~114005-114006).
+  Scalars survive ONLY at a declaration, through `literalTypeOfExpression`'s `as const` arm
+  (~126756-126763) read by the recorders (~62429, ~105380) — which is why `1 as const`, `"a" as const`,
+  `-1 as const` and `let x = "a" as const` answer the literal at a declaration while `probe(1 as const)`
+  is silent, and why (CHK.91)'s `objLitConstContextOf` keep (~127045) is REACHED and then discarded
+  (arm a5's 0 RED). TS1355 is modelled narrowly (`emitTS1355IfInvalidConstAssertion` ~90429-90471,
+  corpus-pinned by ACTIVE `constantEnumAssert`): an identifier operand, a call, the `<const>` form and a
+  body-local base are missed. **STAGE 1 — literal types through a const context, no readonly-ness
+  (one commit):** (a) at ~119303-119304 a const type-ref assertion answers its OPERAND's const-context
+  type — scalar/paren/`-`num via `literalTypeOfExpression`, an `Enum.Member` access via
+  `getTypeOfExpression` (already `K.A`), an object/array literal via `getTypeOf{Object,Array}Literal`
+  (they read the context through the walk; the assertion IS the literal's parent) — tsc's
+  `checkAssertionWorker` (checker.ts:38110-38122) returns `getRegularTypeOfLiteralType(exprType)`
+  (rows r01 r02 r05 r07 r08 r12-form r13 r19 r21 r22 r23 r24 r28); (b) `getTypeOfObjectLiteral`
+  ~127453: under a const context `raw = literalTypeOfExpression(init) ?: getTypeOfExpression(init)`
+  (tsc `checkExpressionForMutableLocation` :41496-41500), the context computed ONCE per literal and
+  threaded down (tsc :33541); (c) `getTypeOfArrayLiteral` ~128118: under a const context build a
+  TUPLE (`buildTupleFromTypes` ~170428) of literal-kept elements (tsc :33396-33397) so `t[0]` reads
+  `1` (r04 r14, the TS2493 half of r20) — an array literal NEVER becomes a tuple here outside a
+  contextual tuple target (~126970), so this is new machinery, not a keep; the stage-1 residue is
+  named: it displays `[1, 2]` not `readonly [1, 2]` and TS4104 does not fire (r03/r18/r26); (d) TS1355
+  general — transcribe `isValidConstAssertionArgument` (:38082-38108) over the existing slice
+  (identifier r06, call r27, `<const>`, a body-local base via `lexicalScopeSymbol`), `constantEnumAssert`
+  stays green; (e) PREREQUISITE in the same commit: `checkPropertyAccessAssignment` (~111924) types a
+  literal RHS as its base primitive, so `declare const mo: { v: "a" }; mo.v = "a"` is an ours-only
+  TS2322 `'string'` TODAY with no `as const` anywhere — stage 1 would add that row at every
+  `constObj.v = "a"`; second chance with `literalTypeOfExpression(value)` on the rejecting path
+  (~111998). Gates: the 30-row fixture as a pin class against the recorded answers (VALUE pins — read
+  the type out of a wrong-typed target, never silence); the 8-profile grid `added=0 removed=0` (19
+  sites on the compiler profile, 32 on harness — `[a, b] as const` pushed into typed arrays, `{
+  throwIfNoEntry: false } as const` as an argument, `} as const` objects, and discriminant keeps like
+  `{ type: "symbol" as const }` in completions.ts:2927 must all survive); the 19 ACTIVE `.errors.txt`
+  baselines mentioning the construct run by name (`awaitedType`, `bigintPropertyName`, `bigintWithLib`,
+  `builtinIterator`, `computedPropertiesNarrowed`, `constantEnumAssert`,
+  `contextualTupleTypeParameterReadonly`, `excessivelyLargeTupleSpread`,
+  `inferFromNestedSameShapeTuple`, the four `isolatedDeclaration*`, `isolatedDeclarationsAddUndefined`,
+  `mappedTypeIndexedAccessConstraint`, `readonlyTupleAndArrayElaboration`, `strictOptionalProperties1`,
+  `temporal`); `cost_gate.py` (~19 literals per profile, the context computed once each). **STAGE 2 —
+  readonly-ness (a separate commit; MEANING rows r09 `push` on `[1, 2] as const` → TS2339, r10/r30
+  TS2540 on a const-asserted property, r18 `readonly [1,2]` → `[1, 2]` silent; FORM rows r03 r12 r26):**
+  (f) const-context object members join `mappedReadonlyMemberIds` at the mint (~127523-127528) —
+  `isReadonlySymbol` (~80524) already consults it, giving TS2540 via `isReadonlyPropertyAccess`
+  (~80426) and TS2704 on delete; a spread OUTSIDE a const context must NOT carry the bit (tsc
+  `getSpreadType` :20137, r13 keeps the literal types but drops readonly); the `{ readonly v: "a"; }`
+  display needs the prefix at `typeToString` ~133121/~133174, which is display-WIDE (`Readonly<T>`
+  ~128657 and mapped `readonly` ~171318 members render BARE today) — grep the active baselines for
+  `{ readonly ` and classify FORM first; (g) READONLY TUPLES — a `readonlyTuple` bit on `Type.Object`
+  beside `tupleElementTypes` (Type.kt:183), set by the const-context array AND by the `readonly [T, U]`
+  TYPE OPERATOR, which is a documented no-op today (~171157-171163) — the declared-type twin `declare
+  const rt: readonly [1, 2]` shows the SAME three gaps with no `as const` at all (`rt.push` silent,
+  `→ number[]` TS2740 where tsc says TS4104, `→ [1, 2]` SILENT), so stage 2 is designed for both
+  spellings at once; members fall to `globalReadonlyArrayType` (push → TS2339); the relation emits
+  TS4104 (tsc :22731/:22739) for a readonly array/tuple source against a mutable target, replacing
+  today's TS2740 for readonly arrays (FORM — count the active baselines carrying it) and closing the
+  silent tuple case (MEANING); retire the pin walker `checkReadonlyTupleElaboration` (~71493, 22
+  `pinDiag`s on `readonlyTupleAndArrayElaboration.ts`) only if the general rule reproduces its rows
+  with the walker PassLab-disabled; pin the unmeasured subtlety that `[1, 2] as const` under a MUTABLE
+  contextual array type stays mutable (tsc :33397 `isMutableArrayLikeType` :25541). **The corpus is
+  structurally blind**: the canonical `constAssertions`, `variadicTuples1` and
+  `typeSatisfaction_errorLocations1` baselines have NO case file (18 of 37 inactive); use
+  `scripts/pristine_oracle.py --extract` on `constAssertions` as the offline oracle. Two neighbouring
+  gaps measured and deliberately NOT chased here: `mt.push(3)` on a mutable `[1, 2]` is silent (tsc
+  TS2345 — tuple method calls are not argument-checked), and `readonly number[]` → `number[]` prints
+  TS2740 for tsc's TS4104.
 
 - [x] **(CHK.86) AN IMPOSSIBLE ENUM-vs-ENUM EQUALITY PRODUCES NEITHER TS2367 NOR A `never`
   NARROW — the DIAGNOSTIC half CLOSED (P18.17); the NARROW half re-queued as (CHK.87).**

@@ -244,6 +244,16 @@ class Rel4BodyScopedEnumTest {
                 }
             """.trimIndent()
         )
-        assert(diagnostics.isEmpty())
+        assert(diagnostics.none { it.code == 2322 })
+        // (CHK.85)(b): an annotated `const a: V = V.A` is flow-REDUCED to `V.A` (tsc's
+        // `getAssignmentReducedType`), so `a === b` IS an unintentional comparison in
+        // both references — measured byte-identical against tsgo 7.0.2 and pristine
+        // 6.0.3 for this fixture and its file-level twin. The control's `isEmpty()`
+        // predated that read; what it guards (no spurious TS2322 from a split enum
+        // identity) is the assertion above, and the row's DISPLAY is the identity
+        // control now: a split would name two different enums.
+        assert(diagnostics.map { it.message } == listOf(
+            "This comparison appears to be unintentional because the types 'V.A' and 'V.B' have no overlap."
+        ))
     }
 }

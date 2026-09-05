@@ -1,13 +1,28 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **193,970** lines (191,070 when the metric was created; the (P18.9)-(P18.21) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **194,383** lines (191,070 when the metric was created; the (P18.9)-(P18.22) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
 checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.22) — A LOCAL INITIALIZED FROM AN ENUM MEMBER IS READ AT ITS FLOW TYPE AT EVERY READER, IN BOTH DIRECTIONS, 17,462 → 17,516 / 0 / 3 (2026-09-05).**
+**(CHK.85)(b) LANDED and (CHK.85) is CLOSED** ((c) is the staged `as const` item (CHK.93), designed
+by read-only recon over 32 measured rows). `let k = K.A; k = K.B; const w: K.B = k` was an ours-only
+TS2322 and `if (k === K.B)` a lost TS2367: `narrowByAssignmentRhs` gains tsc's
+`getAssignmentReducedType` over enum atoms (symbol lookup only), `isNarrowableTarget` admits an enum
+target, the const symbol half keeps the member, the arith and ccet recorders record an
+enum-initialized body local, and the TS2367 emitter reads the flow type through a new REPORTING walk
+kind — the flow walk's stale-antecedent pass-through for an unclassified overwrite is sound for a
+suppression consumer and a false positive for a reporting one (`classifier.ts`'s
+`token = scanner.reScanTemplateToken()`). 49/49 recon rows and 60+ probe rows match both
+references bar four form residues; a (CHK.91) pin was corrected (both references WIDEN `{ v: k }` for
+a `const k = K.A`). 52 pins, 17 arms; core 16,027/0, corpus 8,837/0, `cost_gate.py` rebaselined
+(`globals.lookups` +2.30% = 414 reporting walks, attributed), grid 8×`added=0 removed=0` after an
+intermediate build's +3/+4 rows were closed by the reporting walk and a `let` widening.
 
 **(P18.21) — AN OBJECT LITERAL'S ENUM MEMBER WIDENS THE WAY tsc WIDENS IT, FREE OF THE DISCRIMINATED-UNION LOSSES THAT REFUSED IT TWICE, 17,424 → 17,462 / 0 / 3 (2026-09-05).**
 **(CHK.91) LANDED, closing (CHK.85)(a).** The (P18.18) arm was rebuilt ALONE to NAME its 22 grid
@@ -112,37 +127,3 @@ unchanged, largest move `mapped.hits` +1.22%); `huge_methods.py` exit 0; 8-profi
 Queued: (CHK.89) a return-position enum-member annotation losing its qualifier (`'A'` for
 `'K.A'`, pre-existing), (CHK.90) the TS2367 CATEGORY rule missing `getBaseTypesIfUnrelated`, and
 (CHK.83)'s own remainder.
-
-**(P18.17) — `never` STOPS BEING UNASSIGNABLE AT ONE POSITION, AN IMPOSSIBLE ENUM COMPARISON STARTS REPORTING, AND A GENERALIZED ENUM PRINTS ITS NAMESPACE, 17,308 → 17,337 / 1 / 3 then 17,343 / 0 / 3 predicted (2026-09-05).**
-Three of (P18.16)'s four residues closed, each reproduced against tsgo 7.0.2 AND pristine 6.0.3
-before any code was written (the two references agree on every row; no divergence found).
-**(CHK.84)** — the string-layer `isAssignableTo` had no BOTTOM-type rule, and only the RETURN
-position could show it, because of that function's five call sites only that one adds an
-identifier fallback below `inferSimpleExprType` (and the engine cannot fire, since it correctly
-ACCEPTS a `never` source and an accepted relation does not early-return). **(CHK.86)**, the
-diagnostic half — `comparabilityCategory` maps every numeric enum to `"number"`, so two enums of
-one flavour read as the same category; the identity question is now asked separately and above
-it, with tsc's `getBaseTypesIfUnrelated` deciding whether the members or their enums are printed.
-**(PARITY.3)** — tsc computes the source display TWICE and the difference is the defect: a
-GENERALIZED source is re-rendered fully qualified, which is why the same `Ns.Inner.I` prints
-qualified at a `string` target and bare at a `never` one; scoped to a NAMESPACE chain, with an
-ambient-module guard keeping (P18.14)'s refused `import("<path>")` form out by name and a
-global-augmentation guard STOPPING the walk at `declare global` (which is not a container a
-consumer can spell) while keeping any real namespace nested inside it.
-**(CHK.85) STOPPED with its measurement — it is MEANING, not display**: a mutable object-literal
-property must widen (`const o = { v: K.A }; const w: K.A = o.v` errors in both references and is
-SILENT here — a lost true positive), a `let`'s read must answer the FLOW type, and an `as const`
-property read is missing entirely; the object-literal half lives in `getTypeOfObjectLiteral`, i.e.
-every literal's member types program-wide, so it is a design. Requeued: (CHK.85), plus (CHK.87)
-the `never` NARROW half of (CHK.86) (a separate mechanism — `narrowByEquality` decides from the
-other operand's SYNTAX and bails before any enum question) and (CHK.88) the enum-member-vs-numeric-
-literal sibling (needs member VALUES, not enum identity). 35 pins, eight arms
-(2 / 3 / 6 / 10 / 2 / 1 / 4 / 1 RED, one nested and recorded as such), one (P18.16) expectation
-updated to the references' answer. **The corpus half of the at-risk enumeration was sound and the
-HAND-WRITTEN half was not**: it selected classes by NAME, which cannot see a fixture, so
-`DeclareGlobalAugmentationTest` — an enum declared inside `declare global` — went RED in the full
-suite; censused, 488 core classes mention `enum`/`never` in their SOURCE and the name patterns
-reached 149, missing 339. Re-run (PARITY.2)-style by FIXTURE: **485 classes / 5,169 tests / 0**.
-Corpus at-risk 360 families / 1,481 subtests / **0 moved**; externals 290/0; project 848/0;
-`cost_gate.py` exit 0 (`output.errors` 46 unchanged); `huge_methods.py` exit 0; 8-profile grid all
-`added=0 removed=0`.

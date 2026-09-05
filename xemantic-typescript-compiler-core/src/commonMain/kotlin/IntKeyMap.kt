@@ -160,6 +160,15 @@ internal class IntKeyMap<V : Any>(initialCapacity: Int = 1024) {
  * already had, and which the compiler profile measures at zero.
  */
 internal class NarrowFlowMemo(initialCapacity: Int = 32) {
+    /**
+     * (CHK.85)(b): a REPORTING walk — one whose answer can ADD a diagnostic rather than
+     * suppress one — asks that an assignment no arm of `narrowByAssignmentRhs` can
+     * classify answer the DECLARED type (an overwrite of unknown value) instead of the
+     * pre-assignment antecedent. Per WALK, not per checker: the memo is minted fresh by
+     * every `getNarrowedTypeForReference`, so a nested walk of another kind never
+     * inherits it and never stores a reporting answer under a suppression key.
+     */
+    var overwriteResetsToDeclared: Boolean = false
     private var capacity = highestOneBit(maxOf(initialCapacity, 16))
     private var keys = emptyKeys(capacity)
     private var depths = IntArray(capacity)

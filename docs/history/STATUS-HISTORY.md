@@ -1,3 +1,37 @@
+**(P18.17) — `never` STOPS BEING UNASSIGNABLE AT ONE POSITION, AN IMPOSSIBLE ENUM COMPARISON STARTS REPORTING, AND A GENERALIZED ENUM PRINTS ITS NAMESPACE, 17,308 → 17,337 / 1 / 3 then 17,343 / 0 / 3 predicted (2026-09-05).**
+Three of (P18.16)'s four residues closed, each reproduced against tsgo 7.0.2 AND pristine 6.0.3
+before any code was written (the two references agree on every row; no divergence found).
+**(CHK.84)** — the string-layer `isAssignableTo` had no BOTTOM-type rule, and only the RETURN
+position could show it, because of that function's five call sites only that one adds an
+identifier fallback below `inferSimpleExprType` (and the engine cannot fire, since it correctly
+ACCEPTS a `never` source and an accepted relation does not early-return). **(CHK.86)**, the
+diagnostic half — `comparabilityCategory` maps every numeric enum to `"number"`, so two enums of
+one flavour read as the same category; the identity question is now asked separately and above
+it, with tsc's `getBaseTypesIfUnrelated` deciding whether the members or their enums are printed.
+**(PARITY.3)** — tsc computes the source display TWICE and the difference is the defect: a
+GENERALIZED source is re-rendered fully qualified, which is why the same `Ns.Inner.I` prints
+qualified at a `string` target and bare at a `never` one; scoped to a NAMESPACE chain, with an
+ambient-module guard keeping (P18.14)'s refused `import("<path>")` form out by name and a
+global-augmentation guard STOPPING the walk at `declare global` (which is not a container a
+consumer can spell) while keeping any real namespace nested inside it.
+**(CHK.85) STOPPED with its measurement — it is MEANING, not display**: a mutable object-literal
+property must widen (`const o = { v: K.A }; const w: K.A = o.v` errors in both references and is
+SILENT here — a lost true positive), a `let`'s read must answer the FLOW type, and an `as const`
+property read is missing entirely; the object-literal half lives in `getTypeOfObjectLiteral`, i.e.
+every literal's member types program-wide, so it is a design. Requeued: (CHK.85), plus (CHK.87)
+the `never` NARROW half of (CHK.86) (a separate mechanism — `narrowByEquality` decides from the
+other operand's SYNTAX and bails before any enum question) and (CHK.88) the enum-member-vs-numeric-
+literal sibling (needs member VALUES, not enum identity). 35 pins, eight arms
+(2 / 3 / 6 / 10 / 2 / 1 / 4 / 1 RED, one nested and recorded as such), one (P18.16) expectation
+updated to the references' answer. **The corpus half of the at-risk enumeration was sound and the
+HAND-WRITTEN half was not**: it selected classes by NAME, which cannot see a fixture, so
+`DeclareGlobalAugmentationTest` — an enum declared inside `declare global` — went RED in the full
+suite; censused, 488 core classes mention `enum`/`never` in their SOURCE and the name patterns
+reached 149, missing 339. Re-run (PARITY.2)-style by FIXTURE: **485 classes / 5,169 tests / 0**.
+Corpus at-risk 360 families / 1,481 subtests / **0 moved**; externals 290/0; project 848/0;
+`cost_gate.py` exit 0 (`output.errors` 46 unchanged); `huge_methods.py` exit 0; 8-profile grid all
+`added=0 removed=0`.
+
 **(P18.16) — THE ENUM DISPLAY GENERALIZATION LANDS, AND ITS BLINDED PINS BECOME tsc-VERIFIABLE, 17,286 → 17,308 / 0 / 3 predicted (2026-09-04).**
 (PARITY.2) closed. tsc's `getBaseTypeOfEnumLikeType` is wired, so an enum-member source now
 generalizes to its parent enum at every target that cannot hold a top-level singleton, at all

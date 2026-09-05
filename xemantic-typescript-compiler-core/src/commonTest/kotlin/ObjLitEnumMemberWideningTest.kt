@@ -155,8 +155,14 @@ class ObjLitEnumMemberWideningTest {
     }
 
     @Test
-    fun `a const local value is not fresh and keeps its member`() {
-        assert(messages("const k = K.A\nconst o4 = { v: k }\nconst w: K.A = o4.v").isEmpty())
+    fun `a const local value is fresh through its identifier and widens`() {
+        // CORRECTED by (CHK.85)(b): this pin was written as `isEmpty()` and was GREEN only
+        // because the file-level TS2322 walk's local map held the (REL.2) `K.A` for `k`
+        // while the symbol half still widened the const — both references REPORT this
+        // row (`Type 'K'`), because tsc's declared type for `const k = K.A` is the fresh
+        // literal itself. The identifier arm of the freshness gate is what carries that.
+        assert(messages("const k = K.A\nconst o4 = { v: k }\nconst w: K.A = o4.v") ==
+            listOf("Type 'K' is not assignable to type 'K.A'."))
     }
 
     @Test
@@ -333,5 +339,34 @@ class ObjLitEnumMemberWideningTest {
         // edge rather than claiming coverage, and it reddens the day the assertion is
         // modelled so that the keep gets its value pin then.
         assert(messages("const ac = { v: K.A } as const\nconst acs: string = ac.v").isEmpty())
+    }
+
+    // ---------------------------------------------------------------------
+    // (CHK.85)(b) — freshness THROUGH an identifier
+    // ---------------------------------------------------------------------
+
+    @Test
+    fun `a const initialized from a fresh member is fresh through its identifier`() {
+        // tsc's declared type for `const k = K.A` is the FRESH literal itself
+        // (`getWidenedLiteralTypeForInitializer` keeps `type` under `NodeFlags.Constant`),
+        // so the member widens exactly as `{ v: K.A }` does — measured in both references.
+        // Before (CHK.85)(b)'s symbol half this read `K` for a different reason (the const
+        // itself was widened), which is why the identifier arm of the freshness gate is
+        // pinned here: without it `o.v` would be `K.A` and this row would go SILENT.
+        assert(messages("const kc = K.A\nconst oc2 = { v: kc }\nconst wc: K.A = oc2.v") ==
+            listOf("Type 'K' is not assignable to type 'K.A'."))
+        // A BODY-local const resolves through the owning file's lexical scopes.
+        assert(messages("function fb() { const kb = K.A; const ob = { v: kb }; const wb: K.A = ob.v }") ==
+            listOf("Type 'K' is not assignable to type 'K.A'."))
+    }
+
+    @Test
+    fun `negative control - a let reads its flow-reduced member and stays a singleton`() {
+        // `let k = K.A` reads the flow-REDUCED regular member (tsc's
+        // `getAssignmentReducedType` answers the regular type), so it is not fresh and
+        // `o.v` keeps `K.A` — both references are silent here.
+        assert(messages("let kl = K.A\nconst ol = { v: kl }\nconst wl: K.A = ol.v").isEmpty())
+        // An ANNOTATED const is regular too.
+        assert(messages("const ka2: K.A = K.A\nconst oa = { v: ka2 }\nconst wa: K.A = oa.v").isEmpty())
     }
 }
