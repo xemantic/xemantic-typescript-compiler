@@ -181,6 +181,14 @@ sealed class Type {
         var numberIndexInfo: IndexInfo? = null
         /** Non-null for tuple types — stores element types for display and length checking. */
         var tupleElementTypes: List<Type>? = null
+        /**
+         * (CHK.93) stage 2: a READONLY tuple — `readonly [T, U]`, or an array literal in a
+         * const context with no mutable array-like contextual type (tsc's
+         * `createTupleType(..., readonly)`). Meaningful only while [tupleElementTypes] is
+         * non-null: its members fall to `ReadonlyArray`, it displays `readonly [...]`, and
+         * it never relates to a MUTABLE array or tuple (TS4104).
+         */
+        var readonlyTuple: Boolean = false
         override fun toString(): kotlin.String = symbol?.name ?: "Object#$id"
     }
 

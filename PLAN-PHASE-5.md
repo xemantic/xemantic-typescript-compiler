@@ -25,6 +25,100 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.24) — const assertions become read-only: stage 2 of (CHK.93) lands, and the tuple-member and body-local-argument residues are measured into (CHK.94)/(CHK.95) (2026-09-05)
+
+**Suite 17,573 → 17,611 / 0 / 3** — 38 new pins (`ReadonlyTupleTest` 29, `ConstAssertionTest`
++9 net); no baseline moved and no `LogicalParityDivergence` is needed. Orchestrated as the
+rounds before it: one implementation subagent owned Gradle and landed (CHK.93) stage 2; a
+read-only recon subagent measured the tuple-member and argument-gate residues over 220 cells
+against the `b7cd50d8` snapshot and both references, now queued as (CHK.94) and (CHK.95).
+
+**(CHK.93) STAGE 2 LANDED — readonly-ness; the item is CLOSED with one residue (r20).** Every
+stage-2 row of the recon's fixture is now byte-identical to pristine 6.0.3: `const zarr:
+number[] = zt` on a const tuple reports TS4104 (`The type 'readonly [1, 2]' is 'readonly' and
+cannot be assigned to the mutable type 'number[]'.`), `zt.push(3)` reports TS2339 on `'readonly
+[1, 2]'`, `zo.v = "a"` on a const-asserted object reports TS2540, the displays read `readonly
+[1, 2]` and `{ readonly v: "a"; readonly n: 1; readonly b: true; }`, and the declared-type twin
+(`declare const rt: readonly [1, 2]`, no `as const` anywhere) went from 2 of 7 rows to 7 of 7.
+**(g)** `Type.Object.readonlyTuple` is set by `buildTupleFromTypes(…, readonly)` (slots and
+`length` join `mappedReadonlyMemberIds`), by the `readonly [T, U]` type-operator arm (a no-op
+before; it builds a FRESH tuple from the operand node, never mutating the operand's cached
+one), and by the const-context builder as `readonly = !typeHasMutableArrayLikeConstituent
+(contextualType)` — tsc's `isMutableArrayLikeType`, measured: `const a: number[] = [1, 2] as
+const; a.push(3)` is legal in all three compilers; `widenType`'s rebuild carries the bit. The
+relation consults `readonlyToMutableArrayLike` BEFORE stage 1's tuple→Array rule and the
+structural path; TS4104 is emitted at the var-decl name, the `return` keyword, the assignment
+target and a class property, and at an ARGUMENT as pristine's TS2345 chain (tsgo prints a bare
+TS4104 there — the arc's third reference divergence, and pristine is the corpus's oracle
+through `readonlyTupleAndArrayElaboration`). Members of a readonly tuple fall to
+`ReadonlyArray` (`tupleInheritsArrayMember` consults it; `readonlyArrayLikeLacksArrayMember`
+emits TS2339 on the readonly display); an anonymous tuple no longer takes the number-index
+bail for a non-numeric name (`mt.nope` → TS2339 `'[1, 2]'`, tsc-verified); a slot write `rt[0]
+= 1` is TS2540 `'0'`. **(f)** property, shorthand and method members and spread COPIES under a
+const context join `mappedReadonlyMemberIds` (tsc's `checkObjectLiteral` / `getSpreadType`); a
+spread OUTSIDE a const context keeps round 449's fresh copy without the bit; `delete` reports
+TS2704 INSTEAD of TS2790 (HEAD emitted both — a pre-existing double). tsc's `getContextualType`
+passes THROUGH a const assertion, so a const-asserted array or object literal now installs the
+target context at var-decl / assignment / return / argument / property-init and a nested array
+member reads its member context — and the `constAsserted…Of` helpers were made to REQUIRE a
+traversed assertion, because answering a BARE literal installed a context on every object-
+literal initializer in the program (`program.ts:1075`, a grid row). **Display halves both
+LANDED**: 12 active baselines carry `{ readonly `, 22 `readonly [`, 1 TS4104, and NONE pins a
+bare form, so the corpus is byte-parity with pristine on every such baseline. **Two pre-
+existing false positives closed on the way**: `const t: [1] = [1]` (B407 read
+`getTypeOfExpression(elem)`'s base primitive against the literal slot — the (CHK.94)(0)
+prerequisite, landed here) and the TS2790-beside-TS2704 double. **And the grid found the
+round's most important fix**: `core.ts:1685` `unorderedRemoveItemAt(candidates, i)` after
+`isArray(candidates)` (`value is readonly unknown[]`, subject `T | T[]`) became a false TS2345,
+because B378's guard install put the guard's OWN predicate type into the then-branch — "FP-
+safe" only while `readonly T[]` related to `T[]`; `guardNarrowedLocalType` now installs the
+DECLARED constituent that relates (tsc's `getNarrowedType`), and an UNKNOWN subject with a
+readonly array-like candidate gets no override. **The pin walker `checkReadonlyTupleElaboration`
+is KEPT**: PassLab-disabled, the general rule reproduces 20 of its 22 rows' codes; the misses
+are a destructuring-pattern parameter (the argument gate drops binding-pattern params),
+`Readonly<number[]>` (not mapped to `ReadonlyArray`), and six FORM rows of tuple-length
+elaboration — receipt in the round's scratchpad, the lab file deleted and verified absent.
+
+**Pins and ablation.** 38 pins. Fifteen arms, one mistake each, all RED: a1 members not
+readonly (**7**); a2 spread carrying the bit (**1**); a3 the const tuple bit (**9**); a4 the
+type-operator arm (**12**); a5 members not on `ReadonlyArray` (**5**); a6 the predicate never
+true (**11**); a7 the mutable-context rule (**2**); a8 display (**21**); a9 the slot write
+(**2**); a10 the delete order (**2**); a11 B407's literal keep (**3**); a12 the array context
+(**2**); a13 the object context (**1**); a14 the guard filter (**1**); a15 the bare-literal
+helpers (**1**, after its first pin shape read 0 and was re-pointed at the `program.ts:1075`
+shape). Restored `Checker.class` sha256 `bc484c83…`.
+
+**Gates** (against `bc484c83`): core **845 classes / 16,122 / 0 / 3**; corpus **25 classes /
+8,837 / 0**, every named baseline confirmed run; full suite 17,611 / 0 / 3 over 965 result
+files; `cost_gate.py` **exit 0** (`output.errors` 46 — an INTERMEDIATE build read 48, both
+rows closed above; `spine.nodes` +0.00%, largest move `mapped.keyed` −1.29%);
+`huge_methods.py --fail-over 0` **exit 0**; grid `b7cd50d8` → `bc484c83`, marker
+`readonlyToMutableArrayLike`: **8 × `added=0 removed=0`** (the script hit the 590 s cap after
+seven; the eighth re-run by hand with its recipe); `spine_closure_audit.py` clean; 0 `w:`.
+
+**(CHK.94)/(CHK.95) MEASURED by recon.** Tuples: every `Array` member READ on a tuple is `any`
+(not only calls — `slice`/`map`/`join`/`includes`/`reduce`/`sort`, and callback parameters),
+`tupleInheritsArrayMember` grants existence against the mutable `Array` to a readonly tuple,
+a rest tuple's `length` reads `2` where tsc reads `number`, and the smallest seam is an
+INTERNED `Array<union>` / `ReadonlyArray<union>` base consulted on the miss path — refused for
+rest and optional-slot tuples; the corpus has ZERO active baselines calling an array method on
+a tuple and the compiler profile's only tuple-receiver call is a rest tuple, so the pin class
+is the gate. The argument gate: in EVERY body context a `const s = "a"; takeB(s)` is silent for
+every non-enum scalar initializer, every `let`, and every ANNOTATED primitive local — the
+(P18.22) note's "a body-local STRING const" was the tip of it — with a resolution-free scalar
+arm in `shadowCallTypesDeclList` and a primitive arm in `ccetApplyDeclRecordings` as the fix.
+Two reference divergences recorded: pristine prints `(2 | 1)[]` for tsgo's `(1 | 2)[]` (ours =
+tsgo), and a const-tuple ARGUMENT is TS4104 in tsgo and TS2345 in pristine.
+
+**Residues.** r20 (`zt[5]` → tsc TS2493 + `undefined`) is not modelled — TS2493 has dedicated
+pin walkers only; `typeHasMutableArrayLikeConstituent` has no subclass-of-`Array` leg (the leg
+needed `resolveBaseTypesLazy` from inside array-literal typing and produced an unrelated grid
+row — first-touch order), so a `class C extends Array` contextual type reads readonly here;
+`Readonly<{ a: number }>` displays `{ readonly a: number; }` where tsc keeps the alias; a getter
+member under `as const` displays `any` (getter return inference); `dn.x.push(3)` on a non-
+identifier receiver is silent ((CHK.46)); `delete zo.v` on a BODY-local const object is silent
+(B83.5). Trim-on-write: the (P18.13) note moved to `docs/history/PLAN-PHASE-5-HISTORY.md`.
+
 ### Round (P18.23) — const assertions stop being `any`: stage 1 of (CHK.93) lands, and the name-resolution seam is censused for (INV.0) step 4 (2026-09-05)
 
 **Suite 17,516 → 17,573 / 0 / 3** — the 57 new pins in `ConstAssertionTest`; no baseline
@@ -966,122 +1060,6 @@ a7 widening (c)'s primitive-only guard to any union (3 — all three round-461 n
 Source restored and rebuilt after the batch, confirmed by `javap` and by a `sha256sum` of
 `Checker.class` against the grid's own AFTER snapshot.
 
-### Round (P18.13) — the augmentation residues: a package augmentation stops inventing two errors, and a block's own declarations become visible and importable (2026-09-04)
-
-**Full suite after the round: 17,224 → 17,236 / 0 / 3** (run by the orchestrating session; externals 290/0 with the Kotlin/JS gate live).
-
-**(CHK.82) LANDED IN PART — three of the four residues, plus a display defect found beside
-them; residue (4) MEASURED AND REFUSED as a whole-program logical-parity question.** Each
-reproduced on a scratch project against `tools/tsgo-7.0.2/lib/tsc` and re-measured after.
-
-| # | shape | tsgo 7.0.2 | ours BEFORE | ours AFTER |
-|---|---|---|---|---|
-| 1 | `declare module "./types" { interface ZzzLocal {…}; interface SourceFile { p: ZzzLocal } }`, then `sf.p` | `Type 'ZzzLocal'` | **silent** (`any`) | `Type 'ZzzLocal'` |
-| 1b| the same with a block-declared `type ZzzAl` | `Type 'ZzzAl'` | silent | `Type 'ZzzAl'` |
-| 2 | `import { Brand } from "./types.js"` beside `declare module "./types.js" { export interface Brand {…} }` | silent | **false TS2305** | silent |
-| 3 | `declare module "some-pkg"` with the package installed | silent | **false TS2664** + **false TS2339** on the package's own member | silent |
-| 4 | a module-declared enum in a TS2322 | `import("…/types").ZzzEnum` | `ZzzEnum` | `ZzzEnum` (REFUSED, see below) |
-
-**(1) is one narrowing, and the narrowing is the whole design.** `augmentationContextSymbol`
-answered the augmented module's symbol only for a name the TARGET exports; everything else fell
-to the per-file consult, which cannot see the block's own `exports` (the binder fills them in
-`bindModuleDeclaration`). The second leg asks the block — **only for a name the target does NOT
-export**, which is exactly what keeps (CHK.76)'s measured +43 rows away: a block's PARTIAL
-re-declaration is by definition of a name the target exports, so it can never shadow the merged
-one. Both callers now thread the `ModuleDeclaration` NODE rather than its specifier string.
-
-**A display defect fell out of (1) and is fixed with it.** B86.4's namespace-qualification ascent
-walks `Symbol.parent` while the parent is a module symbol — and a STRING-named module's
-`Symbol.name` IS THE SPECIFIER, so a newly-visible block-declared alias rendered
-`'./types.js.ZzzAl'`, a spelling tsc never produces. Measured on `@types/node`, that ascent was
-ALREADY wrong for every ambient module: `events.DefaultEventMap`, `zlib.CompressCallback`,
-`net.LookupFunction`, `crypto.webcrypto.BigInteger`, and `node:test.test.SuiteFn` — which
-contains a colon.
-
-**(2) is a pure absence-check defect: the TYPE always resolved.** Measured over a seven-shape
-matrix (`interface`/`type`/`enum`/`class`/`const`/`function`, exported and not), all seven types
-were correct before the fix and all seven imports were false TS2305.
-`augmentationDeclaredExportNames` reads the binder's own block `exports` and applies the SAME
-export-modifier predicate the merge applies — extracted as `augmentationMergesSymbol`, one home
-and two consumers, because a hand-written second copy would drift in exactly one block shape.
-Both branches of `checkNamedImportExistence` (import and re-export) take it, additively.
-
-**(3) is ONE cause with two costumes, and it is the most common shape of the four** — every
-`declare module "express"` / `"vue"` over an installed package. No resolver leg could name a bare
-specifier's target (that is a `package.json` `types`/`main` entry, not a string transformation),
-so `targetFile` was null and `collectModuleAugmentations` took the FILELESS-AMBIENT branch:
-the block's partial `interface Widget` went into `globals` as a stub (round 510's mechanism), so
-the package's own `base` read TS2339, while the target-locals merge never fired.
-`augmentationTargetFile` is now the one home for the ladder — the base resolver, the round-443
-`.js`-aware wrapper, the crawl's own `(importer, specifier)` answer ((CHK.30)/(CHK.78)), and for
-a BARE specifier only, the crawl's answer as recorded for any OTHER file, **which every recording
-file must AGREE on** (node resolves a bare specifier from the importer's directory upward, so a
-nested `node_modules` legitimately gives two answers; a wrong target merges an augmentation into
-another package's module and (CFG.1) says nothing here would print that).
-
-**(4) REFUSED, and the measurement is why: it is not an augmentation residue at all.** With NO
-`declare module` anywhere in the program, `export enum ZzzEnum` in a module file renders
-`import("…/types").ZzzEnum` under BOTH tsgo 7.0.2 and pristine `typescript@6.0.3`, where we
-render `ZzzEnum`. So it is a whole-program display question. The corpus carries **103** baselines
-using the `import("…")` form and we satisfy them today through **hard-coded `pinDiag` sites**,
-not a mechanism — and `enumAssignmentCompat6.errors.txt` prints BOTH forms in one message, so the
-rule is tsc's `getAccessibleSymbolChain` ACCESSIBILITY test, a node-builder feature. Landing it
-would rewrite those pins and reach every message naming such a type. Logical-parity conversation,
-requeued.
-
-**(CHK.81)'s two remaining sub-items: BOTH MEASURED, BOTH REFUSED, and both were mis-stated in
-the queue.**
-
-*No TS2304 for `Unknown.Foo`* — the code is **TS2503**, not TS2304, the bare-name TS2304 fires
-correctly beside it, and the axis is **`declare`**, not `declare module`: a PLAIN `namespace`
-body reports it and a `declare namespace` body does not. The suppression is **B367**, explicit
-and documented at `spineUResEmit`/`spineUResMarkFilter` — inside an ambient `ModuleDeclaration`
-body the family keeps ONLY TS2304/TS2552, because "qualified-name resolution and body-position
-TS2314 are still FP-prone in ambient cross-namespace scope (Blocker #3)". Lifting it re-opens
-the whole family inside every ambient body across ~13k baselines. A separate and wider finding
-from the same probe: in a **`.d.ts`** file we report NONE of the seven unresolved-name shapes
-tsgo reports, ambient or not.
-
-*The literal-union alias display* — not an alias question and not an ambient one. `("a" as "a" |
-"b")` assigned to `number`, with no alias and no `declare module` in the program, is
-`Type 'string'` under pristine 6.0.3 and `Type '"a" | "b"'` here. The rule, derived from a
-seven-target matrix against pristine: **a literal-union source collapses to its base primitive
-exactly when the target holds no literal of that base** — `number`, `boolean`, `{x:number}`
-collapse; `never`, `"a" | "c"`, `1 | 2` KEEP the union (and the six corpus baselines that print a
-literal union are all of the keeping kind), and a mixed `"a" | 1` renders `string | number`. It
-is systematic across TS2322 and TS2345 at declaration, argument, return and object-literal-member
-positions. FORM per `docs/logical-parity.md` (identical code, span and verdict), and its only
-gate is the full corpus suite, which this session may not run. Requeued with the rule.
-
-Two more pre-existing divergences recorded in passing from the same matrix: `const t: {x:number}
-= u` where `u: "a" | "b"` reports **nothing** here and TS2322 under pristine (a false negative,
-not a display issue); and union member ORDER, `'2 | 1'` under pristine against our `'1 | 2'`.
-
-**Pins** — `ModuleAugmentationResidueTest`, 12, all through the (CHK.78) direct-`Checker`
-harness (a `diagnose()` pin is vacuous for residue (3): `moduleResolutions` is empty there by
-construction). **Ablation, one mistake at a time, eight arms, every one discriminating with its
-own red set**: a1 the block-exports leg (2 RED), a2 the string-module ascent break (2), a3 the
-TS2305 suppression at both branches (3), a4 the export-modifier predicate — over-suppression (1),
-a5 the merge's target ladder (1), a6 the TS2664 gate (1), a7 the whole bare-specifier leg (2),
-a8 the cross-file AGREEMENT guard (1). Source restored and rebuilt after every arm, confirmed by
-`javap`.
-
-**Gates.** Filtered `*Augment*`/`*Module*`/`*Import*`/`*Export*` **1,468 / 0 / 0**;
-`cost_gate.py` **exit 0** (`output.errors` 46 unchanged, largest counter move `globals.lookups`
-−0.49%, all inside ±2%); `huge_methods.py --fail-over 0` **exit 0** (832 classes, 0 over);
-the 8-profile grid **all eight `added=0 removed=0`** (`scripts/chk82-grid.sh`, two snapshotted
-class dirs, self-comparison and marker checks armed); externals `jvmTest` **290 / 0**; and the
-`@types/node` per-module receipt over all 49 declaration files — **the generated Kotlin CODE is
-byte-identical** (verified by stripping `/* xtsc: … */` markers and `diff -rq`: no difference at
-all), the census totals are identical to the digit (4,709 markers / 137 categories / 2,833
-unmapped occurrences / 521 distinct / 6,462 declarations / 3 checker diagnostics), and the only
-movement is inside marker COMMENTS, where the specifier prefix that B86.4 wrongly added is now
-gone — byte-identical in code, strictly better in text.
-
-**NOT ATTEMPTED, deliberately:** (CHK.81)'s third sub-item, (CHK.73)'s untyped module symbol
-(`p.v` / `p.f()` / `new p.ctor()` through `import p = require("p")`) — a documented blocker
-needing a static-side type for a class value, refused on instruction.
-
 - [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
   HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
   LATTER.** The source headers are the licence; the docs drifted. Sweep README.md and docs/
@@ -1964,7 +1942,16 @@ needing a static-side type for a class value, refused on instruction.
   to every object literal's member types program-wide. Fixtures: `chk85a`/`b`/`c` in the
   (P18.17) note.
 
-- [ ] **(CHK.93) STAGE 1 LANDED 2026-09-05 ((P18.23) note) — a const assertion answers its operand's
+- [x] **(CHK.93) CLOSED 2026-09-05 — STAGE 2 LANDED ((P18.24) note): const-context members are read-only
+  (TS2540/TS2704, `readonly` display), a const array is a readonly tuple unless its contextual type has a mutable
+  array-like constituent (`Type.Object.readonlyTuple`, also set by the `readonly [T, U]` operator), members fall to
+  `ReadonlyArray` (`push` → TS2339), TS4104 replaces TS2740 for readonly→mutable at declaration/assignment/return/
+  class-property and as pristine's TS2345 chain at an argument (tsgo prints a bare TS4104 there), slots are read-only;
+  the pin walker `checkReadonlyTupleElaboration` is KEPT (20/22 codes reproduced); two pre-existing false positives
+  closed (`const t: [1] = [1]`, TS2790 beside TS2704) and B378's guard install filtered to the declared constituent
+  (a grid row on tsc's own `core.ts`); 38 pins, 15 arms RED; core 16,122/0/3, corpus 8,837/0, cost_gate exit 0, grid
+  8×0/0. Residue: r20 `zt[5]` TS2493 (dedicated-walker-only), a subclass-of-`Array` contextual type reads readonly.
+  STAGE 1 LANDED 2026-09-05 ((P18.23) note) — a const assertion answers its operand's
   const-context type (`constContextTypeOf`, recognised syntactically by `isConstAssertionExpr`), object members keep
   their literals with the context computed once, a const array is a frozen tuple with the relation rule tuples
   always needed (tuple → `Array<T>`/`ReadonlyArray<T>` by elements, removing a pre-existing false TS2740 on every
@@ -2044,6 +2031,108 @@ needing a static-side type for a class value, refused on instruction.
   gaps measured and deliberately NOT chased here: `mt.push(3)` on a mutable `[1, 2]` is silent (tsc
   TS2345 — tuple method calls are not argument-checked), and `readonly number[]` → `number[]` prints
   TS2740 for tsc's TS4104.
+
+- [ ] **(CHK.94) TUPLES: ARRAY MEMBERS WITH TYPES AND CHECKED CALLS — MEASURED 2026-09-05 by
+  read-only recon against `b7cd50d8` (fixtures `scratchpad/chk94/a_*`, `c_*`, 90 cells; tsgo
+  7.0.2 = pristine 6.0.3 on every row bar the union ORDER — pristine prints `(2 | 1)[]` for
+  tsgo's `(1 | 2)[]`, ours orders as tsgo; FORM, pin tsgo's and record the divergence).** A
+  tuple is an uninterned `Type.Object` (`buildTupleFromTypes` ~171111) holding only its
+  numbered slots, `length` and a number index; `getPropertyOfType` (~118384) misses every
+  `Array` member and `computeRawTypeOfPropertyAccess` answers `any` (~132749), so `t.slice(1)`
+  / `.map` / `.indexOf("x")` / `.push("z")` / `.push(3)` / `.concat` / `.join` / `.includes` /
+  `.reduce` / `.sort` are SILENT on `[1, 2]`, `[1, "a"]`, `readonly [1, 2]` and `[1, 2] as const`
+  where both references report (TS2345 `'"z"' ⊄ '1 | 2'`, TS2322 `'(1 | 2)[]'`, TS2339 `'push'
+  does not exist on type 'readonly [1, 2]'`), callback parameters are never contextually typed
+  (`t.map(x => …)`, `q.forEach(x => …)`), and `tupleInheritsArrayMember` (~125763) grants
+  EXISTENCE against the mutable `Array` even to a readonly tuple. `length`, `t[0]`, `for-of`
+  and the tuple→array relation are already right. tsc: `createTupleTargetType` checker.ts:17876
+  + `getTupleBaseType` :13312 (`createArrayType(union of elements, readonly)`) inherited by
+  `resolveObjectTypeMembers` :14099-14106. **(0) prerequisite, unrecorded on HEAD**: `const t:
+  [1, 2] = [1, 2]` is an ours-only `TS2322 'number' ⊄ '1'` PAIR at the declaration
+  (`checkArrayLiteralElementsAgainstTuple` ~167780 reads `getTypeOfExpression(elem)`; use
+  `literalTypeOfExpression(elem) ?:`). **(1)** two bits on the tuple, set at mint and carried by
+  `widenType`'s rebuild (~47261): `isReadonlyTuple` (the readonly-tuple arm of
+  `getTypeFromTypeOperator` ~171836-171847, a no-op today, and `constContextTupleOfArrayLiteral`
+  ~128749 — (CHK.93) stage 2's first rung, coordinate with it) and `tupleHasRest` (`getTupleType`
+  ~171092: `RestType` / `NamedTupleMember.dotDotDotToken` — a rest slot is stored as the rest's
+  ARRAY type, so an `Array<number | string[]>` base would make `a.indexOf(x)` on `[number,
+  ...string[]]` a FALSE TS2345; `a.length` also reads `2` there where tsc reads `number`,
+  pre-existing). **(2)** `tupleArrayBase(t)`: null for a rest tuple (and for an optional-slot
+  tuple unless `undefined` joins the union — tsc's base for `[1, 2?]` is `Array<1 | 2 |
+  undefined>`), else `getOrInternReference(readonly ? globalReadonlyArrayType : globalArrayType,
+  listOf(numberIndexInfo.type ?: never))` — interned, once per element set. **(3)** consult it on
+  the MISS path only at `computeRawTypeOfPropertyAccess` (~132725, through
+  `resolveGenericPropertyType` ~111538 — the instantiation `arr.push` on `number[]` already uses
+  at ~132704) and `resolveMemberPropertyType` (~132504: union / narrowed receivers — `[1] | [1,
+  2]`, `[1, 2] | undefined` after `if (m)`), and rewrite `tupleInheritsArrayMember` over the base
+  so a readonly/const tuple LOSES `push` (TS2339; display `'[1, 2]'` until stage 2 — FORM). The
+  call path, overload selection, argument checking and callback contextual typing then follow
+  with no further edit. **Guards**: legal calls must stay silent (`t.some`, `t.join(",")` into
+  string, `t.forEach(x => number = x)`, `t.concat([1])` into `(1|2)[]`, `g(...t)` — silent in all
+  three compilers); `[p[0], p[1]].forEach` is an ARRAY literal, unaffected; `t.concat([9])` is
+  TS2769 in both references (a report or today's silence both acceptable — a false report on
+  `[1]` is not); `<T>(t: [T, T]) => t.slice(1)` is `T[]` (pin; `TypeInstantiator.kt:283`
+  excludes tuples from fn-aware instantiation, not a blocker); `t[5]` TS2493 and `const [a, b] =
+  t` stay OUT of scope (TS2493 has only dedicated pin walkers — ~67870 / ~87751 / ~135570 /
+  ~78177 — and there is no `BindingElement` arm, silent for `number[]` too, (CHK.46)). Corpus:
+  ZERO active `.errors.txt` baselines call an array method on a tuple-typed name — it cannot
+  see the member types; run by name `tupleTypes`, `awaitedType`,
+  `emitCapturingThisInTupleDestructuring2`, `restParameterWithBindingPattern3`,
+  `readonlyTupleAndArrayElaboration`, plus (P18.23)'s 18 `as const` baselines. Grid: the compiler
+  profile's ONLY tuple-receiver method call is `relatedInfo.push(info)` (checker.ts:22624) on a
+  REST tuple (refused → unchanged); `args.*` at :32162 / :36271 / :36289 are arrays; the 8
+  profiles hold 39-93 tuple annotations and 63 tuple-receiver sites, so expect 8 × `added=0
+  removed=0` as a CONTROL — the pin class is the gate. Pins: the 90-cell matrix as VALUE pins,
+  readonly-loses-mutators, rest/optional/generic refusals, union and narrowed receivers, the (0)
+  declaration pair; arms: base off, readonly bit off (`[1, 2] as const` `.push` must read
+  TS2339), rest refusal off (the `indexOf` false positive), the (0) literal read off. Cost: one
+  interned reference per element set; `cost_gate` expected ~+0.00%.
+
+- [ ] **(CHK.95) THE ARGUMENT GATE'S BODY-LOCAL LITERAL CONST — MEASURED 2026-09-05 by
+  read-only recon against `b7cd50d8` (fixtures `scratchpad/chk94/b_*`, `d_*`, 72 cells; tsgo
+  7.0.2 = pristine 6.0.3 on every cell but the const-TUPLE argument, where tsgo prints TS4104
+  and pristine TS2345 — (CHK.93) stage 2, excluded).** In EVERY body context (function, arrow,
+  method, nested function, annotated function) `const s = "a"; takeB(s)` is SILENT for a string,
+  number, boolean, bigint, `as const` scalar and template initializer, for a `let` of each, AND
+  for an ANNOTATED `const s: string = "a"` — while the same lines report at file level and an
+  enum initializer reports everywhere ((P18.22)'s S4). So the (P18.22) note's "a body-local
+  STRING const is equally silent" is every non-enum scalar initializer, every `let`, and every
+  annotated primitive local; only annotated literal UNIONS and callables are recorded.
+  Mechanism: the gate reads `getTypeOfExpression(arg)` (~162473) → `getTypeOfIdentifier`
+  (~119659) → `currentLocalTypes` (~119668) = the ccet frame's `localTypes` (`CcetFrame` ~1562,
+  `withCcetFrameAmbient` ~1595), whose only writers are parameters (~148779), the S4 pre-scan
+  `shadowCallTypesDeclList` (~155326-155400, enum initializers only at ~155370-155386), the
+  if-arm type-guard override (~1930) and the leave-time `ccetApplyDeclRecordings` (~2254-2285:
+  annotated CALLABLES, unions of callables, unions of LITERALS); everything else falls to
+  B83.5's `anyType` (~119725) and the gate `continue`s at ~162660. **Fix**: (a) in
+  `shadowCallTypesDeclList`, under the enum arm's collision guard (`!globals.containsKey(nm) &&
+  currentFileLocals?.containsKey(nm) != true`), an un-annotated arm over a RESOLUTION-FREE
+  scalar subset of `literalTypeOfExpression` (~127098: string / no-subst template / numeric /
+  `-`numeric / bigint / `true` / `false` / paren / `!` / `as const` scalar — NOT its
+  `ConditionalExpression` arm, which calls `getTypeOfExpression` at ~127123 and is the B420
+  first-touch hazard the pre-scan is shaped around, and not arrays), a `const` recording the
+  literal and a `let` its base primitive ((WIDEN.1); `let s = "a"` → `string`, which both
+  references print; `let b = true` → `boolean` where they print `true`, the file-level form
+  residue); the duplicate-name `containsKey → anyType` rule (~155366) comes free, so two sibling
+  blocks' `const s` and the shadow-in/out shapes stay silent where tsc reports the first block's
+  `"a"` (safe direction, pin as silence); (b) in `ccetApplyDeclRecordings`, whose
+  `getTypeFromTypeNode(ann)` already runs at leave time (~2259), record an intrinsic primitive or
+  literal annotation beside the union-of-literals arm. A closure `() => takeB(s)` inherits
+  through `ccetEnterFunctionLike`'s `EpochMap(top.localTypes)` (~2121). **Residues to pin**:
+  ternary / `||` / `??` initializers (tsc `"a" | "c"`), `takeB(o.v)` on `const o = { v: "a" }`
+  (tsc `string`, ours `any`), `s === "b"` TS2367 (a different reader; TS2678 on `switch` already
+  fires), the const-tuple argument, a local named after a lib global under `dom` (`name` /
+  `length` / `top` — the collision guard keeps it `any`). **Guards**: corpus `parseBigInt` (the
+  one active baseline with a literal-argument TS2345 beside a body-local literal const),
+  `EnumMemberLocalFlowTest`, `ConstAssertionTest` (its body-local `takeB(zx)` silence pin FLIPS
+  — update it), the enum-arc classes; grid 8 × 0/0 expected — `const x = "…"; f(x)` is
+  ubiquitous in tsc's sources and the only new reports are ones tsc also makes. Cost: the
+  pre-scan already walks every declaration per body entry; the gate then judges every
+  scalar-local argument it used to skip — attribute `globals.lookups` / `narrow.walks` as
+  (P18.22) did. Pins: the 72-cell context × initializer matrix as VALUE pins, negative controls
+  (`takeS(s)` on `const s = "a"`, `takeNum(n)`), let-widening display, closure, duplicate names;
+  arms: literal arm off (~30 RED), let-widening off (`'"a"'` printed for a `let`),
+  annotated-primitive arm off, collision guard off.
 
 - [x] **(CHK.86) AN IMPOSSIBLE ENUM-vs-ENUM EQUALITY PRODUCES NEITHER TS2367 NOR A `never`
   NARROW — the DIAGNOSTIC half CLOSED (P18.17); the NARROW half re-queued as (CHK.87).**

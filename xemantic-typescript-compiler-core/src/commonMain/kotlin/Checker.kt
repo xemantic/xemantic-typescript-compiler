@@ -1935,7 +1935,12 @@ class Checker(
                 val narrow = resolveUserTypeGuardNarrowing(parent.expression)
                 if (narrow != null) {
                     val t = getTypeFromTypeNode(narrow.second)
-                    if (t !== anyType && t !== errorType) { vn = narrow.first; uType = t }
+                    if (t !== anyType && t !== errorType) {
+                        // (CHK.93) stage 2: the DECLARED constituent that satisfies the guard, not
+                        // the guard's own type — see [guardNarrowedLocalType]; null = no override.
+                        val g = guardNarrowedLocalType(topF.localTypes[narrow.first], t)
+                        if (g != null) { vn = narrow.first; uType = g }
+                    }
                 }
             }
             val id = (node as NodeBase).nodeId
@@ -47258,7 +47263,7 @@ class Checker(
                     val optionalFlags = elems.indices.map { i ->
                         type.members?.get(i.toString())?.id?.let { it in optionalTupleMemberIds } ?: false
                     }.takeIf { flags -> flags.any { it } }
-                    return buildTupleFromTypes(widenedElems, optionalFlags)
+                    return buildTupleFromTypes(widenedElems, optionalFlags, readonly = type.readonlyTuple)
                 }
                 // Recursively widen anonymous object literal member types — matches
                 // TypeScript's behavior where `let x = {a: true}` infers `{a: boolean}`.
@@ -78941,6 +78946,9 @@ interface DataView {
             if (objType !== anyType && objType !== errorType) {
                 val apparent = getApparentType(objType)
                 val propSym = getPropertyOfType(apparent, inner.name.text)
+                // (CHK.93) stage 2: tsc's `checkDeleteExpression` reports a READ-ONLY operand
+                // (TS2704, `checkDeleteReadonlyOperand`) INSTEAD of "must be optional".
+                val readonlyOperand = propSym != null && (isReadonlySymbol(propSym) || isReadonlyAccessOrModifier(propSym))
                 val emit2790 = {
                     val start = inner.pos
                     val length = expressionTrueEnd(inner) - start
@@ -78958,7 +78966,10 @@ interface DataView {
                         ))
                     }
                 }
-                if (propSym != null && !isOptionalProperty(propSym)) {
+                if (readonlyOperand) {
+                    // (CHK.93) stage 2: `checkDeleteReadonlyOperand` below owns the row (TS2704);
+                    // tsc never also asks whether a read-only operand is optional.
+                } else if (propSym != null && !isOptionalProperty(propSym)) {
                     val propType = getTypeOfSymbol(propSym)
                     // Under exactOptionalPropertyTypes, a required property with
                     // `| undefined` in its type still requires optionality to delete.
@@ -80603,6 +80614,15 @@ interface DataView {
         return isReadonlyAccessOrModifier(prop) || prop.id in mappedReadonlyMemberIds
     }
 
+    /**
+     * (CHK.93) stage 2: does the anonymous-object DISPLAY of member [p] carry `readonly `?
+     * tsc prints it for a `readonly` modifier, a get-only accessor and every synthesized
+     * `CheckFlags.Readonly` member; a `-readonly` mapped member never does.
+     */
+    private fun isReadonlyMemberForDisplay(p: Symbol): Boolean =
+        p.id !in mappedMutableMemberIds &&
+            (p.id in mappedReadonlyMemberIds || isReadonlyAccessOrModifier(p))
+
     /** Check if a symbol is declared readonly. */
     private fun isReadonlySymbol(symbol: Symbol): Boolean {
         // M1.10: a `-readonly` mapped member is writable regardless of the carried
@@ -81663,6 +81683,19 @@ interface DataView {
             is ElementAccessExpression -> {
                 // m["x"] = value — check if it's a readonly property too
                 val arg = unwrapped.argumentExpression
+                // (CHK.93) stage 2: a READONLY TUPLE's numbered slot is a read-only member —
+                // `rt[0] = 1` is TS2540 `Cannot assign to '0'` (the slot symbol is in the
+                // side-channel; consulted here because the element-write path never asks
+                // `isReadonlySymbol` for a numeric key).
+                if (arg is NumericLiteralNode) {
+                    val recv = getTypeOfExpression(unwrapped.expression)
+                    if (recv is Type.Object && recv !is Type.Reference && recv.readonlyTuple &&
+                        recv.members?.get(arg.text)?.let { it.id in mappedReadonlyMemberIds } == true
+                    ) {
+                        emitTS2540(arg.text, arg.pos, arg.text.length, source, fileName)
+                        return
+                    }
+                }
                 if (arg is StringLiteralNode && unwrapped.expression is Identifier) {
                     val objName = (unwrapped.expression).text
                     val objSymbol = globals[objName] ?: fileResults[fileName]?.locals?.get(objName)
@@ -105497,10 +105530,20 @@ interface DataView {
         // typing happens first is the one every later consumer sees.
         if (targetType is Type.Object &&
             (init is ArrowFunction || init is FunctionExpression ||
-                (init is ObjectLiteralExpression && objLitTargetNeedsContext(targetType)))
+                (init is ObjectLiteralExpression && objLitTargetNeedsContext(targetType)) ||
+                // (CHK.93) stage 2: a const-asserted OBJECT literal reads the declared type
+                // through the assertion (tsc's `getContextualType` passes the outer context
+                // through a const assertion) — a nested array member reads the MEMBER's
+                // context from it, so this is not gated on `objLitTargetNeedsContext`.
+                constAssertedObjectLiteralOf(init) != null)
         ) {
             contextualType = targetType
         }
+        // (CHK.93) stage 2: a const-asserted ARRAY literal reads the declared type as its
+        // contextual type (a mutable array-like context keeps the tuple mutable — tsc's
+        // `getContextualType` passes the outer context through a const assertion). A
+        // UNION annotation (`number[] | string`) is a context too.
+        if (constAssertedArrayLiteralOf(init) != null) contextualType = targetType
         // 17.66: contextual literal preservation. When the target type contains
         // literal types (e.g. `"x" | "y"`, `keyof typeof obj`), and the init is
         // a literal-typed expression (string/number/bigint/template literal,
@@ -105604,6 +105647,9 @@ interface DataView {
                 CtaSections.close(CtaSections.N_REL_CALL, t0)
                 r
             })
+        // (CHK.93) stage 2: a readonly array-like against a mutable array or tuple is
+        // TS4104 at the name, and nothing else (tsc reports it in place of the chain).
+        if (!isAssignable && emitTs4104IfReadonlyToMutable(sourceType, targetType, name.pos, name.text.length, source, fileName)) return
         if (cvdaPostRelationGates(init, typeAnnotation, sourceType, targetType,
                 canUse, isAssignable, name, source, fileName)) return
         CtaSections.atB(CtaSections.B_ELAB)
@@ -107638,9 +107684,15 @@ interface DataView {
         source: String, fileName: String, typeParams: Set<String>
     ) {
         val targetType = getTypeFromTypeNode(typeAnnotation)
-        val sourceType = getTypeOfExpression(init)
+        // (CHK.93) stage 2: a const-asserted ARRAY literal reads the property's declared
+        // type as its contextual type (a mutable array-like context keeps the tuple mutable).
+        val savedContextual = contextualType
+        if (constAssertedArrayLiteralOf(init) != null) contextualType = targetType
+        val sourceType = try { getTypeOfExpression(init) } finally { contextualType = savedContextual }
         lastMissingPropertyName = null
         val canUse = canUseTypeEngine(sourceType, targetType)
+        // (CHK.93) stage 2: TS4104 at the property name, in place of the chain.
+        if (emitTs4104IfReadonlyToMutable(sourceType, targetType, propName.pos, propName.text.length, source, fileName)) return
         // Excess property check for fresh object literals (TS2353)
         if (canUse && init is ObjectLiteralExpression) {
             val displayTarget = excessPropDisplayTarget(targetType, typeAnnotation)
@@ -108427,6 +108479,9 @@ interface DataView {
             // distributes the contextual type through logical operands, and the nested
             // objlit's guard-narrowed property values need the per-property context.
             val ctxObjLit = (expr as? ObjectLiteralExpression)
+                // (CHK.93) stage 2: a returned const-asserted OBJECT literal reads the
+                // declared return type through the assertion.
+                ?: expr?.let { constAssertedObjectLiteralOf(it) }
                 ?: (expr as? BinaryExpression)?.takeIf {
                     it.operator == SyntaxKind.AmpersandAmpersand ||
                         it.operator == SyntaxKind.BarBar ||
@@ -108461,7 +108516,10 @@ interface DataView {
             }
             val useCtx = (targetType is Type.Object &&
                 (expr is ArrowFunction || expr is FunctionExpression)) || objLitCtx != null ||
-                arrLitCtx != null
+                arrLitCtx != null ||
+                // (CHK.93) stage 2: a returned const-asserted ARRAY literal reads the declared
+                // return type as its contextual type (a mutable array-like keeps it mutable).
+                (expr != null && constAssertedArrayLiteralOf(expr) != null)
             if (useCtx) contextualType = objLitCtx ?: arrLitCtx ?: targetType
             // 17.70: contextual literal preservation for return-statement source —
             // mirrors 17.66 (var-decl init) / 17.67 (call arg). When return type
@@ -108652,6 +108710,8 @@ interface DataView {
             CtaSections.atC(CtaSections.C_RELATION)
             if (canUseForReturn && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 CtaSections.atC(CtaSections.C_ELAB)
+                // (CHK.93) stage 2: TS4104 at the `return` keyword, in place of the chain.
+                if (emitTs4104IfReadonlyToMutable(sourceType, targetType, stmt.pos, 6, source, fileName)) return
                 craElaborateReturnMismatch(
                     stmt, sourceType, targetType, returnTypeNode, source, fileName, typeParams,
                 )
@@ -109527,9 +109587,13 @@ interface DataView {
                     CtaSections.atE(CtaSections.E_SRCTYPE)
                     val savedContextual = contextualType
                     if (tt is Type.Object && (expr.right is ArrowFunction || expr.right is FunctionExpression ||
-                            expr.right is ObjectLiteralExpression)) {
+                            expr.right is ObjectLiteralExpression ||
+                            constAssertedObjectLiteralOf(expr.right) != null)) { // (CHK.93) stage 2
                         contextualType = tt
                     }
+                    // (CHK.93) stage 2: a const-asserted ARRAY literal reads the target as
+                    // its contextual type (a mutable array-like keeps the tuple mutable).
+                    if (constAssertedArrayLiteralOf(expr.right) != null) contextualType = tt
                     // 17.66: contextual literal preservation for assignment RHS — when
                     // target is a literal-containing type and RHS is a literal expression,
                     // preserve the literal instead of widening to the primitive (matches
@@ -109662,6 +109726,8 @@ interface DataView {
                     ) {
                         return
                     }
+                    // (CHK.93) stage 2: TS4104 at the assignment target, in place of the chain.
+                    if (!isAssignable && emitTs4104IfReadonlyToMutable(sourceType, tt, target.pos, target.text.length, source, fileName)) return
                     if (caeElaborateMismatch(expr, target, tt, sourceType, typeAnnotation, canUse, isAssignable,
                             source, fileName, typeParams)) return
                     // tryCatchFinallyControlFlow: the legacy varTypes fallback below WIDENS a
@@ -125762,7 +125828,26 @@ interface DataView {
      */
     private fun tupleInheritsArrayMember(t: Type, name: String): Boolean =
         t is Type.Object && t.tupleElementTypes != null &&
-            getPropertyOfType(globalArrayType, name) != null
+            // (CHK.93) stage 2: a READONLY tuple's base is `ReadonlyArray<T>` — no `push`.
+            getPropertyOfType(if (t.readonlyTuple) (globalReadonlyArrayType ?: globalArrayType) else globalArrayType, name) != null
+
+    /**
+     * (CHK.93) stage 2: is [t] a READONLY array-like receiver — a readonly tuple or a
+     * `ReadonlyArray<T>` reference — and [name] an `Array<T>` member that `ReadonlyArray<T>`
+     * lacks (`push`, `pop`, `splice`, …)? Such an access is TS2339 on the readonly display
+     * (`Property 'push' does not exist on type 'readonly [1, 2]'.`) — the one shape the
+     * permissive number-index bail below would otherwise swallow.
+     */
+    private fun readonlyArrayLikeLacksArrayMember(t: Type, name: String): Boolean {
+        val ro = globalReadonlyArrayType ?: return false
+        val isReadonlyArrayLike = when (t) {
+            is Type.Reference -> t.target === ro
+            is Type.Object -> t !is Type.Interface && t.tupleElementTypes != null && t.readonlyTuple
+            else -> false
+        }
+        return isReadonlyArrayLike && getPropertyOfType(globalArrayType, name) != null &&
+            getPropertyOfType(ro, name) == null
+    }
 
     /**
      * Resolve the RHS of an `instanceof` to its instance type. For `x instanceof C`
@@ -127599,16 +127684,22 @@ interface DataView {
         literalTypeOfExpression(expr)?.also { registerConstContextLiteral(it) }
             ?: getTypeOfExpression(expr)
 
-    /** (CHK.93): the object literal under a const assertion (`{…} as const`, `<const>{…}`), through parentheses. */
+    /**
+     * (CHK.93): the object literal under a const assertion (`{…} as const`, `<const>{…}`),
+     * through parentheses — null for a BARE literal (stage 2: the contextual-type installs
+     * consult this, and a bare literal answering itself installed a context for every
+     * object-literal initializer in the program).
+     */
     private fun constAssertedObjectLiteralOf(expr: Expression): ObjectLiteralExpression? {
         var e: Expression = expr
         var hops = 0
+        var asserted = false
         while (hops++ < 32) {
             e = when (e) {
                 is ParenthesizedExpression -> e.expression
-                is AsExpression -> if (objLitIsConstTypeRef(e.type)) e.expression else return null
-                is TypeAssertionExpression -> if (objLitIsConstTypeRef(e.type)) e.expression else return null
-                is ObjectLiteralExpression -> return e
+                is AsExpression -> if (objLitIsConstTypeRef(e.type)) { asserted = true; e.expression } else return null
+                is TypeAssertionExpression -> if (objLitIsConstTypeRef(e.type)) { asserted = true; e.expression } else return null
+                is ObjectLiteralExpression -> return if (asserted) e else null
                 else -> return null
             }
         }
@@ -127965,7 +128056,11 @@ interface DataView {
                     val useCtx = propCtx != null && propCtx !== anyType && propCtx !== errorType &&
                         !genericValue &&
                         (prop.initializer is ArrowFunction || prop.initializer is FunctionExpression ||
-                            prop.initializer is ObjectLiteralExpression)
+                            prop.initializer is ObjectLiteralExpression ||
+                            // (CHK.93) stage 2: a nested ARRAY literal under a const context
+                            // reads the member's contextual type (mutable array-like keeps
+                            // the nested tuple mutable, tsc's `isMutableArrayLikeType`).
+                            (inConstContext && prop.initializer is ArrayLiteralExpression))
                     if (useCtx) contextualType = propCtx
                     val propTypeRaw = try {
                         // A recovered `name: lhs = rhs` member (assignment as the VALUE —
@@ -128056,6 +128151,12 @@ interface DataView {
                         members[name] = sym
                         properties.add(sym)
                         symbolTypes[sym.id] = propType
+                        // (CHK.93) stage 2: a const-context member is READONLY (tsc
+                        // `checkObjectLiteral`: `checkFlags = inConstContext ? Readonly : 0`
+                        // on every property, shorthand, method and spread member) — the
+                        // side-channel `Readonly<T>` / `Object.freeze` already use, read by
+                        // `isReadonlySymbol` (TS2540 / TS2704) and by the display.
+                        if (inConstContext) mappedReadonlyMemberIds.add(sym.id)
                     }
                 }
                 is ShorthandPropertyAssignment -> {
@@ -128091,6 +128192,7 @@ interface DataView {
                     members[name] = sym
                     properties.add(sym)
                     symbolTypes[sym.id] = propType
+                    if (inConstContext) mappedReadonlyMemberIds.add(sym.id) // (CHK.93) stage 2
                 }
                 is MethodDeclaration -> {
                     val name = when (val n = prop.name) {
@@ -128107,6 +128209,7 @@ interface DataView {
                     sym.valueDeclaration = prop
                     members[name] = sym
                     properties.add(sym)
+                    if (inConstContext) mappedReadonlyMemberIds.add(sym.id) // (CHK.93) stage 2
                     // Method type — create function type with call signature.
                     // B96-UNBLOCKER: when there's no explicit return annotation, infer the
                     // return type from the body (mirrors arrow/fn-expr concise+block-body
@@ -128163,6 +128266,10 @@ interface DataView {
                                 it.parent = psym.parent
                             }
                             symbolTypes[local.id] = getTypeOfSymbol(psym)
+                            // (CHK.93) stage 2: the spread COPY is readonly exactly when the
+                            // spreading literal is in a const context (tsc `getSpreadType`'s
+                            // `readonly` argument) — a spread outside one drops the bit.
+                            if (inConstContext) mappedReadonlyMemberIds.add(local.id)
                             members[pn] = local
                             properties.add(local)
                         }
@@ -128746,9 +128853,92 @@ interface DataView {
             if (t === anyType || t === errorType) return anyType
             elementTypes.add(t)
         }
-        val tuple = buildTupleFromTypes(elementTypes)
+        // (CHK.93) stage 2: READONLY unless the contextual type has a MUTABLE array-like
+        // constituent — tsc `checkArrayLiteral`: `createTupleType(…, readonly =
+        // inConstContext && !(contextualType && someType(contextualType,
+        // isMutableArrayLikeType)))`, which is why `const a: number[] = [1, 2] as const;
+        // a.push(3)` is silent in both references while `const t = [1, 2] as const;
+        // t.push(3)` is TS2339. The context is the ambient one, installed by the
+        // declaration / assignment / return / argument / member sites for a const-asserted
+        // array literal exactly as they install it for an object literal.
+        val readonly = contextualType?.let { !typeHasMutableArrayLikeConstituent(it) } ?: true
+        val tuple = buildTupleFromTypes(elementTypes, readonly = readonly)
         frozenObjectTypeIds.add(tuple.id)
         return tuple
+    }
+
+    /**
+     * (CHK.93) stage 2: tsc's `someType(contextualType, isMutableArrayLikeType)` — does [t]
+     * (or, for a union / intersection, some constituent) name a MUTABLE array or tuple? An
+     * `Array<T>` reference (or a reference to a subtype of it) and a non-readonly tuple
+     * are; `ReadonlyArray<T>`, a readonly tuple, and anything not array-like are not.
+     */
+    private fun typeHasMutableArrayLikeConstituent(t: Type): Boolean = when (t) {
+        is Type.Union -> t.types.any { typeHasMutableArrayLikeConstituent(it) }
+        is Type.Intersection -> t.types.any { typeHasMutableArrayLikeConstituent(it) }
+        // An `Array<T>` reference only: a SUBCLASS of Array would need its base types
+        // resolved here, i.e. from inside an array literal's typing — a first-touch order
+        // hazard ((INC.19)) measured on the compiler profile as an unrelated added row.
+        is Type.Reference -> t.target === globalArrayType
+        is Type.Object -> t.tupleElementTypes != null && !t.readonlyTuple
+        else -> false
+    }
+
+    /**
+     * (CHK.93) stage 2: tsc's relation refusal (checker.ts `structuredTypeRelatedToWorker`,
+     * "The type '{0}' is 'readonly' and cannot be assigned to the mutable type '{1}'"): a
+     * READONLY array-like source — `ReadonlyArray<T>` / `readonly T[]`, or a readonly
+     * tuple — never relates to a MUTABLE array or tuple target, whatever the elements.
+     * The predicate is consulted by the relation (which answers false) AND by each
+     * assignability emitter (which prints TS4104 instead of a missing-members chain).
+     */
+    private fun readonlyToMutableArrayLike(source: Type, target: Type): Boolean {
+        val sourceReadonly = when (source) {
+            is Type.Reference -> globalReadonlyArrayType != null && source.target === globalReadonlyArrayType
+            is Type.Object -> source !is Type.Interface && source.tupleElementTypes != null && source.readonlyTuple
+            else -> false
+        }
+        if (!sourceReadonly) return false
+        return when (target) {
+            is Type.Reference -> target.target === globalArrayType
+            is Type.Object -> target !is Type.Interface && target.tupleElementTypes != null && !target.readonlyTuple
+            else -> false
+        }
+    }
+
+    private fun ts4104Message(source: Type, target: Type): String =
+        "The type '${typeToString(source)}' is 'readonly' and cannot be assigned to the mutable type '${typeToString(target)}'."
+
+    /** (CHK.93) stage 2: emit TS4104 at ([pos], [length]) when [readonlyToMutableArrayLike] holds. */
+    private fun emitTs4104IfReadonlyToMutable(
+        sourceType: Type, targetType: Type, pos: Int, length: Int, source: String, fileName: String,
+    ): Boolean {
+        if (!readonlyToMutableArrayLike(sourceType, targetType)) return false
+        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(
+            message = ts4104Message(sourceType, targetType),
+            category = DiagnosticCategory.Error, code = 4104,
+            fileName = fileName, line = line, character = character,
+            start = pos, length = length,
+        ))
+        return true
+    }
+
+    /** (CHK.93): the array literal under a const assertion (`[…] as const`, `<const>[…]`), through parentheses; null for a BARE literal. */
+    private fun constAssertedArrayLiteralOf(expr: Expression): ArrayLiteralExpression? {
+        var e: Expression = expr
+        var hops = 0
+        var asserted = false
+        while (hops++ < 32) {
+            e = when (e) {
+                is ParenthesizedExpression -> e.expression
+                is AsExpression -> if (objLitIsConstTypeRef(e.type)) { asserted = true; e.expression } else return null
+                is TypeAssertionExpression -> if (objLitIsConstTypeRef(e.type)) { asserted = true; e.expression } else return null
+                is ArrayLiteralExpression -> return if (asserted) e else null
+                else -> return null
+            }
+        }
+        return null
     }
 
     /** B52.4: Narrow helper — return `nullType` only when the block body's first
@@ -133664,10 +133854,11 @@ interface DataView {
                 }
             }
             is Type.Object -> {
-                // Tuple type: display as [T1, T2, ...]
+                // Tuple type: display as [T1, T2, ...] — `readonly [T1, T2]` for a readonly one.
                 val tupleElems = type.tupleElementTypes
                 if (tupleElems != null) {
-                    return "[${tupleElems.joinToString(", ") { typeToString(it) }}]"
+                    val ro = if (type.readonlyTuple) "readonly " else ""
+                    return "$ro[${tupleElems.joinToString(", ") { typeToString(it) }}]"
                 }
                 // B198: self-recursion cut for function-symbol types — a function whose
                 // return annotation is `typeof <itself>` renders the nested occurrence as
@@ -133763,16 +133954,22 @@ interface DataView {
                                     propType.callSignatures?.size == 1 &&
                                     p.declarations.any { it is MethodDeclaration }
                                 ) propType.callSignatures!!.first() else null
+                                // (CHK.93) stage 2: a read-only member carries the `readonly `
+                                // prefix — the declared modifier, a get-only accessor, or the
+                                // side-channel (`Readonly<T>`, a mapped `readonly`, `Object.freeze`,
+                                // a const context) — as tsc prints every `CheckFlags.Readonly`
+                                // / `ModifierFlags.Readonly` property.
+                                val roPrefix = if (isReadonlyMemberForDisplay(p)) "readonly " else ""
                                 if (methodSig != null) {
-                                    parts.add("$displayName${signatureToStringColon(methodSig, isConstruct = false)}")
+                                    parts.add("$roPrefix$displayName${signatureToStringColon(methodSig, isConstruct = false)}")
                                 } else {
                                     val typeStr = if (propType != null) typeToString(propType) else "any"
                                     // 16.0: Optional properties render as `name?: type | undefined`
                                     // matching TypeScript's display convention.
                                     if (isOptionalProperty(p)) {
-                                        parts.add("$displayName?: $typeStr | undefined")
+                                        parts.add("$roPrefix$displayName?: $typeStr | undefined")
                                     } else {
-                                        parts.add("$displayName: $typeStr")
+                                        parts.add("$roPrefix$displayName: $typeStr")
                                     }
                                 }
                             }
@@ -153742,6 +153939,17 @@ interface DataView {
         val prop = getPropertyOfType(objectType, propName)
         // (CHK.93): a tuple has every `Array<T>` member (existence only, see the helper).
         if (prop == null && tupleInheritsArrayMember(objectType, propName)) return
+        // (CHK.93) stage 2: a readonly array-like has no `push` — reported on its own display.
+        if (prop == null && readonlyArrayLikeLacksArrayMember(objectType, propName)) {
+            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '${typeToString(displayTypeOverride ?: objectType)}'.",
+                category = DiagnosticCategory.Error, code = 2339,
+                fileName = fileName, line = line, character = character,
+                start = diagStart, length = diagLength,
+            ))
+            return
+        }
         if (prop != null) {
             // TS2576: `this.X` in an instance method where X is a STATIC member of the
             // enclosing class. `resolveInterfaceMembers` stores statics and instance
@@ -153848,7 +154056,12 @@ interface DataView {
         // many static-side accesses (e.g. Array.isArray) rely on it to avoid FPs.
         if (objectType.stringIndexInfo != null) return
         if (objectType.numberIndexInfo != null) {
-            if (displayTypeOverride == null || propName.toDoubleOrNull() != null) return
+            // (CHK.93) stage 2: an anonymous TUPLE receiver is never the static side of a
+            // lib constructor (the shape this bail exists for), so a non-numeric name that
+            // neither the tuple nor `Array<T>` has is reported (`mt.nope` on `[1, 2]`).
+            val anonymousTuple = objectType !is Type.Reference && objectType !is Type.Interface &&
+                objectType.tupleElementTypes != null && propName.toDoubleOrNull() == null
+            if (!anonymousTuple && (displayTypeOverride == null || propName.toDoubleOrNull() != null)) return
         }
         // Try spelling suggestion from known properties
         // The receiver may still be a member-table SHELL (getDeclaredTypeOfSymbol leaves
@@ -155501,6 +155714,44 @@ interface DataView {
         return varName to uNode
     }
 
+    /**
+     * (CHK.93) stage 2: what B378's if-arm installs for a subject [declared] narrowed by
+     * a user type guard whose predicate type is [candidate] — tsc's `getNarrowedType`
+     * (assumeTrue): a UNION keeps the constituents that relate to the candidate, a
+     * non-union that relates keeps itself, and only a subject with nothing that relates
+     * takes the candidate. B378 installed the candidate ITSELF, which was "FP-safe" only
+     * while every candidate related to everything its constituents did: `isArray(c):
+     * c is readonly unknown[]` on `c: T | T[]` installed `readonly unknown[]`, and once a
+     * readonly array-like stopped relating to a mutable array (TS4104) every
+     * `mutate(c)` inside the branch was a false positive on tsc's own `core.ts`.
+     *
+     * A subject whose declared type this pass does NOT know (the call-types pass records
+     * parameters and callable locals only) cannot be filtered — and installing a READONLY
+     * array-like candidate over an unknown declared type is exactly the false positive
+     * above (`const c = map.get(h)!` in the same function), so it answers null: no
+     * override, the subject keeps the pass's previous (silent) answer. Any other
+     * candidate keeps B378's install.
+     */
+    private fun guardNarrowedLocalType(declared: Type?, candidate: Type): Type? {
+        if (declared == null || declared === anyType || declared === errorType) {
+            val candidateReadonlyArrayLike = when (candidate) {
+                is Type.Reference -> globalReadonlyArrayType != null && candidate.target === globalReadonlyArrayType
+                is Type.Object -> candidate !is Type.Interface && candidate.readonlyTuple
+                else -> false
+            }
+            return if (candidateReadonlyArrayLike) null else candidate
+        }
+        if (declared is Type.Union) {
+            val kept = declared.types.filter { checkTypeRelatedTo(it, candidate, assignableRelation) }
+            return when (kept.size) {
+                0 -> candidate
+                1 -> kept[0]
+                else -> getUnionType(kept)
+            }
+        }
+        return if (checkTypeRelatedTo(declared, candidate, assignableRelation)) declared else candidate
+    }
+
     private fun checkCallTypesInStatement(stmt: Statement, source: String, fileName: String) {
         if (++callTypeCheckDepth > maxCheckDepth) { callTypeCheckDepth--; return }
         try {
@@ -155588,10 +155839,13 @@ interface DataView {
                 val uType = narrow?.let { (_, uNode) ->
                     getTypeFromTypeNode(uNode)
                 }
-                if (narrow != null && uType != null && uType !== anyType && uType !== errorType) {
+                // (CHK.93) stage 2: see [guardNarrowedLocalType] — null means no override.
+                val guarded = if (narrow != null && uType != null && uType !== anyType && uType !== errorType)
+                    guardNarrowedLocalType(currentLocalTypes[narrow.first], uType) else null
+                if (narrow != null && guarded != null) {
                     val vn = narrow.first
                     val saved = currentLocalTypes[vn]
-                    currentLocalTypes[vn] = uType
+                    currentLocalTypes[vn] = guarded
                     try { checkCallTypesInStatement(stmt.thenStatement, source, fileName) }
                     finally { if (saved != null) currentLocalTypes[vn] = saved else currentLocalTypes.remove(vn) }
                 } else {
@@ -162442,7 +162696,11 @@ interface DataView {
             ArgSections.at(ArgSections.L_ARGTYPE)
             val savedContextual = contextualType
             val useCtx = paramType is Type.Object &&
-                (arg is ArrowFunction || arg is FunctionExpression || arg is ObjectLiteralExpression)
+                (arg is ArrowFunction || arg is FunctionExpression || arg is ObjectLiteralExpression ||
+                    // (CHK.93) stage 2: a const-asserted ARRAY or OBJECT literal reads the
+                    // parameter as its contextual type — a mutable array-like keeps the
+                    // tuple mutable (tsc passes the outer context through the assertion).
+                    constAssertedArrayLiteralOf(arg) != null || constAssertedObjectLiteralOf(arg) != null)
             if (useCtx) contextualType = paramType
             // (CALL.6) the level-S classification. Taken INSIDE the already-open
             // L_ARGTYPE row, so it adds no boundary — every nanosecond it
@@ -164072,7 +164330,14 @@ interface DataView {
                 (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
                 !typeContainsForeignTypeParam(paramType, emptySet()) &&
                 argPrimitiveVsCompositeParamCheckable(paramType)
-            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) return CAAS_CONTINUE
+            // (CHK.93) stage 2: a READONLY array-like argument against a MUTABLE array or
+            // tuple parameter is decidable outright (tsc's relation answers false before
+            // any structural comparison); the same rest/arity/foreign-TP guards as above.
+            val allowReadonlyToMutable = arityOk &&
+                (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
+                !typeContainsForeignTypeParam(paramType, emptySet()) &&
+                readonlyToMutableArrayLike(argType, paramType)
+            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) return CAAS_CONTINUE
             // Round 79l (orchestrated — Agent A plan): for a contextually-typed
             // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
             // body-return type (allowFuncReturnMismatch), TypeScript reports a
@@ -164334,6 +164599,13 @@ interface DataView {
             }
             // Union elaboration: find the failing constituent and add as message chain
             val chain = mutableListOf<String>()
+            // (CHK.93) stage 2: a readonly array-like against a mutable array or tuple
+            // parameter elaborates with the TS4104 line and nothing else (pristine 6.0.3;
+            // tsgo 7.0.2 prints a bare TS4104 at the argument instead — the corpus's
+            // oracle is pristine, `readonlyTupleAndArrayElaboration`).
+            if (readonlyToMutableArrayLike(argType, paramType)) {
+                chain.add("  " + ts4104Message(argType, paramType))
+            }
             if (argType is Type.Union) {
                 // Find the last failing constituent (matches TypeScript's behavior)
                 var lastFailing: Type? = null
@@ -165311,6 +165583,11 @@ interface DataView {
         // in both references, the contextual array type making the tuple mutable).
         // Acceptance-only: an element that fails falls through to the structural path,
         // which reports exactly what it reported before.
+        // (CHK.93) stage 2: …but a READONLY array-like source never relates to a MUTABLE
+        // array or tuple target — tsc answers false before any structural comparison
+        // (TS4104 at the emitters), so neither the element rule below nor the structural
+        // path may accept it.
+        if (readonlyToMutableArrayLike(source, target)) return false
         if (source is Type.Object && source.tupleElementTypes != null && target is Type.Reference &&
             (target.target === globalArrayType ||
                 (globalReadonlyArrayType != null && target.target === globalReadonlyArrayType))
@@ -167768,7 +168045,13 @@ interface DataView {
             val slot = slots.getOrNull(i) ?: continue
             if (slot === anyType || slot === errorType || slot is Type.TypeParam) continue
             if (!isSimpleCheckableType(slot)) continue
-            val elemType = getTypeOfExpression(elem)
+            // (CHK.93) stage 2: an element is contextually typed by its slot, so a LITERAL
+            // element keeps its literal against a literal-carrying slot — `const t: [1] =
+            // [1]` was an ours-only `Type 'number' is not assignable to type '1'` (silent in
+            // both references), hidden on the corpus by `readonlyTupleAndArrayElaboration`'s
+            // pin walker wiping the file.
+            val elemType = (if (propTypeContainsLiteral(slot)) literalTypeOfExpression(elem) else null)
+                ?: getTypeOfExpression(elem)
             if (elemType === anyType || elemType === errorType) continue
             if (!isSimpleCheckableType(elemType)) {
                 // didYouMean: a CALLABLE element (e.g. `getNum: () => number`) whose call
@@ -171088,8 +171371,8 @@ interface DataView {
         return getOrInternReference(globalArrayType, listOf(elementType))
     }
 
-    /** Create a tuple type from a TupleType node. */
-    private fun getTupleType(node: TupleType): Type {
+    /** Create a tuple type from a TupleType node ([readonly]: under the `readonly` type operator). */
+    private fun getTupleType(node: TupleType, readonly: Boolean = false): Type {
         val elementTypes = node.elements.map { elem ->
             when (elem) {
                 is NamedTupleMember -> getTypeFromTypeNode(elem.type)
@@ -171102,15 +171385,22 @@ interface DataView {
         // into `node.elementOptional` (the `?` tokens are stripped from `elements`), so an
         // all-optional tuple target does not count its elements as required — `[] : [a?, b?]`
         // no longer FP's TS2739 (moduleSpecifiers.ts `return emptyArray as []`).
-        return buildTupleFromTypes(elementTypes, node.elementOptional)
+        return buildTupleFromTypes(elementTypes, node.elementOptional, readonly)
     }
 
     /** Build a tuple `Type.Object` (with `tupleElementTypes`, numbered props, length, number index sig).
      *  [optionalFlags], when non-null, marks the matching element's member symbol OPTIONAL
      *  (recorded in [optionalTupleMemberIds] so [isOptionalProperty] can see it). */
-    private fun buildTupleFromTypes(elementTypes: List<Type>, optionalFlags: List<Boolean>? = null): Type {
+    private fun buildTupleFromTypes(
+        elementTypes: List<Type>, optionalFlags: List<Boolean>? = null, readonly: Boolean = false,
+    ): Type {
         val tupleObj = Type.Object()
         tupleObj.tupleElementTypes = elementTypes
+        // (CHK.93) stage 2: a readonly tuple's slots and `length` are read-only members
+        // (tsc `createTupleType`: `CheckFlags.Readonly` on every element symbol and on
+        // `length`), so `rt[0] = 1` is TS2540 through the same side-channel `Readonly<T>`
+        // uses; the bit itself is what the relation, the display and the member lookup read.
+        tupleObj.readonlyTuple = readonly
         // Create numbered property symbols: "0", "1", "2", ...
         val props = mutableListOf<Symbol>()
         val members = symbolTable()
@@ -171121,6 +171411,7 @@ interface DataView {
             )
             symbolTypes[propSymbol.id] = elemType
             if (optionalFlags?.getOrNull(i) == true) optionalTupleMemberIds.add(propSymbol.id)
+            if (readonly) mappedReadonlyMemberIds.add(propSymbol.id)
             props.add(propSymbol)
             members[propSymbol.name] = propSymbol
         }
@@ -171139,6 +171430,7 @@ interface DataView {
         } else {
             getUnionType((minLen..maxLen).map { Type.NumberLiteral(it.toDouble()) })
         }
+        if (readonly) mappedReadonlyMemberIds.add(lengthSymbol.id)
         props.add(lengthSymbol)
         members["length"] = lengthSymbol
         tupleObj.properties = props
@@ -171838,14 +172130,16 @@ interface DataView {
                 // `readonly T[]` shorthand: route to globalReadonlyArrayType so the
                 // resulting Type.Reference exposes ReadonlyArray's read-only surface
                 // (no `push`/`pop`/etc.) — pairs with the `ReadonlyArray<T>` branch in
-                // `getTypeFromTypeReference`. For other shapes (e.g. `readonly [T, U]`
-                // tuple) the readonly modifier is a no-op at the type level (TS only
-                // surfaces it via narrower assignment rules we don't yet model).
+                // `getTypeFromTypeReference`. (CHK.93) stage 2: `readonly [T, U]` is a
+                // READONLY TUPLE — a fresh tuple carrying [Type.Object.readonlyTuple], built
+                // from the operand NODE rather than by mutating the operand's own (cached)
+                // tuple. Any other operand keeps today's no-op.
                 val inner = node.type
                 if (inner is ArrayType && globalReadonlyArrayType != null) {
                     val elt = getTypeFromTypeNode(inner.elementType)
                     return getOrInternReference(globalReadonlyArrayType!!, listOf(elt))
                 }
+                if (inner is TupleType) return getTupleType(inner, readonly = true)
                 getTypeFromTypeNode(node.type)
             }
             else -> anyType

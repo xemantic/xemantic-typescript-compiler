@@ -1,3 +1,35 @@
+**(P18.19) — AN ENUM MEMBER KEEPS ITS ENUM AT A RETURN, THE TS2367 CATEGORY RULE TAKES ITS BASES, AND A STRING ENUM STOPS BEING A NUMBER, 17,369 → 17,394 / 0 / 3 predicted (2026-09-05).**
+Two items landed whole and the third partly; every row reproduced against tsgo 7.0.2 AND
+pristine 6.0.3 before any code was written, and **one reference DIVERGENCE was found and
+decided a design**.
+**(CHK.89)** — `function f(): K.A` read `type 'A'` against both references' `'K.A'`: the string
+layer's base name is a `QualifiedName`'s LAST name, and it feeds both renderers. The qualifier is
+an ENUM-MEMBER rule and nothing else (a namespaced INTERFACE prints `'I'` and a whole namespaced
+enum `'Q'` in both references), and its one non-obvious guard came from the CORPUS —
+`SymbolFlags.Enum` is `RegularEnum or ConstEnum` and the binder cascades `ConstEnum` onto a
+`ConstEnumOnly` NAMESPACE, so a flag test rendered `Const.E` and silently disarmed the
+rounds-745-749 same-string retry (`enumAssignmentCompat3`).
+**(CHK.90)** — both halves: the category rule now takes tsc's `getBaseTypesIfUnrelated` base (the
+widened pair is unrelated by CONSTRUCTION there, which is also why the (CHK.88) value rule beside
+it must keep the ORIGINALS), and an ALL-STRING enum's OWN type answers the `"string"` category
+where its MEMBER already did — the two halves of one enum disagreeing about their own flavour,
+which is the silence at `s2 === 3` / `s2 === true`. The fixture is now byte-identical to both
+references on all ten rows.
+**(CHK.83)** — the `readonly` array PARAMETER landed (the ARRAY kind already admitted, missed
+because `isArrayLikeType`'s `Type.Reference` leg names `"Array"` alone) and the ELABORATION
+sub-line landed at all five union-source chain sites. **The PICKER is deliberately untouched: with
+`"a" | 1` against `number[]`, tsgo names the FIRST constituent and pristine the LAST** — pristine is
+the corpus's oracle, so only the rendering moved. INTERSECTION re-measured and still refused (its
+single ours-only row reproduces at `harness/.../vpathUtil.ts:106:30`, and it additionally needs the
+source-display allowlist); the generic `Type.Reference` family newly refused because its LICENCE
+fails — `const d: ArrayLike<string> = s` and `Iterable<string>` are ours-only TS2322 at the
+DECLARATION position.
+25 pins, six arms (5/4/2/7/2/2 RED, one nested pair recorded), one provably-dead line removed with
+its proof. Gates: core **840 / 15,905 / 0 / 3**, generated corpus **25 classes / 8,837 / 0**, the
+seven other modules 0, `cost_gate.py` exit 0 with `output.errors` 46 and this round adding nothing,
+`huge_methods.py --fail-over 0` exit 0, and the 8-profile grid **added=0 removed=0 everywhere** —
+the real gate here, not a control.
+
 **(P18.18) — AN ENUM STOPS OVERLAPPING A LITERAL IT CANNOT HOLD, AN IMPOSSIBLE COMPARISON'S BRANCH BECOMES `never`, AND A PRIMITIVE ARGUMENT STOPS BEING INVISIBLE TO A COMPOSITE PARAMETER, 17,343 → 17,369 / 0 / 3 predicted (2026-09-05).**
 Three of four items landed; every row reproduced against tsgo 7.0.2 AND pristine 6.0.3 before
 any code was written, and the two references agree on all of them.

@@ -1,13 +1,30 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194,650** lines (191,070 when the metric was created; the (P18.9)-(P18.23) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **194,944** lines (191,070 when the metric was created; the (P18.9)-(P18.24) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
 checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.24) — CONST ASSERTIONS BECOME READ-ONLY (STAGE 2 OF (CHK.93), THE ITEM CLOSED), AND THE TUPLE-MEMBER AND BODY-LOCAL-ARGUMENT RESIDUES ARE MEASURED INTO (CHK.94)/(CHK.95), 17,573 → 17,611 / 0 / 3 (2026-09-05).**
+**(CHK.93) stage 2 LANDED.** A const-context object's members are read-only (TS2540, TS2704 instead of a
+pre-existing TS2790 double, `{ readonly v: "a"; }` display), a const array is a readonly tuple unless its
+contextual type has a mutable array-like constituent (tsc's `isMutableArrayLikeType`, measured), the
+`readonly [T, U]` type operator stops being a no-op, members of a readonly tuple fall to `ReadonlyArray`
+(`push` → TS2339), TS4104 replaces TS2740 for readonly→mutable at every position — as pristine's TS2345
+chain at an argument, where tsgo prints a bare TS4104 (the arc's third reference divergence) — and the
+declared-type twin `declare const rt: readonly [1, 2]` went from 2 of 7 rows to 7 of 7. The grid found
+the round's most important fix: B378's guard install put the guard's OWN predicate type into the
+then-branch, "FP-safe" only while `readonly T[]` related to `T[]` — tsc's own `core.ts:1685` became a false
+TS2345 — so it now installs the declared constituent that relates (tsc's `getNarrowedType`). The pin
+walker `checkReadonlyTupleElaboration` is kept (20/22 codes reproduced under PassLab). 38 pins, 15 arms
+RED; core 16,122/0/3, corpus 8,837/0, `cost_gate.py` exit 0, grid 8×`added=0 removed=0`. Read-only recon
+measured 220 cells into two items: every `Array` member READ on a tuple is `any` (an interned
+`Array<union>` base on the miss path is the seam; the corpus has zero baselines that can see it), and the
+argument gate is silent for EVERY body-local scalar / `let` / annotated-primitive local, not only strings.
 
 **(P18.23) — CONST ASSERTIONS STOP BEING `any` (STAGE 1 OF (CHK.93)), AND THE NAME-RESOLUTION SEAM IS CENSUSED FOR (INV.0) STEP 4, 17,516 → 17,573 / 0 / 3 (2026-09-05).**
 **(CHK.93) stage 1 LANDED.** Every object, array and enum-member `as const` was `any` (the `const`
@@ -76,35 +93,3 @@ return / arrow body / assignment positions, where an emitter fires and the push 
 arrives. 30 pins, twelve arms all discriminating, one redundant guard retired by its own arm;
 core 15,935/0, corpus 8,837/0, `cost_gate.py` exit 0, `huge_methods.py` exit 0, grid 8×`added=0
 removed=0`. Residues queued as (CHK.92).
-
-**(P18.19) — AN ENUM MEMBER KEEPS ITS ENUM AT A RETURN, THE TS2367 CATEGORY RULE TAKES ITS BASES, AND A STRING ENUM STOPS BEING A NUMBER, 17,369 → 17,394 / 0 / 3 predicted (2026-09-05).**
-Two items landed whole and the third partly; every row reproduced against tsgo 7.0.2 AND
-pristine 6.0.3 before any code was written, and **one reference DIVERGENCE was found and
-decided a design**.
-**(CHK.89)** — `function f(): K.A` read `type 'A'` against both references' `'K.A'`: the string
-layer's base name is a `QualifiedName`'s LAST name, and it feeds both renderers. The qualifier is
-an ENUM-MEMBER rule and nothing else (a namespaced INTERFACE prints `'I'` and a whole namespaced
-enum `'Q'` in both references), and its one non-obvious guard came from the CORPUS —
-`SymbolFlags.Enum` is `RegularEnum or ConstEnum` and the binder cascades `ConstEnum` onto a
-`ConstEnumOnly` NAMESPACE, so a flag test rendered `Const.E` and silently disarmed the
-rounds-745-749 same-string retry (`enumAssignmentCompat3`).
-**(CHK.90)** — both halves: the category rule now takes tsc's `getBaseTypesIfUnrelated` base (the
-widened pair is unrelated by CONSTRUCTION there, which is also why the (CHK.88) value rule beside
-it must keep the ORIGINALS), and an ALL-STRING enum's OWN type answers the `"string"` category
-where its MEMBER already did — the two halves of one enum disagreeing about their own flavour,
-which is the silence at `s2 === 3` / `s2 === true`. The fixture is now byte-identical to both
-references on all ten rows.
-**(CHK.83)** — the `readonly` array PARAMETER landed (the ARRAY kind already admitted, missed
-because `isArrayLikeType`'s `Type.Reference` leg names `"Array"` alone) and the ELABORATION
-sub-line landed at all five union-source chain sites. **The PICKER is deliberately untouched: with
-`"a" | 1` against `number[]`, tsgo names the FIRST constituent and pristine the LAST** — pristine is
-the corpus's oracle, so only the rendering moved. INTERSECTION re-measured and still refused (its
-single ours-only row reproduces at `harness/.../vpathUtil.ts:106:30`, and it additionally needs the
-source-display allowlist); the generic `Type.Reference` family newly refused because its LICENCE
-fails — `const d: ArrayLike<string> = s` and `Iterable<string>` are ours-only TS2322 at the
-DECLARATION position.
-25 pins, six arms (5/4/2/7/2/2 RED, one nested pair recorded), one provably-dead line removed with
-its proof. Gates: core **840 / 15,905 / 0 / 3**, generated corpus **25 classes / 8,837 / 0**, the
-seven other modules 0, `cost_gate.py` exit 0 with `output.errors` 46 and this round adding nothing,
-`huge_methods.py --fail-over 0` exit 0, and the 8-profile grid **added=0 removed=0 everywhere** —
-the real gate here, not a control.

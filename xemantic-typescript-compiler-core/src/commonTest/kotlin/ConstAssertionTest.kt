@@ -30,7 +30,8 @@ import kotlin.test.Test
 
 /**
  * (CHK.93) STAGE 1 — const assertions (`x as const`, `<const>x`) carry LITERAL types
- * through a const context; readonly-ness is stage 2. Every row was reproduced against
+ * through a const context — and STAGE 2, readonly-ness (see the section at the bottom
+ * and [ReadonlyTupleTest] for the declared-type twin). Every row was reproduced against
  * tsgo 7.0.2 AND pristine `typescript@6.0.3` before any code was written (the recon's
  * `chk85c/` r01-r30 plus the probes of this round); the two references agree on every
  * row bar one union member ORDER (noted where it applies).
@@ -59,11 +60,18 @@ import kotlin.test.Test
  *     an ours-only TS2322 `'string'` with no `as const` anywhere) and prints the literal
  *     where it does not relate.
  *
- * STAGE-2 EDGES, pinned at TODAY's answer so the next stage's diff is legible: the
- * readonly display (`{ readonly v: "a"; }` / `readonly [1, 2]` read bare here), TS4104
- * for a const tuple against a mutable array (silent here), TS2540 on a const-asserted
- * member (silent here for a literal write, TS2322 for an enum-member write), `push` on
- * a const tuple (silent), TS2493 out of range (silent).
+ * STAGE 2 — READONLY-NESS (landed after stage 1):
+ * (f) a const-context object member is READ-ONLY — the minted member (property,
+ *     shorthand, method, and a spread COPY made inside a const context) joins the
+ *     `Readonly<T>` / `Object.freeze` side-channel, so a write is TS2540, a `delete` is
+ *     TS2704, and the display carries `readonly `; a spread OUTSIDE a const context keeps
+ *     the literal types and drops the bit (tsc `getSpreadType`'s `readonly` argument).
+ * (g) a const array is a READONLY TUPLE unless its contextual type has a MUTABLE
+ *     array-like constituent (tsc's `isMutableArrayLikeType`) — its members fall to
+ *     `ReadonlyArray` (`push` → TS2339), it never relates to a mutable array or tuple
+ *     (TS4104 at every position), its slots are read-only (TS2540 `'0'`), and it displays
+ *     `readonly [1, 2]`.
+ * Still recorded at today's answer: TS2493 out of range (r20) — not modelled.
  *
  * RECORDED residues (ours): the argument elaboration through a const assertion prints
  * the TARGET literal widened (`'string'` for `"b"` — (CHK.92)(a)'s emitter, not this
@@ -258,13 +266,11 @@ class ConstAssertionTest {
 
     @Test
     fun `the never arm prints the const-context types`() {
-        // FORM residue recorded: the object prints `{ v: "a"; }` and the tuple `[1, 2]`
-        // where both references print `{ readonly v: "a"; }` / `readonly [1, 2]` — stage 2.
         val src = "const o1 = { v: \"a\" } as const; probe(o1); const a1 = [1, 2] as const; probe(a1); " +
             "const e1 = K.A as const; probe(e1); probe(({ v: \"a\" } as const).v); probe(([1, 2] as const)[0])"
         assert(messages(src) == listOf(
-            "Argument of type '{ v: \"a\"; }' is not assignable to parameter of type 'never'.",
-            "Argument of type '[1, 2]' is not assignable to parameter of type 'never'.",
+            "Argument of type '{ readonly v: \"a\"; }' is not assignable to parameter of type 'never'.",
+            "Argument of type 'readonly [1, 2]' is not assignable to parameter of type 'never'.",
             "Argument of type 'K.A' is not assignable to parameter of type 'never'.",
             "Argument of type '\"a\"' is not assignable to parameter of type 'never'.",
             "Argument of type '1' is not assignable to parameter of type 'never'.",
@@ -306,11 +312,10 @@ class ConstAssertionTest {
     }
 
     @Test
-    fun `a nested array member is a tuple whose element reads its literal`() {
-        // FORM residue recorded: `[1, "a"]` for the references' `readonly [1, "a"]`.
+    fun `a nested array member is a readonly tuple whose element reads its literal`() {
         assert(messages("const zo = { x: [1, \"a\"] } as const; const zs: \"b\" = zo.x[1]; const zn: number = zo.x") == listOf(
             aNotB,
-            "Type '[1, \"a\"]' is not assignable to type 'number'.",
+            "Type 'readonly [1, \"a\"]' is not assignable to type 'number'.",
         ))
     }
 
@@ -369,18 +374,17 @@ class ConstAssertionTest {
     }
 
     @Test
-    fun `an empty const array is an empty tuple`() {
-        // FORM residue recorded: `[]` for the references' `readonly []`.
+    fun `an empty const array is an empty readonly tuple`() {
         assert(messages("const ze = [] as const; const zn: number = ze") ==
-            listOf("Type '[]' is not assignable to type 'number'."))
+            listOf("Type 'readonly []' is not assignable to type 'number'."))
     }
 
     @Test
-    fun `a const tuple relates to an array of its element type`() {
+    fun `a const tuple under a mutable array context is mutable and relates`() {
         // Both references are SILENT on the first two: the contextual `number[]` is a
-        // MUTABLE array-like, so tsc's tuple is mutable and assignable — the
-        // mutability half is stage 2 (here every tuple is mutable, so the silence is
-        // pinned and the readonly half recorded). The third is the negative control.
+        // MUTABLE array-like, so the tuple is mutable and assignable (stage 2's
+        // `isMutableArrayLikeType` subtlety); a readonly context keeps it readonly, which
+        // relates too. The third is the negative control.
         assert(messages("const zarr: number[] = [1, 2] as const; zarr.push(3)").isEmpty())
         assert(messages("const zt = [1, 2] as const; const zr: readonly number[] = zt").isEmpty())
         val d = diagnose(prelude + "const zs2: string[] = [1, 2] as const")
@@ -503,50 +507,153 @@ class ConstAssertionTest {
     }
 
     // ---------------------------------------------------------------------
-    // Stage-2 edges, pinned at today's answer (the KDoc names the reference's)
+    // Stage 2 (g): the const array is a READONLY tuple
     // ---------------------------------------------------------------------
 
+    private fun ts4104(source: String, target: String) =
+        "The type '$source' is 'readonly' and cannot be assigned to the mutable type '$target'."
+
     @Test
-    fun `stage-2 edge - a const tuple against a mutable array is silent - r03`() {
-        // tsc: TS4104 `The type 'readonly [1, 2]' is 'readonly' and cannot be assigned to
-        // the mutable type 'number[]'.` — readonly-ness is stage 2.
-        assert(messages("const zt = [1, 2] as const; const zarr: number[] = zt").isEmpty())
-        assert(messages("const ze = [] as const; const za: number[] = ze").isEmpty())
+    fun `a const tuple against a mutable array is TS4104 - r03`() {
+        val src = "const zt = [1, 2] as const; const zarr: number[] = zt"
+        val d = diagnose(prelude + src)
+        assert(d.map { it.message } == listOf(ts4104("readonly [1, 2]", "number[]")))
+        assert(d[0].code == 4104)
+        assert(d[0].line == rowLine)
+        assert(d[0].character == col(src, "zarr"))
+        assert(d[0].length == 4)
+        assert(d[0].messageChain.isEmpty())
+        assert(messages("const ze = [] as const; const za: number[] = ze") == listOf(ts4104("readonly []", "number[]")))
     }
 
     @Test
-    fun `stage-2 edge - push on a const tuple is silent - r09`() {
-        // tsc: TS2339 `Property 'push' does not exist on type 'readonly [1, 2]'.`
-        assert(messages("const zt = [1, 2] as const; zt.push(3)").isEmpty())
+    fun `a const tuple against a mutable tuple is TS4104 and readonly targets accept it - r18`() {
+        val src = "const zt = [1, 2] as const; const zu: [1, 2] = zt; const zr: readonly [1, 2] = zt; const za: readonly number[] = zt"
+        val d = diagnose(prelude + src)
+        assert(d.map { it.message } == listOf(ts4104("readonly [1, 2]", "[1, 2]")))
+        assert(d[0].character == col(src, "zu"))
     }
 
     @Test
-    fun `stage-2 edge - a literal write to a const-asserted member is silent - r10`() {
-        // tsc: TS2540 `Cannot assign to 'v' because it is a read-only property.`
-        assert(messages("const zo = { v: \"a\" } as const; zo.v = \"a\"").isEmpty())
+    fun `push on a const tuple is TS2339 on the readonly display - r09`() {
+        val src = "const zt = [1, 2] as const; zt.push(3)"
+        val d = diagnose(prelude + src)
+        assert(d.map { it.message } == listOf("Property 'push' does not exist on type 'readonly [1, 2]'."))
+        assert(d[0].code == 2339)
+        assert(d[0].character == col(src, "push"))
+        assert(d[0].length == 4)
+        assert(messages("const zt = [1, 2] as const; const zs = zt.slice(); const zn: number = zt.length; zt.nope") ==
+            listOf("Property 'nope' does not exist on type 'readonly [1, 2]'."))
     }
 
     @Test
-    fun `stage-2 edge - an enum write to a const-asserted member is the literal mismatch - r30`() {
-        // tsc: TS2540 at `v`; here the member's kept `K.A` refuses `K.B` through (e).
-        val d = diagnose(prelude + "const zo = { v: K.A } as const; zo.v = K.B")
-        assert(d.map { it.message } == listOf("Type 'K.B' is not assignable to type 'K.A'."))
+    fun `a const tuple slot write is TS2540 on the slot`() {
+        val src = "const zt = [1, 2] as const; zt[0] = 1"
+        val d = diagnose(prelude + src)
+        assert(d.map { it.message } == listOf("Cannot assign to '0' because it is a read-only property."))
+        assert(d[0].code == 2540)
+        assert(d[0].character == colLast(src, "0"))
     }
 
     @Test
-    fun `stage-2 edge - the const object and tuple display bare - r12 and r26`() {
-        // tsc: `{ readonly v: "a"; readonly n: 1; readonly b: true; }` and `readonly [1, 2]`.
-        assert(messages("const zo = { v: \"a\", n: 1, b: true } as const; const zz: number = zo") ==
-            listOf("Type '{ v: \"a\"; n: 1; b: true; }' is not assignable to type 'number'."))
+    fun `the const tuple displays with the readonly prefix - r26`() {
         assert(messages("const zt = [1, 2] as const; const zz: string = zt") ==
-            listOf("Type '[1, 2]' is not assignable to type 'string'."))
+            listOf("Type 'readonly [1, 2]' is not assignable to type 'string'."))
     }
 
     @Test
-    fun `stage-2 edge - a readonly tuple annotation and an out-of-range index are silent - r18 and r20`() {
-        // tsc: TS4104 for `const zu: [1, 2] = zt`; TS2322 `undefined` + TS2493 for `zt[5]`.
-        assert(messages("const zt = [1, 2] as const; const zu: [1, 2] = zt; const zr: readonly [1, 2] = zt").isEmpty())
+    fun `a const array under a mutable contextual type at every position stays mutable`() {
+        // tsc `checkArrayLiteral`: readonly only when NO constituent of the contextual
+        // type is a mutable array-like — the return, argument, assignment, class
+        // property and union-annotation contexts are all passed through the assertion.
+        assert(messages("function zf(): number[] { return [1, 2] as const }").isEmpty())
+        assert(messages("declare function zg(x: number[]): void; zg([1, 2] as const)").isEmpty())
+        assert(messages("let za: number[] = []; za = [1, 2] as const").isEmpty())
+        assert(messages("class ZC { p: number[] = [1, 2] as const }").isEmpty())
+        assert(messages("const zu: number[] | string = [1, 2] as const").isEmpty())
+        assert(messages("const zc: { x: number[] } = { x: [1, 2] } as const").isEmpty())
+    }
+
+    @Test
+    fun `a const array under a readonly contextual type is readonly`() {
+        assert(messages("const zro: readonly number[] = [1, 2] as const; zro.push(3)") ==
+            listOf("Property 'push' does not exist on type 'readonly number[]'."))
+        assert(messages("const zo = { x: [1, 2] } as const; const zn: number = zo.x") ==
+            listOf("Type 'readonly [1, 2]' is not assignable to type 'number'."))
+    }
+
+    @Test
+    fun `residue - an out-of-range const tuple index is silent - r20`() {
+        // tsc: TS2322 `undefined` + TS2493 — not modelled.
         assert(messages("const zt = [1, 2] as const; const zu: number = zt[5]").isEmpty())
+    }
+
+    // ---------------------------------------------------------------------
+    // Stage 2 (f): const-context members are read-only
+    // ---------------------------------------------------------------------
+
+    private fun ts2540(name: String) = "Cannot assign to '$name' because it is a read-only property."
+
+    @Test
+    fun `a literal write to a const-asserted member is TS2540 alone - r10`() {
+        val src = "const zo = { v: \"a\" } as const; zo.v = \"a\""
+        val d = diagnose(prelude + src)
+        assert(d.map { it.message } == listOf(ts2540("v")))
+        assert(d[0].code == 2540)
+        assert(d[0].line == rowLine)
+        assert(d[0].character == colLast(src, "v = "))
+        assert(d[0].length == 1)
+    }
+
+    @Test
+    fun `an enum write to a const-asserted member is TS2540 alone - r30`() {
+        // tsc reports the readonly write and does NOT judge the value (B435's rule).
+        val src = "const zo = { v: K.A } as const; zo.v = K.B"
+        val d = diagnose(prelude + src)
+        assert(d.map { it.message } == listOf(ts2540("v")))
+        assert(d[0].character == colLast(src, "v = "))
+    }
+
+    @Test
+    fun `a method and a shorthand member of a const object are read-only`() {
+        val src = "const zo = { m() { return 1 } } as const; zo.m = () => 2"
+        val d = diagnose(prelude + src)
+        assert(d.map { it.message } == listOf(ts2540("m")))
+        assert(d[0].character == colLast(src, "m = "))
+        val src2 = "const zv = \"a\"; const zs = { zv } as const; zs.zv = \"a\""
+        val d2 = diagnose(prelude + src2)
+        assert(d2.map { it.message } == listOf(ts2540("zv")))
+        assert(d2[0].character == colLast(src2, "zv = "))
+    }
+
+    @Test
+    fun `a spread inside a const context is read-only`() {
+        val src = "const zc = { v: \"a\" } as const; const zm = { ...zc } as const; zm.v = \"b\""
+        val d = diagnose(prelude + src)
+        assert(d.map { it.message } == listOf(ts2540("v")))
+        assert(d[0].character == colLast(src, "v = "))
+    }
+
+    @Test
+    fun `delete of a const-asserted member is TS2704 alone`() {
+        val src = "const zo = { v: \"a\" } as const; delete zo.v"
+        val d = diagnose(prelude + src)
+        assert(d.map { it.message } == listOf("The operand of a 'delete' operator cannot be a read-only property."))
+        assert(d[0].code == 2704)
+        assert(d[0].character == colLast(src, "zo.v"))
+        assert(d[0].length == 4)
+    }
+
+    @Test
+    fun `negative control - a plain object literal member stays writable`() {
+        assert(messages("const zo = { v: \"a\" }; zo.v = \"b\"; const zt = [1, 2]; zt.push(3); zt[0] = 5; delete zo.v").map { it } ==
+            listOf("The operand of a 'delete' operator must be optional."))
+    }
+
+    @Test
+    fun `the const object displays its members with the readonly prefix - r12`() {
+        assert(messages("const zo = { v: \"a\", n: 1, b: true } as const; const zz: number = zo") ==
+            listOf("Type '{ readonly v: \"a\"; readonly n: 1; readonly b: true; }' is not assignable to type 'number'."))
     }
 
     // ---------------------------------------------------------------------

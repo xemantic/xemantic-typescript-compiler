@@ -1,3 +1,119 @@
+### Round (P18.13) — the augmentation residues: a package augmentation stops inventing two errors, and a block's own declarations become visible and importable (2026-09-04)
+
+**Full suite after the round: 17,224 → 17,236 / 0 / 3** (run by the orchestrating session; externals 290/0 with the Kotlin/JS gate live).
+
+**(CHK.82) LANDED IN PART — three of the four residues, plus a display defect found beside
+them; residue (4) MEASURED AND REFUSED as a whole-program logical-parity question.** Each
+reproduced on a scratch project against `tools/tsgo-7.0.2/lib/tsc` and re-measured after.
+
+| # | shape | tsgo 7.0.2 | ours BEFORE | ours AFTER |
+|---|---|---|---|---|
+| 1 | `declare module "./types" { interface ZzzLocal {…}; interface SourceFile { p: ZzzLocal } }`, then `sf.p` | `Type 'ZzzLocal'` | **silent** (`any`) | `Type 'ZzzLocal'` |
+| 1b| the same with a block-declared `type ZzzAl` | `Type 'ZzzAl'` | silent | `Type 'ZzzAl'` |
+| 2 | `import { Brand } from "./types.js"` beside `declare module "./types.js" { export interface Brand {…} }` | silent | **false TS2305** | silent |
+| 3 | `declare module "some-pkg"` with the package installed | silent | **false TS2664** + **false TS2339** on the package's own member | silent |
+| 4 | a module-declared enum in a TS2322 | `import("…/types").ZzzEnum` | `ZzzEnum` | `ZzzEnum` (REFUSED, see below) |
+
+**(1) is one narrowing, and the narrowing is the whole design.** `augmentationContextSymbol`
+answered the augmented module's symbol only for a name the TARGET exports; everything else fell
+to the per-file consult, which cannot see the block's own `exports` (the binder fills them in
+`bindModuleDeclaration`). The second leg asks the block — **only for a name the target does NOT
+export**, which is exactly what keeps (CHK.76)'s measured +43 rows away: a block's PARTIAL
+re-declaration is by definition of a name the target exports, so it can never shadow the merged
+one. Both callers now thread the `ModuleDeclaration` NODE rather than its specifier string.
+
+**A display defect fell out of (1) and is fixed with it.** B86.4's namespace-qualification ascent
+walks `Symbol.parent` while the parent is a module symbol — and a STRING-named module's
+`Symbol.name` IS THE SPECIFIER, so a newly-visible block-declared alias rendered
+`'./types.js.ZzzAl'`, a spelling tsc never produces. Measured on `@types/node`, that ascent was
+ALREADY wrong for every ambient module: `events.DefaultEventMap`, `zlib.CompressCallback`,
+`net.LookupFunction`, `crypto.webcrypto.BigInteger`, and `node:test.test.SuiteFn` — which
+contains a colon.
+
+**(2) is a pure absence-check defect: the TYPE always resolved.** Measured over a seven-shape
+matrix (`interface`/`type`/`enum`/`class`/`const`/`function`, exported and not), all seven types
+were correct before the fix and all seven imports were false TS2305.
+`augmentationDeclaredExportNames` reads the binder's own block `exports` and applies the SAME
+export-modifier predicate the merge applies — extracted as `augmentationMergesSymbol`, one home
+and two consumers, because a hand-written second copy would drift in exactly one block shape.
+Both branches of `checkNamedImportExistence` (import and re-export) take it, additively.
+
+**(3) is ONE cause with two costumes, and it is the most common shape of the four** — every
+`declare module "express"` / `"vue"` over an installed package. No resolver leg could name a bare
+specifier's target (that is a `package.json` `types`/`main` entry, not a string transformation),
+so `targetFile` was null and `collectModuleAugmentations` took the FILELESS-AMBIENT branch:
+the block's partial `interface Widget` went into `globals` as a stub (round 510's mechanism), so
+the package's own `base` read TS2339, while the target-locals merge never fired.
+`augmentationTargetFile` is now the one home for the ladder — the base resolver, the round-443
+`.js`-aware wrapper, the crawl's own `(importer, specifier)` answer ((CHK.30)/(CHK.78)), and for
+a BARE specifier only, the crawl's answer as recorded for any OTHER file, **which every recording
+file must AGREE on** (node resolves a bare specifier from the importer's directory upward, so a
+nested `node_modules` legitimately gives two answers; a wrong target merges an augmentation into
+another package's module and (CFG.1) says nothing here would print that).
+
+**(4) REFUSED, and the measurement is why: it is not an augmentation residue at all.** With NO
+`declare module` anywhere in the program, `export enum ZzzEnum` in a module file renders
+`import("…/types").ZzzEnum` under BOTH tsgo 7.0.2 and pristine `typescript@6.0.3`, where we
+render `ZzzEnum`. So it is a whole-program display question. The corpus carries **103** baselines
+using the `import("…")` form and we satisfy them today through **hard-coded `pinDiag` sites**,
+not a mechanism — and `enumAssignmentCompat6.errors.txt` prints BOTH forms in one message, so the
+rule is tsc's `getAccessibleSymbolChain` ACCESSIBILITY test, a node-builder feature. Landing it
+would rewrite those pins and reach every message naming such a type. Logical-parity conversation,
+requeued.
+
+**(CHK.81)'s two remaining sub-items: BOTH MEASURED, BOTH REFUSED, and both were mis-stated in
+the queue.**
+
+*No TS2304 for `Unknown.Foo`* — the code is **TS2503**, not TS2304, the bare-name TS2304 fires
+correctly beside it, and the axis is **`declare`**, not `declare module`: a PLAIN `namespace`
+body reports it and a `declare namespace` body does not. The suppression is **B367**, explicit
+and documented at `spineUResEmit`/`spineUResMarkFilter` — inside an ambient `ModuleDeclaration`
+body the family keeps ONLY TS2304/TS2552, because "qualified-name resolution and body-position
+TS2314 are still FP-prone in ambient cross-namespace scope (Blocker #3)". Lifting it re-opens
+the whole family inside every ambient body across ~13k baselines. A separate and wider finding
+from the same probe: in a **`.d.ts`** file we report NONE of the seven unresolved-name shapes
+tsgo reports, ambient or not.
+
+*The literal-union alias display* — not an alias question and not an ambient one. `("a" as "a" |
+"b")` assigned to `number`, with no alias and no `declare module` in the program, is
+`Type 'string'` under pristine 6.0.3 and `Type '"a" | "b"'` here. The rule, derived from a
+seven-target matrix against pristine: **a literal-union source collapses to its base primitive
+exactly when the target holds no literal of that base** — `number`, `boolean`, `{x:number}`
+collapse; `never`, `"a" | "c"`, `1 | 2` KEEP the union (and the six corpus baselines that print a
+literal union are all of the keeping kind), and a mixed `"a" | 1` renders `string | number`. It
+is systematic across TS2322 and TS2345 at declaration, argument, return and object-literal-member
+positions. FORM per `docs/logical-parity.md` (identical code, span and verdict), and its only
+gate is the full corpus suite, which this session may not run. Requeued with the rule.
+
+Two more pre-existing divergences recorded in passing from the same matrix: `const t: {x:number}
+= u` where `u: "a" | "b"` reports **nothing** here and TS2322 under pristine (a false negative,
+not a display issue); and union member ORDER, `'2 | 1'` under pristine against our `'1 | 2'`.
+
+**Pins** — `ModuleAugmentationResidueTest`, 12, all through the (CHK.78) direct-`Checker`
+harness (a `diagnose()` pin is vacuous for residue (3): `moduleResolutions` is empty there by
+construction). **Ablation, one mistake at a time, eight arms, every one discriminating with its
+own red set**: a1 the block-exports leg (2 RED), a2 the string-module ascent break (2), a3 the
+TS2305 suppression at both branches (3), a4 the export-modifier predicate — over-suppression (1),
+a5 the merge's target ladder (1), a6 the TS2664 gate (1), a7 the whole bare-specifier leg (2),
+a8 the cross-file AGREEMENT guard (1). Source restored and rebuilt after every arm, confirmed by
+`javap`.
+
+**Gates.** Filtered `*Augment*`/`*Module*`/`*Import*`/`*Export*` **1,468 / 0 / 0**;
+`cost_gate.py` **exit 0** (`output.errors` 46 unchanged, largest counter move `globals.lookups`
+−0.49%, all inside ±2%); `huge_methods.py --fail-over 0` **exit 0** (832 classes, 0 over);
+the 8-profile grid **all eight `added=0 removed=0`** (`scripts/chk82-grid.sh`, two snapshotted
+class dirs, self-comparison and marker checks armed); externals `jvmTest` **290 / 0**; and the
+`@types/node` per-module receipt over all 49 declaration files — **the generated Kotlin CODE is
+byte-identical** (verified by stripping `/* xtsc: … */` markers and `diff -rq`: no difference at
+all), the census totals are identical to the digit (4,709 markers / 137 categories / 2,833
+unmapped occurrences / 521 distinct / 6,462 declarations / 3 checker diagnostics), and the only
+movement is inside marker COMMENTS, where the specifier prefix that B86.4 wrongly added is now
+gone — byte-identical in code, strictly better in text.
+
+**NOT ATTEMPTED, deliberately:** (CHK.81)'s third sub-item, (CHK.73)'s untyped module symbol
+(`p.v` / `p.f()` / `new p.ctor()` through `import p = require("p")`) — a documented blocker
+needing a static-side type for a class value, refused on instruction.
+
 ### Round (P18.12) — cross-module heritage: the 179 refused supertypes of `@types/node` become supertypes, and the set still compiles (2026-09-04)
 
 **(CHK.78) LANDED — three augmentation divergences, and the first was FAR broader than the item
