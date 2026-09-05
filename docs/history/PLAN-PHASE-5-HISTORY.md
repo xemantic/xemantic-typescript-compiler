@@ -1,5 +1,113 @@
 ### Round (INC.91) — the reopened closure, censused the same day and refused on soundness
 
+### Round (P18.8) — Stage 2 of the inversion: the post-hoc type oracle lands, and its price is attributed before it is recorded (2026-09-02)
+
+**(INV.2) LANDED, owner-approved this session.** `TypeOracle` (`TypeOracle.kt`, core): the
+proto.go-shaped, node-addressed query surface over ONE finished check — `typeAt`,
+`symbolAt`/`symbolsAt`, `resolvedCallAt`/`resolvedSignatureAt`, `contextualTypeAt`,
+`typeOfSymbolAt` served from the (INV.1) store, the bin-A rows (`typeOfSymbol`,
+`declaredTypeOfSymbol`, `aliasedSymbol`, `propertyOfType` as the COLLECTION question,
+`propertiesOfType`, `apparentType`, `baseTypes`, `typeArguments`, `typesOfType`,
+`callSignaturesOfType`, `constructSignaturesOfType`, `returnTypeOfSignature`,
+`parametersOfSignature` + the declaration-read `parameterDeclarationsOfSignature`,
+`isAssignableTo`, `typeToString`, `typeFromTypeNode`, `constantValue`, `intrinsicType`)
+through an `OracleLens` — the at-rest twin of `CheckedLens` — and `resolveName` /
+`symbolsInScope` REFUSED with an `OracleRefusal` naming Stage 3 / B83.5. Per-build
+`OracleHandles` (generation-checked, refused after release or `close()`); `close()` on edit.
+Entries: `typeOracleOf(files, options)` and `ProjectCompiler.build(…, oracleHolder)`
+(threaded like `recheckHolder`, sequential forced, `recheckOnly` refused). Per-row
+divergence table: `docs/type-oracle.md`. **The store grew three channels** — `symbols`
+(Symbol-or-List per name, alias NOT followed), `calls` (`IntKeyMap<ResolvedCall>` with the
+candidate count), `contextual` ((API.10)'s walk) — all from the one visit behind the type's
+first-wins gate. 23 pins (`TypeOracleTest`), every walk-scoped row on a VALUE the post-hoc
+path gets wrong, refusals pinned as refusals, the handle table on its three refusals, the
+project entry on the file set + a recorded answer + the partition refusal, a channel-mask
+pin. Suite **16,838 → 16,860 / 0 / 3**; cost_gate +0.00 % on all 20; huge_methods clean;
+build warning-clean.
+
+**THE MEASUREMENT, AND WHAT IT FOUND.** The design says measure flag-on before any later
+stage is priced, so the Stage-2 store was priced warm, rotated, on both shapes. First
+full-on arm on the compiler profile: **8,337 / 8,466 ms against 5,073 / 5,385 — +57-64 %**,
+against Stage 1's +14.9 %. Rather than record it, a `NodeAnswers.channels` measurement seam
+(`BenchMain … nodeAnswers:<types|symbols|calls|contextual>`) attributed it in four arms:
+types-only 5,998 (Stage 1 reproduced), calls +220 ms (4.1 µs per call, KIR's own price),
+contextual +145 ms, **symbols +2,142 ms**. A JFR of the symbols arm charged **11.3 % of all
+samples to `IntKeyMap.set`/`grow` under `getTypeOfObjectLiteral` ← `getTypeOfExpression`**:
+the object-literal KEY leg re-typed its literal once per key, and `getTypeOfExpression` has
+no per-node memo (round 737) — `getTypeOfObjectLiteral` mints the member table on every
+call — so tsc's diagnostic-message tables cost O(keys²). The spine is preorder, so the
+literal's type is in the store before its keys: `nodeAnswerTypeOrCompute` reads it (and the
+member-access receiver likewise; off the store it is the old computation verbatim, the
+capture measurement pins re-run green). After: symbols +258 ms, and the whole store
+**compiler profile 5,270 → 6,404 ms, +21.5 %, 1.90 µs per recorded expression** (598,455:
+360,627 symbols, 53,066 calls, 78,127 contextual); **many-small-2400-dom 3,457/3,439 →
+3,654/3,685, +5.7 / +7.1 %, 0.95 µs** (232,106). (INV.1b) is half-answered: the companions
+are pure RESOLUTION (+6 % on top of the type), the reconstruction is paid once per node.
+
+**(EXT.10) LANDED in the same session — the externals ladder's alias-reference rung.** A
+reference to an exported alias this generation EMITS renders by name wherever the resolved
+body has no Kotlin spelling: a generic instantiation (`h: Handler<string>` →
+`Handler<String>`, arguments rendered from their own annotations, arity exact — a use
+relying on a defaulted alias parameter falls back) and a function-typed non-generic alias
+(`type Cb = (done: boolean) => void` is now EMITTED — the non-generic alias body goes through
+the annotation path, resolved-first, syntactic for a function type — and its uses spell
+`Cb`). Identity evidence, never spelling: a new `CheckedLens.typeReferenceSymbol` (the
+definition channel's free-name resolution, import alias followed; a qualified name refused),
+matched against the exported alias declarations, and the alias must itself be renderable
+(memoised by running its own collection at the reference — the reference may be walked
+first). The Dukat pin is untouched: a mapped body still renders resolved (`Species` →
+`String`). Seven pins: members/signatures/top-level, the function-typed alias, the Dukat
+control, a skipped alias, an omitted defaulted argument, a lib alias (`Record<string,
+number>`), and a cross-file import beside a same-named non-exported local. Externals
+80/0, both library gates green. Suite 16,860 → 16,867 / 0 / 3.
+
+**(INV.1b) ANSWERED, one bit later.** `NodeAnswers.TYPES` clear records `anyType` without
+resolving — the reconstruction-only arm. Compiler profile, rotated: reconstruction
+**5,290 / 5,266 ms = the plain check (5,270)**, types **6,158 / 6,121** — the reconstruction
+(eight-field save/restore + `withCtaFrameLocals` + the store write) is FREE and the whole
+1.45 µs per expression is `getTypeOfExpression` typing again what the walk had typed: there
+is no per-node memo, so the store's population is a 1 : 1 re-typing, which is also the
+mechanism behind the key-leg finding. many-small single draws (types 3,738 / reconstruction
+3,541 / off 3,326) are inside that shape's ±40 % band and indicative only. Pinned in
+`TypeOracleTest` (placeholder at every expression; real types under the TYPES bit).
+
+**What did NOT happen.** `Project` does not hand out an oracle — queued as (INV.2b) with the
+invalidation question stated; EXT/LSP were not migrated (served today). The
+`leaf_owner_profile.py --inclusive-of` filter printed the same table for every method name
+it was given (it did not filter); the attribution came from a three-frame caller census of
+the `IntKeyMap.set` stacks instead — worth knowing before trusting that flag. One CLAUDE.md
+entry: a store channel may not re-type what the walk already recorded, and a flag-on cost
+is attributed per channel before it is recorded.
+
+### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
+
+**(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
+own-TP resolution (the measured mechanism: the lens at an interface-declaration callback
+resolves a bare `T` to `any` — an interface's TPs are not the reconstructed fn-TP
+ambient), interface references under POSITIVE `===` identity evidence, `public typealias`
+for mappable exported aliases (uses still resolve — the Dukat pin holds), top-level
+functions (nested ones stay silent by ===-membership; overloads loudly skipped),
+function-TYPE annotations mapped recursively with whole-annotation refusal on
+generic/optional-param/rest shapes (an optional parameter is ARITY, not nullability),
+optional methods flipped to nullable function-typed properties. The compile-gate variant
+renders non-external functions with the body `= null!!` — Nothing-typed, legal for any
+return type, built-ins only, which is what the zero-classpath metadata compile allows.
+Gate fixture carries every new shape; negative control intact.
+
+**(API.18) ATTEMPTED TWICE AND REVERTED, WITH THE MECHANISM RECORDED IN THE QUEUE ITEM:**
+no span-arithmetic fix exists — at EOF a true container of the final token and a node
+merely ABUTTING it share `(pos, rawEnd)` exactly, so the fix is `pathAt`'s
+sibling-bound descent (round 910's own prescription), with the derived per-token
+ownership rule and the five reddening EOF-population pins written down for the next
+attempt. Tree restored, both module suites re-verified green.
+
+**SESSION CLOSE.** Full-suite state across all nine modules: **16,764 / 0 failures / 3
+skipped** (+87 this session: 15+14 externals, 42+16 lsp); `cost_gate.py` exit 0, every
+counter unchanged — the whole Phase 18 arc landed without touching a single checker
+counter, which is the (INC-closure) directive holding by construction.
+
+
+
 **(INC.90) REOPENED THE CLOSURE ON A 12.7x MEASUREMENT AND THIS CENSUS REFUSES THE PROPOSAL
 WITHOUT TOUCHING THAT NUMBER** — the prize is real, the stopping signal is not.
 `Inc91ClosureCensusMain`, counts not milliseconds, two reproducing runs.

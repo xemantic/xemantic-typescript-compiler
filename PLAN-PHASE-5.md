@@ -25,6 +25,136 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.18) — an enum stops overlapping a literal it cannot hold, an impossible comparison's branch becomes `never`, and a primitive argument stops being invisible to a composite parameter (2026-09-05)
+
+**Full suite after the round: 17,343 → 17,369 / 0 / 3 — exactly the 26 new pins, no baseline moved, no `LogicalParityDivergence`, as predicted** (run by the orchestrating session; the module sum reconciles: 15,880 core + 290 + 848 + 159 + 58 + 30 + 18 + 20 + 66).
+
+**THREE of the four items LANDED; (CHK.85) STOPPED for the second time, now with the
+measurement its queue entry asked for.** Every row below was reproduced against tsgo 7.0.2
+AND pristine `typescript@6.0.3` BEFORE any code was written, and the two references agree
+on every one of them — no reference divergence was found this round.
+
+**(CHK.85) STOPPED — (a) was BUILT and it costs MEANING on every profile.** The item's
+queue entry asked for the blast radius before landing, and here it is: with the
+object-literal member widening in
+place the 8-profile grid reads **+7 added rows on every profile and +22 on harness**, all
+of them DISCRIMINATED-UNION SELECTION losses — `{ type: UpToDateStatusType.…, … }` against
+`UpToDateStatus` in `tsbuildPublic.ts`, `{ kind: InvocationKind.… }` against `Invocation`
+in `signatureHelp.ts`, `{ definition: { type: DefinitionKind.… } }` against
+`SymbolAndEntries` in `findAllReferences.ts`, and eight more. So the widening RULE is
+right (its contextual keep is tsc's `isLiteralOfContextualType`, and the two true
+positives and the ours-only false positive it fixes are all real) and what is missing is
+the CONTEXT reaching `getTypeOfObjectLiteral` at those sites. **Two facts the round adds to
+the item.** (a) is not the lost true positive the entry describes but a lost true positive
+AND an ADDED false positive: with `const o = { v: K.A }`, `o.v = K.B` is an ours-only
+`TS2322` today (the member's declared type is the singleton) and both references accept it.
+And the widening is ONLY missing for enums, for a structural reason — an object-literal
+member's value is typed by `getTypeOfExpression`, which answers the BASE primitive for a
+literal node, so a string/number/boolean member is already widened by construction and an
+enum-member ACCESS is the one literal-like type that survives into a member. (c) is not an
+enum question at all: `({ v: "a" } as const).v` and `[1, 2] as const` are equally
+unmodelled, so a const ASSERTION is a FEATURE, not a residue.
+
+**(CHK.88) LANDED.** `ka === 1` with `ka: K.A` (`A = 0`) reads `… the types 'K.A' and '1'
+have no overlap.` in both references and was silent here. It is deliberately NOT (CHK.86)'s
+rule — that one is gated to both operands being enum-flavored and answers from enum
+IDENTITY, where this needs the member VALUES — so it is a sibling helper reusing round
+745's `enumKnownDomainValues`, whose refusal for a *computed* enum is exactly what keeps
+`declare enum D { X, Y }` and `enum Comp { X = "ab".length }` accepting every literal in
+all three compilers. Measured rows: a member, a whole enum, `-1`, a `const` enum, a
+bit-shift enum, `!==`, and a string enum's `sp === "z"`. The literal must be read off the
+AST (`literalTypeOfExpression`) because `getTypeOfExpression` answers the base primitive
+for a literal node — `1` arrives as `number` and the value would be gone. Two display
+rules earned their own pins: a literal whose FLAVOUR does not match the domain is left to
+the category rule (both references print `'K' and 'string'` for `ka === "z"`, not a value
+verdict), and a union covering EVERY member of one enum prints as the bare enum, because
+in tsc `K.A | K.B` **is** `K` — round 746's `enumUnionTargetDisplay` already owns that
+collapse.
+
+**(CHK.87) LANDED, and it DELETES rows rather than adding them.** Both references narrow
+the true branch of an impossible enum comparison to `never` and therefore report the
+TS2367 and nothing else; we reported the TS2367 and still saw the un-narrowed `K` inside
+the branch. `narrowByEquality`'s three readers all answer from the SYNTAX of the other
+operand — a literal node, a nullish annotation, an `E.M` access — and a bare identifier
+holding a whole enum is none of them, so the walker bailed before any enum question was
+asked. The narrow asks the one question they cannot (the other operand's TYPE) and is
+decided by (CHK.86)'s OWN predicate, so the branch it collapses is exactly the branch that
+reports. Its `getTypeOfExpression` is gated behind a flags-and-symbol test on a type
+already in hand, and `cost_gate.py` reads `typeOfExpr.calls` **−0.22%**.
+
+**(CHK.83) LANDED for FOUR of its five parameter kinds, and the fifth is refused with its
+measurement.** A primitive-like argument — a primitive-only UNION included — is decidable
+against an ARRAY (or tuple), FUNCTION, ENUM or UNION parameter, and all of them were silent
+here while both references report. The licence is the DECLARATION position, which admits
+the identical family through `canUseTypeEngine` and matches both references row for row,
+including the two rows that must stay SILENT (`const d: { length: number } = s` — a string
+HAS `length`). **Four guards, and THREE of them were found by a gate rather than by
+reading.** A REST parameter's declared type is the ARRAY while the argument is one ELEMENT,
+so admitting it reported every ordinary `f("a")` against `f(...xs: string[])` — **301-401
+added rows per profile**, the largest family, caught by the grid. An ARITY-mismatched call
+reports `TS2554` and nothing per argument in tsc — caught by the CORPUS
+(`couldNotSelectGenericOverload`). An OVERLOAD-SET parameter is owned by the dedicated pin
+walker `checkRecursiveFunctionTypes`, so admitting it DUPLICATED an existing row —
+caught by the corpus (`recursiveFunctionTypes`) and attributed by `--passTiming`'s
+`emissions by pass` census, which named both emitters. The fourth, an un-inferred
+callee type parameter, was added on the same evidence. **INTERSECTION is refused** and the
+reason is (CHK.55)'s law rather than the relation: on the harness profile
+`vpath.parse(path)` resolves to `getPathComponents`, an overload set whose FIRST signature
+takes tsc's branded `Path` (`string & { __pathBrand: any }`) and whose second takes
+`string`; `signatureAcceptsArgs` does not ask this question, so selection keeps the first
+and opening the gate reported an ours-only TS2345 — one row, on one profile, i.e. exactly
+the direction a MEANING change must not move.
+
+**Pins and ablation.** 26 pins in the new `EnumWideningParityTest`, organised by RULE with
+a negative control per rule because all three defects are SILENCES. **Twelve arms, one
+mistake each, all discriminating**: a1 the (CHK.88) emission (**7 RED**, every positive);
+a2 the domain-COMPLETENESS gate, `enumKnownDomainValues` → `enumDomainValues` (**1 RED**,
+the computed-enum control); a3 the flavour guard (**1 RED**); a4 the union display collapse
+(**1 RED**, a NESTED set inside a1's, recorded as such per round 807); a5 the (CHK.87)
+narrow (**2 RED**); a6 its `equal` polarity guard (**2 RED**, disjoint from a5); a7 the
+(CHK.83) gate (**5 RED**); a8 the rest-parameter guard (**1 RED**); a9 the intersection
+refusal (**1 RED**); a10 the arity gate (**1 RED**); a11 the un-inferred-type-parameter
+refusal (**1 RED**); a12 the overload-set refusal (**1 RED**). Source restored from a
+snapshot (never `git checkout` — the round is uncommitted, and this round LOST its edits
+once to exactly that), rebuilt, and the restored `Checker.class` sha256 (`415979b0`)
+matched the binary every gate ran against.
+
+**At-risk enumeration.** For a diagnostic-ADDING change the corpus at-risk set is not
+narrower than "every active `.errors.txt` baseline", because a new row moves a baseline
+whatever codes it already carries — so the enumeration by content (130 baselines mentioning
+an enum, 16 carrying TS2367, 163 carrying TS2345, union 303) is a LEAD and not the gate,
+and **all 25 generated corpus classes were run instead: 8,837 tests, 0 red**, every class
+confirmed present in the XMLs. The hand-written half was fixture-selected by grepping the
+test SOURCES (`enum` / `never` / `as const` / `2345` / `2367` / `Argument of type` / `...`
+/ `[]` / `=>`), which selected **682 of 802** files — and rather than run 682 `--tests`
+patterns (measured: Gradle spends >20 minutes matching them and produces no XML), the whole
+core module was run as their superset: **839 classes / 15,880 tests / 0 failures**, with
+all 681 selected test classes confirmed present.
+
+**Gates**, all against the final binary (`415979b0`). Core module **839 / 15,880 / 0**;
+generated corpus **25 classes / 8,837 / 0**; externals **290 / 0**; project **848 / 0**;
+kir **159 / 0**; lsp **58 / 0**. `cost_gate.py` **exit 0** — `output.errors` 46 unchanged,
+`spine.nodes` +0.00%, largest move `mapped.hits` +1.22%, and `typeOfExpr.calls` **−0.22%**,
+which is the receipt that (CHK.87)'s resolution is gated. `huge_methods.py --fail-over 0`
+**exit 0**. 8-profile grid `PARITY1_MARKER=enumCannotHoldLiteral`, two snapshotted class
+dirs with the self-comparison and positive-control refusals armed: **all eight `added=0
+removed=0`** — and for these three items that is the REAL gate, not a control, because all
+three add or delete diagnostics. Build warning-clean (`--rerun-tasks`, 0 `w:`).
+
+**Suite prediction: 17,343 → 17,369 / 0 / 3** (exactly the 26 new pins; no baseline moved
+and no `LogicalParityDivergence` is needed).
+
+**Residues queued** — (CHK.89) the RETURN-position target display for an enum-member
+annotation (`function f(): K.A` reads `'A'` where both references read `'K.A'`; PRE-EXISTING
+and unrelated to this round, found because (CHK.85)(a) would have added a row exhibiting
+it); (CHK.90) the TS2367 CATEGORY rule's operand display, which does not apply
+`getBaseTypesIfUnrelated` (`ka === "z"` reads `'K.A' and 'string'` against both references'
+`'K' and 'string'`), plus its sibling silence for a string enum against a number
+(`s2 === 3`); and (CHK.83)'s own remainder — the INTERSECTION and OVERLOAD-SET parameter
+kinds, `fEnum(3)` at an argument (the literal is typed as its base primitive there, so the
+round-745 domain rule never sees a literal), a `readonly` array and a generic `Reference`
+parameter (`Promise<number>`, `Map<…>`), and `const l1: 5 = em`.
+
 ### Round (P18.17) — `never` stops being unassignable at one position, an impossible enum comparison starts reporting, and a generalized enum prints its namespace (2026-09-05)
 
 **Full suite after the round: 17,308 → 17,343 / 0 / 3** — the 29 + 6 new pins, no baseline moved, no `LogicalParityDivergence`. The first run read 17,337 / **1** / 3: `DeclareGlobalAugmentationTest` reddened on the (PARITY.3) qualification (`global.ZzzEnum`), a class the round's hand-written at-risk set could not reach because it selected classes BY NAME — the class names no enum and no namespace. Censused afterwards: **488 core classes mention `enum` or `never` in their SOURCE and the name patterns reached 149**, so 69% of the population was unscanned; the fixture-grep sweep (485 classes / 5,169 tests, every intended class confirmed present in the XMLs) is now the method, and it is in CLAUDE.md.
@@ -1363,113 +1493,6 @@ lib utility types (`Partial<Observer<T>>`, `Exclude`, `Readonly`) and `typeof`.
 NON-generic class renders `val plain: Plain` — the instance type — which compiles and is
 wrong; only the generic case is refused by the arity guard.
 
-### Round (P18.8) — Stage 2 of the inversion: the post-hoc type oracle lands, and its price is attributed before it is recorded (2026-09-02)
-
-**(INV.2) LANDED, owner-approved this session.** `TypeOracle` (`TypeOracle.kt`, core): the
-proto.go-shaped, node-addressed query surface over ONE finished check — `typeAt`,
-`symbolAt`/`symbolsAt`, `resolvedCallAt`/`resolvedSignatureAt`, `contextualTypeAt`,
-`typeOfSymbolAt` served from the (INV.1) store, the bin-A rows (`typeOfSymbol`,
-`declaredTypeOfSymbol`, `aliasedSymbol`, `propertyOfType` as the COLLECTION question,
-`propertiesOfType`, `apparentType`, `baseTypes`, `typeArguments`, `typesOfType`,
-`callSignaturesOfType`, `constructSignaturesOfType`, `returnTypeOfSignature`,
-`parametersOfSignature` + the declaration-read `parameterDeclarationsOfSignature`,
-`isAssignableTo`, `typeToString`, `typeFromTypeNode`, `constantValue`, `intrinsicType`)
-through an `OracleLens` — the at-rest twin of `CheckedLens` — and `resolveName` /
-`symbolsInScope` REFUSED with an `OracleRefusal` naming Stage 3 / B83.5. Per-build
-`OracleHandles` (generation-checked, refused after release or `close()`); `close()` on edit.
-Entries: `typeOracleOf(files, options)` and `ProjectCompiler.build(…, oracleHolder)`
-(threaded like `recheckHolder`, sequential forced, `recheckOnly` refused). Per-row
-divergence table: `docs/type-oracle.md`. **The store grew three channels** — `symbols`
-(Symbol-or-List per name, alias NOT followed), `calls` (`IntKeyMap<ResolvedCall>` with the
-candidate count), `contextual` ((API.10)'s walk) — all from the one visit behind the type's
-first-wins gate. 23 pins (`TypeOracleTest`), every walk-scoped row on a VALUE the post-hoc
-path gets wrong, refusals pinned as refusals, the handle table on its three refusals, the
-project entry on the file set + a recorded answer + the partition refusal, a channel-mask
-pin. Suite **16,838 → 16,860 / 0 / 3**; cost_gate +0.00 % on all 20; huge_methods clean;
-build warning-clean.
-
-**THE MEASUREMENT, AND WHAT IT FOUND.** The design says measure flag-on before any later
-stage is priced, so the Stage-2 store was priced warm, rotated, on both shapes. First
-full-on arm on the compiler profile: **8,337 / 8,466 ms against 5,073 / 5,385 — +57-64 %**,
-against Stage 1's +14.9 %. Rather than record it, a `NodeAnswers.channels` measurement seam
-(`BenchMain … nodeAnswers:<types|symbols|calls|contextual>`) attributed it in four arms:
-types-only 5,998 (Stage 1 reproduced), calls +220 ms (4.1 µs per call, KIR's own price),
-contextual +145 ms, **symbols +2,142 ms**. A JFR of the symbols arm charged **11.3 % of all
-samples to `IntKeyMap.set`/`grow` under `getTypeOfObjectLiteral` ← `getTypeOfExpression`**:
-the object-literal KEY leg re-typed its literal once per key, and `getTypeOfExpression` has
-no per-node memo (round 737) — `getTypeOfObjectLiteral` mints the member table on every
-call — so tsc's diagnostic-message tables cost O(keys²). The spine is preorder, so the
-literal's type is in the store before its keys: `nodeAnswerTypeOrCompute` reads it (and the
-member-access receiver likewise; off the store it is the old computation verbatim, the
-capture measurement pins re-run green). After: symbols +258 ms, and the whole store
-**compiler profile 5,270 → 6,404 ms, +21.5 %, 1.90 µs per recorded expression** (598,455:
-360,627 symbols, 53,066 calls, 78,127 contextual); **many-small-2400-dom 3,457/3,439 →
-3,654/3,685, +5.7 / +7.1 %, 0.95 µs** (232,106). (INV.1b) is half-answered: the companions
-are pure RESOLUTION (+6 % on top of the type), the reconstruction is paid once per node.
-
-**(EXT.10) LANDED in the same session — the externals ladder's alias-reference rung.** A
-reference to an exported alias this generation EMITS renders by name wherever the resolved
-body has no Kotlin spelling: a generic instantiation (`h: Handler<string>` →
-`Handler<String>`, arguments rendered from their own annotations, arity exact — a use
-relying on a defaulted alias parameter falls back) and a function-typed non-generic alias
-(`type Cb = (done: boolean) => void` is now EMITTED — the non-generic alias body goes through
-the annotation path, resolved-first, syntactic for a function type — and its uses spell
-`Cb`). Identity evidence, never spelling: a new `CheckedLens.typeReferenceSymbol` (the
-definition channel's free-name resolution, import alias followed; a qualified name refused),
-matched against the exported alias declarations, and the alias must itself be renderable
-(memoised by running its own collection at the reference — the reference may be walked
-first). The Dukat pin is untouched: a mapped body still renders resolved (`Species` →
-`String`). Seven pins: members/signatures/top-level, the function-typed alias, the Dukat
-control, a skipped alias, an omitted defaulted argument, a lib alias (`Record<string,
-number>`), and a cross-file import beside a same-named non-exported local. Externals
-80/0, both library gates green. Suite 16,860 → 16,867 / 0 / 3.
-
-**(INV.1b) ANSWERED, one bit later.** `NodeAnswers.TYPES` clear records `anyType` without
-resolving — the reconstruction-only arm. Compiler profile, rotated: reconstruction
-**5,290 / 5,266 ms = the plain check (5,270)**, types **6,158 / 6,121** — the reconstruction
-(eight-field save/restore + `withCtaFrameLocals` + the store write) is FREE and the whole
-1.45 µs per expression is `getTypeOfExpression` typing again what the walk had typed: there
-is no per-node memo, so the store's population is a 1 : 1 re-typing, which is also the
-mechanism behind the key-leg finding. many-small single draws (types 3,738 / reconstruction
-3,541 / off 3,326) are inside that shape's ±40 % band and indicative only. Pinned in
-`TypeOracleTest` (placeholder at every expression; real types under the TYPES bit).
-
-**What did NOT happen.** `Project` does not hand out an oracle — queued as (INV.2b) with the
-invalidation question stated; EXT/LSP were not migrated (served today). The
-`leaf_owner_profile.py --inclusive-of` filter printed the same table for every method name
-it was given (it did not filter); the attribution came from a three-frame caller census of
-the `IntKeyMap.set` stacks instead — worth knowing before trusting that flag. One CLAUDE.md
-entry: a store channel may not re-type what the walk already recorded, and a flag-on cost
-is attributed per channel before it is recorded.
-
-### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
-
-**(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
-own-TP resolution (the measured mechanism: the lens at an interface-declaration callback
-resolves a bare `T` to `any` — an interface's TPs are not the reconstructed fn-TP
-ambient), interface references under POSITIVE `===` identity evidence, `public typealias`
-for mappable exported aliases (uses still resolve — the Dukat pin holds), top-level
-functions (nested ones stay silent by ===-membership; overloads loudly skipped),
-function-TYPE annotations mapped recursively with whole-annotation refusal on
-generic/optional-param/rest shapes (an optional parameter is ARITY, not nullability),
-optional methods flipped to nullable function-typed properties. The compile-gate variant
-renders non-external functions with the body `= null!!` — Nothing-typed, legal for any
-return type, built-ins only, which is what the zero-classpath metadata compile allows.
-Gate fixture carries every new shape; negative control intact.
-
-**(API.18) ATTEMPTED TWICE AND REVERTED, WITH THE MECHANISM RECORDED IN THE QUEUE ITEM:**
-no span-arithmetic fix exists — at EOF a true container of the final token and a node
-merely ABUTTING it share `(pos, rawEnd)` exactly, so the fix is `pathAt`'s
-sibling-bound descent (round 910's own prescription), with the derived per-token
-ownership rule and the five reddening EOF-population pins written down for the next
-attempt. Tree restored, both module suites re-verified green.
-
-**SESSION CLOSE.** Full-suite state across all nine modules: **16,764 / 0 failures / 3
-skipped** (+87 this session: 15+14 externals, 42+16 lsp); `cost_gate.py` exit 0, every
-counter unchanged — the whole Phase 18 arc landed without touching a single checker
-counter, which is the (INC-closure) directive holding by construction.
-
-
 - [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
   HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
   LATTER.** The source headers are the licence; the docs drifted. Sweep README.md and docs/
@@ -2200,7 +2223,20 @@ counter, which is the (INC-closure) directive holding by construction.
   accepted relation does not early-return. One line, mirroring `isSimpleTypeRelatedTo`'s
   own "Never source is assignable to everything".
 
-- [ ] **(CHK.85) A MUTABLE BINDING DOES NOT WIDEN AN ENUM MEMBER THE WAY tsc DOES —
+- [ ] **(CHK.85) STOPPED A SECOND TIME 2026-09-05 ((P18.18) note), NOW WITH THE BLAST
+  RADIUS THE ENTRY ASKED FOR — (a) WAS BUILT AND COSTS MEANING: +7 rows on every profile
+  and +22 on harness, ALL of them DISCRIMINATED-UNION SELECTION losses** (`UpToDateStatus`
+  in tsbuildPublic.ts, `Invocation` in signatureHelp.ts, `SymbolAndEntries` in
+  findAllReferences.ts, and eight more). The widening RULE is right — its contextual keep is
+  tsc's `isLiteralOfContextualType` — so what is missing is the CONTEXT reaching
+  `getTypeOfObjectLiteral` at those sites, and THAT is the unblocker to queue next. Two
+  corrections to the entry below: (a) is a lost true positive AND an ADDED false positive
+  (`const o = { v: K.A }; o.v = K.B` is an ours-only TS2322 both references accept); and the
+  widening is missing for ENUMS ONLY for a structural reason — an object-literal member's
+  value is typed by `getTypeOfExpression`, which answers the BASE primitive for a literal
+  node, so string/number/boolean members are already widened by construction. (c) is not an
+  enum question at all: `({ v: "a" } as const).v` and `[1, 2] as const` are equally
+  unmodelled here, so a const ASSERTION is a FEATURE, not a residue. ORIGINAL ITEM: A MUTABLE BINDING DOES NOT WIDEN AN ENUM MEMBER THE WAY tsc DOES —
   STOPPED (P18.17): it is **MEANING**, not display, and it is a design.** Re-measured
   against both references at BOTH positions, it is not one gap but three, and the third
   was not in the original item: (a) a mutable OBJECT-LITERAL PROPERTY must widen — `const o
@@ -2229,7 +2265,10 @@ counter, which is the (INC-closure) directive holding by construction.
   is still unrelated — which is the single line accounting for `ka === kb` printing
   `'K.A' and 'K.B'` while `ka === jx` prints `'K' and 'J'`.
 
-- [ ] **(CHK.87) THE `never` NARROW OF AN IMPOSSIBLE ENUM COMPARISON — a SEPARATE
+- [x] **(CHK.87) CLOSED 2026-09-05 ((P18.18) note) — the narrow is decided by (CHK.86)'s
+  OWN predicate, so the branch it collapses is exactly the branch that reports; the
+  `getTypeOfExpression` it needs is gated behind a flags-and-symbol test and `cost_gate.py`
+  reads `typeOfExpr.calls` −0.22%. ORIGINAL ITEM: THE `never` NARROW OF AN IMPOSSIBLE ENUM COMPARISON — a SEPARATE
   mechanism from (CHK.86)'s diagnostic, measured (P18.17).** Both references narrow the
   true branch of `if (k === j)` to `never` and therefore report the TS2367 and NOTHING
   else; we report the TS2367 and still see the un-narrowed `K` inside the branch. The
@@ -2243,7 +2282,12 @@ counter, which is the (INC-closure) directive holding by construction.
   measured EMPTY: no active baseline can carry an impossible enum comparison, because tsc
   emits TS2367 for one and we were green without it.
 
-- [ ] **(CHK.88) AN ENUM MEMBER COMPARED TO A NUMERIC LITERAL OUT OF ITS RANGE — measured
+- [x] **(CHK.88) CLOSED 2026-09-05 ((P18.18) note) — a sibling helper reusing round 745's
+  `enumKnownDomainValues`, whose refusal for a *computed* enum is what keeps `declare enum`
+  and a non-foldable member accepting every literal; the literal is read off the AST because
+  `getTypeOfExpression` answers the base primitive for a literal node. Two display rules
+  earned pins: a FLAVOUR mismatch is left to the category rule, and a union covering every
+  member prints as the bare enum. ORIGINAL ITEM: AN ENUM MEMBER COMPARED TO A NUMERIC LITERAL OUT OF ITS RANGE — measured
   (P18.17), deliberately outside (CHK.86)'s scope.** `ka === 1` with `ka: K.A` (`A = 0`)
   is `TS2367: … the types 'K.A' and '1' have no overlap.` in both references and is silent
   here, while `ka === 0` is correctly legal in all three. (CHK.86) is gated to BOTH operands
@@ -2270,7 +2314,42 @@ counter, which is the (INC-closure) directive holding by construction.
   because a plain `namespace global` is an ordinary container both references print as
   `'global.GE'`.
 
-- [ ] **(CHK.83) THE ARGUMENT-SIDE REMAINDER OF (P18.14)(c)'s HOLE, MEASURED ((P18.15)) — a
+- [ ] **(CHK.89) A RETURN-POSITION ENUM-MEMBER ANNOTATION LOSES ITS ENUM QUALIFIER —
+  measured (P18.18), PRE-EXISTING and unrelated to that round's changes.** `function f():
+  K.A { return kb }` reads `Type 'K.B' is not assignable to type 'A'.` here against both
+  references' `'K.A'`, and `function f3(): N.Q.X { … }` reads `'X'` for their `'Q.X'`; the
+  DECLARATION twin (`const w: K.A = kb`) is byte-correct, so the divergence is the RETURN
+  path's target rendering reducing a `QualifiedName` to its last name. Found only because
+  (CHK.85)(a) would have added a row exhibiting it. FORM, and its at-risk population is
+  every baseline with a TS2322 at a `return` whose annotation is qualified — enumerate
+  before landing.
+
+- [ ] **(CHK.90) THE TS2367 *CATEGORY* RULE DOES NOT APPLY `getBaseTypesIfUnrelated` —
+  measured (P18.18).** `ka === "z"` with `ka: K.A` reads `… the types 'K.A' and 'string' …`
+  here against both references' `'K' and 'string'`, and `ka === true` the same way: the
+  (CHK.86) rule transcribes tsc's base-vs-original display and the category rule beside it
+  does not, so the two disagree about one operand. Beside it, a SILENCE in the same rule: a
+  string enum against a number (`s2 === 3` with `s2: S2`) is `'S2' and 'number'` in both
+  references and nothing here, so `comparabilityCategory` is answering null for a string
+  enum where it answers `"number"` for a numeric one. FORM plus one missing row; the at-risk
+  population is every baseline carrying a TS2367 with an enum operand (16 carry TS2367 at
+  all).
+
+- [ ] **(CHK.83) PARTLY DONE 2026-09-05 ((P18.18) note) — FOUR of the five parameter kinds
+  LANDED (ARRAY/tuple, FUNCTION, ENUM, UNION), with four guards, three of which a GATE found
+  rather than a reading: a REST parameter (301-401 added rows per profile, the grid), an
+  ARITY-mismatched call (`couldNotSelectGenericOverload`, the corpus), an OVERLOAD-SET
+  parameter owned by the dedicated `checkRecursiveFunctionTypes` walker
+  (`recursiveFunctionTypes`, the corpus, attributed by `--passTiming`'s emissions census),
+  and an un-inferred callee type parameter. WHAT REMAINS: the INTERSECTION kind, refused
+  with its measurement — on the harness profile `vpath.parse(path)` resolves to
+  `getPathComponents`, an overload set whose FIRST signature takes tsc's branded `Path`, and
+  `signatureAcceptsArgs` does not ask the question, so opening the gate reported an ours-only
+  TS2345 ((CHK.55)'s law); the OVERLOAD-SET kind, which needs its two emitters unified;
+  `fEnum(3)` at an ARGUMENT (the literal is typed as its base primitive there, so round 745's
+  domain rule never sees a literal, though the DECLARATION `const d: E = 3` reports); a
+  `readonly` array and a generic `Reference` parameter (`Promise<number>`, `Map<…>`); and the
+  two rows the item names below (`const l1: 5 = em`, the elaboration sub-line). ORIGINAL ITEM: THE ARGUMENT-SIDE REMAINDER OF (P18.14)(c)'s HOLE, MEASURED ((P18.15)) — a
   primitive-only union argument against an ARRAY, FUNCTION, INTERSECTION, ENUM or UNION parameter
   is SILENT here and reported by both tsgo 7.0.2 and pristine 6.0.3.** (P18.14) lifted the
   declaration/assignment/return side of `canUseTypeEngine`'s refusal; the argument gate has its

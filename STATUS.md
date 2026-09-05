@@ -9,6 +9,42 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
+**(P18.18) — AN ENUM STOPS OVERLAPPING A LITERAL IT CANNOT HOLD, AN IMPOSSIBLE COMPARISON'S BRANCH BECOMES `never`, AND A PRIMITIVE ARGUMENT STOPS BEING INVISIBLE TO A COMPOSITE PARAMETER, 17,343 → 17,369 / 0 / 3 predicted (2026-09-05).**
+Three of four items landed; every row reproduced against tsgo 7.0.2 AND pristine 6.0.3 before
+any code was written, and the two references agree on all of them.
+**(CHK.88)** — `ka === 1` with `ka: K.A` is `TS2367 … 'K.A' and '1'` in both references and was
+silent here; the verdict needs the member VALUES (round 745's `enumKnownDomainValues`, whose
+refusal for a *computed* enum is what keeps `declare enum` and a non-foldable member accepting
+every literal), and the literal must be read off the AST because `getTypeOfExpression` answers the
+base primitive for a literal node. **(CHK.87)** — the sibling NARROW, decided by (CHK.86)'s own
+predicate so the branch it collapses is exactly the branch that reports; it DELETES rows, and
+`typeOfExpr.calls` reads −0.22%. **(CHK.83)** — FOUR of five parameter kinds (ARRAY/tuple,
+FUNCTION, ENUM, UNION); the licence is the DECLARATION position, which admits the same family and
+matches both references row for row. **THREE of its four guards were found by a GATE, not by
+reading**: a REST parameter (301-401 added rows per profile — the grid), an ARITY-mismatched call
+(`couldNotSelectGenericOverload` — the corpus), and an OVERLOAD-SET parameter already owned by the
+dedicated `checkRecursiveFunctionTypes` walker (`recursiveFunctionTypes` — the corpus, attributed
+by `--passTiming`'s emissions census). INTERSECTION is refused with its measurement ((CHK.55)'s
+law: overload selection keeps a branded-`Path` signature, so opening the gate reported an
+ours-only row).
+**(CHK.85) STOPPED A SECOND TIME, now with the blast radius its entry asked for — (a) was BUILT
+and costs MEANING: +7 rows on every profile and +22 on harness, ALL discriminated-union selection
+losses.** The widening RULE is right (its contextual keep is tsc's `isLiteralOfContextualType`);
+what is missing is the CONTEXT reaching `getTypeOfObjectLiteral`. Two corrections: (a) is a lost
+true positive AND an ADDED false positive (`o.v = K.B` is an ours-only TS2322), and the widening
+is missing for ENUMS ONLY because a literal node already types as its base primitive; (c) is not
+an enum question at all — `as const` is unmodelled for strings and arrays too, i.e. a FEATURE.
+26 pins, **twelve arms** (7 / 1 / 1 / 1 / 2 / 2 / 5 / 1 / 1 / 1 / 1 / 1 RED, one nested and
+recorded as such). Gates: whole core module **839 classes / 15,880 / 0** (a superset of the
+682-file fixture-selected sweep, all 681 test classes confirmed present — 682 `--tests` patterns
+were measured to take >20 min and produce no XML); generated corpus **25 classes / 8,837 / 0**;
+externals 290/0; project 848/0; kir 159/0; lsp 58/0; `cost_gate.py` exit 0 (`output.errors` 46
+unchanged, largest move `mapped.hits` +1.22%); `huge_methods.py` exit 0; 8-profile grid all
+`added=0 removed=0` — the REAL gate here, not a control, since all three items move diagnostics.
+Queued: (CHK.89) a return-position enum-member annotation losing its qualifier (`'A'` for
+`'K.A'`, pre-existing), (CHK.90) the TS2367 CATEGORY rule missing `getBaseTypesIfUnrelated`, and
+(CHK.83)'s own remainder.
+
 **(P18.17) — `never` STOPS BEING UNASSIGNABLE AT ONE POSITION, AN IMPOSSIBLE ENUM COMPARISON STARTS REPORTING, AND A GENERALIZED ENUM PRINTS ITS NAMESPACE, 17,308 → 17,337 / 1 / 3 then 17,343 / 0 / 3 predicted (2026-09-05).**
 Three of (P18.16)'s four residues closed, each reproduced against tsgo 7.0.2 AND pristine 6.0.3
 before any code was written (the two references agree on every row; no divergence found).
@@ -104,36 +140,4 @@ actually protects); **no baseline moved and no `LogicalParityDivergence` was nee
 round predicted by enumerating the 4 literal-union-source and 18 `never`-target baselines. New
 CLAUDE.md entry: the 8-profile grid is structurally BLIND to every type-display change (all its
 rows are `Cannot find name …`).
-
-**(P18.13) — THE AUGMENTATION RESIDUES: A PACKAGE AUGMENTATION STOPS INVENTING TWO ERRORS, 17,224 → 17,236 / 0 / 3 (2026-09-04; filtered gates only — the full suite was not run this round, so the headline count stands at 17,224 / 0 / 3 plus 12 new pins).**
-(CHK.82) three of four residues, each measured against tsgo 7.0.2 on a scratch project.
-**(3) is the one a real project meets:** `declare module "some-pkg"` over an installed package
-was a false **TS2664** *plus* a false **TS2339 on the package's own member** — ONE cause, since
-no resolver leg can name a bare specifier's target (a `package.json` `types` entry, not a string
-transformation), so `targetFile` was null and the merge took the FILELESS-AMBIENT branch,
-publishing the block's PARTIAL interface into `globals` as a round-510 stub while never merging
-into the real target. `augmentationTargetFile` is the one home for the ladder; its bare leg takes
-the crawl's answer from any file and requires them to AGREE. **(1)** a name the BLOCK declares
-and the target does not export typed `any` — now resolved, narrowed to exactly that case, which
-is what keeps (CHK.76)'s +43 rows away. **(2)** `import { Brand } from "./types.js"` beside an
-augmentation declaring `Brand` was a false TS2305 while the TYPE always resolved — a pure
-absence-check defect, fixed by reading the binder's own block `exports` through the SAME
-export-modifier predicate the merge uses (extracted, one home, two consumers). A B86.4 display
-defect fell out beside them: the namespace-qualification ascent treated a STRING-named module's
-specifier as a name segment, so `@types/node` rendered `events.DefaultEventMap`,
-`zlib.CompressCallback` and even `node:test.test.SuiteFn` — with a colon in it.
-**(4) REFUSED with the measurement:** the enum display `import("…").E` is NOT an augmentation
-residue (it reproduces with no `declare module` in the program, under tsgo AND pristine 6.0.3),
-103 corpus baselines use that form and we satisfy them through hard-coded pins rather than a
-mechanism — a logical-parity conversation. **(CHK.81)'s two remaining sub-items MEASURED and
-REFUSED, both mis-stated in the queue:** the missing diagnostic is TS2503 (not TS2304) and the
-axis is `declare` (not `declare module`), suppressed deliberately by **B367**; and the
-literal-union display is neither an alias nor an ambient question — the rule is *collapse to the
-base primitive exactly when the target holds no literal of that base*, systematic across TS2322
-and TS2345, gated only by the full corpus.
-12 pins, eight single-mistake ablation arms each with its own red set; filtered
-`*Augment*`/`*Module*`/`*Import*`/`*Export*` 1,468/0/0; cost_gate exit 0 (errors 46 unchanged);
-huge_methods 0 over; the 8-profile grid all eight `added=0 removed=0`; externals 290/0; and the
-`@types/node` per-module receipt with its generated Kotlin CODE **byte-identical** and its marker
-text strictly better.
 

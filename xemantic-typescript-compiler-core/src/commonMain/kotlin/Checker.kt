@@ -114921,6 +114921,90 @@ interface DataView {
     }
 
     /**
+     * (CHK.88): the two DISPLAY strings of a `TS2367` for an equality comparison between an
+     * ENUM-flavored operand and a LITERAL whose value the enum provably cannot hold, or
+     * `null` when no such pair is present.
+     *
+     * Measured against tsgo 7.0.2 AND pristine `typescript@6.0.3`, which agree on every
+     * row: `ka === 1` (`ka: K.A`, `A = 0`) reads
+     * `… the types 'K.A' and '1' have no overlap.` there and was SILENT here, as were
+     * `ka === -1`, `k === 5` (a whole enum), `cp === 4` (a `const` enum), `m === 4` (an enum
+     * whose members are foldable bit shifts), `kab === 5` (a union of members) and
+     * `sp === "z"` (a string enum).
+     *
+     * WHY IT IS NOT (CHK.86)'s RULE. That one is gated to BOTH operands being enum-flavored
+     * and answers from enum IDENTITY; the verdict here needs the member VALUES, which is
+     * round 745's [enumKnownDomainValues] machinery — and that helper's whole point is that
+     * it answers `null` (i.e. "this enum can hold anything") for a *computed* enum, which is
+     * exactly why `declare enum D { X, Y }` and `enum Comp { X = "ab".length }` keep
+     * accepting every literal in all three compilers.
+     *
+     * DISPLAY. tsc's `getBaseTypesIfUnrelated` widens both operands and prints the pair only
+     * when the WIDENED pair is still unrelated; an enum's base is its own primitive
+     * (`number`/`string`), which IS related to the literal's base, so the ORIGINALS always
+     * survive here. That is why `ka === 1` prints `'K.A'` and not `'K'`.
+     *
+     * FLAVOUR. A literal whose kind does not match every value in the enum's domain is left
+     * to the CATEGORY rule below, which is what both references do too: `ka === "z"` reads
+     * `'K' and 'string'` there, NOT `'K.A' and '"z"'`.
+     */
+    private fun enumLiteralComparisonNoOverlapDisplays(
+        leftType: Type, left: Expression, rightType: Type, right: Expression,
+    ): Pair<String, String>? {
+        enumCannotHoldLiteral(leftType, rightType, right)?.let { return enumOperandDisplay(leftType) to it }
+        enumCannotHoldLiteral(rightType, leftType, left)?.let { return it to enumOperandDisplay(rightType) }
+        return null
+    }
+
+    /**
+     * (CHK.88): the display of the ENUM-flavored operand. A union covering EVERY member of
+     * one enum prints as the bare enum, because in tsc a numeric enum **is** the union of
+     * its members and `K.A | K.B` is therefore literally the type `K` — measured, both
+     * references print `'K' and '5'` for `kab === 5` with `kab: K.A | K.B`.
+     * [enumUnionTargetDisplay] is round 746's transcription of `formatUnionTypes` and
+     * already owns that collapse; it answers `null` for a non-union, which is the ordinary
+     * single-member/whole-enum case.
+     */
+    private fun enumOperandDisplay(t: Type): String =
+        enumUnionTargetDisplay(t) ?: typeToString(t)
+
+    /**
+     * (CHK.88): the literal's display when [enumType] is enum-flavored, [otherExpr] is a
+     * literal of the SAME flavour as every value the enum can hold, and that value is
+     * outside the enum's KNOWN domain. `null` in every other case — including every case
+     * this checker cannot decide, so the rule is refusal-shaped exactly as (CHK.86)'s is.
+     *
+     * [otherType] must NOT be enum-flavored: such a pair belongs to
+     * [enumComparisonNoOverlapDisplays], which runs first and returns.
+     *
+     * The literal is read off the AST through [literalTypeOfExpression] and not from
+     * [otherType], because `getTypeOfExpression` answers the BASE primitive for a literal
+     * node — there is no fresh-literal expression type in this checker, so `1` arrives here
+     * as `number` and the value would be gone.
+     */
+    private fun enumCannotHoldLiteral(enumType: Type, otherType: Type, otherExpr: Expression): String? {
+        val atoms = enumComparisonAtoms(enumType) ?: return null
+        if (enumComparisonAtoms(otherType) != null) return null
+        val lit = literalTypeOfExpression(otherExpr) ?: return null
+        val domain = ArrayList<ConstantValue>()
+        for (atom in atoms) domain.addAll(enumKnownDomainValues(atom) ?: return null)
+        if (domain.isEmpty()) return null
+        return when (lit) {
+            is Type.NumberLiteral -> {
+                if (domain.any { it !is ConstantValue.NumberValue }) return null
+                if (domain.any { (it as ConstantValue.NumberValue).value == lit.value }) null
+                else typeToString(lit)
+            }
+            is Type.StringLiteral -> {
+                if (domain.any { it !is ConstantValue.StringValue }) return null
+                if (domain.any { (it as ConstantValue.StringValue).value == lit.value }) null
+                else typeToString(lit)
+            }
+            else -> null
+        }
+    }
+
+    /**
      * (CHK.86): the enum-flavored constituents of [t] — the type itself, or a union's
      * members — or null when ANY constituent is not enum-flavored.
      *
@@ -125436,8 +125520,46 @@ interface DataView {
         val literalType = literalTypeOfExpression(other)
             ?: constNullishAnnotationType(other)
             ?: enumMemberTypeOfExpr(other)
-        if (literalType == null) return t
+        if (literalType == null) {
+            enumImpossibleEqualityNarrow(t, other, equal)?.let { return it }
+            return t
+        }
         return narrowUnionByLiteral(t, literalType, keep = equal)
+    }
+
+    /**
+     * (CHK.87): `never` for the TRUE branch of an equality whose two operands are
+     * enum-flavored and provably cannot overlap; `null` for everything else.
+     *
+     * The SIBLING of (CHK.86)'s diagnostic and deliberately decided by the SAME predicate
+     * ([enumComparisonNoOverlapDisplays]), so the branch this collapses is exactly the
+     * branch that reports `TS2367`. Both references narrow `if (k === j)` — `k: K`, `j: J`
+     * — to `never` and therefore report the TS2367 and NOTHING else, where we reported the
+     * TS2367 and still saw the un-narrowed `K` inside the branch.
+     *
+     * WHY THE WALKER COULD NOT SEE IT. The three readers above answer from the SYNTAX of
+     * the other operand — a literal node, a nullish annotation, an `E.M` access — and a
+     * bare identifier holding a whole enum is none of them, so the walker bailed before any
+     * enum question was asked. This asks the one question they cannot: what is the other
+     * operand's TYPE.
+     *
+     * COST. [enumComparisonAtoms] is a flags-and-symbol test on a type already in hand, and
+     * it is asked FIRST, so the `getTypeOfExpression` below runs only for an equality that
+     * narrows an ENUM-typed reference against a non-literal operand — the (CHK.62) rule
+     * that a predicate consulted per flow call may not resolve its way to an answer.
+     *
+     * SAFETY. Adopting `never` DELETES diagnostics inside the branch, which is the direction
+     * CLAUDE.md warns about; what licenses it here is that [enumAtomListsOverlap] is
+     * refusal-shaped (every unknown reads as "overlap"), so the collapse happens only where
+     * the comparison has already been PROVED impossible and reported as such.
+     */
+    private fun enumImpossibleEqualityNarrow(t: Type, other: Expression, equal: Boolean): Type? {
+        if (!equal) return null
+        if (enumComparisonAtoms(t) == null) return null
+        val otherType = getTypeOfExpression(other)
+        if (otherType === anyType || otherType === errorType) return null
+        if (enumComparisonNoOverlapDisplays(t, otherType) == null) return null
+        return neverType
     }
 
     /**
@@ -161542,7 +161664,7 @@ interface DataView {
             ) break
             if (caasNonSimpleParamChecks(
                     arg, paramType, argType, params, i, sig, sigIn, source, fileName,
-                    calleeGenericInstantiation,
+                    calleeGenericInstantiation, args = args,
                 ) == CAAS_CONTINUE
             ) continue
             when (caasTailGatesAndRelation(
@@ -162675,6 +162797,7 @@ interface DataView {
         source: String,
         fileName: String,
         calleeGenericInstantiation: Boolean,
+        args: List<Expression>,
     ): Int {
         // Conservative: only check when parameter type is a well-known type
         // (primitive, void, undefined, null, never). Skip object/interface/union/
@@ -162830,7 +162953,35 @@ interface DataView {
                     val mt = getTypeOfSymbol(ms)
                     mt !== anyType && mt !== errorType
                 }
-            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) return CAAS_CONTINUE
+            // (CHK.83): the ARGUMENT-side remainder of (P18.14)(c)'s hole. A
+            // primitive-like argument — [isSimpleCheckableType] admits a primitive-only
+            // UNION — is decidable against an ARRAY, FUNCTION, INTERSECTION, ENUM or
+            // UNION parameter, and all five were SILENT here while both tsgo 7.0.2 and
+            // pristine `typescript@6.0.3` report them. The evidence that our relation
+            // engine already answers this whole family correctly is the DECLARATION
+            // position, which admits it through [canUseTypeEngine] and matches both
+            // references row for row — including the two rows that must stay SILENT
+            // (`const d: { length: number } = s`, a string HAS `length`).
+            // A REST parameter's declared type is the ARRAY and the argument is one
+            // ELEMENT of it, so admitting it here reports every ordinary `f("a")` against
+            // `f(...xs: string[])` — measured on the 8 profiles as 301-401 added rows,
+            // by far the largest family. The element-type form is the sibling rule at the
+            // bottom of `checkArgumentsAgainstSignature`; this one stays off it.
+            // A call whose ARITY is already wrong reports `TS2554` and NOTHING per
+            // argument in tsc — measured on the corpus, where opening this gate added a
+            // second row to `couldNotSelectGenericOverload` (`makeArray(1, "")`) and
+            // DUPLICATED an existing one in `recursiveFunctionTypes` (`f6("", 3)`, whose
+            // TS2345 another emitter already owns).
+            val restAt = params.indexOfFirst {
+                (it.valueDeclaration as? Parameter)?.dotDotDotToken == true
+            }
+            val arityOk = args.size >= sig.minArgumentCount &&
+                (restAt >= 0 || args.size <= params.size)
+            val allowPrimitiveVsCompositeParam = argIsPrimitive && arityOk &&
+                (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
+                !typeContainsForeignTypeParam(paramType, emptySet()) &&
+                argPrimitiveVsCompositeParamCheckable(paramType)
+            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) return CAAS_CONTINUE
             // Round 79l (orchestrated — Agent A plan): for a contextually-typed
             // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
             // body-return type (allowFuncReturnMismatch), TypeScript reports a
@@ -163464,6 +163615,47 @@ interface DataView {
      */
     private fun isArgCheckableType(type: Type): Boolean =
         isSimpleCheckableType(type) || type.flags.hasAny(TypeFlags.NonPrimitive)
+
+    /**
+     * (CHK.83): is [paramType] one of the COMPOSITE parameter kinds a primitive-like
+     * argument is decidable against — ARRAY (or tuple), FUNCTION, ENUM, UNION? The fifth
+     * kind the item names, INTERSECTION, is refused with its measurement below.
+     *
+     * Deliberately an enumeration of the measured kinds rather than a delegation to
+     * [canUseTypeEngine]: that predicate additionally admits an anonymous PROPERTY BAG,
+     * which is the B418b asymmetry round 512's [paramIsPlainObjectBag] gate exists to
+     * handle (a primitive can satisfy `{ length: number }` through its apparent members),
+     * and the plain-bag families keep their own rule untouched.
+     *
+     * A `Type.TypeParam` parameter is excluded because it has its own sites
+     * ([caasTypeParamConstraintArg] and the constraint gate in this function's own tail)
+     * and admitting it here would co-emit.
+     */
+    private fun argPrimitiveVsCompositeParamCheckable(paramType: Type): Boolean {
+        if (paramType is Type.TypeParam) return false
+        // An INTERSECTION parameter is measured and REFUSED, and the reason is (CHK.55)'s
+        // law rather than the relation: on the harness profile `vpath.parse(path)` resolves
+        // to `getPathComponents`, an OVERLOAD SET whose FIRST signature takes tsc's branded
+        // `Path` (`string & { __pathBrand: any }`) and whose second takes `string`.
+        // `signatureAcceptsArgs` does not ask this question, so selection keeps the first;
+        // opening the gate then reports a `TS2345` neither reference has — an ours-only row
+        // on a profile, i.e. exactly the direction a MEANING change must not move. The
+        // intersection family needs the matching rule in overload SELECTION first.
+        if (paramType is Type.Union) return true
+        val obj = paramType as? Type.Object ?: return false
+        if (obj.tupleElementTypes != null) return true
+        if (isArrayLikeType(obj)) return true
+        if (obj.symbol?.flags?.hasAny(SymbolFlags.Enum) == true) return true
+        resolveStructuredTypeMembers(obj)
+        // An OVERLOAD SET as a parameter type (more than one call signature) is refused:
+        // the corpus measured a DUPLICATE row on `recursiveFunctionTypes`, where the
+        // dedicated pin walker `checkRecursiveFunctionTypes` already owns the TS2345 for
+        // `f6("")` against `{ (): typeof f6; (a: typeof f6): () => number; }` — the
+        // `--passTiming` emissions census names both emitters. An ordinary function type
+        // (exactly one call signature) and a construct-signature-only type are unaffected.
+        if ((obj.callSignatures?.size ?: 0) > 1) return false
+        return !obj.callSignatures.isNullOrEmpty() || !obj.constructSignatures.isNullOrEmpty()
+    }
 
     // -----------------------------------------------------------------------
     // Structural typing engine (Phase 4 items 4a-4e)
@@ -165657,6 +165849,26 @@ interface DataView {
         // `k === S.P` read `'K' and 'S.P'` against both references' `'K' and 'S'`,
         // because the base-type rule below is tsc's and the category rule is not.
         enumComparisonNoOverlapDisplays(leftType, rightType)?.let { (ld, rd) ->
+            val start = expr.pos
+            val length = expressionTrueEnd(expr.right) - start
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "This comparison appears to be unintentional because the types " +
+                        "'$ld' and '$rd' have no overlap.",
+                    category = DiagnosticCategory.Error, code = 2367,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                ))
+            }
+            return
+        }
+        // (CHK.88): the enum-against-numeric/string-LITERAL sibling the rule above is
+        // deliberately gated out of (its verdict is enum IDENTITY; this one needs the
+        // member VALUES). Placed directly below it so a pair that is enum-vs-enum has
+        // already been decided, and ABOVE the category rule so a literal whose flavour
+        // MATCHES the enum is judged by value rather than printed as its base primitive.
+        enumLiteralComparisonNoOverlapDisplays(leftType, expr.left, rightType, expr.right)?.let { (ld, rd) ->
             val start = expr.pos
             val length = expressionTrueEnd(expr.right) - start
             if (length > 0) {
