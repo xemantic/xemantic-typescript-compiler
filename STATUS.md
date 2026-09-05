@@ -1,13 +1,30 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194,383** lines (191,070 when the metric was created; the (P18.9)-(P18.22) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **194,650** lines (191,070 when the metric was created; the (P18.9)-(P18.23) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
 checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.23) — CONST ASSERTIONS STOP BEING `any` (STAGE 1 OF (CHK.93)), AND THE NAME-RESOLUTION SEAM IS CENSUSED FOR (INV.0) STEP 4, 17,516 → 17,573 / 0 / 3 (2026-09-05).**
+**(CHK.93) stage 1 LANDED.** Every object, array and enum-member `as const` was `any` (the `const`
+type reference fell off the resolution ladder to `errorType`); now the assertion answers its operand's
+const-context type, object members keep their literals with the context computed once, a const array
+is a frozen tuple — which needed the relation rule tuples always needed (tuple → `Array<T>` by
+elements, removing a pre-existing false TS2740 on every declared tuple against an array) and an
+existence-only tuple-inherits-Array answer the grid demanded (`isArray(diag) ? diag.slice(1)` in tsc's
+own utilities.ts) — TS1355 is tsc's `isValidConstAssertionArgument` in both spellings, and the
+prerequisite literal-property-write false positive (`mo.v = "a"` against `v: "a"` reported `'string'`)
+is closed first. 16 of 30 recon rows byte-identical to pristine; the readonly half (TS2540, TS4104,
+`push` on a const tuple, `readonly [1, 2]` display) stays queued as stage 2. 57 pins, 12 arms all
+RED; core 16,084/0/3, corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline, grid 8×`added=0
+removed=0`. **(INV.0) step 4 censused by read-only recon**: the name-resolution surface partitioned
+into a two-commit `NameResolver` extraction (~1,300 code lines), an ambient row of three reads and
+no writes, eleven invariants each mapped to its pin classes — and tsgo's closure-struct
+`NameResolver` identified as exactly the shape § 10 forbids.
 
 **(P18.22) — A LOCAL INITIALIZED FROM AN ENUM MEMBER IS READ AT ITS FLOW TYPE AT EVERY READER, IN BOTH DIRECTIONS, 17,462 → 17,516 / 0 / 3 (2026-09-05).**
 **(CHK.85)(b) LANDED and (CHK.85) is CLOSED** ((c) is the staged `as const` item (CHK.93), designed
@@ -91,39 +108,3 @@ its proof. Gates: core **840 / 15,905 / 0 / 3**, generated corpus **25 classes /
 seven other modules 0, `cost_gate.py` exit 0 with `output.errors` 46 and this round adding nothing,
 `huge_methods.py --fail-over 0` exit 0, and the 8-profile grid **added=0 removed=0 everywhere** —
 the real gate here, not a control.
-
-**(P18.18) — AN ENUM STOPS OVERLAPPING A LITERAL IT CANNOT HOLD, AN IMPOSSIBLE COMPARISON'S BRANCH BECOMES `never`, AND A PRIMITIVE ARGUMENT STOPS BEING INVISIBLE TO A COMPOSITE PARAMETER, 17,343 → 17,369 / 0 / 3 predicted (2026-09-05).**
-Three of four items landed; every row reproduced against tsgo 7.0.2 AND pristine 6.0.3 before
-any code was written, and the two references agree on all of them.
-**(CHK.88)** — `ka === 1` with `ka: K.A` is `TS2367 … 'K.A' and '1'` in both references and was
-silent here; the verdict needs the member VALUES (round 745's `enumKnownDomainValues`, whose
-refusal for a *computed* enum is what keeps `declare enum` and a non-foldable member accepting
-every literal), and the literal must be read off the AST because `getTypeOfExpression` answers the
-base primitive for a literal node. **(CHK.87)** — the sibling NARROW, decided by (CHK.86)'s own
-predicate so the branch it collapses is exactly the branch that reports; it DELETES rows, and
-`typeOfExpr.calls` reads −0.22%. **(CHK.83)** — FOUR of five parameter kinds (ARRAY/tuple,
-FUNCTION, ENUM, UNION); the licence is the DECLARATION position, which admits the same family and
-matches both references row for row. **THREE of its four guards were found by a GATE, not by
-reading**: a REST parameter (301-401 added rows per profile — the grid), an ARITY-mismatched call
-(`couldNotSelectGenericOverload` — the corpus), and an OVERLOAD-SET parameter already owned by the
-dedicated `checkRecursiveFunctionTypes` walker (`recursiveFunctionTypes` — the corpus, attributed
-by `--passTiming`'s emissions census). INTERSECTION is refused with its measurement ((CHK.55)'s
-law: overload selection keeps a branded-`Path` signature, so opening the gate reported an
-ours-only row).
-**(CHK.85) STOPPED A SECOND TIME, now with the blast radius its entry asked for — (a) was BUILT
-and costs MEANING: +7 rows on every profile and +22 on harness, ALL discriminated-union selection
-losses.** The widening RULE is right (its contextual keep is tsc's `isLiteralOfContextualType`);
-what is missing is the CONTEXT reaching `getTypeOfObjectLiteral`. Two corrections: (a) is a lost
-true positive AND an ADDED false positive (`o.v = K.B` is an ours-only TS2322), and the widening
-is missing for ENUMS ONLY because a literal node already types as its base primitive; (c) is not
-an enum question at all — `as const` is unmodelled for strings and arrays too, i.e. a FEATURE.
-26 pins, **twelve arms** (7 / 1 / 1 / 1 / 2 / 2 / 5 / 1 / 1 / 1 / 1 / 1 RED, one nested and
-recorded as such). Gates: whole core module **839 classes / 15,880 / 0** (a superset of the
-682-file fixture-selected sweep, all 681 test classes confirmed present — 682 `--tests` patterns
-were measured to take >20 min and produce no XML); generated corpus **25 classes / 8,837 / 0**;
-externals 290/0; project 848/0; kir 159/0; lsp 58/0; `cost_gate.py` exit 0 (`output.errors` 46
-unchanged, largest move `mapped.hits` +1.22%); `huge_methods.py` exit 0; 8-profile grid all
-`added=0 removed=0` — the REAL gate here, not a control, since all three items move diagnostics.
-Queued: (CHK.89) a return-position enum-member annotation losing its qualifier (`'A'` for
-`'K.A'`, pre-existing), (CHK.90) the TS2367 CATEGORY rule missing `getBaseTypesIfUnrelated`, and
-(CHK.83)'s own remainder.

@@ -25,6 +25,101 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.23) — const assertions stop being `any`: stage 1 of (CHK.93) lands, and the name-resolution seam is censused for (INV.0) step 4 (2026-09-05)
+
+**Suite 17,516 → 17,573 / 0 / 3** — the 57 new pins in `ConstAssertionTest`; no baseline
+moved and no `LogicalParityDivergence` is needed. Orchestrated as the three rounds before it:
+one implementation subagent owned Gradle and landed (CHK.93) stage 1; a read-only recon
+subagent censused the (INV.0) name-resolution seam over HEAD and produced the step-4
+extraction plan, now in the queue as the (INV.0) step-4 sub-item.
+
+**(CHK.93) STAGE 1 LANDED — literal types through a const context, no readonly-ness.** On
+HEAD every OBJECT, ARRAY and ENUM-MEMBER const assertion was `any` (the `const` TypeReference
+fell off `getTypeFromTypeReference`'s ladder to `errorType`); after this round 16 of the
+recon's 30 rows are byte-identical to pristine 6.0.3 = tsgo 7.0.2 (message and position), and
+the stage-2 edges are pinned at today's answer with their KDoc saying so. The five
+deliverables, in the order they landed: **(e) the prerequisite first** —
+`checkPropertyAccessAssignment` typed a literal RHS as its base primitive, so `declare const
+mo: { v: "a" }; mo.v = "a"` was an ours-only TS2322 `'string'` with no `as const` anywhere;
+`propertyWriteLiteralValueType` is a second chance on the REJECTING path only, and a refusal
+now prints the literal (`mo.v = "b"` → `'"b"'`, both references). **(a)** a const type-ref
+assertion answers its operand's const-context type (`constContextTypeOf`:
+`literalTypeOfExpression ?: getTypeOfExpression`, scalar mints registered non-widening; the
+assertion recognised SYNTACTICALLY by `isConstAssertionExpr` through parens / `satisfies` /
+`!`), with the regular-literal rule at the three recorders (so `let x = "a" as const; x =
+"b"` reports and `let l = "a" as const` reads `"a"`), in `inferReturnTypeFromBody`, and an
+argument ELABORATION through the assertion (tsc's `elaborateError`) so the excess-property
+TS2353 and the per-property row both fire at `zf({ v: "a" } as const)`. **(b)**
+`getTypeOfObjectLiteral` computes `inConstContext` ONCE per literal (tsc's
+`checkObjectLiteral`) and threads it into the member `raw` and into (CHK.91)'s
+`objLitMutableMemberType` (replacing its per-member walk); the object is frozen against
+`widenType`. **(c)** a const array is a frozen TUPLE (`constContextTupleOfArrayLiteral`) so
+`t[0]` reads `1` — and the tuple needed a relation rule tuples always needed: a tuple source
+relates to `Array<T>` / `ReadonlyArray<T>` when every element relates (acceptance-only),
+which removes a PRE-EXISTING false TS2740 on every declared tuple against an array (`declare
+const mt: [1, 2]; const a: number[] = mt` was TS2740 on HEAD, silent in tsc). Its knock-on
+was found by the grid: once a tuple relates, `isArray(diag)` narrows a union to its tuple
+constituent and `diag.slice(1)` read as missing (tsc's own `services/utilities.ts:4062`, one
+added row on harness/server/services) — `tupleInheritsArrayMember` answers EXISTENCE only,
+consulted at the three member-missing emitters; a tuple method's TYPE stays `any`
+(pre-existing), and the type-faithful table was REFUSED as an unpriced program-wide change.
+**(d)** TS1355 is tsc's `isValidConstAssertionArgument` transcribed (tri-state), dispatched
+from BOTH `as const` and `<const>` spine arms, the base resolved through `spineScopeLookup` →
+file locals → per-file globals, qualified names through `exports`, aliases through
+`resolveAlias`; one deliberate conservatism — an UNRESOLVED base is skipped (tsc reports
+TS1355 beside TS2304). **Measured the item's open subtlety**: `const a: number[] = [1, 2] as
+const; a.push(3)` is SILENT in both references (tsc makes the tuple mutable under a mutable
+contextual array), pinned as silence with the note that stage 1 cannot express the
+mutability half. One (CHK.91) pin recorded as "unobservable until the assertion is modelled"
+became a VALUE pin.
+
+**Pins and ablation.** 57 pins, VALUE pins throughout (the type read out of a wrong-typed
+target), negative controls per rule. Twelve arms, one mistake each: a1 the assertion typing
+(**34 RED**); a2 the member keep (**18**); a3 the tuple (**14**); a4 the TS1355 widening
+(**4**); a5 the second chance (**2**); a6 the tuple→array relation (**3**); a7 let-keeps-
+regular at both recorders (**4**); a8 the frozen mark — its first shape read 0 RED because the
+recorder never calls `widenType`, re-pointed at the SYMBOL path (a class property `p = [{ v:
+"a" } as const]`, measured `'string'` on the arm) (**1**); a9 non-widening registration
+(**2**); a10 elaboration through the assertion (**2**); a11 return inference (**1**); a12
+tuple-inherits-Array (**1**). "Context computed per member instead of once" is unobservable
+by construction — a cost-only decision, stated, no arm. Restored `Checker.class` sha256
+`b7cd50d8…`.
+
+**Gates** (against `b7cd50d8`): core **844 classes / 16,084 / 0 / 3**; corpus **25 classes /
+8,837 / 0**, the 18 named `as const` baselines confirmed run by name in the XMLs; full suite
+17,573 / 0 / 3 over 964 result files; `cost_gate.py` **exit 0**, no rebaseline (`output.errors`
+46, `spine.nodes` +0.00%, `typeOfExpr.calls` +0.03%, largest move `mapped.keyed` −1.28%);
+`huge_methods.py --fail-over 0` **exit 0**; grid `0a74b2bb` → `b7cd50d8`, marker
+`constContextTupleOfArrayLiteral`: **8 × `added=0 removed=0`** (the script's own run hit the
+590 s cap after seven profiles; the eighth and the after arms were re-run by hand with the
+script's exact recipe) — an INTERMEDIATE build had the one `slice` row, closed by a12.
+Builds 0 `w:`, `spine_closure_audit.py` clean.
+
+**(INV.0) STEP 4 CENSUSED — the name-resolution seam, as an extraction plan.** Sixty-odd
+functions partitioned into post-hoc-resolvable (the future `NameResolver`), walk-scoped (stay,
+or take the scope as a parameter) and type-questions-in-disguise (Stage-3-shaped); two
+commit-sized moves (4a the module-specifier + alias leaf, ~450 code lines; 4b the scope side,
+~850), a constructor of eleven frozen inputs with the five init-filled containers handed in
+as OBJECTS, an ambient row of three reads and no writes, eleven invariants each mapped to
+the pin classes that gate it, the `-XX:+PrintInlining` hops to watch, and the finding that
+tsgo's `binder.NameResolver` (a struct of 13 closures) and tsc's `createNameResolver` are
+exactly § 10's forbidden shape — the SPLIT transfers, the wiring does not. Spans were brace-
+matched over a length-preserving stripped copy with the positive control CLAUDE.md demands
+(4,754 `fun`s raw = stripped).
+
+**Residues (recorded in `ConstAssertionTest`'s KDoc; stage 2 stays queued as written).** r24's
+target prints `'string'` for `'"b"'` — (CHK.92)(a)'s deliberate target widening, not this
+round's; `const s: string[] = [1, 2] as const` reports TS2740 at the declaration where tsc
+elaborates per element (form); `` `p${n}` as const `` is `string` (no template-literal types);
+a `let` read of an enum-member ELEMENT widens to the enum (enum members are shared instances
+and cannot carry a non-widening mark); `[...zt, 3] as const` stays `any` (spread); a body-
+local `takeB(zx)` is silent (the argument gate's frame has no var-decl recorder — HEAD-
+identical, the (P18.22) residue); `zd.indexOf("x")` and `mt.push(3)` are silent (tuple method
+calls unchecked, pre-existing); a conditional member's union order prints `"a" | "b"` where
+pristine prints `"b" | "a"` and tsgo agrees with us; a boolean literal cannot carry a per-
+instance mark (`trueType` is a singleton), which is WHY the let-keeps rule is syntactic.
+Trim-on-write: the (P18.12) note moved to `docs/history/PLAN-PHASE-5-HISTORY.md`.
+
 ### Round (P18.22) — a local initialized from an enum member is read at its flow type, at every reader, in both directions (2026-09-05)
 
 **Suite 17,462 → 17,516 / 0 / 3** — the 52 new pins in `EnumMemberLocalFlowTest` plus two
@@ -987,81 +1082,6 @@ gone — byte-identical in code, strictly better in text.
 (`p.v` / `p.f()` / `new p.ctor()` through `import p = require("p")`) — a documented blocker
 needing a static-side type for a class value, refused on instruction.
 
-### Round (P18.12) — cross-module heritage: the 179 refused supertypes of `@types/node` become supertypes, and the set still compiles (2026-09-04)
-
-**(CHK.78) LANDED — three augmentation divergences, and the first was FAR broader than the item
-stated.** (a) The false **TS2882** has nothing to do with augmentation: `resolveModuleSpecifier`
-matches a specifier against `fileResults` KEYS and is not directory-aware, so on a REAL project
-(absolute-path keys) **every relative side-effect import** read it — `import "./types.js"`,
-`import "./types"`, nested paths, with or without an augmentation beside them. The corpus is
-blind by construction (flat names, so `./types` matches `types.ts`) and tsc's own 78 sources
-carry no relative side-effect import. Fix: the side-effect arm appends
-`resolveImportTargetFallback` — the crawl's own `(importer, specifier)` answer per (CHK.30),
-empty off the project path, so it can only SUPPRESS; the genuinely missing module keeps TS2882
-and the bare-specifier arm is untouched. (b) A bare `node: Node` inside the block typing `any`
-is a LIB-COLLISION axis, not an annotation one: with `lib: ["es2020"]` the same fixture already
-resolved and only DOM degraded it, because INV.3(c)(iv)'s augmentation leg sat BELOW
-`lookupPerFileForNode`'s per-file consult — extracted as `augmentationContextSymbol` and asked
-FIRST. The same fix closed a PRECEDENCE divergence measured beside it: with an
-`import { Zzz } from "./other.js"` beside the augmentation, tsgo resolves the augmented module's
-`Zzz` and we resolved the import's — the augmented module is the inner scope. (c) The lens's
-`typeReferenceSymbol` answered the block's own PARTIAL interface in-walk; it now asks the
-augmentation context first (a bounded parent walk, lens-only, off the hot path), falling through
-where the target does not export the name. **One guard was built, measured REDUNDANT and
-removed**: an `augmentationSharedNames` index plus a third fast-path clause read 0 RED under
-ablation, because (CHK.49) keeps the lib key set out of `nonModuleVisible` — a lib name a module
-file also declares IS module-only and never took the fast path — and a script-file collision is
-already merged by `mergeSharedKeepNames`; the refusal is recorded in source and the fast path
-stays one probe. 13 pins (part (a) pinned through a DIRECT `Checker` construction with
-`moduleResolutions`, since a `diagnose()` pin is vacuous on flat names), three arms RED 3/2/1;
-filtered 1,163/0; cost_gate exit 0; huge_methods 0 over; the 8-profile grid `added=0 removed=0`;
-externals 290/0 with the per-module gates; **the `@types/node` per-module receipt byte-identical
-in all six output files** — the real risk here, since `declare module "fs"` inside `fs.d.ts` can
-make the relative-aware resolver see a BARE specifier, and it does not fire because a script
-`.d.ts` has no named module exports. Suite 17,211 → 17,224 / 0 / 3. Four residues queued as
-(CHK.82).
-
-**Full suite after the round: 17,196 → 17,211 / 0 / 3** (run by the orchestrating session; the externals module reads 290/0 with the Kotlin/JS gate live).
-
-**(EXT.24) LANDED — a per-module SET is generated in ONE call, so every generation knows the
-others.** `generateKotlinExternalsPerModule(files, modules)` runs each wiring TWICE: pass 1
-collects each module's frozen tree and LIFTS it into that module's Kotlin package (path prefixing
-and nothing else); pass 2 re-runs each generation with the other modules' lifted trees in hand and
-renders it. Only the string-only models cross between the passes — no AST, checker or collector is
-retained — which is what keeps a 51-module set inside an ordinary heap; the price is one extra
-check per module (14.5 s → 29.7 s for `@types/node`). Between the passes the `open` attribution is
-computed ONCE over the whole lifted set (`openedAcrossModules`) and restated per generation
-(`translateOpened`), because a class member that a subclass in ANOTHER package overrides must be
-`open` and the owning generation cannot see that for itself: its own declarations are spelled
-locally while the foreign subclass's supertype names its package, and no single table holds both
-spellings. **Receipt on `@types/node` 20.19.43, 51 modules, program order held:** heritage
-refusals `179 → 0`, cross-package references `283 → 468`, `Socket extends stream.Duplex` renders
-(`public open external class Socket(…) : node.stream.Stream.Duplex`), and the whole set still
-compiles TOGETHER at **0 metadata and 0 Kotlin/JS errors** — the 184 `hides member of supertype` +
-27 `inherits conflicting members` (EXT.21b) measured are gone, as are the 115 `is final and cannot
-be overridden` the first cut produced. Exactly ONE new heritage marker, and it is honest:
-`https.Server` merges an interface whose `extends node.http.Server` is now a real class base while
-the class already extends `node.tls.Server` — a Kotlin class extends one class. rxjs (250 files)
-and `typescript.d.ts` are byte-identical: a single-module generation keeps the (EXT.21b) refusal
-BY CONSTRUCTION, since the gate is the SET of specifiers generated beside it. 9 pins + 6 gate
-cases (a per-module set compiled together in both compilers), eight single-mistake arms.
-**The one thing that had to be measured rather than reasoned, and the trap:** a lifted package is
-NOT an ordinary scope. Modelling it as one — its segments in the spelling set, resolved by
-`resolveSpelling`'s innermost-first walk — makes `node.node.console` (the `node:console` twin
-under the root `node`) declare the name `node` in the scope `node`, so `node.net.Socket` read from
-`node.http` resolves to NOTHING and the whole cross-module override attribution silently reads
-empty. It is invisible at three modules and total at 51; `Inheritance.resolveHere` separates the
-package half from the declaration half, and `spellHere` refuses a partial package prefix as a
-spelling (Kotlin has no relative package resolution). **Two things built and then removed or
-recorded as redundant, measured rather than argued:** rewriting the lifted texts to absolute
-spellings at lift time is byte-inert on the whole 51-module set (`respell` re-resolves every
-inherited text anyway) and is not kept; passing the foreign tables to the REDUCE as well as to the
-renderer is byte-inert too and is kept for consistency, not claimed as a guard. Externals
-275 → 290 / 0. Two probe/gate instruments repaired in passing: a multi-file compile error now
-names its FILE (a line number over 51 generated sources names nothing without it), and the probe's
-declaration-count regex could not count `public override fun`, so a rung that ADDS supertypes read
-as a loss of 221 declarations.
-
 - [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
   HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
   LATTER.** The source headers are the licence; the docs drifted. Sweep README.md and docs/
@@ -1944,7 +1964,18 @@ as a loss of 221 declarations.
   to every object literal's member types program-wide. Fixtures: `chk85a`/`b`/`c` in the
   (P18.17) note.
 
-- [ ] **(CHK.93) CONST ASSERTIONS — `x as const` / `<const>x` — MEASURED 2026-09-05 by read-only
+- [ ] **(CHK.93) STAGE 1 LANDED 2026-09-05 ((P18.23) note) — a const assertion answers its operand's
+  const-context type (`constContextTypeOf`, recognised syntactically by `isConstAssertionExpr`), object members keep
+  their literals with the context computed once, a const array is a frozen tuple with the relation rule tuples
+  always needed (tuple → `Array<T>`/`ReadonlyArray<T>` by elements, removing a pre-existing false TS2740 on every
+  declared tuple) and the existence-only `tupleInheritsArrayMember`, TS1355 is tsc's `isValidConstAssertionArgument`
+  in both spellings, and the (e) prerequisite makes a literal property write a second chance by literal. 16 of the 30
+  rows byte-identical to pristine; stage-2 edges r03 r09 r10 r12 r18 r20 r26 r30 pinned at today's answer. 57 pins,
+  12 arms; core 16,084/0/3, corpus 8,837/0, cost_gate exit 0, grid 8×0/0. **STAGE 2 (readonly-ness) STAYS OPEN as
+  written below**, plus two facts for it: a `let` read of an enum-member ELEMENT widens to the enum (shared member
+  instances carry no mark), and the type-faithful tuple member table (`mt.slice(1)` typed, not `any`) was REFUSED
+  this round as an unpriced program-wide change — price it on the grid first. ORIGINAL ITEM: CONST ASSERTIONS —
+  `x as const` / `<const>x` — MEASURED 2026-09-05 by read-only
   recon (fixtures `scratchpad/chk85c/` r01-r30 + probes; tsgo 7.0.2 ≡ pristine 6.0.3 on all 32 rows;
   Checker.kt lines are commit 1331d33a). The (CHK.85)(c) successor.** Every OBJECT, ARRAY and
   ENUM-MEMBER const assertion is `any` on HEAD: `getTypeOfExpressionCore` types an
@@ -2215,6 +2246,103 @@ as a loss of 221 declarations.
   (precedent: `enumMemberWeakSource` ~118886, which is why `nestedExcessPropertyChecking`
   prints `Type 'E'` today), with a syntactic freshness override at the (CHK.86)/(CHK.88)
   emitter (~165973/165993). Population 26 baselines / 4 ACTIVE, 0 member-form lines anywhere.
+
+- [ ] **(INV.0) STEP 4 — NAME RESOLUTION: EXTRACT `NameResolver.kt` IN TWO COMMITS (4a leaf, 4b
+  scope side), VERBATIM, LEDGER ROW 4 — the extraction PLAN, censused 2026-09-05 by read-only
+  recon over HEAD 9a49e44c (spans brace-matched over a length-preserving stripped copy, 4,754
+  `fun`s raw = stripped; caller counts by `grep -a`).** The surface is 60-odd functions in
+  three partitions: (i) POST-HOC-RESOLVABLE (a function of the node and the frozen binder
+  tables — the collaborator), (ii) WALK-SCOPED (reads `currentLocalTypes` /
+  `currentFileLocals` / `spineCurrentScope` / `inferenceNamespaceStack` — stays, or takes the
+  scope as a parameter), (iii) TYPE questions in disguise (`getTypeFromTypeReference`,
+  `getTypeOfIdentifier`'s `getTypeOfSymbol` tail, `lookupInInferenceNamespace` — Stage-3-
+  shaped, out of scope). **4a moves the LEAF (~450 code lines)**: `resolveModuleSpecifier` /
+  `computeModuleSpecifier` / `resolveModuleSpecifierRelative` / `…RelativeJsAware` /
+  `resolveAliasJsModuleSpecifier` / `resolveImportTargetFallback` / `resolveAlias` (242 lines,
+  63 callers, NO diagnostic side effect — grepped) / `getSymbolTarget` + `setSymbolTarget`
+  (with `CheckerState.symbolTargets`, whose only readers they are) / `resolveAliasTarget` /
+  `resolveNamePath` / `findSymbolInExports` / `resolveImportedSymbolGeneral` +
+  `computeImportedSymbolGeneral` / `resolveExportedSymbolThroughStars` / `moduleNamedExportsOf`
+  / `augmentationTargetFile`, plus `moduleSpecifierCache` / `importedSymbolGeneralCache` /
+  `ambientModuleFilelessCache` — every other resolver depends on this set. **4b moves the
+  SCOPE SIDE (~850 code lines)**: `owningBinderResult` / `nodeSymbolOf` /
+  `moduleInstanceStateOf`; `lookupInEnclosingNamespaces` + `globalAugmentationLevelSymbol` +
+  `mergedNamespaceLevels` + `ambientModuleBlockIsFileless`; `moduleLocalContributesGlobally`;
+  `lexicalTypeSymbolForNode`; `buildPerFileScopes` / `buildPerFileScopeFor` /
+  `computePerFileVisibility` (minus the classifier install) / `ensurePerFileVisibility` /
+  `moduleOnlyGlobals` / `libValueShadows` / `perFileScopeOf` / `perFileScopeProbe` /
+  `lookupPerFile` / `lookupInFileScope` / `globalsForFile` / `lookupPerFileForNode` (67
+  callers, ~2 M identifiers per self-compile) / `augmentationContextSymbol` (+`ForNode`) /
+  `libValueBehindTypeOnlyShadow`; `resolveQualifiedName`; `resolveTypeNameToSymbol` +
+  `symbolHasTypeSideDeclaration` + `typeSideImportFallback`; `namespaceAliasMemberSymbol` /
+  `resolveNamespaceQualifiedSymbol` / `resolveNsQualifiedFromQualifiedName`;
+  `resolveHeritageBaseHead` / `resolveHeritageBaseSymbol` / `isInAmbientContext`;
+  `ambientModuleSurfaceMember`; the `resolveIdentifierInFile` / `findTypeAliasByName` /
+  `findTypeParamDeclByName` / `findNamespaceLocalInterface` first-hit program scans (verbatim,
+  FLAGGED in the row as a (BIND.1)-class cross-file answer — not to be "fixed" in a split); and
+  the `perFileScope*` / visibility fields. **Constructor** (row 3's shape — final class, direct
+  calls, objects handed in, no lambdas): `(checker, options, binderResults, fileResults,
+  globals, libGlobals, moduleResolutions, moduleImportAliasNames, umdGlobalNames, moduleFiles,
+  globalAugmentationAddedSymbols)` — the five mutable containers are the SAME objects the init
+  passes fill, so a later fill is visible without an ambient read; declared beside
+  `instantiator` (~:702), i.e. BEFORE `init`, with `libGlobals`'s DECLARATION (~:9866) moved
+  ahead of it (move the declaration, not the initialiser). **tsgo's shape is NOT the model**:
+  `binder.NameResolver` (nameresolver.go:9-22, checker.go:1466-1481) is a struct of 13
+  closures and tsc's `createNameResolver` (utilities.ts:11491-12030) the same — exactly § 10's
+  forbidden capturing-lambda input; what transfers is the SPLIT (a `resolveName(location,
+  name, meaning)` primitive apart from entity-name / alias / external-module resolution), not
+  the wiring. **Stays in `Checker`**: `getTypeOfIdentifier` (its first four legs are walk
+  ambient), `spineScopeLookup` (reads `existing` — must never merge with the `symbols`-only
+  chain), `lexicalScopeSymbol`, the two `inferenceNamespaceStack` consults,
+  `resolveQualifiedValueSymbol` (first leg `currentFileLocals`), `resolveTypeNameInEnclosingScope`
+  / `resolveTypeNameViaNamespaceExports`, the three `currentFileLocals` namespace-member
+  finders, the TS2304 `NameScope` / `lexLevelHasName` / `spineURes*` / `buildNamespaceScope`
+  family, and `installGlobalsLookupClassifier` (reads the resolver's classifier sets through
+  `internal` accessors and calls `resolver.ensurePerFileVisibility()`). **Ambient row after the
+  move**: reads `Checker.findEnclosingImport` (the (INC.81) `enclosingImportIndex`),
+  `Checker.lexicalBlockScopedEnumNames` (an init-pass `var`), the pure predicates
+  `isModuleFile` / `isImportBindingDecl` / `isDtsFile`; writes NONE (`symbolTargets`, the scope
+  maps, the visibility sets and four memos become resolver-owned). ~1,300 code lines / ~2,000
+  with KDoc out of `Checker.kt` — the largest Stage-0 move so far (rows 1-3: 60/79/290).
+  **Invariants the moved code preserves VERBATIM, each with its gate**: (1) `globals[name]` IS
+  the binder's object (`Inv3MergeRetireTest`, `Inv3GlobalsForFileTest`, `Inv3PerFileLookupTest`'s
+  `assertSame`, corpus `extendGenericArray*` / `jsExportMemberMergedWithModuleAugmentation`);
+  (2) (CHK.49)'s un-seeded lib keys in `ensurePerFileVisibility` (`Inv3NodeKeyedLookupTest`,
+  `LibGlobalNameShadowTest`, `PostRetirePerFileConsultsTest`, `NameCensusTest`); (3)
+  `LayeredSymbolTable` order (`LayeredSymbolTableTest`, `PerFileScopeMemoTest`,
+  `ProjectLazyPerFileScopeTest`, `ProjectLazyVisibilitySetsTest`; the VALUE receipt is the
+  corpus, 503 red if the scope is never built); (4) the build calls stay on their OWN
+  `pass("init:…")` lines — init order is the soundness argument (`SetupPhasePartitionTest`,
+  `DeferredSetupPassTest`, `EagerIndexDeferralTest`); (5) `symbols`-only in
+  `lexicalTypeSymbolForNode` (`FunctionScopedEnumTypePositionTest`,
+  `EnumShadowedInFunctionScopeTest`, `Inv2LexicalScopeTest`, `Inv4SpineScopeStateTest`); (6)
+  lexical-first, never as a miss-fallback, in `resolveTypeNameToSymbol` (B83.5;
+  `NamespaceTypeNameShadowingTest`); (7) no cross-file scan on an owner miss ((BIND.1);
+  `NodeKeyCollisionTest`); (8) innermost-first position-derived namespace consult skipping
+  string-named blocks and `declare global` (`NamespaceBodyResolutionTest`,
+  `NamespaceResolutionFollowUpTest`, `NamespaceResolutionResidueTest`,
+  `DeclareGlobalAugmentationTest`); (9) `resolveImportTargetFallback` LAST and
+  `moduleResolutions`-only, and `resolveImportedSymbolGeneral` NEVER inside `resolveAlias`
+  (round 409's TS2315 flood; `ProjectPackageTypeResolutionTest`, `CrawlPerFileResolutionScopeTest`,
+  `ModuleAugmentation*Test`); (10) heritage meanings (`NamespaceImportHeritageTest`,
+  `NamespaceQualifiedBaseInheritanceTest`, `KotlinExternalsGeneratorTest`); (11)
+  `symbolTargets` per-checker and `IntKeyMap`-keyed (`ParallelWorkerIdSpaceTest`,
+  `CompileThreadInvariantTest`). Plus a new `NameResolverTest` pinning the pure
+  `computeModuleSpecifier` / `resolveModuleSpecifierRelative` without a checker (row 3's
+  `createTypeMapper` precedent). **Forbidden-shape notes**: keep `moduleOnlyGlobals()` a
+  method with one boolean guard, NOT `by lazy`; keep `perFileScopeOf`'s reference-compared
+  memo pair verbatim; keep `importedSymbolGeneralCache` the boxed `HashMap<Int,…>` it is (the
+  boxed-key family is measured and refused, round 904 — a split is not the place). **Receipts
+  per commit (§ 10)**: corpus byte-identical + `cost_gate.py` +0.00% (a CONTROL); `scripts/
+  ab-interleaved.sh` wall + win rate; JFR allocation via `scripts/aggregate_jfr.py`;
+  `-XX:+PrintInlining` on the `Checker::lookupPerFileForNode` (from `getTypeOfIdentifier`
+  ~119625, on `getTypeOfExpression`'s Identifier arm), `lookupInEnclosingNamespaces`,
+  `resolveTypeNameToSymbol`, `resolveAliasTarget` (from `getTypeOfSymbolWorker`) and
+  `resolveModuleSpecifier` (73 sites) hops reading `inline (hot)` with the three standing sites
+  row-identical; core `--rerun` compile time; `huge_methods.py --fail-over 0`; `Checker.kt`
+  `wc -l` before/after as the STATUS.md shrinkage row. Cross-file consumers: NONE call these
+  directly — `CheckedLens.resolveName` (~5991) is `spineScopeLookup` and `typeReferenceSymbol`
+  (~6001) composes the per-file legs; `SpineDispatch.kt` and `NameCensus.kt` only NAME them.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

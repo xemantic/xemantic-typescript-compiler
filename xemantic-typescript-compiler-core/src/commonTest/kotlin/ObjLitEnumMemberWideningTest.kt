@@ -332,13 +332,17 @@ class ObjLitEnumMemberWideningTest {
     }
 
     @Test
-    fun `a const assertion is recorded as unobservable until the assertion is modelled`() {
-        // (CHK.85)(c): `as const` is unmodelled — the member reads `any` on every binary
-        // this repo has shipped, so tsc's const-context keep (piece 2 of the rule) cannot
-        // be pinned by a value here. This is an ARM pin (round 812's law): it records the
-        // edge rather than claiming coverage, and it reddens the day the assertion is
-        // modelled so that the keep gets its value pin then.
-        assert(messages("const ac = { v: K.A } as const\nconst acs: string = ac.v").isEmpty())
+    fun `a const assertion keeps the member - the const-context keep has its value pin`() {
+        // (CHK.93) stage 1 modelled the assertion, so the const-context keep (piece 2 of
+        // the rule) is now a VALUE pin: both references print `Type 'K' is not assignable
+        // to type 'string'` (the generalization at a string target) and `Type 'K.A' is not
+        // assignable to type 'K.B'` at a same-flavour member target — the member survives
+        // the literal, where without the keep it would widen to `K` and the second row
+        // would be silent. Until (CHK.93) this was an ARM pin recording `any`.
+        assert(messages("const ac = { v: K.A } as const\nconst acs: string = ac.v") ==
+            listOf("Type 'K' is not assignable to type 'string'."))
+        assert(messages("const ac = { v: K.A } as const\nconst acn: K.B = ac.v") ==
+            listOf("Type 'K.A' is not assignable to type 'K.B'."))
     }
 
     // ---------------------------------------------------------------------

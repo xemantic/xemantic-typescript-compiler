@@ -47319,8 +47319,21 @@ class Checker(
      * Returns `anyType` for expressions that can't be reliably inferred.
      * Skips null/undefined initializers (declare-then-assign patterns).
      */
-    private fun inferTypeFromInitializer(init: Expression): Type =
-        inferTypeFromInitializerType(rawTypeOfInitializer(init))
+    private fun inferTypeFromInitializer(init: Expression): Type {
+        val raw = rawTypeOfInitializer(init)
+        if (constAssertedInitializerKeeps(init, raw)) return raw
+        return inferTypeFromInitializerType(raw)
+    }
+
+    /**
+     * (CHK.93): does the const-ASSERTED initializer [init] keep its raw type [raw] —
+     * a regular literal (or a frozen const-context object/tuple) that never widens?
+     * The nullish/void exclusions are [inferTypeFromInitializerType]'s own.
+     */
+    private fun constAssertedInitializerKeeps(init: Expression, raw: Type): Boolean =
+        raw !== anyType && raw !== errorType &&
+            !raw.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void) &&
+            isConstAssertionExpr(init)
 
     /**
      * (CHK.85)(b) S3: the UN-widened half of [inferTypeFromInitializer] — `anyType` for the
@@ -62482,8 +62495,12 @@ interface DataView {
                 // relates to a member here) and the TS2367 read reported against
                 // `VarianceFlags.Bivariant`; tsc's declared type is `VarianceFlags |
                 // undefined`. A `const` keeps the members ((REL.2) round 783).
+                // (CHK.93): a const-ASSERTED initializer is regular and never widens
+                // ([cvdaRecordInferredLocalType]'s rule, repeated here for the same
+                // reason the const-ness gate is).
                 currentLocalTypes[declName!!] =
-                    if (WIDEN1_CONST_KEEPS_LITERAL && isConst) lit
+                    if ((WIDEN1_CONST_KEEPS_LITERAL && isConst) ||
+                        decl.initializer?.let { isConstAssertionExpr(it) } == true) lit
                     else widenEnumMemberTypes(getWidenedLiteralType(lit))
             } else if (declName != null && decl.type == null && decl.initializer != null &&
                 enumMemberAssignedAtoms(decl.initializer) != null) {
@@ -74018,6 +74035,8 @@ interface DataView {
                     // (14''c) ran AFTER the two round-630/632 passes, keeping
                     // the insertion order at a shared position byte-exact.
                     emitTS2352IfArrayToClassMismatch(node, spineSource, spineFileName)
+                    // (CHK.93)(d): the `<const>x` spelling of TS1355.
+                    emitTS1355IfInvalidConstAssertion(node.type, node.expression, spineSource, spineFileName)
                 } finally {
                     currentCheckFileName = savedCheckFileName
                     currentFlowGraph = savedFlow
@@ -74033,7 +74052,7 @@ interface DataView {
                 try {
                     emitTS2352IfNullAsReadonlyTuple(node, spineSource, spineFileName)
                     emitTS2352IfNullAsCast(node, spineSource, spineFileName)
-                    emitTS1355IfInvalidConstAssertion(node, spineSource, spineFileName)
+                    emitTS1355IfInvalidConstAssertion(node.type, node.expression, spineSource, spineFileName)
                     emitTS2352IfClassInstanceToRecordCast(node, spineSource, spineFileName)
                 } finally {
                     currentCheckFileName = savedCheckFileName
@@ -90481,38 +90500,25 @@ interface DataView {
     }
 
     /**
-     * B98.r128c: TS1355 — "A 'const' assertion can only be applied to references to enum
-     * members, or string, number, boolean, array, or object literals." Narrow, FP-safe
-     * slice: `<operand> as const` where the operand is a PROPERTY or ELEMENT access whose
-     * base Identifier resolves to a genuine NON-enum VALUE declaration (var/const/let/
-     * class/function/param). Enum-member access (`E.A as const`) is the ONLY valid
-     * property-access operand, so a non-enum base is unambiguously invalid (e.g.
-     * `const E5 = {…}; E5.a as const`). Conservative everywhere else: an unresolvable
-     * base, a namespace/interface/type-alias base, a qualified (PropertyAccess) base, or
-     * any non-member operand is SKIPPED (FN, never FP) — so the full whitelist of valid
-     * `as const` forms (literals, array/object literals, +/- numerics, …) is never at
-     * risk of a false positive. Squiggle spans the operand. Corpus FP surface verified
-     * empty: only `constantEnumAssert` (non-enum, fires) and `computedEnumTypeWidening`
-     * (enum base, skipped) have the `X.prop as const` shape.
+     * TS1355 — tsc's `checkAssertionWorker` over `isValidConstAssertionArgument`
+     * (checker.ts:38082), generalised by (CHK.93)(d) from B98.r128c's member-access-only
+     * slice. VALID operands: a string / number / bigint / boolean / template literal, an
+     * array or object literal, `-` on a numeric or bigint literal, `+` on a numeric one,
+     * parentheses around any of those, and a property or element access whose base
+     * ENTITY resolves to an enum. Everything else is the error at the OPERAND — an
+     * identifier (r06), a call (r27), `null` / `undefined`, a non-enum member access
+     * (`E.A.toString as const`, `N.x as const`), measured on tsgo 7.0.2 = pristine 6.0.3
+     * — for both spellings, `x as const` and `<const>x`. ONE deliberate conservatism: a
+     * member access whose base does NOT RESOLVE here is SKIPPED (tsc reports TS1355
+     * beside its TS2304): a resolution gap of ours must not manufacture a second row.
+     * `constantEnumAssert` (ACTIVE) pins the non-enum member-access shape; a
+     * `computedEnumTypeWidening`-style enum base stays valid.
      */
-    private fun emitTS1355IfInvalidConstAssertion(expr: AsExpression, source: String, fileName: String) {
-        val t = expr.type
-        if (t !is TypeReference || (t.typeName as? Identifier)?.text != "const") return
-        val operand = expr.expression
-        val baseIdent: Identifier? = when (operand) {
-            is PropertyAccessExpression -> operand.expression as? Identifier
-            is ElementAccessExpression -> operand.expression as? Identifier
-            else -> null
-        }
-        if (baseIdent == null) return
-        val sym = globals[baseIdent.text] ?: return
-        val decls = sym.declarations
-        if (decls.any { it is EnumDeclaration }) return            // enum member ref → valid
-        val isValueDecl = decls.any {
-            it is VariableDeclaration || it is ClassDeclaration ||
-                it is FunctionDeclaration || it is Parameter
-        }
-        if (!isValueDecl) return                                   // namespace/type-only/etc → skip
+    private fun emitTS1355IfInvalidConstAssertion(
+        typeNode: TypeNode, operand: Expression, source: String, fileName: String,
+    ) {
+        if (!objLitIsConstTypeRef(typeNode)) return
+        if (isValidConstAssertionArgument(operand) != false) return
         val start = operand.pos
         val length = expressionTrueEnd(operand) - start
         if (length <= 0) return
@@ -90527,6 +90533,51 @@ interface DataView {
             start = start,
             length = length,
         ))
+    }
+
+    /**
+     * (CHK.93)(d): tsc's `isValidConstAssertionArgument`, tri-state — `null` when the
+     * verdict needs a base resolution this checker could not make (the caller skips).
+     * `true` / `false` are Identifiers in this parser, which is why the Identifier arm
+     * admits exactly those two spellings.
+     */
+    private fun isValidConstAssertionArgument(node: Expression): Boolean? = when (node) {
+        is StringLiteralNode, is NoSubstitutionTemplateLiteralNode, is NumericLiteralNode,
+        is BigIntLiteralNode, is TemplateExpression,
+        is ArrayLiteralExpression, is ObjectLiteralExpression -> true
+        is Identifier -> node.text == "true" || node.text == "false"
+        is ParenthesizedExpression -> isValidConstAssertionArgument(node.expression)
+        is PrefixUnaryExpression -> {
+            val arg = node.operand
+            (node.operator == SyntaxKind.Minus && (arg is NumericLiteralNode || arg is BigIntLiteralNode)) ||
+                (node.operator == SyntaxKind.Plus && arg is NumericLiteralNode)
+        }
+        is PropertyAccessExpression -> constAssertionBaseIsEnum(node.expression)
+        is ElementAccessExpression -> constAssertionBaseIsEnum(node.expression)
+        else -> false
+    }
+
+    /** (CHK.93)(d): does the member-access base [base] resolve to an ENUM? `null` = unresolved. */
+    private fun constAssertionBaseIsEnum(base: Expression): Boolean? {
+        val sym = constAssertionEntitySymbol(unwrapParensExpr(base)) ?: return null
+        return sym.flags.hasAny(SymbolFlags.Enum) || sym.declarations.any { it is EnumDeclaration }
+    }
+
+    /**
+     * (CHK.93)(d): tsc's `resolveEntityName` over an entity-name EXPRESSION, as far as
+     * this checker resolves one — an identifier through the walk-scoped chain (a
+     * body-local enum, B83.5), the file locals and the per-file globals; a qualified
+     * name through its container's `exports` (an enum's members, a namespace's
+     * members); an import alias through its target. Unresolvable → `null`.
+     */
+    private fun constAssertionEntitySymbol(e: Expression): Symbol? {
+        val raw = when (e) {
+            is Identifier -> spineScopeLookup(e.text) ?: currentFileLocals?.get(e.text)
+                ?: lookupPerFileForNode(e, e.text)
+            is PropertyAccessExpression -> constAssertionEntitySymbol(e.expression)?.exports?.get(e.name.text)
+            else -> null
+        } ?: return null
+        return if (raw.flags.hasAny(SymbolFlags.Alias)) resolveAlias(raw).takeIf { it !== raw } else raw
     }
 
     /** Shared core for TS2352 nullish/primitive-mismatch cast diagnostics (both `<T>x` and
@@ -105865,7 +105916,13 @@ interface DataView {
         // BASE primitive for a literal node (there is no fresh-literal expression type
         // in this checker), so `literalTypeOfExpression` is the only source of one.
         val keepsLiteral = WIDEN1_CONST_KEEPS_LITERAL && varDeclIsImmutableBinding(decl)
-        val inferred = (if (keepsLiteral) literalTypeOfExpression(init) else null)
+        // (CHK.93): a const-ASSERTED initializer is a REGULAR literal type and never
+        // widens, for a `let` as much as for a `const` — tsc's `getWidenedLiteralType`
+        // widens only a FRESH literal, so `let x = "a" as const` reads `"a"` in both
+        // references (rows r25/q05). Read off the AST: a boolean literal is a shared
+        // singleton here and can carry no per-instance non-widening mark.
+        val constAsserted = isConstAssertionExpr(init)
+        val inferred = (if (keepsLiteral || constAsserted) literalTypeOfExpression(init) else null)
             ?: getTypeOfExpression(init)
         // 16.0: Allow void from explicit super()/CallExpression — for super(...)
         // returning void, we want `x = 5` later to fire TS2322. Filter void
@@ -105910,6 +105967,10 @@ interface DataView {
                         if (it === inferred) widen1ImmutableLiteralTypeIds.add(it.id)
                     }
                 }
+                // (CHK.93): a `let` initialized by a const assertion keeps the regular
+                // literal, and is NOT registered for the assignment-target widen-back —
+                // `let x = "a" as const; x = "b"` is a TS2322 in both references.
+                else if (constAsserted) inferred
                 else when (inferred) {
                 is Type.StringLiteral -> stringType
                 is Type.NumberLiteral -> numberType
@@ -111901,6 +111962,19 @@ interface DataView {
      * Resolves x's type, looks up the property symbol, gets its declared type, and emits
      * TS2322 if value type isn't assignable.
      */
+    /**
+     * (CHK.93)(e): the LITERAL type of a property write's right-hand side, or `null`
+     * when [value] is not a literal node (or its literal is what [valueType] already
+     * is). Read off the AST because `getTypeOfExpression` answers the base primitive
+     * for a literal node. Consulted ONLY after the base-typed relation has rejected,
+     * so it can turn a rejection into an acceptance and never the reverse.
+     */
+    private fun propertyWriteLiteralValueType(value: Expression, valueType: Type): Type? {
+        val lit = literalTypeOfExpression(value) ?: return null
+        if (lit === valueType || lit === errorType || lit === anyType) return null
+        return lit
+    }
+
     private fun checkPropertyAccessAssignment(
         target: PropertyAccessExpression, value: Expression, source: String, fileName: String
     ) {
@@ -112090,12 +112164,26 @@ interface DataView {
         if (!canUseTypeEngine(valueType, ptForRel)) return
         lastMissingIndexSigKind = null
         if (checkTypeRelatedTo(valueType, ptForRel, assignableRelation)) return
+        // (CHK.93)(e): a LITERAL right-hand side gets a second chance by its LITERAL
+        // type on the rejecting path. `getTypeOfExpression` answers the BASE primitive
+        // for a literal node — there is no fresh-literal expression type in this
+        // checker — so `declare const mo: { v: "a" }; mo.v = "a"` was an ours-only
+        // TS2322 `'string'` with no `as const` anywhere; both references are silent,
+        // and where the literal does NOT relate they print it (`Type '"b"' is not
+        // assignable to type '"a"'`). Suppression-first: the verdict moves only from a
+        // rejection to an acceptance, and the display goes through the same
+        // generalization the var-decl and assignment sites use ((PARITY.1)), so a
+        // literal against an object target still reads its base primitive.
+        val literalValue = propertyWriteLiteralValueType(value, valueType)
+        if (literalValue != null && checkTypeRelatedTo(literalValue, ptForRel, assignableRelation)) return
         // Object literal — emit TS2353 for excess instead
         if (value is ObjectLiteralExpression) {
             val displayTarget = typeToString(ptForRel)
             if (checkExcessProperties(value, valueType, ptForRel, displayTarget, source, fileName)) return
         }
-        val displaySource = typeToString(valueType)
+        val displaySource = typeToString(
+            literalValue?.let { relationErrorSourceDisplayType(it, ptForRel) } ?: valueType
+        )
         // B585: inside an object-literal method whose object literal is contextually
         // typed by `Record<string, Alias>`, a `this.X = v` mismatch displays the
         // contextual alias (`WatchHandler<any>`), not the unfolded structural method
@@ -116608,6 +116696,8 @@ interface DataView {
                             widen1ImmutableLiteralTypeIds.add(raw.id)
                             return raw
                         }
+                        // (CHK.93): a const-asserted initializer never widens (regular).
+                        if (constAssertedInitializerKeeps(init, raw)) return raw
                         val inferred = inferTypeFromInitializerType(raw)
                         if (inferred !== anyType && inferred !== errorType) return inferred
                     }
@@ -119411,9 +119501,18 @@ interface DataView {
             // Binary expressions
             is BinaryExpression -> getTypeOfBinaryExpression(expr)
 
-            // Type assertions / casts
-            is AsExpression -> getTypeFromTypeNode(expr.type)
-            is TypeAssertionExpression -> getTypeFromTypeNode(expr.type)
+            // Type assertions / casts. (CHK.93)(a): a CONST assertion (`x as const`,
+            // `<const>x`) answers its operand's const-context type — tsc's
+            // `checkAssertionWorker` returns `getRegularTypeOfLiteralType(exprType)`
+            // for `isConstTypeReference(type)`; before this a `const` type reference
+            // fell off `getTypeFromTypeReference`'s ladder to `errorType`, i.e. every
+            // object, array and enum-member const assertion was `any`.
+            is AsExpression ->
+                if (objLitIsConstTypeRef(expr.type)) constContextTypeOf(expr.expression)
+                else getTypeFromTypeNode(expr.type)
+            is TypeAssertionExpression ->
+                if (objLitIsConstTypeRef(expr.type)) constContextTypeOf(expr.expression)
+                else getTypeFromTypeNode(expr.type)
             is SatisfiesExpression -> getTypeOfExpression(expr.expression)
             is NonNullExpression -> {
                 // `undefined!`/`null!` is NonNullable<nullish> = never (assignable to
@@ -125649,8 +125748,21 @@ interface DataView {
      */
     private fun typeHasOwnProperty(type: Type, propName: String): Boolean {
         if (type !is Type.Object) return false
-        return getPropertyOfType(type, propName) != null
+        return getPropertyOfType(type, propName) != null || tupleInheritsArrayMember(type, propName)
     }
+
+    /**
+     * (CHK.93): does the TUPLE [t] inherit the member [name] from `Array<T>`? A tuple's
+     * member table here holds only its numbered slots and `length`, where in tsc its
+     * base type is `Array<union of its elements>` — so once a tuple RELATES to an
+     * array (the (c) relation rule), a type-guard narrow `isArray(diag)` lands on the
+     * tuple constituent and `diag.slice(1)` read as a missing member (tsc's own
+     * services/utilities.ts `diagnosticToString`, a grid row). EXISTENCE only: the
+     * member's type is not modelled (a tuple method call stays `any`, pre-existing).
+     */
+    private fun tupleInheritsArrayMember(t: Type, name: String): Boolean =
+        t is Type.Object && t.tupleElementTypes != null &&
+            getPropertyOfType(globalArrayType, name) != null
 
     /**
      * Resolve the RHS of an `instanceof` to its instance type. For `x instanceof C`
@@ -127331,10 +127443,13 @@ interface DataView {
      */
     private fun objLitMutableMemberType(
         prop: PropertyAssignment, name: String, propType: Type, propCtx: Type?,
+        inConstContext: Boolean,
     ): Type {
         if (!typeHasEnumMemberConstituent(propType)) return propType
         if (!objLitInitIsFreshEnumMemberAccess(prop.initializer)) return propType
-        if (objLitConstContextOf(prop.initializer)) return propType
+        // (CHK.93): the context is a property of the LITERAL, computed once by
+        // [getTypeOfObjectLiteral] (tsc's `inConstContext` at `checkObjectLiteral`).
+        if (inConstContext) return propType
         val ctx = propCtx?.takeIf { it !== anyType && it !== errorType }
             ?: objLitMemberContextualType(prop, name)
         if (ctx != null && isEnumLiteralOfContextualType(propType, ctx)) return propType
@@ -127446,6 +127561,66 @@ interface DataView {
 
     private fun objLitIsConstTypeRef(t: TypeNode): Boolean =
         t is TypeReference && (t.typeName as? Identifier)?.text == "const" && t.typeArguments == null
+
+    /**
+     * (CHK.93): is [expr] — through parentheses, `satisfies` and a non-null assertion —
+     * a const assertion, `x as const` or `<const>x`? Decided off the AST because the
+     * property the recorders need ("this literal is REGULAR and never widens", tsc's
+     * `getWidenedLiteralType` widening only a FRESH one) cannot be carried on a boolean
+     * literal, which is a shared singleton here.
+     */
+    private fun isConstAssertionExpr(expr: Expression): Boolean {
+        var e: Expression = expr
+        var hops = 0
+        while (hops++ < 32) {
+            e = when (e) {
+                is ParenthesizedExpression -> e.expression
+                is SatisfiesExpression -> e.expression
+                is NonNullExpression -> e.expression
+                is AsExpression -> return objLitIsConstTypeRef(e.type)
+                is TypeAssertionExpression -> return objLitIsConstTypeRef(e.type)
+                else -> return false
+            }
+        }
+        return false
+    }
+
+    /**
+     * (CHK.93): the type of [expr] in a CONST context — tsc's
+     * `checkExpressionForMutableLocation` under `isConstContext`, i.e.
+     * `getRegularTypeOfLiteralType`. The literal is read off the AST because
+     * `getTypeOfExpression` answers the base primitive for a literal node; an object or
+     * array literal, an enum-member access, an identifier and a call fall through to
+     * `getTypeOfExpression`, where the literal's own typing reads the context through
+     * the walk ([objLitConstContextOf]). A scalar mint is registered NON-WIDENING —
+     * the Object.freeze precedent — so a `let` read of it keeps the literal.
+     */
+    private fun constContextTypeOf(expr: Expression): Type =
+        literalTypeOfExpression(expr)?.also { registerConstContextLiteral(it) }
+            ?: getTypeOfExpression(expr)
+
+    /** (CHK.93): the object literal under a const assertion (`{…} as const`, `<const>{…}`), through parentheses. */
+    private fun constAssertedObjectLiteralOf(expr: Expression): ObjectLiteralExpression? {
+        var e: Expression = expr
+        var hops = 0
+        while (hops++ < 32) {
+            e = when (e) {
+                is ParenthesizedExpression -> e.expression
+                is AsExpression -> if (objLitIsConstTypeRef(e.type)) e.expression else return null
+                is TypeAssertionExpression -> if (objLitIsConstTypeRef(e.type)) e.expression else return null
+                is ObjectLiteralExpression -> return e
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    /** (CHK.93): a FRESH literal mint (or a union of them) that must never widen. */
+    private fun registerConstContextLiteral(t: Type) {
+        if (t is Type.StringLiteral || t is Type.NumberLiteral || t is Type.BigIntLiteral || t is Type.Union) {
+            nonWideningLiteralTypeIds.add(t.id)
+        }
+    }
 
     /**
      * (CHK.91) piece 3: tsc's `isLiteralOfContextualType` for an enum-member [candidate]
@@ -127749,6 +127924,9 @@ interface DataView {
         }?.also {
             resolveStructuredTypeMembers(it)
         }
+        // (CHK.93)(b): tsc's `isConstContext`, computed ONCE per literal (checker.ts
+        // `checkObjectLiteral`'s `inConstContext`) and threaded to every member.
+        val inConstContext = objLitConstContextOf(expr)
         for (prop in expr.properties) {
             when (prop) {
                 is PropertyAssignment -> {
@@ -127796,7 +127974,12 @@ interface DataView {
                         if (prop.initializer.let { it is BinaryExpression && it.operator == SyntaxKind.Equals })
                             anyType
                         else {
-                            val raw = getTypeOfExpression(prop.initializer)
+                            // (CHK.93)(b): under a const context a member KEEPS its literal
+                            // type — tsc's `checkExpressionForMutableLocation` answers
+                            // `getRegularTypeOfLiteralType` there; read off the AST because
+                            // `getTypeOfExpression` answers the base primitive for a literal.
+                            val raw = if (inConstContext) constContextTypeOf(prop.initializer)
+                                else getTypeOfExpression(prop.initializer)
                             // Round 438: a property VALUE that is a flow-narrowed bare Identifier
                             // reads its narrowed type — tsc types object-literal property values as
                             // expressions in flow context, but getTypeOfIdentifier does not consult
@@ -127860,7 +128043,7 @@ interface DataView {
                     }
                     // (CHK.91): a FRESH enum-member value widens to its enum unless the
                     // contextual member type keeps it — tsc's mutable-location rule.
-                    val propType = objLitMutableMemberType(prop, name, propTypeRaw, propCtx)
+                    val propType = objLitMutableMemberType(prop, name, propTypeRaw, propCtx, inConstContext)
                     // Duplicate member name: tsc's symbol table keeps ONE entry (the display
                     // shows the FIRST position; the value type updates last-wins).
                     val existing = members[name]
@@ -128030,6 +128213,10 @@ interface DataView {
         val objType = Type.Object()
         objType.members = members
         objType.properties = properties
+        // (CHK.93)(b): a const-context literal's members are REGULAR literal types and
+        // must survive [widenType] intact — the Object.freeze precedent (B435), so
+        // `let o = { v: "a" } as const` reads `o.v` as `"a"` in both references.
+        if (inConstContext) frozenObjectTypeIds.add(objType.id)
         return objType
     }
 
@@ -128462,16 +128649,13 @@ interface DataView {
 
     /** Get the type of an array literal expression. */
     private fun getTypeOfArrayLiteral(expr: ArrayLiteralExpression): Type {
+        // (CHK.93)(c): under a const context an array literal is a TUPLE of its
+        // elements' const-context types (tsc `checkArrayLiteral`: `inConstContext`
+        // → `createTupleType`), so `([1, 2] as const)[0]` reads `1`. Readonly-ness is
+        // stage 2: the tuple displays `[1, 2]` where tsc displays `readonly [1, 2]`.
+        if (objLitConstContextOf(expr)) return constContextTupleOfArrayLiteral(expr)
         if (expr.elements.isEmpty()) return getArrayType(anyType) // empty array → any[] (B87.6)
-        // Round 472: a contextual Array/ReadonlyArray type distributes its ELEMENT type
-        // to object-literal elements (tsc's contextual-type distribution) — a returned
-        // `[{ definition: { type: DefinitionKind.X, file: node }, … }]` vs
-        // `readonly SymbolAndEntries[]` needs the element context for the nested
-        // discriminant selection + guard-narrowed values (findAllReferences.ts:1000).
-        val elemCtx = (contextualType as? Type.Reference)
-            ?.takeIf { isArrayLikeReference(it) }
-            ?.resolvedTypeArguments?.firstOrNull()
-            ?.takeIf { it !== anyType && it !== errorType }
+        val elemCtx = arrayLiteralElementContext()
         // Infer element type as union of all element types
         val elementTypes = mutableListOf<Type>()
         for (el in expr.elements) {
@@ -128516,6 +128700,55 @@ interface DataView {
             else -> getUnionType(elementTypes)
         }
         return getArrayType(elementType)
+    }
+
+    /**
+     * Round 472: a contextual Array/ReadonlyArray type distributes its ELEMENT type
+     * to object-literal elements (tsc's contextual-type distribution) — a returned
+     * `[{ definition: { type: DefinitionKind.X, file: node }, … }]` vs
+     * `readonly SymbolAndEntries[]` needs the element context for the nested
+     * discriminant selection + guard-narrowed values (findAllReferences.ts:1000).
+     */
+    private fun arrayLiteralElementContext(): Type? = (contextualType as? Type.Reference)
+        ?.takeIf { isArrayLikeReference(it) }
+        ?.resolvedTypeArguments?.firstOrNull()
+        ?.takeIf { it !== anyType && it !== errorType }
+
+    /**
+     * (CHK.93)(c): the tuple an array literal in a CONST context denotes — one slot per
+     * element, each its const-context type ([constContextTypeOf]; a nested literal reads
+     * the context through the walk). A spread element keeps today's `any` (unsupported
+     * here outside a const context too), and an element this checker cannot type keeps
+     * today's `any` for the whole literal rather than guessing at a slot. The tuple is
+     * frozen against [widenType] exactly as a const-context object is.
+     */
+    private fun constContextTupleOfArrayLiteral(expr: ArrayLiteralExpression): Type {
+        val elemCtx = arrayLiteralElementContext()
+        val elementTypes = ArrayList<Type>(expr.elements.size)
+        for (el in expr.elements) {
+            if (el is SpreadElement) return anyType
+            val lit = literalTypeOfExpression(el)
+            val t = if (lit != null) {
+                registerConstContextLiteral(lit)
+                lit
+            } else {
+                val raw = if (elemCtx != null && el is ObjectLiteralExpression) {
+                    val savedCtx = contextualType
+                    contextualType = elemCtx
+                    try { getTypeOfExpression(el) } finally { contextualType = savedCtx }
+                } else getTypeOfExpression(el)
+                // Round 459's identifier narrowing, as the ordinary path applies it.
+                if (el is Identifier) {
+                    val narrowed = getNarrowedTypeForReference(raw, el)
+                    if (objLitValueNullishStrip(raw, narrowed)) narrowed else raw
+                } else raw
+            }
+            if (t === anyType || t === errorType) return anyType
+            elementTypes.add(t)
+        }
+        val tuple = buildTupleFromTypes(elementTypes)
+        frozenObjectTypeIds.add(tuple.id)
+        return tuple
     }
 
     /** B52.4: Narrow helper — return `nullType` only when the block body's first
@@ -145039,7 +145272,10 @@ interface DataView {
                     // Only return a CONCRETE result so the `?: anyType` fallback is
                     // unchanged for unresolvable cast targets.
                     is AsExpression -> {
-                        getTypeFromTypeNode(expr.type)
+                        // (CHK.93): `return x as const` infers the operand's const-context
+                        // type (a `const` type reference resolves to nothing by itself).
+                        (if (objLitIsConstTypeRef(expr.type)) constContextTypeOf(expr.expression)
+                            else getTypeFromTypeNode(expr.type))
                             .takeIf { it !== anyType && it !== errorType }
                     }
                     // B96-UNBLOCKER: `return [123]` infers the array-literal type
@@ -152673,7 +152909,11 @@ interface DataView {
                 // narrowed-single-Object emission missed it.
                 val indexSigProvides = narrowed.stringIndexInfo != null ||
                     (narrowed.numberIndexInfo != null && isNumericLiteralName(propName))
-                if (!indexSigProvides && getPropertyOfType(narrowed, propName) == null) {
+                // (CHK.93): a TUPLE constituent — what `isArray(diag)` narrows to once a
+                // tuple relates to an array — carries every `Array<T>` member.
+                if (!indexSigProvides && getPropertyOfType(narrowed, propName) == null &&
+                    !tupleInheritsArrayMember(narrowed, propName)
+                ) {
                     val narrowedDisplay = typeToString(narrowed)
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
@@ -153500,6 +153740,8 @@ interface DataView {
         // Check if property exists in type members
         CpaSections.atR(CpaSections.R_PROP)
         val prop = getPropertyOfType(objectType, propName)
+        // (CHK.93): a tuple has every `Array<T>` member (existence only, see the helper).
+        if (prop == null && tupleInheritsArrayMember(objectType, propName)) return
         if (prop != null) {
             // TS2576: `this.X` in an instance method where X is a STATIC member of the
             // enclosing class. `resolveInterfaceMembers` stores statics and instance
@@ -162737,6 +162979,12 @@ interface DataView {
         fileName: String,
     ): Int {
         ArgSections.at(ArgSections.L_OBJLIT)
+        // (CHK.93): tsc's `elaborateError` looks THROUGH a const assertion
+        // (`isConstTypeReference` → elaborate the operand), so `f({ v: "a" } as const)`
+        // reports at the property exactly as `f({ v: "a" })` does — the literal's type
+        // is already the const-context one ([getTypeOfObjectLiteral]).
+        @Suppress("NAME_SHADOWING")
+        val arg = arg as? ObjectLiteralExpression ?: constAssertedObjectLiteralOf(arg) ?: arg
         if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Object) {
             resolveStructuredTypeMembers(paramType)
             // Only emit TS2353 if target has known named properties — skip
@@ -165051,6 +165299,25 @@ interface DataView {
                     }
                     return true
                 }
+            }
+        }
+        // (CHK.93): a TUPLE source relates to an `Array<T>` / `ReadonlyArray<T>` target
+        // when EVERY element relates to `T` — in tsc a tuple is a reference whose base
+        // type is `Array<union of its elements>`, so `[1, 2]` → `number[]` holds; here a
+        // tuple is a `Type.Object` carrying only its numbered members and `length`, and
+        // the structural path reported it missing `pop`, `push`, … (a false TS2740 for
+        // every declared tuple against an array, surfaced at every `as const` array the
+        // moment (CHK.93)(c) built one — `const a: number[] = [1, 2] as const` is SILENT
+        // in both references, the contextual array type making the tuple mutable).
+        // Acceptance-only: an element that fails falls through to the structural path,
+        // which reports exactly what it reported before.
+        if (source is Type.Object && source.tupleElementTypes != null && target is Type.Reference &&
+            (target.target === globalArrayType ||
+                (globalReadonlyArrayType != null && target.target === globalReadonlyArrayType))
+        ) {
+            val elt = target.resolvedTypeArguments?.singleOrNull()
+            if (elt != null && source.tupleElementTypes!!.all { checkTypeRelatedTo(it, elt, relation) }) {
+                return true
             }
         }
         // B75.2: Array-derived source → ReadonlyArray<T> target — covariant element shortcut.

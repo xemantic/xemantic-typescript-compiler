@@ -1,3 +1,78 @@
+### Round (P18.12) — cross-module heritage: the 179 refused supertypes of `@types/node` become supertypes, and the set still compiles (2026-09-04)
+
+**(CHK.78) LANDED — three augmentation divergences, and the first was FAR broader than the item
+stated.** (a) The false **TS2882** has nothing to do with augmentation: `resolveModuleSpecifier`
+matches a specifier against `fileResults` KEYS and is not directory-aware, so on a REAL project
+(absolute-path keys) **every relative side-effect import** read it — `import "./types.js"`,
+`import "./types"`, nested paths, with or without an augmentation beside them. The corpus is
+blind by construction (flat names, so `./types` matches `types.ts`) and tsc's own 78 sources
+carry no relative side-effect import. Fix: the side-effect arm appends
+`resolveImportTargetFallback` — the crawl's own `(importer, specifier)` answer per (CHK.30),
+empty off the project path, so it can only SUPPRESS; the genuinely missing module keeps TS2882
+and the bare-specifier arm is untouched. (b) A bare `node: Node` inside the block typing `any`
+is a LIB-COLLISION axis, not an annotation one: with `lib: ["es2020"]` the same fixture already
+resolved and only DOM degraded it, because INV.3(c)(iv)'s augmentation leg sat BELOW
+`lookupPerFileForNode`'s per-file consult — extracted as `augmentationContextSymbol` and asked
+FIRST. The same fix closed a PRECEDENCE divergence measured beside it: with an
+`import { Zzz } from "./other.js"` beside the augmentation, tsgo resolves the augmented module's
+`Zzz` and we resolved the import's — the augmented module is the inner scope. (c) The lens's
+`typeReferenceSymbol` answered the block's own PARTIAL interface in-walk; it now asks the
+augmentation context first (a bounded parent walk, lens-only, off the hot path), falling through
+where the target does not export the name. **One guard was built, measured REDUNDANT and
+removed**: an `augmentationSharedNames` index plus a third fast-path clause read 0 RED under
+ablation, because (CHK.49) keeps the lib key set out of `nonModuleVisible` — a lib name a module
+file also declares IS module-only and never took the fast path — and a script-file collision is
+already merged by `mergeSharedKeepNames`; the refusal is recorded in source and the fast path
+stays one probe. 13 pins (part (a) pinned through a DIRECT `Checker` construction with
+`moduleResolutions`, since a `diagnose()` pin is vacuous on flat names), three arms RED 3/2/1;
+filtered 1,163/0; cost_gate exit 0; huge_methods 0 over; the 8-profile grid `added=0 removed=0`;
+externals 290/0 with the per-module gates; **the `@types/node` per-module receipt byte-identical
+in all six output files** — the real risk here, since `declare module "fs"` inside `fs.d.ts` can
+make the relative-aware resolver see a BARE specifier, and it does not fire because a script
+`.d.ts` has no named module exports. Suite 17,211 → 17,224 / 0 / 3. Four residues queued as
+(CHK.82).
+
+**Full suite after the round: 17,196 → 17,211 / 0 / 3** (run by the orchestrating session; the externals module reads 290/0 with the Kotlin/JS gate live).
+
+**(EXT.24) LANDED — a per-module SET is generated in ONE call, so every generation knows the
+others.** `generateKotlinExternalsPerModule(files, modules)` runs each wiring TWICE: pass 1
+collects each module's frozen tree and LIFTS it into that module's Kotlin package (path prefixing
+and nothing else); pass 2 re-runs each generation with the other modules' lifted trees in hand and
+renders it. Only the string-only models cross between the passes — no AST, checker or collector is
+retained — which is what keeps a 51-module set inside an ordinary heap; the price is one extra
+check per module (14.5 s → 29.7 s for `@types/node`). Between the passes the `open` attribution is
+computed ONCE over the whole lifted set (`openedAcrossModules`) and restated per generation
+(`translateOpened`), because a class member that a subclass in ANOTHER package overrides must be
+`open` and the owning generation cannot see that for itself: its own declarations are spelled
+locally while the foreign subclass's supertype names its package, and no single table holds both
+spellings. **Receipt on `@types/node` 20.19.43, 51 modules, program order held:** heritage
+refusals `179 → 0`, cross-package references `283 → 468`, `Socket extends stream.Duplex` renders
+(`public open external class Socket(…) : node.stream.Stream.Duplex`), and the whole set still
+compiles TOGETHER at **0 metadata and 0 Kotlin/JS errors** — the 184 `hides member of supertype` +
+27 `inherits conflicting members` (EXT.21b) measured are gone, as are the 115 `is final and cannot
+be overridden` the first cut produced. Exactly ONE new heritage marker, and it is honest:
+`https.Server` merges an interface whose `extends node.http.Server` is now a real class base while
+the class already extends `node.tls.Server` — a Kotlin class extends one class. rxjs (250 files)
+and `typescript.d.ts` are byte-identical: a single-module generation keeps the (EXT.21b) refusal
+BY CONSTRUCTION, since the gate is the SET of specifiers generated beside it. 9 pins + 6 gate
+cases (a per-module set compiled together in both compilers), eight single-mistake arms.
+**The one thing that had to be measured rather than reasoned, and the trap:** a lifted package is
+NOT an ordinary scope. Modelling it as one — its segments in the spelling set, resolved by
+`resolveSpelling`'s innermost-first walk — makes `node.node.console` (the `node:console` twin
+under the root `node`) declare the name `node` in the scope `node`, so `node.net.Socket` read from
+`node.http` resolves to NOTHING and the whole cross-module override attribution silently reads
+empty. It is invisible at three modules and total at 51; `Inheritance.resolveHere` separates the
+package half from the declaration half, and `spellHere` refuses a partial package prefix as a
+spelling (Kotlin has no relative package resolution). **Two things built and then removed or
+recorded as redundant, measured rather than argued:** rewriting the lifted texts to absolute
+spellings at lift time is byte-inert on the whole 51-module set (`respell` re-resolves every
+inherited text anyway) and is not kept; passing the foreign tables to the REDUCE as well as to the
+renderer is byte-inert too and is kept for consistency, not claimed as a guard. Externals
+275 → 290 / 0. Two probe/gate instruments repaired in passing: a multi-file compile error now
+names its FILE (a line number over 51 generated sources names nothing without it), and the probe's
+declaration-count regex could not count `public override fun`, so a rung that ADDS supertypes read
+as a loss of 221 declarations.
+
 ### Round (P18.11) — per-module externals generation: 51 modules of `@types/node` compile together (2026-09-04)
 
 **(EXT.21b) LANDED — one generation per declaring module, the half (EXT.21a)'s package scheme
