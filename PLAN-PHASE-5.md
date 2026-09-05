@@ -25,6 +25,127 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.19) — an enum member keeps its enum at a return, the TS2367 category rule takes its bases, and a string enum stops being a number (2026-09-05)
+
+**Suite PREDICTION: 17,369 -> 17,394 / 0 / 3** — exactly the 25 new pins in
+`EnumComparisonDisplayTest`; no baseline moved and no `LogicalParityDivergence` is needed.
+(The full-suite run and the commit are the orchestrating session's; every module was run
+here individually and reconciles: core 15,905 + 290 + 848 + 159 + 58 + 30 + 20 + 66 + 18.)
+
+**TWO items LANDED WHOLE, the third partly — and its two remaining kinds are refused with
+fresh measurements.** Every row below was reproduced against tsgo 7.0.2 AND pristine
+`typescript@6.0.3` BEFORE any code was written. **One REFERENCE DIVERGENCE was found and
+it decided a design**: see (CHK.83) below.
+
+**(CHK.89) LANDED.** `function f(): K.A { return kb }` read `… type 'A'` here against both
+references' `'K.A'`, and `N.Q.X` read `'X'` for their `'Q.X'`. The cause is one line:
+[getTypeReferenceLastName] takes a `QualifiedName`'s `right` only, and it is the base name
+of BOTH string-layer renderers ([resolveSimpleTypeName], which also produces the
+`"@"`-prefixed matching keys, and [formatTypeForDisplay]). The new
+[typeReferenceDisplayName] keeps the enum for an ENUM MEMBER and nothing else — measured,
+that is exactly tsc's rule: a namespaced INTERFACE (`function f4(): M.I`) prints `'I'` in
+BOTH references and a WHOLE namespaced enum (`function f5(): N.Q`) prints `'Q'`, so the
+rendering is the enum SYMBOL's name plus the member's, never the written dotted path.
+Five positions fixed at once (function declaration, arrow, class method, a function TYPE's
+return, and the namespaced form); the DECLARATION twin was already correct because it
+renders the RESOLVED type. **The corpus found the one guard a reading missed**:
+`SymbolFlags.Enum` is `RegularEnum or ConstEnum` and the binder CASCADES `ConstEnum` onto a
+namespace whose instance state is `ConstEnumOnly`, so `namespace Const { export const enum
+E }` rendered `Const.E` — which does not merely print wrong, it DISARMS the rounds-745-749
+same-string retry (that retry fires only when the two displays are EQUAL), and
+`enumAssignmentCompat3` read `Type 'E' … to type 'Const.E'` against its baseline's
+`'First.E'`. The guard is a declaration-kind test, not a flag test.
+
+**(CHK.90) LANDED, both halves, and the fixture is now byte-identical to both references on
+all ten rows.** The FORM half: [ts2367CategoryDisplay] takes tsc's `getBaseTypesIfUnrelated`
+base, which (CHK.86)'s rule one line up already transcribed — the two TS2367 paths
+disagreeing about one operand is what named the defect. **The widened pair is unrelated by
+CONSTRUCTION at that rule**, because it fires only when the two operands' comparability
+categories DIFFER and widening preserves an operand's category, so the base always wins
+there; that is also why the (CHK.88) value rule beside it must keep the ORIGINALS (`ka === 1`
+stays `'K.A' and '1'` in all three compilers, because an enum's base IS related to a
+literal's). The MEANING half: [comparabilityCategory] answered `null` for an ALL-STRING-valued
+enum's OWN type while its MEMBER already answered `"string"` — the two halves of one enum
+disagreeing about their own flavour — so `s2 === 3` and `s2 === true` were silent. Placed
+above the numeric arms deliberately: [isNumericEnumObjectType] defaults an unevaluated enum
+to numeric where [isStringEnumObjectType] demands positive evidence, so a heterogeneous or
+unevaluated enum reaches neither and keeps its `null`. **Two neighbouring TS2365 rows were
+checked against the BEFORE binary and are PRE-EXISTING** (`s2 < st` and `s2 < s2` are
+ours-only, and `s2 < 1` prints `'S2'` where both references print `'string'`) — that whole
+family is emitted above `comparabilityCategory` and this round moved none of it.
+
+**(CHK.83) two more pieces LANDED and two kinds REFUSED with measurements.** The `readonly`
+array PARAMETER is the ARRAY kind the previous round already admitted, missed for a purely
+representational reason ([isArrayLikeType]'s `Type.Reference` leg names `"Array"` alone).
+The ELABORATION sub-line landed at all FIVE union-source chain sites: tsc builds it by
+RE-ENTERING `reportRelationError`, so the constituent takes the same generalization the
+outer line takes (`Type '"b"'` -> `Type 'string'`). **The PICKER is deliberately untouched,
+and the reason is a measured REFERENCE DIVERGENCE**: with `un: "a" | 1` against `number[]`,
+tsgo prints the FIRST constituent (`Type 'string'`) and pristine the LAST (`Type 'number'`),
+which is our historical picker — pristine is the corpus's own oracle, so only the rendering
+moved. **INTERSECTION re-measured and still refused**: its single ours-only `TS2345`
+reproduces exactly at `harness/src/harness/vpathUtil.ts:106:30`, project and services clean,
+and the arm additionally showed the kind needs a SECOND fix (with the gate open a union
+argument prints `'"a" | "b"'` where both references print `'string'`, because
+`relationErrorSourceDisplayType`'s target-kind allowlist declines an intersection).
+**The generic `Type.Reference` family is newly refused and its LICENCE is what fails**:
+`const d: ArrayLike<string> = s` and `const d: Iterable<string> = s` are ours-only `TS2322`
+at the DECLARATION position, so admitting `Promise<T>`/`Map<K,V>`/`Named<T>` — all three of
+which ARE correct there — would drag a pre-existing declaration-position false positive into
+every argument, and no predicate over the target separates them. The OVERLOAD-SET kind was
+re-measured and is CORRECT for the ordinary shape today.
+
+**Pins and ablation.** 25 pins in the new `EnumComparisonDisplayTest`, organised by rule
+with a negative control per rule, plus ONE pre-existing pin UPDATED
+(`EnumWideningParityTest`'s flavour-guard row asserted the pre-existing `'K.A' and 'string'`
+and explicitly said so). **Six arms, one mistake each, all discriminating**: a1 the enum-member
+qualifier (**5 RED**); a2 the ConstEnum-cascade guard (**4 RED**, including the corpus
+baseline `enumAssignmentCompat3`); a3 the string-enum category (**2 RED**); a4 the
+`getBaseTypesIfUnrelated` base (**7 RED**, a3's two NESTED inside it and recorded as such per
+round 807 — under a4 those rows still REPORT and print `'string'`, which is the receipt that
+the atoms branch also supplies the whole-string-enum display); a5 the `readonly` array
+admission (**2 RED**); a6 the chain generalization (**2 RED**). Source restored from a
+scratchpad snapshot (never `git checkout` — the round is uncommitted) and the restored
+`Checker.class` sha256 `6e9e55a0…` matches the binary every gate ran against. **One
+provably-dead line was removed rather than pinned**: an `isStringEnumObjectType` arm in
+[ts2367CategoryDisplay]'s fallback is unreachable, because both it and [enumComparisonAtoms]
+require a `Type.Object` with an `Enum`-flagged symbol — the proof is in the KDoc and a4 is
+its receipt.
+
+**At-risk enumeration.** (CHK.90)'s MEANING half and (CHK.83)'s `readonly` half are
+diagnostic-ADDING, so per the standing rule the corpus at-risk set is not narrower than
+every active `.errors.txt` baseline (**2,881** subtests) and **all 25 generated corpus
+classes were run: 8,837 tests, 0 red**, every class confirmed present in the XMLs. The
+content enumeration is a LEAD only and is recorded for the next round: 51 baselines carry
+TS2367, 310 carry a union-source chain sub-line, 324 carry TS2345, 25 carry an enum-dot
+display, and **0** mention a `readonly` array parameter. The hand-written half was covered
+by running the whole CORE MODULE as its superset (CLAUDE.md's rule, and the ~700-pattern
+filter is measured pathological).
+
+**Gates**, all against the final binary (`6e9e55a0`). Core module **840 classes / 15,905 /
+0 / 3 skipped**; generated corpus **25 classes / 8,837 / 0**; externals 290, project 848,
+kir 159, lsp 58, api 30, client 20, daemon 66, cli 18 — all 0. `cost_gate.py` **exit 0**
+(`output.errors` 46 and `spine.nodes` +0.00%; `typeOfExpr.calls` −0.22% and
+`globals.lookups` −0.49% are (P18.18)'s un-rebaselined receipts carried forward, i.e. THIS
+round adds nothing — the `QualifiedName`-gated resolution in [typeReferenceDisplayName] is
+free). `huge_methods.py --fail-over 0` **exit 0**. 8-profile grid with
+`PARITY1_MARKER=typeReferenceDisplayName`, two snapshotted class dirs with the
+self-comparison and positive-control refusals armed: **all eight `added=0 removed=0`** — and
+for the two diagnostic-adding pieces that is the REAL gate, not a control. Build
+warning-clean (`--rerun-tasks`, 0 `w:`).
+
+**Residues.** (a) `function f4(): M.I` reports **TS2322** at a return where both references
+report **TS2741** — the return path's string fallback owns a shape the declaration path
+decides structurally. (b) `const g: () => K.A = () => kb` reports the WHOLE-signature
+message at the declaration where both references drill into the return and anchor at the
+arrow body. (c) The rounds-745-749 same-string retry is wired to the assignment/var-decl
+displays and NOT to the return path, so `function f(): Const.E { return abc }` reads
+`Type 'E' … to type 'E'` (pre-existing, confirmed against the BEFORE binary). (d) A
+HETEROGENEOUS enum against a literal (`h === 3` with `enum H { A = 0, B = "b" }`) is silent
+here and `'H' and '3'` in both references — neither the (CHK.88) value rule (its domain is
+mixed) nor the category rule (`comparabilityCategory` answers `null`) claims it. (e) The
+TS2365 string-enum relational family named above.
+
 ### Round (P18.18) — an enum stops overlapping a literal it cannot hold, an impossible comparison's branch becomes `never`, and a primitive argument stops being invisible to a composite parameter (2026-09-05)
 
 **Full suite after the round: 17,343 → 17,369 / 0 / 3 — exactly the 26 new pins, no baseline moved, no `LogicalParityDivergence`, as predicted** (run by the orchestrating session; the module sum reconciles: 15,880 core + 290 + 848 + 159 + 58 + 30 + 18 + 20 + 66).
@@ -2314,7 +2435,13 @@ wrong; only the generic case is refused by the arity guard.
   because a plain `namespace global` is an ordinary container both references print as
   `'global.GE'`.
 
-- [ ] **(CHK.89) A RETURN-POSITION ENUM-MEMBER ANNOTATION LOSES ITS ENUM QUALIFIER —
+- [x] **(CHK.89) DONE 2026-09-05 ((P18.19) note) — the string layer's type-reference
+  renderer keeps an enum member's enum (`typeReferenceDisplayName`), wired into BOTH
+  [resolveSimpleTypeName] and [formatTypeForDisplay]; the qualifier is an ENUM-MEMBER rule
+  and not a qualified-name one (a namespaced INTERFACE prints bare in both references, and
+  so does a WHOLE namespaced enum), and the `SymbolFlags.Enum` cascade onto a
+  `ConstEnumOnly` NAMESPACE needed a declaration-kind guard the corpus found
+  (`enumAssignmentCompat3`). ORIGINAL ITEM: A RETURN-POSITION ENUM-MEMBER ANNOTATION LOSES ITS ENUM QUALIFIER —
   measured (P18.18), PRE-EXISTING and unrelated to that round's changes.** `function f():
   K.A { return kb }` reads `Type 'K.B' is not assignable to type 'A'.` here against both
   references' `'K.A'`, and `function f3(): N.Q.X { … }` reads `'X'` for their `'Q.X'`; the
@@ -2324,7 +2451,12 @@ wrong; only the generic case is refused by the arity guard.
   every baseline with a TS2322 at a `return` whose annotation is qualified — enumerate
   before landing.
 
-- [ ] **(CHK.90) THE TS2367 *CATEGORY* RULE DOES NOT APPLY `getBaseTypesIfUnrelated` —
+- [x] **(CHK.90) DONE 2026-09-05 ((P18.19) note) — BOTH halves: [ts2367CategoryDisplay]
+  now takes tsc's `getBaseTypesIfUnrelated` base (the widened pair is unrelated by
+  CONSTRUCTION at that rule, since widening preserves an operand's category), and
+  [comparabilityCategory] answers `"string"` for an ALL-STRING-valued enum's OWN type,
+  which is the silence (`s2 === 3`, `s2 === true`). Ten rows on the fixture, byte-identical
+  to both references. ORIGINAL ITEM: THE TS2367 *CATEGORY* RULE DOES NOT APPLY `getBaseTypesIfUnrelated` —
   measured (P18.18).** `ka === "z"` with `ka: K.A` reads `… the types 'K.A' and 'string' …`
   here against both references' `'K' and 'string'`, and `ka === true` the same way: the
   (CHK.86) rule transcribes tsc's base-vs-original display and the category rule beside it
@@ -2335,7 +2467,28 @@ wrong; only the generic case is refused by the arity guard.
   population is every baseline carrying a TS2367 with an enum operand (16 carry TS2367 at
   all).
 
-- [ ] **(CHK.83) PARTLY DONE 2026-09-05 ((P18.18) note) — FOUR of the five parameter kinds
+- [ ] **(CHK.83) FURTHER PARTLY DONE 2026-09-05 ((P18.19) note) — the `readonly` array
+  parameter LANDED (it is the ARRAY kind the round had already admitted, missed only
+  because [isArrayLikeType]'s `Type.Reference` leg names `"Array"` alone) and the
+  ELABORATION sub-line LANDED at all five union-source chain sites (the constituent now
+  takes the same generalization the outer line takes; the PICKER is deliberately unchanged
+  because THE TWO REFERENCES DISAGREE about it — tsgo names the first, pristine the last,
+  which is ours). RE-MEASURED AND STILL REFUSED: the INTERSECTION parameter kind, which
+  reproduces its single ours-only `TS2345` at `harness/src/harness/vpathUtil.ts:106:30`
+  (`string` against `string & { __pathBrand: any }`), project and services clean — and it
+  additionally needs `relationErrorSourceDisplayType`'s target-kind allowlist, since with
+  the gate open a union argument prints `'"a" | "b"'` where both references print
+  `'string'`. NEWLY REFUSED WITH ITS MEASUREMENT: the generic `Type.Reference` parameter
+  family (`Promise<T>`, `Map<K,V>`, a user `Named<T>`) — its licence FAILS, because
+  `const d: ArrayLike<string> = s` and `const d: Iterable<string> = s` are ours-only
+  `TS2322` at the DECLARATION position; the unblocker is a primitive's apparent members,
+  not this gate. STILL OPEN: the OVERLOAD-SET kind (measured CORRECT for the ordinary
+  shape — `fOvl(s)`/`fOvl(u)` match both references today — so what remains is only the
+  duplicate-emitter unification), `fEnum(3)` at an argument, and `const l1: 5 = em` (an
+  enum MEMBER against a literal of a different value: measured silent at BOTH the
+  declaration and argument positions, while the WHOLE enum reports and `const l2: 1 = em`
+  is correctly silent, so the relation accepts an EnumLiteral source against a
+  non-matching literal target). PARTLY DONE 2026-09-05 ((P18.18) note) — FOUR of the five parameter kinds
   LANDED (ARRAY/tuple, FUNCTION, ENUM, UNION), with four guards, three of which a GATE found
   rather than a reading: a REST parameter (301-401 added rows per profile, the grid), an
   ARITY-mismatched call (`couldNotSelectGenericOverload`, the corpus), an OVERLOAD-SET

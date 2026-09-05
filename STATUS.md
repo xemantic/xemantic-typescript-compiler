@@ -1,13 +1,45 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **191,070** lines (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **193,482** lines (191,070 when the metric was created; the (P18.9)-(P18.19) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
 checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.19) — AN ENUM MEMBER KEEPS ITS ENUM AT A RETURN, THE TS2367 CATEGORY RULE TAKES ITS BASES, AND A STRING ENUM STOPS BEING A NUMBER, 17,369 → 17,394 / 0 / 3 predicted (2026-09-05).**
+Two items landed whole and the third partly; every row reproduced against tsgo 7.0.2 AND
+pristine 6.0.3 before any code was written, and **one reference DIVERGENCE was found and
+decided a design**.
+**(CHK.89)** — `function f(): K.A` read `type 'A'` against both references' `'K.A'`: the string
+layer's base name is a `QualifiedName`'s LAST name, and it feeds both renderers. The qualifier is
+an ENUM-MEMBER rule and nothing else (a namespaced INTERFACE prints `'I'` and a whole namespaced
+enum `'Q'` in both references), and its one non-obvious guard came from the CORPUS —
+`SymbolFlags.Enum` is `RegularEnum or ConstEnum` and the binder cascades `ConstEnum` onto a
+`ConstEnumOnly` NAMESPACE, so a flag test rendered `Const.E` and silently disarmed the
+rounds-745-749 same-string retry (`enumAssignmentCompat3`).
+**(CHK.90)** — both halves: the category rule now takes tsc's `getBaseTypesIfUnrelated` base (the
+widened pair is unrelated by CONSTRUCTION there, which is also why the (CHK.88) value rule beside
+it must keep the ORIGINALS), and an ALL-STRING enum's OWN type answers the `"string"` category
+where its MEMBER already did — the two halves of one enum disagreeing about their own flavour,
+which is the silence at `s2 === 3` / `s2 === true`. The fixture is now byte-identical to both
+references on all ten rows.
+**(CHK.83)** — the `readonly` array PARAMETER landed (the ARRAY kind already admitted, missed
+because `isArrayLikeType`'s `Type.Reference` leg names `"Array"` alone) and the ELABORATION
+sub-line landed at all five union-source chain sites. **The PICKER is deliberately untouched: with
+`"a" | 1` against `number[]`, tsgo names the FIRST constituent and pristine the LAST** — pristine is
+the corpus's oracle, so only the rendering moved. INTERSECTION re-measured and still refused (its
+single ours-only row reproduces at `harness/.../vpathUtil.ts:106:30`, and it additionally needs the
+source-display allowlist); the generic `Type.Reference` family newly refused because its LICENCE
+fails — `const d: ArrayLike<string> = s` and `Iterable<string>` are ours-only TS2322 at the
+DECLARATION position.
+25 pins, six arms (5/4/2/7/2/2 RED, one nested pair recorded), one provably-dead line removed with
+its proof. Gates: core **840 / 15,905 / 0 / 3**, generated corpus **25 classes / 8,837 / 0**, the
+seven other modules 0, `cost_gate.py` exit 0 with `output.errors` 46 and this round adding nothing,
+`huge_methods.py --fail-over 0` exit 0, and the 8-profile grid **added=0 removed=0 everywhere** —
+the real gate here, not a control.
 
 **(P18.18) — AN ENUM STOPS OVERLAPPING A LITERAL IT CANNOT HOLD, AN IMPOSSIBLE COMPARISON'S BRANCH BECOMES `never`, AND A PRIMITIVE ARGUMENT STOPS BEING INVISIBLE TO A COMPOSITE PARAMETER, 17,343 → 17,369 / 0 / 3 predicted (2026-09-05).**
 Three of four items landed; every row reproduced against tsgo 7.0.2 AND pristine 6.0.3 before
@@ -116,28 +148,3 @@ which makes those pins tsc-verifiable for the first time) and queued as (PARITY.
 instrument repairs: the grid script's positive-control marker was hard-coded to the previous
 round's symbol, and the grid's blindness to display changes was re-confirmed by counting (0 of
 417 rows carries an assignability message). New meaning residues queued as (CHK.83).
-
-**(P18.14) — A REAL FALSE NEGATIVE BEHIND A DISPLAY ITEM, 17,236 → 17,259 / 0 / 3 (2026-09-04).**
-(PARITY.1) was queued as two FORM divergences and its most valuable half turned out to be
-MEANING: `canUseTypeEngine` refused a `Type.Union` source against an OBJECT target wholesale,
-so `const t: { x: number } = u` with `u: "a" | "b"` — and `string | number`, `string | undefined`,
-against a named interface, an array, a function type, at declaration, assignment AND return —
-reported NOTHING where tsgo 7.0.2 and pristine 6.0.3 both report TS2322 (argument and
-object-literal-member positions already reported, so a probe written either way reads as
-working). Fixed by lifting the two primitive-vs-object rules the gate already had to a
-primitive-only UNION, with the suppression-only narrowing predicates given the matching
-anonymous-object arm. The literal-union display collapse landed at declaration and assignment
-(`getBaseTypeOfLiteralType` maps over a union where `getWidenedLiteralType` has no union arm,
-plus tsc's `never` guard, which also fixed a pre-existing single-literal divergence); argument,
-return and object-literal-member displays are separate emitters and stay open. **The qualified
-`import("…").Enum` display is REFUSED with a measurement that corrects the item**: the rule is
-enum-only, the claim that 103 baselines are served by hard-coded pins is false (they are served
-by rounds 745-749's real same-string-retry mechanism), and only 10 of 2,881 active baselines
-carry the rendering — while `typeToString` here is a pure `(Type) -> String` with 718 downstream
-sites, so the node-builder context tsc uses is a redesign, not a fix. 23 pins, seven arms each
-with its own red set (one first read 0 RED and was replaced by a pin probing what the guard
-actually protects); **no baseline moved and no `LogicalParityDivergence` was needed**, which the
-round predicted by enumerating the 4 literal-union-source and 18 `never`-target baselines. New
-CLAUDE.md entry: the 8-profile grid is structurally BLIND to every type-display change (all its
-rows are `Cannot find name …`).
-

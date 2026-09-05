@@ -1616,3 +1616,27 @@ warning per cancelled keystroke.
 **GATES.** Suite **16,653 / 0 / 3**; `cost_gate.py` exit 0, every counter +0.00%, `output.errors`
 46; `huge_methods.py --fail-over 0` clean; **two-binary 8-profile grid added=0 removed=0 on all
 eight**, its before-arm control verified non-blind.
+
+**(P18.14) — A REAL FALSE NEGATIVE BEHIND A DISPLAY ITEM, 17,236 → 17,259 / 0 / 3 (2026-09-04).**
+(PARITY.1) was queued as two FORM divergences and its most valuable half turned out to be
+MEANING: `canUseTypeEngine` refused a `Type.Union` source against an OBJECT target wholesale,
+so `const t: { x: number } = u` with `u: "a" | "b"` — and `string | number`, `string | undefined`,
+against a named interface, an array, a function type, at declaration, assignment AND return —
+reported NOTHING where tsgo 7.0.2 and pristine 6.0.3 both report TS2322 (argument and
+object-literal-member positions already reported, so a probe written either way reads as
+working). Fixed by lifting the two primitive-vs-object rules the gate already had to a
+primitive-only UNION, with the suppression-only narrowing predicates given the matching
+anonymous-object arm. The literal-union display collapse landed at declaration and assignment
+(`getBaseTypeOfLiteralType` maps over a union where `getWidenedLiteralType` has no union arm,
+plus tsc's `never` guard, which also fixed a pre-existing single-literal divergence); argument,
+return and object-literal-member displays are separate emitters and stay open. **The qualified
+`import("…").Enum` display is REFUSED with a measurement that corrects the item**: the rule is
+enum-only, the claim that 103 baselines are served by hard-coded pins is false (they are served
+by rounds 745-749's real same-string-retry mechanism), and only 10 of 2,881 active baselines
+carry the rendering — while `typeToString` here is a pure `(Type) -> String` with 718 downstream
+sites, so the node-builder context tsc uses is a redesign, not a fix. 23 pins, seven arms each
+with its own red set (one first read 0 RED and was replaced by a pin probing what the guard
+actually protects); **no baseline moved and no `LogicalParityDivergence` was needed**, which the
+round predicted by enumerating the 4 literal-union-source and 18 `never`-target baselines. New
+CLAUDE.md entry: the 8-profile grid is structurally BLIND to every type-display change (all its
+rows are `Cannot find name …`).

@@ -106815,7 +106815,8 @@ interface DataView {
                 }
             }
             if (pickedFailing != null) {
-                val constStr = typeToString(pickedFailing)
+                // (CHK.83) the constituent takes the same generalization the outer line does.
+                val constStr = relationErrorConstituentDisplay(pickedFailing, targetType)
                 chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
             }
         } else {
@@ -107572,7 +107573,8 @@ interface DataView {
                     }
                 }
                 if (lastFailing != null) {
-                    val constStr = typeToString(lastFailing)
+                    // (CHK.83) the constituent takes the same generalization the outer line does.
+                    val constStr = relationErrorConstituentDisplay(lastFailing, targetType)
                     chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
                 }
             } else if (sourceType is Type.Object && targetType is Type.Object) {
@@ -108999,7 +109001,9 @@ interface DataView {
                 }
             }
             if (lastFailingConstituent != null) {
-                chain.add("  Type '${typeToString(lastFailingConstituent)}' is not assignable to type '$displayTarget'.")
+                // (CHK.83) the constituent takes the same generalization the outer line does.
+                val constStr = relationErrorConstituentDisplay(lastFailingConstituent, targetType)
+                chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
             }
         }
         // (M3.0-gap-3 B1) TypeParam TARGET chain — the parity the var-decl
@@ -110432,7 +110436,8 @@ interface DataView {
                     }
                 }
                 if (lastFailing != null) {
-                    val constStr = typeToString(lastFailing)
+                    // (CHK.83) the constituent takes the same generalization the outer line does.
+                    val constStr = relationErrorConstituentDisplay(lastFailing, tt)
                     chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
                 }
             } else if (sourceType is Type.Intersection && ttForDisplay is Type.Intersection) {
@@ -130897,6 +130902,30 @@ interface DataView {
      * [enumModuleImportPrefix] leg stays reserved to the rounds-745-749 same-string
      * retry, where a corpus baseline asks for it by name.
      */
+    /**
+     * (CHK.83): the DISPLAY of the union CONSTITUENT a relation-error chain names.
+     *
+     * tsc builds that sub-line by RE-ENTERING `reportRelationError` with the constituent as
+     * the source, so the constituent takes the SAME generalization the outer line takes:
+     * `const e: Box = u` with `u: "a" | "b"` reads
+     * `Type 'string' is not assignable to type 'Box'.` on the sub-line in BOTH tsgo 7.0.2
+     * and pristine `typescript@6.0.3`, where we printed the raw `Type '"b"'`. The comment
+     * that used to sit at these five sites claimed the picker matched tsc; what it matched
+     * was the CHOICE of constituent, never its rendering.
+     *
+     * WHICH constituent is deliberately left alone, because THE TWO REFERENCES DISAGREE
+     * ABOUT IT: with `un: "a" | 1` against `number[]`, tsgo prints `Type 'string'` (the
+     * first) and pristine prints `Type 'number'` (the last), which is our historical
+     * picker. Pristine is the corpus's own oracle, so the picker stays; only the rendering
+     * moves, and on it the two references agree on every measured row.
+     *
+     * A `never` target keeps the literal ([relationErrorSourceDisplayType]'s first line),
+     * which is the same suppression the outer display already honours — and the one site
+     * that picks the FIRST constituent is the `never` one, so the two rules meet there.
+     */
+    private fun relationErrorConstituentDisplay(constituent: Type, targetType: Type): String =
+        relationErrorSourceDisplay(constituent, targetType)
+
     private fun relationErrorSourceDisplay(sourceType: Type, targetType: Type): String {
         val displayType = relationErrorSourceDisplayType(sourceType, targetType)
         return relationErrorSourceQualified(displayType, targetType) ?: typeToString(displayType)
@@ -163252,7 +163281,8 @@ interface DataView {
                     }
                 }
                 if (lastFailing != null) {
-                    val constStr = typeToString(lastFailing)
+                    // (CHK.83) the constituent takes the same generalization the outer line does.
+                    val constStr = relationErrorConstituentDisplay(lastFailing, paramType)
                     chain.add("  Type '$constStr' is not assignable to type '$paramTypeStr'.")
                 }
             }
@@ -163645,6 +163675,26 @@ interface DataView {
         val obj = paramType as? Type.Object ?: return false
         if (obj.tupleElementTypes != null) return true
         if (isArrayLikeType(obj)) return true
+        // (CHK.83) a `readonly` array is the SAME "ARRAY (or tuple)" kind this predicate
+        // already admits, and it was missed for a purely representational reason:
+        // [isArrayLikeType]'s [Type.Reference] leg names `"Array"` alone, so
+        // `ReadonlyArray<string>` reaches it only when the instantiation itself carries the
+        // symbol. Measured on both references, `fRo(s)` / `fRo(u)` against
+        // `(x: readonly string[])` report `TS2345` there and were silent here, and the
+        // DECLARATION twin (`const d: readonly string[] = s`) already matched them row for
+        // row — which is the licence this whole rule runs on.
+        //
+        // The WIDER family — any generic [Type.Reference] parameter — is REFUSED, and the
+        // reason is the licence FAILING rather than the relation: `const d: ArrayLike<string>
+        // = s` and `const d: Iterable<string> = s` are ours-only `TS2322` at the DECLARATION
+        // position (both references accept them — a `string` really does satisfy both through
+        // its apparent `String` members, which our apparent type does not supply), so
+        // admitting the family here would propagate a pre-existing declaration-position false
+        // positive into every argument. `Promise<T>`, `Map<K, V>` and a user-declared
+        // `Named<T>` are all correct at the declaration position and are held back only by
+        // that: they cannot be separated from `ArrayLike`/`Iterable` by any predicate over
+        // the target, so the unblocker is the apparent-members gap, not this gate.
+        if (obj is Type.Reference && obj.target.symbol?.name == "ReadonlyArray") return true
         if (obj.symbol?.flags?.hasAny(SymbolFlags.Enum) == true) return true
         resolveStructuredTypeMembers(obj)
         // An OVERLOAD SET as a parameter type (more than one call signature) is refused:
@@ -171481,7 +171531,8 @@ interface DataView {
                 else -> null
             }
             is TypeReference -> {
-                val baseName = getTypeReferenceLastName(typeNode.typeName) ?: return null
+                // (CHK.89) the enum-member qualifier: `K.A` must not render as `A`.
+                val baseName = typeReferenceDisplayName(typeNode.typeName) ?: return null
                 val typeArgs = typeNode.typeArguments
                 if (typeArgs != null && typeArgs.isNotEmpty()) {
                     // Format as Name<Arg1, Arg2> for display in TS2322 messages
@@ -171526,6 +171577,48 @@ interface DataView {
             is QualifiedName -> node.right.text
             else -> null
         }
+    }
+
+    /**
+     * (CHK.89): the DISPLAY name of a type-reference name node — [getTypeReferenceLastName],
+     * except that a `QualifiedName` denoting an ENUM MEMBER keeps its enum.
+     *
+     * `function f(): K.A { return kb }` read `Type 'K.B' is not assignable to type 'A'.` here
+     * against both tsgo 7.0.2's and pristine `typescript@6.0.3`'s `'K.A'`, and
+     * `function f3(): N.Q.X` read `'X'` for their `'Q.X'`. The DECLARATION twin
+     * (`const w: K.A = kb`) was already byte-correct, because it renders through
+     * [typeToString] of the RESOLVED type; the string layer this helper serves renders the
+     * ANNOTATION NODE, and [getTypeReferenceLastName] drops everything left of the last dot.
+     *
+     * WHY THE QUALIFIER IS KEPT FOR AN ENUM MEMBER AND FOR NOTHING ELSE. tsc names an enum
+     * member type `<enum>.<member>` and every other namespace-scoped type by its own name
+     * alone — measured on the same fixture: `function f4(): M.I` prints `'I'` in BOTH
+     * references (not `'M.I'`), and a WHOLE namespaced enum `function f5(): N.Q` prints
+     * `'Q'`. So the rendering is the enum SYMBOL's name plus the member's, never the
+     * written dotted path — which is why `N.Q.X` is `Q.X` and not `N.Q.X`.
+     *
+     * Refusal-shaped: anything that does not resolve to an enum keeps today's last name, so
+     * the "@"-prefixed strings this feeds (produced ONLY by [resolveSimpleTypeName]) move
+     * for enum-member annotations and for nothing else — and they move on BOTH sides of
+     * every comparison, since every producer of that name space routes through here.
+     */
+    private fun typeReferenceDisplayName(node: Node): String? {
+        val qualified = node as? QualifiedName ?: return getTypeReferenceLastName(node)
+        val member = qualified.right.text
+        val owner = resolveTypeNameToSymbol(qualified.left) ?: return member
+        // The flag alone is NOT enough, and the corpus is what said so
+        // (`enumAssignmentCompat3`): `SymbolFlags.Enum` is `RegularEnum or ConstEnum`, and
+        // `Binder`'s CASCADE gives a NAMESPACE whose instance state is `ConstEnumOnly` the
+        // `ConstEnum` flag — so `namespace Const { export const enum E { … } }` made the
+        // annotation `Const.E` render as `Const.E`. That is not merely a wrong string: the
+        // rounds-745-749 same-string retry ([enumCollisionQualifiedDisplays]) fires only
+        // when the source and target displays are EQUAL, so pre-qualifying ONE side
+        // silently disarmed it and `k = abc` read `Type 'E' … to type 'Const.E'` where the
+        // baseline reads `Type 'First.E' … to type 'Const.E'`.
+        // A declaration test separates them exactly: a namespace declares a
+        // `ModuleDeclaration`, an enum an `EnumDeclaration`.
+        if (owner.declarations.none { it is EnumDeclaration }) return member
+        return "${owner.name}.$member"
     }
 
     /** 17.238: Format full dotted name `a.b.c` for QualifiedName. */
@@ -171832,7 +171925,8 @@ interface DataView {
                 else -> null
             }
             is TypeReference -> {
-                val baseName = getTypeReferenceLastName(typeNode.typeName) ?: return null
+                // (CHK.89) the enum-member qualifier: `() => K.A` must not render as `() => A`.
+                val baseName = typeReferenceDisplayName(typeNode.typeName) ?: return null
                 val typeArgs = typeNode.typeArguments
                 if (typeArgs != null && typeArgs.isNotEmpty()) {
                     // TypeScript normalizes Array<T> → T[] and ReadonlyArray<T> → readonly T[]
@@ -184965,6 +185059,18 @@ interface DataView {
         // flag; live, it would call `Ext.Dts` (a STRING member) a number and FP a
         // cross-category TS2365 against a string operand.
         enumMemberTypeIsStringValued(type)?.let { return if (it) "string" else "number" }
+        // (CHK.90): an ALL-STRING-valued enum's OWN type is the `"string"` category, and it
+        // answered `null` — so `s2 === 3` and `s2 === true` (`s2: S2`) were SILENT here where
+        // both tsgo 7.0.2 and pristine `typescript@6.0.3` report `'S2' and 'number'` /
+        // `'S2' and 'boolean'`, and `s2 < 1` was silent against their TS2365
+        // `'string' and 'number'`. Its MEMBER already answered `"string"` through the line
+        // above, which is why `s2x === 3` reported and the whole enum did not — the two
+        // halves of one enum disagreeing about their own flavour.
+        // Placed above the numeric arms because [isNumericEnumObjectType] defaults an enum
+        // with NO evaluated values to numeric while [isStringEnumObjectType] demands
+        // POSITIVE evidence (every evaluated value a string, at least one of them), so a
+        // heterogeneous or unevaluated enum reaches neither and keeps its `null`.
+        if (isStringEnumObjectType(type)) return "string"
         if (type.flags.hasAny(TypeFlags.Number or TypeFlags.NumberLiteral or TypeFlags.EnumLiteral)) return "number"
         if (type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) return "number"
         if (isNumericEnumObjectType(type)) return "number"
@@ -184973,12 +185079,38 @@ interface DataView {
         return null
     }
 
-    /** TS2367 (`==`/`!=` no-overlap) display for a primitive operand: an enum renders as
-     *  its NAME (`E`), a pure number/string/boolean renders as its category name (matching
-     *  the widened base tsc shows). */
-    private fun ts2367CategoryDisplay(type: Type, category: String): String =
-        if ((type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) ||
+    /**
+     * TS2367 (`==`/`!=` no-overlap) display for a primitive operand: an enum renders as
+     * its NAME (`E`), a pure number/string/boolean renders as its category name (matching
+     * the widened base tsc shows).
+     *
+     * (CHK.90): an enum MEMBER renders as its ENUM, which is tsc's `getBaseTypesIfUnrelated`
+     * — the SAME transcription (CHK.86)'s [enumComparisonNoOverlapDisplays] already applies
+     * one rule up, and the two TS2367 paths disagreeing about one operand is what named this
+     * defect: `ka === "z"` (`ka: K.A`) read `'K.A' and 'string'` here against both
+     * references' `'K' and 'string'`, while `ka === kb` — decided by the identity rule —
+     * read `'K.A' and 'K.B'` in all three.
+     *
+     * **The widened pair is unrelated by CONSTRUCTION here, so the base ALWAYS wins.** tsc
+     * keeps the originals when `isRelated(leftBase, rightBase)`; this rule fires only when
+     * the two operands' comparability categories DIFFER, and widening preserves an
+     * operand's category (`K.A` -> `K` is still `"number"`, `"z"` -> `string` is still
+     * `"string"`), so no pair reaching here can relate after widening. That is also why the
+     * (CHK.88) value rule above must keep the ORIGINALS — there the bases DO relate (an
+     * enum's base against a literal's base), which is why `ka === 1` prints `'K.A' and '1'`
+     * in all three compilers.
+     */
+    private fun ts2367CategoryDisplay(type: Type, category: String): String {
+        enumComparisonAtoms(type)?.let { atoms -> return typeToString(enumComparisonBaseType(type, atoms)) }
+        // No `isStringEnumObjectType` arm below, and that is a PROOF rather than an
+        // omission: both it and [enumComparisonAtoms] require a [Type.Object] carrying an
+        // `Enum`-flagged symbol, so every type the string-enum test could accept has already
+        // returned above. The two surviving arms are the ones [enumComparisonAtoms] refuses —
+        // an `Enum`-flagged [Type.Intrinsic] (no symbol) and an `EnumLiteral` whose owner is
+        // not an enum symbol.
+        return if ((type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) ||
             type.flags.hasAny(TypeFlags.EnumLiteral) || isNumericEnumObjectType(type)) typeToString(type) else category
+    }
 
     /** For TS2365 "Operator X cannot be applied to types 'A' and 'B'", display the
      *  LITERAL form of literal operands (number `3`, null, undefined) rather than

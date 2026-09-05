@@ -229,15 +229,15 @@ class EnumWideningParityTest {
             const c2 = ka === true
             """,
         ).map { it.message }
-        // The category rule owns this pair, which is what BOTH references do too — they
-        // print 'K' and 'string' / 'K' and 'boolean'. Our operand display there is the
-        // ORIGINAL rather than tsc's `getBaseTypesIfUnrelated` base, a PRE-EXISTING
-        // divergence that predates this round and is queued separately; what this pin
-        // asserts is that the value rule above did NOT claim the pair.
+        // The category rule owns this pair, which is what BOTH references do too. Its
+        // operand display was the ORIGINAL rather than tsc's `getBaseTypesIfUnrelated`
+        // base when this pin was written; (CHK.90) landed the base and the expectation
+        // moved to both references' own strings. What this pin asserts is unchanged: the
+        // VALUE rule above did not claim the pair.
         assert(
             messages == listOf(
-                "This comparison appears to be unintentional because the types 'K.A' and 'string' have no overlap.",
-                "This comparison appears to be unintentional because the types 'K.A' and 'boolean' have no overlap.",
+                "This comparison appears to be unintentional because the types 'K' and 'string' have no overlap.",
+                "This comparison appears to be unintentional because the types 'K' and 'boolean' have no overlap.",
             ),
         )
     }
