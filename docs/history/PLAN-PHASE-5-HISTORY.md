@@ -1,3 +1,724 @@
+### Round (P18.9) — the externals ladder goes green at every rung: RxJS core, its census, a parser defect, all of RxJS, and `typescript.d.ts` through the namespace rung (2026-09-02)
+
+**(EXT.11a) LANDED — the externals ladder's third rung, `rxjs@7.8.2` core (15 files under
+`dist/types/internal`), generates with ZERO checker diagnostics and its Kotlin now COMPILES.**
+Measured first with a new reusable instrument, `ExternalsLibraryProbe` (jvmTest, env-gated —
+`XTSC_EXTERNALS_PROBE_FILES`/`_ROOT`/`_OUT`, mirroring `LibraryProbe`), which writes the
+generated Kotlin, the metadata-compile errors, every checker diagnostic and a marker CENSUS
+per mechanism: before the round the core read 96 markers, **3 compile errors, 0 diagnostics**.
+The three errors were two mechanisms: (1) an interface CALL SIGNATURE — the parser spells it
+as a `MethodDeclaration` named `Identifier("")`, and `collectMethod` rendered
+`public fun ``(source: T): R`; (2) `typeof Action` — no `TypeQuery` arm, so the annotation
+fell to the resolved type, which this checker types as the INSTANCE type (CHK.73), and the
+generated name `Action` was emitted WITHOUT its type argument (one type argument expected).
+Plus one SILENT defect no gate saw: a function type's `this:` parameter rendered as a
+POSITIONAL parameter (`(SchedulerAction<T>, T) -> Unit` for `(this: SchedulerAction<T>,
+state: T) => void`), i.e. a Kotlin lambda would receive the wrong arguments at run time.
+
+**The rules.** An exported interface whose members are exactly one call signature (no own
+TPs on it, no heritage) is a function-type alias, `public typealias UnaryFunction<T, R> =
+(T) -> R`, through the shared syntactic function-type path under the interface's own TP
+scope; an EMPTY interface whose only base is such a callable interface — transitively,
+`MonoTypeOperatorFunction<T> extends OperatorFunction<T, T>` over `OperatorFunction<T, R>
+extends UnaryFunction<Observable<T>, Observable<R>>` — is `public typealias
+OperatorFunction<T, R> = UnaryFunction<Observable<T>, Observable<R>>` (Kotlin allows an alias
+to a parameterised alias). The chain is closed syntactically up front (first-wins by name,
+the `finish()` rule) and the lens confirms the direct base's IDENTITY at the callback
+(`heritageBaseSymbol` → `aliasTarget` → `===`), so a cross-file collision fails loud. A
+callable interface stays NAMEABLE for members and parameters (`pipe(op1:
+OperatorFunction<T, A>)`) and is never a SUPERTYPE (a function type has no subtypes — a
+class `implements` it keeps the per-base marker). A call signature beside other members and a
+construct signature (`new (…)`, a method named `new` — unambiguous inside an interface only)
+are loud `SkippedMember`s. A `TypeQuery` annotation refuses, with the marker naming what was
+WRITTEN (`unmapped typeof Action` — the resolved type is the one thing it must not show), and
+`mappedText` gained the ARITY GUARD: a bare generated `Type.Interface` that declares type
+parameters (or a `Reference` with null arguments to one) answers null, never its bare name —
+reached by `export const ctor = Box` (the checker types a class value as its instance type).
+A function type's `this` parameter is a Kotlin RECEIVER, `SchedulerAction<T>.(T) -> Unit`
+(the faithful shape, and the nullable wrapping still parenthesises); a DECLARATION's `this`
+parameter is dropped from the Kotlin parameter list with a loud `this parameter <type> not
+carried` marker (function/method markers, a `SkippedMember` for a constructor).
+
+**Gate.** `KotlinExternalsRxjsGateTest` embeds the 15 files verbatim (Apache-2.0, the
+LICENSE.txt copyright line retained in the class KDoc; the two `source$` occurrences escaped
+`${'$'}`): compiles + zero checker errors; the spine renders (the three typealiases,
+`pipe` typed by the alias, `public open external class Subject<T>() : Observable<T>,
+SubscriptionLike {`, `AsyncSubject<T>() : Subject<T>`, `schedule(work:
+SchedulerAction<T>.(T) -> Unit, delay: Double, state: T)`, `EMPTY_SUBSCRIPTION`); the
+inexpressible shapes stay loud. Ten generator pins (exact full text), each measured RED
+against the pre-change collector by stash-ablation, 70 pre-existing pins green on both arms.
+Externals module 84 → 94/0, warning-clean; suite 16,867 → 16,881 / 0 / 3. No core change
+(cost_gate/huge_methods not applicable; the externals module reads the checker through the
+lens only).
+
+**After: 97 markers, 0 compile errors** — the census for the next rung ((EXT.11b), queued):
+74 `unmapped` in 42 distinct shapes, of which nullable unions (`X | null`, `X | undefined`,
+optional parameters inside function types) ~24, bare `any`/`(err: any) => void` ~18,
+`Promise<…>` 8, arrays 3, string literals 4, intersections 4, utility types
+(`Partial<Observer<T>>`) 4; 16 skipped generic aliases (conditional/`infer`/mapped bodies —
+correctly loud), 2 `extends <class>` on an interface, `TeardownLogic`/`Falsy`, one
+symbol-keyed member, `Notification`'s three constructors, `toPromise`'s overload collapse.
+**Marker text over-reports `any`**: `lens.render` substitutes the declaration's own TPs to
+`any`, so `Partial<Observer<any>>` is `Partial<Observer<T>>` in the source — attribute an
+`any` from the `.d.ts`, never from the marker.
+
+**(CHK.81) LANDED IN PART — the `require`-of-`export =` family, verified after a rate-limited
+handover.** The implementing agent was killed by an API limit before ANY gate ran; its 450 lines
+sat unverified in the tree and a second agent verified them rather than redoing the work. What it
+implements: an `import X = require("m")` of a FILELESS ambient block whose surface is `export =
+<value>` now names that VALUE (`ambientRequireAliasTarget`, gated to class/function/variable/enum
+— a pure-namespace or absent `export =` keeps B113's CARRIER, which the corpus's TS2694 family
+pins), so `class Worker extends EventEmitter` under such an import inherits its members where it
+inherited nothing (7 of 9 consumer probes silent before, tsgo reporting all 9); TS2694 quotes an
+ambient carrier (`Namespace '"node:net"'`, not `'"mod".net'`) and names an `export =` target bare;
+a new `checkAmbientAliasQualifiedTypeRefs` reports the missing member for an interface heritage
+and an annotation where the unresolved-name family is silent; the false TS2833 for a `require`
+alias of an ambient module is gone; and `checkNamedImportFromAmbientExportEqualsValue` reports
+TS2305/TS2616 for a named import absent from an `export =` target's surface. **The verification
+found a REGRESSION the handover had introduced and no gate could see**: with the alias naming the
+`Stream` CLASS, the named-import leg read `exports["Stream"]` on it and got the dead
+`ExportSpecifier` of real `@types/node`'s own `namespace Stream { export { Stream, … } }`, so
+`Stream` degraded to `any` and a genuine TS2322 in `child_process.d.ts` was LOST — invisible to
+the 8-profile grid, the corpus filter and the probe's diagnostic count alike; only the probe's
+RENDERED TYPES showed it. The minimal fix (11 lines, that one leg): an `exports[name]` entry
+declared ONLY by `ExportSpecifier`s falls through to the surface walk. A broader fix in
+`ambientModuleSurfaceMember` was built, measured unnecessary and reverted. **A premise of the
+queue item was also wrong**: tsgo reports TS2305 for `import { Stream } from "node:stream"` only
+WITHOUT the local re-export clause — on real `@types/node` it is silent, and so are we. 13 pins,
+**every one discriminating** (12 red against the ablated checker, the 13th against its own
+targeted arm); filtered 1,604/0; cost_gate exit 0 (the recorded deltas are inherited — HEAD reads
+them too); huge_methods 0 over; the 8-profile grid `added=0 removed=0` through a new
+`scripts/chk81-grid.sh` that refuses a self-comparison, fewer than 8 profiles, and a truncated
+capture; externals 242/0; the `@types/node` probe equal on every total and strictly better in
+content (three types stop being `any`; a first census that looked worse was a `LC_ALL=C` sort
+mistake — program ORDER matters, per round 776). The generator's written-name heritage route
+closed **5 of its 8** bases (82 → 85 lost under ablation, against (CHK.80)'s 82 → 90) and STAYS
+for the three `extends Stream` written inside `namespace Stream`; its KDoc carries the numbers.
+Suite 17,150 → 17,163 / 0 / 3 measured alone, and **17,182 / 0 / 3 after the rebase onto (P18.10)'s (EXT.21a)/(DOC.2) work, which had landed on main meanwhile — the combined tree was re-run because a checker resolution change and an externals generator change had never been gated together**. Three sub-items remain unattempted, so the item stays UNCHECKED.
+
+**(CHK.80) LANDED — the four (CHK.79) follow-ups, each reproduced against tsgo on its own fixture
+(`scratchpad/chk80/`), all matching row for row after.** (a) ANNOTATIONS through a block's
+namespace-import alias (`x: net.Socket`, `Array<net.Socket>`, a `require` alias, a type alias):
+`ambientModuleSurfaceMember` is now the LAST leg of `resolveQualifiedName` and
+`resolveQualifiedValueSymbol` — 1 → 11 of 15 consumer rows match; the 4 that stay silent are
+(CHK.73)'s "a module symbol has no type" (`p.v`/`p.f()`/`new p.ctor()` through `import p =
+require("p")` are untyped on HEAD too). (b) `class X extends A.B` with a namespace/module head
+lacking `B`: tsgo reports **TS2339 at the member name, `Property 'Nope' does not exist on type
+'typeof import("node:net")'`** — the specifier as WRITTEN, `typeof NS` for a script namespace, the
+innermost segment for a dotted head, the same for a declared-but-not-exported member; a new pass
+`checkClassExtendsMissingNamespaceMember` emits it only where `resolveHeritageBaseSymbol` is null
+AND the head resolves to a namespace or a namespace-import/`require` alias of a fileless carrier,
+deduped against the spine's existing row; the three pristine fixtures the oracle names
+(`undeclaredBase`, `classExtendingQualifiedName`, `extBaseClass2`) match byte for byte. (c)
+NAMED-import heads inside ambient blocks and `declare global` names: `resolveAlias`'s
+`ImportSpecifier` arm reaches a BLOCK-level specifier's declaration through the parent chain (the
+round-432 index holds top-level imports only) and takes the (CHK.79) surface walk; and
+`lookupInEnclosingNamespaces` consults the MERGED global namespace (`globals[seg]`, which
+`init:mergeGlobalAugmentations` already folds each file's `NodeJS` into — only the
+enclosing-namespace consult was reading the per-file twin) — no (CHK.50) design needed; 4 false
+TS2339 and every named-import base silent → all 12 rows match. (d) The alias-into-carrier
+MERGE, censused (`--mergeCensus` now prints one row per alias-with-module merge on `globals`):
+`init:mergeSharedKeepNames` makes every SCRIPT-file local a shared name and an ambient carrier
+`"net"` IS a script local, so a MODULE file's same-named import alias merged into it — the
+concrete defect on HEAD: `import * as net from "./mynet"` in one file makes `import net2 =
+require("net")` in an UNRELATED file resolve to `./mynet`. One guard in
+`init:mergeFileLocalsIntoGlobals` (a pure-import-alias local whose name is an ambient CARRIER is
+skipped) plus the read side it forces (`lookupPerFileForNode`'s fast path answered `globals[name]`
+before the owning module file's own alias — `moduleImportAliasNames`, empty on every program
+without a collision, keeps the hot path one probe); the GENERAL "an import alias never merges"
+guard was built and REVERTED — it reddens corpus `jsExportMemberMergedWithModuleAugmentation` (a
+JS `module.exports` augmentation resolves through that legacy merge). Post-fix census 0 rows.
+15 pins in `NamespaceResolutionFollowUpTest` + 4 re-scoped in `NamespaceImportHeritageTest`
+(**pin ablation NOT run this time — the fixtures are the reproduction evidence**); filtered
+1,300/0; cost_gate exit 0 (deltas inherited, HEAD identical on all 20); huge_methods 0 over; the
+8-profile grid `added=0 removed=0`; externals 242/0 (one (EXT.19) pin moved: `f: net.Family` →
+`String`, the same-file Dukat rule now that the lens answers the alias). **`@types/node` probe:
+BETTER, not identical** — markers 5,343 → 5,323, heritage refusals 95 → 82, unmapped 3,198 →
+3,186, 0 errors in both compilers; the generator's bare-name heritage route now carries 8 of the
+29 bases (measured by ablation: five `extends EventEmitter` whose head is `import EventEmitter =
+require("node:events")` — B113 resolves a `require` of an `export = <class>` block to the CARRIER
+— and three `extends Stream` inside `namespace Stream`) and stays, KDoc'd. Suite 17,135 →
+17,150 / 0 / 3. Follow-ups queued as (CHK.81).
+
+**(CHK.79) LANDED — a dotted heritage base whose head is a namespace import inside an ambient
+module block resolves through the target module's SURFACE.** Reproduced on a four-file
+`@types/node`-shaped fixture (`declare module "stream"` with `export = Stream` + a
+`declare module "node:stream" { import stream = require("stream"); export = stream }` twin,
+`net` with `import * as stream from "node:stream"` and a `declare module "node:net" { export *
+from "net" }` twin, `tls` with `import * as net from "node:net"`, `tty` with `import net =
+require("net")`): five consumer probes SILENT and two FALSE TS2339 before, all nine matching tsgo
+after. The head resolved all along ((CHK.77)'s consult finds the block's alias in the merged
+carrier's exports); the miss was `resolveAlias` leaving a fileless `NamespaceImport` alias
+unresolved and `alias.exports?.get(name)` answering null. Fix, additive at the PropertyAccess
+arm of `resolveHeritageBaseSymbol`: `ambientModuleSurfaceMember` — an unresolved import alias →
+`ambientModuleOfImportAlias` (`globals["m"]` only when the specifier resolves to NO program file,
+the three resolver legs incl. (CHK.30)'s fallback); a carrier's own exports (skipping the block's
+own non-exported import bindings); then body-order `export = X` (the block's namespace, or another
+module through a `require` alias) and `export * from "m"` (ambient carrier or file-backed target),
+cycle-cut by symbol id. **One trap recorded in code: a merged carrier can carry the ALIAS bit
+beside MODULE** (`globals["net"]` had a module file's `import net = require("net")` merged in by
+name), so the alias arm is gated `Alias && !Module`. Nine pins, 7 RED by ablation; filtered
+725/0; cost_gate exit 0 — and the non-zero deltas it prints (`mapped.hits` +1.22 %,
+`globals.lookups` −0.49 %) are INHERITED: the HEAD jar reads identical values on all 20 counters
+(the baseline was last written at BIND.1); huge_methods 0 over; the 8-profile grid `added=0
+removed=0`. Externals 242/0 with the JS gate; the `@types/node` probe byte-identical on the
+fixed core; **the generator's namespace-import heritage route RETIRED** (`writtenTarget(…,
+namespaceImportHeads = false)` in `collectHeritage`) — measured load-bearing before the fix
+(the ablated core loses 40 dotted bases, not the queue's 17), inert after; the bare-name route
+stays (29 bases: named-import heads and `declare global`/`NodeJS` names the lens still misses).
+Suite 17,126 → 17,135 / 0 / 3. Follow-ups queued as (CHK.80).
+
+**(EXT.23) LANDED — a TypeScript-optional parameter renders `x: T? = definedExternally` (real) /
+`x: T? = null` (gate), everywhere a declaration's parameter is rendered, through ONE
+`ExternalParameter.optional` flag and one `parameterText(parameter, OptionalDefault)`
+(`DEFINED_EXTERNALLY` / `NULL` / `INHERITED`).** Three measurement tables (90 rows: 62 Kotlin/JS
+in the JS gate, 28 metadata in `KotlinOverloadEquivalenceTest`) decided the exceptions: an
+OVERRIDE carries no default (`An overriding function is not allowed to specify default values`;
+the base's is inherited, and where the base parameter is required a loud marker records the
+TypeScript-only optionality); a `vararg` never; `operator fun set` REFUSES a default in both
+compilers (unreachable — an index value is never optional); function TYPES stay refused (arity);
+a default is in NEITHER the overload nor the override key (`f()` beside `f(x = …)` is distinct
+and unambiguous at the call site, measured). Two sub-rules the measurement forced: a collapse
+SURVIVOR carries a dropped twin's optionality (rxjs `first()`/`last()` stay callable), and the
+gate default on a non-null survivor type is `= null!!`. (EXT.22) refined on the way: a nested
+base whose parameters are ALL optional is now defaulted, so its subclasses keep the primary
+constructor (`Stream.Transform(opts?)`'s chain) — only a required non-vararg base parameter
+forces the secondary form. **NEW rule found by `@types/node` (4 errors): a NESTED class/interface
+with two DIRECT supertypes each declaring a default for one member is `More than one function
+overridden by 'pipe' declares a default value`** — 38 variant rows showed the refusal is a
+property of the DERIVED declaration being nested and only DIRECT declarers count (the same shape
+at top level, an indirect second declarer, or an intermediate override without a default is
+accepted); `Inheritance.droppedDefaults` drops all but the first direct declarer's default
+(class base first) with a marker naming the keeper. Six generator pins + three measurement
+tests; 19 existing pins moved by exactly the default addition (stash-ablation 19 RED). Censuses:
+rxjs 123 defaults / 1 override-loss marker, `@types/node` 688 / 1 dropped (`ReadableStream.pipe`,
+keeper `Stream`), `typescript.d.ts` 236 — all three at 0 metadata and 0 Kotlin/JS errors.
+Externals 233 → 242/0; suite 17,117 → 17,126 / 0 / 3.
+
+**(EXT.22) LANDED — and its queued mechanism was REFUTED by measurement before any code moved.**
+70 Kotlin/JS rows in three batches: an external class may NEVER spell a superclass call
+(`Delegated constructor call in external class is prohibited` for `Base(definedExternally)`,
+pass-through `Base(opts)`, and `Base()` over a nullable/defaulted/vararg parameter alike), so
+"pass `definedExternally` per parameter" was never an option and the real variant's omitted call
+was right all along. What decides it is whether the base is rendered NESTED: a top-level base
+with parameters is accepted call-free in every form; a nested base (in an object or a class) with
+a REQUIRED parameter is `No value passed for parameter` whatever the spelling — qualified,
+sibling, import, alias, inherited pass-through, generic — and accepted only when its parameter is
+defaulted, vararg-only or absent; and the ESCAPE is a SECONDARY constructor on the derived class,
+which carries no implicit call (`class Hash : NS.Inner { constructor() }`) — accepted with
+parameters, inherited by name, generic, vararg, abstract, in chains, over an (EXT.20)-merged
+base, over the full `Stream.Transform` shape, and callable/subclassable by a consumer. All 23
+`@types/node` errors were that one shape. Rule (`Inheritance.secondaryConstructor`, real variant
+only): a class whose generated superclass is rendered nested and whose effective constructor
+has a non-vararg parameter renders that constructor — own or inherited by name — as `public
+constructor(…)` in the body; the base's API is untouched (defaulting its parameters would let a
+Kotlin caller omit what TS requires); the gate variant keeps primary + `null!!`. (EXT.16)'s
+marker `a nested object member cannot carry @JsName` re-worded to what is true (`a typealias is
+top-level only and a @JsName value re-export is not built`). Pins: a new (EXT.22) section
+(own/inherited/chained/sibling secondary constructors, top-level base staying primary, the
+negative control), the JS gate's 32-row measurement plus the `types-node stream` fixture; two
+pins moved (`ReadStream(opts…) : Stream.Readable`, the shadowing pin's respelling surviving into
+the secondary form); ablation 4 RED. **`@types/node` wired: Kotlin/JS errors 23 → 0** (74 diff
+lines = exactly the 23 classes + 2 reworded markers), rxjs and `typescript.d.ts` md5-identical.
+Externals 229 → 233/0; suite 17,113 → 17,117 / 0 / 3. Measured on the way and queued as
+(EXT.23): the honest rendering of a TS-optional parameter is `x: T? = definedExternally`, not
+`x: T?` — an optionality rung across every optional parameter and the override/overload keys.
+
+**(EXT.18) LANDED — a collision Kotlin refuses and TypeScript allows renames through `@JsName`
+under wiring.** The scheme, measured against Kotlin/JS 2.4.10 in the JS gate: the suffix names
+the KIND that had to move — a value colliding with a type or a namespace object is `<Name>Value`,
+a function whose signature is a same-named class's constructor is `<Name>Fn`; the type/object
+keeps its name (it is what every other declaration spells); all six shapes compile
+(`@JsName("AjaxError") val AjaxErrorValue: AjaxErrorCtor` beside the interface,
+`@JsName("Foo") fun FooFn(x: String)` beside `class Foo(x: String)` AND its `fun Foo(x: Double)`
+overload, `@JsName("path") val pathValue` beside `object path`, a nested object member). A rename
+happens only under a `ModuleWiring` (without one the (EXT.11c) skips stay byte-identical — a
+rename without the JS binding would silently move the consumer's binding) and only when the
+suffixed name is free among everything the scope declares (a taken suffix is a loud skip saying
+so); reach is asked under the TypeScript name, the binding is the first exported name, so
+`export { AjaxError as AjaxErr }` composes to `@JsName("AjaxErr")`; value + type is kept OUT of
+(EXT.20)'s merge table (a `const` does not merge with an interface). Nine pins + the measurement
+pin, seven single-mistake ablation arms each red only on the pins naming it. **Censuses (the probe
+now also compiles the REAL output as Kotlin/JS): rxjs 250 wired — value-vs-type skips 9 → 0,
+`@JsName` 9, 0 metadata and 0 Kotlin/JS errors; `@types/node` wired — 40 value/type + 8
+value/object skips → 0 (46 `@JsName`, 2 taken-suffix skips that are the cross-block flattening),
+0 metadata errors; `typescript.d.ts` unwired md5-identical.** Externals 219 → 229/0; suite
+17,103 → 17,113 / 0 / 3. **Found by the new Kotlin/JS arm, queued as (EXT.22):** 23 pre-existing
+Kotlin/JS errors on `@types/node`'s real output — `class Hash() : Stream.Transform` needs the
+superclass call's arity even in an external class (`No value passed for parameter 'opts'`) — never
+JS-compiled by any gate before; and (EXT.16)'s marker "a nested object member cannot carry
+`@JsName`" is refuted by the measurement.
+
+**(EXT.20) LANDED — an `export =` target never vanishes, and TypeScript declaration MERGING is
+rendered.** tsgo 7.0.2 measured on the reduced `events.d.ts` shape: every import form binds the
+class, the merged interface's members, the namespace's `export`-modified types/functions/values
+and its self re-export; un-modified members not merged with the target are TS2694/TS2305 under
+every form — so the surface is exactly the target plus what merges with it. Kotlin measured
+(pinned in the JS gate and `KotlinOverloadEquivalenceTest`): an `external class` nests
+interfaces/classes/objects and holds a companion; an `external interface` nests interfaces AND
+ACCEPTS A COMPANION (the queue's "cannot hold a companion" was wrong) but refuses a nested
+class/object; `fun assert` beside `object assert` compiles. Rules: `Surface.scan`'s
+`exportEqualsTargets` exports the identifiers a scope's `export =` names whatever their
+modifiers; one `mergeGroupFirst` table (same qualified name, same file, at most one
+class/interface/enum/namespace; class⊥enum, interface⊥enum, alias never) read by BOTH the
+reference side (`ownsName`) and the render side (`finish`): class+interface → members and
+`extends` bases joined (a redeclared property or differing TP lists a loud skip),
+class+namespace → values/functions in the companion and types nested, interface+namespace →
+companion + nested interfaces (a class/object inside a loud skip), enum+namespace → companion
+after the entries, function+namespace → both render (legal, measured); a merged interface's
+second class base is dropped when equal to the superclass and a loud skip otherwise. **`@types/
+node`: metadata errors 0 → 0; 7 `export =` targets declared, 7 rendered, 0 vanished (a new
+census line); heritage skips 113 → 106 (`EventEmitter`, `Stream`, `Module`, `Stats` are classes
+now; `ChildProcess`/`Socket`/`Worker`/`Agent` extend `EventEmitter<Any?>`, zlib classes
+implement `Zlib`); `declared again in the same scope` 14 → 0 (all 14 were merges).** rxjs and
+`typescript.d.ts` md5-identical. 4 pins rewritten, 7 new, one JS-gate compile of the merged
+shape, 3 measurement pins; stash-ablation exactly 11 red; externals 207 → 219/0; suite 17,091 →
+17,103 / 0 / 3. The 66-modules-in-one-scope flattening (57 `declared again by another file`,
+112 names declared by more than one module) is a per-module-generation DESIGN, queued as
+(EXT.21) with its census.
+
+**(EXT.19) LANDED — and the queue item's mechanism was WRONG, which the fixture said before any
+code moved.** `shortestSpelling` already implemented innermost-first resolution correctly (the
+nearer-scope shadow fixtures rendered right on the unmodified binary, and there is no nested
+`ReadableStream` in `@types/node` at all); the 45 `'X' overrides nothing` were a CASCADE OF ONE
+ARITY ERROR — `interface ReadableStream : global.NodeJS.EventEmitter` spelled bare where the
+target is `EventEmitter<T = DefaultEventMap>` (`One type argument expected`), and a Kotlin
+supertype in error contributes no members. Eight rules landed: (1) type-argument FILL — a base
+or reference to a generated generic target renders one argument per declared parameter, the
+missing ones from the parameter's DEFAULT (resolved at its own position, spelled from the use
+site, earlier parameters substituted; an unmappable default is supplied as `Any?` with a loud
+marker; no default and no argument still refuses; the resolved path gained the arity guard);
+(2) NAME OWNERSHIP — a reference to a declaration that loses its scope's name under `finish()`'s
+first-wins rule refuses with `the name X is taken by an earlier declaration in <scope>`; (3) a
+refused callable interface referenced by name is a marker (was `Unresolved reference`, 10
+errors); (4) `toString`/`equals` render `override` (members of `Any`); (5) inherited texts are
+RESPELLED from the base's scope to the deriving scope before keying (override keys differing
+only by spelling read as "hides member of supertype"); (6) the generic-vs-non-generic LIFT —
+a non-generic `on(event, listener)` implementing an inherited `on<K>(…)` is ONE Kotlin
+signature (measured: conflicting overloads), rendered in the inherited shape with `override`,
+loudly; (7) namespace IMPORTS inside ambient modules (`import * as X` / `import X = require`)
+resolve `X.Y` through the module's surface — own exports, `export * from`, `export =
+<namespace>`, `require` alias chains — because the checker's `heritageBaseSymbol` answers NULL
+for all 17 such heads after (CHK.77) (queued (CHK.79)); (8) a class merging with its namespace
+in one file is worded as a merge. **`@types/node` (66 files, unwired and wired alike): metadata
+compile errors 86 → 0 (35 before (CHK.77)), `overrides nothing` 45 → 0, heritage skips 137 →
+110 + 3** (the four `net.*`/`tls.*` bases and 23 `stream.*` ones render; what remains is lib
+types and the vanished `class EventEmitter`/`class Stream`); rxjs and `typescript.d.ts`
+byte-identical. Six pins, none moved; externals 201 → 207/0 with the JS gate running; suite
+17,085 → 17,091 / 0 / 3. **Found, queued:** an un-`export`-modified class inside an `export =`
+module body VANISHES silently ((EXT.20), with the 66-modules-in-one-scope flattening residue),
+and the checker's null answer for a namespace-import head ((CHK.79)).
+
+**(CHK.77) LANDED — the four namespace-resolution residues, each reproduced against tsgo and
+closed at the resolver.** (1) A string-named `declare module "m"` body is consulted by
+`lookupInEnclosingNamespaces` ONLY when the specifier resolves to NO program file
+(`ambientModuleBlockIsFileless`: plain resolver → `.js`-aware relative → the (CHK.30) crawl
+fallback, memoized per file+specifier), reading the merged `globals["m"]` carrier; a file-backed
+AUGMENTATION stays skipped — the consumer path was already right (the lazy
+`pushInferenceNamespaceFor` path), the residue was lens-only, and the negative control is
+byte-identical (an ablation consulting every string block blindly reddened exactly the two
+control pins). (2) A dotted heritage base's HEAD is asked with the qualified-left meaning
+(`resolveHeritageBaseHead`; a namespace of interfaces is a `NamespaceModule` that neither
+`Type` nor `Value` matched — 3 false TS2339 on `extends JsTyping.TypingResolutionHost`), and the
+implicit-export rule follows tsc's inherited `NodeFlags.Ambient` (`isInAmbientContext`: an
+ancestor `declare` or a `.d.ts`), so `extends ts.server.A` across files resolves. (3) The lens's
+`typeReferenceSymbol` answers a QUALIFIED name through `resolveQualifiedName` (contract updated in
+`CheckedProgram.kt`; the externals call sites test declaration identity and needed nothing).
+(4) CROSS-FILE MERGING: `mergedNamespaceLevels` descends from the merged `globals` root along
+the segment path for a SCRIPT program file whose outermost namespace the `globals` entry carries
+(identity scan; module files under INV.3(d) and lib files keep the per-file answer, which is what
+leaves the 8 tsc profiles untouched by construction) — `declare namespace ts { interface A }` in
+one file and `interface B extends A { x: A }` in another went from 3 false TS2339 + 7 silent `any`
+to tsgo's 11 rows exactly. 12 pins (`NamespaceResolutionResidueTest`); `*Namespace*`/`*Module*`/
+`*Augment*` 921/0; cost_gate exit 0 (`mapped.hits` +1.22 % as (CHK.76) recorded, the rest under
+0.5 %); huge_methods 0 over; the 8-profile grid `added=0 removed=0`; externals 201/0 WITH the JS
+gate running; suite 17,073 → 17,085 / 0 / 3. **The `@types/node` receipt (66 files, 20.19.43):**
+bare `unmapped any` 1,013 → 964 and `extends EventEmitter` now resolves — but distinct unmapped
+shapes 458 → 540 (names that were `any` now resolve to declarations the generator has no mapping
+for) and the metadata compile 35 → 86 errors: `+45 'X' overrides nothing`, because `implements
+NodeJS.ReadableStream` resolves for the first time and the spelled supertype `ReadableStream`
+inside `object Stream` resolves to a DIFFERENT generated declaration than the file-level one —
+a generator SPELLING rule for a nested scope shadowing an outer name, queued as (EXT.19); two
+pre-existing augmentation divergences on the negative control and the in-walk lens answer are
+(CHK.78).
+
+**(EXT.17) LANDED as a LOCAL gate — the REAL externals output is compiled as Kotlin/JS for the
+first time, and it found two silent defects.** Feasibility measured: `K2JSCompiler` is in the
+`kotlin-compiler-embeddable` jar already on the externals test classpath, but NO Kotlin/JS stdlib
+klib exists anywhere on this box (the Gradle cache holds JVM jars and linuxX64 klibs; `~/.konan`'s
+stdlib is `builtins_platform=NATIVE`); `kotlin-stdlib-js-2.4.10.klib` (3.4 MB, sha1 verified) was
+fetched into the scratchpad for the experiment only. `JsCompileCheck` (the JS twin of
+`MetadataCompileCheck`: `-libraries <klib> -Xir-produce-klib-dir`, module kind `commonjs`) and
+`KotlinExternalsJsGateTest` (19 tests: hello world, a positive control, compiler-fact pins, ten
+fixture families, and the REAL output of mitt, smol-toml, rxjs core, rxjs extras and
+`typescript.d.ts` — 9,960 lines) locate the klib by `XTSC_KOTLIN_STDLIB_JS` or the Gradle cache
+and print a loud `SKIPPED:` line otherwise. **Finding 1, a silent defect of (EXT.11a)'s own rule:
+Kotlin/JS PROHIBITS a function type with a receiver in an external declaration** (`Function types
+with receivers are prohibited in external declarations`, directly and through an alias, lifted
+only by `-Xextension-functions-in-externals`) — and the receiver form was ALSO semantically wrong:
+a Kotlin/JS receiver lambda is a JS function taking the receiver as its FIRST ARGUMENT, so
+`work.call(action, state)` would have bound `state` to the receiver. Now `(T) -> Unit /* xtsc: this
+parameter Action<T> not carried */` — receiver-less, the dropped receiver ONE top-level marker after
+the nullable wrap, never inside a parenthesis; a compiler-fact pin reddens the day Kotlin accepts
+receivers flag-free. **Finding 2: `Class 'Subscriber' is not abstract and does not implement
+abstract members`** — one member in TypeScript is two in Kotlin whenever a class implements an
+interface's function-typed PROPERTY with a METHOD (`Observer.next` / `Subscriber.next(value)`),
+or one method where the interface declares three overloads (`Scheduler.schedule`), or an abstract
+base never declared the interface's OPTIONAL members (`server.InferredProject`); one renderer
+rule, `Inheritance.owedMembers`: a non-abstract class renders every interface member no class in
+its chain declares BY KEY as a loud `override` of the inherited shape. **Finding 3, not a
+generator defect:** `K2JSCompiler`'s default module kind is UMD and Kotlin/JS refuses calling a
+`@JsModule`-only declaration from a UMD compilation — a consumer constraint, pinned (`commonjs` and
+`es` accept). Residual: parameter-name warnings across overload/implementation (printed, not
+gated). Six pins moved/added; externals 201/0 with the klib, 19 loud skips without; suite 17,051
+→ 17,073 / 0 / 3. **The CI half is a build-file change and stays BLOCKED-PENDING-USER** with the
+exact three-line proposal in the queue item.
+
+**(EXT.16) LANDED — module wiring, the umbrella's last rung; the ladder item is CHECKED OFF.**
+`generateKotlinExternals(files, options, module = ModuleWiring("rxjs", "/rxjs/index.d.ts"))`
+(null keeps today's global-script output byte-for-byte). The PUBLIC SURFACE is a syntactic
+`ExportPlan` over the given files: per-file lazily-memoised export tables (`export`-modified
+declarations, `export { a as b }` through the file's IMPORT bindings first — `import {p as a}`,
+`import a from`, `import * as a`, `import a = require()` — then its own group; `export { } from`
+and `export * as ns from` read the resolved file's table; `export * from` merges with tsc's rules
+— `default` excluded, explicit wins, a name two stars disagree on dropped; type-only exports bind
+nothing; `export = X` records the module object), relative specifiers resolved against the
+importer's directory over the file names, a bare or unresolved specifier a loud marker, a cycle
+guard, and a walk from the entry giving each value-bearing declaration a `Reach` (own name /
+another name / qualified / module object / via a flattened root's header / unreachable).
+Rendering, real variant only (the gate compiles the annotation-free variant — a renderer flag):
+`@file:JsModule("m")` first, `@file:JsNonModule` after it for UMD (`export as namespace X` has NO
+AST node — a documented misparse into a phantom bodiless `namespace X` — so the ENTRY's text is
+scanned line-anchored and the phantom dropped), a declaration reachable under its own name gets
+nothing, under another name `@JsName("<first in entry order>")` plus a marker listing the rest, a
+backticked own name `@JsName("$")`, `export default` → `@JsName("default")`, a qualified-only
+reach (`export * as ns`) a marker (`@JsQualifier` is file-level), and an UNREACHABLE value a loud
+`<kind> X is not exported by the package entry - an internal path a consumer cannot bind` with
+the declaration kept so types still compile. **The `export =` decision, pinned:** the target
+renders with NO `@JsName` and a marker saying it IS the module object (`@JsName("default")` is
+wrong for CommonJS); an `export =` NAMESPACE (typescript.d.ts's shape) binds cleanly through its
+flattened members. 20 pins, nine single-mistake ablation arms each red only on the pins naming
+it; the four library gates re-pinned with the annotations in the real output (mitt's default
+export → `@JsName("default")`, smol-toml's `_default`, rxjs 0 renames); the rxjs 250-file
+probe with `XTSC_EXTERNALS_PROBE_MODULE=rxjs:<entry>`: **re-export markers 291 → 0, 0
+`@JsName`, 101 `not exported by the package entry`** (85 truly internal — `innerFrom`,
+`combineLatestInit`…; 16 exported only by sibling entries `rxjs/operators`/`ajax`/`fetch`/
+`webSocket`/`testing`, which need one generation per `exports` entry), 0 compile errors. A real
+defect found by the probe on the way: a ROOT-level entry (`/index.d.ts`) lost its leading `/`
+in resolution — fixed and pinned. Externals 159 → 179/0; suite 17,031 → 17,051 / 0 / 3.
+**Caveat, queued as (EXT.17):** Kotlin/JS itself is not compiled by any gate, so the
+JS-side legality of `external var` under a file-level `JsModule` and `@JsName` on a `sealed
+external interface` is unverified (the 2.4.10 compiler jar was read for the declaration-level
+diagnostics; none forbids them). (EXT.18) queued: renaming through `@JsName` where Kotlin
+refuses a collision TypeScript allows.
+
+**(EXT.15) LANDED — index signatures and parameter properties, the umbrella's last two member
+rungs.** `[key: string]: T` → `public operator fun get(key: String): T?` + `set(key: String,
+value: T)` (a number key → `Double`; the READ is nullable because an absent key is `undefined`,
+the WRITE is not; `readonly` drops the set; `symbol`/template/literal-union/alias keys are a loud
+skip naming the key, decided from SYNTAX — a key typed `Any?` would say nothing about which keys
+the object answers); to every key in the module the pair is an ordinary `get`/`set` (`operator`
+is a rendering fact), so a redeclared signature renders `override operator`, a class base `open
+operator`, and an index signature beside a method `get(key: string)` collapses loudly. Measured
+first with the metadata compiler (`KotlinIndexSignatureCompileTest`, 4 pins): a `String` pair
+beside a `Double` pair compiles, `override operator` compiles, the gate's `= null!!` bodies and a
+companion pair compile, a keyless `operator fun get()` is refused. Parameter properties: every
+modified constructor parameter declares a member — `public`/`readonly`/`override` render an
+explicit `var`/`val` at the START of the class body in parameter order (primary-constructor
+`val` syntax deliberately not used: one constructor rendering path for own/inherited/gate
+super-call, and an explicit member reaches `override`/`open` like any property);
+`private`/`protected` omitted silently; the constructor keeps every parameter. Population:
+`typescript.d.ts` 7 interface index signatures (`MapLike<T>` now `get(index: String): T?`) and 0
+parameter properties — STRUCTURAL: TS2369 forbids a parameter property outside a constructor
+IMPLEMENTATION, so `.d.ts` emit never contains one, and both rxjs probes are byte-identical. Two
+fixture defects the checker caught and tsgo confirmed (TS2411 under a string index, TS2369 in a
+`declare class`) — fixtures corrected, not the generator. 8 pins RED by ablation, no gate
+expectation moved. Externals 149 → 159/0; suite 17,021 → 17,031 / 0 / 3.
+
+**(EXT.14) LANDED — the generator's per-file syntactic ladder is RETIRED; a program-wide
+written-name fallback survives for exactly the two shapes the lens cannot answer.** Measured on
+`typescript.d.ts` in three arms: HEAD (9,791 lines, 1,750 markers, 9 heritage skips), arm A (lens
+first, ladder on miss — 12 compile errors on the first cut, a generator defect the ladder had
+MASKED: `generatedNameOf` answers a spelling `shortestSpelling` already rendered per segment and
+three consumers wrapped it in `kotlinIdentifier` again, `` `protocol.Location` ``; fixed, then
+byte-identical), arm B (ladder removed — ONE hunk, `interface InstallTypingHost extends
+JsTyping.TypingResolutionHost` losing its supertype). Shipped: arm B plus `writtenFallback`
+(~90 lines for 130 + three tables), consulted only after every lens leg answered null and only
+where `segments.size > 1 || scope.inAmbientModule` — a bare name inside a `declare namespace`
+body is the lens's alone now, by (CHK.76). Output byte-identical to HEAD; all five gates green on
+their real inputs; nested-alias inlining now reaches through `typeReferenceSymbol` (resolved body
+first, syntactic inline second — the (EXT.10) rule one scope down); the fallback resolves
+PROGRAM-wide (deliberate: `extends ts.server.A` across files now renders where the ladder
+skipped). Four pins added, none moved; a pre-existing gap fixed on the way — `parseKotlinTypeText`
+had no dotted-name production, so every overload/override key over a `server.Node`-typed
+parameter silently fell to the textual key (`KotlinOverloadEquivalenceTest` has no dotted row yet).
+Externals 145 → 149/0; suite 17,017 → 17,021 / 0 / 3. **Residue for the checker, measured, queued
+as (CHK.77):** `declare module "m"` bodies (skipped by design; a genuine ambient module should be
+consulted), a qualified heritage base whose head is a type-only namespace (the one hunk), the
+qualified-name refusal in `typeReferenceSymbol`, and cross-file namespace MERGING (the consult
+reads the per-file symbol, not the merged instance — `@types/node`'s whole shape).
+
+**(CHK.76) LANDED — a namespace body's names resolve as tsc resolves them, at every resolver.**
+Not B83.5: the binder binds every namespace-body member into the namespace symbol's `exports`
+and INV.2(c) aliases them, so the WALK-scoped `spineScopeLookup` was right all along; every
+non-walk resolver consulted the enclosing namespace only through the ambient
+`inferenceNamespaceStack`, whose three frame families resolve a namespace's NAME via
+`currentFileLocals ?: globals` — where a NESTED namespace never is — so the stack held only the
+outermost namespace: `lookupTypeSymbolInInferenceNamespace` answered the ROOT's `Node`, and
+`resolveTypeNameToSymbol`/`resolveQualifiedName`/`resolveHeritageBaseSymbol`/`getTypeOfIdentifier`
+fell to `lookupPerFileForNode` (`any`). One position-derived helper, `lookupInEnclosingNamespaces`
+(tsc's `resolveName` `ModuleDeclaration` arm: walk `parent`, read each Identifier-named
+`ModuleDeclaration`'s `exports` innermost-first, dotted segments via `symbol.parent`), consulted
+before the per-file/global consult at seven sites including the lens's `typeReferenceSymbol`;
+it answers null outside namespace bodies, so nothing else moves. Reproduced on small `.d.ts` and
+`.ts` fixtures against tsgo 7.0.2 with write probes (a `.d.ts` initializer is VACUOUS for our
+compiler — no TS2322 on an ambient initializer — so `.d.ts` shapes were read through a consumer
+file): a bare sibling class → `any` (silent where tsgo reports TS2322), a shadowed `Node` → the
+root's (a FALSE TS2353 on the nested literal and silence on the wrong one), `M.D` → `any`,
+`heritageBaseSymbol` null, `LE.Q` → `any`; all now match tsgo in code and position (form-only
+residue: we print `LE.Q` where tsgo prints `N.LE`). **Built and REVERTED**: consulting
+string-named `declare module "<spec>"` bodies added 43 rows on services/server/harness (a module
+AUGMENTATION's partial interface is a separate symbol here, INV.3(c)(iv)); Identifier-named only.
+**The full suite then reddened THREE baselines, two mechanisms, both fixed:** a class VALUE inside
+a namespace now resolved at `getTypeOfIdentifier` to its INSTANCE type (CHK.73), so
+`tryEmitStaticAccessTs2576`'s `identSymbol == null` branch reported `C.y` as a missing instance
+member (`statics.ts` 2 → 13 rows, `genericRecursiveImplicitConstructorErrors3` +1) — the
+namespace class now joins the `identSymbol` chain exactly as a file-level class does (`C.y`
+silent, `C.nope` → `typeof C`, tsgo's answers); and `qualify.ts` DOUBLE-emitted five rows because
+`K1.I3` now resolved in `checkSpine` AND the corpus-unique `checkQualify` pin walker re-added its
+verbatim rows (its TS2740 says `25 more` where the engine's says `28 more`, the embedded-lib
+difference) — the pin, the SECOND pass, now REPLACES the row at its `(file, code, start)`. 18 + 4
+pins (8 RED by ablation against HEAD, controls green; `--passTiming`'s `emissions by pass` table
+was the instrument, as CLAUDE.md prescribes); `*Namespace*`/`*Module*` 832/0; cost_gate exit 0
+(`mapped.hits` +1.22 %, `globals.lookups` −0.49 %, `typeOfExpr.calls` −0.22 % — a resolver that
+now ANSWERS inside namespace bodies, within tolerance, not rebaselined); huge_methods 0 over; the
+8-profile grid `added=0 removed=0` on all eight; externals 145/0 with `typescript.d.ts` still
+compiling — its census moved 1,659 → 1,750 markers because every `resolved to any` marker is
+GONE and the newly-resolved bodies land as honest `unmapped` shapes; retiring the generator's
+syntactic arm where the lens now answers is (EXT.14). Suite 16,995 → 17,017 / 0 / 3.
+
+**(CHK.75) LANDED — the ambient-initializer rule is tsc's, at both emitters.** Read from
+`grammarchecks.go:1942` (`checkAmbientInitializer`): for a `readonly` property or a const-like
+variable (`const`/`using`/`await using`) WITHOUT a type annotation the initializer must be a
+string/numeric literal, a no-substitution template, `-<numeric>`, `true`/`false`, a bigint
+literal, or an enum-member reference (a property access typing enum-like, or an element access
+with a STRING-literal argument) — otherwise **TS1254, the `'const'` wording, on a `readonly`
+PROPERTY too** (the queue item assumed TS1039; measured on tsgo and mirrored); everything else
+(annotated, `let`/`var`, non-readonly property) is TS1039 at the initializer. Ours had the
+variable arm counting `const` only with a literal set missing `true`/`false`/template/enum
+(`declare const c = E.A` was a false TS1254) and the PROPERTY arm with no exemption at all
+(every ambient property initializer was TS1039) — one shared `isValidAmbientInitializer` now,
+plus a SYNTACTIC second chance for the enum leg (`ambientInitializerNamesEnumMember`, a
+round-936-shaped descent over the enclosing `ModuleBlock`s), needed because `E["A"]` is not typed
+as the enum literal here and a bare `LE.Q` inside the `declare namespace` declaring `LE` types
+`any` — (CHK.76)'s family, live in this exact path. Matrix: 73 lines over `.d.ts` and `.ts
+declare class` projects, byte-identical to tsgo 7.0.2 in codes and positions; `typescript.d.ts`
+TS1039+TS1254 1 → 0. Pristine: 8 ACTIVE 1039 fixtures and 2 ACTIVE 1254 ones stay byte-exact,
+the 5 ungated 1039 fixtures `--extract`ed and matched row for row; no pristine fixture has the
+readonly-literal POSITIVE shape, so the corpus is a control here. 48 pins; cost_gate +0.00% on all
+20 counters; huge_methods 0 over; suite 16,947 → 16,995 / 0 / 3. **Instrument defect fixed on the
+way:** `pristine_oracle.py --extract` wrote a baseline's `~~~~` squiggle lines into the
+reconstructed source of a TAB-indented fixture (`strip("~ ")` missed `\t`) — four extra lines
+and every row misaligned, round 941's alignment trap in a new costume.
+
+**(EXT.13) LANDED — the namespace rung: `typescript.d.ts` (11,448 lines, ONE `declare namespace
+ts` with `export = ts`) now generates 9,792 lines of Kotlin that metadata-compile at 0 errors.**
+The design: the ROOT ambient namespace (and `declare module "m"`) FLATTENS to the module surface
+under one header marker (`namespace ts - members rendered at top level; @JsModule/@JsQualifier
+wiring is a later rung`) — a Kotlin `typealias` is top-level only and `export = ts` makes the body
+the surface a consumer's `@file:JsModule` will bind; NESTED namespaces are `external object`s
+(gate: `object`, members `= null!!`) with a nested alias a loud skip (its USES inline the body —
+the Dukat promise kept by syntax) and `export import X = ts.X` a marker; a NON-ambient namespace,
+the shorthand `declare module "m";` and `declare global` are loud skips; a dotted `declare
+namespace A.B` is `A` flattened with `B` nested (one node with a `PropertyAccessExpression`
+name). References render by the SHORTEST Kotlin spelling that resolves at the use site (Kotlin's
+innermost-first rule over the generation's own qualified names; a root type shadowed by a nested
+same-named one refuses loudly), `Inheritance` keys by qualified path, and every `finish()` rule
+is per SCOPE (a same-scope same-file duplicate — `interface Node` twice in `ts`, 10 of them — is
+the merge wording). tsgo 7.0.2 measured on implicit export: every member of an ambient namespace
+is exported, an explicit `export` elsewhere does NOT switch it off, nested namespaces inherit it,
+and the only switch-off is an export DECLARATION (`export { A }`), impossible in a namespace body
+(TS1194) and possible in `declare module "m"` — tsc's `setExportContextFlag`, implemented as such.
+
+**Deviation, and a checker finding: the lens is WRONG inside namespace bodies in both directions**
+(bare `Project` → `any` beside its own declaration, bare `Node` → the ROOT's where the namespace
+declares its own, `server.protocol.Request` → a type failing identity, and 509 `extends
+Node`-shaped clauses failing `heritageBaseSymbol` in the flattened root), so the generator grew a
+THIRD syntactic arm, `writtenTarget` — TypeScript's lexical rule over its own per-file tree,
+consulted only for a qualified name or a name written inside a namespace body; a bare name at a
+file's top level keeps the checker (imports). Queued as (CHK.76). **Three mechanisms the 588 KB
+gate exposed and closed**: chained `var` narrowing (29 errors — `inherited` now answers members
+as their base RENDERS them, composed down the chain), a diamond clash (`prunedSupertypes` drops a
+later base whose member clashes with one already inherited, measured rule: properties must be
+equal, functions only when neither return is a subtype), and `val` narrowing to a NON-subtype
+(244 — `readonly kind: SyntaxKind.Identifier` over `SyntaxKind` renders the inherited type loudly;
+a generated-subtype narrowing keeps its own). Two existing pins moved, one of them because the
+metadata compiler REFUSES `override val tag: Obs<U>` over `val tag: Obs<Any?>` (invariant `T`) —
+no gate had ever compiled that fixture. 16 new pins + a nested-object compile-gate case;
+`KotlinExternalsTypescriptGateTest` reads the local file (`XTSC_TYPESCRIPT_DTS` or the default,
+resolved against cwd AND its parent — the module test worker runs in the module dir; loud skip
+when absent). Externals 126 → 145/0; suite 16,928 → 16,947 / 0 / 3. **Census: 5,422
+declarations (1,802 val, 1,529 fun, 1,149 var, 831 interface, 73 enums, 22 typealias, 10 class, 6
+objects); 1,659 markers — 760 unmapped (unions of interfaces, `string & {}` brands, `{}`), 453
+narrowed-override, 180 unmappable root aliases, 72 constraints, 60 nested-alias skips, 26 optional
+methods, 19 `export import`, 11 value/type shares, 10 merges, 7 heritage skips; checker 1 error
+(TS1039, (CHK.75)).** The ladder — mitt → smol-toml → RxJS → typescript.d.ts — is now GREEN at
+every rung.
+
+**(EXT.12) LANDED — the overload collapse keeps the LEAST-MARKED member of an equivalence class,
+ties to the first declared.** One helper family in `KotlinSignatureKeys.kt` serves both sites
+(`dedupeOverloads` for instance/static/interface members and `finish()` for the module surface,
+through a new sealed `FunctionSignature` view): the whole list is grouped by `overloadSignature`
+BEFORE deciding — a class spans non-consecutive declarations (rxjs's `zip` interleave) — then
+the strictly-fewest-markers member wins (` /* xtsc:` occurrences in parameter and return texts
+plus the member's own marker list). Every member keeps its declared SLOT: the survivor renders
+where it was declared and each dropped one is a marker where IT was — moving the survivor into
+the class's first slot would move it past members of OTHER classes in an interleaved surface,
+and nothing downstream reads position (`override`/`open` are keyed). The marker now names the
+survivor: `skipped overload of of collapsing to a duplicate signature - kept <T> of(value: T)`.
+Four pins RED by ablation (the `of` shape, one per marker KIND — parameter, return, constraint —
+with a non-zero tie control, a three-member class keeping its middle member in place, a
+method/static/interface trio) and eight tie pins re-worded; the extras gate re-pinned from the
+output (`first` now keeps the typed `BooleanConstructor, defaultValue: D` twin over the `null`
+one; `of` keeps `<T> of(value: T): Observable<T>`). 250-file probe: collapse markers **49 → 49**,
+total 968 → 960, 0 compile errors; six survivors changed (`of`, `combineLatestAll`, operator
+`combineLatest`, `first`, `skipWhile`, `zipAll`). Externals 122 → 126/0; suite 16,924 → 16,928 /
+0 / 3. One trap re-met: a KDoc spelling `` `*/` `` closes the comment (CLAUDE.md's entry) — the
+first build failed on it.
+
+**(CHK.73b) LANDED — a class-valued export is refused loudly, generator-side.** `export const
+plain = Plain` rendered `val plain: Plain` (the INSTANCE type — the checker has no static-side
+type for a class value, (CHK.73)) and compiled. `collectValue`'s un-annotated branch now asks
+`constructorValueRefusal` before the checker: a `class` expression refuses syntactically; an
+`Identifier` or dotted initializer resolves through `lens.heritageBaseSymbol` (+ `aliasTarget`)
+and refuses when the symbol declares a CLASS (checked first, so a class merged with a namespace
+is the class), an ENUM (`val K: Kind` — a consumer would read `K` as an entry) or a MODULE
+(`val N: Any?` with NO marker, the shape otherwise reserved for a written `any`); `new Plain()`
+and `NS.x` keep the checker's answer. **`resolveName` was measured and rejected as the resolver**:
+it sees a same-file class, but for an IMPORTED class it answers the import specifier's
+lexical-chain symbol, on which `aliasTarget` answers null (no `Alias` flag), and it cannot answer
+`NS.Inner` — `heritageBaseSymbol` answered the declaration in every measured shape. **`export
+const E = Error` is NOT the class shape**: the lib spells `interface Error` + `declare var Error:
+ErrorConstructor`, so the checker types it correctly and the (EXT.11b) marker already carries
+it — pinned as the control it is. A `.d.ts` cannot carry a non-literal `const` initializer
+(TS1254), so the cross-file pin uses `.ts`. Five pins (4 RED by ablation, one control);
+externals 118 → 122/0; suite 16,920 → 16,924 / 0 / 3.
+
+**(EXT.11c) LANDED — the whole `rxjs@7.8.2` surface (250 files) COMPILES: 37 → 0 Kotlin errors,
+and the Kotlin overload-equivalence rule is now a MEASURED table, not a guess.** ~100 Kotlin pairs
+were fed to the metadata compiler (`KotlinOverloadEquivalenceTest`, 5 tests, pins the table
+against the compiler): two same-named functions conflict iff their own type-parameter COUNT and
+value-parameter count/`vararg`-positions match, concrete nullability is equal at every depth, and
+— the part no textual key sees — a FREE own type parameter (every occurrence covariant: top
+level, function-type return, vararg element, variance composed) erases to its bound with the
+occurrence's nullability (`T` ≡ `T?` ≡ `Any?`, `<T : Base> f(T)` ≡ `f(Base)`, order and identity
+irrelevant), while a PINNED one (any invariant or contravariant occurrence — a generic argument,
+a function-type parameter) keeps a nullability-carrying identity at EVERY occurrence, compared
+up to bijective renaming (`Box<T>` ≡ `Box<U>`, ≠ `Box<Any?>`, ≠ `Box<U?>`; `(T, Box<T>)` ≠
+`(Any?, Box<U>)` — the row every per-parameter model fails). **The queue's "TP-list length
+collapses" was WRONG** — `<A> f(Any?)` and `<A, R> f(Any?)` are distinct; rxjs's `zip` conflict
+was a 2-vs-2 NAME conflict. **And the brief's "keep the collapse key and the override key
+agreeing" was REFUTED**: the OVERRIDE relation is positional TP identity with exact nullability
+(`override fun <T> f(x: T)` over `<U> f(x: Any?)` is "overrides nothing" while the same member
+declared beside it is legal), so `KotlinSignatureKeys.kt` ships TWO keys, `overloadSignature`
+(free TP → `Any?`, pinned TP → `#k` by first occurrence + `?`, TP count, `vararg` kept) and
+`overrideSignature` (positional `#i`, exact nullability), each documented with its rows; an
+unparseable type text falls back to the old textual key. Also measured: a `val`/`var` conflicts
+with an interface/class/alias/value of its name, a `fun` beside an interface is legal, a `fun`
+beside a CLASS conflicts iff its signature equals the class's constructor (`class Foo<T>` does not
+collide with `fun Foo()`; `fun Foo()` collides with `typealias Foo = String`), and a `var`
+override must repeat the inherited type EXACTLY (nullability alone refuses; `val` over `val` and
+`var` over `val` are covariant).
+
+**The rules.** `finish()` collects type names first, then a value sharing a type's name is a loud
+`skipped value AjaxError shares its name with the type AjaxError - module wiring is a later rung`
+(order-independent) and a function whose overload key equals a same-named class's/alias's
+constructor is a loud skip. The renderer's `Inheritance` now reads bases THROUGH the supertype's
+type arguments, composed down the chain, keyed by `overrideSignature` — before, a renamed TP
+(`class D<U> extends B<U>` over `B<T>`) silently lost every `override`/`open` and rendered an
+inherited constructor with the base's unbound `T`. A subclass redeclaring an inherited `var` with
+a different type renders the BASE's type with `/* xtsc: narrowed to X in TypeScript - rendered as
+the inherited Y */` (composes with the readonly marker; `val` overrides untouched). Gate:
+`KotlinExternalsRxjsExtrasGateTest`, 21 verbatim files (the 13 seeds + their import closure,
+smaller than the core set), compiles at 0 diagnostics with the three mechanisms visible. Eight
+exact pins, each RED by stash-ablation; no existing pin moved. Externals 102 → 118/0; suite
+16,904 → 16,920 / 0 / 3. **250-file census after: 0 compile errors, 0 diagnostics, 968 markers
+(collapses 40 → 49, value-vs-type skips 9, narrowed var 1, unmapped 432; 291 re-export and 117
+constraint markers are the module-wiring/constraint residue), 478 declarations.**
+
+**Two things left on the table, recorded not taken.** First-wins collapse keeps the EARLIER of two
+equivalent overloads, which loses the clean `<T> of(value: T): Observable<T>` to the all-`Any?`
+rest overload declared before it — correct Kotlin, worse output; a "most-mapped signature wins"
+policy is a separate decision, queued below. Function-vs-alias constructor collision is modelled
+only for `String`/`Double`/`Boolean` bodies and aliases to generated classes.
+
+**(PARSE.1) LANDED — a parser defect on rxjs's own `index.d.ts:43`, found by the 250-file
+probe.** `export { from } from './x'` reported TS1005/TS1141/TS1434 (plus checker fallout):
+`Parser.parseNamedExports` had a hand-written `if (token == FromKeyword) break` at the
+START-of-specifier position, so an exported name spelled `from` ended the clause; the named
+IMPORTS loop never had it, because it gates on `isImportOrExportSpecifierListElement()` —
+the port of tsc's `isListElement(ImportOrExportSpecifiers)`, which reads `from` as a
+specifier unless a STRING LITERAL follows. One line: the export loop now asks the same
+predicate. Measured on 13 shapes against tsgo 7.0.2 — `from`, `from as f`, `f as from`, a
+local `export { from }`, `a, from`, `from, from as ff` all went 3-10 errors → 0 and the
+emitted JavaScript is byte-identical to tsgo's; the imports, the default import named `from`
+and `type from` were already right; two negative controls unchanged. **The corpus was blind
+by construction**: `pristine_oracle.py` finds NO baseline with a `from` specifier (the nearest,
+`exportsAndImportsWithContextualKeywordNames02`, is the contextual keyword `as`, and its only
+variant is a skipped `es5`). 15 pins in `ExportFromSpecifierTest`; huge_methods exit 0
+(largest 5,388); cost_gate +0.00% on all counters; suite 16,889 → 16,904 / 0 / 3. Pre-existing
+and left: a MISSING module specifier (`export { a } from` at EOF) reports TS1141 where tsc
+reports TS1109 `Expression expected`.
+
+**The 250-file probe** (whole `rxjs@7.8.2` `dist/types`, run between the two rungs): 496
+declarations, 967 markers, 3 diagnostics (the defect above), **37 Kotlin compile errors in
+three mechanisms the core rung could not show** — 24 overload conflicts the textual (EXT.5)
+key cannot see (nullability-only, TP-name-only, TP-list-length-only, bare-TP-vs-`Any?`), 12
+value-vs-type name collisions (`interface AjaxError` + `const AjaxError: AjaxErrorCtor`), one
+narrowed `var` override — queued as (EXT.11c) with the census.
+
+**(EXT.11b) LANDED in the same session — the census's cheap mapping wins.** Nullable unions:
+`X | null` / `X | undefined` / both → `X?` where X maps, SYNTACTICALLY (a `UnionType`
+annotation, so it composes inside function types: `((value: T) => void) | null` → `((T) ->
+Unit)?`; a `ParenthesizedType` arm was needed, since the parser keeps the parentheses) and on
+the resolved `Type.Union` (members filtered by the Null/Undefined intrinsics) — ONE rule: the
+non-nullish members all mapping to one text → that text, `?`-wrapped when a nullish member was
+dropped; distinct texts → the marker. `nullableTypeText` is the one wrapping helper (optional
+members/parameters, the optional-method property, both union paths) and decides "already
+nullable" on the TOP-LEVEL shape, so `(T) -> String?` wraps to `((T) -> String?)?` and `X?` is
+never doubled. `any`/`unknown` → `Any?` with NO marker (the fallback was already `Any?`, so
+this is marker removal that unblocks every composite: `(err: any) => void` → `(Any?) -> Unit`),
+keyed on the intrinsic NAME `any` so `error`/`unresolved` stay marked. Arrays: `T[]`,
+`readonly T[]`, and `Array<T>`/`ReadonlyArray<T>` on positive lib evidence (every declaration
+of the reference's symbol sits in a `lib.*.d.ts` — walked through `parent`) → `Array<T>`; a
+declaration's rest parameter `...xs: T[]` → `vararg xs: T` (a non-array rest type is now a
+loud `unmapped rest …` — HEAD rendered `...xs: T` as a plain `xs: T`, silently). Literal types
+widen to their base (`"N"` → `String`) through the shared `widenLiteral`, and a literal union
+collapses through the one-text clause (`'N' | 'E' | 'C'` → `String`). `Promise<T>` and an
+optional parameter inside a function type stay refused, said where a reader would look.
+
+**Two measured surprises, both CLAUDE.md-worthy.** (1) A LIB MAPPED ALIAS (`Record<string,
+number>`) resolves to the bare `anyType` in this checker — not `errorType` — so "map `any`"
+needs WRITTEN evidence: the resolved-type fallback refuses an `any` the source did not spell
+(`unmapped Record<string, number> - resolved to any`). (2) `getTypeFromTypeReference` resolves a
+one-argument `Array<X>` to the lib array BY NAME, so a program's own non-exported `interface
+Array<T>` is invisible on the resolved path; the syntactic arm refuses any reference SPELLING
+`Array`/`ReadonlyArray` whose symbol is not lib-declared, BEFORE the resolved path (`unmapped
+Array<string> - not the lib Array`). Eight exact pins (9 RED of 88 by stash-ablation, the
+distinct-texts boundary control green on both arms); three existing pins moved marker →
+mapping only (`residents: Array<Creature>`, `choose(mode: String)`, smol-toml's
+`stringify(obj: Any?, …)`); the RxJS gate's spine gained eight pins from the output
+(`observers: Array<Observer<T>>`, `source: Observable<Any?>?`, `val kind: String`,
+`subscribe(next: ((T) -> Unit)?, …)`, `vararg operations: OperatorFunction<Any?, Any?>`,
+`Subscription(initialTeardown: (() -> Unit)?)`). Externals 94 → 102/0; suite 16,881 →
+16,889 / 0 / 3. **Census after: 97 → 62 markers, 74 → 39 `unmapped` in 25 shapes** — what is
+left is `Promise` (8), optional-in-function-type (6), distinct-text unions, intersections,
+lib utility types (`Partial<Observer<T>>`, `Exclude`, `Readonly`) and `typeof`.
+
+**Silent defect found, queued (CHK.73 shape):** `export const plain = Plain` for a
+NON-generic class renders `val plain: Plain` — the instance type — which compiles and is
+wrong; only the generic case is refused by the arity guard.
+
 ### Round (INC.91) — the reopened closure, censused the same day and refused on soundness
 
 ### Round (P18.8) — Stage 2 of the inversion: the post-hoc type oracle lands, and its price is attributed before it is recorded (2026-09-02)

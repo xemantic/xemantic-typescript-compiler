@@ -1,3 +1,20 @@
+**(P18.15) — THE LITERAL-UNION COLLAPSE AT EVERY POSITION, AND AN ENUM GENERALIZATION REFUSED, 17,259 → 17,286 / 0 / 3 (2026-09-04).**
+(PARITY.1) closed. The item named three emitters; a trace censused SIX (argument, rest argument,
+return and three object-literal paths, one with no keep-guard at all), all now through one
+measured helper whose keep-predicate also recurses through a union target — every top-level
+source display in that family now matches tsgo 7.0.2 AND pristine 6.0.3 byte for byte. 27 pins,
+seven arms with disjoint red sets, and the outcome matched the prediction exactly: no baseline
+moved, no `LogicalParityDivergence`, from an enumeration of all 3,145 active baselines rather
+than a sample. **The enum-member residue was FORM, not the MEANING the previous round recorded —
+and refusing it is the finding**: wired, it left every baseline and profile unchanged and BLINDED
+47 assertions in 13 classes, because the (REL.2) enum-narrowing arc reads the narrowed type out
+of the message at a primitive probe target; they go blind, not red, and no gate here sees that.
+The remedy is measured (a `never` probe target, which tsc suppresses the generalization for, and
+which makes those pins tsc-verifiable for the first time) and queued as (PARITY.2). Two
+instrument repairs: the grid script's positive-control marker was hard-coded to the previous
+round's symbol, and the grid's blindness to display changes was re-confirmed by counting (0 of
+417 rows carries an assignability message). New meaning residues queued as (CHK.83).
+
 **(P18.11) — PER-MODULE EXTERNALS GENERATION: 51 MODULES OF `@types/node` COMPILE TOGETHER, → 17,196 / 0 / 3 (2026-09-04).**
 
 **(P18.13) — THE AUGMENTATION RESIDUES: A PACKAGE AUGMENTATION STOPS INVENTING TWO ERRORS, 17,224 → 17,236 / 0 / 3 (2026-09-04; filtered gates only — the full suite was not run this round, so the headline count stands at 17,224 / 0 / 3 plus 12 new pins).**

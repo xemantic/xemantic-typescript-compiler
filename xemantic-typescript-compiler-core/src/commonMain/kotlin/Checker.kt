@@ -98515,7 +98515,7 @@ interface DataView {
         val bodyType = if (propTypeContainsLiteral(targetType)) {
             literalTypeOfExpression(body, isArrayLikeReference(targetType))
                 ?: getTypeOfExpression(body)
-        } else getTypeOfExpression(body)
+        } else enumTargetLiteralSource(body, targetType) ?: getTypeOfExpression(body) // (CHK.83)
         if (bodyType === anyType || bodyType === errorType) return
         // Skip null/undefined sources — strictNullChecks mismatch with TypeScript test defaults.
         if (bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
@@ -105384,7 +105384,7 @@ interface DataView {
                 r
             }
         } else {
-            enumNumericLiteralSource(init, targetType) ?: run {
+            enumTargetLiteralSource(init, targetType) ?: run {
                 val t0 = CtaSections.t()
                 val r = getTypeOfExpression(init)
                 CtaSections.close(CtaSections.N_GET_TYPE_OF_EXPR, t0)
@@ -108331,7 +108331,7 @@ interface DataView {
                     val widened = getTypeOfExpression(expr)
                     if (propTypeContainsLiteral(targetType)) {
                         literalTypeOfExpression(expr, isArrayLikeReference(targetType)) ?: widened
-                    } else widened
+                    } else enumTargetLiteralSource(expr, targetType) ?: widened // (CHK.83)
                 } else undefinedType
             } finally {
                 if (useCtx) contextualType = savedContextual
@@ -109382,7 +109382,7 @@ interface DataView {
                     val sourceTypeRaw = if (propTypeContainsLiteral(tt)) {
                         literalTypeOfExpression(expr.right, isArrayLikeReference(tt)) ?: getTypeOfExpression(expr.right)
                     } else {
-                        enumNumericLiteralSource(expr.right, tt) ?: getTypeOfExpression(expr.right)
+                        enumTargetLiteralSource(expr.right, tt) ?: getTypeOfExpression(expr.right)
                     }
                     // M3.4: narrow a reference RHS via the flow graph before the missing-property /
                     // relation checks below. A preceding user type-guard can narrow the RHS to a
@@ -114617,6 +114617,30 @@ interface DataView {
     }
 
     /**
+     * (CHK.83): does the enum-MEMBER type [source] carry exactly the value of the
+     * string/number literal [literal]?
+     *
+     * The value is read through [enumMemberEntries] — the view that answers `null` for
+     * a member tsc treats as OPAQUE (an ambient non-const member with no initializer,
+     * which [enumValues] auto-numbers for the Transformer) — because tsc's rule needs
+     * a `NumberLiteral`/`StringLiteral` flag on the member and an opaque member has
+     * neither: `declare enum Amb { P }` puts `Amb.P` beside NO literal, measured on
+     * both references as `Type 'Amb.P' is not assignable to type '0'`. A computed
+     * member answers `false` the same way.
+     */
+    private fun enumMemberValueEqualsLiteral(source: Type, literal: Type): Boolean {
+        if (source.flags.hasNone(TypeFlags.EnumLiteral)) return false
+        val memberSym = (source as? Type.Object)?.symbol ?: return false
+        val owner = memberSym.parent ?: return false
+        val value = enumMemberEntries(owner)?.firstOrNull { it.first == memberSym.name }?.second ?: return false
+        return when (literal) {
+            is Type.NumberLiteral -> value is ConstantValue.NumberValue && value.value == literal.value
+            is Type.StringLiteral -> value is ConstantValue.StringValue && value.value == literal.value
+            else -> false
+        }
+    }
+
+    /**
      * (REL.1)(a): is [type] an enum-flavored `Type.Object` — an enum's OWN type, or
      * one of its MEMBER types?
      *
@@ -115293,7 +115317,13 @@ interface DataView {
         val parts = union.types
         if (parts.none { it.flags.hasAny(TypeFlags.EnumLike) }) return null
         val out = mutableListOf<String>()
-        for (p in parts) if (p.flags.hasNone(TypeFlags.EnumLike)) out.add(typeToString(p))
+        // (CHK.83): tsc's `formatUnionTypes` skips `null`/`undefined` while walking the
+        // constituents and appends them LAST (`null` before `undefined`), whatever their
+        // ids — `E | null | undefined` on both references, where the id order this
+        // helper otherwise transcribes printed `undefined | null | E`. `void` is not
+        // Nullable there and keeps its place.
+        val nullish = TypeFlags.Null or TypeFlags.Undefined
+        for (p in parts) if (p.flags.hasNone(TypeFlags.EnumLike or nullish)) out.add(typeToString(p))
         val enumParts = parts.filter { it.flags.hasAny(TypeFlags.EnumLike) }
         var i = 0
         while (i < enumParts.size) {
@@ -115317,6 +115347,8 @@ interface DataView {
             }
             i = if (j > i) j else i + 1
         }
+        if (parts.any { it.flags.hasAny(TypeFlags.Null) }) out.add("null")
+        if (parts.any { it.flags.hasAny(TypeFlags.Undefined) }) out.add("undefined")
         return out.joinToString(" | ")
     }
 
@@ -131057,24 +131089,37 @@ interface DataView {
     }
 
     /**
-     * (REL.1)(c) round 745: the NUMERIC-LITERAL type of [init] when [targetType] is
-     * enum-flavored, else `null`.
+     * (REL.1)(c) round 745, widened by (CHK.83): the string/number LITERAL type of
+     * [init] when [targetType] is enum-flavored — or a UNION with an enum-flavored
+     * constituent — else `null`.
      *
      * The value-aware relation rule needs the VALUE: `getTypeOfExpression` hands an
      * assignability site the widened `number` for a literal initializer, and `number`
      * relates to every numeric enum by the bit-flag rule, so `let e: E = 4` would
-     * never be asked the question.
+     * never be asked the question. The union arm is what lets `const d: E | undefined
+     * = 3` ask it too (both references report; a whole-flag test on the union saw no
+     * enum), and the STRING arm is display-only by construction — a string literal is
+     * never assignable to a string enum, so the verdict cannot move, but both
+     * references print `Type '"z"' is not assignable to type 'S'` where a widened
+     * source printed `'string'`.
      *
-     * Restricted to a `Type.NumberLiteral` result BY CONSTRUCTION, which is the
-     * firewall: the broad fix — admitting enums to [propTypeContainsLiteral] — also
-     * routed non-numeric initializers through [literalTypeOfExpression] and made
-     * `languageVersion = undefined!` (parser.ts:1790) reach the relation as plain
-     * `undefined`, for 4 profile FPs. Nothing but a numeric literal can pass here.
+     * Restricted to a `Type.NumberLiteral`/`Type.StringLiteral` result BY
+     * CONSTRUCTION, which is the firewall: the broad fix — admitting enums to
+     * [propTypeContainsLiteral] — also routed non-literal initializers through
+     * [literalTypeOfExpression] and made `languageVersion = undefined!`
+     * (parser.ts:1790) reach the relation as plain `undefined`, for 4 profile FPs.
+     * `undefined`, `null` and the boolean literals cannot pass here.
      */
-    private fun enumNumericLiteralSource(init: Expression, targetType: Type): Type.NumberLiteral? {
-        if (targetType.flags.hasNone(TypeFlags.EnumLike)) return null
-        return literalTypeOfExpression(init) as? Type.NumberLiteral
+    private fun enumTargetLiteralSource(init: Expression, targetType: Type): Type? {
+        if (!typeHasEnumFlavoredConstituent(targetType)) return null
+        val lit = literalTypeOfExpression(init) ?: return null
+        return if (lit is Type.NumberLiteral || lit is Type.StringLiteral) lit else null
     }
+
+    /** (CHK.83): [t] is enum-flavored, or a union with an enum-flavored constituent. */
+    private fun typeHasEnumFlavoredConstituent(t: Type): Boolean =
+        t.flags.hasAny(TypeFlags.EnumLike) ||
+            (t is Type.Union && t.types.any { it.flags.hasAny(TypeFlags.EnumLike) })
 
     /** 17.43 helper: true if [propType] is a literal type or contains literal members. */
     private fun propTypeContainsLiteral(propType: Type): Boolean = when {
@@ -157999,7 +158044,8 @@ interface DataView {
             val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
             val argType = overloadNarrowedArgType(arg, if (propTypeContainsLiteral(paramType))
-                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg))
+                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg))
+                else enumTargetLiteralSource(arg, paramType) ?: getTypeOfExpression(arg)) // (CHK.83)
             if (argType === anyType || argType === errorType) continue
             if (overloadArgSkippable(argType, params[i], paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
@@ -158008,7 +158054,9 @@ interface DataView {
                 if (propError != null) return propError
                 // overloadingOnConstants2: keep the literal display against a literal param
                 // (tsc shows `Argument of type '"um"'`, not the widened `'string'`).
-                val displayArgType = if (propTypeContainsLiteral(paramType)) argType else getWidenedLiteralType(argType)
+                // (CHK.83): an enum-flavored param keeps the literal too — pristine's chain
+                // reads `Argument of type '3' is not assignable to parameter of type 'E'`.
+                val displayArgType = if (ts2322KeepsSourceLiteral(paramType)) argType else getWidenedLiteralType(argType)
                 return "Argument of type '${typeToString(displayArgType)}' is not assignable to parameter of type '${typeToString(paramType)}'."
             }
             // (CHK.56) THE WEAK-TYPE SUBLINE. The relation ACCEPTED this argument, so
@@ -158047,7 +158095,8 @@ interface DataView {
             val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
             val argType = overloadNarrowedArgType(arg, if (propTypeContainsLiteral(paramType))
-                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg))
+                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg))
+                else enumTargetLiteralSource(arg, paramType) ?: getTypeOfExpression(arg)) // (CHK.83)
             if (argType === anyType || argType === errorType) continue
             if (overloadArgSkippable(argType, params[i], paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
@@ -158490,7 +158539,8 @@ interface DataView {
             // would FP-reject a valid `foo("hi")` against an overload param `"hi"`. Gated to
             // literal params so non-literal overloads are byte-identical.
             val argType = overloadNarrowedArgType(arg, if (propTypeContainsLiteral(paramType))
-                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg))
+                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg))
+                else enumTargetLiteralSource(arg, paramType) ?: getTypeOfExpression(arg)) // (CHK.83)
             if (argType === anyType || argType === errorType) continue
             // B176: an explicit `undefined` arg is LEGAL for an OPTIONAL parameter (absent
             // and undefined are interchangeable for params unless exactOptionalPropertyTypes).
@@ -161428,9 +161478,14 @@ interface DataView {
                 // var-init inference (the `isFromCall` rule).
                 val widened = if (raw === anyType) (voidIifeArgType(arg) ?: raw) else raw
                 val litT = ArgSections.t()
+                // (CHK.83): the declaration rule at the ARGUMENT gate. `fEnum(3)` with no
+                // member valued 3 is `TS2345` on both references and was silent here,
+                // because the literal arrived as `number` and `number` relates to every
+                // numeric enum; `fEnum(-1)` reported all along only because a negated
+                // literal is typed as its literal by `getTypeOfExpression`.
                 val ctxAppliedRaw = if (propTypeContainsLiteral(paramType)) {
                     literalTypeOfExpression(arg) ?: widened
-                } else widened
+                } else enumTargetLiteralSource(arg, paramType) ?: widened
                 ArgSections.close(ArgSections.N_LITERAL, litT)
                 // M3.1 (round 429c): a non-null-asserted arg (`readFile(path)!`) types
                 // as its nullish-stripped union (tsc NonNullable) — LOCAL strip only.
@@ -163367,7 +163422,8 @@ interface DataView {
         for (i in lastIdx until args.size) {
             val arg = args[i]
             if (arg is SpreadElement) continue
-            val argType0 = getTypeOfExpression(arg)
+            // (CHK.83): a rest ELEMENT is an argument — the enum literal rule applies.
+            val argType0 = enumTargetLiteralSource(arg, elementType) ?: getTypeOfExpression(arg)
             // M3.4 (round 429d): mirror B469 — a reference arg in a REST position
             // narrows by the flow graph too (`cond ? diag(…, deprecatedEntity) : …`
             // truthy-narrows the `string | undefined` rest arg to `string` — tsc
@@ -163695,6 +163751,9 @@ interface DataView {
         // that: they cannot be separated from `ArrayLike`/`Iterable` by any predicate over
         // the target, so the unblocker is the apparent-members gap, not this gate.
         if (obj is Type.Reference && obj.target.symbol?.name == "ReadonlyArray") return true
+        // An enum MEMBER parameter (`e: E.A`) needs no arm here: its type carries
+        // `EnumLiteral`, which [isSimpleCheckableType] admits, so it never reaches this
+        // predicate — measured by (CHK.83)'s ablation (an `EnumMember` arm read 0 RED).
         if (obj.symbol?.flags?.hasAny(SymbolFlags.Enum) == true) return true
         resolveStructuredTypeMembers(obj)
         // An OVERLOAD SET as a parameter type (more than one call signature) is refused:
@@ -163803,7 +163862,20 @@ interface DataView {
         // to justify it.
         if (sf.hasAny(TypeFlags.EnumLiteral) || tf.hasAny(TypeFlags.EnumLiteral)) {
             enumMemberTypeIsStringValued(source)?.let { sourceIsString ->
-                if (tf.hasAny(if (sourceIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) return true
+                if (tf.hasAny(if (sourceIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) {
+                    // (CHK.83): a LITERAL target is not the wide primitive. tsc relates an
+                    // enum member to a string/number literal ONLY by value —
+                    // `s & NumberLiteral && s & EnumLiteral && t & NumberLiteral &&
+                    // !(t & EnumLiteral) && s.value === t.value` (and the string twin) —
+                    // so `E.A` (`A = 1`) reaches `1` and not `5`, and a member whose value
+                    // tsc does not know (a computed or ambient-opaque member) reaches NO
+                    // literal at all. `NumberLike` includes `NumberLiteral`, which is how
+                    // `const l1: 5 = em` was silent at every position while `const l3: 5 =
+                    // ew` (the WHOLE enum) reported. Falling through here is a rejection:
+                    // nothing below relates a member-less enum object to a literal.
+                    if (target !is Type.StringLiteral && target !is Type.NumberLiteral) return true
+                    if (enumMemberValueEqualsLiteral(source, target)) return true
+                }
             }
             enumMemberTypeIsStringValued(target)?.let { targetIsString ->
                 if (!targetIsString && sf.hasAny(TypeFlags.NumberLike) &&
@@ -166860,7 +166932,18 @@ interface DataView {
             // B395: under arrayPropsOnly (direct object-literal init) skip only SIMPLE values
             // (those are owned by emitPerPropertyMismatches); object-literal values are now
             // descended for the nested missing-required-property check (TS2741/2739/2740).
-            if (arrayPropsOnly && value !is ArrayLiteralExpression && value !is ObjectLiteralExpression) continue
+            // (CHK.83): a string/number LITERAL value under an enum-flavored target member is
+            // the one simple leaf the WHOLE relation cannot see — `{ e: number }` relates to
+            // `{ e: E }` by the bit-flag rule, so `emitPerPropertyMismatches` is never
+            // entered for `{ e: 3 }`. Admit it here ONLY when its widened type relates
+            // (the numeric case); a string literal's widened `string` already fails the
+            // whole relation and that path owns it, which is what keeps this from
+            // double-emitting.
+            val enumLeafOwnedHere = arrayPropsOnly &&
+                enumTargetLiteralSource(value, tgtMemberType) != null &&
+                checkTypeRelatedTo(getTypeOfExpression(value), tgtMemberType, assignableRelation)
+            if (arrayPropsOnly && value !is ArrayLiteralExpression && value !is ObjectLiteralExpression &&
+                !enumLeafOwnedHere) continue
             if (value is ObjectLiteralExpression) {
                 val tgtObj = selectObjectConstituentForObjectLiteral(tgtMemberType) ?: continue
                 val childViaUnion = viaUnion || tgtMemberType is Type.Union
@@ -166956,7 +167039,12 @@ interface DataView {
                 // "iterationTypesOfAsyncIterable"` vs the two-literal union). Mirrors the
                 // 17.70 return-path / B326 overload-arg rule.
                 val effValueType = if (propTypeContainsLiteral(tgtMemberType))
-                    literalTypeOfExpression(value) ?: valueType else valueType
+                    literalTypeOfExpression(value) ?: valueType
+                else enumTargetLiteralSource(value, tgtMemberType) ?: valueType // (CHK.83)
+                // (CHK.83): the enum case DISPLAYS the literal it compared; every other
+                // shape keeps the display it had.
+                val displayValueType = if (effValueType !== valueType &&
+                    typeHasEnumFlavoredConstituent(tgtMemberType)) effValueType else valueType
                 // An OPTIONAL target property `a?: T` accepts a `T | undefined` source when
                 // exactOptionalPropertyTypes is off (widenOptionalTargetPropType, source-nullish
                 // gated) — e.g. `sourceIndex: hasSource ? n : undefined` (`number | undefined`)
@@ -166988,7 +167076,7 @@ interface DataView {
                     // [relationErrorSourceDisplayType] — the nested / return-position
                     // object-literal member reaches THIS emitter, not the two per-property
                     // ones. The TARGET display keeps its bare widening.
-                    message = "Type '${relationErrorSourceDisplay(valueType, tgtMemberType)}' is not assignable to type '${typeToString(getWidenedLiteralType(tgtMemberType))}'.",
+                    message = "Type '${relationErrorSourceDisplay(displayValueType, tgtMemberType)}' is not assignable to type '${typeToString(getWidenedLiteralType(tgtMemberType))}'.",
                     category = DiagnosticCategory.Error,
                     code = 2322,
                     fileName = fileName,
@@ -168461,7 +168549,13 @@ interface DataView {
             val targetPropType = getPropertyTypeForRelation(targetType, targetProp)
             if (targetPropType === anyType || targetPropType === errorType) continue
             val sourceProp = sourceType.members?.get(propName) ?: continue
-            val sourcePropType = getPropertyTypeForRelation(sourceType, sourceProp)
+            // (CHK.83): an enum-flavored target MEMBER keeps the value's LITERAL — tsc's
+            // `isLiteralOfContextualType` declines to widen a literal whose contextual
+            // type holds a literal of its kind, and an enum is a union of its members'
+            // literals — so `{ e: 3 }` against `{ e: E }` compares `3`, not the widened
+            // `number` that relates to every numeric enum. Both references report it.
+            val sourcePropType = enumTargetLiteralSource(unwrapToObjLitValue(propNode.initializer), targetPropType)
+                ?: getPropertyTypeForRelation(sourceType, sourceProp)
             if (sourcePropType === anyType || sourcePropType === errorType) continue
             if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
             // Round 435: fresh literal prop value vs a literal-containing target member —

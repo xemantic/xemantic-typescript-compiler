@@ -1,13 +1,31 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **193,482** lines (191,070 when the metric was created; the (P18.9)-(P18.19) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **193,576** lines (191,070 when the metric was created; the (P18.9)-(P18.20) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
 checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.20) — AN ENUM MEMBER STOPS RELATING TO A LITERAL IT DOES NOT EQUAL, A LITERAL ARGUMENT STOPS BEING INVISIBLE TO AN ENUM PARAMETER, AND THE (CHK.85) UNBLOCKER IS DESIGNED, 17,394 → 17,424 / 0 / 3 (2026-09-05).**
+An orchestrated round: one implementation subagent owned Gradle; a read-only recon subagent
+worked against a frozen snapshot of the HEAD binary. **(CHK.83) CLOSED.** `const l1: 5 = em` was
+silent at every position because `isSimpleTypeRelatedTo`'s `EnumLiteral` leg accepted a member
+against ANY number literal (`NumberLike ⊇ NumberLiteral`); it now relates by VALUE through the
+tsc-value view, so an ambient opaque member relates to no literal. `fEnum(3)` at an argument, a
+rest element, a return, an arrow body, the overload chain and object-literal members now reports
+as both references do; the enum-union display puts `null`/`undefined` last. The overload-set
+unification is STOPPED: `checkRecursiveFunctionTypes` pins four mechanisms, not one. **(CHK.91)
+DESIGNED** — the (CHK.85)(a) unblocker: a FRESHNESS gate (tsc widens only an enum-member ACCESS
+expression; the built arm widened `{ v: a }`, `{ v: k }` and shorthands too) plus a PULL-derived
+contextual keep mirroring tsc's `getContextualType` roots, decided by `isLiteralOfContextualType`'s
+SOME rule; the eleven losses are exactly the union-annotated declaration / nested / conditional
+return / arrow body / assignment positions, where an emitter fires and the push field never
+arrives. 30 pins, twelve arms all discriminating, one redundant guard retired by its own arm;
+core 15,935/0, corpus 8,837/0, `cost_gate.py` exit 0, `huge_methods.py` exit 0, grid 8×`added=0
+removed=0`. Residues queued as (CHK.92).
 
 **(P18.19) — AN ENUM MEMBER KEEPS ITS ENUM AT A RETURN, THE TS2367 CATEGORY RULE TAKES ITS BASES, AND A STRING ENUM STOPS BEING A NUMBER, 17,369 → 17,394 / 0 / 3 predicted (2026-09-05).**
 Two items landed whole and the third partly; every row reproduced against tsgo 7.0.2 AND
@@ -131,20 +149,3 @@ the last a measured-redundant guard kept with its reason. Four residues queued: 
 `never` unassignable at a RETURN position and nowhere else, (CHK.85) a mutable object-literal
 property and a `let` not widening an enum member the way tsc does, (CHK.86) no TS2367 for an
 impossible enum-vs-enum equality, (PARITY.3) the lost namespace prefix.
-
-**(P18.15) — THE LITERAL-UNION COLLAPSE AT EVERY POSITION, AND AN ENUM GENERALIZATION REFUSED, 17,259 → 17,286 / 0 / 3 (2026-09-04).**
-(PARITY.1) closed. The item named three emitters; a trace censused SIX (argument, rest argument,
-return and three object-literal paths, one with no keep-guard at all), all now through one
-measured helper whose keep-predicate also recurses through a union target — every top-level
-source display in that family now matches tsgo 7.0.2 AND pristine 6.0.3 byte for byte. 27 pins,
-seven arms with disjoint red sets, and the outcome matched the prediction exactly: no baseline
-moved, no `LogicalParityDivergence`, from an enumeration of all 3,145 active baselines rather
-than a sample. **The enum-member residue was FORM, not the MEANING the previous round recorded —
-and refusing it is the finding**: wired, it left every baseline and profile unchanged and BLINDED
-47 assertions in 13 classes, because the (REL.2) enum-narrowing arc reads the narrowed type out
-of the message at a primitive probe target; they go blind, not red, and no gate here sees that.
-The remedy is measured (a `never` probe target, which tsc suppresses the generalization for, and
-which makes those pins tsc-verifiable for the first time) and queued as (PARITY.2). Two
-instrument repairs: the grid script's positive-control marker was hard-coded to the previous
-round's symbol, and the grid's blindness to display changes was re-confirmed by counting (0 of
-417 rows carries an assignability message). New meaning residues queued as (CHK.83).
