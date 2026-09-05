@@ -106564,7 +106564,8 @@ interface DataView {
         // collapsed to the bare class name, render the source as `typeof C`
         // (matches tsc — `var x: number = C` → "Type 'typeof C' ..."). typeName1.
         val displaySource = run {
-            val base = typeToString(displaySourceType)
+            val base = relationErrorSourceQualified(displaySourceType, targetType)
+                ?: typeToString(displaySourceType)
             if (init is Identifier && base == init.text) {
                 val s = currentFileLocals?.get(init.text) ?: globals[init.text]
                 if (s != null && s.flags.hasAny(SymbolFlags.Class) &&
@@ -108906,7 +108907,8 @@ interface DataView {
         // `one: "a"` read `Type 'string'`, both references read `'"a"'`) and the
         // enum-member arm.
         val displaySourceType = relationErrorSourceDisplayType(sourceType, targetType)
-        val displaySource = typeToString(displaySourceType)
+        val displaySource = relationErrorSourceQualified(displaySourceType, targetType)
+            ?: typeToString(displaySourceType)
         val displayTarget = if (returnTypeNode is TypeQuery && targetType is Type.Object &&
                 targetType !is Type.Interface && !targetType.callSignatures.isNullOrEmpty() &&
                 targetType.symbol?.flags?.hasAny(SymbolFlags.Function) == true)
@@ -110318,7 +110320,8 @@ interface DataView {
             // both print fully qualified — see [enumCollisionQualifiedDisplays].
             val enumQualified =
                 enumCollisionQualifiedDisplays(displaySourceType, tt, displaySourceRaw, displayTargetRaw)
-            val displaySource = enumQualified?.first ?: displaySourceRaw
+            val displaySource = relationErrorSourceQualified(displaySourceType, tt)
+                ?: enumQualified?.first ?: displaySourceRaw
             val displayTarget = enumQualified?.second ?: displayTargetRaw
             val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
             // 16.4bf: Compute missing-property set directly rather than relying on
@@ -114870,6 +114873,107 @@ interface DataView {
      * `declare enum` relates to a concrete one until a member's value is known on
      * BOTH sides and differs.
      */
+    /**
+     * (CHK.86): the two DISPLAY strings of a `TS2367` for an equality comparison whose
+     * operands are both enum-flavored and provably cannot overlap, or null when either
+     * operand is not enum-flavored or an overlap is possible.
+     *
+     * tsc reaches this through the general operator reporter, whose comparability test is
+     * `isTypeEqualityComparableTo(l, r) || isTypeEqualityComparableTo(r, l)` — symmetric,
+     * which is why [enumEnumsOverlap] asks [enumTypesRelation] in BOTH directions (that
+     * helper is directional: every SOURCE member must be present in the TARGET).
+     *
+     * The display is tsc's `getBaseTypesIfUnrelated`, transcribed:
+     *
+     * ```
+     * const leftBase = getBaseTypeOfLiteralType(leftType);
+     * const rightBase = getBaseTypeOfLiteralType(rightType);
+     * if (!isRelated(leftBase, rightBase)) { effectiveLeft = leftBase; effectiveRight = rightBase; }
+     * ```
+     *
+     * i.e. widen BOTH operands to their enums and, if they are STILL unrelated, print the
+     * enums; otherwise print the originals. That single line accounts for every display
+     * measured on both references: `ka === kb` prints `'K.A' and 'K.B'` (the bases are one
+     * enum, so they ARE related and the members survive) while `ka === jx` prints
+     * `'K' and 'J'` and not `'K.A' and 'J.X'`, and `ka === j` — a member against a whole
+     * enum — prints `'K' and 'J'`.
+     *
+     * SCOPE. Both operands must decompose into enum-flavored atoms ([enumComparisonAtoms]
+     * admits a UNION of them, which is what a narrowed reference is), so nothing else can
+     * reach this rule: an enum against `number`, against a numeric literal, or against
+     * `string` keeps whatever answer it has today. The enum-against-numeric-LITERAL sibling
+     * is a real and separately measured gap — both references report `ka === 1` as
+     * `'K.A' and '1'` and we are silent — but deciding it needs the member VALUES
+     * ([enumDomainValues] / the round-745 `numericLiteralFitsEnum` machinery) rather than
+     * enum identity, so it is left to its own round.
+     */
+    private fun enumComparisonNoOverlapDisplays(leftType: Type, rightType: Type): Pair<String, String>? {
+        val leftAtoms = enumComparisonAtoms(leftType) ?: return null
+        val rightAtoms = enumComparisonAtoms(rightType) ?: return null
+        if (enumAtomListsOverlap(leftAtoms, rightAtoms)) return null
+        val leftBase = enumComparisonBaseType(leftType, leftAtoms)
+        val rightBase = enumComparisonBaseType(rightType, rightAtoms)
+        val basesRelated = enumComparisonAtoms(leftBase)?.let { lb ->
+            enumComparisonAtoms(rightBase)?.let { rb -> enumAtomListsOverlap(lb, rb) }
+        } == true
+        return if (basesRelated) typeToString(leftType) to typeToString(rightType)
+        else typeToString(leftBase) to typeToString(rightBase)
+    }
+
+    /**
+     * (CHK.86): the enum-flavored constituents of [t] — the type itself, or a union's
+     * members — or null when ANY constituent is not enum-flavored.
+     *
+     * The all-or-nothing answer is the firewall: a union that mixes an enum with
+     * `undefined` (the ordinary optional shape) must not be judged here at all, because
+     * the nullish half overlaps things this rule knows nothing about.
+     */
+    private fun enumComparisonAtoms(t: Type): List<Type>? {
+        val parts = if (t is Type.Union) t.types else listOf(t)
+        if (parts.isEmpty()) return null
+        for (p in parts) {
+            if (enumOwnTypeSymbol(p) == null && enumOfMemberTypeSymbol(p) == null) return null
+        }
+        return parts
+    }
+
+    /** (CHK.86): tsc's `getBaseTypeOfLiteralType` over a comparison operand — every enum
+     *  member widened to its enum, deduplicated, so `K.A | K.B` becomes `K`. */
+    private fun enumComparisonBaseType(t: Type, atoms: List<Type>): Type {
+        val widened = atoms.map { baseTypeOfLiteralType(it) }
+        val distinct = mutableListOf<Type>()
+        for (w in widened) if (distinct.none { it === w }) distinct.add(w)
+        return when {
+            distinct.size == 1 -> distinct[0]
+            distinct.size == atoms.size && t is Type.Union -> t
+            else -> getUnionType(distinct)
+        }
+    }
+
+    /** (CHK.86): some pair of atoms can hold a common value. */
+    private fun enumAtomListsOverlap(left: List<Type>, right: List<Type>): Boolean =
+        left.any { l -> right.any { r -> enumAtomsOverlap(l, r) } }
+
+    /**
+     * (CHK.86): whether one enum-flavored atom and another can hold a common value.
+     *
+     * Two atoms of DIFFERENT enums never can; two MEMBERS of one enum can only when they
+     * are the same member; anything involving a whole enum and one of its own members
+     * always can. Unknown answers ALL read as "overlap", so the rule is refusal-shaped:
+     * it emits only where it can prove the comparison impossible.
+     */
+    private fun enumAtomsOverlap(a: Type, b: Type): Boolean {
+        val aMemberEnum = enumOfMemberTypeSymbol(a)
+        val bMemberEnum = enumOfMemberTypeSymbol(b)
+        val aEnum = aMemberEnum ?: enumOwnTypeSymbol(a) ?: return true
+        val bEnum = bMemberEnum ?: enumOwnTypeSymbol(b) ?: return true
+        val sameEnum = canonicalEnumSymbol(aEnum).id == canonicalEnumSymbol(bEnum).id ||
+            enumTypesRelation(aEnum, bEnum) == null || enumTypesRelation(bEnum, aEnum) == null
+        if (!sameEnum) return false
+        if (aMemberEnum != null && bMemberEnum != null) return enumMemberTypesAreSameMember(a, b)
+        return true
+    }
+
     private fun enumTypesRelation(sourceEnum: Symbol, targetEnum: Symbol): EnumRelFailure? {
         val src = canonicalEnumSymbol(sourceEnum)
         val tgt = canonicalEnumSymbol(targetEnum)
@@ -130629,6 +130733,143 @@ interface DataView {
      * prints `'0 | 1'` against a deferred conditional type. Widening the gate to "anything
      * [ts2322KeepsSourceLiteral] declines" would collapse both.
      */
+    /**
+     * (PARITY.3): the STRING a relation-error emitter prints for its SOURCE — the
+     * generalization of [relationErrorSourceDisplayType] plus tsc's re-render of the
+     * generalized type under `TypeFormatFlags.UseFullyQualifiedType`.
+     *
+     * `reportRelationError` computes the two displays in TWO different ways and the
+     * difference is exactly this qualification:
+     *
+     * ```
+     * const [sourceType, targetType] = getTypeNamesForErrorDisplay(source, target);
+     * //   ^ plain typeToString(...)  -> a BARE name
+     * let generalizedSourceType = sourceType;
+     * if (!(target.flags & TypeFlags.Never) && isLiteralType(source) &&
+     *     !typeCouldHaveTopLevelSingletonTypes(target)) {
+     *     generalizedSource = getBaseTypeOfLiteralType(source);
+     *     generalizedSourceType = getTypeNameForErrorDisplay(generalizedSource);
+     * //   ^ typeToString(..., undefined, TypeFormatFlags.UseFullyQualifiedType)
+     * }
+     * ```
+     *
+     * So a source that takes the generalize branch prints QUALIFIED and one that does
+     * not prints BARE — for the SAME type, in the SAME message shape. Measured against
+     * tsgo 7.0.2 AND pristine `typescript@6.0.3` with `en: Ns.Inner.I`:
+     * `const d: string = en` reads `Type 'Ns.Inner.I'` while `const d: never = en`
+     * reads `Type 'I'`, and we read `Type 'I'` for both.
+     *
+     * A WHOLE ENUM takes the branch even though the generalization is the identity —
+     * that is not an accident of ours: in tsc a numeric enum type IS a union carrying
+     * `TypeFlags.EnumLiteral`, so `isLiteralType` answers true for it, while
+     * `getBaseTypeOfEnumLikeType` returns the type unchanged for a non-member symbol.
+     * The observable effect of entering the branch is therefore the RE-RENDER alone,
+     * which is why the qualification cannot be keyed on "the type changed".
+     *
+     * SCOPE, deliberately narrower than tsc's. Only a NAMESPACE chain is walked
+     * ([enumNamespaceQualifiedDisplay] returns null without one), so a top-level enum
+     * is untouched and a MODULE-scoped one keeps its bare name where tsc prints
+     * `import("<path>").E`. That last case is (P18.14)'s refused mechanism — tsc spells
+     * the module with an ABSOLUTE path in a real project, which no stable display can
+     * reproduce — and this rule must not drag it in: [enumTypeQualifiedDisplay]'s own
+     * [enumModuleImportPrefix] leg stays reserved to the rounds-745-749 same-string
+     * retry, where a corpus baseline asks for it by name.
+     */
+    private fun relationErrorSourceDisplay(sourceType: Type, targetType: Type): String {
+        val displayType = relationErrorSourceDisplayType(sourceType, targetType)
+        return relationErrorSourceQualified(displayType, targetType) ?: typeToString(displayType)
+    }
+
+    /**
+     * (PARITY.3): the qualified render of an ALREADY-generalized source display type, or
+     * null when tsc would not re-render it — see [relationErrorSourceDisplay].
+     *
+     * Split out so the assignment path can keep the BARE strings its rounds-745-749
+     * same-string retry compares ([enumCollisionQualifiedDisplays] fires only when the
+     * two displays are EQUAL, which a pre-qualified source would silently prevent) and
+     * still let this rule override afterwards, which is tsc's own order: the collision
+     * retry runs inside `getTypeNamesForErrorDisplay`, the generalization re-render after
+     * it. The two are mutually exclusive in practice — the retry needs an enum-flavored
+     * TARGET, which is exactly what [relationErrorGeneralizesSource] refuses.
+     */
+    private fun relationErrorSourceQualified(displayType: Type, targetType: Type): String? {
+        if (!relationErrorGeneralizesSource(targetType)) return null
+        return enumNamespaceQualifiedDisplay(displayType)
+    }
+
+    /**
+     * (PARITY.3): the TARGET half of tsc's generalize condition —
+     * `!(target.flags & TypeFlags.Never) && !typeCouldHaveTopLevelSingletonTypes(target)`.
+     *
+     * The SOURCE half (`isLiteralType(source)`) is not spelled out because the only
+     * caller's qualification is enum-only, and every enum-flavored type satisfies it in
+     * tsc by construction: an enum member is a unit type, and a whole enum is a union
+     * flagged `EnumLiteral`, which `isLiteralType` admits explicitly.
+     */
+    private fun relationErrorGeneralizesSource(targetType: Type): Boolean {
+        if (targetType === neverType || targetType.flags.hasAny(TypeFlags.Never)) return false
+        return !ts2322KeepsSourceLiteral(targetType)
+    }
+
+    /**
+     * (PARITY.3): an enum-flavored type rendered with its NAMESPACE path — `Ns.Inner.I` —
+     * or null when it is not enum-flavored or has no namespace container.
+     *
+     * The null-without-a-namespace answer is the blast radius: a top-level enum renders
+     * through [typeToString] exactly as before, so this rule can only ever change a
+     * display that spells a namespace. It is [enumTypeQualifiedDisplay] with the
+     * [enumModuleImportPrefix] leg removed — see [relationErrorSourceDisplay] for why
+     * that leg may not be shared.
+     */
+    private fun enumNamespaceQualifiedDisplay(type: Type): String? {
+        val sym = (type as? Type.Object)?.symbol ?: return null
+        val isMember = sym.flags.hasAny(SymbolFlags.EnumMember)
+        val enumSym = (if (isMember) sym.parent else sym)
+            ?.takeIf { it.flags.hasAny(SymbolFlags.Enum) } ?: return null
+        val segments = mutableListOf(enumSym.name)
+        var cur = enumSym.parent
+        var hops = 0
+        while (cur != null && hops++ < 64 &&
+            cur.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)
+        ) {
+            // An AMBIENT MODULE (`declare module "amb" { … }`) is a container tsc renders
+            // as `import("amb")`, not as a dotted segment — its symbol NAME is the bare
+            // specifier, so joining it produces `amb.AE`, a string that reads as a
+            // namespace and is wrong in a new way (measured: both references print
+            // `import("amb").AE` and we printed the bare `AE` before this rule). Refusing
+            // the whole chain keeps the pre-existing bare display, which is the divergence
+            // (P18.14) already refused for the module family; the `import(…)` form belongs
+            // to [enumModuleImportPrefix] and to a round that can gate it on a baseline.
+            if (cur.declarations.any { it is ModuleDeclaration && it.name is StringLiteralNode }) return null
+            // A GLOBAL AUGMENTATION (`declare global { … }`) is not a container a
+            // consumer can spell — it IS the global scope, so its members are reachable
+            // unqualified and both references render them BARE. STOP rather than refuse:
+            // a real namespace nested INSIDE the block is an ordinary container and does
+            // qualify, which the same measurement pins — `declare global { namespace N
+            // { enum NE {} } }` reads `'N.NE'` in tsgo 7.0.2 AND pristine 6.0.3, and
+            // `Deep.Inner.DE` keeps both of its segments, while the block's own direct
+            // members drop to one segment and fall out below as a bare name.
+            //
+            // KEYED ON THE `declare` MODIFIER, NOT ON THE NAME, and that is measured:
+            // a PLAIN `namespace global { export enum GE {} }` is an ordinary namespace
+            // that happens to be called `global`, and both references print `'global.GE'`
+            // for it. The third form — a modifier-less `global { … }` nested in an
+            // AMBIENT module, where the augmentation is ambient by context — needs no arm
+            // here: the guard above already refuses that chain at the module hop, which
+            // is the same bare answer for the same reason.
+            if (cur.declarations.any {
+                    it is ModuleDeclaration && (it.name as? Identifier)?.text == "global" &&
+                        ModifierFlag.Declare in it.modifiers
+                }
+            ) break
+            segments.add(0, cur.name)
+            cur = cur.parent
+        }
+        if (segments.size == 1) return null
+        if (isMember) segments.add(sym.name)
+        return segments.joinToString(".")
+    }
+
     private fun relationErrorSourceDisplayType(sourceType: Type, targetType: Type): Type {
         if (targetType === neverType || targetType.flags.hasAny(TypeFlags.Never)) return sourceType
         if (ts2322KeepsSourceLiteral(targetType)) return sourceType
@@ -161880,7 +162121,7 @@ interface DataView {
             // target read `Type 'string'` where tsgo 7.0.2 and pristine read `'"a"'`, and a
             // literal-union member value read `'"a" | "b"'` where both read `'string'`.
             // The TARGET display is deliberately left on the bare widening.
-            val displaySource = typeToString(relationErrorSourceDisplayType(sourcePropType, targetPropType))
+            val displaySource = relationErrorSourceDisplay(sourcePropType, targetPropType)
             val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
             val related = mutableListOf<Diagnostic>()
@@ -162744,7 +162985,7 @@ interface DataView {
             // where tsgo 7.0.2 and pristine `typescript@6.0.3` both read `'string'`, and a
             // single-literal reference read `'"a"'` for their `'string'`. `f(true)` — the
             // fresh case the old rule DID widen — is unchanged.
-            val argTypeStr = typeToString(relationErrorSourceDisplayType(argType, paramType))
+            val argTypeStr = relationErrorSourceDisplay(argType, paramType)
             val paramTypeStr = typeToString(paramType)
             val start = arg.pos
             // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
@@ -162979,7 +163220,7 @@ interface DataView {
             val ok = checkTypeRelatedTo(argType, elementType, assignableRelation)
             if (!ok) {
                 // (PARITY.1)(b-residue): a REST argument is an argument — same rule.
-                val argDisplay = typeToString(relationErrorSourceDisplayType(argType, elementType))
+                val argDisplay = relationErrorSourceDisplay(argType, elementType)
                 val paramDisplay = typeToString(elementType)
                 val start = arg.pos
                 val length = expressionTrueEnd(arg) - start
@@ -165398,6 +165639,38 @@ interface DataView {
         // reference checks below (which never fire for primitives). The DISPLAY uses the
         // category name for pure number/string/boolean and typeToString for an enum
         // (baseline shows `'string' and 'E'`, not `'string' and 'number'`).
+        // (CHK.86): two ENUM-flavored operands with no overlap. Measured against tsgo
+        // 7.0.2 AND pristine `typescript@6.0.3`, which agree on every row: `k === j`
+        // (`k: K`, `j: J`) reads `TS2367: … the types 'K' and 'J' have no overlap.`
+        // there and was SILENT here, as were `ka === kb` (two members of ONE enum),
+        // `ka === K.B`, `ka === jx`, `S === T` (two string enums) and `c1 === K.A` (a
+        // `const` enum against a member of another).
+        //
+        // WHY THE CATEGORY RULE BELOW CANNOT SEE IT: [comparabilityCategory] maps a
+        // numeric enum to `"number"` and a string enum to `"string"` — deliberately, so
+        // that `k === num` and `s1 === "p"` stay legal — so two enums of the same
+        // flavour read as the SAME category and the rule falls through. The enum
+        // question is about IDENTITY, not category, and has to be asked separately.
+        //
+        // Placed ABOVE the category rule so a numeric-enum-vs-string-enum pair is
+        // decided here too: it already fired there, but with the WRONG display —
+        // `k === S.P` read `'K' and 'S.P'` against both references' `'K' and 'S'`,
+        // because the base-type rule below is tsc's and the category rule is not.
+        enumComparisonNoOverlapDisplays(leftType, rightType)?.let { (ld, rd) ->
+            val start = expr.pos
+            val length = expressionTrueEnd(expr.right) - start
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "This comparison appears to be unintentional because the types " +
+                        "'$ld' and '$rd' have no overlap.",
+                    category = DiagnosticCategory.Error, code = 2367,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                ))
+            }
+            return
+        }
         run {
             val lc = comparabilityCategory(leftType)
             val rc = comparabilityCategory(rightType)
@@ -166453,7 +166726,7 @@ interface DataView {
                     // [relationErrorSourceDisplayType] — the nested / return-position
                     // object-literal member reaches THIS emitter, not the two per-property
                     // ones. The TARGET display keeps its bare widening.
-                    message = "Type '${typeToString(relationErrorSourceDisplayType(valueType, tgtMemberType))}' is not assignable to type '${typeToString(getWidenedLiteralType(tgtMemberType))}'.",
+                    message = "Type '${relationErrorSourceDisplay(valueType, tgtMemberType)}' is not assignable to type '${typeToString(getWidenedLiteralType(tgtMemberType))}'.",
                     category = DiagnosticCategory.Error,
                     code = 2322,
                     fileName = fileName,
@@ -168039,7 +168312,7 @@ interface DataView {
             // target read `Type 'string'` where tsgo 7.0.2 and pristine read `'"a"'`, and a
             // literal-union member value read `'"a" | "b"'` where both read `'string'`.
             // The TARGET display is deliberately left on the bare widening.
-            val displaySource = typeToString(relationErrorSourceDisplayType(sourcePropType, targetPropType))
+            val displaySource = relationErrorSourceDisplay(sourcePropType, targetPropType)
             val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
             val related = mutableListOf<Diagnostic>()
@@ -171782,6 +172055,26 @@ interface DataView {
         if (sourceType.startsWith("&") || targetType.startsWith("&")) return true
         if (targetType == "any" || targetType == "unknown") return true
         if (sourceType == "any") return true
+        // (CHK.84): `never` is the BOTTOM type, so it is assignable to everything —
+        // the same rule [isSimpleTypeRelatedTo] states as "Never source is assignable to
+        // everything" for the type engine, missing here. Measured against tsgo 7.0.2 AND
+        // pristine `typescript@6.0.3`: `declare const n: never; function f(): string {
+        // return n; }` reported `TS2322: Type 'never' is not assignable to type 'string'.`
+        // here and is SILENT in both.
+        //
+        // WHY ONLY THE RETURN POSITION SHOWED IT. Of this function's five call sites only
+        // [checkReturnAssignabilityCore]'s adds an IDENTIFIER fallback
+        // (`?: (expr as? Identifier)?.let { varTypes[it.text] }`) below
+        // [inferSimpleExprType]; the var-decl, assignment and `this.p` sites pass
+        // `inferSimpleExprType` alone, which answers null for a bare identifier, so a
+        // `never`-annotated name never reached the string layer there. The engine path
+        // above cannot fire either — the relation correctly ACCEPTS a `never` source, and
+        // an accepted relation does not early-return, so control fell through to here.
+        //
+        // It can only ever DELETE a row whose source display is exactly `never`, and no
+        // baseline in the 9,055-file corpus carries `'never' is not assignable` as a
+        // SOURCE — tsc cannot produce one.
+        if (sourceType == "never") return true
         // undefined is assignable to void
         if (sourceType == "undefined" && targetType == "void") return true
         // When strict null checks are off, null and undefined are assignable to everything

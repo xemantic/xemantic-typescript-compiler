@@ -25,6 +25,128 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.17) — `never` stops being unassignable at one position, an impossible enum comparison starts reporting, and a generalized enum prints its namespace (2026-09-05)
+
+**Full suite after the round: 17,308 → 17,343 / 0 / 3** — the 29 + 6 new pins, no baseline moved, no `LogicalParityDivergence`. The first run read 17,337 / **1** / 3: `DeclareGlobalAugmentationTest` reddened on the (PARITY.3) qualification (`global.ZzzEnum`), a class the round's hand-written at-risk set could not reach because it selected classes BY NAME — the class names no enum and no namespace. Censused afterwards: **488 core classes mention `enum` or `never` in their SOURCE and the name patterns reached 149**, so 69% of the population was unscanned; the fixture-grep sweep (485 classes / 5,169 tests, every intended class confirmed present in the XMLs) is now the method, and it is in CLAUDE.md.
+
+**Three of (P18.16)'s four residues LANDED; (CHK.85) STOPPED with its measurement, because
+it is MEANING and a design.** Every row below was reproduced against tsgo 7.0.2 AND
+pristine `typescript@6.0.3` BEFORE any code was written, and the two references agree on
+every one of them — no reference divergence was found this round.
+
+**(CHK.84).** `declare const n: never; function f(): string { return n }` was an ours-only
+TS2322. The string-layer `isAssignableTo` had no BOTTOM-type rule, and the reason only the
+RETURN position showed it is structural rather than accidental: of that function's five
+call sites only `checkReturnAssignabilityCore`'s adds an IDENTIFIER fallback
+(`?: (expr as? Identifier)?.let { varTypes[it.text] }`) below `inferSimpleExprType`, so a
+`never`-annotated NAME never reached the string layer at the var-decl, assignment or
+`this.p` sites — and the engine cannot fire either, because it correctly ACCEPTS a `never`
+source and an accepted relation does not early-return. One line, mirroring
+`isSimpleTypeRelatedTo`'s own rule. **At-risk enumeration: EMPTY by construction** — the
+change can only delete a row whose source display is exactly `never`, and **no baseline in
+the whole 9,055-file corpus carries `'never' is not assignable` as a SOURCE**; tsc cannot
+produce one. The 225 active baselines that mention `never` at all were run as the superset.
+
+**(CHK.86), the diagnostic half.** `comparabilityCategory` maps a numeric enum to
+`"number"` and a string enum to `"string"` — deliberately, so `k === num` and `s1 === "p"`
+stay legal — so two enums of one flavour read as the SAME category and the rule fell
+through. The enum question is about IDENTITY and is now asked separately, ABOVE the
+category rule, which also fixed a display that rule was getting wrong (`k === S.P` read
+`'K' and 'S.P'` against both references' `'K' and 'S'`). The display is tsc's
+`getBaseTypesIfUnrelated` transcribed, and that ONE line accounts for every measured row:
+`ka === kb` prints `'K.A' and 'K.B'` because the bases are one enum and therefore related,
+while `ka === jx`, `ka === j`, `kab === jx` and `c1 === K.A` all print their ENUMS. Two
+siblings measured and deliberately left out, each queued with its mechanism: the `never`
+NARROW ((CHK.87)) and the enum-member-vs-numeric-literal case ((CHK.88)).
+
+**(PARITY.3), and it was NOT the rounds-745-749 same-string retry's job.** tsc's
+`reportRelationError` computes the source display TWICE:
+`getTypeNamesForErrorDisplay` gives a BARE name, then the generalize branch re-renders the
+generalized source under `TypeFormatFlags.UseFullyQualifiedType`. That is the whole
+asymmetry (P18.16) recorded: the SAME `Ns.Inner.I` prints qualified at a `string` target
+and bare at a `never` one. **The qualification cannot be keyed on "the type changed"** — a
+WHOLE enum enters the branch too, because in tsc a numeric enum IS a union flagged
+`EnumLiteral` (so `isLiteralType` admits it) while `getBaseTypeOfEnumLikeType` returns it
+unchanged, so entering the branch has the RE-RENDER as its only observable effect. Scope is
+deliberately narrower than tsc's: only a NAMESPACE chain is walked, so a top-level enum is
+byte-identical to before and a MODULE-scoped one keeps its bare name where tsc prints
+`import("<absolute path>").E` — (P18.14)'s refused mechanism. TWO container kinds must be
+refused as chain segments and BOTH earned their own pins. An AMBIENT module (`declare
+module "amb"`) renders `amb.AE` without its guard, a string that reads as a namespace and
+is wrong in a NEW way. A GLOBAL AUGMENTATION (`declare global { … }`) is worse, because it
+shipped in the first cut and the corpus caught it: it is not a container a consumer can
+SPELL — it IS the global scope — so both references print its members BARE, and we read
+`global.ZzzEnum`. Its guard STOPS the walk rather than refusing the chain, because a real
+namespace nested inside the block IS an ordinary container and does qualify (`declare
+global { namespace N { enum NE {} } }` reads `'N.NE'` in both references, and
+`Deep.Inner.DE` keeps both segments); and it is keyed on the `declare` MODIFIER, not on the
+NAME, because a plain `namespace global { export enum GE {} }` is an ordinary namespace
+that both references print as `'global.GE'`. The third form — a modifier-less `global { … }`
+inside an ambient module — needs no arm, since the ambient guard already refuses that chain
+one hop later for the same bare answer. The rounds-745-749 retry
+was left untouched and is ORDERED against this rule the way tsc orders them (the retry
+compares BARE strings; this overrides afterwards), which is why
+`enumAssignmentCompat3/6/7` are unmoved.
+
+**(CHK.85) STOPPED — MEANING, and three gaps rather than one.** `const o = { v: K.A };
+const w: K.A = o.v` is an ERROR in both references (a mutable object-literal property
+widens to `K`) and is **SILENT here** — a lost TRUE POSITIVE, not a display divergence —
+and so is its return-position twin. Beside it: a `let`/`const` local's READ answers the
+FLOW type in both references (`K.A`, and `K.B` after a reassignment) where we answer the
+widened declared `K`; and an `as const` property read is reported by both references and is
+entirely missing here. Two further facts for whoever takes it — our ARGUMENT and
+DECLARATION paths disagree with EACH OTHER on the identical expression, and (WIDEN.1)'s
+recording-site rule does not reach the object-literal half at all, because the widening tsc
+performs is in `getTypeOfObjectLiteral`'s member typing, i.e. every object literal's member
+types program-wide.
+
+**Pins and ablation.** 35 pins in the new `EnumNeverParityTest`, plus one (P18.16)
+expectation UPDATED — `TypeDisplayParityPositionsTest`'s namespace pin was written to
+RECORD this divergence ("OURS, NOT tsc's, AND THE DIVERGENCE IS PRE-EXISTING") and now
+reads the references' `'Ns.Inner'`; it was found by the at-risk gate, not by grep. Six
+arms, one mistake each, all discriminating: a1 the `never` string rule (**2 RED** — the two
+return pins, with the declaration/assignment/argument pin GREEN, which is the receipt that
+those positions never reach the string layer); a2 the generalize GATE (**3 RED**, all three
+`never`-target controls); a3 the qualification itself (**6 RED**, disjoint from a2); a4 the
+(CHK.86) emission (**10 RED**); a5 the base-vs-original display rule (**2 RED**, a NESTED
+set inside a4's, recorded as such per round 807); a6 the ambient-module refusal (**1 RED**,
+its own pin); a7 the global-augmentation stop (**4 RED**, the four `declare global`
+qualification pins); a8 keying that guard on the NAME instead of the `declare` modifier
+(**1 RED**, the `namespace global` control, disjoint from a7). Source restored from a snapshot (the round is uncommitted, so never `git
+checkout`), rebuilt, and the restored `Checker.class` sha256 (`a87300a1`) matched the
+binary every gate had run against.
+
+**At-risk enumeration, and the half of it that was WRONG.** The CORPUS half was sound and
+was done by EXECUTION over all 3,145 active `.errors.txt` baselines: 147 mention `enum`
+(case-insensitive; 135 declare one), 225 mention `never`; union **360 families, 1,481
+subtests, 0 moved**, every family confirmed to have actually run — the first attempt's
+`--tests` patterns contained BACKTICKS and matched **nothing** for the corpus families
+while still exiting 0, which is why the coverage assertion is now part of the method. **The
+HAND-WRITTEN half selected classes by NAME (`*Enum*`, `*Display*`, `*Narrow*`, …) and that
+cannot see a FIXTURE**: `DeclareGlobalAugmentationTest` declares an enum inside a `declare
+global` block, names no enum and no namespace in its own name or its expectations, and went
+RED in the full suite. Censused afterwards, **488 core test classes mention `enum` or
+`never` in their SOURCE and the name patterns reached only 149 of them — 339 missed**. The
+sweep that would have caught it is (PARITY.2)'s and is cheap: grep the test SOURCES, run
+every class, assert every intended class appears in the result XMLs. Re-run that way:
+**485 classes, 5,169 tests, 0 failed** (the 3 non-classes are `BenchMain` and friends). No
+`LogicalParityDivergence` needed.
+
+**Gates**, all against the final binary (`6d6751fb`). Fixture-selected core classes
+**485 / 5,169 / 0**; at-risk corpus families **3,168 / 0 / 0**; externals `jvmTest`
+**290 / 0**; project `jvmTest` **848 / 0**. `cost_gate.py` **exit 0** (`output.errors` 46
+unchanged, `spine.nodes` +0.00%; largest move `mapped.hits` +1.22%, and `globals.lookups`
+−0.49%). `huge_methods.py --fail-over 0` **exit 0**. 8-profile grid
+`PARITY1_MARKER=enumComparisonNoOverlapDisplays`, two snapshotted class dirs with the
+self-comparison and positive-control refusals armed: **all eight `added=0 removed=0`** —
+and per (P18.15) that is a CONTROL for the display half (0 of its 417 rows carries an
+assignability message), while for (CHK.86) it is the real gate that no TS2367 was added.
+Build warning-clean (`--rerun-tasks`, 0 `w:`).
+
+**Suite: 17,308 → 17,337 / 1 / 3 on the first run** — the count was predicted exactly and the one
+failure was the `declare global` display above, fixed here with 6 further pins. **Revised
+prediction: 17,343 / 0 / 3.**
+
 ### Round (P18.16) — the enum display generalization lands, and the pins it would have blinded become tsc-verifiable instead (2026-09-04)
 
 **Full suite after the round: 17,286 → 17,308 / 0 / 3 — exactly the +22 new pins, no baseline moved, no `LogicalParityDivergence`, as predicted** (run by the orchestrating session).
@@ -1320,340 +1442,6 @@ the `IntKeyMap.set` stacks instead — worth knowing before trusting that flag. 
 entry: a store channel may not re-type what the walk already recorded, and a flag-on cost
 is attributed per channel before it is recorded.
 
-### Round (P18.7) — two owner decisions land: the POM licence and Stage 1 of the inversion (2026-09-02)
-
-**(LIC.2) LANDED.** The root POM's `licenses` block now carries the SPDX expression the
-1,078 source headers carry (`AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`, `url`
-at the repo's `LICENSE`) plus a second entry for the Output Exception (`url` at
-`LICENSE-EXCEPTION`), both `distribution = "repo"`. Verified by generating
-`xemantic-typescript-compiler-core`'s JVM POM and reading the block back; no other
-`Apache` string survives in any build file. Owner approved the build-file edit and the
-two-entry shape in this session.
-
-**(INV.1) LANDED — STAGE 1 OF THE INVERSION, THE PER-FILE NODE-ANSWER STORE, OFF BY
-DEFAULT.** `NodeAnswers.kt`: a `NodeAnswerStore` per checked file, `nodeId`-indexed,
-holding the walk's own answer for every `Expression`, recorded at the capture/sink hook
-under the same reconstructed ambient, first-wins with the refusal BEFORE the resolution
-(`Checker.nodeAnswerRecord`). One deviation from the design and it is a correction: the
-slot holds the `Type`, because the "existing id→Type lookup" § 4 assumed does not exist
-(`Type.id` is registered nowhere) — same four bytes under compressed oops, one step fewer.
-The flag is a `Checker` constructor parameter defaulting to the process-global
-`NodeAnswers.enabled`, read once; `--nodeAnswers` on the CLI (ledger-routed, usage text,
-`CliModeRestoreTest` lists) prints the recorded count; `BenchMain`'s 8th argument arms it
-warm. **Pins (10, `NodeAnswerStoreTest`, on the round-911 fixture):** body local recorded
-`number` vs post-hoc `string` on one instance; parameters/narrow recorded vs post-hoc
-`any`; store == capture at every span; EVERY expression of the file answered and
-computations == recorded; production mode `nodeAnswerComputations == 0` and no store;
-default off; first-wins/unindexed unit pin. **Receipts, flag off:** suite 16,838/0/3 (+10),
-cost_gate exit 0 all +0.00%, huge_methods clean, warm A/B parent-vs-commit 3 rotated pairs
-**+0.19 / −0.97 / −3.17 %, B 2/3, sd < 1 % both arms — NOISE-DOMINATED** (one field write
-per FILE is the whole production delta; JFR/PrintInlining arms have nothing to show and
-were not run). **Measured, flag on** (the number the design asked for): compiler profile
-5,272/5,485 → 6,152/6,212 ms (**+14.9 %**, 598,455 recorded, **1.34 µs each**);
-many-small-2400-dom 3,378/3,307 → 3,638/3,737 (**+10.3 %**, 232,106, **1.49 µs**);
-diagnostics identical in every arm. Per-node, not per-file. Queued (INV.1b) to attribute
-it (resolution vs reconstruction) and (INV.2) Stage 2 as BLOCKED-PENDING-USER. Two traps
-recorded in CLAUDE.md: `ab-warm.sh` cannot A/B a commit that touches `BenchMain` (shared
-test classes — drive the arms by hand with the parent's test classes), and the design's
-id→Type lookup does not exist.
-
-**(INV.1) APPROVED, and the § 10 question answered.** The owner asked what the
-cost-neutrality contract in `docs/INVERSION-DESIGN.md` § 10 entails — it was committed by
-the (P18.5) session under the label "owner additions", so it is an agent's transcription of
-that conversation, not the owner's own text. What it says: `cost_gate.py` reads 0.00% for a
-pure restructuring BY CONSTRUCTION (its counters count calls), so per-commit evidence for
-(INV.\*) work is instead (1) `ab-interleaved.sh` wall time with win rate, (2) a JFR
-allocation profile before/after, (3) `-XX:+PrintInlining` on the three hottest entry
-points showing every new delegation hop still `inline (hot)`, (4) core-module compile time
-before/after; hot-path rules (final long-lived collaborators, interfaces only with one
-production implementation, interned per-instantiation mappers, no capturing lambdas /
-`by lazy` / boxed seams / `open` classes), watch inlining depth and frame size in the
-relation recursions, and the success metric is `Checker.kt` line-count SHRINKAGE on the
-STATUS.md dashboard. For (INV.1) this means: the store ships OFF, the flag-off path must
-measure inert on wall AND allocation (not only on the counters), and the flag-on recording
-cost is measured on the compiler profile and the 2,401-file shape before Stage 2 is priced.
-
-### Round (P18.6) — the smol-toml rung: the externals generator goes multi-file (2026-09-02)
-
-**(EXT.7) LANDED — THE smol-toml RUNG IS GREEN** (externals module 52 → 64 pins, full suite
-16,815/0/3). The second fixture-ladder rung is what mitt is not — a seven-file package
-with relative `.js` imports between the files — so the rung's first deliverable is the
-MULTI-FILE entry point: `generateKotlinExternals(files: List<SourceFileEntry>)` parses each
-file, binds all of them with ONE `Binder` (the multi-file site in `TypeScriptCompiler` is
-the precedent: a program's binder results must share one binder's tables) and checks with
-ONE `Checker`; the pre-scanned exported sets are the UNION over the files, so a member typed
-by ANOTHER file's exported interface renders by name under the same `===` identity evidence
-a same-file reference gets (pinned across a `.js` specifier resolving to its `.d.ts`
-sibling, with the Dukat alias-resolution pin holding across the file boundary). The output
-is ONE Kotlin source in walk order, so the collector gained a `finish()` pass for the two
-rules that need every file walked: a second exported TYPE name across files is a loud skip
-(one Kotlin package cannot hold both), and top-level function overloads collapse by the
-(EXT.5) marker-stripped key. **Top-level overloads now RENDER** — (EXT.3)'s loud skip was
-about the implementation signature being emitted beside its overloads, so the rule is
-exactly that: among overloads, the declaration WITH a body produces nothing (it is not a
-callable surface; a lone function with a body still renders), and a `.d.ts` has no
-implementation so every overload renders. smol-toml's two `parse` overloads map to
-DIFFERENT Kotlin signatures (an intersection parameter falls back, `options?: ParseOptions`
-maps by name to `ParseOptions?`) and both survive; the gate compiles them as Kotlin
-overloads. Three smaller shapes from the same fixture: an ECMAScript `#private` member
-(measured: the parser hands it over as an `Identifier` spelled `#private`, so it had been
-a "member with a non-identifier name" marker — now omitted like a `private` one, since it
-is one), heritage markers that NAME what is not carried (`skipped heritage clause extends
-Date`, one per clause), and the export WIRING family — `export default <value>`, `export
-=`, `export { a as b } [from '…']`, `export * from` — each a loud marker naming what it
-wires, with the module-marker idiom `export {}` deliberately silent (it wires nothing). The
-gate: `KotlinExternalsSmolTomlGateTest` embeds the VERBATIM seven `dist` declaration files
-of `smol-toml@1.7.1` (BSD-3-Clause; each file carries the licence's notice, conditions and
-disclaimer verbatim, which is what a source redistribution owes) and the generated Kotlin
-metadata-compiles, with spine pins on the classes, the overloads, the destructured optional
-parameter (`p1: Any? /* xtsc: unmapped { maxDepth?: … } */`) and the loud alias refusals —
-and the checker reports ZERO diagnostics on the package. **Two measured surprises.** (1)
-The recursive aliases `TomlValue`/`TomlValueWithoutBigInt` resolve to `any` in this checker
-(a recursion guard's answer), so their refusal reads `unmappable body any` — loud, so not a
-generator defect, but a checker limitation the ladder will meet again. (2) My first
-negative control claimed a FLAT file name defeats the relative import (CLAUDE.md's
-`Inv3PerFileLookupTest` lesson, transplanted); measured, `./a.js` against a flat `a.d.ts`
-RESOLVES through a direct `Checker` construction, so the control was a false claim and was
-replaced by one that discriminates the mechanism it is for — a same-named NON-exported
-interface in the importing file must still fall back, which a name-keyed union of the
-files' exported names would get wrong. The KDoc says "path-shaped is the shape every
-package has", not "flat is defeated". Probe discipline held once more: the fixture's
-rendering was READ (a deliberate `fail(rendered)`) before a single pin was written, and the
-KDoc glob `dist/*.d.ts` re-tripped the nested-comment trap CLAUDE.md already records —
-twice, once per file, caught by the compiler both times.
-
-**(TEST.1) DONE — THE "ORDER-SENSITIVE" NEGATIVE CONTROL WAS A DATA RACE IN THE TEST'S
-OWN INSTRUMENT** (project module 847 → 848 pins; full suite 16,816/0/3). Neither the
-`-project` module alone (847/0) nor the suspected predecessor classes (`FileFinalTokenTest`
-+ `TokenIndexGateTest` + the class itself, one JVM) reproduced the red, and no process-global
-in the module or in core serves a READ (`CrawlParseCache` needs the content first; the
-resident path answers only from an overlay or a retention the fresh project has none of) —
-so the mechanism could not be an order. What IS true of every first build is that the crawl
-reads the program's files from SIXTEEN concurrent workers
-(`drainConcurrently`'s `flatMapMerge` around `withContext(pipelineIoDispatcher) {
-vfs.readText(path) }`), and `CountingVfs.readText` kept a plain `reads++` and a `HashMap`
-put — round 825's race one layer up, in the test harness. Two workers inserting two paths
-into the same bucket of a fresh table lose one outright, and a lost `b.ts` insertion IS
-`afterFirst == 0`. Measured with real threads (8 × 2,000 reads over 64 paths): the old
-wrapper counted **12,880 of 16,000**. The fix is stdlib `kotlin.concurrent.atomics` (an
-`AtomicInt` per counter, an `AtomicReference` to an immutable per-path map swapped by CAS —
-a lost race retries instead of losing an entry; no dependency added, common code); the pin
-is `CountingVfsConcurrencyTest` in `jvmTest` (spawning threads is not expressible in common
-code; the wrapper it grades is the common one), red against the old wrapper, green by
-construction against the new. Lesson recorded in CLAUDE.md: a counting Vfs under the crawl
-is a concurrent instrument, and a count pin's flake is a race before it is an order.
-
-**(INV.0) STEP 3 — `TypeInstantiator`, THE INSTANTIATION SEAM, AND THE FIRST LEDGER ROW
-THAT IS HONEST ABOUT A NON-EMPTY AMBIENT SURFACE** (`Checker.kt` 191,030 → 190,771; ledger
-row 3; suite 16,819/0/3 byte-identical, +3 mapper pins; RECEIPTS: cost_gate +0.00% on every counter — the control; ab-interleaved 6 pairs −0.81% B-wins-3/6 NOISE-DOMINATED, i.e. no wall effect; JFR allocation 1,903 vs 1,999 samples, same leaf families, no new frame; PrintInlining reads the 10-byte `Checker::instantiateType` hop `inline` ×55 / `inline (hot)` ×32 and refuses it only at 20 callers that are cold or already at `DesiredMethodLimit`, the `instantiateSignature` hop `inline` ×15, the fn-aware hop `inline (hot)` ×4, while the 1,265-byte body reads exactly what the 1,241-byte pre-split body read (`callee is too large` ×81 in BOTH arms — instantiation was never an inlined leaf); the three standing hot sites row-for-row identical; core `--rerun` compile 79.2 → 80.6 s (run 2), flat. Measurement-harness note, second session running: the background task runner KILLS a silent long-running receipt command at ~1 minute (twice: one A/B pair each time), where step 1 saw ~4.5 min — the A/B, the JFR pair and the inlining pair each ran in the FOREGROUND under the 10-minute tool timeout instead, one JVM at a time, and completed). Why this seam third: the owner's core order names name resolution and
-`getTypeOfSymbol`/`getTypeOfExpression` first, and those are exactly the families whose
-ambient surface is the whole checker (`currentLocalTypes`, the cta frames, the per-file
-scopes, the write gates) — extracting them is Stage 3's work, not a verbatim move. The
-instantiation family is the next seam whose ambient reads can be COUNTED on one hand: a
-census of every call name in the 291-line region found four checker members
-(`getTypeOfSymbol`, `getUnionType`, `getIntersectionType`, `getOrInternReference`) and
-stdlib, nothing else. So the collaborator takes the checker (final class, direct calls),
-the `symbolTypes` table and the interner as constructor inputs, its ten functions moved
-verbatim with those four calls re-pointed, the checker keeps one-line private delegations
-at the seam (the hops the inlining receipt prices), `TypeMapper` became a file-level
-`fun interface` (the checker's six ad-hoc mapper lambdas are byte-identical, they merely
-name a top-level type now) and `createTypeMapper` — a pure function — became file-level
-and pinned without a checker (`TypeInstantiatorTest`: index, identity, a structurally
-identical twin parameter NOT mapped). Three checker members went `private` → `internal`
-for the collaborator to reach them; the ledger row records them as the debt a later
-stage pays (an instantiator taking a `TypeResolver` and a `TypeNormalizer` as inputs
-would read "none"). **The gotcha that bit while doing it**: a checker-side private
-delegation named `createTypeMapper` calling a top-level `createTypeMapper` recurses into
-ITSELF (a member wins name resolution over a same-named top-level function), so the
-delegation was deleted rather than kept — the 21 call sites resolve to the file-level
-function directly.
-
-**(EXT.8) LANDED — HERITAGE TO GENERATED TARGETS** (externals 64 → 70 pins; full suite
-16,825/0/3). The rung RxJS needs before anything else (`Subject<T> extends
-Observable<T>`): a heritage base that is a GENERATED interface/class renders as a Kotlin
-supertype — resolved by IDENTITY, the base symbol's declaration `===` a pre-scanned
-exported declaration, generic arguments from their own annotations, one unmappable
-argument refusing the base — while a lib type, a non-exported neighbour, an enum or a base
-of the wrong KIND for the Kotlin shape (an interface cannot extend a class; a class cannot
-`extends` an interface) stays a per-BASE marker naming it. Kotlin then owes what TypeScript
-never asks for: `override` on a redeclared member (a property by name; a method by its
-mapped signature — the (EXT.5) `overloadSignature` key moved to the renderer and is shared,
-so the overload collapse and the override decision cannot disagree; a differing signature
-is an overload, not an override), `open` on the CLASS member some generated subclass
-overrides (an interface member is open already), `open external class` on every
-non-abstract class (Dukat's and kotlin-wrappers' convention — JavaScript classes are always
-extensible), a `readonly` narrowing of an inherited `var` rendered `var` with a marker
-(Kotlin refuses `override val` over `var`), and the INHERITED constructor for a subclass
-declaring none (TypeScript inherits it; a consumer's `Derived("x", 1)` must keep
-compiling), passed through by name in the gate variant's superclass call and `null!!`s
-when the subclass has its own. The GATE variant renders every class `abstract`: a
-non-external class implementing a generated interface would owe implementations, and
-`abstract` also keeps it extensible — both things an external class gets for free (the
-existing gate-variant class pin moved to `abstract` deliberately). **The finding that cost
-the third test run**: an IMPORTED base fell to the marker because the lens's `resolveName`
-is the walk-scoped INV.2(c) lexical lookup, which by its `symbols`-only rule offers no
-import — so `CheckedLens` gained `heritageBaseSymbol(base)`, answered by the checker's own
-`resolveHeritageBaseSymbol` (what the clause itself is resolved with, qualified names and
-imports included), then `aliasTarget` for the declaration it names; the only lens
-implementor is the checker's, and no counter moves (the lens is live only under a sink).
-Gate fixture grew `Dog extends Animal implements Farmable` + `Named extends Farmable`;
-mitt and smol-toml gates unchanged (their bases are lib types, still markers).
-
-**(EXT.9) LANDED — EXPORTED VALUES AND ACCESSORS** (externals 70 → 73 pins; full suite
-16,828/0/3). `export [declare] const|let|var x: T` renders `public external val|var
-x: T` — the annotation resolved by the checker where written, and for an un-annotated
-declaration the checker's own answer for the NAME (`lens.typeOf` on the declared
-identifier), with a `const`'s LITERAL type widened to its base primitive (`export const
-RETRIES = 3` is typed `3` by the (WIDEN.1) const rule and a consumer binds a `Double`;
-the first pin caught the un-widened `Any? /* xtsc: unmapped 3 */`). A destructuring export
-is a loud skip; a non-exported `declare const` (smol-toml's `_default`) stays silent, as
-before. Accessors: a get/set PAIR is one property (`var`), a getter alone `val`, a
-setter alone `var` typed by its parameter, emitted at the FIRST accessor's position with
-the partner consumed — so member order survives and nothing renders twice; static
-accessors reach the companion, interface accessors (TS 4.x) the interface, and a
-`private`/`protected`/`#` accessor is neither rendered nor a silent PARTNER (the
-sibling set is filtered the same way the member loop is). The gate variant initializes
-a top-level value with `= null!!`; gate fixture grew both shapes.
-
-### Round (P18.5) — owner additions 2026-09-02 applied; (LIC.3) CONTRIBUTING.md; the queue continues (2026-09-02)
-
-**Step 0 — the owner additions, one commit.** (1) The owner's queue insert for the
-Checker.kt split was MERGED into the existing (INV.0) item per its own merge rule ((INV.D)
-had already queued it at P18.0) and the item moved to sit directly after (INV.D), ahead of
-the blocked (INV.1); what the merge added is the constructor discipline (FINAL classes,
-built once per Checker, per-node context as parameters) and the RECEIPT protocol —
-cost_gate 0.00% is a control for a pure split BY CONSTRUCTION, evidence is ab-interleaved
-wall+win-rate, a JFR allocation profile, PrintInlining on the three hot sites, and
-core-module compile time. (2) `docs/INVERSION-DESIGN.md` § 10 "Cost-neutrality contract"
-added (final collaborators; interned TypeMappers; forbidden hot-path shapes — capturing
-lambdas, `by lazy`, boxed seams, `open`; inlining-depth/deep-stack re-checks; SHRINKAGE as
-the success metric), with a pointer from § 6 Stage 0; the shrinkage row is now on
-STATUS.md (`Checker.kt` 191,155 lines, verified by `wc -l`). (3) CLAUDE.md gotcha on
-cost_gate's structural blindness to splits. (4) § Approvals recreated in the WORK ORDER
-preamble (the 2026-07-02 original was trimmed away; pointer to CLAUDE.md for the old
-pre-approvals) carrying the two 2026-09-02 owner decisions: the licence is
-`AGPL-3.0-only`, NOT `-or-later` (swept: no `-or-later` anywhere in README/docs — (LIC.1)
-held), and the CONTRIBUTING.md no-external-PRs statement. **Label collision handled, not
-hidden**: the owner labels the CONTRIBUTING decision "(LIC.2)" but the queue's (LIC.2) was
-already the POM-drift item — the deliverable is queued as (LIC.3), the POM item stays
-separately BLOCKED-PENDING-USER (the licence-string decision does not by itself approve a
-build.gradle.kts edit, which is Guardrail-gated). `docs/inputs/` does not exist, so there
-is no JetBrains API-shape reply to add to (INV.D)'s inputs — checked, not skipped.
-
-**(LIC.3) DONE** — CONTRIBUTING.md created (root): external PRs cannot be merged until the
-contributor agreement exists; issues and minimal reproductions welcomed, with the repo's
-issues URL. Doc-only, no gate applies.
-
-**(EXT.4) LANDED — CLASSES AND ENUMS** (externals module 29 → 40 pins, full suite
-16,775/0/3). `export class` → `public [abstract ]external class` with the one declared
-constructor as the primary constructor, TS statics as the companion object, `readonly` →
-`val`; `private`/`protected` members OMITTED (the non-exported-declaration policy — not a
-consumable surface); >1 constructor and a parameter property are loud markers. `export
-enum` → Karakum's shape: `public sealed external interface E { companion object { val
-Entry: E } }`; a `const enum` is a loud skip (no runtime object) and is EXCLUDED from the
-naming set, so a member typed by one falls back rather than naming a type the module does
-not declare. The naming set widened `Type.Interface` → `Type.Object` (a class instance
-type IS a `Type.Interface`; an enum is a member-less `Type.Object` carrying the enum
-symbol — the (CHK.60) fact, consumed) and stays positive-identity-gated, so an enum
-MEMBER literal (declared by `EnumMember` nodes) is outside it by construction. The gate
-variant grows `= null!!` bodies for class/enum members (a non-external class member
-cannot stay bodiless) — a renderer flag, never text surgery — and the metadata compile
-gate passes on the widened fixture. Two mechanism findings: a STATIC member refuses the
-syntactic own-TP answer (a Kotlin companion object cannot see class TPs; TS refuses
-`static x: T` too — pinned by a fallback marker), and all five collection arms now gate
-on IDENTITY membership in the pre-scanned top-level exported sets, closing a latent leak
-where a namespace-nested exported interface/alias would have rendered at top level
-(default-exported declarations stay deliberately silent until the DEFAULT-exports rung).
-
-**(INV.0) STEP 1 LANDED — `TypeInterner`, THE FIRST STAGE-0 COLLABORATOR, AND THE OWNER'S
-RECEIPT PROTOCOL EXERCISED END-TO-END.** Canonical type identity (INV.5(a), design § 4
-pillar 4) extracted into a final class with an EMPTY ambient surface: the six intern
-caches moved wholesale out of `CheckerState`, their only three access sites became
-one-line delegations, and normalization stayed with the callers — identity ONLY is what
-makes the ambient columns read "none". `docs/inversion-ambient-ledger.md` created (row 1);
-`Checker.kt` 191,155 → 191,107; 6 identity pins (`TypeInternerTest`, including the
-deliberate null-vs-empty-args conflation and the two-interners-share-nothing lifetime
-pin). RECEIPTS (contract § 10): corpus 16,781/0/3 BYTE-IDENTICAL; cost_gate +0.00% on
-every counter (the control, exactly as the contract predicts for a pure split);
-huge_methods 0; ab-interleaved 6 pairs +60 ms (+0.26%) B-wins-2/6 = NOISE-DOMINATED (no
-wall effect — plus 4 pairs from a killed first batch reading the same); JFR allocation
-profile 2,041 vs 2,036 samples, same leaf families, no new frame (aggregate_jfr.py
-gained `--event` so the same aggregation reads jdk.ObjectAllocationSample); core
-`--rerun` compile 84.7/80.5 s → 79.5/80.9 s (flat, the baseline series). **The
-PrintInlining receipt found the split IMPROVED the hot path rather than merely not
-hurting it**: the pre-split `getOrInternReference` was a 277-byte body C2 refused at
-EVERY hot site (`callee is too large` ×39, zero `inline (hot)`), while the split's
-13-byte hop inlines everywhere and the 273-byte `TypeInterner::reference` body itself
-reads `inline (hot)` ×7 (union ×10 vs ×3 before); the three standing hot sites are
-row-for-row identical across arms. A measurement-harness note: the first combined
-receipt script was KILLED mid-batch by the task runner (~4.5 min) — chunked re-runs
-(ab / JFR / inlining as separate background commands) completed cleanly; nothing in the
-tree was at risk because the receipts are read-only over snapshotted class dirs.
-
-**(API.18) LANDED — THE FILE-FINAL TOKEN, HEALED BY OWNERSHIP RATHER THAN SPAN
-ARITHMETIC** (suite 16,791/0/3; -lsp 58/0 with the recorded-edge pin FLIPPED to the healed
-assertion; -project +9 pins in `FileFinalTokenTest` + the shape admitted to
-`TokenIndexGateTest`). The two reverted attempts' analysis held — a container and an
-abutter are indistinguishable by `(pos, rawEnd)` at EOF — and the fix honors it: a
-DESCENT over RAW ends computes the final token's owner chain (last-match per level, so an
-ASI sibling whose raw end overshoots ONTO the token loses to the true owner; the chain
-counts only when its leaf STARTS at the token's start — an identifier, literal or keyword
-does, a closing bracket or an abutter never can), and `realEndOf` consults it by IDENTITY
-(packed `(pos,end)` key prefilter + `===` confirm, because a parent and first child share
-both coordinates). With owners' exact ends accepted, the ordinary `pathAt` descent and
-all three `TokenIndexInvariants` rules (SPAN_IS_EXACT / REACHABLE / PATH_NESTS) heal with
-NO carve-outs — the item's "the fix lives in pathAt's descent" is honored in substance:
-the descent DECIDES, `realEndOf` consults. Punctuation-final files and dangling-dot
-recovery keep today's conservative answers, pinned as such. **A latent flake surfaced and
-is queued as (TEST.1)**: `ProjectTrustedFilesystemTest`'s negative control read
-`afterFirst == 0` in the two-module filtered run, green alone and in the full suite —
-round 914's order-sensitivity family, pre-existing (the failing pin counts Vfs reads,
-which nothing in this change touches).
-
-**(EXT.5) LANDED — GENERIC ALIASES, GENERIC METHODS, METHOD OVERLOADS** (externals 40 →
-47 pins, full suite 16,798/0/3). `type Handler<T> = (event: T) => void` — mitt's spine —
-renders as `public typealias Handler<T> = (T) -> Unit`, the body answered SYNTACTICALLY
-under the alias's own TP scope ((EXT.2)'s lens-ambient finding, third consumer); a
-generic METHOD renders `fun <Key> on(...)` with constraint/default markers (shared
-`typeParameterMarkers` helper), the member scope = enclosing TPs + the method's own;
-interface/class method overloads render as Kotlin overloads, with a post-pass collapsing
-ones that MAP to one Kotlin signature (two literal-typed parameters both falling to the
-`Any?` fallback conflict however different their markers read — the dedup key strips
-` /* xtsc: ...` first, which the pin caught on the first run); an optional GENERIC method
-is a loud skip (a nullable function-typed property cannot carry TPs). Gate fixture
-widened with all three shapes; metadata compile green.
-
-**(EXT.6) LANDED — DEFAULT EXPORTS + THE mitt RUNG IS GREEN** (externals 47 → 52 pins,
-full suite 16,803/0/3). Every DEFAULT-exported kind now renders under its written name
-with a loud `default export - consumers bind the module's default` marker (functions had
-been rendering default exports SILENTLY — the same half-right silence (EXT.4) refused
-for classes; module wiring is a later rung), and a nameless default class/function skips
-loudly. `KotlinExternalsMittGateTest` embeds the VERBATIM `mitt@3.0.1` `index.d.ts`
-(fetched from npm, MIT, attributed) — the fixture ladder's first rung — and gates that
-the generated Kotlin metadata-compiles, plus spine pins (`public typealias Handler<T> =
-(T) -> Unit`, `public external fun <Events> mitt(...): Emitter<Events>`, the default
-marker) and loud-fallback pins for the keyof/indexed/conditional shapes. **Mechanism
-finding, measured by the gate's own first run**: the lens ambient substitutes a
-declaration's own TPs to `any` inside a reference annotation (`Emitter<Events>` resolved
-as `Emitter<any>`), so `annotationTextOrNull` gained the (EXT.2) own-TP mechanism one
-level up — a generic reference names its TARGET by the checker's positive identity and
-renders its ARGUMENTS from their own annotations, one unmappable argument still refusing
-the whole. Probe discipline: two guessed pins failed before `kotlin.test.fail(rendered)`
-printed the actual output — round 761's "probe the value" one module over. Also
-extracted `MetadataCompileCheck.kt` (shared by both gates).
-
-**(INV.0) STEP 2 — `Relation` + `Ternary` RELOCATED to `TypeRelationCache.kt`** (ledger
-row 2; `Checker.kt` 191,107 → 191,030; suite 16,803/0/3, cost_gate +0.00%, huge_methods 0).
-A pure relocation — every call site unchanged, ambient surface none — creating the named
-seam the relater's algorithm extraction grows into. The § 10 wall/allocation/inlining
-receipts are deliberately not exercised: they price delegation hops and a file move adds
-none (stated in the ledger row, not silently skipped). **Session close (P18.5)**: nine
-work landings in one session — owner additions applied and committed as directed;
-(LIC.3); (EXT.4)/(EXT.5)/(EXT.6) with the mitt rung green; (INV.0) steps 1-2 with the
-receipt protocol exercised end-to-end; (API.18) healed; (TEST.1) queued. Suite 16,764 →
-16,803 with zero failures at every gate; every checker counter +0.00% all session.
-Trim-on-write honoured: 4 oldest rounds ((INC.83/84/85/87)) moved to history, 10 live.
-
 ### Round (P18.4) — two externals rungs, one honest refusal, and the session closes at 16,764/0 (2026-09-01)
 
 **(EXT.2) + (EXT.3) LANDED** (externals module 15 → 29 pins): generics with syntactic
@@ -2402,40 +2190,85 @@ counter, which is the (INC-closure) directive holding by construction.
   it suppresses the generalization — so it is FORM, and the blocker was the (REL.2) probe
   discipline, not the corpus.
 
-- [ ] **(CHK.84) `never` IS NOT ASSIGNABLE AT A *RETURN* POSITION HERE, AND ONLY THERE —
-  measured ((P18.16)).** `declare const n: never; function f(): string { return n; }` reports
+- [x] **(CHK.84) `never` IS NOT ASSIGNABLE AT A *RETURN* POSITION HERE, AND ONLY THERE —
+  CLOSED (P18.17).** `declare const n: never; function f(): string { return n; }` reported
   `TS2322: Type 'never' is not assignable to type 'string'.` where tsgo 7.0.2 and pristine
-  `typescript@6.0.3` are both silent; the same value at a DECLARATION (`const s: string = n`)
-  and at an ARGUMENT (`takeStr(n)`) is correctly silent in all three. An ours-only false
-  positive, found because it forced every converted (PARITY.2) declaration fixture to drop
-  its `return s`.
+  `typescript@6.0.3` are both silent. The string-layer `isAssignableTo` had no rule for the
+  BOTTOM type, and of its five call sites only the return one adds an IDENTIFIER fallback
+  below `inferSimpleExprType`, so a `never`-annotated NAME reached it there and nowhere
+  else; the engine cannot fire either, because it correctly ACCEPTS a `never` source and an
+  accepted relation does not early-return. One line, mirroring `isSimpleTypeRelatedTo`'s
+  own "Never source is assignable to everything".
 
-- [ ] **(CHK.85) A MUTABLE BINDING DOES NOT WIDEN AN ENUM MEMBER THE WAY tsc DOES, IN TWO
-  PLACES — measured ((P18.16)).** `probe({ v: K.A }.v)` at a `never` parameter reads
-  `'K.A'` here and `'K'` in BOTH references: tsc widens a mutable object-literal property's
-  enum member to its enum exactly as it widens a `let`. The mirror at the same seam: for
-  `let k = K.A; const s: never = k`, tsc reads the FLOW type `'K.A'` and we read the widened
-  declared type `'K'`. Both were invisible before the (PARITY.2) generalization, because a
-  `string` target renders `K` for every one of them.
+- [ ] **(CHK.85) A MUTABLE BINDING DOES NOT WIDEN AN ENUM MEMBER THE WAY tsc DOES —
+  STOPPED (P18.17): it is **MEANING**, not display, and it is a design.** Re-measured
+  against both references at BOTH positions, it is not one gap but three, and the third
+  was not in the original item: (a) a mutable OBJECT-LITERAL PROPERTY must widen — `const o
+  = { v: K.A }; const w: K.A = o.v` is an ERROR in both references (`o.v` is `K`) and is
+  **SILENT here**, i.e. we lose a true positive, and so is the return-position twin; (b) a
+  `let`/`const` local's READ answers the FLOW type there (`let k = K.A; probe(k)` reads
+  `K.A`, and `K.B` after `k = K.B`) where we answer the widened declared `K`; (c) an
+  `as const` property read (`{ v: K.A } as const`).`v` is reported by both references and
+  is **entirely missing** here. Two more facts for whoever takes it: our ARGUMENT and
+  DECLARATION paths disagree with EACH OTHER on the identical expression (`const o = { v:
+  K.A }; o.v` displays `K` at an argument and `K.A` at a declaration), and (WIDEN.1)'s "the
+  const rule is applied where `currentLocalTypes` is RECORDED" does not reach (a) at all —
+  the widening tsc performs is in `getTypeOfObjectLiteral`'s member typing, i.e. a change
+  to every object literal's member types program-wide. Fixtures: `chk85a`/`b`/`c` in the
+  (P18.17) note.
 
-- [ ] **(CHK.86) AN IMPOSSIBLE ENUM-vs-ENUM EQUALITY PRODUCES NEITHER TS2367 NOR A `never`
-  NARROW — measured ((P18.16)).** For `if (k === J.X) { probe(k) }` with `k: K` and an
-  unrelated enum `J`, both references emit `TS2367: This comparison appears to be
-  unintentional because the types 'K' and 'J' have no overlap.` and NOTHING else (the branch
-  narrows to `never`, which is assignable to every parameter). We emit no TS2367 and report
-  the un-narrowed `K` instead. Two (REL.2) negative controls assert our answer and are
-  ours-only by construction; they say so.
+- [x] **(CHK.86) AN IMPOSSIBLE ENUM-vs-ENUM EQUALITY PRODUCES NEITHER TS2367 NOR A `never`
+  NARROW — the DIAGNOSTIC half CLOSED (P18.17); the NARROW half re-queued as (CHK.87).**
+  `comparabilityCategory` maps a numeric enum to `"number"` and a string enum to
+  `"string"` — deliberately, so `k === num` and `s1 === "p"` stay legal — so two enums of
+  one flavour read as the SAME category and the rule fell through. The enum question is
+  about IDENTITY and is now asked separately, ABOVE the category rule, which also fixed a
+  display the category rule was getting wrong (`k === S.P` read `'K' and 'S.P'` against
+  both references' `'K' and 'S'`). The display is tsc's `getBaseTypesIfUnrelated`
+  transcribed — widen both operands to their enums and print the WIDENED pair only when it
+  is still unrelated — which is the single line accounting for `ka === kb` printing
+  `'K.A' and 'K.B'` while `ka === jx` prints `'K' and 'J'`.
 
-- [ ] **(PARITY.3) A GENERALIZED NAMESPACE-SCOPED ENUM LOSES ITS NAMESPACE PREFIX —
-  measured ((P18.16)).** `const d: string = en` with `en: Ns.Inner.I` reads `Type 'Inner'`
-  here and `Type 'Ns.Inner'` in both references. Note tsc's own asymmetry, which we match:
-  at a `never` target BOTH references print the MEMBER unqualified (`'Inner.I'`), exactly as
-  we do. The prefix is tsc's `symbolToTypeNode` accessibility qualification — the
-  (PARITY.1)(a) mechanism measured and REFUSED by (P18.14), which needs a node-builder
-  enclosing-declaration context this `typeToString` does not have; this is a second,
-  cheaper-looking instance of it (a NAMESPACE chain rather than a module specifier) and may
-  be reachable through `enumTypeQualifiedDisplay`, which already builds that path for the
-  same-string retry. Corpus-gated: 3 active baselines print a namespace-qualified enum name.
+- [ ] **(CHK.87) THE `never` NARROW OF AN IMPOSSIBLE ENUM COMPARISON — a SEPARATE
+  mechanism from (CHK.86)'s diagnostic, measured (P18.17).** Both references narrow the
+  true branch of `if (k === j)` to `never` and therefore report the TS2367 and NOTHING
+  else; we report the TS2367 and still see the un-narrowed `K` inside the branch. The
+  diagnostic is decided from the two RESOLVED TYPES in `checkEqualityComparisonNoOverlap`;
+  narrowing is decided in `narrowByEquality` from the SYNTAX of the other operand
+  (`literalTypeOfExpression` / `enumMemberTypeOfExpr`), which answers null for a bare
+  identifier AND for a whole enum, so the walker bails before any enum question is asked —
+  and it would additionally have to collapse a NON-union reference to `never`, which is the
+  hazard CLAUDE.md records for every `never`-adopting substitution. `enumAtomListsOverlap`
+  is the predicate it would reuse. Corpus exposure is the same as (CHK.86)'s and was
+  measured EMPTY: no active baseline can carry an impossible enum comparison, because tsc
+  emits TS2367 for one and we were green without it.
+
+- [ ] **(CHK.88) AN ENUM MEMBER COMPARED TO A NUMERIC LITERAL OUT OF ITS RANGE — measured
+  (P18.17), deliberately outside (CHK.86)'s scope.** `ka === 1` with `ka: K.A` (`A = 0`)
+  is `TS2367: … the types 'K.A' and '1' have no overlap.` in both references and is silent
+  here, while `ka === 0` is correctly legal in all three. (CHK.86) is gated to BOTH operands
+  being enum-flavored precisely so it cannot reach this: the verdict needs the member
+  VALUES (`enumDomainValues` / round 745's `numericLiteralFitsEnum`), not enum identity.
+
+- [x] **(PARITY.3) A GENERALIZED NAMESPACE-SCOPED ENUM LOSES ITS NAMESPACE PREFIX —
+  CLOSED (P18.17), and it was NOT the same-string-retry mechanism's job.** tsc's
+  `reportRelationError` computes the source display TWICE and the difference is the whole
+  defect: `getTypeNamesForErrorDisplay` gives a BARE name, and the generalize branch then
+  re-renders the generalized source with `TypeFormatFlags.UseFullyQualifiedType`. So the
+  SAME type prints `Ns.Inner.I` at a `string` target and `I` at a `never` one, and the
+  qualification cannot be keyed on "the type changed" — a WHOLE enum enters the branch too
+  (in tsc a numeric enum IS a union flagged `EnumLiteral`, so `isLiteralType` admits it,
+  while `getBaseTypeOfEnumLikeType` returns it unchanged), so the observable effect of
+  entering the branch is the RE-RENDER alone. Scope deliberately narrower than tsc's: only
+  a NAMESPACE chain is walked, so a top-level enum is untouched and a MODULE-scoped one
+  keeps its bare name where tsc prints `import("<path>").E` — (P18.14)'s refused mechanism,
+  which an AMBIENT-module guard keeps out by name. A GLOBAL AUGMENTATION is refused too and
+  for a different reason: `declare global { … }` is not a container a consumer can SPELL, it
+  IS the global scope, so both references print its members bare — but the walk STOPS there
+  rather than refusing the chain, because a real namespace nested inside the block does
+  qualify (`N.NE`, `Deep.Inner.DE`), and the guard is keyed on the `declare` MODIFIER
+  because a plain `namespace global` is an ordinary container both references print as
+  `'global.GE'`.
 
 - [ ] **(CHK.83) THE ARGUMENT-SIDE REMAINDER OF (P18.14)(c)'s HOLE, MEASURED ((P18.15)) — a
   primitive-only union argument against an ARRAY, FUNCTION, INTERSECTION, ENUM or UNION parameter

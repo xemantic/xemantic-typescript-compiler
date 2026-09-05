@@ -29,6 +29,340 @@ and it killed a design that had a real 12.7x measurement behind it. A prize bein
 evidence that a mechanism for collecting it is sound.
 
 
+### Round (P18.7) — two owner decisions land: the POM licence and Stage 1 of the inversion (2026-09-02)
+
+**(LIC.2) LANDED.** The root POM's `licenses` block now carries the SPDX expression the
+1,078 source headers carry (`AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`, `url`
+at the repo's `LICENSE`) plus a second entry for the Output Exception (`url` at
+`LICENSE-EXCEPTION`), both `distribution = "repo"`. Verified by generating
+`xemantic-typescript-compiler-core`'s JVM POM and reading the block back; no other
+`Apache` string survives in any build file. Owner approved the build-file edit and the
+two-entry shape in this session.
+
+**(INV.1) LANDED — STAGE 1 OF THE INVERSION, THE PER-FILE NODE-ANSWER STORE, OFF BY
+DEFAULT.** `NodeAnswers.kt`: a `NodeAnswerStore` per checked file, `nodeId`-indexed,
+holding the walk's own answer for every `Expression`, recorded at the capture/sink hook
+under the same reconstructed ambient, first-wins with the refusal BEFORE the resolution
+(`Checker.nodeAnswerRecord`). One deviation from the design and it is a correction: the
+slot holds the `Type`, because the "existing id→Type lookup" § 4 assumed does not exist
+(`Type.id` is registered nowhere) — same four bytes under compressed oops, one step fewer.
+The flag is a `Checker` constructor parameter defaulting to the process-global
+`NodeAnswers.enabled`, read once; `--nodeAnswers` on the CLI (ledger-routed, usage text,
+`CliModeRestoreTest` lists) prints the recorded count; `BenchMain`'s 8th argument arms it
+warm. **Pins (10, `NodeAnswerStoreTest`, on the round-911 fixture):** body local recorded
+`number` vs post-hoc `string` on one instance; parameters/narrow recorded vs post-hoc
+`any`; store == capture at every span; EVERY expression of the file answered and
+computations == recorded; production mode `nodeAnswerComputations == 0` and no store;
+default off; first-wins/unindexed unit pin. **Receipts, flag off:** suite 16,838/0/3 (+10),
+cost_gate exit 0 all +0.00%, huge_methods clean, warm A/B parent-vs-commit 3 rotated pairs
+**+0.19 / −0.97 / −3.17 %, B 2/3, sd < 1 % both arms — NOISE-DOMINATED** (one field write
+per FILE is the whole production delta; JFR/PrintInlining arms have nothing to show and
+were not run). **Measured, flag on** (the number the design asked for): compiler profile
+5,272/5,485 → 6,152/6,212 ms (**+14.9 %**, 598,455 recorded, **1.34 µs each**);
+many-small-2400-dom 3,378/3,307 → 3,638/3,737 (**+10.3 %**, 232,106, **1.49 µs**);
+diagnostics identical in every arm. Per-node, not per-file. Queued (INV.1b) to attribute
+it (resolution vs reconstruction) and (INV.2) Stage 2 as BLOCKED-PENDING-USER. Two traps
+recorded in CLAUDE.md: `ab-warm.sh` cannot A/B a commit that touches `BenchMain` (shared
+test classes — drive the arms by hand with the parent's test classes), and the design's
+id→Type lookup does not exist.
+
+**(INV.1) APPROVED, and the § 10 question answered.** The owner asked what the
+cost-neutrality contract in `docs/INVERSION-DESIGN.md` § 10 entails — it was committed by
+the (P18.5) session under the label "owner additions", so it is an agent's transcription of
+that conversation, not the owner's own text. What it says: `cost_gate.py` reads 0.00% for a
+pure restructuring BY CONSTRUCTION (its counters count calls), so per-commit evidence for
+(INV.\*) work is instead (1) `ab-interleaved.sh` wall time with win rate, (2) a JFR
+allocation profile before/after, (3) `-XX:+PrintInlining` on the three hottest entry
+points showing every new delegation hop still `inline (hot)`, (4) core-module compile time
+before/after; hot-path rules (final long-lived collaborators, interfaces only with one
+production implementation, interned per-instantiation mappers, no capturing lambdas /
+`by lazy` / boxed seams / `open` classes), watch inlining depth and frame size in the
+relation recursions, and the success metric is `Checker.kt` line-count SHRINKAGE on the
+STATUS.md dashboard. For (INV.1) this means: the store ships OFF, the flag-off path must
+measure inert on wall AND allocation (not only on the counters), and the flag-on recording
+cost is measured on the compiler profile and the 2,401-file shape before Stage 2 is priced.
+
+### Round (P18.6) — the smol-toml rung: the externals generator goes multi-file (2026-09-02)
+
+**(EXT.7) LANDED — THE smol-toml RUNG IS GREEN** (externals module 52 → 64 pins, full suite
+16,815/0/3). The second fixture-ladder rung is what mitt is not — a seven-file package
+with relative `.js` imports between the files — so the rung's first deliverable is the
+MULTI-FILE entry point: `generateKotlinExternals(files: List<SourceFileEntry>)` parses each
+file, binds all of them with ONE `Binder` (the multi-file site in `TypeScriptCompiler` is
+the precedent: a program's binder results must share one binder's tables) and checks with
+ONE `Checker`; the pre-scanned exported sets are the UNION over the files, so a member typed
+by ANOTHER file's exported interface renders by name under the same `===` identity evidence
+a same-file reference gets (pinned across a `.js` specifier resolving to its `.d.ts`
+sibling, with the Dukat alias-resolution pin holding across the file boundary). The output
+is ONE Kotlin source in walk order, so the collector gained a `finish()` pass for the two
+rules that need every file walked: a second exported TYPE name across files is a loud skip
+(one Kotlin package cannot hold both), and top-level function overloads collapse by the
+(EXT.5) marker-stripped key. **Top-level overloads now RENDER** — (EXT.3)'s loud skip was
+about the implementation signature being emitted beside its overloads, so the rule is
+exactly that: among overloads, the declaration WITH a body produces nothing (it is not a
+callable surface; a lone function with a body still renders), and a `.d.ts` has no
+implementation so every overload renders. smol-toml's two `parse` overloads map to
+DIFFERENT Kotlin signatures (an intersection parameter falls back, `options?: ParseOptions`
+maps by name to `ParseOptions?`) and both survive; the gate compiles them as Kotlin
+overloads. Three smaller shapes from the same fixture: an ECMAScript `#private` member
+(measured: the parser hands it over as an `Identifier` spelled `#private`, so it had been
+a "member with a non-identifier name" marker — now omitted like a `private` one, since it
+is one), heritage markers that NAME what is not carried (`skipped heritage clause extends
+Date`, one per clause), and the export WIRING family — `export default <value>`, `export
+=`, `export { a as b } [from '…']`, `export * from` — each a loud marker naming what it
+wires, with the module-marker idiom `export {}` deliberately silent (it wires nothing). The
+gate: `KotlinExternalsSmolTomlGateTest` embeds the VERBATIM seven `dist` declaration files
+of `smol-toml@1.7.1` (BSD-3-Clause; each file carries the licence's notice, conditions and
+disclaimer verbatim, which is what a source redistribution owes) and the generated Kotlin
+metadata-compiles, with spine pins on the classes, the overloads, the destructured optional
+parameter (`p1: Any? /* xtsc: unmapped { maxDepth?: … } */`) and the loud alias refusals —
+and the checker reports ZERO diagnostics on the package. **Two measured surprises.** (1)
+The recursive aliases `TomlValue`/`TomlValueWithoutBigInt` resolve to `any` in this checker
+(a recursion guard's answer), so their refusal reads `unmappable body any` — loud, so not a
+generator defect, but a checker limitation the ladder will meet again. (2) My first
+negative control claimed a FLAT file name defeats the relative import (CLAUDE.md's
+`Inv3PerFileLookupTest` lesson, transplanted); measured, `./a.js` against a flat `a.d.ts`
+RESOLVES through a direct `Checker` construction, so the control was a false claim and was
+replaced by one that discriminates the mechanism it is for — a same-named NON-exported
+interface in the importing file must still fall back, which a name-keyed union of the
+files' exported names would get wrong. The KDoc says "path-shaped is the shape every
+package has", not "flat is defeated". Probe discipline held once more: the fixture's
+rendering was READ (a deliberate `fail(rendered)`) before a single pin was written, and the
+KDoc glob `dist/*.d.ts` re-tripped the nested-comment trap CLAUDE.md already records —
+twice, once per file, caught by the compiler both times.
+
+**(TEST.1) DONE — THE "ORDER-SENSITIVE" NEGATIVE CONTROL WAS A DATA RACE IN THE TEST'S
+OWN INSTRUMENT** (project module 847 → 848 pins; full suite 16,816/0/3). Neither the
+`-project` module alone (847/0) nor the suspected predecessor classes (`FileFinalTokenTest`
++ `TokenIndexGateTest` + the class itself, one JVM) reproduced the red, and no process-global
+in the module or in core serves a READ (`CrawlParseCache` needs the content first; the
+resident path answers only from an overlay or a retention the fresh project has none of) —
+so the mechanism could not be an order. What IS true of every first build is that the crawl
+reads the program's files from SIXTEEN concurrent workers
+(`drainConcurrently`'s `flatMapMerge` around `withContext(pipelineIoDispatcher) {
+vfs.readText(path) }`), and `CountingVfs.readText` kept a plain `reads++` and a `HashMap`
+put — round 825's race one layer up, in the test harness. Two workers inserting two paths
+into the same bucket of a fresh table lose one outright, and a lost `b.ts` insertion IS
+`afterFirst == 0`. Measured with real threads (8 × 2,000 reads over 64 paths): the old
+wrapper counted **12,880 of 16,000**. The fix is stdlib `kotlin.concurrent.atomics` (an
+`AtomicInt` per counter, an `AtomicReference` to an immutable per-path map swapped by CAS —
+a lost race retries instead of losing an entry; no dependency added, common code); the pin
+is `CountingVfsConcurrencyTest` in `jvmTest` (spawning threads is not expressible in common
+code; the wrapper it grades is the common one), red against the old wrapper, green by
+construction against the new. Lesson recorded in CLAUDE.md: a counting Vfs under the crawl
+is a concurrent instrument, and a count pin's flake is a race before it is an order.
+
+**(INV.0) STEP 3 — `TypeInstantiator`, THE INSTANTIATION SEAM, AND THE FIRST LEDGER ROW
+THAT IS HONEST ABOUT A NON-EMPTY AMBIENT SURFACE** (`Checker.kt` 191,030 → 190,771; ledger
+row 3; suite 16,819/0/3 byte-identical, +3 mapper pins; RECEIPTS: cost_gate +0.00% on every counter — the control; ab-interleaved 6 pairs −0.81% B-wins-3/6 NOISE-DOMINATED, i.e. no wall effect; JFR allocation 1,903 vs 1,999 samples, same leaf families, no new frame; PrintInlining reads the 10-byte `Checker::instantiateType` hop `inline` ×55 / `inline (hot)` ×32 and refuses it only at 20 callers that are cold or already at `DesiredMethodLimit`, the `instantiateSignature` hop `inline` ×15, the fn-aware hop `inline (hot)` ×4, while the 1,265-byte body reads exactly what the 1,241-byte pre-split body read (`callee is too large` ×81 in BOTH arms — instantiation was never an inlined leaf); the three standing hot sites row-for-row identical; core `--rerun` compile 79.2 → 80.6 s (run 2), flat. Measurement-harness note, second session running: the background task runner KILLS a silent long-running receipt command at ~1 minute (twice: one A/B pair each time), where step 1 saw ~4.5 min — the A/B, the JFR pair and the inlining pair each ran in the FOREGROUND under the 10-minute tool timeout instead, one JVM at a time, and completed). Why this seam third: the owner's core order names name resolution and
+`getTypeOfSymbol`/`getTypeOfExpression` first, and those are exactly the families whose
+ambient surface is the whole checker (`currentLocalTypes`, the cta frames, the per-file
+scopes, the write gates) — extracting them is Stage 3's work, not a verbatim move. The
+instantiation family is the next seam whose ambient reads can be COUNTED on one hand: a
+census of every call name in the 291-line region found four checker members
+(`getTypeOfSymbol`, `getUnionType`, `getIntersectionType`, `getOrInternReference`) and
+stdlib, nothing else. So the collaborator takes the checker (final class, direct calls),
+the `symbolTypes` table and the interner as constructor inputs, its ten functions moved
+verbatim with those four calls re-pointed, the checker keeps one-line private delegations
+at the seam (the hops the inlining receipt prices), `TypeMapper` became a file-level
+`fun interface` (the checker's six ad-hoc mapper lambdas are byte-identical, they merely
+name a top-level type now) and `createTypeMapper` — a pure function — became file-level
+and pinned without a checker (`TypeInstantiatorTest`: index, identity, a structurally
+identical twin parameter NOT mapped). Three checker members went `private` → `internal`
+for the collaborator to reach them; the ledger row records them as the debt a later
+stage pays (an instantiator taking a `TypeResolver` and a `TypeNormalizer` as inputs
+would read "none"). **The gotcha that bit while doing it**: a checker-side private
+delegation named `createTypeMapper` calling a top-level `createTypeMapper` recurses into
+ITSELF (a member wins name resolution over a same-named top-level function), so the
+delegation was deleted rather than kept — the 21 call sites resolve to the file-level
+function directly.
+
+**(EXT.8) LANDED — HERITAGE TO GENERATED TARGETS** (externals 64 → 70 pins; full suite
+16,825/0/3). The rung RxJS needs before anything else (`Subject<T> extends
+Observable<T>`): a heritage base that is a GENERATED interface/class renders as a Kotlin
+supertype — resolved by IDENTITY, the base symbol's declaration `===` a pre-scanned
+exported declaration, generic arguments from their own annotations, one unmappable
+argument refusing the base — while a lib type, a non-exported neighbour, an enum or a base
+of the wrong KIND for the Kotlin shape (an interface cannot extend a class; a class cannot
+`extends` an interface) stays a per-BASE marker naming it. Kotlin then owes what TypeScript
+never asks for: `override` on a redeclared member (a property by name; a method by its
+mapped signature — the (EXT.5) `overloadSignature` key moved to the renderer and is shared,
+so the overload collapse and the override decision cannot disagree; a differing signature
+is an overload, not an override), `open` on the CLASS member some generated subclass
+overrides (an interface member is open already), `open external class` on every
+non-abstract class (Dukat's and kotlin-wrappers' convention — JavaScript classes are always
+extensible), a `readonly` narrowing of an inherited `var` rendered `var` with a marker
+(Kotlin refuses `override val` over `var`), and the INHERITED constructor for a subclass
+declaring none (TypeScript inherits it; a consumer's `Derived("x", 1)` must keep
+compiling), passed through by name in the gate variant's superclass call and `null!!`s
+when the subclass has its own. The GATE variant renders every class `abstract`: a
+non-external class implementing a generated interface would owe implementations, and
+`abstract` also keeps it extensible — both things an external class gets for free (the
+existing gate-variant class pin moved to `abstract` deliberately). **The finding that cost
+the third test run**: an IMPORTED base fell to the marker because the lens's `resolveName`
+is the walk-scoped INV.2(c) lexical lookup, which by its `symbols`-only rule offers no
+import — so `CheckedLens` gained `heritageBaseSymbol(base)`, answered by the checker's own
+`resolveHeritageBaseSymbol` (what the clause itself is resolved with, qualified names and
+imports included), then `aliasTarget` for the declaration it names; the only lens
+implementor is the checker's, and no counter moves (the lens is live only under a sink).
+Gate fixture grew `Dog extends Animal implements Farmable` + `Named extends Farmable`;
+mitt and smol-toml gates unchanged (their bases are lib types, still markers).
+
+**(EXT.9) LANDED — EXPORTED VALUES AND ACCESSORS** (externals 70 → 73 pins; full suite
+16,828/0/3). `export [declare] const|let|var x: T` renders `public external val|var
+x: T` — the annotation resolved by the checker where written, and for an un-annotated
+declaration the checker's own answer for the NAME (`lens.typeOf` on the declared
+identifier), with a `const`'s LITERAL type widened to its base primitive (`export const
+RETRIES = 3` is typed `3` by the (WIDEN.1) const rule and a consumer binds a `Double`;
+the first pin caught the un-widened `Any? /* xtsc: unmapped 3 */`). A destructuring export
+is a loud skip; a non-exported `declare const` (smol-toml's `_default`) stays silent, as
+before. Accessors: a get/set PAIR is one property (`var`), a getter alone `val`, a
+setter alone `var` typed by its parameter, emitted at the FIRST accessor's position with
+the partner consumed — so member order survives and nothing renders twice; static
+accessors reach the companion, interface accessors (TS 4.x) the interface, and a
+`private`/`protected`/`#` accessor is neither rendered nor a silent PARTNER (the
+sibling set is filtered the same way the member loop is). The gate variant initializes
+a top-level value with `= null!!`; gate fixture grew both shapes.
+
+### Round (P18.5) — owner additions 2026-09-02 applied; (LIC.3) CONTRIBUTING.md; the queue continues (2026-09-02)
+
+**Step 0 — the owner additions, one commit.** (1) The owner's queue insert for the
+Checker.kt split was MERGED into the existing (INV.0) item per its own merge rule ((INV.D)
+had already queued it at P18.0) and the item moved to sit directly after (INV.D), ahead of
+the blocked (INV.1); what the merge added is the constructor discipline (FINAL classes,
+built once per Checker, per-node context as parameters) and the RECEIPT protocol —
+cost_gate 0.00% is a control for a pure split BY CONSTRUCTION, evidence is ab-interleaved
+wall+win-rate, a JFR allocation profile, PrintInlining on the three hot sites, and
+core-module compile time. (2) `docs/INVERSION-DESIGN.md` § 10 "Cost-neutrality contract"
+added (final collaborators; interned TypeMappers; forbidden hot-path shapes — capturing
+lambdas, `by lazy`, boxed seams, `open`; inlining-depth/deep-stack re-checks; SHRINKAGE as
+the success metric), with a pointer from § 6 Stage 0; the shrinkage row is now on
+STATUS.md (`Checker.kt` 191,155 lines, verified by `wc -l`). (3) CLAUDE.md gotcha on
+cost_gate's structural blindness to splits. (4) § Approvals recreated in the WORK ORDER
+preamble (the 2026-07-02 original was trimmed away; pointer to CLAUDE.md for the old
+pre-approvals) carrying the two 2026-09-02 owner decisions: the licence is
+`AGPL-3.0-only`, NOT `-or-later` (swept: no `-or-later` anywhere in README/docs — (LIC.1)
+held), and the CONTRIBUTING.md no-external-PRs statement. **Label collision handled, not
+hidden**: the owner labels the CONTRIBUTING decision "(LIC.2)" but the queue's (LIC.2) was
+already the POM-drift item — the deliverable is queued as (LIC.3), the POM item stays
+separately BLOCKED-PENDING-USER (the licence-string decision does not by itself approve a
+build.gradle.kts edit, which is Guardrail-gated). `docs/inputs/` does not exist, so there
+is no JetBrains API-shape reply to add to (INV.D)'s inputs — checked, not skipped.
+
+**(LIC.3) DONE** — CONTRIBUTING.md created (root): external PRs cannot be merged until the
+contributor agreement exists; issues and minimal reproductions welcomed, with the repo's
+issues URL. Doc-only, no gate applies.
+
+**(EXT.4) LANDED — CLASSES AND ENUMS** (externals module 29 → 40 pins, full suite
+16,775/0/3). `export class` → `public [abstract ]external class` with the one declared
+constructor as the primary constructor, TS statics as the companion object, `readonly` →
+`val`; `private`/`protected` members OMITTED (the non-exported-declaration policy — not a
+consumable surface); >1 constructor and a parameter property are loud markers. `export
+enum` → Karakum's shape: `public sealed external interface E { companion object { val
+Entry: E } }`; a `const enum` is a loud skip (no runtime object) and is EXCLUDED from the
+naming set, so a member typed by one falls back rather than naming a type the module does
+not declare. The naming set widened `Type.Interface` → `Type.Object` (a class instance
+type IS a `Type.Interface`; an enum is a member-less `Type.Object` carrying the enum
+symbol — the (CHK.60) fact, consumed) and stays positive-identity-gated, so an enum
+MEMBER literal (declared by `EnumMember` nodes) is outside it by construction. The gate
+variant grows `= null!!` bodies for class/enum members (a non-external class member
+cannot stay bodiless) — a renderer flag, never text surgery — and the metadata compile
+gate passes on the widened fixture. Two mechanism findings: a STATIC member refuses the
+syntactic own-TP answer (a Kotlin companion object cannot see class TPs; TS refuses
+`static x: T` too — pinned by a fallback marker), and all five collection arms now gate
+on IDENTITY membership in the pre-scanned top-level exported sets, closing a latent leak
+where a namespace-nested exported interface/alias would have rendered at top level
+(default-exported declarations stay deliberately silent until the DEFAULT-exports rung).
+
+**(INV.0) STEP 1 LANDED — `TypeInterner`, THE FIRST STAGE-0 COLLABORATOR, AND THE OWNER'S
+RECEIPT PROTOCOL EXERCISED END-TO-END.** Canonical type identity (INV.5(a), design § 4
+pillar 4) extracted into a final class with an EMPTY ambient surface: the six intern
+caches moved wholesale out of `CheckerState`, their only three access sites became
+one-line delegations, and normalization stayed with the callers — identity ONLY is what
+makes the ambient columns read "none". `docs/inversion-ambient-ledger.md` created (row 1);
+`Checker.kt` 191,155 → 191,107; 6 identity pins (`TypeInternerTest`, including the
+deliberate null-vs-empty-args conflation and the two-interners-share-nothing lifetime
+pin). RECEIPTS (contract § 10): corpus 16,781/0/3 BYTE-IDENTICAL; cost_gate +0.00% on
+every counter (the control, exactly as the contract predicts for a pure split);
+huge_methods 0; ab-interleaved 6 pairs +60 ms (+0.26%) B-wins-2/6 = NOISE-DOMINATED (no
+wall effect — plus 4 pairs from a killed first batch reading the same); JFR allocation
+profile 2,041 vs 2,036 samples, same leaf families, no new frame (aggregate_jfr.py
+gained `--event` so the same aggregation reads jdk.ObjectAllocationSample); core
+`--rerun` compile 84.7/80.5 s → 79.5/80.9 s (flat, the baseline series). **The
+PrintInlining receipt found the split IMPROVED the hot path rather than merely not
+hurting it**: the pre-split `getOrInternReference` was a 277-byte body C2 refused at
+EVERY hot site (`callee is too large` ×39, zero `inline (hot)`), while the split's
+13-byte hop inlines everywhere and the 273-byte `TypeInterner::reference` body itself
+reads `inline (hot)` ×7 (union ×10 vs ×3 before); the three standing hot sites are
+row-for-row identical across arms. A measurement-harness note: the first combined
+receipt script was KILLED mid-batch by the task runner (~4.5 min) — chunked re-runs
+(ab / JFR / inlining as separate background commands) completed cleanly; nothing in the
+tree was at risk because the receipts are read-only over snapshotted class dirs.
+
+**(API.18) LANDED — THE FILE-FINAL TOKEN, HEALED BY OWNERSHIP RATHER THAN SPAN
+ARITHMETIC** (suite 16,791/0/3; -lsp 58/0 with the recorded-edge pin FLIPPED to the healed
+assertion; -project +9 pins in `FileFinalTokenTest` + the shape admitted to
+`TokenIndexGateTest`). The two reverted attempts' analysis held — a container and an
+abutter are indistinguishable by `(pos, rawEnd)` at EOF — and the fix honors it: a
+DESCENT over RAW ends computes the final token's owner chain (last-match per level, so an
+ASI sibling whose raw end overshoots ONTO the token loses to the true owner; the chain
+counts only when its leaf STARTS at the token's start — an identifier, literal or keyword
+does, a closing bracket or an abutter never can), and `realEndOf` consults it by IDENTITY
+(packed `(pos,end)` key prefilter + `===` confirm, because a parent and first child share
+both coordinates). With owners' exact ends accepted, the ordinary `pathAt` descent and
+all three `TokenIndexInvariants` rules (SPAN_IS_EXACT / REACHABLE / PATH_NESTS) heal with
+NO carve-outs — the item's "the fix lives in pathAt's descent" is honored in substance:
+the descent DECIDES, `realEndOf` consults. Punctuation-final files and dangling-dot
+recovery keep today's conservative answers, pinned as such. **A latent flake surfaced and
+is queued as (TEST.1)**: `ProjectTrustedFilesystemTest`'s negative control read
+`afterFirst == 0` in the two-module filtered run, green alone and in the full suite —
+round 914's order-sensitivity family, pre-existing (the failing pin counts Vfs reads,
+which nothing in this change touches).
+
+**(EXT.5) LANDED — GENERIC ALIASES, GENERIC METHODS, METHOD OVERLOADS** (externals 40 →
+47 pins, full suite 16,798/0/3). `type Handler<T> = (event: T) => void` — mitt's spine —
+renders as `public typealias Handler<T> = (T) -> Unit`, the body answered SYNTACTICALLY
+under the alias's own TP scope ((EXT.2)'s lens-ambient finding, third consumer); a
+generic METHOD renders `fun <Key> on(...)` with constraint/default markers (shared
+`typeParameterMarkers` helper), the member scope = enclosing TPs + the method's own;
+interface/class method overloads render as Kotlin overloads, with a post-pass collapsing
+ones that MAP to one Kotlin signature (two literal-typed parameters both falling to the
+`Any?` fallback conflict however different their markers read — the dedup key strips
+` /* xtsc: ...` first, which the pin caught on the first run); an optional GENERIC method
+is a loud skip (a nullable function-typed property cannot carry TPs). Gate fixture
+widened with all three shapes; metadata compile green.
+
+**(EXT.6) LANDED — DEFAULT EXPORTS + THE mitt RUNG IS GREEN** (externals 47 → 52 pins,
+full suite 16,803/0/3). Every DEFAULT-exported kind now renders under its written name
+with a loud `default export - consumers bind the module's default` marker (functions had
+been rendering default exports SILENTLY — the same half-right silence (EXT.4) refused
+for classes; module wiring is a later rung), and a nameless default class/function skips
+loudly. `KotlinExternalsMittGateTest` embeds the VERBATIM `mitt@3.0.1` `index.d.ts`
+(fetched from npm, MIT, attributed) — the fixture ladder's first rung — and gates that
+the generated Kotlin metadata-compiles, plus spine pins (`public typealias Handler<T> =
+(T) -> Unit`, `public external fun <Events> mitt(...): Emitter<Events>`, the default
+marker) and loud-fallback pins for the keyof/indexed/conditional shapes. **Mechanism
+finding, measured by the gate's own first run**: the lens ambient substitutes a
+declaration's own TPs to `any` inside a reference annotation (`Emitter<Events>` resolved
+as `Emitter<any>`), so `annotationTextOrNull` gained the (EXT.2) own-TP mechanism one
+level up — a generic reference names its TARGET by the checker's positive identity and
+renders its ARGUMENTS from their own annotations, one unmappable argument still refusing
+the whole. Probe discipline: two guessed pins failed before `kotlin.test.fail(rendered)`
+printed the actual output — round 761's "probe the value" one module over. Also
+extracted `MetadataCompileCheck.kt` (shared by both gates).
+
+**(INV.0) STEP 2 — `Relation` + `Ternary` RELOCATED to `TypeRelationCache.kt`** (ledger
+row 2; `Checker.kt` 191,107 → 191,030; suite 16,803/0/3, cost_gate +0.00%, huge_methods 0).
+A pure relocation — every call site unchanged, ambient surface none — creating the named
+seam the relater's algorithm extraction grows into. The § 10 wall/allocation/inlining
+receipts are deliberately not exercised: they price delegation hops and a file move adds
+none (stated in the ledger row, not silently skipped). **Session close (P18.5)**: nine
+work landings in one session — owner additions applied and committed as directed;
+(LIC.3); (EXT.4)/(EXT.5)/(EXT.6) with the mitt rung green; (INV.0) steps 1-2 with the
+receipt protocol exercised end-to-end; (API.18) healed; (TEST.1) queued. Suite 16,764 →
+16,803 with zero failures at every gate; every checker counter +0.00% all session.
+Trim-on-write honoured: 4 oldest rounds ((INC.83/84/85/87)) moved to history, 10 live.
+
 ### Round (INC.89) — three inherited refusals re-derived, one API member pinned, one split landed
 
 **(INC.88) LEFT A STANDING INSTRUCTION — "anything larger needs the refusals re-derived rather

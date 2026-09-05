@@ -9,6 +9,40 @@ checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
+**(P18.17) — `never` STOPS BEING UNASSIGNABLE AT ONE POSITION, AN IMPOSSIBLE ENUM COMPARISON STARTS REPORTING, AND A GENERALIZED ENUM PRINTS ITS NAMESPACE, 17,308 → 17,337 / 1 / 3 then 17,343 / 0 / 3 predicted (2026-09-05).**
+Three of (P18.16)'s four residues closed, each reproduced against tsgo 7.0.2 AND pristine 6.0.3
+before any code was written (the two references agree on every row; no divergence found).
+**(CHK.84)** — the string-layer `isAssignableTo` had no BOTTOM-type rule, and only the RETURN
+position could show it, because of that function's five call sites only that one adds an
+identifier fallback below `inferSimpleExprType` (and the engine cannot fire, since it correctly
+ACCEPTS a `never` source and an accepted relation does not early-return). **(CHK.86)**, the
+diagnostic half — `comparabilityCategory` maps every numeric enum to `"number"`, so two enums of
+one flavour read as the same category; the identity question is now asked separately and above
+it, with tsc's `getBaseTypesIfUnrelated` deciding whether the members or their enums are printed.
+**(PARITY.3)** — tsc computes the source display TWICE and the difference is the defect: a
+GENERALIZED source is re-rendered fully qualified, which is why the same `Ns.Inner.I` prints
+qualified at a `string` target and bare at a `never` one; scoped to a NAMESPACE chain, with an
+ambient-module guard keeping (P18.14)'s refused `import("<path>")` form out by name and a
+global-augmentation guard STOPPING the walk at `declare global` (which is not a container a
+consumer can spell) while keeping any real namespace nested inside it.
+**(CHK.85) STOPPED with its measurement — it is MEANING, not display**: a mutable object-literal
+property must widen (`const o = { v: K.A }; const w: K.A = o.v` errors in both references and is
+SILENT here — a lost true positive), a `let`'s read must answer the FLOW type, and an `as const`
+property read is missing entirely; the object-literal half lives in `getTypeOfObjectLiteral`, i.e.
+every literal's member types program-wide, so it is a design. Requeued: (CHK.85), plus (CHK.87)
+the `never` NARROW half of (CHK.86) (a separate mechanism — `narrowByEquality` decides from the
+other operand's SYNTAX and bails before any enum question) and (CHK.88) the enum-member-vs-numeric-
+literal sibling (needs member VALUES, not enum identity). 35 pins, eight arms
+(2 / 3 / 6 / 10 / 2 / 1 / 4 / 1 RED, one nested and recorded as such), one (P18.16) expectation
+updated to the references' answer. **The corpus half of the at-risk enumeration was sound and the
+HAND-WRITTEN half was not**: it selected classes by NAME, which cannot see a fixture, so
+`DeclareGlobalAugmentationTest` — an enum declared inside `declare global` — went RED in the full
+suite; censused, 488 core classes mention `enum`/`never` in their SOURCE and the name patterns
+reached 149, missing 339. Re-run (PARITY.2)-style by FIXTURE: **485 classes / 5,169 tests / 0**.
+Corpus at-risk 360 families / 1,481 subtests / **0 moved**; externals 290/0; project 848/0;
+`cost_gate.py` exit 0 (`output.errors` 46 unchanged); `huge_methods.py` exit 0; 8-profile grid all
+`added=0 removed=0`.
+
 **(P18.16) — THE ENUM DISPLAY GENERALIZATION LANDS, AND ITS BLINDED PINS BECOME tsc-VERIFIABLE, 17,286 → 17,308 / 0 / 3 predicted (2026-09-04).**
 (PARITY.2) closed. tsc's `getBaseTypeOfEnumLikeType` is wired, so an enum-member source now
 generalizes to its parent enum at every target that cannot hold a top-level singleton, at all
@@ -102,28 +136,4 @@ and TS2345, gated only by the full corpus.
 huge_methods 0 over; the 8-profile grid all eight `added=0 removed=0`; externals 290/0; and the
 `@types/node` per-module receipt with its generated Kotlin CODE **byte-identical** and its marker
 text strictly better.
-
-**(P18.12) — CROSS-MODULE HERITAGE: THE 179 REFUSED SUPERTYPES OF `@types/node` BECOME SUPERTYPES, 17,196 → 17,224 / 0 / 3 (2026-09-04).**
-**(CHK.78) landed beside it:** three augmentation divergences, the first far broader than the
-item stated — `resolveModuleSpecifier` is not directory-aware, so on a REAL project every
-relative SIDE-EFFECT import read a false TS2882 (the corpus is blind: flat names; tsc's own
-sources have none); the crawl's own answer now suppresses it. A bare name inside an augmentation
-block typing `any` was a LIB-collision axis (the INV.3(c)(iv) leg sat below the per-file consult),
-which also fixed a precedence divergence against tsgo; the lens no longer answers the block's
-partial interface. One guard measured redundant and removed; 13 pins, `@types/node` byte-identical,
-grid unchanged; four residues queued as (CHK.82).
-(EXT.24): a per-module SET is generated in ONE call (`generateKotlinExternalsPerModule`) in two
-passes — pass 1 collects each module's frozen tree and lifts it into that module's Kotlin package,
-pass 2 re-runs each generation with the others' lifted models in hand — with the `open`
-attribution computed once over the whole lifted set and restated per generation, because a member
-a subclass in another package overrides must be `open` and the owning generation cannot see that
-for itself. On `@types/node` 20.19.43: heritage refusals **179 → 0**, cross-package references
-283 → 468, `Socket extends stream.Duplex` renders, and the 51-module set still compiles TOGETHER
-at **0 metadata and 0 Kotlin/JS errors** (the 184 `hides member of supertype` + 27 `inherits
-conflicting members` (EXT.21b) measured are gone). Exactly one new, honest heritage marker
-(`https.Server` would need two class bases). rxjs and `typescript.d.ts` byte-identical — a
-generation produced ALONE keeps the (EXT.21b) refusal by construction. 9 pins + 6 gate cases,
-eight single-mistake arms; externals 275 → 290 / 0. The trap it cost an hour to find: a lifted
-package is NOT an ordinary scope, and modelling it as one makes `node:console`'s
-`node.node.console` shadow the head `node` and silently empty the whole cross-module attribution.
 

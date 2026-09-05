@@ -518,16 +518,15 @@ class TypeDisplayParityPositionsTest {
 
     @Test
     fun `a namespace-scoped enum member generalizes to its enum`() {
-        // OURS, NOT tsc's, AND THE DIVERGENCE IS PRE-EXISTING: both references print
-        // `'Ns.Inner'` here. That prefix is tsc's `symbolToTypeNode` accessibility
-        // qualification — the (PARITY.1)(a) mechanism measured and REFUSED by (P18.14),
-        // which needs a node-builder enclosing-declaration context this `typeToString`
-        // does not have. Note the asymmetry, which is tsc's and not ours: at the `never`
-        // target below BOTH references print the member UNqualified (`'Inner.I'`), which
-        // we match byte for byte.
+        // (PARITY.3) CLOSED this: the prefix both references print is tsc's
+        // `TypeFormatFlags.UseFullyQualifiedType`, applied by `reportRelationError` to
+        // the GENERALIZED source alone. Note the asymmetry, which is tsc's and not ours
+        // and is now pinned on both sides: at the `never` target below BOTH references
+        // print the member UNqualified (`'Inner.I'`), because the generalize branch is
+        // not entered there — see [Checker.relationErrorSourceDisplay].
         assert(
             only("const d: string = en;", 2322).message ==
-                "Type 'Inner' is not assignable to type 'string'."
+                "Type 'Ns.Inner' is not assignable to type 'string'."
         )
     }
 

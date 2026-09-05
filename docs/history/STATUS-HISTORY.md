@@ -11,6 +11,30 @@ ablation arms with distinct red sets; externals 275/0. Cross-module HERITAGE is 
 and queued as (EXT.24): admitting it measured 184 `hides member of supertype` + 27 `inherits
 conflicting members`, because `Inheritance` is built over one generation.
 
+**(P18.12) — CROSS-MODULE HERITAGE: THE 179 REFUSED SUPERTYPES OF `@types/node` BECOME SUPERTYPES, 17,196 → 17,224 / 0 / 3 (2026-09-04).**
+**(CHK.78) landed beside it:** three augmentation divergences, the first far broader than the
+item stated — `resolveModuleSpecifier` is not directory-aware, so on a REAL project every
+relative SIDE-EFFECT import read a false TS2882 (the corpus is blind: flat names; tsc's own
+sources have none); the crawl's own answer now suppresses it. A bare name inside an augmentation
+block typing `any` was a LIB-collision axis (the INV.3(c)(iv) leg sat below the per-file consult),
+which also fixed a precedence divergence against tsgo; the lens no longer answers the block's
+partial interface. One guard measured redundant and removed; 13 pins, `@types/node` byte-identical,
+grid unchanged; four residues queued as (CHK.82).
+(EXT.24): a per-module SET is generated in ONE call (`generateKotlinExternalsPerModule`) in two
+passes — pass 1 collects each module's frozen tree and lifts it into that module's Kotlin package,
+pass 2 re-runs each generation with the others' lifted models in hand — with the `open`
+attribution computed once over the whole lifted set and restated per generation, because a member
+a subclass in another package overrides must be `open` and the owning generation cannot see that
+for itself. On `@types/node` 20.19.43: heritage refusals **179 → 0**, cross-package references
+283 → 468, `Socket extends stream.Duplex` renders, and the 51-module set still compiles TOGETHER
+at **0 metadata and 0 Kotlin/JS errors** (the 184 `hides member of supertype` + 27 `inherits
+conflicting members` (EXT.21b) measured are gone). Exactly one new, honest heritage marker
+(`https.Server` would need two class bases). rxjs and `typescript.d.ts` byte-identical — a
+generation produced ALONE keeps the (EXT.21b) refusal by construction. 9 pins + 6 gate cases,
+eight single-mistake arms; externals 275 → 290 / 0. The trap it cost an hour to find: a lifted
+package is NOT an ordinary scope, and modelling it as one makes `node:console`'s
+`node.node.console` shadow the head `node` and silently empty the whole cross-module attribution.
+
 **(P18.10) — THE CI HALF OF THE KOTLIN/JS GATE, THE README REPOSITIONING, AND THE EXTERNALS PACKAGE SCHEME MEASURED RATHER THAN PROPOSED, 17,150 → 17,169 / 0 / 3 (2026-09-03).**
 Three owner decisions answered. **(EXT.17)**: the Kotlin/JS stdlib klib is now DECLARED by the
 build (`dependencyScope` + `resolvable`, artifact-only `@klib` notation so no Kotlin/JS platform
