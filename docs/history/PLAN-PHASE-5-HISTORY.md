@@ -1,3 +1,81 @@
+### Round (P18.10) — the CI half of the Kotlin/JS gate, the README repositioning lands, and the externals package scheme is measured rather than proposed (2026-09-03)
+
+**Three owner decisions were answered this session** — (EXT.17)'s CI half approved, (DOC.2)
+approved, and (EXT.21)'s package scheme DELEGATED ("I wish to follow your best
+recommendation here").
+
+**(EXT.17) LANDED — the Kotlin/JS stdlib klib is DECLARED, not located, and the gate can no
+longer go quietly green.** A `dependencyScope` + `resolvable` configuration pair declares
+`org.jetbrains.kotlin:kotlin-stdlib-js:<catalog kotlin>@klib` and passes its single file to
+`jvmTest` as `XTSC_KOTLIN_STDLIB_JS`. **Artifact-only notation deliberately**: it bypasses
+variant-aware resolution, so the configuration needs no Kotlin/JS platform attributes and
+cannot be handed a JVM or Native variant. Nothing enters any published artifact; the build
+stays warning-clean under `--warning-mode all`. **The ablation exposed a second defect,
+fixed in the same commit**: with the environment variable pointed at a non-existent path
+the whole gate read **28 tests, 0 failures** having compiled NOTHING — loud on stdout,
+green in JUnit, so no CI arm could tell a compiled gate from a skipped one. `JsStdlib.locate`
+now splits the cases by WHO the absence is a statement about — an UNSET variable is a fact
+about the BOX (a developer outside Gradle) and still skips loudly; a variable that is SET and
+names nothing is a fact about the BUILD, which cannot be true on a correct one, and `check`s.
+Ablated: 28/0 green before, **27 of 28 RED** after. CLAUDE.md gotcha added.
+
+**(DOC.2) LANDED — the approved commit cherry-picked onto main unchanged**, so the audit
+trail separates what the owner signed off from what this session then refreshed. The branch
+was 95 commits behind main and its facts predated the whole (EXT.11…23) arc, so a SECOND
+commit refreshed only what measurement changed: the ladder table (mitt / smol-toml / RxJS 250
+files / `typescript.d.ts` / `@types/node`, all at 0 Kotlin errors) with the `@types/node`
+flattening named as the open limit; the suite count 15,528 → 17,169; and the stale "the
+language service is not incremental — every semantic query is a full rebuild" bullet, replaced
+by the (LSP.3) measurement (93-217 ms narrowed here against tsgo's 12-18 ms, said in their
+favour). Positioning prose untouched.
+
+**(EXT.21a) LANDED — and the queued proposal was REFUTED on its central rule.** The item asked
+for a package-naming scheme; `KotlinPackageNameCompileTest` asked the metadata compiler AND
+`K2JSCompiler` instead of guessing, and they agree on every row: **a backtick rescues a
+hyphenated segment, a hard keyword and a digit-first one, and rescues NOTHING else** — `.`,
+`~`, `@`, `:` and `/` are `Name contains illegal characters` inside one. So "any segment that
+is not a Kotlin identifier backticked" produces a file no compiler accepts. Landed instead:
+`/`, `:` and `.` are SEPARATORS, npm's leading `@` is DROPPED, a keyword/digit-first/hyphenated
+segment is BACKTICKED, and any other character is REFUSED loudly — no `package` line plus a
+marker naming it, which degrades to the pre-(EXT.21) root-package behaviour rather than to a
+broken file. `ModuleWiring.packageRoot` prefixes a multi-module package (`node.fs`, the
+kotlin-wrappers convention) without hard-coding one ecosystem, and the case of a specifier is
+PRESERVED (lowercasing would collapse two specifiers onto one package for a convention that
+costs nothing to honour and everything to enforce).
+
+**The load-bearing measurement is the second one**: every accepted package name is also
+spellable in a QUALIFIED reference, backticked segments included. That is what makes a
+cross-package reference (`node.net.Socket` named from the `dgram` generation) expressible, and
+so what makes (EXT.21b) viable at all — without it the per-module design would have had no way
+to name another module's declarations.
+
+9 measurement rows + 10 end-to-end pins through the generator (including the refusal, whose
+first assertion was VACUOUS — the refusal marker's own text contains the word "package", so a
+substring test passes against a renderer that emitted both; it is a line-start test now).
+27 wiring pins re-pinned for the added line. Externals 242 → **261/0**; suite 17,150 →
+**17,169 / 0 / 3**, exactly the 19 added.
+
+**The ablation, three single-mistake arms, each restored against its own snapshot.** a1
+(never backtick a segment) — **3 RED**, and the third is the receipt that the rule is not a
+unit-test artefact: `smol-toml's real output compiles as Kotlin JS` goes red, i.e. that
+library's actual generation would emit `package smol-toml` and `K2JSCompiler` would refuse it.
+a2 (keep npm's leading `@`) — **1 RED**, the scope pin. a3 (escape an illegal character
+instead of refusing) — **1 RED**, the refusal pin. Distinct red sets, so no pin is standing in
+for another. Restored and REBUILT before the green re-run (the class dir holds the last arm's
+binary until then, (CHK.54)'s trap): 261/0.
+
+**(EXT.21b) queued** — per-module selection and cross-module qualified spelling, which needs
+no further owner decision. Split from (EXT.21a) because it touches the generator's most
+delicate path (reference spelling under identity evidence and first-wins naming);
+`Site.moduleSpecifier` already exists and is the hook.
+
+**One protocol failure, recorded.** The session's first full-suite run was launched as
+`nohup ./gradlew … &` INSIDE a `run_in_background` call — the double-detach CLAUDE.md
+explicitly forbids. The tool reported exit 0 for the backgrounding rather than the build, and
+the partial result (50 tests, core absent) read as a plausible suite. Caught before anything
+was recorded; the later runs were launched bare. The existing gotcha is correct and was simply
+not followed.
+
 ### Round (P18.9) — the externals ladder goes green at every rung: RxJS core, its census, a parser defect, all of RxJS, and `typescript.d.ts` through the namespace rung (2026-09-02)
 
 **(EXT.11a) LANDED — the externals ladder's third rung, `rxjs@7.8.2` core (15 files under

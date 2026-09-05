@@ -126982,6 +126982,397 @@ interface DataView {
         return target
     }
 
+    /**
+     * (CHK.91), the (CHK.85)(a) unblocker: the type an object literal's MUTABLE member
+     * contributes — tsc's `checkExpressionForMutableLocation`, whose
+     * `getWidenedLiteralLikeTypeForContextualType` turns a FRESH enum-member type into its
+     * own enum unless the contextual type can hold the singleton.
+     *
+     * WHY ONLY THE ENUM CASE IS HERE, AND WHY THAT IS THE WHOLE RULE: an object-literal
+     * member's value is typed by [getTypeOfExpression], which answers the BASE primitive
+     * for a literal node — there is no fresh-literal expression type in this checker — so
+     * a string/number/bigint/boolean member is ALREADY widened by construction and this
+     * function has nothing to do for it. An enum-member ACCESS is the one literal-like
+     * type that survives into a member, which is why the widening looked absent for
+     * exactly one flavour.
+     *
+     * Measured against tsgo 7.0.2 AND pristine `typescript@6.0.3`, which agree on every
+     * row. It removes a genuine FALSE POSITIVE as well as buying two true ones: with
+     * `const o = { v: K.A }`, `o.v = K.B` was an ours-only `TS2322` (the member's declared
+     * type was the singleton), while `const w: K.A = o.v` and the `return o.v` twin were
+     * SILENT where both references report `Type 'K' is not assignable to type 'K.A'`.
+     *
+     * THREE PIECES, each measured to be load-bearing on its own:
+     *
+     * 1. FRESHNESS ([objLitInitIsFreshEnumMemberAccess]) — tsc widens only a FRESH literal
+     *    type (`getWidenedLiteralType` tests `isFreshLiteralType`), and the type of an
+     *    enum-member ACCESS expression is the only fresh enum literal there is. So
+     *    `{ v: a }` with `a: K.A`, `{ v: k }` with `let k = K.A`, `{ v: K.A as K.A }` and
+     *    every SHORTHAND stay un-widened (both references), while `{ v: cond ? K.A : K.B }`
+     *    and `{ v: x || K.A }` widen — a union of fresh members is fresh member by member.
+     *    The (P18.18) arm widened on the TYPE alone and would have manufactured two false
+     *    positives the grid had not reached.
+     *
+     * 2. The `as const` context ([objLitConstContextOf]) keeps the literal —
+     *    `getRegularTypeOfLiteralType`, tsc's `isConstContext`, walked through parens,
+     *    array elements, spreads and enclosing property assignments exactly as tsc walks.
+     *
+     * 3. The contextual KEEP ([isEnumLiteralOfContextualType], tsc's
+     *    `isLiteralOfContextualType`): SOME constituent of the contextual member type
+     *    carries a literal of the member's flavour — an enum member, a whole enum (in tsc a
+     *    union of its members), a number literal for a numeric member, a string literal
+     *    for a string one, a type parameter through its constraint. NOT
+     *    [enumComparisonAtoms], whose EVERY rule widens against `kind?: E.X` (an
+     *    `undefined` constituent is not enum-flavoured) and never keeps against `0 | 1`.
+     *    The context is the PUSH [contextualType]'s member where the push reached, else
+     *    the PULL [objLitMemberContextualType] — which is what closes the eleven-loss
+     *    class the (P18.18) arm measured: a UNION-annotated declaration, a literal nested
+     *    under one, a CONDITIONAL return, an ARROW expression body and a union-target
+     *    ASSIGNMENT are positions the push never reaches, so the discriminant widened there
+     *    and the relation lost its constituent selection (+7 rows per profile, +22 on
+     *    harness, all `{ kind: SomeEnum.X, … }` literals).
+     *
+     * Consulted only for an enum-member-valued member (265 on the compiler profile), so
+     * the pull's parent walk is paid ~300 times per build and `cost_gate.py` is the
+     * receipt. [getTypeOfObjectLiteral] mints on every call and has no memo — the pull
+     * resolves ONE annotation or ONE callee and nothing else.
+     */
+    private fun objLitMutableMemberType(
+        prop: PropertyAssignment, name: String, propType: Type, propCtx: Type?,
+    ): Type {
+        if (!typeHasEnumMemberConstituent(propType)) return propType
+        if (!objLitInitIsFreshEnumMemberAccess(prop.initializer)) return propType
+        if (objLitConstContextOf(prop.initializer)) return propType
+        val ctx = propCtx?.takeIf { it !== anyType && it !== errorType }
+            ?: objLitMemberContextualType(prop, name)
+        if (ctx != null && isEnumLiteralOfContextualType(propType, ctx)) return propType
+        return widenEnumMemberTypes(propType)
+    }
+
+    /** (CHK.91): [t] is an enum-MEMBER type, or a union with an enum-member constituent. */
+    private fun typeHasEnumMemberConstituent(t: Type): Boolean =
+        enumTypeOfMemberType(t) != null ||
+            (t is Type.Union && t.types.any { enumTypeOfMemberType(it) != null })
+
+    /**
+     * (CHK.91) piece 1: is [expr] syntactically a FRESH enum-member value — an
+     * `Enum.Member` access ([enumMemberTypeOfExpr]), through parentheses, the branches of
+     * a conditional and the operands of `||` / `??`? A bare identifier, a shorthand, an
+     * `as` expression and a call are NOT fresh (tsc's `isFreshLiteralType` is false for
+     * every one of them, measured), so the (P18.18) arm's type-only test is refused here.
+     */
+    private fun objLitInitIsFreshEnumMemberAccess(expr: Expression, depth: Int = 0): Boolean {
+        if (depth > 8) return false
+        return when (val e = unwrapParensExpr(expr)) {
+            is PropertyAccessExpression -> enumMemberTypeOfExpr(e) != null
+            is ConditionalExpression ->
+                objLitInitIsFreshEnumMemberAccess(e.whenTrue, depth + 1) ||
+                    objLitInitIsFreshEnumMemberAccess(e.whenFalse, depth + 1)
+            is BinaryExpression ->
+                (e.operator == SyntaxKind.BarBar || e.operator == SyntaxKind.QuestionQuestion) &&
+                    (objLitInitIsFreshEnumMemberAccess(e.left, depth + 1) ||
+                        objLitInitIsFreshEnumMemberAccess(e.right, depth + 1))
+            else -> false
+        }
+    }
+
+    /**
+     * (CHK.91) piece 2: tsc's `isConstContext` for [node] — is it (transitively) the
+     * operand of an `as const` / `<const>` assertion, through parentheses, array elements,
+     * spreads, template spans and enclosing property assignments?
+     */
+    private fun objLitConstContextOf(node: Node): Boolean {
+        var cur: Node = node
+        var hops = 0
+        while (hops++ < 32) {
+            val parent = (cur as NodeBase).parent ?: return false
+            when (parent) {
+                is AsExpression -> return objLitIsConstTypeRef(parent.type)
+                is TypeAssertionExpression -> return objLitIsConstTypeRef(parent.type)
+                is ParenthesizedExpression, is ArrayLiteralExpression, is SpreadElement -> cur = parent
+                is PropertyAssignment, is ShorthandPropertyAssignment, is TemplateSpan ->
+                    cur = (parent as NodeBase).parent ?: return false
+                else -> return false
+            }
+        }
+        return false
+    }
+
+    private fun objLitIsConstTypeRef(t: TypeNode): Boolean =
+        t is TypeReference && (t.typeName as? Identifier)?.text == "const" && t.typeArguments == null
+
+    /**
+     * (CHK.91) piece 3: tsc's `isLiteralOfContextualType` for an enum-member [candidate]
+     * (a member, or a union carrying one) against the contextual member type [ctx].
+     *
+     * SOME constituent decides: an enum MEMBER or a WHOLE enum (in tsc the union of its
+     * member literals) of the candidate's flavour, a number literal for a numeric member, a
+     * string literal for a string member, a type parameter through its constraint. An
+     * intersection is judged like a union (tsc's `UnionOrIntersection`). Anything else —
+     * `number`, `string`, an object, `any` — is not a literal context, and the member
+     * widens.
+     */
+    private fun isEnumLiteralOfContextualType(candidate: Type, ctx: Type, depth: Int = 0): Boolean {
+        if (depth > 8) return false
+        return when (ctx) {
+            is Type.Union -> ctx.types.any { isEnumLiteralOfContextualType(candidate, it, depth + 1) }
+            is Type.Intersection -> ctx.types.any { isEnumLiteralOfContextualType(candidate, it, depth + 1) }
+            is Type.TypeParam -> ctx.constraint?.let { isEnumLiteralOfContextualType(candidate, it, depth + 1) } == true
+            is Type.NumberLiteral -> objLitCandidateHasFlavour(candidate, stringFlavour = false)
+            is Type.StringLiteral -> objLitCandidateHasFlavour(candidate, stringFlavour = true)
+            else -> {
+                val sym = (ctx as? Type.Object)?.symbol ?: return false
+                when {
+                    sym.flags.hasAny(SymbolFlags.EnumMember) && ctx.flags.hasAny(TypeFlags.EnumLiteral) ->
+                        enumMemberTypeIsStringValued(ctx)?.let { objLitCandidateHasFlavour(candidate, it) } ?: true
+                    sym.flags.hasAny(SymbolFlags.Enum) -> true
+                    else -> false
+                }
+            }
+        }
+    }
+
+    /** (CHK.91): does [candidate] carry an enum member of the given value flavour? An
+     *  unknown flavour (a computed or opaque member) answers true — a KEEP is the
+     *  pre-(CHK.91) behaviour, so uncertainty resolves toward it. */
+    private fun objLitCandidateHasFlavour(candidate: Type, stringFlavour: Boolean): Boolean {
+        val parts = if (candidate is Type.Union) candidate.types else listOf(candidate)
+        return parts.any { p ->
+            enumTypeOfMemberType(p) != null &&
+                (enumMemberTypeIsStringValued(p)?.let { it == stringFlavour } ?: true)
+        }
+    }
+
+    /**
+     * (CHK.91) the PULL: the contextual type of [prop]'s VALUE position, derived from the
+     * parent chain — the object literal's own contextual type, then the member [name] in it
+     * across EVERY union constituent (tsc's `getContextualTypeForObjectLiteralElement` over
+     * `getTypeOfPropertyOfContextualType`, which maps a union). Null where the chain offers
+     * no type, in which case the member widens exactly as an uncontextual expression does.
+     */
+    private fun objLitMemberContextualType(prop: PropertyAssignment, name: String): Type? {
+        val objLit = (prop as NodeBase).parent as? ObjectLiteralExpression ?: return null
+        val ctx = objLitContextualTypeAt(objLit, 0) ?: return null
+        return objLitCtxMemberType(ctx, name, 0)
+    }
+
+    /** (CHK.91): member [name]'s contextual type in [ctx] — mapped over a union (the
+     *  union of every constituent's answer), first-hit through an intersection, the
+     *  constraint of a type parameter, [lookupPropertyTypeForCtx] for an object. */
+    private fun objLitCtxMemberType(ctx: Type, name: String, depth: Int): Type? {
+        if (depth > 8) return null
+        return when (ctx) {
+            is Type.Union -> {
+                val found = ArrayList<Type>(ctx.types.size)
+                for (m in ctx.types) {
+                    val t = objLitCtxMemberType(m, name, depth + 1) ?: continue
+                    if (found.none { it === t }) found.add(t)
+                }
+                when (found.size) {
+                    0 -> null
+                    1 -> found[0]
+                    else -> getUnionType(found)
+                }
+            }
+            is Type.TypeParam -> ctx.constraint?.let { objLitCtxMemberType(it, name, depth + 1) }
+            is Type.Intersection, is Type.Object -> lookupPropertyTypeForCtx(ctx, name)
+            else -> null
+        }
+    }
+
+    /**
+     * (CHK.91): the contextual type of an expression POSITION, pulled from the parent
+     * chain — tsc's `getContextualType`, for the KEEP decision of
+     * [objLitMutableMemberType].
+     *
+     * WHY THIS IS WIDER THAN [pullContextualTypeAt] AND NOT A REPLACEMENT FOR IT: the two
+     * consumers fail in OPPOSITE directions. (CHK.39)'s consumer writes a PARAMETER type,
+     * where a wrong context is a wrong type and a missing one is `any` — so it is
+     * deliberately partial. Here a missing context WIDENS the member and can lose a
+     * discriminated-union selection (the (P18.18) eleven-loss class), while a context that
+     * reaches merely KEEPS the singleton, i.e. the behaviour every build before (CHK.91)
+     * had. So this walk covers every root tsc's `getContextualType` has that this checker
+     * can resolve: the declaration annotation, the enclosing function's return type (an
+     * `async` one unwrapped), a call argument's RAW parameter type ([objLitCtxArgType] —
+     * NEVER [cpaCtxAt], which stops at statements, and not [cpaComputeArgCtxTypes], for
+     * the two reasons recorded there), an assignment's left operand, `as` / `satisfies`,
+     * and inheritance through parentheses, `!`, `?:`, `||` / `??` / `&&` / `,`, array
+     * elements, spreads and nested properties. The leaves are shared with the (CHK.39)
+     * walk; only the set of arms differs. Nothing here types the asking literal — every
+     * source is an ANNOTATION, a callee, or a sibling subtree — so the walk needs no
+     * re-entrancy guard.
+     */
+    private fun objLitContextualTypeAt(node: Node, depth: Int): Type? {
+        if (depth > 24) return null
+        val parent = (node as NodeBase).parent ?: return null
+        return when (parent) {
+            is ParenthesizedExpression -> objLitContextualTypeAt(parent, depth + 1)
+            is NonNullExpression -> objLitContextualTypeAt(parent, depth + 1)
+            is VariableDeclaration ->
+                if (parent.initializer === node) parent.type?.let { pullCtxResolveAnnotation(it) } else null
+            is PropertyDeclaration ->
+                if (parent.initializer === node) parent.type?.let { pullCtxResolveAnnotation(it) } else null
+            is Parameter ->
+                if (parent.initializer === node) parent.type?.let { pullCtxResolveAnnotation(it) } else null
+            is PropertyAssignment -> {
+                val objLit = (parent as NodeBase).parent as? ObjectLiteralExpression
+                val name = pullCtxMemberName(parent.name)
+                if (parent.initializer !== node || objLit == null || name == null) null
+                else objLitContextualTypeAt(objLit, depth + 1)?.let { objLitCtxMemberType(it, name, 0) }
+            }
+            is SpreadAssignment ->
+                ((parent as NodeBase).parent as? ObjectLiteralExpression)?.let { objLitContextualTypeAt(it, depth + 1) }
+            is ArrayLiteralExpression -> {
+                val idx = parent.elements.indexOfFirst { it === node }
+                if (idx < 0) null
+                else objLitContextualTypeAt(parent, depth + 1)?.let { objLitCtxArrayElementAt(it, idx) }
+            }
+            is SpreadElement -> objLitContextualTypeAt(parent, depth + 1)
+            is ConditionalExpression ->
+                if (parent.whenTrue === node || parent.whenFalse === node) objLitContextualTypeAt(parent, depth + 1)
+                else null
+            is BinaryExpression -> when (parent.operator) {
+                SyntaxKind.Equals, SyntaxKind.BarBarEquals,
+                SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.QuestionQuestionEquals ->
+                    if (parent.right === node) objLitCtxAssignmentTargetType(parent.left) else null
+                // tsc: the operands of `||` / `??` take the expression's own context; the
+                // RIGHT one falls back to the left operand's type when there is none.
+                SyntaxKind.BarBar, SyntaxKind.QuestionQuestion ->
+                    objLitContextualTypeAt(parent, depth + 1)
+                        ?: if (parent.right === node) objLitCtxAssignmentTargetType(parent.left) else null
+                SyntaxKind.AmpersandAmpersand, SyntaxKind.Comma ->
+                    if (parent.right === node) objLitContextualTypeAt(parent, depth + 1) else null
+                else -> null
+            }
+            is AsExpression ->
+                if (objLitIsConstTypeRef(parent.type)) objLitContextualTypeAt(parent, depth + 1)
+                else pullCtxResolveAnnotation(parent.type)
+            is TypeAssertionExpression ->
+                if (objLitIsConstTypeRef(parent.type)) objLitContextualTypeAt(parent, depth + 1)
+                else pullCtxResolveAnnotation(parent.type)
+            is SatisfiesExpression -> pullCtxResolveAnnotation(parent.type)
+            is ReturnStatement ->
+                if (parent.expression === node) objLitCtxEnclosingFnLike(parent)?.let { objLitCtxFnReturnType(it, depth) }
+                else null
+            is ArrowFunction ->
+                if (parent.body === node) objLitCtxFnReturnType(parent, depth) else null
+            is CallExpression -> {
+                val idx = parent.arguments.indexOfFirst { it === node }
+                if (idx < 0) null else objLitCtxArgType(parent, idx)
+            }
+            else -> null
+        }
+    }
+
+    /** (CHK.91): the type an assignment's LEFT operand contributes as context — its own
+     *  type, refused for a destructuring PATTERN (typing one as an expression is the wrong
+     *  question) and for `any`/error. */
+    private fun objLitCtxAssignmentTargetType(left: Expression): Type? {
+        if (left is ObjectLiteralExpression || left is ArrayLiteralExpression) return null
+        val t = getTypeOfExpression(left)
+        return t.takeIf { it !== anyType && it !== errorType }
+    }
+
+    /** (CHK.91): the return-position context of function-like [fn] — its annotation, else
+     *  the return type of the single signature that contextually types it, an `async`
+     *  wrapper stripped ([pullCtxAwaitIfAsync]). */
+    private fun objLitCtxFnReturnType(fn: Node, depth: Int): Type? {
+        val ann = when (fn) {
+            is FunctionDeclaration -> fn.type
+            is MethodDeclaration -> fn.type
+            is GetAccessor -> fn.type
+            is ArrowFunction -> fn.type
+            is FunctionExpression -> fn.type
+            else -> null
+        }
+        val declared = ann?.let { pullCtxResolveAnnotation(it) }
+            ?: objLitContextualTypeAt(fn, depth + 1)?.let { contextualSigReturnTypeForCtx(it) }
+            ?: return null
+        return pullCtxAwaitIfAsync(fn, declared)
+    }
+
+    /** (CHK.91): the function-like a `return` belongs to, through ANY statement or clause
+     *  (a `return` reaches its function only through statements). A constructor or setter
+     *  has no return type to contribute; a class or file boundary ends the walk. */
+    private fun objLitCtxEnclosingFnLike(ret: ReturnStatement): Node? {
+        var cur: Node? = (ret as NodeBase).parent
+        var hops = 0
+        while (cur != null && hops++ < 64) {
+            when (cur) {
+                is FunctionDeclaration, is MethodDeclaration, is GetAccessor,
+                is ArrowFunction, is FunctionExpression -> return cur
+                is Constructor, is SetAccessor, is ClassDeclaration, is ClassExpression,
+                is SourceFile, is ModuleDeclaration -> return null
+                else -> cur = (cur as NodeBase).parent
+            }
+        }
+        return null
+    }
+
+    /** (CHK.91): [pullCtxArrayElementAt] mapped over a union context (`Bag[] | undefined`,
+     *  `A[] | B[]`) — the union of every constituent's element answer. */
+    private fun objLitCtxArrayElementAt(ctx: Type, idx: Int): Type? {
+        if (ctx !is Type.Union) return pullCtxArrayElementAt(ctx, idx)
+        val found = ArrayList<Type>(ctx.types.size)
+        for (m in ctx.types) {
+            val t = pullCtxArrayElementAt(m, idx) ?: continue
+            if (found.none { it === t }) found.add(t)
+        }
+        return when (found.size) {
+            0 -> null
+            1 -> found[0]
+            else -> getUnionType(found)
+        }
+    }
+
+    /**
+     * (CHK.91): argument [idx]'s contextual parameter type — the callee's RAW parameter
+     * type, rest-aware, taken from EVERY signature of an overload set and never from an
+     * inference or a selection.
+     *
+     * WHY NOT [cpaComputeArgCtxTypes], the computation the (CHK.39) pull shares: it
+     * SELECTS an overload (`resolveCallOverload`, which types every argument against every
+     * candidate — measured **+18,622 `getTypeOfExpression` calls**, +2.9% on the compiler
+     * profile, for a decision that needs none of it) and it INSTANTIATES a generic
+     * parameter from the arguments — typing the asking literal (widened, under a guard),
+     * inferring `T = { v: K }` and handing the outer ask `v: K`, a whole enum, i.e. a KEEP:
+     * a circular answer that is the opposite of tsc's, whose contextual type for
+     * `id<T>(x: T)` is the bare `T` under an inference that has fixed nothing, so the type
+     * parameter's CONSTRAINT decides ([isEnumLiteralOfContextualType]'s `TypeParam` arm)
+     * and an unconstrained one widens (`id({ v: K.A })` infers `T = { v: K }` in both
+     * references). The raw parameter is exactly that answer. Across an overload set the
+     * SOME rule over every candidate's parameter is conservative in the KEEP direction —
+     * the behaviour every build before (CHK.91) had — and costs one `getTypeOfSymbol`
+     * per candidate. A receiver instantiation (`Map<K, V>.set`'s `V`) is already
+     * substituted in the member the property access resolves to.
+     */
+    private fun objLitCtxArgType(call: CallExpression, idx: Int): Type? {
+        val calleeType = when (val callee = call.expression) {
+            is Identifier -> getTypeOfIdentifier(callee)
+            is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
+            else -> return null
+        }
+        if (calleeType !is Type.Object) return null
+        resolveStructuredTypeMembers(calleeType)
+        var sigs = calleeType.callSignatures
+        if (sigs.isNullOrEmpty() && calleeType is Type.Reference) {
+            resolveStructuredTypeMembers(calleeType.target)
+            sigs = calleeType.target.callSignatures
+        }
+        if (sigs.isNullOrEmpty()) return null
+        val found = ArrayList<Type>(sigs.size)
+        for (sig in sigs) {
+            val t = restAwareParamType(sig.parameters, idx) ?: continue
+            if (t === anyType || t === errorType) continue
+            if (found.none { it === t }) found.add(t)
+        }
+        return when (found.size) {
+            0 -> null
+            1 -> found[0]
+            else -> getUnionType(found)
+        }
+    }
+
     private fun getTypeOfObjectLiteral(expr: ObjectLiteralExpression): Type {
         val members = symbolTable()
         val properties = mutableListOf<Symbol>()
@@ -127052,7 +127443,7 @@ interface DataView {
                         (prop.initializer is ArrowFunction || prop.initializer is FunctionExpression ||
                             prop.initializer is ObjectLiteralExpression)
                     if (useCtx) contextualType = propCtx
-                    val propType = try {
+                    val propTypeRaw = try {
                         // A recovered `name: lhs = rhs` member (assignment as the VALUE —
                         // reachabilityChecksNoCrash1's `const: out = []`) displays as `any`
                         // in tsc's object-literal type.
@@ -127121,6 +127512,9 @@ interface DataView {
                     } finally {
                         if (useCtx) contextualType = savedCtx
                     }
+                    // (CHK.91): a FRESH enum-member value widens to its enum unless the
+                    // contextual member type keeps it — tsc's mutable-location rule.
+                    val propType = objLitMutableMemberType(prop, name, propTypeRaw, propCtx)
                     // Duplicate member name: tsc's symbol table keeps ONE entry (the display
                     // shows the FIRST position; the value type updates last-wins).
                     val existing = members[name]

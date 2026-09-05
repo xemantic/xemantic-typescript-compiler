@@ -1,13 +1,31 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **193,576** lines (191,070 when the metric was created; the (P18.9)-(P18.20) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **193,970** lines (191,070 when the metric was created; the (P18.9)-(P18.21) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
 checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.21) — AN OBJECT LITERAL'S ENUM MEMBER WIDENS THE WAY tsc WIDENS IT, FREE OF THE DISCRIMINATED-UNION LOSSES THAT REFUSED IT TWICE, 17,424 → 17,462 / 0 / 3 (2026-09-05).**
+**(CHK.91) LANDED, closing (CHK.85)(a).** The (P18.18) arm was rebuilt ALONE to NAME its 22 grid
+sites (tsbuildPublic returns and a `Map.set`, conditional returns in six services files, two
+union-annotated declarations, one assignment), then landed as three pieces: widen only a FRESH
+enum-member ACCESS (tsc widens no identifier, `const` local, `as` or shorthand — the arm did, two
+false positives it had not reached), tsc's `isConstContext`, and the SOME-rule keep over the push
+context ?: a PULL walking every `getContextualType` root. The ARGUMENT root reads the callee's RAW
+parameter types: `cpaComputeArgCtxTypes` measured +2.9% `typeOfExpr.calls` (overload selection
+typing every argument) and handed back a circular keep for `id({ v: K.A })`. `const w: K.A = o.v`
+reports `Type 'K'`, `o.v = K.B` and `o.kind === K.B` lose their ours-only rows, every
+discriminated-union position is byte-identical to HEAD. 38 pins, six arms (`as const` recorded as
+unobservable); core 15,973/0, corpus 8,837/0, `cost_gate.py` exit 0 (`typeOfExpr.calls` −0.16%),
+grid 8×`added=0 removed=0`. Read-only recon rewrote (CHK.85)(b) (MEANING both ways: six false
+positives after a reassignment, seven lost `k === K.B` / body-local rows; four seams named) and
+(CHK.92) (the optional-parameter display is tsc's `isRelatedTo` nullable strip, wrong here in both
+directions; the `gU(1)` claim was false), and found the primitive mis-assignment probe blind on
+both sides for an enum-member local.
 
 **(P18.20) — AN ENUM MEMBER STOPS RELATING TO A LITERAL IT DOES NOT EQUAL, A LITERAL ARGUMENT STOPS BEING INVISIBLE TO AN ENUM PARAMETER, AND THE (CHK.85) UNBLOCKER IS DESIGNED, 17,394 → 17,424 / 0 / 3 (2026-09-05).**
 An orchestrated round: one implementation subagent owned Gradle; a read-only recon subagent
@@ -128,24 +146,3 @@ reached 149, missing 339. Re-run (PARITY.2)-style by FIXTURE: **485 classes / 5,
 Corpus at-risk 360 families / 1,481 subtests / **0 moved**; externals 290/0; project 848/0;
 `cost_gate.py` exit 0 (`output.errors` 46 unchanged); `huge_methods.py` exit 0; 8-profile grid all
 `added=0 removed=0`.
-
-**(P18.16) — THE ENUM DISPLAY GENERALIZATION LANDS, AND ITS BLINDED PINS BECOME tsc-VERIFIABLE, 17,286 → 17,308 / 0 / 3 predicted (2026-09-04).**
-(PARITY.2) closed. tsc's `getBaseTypeOfEnumLikeType` is wired, so an enum-member source now
-generalizes to its parent enum at every target that cannot hold a top-level singleton, at all
-six emitters plus declaration and assignment — byte-identical to tsgo 7.0.2 AND pristine 6.0.3
-on every shape but two pre-existing ones (a namespace prefix, and an interned member union's
-alias name). **The round is the conversion, and the population had to be re-derived to find
-it**: the queue's grep-derived list said 13 classes, a mechanical run of all 170 core classes
-whose fixtures declare an enum says 14 / 45, and the extra one expects a type ALIAS name that
-no grep for a member rendering can see. Every converted probe moved to a `never` target — the
-one target tsc suppresses the generalization for — which makes 45 (REL.2) narrowing assertions
-verifiable against both references for the first time; three pins REFUSED conversion with their
-reasons (the round-441 `never`-parameter arm discards a non-enum narrow; a `let`'s flow type
-diverges) and two `string`-target twins were re-expected to the generalized enum rather than
-moved. Corpus predicted from an enumeration of all 3,145 active baselines (135 declare an enum,
-2 name a member in an assignability source, both at suppressing targets): 715 at-risk subtests
-run, **0 moved, no `LogicalParityDivergence`**. Five ablation arms (20 / 3 / 73 / 9 / 0 RED),
-the last a measured-redundant guard kept with its reason. Four residues queued: (CHK.84)
-`never` unassignable at a RETURN position and nowhere else, (CHK.85) a mutable object-literal
-property and a `let` not widening an enum member the way tsc does, (CHK.86) no TS2367 for an
-impossible enum-vs-enum equality, (PARITY.3) the lost namespace prefix.

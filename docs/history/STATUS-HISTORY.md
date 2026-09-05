@@ -1,3 +1,24 @@
+**(P18.16) — THE ENUM DISPLAY GENERALIZATION LANDS, AND ITS BLINDED PINS BECOME tsc-VERIFIABLE, 17,286 → 17,308 / 0 / 3 predicted (2026-09-04).**
+(PARITY.2) closed. tsc's `getBaseTypeOfEnumLikeType` is wired, so an enum-member source now
+generalizes to its parent enum at every target that cannot hold a top-level singleton, at all
+six emitters plus declaration and assignment — byte-identical to tsgo 7.0.2 AND pristine 6.0.3
+on every shape but two pre-existing ones (a namespace prefix, and an interned member union's
+alias name). **The round is the conversion, and the population had to be re-derived to find
+it**: the queue's grep-derived list said 13 classes, a mechanical run of all 170 core classes
+whose fixtures declare an enum says 14 / 45, and the extra one expects a type ALIAS name that
+no grep for a member rendering can see. Every converted probe moved to a `never` target — the
+one target tsc suppresses the generalization for — which makes 45 (REL.2) narrowing assertions
+verifiable against both references for the first time; three pins REFUSED conversion with their
+reasons (the round-441 `never`-parameter arm discards a non-enum narrow; a `let`'s flow type
+diverges) and two `string`-target twins were re-expected to the generalized enum rather than
+moved. Corpus predicted from an enumeration of all 3,145 active baselines (135 declare an enum,
+2 name a member in an assignability source, both at suppressing targets): 715 at-risk subtests
+run, **0 moved, no `LogicalParityDivergence`**. Five ablation arms (20 / 3 / 73 / 9 / 0 RED),
+the last a measured-redundant guard kept with its reason. Four residues queued: (CHK.84)
+`never` unassignable at a RETURN position and nowhere else, (CHK.85) a mutable object-literal
+property and a `let` not widening an enum member the way tsc does, (CHK.86) no TS2367 for an
+impossible enum-vs-enum equality, (PARITY.3) the lost namespace prefix.
+
 **(P18.15) — THE LITERAL-UNION COLLAPSE AT EVERY POSITION, AND AN ENUM GENERALIZATION REFUSED, 17,259 → 17,286 / 0 / 3 (2026-09-04).**
 (PARITY.1) closed. The item named three emitters; a trace censused SIX (argument, rest argument,
 return and three object-literal paths, one with no keep-guard at all), all now through one

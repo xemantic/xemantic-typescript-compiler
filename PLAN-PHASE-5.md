@@ -25,6 +25,100 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.21) — an object literal's enum member widens the way tsc widens it, with the freshness gate and the pull-derived keep that make it free of discriminated-union losses (2026-09-05)
+
+**Suite 17,424 → 17,462 / 0 / 3** — exactly the 38 new pins in `ObjLitEnumMemberWideningTest`;
+no baseline moved and no `LogicalParityDivergence` is needed. Orchestrated as (P18.20): one
+implementation subagent owned Gradle and landed (CHK.91); a read-only recon subagent ran
+against the committed `5d5e4319…` snapshot and rewrote (CHK.85)(b) and (CHK.92) from
+measurements (49 + 45 rows, both references agreeing on every one) — those rewrites are in
+the queue, with the facts that contradicted the previous entries listed below.
+
+**(CHK.91) LANDED — (CHK.85)(a) is closed by it.** The (P18.18) arm was BUILT AGAIN, ALONE,
+and the grid it reddens is now NAMED: 22 distinct sites (7 rows on each of the five compiler-
+shaped profiles, 22 on harness/server/services) — `tsbuildPublic.ts` block returns and a
+bare-`if` return under the `UpToDateStatus` annotation plus `state.projectStatus.set(…)`'s
+`Map<K,V>.set`; conditional returns in `importFixes`, `returnValueCorrect`,
+`findAllReferences` (1236, the row the recon predicted), `convertImport`, `signatureHelp`
+and `stringCompletions`; two union-annotated declarations (`signatureHelp.ts:391/428`); one
+union-target assignment (`importFixes.ts:381`). Every emitter is a spine handler, so
+`--passTiming`'s census names only `checkSpine`; the classification is by parent chain. The
+landed shape is the item's three pieces: `objLitMutableMemberType` at the PropertyAssignment
+site ONLY (the reverted arm's SHORTHAND site is a measured mistake — arm a6, 1 RED); the
+FRESHNESS gate `objLitInitIsFreshEnumMemberAccess` (an `Enum.Member` access through parens,
+`?:` branches and `||`/`??` operands widens; a typed identifier, a `const` local, an `as`
+and a shorthand stay — tsc's `getWidenedLiteralType` widens only a FRESH literal, and the
+(P18.18) arm would have added two false positives here); tsc's `isConstContext`; and the
+keep `isEnumLiteralOfContextualType` — the SOME rule over union/intersection constituents, a
+type parameter's constraint, a same-flavour enum member, a whole enum, a number/string
+literal by flavour — over the push `propCtx` ?: the PULL `objLitMemberContextualType`, which
+walks every `getContextualType` root (declaration/property/parameter annotation, an outer
+literal's member across ALL union constituents, spread, array element, conditional,
+assignment with the compound forms, `as`/`satisfies`, `return` through any statement or
+clause up to the enclosing function-like, an arrow's expression body, a call argument),
+depth-capped at 24 and sharing its leaves with (CHK.39)'s pull. **The argument root
+departs from the item's spec, and the measurement is why**: `cpaComputeArgCtxTypes` read
+`typeOfExpr.calls` **+2.89% (+18,622)** on the cost gate — attributed with
+`--typeOfExprCallers` entirely to `signatureAcceptsArgs`/`allArgumentsMatch` under
+`resolveCallOverload`, i.e. overload SELECTION typing every argument of every overloaded
+call — and it was also WRONG for a generic callee: inference typed the asking literal,
+inferred `T = { v: K }`, and handed back a circular KEEP where both references widen
+(`id({ v: K.A })`, fixture c:17). `objLitCtxArgType` reads the callee's RAW parameter types
+instead (rest-aware, every overload unioned, no inference, no selection); a receiver
+instantiation (`Map<K,V>.set` under tsbuildPublic's `State<T>`) arrives already substituted.
+Cost: `typeOfExpr.calls` **−0.16%**.
+
+**Rows (tsgo 7.0.2 = pristine 6.0.3 on every fixture).** Gained, as both references:
+`const w: K.A = o.v` and `return o.v` (`Type 'K' is not assignable to type 'K.A'.`), the
+string-enum twin, the whole-object / generic-inference / destructuring rows, `?:`/`??`/`||`
+widening, a class property initializer. Removed, as both references: the ours-only TS2322
+on `o.v = K.B` and the ours-only TS2367 on `if (o.kind === K.B)`. Byte-identical to HEAD on
+every discriminated-union position — declaration, nested, plain and bare-`if` return,
+returned array, conditional return, arrow body, assignment, argument, `push`, `Map.set` —
+which is the whole point. `ObjLitEnumNarrowTest`'s one pin had recorded
+`probe({ v: K.A }.v)` as a MEASURED DIVERGENCE ("the expectation below is OURS"); it now
+reads the references' `'K'`.
+
+**Pins and ablation.** 38 pins in three rules with negative controls per rule and a
+tsbuildPublic-shaped `State<T>` `Map.set` pin. Six arms: a1 widening off (**11 RED**); a2
+freshness off (**3**); a3 pull off (**12**); a4 `enumComparisonAtoms` instead of the SOME
+rule (**3** — and it did NOT redden `kind?: E.X`, because this checker models an optional
+member as plain `E.X` ((CHK.61)(b)), so an `E.X | undefined` pin carries that arm and the
+optional pin's KDoc says a3 alone discriminates it); a5 the const-context rule (**0 RED** —
+unobservable by construction, `as const` yields `any` on every binary until (CHK.85)(c);
+kept as tsc's rule and pinned as a RECORDED edge, not claimed); a6 the shorthand site
+(**1**). Restored `Checker.class` sha256 `87a04d80…`, byte-identical to the final binary.
+
+**Gates** (all against `87a04d80`): core **842 classes / 15,973 / 0 / 3**; corpus **25
+classes / 8,837 / 0**; full suite 17,462 / 0 / 3 over 962 result files; `cost_gate.py`
+**exit 0** (`output.errors` 46, `spine.nodes` +0.00%, `typeOfExpr.calls` −0.16%,
+`globals.lookups` −0.39%); `huge_methods.py --fail-over 0` **exit 0**; grid BEFORE
+`5d5e4319` / AFTER `87a04d80`, `PARITY1_MARKER=objLitMemberContextualType`: **all eight
+`added=0 removed=0`**. Builds 0 `w:`.
+
+**Recon corrections carried into the queue.** (CHK.85)(b) is MEANING in both directions
+(six ours-only false positives after a reassignment, seven lost true positives — every
+`k === K.B` discriminant and a body-local const at the argument gate), not the form
+divergence the entry recorded; its four seams are named with lines; and the primitive
+mis-assignment probe (P18.20) recommended for it is BLIND ON BOTH SIDES (tsc's
+`reportRelationError` generalizes `K.A` to `K` at a `string` target, and so does ours) — the
+instrument is a same-flavour literal MEMBER target. (CHK.92)(c)'s "`gU(1)` prints
+`'string | undefined'` here" was FALSE (ours prints `'string'`); the real rule is tsc's
+`isRelatedTo` nullable strip, gated on a `DefinitelyNonNullable` source and a non-union
+remainder, wrong here in both directions. (CHK.92)(a)'s "an earlier round's explicit
+choice" has no archive record, and the symptom is a self-contradictory
+`'number' is not assignable to type 'number'`. And (CHK.83)'s string-literal arm keeps
+`'"z"'` against a NUMERIC enum where both references print `'string'` — tsc's keep is per
+flavour — folded into (CHK.92)(a).
+
+**Residues (pre-existing unless noted).** `Map.set(…)` prints the parameter `'V'` where both
+references print `'Status'`; `bx.set("p", {…})` on a hand-written `Box<V>`, `arr.push(…)` and
+`m.set` outside the `State<T>` shape are silent (argument-emitter reach); `nums.map(() =>
+({ v: K.A }))[0].v` and `tp<T extends { v: K.A }>({ v: K.A })` are inference-side; `NewExpression`
+arguments and JSX attributes are not pull roots (no profile row); a mixed conditional
+(`cond ? K.A : sk`) widens both halves where tsc widens only the fresh one. Trim-on-write:
+the (P18.10) note moved to `docs/history/PLAN-PHASE-5-HISTORY.md`.
+
 ### Round (P18.20) — an enum member stops relating to a literal it does not equal, a literal argument stops being invisible to an enum parameter, and the (CHK.85) unblocker is designed rather than guessed (2026-09-05)
 
 **Suite 17,394 → 17,424 / 0 / 3** — exactly the 30 new pins in
@@ -924,84 +1018,6 @@ to know the other modules' declarations, queued as (EXT.24). Externals 261 → 2
 (CLAUDE.md's nested-comment entry, hit live), and Gradle treats `environment()` as a NON-input, so
 every env-driven probe run needs `--rerun` or it silently reuses the previous capture.
 
-### Round (P18.10) — the CI half of the Kotlin/JS gate, the README repositioning lands, and the externals package scheme is measured rather than proposed (2026-09-03)
-
-**Three owner decisions were answered this session** — (EXT.17)'s CI half approved, (DOC.2)
-approved, and (EXT.21)'s package scheme DELEGATED ("I wish to follow your best
-recommendation here").
-
-**(EXT.17) LANDED — the Kotlin/JS stdlib klib is DECLARED, not located, and the gate can no
-longer go quietly green.** A `dependencyScope` + `resolvable` configuration pair declares
-`org.jetbrains.kotlin:kotlin-stdlib-js:<catalog kotlin>@klib` and passes its single file to
-`jvmTest` as `XTSC_KOTLIN_STDLIB_JS`. **Artifact-only notation deliberately**: it bypasses
-variant-aware resolution, so the configuration needs no Kotlin/JS platform attributes and
-cannot be handed a JVM or Native variant. Nothing enters any published artifact; the build
-stays warning-clean under `--warning-mode all`. **The ablation exposed a second defect,
-fixed in the same commit**: with the environment variable pointed at a non-existent path
-the whole gate read **28 tests, 0 failures** having compiled NOTHING — loud on stdout,
-green in JUnit, so no CI arm could tell a compiled gate from a skipped one. `JsStdlib.locate`
-now splits the cases by WHO the absence is a statement about — an UNSET variable is a fact
-about the BOX (a developer outside Gradle) and still skips loudly; a variable that is SET and
-names nothing is a fact about the BUILD, which cannot be true on a correct one, and `check`s.
-Ablated: 28/0 green before, **27 of 28 RED** after. CLAUDE.md gotcha added.
-
-**(DOC.2) LANDED — the approved commit cherry-picked onto main unchanged**, so the audit
-trail separates what the owner signed off from what this session then refreshed. The branch
-was 95 commits behind main and its facts predated the whole (EXT.11…23) arc, so a SECOND
-commit refreshed only what measurement changed: the ladder table (mitt / smol-toml / RxJS 250
-files / `typescript.d.ts` / `@types/node`, all at 0 Kotlin errors) with the `@types/node`
-flattening named as the open limit; the suite count 15,528 → 17,169; and the stale "the
-language service is not incremental — every semantic query is a full rebuild" bullet, replaced
-by the (LSP.3) measurement (93-217 ms narrowed here against tsgo's 12-18 ms, said in their
-favour). Positioning prose untouched.
-
-**(EXT.21a) LANDED — and the queued proposal was REFUTED on its central rule.** The item asked
-for a package-naming scheme; `KotlinPackageNameCompileTest` asked the metadata compiler AND
-`K2JSCompiler` instead of guessing, and they agree on every row: **a backtick rescues a
-hyphenated segment, a hard keyword and a digit-first one, and rescues NOTHING else** — `.`,
-`~`, `@`, `:` and `/` are `Name contains illegal characters` inside one. So "any segment that
-is not a Kotlin identifier backticked" produces a file no compiler accepts. Landed instead:
-`/`, `:` and `.` are SEPARATORS, npm's leading `@` is DROPPED, a keyword/digit-first/hyphenated
-segment is BACKTICKED, and any other character is REFUSED loudly — no `package` line plus a
-marker naming it, which degrades to the pre-(EXT.21) root-package behaviour rather than to a
-broken file. `ModuleWiring.packageRoot` prefixes a multi-module package (`node.fs`, the
-kotlin-wrappers convention) without hard-coding one ecosystem, and the case of a specifier is
-PRESERVED (lowercasing would collapse two specifiers onto one package for a convention that
-costs nothing to honour and everything to enforce).
-
-**The load-bearing measurement is the second one**: every accepted package name is also
-spellable in a QUALIFIED reference, backticked segments included. That is what makes a
-cross-package reference (`node.net.Socket` named from the `dgram` generation) expressible, and
-so what makes (EXT.21b) viable at all — without it the per-module design would have had no way
-to name another module's declarations.
-
-9 measurement rows + 10 end-to-end pins through the generator (including the refusal, whose
-first assertion was VACUOUS — the refusal marker's own text contains the word "package", so a
-substring test passes against a renderer that emitted both; it is a line-start test now).
-27 wiring pins re-pinned for the added line. Externals 242 → **261/0**; suite 17,150 →
-**17,169 / 0 / 3**, exactly the 19 added.
-
-**The ablation, three single-mistake arms, each restored against its own snapshot.** a1
-(never backtick a segment) — **3 RED**, and the third is the receipt that the rule is not a
-unit-test artefact: `smol-toml's real output compiles as Kotlin JS` goes red, i.e. that
-library's actual generation would emit `package smol-toml` and `K2JSCompiler` would refuse it.
-a2 (keep npm's leading `@`) — **1 RED**, the scope pin. a3 (escape an illegal character
-instead of refusing) — **1 RED**, the refusal pin. Distinct red sets, so no pin is standing in
-for another. Restored and REBUILT before the green re-run (the class dir holds the last arm's
-binary until then, (CHK.54)'s trap): 261/0.
-
-**(EXT.21b) queued** — per-module selection and cross-module qualified spelling, which needs
-no further owner decision. Split from (EXT.21a) because it touches the generator's most
-delicate path (reference spelling under identity evidence and first-wins naming);
-`Site.moduleSpecifier` already exists and is the hook.
-
-**One protocol failure, recorded.** The session's first full-suite run was launched as
-`nohup ./gradlew … &` INSIDE a `run_in_background` call — the double-detach CLAUDE.md
-explicitly forbids. The tool reported exit 0 for the backgrounding rather than the build, and
-the partial result (50 tests, core absent) read as a plausible suite. Caught before anything
-was recorded; the later runs were launched bare. The existing gotcha is correct and was simply
-not followed.
-
 - [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
   HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
   LATTER.** The source headers are the licence; the docs drifted. Sweep README.md and docs/
@@ -1732,7 +1748,14 @@ not followed.
   accepted relation does not early-return. One line, mirroring `isSimpleTypeRelatedTo`'s
   own "Never source is assignable to everything".
 
-- [ ] **(CHK.91) THE (CHK.85)(a) UNBLOCKER, DESIGNED 2026-09-05 BY READ-ONLY RECON AGAINST
+- [x] **(CHK.91) LANDED 2026-09-05 ((P18.21) note) — `objLitMutableMemberType` at the PropertyAssignment
+  site only, the freshness gate `objLitInitIsFreshEnumMemberAccess`, tsc's `isConstContext`, and the SOME-rule keep
+  `isEnumLiteralOfContextualType` over push `propCtx` ?: the pull `objLitMemberContextualType` (every
+  `getContextualType` root); the arm-alone grid named 22 sites and the pull closes all 22 (grid 8×`added=0
+  removed=0`). The ARGUMENT root reads the callee's RAW parameter types, NOT `cpaComputeArgCtxTypes` — measured
+  +2.9% `typeOfExpr.calls` (overload selection) and a circular keep for `id({ v: K.A })`. 38 pins, six arms (a5
+  `as const` unobservable, recorded); core 15,973/0, corpus 8,837/0, cost_gate exit 0. (CHK.85)(a) CLOSED by
+  this; (b)/(c) stay. ORIGINAL ITEM: THE (CHK.85)(a) UNBLOCKER, DESIGNED 2026-09-05 BY READ-ONLY RECON AGAINST
   BOTH REFERENCES — a PULL-derived contextual KEEP for the object-literal enum-member
   widening, plus the FRESHNESS gate the built (P18.18) arm lacked.** The arm
   (`objLitMutableMemberType`, one 34-line function + two call sites at
@@ -1790,7 +1813,58 @@ not followed.
   — grade (CHK.85)(b) with a primitive mis-assignment. Fixtures: the recon's scratch set is
   reproduced in the (P18.20) note.
 
-- [ ] **(CHK.85) STOPPED A SECOND TIME 2026-09-05 ((P18.18) note), NOW WITH THE BLAST
+- [ ] **(CHK.85)(b) REWRITTEN 2026-09-05 BY READ-ONLY RECON (`scratchpad/chk85b`, 49 rows,
+  both references agree on all; Checker.kt lines are commit 7685baf8) — A `let`/`const` LOCAL
+  INITIALIZED FROM AN ENUM MEMBER IS READ WRONGLY AT FOUR READERS, IN BOTH DIRECTIONS: MEANING,
+  not the "widened declared `K`" form divergence the entry below records.** `let k = K.A` reads
+  `K` everywhere here where both references read the FLOW type: `const w: K.B = k` / `takeB(k)`
+  / `return k` print `'K'` for `'K.A'` (form), and after `k = K.B` the same three are ours-only
+  FALSE POSITIVES (w3/a3/r3/sw2/an2, 6 rows); `if (k === K.B)` is a lost TS2367 for `const`
+  AND `let` (d1/d2/bd1/bd2/an4); a BODY-LOCAL `const k = K.A` is `any` at the argument gate
+  and the `never` arm (ba1/bv1 silent — 7 lost true positives). Mechanism: (i)
+  `narrowByAssignmentRhs` (~120857) has no enum-member RHS arm and every reducing arm needs
+  `declaredType is Type.Union` (`narrowUnionByRhsAssignment` ~122174 returns `declared` for a
+  non-union, and our enum `K` is an atomic `Type.Object`); (ii) `isNarrowableTarget` (~119592:
+  Intrinsic / string-number-bigint literal / never) refuses an `EnumLiteral` target so the
+  var-decl reader never asks; (iii) the const SYMBOL half (`getTypeOfVariableOrProperty`
+  ~116472-116490) widens an enum-member initializer through `inferTypeFromInitializer` →
+  `widenType` → `enumTypeOfMemberType` where the LOCAL half (`cvdaRecordInferredLocalType`
+  ~105781-105845, R783) keeps it — which is what the argument gate, the never arm and the
+  TS2367 pass read for a file-level const; (iv) `spineArithRecordVarDecl` (~62429) records only
+  `literalTypeOfExpression` results, so the cta/ccet frame never holds an enum-initialized
+  body local (B83.5 → `any`). Seam, four edits and no new pass: S1 an `enumMemberRhsType` arm
+  first in `narrowByAssignmentRhs` — the RHS is a `PropertyAccessExpression` whose receiver
+  resolves by SYMBOL LOOKUP (file locals / lexical / globals, NEVER `getTypeOfExpression`:
+  (CHK.62)'s law, this helper runs at every `FlowAssignment` visit) to an enum owning that
+  member, reducing an enum / enum-carrying-union declared type to the member (tsc's
+  `getAssignmentReducedType` checker.ts:28118 over the enum-as-union), and answering the
+  ANTECEDENT — never `never` — for a member outside the declared enum; S2 admit
+  `EnumLiteral`/`Enum` in `isNarrowableTarget` (its three sites: var-decl ~105419, return
+  ~108360, assignment ~109431; the argument gate's M34 arm ~161612 already substitutes a
+  narrowed result that relates); S3 the R783 keep in the symbol half (`varDeclIsImmutableBinding`
+  → keep an `EnumLiteral`-flagged initializer type; the local half already registers the
+  interned id in `widen1ImmutableLiteralTypeIds` ~105816, so the assignment-target widen-back
+  is unchanged); S4 record `if (isConst) member else enumTypeOfMemberType(member)` in
+  `spineArithRecordVarDecl`, plus ONE flow read for an Identifier operand at the
+  (CHK.86)/(CHK.88) emitter (~165973/165993) — a new `narrow.walks` move to justify in
+  `cost_gate.py`. Guards measured: a nested FUNCTION DECLARATION resets to `K` (n1w/n2w —
+  checker.ts:31181-31191 excludes it from the flow-container loop) while an ARROW keeps `K.A`
+  (n4w); silent after reassignment stays silent (d3/bd3); the loop join stays form-only
+  (`'K'` for tsc's `'K.A | K.B'`, (CHK.69)); S2's var-decl branch substitutes UNCONDITIONALLY
+  (not suppression-only), so a wrong narrow is a false positive; S3 changes a file-level
+  const's type PROGRAM-WIDE (every consumer, including `o.kind === X` discriminants) — grid
+  all 8 profiles. **GRADE WITH `const w: K.B = k` / `takeB(k)` / `nv(k)` / `k === K.B`** — the
+  primitive mis-assignment probe (P18.20) recommended is BLIND ON BOTH SIDES (`const p:
+  string = k` prints `Type 'K'` in tsc's `reportRelationError` generalization AND in ours),
+  so CLAUDE.md's "a narrowing probe must target a PRIMITIVE" needs the enum refinement: a
+  same-flavour literal MEMBER target. Interacts with (CHK.92)(d): d15 `const k = Cmp.X; k === 5`
+  prints `'Cmp'` here through the symbol half and `'Cmp.X'` in both references.
+
+- [ ] **(CHK.85) (a) CLOSED 2026-09-05 BY (CHK.91) ((P18.21) note) — `const w: K.A = o.v` and `return o.v`
+  report `Type 'K'`, `o.v = K.B` is legal, and the discriminated-union selections survive; what remains is
+  (b) (the rewritten sub-item above) and (c) `as const` (a FEATURE: `({ v: "a" } as const).v` and `[1, 2] as
+  const` are equally unmodelled, and (CHK.91)'s const-context keep is unobservable until it lands). PREVIOUS
+  STATE: STOPPED A SECOND TIME 2026-09-05 ((P18.18) note), NOW WITH THE BLAST
   RADIUS THE ENTRY ASKED FOR — (a) WAS BUILT AND COSTS MEANING: +7 rows on every profile
   and +22 on harness, ALL of them DISCRIMINATED-UNION SELECTION losses** (`UpToDateStatus`
   in tsbuildPublic.ts, `Invocation` in signatureHelp.ts, `SymbolAndEntries` in
@@ -1973,23 +2047,54 @@ not followed.
   `UnionOrIntersection` and an `Instantiable`'s constraint — widening it is corpus-gated because
   that allowlist is what protects two baselines.
 
-- [ ] **(CHK.92) THE (CHK.83) DISPLAY RESIDUES, MEASURED 2026-09-05 ((P18.20) note), ALL
-  PRE-EXISTING AND ALL AGREED BY BOTH REFERENCES.** (a) An object-literal member TARGET
-  display is deliberately widened at `emitPerPropertyMismatchesForObjectLiteral` (`{ p: 5 }`
-  prints `'number'`, `{ p: "x" }` prints `'string'`; both references print the literal) — an
-  earlier round's explicit choice, so grep the archive for that walker before changing it,
-  and its at-risk population is every baseline with a per-property TS2322. (b) `fx({ e: 3 })`
-  — the ARGUMENT-position object literal (`caasObjLitPerPropertyMismatch`) is silent where
-  the declaration twin now reports `Type '3' is not assignable to type 'E'.` at the key. (c)
-  An OPTIONAL parameter `e?: E` prints `'E'` where both references print `'E | undefined'`:
-  tsc's `isRelatedTo` strips nullables from a target only when exactly ONE non-nullable
-  constituent remains, and an enum is a union of its members, so it never strips there; our
-  optional parameter carries no `| undefined` at all. Same family as `gU(1)` (`s?: string`)
-  printing `'string | undefined'` where tsc prints `'string'` — the two are ONE rule and must
-  land together. (d) A SINGLE-member enum's member prints `Cmp.X`/`CE.M` where both references
-  print `Cmp`/`CE` (tsc: the parent's declared type IS the member type when there is one
-  member — `getDeclaredTypeOfEnum`). FORM for (a)/(c)/(d) and one missing row for (b); the
-  corpus is the gate for all four.
+- [ ] **(CHK.92) THE (CHK.83) DISPLAY/ARGUMENT RESIDUES — MEASURED 2026-09-05 by read-only
+  recon (`scratchpad/chk92`, 45 rows; tsgo 7.0.2 and pristine 6.0.3 agree on every row;
+  Checker.kt lines are commit 7685baf8).** (a) FORM. `emitPerPropertyMismatchesForObjectLiteral`
+  (~168702) and `caasObjLitPerPropertyMismatch` (~162327) print `'number' is not assignable to
+  type 'number'` for `{ p: 6 }` against `p: 5` — the SOURCE is the widened member type
+  ((WIDEN.1): no fresh literal in `getTypeOfObjectLiteral`) and the TARGET is
+  `getWidenedLiteralType`'d; tsc widens NEITHER (`reportRelationError` checker.ts:22628
+  generalizes the source only when `!typeCouldHaveTopLevelSingletonTypes(target)`, and a
+  literal target could). No archive entry records the widening as a decision (blame lands on
+  the 2026-08-02 JIT split, a move), so the (P18.20) note's "an earlier round's explicit
+  choice" is unsupported. Seam: `typeToString(targetPropType)` at both sites +
+  `relationErrorSourceDisplayType(literalTypeOfExpression(value) ?: sourcePropType, target)`
+  for the source; guard set = 21 ACTIVE literal-target baselines (`scratchpad/pop_a.txt`), all
+  green today. Fold in the (CHK.83) form divergence found beside it: the string-literal arm
+  keeps `'"z"'` against a NUMERIC enum target where both references print `'string'` (rows
+  a8/b5/c14/c22) — tsc's keep is per FLAVOUR (`isLiteralOfContextualType` 41459+), so the
+  literal survives only against a string enum. (b) MEANING (missing row). `fx({ e: 3 })`,
+  `fx({ e: "s" })` and `fx({ p: "z" })` against a string enum are all silent at an ARGUMENT:
+  `caasObjLitPerPropertyMismatch` lacks the `enumTargetLiteralSource` leg the declaration twin
+  has (~168558) and its `bothSimple` gate (~162302) refuses an enum target outright. Seam:
+  admit enum-flavoured targets there + the literal-source leg; corpus + grid gate it. (c)
+  FORM, ONE rule at three sites, wrong here in BOTH directions. tsc's `isRelatedTo`
+  (checker.ts:22802-22812) rewrites a 2-3 member target union with ONE non-nullable remainder
+  to that remainder ONLY for a `DefinitelyNonNullable` source (types.ts:6391 — not a union /
+  type parameter / `unknown` / `null`) and never when the remainder is itself a union
+  (`boolean`, a ≥2-member enum). Ours prints the bare optional-parameter type ALWAYS (the
+  Parameter arm ~116507 adds no `| undefined`; head display ~161940/161988) — right for
+  `gU(1)` against `s?: string` (the (P18.20) note's "prints `'string | undefined'`" is FALSE —
+  ours prints `'string'`), wrong for `e?: E` / `b?: boolean` / a union, type-parameter,
+  `unknown` or `null` SOURCE (rows c1/c5/c9/c10/c16/c20/c23/c25 → references print
+  `'… | undefined'`) — and prints an EXPLICIT `string | undefined` / `| null` in full where
+  tsc strips it (c11-c13/c18/c19/c24). The property twin (`widenOptionalTargetPropType`
+  ~169838) has the source-nullish half but not the union-remainder refusal (c22 `e?: E`
+  prints `'E'` for `'E | undefined'`). Seam: a display-only `nullableTargetDisplay(target,
+  source, isOptionalParam)` at the TS2345 head, the var-decl TS2322 head and the optional-
+  property display, `null` then `undefined` last; negatives pinned by 14 ACTIVE baselines
+  (`optionalParamTypeComparison`, `intersectionsAndOptionalProperties`,
+  `elaboratedErrorsOnNullableTargets01`, … `scratchpad/pop_c.txt`); the positive side is
+  invisible to the corpus by construction. (d) FORM with one exception. A one-member enum's
+  declared type IS its member's regular type (`getDeclaredTypeOfEnum` checker.ts:13544 +
+  `getUnionType`'s single-type return ~18313), so relation errors print `Cmp` where ours prints
+  `Cmp.X` (d2/d6/d9/d11/d13/d14, incl. a parameter annotated `x: Cmp.X`) — but the TS2367
+  operand display keeps the FRESH `Cmp.X` for a direct member access or a `const` bound to one
+  (d10/d15; ours is right on d10 and wrong on d15 through (CHK.85)(b)'s symbol half). Seam: the
+  EnumMember arm of `typeToString` (~132756) prints the parent for a one-member enum
+  (precedent: `enumMemberWeakSource` ~118886, which is why `nestedExcessPropertyChecking`
+  prints `Type 'E'` today), with a syntactic freshness override at the (CHK.86)/(CHK.88)
+  emitter (~165973/165993). Population 26 baselines / 4 ACTIVE, 0 member-form lines anywhere.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to
