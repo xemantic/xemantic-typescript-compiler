@@ -25,6 +25,84 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.33) — an exported destructuring IS an export ((CHK.99)), and FOUR of the item's six sites were wrong (2026-09-06)
+
+**Suite 17,981 → 18,021 / 0 / 3** — 40 pins across three files with three different harnesses; no
+baseline moved and no `LogicalParityDivergence` is needed. Same orchestration: an implementation
+subagent owned Gradle; the full suite, `cost_gate.py`, `huge_methods.py` and an independent
+8-profile grid ran here.
+
+**(CHK.99) LANDED.** `bindingPatternNames(name): List<String>` (new `BindingPatternNames.kt`) is the
+checker-side mirror of `Binder.bindVariableDeclarationName` (Binder.kt:398-419), i.e. tsc's
+binder.ts:3648 / :887-888 rule that **every leaf of an exported pattern is an export**. An
+`Identifier` answers itself, so it is a DROP-IN for the `as? Identifier` it replaces — which is
+what makes the change provably inert on code with no exported pattern. The item's own fixture goes
+**26 rows → 16** against 17 in both references: all ten false TS2305 and the false TS2339 on
+`typeof NS` are gone, and the barrel import GAINED a true TS2345 it had been losing. A 14-shape
+fixture goes 24 → 10.
+
+**FOUR OF THE ITEM'S SIX SITES WERE WRONG — the fifth round running in which the recon is refuted,
+and the sharpest instance yet.**
+- **The `typeof NS` site is not where the item says.** The named line is `spineExSetup`'s
+  expando-candidate set; the real site is `isNameExportedFromNamespace`'s tail loop, gated behind
+  `nsSym.exports?.get(propName)` — **a site the item did not name at all.**
+- **The `nsImportTargets` site is irrelevant**: it is `checkDeclarationEmitMappedUniqueSymbolKey`, a
+  TS4118 decl-emit walker gated on `options.declaration` and needing a `CallExpression` initializer.
+- **The `varDecls` site MUST NOT be changed, and that was PROVEN rather than argued.** Its one
+  consumer reads `d.type`, so registering leaves there types `shared` of
+  `export const { shared }: { shared: never[] } = x` as `{ shared: never[]; }` where both
+  references print `never[]`. It is also **inert on every non-collision fixture** (the path fires
+  only on round 473's same-name-across-modules shape), so the first guard pin written for it was
+  GREEN against the mistake and had to be rewritten with the collision — a blind pin caught before
+  it was recorded. Arm a9 is that mistake, and it reddens exactly one pin.
+- **The item's "`import * as A; A.p` typed `any`" is not this defect at all**: `A.plain` from a
+  plain `export const plain = 1` is equally `any` on the parent binary. It is a general
+  namespace-import member-typing gap, so a pin on it could not discriminate this fix — recorded,
+  not fixed, and **do not use a namespace-import member as a (CHK.99) pin.**
+Two smaller corrections: the item's "`rest` is lost" is STALE (object rest already reported
+correctly on the parent — closed by (CHK.96)/(CHK.98)), and the `export*BindingPattern` corpus
+subtests ARE active but are JS-EMIT subtests, so the item's conclusion still holds.
+
+**TWO LOST DIAGNOSTICS CLOSED THAT THE ITEM DID NOT MENTION** — **TS2308** (two `export *` barrels
+over a same-named pattern leaf; verified here against both references directly) and **TS2484** (a
+namespace-scoped pattern leaf in the export-conflict rule). Both are gains only a POSITIVE pin can
+see, and each is discriminated by exactly one arm.
+
+**THE HARNESS IS THE POINT, AND THE ITEM WAS RIGHT ABOUT THAT.** Population is **0 on all eight
+profiles** — re-derived here rather than inherited (`grep -rhoE '^\s*export (const|let|var) *[\[{]'`
+reads 0 on every one) — and the class is structurally invisible to the corpus, the (CHK.29)/(CFG.1)
+axis. So the 40 pins are split by what each half can actually observe: **11** against a direct
+`Parser` (the helper itself), **12** through `diagnose()` (the namespace half IS single-file
+reproducible), and **17** in the `-project` module through `ProjectCompiler` + a `Vfs` (the
+cross-file half, which a `diagnose()` pin cannot express). **Every positive pin is a VALUE pin** —
+import, then mis-assign, and name the resulting TS2322 type — so a deleted emitter cannot satisfy
+one.
+
+**GATES.** Suite **18,021 / 0 / 3**, corpus **8,837 / 0**, `-project` 848 → **865 / 0**.
+`cost_gate.py` **exit 0 at `+0.00%` on EVERY counter**, `output.errors` 46 → 46 —
+which is the arithmetic statement that the helper is a drop-in. `huge_methods.py --fail-over 0`
+**exit 0**. **Grid 8 × `added=0 removed=0`**, and it is a CONTROL by a population count taken
+independently, not by the green.
+
+**ARMS — 9, every one discriminating.** a1 `getModuleNamedExports` Identifier-only **11 RED** (all
+cross-file); a2 `collectExportedNamesInBody` 1 (the TS2484 gain); a3 `collectFileDirectExportedNames`
+1 (the TS2308 gain); a4 `isNameExportedFromNamespace` 5 (all `typeof NS`); a5 the whole fix off
+**28**; a6 collect `propertyName` instead of the bound local 14; a7 stop at the first nesting level
+5; a8 array patterns bind nothing 8; a9 the item's rejected sixth site 1. **Eight negative/plain
+controls are recorded as NON-discriminating rather than counted**, and one is named as a genuine
+REDUNDANT guard (the renamed-member namespace control cannot fail under a6, because
+`isNameExportedFromNamespace` filters on `nsSym.exports` first — its `-project` twin is what
+discriminates a6). **And the a3 anchor caught a real trap**: a leading-whitespace anchor is a
+SUBSTRING of a deeper-indented identical line, so the first a3 patch matched two sites and the
+anchor-count check refused it. No double emission (`--passTiming` reads one netting pass per family;
+the TS2308 and TS2484 owners are disjoint dedicated walkers).
+
+**RESIDUES**, all pre-existing and none introduced: our TS2484 anchors the EXPORTED name where tsc
+anchors the LOCAL one (a FORM divergence, verified pre-existing on the parent for the plain
+`export const` shape — the pin names the code and message, not the span); an ours-only TS2484 under
+TS2395 for a merged namespace pair, also pre-existing; `import * as A; A.p` still `any`; and
+`export const { [key]: computed }` still types its leaf `any`, a (CHK.96) computed-key refusal.
+
 ### Round (P18.32) — a WEAK guard target narrows ((CHK.98b), whose diagnosis was wrong), and (CHK.98)(b)'s union gate LIFTS (2026-09-06)
 
 **Suite 17,963 → 17,981 / 0 / 3** — 13 pins in the new `PositiveGuardWeakTargetNarrowingTest` and 5
@@ -3090,7 +3168,26 @@ prediction: 17,343 / 0 / 3.**
   short-circuited chain). The other remaining knip false positive behind (CHK.98)(b)'s union
   gate.
 
-- [ ] **(CHK.99) A DESTRUCTURED `export const/let/var { … } = …` / `[ … ] = …` IS NOT AN EXPORT TO
+- [x] **(CHK.99) CLOSED 2026-09-06 ((P18.33) note) — `bindingPatternNames` (new `BindingPatternNames.kt`),
+  the checker-side mirror of `Binder.bindVariableDeclarationName`; an `Identifier` answers itself, so it is
+  a DROP-IN and the change is provably inert on code with no exported pattern (`cost_gate.py` +0.00% on
+  every counter). **FOUR of the item's SIX sites were wrong**: the `typeof NS` line named is
+  `spineExSetup`'s expando set (the real site, `isNameExportedFromNamespace`'s tail loop, the item does not
+  name at all); the `nsImportTargets` site is a TS4118 decl-emit walker and irrelevant; **`varDecls` MUST
+  NOT be changed** (its consumer reads `d.type`, so a registered leaf mistypes an ANNOTATED exported
+  pattern — proven by arm a9, and inert on every non-collision fixture, so the first guard pin was blind
+  and had to spell the collision out); and "`import * as A; A.p` is `any`" is a general namespace-import
+  gap, equally true of a plain `export const`, so it cannot discriminate this fix. Also **TWO lost
+  diagnostics closed that the item did not mention** — TS2308 (two `export *` barrels over a same-named
+  leaf) and TS2484 (a namespace-scoped leaf in the export-conflict rule). 40 pins across THREE harnesses
+  (11 direct `Parser`, 12 `diagnose()`, 17 `-project` through `ProjectCompiler` + a `Vfs` — the cross-file
+  half is not expressible in `diagnose()`), every positive one a VALUE pin; 9 arms all discriminating,
+  8 controls recorded as non-discriminating and one named a genuine redundant guard. Suite 18,021/0/3,
+  corpus 8,837/0, `-project` 865/0, grid 8×0/0 — a CONTROL by an independently re-derived population count
+  of 0 exported-destructuring sites on all eight profiles, not by the green. RESIDUES, all pre-existing:
+  our TS2484 anchors the EXPORTED name where tsc anchors the LOCAL one (FORM); an ours-only TS2484 under
+  TS2395 for a merged namespace pair; `import * as A; A.p` still `any`; `export const { [key]: c }` still
+  types its leaf `any` (a (CHK.96) computed-key refusal). ORIGINAL: A DESTRUCTURED `export const/let/var { … } = …` / `[ … ] = …` IS NOT AN EXPORT TO
   ANY AST-DERIVED EXPORT SET — MEASURED 2026-09-06 by read-only recon against `52f386e8`
   (`scratchpad/chk99/r1`: 10 false TS2305 on every named import of a pattern name, through
   `export *` barrels too, a false TS2339 on `typeof NS` for a namespace-scoped pattern export,

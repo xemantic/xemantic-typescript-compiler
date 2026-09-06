@@ -1911,3 +1911,25 @@ round-927 pairs recorded; core 16,303/0, corpus 8,837/0, `cost_gate.py` rebaseli
 types a callback's parameters for the assignability reader and hover — CLAUDE.md's (CHK.30) entry was
 STALE and is corrected — and the residue is the ccet ARGUMENT reader plus three property-access sources,
 queued as (CHK.98) with two narrowing gaps (98b/98c) behind its union gate.
+
+**(P18.28) — AN OBJECT REST, ITERABLES, CONTEXTUAL PATTERN PARAMETERS AND THE DISCRIMINANT CARRY (STAGE 2 OF (CHK.96), THE ITEM CLOSED), AND THE THREE DEFECTS THE GATES FOUND, 17,792 → 17,874 / 0 / 3 (2026-09-06).**
+**(CHK.96) stage 2 LANDED, and the round INHERITED an interrupted session's tree** — the
+implementation was written and compiled with the gates unrun and one pin red, so the round's own
+work is the gating and the three defects it turned up. An object REST reads tsc's `getRestType`
+(members copied MUTABLE, `private`/`protected`/`#private` dropped always and methods/accessors
+only under a CLASS, a generic source refusing); `[Symbol.iterator]` sources read through tsc's
+fast and slow legs, which needed the instantiator to rebuild a TUPLE **as** a tuple — without it
+`Map<K, V>`'s `MapIterator<[K, V]>` had no readable slots, silently; contextual pattern
+parameters reach six readers; the pattern's implied contextual type widens every array-literal
+element; and the destructured-discriminant carry implements `getNarrowedTypeOfSymbol` INVERTED
+(each sibling's narrowed type filters the parent's constituents, since this checker narrows by
+path strings). **The three defects: a blind pin** whose `none { "=>" }` guard contradicted its own
+expected message (the compiler was right); **a corpus double-emission** — `destructuringUnspreadableIntoRest`
+50 → 72 rows, `--passTiming` naming `checkObjectRestUnspreadableAccess` 44 against `checkSpine`
+22, deduped in the walker because it runs SECOND (ablated: 1 of 82 pins RED); and **a grid
+regression**, one ours-only TS2322 on the three profiles carrying `services.ts:3264`, where a
+CONDITIONAL of array literals gets no implied contextual tuple — both reconstructions measured
+wrong (the second needs flow-narrowed branch elements, which `getTypeOfExpression` never gives),
+so the shape now refuses, as HEAD does, and is queued as (CHK.107). Corpus 8,837/0, core
+16,385/0, `cost_gate.py` exit 0 with no rebaseline (`typeOfExpr.calls` +0.89%), `huge_methods.py`
+exit 0, grid 8×`added=0 removed=0`.

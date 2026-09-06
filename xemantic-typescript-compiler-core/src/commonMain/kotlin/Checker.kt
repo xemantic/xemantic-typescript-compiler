@@ -46292,10 +46292,8 @@ class Checker(
             when (s) {
                 is VariableStatement -> {
                     if (ModifierFlag.Export in s.modifiers) {
-                        for (decl in s.declarationList.declarations) {
-                            val n = decl.name
-                            if (n is Identifier) out.add(n.text)
-                        }
+                        // (CHK.99) binding-pattern leaves included.
+                        for (decl in s.declarationList.declarations) out.addAll(bindingPatternNames(decl.name))
                     }
                 }
                 is FunctionDeclaration -> if (ModifierFlag.Export in s.modifiers && s.name != null) out.add(s.name.text)
@@ -46324,7 +46322,8 @@ class Checker(
         for (s in stmts) {
             when (s) {
                 is VariableStatement -> if (ModifierFlag.Export in s.modifiers) {
-                    for (decl in s.declarationList.declarations) (decl.name as? Identifier)?.let { out.add(it.text) }
+                    // (CHK.99) binding-pattern leaves included.
+                    for (decl in s.declarationList.declarations) out.addAll(bindingPatternNames(decl.name))
                 }
                 is FunctionDeclaration -> if (ModifierFlag.Export in s.modifiers && ModifierFlag.Default !in s.modifiers && s.name != null) out.add(s.name.text)
                 is ClassDeclaration -> if (ModifierFlag.Export in s.modifiers && ModifierFlag.Default !in s.modifiers && s.name != null) out.add(s.name.text)
@@ -56504,8 +56503,9 @@ class Checker(
                 is VariableStatement -> {
                     if (ModifierFlag.Export in stmt.modifiers) {
                         for (decl in stmt.declarationList.declarations) {
-                            val name = decl.name
-                            if (name is Identifier) exports.add(name.text)
+                            // (CHK.99) every leaf a binding pattern BINDS is an export, exactly
+                            // as the binder declares them — an `Identifier` answers itself.
+                            exports.addAll(bindingPatternNames(decl.name))
                         }
                     }
                 }
@@ -156781,7 +156781,9 @@ interface DataView {
                 if (stmt !is VariableStatement) continue
                 if (ModifierFlag.Export !in stmt.modifiers) continue
                 for (d in stmt.declarationList.declarations) {
-                    if (d.name is Identifier && (d.name).text == propName) return true
+                    // (CHK.99) a destructured `export const { p } = o` in a namespace body
+                    // exports every leaf; before this the loop saw only Identifier names.
+                    if (propName in bindingPatternNames(d.name)) return true
                 }
             }
         }

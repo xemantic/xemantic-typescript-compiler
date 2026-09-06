@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **197,347** lines (191,070 when the metric was created; the (P18.9)-(P18.32) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **197,349** lines (191,070 when the metric was created; the (P18.9)-(P18.33) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,27 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.33) — AN EXPORTED DESTRUCTURING IS AN EXPORT ((CHK.99)), AND FOUR OF THE ITEM'S SIX SITES WERE WRONG, 17,981 → 18,021 / 0 / 3 (2026-09-06).**
+**(CHK.99) CLOSED.** `bindingPatternNames` — the checker-side mirror of
+`Binder.bindVariableDeclarationName`, i.e. tsc's rule that every leaf of an exported pattern is an
+export — at four name-set sites. An `Identifier` answers itself, so it is a DROP-IN, which is the
+arithmetic reason `cost_gate.py` reads **+0.00% on every counter**. The item's fixture goes 26 → 16
+rows against 17 in both references: ten false TS2305 and a false TS2339 on `typeof NS` gone, and a
+barrel import GAINED a true TS2345 it had been losing. **Four of the item's six sites were wrong**:
+the `typeof NS` line it names is a different walker's set (the real site it never names), the
+`nsImportTargets` site is an unrelated decl-emit walker, **`varDecls` must NOT be changed** — its
+consumer reads `d.type`, so a registered leaf mistypes an ANNOTATED exported pattern, proven by an
+arm and inert on every non-collision fixture (the first guard pin was blind and had to spell the
+collision out) — and "`import * as A; A.p` is `any`" is a general namespace-import gap equally true
+of a plain `export const`, so it cannot discriminate the fix. **Two lost diagnostics the item did
+not mention also close**: TS2308 and TS2484. The harness split is the point: population is **0 on
+all eight profiles** (re-derived here, so the grid is a CONTROL rather than coverage) and the class
+is structurally invisible to the corpus, so the 40 pins run across THREE harnesses — 11 direct
+`Parser`, 12 `diagnose()`, and 17 in `-project` through `ProjectCompiler` + a `Vfs` for the
+cross-file half — with every positive pin a VALUE pin. 9 arms all discriminating; 8 controls
+recorded as non-discriminating rather than counted. Corpus 8,837/0, `-project` 848 → 865/0,
+`huge_methods.py` exit 0, grid 8×`added=0 removed=0`.
 
 **(P18.32) — A WEAK GUARD TARGET NARROWS ((CHK.98b), WHOSE DIAGNOSIS WAS WRONG), AND (CHK.98)(b)'s UNION GATE LIFTS, 17,963 → 17,981 / 0 / 3 (2026-09-06).**
 **(CHK.98b) CLOSED — and the round's main finding is that the item misdiagnosed it.** Queued as
@@ -101,25 +122,3 @@ Corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline — combining every uni
 ~0.00% on its own — `huge_methods.py` exit 0 (`ccetUnionCalleeChecks` SHRANK ~100 lines), grid
 8×`added=0 removed=0`. Stage 2 stays open: the array fallback, `getCallSignaturesOfType`'s union
 arm, callback contextual typing, the optional-call result and `this` params/TS2684.
-
-**(P18.28) — AN OBJECT REST, ITERABLES, CONTEXTUAL PATTERN PARAMETERS AND THE DISCRIMINANT CARRY (STAGE 2 OF (CHK.96), THE ITEM CLOSED), AND THE THREE DEFECTS THE GATES FOUND, 17,792 → 17,874 / 0 / 3 (2026-09-06).**
-**(CHK.96) stage 2 LANDED, and the round INHERITED an interrupted session's tree** — the
-implementation was written and compiled with the gates unrun and one pin red, so the round's own
-work is the gating and the three defects it turned up. An object REST reads tsc's `getRestType`
-(members copied MUTABLE, `private`/`protected`/`#private` dropped always and methods/accessors
-only under a CLASS, a generic source refusing); `[Symbol.iterator]` sources read through tsc's
-fast and slow legs, which needed the instantiator to rebuild a TUPLE **as** a tuple — without it
-`Map<K, V>`'s `MapIterator<[K, V]>` had no readable slots, silently; contextual pattern
-parameters reach six readers; the pattern's implied contextual type widens every array-literal
-element; and the destructured-discriminant carry implements `getNarrowedTypeOfSymbol` INVERTED
-(each sibling's narrowed type filters the parent's constituents, since this checker narrows by
-path strings). **The three defects: a blind pin** whose `none { "=>" }` guard contradicted its own
-expected message (the compiler was right); **a corpus double-emission** — `destructuringUnspreadableIntoRest`
-50 → 72 rows, `--passTiming` naming `checkObjectRestUnspreadableAccess` 44 against `checkSpine`
-22, deduped in the walker because it runs SECOND (ablated: 1 of 82 pins RED); and **a grid
-regression**, one ours-only TS2322 on the three profiles carrying `services.ts:3264`, where a
-CONDITIONAL of array literals gets no implied contextual tuple — both reconstructions measured
-wrong (the second needs flow-narrowed branch elements, which `getTypeOfExpression` never gives),
-so the shape now refuses, as HEAD does, and is queued as (CHK.107). Corpus 8,837/0, core
-16,385/0, `cost_gate.py` exit 0 with no rebaseline (`typeOfExpr.calls` +0.89%), `huge_methods.py`
-exit 0, grid 8×`added=0 removed=0`.
