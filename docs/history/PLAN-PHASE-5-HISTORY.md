@@ -1,3 +1,33 @@
+### Round (P18.15) — the literal-union collapse at every position, and an enum generalization refused for a reason worth more than the fix (2026-09-04)
+
+**(PARITY.1) CLOSED.** The queue item named three emitters; a trace over the `Diagnostic`
+constructor censused **SIX** — argument (`caasTailGatesAndRelation`), rest argument
+(`checkRestArgsAgainstArrayElementType`), return (`craElaborateReturnMismatch`), and three
+object-literal paths (`emitPerPropertyMismatchesForObjectLiteral`, `caasObjLitPerPropertyMismatch`,
+`checkNestedObjLitPropTypes`, the first of which had NO keep-guard at all). All six now go through
+the one measured helper, whose keep-predicate additionally recurses through a UNION target (tsc's
+`typeCouldHaveTopLevelSingletonTypes` does), and every top-level source display in the
+`Intrinsic`/`Object`-target family matches tsgo 7.0.2 AND pristine 6.0.3 byte for byte. 27 pins,
+seven arms with disjoint red sets. **Prediction and outcome: 17,259 → 17,286 / 0 / 3, exactly the
+new pins, no baseline moved, no `LogicalParityDivergence`** — from an enumeration of all **3,145
+active** baselines over four message shapes (80 families flagged, all 80 run, 0 moved), not a
+sample.
+
+**The enum-member residue was FORM, not the MEANING (P18.14) recorded — and refusing it is the
+round's real finding.** Both references hold `ZzzEnum.A`; only tsc's DISPLAY generalizes it, by
+the same `getBaseTypeOfLiteralType` this arc transcribes. Wired, it left all 80 at-risk baselines
+and all 8 profiles unchanged and **blinded 47 assertions in 13 hand-written classes** — the
+(REL.2) enum-narrowing arc reads the narrowed type out of the message at a PRIMITIVE probe target
+by design, so generalizing collapses `K.A`, `K.A | K.B` and an un-narrowed `K` to one string:
+they go BLIND, not RED, which no gate here can see. The remedy is measured — a `never` probe
+target, which tsc suppresses the generalization for, makes nine narrowing shapes byte-identical
+to both references, something those pins cannot claim today — and three classes were converted
+because the literal half forced them; the rest is (PARITY.2). **Two instrument repairs on the
+way:** `scripts/parity1-grid.sh`'s positive-control marker was HARD-CODED to (P18.14)'s symbol
+and is now a parameter (a round-853 frozen instrument in the making), and the grid's blindness to
+display changes was re-confirmed by counting — **0 of its 417 rows carries an assignability
+message**. New MEANING residues queued as (CHK.83).
+
 ### Round (P18.14) — a primitive-only union stops being invisible to an object annotation, and a literal union starts printing the way tsc prints it (2026-09-04)
 
 **Full suite after the round: 17,236 → 17,259 / 0 / 3** — exactly the 23 new pins, **no baseline moved and no `LogicalParityDivergence` was needed**, which is what the round predicted from its enumeration of the 4 literal-union-source and 18 `not assignable to type 'never'` baselines (run by the orchestrating session).

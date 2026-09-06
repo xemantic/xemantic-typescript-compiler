@@ -2271,6 +2271,18 @@ class Checker(
                         it is Type.BigIntLiteral || it === trueType || it === falseType
                 }) {
                 currentLocalTypes[nm.text] = t
+            } else if (t === stringType || t === numberType || t === bigintType ||
+                (t === booleanType && varDeclIsImmutableBinding(decl)) ||
+                t is Type.StringLiteral || t is Type.NumberLiteral || t is Type.BigIntLiteral ||
+                t === trueType || t === falseType) {
+                // (CHK.95): an intrinsic primitive or a single literal annotation —
+                // `const s: string = "a"; takeB(s)` read `any` in every body context
+                // where only a union of literals was recorded. The annotation is the
+                // declared type, so nothing here widens; a same-named SECOND local in
+                // this body was pre-recorded `any` by the pre-scan and keeps it (the
+                // `== null` guard above). A MUTABLE `boolean` is refused for the reason
+                // [isBooleanLiteralType]'s pre-scan twin records.
+                currentLocalTypes[nm.text] = t
             }
         }
         if (nm != null && currentLocalTypes[nm.text] == null) {
@@ -71010,7 +71022,12 @@ interface DataView {
             diagnostics.removeAll { it.fileName == fileName && (it.code == 2322 || it.code == 2339 || it.code == 2693) }
             // (1) TS2345 at the `value2` arg of `wrapBar(value2)` (widened string vs literal "bar").
             val v2 = srcIndexOf(source, "wrapBar(value2)")
-            if (v2 >= 0) {
+            // (CHK.95): the argument gate now reads an ANNOTATED body-local `const
+            // value2: string` and emits this row itself; the pin re-emits only the
+            // half the engine still misses (this pass runs AFTER checkSpine).
+            if (v2 >= 0 && diagnostics.none {
+                    it.fileName == fileName && it.code == 2345 && it.start == v2 + "wrapBar(".length
+                }) {
                 val pos = v2 + "wrapBar(".length
                 val (l, c) = getLineAndCharacterOfPosition(source, pos)
                 diagnostics.add(Diagnostic(
@@ -127262,6 +127279,37 @@ interface DataView {
         t is Type.Reference &&
             (t.target.symbol?.name == "Array" || t.target.symbol?.name == "ReadonlyArray")
 
+    /**
+     * (CHK.95): is [expr] a SCALAR literal [literalTypeOfExpression] can mint WITHOUT
+     * typing any expression — a string, no-substitution template, numeric, `-`numeric,
+     * bigint, `true`/`false`, through parentheses, `!`, `satisfies` and `as const`?
+     * The ccet body-local pre-scan runs at every function-body entry, BEFORE the walk,
+     * so anything it resolves there lands in a first-touch cache (B420); this is the
+     * subset that resolves nothing. Deliberately NOT its ConditionalExpression arm
+     * (which calls getTypeOfExpression), not an array literal, and not `null` /
+     * `undefined` (a mutable-location widening question this pre-scan does not model).
+     */
+    /**
+     * (CHK.95): tsc's `boolean` is the union `true | false`, so `let b = true; b = false;
+     * takeF(b)` NARROWS by the assignment there; ours is an intrinsic the argument gate's
+     * flow arms cannot reduce, so recording `boolean` for a MUTABLE local was measured a
+     * false positive on exactly that shape. A mutable boolean local is therefore left
+     * unrecorded (`any`), and only an immutable one records its literal.
+     */
+    private fun isBooleanLiteralType(t: Type): Boolean = t === trueType || t === falseType
+
+    private fun isResolutionFreeScalarLiteral(expr: Expression): Boolean = when (expr) {
+        is StringLiteralNode, is NoSubstitutionTemplateLiteralNode,
+        is NumericLiteralNode, is BigIntLiteralNode -> true
+        is PrefixUnaryExpression -> expr.operator == SyntaxKind.Minus && expr.operand is NumericLiteralNode
+        is Identifier -> expr.text == "true" || expr.text == "false"
+        is ParenthesizedExpression -> isResolutionFreeScalarLiteral(expr.expression)
+        is NonNullExpression -> isResolutionFreeScalarLiteral(expr.expression)
+        is SatisfiesExpression -> isResolutionFreeScalarLiteral(expr.expression)
+        is AsExpression -> objLitIsConstTypeRef(expr.type) && isResolutionFreeScalarLiteral(expr.expression)
+        else -> false
+    }
+
     private fun literalTypeOfExpression(expr: Expression, arrayCtx: Boolean = false): Type? = when (expr) {
         is StringLiteralNode -> Type.StringLiteral(expr.text)
         is NoSubstitutionTemplateLiteralNode -> Type.StringLiteral(expr.text)
@@ -138282,6 +138330,10 @@ interface DataView {
                     "string" -> "String"; "number" -> "Number"; "boolean" -> "Boolean"; else -> null
                 }
             } ?: continue
+            // (CHK.95): a body-local `var static = "hi"` is now recorded in the argument
+            // gate's frame, so the ccet callee check emits this row on the spine first;
+            // this pass runs AFTER it and keeps only what the engine still misses.
+            if (diagnostics.any { it.fileName == fileName && it.code == 2349 && it.start == callee.pos }) continue
             val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
             diagnostics.add(Diagnostic(
                 message = "This expression is not callable.",
@@ -155626,12 +155678,19 @@ interface DataView {
         // binding-name registration below must run even when no param types were recorded.)
         val paramNames = mutableSetOf<String>()
         for (p in parameters) collectBindingNames(p.name, paramNames)
-        for (s in statements) shadowCallTypesLocalDecls(s, paramNames)
+        // (CHK.95): every Identifier local this body declares, in pre-scan order,
+        // so a SECOND declaration of a name — two sibling blocks' `const s` — reads
+        // `any` whether the first was recorded here (round 460's `containsKey` rule)
+        // or is recorded at its LEAVE by [ccetApplyDeclRecordings] (an annotated
+        // local; without this the second block read the first block's annotation).
+        val bodyNames = HashSet<String>()
+        for (s in statements) shadowCallTypesLocalDecls(s, paramNames, bodyNames)
     }
 
     private fun shadowCallTypesDeclList(
         declarations: List<VariableDeclaration>,
         paramNames: Set<String>,
+        bodyNames: MutableSet<String>,
         // Round 470: a let/const in a NESTED block that collides with a PARAM is a
         // genuine block-scoped shadow (tsc importFixes.ts: param `namedImports:
         // readonly Import[]` vs the else-block's `const namedImports =
@@ -155673,7 +155732,7 @@ interface DataView {
                 }
                 continue
             }
-            if (currentLocalTypes.containsKey(nm)) {
+            if (!bodyNames.add(nm) || currentLocalTypes.containsKey(nm)) {
                 currentLocalTypes[nm] = anyType
             } else if (d.type == null && d.initializer != null &&
                 enumMemberAssignedAtoms(d.initializer) != null &&
@@ -155694,6 +155753,27 @@ interface DataView {
                 val value = if (atoms.size == 1) atoms[0] else getUnionType(atoms)
                 currentLocalTypes[nm] =
                     if (varDeclIsImmutableBinding(d)) value else widenEnumMemberTypes(value)
+            } else if (d.type == null && d.initializer != null &&
+                isResolutionFreeScalarLiteral(d.initializer) &&
+                !globals.containsKey(nm) && currentFileLocals?.containsKey(nm) != true) {
+                // (CHK.95): the enum arm's sibling for every other SCALAR initializer —
+                // `const s = "a"; takeB(s)` was silent in every body context while the
+                // same lines report at file level (the symbol half) and an enum
+                // initializer reports here. The initializer is read off the AST through
+                // [isResolutionFreeScalarLiteral] — the subset of
+                // [literalTypeOfExpression] that mints a literal without typing an
+                // expression (its ConditionalExpression arm calls getTypeOfExpression,
+                // the B420 first-touch hazard this pre-scan is shaped around; arrays and
+                // `null`/`undefined` stay out). A `const` — or a const-asserted `let`,
+                // decided syntactically per (CHK.93) — keeps the literal; a `let`/`var`
+                // records its base primitive ((WIDEN.1): `let s = "a"` reads `string`,
+                // which both references print). Same collision guard as the enum arm,
+                // so a local named after a lib global stays `any`.
+                val lit = literalTypeOfExpression(d.initializer)
+                val immutable = varDeclIsImmutableBinding(d) || isConstAssertionExpr(d.initializer)
+                if (lit != null && (immutable || !isBooleanLiteralType(lit))) {
+                    currentLocalTypes[nm] = if (immutable) lit else getWidenedLiteralType(lit)
+                }
             } else if (globals.containsKey(nm) || currentFileLocals?.containsKey(nm) == true) {
                 // Round 463: an Identifier local (incl. a for-of/for-in loop-header
                 // const, B83.5-unbound) whose name collides with a GLOBAL binding —
@@ -155711,7 +155791,9 @@ interface DataView {
         }
     }
 
-    private fun shadowCallTypesLocalDecls(s: Statement?, paramNames: Set<String>, nested: Boolean = false) {
+    private fun shadowCallTypesLocalDecls(
+        s: Statement?, paramNames: Set<String>, bodyNames: MutableSet<String>, nested: Boolean = false,
+    ) {
         // [nested] = inside a block/if/loop/try/switch — a let/const there that collides
         // with a PARAM is a genuine block-scoped shadow (see shadowCallTypesDeclList).
         fun listNestedLetConst(list: VariableDeclarationList): Boolean =
@@ -155719,31 +155801,31 @@ interface DataView {
         when (s) {
             null -> {}
             is VariableStatement -> shadowCallTypesDeclList(
-                s.declarationList.declarations, paramNames, listNestedLetConst(s.declarationList))
-            is Block -> for (st in s.statements) shadowCallTypesLocalDecls(st, paramNames, nested = true)
+                s.declarationList.declarations, paramNames, bodyNames, listNestedLetConst(s.declarationList))
+            is Block -> for (st in s.statements) shadowCallTypesLocalDecls(st, paramNames, bodyNames, nested = true)
             is IfStatement -> {
-                shadowCallTypesLocalDecls(s.thenStatement, paramNames, nested = true)
-                shadowCallTypesLocalDecls(s.elseStatement, paramNames, nested = true)
+                shadowCallTypesLocalDecls(s.thenStatement, paramNames, bodyNames, nested = true)
+                shadowCallTypesLocalDecls(s.elseStatement, paramNames, bodyNames, nested = true)
             }
             is ForStatement -> {
-                (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames) }
-                shadowCallTypesLocalDecls(s.statement, paramNames, nested = true)
+                (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames, bodyNames) }
+                shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true)
             }
             is ForInStatement -> {
-                (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames) }
-                shadowCallTypesLocalDecls(s.statement, paramNames, nested = true)
+                (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames, bodyNames) }
+                shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true)
             }
             is ForOfStatement -> {
-                (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames) }
-                shadowCallTypesLocalDecls(s.statement, paramNames, nested = true)
+                (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames, bodyNames) }
+                shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true)
             }
-            is WhileStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, nested = true)
-            is DoStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, nested = true)
-            is LabeledStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, nested)
+            is WhileStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true)
+            is DoStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested = true)
+            is LabeledStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, bodyNames, nested)
             is TryStatement -> {
-                for (st in s.tryBlock.statements) shadowCallTypesLocalDecls(st, paramNames, nested = true)
-                s.catchClause?.block?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames, nested = true) }
-                s.finallyBlock?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames, nested = true) }
+                for (st in s.tryBlock.statements) shadowCallTypesLocalDecls(st, paramNames, bodyNames, nested = true)
+                s.catchClause?.block?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames, bodyNames, nested = true) }
+                s.finallyBlock?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames, bodyNames, nested = true) }
             }
             is SwitchStatement -> for (c in s.caseBlock) {
                 val stmts = when (c) {
@@ -155751,7 +155833,7 @@ interface DataView {
                     is DefaultClause -> c.statements
                     else -> emptyList()
                 }
-                for (st in stmts) shadowCallTypesLocalDecls(st, paramNames, nested = true)
+                for (st in stmts) shadowCallTypesLocalDecls(st, paramNames, bodyNames, nested = true)
             }
             else -> {}
         }

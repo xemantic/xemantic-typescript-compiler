@@ -1,3 +1,21 @@
+**(P18.21) — AN OBJECT LITERAL'S ENUM MEMBER WIDENS THE WAY tsc WIDENS IT, FREE OF THE DISCRIMINATED-UNION LOSSES THAT REFUSED IT TWICE, 17,424 → 17,462 / 0 / 3 (2026-09-05).**
+**(CHK.91) LANDED, closing (CHK.85)(a).** The (P18.18) arm was rebuilt ALONE to NAME its 22 grid
+sites (tsbuildPublic returns and a `Map.set`, conditional returns in six services files, two
+union-annotated declarations, one assignment), then landed as three pieces: widen only a FRESH
+enum-member ACCESS (tsc widens no identifier, `const` local, `as` or shorthand — the arm did, two
+false positives it had not reached), tsc's `isConstContext`, and the SOME-rule keep over the push
+context ?: a PULL walking every `getContextualType` root. The ARGUMENT root reads the callee's RAW
+parameter types: `cpaComputeArgCtxTypes` measured +2.9% `typeOfExpr.calls` (overload selection
+typing every argument) and handed back a circular keep for `id({ v: K.A })`. `const w: K.A = o.v`
+reports `Type 'K'`, `o.v = K.B` and `o.kind === K.B` lose their ours-only rows, every
+discriminated-union position is byte-identical to HEAD. 38 pins, six arms (`as const` recorded as
+unobservable); core 15,973/0, corpus 8,837/0, `cost_gate.py` exit 0 (`typeOfExpr.calls` −0.16%),
+grid 8×`added=0 removed=0`. Read-only recon rewrote (CHK.85)(b) (MEANING both ways: six false
+positives after a reassignment, seven lost `k === K.B` / body-local rows; four seams named) and
+(CHK.92) (the optional-parameter display is tsc's `isRelatedTo` nullable strip, wrong here in both
+directions; the `gU(1)` claim was false), and found the primitive mis-assignment probe blind on
+both sides for an enum-member local.
+
 **(P18.20) — AN ENUM MEMBER STOPS RELATING TO A LITERAL IT DOES NOT EQUAL, A LITERAL ARGUMENT STOPS BEING INVISIBLE TO AN ENUM PARAMETER, AND THE (CHK.85) UNBLOCKER IS DESIGNED, 17,394 → 17,424 / 0 / 3 (2026-09-05).**
 An orchestrated round: one implementation subagent owned Gradle; a read-only recon subagent
 worked against a frozen snapshot of the HEAD binary. **(CHK.83) CLOSED.** `const l1: 5 = em` was

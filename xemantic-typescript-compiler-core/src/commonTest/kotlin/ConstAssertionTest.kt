@@ -77,8 +77,8 @@ import kotlin.test.Test
  * the TARGET literal widened (`'string'` for `"b"` — (CHK.92)(a)'s emitter, not this
  * round's); a template with substitutions is `string`, not tsc's template literal type;
  * a `let` read of an enum-member element widens to the enum; a spread ELEMENT keeps a
- * const array at `any`; a body-local argument stays silent (the argument gate's frame
- * has no var-decl recorder, pre-existing).
+ * const array at `any`. (A body-local scalar argument, silent when this class was
+ * written, reads its literal since (CHK.95) — `BodyLocalLiteralArgumentTest`.)
  */
 class ConstAssertionTest {
 

@@ -1,13 +1,28 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **195,122** lines (191,070 when the metric was created; the (P18.9)-(P18.25) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **195,204** lines (191,070 when the metric was created; the (P18.9)-(P18.26) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
 checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.26) — A BODY-LOCAL SCALAR CONST REACHES THE ARGUMENT GATE, AND UNION CALLEES ARE MEASURED INTO (CHK.97), 17,664 → 17,717 / 0 / 3 (2026-09-06).**
+**(CHK.95) LANDED.** In every body context `const s = "a"; takeB(s)` was silent for every non-enum scalar
+initializer, every `let` and every annotated primitive local (48 of 72 cells) while file level reported: a
+SYNTACTIC scalar predicate in the ccet pre-scan (a const keeps the literal, a let widens — a counter arm
+shows why it must be syntactic: admitting the conditional moves `typeOfExpr.calls`) and a primitive-
+annotation arm at leave time, with a per-body name set so an annotated duplicate reads `any`. The mutable
+boolean is REFUSED after measurement (tsc's `boolean` is `true | false` and narrows by assignment; ours
+is an intrinsic, and the file-level twin is a pre-existing false positive). Two post-spine emitters that
+double-emitted rows the gate now owns were deduped. 89 of 125 cells match both references, 30 named
+residues; 53 pins, 7 arms; core 16,228/0, corpus 8,837/0, `cost_gate.py` exit 0 (`globals.lookups`
+−0.31%), grid 8×`added=0 removed=0`. Read-only recon measured union callees (26 rows, five extracted
+pristine fixtures): the call RESULT is `any` for EVERY union callee, three wrong-row families beside the
+silences, and TS2349 where tsc says TS2722 — queued as (CHK.97) around tsc's two-pass `getUnionSignatures`
+plus its array fallback.
 
 **(P18.25) — A TUPLE'S ARRAY MEMBERS GET TYPES AND ITS CALLS GET CHECKED, AND DESTRUCTURED BINDINGS ARE MEASURED INTO (CHK.96), 17,611 → 17,664 / 0 / 3 (2026-09-05).**
 **(CHK.94) LANDED.** Every `Array` member READ on a tuple was `any` and every call through one unchecked;
@@ -72,21 +87,3 @@ references bar four form residues; a (CHK.91) pin was corrected (both references
 a `const k = K.A`). 52 pins, 17 arms; core 16,027/0, corpus 8,837/0, `cost_gate.py` rebaselined
 (`globals.lookups` +2.30% = 414 reporting walks, attributed), grid 8×`added=0 removed=0` after an
 intermediate build's +3/+4 rows were closed by the reporting walk and a `let` widening.
-
-**(P18.21) — AN OBJECT LITERAL'S ENUM MEMBER WIDENS THE WAY tsc WIDENS IT, FREE OF THE DISCRIMINATED-UNION LOSSES THAT REFUSED IT TWICE, 17,424 → 17,462 / 0 / 3 (2026-09-05).**
-**(CHK.91) LANDED, closing (CHK.85)(a).** The (P18.18) arm was rebuilt ALONE to NAME its 22 grid
-sites (tsbuildPublic returns and a `Map.set`, conditional returns in six services files, two
-union-annotated declarations, one assignment), then landed as three pieces: widen only a FRESH
-enum-member ACCESS (tsc widens no identifier, `const` local, `as` or shorthand — the arm did, two
-false positives it had not reached), tsc's `isConstContext`, and the SOME-rule keep over the push
-context ?: a PULL walking every `getContextualType` root. The ARGUMENT root reads the callee's RAW
-parameter types: `cpaComputeArgCtxTypes` measured +2.9% `typeOfExpr.calls` (overload selection
-typing every argument) and handed back a circular keep for `id({ v: K.A })`. `const w: K.A = o.v`
-reports `Type 'K'`, `o.v = K.B` and `o.kind === K.B` lose their ours-only rows, every
-discriminated-union position is byte-identical to HEAD. 38 pins, six arms (`as const` recorded as
-unobservable); core 15,973/0, corpus 8,837/0, `cost_gate.py` exit 0 (`typeOfExpr.calls` −0.16%),
-grid 8×`added=0 removed=0`. Read-only recon rewrote (CHK.85)(b) (MEANING both ways: six false
-positives after a reassignment, seven lost `k === K.B` / body-local rows; four seams named) and
-(CHK.92) (the optional-parameter display is tsc's `isRelatedTo` nullable strip, wrong here in both
-directions; the `gU(1)` claim was false), and found the primitive mis-assignment probe blind on
-both sides for an enum-member local.

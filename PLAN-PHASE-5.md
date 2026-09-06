@@ -25,6 +25,83 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.26) — a body-local scalar const reaches the argument gate, and union callees are measured into (CHK.97) (2026-09-06)
+
+**Suite 17,664 → 17,717 / 0 / 3** — the 53 new pins in `BodyLocalLiteralArgumentTest`; no
+baseline moved and no `LogicalParityDivergence` is needed. Orchestrated as before: one
+implementation subagent owned Gradle and landed (CHK.95); a read-only recon subagent measured
+union callees over 26 rows and five extracted pristine fixtures against the `7dc50053`
+snapshot and both references, now queued as (CHK.97).
+
+**(CHK.95) LANDED.** In every body context `const s = "a"; takeB(s)` was silent for every
+non-enum scalar initializer, every `let`, and every ANNOTATED primitive local (48 of 72
+measured cells), while the same lines reported at file level and an enum initializer
+reported everywhere. Two arms close it: **(a)** in `shadowCallTypesDeclList`, under the enum
+arm's collision guard, an un-annotated local whose initializer passes the new SYNTACTIC
+predicate `isResolutionFreeScalarLiteral` (string / no-subst template / numeric / `-`numeric
+/ bigint / `true` / `false` / paren / `!` / `satisfies` / `as const` — NOT the
+`ConditionalExpression` arm, arrays, `null` / `undefined`) is recorded through
+`literalTypeOfExpression`: a `const` or a const-asserted `let` keeps the literal, a
+`let`/`var` records its base primitive ((WIDEN.1)); **(b)** in `ccetApplyDeclRecordings` an
+intrinsic `string` / `number` / `bigint`, a single literal type, or `boolean` for an
+IMMUTABLE binding is recorded beside the union-of-literals arm. A per-body name set threaded
+from `applyCallTypesBodyLocalShadowing` makes a SECOND declaration of a name read `any` even
+when the first is an ANNOTATED local recorded at leave time — without it `{ const s: string }
+{ const s: number = 1; takeN(s) }` read the first block's `string`, a false positive.
+**Refused after measurement — the MUTABLE boolean**: tsc's `boolean` is `true | false` and
+narrows by assignment, ours is an intrinsic no gate arm reduces, so `let b = true; b = false;
+takeF(b)` reported `'boolean'` where both references are silent; its file-level twin is a
+PRE-EXISTING false positive on HEAD. A mutable boolean local stays unrecorded; `const b =
+true`, `let b = true as const` and `const b: boolean` record. **Two post-spine emitters
+double-emitted rows the gate now owns** (attributed with a temporary `Diagnostic`-init stack
+hook): the corpus pin `checkInferFromGenericFunctionReturnTypes3` and
+`checkNonConstructorExtendsInStatements`'s reserved-word TS2349 — both run after `checkSpine`,
+so the identity test lives in them, CLAUDE.md's rule. Over 125 cells the answer is 89
+matching both references, 6 excluded (the const-TUPLE argument, where tsgo prints TS4104 and
+pristine TS2345), and 30 named residues; `d_overload` prints pristine's full per-candidate
+TS2769 chain.
+
+**Pins and ablation.** 53 pins. Seven arms: a1 the literal arm off (**30 RED**); a2 let-
+widening off (**8** — `'"a"'` printed for a `let`); a3 the annotated-primitive arm off (**3**);
+a4 the collision guard off (**2** — a lib-global-named local under `@useRealLibs`, and the
+file-level binding); a4b the body-name set off (**1**, the annotated duplicate); a6 the
+mutable boolean recorded (**2**); a5 a COUNTER arm — the `ConditionalExpression` admitted to
+the predicate — reads `typeOfExpr.calls` 600,167 → 601,428, `narrow.walks` 36,453 → 36,576,
+`typeNode.bypassed` +94 against the fixed binary: the pre-scan typing expressions, (CHK.68)'s
+signature, which is why the predicate is syntactic. Restored source `cmp`-verified; the two
+dedupe edits landed after the arms, final `Checker.class` sha256 `d98a090d…`, every gate
+against it.
+
+**Gates** (against `d98a090d`): core **847 classes / 16,228 / 0 / 3**; corpus **25 classes /
+8,837 / 0**, `parseBigInt` both subtests confirmed run (the first pass had the two double-
+emissions above, both closed); full suite 17,717 / 0 / 3 over 967 result files;
+`cost_gate.py` **exit 0**, no rebaseline (`output.errors` 46, `spine.nodes` +0.00%,
+`typeOfExpr.calls` +0.16% — the gate now judges scalar-local arguments — `narrow.walks`
++0.06%, `globals.lookups` **−0.31%** — fewer `any` bails reach the globals probe);
+`huge_methods.py --fail-over 0` **exit 0**; grid `7dc50053` → `d98a090d`, marker
+`isResolutionFreeScalarLiteral`: **8 × `added=0 removed=0`** (the eighth profile re-run by
+hand after the script's 590 s cap). 0 `w:`.
+
+**(CHK.97) MEASURED by recon — union callees.** The (P18.25) residue was under-described: the
+call RESULT is `any` for EVERY union callee, including B516's own combinable rows, because
+`getReturnTypeOfCallExpression` returns `any` for a non-`Type.Object` callee before any
+signature is read; three shipped WRONG rows beside the silences (two overloaded members
+combined by their first signatures where tsc refuses, the concatenated signature list read as
+an overload set, a false TS2351 on every union `new`), and TS2349 for tsc's TS2722 on a
+nullish union callee. The item transcribes tsc's two-pass `getUnionSignatures` plus the ARRAY
+FALLBACK (the honest replacement for round 302's `≥2`-overload silence), names five consumers,
+and carries two reference divergences (union member order, `unionTypeCallSignatures6.ts:39`
+TS2741 vs TS2684) with pristine honoured.
+
+**Residues (pinned as ours in the class KDoc).** Ternary / `||` / `??` initializers are `any`
+(tsc `"a" | "c"`); `takeB(o.v)` on a body-local object is `any`; `s === "b"` TS2367 is a
+different reader; `for (const s of …)` heads are (CHK.96)(f); a template with a substitution
+and `"a" + "b"` are `any`; duplicate-name / shadow shapes stay silent (tsc reports the first
+block's type — the safe direction); `const s = "a"; s()` is a silent TS2349 (the ccet callee
+check handles intrinsics, not a literal type); use-before-declaration reports TS2345 + TS2448
+but not tsc's TS2454; contextual callback parameters are still `any` ((CHK.39)). Trim-on-
+write: the (P18.15) note moved to `docs/history/PLAN-PHASE-5-HISTORY.md`.
+
 ### Round (P18.25) — a tuple's array members get types and its calls get checked, and destructured bindings are measured into (CHK.96) (2026-09-05)
 
 **Suite 17,611 → 17,664 / 0 / 3** — the 53 new pins in `TupleArrayMembersTest`; no baseline
@@ -1031,36 +1108,6 @@ nowhere else; (CHK.85) a mutable object-literal property, and a `let`, do not wi
 member the way tsc's flow/widening does; (CHK.86) no TS2367 and no `never` narrow for an
 impossible enum-vs-enum equality; and (PARITY.3) the namespace prefix a generalized
 namespace-scoped enum loses.
-
-### Round (P18.15) — the literal-union collapse at every position, and an enum generalization refused for a reason worth more than the fix (2026-09-04)
-
-**(PARITY.1) CLOSED.** The queue item named three emitters; a trace over the `Diagnostic`
-constructor censused **SIX** — argument (`caasTailGatesAndRelation`), rest argument
-(`checkRestArgsAgainstArrayElementType`), return (`craElaborateReturnMismatch`), and three
-object-literal paths (`emitPerPropertyMismatchesForObjectLiteral`, `caasObjLitPerPropertyMismatch`,
-`checkNestedObjLitPropTypes`, the first of which had NO keep-guard at all). All six now go through
-the one measured helper, whose keep-predicate additionally recurses through a UNION target (tsc's
-`typeCouldHaveTopLevelSingletonTypes` does), and every top-level source display in the
-`Intrinsic`/`Object`-target family matches tsgo 7.0.2 AND pristine 6.0.3 byte for byte. 27 pins,
-seven arms with disjoint red sets. **Prediction and outcome: 17,259 → 17,286 / 0 / 3, exactly the
-new pins, no baseline moved, no `LogicalParityDivergence`** — from an enumeration of all **3,145
-active** baselines over four message shapes (80 families flagged, all 80 run, 0 moved), not a
-sample.
-
-**The enum-member residue was FORM, not the MEANING (P18.14) recorded — and refusing it is the
-round's real finding.** Both references hold `ZzzEnum.A`; only tsc's DISPLAY generalizes it, by
-the same `getBaseTypeOfLiteralType` this arc transcribes. Wired, it left all 80 at-risk baselines
-and all 8 profiles unchanged and **blinded 47 assertions in 13 hand-written classes** — the
-(REL.2) enum-narrowing arc reads the narrowed type out of the message at a PRIMITIVE probe target
-by design, so generalizing collapses `K.A`, `K.A | K.B` and an un-narrowed `K` to one string:
-they go BLIND, not RED, which no gate here can see. The remedy is measured — a `never` probe
-target, which tsc suppresses the generalization for, makes nine narrowing shapes byte-identical
-to both references, something those pins cannot claim today — and three classes were converted
-because the literal half forced them; the rest is (PARITY.2). **Two instrument repairs on the
-way:** `scripts/parity1-grid.sh`'s positive-control marker was HARD-CODED to (P18.14)'s symbol
-and is now a parameter (a round-853 frozen instrument in the making), and the grid's blindness to
-display changes was re-confirmed by counting — **0 of its 417 rows carries an assignability
-message**. New MEANING residues queued as (CHK.83).
 
 - [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
   HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
@@ -2100,7 +2147,14 @@ message**. New MEANING residues queued as (CHK.83).
   TS2339), rest refusal off (the `indexOf` false positive), the (0) literal read off. Cost: one
   interned reference per element set; `cost_gate` expected ~+0.00%.
 
-- [ ] **(CHK.95) THE ARGUMENT GATE'S BODY-LOCAL LITERAL CONST — MEASURED 2026-09-05 by
+- [x] **(CHK.95) LANDED 2026-09-06 ((P18.26) note) — a resolution-free scalar arm in
+  `shadowCallTypesDeclList` (`isResolutionFreeScalarLiteral`; a const or const-asserted let keeps the literal, a
+  let/var widens) and a primitive/literal-annotation arm in `ccetApplyDeclRecordings`, with a per-body name set so an
+  annotated duplicate reads `any`; the MUTABLE boolean refused after measurement (tsc's `boolean` narrows by
+  assignment, ours cannot — its file-level twin is a pre-existing false positive); two post-spine emitters deduped;
+  125 cells, 89 matching both references, 6 excluded (const tuple), 30 named residues; 53 pins, 7 arms incl. a
+  counter arm; core 16,228/0, corpus 8,837/0, cost_gate exit 0 (`globals.lookups` −0.31%), grid 8×0/0. ORIGINAL
+  ITEM: THE ARGUMENT GATE'S BODY-LOCAL LITERAL CONST — MEASURED 2026-09-05 by
   read-only recon against `b7cd50d8` (fixtures `scratchpad/chk94/b_*`, `d_*`, 72 cells; tsgo
   7.0.2 = pristine 6.0.3 on every cell but the const-TUPLE argument, where tsgo prints TS4104
   and pristine TS2345 — (CHK.93) stage 2, excluded).** In EVERY body context (function, arrow,
@@ -2263,6 +2317,98 @@ message**. New MEANING residues queued as (CHK.83).
   (both touch `ccetApplyDeclRecordings` / `shadowCallTypesDeclList`) and (CHK.94)(1) (the rest
   bit). Corrects (CHK.46)'s entry: the "write probe answered the right type" there is
   `recordDestructuredConstElementTypes`, a walk-scoped recording, not the symbol.
+
+- [ ] **(CHK.97) UNION CALLEES: tsc's `combineSignaturesOfUnionMembers` — MEASURED 2026-09-06 by
+  read-only recon against `7dc50053` (fixtures `scratchpad/chk97/p`, 26 rows × 3 compilers, plus
+  five pristine fixtures extracted with `pristine_oracle.py --extract` into `chk97/x`; tsgo 7.0.2
+  = pristine 6.0.3 on every row bar two divergences below).** The (P18.25) residue was under-
+  described: the call RESULT is `any` for EVERY union callee — including B516's own combinable
+  rows — because `getReturnTypeOfCallExpression` (~129656) and `getReturnTypeOfNewExpression`
+  (~132636) `return anyType` for a non-`Type.Object` callee before any signature is read (30
+  missing TS2322 rows); SILENT where tsc reports: different arity (TS2554, `minArgumentCount` =
+  max), rest members (`push(1)` on `number[] | string[]` → `'never'`; `push(3)` on `[1] | [1, 2]`
+  → `'1'` — tsc's PASS 1, a clone of `Array<1>.push`, so member ORDER is load-bearing), generic
+  members, identical-overload pairs, TS7006 through a non-identical union contextual type;
+  WRONG where tsc reports differently: two overloaded members combined by their FIRST signatures
+  (TS2345 for tsc's TS2349 — the `≥2`-overload silence at ~157647 sits BELOW the combinable
+  branch at ~157552), a false TS2554 off the first overload's arity, the CONCATENATED signature
+  list read as an overload set (TS2769 for TS2345/TS2554 — `unionTypeCallSignatures.ts:9/36/42/55`),
+  a false TS2351 on every union `new` (the construct branch ~158985 has ONLY `differ → TS2351`;
+  20 rows on `unionTypeConstructSignatures`), and TS2349 "Not all constituents…" for tsc's TS2722
+  on a `Fn | undefined` callee (tsc checks nullability at checker.ts:37038 BEFORE asking for
+  signatures at :37054; ours has no general TS2722 emitter). **ONE HOME**
+  `combineUnionSignatures(union): List<Signature>?`, tsc's `getUnionSignatures`
+  (checker.ts:14313-14363): PASS 1 `findMatchingSignatures` (a generic member needs an exact
+  `compareSignaturesIdentical` match, a non-generic one may partial-match with returns ignored)
+  keeps a CLONE of the first member's signature with the member returns UNIONED; PASS 2
+  `combineSignaturesOfUnionMembers` (:14447-14483) — only when pass 1 produced nothing and at most
+  ONE member is overloaded: the LONGEST parameter list, positions INTERSECTED through
+  `reduceIntersectionForWriteType` (NEVER `getIntersectionType` — an object pair falls to it
+  inside the reducer, which is what printed r25's `{ p: number; } & { q: string; }` byte-
+  identically), a missing position contributing `unknown`, optional iff optional in both, rest
+  = `Array<∩ of ELEMENT types>` on the interned array plus the extra-rest tail,
+  `minArgumentCount = max`, type parameters from the first with the second's mapped onto them
+  (`createTypeMapper` + `instantiateType`), parameter symbols minted with `symbolTypes[id]`
+  written at mint (the `instantiateSignature` idiom, `TypeInstantiator.kt:231-238`) and a
+  `valueDeclaration` whose `dotDotDotToken` readers keep working, return = `getUnionType(returns)`;
+  REFUSED → null when a member has NO signatures (today's TS2349 (a)/(b) stays), when more than
+  one member is overloaded (tsc's `-1`), or generic-vs-generic non-identical
+  (`unionCalleeGenericSignaturesIncompatible`); plus tsc's ARRAY FALLBACK (:15949-15964): when both
+  passes are empty and every member is an `Array`/`ReadonlyArray`/tuple instantiation of one
+  member name, answer that member on `Array<union of elements>` (`tupleArrayBase` is the
+  instrument for the tuple half) — the honest replacement for round 302's `≥2` silence, what makes
+  `(number[] | string[]).filter` legal and `(string | number)[]`. Memoized by the union's
+  `Type.id` (INV.5(a) interns unions by member-id list, so the key is exact; memoize null too).
+  **Five consumers, each a `return any`/null today**: `getCallSignaturesOfType`'s union arm
+  (~160366, the concatenation) and a NEW union arm of `getConstructSignaturesOfType` (~160392,
+  empty for any union); `getReturnTypeOfCallExpression` / `…NewExpression` for a `Type.Union`
+  callee, falling through to the existing single/overload resolution; `ccetUnionCalleeChecks`
+  case (c) (~157511-157690: replace `firstOrNull()` + `combinable` + the rest-tuple branch +
+  the `≥2` suppression by "combined == null → today's decision, else hand the combined list to
+  the ordinary argument gate" — the too-FEW TS2554 comes free; the dedicated walkers
+  `checkTest2RestTupleTypeofUnionCall` ~156748 and B538's `checkCombinedRestParamForOfSpreadCall`
+  ~13015 may then DOUBLE-EMIT — `--passTiming`'s emissions-by-pass names both); the `new` union
+  branch (~158985); and `cpaComputeArgCtxTypes` ~147732 / `callableSignaturesForCtx` ~39614 for
+  callback parameters (a callback's OWN parameter is then an intersection of function types —
+  tsc's `getIntersectedSignatures` with parameters UNIONED is a second rule, stage it after, and
+  grade with a wrong-typed USE inside the arrow per (CHK.30)). Move the nullish-callee check
+  ABOVE the union branch (the round-408 pre-pass at ~157457 already computes the non-nullish
+  set; TS2722 is one branch there). OUT OF SCOPE, record: `this` parameters (tsc INTERSECTS them
+  and reports TS2684; `Signature` at `Type.kt:318` has no `thisParameter` and `code = 2684` has 0
+  sites — `unionTypeCallSignatures5/6`). Cost: one synthesized `Signature` per distinct union
+  callee, memoized; union-of-array receivers are 9/13/32/32 declarations on project/services/
+  server/harness, `?.(` calls 74-131, `Debug.fail(` 110-159 and `Debug.assertNever(` 62-114 per
+  profile (`never`-returning callees matter only where they sit IN a union). **Grid risk**: every
+  union callee that answered `any` becomes typed — its arguments checked at every position (a
+  rest position must be `Array<∩ of ELEMENT types>`, not `∩ of the array types` — the (CHK.83)
+  rest lesson), its result reaching every downstream reader (a `never` member's return collapses
+  the union; `void | T` results reach declaration/return readers), and `(A[] | B[]).forEach /
+  map / filter / some / indexOf` switching from silence to the combined or fallback signature —
+  pre-read `fourslashImpl.ts:1218` (the (CHK.94) harness row, must stay `removed=1`),
+  `watchPublic.ts:224`, `types.ts:7401/8161`, `builder.ts:140` (`X[] | readonly Y[]` receivers).
+  **Guards** (ACTIVE `.errors.txt`): `betterErrorForUnionCall` (3 × TS2349, the generic refusal —
+  must stay), `newOperator` (TS2351 at :38/:42/:46 — must stay), `signatureCombiningRestParameters
+  1/3/4/5` (combined rows we already match; 1 and 5-part-2 are the dedicated walkers above; 3/4
+  print an object INTERSECTION display, i.e. the reducer's `getIntersectionType` fallback and its
+  member ORDER), `unionOfArraysFilterCall` (TS18048 only — the round-302 silence must become the
+  array fallback without adding a row); INACTIVE but extractable value pins (no
+  `tests/cases/conformance/types/union/` in the clone): `unionTypeCallSignatures` (28 pristine
+  rows: TS2554 min=max, TS2345 vs combined params, TS2322 on results, TS2555, TS2769 for both-
+  overloaded members), `unionTypeConstructSignatures` (28), `unionTypeCallSignatures4` (2 ×
+  TS2554); `…5`/`…6` need the `this` model. **Pins**: the 26-row matrix as `diagnose()` value pins
+  (`@useRealLibs` for the `[1] | [1, 2]` / `number[] | string[]` rows so `map`/`push` are real)
+  plus the extracted pristine row sets; **arms**: a1 combine off; a2 `getIntersectionType` for the
+  reducer (`[1] | [1, 2]`.indexOf(1) and r03 red); a3 min instead of max (r02/r22 TS2554 red); a4
+  the rest position intersecting the ARRAY types (r04/r15 `push(1)` → `never` red); a5 the
+  `≥2`-in-two-members refusal dropped (r09 red; `betterErrorForUnionCall` stays green — a
+  redundant-pair note); a6 the nullish check left below the union branch (r14 red); a7 the
+  construct arm absent (r17 + 20 `unionTypeConstructSignatures` rows red); a8 the array fallback
+  off (r15 `filter` result red, `unionOfArraysFilterCall` must stay green); a9 a memo keyed by
+  member COUNT (a wrong-program arm: two same-sized unions in one file share a signature).
+  Reference divergences, pristine honoured: tsgo prints `(1 | 2)[]` where pristine prints `(2 |
+  1)[]` for `[1] | [1, 2]`.map's result (member order; ours = tsgo); `unionTypeCallSignatures6.ts:39`
+  is TS2741 in tsgo and TS2684 in pristine. All 23 of ours on the matrix come from `checkSpine`
+  (one owner, no tail-walker double-emit on these shapes).
 
 - [x] **(CHK.86) AN IMPOSSIBLE ENUM-vs-ENUM EQUALITY PRODUCES NEITHER TS2367 NOR A `never`
   NARROW — the DIAGNOSTIC half CLOSED (P18.17); the NARROW half re-queued as (CHK.87).**
