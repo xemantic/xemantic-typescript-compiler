@@ -396,10 +396,15 @@ class BodyLocalLiteralArgumentTest {
     }
 
     @Test
-    fun `negative control - a callback parameter shadows the enclosing const`() {
-        // tsc reads the contextual `number`; the parameter's `any` shadow is what keeps
-        // the enclosing `"a"` out ((CHK.42)'s rule) — silent, never `"a"`.
-        assert(messages("function f() { const s = \"a\"; [1].forEach(s => takeN(s)) }").isEmpty())
+    fun `a callback parameter shadows the enclosing const - it reads the CONTEXTUAL number`() {
+        // The control's subject is unchanged — the enclosing `const s = "a"` must never
+        // reach the callback ((CHK.42)'s rule) — but the ASSERTION flipped with
+        // (CHK.98)(a): the parameter used to be the `any` shadow (silent), and is now the
+        // contextual `number` from `[1].forEach`, which `takeN(x: 2)` rejects. tsgo 7.0.2
+        // and pristine `typescript@6.0.3` both give exactly this row. Naming `number` is
+        // what still proves `"a"` did not leak — a silence assertion no longer could.
+        assert(messages("function f() { const s = \"a\"; [1].forEach(s => takeN(s)) }") ==
+            listOf(numberNotTwo))
     }
 
     // ---------------------------------------------------------------------

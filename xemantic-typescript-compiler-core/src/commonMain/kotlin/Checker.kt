@@ -2187,12 +2187,22 @@ class Checker(
                 val ownNames = mutableSetOf<String>()
                 for (p in params) collectBindingNames(p.name, ownNames)
                 for (n in ownNames) currentLocalTypes[n] = anyType
-                // (CHK.96) stage 2: a contextual PATTERN parameter's leaves are typed at the
-                // argument reader (`objs.map(({ p }) => takeB(p))`); the identifier
-                // parameters keep the `any` above — that wiring is (CHK.98)(a).
-                if (params.any { it.type == null && !it.dotDotDotToken && (it.name is ObjectBindingPattern || it.name is ArrayBindingPattern) }) {
-                    applyPulledContextualParamTypes(node, params, patternsOnly = true)
-                }
+                // (CHK.98)(a) THE THIRD APPLY SITE. The blanket `anyType` above is round
+                // 475's SHADOW — "we cannot type this parameter, so at least do not let it
+                // resolve to a same-named enclosing binding" — and it was being read as a
+                // claim that the parameter IS `any`, by the one reader that owns call
+                // ARGUMENTS. Measured on HEAD: an explicitly ANNOTATED arrow parameter is
+                // just as untyped here (`takeU((x: string | number) => takeS(x))` is silent),
+                // so the gap is not contextual typing alone — it is that this frame never
+                // ran the ordinary parameter registrar at all, where the class-method and
+                // constructor arms two blocks up always have.
+                //
+                // Both halves land, in the same order the B246 branch above uses: the
+                // ANNOTATION first ([populateParameterLocalTypes], which also carries the
+                // TS2370 rest guard, the namespace bridge, B516 and the fn-valued-default /
+                // IIFE arms), then the CONTEXTUAL type for what is left un-annotated.
+                populateParameterLocalTypes(params)
+                applyPulledContextualParamTypes(node, params, refuseTpFnTypes = true)
                 val body = if (node is ArrowFunction) node.body else (node as FunctionExpression).body
                 (body as? Block)?.let { b ->
                     applyCallTypesBodyLocalShadowing(b.statements, params)
@@ -2219,16 +2229,29 @@ class Checker(
             }
         }
         val eff = effThis
-        val frame = if (eff != null) {
-            val lt = EpochMap(top.localTypes)
-            lt["this"] = eff
-            CcetFrame(body, lt, top.paramBindings, top.tpScope, top.tpAst,
-                top.superBaseSig, top.superBaseType, dead = top.dead)
-        } else {
-            CcetFrame(body, top.localTypes, top.paramBindings, top.tpScope, top.tpAst,
-                top.superBaseSig, top.superBaseType, dead = top.dead)
-        }
+        // (CHK.98)(a) THE SECOND `anyType` SITE. An object-literal member's body got a
+        // frame carrying `this` and NOTHING about its own parameters — not the round-475
+        // shadow, not the ordinary registrar, not the contextual type — so
+        // `cfg({ onX(n) { takeS(n) } })` was silent at the ARGUMENT reader while its
+        // `onX: n => …` twin one line up reports. The map must be COPIED for that
+        // (the `eff == null` branch used to SHARE the enclosing one, which is fine for
+        // a frame that writes nothing and a leak for one that does).
+        val lt = EpochMap(top.localTypes)
+        if (eff != null) lt["this"] = eff
+        val frame = CcetFrame(body, lt, EpochSet(top.paramBindings), top.tpScope, top.tpAst,
+            top.superBaseSig, top.superBaseType, dead = top.dead)
         ccetFrames.addLast(frame)
+        withCcetFrameAmbient(frame) {
+            val ownNames = mutableSetOf<String>()
+            for (prm in params) collectBindingNames(prm.name, ownNames)
+            // `this` is a pseudo-parameter — never shadow the type just installed for it.
+            ownNames.remove("this")
+            for (n in ownNames) currentLocalTypes[n] = anyType
+            populateParameterLocalTypes(params)
+            applyPulledContextualParamTypes(member, params, refuseTpFnTypes = true)
+            applyCallTypesBodyLocalShadowing(body.statements, params)
+            shadowNestedFunctionNames(body.statements)
+        }
         return frame
     }
 
@@ -2586,6 +2609,40 @@ class Checker(
         val anonSym = Symbol(SymbolFlags.Class, "(Anonymous class)")
         anonSym.declarations.add(cls)
         return getDeclaredTypeOfSymbol(anonSym)
+    }
+
+    /**
+     * (CHK.98)(b) TRUE while the property-access family is walking under a context
+     * that came from a written ANNOTATION — a variable declaration's, a class
+     * property's, or an object-literal member's — rather than from a call argument.
+     *
+     * The three new sources are exactly the ones the cpa family had no edge for, and
+     * they are opened behind a gate because this family has narrowing gaps a call
+     * argument's contextual types happen not to reach: a UNION contextual parameter
+     * type is what (CHK.98b)'s nested-ternary predicate narrow and (CHK.98c)'s
+     * optional-chain `typeof` need, and without them the same annotated parameter is
+     * a false TS2339 / TS18048 on real code (measured: 3 of the 15 refused knip rows
+     * survive as annotated-parameter probes, and both are narrowing, not typing).
+     * The gate lifts when those two land — it is a statement about the READER, not
+     * about the source.
+     */
+    private var cpaAnnotationCtx: Boolean = false
+
+    /**
+     * (CHK.98)(b) Walk [init] with [ann]'s resolved type installed as the contextual
+     * type, under the annotation gate. A no-op — the ordinary bare walk — unless the
+     * annotation resolves to something concrete, so it can only ever ADD a context
+     * where the family previously had none.
+     */
+    private inline fun cpaWithAnnotationCtx(ann: TypeNode?, block: () -> Unit) {
+        val t = ann?.let { getTypeFromTypeNodeSafeNsAware(it) }
+            ?.takeIf { it !== anyType && it !== errorType }
+        if (t == null) { block(); return }
+        val savedCtx = contextualType
+        val savedGate = cpaAnnotationCtx
+        contextualType = t
+        cpaAnnotationCtx = true
+        try { block() } finally { contextualType = savedCtx; cpaAnnotationCtx = savedGate }
     }
 
     /** (cpa-m2b): the contextualType at an EXPRESSION position, pull-derived
@@ -3007,7 +3064,15 @@ class Checker(
                         node as VariableStatement
                         for (decl in node.declarationList.declarations) {
                             decl.initializer?.let {
-                                checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
+                                // (CHK.98)(b) `const h: (n: Nd) => void = n => { n.nope }`
+                                // — the declaration's ANNOTATION is the initializer's
+                                // contextual type. This anchor walked it bare, which is
+                                // why the property-access reader saw an untyped `n`
+                                // where the assignability reader (CHK.39) already
+                                // reported through the same annotation.
+                                cpaWithAnnotationCtx(decl.type) {
+                                    checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
+                                }
                             }
                             cpaApplyDeclRecordings(decl)
                         }
@@ -3123,7 +3188,11 @@ class Checker(
                     val sStatic2 = inStaticClassMethod
                     inStaticClassMethod = isStatic
                     try {
-                        checkPropertyAccessInExpr(init, spineSource, spineFileName, clsType)
+                        // (CHK.98)(b) a class property's ANNOTATION types its
+                        // initializer, exactly as a variable declaration's does.
+                        cpaWithAnnotationCtx(node.type) {
+                            checkPropertyAccessInExpr(init, spineSource, spineFileName, clsType)
+                        }
                     } finally {
                         inStaticClassMethod = sStatic2
                     }
@@ -63421,11 +63490,25 @@ interface DataView {
                 // which is why the index is computed here where the array-reference
                 // case never needed one.
                 val cur = spineIanyCtx?.takeIf { it.kind == 0 }
-                val elemCtx = cur?.type?.let {
+                val fnElem = node is ArrowFunction || node is FunctionExpression
+                var elemCtx = cur?.type?.let {
                     pullCtxArrayElementAt(it, p.elements.indexOfFirst { e -> e === node })
                 }
-                val typed = if (node is ArrowFunction || node is FunctionExpression) false
-                    else cur?.typed == true
+                // (CHK.98)(c) `many([x => {}])` was an ours-only FALSE TS7006. The
+                // CALL-ARGUMENT edge records `typed = true` with NO type (round 799
+                // deliberately: resolving the callee type at 31,575 edges is the
+                // single hottest thing in this handler), and the arm below then
+                // clears `typed` for a function element and finds no `type` to put
+                // in its place — so a contextually-typed arrow inside an array
+                // literal argument ends with no context at all, while the
+                // ASSIGNABILITY half types its parameter through (CHK.40)(a)'s pull.
+                // Ask the pull HERE instead, where the population is exactly
+                // "arrow/function-expression element of a contextually-typed array
+                // literal" and not every call argument in the program.
+                if (fnElem && elemCtx == null && cur?.typed == true && cur.type == null) {
+                    elemCtx = pullContextualTypeAt(node)
+                }
+                val typed = if (fnElem) false else cur?.typed == true
                 spineIanyDefineCtx(node, if (typed || elemCtx != null || cur?.viaUnion == true)
                     SpineIanyCtx(kind = 0, typed = typed, type = elemCtx,
                         viaUnion = cur?.viaUnion == true) else null)
@@ -128060,7 +128143,9 @@ interface DataView {
     ): Type? {
         val leftTypeofRef = isTypeOfRef(expr.left, name)
         val rightTypeofRef = isTypeOfRef(expr.right, name)
-        if (!leftTypeofRef && !rightTypeofRef) return null
+        if (!leftTypeofRef && !rightTypeofRef) {
+            return typeofOptionalChainNonNullish(t, expr, equal, name)
+        }
         val literalSide = unwrapParensExpr(if (leftTypeofRef) expr.right else expr.left)
         val guard = when (literalSide) {
             is StringLiteralNode -> literalSide.text
@@ -128068,6 +128153,48 @@ interface DataView {
             else -> return null
         }
         return narrowByTypeOfGuard(t, guard, isMatch = equal)
+    }
+
+    /**
+     * (CHK.98c) tsc's `optionalChainContainsReference` rule for a `typeof` guard
+     * (checker.ts `narrowTypeByOptionalChainContainment`): `typeof c.g?.r === "string"`
+     * proves `c.g` NON-NULLISH on the true branch, because a nullish link
+     * short-circuits the WHOLE chain to `undefined` and `typeof undefined` is
+     * `"undefined"` — which no other tag can be. The discriminant twin of this rule
+     * has been here since round 422 ([narrowByDiscriminantProperty]'s `dropNullish`);
+     * the `typeof` form was missing, and it is a PRE-EXISTING false TS18048 on HEAD
+     * for a plain function-declaration parameter as much as for a contextually-typed
+     * one (measured: knip's release-it plugin, two rows).
+     *
+     * Three conditions, each of which is what keeps it sound:
+     * * the guard tag is not `"undefined"` — `typeof c.g?.r === "undefined"` holds
+     *   precisely when the chain DID short-circuit;
+     * * the branch is the EQUAL one — `!==` is true when the chain short-circuited;
+     * * some link of the chain carries a `?.` and its receiver is [name] — a chain
+     *   with no `?.` proves nothing (and is already an error at the source).
+     */
+    private fun typeofOptionalChainNonNullish(
+        t: Type, expr: BinaryExpression, equal: Boolean, name: String,
+    ): Type? {
+        if (!equal) return null
+        val left = unwrapParensExpr(expr.left)
+        val right = unwrapParensExpr(expr.right)
+        val typeofSide = (left as? TypeOfExpression) ?: (right as? TypeOfExpression) ?: return null
+        val literalSide = unwrapParensExpr(if (typeofSide === left) expr.right else expr.left)
+        val guard = when (literalSide) {
+            is StringLiteralNode -> literalSide.text
+            is NoSubstitutionTemplateLiteralNode -> literalSide.text
+            else -> return null
+        }
+        if (guard == "undefined") return null
+        var cur: Expression = unwrapParensExpr(typeofSide.expression)
+        while (cur is PropertyAccessExpression) {
+            if (cur.questionDotToken && getReferencePath(cur.expression) == name) {
+                return pExcludeNullish(t)
+            }
+            cur = unwrapParensExpr(cur.expression)
+        }
+        return null
     }
 
     private fun isTypeOfRef(expr: Expression, name: String): Boolean {
@@ -148482,7 +148609,10 @@ interface DataView {
                 // emissions; the arm still runs for its maps' evolution.
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let {
-                        checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
+                        // (CHK.98)(b) the spine anchor's twin — see there.
+                        cpaWithAnnotationCtx(decl.type) {
+                            checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
+                        }
                     }
                     // B136: populate an UNANNOTATED, CALL-initialized local var's type
                     // into currentLocalTypes so a SUBSEQUENT chained access resolves the
@@ -148797,7 +148927,10 @@ interface DataView {
                 // (cpa-m3c): spine-anchored for ClassDECLARATION members
                 // (ClassExpression members are never marked).
                 member.initializer?.let {
-                    checkPropertyAccessInExpr(it, source, fileName, classType)
+                    // (CHK.98)(b) the spine anchor's twin — see there.
+                    cpaWithAnnotationCtx(member.type) {
+                        checkPropertyAccessInExpr(it, source, fileName, classType)
+                    }
                 }
             }
             else -> {}
@@ -149233,6 +149366,8 @@ interface DataView {
                     // (the param stays any — suppression-only), matching the
                     // B136 concreteness discipline.
                     if (typeContainsUnresolvedTypeParam(pType)) continue
+                    // (CHK.98)(b) the annotation-sourced gate — see [cpaAnnotationCtx].
+                    if (cpaAnnotationCtx && pType is Type.Union) continue
                     currentLocalTypes[pName.text] = pType
                 }
                 if (expr.body is Expression) {
@@ -149332,8 +149467,103 @@ interface DataView {
                         contextualType = savedCtx
                     }
                 }
+                // (CHK.98)(b) THE OBJECT-LITERAL **METHOD**. `cfg({ onX(v) { v.nope } })`
+                // fell into the `else -> {}` below: the body was not walked AT ALL by
+                // this family, so the member form of a callback was silent where its
+                // `onX: v => …` twin two lines up reports. tsc types the two the same
+                // way (`getContextualType` reaches a method through the same member
+                // lookup a PropertyAssignment uses), and (CHK.39) already reports the
+                // method form at the assignability reader — this is the third of the
+                // three readers disagreeing about one caret.
+                // SCOPED to an ANNOTATION-sourced context, and that scope is MEASURED,
+                // not chosen: opened for every object literal in the program it walks a
+                // very large new population and costs one false positive on three
+                // profiles — `inlineVariable.ts:102`, an `info` narrowed by a NEGATED
+                // namespace-qualified type-guard call inside `registerRefactor({ … })`,
+                // where the guard's narrowing does not reach this family. That row is a
+                // pre-existing gap the walk merely made reachable (CLAUDE.md (CHK.50):
+                // making a type real surfaces what `any` was hiding), and it is not the
+                // gap this item is about. The call-argument source is recorded as a
+                // KNOWN GAP in `ContextualParamReadersTest`.
+                is MethodDeclaration ->
+                    if (cpaAnnotationCtx) cpaExprObjlitMethod(prop, ctxObj, source, fileName)
                 else -> {}
             }
+        }
+    }
+
+    /**
+     * (CHK.98)(b) An object-literal METHOD member's body, contextually typed by the
+     * matching member of the literal's own contextual type.
+     *
+     * [cpaExprFunctionExpression]'s shape — its own scope, the ordinary parameter
+     * registrar, then the contextual signature for what is left un-annotated — with
+     * one difference forced by the position: the member's contextual type must be
+     * looked up by NAME on [ctxObj] first, because the method IS the expression whose
+     * position is typed (there is no initializer node to hand a `contextualType` to).
+     * A COMPUTED name is refused rather than guessed (round 935).
+     */
+    private fun cpaExprObjlitMethod(
+        prop: MethodDeclaration, ctxObj: Type.Object?, source: String, fileName: String,
+    ) {
+        val body = prop.body ?: return
+        val mName = pullCtxMemberName(prop.name)
+        val mType = if (mName != null && ctxObj != null)
+            ctxObj.members?.get(mName)?.let { getTypeOfSymbol(it) }
+                ?.takeIf { it !== anyType && it !== errorType } else null
+        val savedLocalTypes = currentLocalTypes
+        val savedParamBindings = currentParamBindingNames
+        val savedShadowed = currentShadowedNames
+        currentLocalTypes = EpochMap(currentLocalTypes)
+        currentParamBindingNames = EpochSet(currentParamBindingNames)
+        currentShadowedNames = EpochSet(currentShadowedNames)
+        val savedCtx = contextualType
+        val savedGate = cpaAnnotationCtx
+        contextualType = null
+        cpaAnnotationCtx = true
+        try {
+            populateParameterLocalTypes(prop.parameters)
+            for (p in prop.parameters) {
+                if (p.type != null) continue
+                (p.name as? Identifier)?.text?.let { currentLocalTypes.remove(it) }
+            }
+            val sig = (mType as? Type.Object)?.let {
+                resolveStructuredTypeMembers(it); it.callSignatures?.singleOrNull()
+            }
+            if (sig != null) {
+                for ((i, param) in prop.parameters.withIndex()) {
+                    if (param.type != null) continue
+                    val sp = sig.parameters.getOrNull(i) ?: break
+                    val pn = param.name
+                    if (pn is ObjectBindingPattern || pn is ArrayBindingPattern) {
+                        val parentType = getTypeOfSymbol(sp)
+                        if (parentType === anyType || parentType === errorType ||
+                            typeContainsUnresolvedTypeParam(parentType)) continue
+                        forEachBindingPatternLeaf(pn, parentType, isConst = false, refuseFnMembers = false) { leaf, t ->
+                            if (t != null && !isTpReferencingFnTypeOrUnion(t)) currentLocalTypes[leaf] = t
+                        }
+                        continue
+                    }
+                    val pName = (pn as? Identifier)?.text ?: continue
+                    val pType = getTypeOfSymbol(sp)
+                    if (pType === anyType || pType === errorType) continue
+                    if (typeContainsUnresolvedTypeParam(pType)) continue
+                    // (CHK.98)(b) the annotation-sourced gate — see [cpaAnnotationCtx].
+                    if (pType is Type.Union) continue
+                    currentLocalTypes[pName] = pType
+                }
+            }
+            prop.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet().let { pn ->
+                applyBodyLocalShadowing(body.statements, pn)
+                applyAmbiguousBlockScopedLocals(body.statements, pn)
+            }
+            checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType = null)
+        } finally {
+            contextualType = savedCtx
+            cpaAnnotationCtx = savedGate
+            currentLocalTypes = savedLocalTypes
+            currentParamBindingNames = savedParamBindings
+            currentShadowedNames = savedShadowed
         }
     }
 
@@ -149414,6 +149644,8 @@ interface DataView {
                     // Round 569: skip un-inferred callee TPs (see the
                     // ArrowFunction twin above).
                     if (typeContainsUnresolvedTypeParam(pType)) continue
+                    // (CHK.98)(b) the annotation-sourced gate — see [cpaAnnotationCtx].
+                    if (cpaAnnotationCtx && pType is Type.Union) continue
                     currentLocalTypes[pName.text] = pType
                 }
             }
@@ -150085,6 +150317,37 @@ interface DataView {
             // the function itself.
             is ReturnStatement ->
                 if (parent.expression === node) pullCtxReturnTypeAt(parent, depth) else null
+            // (CHK.98)(c) tsc `getContextualType`'s ConditionalExpression arm
+            // (checker.ts:32553): both branches of `c ? f : g` sit at the
+            // conditional's own contextual position. The cpa family has always
+            // passed this edge through, so before this the property-access reader
+            // was right about `c ? (n => n.kind) : …` and the assignability reader
+            // silent about the same arrow — two readers, one caret, different answers.
+            is ConditionalExpression ->
+                if (parent.whenTrue === node || parent.whenFalse === node)
+                    pullContextualTypeAt(parent, depth + 1) else null
+            // (CHK.98)(c) tsc's `AssertionExpression` arm (checker.ts:32809): the
+            // ASSERTED type contextually types the operand. `as const` is excluded
+            // there and here — it is a request NOT to widen, not a type to push
+            // down — which [isConstAssertionExpr] decides syntactically, as
+            // (CHK.93) requires.
+            is AsExpression ->
+                if (parent.expression === node && !isConstAssertionExpr(parent))
+                    pullCtxResolveAnnotation(parent.type) else null
+            is SatisfiesExpression ->
+                if (parent.expression === node) pullCtxResolveAnnotation(parent.type) else null
+            // (CHK.98)(c) tsc's assignment arm (checker.ts:32259
+            // `getTypeOfExpression(binaryExpression.left)`): the RIGHT operand of a
+            // plain `=` is contextually typed by the LEFT's type. (CHK.40) refused
+            // `=` outright; the refusal is narrowed rather than dropped — only the
+            // simple, cheap LHS shapes are asked, because the pull runs per
+            // function-like and `getTypeOfExpression` over an arbitrary LHS is not a
+            // bounded question.
+            is BinaryExpression ->
+                if (parent.operator == SyntaxKind.Equals && parent.right === node &&
+                    (parent.left is Identifier || parent.left is PropertyAccessExpression))
+                    getTypeOfExpression(parent.left)
+                        .takeIf { it !== anyType && it !== errorType } else null
             else -> null
         }
     }
@@ -150203,7 +150466,12 @@ interface DataView {
      * the position supplies a concrete type, so it can turn an `any` into a real
      * type and can never redirect one that already resolved.
      */
-    private fun applyPulledContextualParamTypes(fn: Node, parameters: List<Parameter>, patternsOnly: Boolean = false) {
+    private fun applyPulledContextualParamTypes(
+        fn: Node,
+        parameters: List<Parameter>,
+        patternsOnly: Boolean = false,
+        refuseTpFnTypes: Boolean = false,
+    ) {
         // The population is exactly the un-annotated identifier and PATTERN parameters;
         // the gate is what keeps the (possibly inference-driving) pull off every
         // other function body in the program. (CHK.96) stage 2 adds the patterns —
@@ -150213,13 +150481,47 @@ interface DataView {
         // reader's call, which types pattern parameters here and leaves its identifier
         // parameters to (CHK.98)(a).
         if (parameters.none {
-                it.type == null && !it.dotDotDotToken &&
-                    ((it.name is Identifier && !patternsOnly) || it.name is ObjectBindingPattern || it.name is ArrayBindingPattern)
+                it.type == null &&
+                    (((it.name is Identifier && !patternsOnly) || it.name is ObjectBindingPattern ||
+                        it.name is ArrayBindingPattern) ||
+                        // (CHK.98)(c) a REST parameter is a population of its own — it was
+                        // skipped outright below, so `takeR((...xs) => …)` left `xs` as `any`.
+                        (it.dotDotDotToken && it.name is Identifier && !patternsOnly))
             }) return
         val ctx = pullContextualTypeAt(fn) ?: return
         val sig = callableSignaturesForCtx(ctx)?.singleOrNull() ?: return
+        // (CHK.98)(c) tsc's `getContextualThisParameterType` (checker.ts:31884): the
+        // contextual signature's own `this` parameter types `this` inside the body.
+        // An ARROW has no `this` of its own (it inherits the enclosing one), so only a
+        // function EXPRESSION may take it — and the type is read off the signature's
+        // DECLARATION, because [getParameterSymbols] deliberately drops the `this`
+        // pseudo-parameter from `Signature.parameters` (which is also what keeps the
+        // positional zip below aligned).
+        if (!patternsOnly && fn is FunctionExpression &&
+            parameters.none { (it.name as? Identifier)?.text == "this" }) {
+            contextualThisParamType(sig)?.let { currentLocalTypes["this"] = it }
+        }
         for ((i, param) in parameters.withIndex()) {
-            if (param.type != null || param.dotDotDotToken) continue
+            if (param.type != null) continue
+            if (param.dotDotDotToken) {
+                // (CHK.98)(c) Only the ALIGNED case: the contextual signature's
+                // parameter at the same position is itself a rest, so its (array) type
+                // IS this rest parameter's type. tsc's `getRestTypeAtPosition`
+                // additionally builds a tuple out of the remaining FIXED parameters
+                // when the two lists do not line up; that is refused here rather than
+                // approximated — a wrong element type is a false positive at every use
+                // of the rest binding.
+                if (patternsOnly) continue
+                val rn = (param.name as? Identifier)?.text ?: continue
+                val sp = sig.parameters.getOrNull(i) ?: continue
+                if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken != true) continue
+                val rt = getTypeOfSymbol(sp)
+                if (rt === anyType || rt === errorType) continue
+                if (typeContainsUnresolvedTypeParam(rt)) continue
+                if (refuseTpFnTypes && isTpReferencingFnTypeOrUnion(rt)) continue
+                currentLocalTypes[rn] = rt
+                continue
+            }
             val pattern = param.name.takeIf { it is ObjectBindingPattern || it is ArrayBindingPattern }
             val name = (param.name as? Identifier)?.text
             if (name == null && pattern == null) continue
@@ -150232,6 +150534,14 @@ interface DataView {
             // registering the bare TP turns downstream uncertainty-bails into
             // constraint-based verdicts. Skip (the param stays `any`).
             if (typeContainsUnresolvedTypeParam(pType)) continue
+            // (CHK.98)(a) B516's gate for the IDENTIFIER path, opt-in because it belongs
+            // to the ccet ARGUMENT reader and to no other caller: a contextual parameter
+            // whose own type is a FUNCTION carrying an unresolved type parameter INSIDE
+            // its signature passes the test above (the TP is not at the top level), and
+            // registering it hands the un-substituted signature to the call check this
+            // very frame owns — the double-emit `checkFnTypedParamCalls` exists to avoid.
+            // The two older apply sites keep their behaviour ([refuseTpFnTypes] false).
+            if (refuseTpFnTypes && isTpReferencingFnTypeOrUnion(pType)) continue
             // B85.1a, and it is LOAD-BEARING here rather than a detail: an
             // OPTIONAL contextual parameter (`cb: (a: T, b?: U) => void`) has
             // effective type `U | undefined` inside the body, so writing the
@@ -150253,6 +150563,27 @@ interface DataView {
             }
             currentLocalTypes[name!!] = effective
         }
+    }
+
+    /**
+     * (CHK.98)(c) The `this` type a contextual signature supplies, from its
+     * DECLARATION's `this` pseudo-parameter annotation (tsc's
+     * `getContextualThisParameterType`). Null when the signature declares no `this`,
+     * when the annotation does not resolve, or when it resolves to nothing usable —
+     * so it can only ever type a `this` that was previously `any`.
+     */
+    private fun contextualThisParamType(sig: Signature): Type? {
+        val declParams: List<Parameter> = when (val d = sig.declaration) {
+            is FunctionType -> d.parameters
+            is FunctionDeclaration -> d.parameters
+            is MethodDeclaration -> d.parameters
+            is FunctionExpression -> d.parameters
+            else -> return null
+        }
+        val thisParam = declParams.firstOrNull()
+            ?.takeIf { (it.name as? Identifier)?.text == "this" } ?: return null
+        val tn = thisParam.type ?: return null
+        return getTypeFromTypeNodeSafeNsAware(tn)?.takeIf { it !== anyType && it !== errorType }
     }
 
     /** B516 gate (extracted for M1.11's fn-default branch): a function-shaped type whose
@@ -159902,6 +160233,15 @@ interface DataView {
         fileName: String,
     ) {
         val callee = expr.expression as? PropertyAccessExpression ?: return
+        // (CHK.98)(a) A SPREAD argument carries an UNKNOWN number of arguments unless
+        // its type is a fixed-length tuple, and `expr.arguments.size` counts it as ONE
+        // — so `d(f.funcB(...p))` read "Expected 2 arguments, but got 1". tsc bails for
+        // exactly this (`getSpreadArgumentIndex` / `hasEffectiveRestParameter`), and
+        // bailing is the safe direction here: a missed arity row, never an invented one.
+        // Unreachable before (CHK.98)(a) — the receiver `f` was `any` at this reader, so
+        // no signature resolved and the check never ran (the corpus's
+        // `bindingPatternCannotBeOnlyInferenceSource`).
+        if (expr.arguments.any { it is SpreadElement }) return
         // B241: a SOFT later-lib member (Array.flat/flatMap under a pre-es2019 lib)
         // errors TS2550 at the property access instead — suppress the arity check.
         run {
@@ -160713,7 +161053,19 @@ interface DataView {
         //   (a) all constituents non-constructable → "No constituent ... is constructable."
         //   (b) some non-constructable → "Not all constituents ... are constructable." + first missing display
         //   (c) all constructable but sigs differ structurally → "Each member ... has construct signatures, but none ... compatible..."
-        if (calleeType is Type.Union) {
+        // (CHK.98)(a): this checker types a class VALUE as its INSTANCE type
+        // ((CHK.73)), so a union of class REFERENCES has no construct signatures for
+        // a reason that is a modelling artifact and not a fact about the program.
+        // Refuse rather than report — `[ConcreteA, AbstractA].map(cls => new cls())`
+        // is TS2511 in both references and NOTHING else. Unreachable before
+        // (CHK.98)(a): the callee was `any` at this reader, so the arm never saw a
+        // union of classes at all (the corpus's `abstractClassUnionInstantiation`).
+        if (calleeType is Type.Union &&
+            calleeType.types.none { c ->
+                val sym = (c as? Type.Interface)?.symbol
+                    ?: (c as? Type.Reference)?.target?.symbol
+                sym?.flags?.hasAny(SymbolFlags.Class) == true
+            }) {
             val constituents = calleeType.types
             val nonCtor = constituents.filter { getConstructSignaturesOfType(it).isEmpty() }
             val unionDisplay = typeToString(calleeType)

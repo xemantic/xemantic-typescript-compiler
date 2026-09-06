@@ -316,12 +316,16 @@ class BindingElementTypeTest {
         )
 
     @Test
-    fun `residue - an arrow's own parameters are any at the argument gate - pre-existing`() {
-        // `ccetEnterFunctionLike` registers every own parameter NAME as `any` when the
-        // arrow has no `FunctionType` annotation — an IDENTIFIER `(p: number) =>` as much
-        // as a pattern, on HEAD before this round. tsc reports both.
-        assertSilent("const f = ({ p }: I) => { takeB(p) }")
-        assertSilent("const g = (p: number) => { takeB(p) }")
+    fun `an arrow's own parameters reach the argument gate - CHK 98 a`() {
+        // Was a recorded RESIDUE: `ccetEnterFunctionLike` registered every own parameter
+        // NAME as `any` unless the arrow carried a `FunctionType` annotation — an
+        // IDENTIFIER `(p: number) =>` as much as a pattern. (CHK.98)(a) runs the ordinary
+        // registrar there, so both report, as tsc always did (verified against tsgo 7.0.2
+        // and pristine `typescript@6.0.3`: both give TS2345 `number` -> `boolean` here).
+        assert(diagnose(prelude + "const f = ({ p }: I) => { takeB(p) }")
+            .map { it.code to it.message } == listOf(2345 to arg("number")))
+        assert(diagnose(prelude + "const g = (p: number) => { takeB(p) }")
+            .map { it.code to it.message } == listOf(2345 to arg("number")))
     }
 
     @Test

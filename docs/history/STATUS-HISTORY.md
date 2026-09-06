@@ -1880,3 +1880,18 @@ regressions; 53 pins, 11 arms (one provably unobservable, recorded); core 16,175
 destructured bindings over ~120 cells: an OBJECT pattern's members are already typed at every reader but
 the argument and TS2367 ones, every ARRAY pattern / default / nested / rest / contextual pattern parameter
 is `any` everywhere — queued as the staged (CHK.96), correcting (CHK.46)'s entry.
+
+**(P18.26) — A BODY-LOCAL SCALAR CONST REACHES THE ARGUMENT GATE, AND UNION CALLEES ARE MEASURED INTO (CHK.97), 17,664 → 17,717 / 0 / 3 (2026-09-06).**
+**(CHK.95) LANDED.** In every body context `const s = "a"; takeB(s)` was silent for every non-enum scalar
+initializer, every `let` and every annotated primitive local (48 of 72 cells) while file level reported: a
+SYNTACTIC scalar predicate in the ccet pre-scan (a const keeps the literal, a let widens — a counter arm
+shows why it must be syntactic: admitting the conditional moves `typeOfExpr.calls`) and a primitive-
+annotation arm at leave time, with a per-body name set so an annotated duplicate reads `any`. The mutable
+boolean is REFUSED after measurement (tsc's `boolean` is `true | false` and narrows by assignment; ours
+is an intrinsic, and the file-level twin is a pre-existing false positive). Two post-spine emitters that
+double-emitted rows the gate now owns were deduped. 89 of 125 cells match both references, 30 named
+residues; 53 pins, 7 arms; core 16,228/0, corpus 8,837/0, `cost_gate.py` exit 0 (`globals.lookups`
+−0.31%), grid 8×`added=0 removed=0`. Read-only recon measured union callees (26 rows, five extracted
+pristine fixtures): the call RESULT is `any` for EVERY union callee, three wrong-row families beside the
+silences, and TS2349 where tsc says TS2722 — queued as (CHK.97) around tsc's two-pass `getUnionSignatures`
+plus its array fallback.

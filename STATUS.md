@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **196,976** lines (191,070 when the metric was created; the (P18.9)-(P18.30) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **197,328** lines (191,070 when the metric was created; the (P18.9)-(P18.31) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,30 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.31) — CONTEXTUAL PARAMETER TYPES REACH THE ARGUMENT AND PROPERTY-ACCESS READERS ((CHK.98)(a)/(b)/(c)), AND A SCRIPTED SPLICE THAT SILENTLY DELETED THREE PINS, 17,932 → 17,963 / 0 / 3 (2026-09-06).**
+**(CHK.98)(a)/(b)/(c) LANDED.** The ccet ARGUMENT reader (TWO `anyType` sites, not the one the
+item named — and `ccetObjlitMemberFrame` additionally had to COPY the `localTypes` map it was
+SHARING with the enclosing frame), the PROPERTY-ACCESS readers (`cpaAnnotationCtx` at four sites
+plus an objlit-METHOD arm, gated to a NON-union contextual parameter type), and the pull's exact
+arms (Conditional, As/Satisfies, `=`, `this`, REST, the array-literal edge). Matrix **99 → 125
+rows matched against both references, ours-only 7 → 2**. Three defects the item did not name
+landed with it, including **(CHK.98c)** as (b)'s prerequisite — which is PRE-EXISTING on HEAD and
+fires for a plain function-declaration parameter. **Five of the item's claims are measured wrong**,
+the sharpest being its `typeNode.bypassed` **+31%** memo precondition: measured **+0.22%** with no
+memo built, so the memo is not one. 31 new pins plus **five flipped from an absence assertion to a
+value one** — two the item predicted, and two residues of EARLIER rounds found only because the
+full suite ran; every flip re-verified here against tsgo 7.0.2 AND pristine 6.0.3 before being
+accepted. **The round's instrument hazard is a THIRD way an arm reads a false zero**: a scripted
+splice silently DELETED three pins, so two arms read `0 RED` while `git diff --shortstat` and a
+per-arm `cmp` both passed — they test the source under ablation, never the pin POPULATION.
+**`cost_gate.py` FAILED and was rebaselined WITH ATTRIBUTION** in the same commit: an arm disabling
+only (a) reads exit 0, and (a) owns 83% of the `narrow.memoServed` rise (+2.29%) and 43% of
+`mapped.hits` (+2.22%) — both cache-HIT counters rising faster than their own populations, because
+a contextually-typed parameter becomes a NARROWABLE REFERENCE where an `any` one was not;
+`spine.nodes` +0.00%, `output.errors` 46 → 46. Corpus 8,837/0, `huge_methods.py` exit 0, grid
+8×`added=0 removed=0` with the BEFORE arm rebuilt in a directory no subagent wrote to. 19 arms
+(a12 recorded as a redundant guard).
 
 **(P18.30) — THE ARRAY FALLBACK, INTERSECTED CALLBACK SIGNATURES AND THE OPTIONAL-CALL RESULT (STAGE 2 OF (CHK.97)), AND A `noImplicitAny` GATE THAT WAS INERT ON EVERY STRICT PROJECT, 17,916 → 17,932 / 0 / 3 (2026-09-06).**
 **(CHK.97) stage 2 LANDED** — three of five deliverables: tsc's ARRAY FALLBACK (checker.ts:15949),
@@ -93,18 +117,3 @@ round-927 pairs recorded; core 16,303/0, corpus 8,837/0, `cost_gate.py` rebaseli
 types a callback's parameters for the assignability reader and hover — CLAUDE.md's (CHK.30) entry was
 STALE and is corrected — and the residue is the ccet ARGUMENT reader plus three property-access sources,
 queued as (CHK.98) with two narrowing gaps (98b/98c) behind its union gate.
-
-**(P18.26) — A BODY-LOCAL SCALAR CONST REACHES THE ARGUMENT GATE, AND UNION CALLEES ARE MEASURED INTO (CHK.97), 17,664 → 17,717 / 0 / 3 (2026-09-06).**
-**(CHK.95) LANDED.** In every body context `const s = "a"; takeB(s)` was silent for every non-enum scalar
-initializer, every `let` and every annotated primitive local (48 of 72 cells) while file level reported: a
-SYNTACTIC scalar predicate in the ccet pre-scan (a const keeps the literal, a let widens — a counter arm
-shows why it must be syntactic: admitting the conditional moves `typeOfExpr.calls`) and a primitive-
-annotation arm at leave time, with a per-body name set so an annotated duplicate reads `any`. The mutable
-boolean is REFUSED after measurement (tsc's `boolean` is `true | false` and narrows by assignment; ours
-is an intrinsic, and the file-level twin is a pre-existing false positive). Two post-spine emitters that
-double-emitted rows the gate now owns were deduped. 89 of 125 cells match both references, 30 named
-residues; 53 pins, 7 arms; core 16,228/0, corpus 8,837/0, `cost_gate.py` exit 0 (`globals.lookups`
-−0.31%), grid 8×`added=0 removed=0`. Read-only recon measured union callees (26 rows, five extracted
-pristine fixtures): the call RESULT is `any` for EVERY union callee, three wrong-row families beside the
-silences, and TS2349 where tsc says TS2722 — queued as (CHK.97) around tsc's two-pass `getUnionSignatures`
-plus its array fallback.

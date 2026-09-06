@@ -25,6 +25,101 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.31) — contextual parameter types reach the argument and property-access readers ((CHK.98)(a)/(b)/(c)), and a scripted splice that silently deleted three pins (2026-09-06)
+
+**Suite 17,932 → 17,963 / 0 / 3** — 31 pins in the new `ContextualParamReadersTest`, plus FIVE
+pins flipped from an absence assertion to a value one (two KNOWN-GAP pins in
+`ContextualParameterTypeTest`, which the item predicted, and — found by the FULL suite, which the
+implementation subagent did not run — two residues of EARLIER rounds this work closed:
+`BindingElementTypeTest`'s "an arrow's own parameters are `any` at the argument gate" and
+`BodyLocalLiteralArgumentTest`'s callback-shadowing negative control). **Every flipped expectation
+was re-verified here against tsgo 7.0.2 AND pristine 6.0.3 before being accepted** — all three
+rows agree on both, so these are genuine residue closures and not a regression being papered over.
+The shadowing control keeps its subject and gains strength: it now NAMES the contextual `number`,
+which is what still proves the enclosing `const s = "a"` did not leak, where a silence assertion
+no longer could.
+
+**(CHK.98)(a)/(b)/(c) LANDED.** **(a)** the ccet ARGUMENT reader — TWO `anyType` sites, not the
+one the item named: `ccetEnterFunctionLike`'s `else` branch and `ccetObjlitMemberFrame` both now
+run `populateParameterLocalTypes` + `applyPulledContextualParamTypes` after the round-475 shadow
+(tsc's `getContextuallyTypedParameterType`), the objlit frame additionally COPYING its `localTypes`
+map, which it used to share with the enclosing one — harmless for a frame that writes nothing and
+a leak for one that does. **(b)** the PROPERTY-ACCESS readers — `cpaAnnotationCtx` /
+`cpaWithAnnotationCtx` at four sites (the spine `VARIABLE_STATEMENT` and `PropertyDeclaration`
+anchors and their legacy twins), gated to a NON-union contextual parameter type, plus
+`cpaExprObjlitMethod` filling `cpaExprObjectLiteral`'s `else -> {}`. **(c)** the pull's exact arms
+— `ConditionalExpression` (tsc :32553), `As`/`Satisfies` (:32809, `as const` excluded
+syntactically), `=` (:32259, LHS restricted to Identifier/PropertyAccess), `contextualThisParamType`
+(:31884), the aligned REST arm (`getRestTypeAtPosition`), and the `spineIanyEnterNode`
+array-literal edge asking the pull where the hot call-arg edge cannot. Matrix **99 → 125 rows
+matched against both references, ours-only 7 → 2** (both pre-existing and queued).
+
+**THREE DEFECTS THE ITEM DID NOT NAME, each forced by a gate.** (CHK.98c) had to land as (b)'s
+prerequisite — `typeofOptionalChainNonNullish` (tsc's `optionalChainContainsReference`) — and it is
+**PRE-EXISTING on HEAD**, firing for a plain function-declaration parameter, measured arm-free;
+(b) merely widened its reach. The union-`new` emitter now refuses a union of CLASS INSTANCE types,
+because this checker types a class value as its instance type ((CHK.73)) so "no construct
+signature" is an artifact (corpus `abstractClassUnionInstantiation`). And
+`checkTs2554ForPropertyAccessCall` bails on a SPREAD argument (tsc's `getSpreadArgumentIndex`) —
+`arguments.size` counts `...p` as one (corpus `bindingPatternCannotBeOnlyInferenceSource`).
+
+**FIVE MORE OF THE ITEM'S CLAIMS ARE MEASURED WRONG — the fifth round running.**
+- **The gap is not contextual typing at all in one case**: an explicitly ANNOTATED arrow parameter
+  was equally untyped at the ccet argument reader on the parent binary
+  (`takeU((x: string | number) => takeS(x))` is silent) — that frame never ran the ordinary
+  parameter registrar. There is a pin for it that needs no contextual typing.
+- **The union gate is insufficient on its own.** The item said it would avoid the knip rows;
+  measured, (CHK.98c)'s shape has a NON-union parameter type and came through anyway, which is
+  why (98c) had to land.
+- **Opening (b) to every object literal costs `inlineVariable.ts:102` on three profiles**; scoped
+  to annotation-sourced contexts it is 8×0 — the item's `objlit method` scope is the one that works.
+- **The REST arm was innocent of the baseline first blamed on it** (the cause was (a) typing the
+  receiver plus the spread-arity gap); reinstated after measurement.
+- **And the item's own cost prediction is refuted**: it warned the first two pull sites cost
+  `typeNode.bypassed` **+31%** without a memo. Measured, `typeNode.bypassed` is **+0.22%** and NO
+  memo was built — so the memo the item made a precondition is not one. (Deliberately not added:
+  a cache over an ambient-sensitive answer needs a cost measurement to justify it, and there was
+  none to justify.)
+
+**THE ROUND'S INSTRUMENT HAZARD — a THIRD way an ablation arm reads a false zero.** A scripted
+splice earlier in the round silently DELETED three pins, so two arms (a6, a7a) read `0 RED` and
+were nearly recorded as blind pins. **`git diff --shortstat` and a per-arm `cmp` against the arm's
+own snapshot BOTH said the arms were fine** — they test the SOURCE under ablation, not the pin
+POPULATION. What exposed it was a project-level measurement carried alongside the pin counts; with
+the pins restored, both arms discriminate. Round 902's "the arm can be DEAD rather than the pin
+blind" and round 922's "shortstat is vacuous on a dirty tree" now have a sibling: **the pin set
+itself can shrink**, and only an expected-count assertion sees it.
+
+**GATES.** Suite **17,963 / 0 / 3**, corpus **8,837 / 0**. **`cost_gate.py` FAILED and was
+rebaselined WITH ATTRIBUTION** (`--update` in this commit): `narrow.memoServed` **+2.29%** and
+`mapped.hits` **+2.22%** over the ±2% tolerance, `typeOfExpr.calls` +1.59%, `narrow.walks` +0.93%,
+`typeNode.cacheable` +1.04%, `spine.nodes` +0.00%, `output.errors` 46 → 46. **An attribution arm
+disabling ONLY (a)'s two apply sites reads `exit 0`**, i.e. (a) alone crosses the gate, and it owns
+**83% of the `narrow.memoServed` rise and 43% of `mapped.hits`**. That is the expected accounting
+and not a leak: both over-tolerance counters are cache-HIT counters rising FASTER than their own
+populations (`narrow.walks` +0.93%, `mapped.keyed` +0.67%), which is a memo becoming more
+effective, and the mechanism is that a contextually-typed parameter becomes a NARROWABLE
+REFERENCE where an `any` one was not. `huge_methods.py --fail-over 0` **exit 0**. **Grid
+8 × `added=0 removed=0`** (`scripts/chk98-grid.sh`, BEFORE arm = the committed `6bdcd647a` binary
+in a directory no subagent wrote to, sha-guarded — the subagent kept to its own
+`build/bench/chk98-a/` prefix as briefed, which is the fix for last round's shared-directory
+self-comparison).
+
+**ARMS — 19 runs, one mistake each.** a1 the ccet apply site **5 RED** (all argument-reader, no
+property-access pin — the item's prediction confirmed); a2 the cpa annotation source 5 (including
+both flipped KNOWN-GAP pins); a3 objlit-method walk 2; a3b that walk opened to every objlit 1;
+a4 the union gate 1; a5a/a5b/a5c Conditional / as+satisfies / `=` 1/2/1; a6 the array edge 1;
+a7a `this` 1; a7b REST 2; a8 the objlit member frame 1; a9 (98c) 3; a10/a11 the two narrowing
+guards 1/1 (each reddening its own negative control); a13 the spread-arity guard 1. **a12
+(`refuseTpFnTypes`) reddens NOTHING on any measured shape and is recorded as a REDUNDANT GUARD**,
+kept because it is the B516 discipline the sibling registrars carry and the grid was taken with it.
+
+**LEFT FOR A LATER STAGE**: the `NewExpression` argument arm (needs construct-signature plumbing
+plus explicit type-argument instantiation — a half-working arm hands an un-substituted `T` to the
+argument relation, the item's own pre-check hazard); the `pullContextualTypeAt` memo (unbuilt and
+now unmotivated, see above); `typeContainsUnresolvedTypeParam`'s `Type.Object` arm (refused — no
+measured instance, ~30 callers); (CHK.98b); TS2556 for a non-tuple spread; and the item's stage 2.
+
 ### Round (P18.30) — the array fallback, intersected callback signatures and the optional-call result (stage 2 of (CHK.97)), and a `noImplicitAny` gate that was inert on every strict project (2026-09-06)
 
 **Suite 17,916 → 17,932 / 0 / 3** — 16 pins in the new `UnionCalleeStage2Test`, plus one stage-1
@@ -2782,7 +2877,32 @@ prediction: 17,343 / 0 / 3.**
   is TS2741 in tsgo and TS2684 in pristine. All 23 of ours on the matrix come from `checkSpine`
   (one owner, no tail-walker double-emit on these shapes).
 
-- [ ] **(CHK.98) CONTEXTUAL PARAMETER TYPES REACH THE *ARGUMENT* AND *PROPERTY-ACCESS* READERS,
+- [ ] **(CHK.98) (a)/(b)/(c) LANDED 2026-09-06 ((P18.31) note) — the ccet ARGUMENT reader (TWO `anyType`
+  sites, not the one the item named: `ccetEnterFunctionLike`'s `else` AND `ccetObjlitMemberFrame`, which
+  additionally had to COPY its shared `localTypes` map), the PROPERTY-ACCESS readers (`cpaAnnotationCtx` /
+  `cpaWithAnnotationCtx` at four sites + `cpaExprObjlitMethod`, gated to a NON-union contextual parameter
+  type), and the pull's exact arms (Conditional, As/Satisfies, `=`, `this`, REST, the array-literal edge).
+  Matrix 99 → 125 rows matched against both references, ours-only 7 → 2; 31 pins + FIVE flipped from
+  absence to value (two KNOWN-GAP pins the item predicted, and two residues of EARLIER rounds found by the
+  full suite); 19 arms (a12 `refuseTpFnTypes` recorded as a REDUNDANT GUARD); corpus 8,837/0, grid 8×0/0,
+  `cost_gate.py` REBASELINED with attribution — an arm disabling only (a) reads exit 0, and (a) owns 83% of
+  the `narrow.memoServed` rise and 43% of `mapped.hits`, both cache-HIT counters rising faster than their
+  populations because a contextually-typed parameter becomes a NARROWABLE REFERENCE where an `any` one was
+  not. **THREE defects the item did not name landed with it**: (CHK.98c) as (b)'s prerequisite, a union-`new`
+  refusal for CLASS INSTANCE types ((CHK.73) — this checker types a class value as its instance type, so
+  "no construct signature" is an artifact), and a SPREAD-argument bail in
+  `checkTs2554ForPropertyAccessCall`. **FIVE of the item's claims are measured WRONG**: an explicitly
+  ANNOTATED arrow parameter was equally untyped at the ccet reader (that frame never ran the ordinary
+  registrar — not a contextual-typing gap at all); the union gate alone does NOT avoid the knip rows;
+  opening (b) to every object literal costs `inlineVariable.ts:102` on three profiles, so the item's
+  objlit-METHOD scope is the one that works; the REST arm was innocent of the baseline first blamed on it;
+  and **the item's `typeNode.bypassed` +31% memo precondition is refuted — measured +0.22% with NO memo
+  built**. **STILL OPEN**: the `NewExpression` argument arm (needs construct-signature plumbing plus
+  explicit type-argument instantiation — a half-working arm hands an un-substituted `T` to the argument
+  relation, the item's own pre-check hazard); the `pullContextualTypeAt` memo (unbuilt and now
+  UNMOTIVATED — do not add a cache over an ambient-sensitive answer without a cost measurement);
+  `typeContainsUnresolvedTypeParam`'s `Type.Object` arm (refused — no measured instance, ~30 callers);
+  (CHK.98b); TS2556 for a non-tuple spread; and the item's own STAGE 2. ORIGINAL ITEM: CONTEXTUAL PARAMETER TYPES REACH THE *ARGUMENT* AND *PROPERTY-ACCESS* READERS,
   AND THE PULL'S EXACT NON-GENERIC ARMS LAND — MEASURED 2026-09-06 by read-only recon against
   `d98a090d` (`scratchpad/chk98/{m,m2,m3,m4,k}`, 99 rows; tsgo 7.0.2 = pristine 6.0.3 on every
   row, union order included).** (CHK.39) ALREADY typed a callback's parameters for the
@@ -2872,7 +2992,11 @@ prediction: 17,343 / 0 / 3.**
   parameter probe, `scratchpad/chk98/k`): a type-guard CALL as a ternary CONDITION narrows the
   then-operand in tsc and not in the property-access family here. One of the two remaining knip
   false positives that keep (CHK.98)(b)'s union gate closed.
-- [ ] **(CHK.98c) OPTIONAL-CHAIN `typeof` NARROWING** — `typeof c.github?.releaseNotes ===
+- [x] **(CHK.98c) CLOSED 2026-09-06 ((P18.31) note) — `typeofOptionalChainNonNullish`, tsc's
+  `optionalChainContainsReference`. It landed as (CHK.98)(b)'s PREREQUISITE, not beside it: the item
+  predicted (b)'s union gate would avoid the knip rows, and measured, this shape has a NON-union parameter
+  type and came through anyway. It is also PRE-EXISTING on HEAD — it fires for a plain
+  function-declaration parameter, measured arm-free — so (b) only widened its reach. ORIGINAL: OPTIONAL-CHAIN `typeof` NARROWING** — `typeof c.github?.releaseNotes ===
   'string'` then `c.github.releaseNotes` reads TS18048 here (knip's release-it plugin, two rows,
   measured 2026-09-06 as an annotated-parameter probe): a `typeof` guard over an optional chain
   narrows the chain's every link non-nullish in tsc (a `"string"` result cannot come from a
