@@ -10664,6 +10664,19 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val enumDomainCompleteCache = HashMap<Int, Boolean>()
 
+    /** (CHK.97): memo for [combineUnionSignatures], keyed by the UNION's `Type.id`.
+     *  INV.5(a) interns unions by their member-id list, so the key is exact. A NULL
+     *  answer (the combination is refused) is memoized too — it is as expensive to
+     *  re-derive as a positive one. Declared before `init` per the init-order trap.
+     *  Storing `null` inside the map is what makes `containsKey` the hit test. */
+    private val unionSignatureCache = HashMap<Int, List<Signature>?>()
+
+    /** (CHK.97): [unionSignatureCache]'s CONSTRUCT-signature twin. tsc runs the same
+     *  `getUnionSignatures` over both signature kinds (`resolveUnionTypeMembers`), and a
+     *  union's construct signatures were the EMPTY list here — which is why every
+     *  `new (typeof A | typeof B)(…)` was a false TS2351. */
+    private val unionConstructSignatureCache = HashMap<Int, List<Signature>?>()
+
     /**
      * (INC.69) The program's files grouped by the LAST PATH SEGMENT of their file
      * name, built on first ask and never again.
@@ -130624,9 +130637,37 @@ interface DataView {
             }
             return anyType
         }
-        if (calleeType !is Type.Object) return anyType
-        resolveStructuredTypeMembers(calleeType)
-        val sigs = calleeType.callSignatures
+        // (CHK.97) A UNION callee is tsc's `getUnionSignatures` — before this the
+        // function `return anyType`'d for every non-`Type.Object` callee BEFORE any
+        // signature was read, so a union call's RESULT was `any` program-wide (including
+        // B516's own combinable rows) and every downstream reader of it was vacuous.
+        val sigs: List<Signature>? = when {
+            calleeType is Type.Object -> {
+                resolveStructuredTypeMembers(calleeType)
+                calleeType.callSignatures
+            }
+            calleeType is Type.Union -> {
+                // A nullish constituent has no signatures, so the combination would be
+                // refused outright; tsc reports the invocation (TS2721/2722/2723, emitted
+                // by [ccetUnionCalleeChecks]) and resolves the call against the NON-nullish
+                // part. An OPTIONAL call keeps today's `any`: its result is the combined
+                // return `| undefined`, which is not expressible at this function's many
+                // exits without restructuring it (a stage-2 residue, and `any` is the
+                // conservative direction — a NARROWER answer would silently accept
+                // `const x: number = f?.()`).
+                val nonNullish = calleeType.types.filter { !isNullishConstituent(it) }
+                when {
+                    nonNullish.size == calleeType.types.size -> combineUnionSignatures(calleeType)
+                    expr.questionDotToken || nonNullish.isEmpty() -> return anyType
+                    else -> when (val eff = getUnionType(nonNullish)) {
+                        is Type.Union -> combineUnionSignatures(eff)
+                        is Type.Object -> { resolveStructuredTypeMembers(eff); eff.callSignatures }
+                        else -> return anyType
+                    }
+                }
+            }
+            else -> return anyType
+        }
         if (sigs.isNullOrEmpty()) return anyType
         // 16.4: Explicit type arguments on call expression — instantiate the signature
         val typeArgs = expr.typeArguments
@@ -133614,9 +133655,17 @@ interface DataView {
             }
             return calleeType
         }
-        if (calleeType !is Type.Object) return anyType
-        resolveStructuredTypeMembers(calleeType)
-        val sigs = calleeType.constructSignatures
+        // (CHK.97) a UNION callee — `new (typeof A | typeof B)(…)` — is tsc's
+        // `getUnionSignatures` over the members' CONSTRUCT lists; its return is the
+        // union of the members' instance types (`A | B`), which was `any` before.
+        val sigs: List<Signature>? = when {
+            calleeType is Type.Object -> {
+                resolveStructuredTypeMembers(calleeType)
+                calleeType.constructSignatures
+            }
+            calleeType is Type.Union -> combineUnionSignatures(calleeType, construct = true)
+            else -> return anyType
+        }
         if (sigs.isNullOrEmpty()) return anyType
         return sigs[0].resolvedReturnType ?: anyType
     }
@@ -158298,7 +158347,13 @@ interface DataView {
         }
         // Get call signatures
         CallSections.at(CallSections.CALL_SIGS)
-        val signatures = getCallSignaturesOfType(calleeType)
+        // (CHK.97) A UNION callee's signatures are tsc's `getUnionSignatures`, not the
+        // CONCATENATION `getCallSignaturesOfType` answers — reading the concatenation as
+        // an overload set printed TS2769 where tsc prints the combined signature's own
+        // TS2345/TS2554. Scoped to THIS call site in stage 1; `getCallSignaturesOfType`
+        // itself is unchanged, so every "does this have call signatures" reader is too.
+        val signatures = (calleeType as? Type.Union)?.let { combineUnionSignatures(it) }
+            ?: getCallSignaturesOfType(calleeType)
         CallSections.at(CallSections.NO_SIGS)
         if (signatures.isEmpty()) {
             ccetNoCallSignatureDiagnostics(expr, calleeExpr, calleeType, source, fileName)
@@ -158628,6 +158683,41 @@ interface DataView {
                 Pair(s, expressionTrueEnd(calleeExpr) - s)
             }
         }
+        // (CHK.97) tsc checks NULLABILITY before it asks for signatures
+        // (checker.ts:37038 `checkNonNullExpression` sits above the :37054
+        // `getSignaturesOfType`), so `f("x")` on a `Fn | undefined` callee is TS2722
+        // "Cannot invoke an object which is possibly 'undefined'." — not the case-(b)
+        // TS2349 "Not all constituents … are callable" this reported. An OPTIONAL call
+        // short-circuits on a nullish callee and is legal (the round-408 pre-pass above
+        // already answers it), and a nullish member left after narrowing beside a
+        // NON-callable one is still a genuine case-(b).
+        if (!expr.questionDotToken && strictNullChecks) {
+            val nullish = constituents.filter { isNullishConstituent(it) }
+            val rest = constituents.filter { !isNullishConstituent(it) }
+            if (nullish.isNotEmpty() && rest.isNotEmpty() &&
+                rest.all { getCallSignaturesOfType(it).isNotEmpty() }
+            ) {
+                val hasNull = nullish.any { it.flags.hasAny(TypeFlags.Null) }
+                val hasUndefined = nullish.any { it.flags.hasAny(TypeFlags.Undefined) }
+                val (msg, code) = when {
+                    hasNull && hasUndefined ->
+                        "Cannot invoke an object which is possibly 'null' or 'undefined'." to 2723
+                    hasNull -> "Cannot invoke an object which is possibly 'null'." to 2721
+                    else -> "Cannot invoke an object which is possibly 'undefined'." to 2722
+                }
+                val (start, length) = computeSpan()
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = msg,
+                        category = DiagnosticCategory.Error, code = code,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                    ))
+                    return true
+                }
+            }
+        }
         if (nonCallable.isNotEmpty() && nonCallable.size != constituents.size) {
             // Case (b): mixed callable / non-callable.
             val firstMissing = nonCallable[0]
@@ -158655,90 +158745,26 @@ interface DataView {
             val hasNullSig = sigsList.any { it == null }
             if (!hasNullSig) {
                 val sigs = sigsList.map { it!! }
-                // B516: union-of-callables combined signature (tsc getUnionSignatures).
-                // When every member call signature is type-parameter-free, has the SAME
-                // (non-zero) required-only arity, no `this`/optional/rest params, AND at
-                // least one parameter position has DIFFERING types across members, tsc
-                // synthesizes ONE signature whose parameter at position i is the
-                // INTERSECTION of the members' types there (e.g.
-                // `((x:number)=>string) | ((x:boolean)=>string)` → `(x: number & boolean)`
-                // = `(x: never)`). Calling it then checks the args against the combined
-                // (often `never`) parameters — yielding TS2345 / TS2554 instead of the
-                // (incorrect) "none of those signatures are compatible" TS2349. The
-                // type-param gate keeps `fnUnion2`/`F3|F4`-style genuinely-incompatible
-                // unions on the TS2349 path; the `this`-param gate (params drop `this`
-                // at build, so a this-only sig has arity 0) excludes `unionTypeCallSignatures6`.
-                // Round 728: tsc's `combineSignaturesOfUnionMembers` does NOT demand equal
-                // arity or all-required parameters — it takes the LONGEST parameter list,
-                // intersects position-wise (a position the shorter signature lacks contributes
-                // `unknown`, i.e. nothing) and sets the combined minArgumentCount to the MAX.
-                // Our gate demanded `minArgumentCount == pc`, so EVERY lib method carrying a
-                // trailing optional — `forEach(cb, thisArg?)` above all — fell through to the
-                // (incorrect) TS2349 "none of those signatures are compatible" path. REST
-                // parameters stay excluded: the rest-tuple union below owns them.
-                val combinedParamCount = sigs.maxOf { it.parameters.size }
-                val combinable = run {
-                    if (combinedParamCount == 0) return@run false
-                    for (s in sigs) {
-                        if (!s.typeParameters.isNullOrEmpty()) return@run false
-                        if (s.parameters.any {
-                                (it.valueDeclaration as? Parameter)?.dotDotDotToken == true
-                            }) return@run false
-                    }
-                    // require at least one position where the param types differ
-                    (0 until combinedParamCount).any { i ->
-                        val t0 = sigs[0].parameters.getOrNull(i)?.let { getTypeOfSymbol(it) }
-                        sigs.any { s -> s.parameters.getOrNull(i)?.let { getTypeOfSymbol(it) } !== t0 }
-                    }
-                }
-                if (combinable) {
-                    val pc = combinedParamCount
-                    val args = expr.arguments
-                    if (args.size > pc) {
-                        emitTS2554TooMany(sigs.maxOf { it.minArgumentCount }, pc, args.size, args, pc, source, fileName)
-                        return true
-                    }
-                    for (i in 0 until minOf(args.size, pc)) {
-                        // (CHK.94): REDUCED, as tsc's intersection is at construction —
-                        // `1 & (1 | 2)` is `1`, not an un-distributed intersection that
-                        // rejected `u.indexOf(1)` on `[1] | [1, 2]` and displayed
-                        // `1 & 1 | 2`; object constituents fall to `getIntersectionType`
-                        // inside the reducer, so `number & boolean` still reads `never`.
-                        val combinedParamType =
-                            reduceIntersectionForWriteType(sigs.mapNotNull { s ->
-                                s.parameters.getOrNull(i)?.let { getTypeOfSymbol(it) }
-                            })
-                        val arg = args[i]
-                        if (arg is SpreadElement) continue
-                        // (CHK.94): against a LITERAL(-union) combined parameter keep the
-                        // literal argument type — `allArgumentsMatch`'s overloadingOnConstants2
-                        // rule; `getTypeOfExpression` widens `1` to `number`, which rejected
-                        // `u.indexOf(1)` against the combined `1` (a false positive).
-                        val argType = if (propTypeContainsLiteral(combinedParamType))
-                            literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
-                        else getTypeOfExpression(arg)
-                        if (argType === anyType || argType === errorType) continue
-                        if (!checkTypeRelatedTo(argType, combinedParamType, assignableRelation)) {
-                            val paramIsLiteral = getWidenedLiteralType(combinedParamType) !== combinedParamType
-                            val showLiteral = paramIsLiteral || combinedParamType === neverType
-                            val argDisplay = if (showLiteral)
-                                typeToString(literalTypeOfExpression(arg) ?: argType)
-                            else typeToString(getWidenedLiteralType(argType))
-                            val start = arg.pos
-                            val length = expressionTrueEnd(arg) - start
-                            if (length > 0) {
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "Argument of type '$argDisplay' is not assignable to parameter of type '${typeToString(combinedParamType)}'.",
-                                    category = DiagnosticCategory.Error, code = 2345,
-                                    fileName = fileName, line = line, character = character,
-                                    start = start, length = length,
-                                ))
-                            }
-                        }
-                    }
-                    return true
-                }
+                // (CHK.97) B516's hand-rolled approximation of tsc's
+                // `combineSignaturesOfUnionMembers` is DELETED — [combineUnionSignatures]
+                // is the one home and answers the whole two-pass rule, so a combinable
+                // union is handed to the ORDINARY argument gate (the caller re-reads the
+                // signatures through the same helper) instead of being argument-checked
+                // here against one synthesized parameter list. What that buys beyond
+                // B516: the call's RESULT type (every union callee answered `any` before,
+                // so ~30 measured TS2322 rows never fired), the ARITY rows in both
+                // directions, rest members, generic members, and a PASS-1 overload SET.
+                // B516's two rules that had to be RE-HOMED rather than dropped are
+                // recorded where they now live: the literal-argument keep against a
+                // `never`/literal parameter (both argument sites, (CHK.55)'s rule) and
+                // the FP-firewall trust for a synthesized parameter
+                // ([Signature.fromUnionCombination]).
+                //
+                // ORDER is load-bearing: the two dedicated rest-TUPLE walkers below own a
+                // shape [sigTryTypeAtPosition] does not model (a rest parameter typed as a
+                // fixed-length tuple expands POSITIVELY in tsc's `getParameterCount`; ours
+                // answers the tuple itself), so they run FIRST — `signatureCombiningRest
+                // Parameters5` is the baseline that notices.
                 // signatureCombiningRestParameters5 (part 1): a union of fn types whose SOLE
                 // param is a REST param typed as a fixed-length TUPLE (`(...args: [a, b]) =>
                 // void`). tsc combines by element-wise intersecting the tuples (`[string|number,
@@ -158779,6 +158805,23 @@ interface DataView {
                         }
                     }
                     return true
+                }
+                // (CHK.97) tsc's `getUnionSignatures`. A non-null answer means the union
+                // HAS call signatures; hand them to the ordinary resolution by declining
+                // to consume the call (the caller recomputes them for a union through the
+                // same helper). A null answer keeps every decision below exactly as it was.
+                val combinedSigs = combineUnionSignatures(calleeType)
+                if (combinedSigs != null) {
+                    // tsc reports an ARITY error and NOTHING per argument, so the check
+                    // is here rather than after the hand-off. The ordinary gate cannot
+                    // do it: TS2554 fires for a FUNCTION-DECLARATION callee only (both
+                    // directions, MEASURED — the queue item's "the too-FEW TS2554 comes
+                    // free" is false), and a union callee is a VARIABLE by construction.
+                    // Retired B516 emitted the too-MANY half for its own subset;
+                    // `functionCallOnConstrainedTypeVariable` is the corpus baseline and
+                    // `unionTypeCallSignatures4` the (inactive) pristine one.
+                    if (unionCalleeArityDiagnostic(expr, combinedSigs, calleeExpr, source, fileName)) return true
+                    return false
                 }
                 // unionOfArraysFilterCall: a union with an OVERLOADED member — at least one
                 // constituent has ≥2 call signatures (e.g. `(Fizz[] | readonly Buzz[]).filter`,
@@ -158858,6 +158901,397 @@ interface DataView {
             }
         }
         return false
+    }
+
+    // ------------------------------------------------------------------
+    // (CHK.97) tsc's `getUnionSignatures` — the ONE home for a union callee's
+    // signatures. checker.ts:14313-14363 (the two passes), :14400-14483
+    // (`combineUnionParameters` / `combineSignaturesOfUnionMembers`).
+    // ------------------------------------------------------------------
+
+    /** (CHK.97) Does [sig]'s parameter at [i] carry a `...`? */
+    private fun sigParamIsRestAt(sig: Signature, i: Int): Boolean {
+        val p = sig.parameters.getOrNull(i) ?: return false
+        return (p.valueDeclaration as? Parameter)?.dotDotDotToken == true ||
+            p.declarations.any { it is Parameter && it.dotDotDotToken }
+    }
+
+    /** (CHK.97) tsc's `hasEffectiveRestParameter` — is the LAST parameter a rest? */
+    private fun sigHasRestParameter(sig: Signature): Boolean =
+        sig.parameters.isNotEmpty() && sigParamIsRestAt(sig, sig.parameters.size - 1)
+
+    /**
+     * (CHK.97) tsc's `tryGetTypeAtPosition` — the type an ARGUMENT at [i] binds to:
+     * the i-th parameter's type, the ELEMENT type where that position lands on (or
+     * past) a trailing rest, and null past the end of a rest-less list.
+     */
+    private fun sigTryTypeAtPosition(sig: Signature, i: Int): Type? {
+        val params = sig.parameters
+        if (params.isEmpty()) return null
+        if (i >= params.size && !sigHasRestParameter(sig)) return null
+        return restAwareParamType(params, i)
+    }
+
+    /** (CHK.97) tsc's `getTypeAtPosition` — [sigTryTypeAtPosition] with `any` past the end. */
+    private fun sigTypeAtPosition(sig: Signature, i: Int): Type =
+        sigTryTypeAtPosition(sig, i) ?: anyType
+
+    /**
+     * (CHK.97) tsc's `compareTypesIdentical` / `compareTypesSubtypeOf` — the comparator
+     * `compareSignaturesIdentical` is handed. There is no subtype relation in this
+     * checker (`subtypeRelation` is declared with ZERO readers, CLAUDE.md), so the
+     * PARTIAL comparator is assignability — which is bidirectional exactly where a
+     * subtype relation would separate the pair (`any`, optional members), i.e. it is
+     * more permissive and can only widen the set of matched signatures.
+     */
+    private fun sigCompareTypes(a: Type, b: Type, partialMatch: Boolean): Boolean =
+        a === b || checkTypeRelatedTo(a, b, if (partialMatch) assignableRelation else identityRelation)
+
+    /** (CHK.97) tsc's `isMatchingSignature` (checker.ts:25370) verbatim. */
+    private fun isMatchingSignature(source: Signature, target: Signature, partialMatch: Boolean): Boolean {
+        val sourceCount = source.parameters.size
+        val targetCount = target.parameters.size
+        val sourceMin = source.minArgumentCount
+        val targetMin = target.minArgumentCount
+        val sourceRest = sigHasRestParameter(source)
+        val targetRest = sigHasRestParameter(target)
+        // Same number of required, optional and rest parameters.
+        if (sourceCount == targetCount && sourceMin == targetMin && sourceRest == targetRest) return true
+        // A partial match needs only that the TARGET has no fewer required parameters.
+        return partialMatch && sourceMin <= targetMin
+    }
+
+    /**
+     * (CHK.97) tsc's `compareSignaturesIdentical` (checker.ts:25397), minus the
+     * `this`-parameter arm — [Signature] has no `thisParameter` here, which is the
+     * one modelling gap this family records as OUT OF SCOPE (`unionTypeCallSignatures5/6`).
+     */
+    private fun compareSignaturesIdentical(
+        source: Signature,
+        target: Signature,
+        partialMatch: Boolean,
+        ignoreReturnTypes: Boolean,
+    ): Boolean {
+        if (source === target) return true
+        if (!isMatchingSignature(source, target, partialMatch)) return false
+        val stp = source.typeParameters
+        val ttp = target.typeParameters
+        if ((stp?.size ?: 0) != (ttp?.size ?: 0)) return false
+        var src = source
+        if (!ttp.isNullOrEmpty() && !stp.isNullOrEmpty()) {
+            val mapper = createTypeMapper(stp, ttp)
+            for (i in ttp.indices) {
+                val s = stp[i]
+                val t = ttp[i]
+                if (s === t) continue
+                val sc = s.constraint?.let { instantiateType(it, mapper) } ?: unknownType
+                val tc = t.constraint ?: unknownType
+                if (!sigCompareTypes(sc, tc, partialMatch)) return false
+            }
+            // Erase the source's own type parameters onto the target's before comparing
+            // parameter and return types, so `<T>(a: T) => T` and `<U>(a: U) => U` match.
+            src = instantiateSignature(source, mapper)
+        }
+        for (i in 0 until target.parameters.size) {
+            val s = sigTypeAtPosition(src, i)
+            val t = sigTypeAtPosition(target, i)
+            if (!sigCompareTypes(t, s, partialMatch)) return false
+        }
+        if (!ignoreReturnTypes) {
+            val sr = src.resolvedReturnType ?: anyType
+            val tr = target.resolvedReturnType ?: anyType
+            if (!sigCompareTypes(sr, tr, partialMatch)) return false
+        }
+        return true
+    }
+
+    /** (CHK.97) tsc's `findMatchingSignature` (checker.ts:14271). */
+    private fun findMatchingSignature(
+        signatureList: List<Signature>,
+        signature: Signature,
+        partialMatch: Boolean,
+        ignoreReturnTypes: Boolean,
+    ): Signature? = signatureList.firstOrNull {
+        compareSignaturesIdentical(it, signature, partialMatch, ignoreReturnTypes)
+    }
+
+    /** (CHK.97) tsc's `findMatchingSignatures` (checker.ts:14278). */
+    private fun findMatchingSignatures(
+        signatureLists: List<List<Signature>>,
+        signature: Signature,
+        listIndex: Int,
+    ): List<Signature>? {
+        if (!signature.typeParameters.isNullOrEmpty()) {
+            // A GENERIC signature needs an EXACT match (return types included) in every
+            // other list, and is only ever contributed by the first list.
+            if (listIndex > 0) return null
+            for (i in 1 until signatureLists.size) {
+                if (findMatchingSignature(signatureLists[i], signature, partialMatch = false, ignoreReturnTypes = false) == null) return null
+            }
+            return listOf(signature)
+        }
+        var result: MutableList<Signature>? = null
+        for (i in signatureLists.indices) {
+            // A non-generic signature may have EXCESS parameters (the partial fallback)
+            // and may differ in return type.
+            val match = if (i == listIndex) signature
+            else findMatchingSignature(signatureLists[i], signature, partialMatch = false, ignoreReturnTypes = true)
+                ?: findMatchingSignature(signatureLists[i], signature, partialMatch = true, ignoreReturnTypes = true)
+            if (match == null) return null
+            val list = result ?: mutableListOf<Signature>().also { result = it }
+            if (list.none { it === match }) list.add(match)
+        }
+        return result
+    }
+
+    /**
+     * (CHK.97) tsc's `createUnionSignature` (checker.ts:14159) — [signature]'s own
+     * parameter list and arity with the members' RETURN types unioned. tsc defers the
+     * return through `compositeSignatures`; computed eagerly here, and [getUnionType]
+     * drops `never` (so `never | void` is `void`, the `assertNever`-beside-a-void-member
+     * shape) which is what tsc's `UnionReduction.Subtype` does for that pair.
+     */
+    private fun createUnionSignature(signature: Signature, unionSignatures: List<Signature>): Signature =
+        Signature(
+            declaration = signature.declaration,
+            typeParameters = signature.typeParameters,
+            parameters = signature.parameters,
+            resolvedReturnType = getUnionType(unionSignatures.map { it.resolvedReturnType ?: anyType }),
+            minArgumentCount = signature.minArgumentCount,
+        ).also { it.fromUnionCombination = true }
+
+    /**
+     * (CHK.97) A synthesized parameter symbol carrying [type]. The type is written into
+     * `symbolTypes` AT MINT — the `instantiateSignature` idiom (TypeInstantiator.kt:231),
+     * sound where the gated `getTypeOfSymbol` write is not because the id is reachable
+     * only from the signature just built. [decl] is reused verbatim from a member's own
+     * parameter so `restAwareParamType`'s `dotDotDotToken` readers keep working; it is
+     * chosen by the CALLER so its rest-ness matches the combined position's.
+     */
+    private fun mintCombinedParam(name: String, type: Type, decl: Parameter?): Symbol {
+        val sym = Symbol(SymbolFlags.FunctionScopedVariable, name)
+        if (decl != null) {
+            sym.declarations.add(decl)
+            sym.valueDeclaration = decl
+        }
+        symbolTypes[sym.id] = type
+        return sym
+    }
+
+    /** (CHK.97) The `Parameter` declaration of [sig]'s position [i], or null. */
+    private fun sigParamDecl(sig: Signature, i: Int): Parameter? =
+        sig.parameters.getOrNull(i)?.let { p ->
+            (p.valueDeclaration as? Parameter) ?: p.declarations.firstOrNull { it is Parameter } as? Parameter
+        }
+
+    /** (CHK.97) The `Parameter` declaration of [sig]'s trailing REST parameter, or null. */
+    private fun sigRestParamDecl(sig: Signature): Parameter? =
+        if (sigHasRestParameter(sig)) sigParamDecl(sig, sig.parameters.size - 1) else null
+
+    /**
+     * (CHK.97) tsc's `combineUnionParameters` (checker.ts:14400) — the LONGEST parameter
+     * list, positions INTERSECTED (through [reduceIntersectionForWriteType], never
+     * `getIntersectionType`: an object pair falls to it INSIDE the reducer, so
+     * `{ p: number } & { q: string }` still displays as an intersection while
+     * `1 & (1 | 2)` reduces to `1`), a missing position contributing `unknown`, and a
+     * REST position carrying `Array<the intersection of the ELEMENT types>` — NOT the
+     * intersection of the array types, which is (CHK.83)'s rest lesson and is what makes
+     * `((...a: string[]) | (...a: number[]))()` reject its argument against `never`.
+     */
+    private fun combineUnionParameters(left: Signature, right: Signature, mapper: TypeMapper?): List<Symbol> {
+        val leftCount = left.parameters.size
+        val rightCount = right.parameters.size
+        val longest = if (leftCount >= rightCount) left else right
+        val shorter = if (longest === left) right else left
+        val longestCount = if (longest === left) leftCount else rightCount
+        val eitherHasRest = sigHasRestParameter(left) || sigHasRestParameter(right)
+        val needsExtraRestElement = eitherHasRest && !sigHasRestParameter(longest)
+        val params = ArrayList<Symbol>(longestCount + if (needsExtraRestElement) 1 else 0)
+        for (i in 0 until longestCount) {
+            var longestParamType = sigTypeAtPosition(longest, i)
+            if (longest === right && mapper != null) longestParamType = instantiateType(longestParamType, mapper)
+            var shorterParamType = sigTryTypeAtPosition(shorter, i) ?: unknownType
+            if (shorter === right && mapper != null) shorterParamType = instantiateType(shorterParamType, mapper)
+            val combined = reduceIntersectionForWriteType(listOf(longestParamType, shorterParamType))
+            val isRestParam = eitherHasRest && !needsExtraRestElement && i == longestCount - 1
+            val leftName = if (i >= leftCount) null else left.parameters[i].name
+            val rightName = if (i >= rightCount) null else right.parameters[i].name
+            val paramName = when {
+                leftName == rightName -> leftName
+                leftName == null -> rightName
+                rightName == null -> leftName
+                else -> null
+            } ?: "arg$i"
+            val decl =
+                if (isRestParam) (sigRestParamDecl(left) ?: sigRestParamDecl(right))
+                else sigParamDecl(longest, i)?.takeIf { !it.dotDotDotToken }
+                    ?: sigParamDecl(shorter, i)?.takeIf { !it.dotDotDotToken }
+            val paramType =
+                if (isRestParam) getOrInternReference(globalArrayType, listOf(combined)) else combined
+            params.add(mintCombinedParam(paramName, paramType, decl))
+        }
+        if (needsExtraRestElement) {
+            var tail = sigTypeAtPosition(shorter, longestCount)
+            if (shorter === right && mapper != null) tail = instantiateType(tail, mapper)
+            params.add(mintCombinedParam(
+                "args",
+                getOrInternReference(globalArrayType, listOf(tail)),
+                sigRestParamDecl(shorter),
+            ))
+        }
+        return params
+    }
+
+    /**
+     * (CHK.97) tsc's `combineSignaturesOfUnionMembers` (checker.ts:14447). Type
+     * parameters come from the FIRST signature with the second's mapped onto them; the
+     * combined arity is the MAX of the two minimums (which is why calling a
+     * `((a: string) => …) | ((a: string, b: number) => …)` union with ONE argument is
+     * TS2554 rather than silence).
+     */
+    private fun combineSignaturesOfUnionMembers(left: Signature, right: Signature): Signature {
+        val typeParams = left.typeParameters?.takeIf { it.isNotEmpty() }
+            ?: right.typeParameters?.takeIf { it.isNotEmpty() }
+        val ltp = left.typeParameters
+        val rtp = right.typeParameters
+        val paramMapper =
+            if (!ltp.isNullOrEmpty() && !rtp.isNullOrEmpty()) createTypeMapper(rtp, ltp) else null
+        val params = combineUnionParameters(left, right, paramMapper)
+        var rightReturn = right.resolvedReturnType ?: anyType
+        if (paramMapper != null) rightReturn = instantiateType(rightReturn, paramMapper)
+        return Signature(
+            declaration = left.declaration,
+            typeParameters = typeParams,
+            parameters = params,
+            resolvedReturnType = getUnionType(listOf(left.resolvedReturnType ?: anyType, rightReturn)),
+            minArgumentCount = maxOf(left.minArgumentCount, right.minArgumentCount),
+        ).also { it.fromUnionCombination = true }
+    }
+
+    /**
+     * (CHK.97) tsc's `getUnionSignatures` (checker.ts:14313) — the CALL signatures of a
+     * union callee, or null where the combination is REFUSED and the caller must keep
+     * its own decision (today's TS2349 / TS2351 family).
+     *
+     * PASS 1 keeps every member signature that is PRESENT in each constituent — a
+     * generic one needs an exact `compareSignaturesIdentical` match, a non-generic one
+     * may partial-match with return types ignored — as a clone whose return is the union
+     * of the matched members' returns. It can produce SEVERAL signatures, i.e. a genuine
+     * overload set the ordinary resolution then handles.
+     *
+     * PASS 2 runs only when pass 1 produced nothing AND at most ONE constituent is
+     * overloaded (tsc's `indexWithLengthOverOne === -1` bail: a power set of signatures
+     * would have no obvious ordering), folding the members pairwise through
+     * [combineSignaturesOfUnionMembers].
+     *
+     * REFUSED (null) when a constituent has NO call signatures (the caller's TS2349
+     * (a)/(b) cases stay), when both passes come up empty, or when two GENERIC members'
+     * type parameters are not identical ([unionCalleeGenericSignaturesIncompatible],
+     * tsc's `compareTypeParametersIdentical`) — `betterErrorForUnionCall`'s TS2349.
+     *
+     * Memoized by the union's `Type.id` ([unionSignatureCache]); INV.5(a) interns unions
+     * by their member-id list, so the key is exact — a memo keyed by anything coarser
+     * (the member COUNT, say) hands one union's signature to another's call site, a
+     * WRONG PROGRAM no arity or value pin over a single union can see.
+     *
+     * NOT modelled, recorded rather than silently approximated: `this` parameters (tsc
+     * INTERSECTS them and reports TS2684; [Signature] has no `thisParameter`), and tsc's
+     * ARRAY FALLBACK (checker.ts:15949) for a union of `Array`/`ReadonlyArray` members
+     * with no combined signature — the `≥2`-overloaded suppression in
+     * [ccetUnionCalleeChecks] still owns `unionOfArraysFilterCall`.
+     */
+    private fun combineUnionSignatures(union: Type.Union, construct: Boolean = false): List<Signature>? {
+        val cache = if (construct) unionConstructSignatureCache else unionSignatureCache
+        cache[union.id]?.let { return it }
+        if (cache.containsKey(union.id)) return null
+        val answer = computeCombinedUnionSignatures(union, construct)
+        cache[union.id] = answer
+        return answer
+    }
+
+    /**
+     * (CHK.97) TS2554 for a call whose argument count no COMBINED signature admits —
+     * `Expected 1-2 arguments, but got 3.` across the whole combined list, exactly as
+     * tsc reports it for a union callee (measured identical on tsgo 7.0.2 and pristine
+     * 6.0.3). Returns true when it emitted, in which case the call is CONSUMED: tsc
+     * reports an arity error and nothing per argument.
+     */
+    private fun unionCalleeArityDiagnostic(
+        expr: CallExpression,
+        sigs: List<Signature>,
+        calleeExpr: Expression,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        val args = expr.arguments
+        if (args.any { it is SpreadElement }) return false
+        if (sigs.isEmpty()) return false
+        val anyRest = sigs.any { sigHasRestParameter(it) }
+        val maxParams = sigs.maxOf { it.parameters.size }
+        val minParams = sigs.minOf { it.minArgumentCount }
+        if (!anyRest && args.size > maxParams) {
+            emitTS2554TooMany(minParams, maxParams, args.size, args, maxParams, source, fileName)
+            return true
+        }
+        if (args.size < minParams) {
+            emitTS2554TooFew(minParams, maxParams, args.size, calleeExpr, source, fileName)
+            return true
+        }
+        return false
+    }
+
+    private fun computeCombinedUnionSignatures(union: Type.Union, construct: Boolean): List<Signature>? {
+        val signatureLists = ArrayList<List<Signature>>(union.types.size)
+        var multipleOverloadSets = false
+        var indexWithLengthOverOne = -1
+        for (t in union.types) {
+            val sigs = if (construct) getConstructSignaturesOfType(t) else getCallSignaturesOfType(t)
+            if (sigs.isEmpty()) return null
+            if (sigs.size > 1) {
+                if (indexWithLengthOverOne < 0) indexWithLengthOverOne = signatureLists.size
+                else multipleOverloadSets = true
+            }
+            signatureLists.add(sigs)
+        }
+        if (signatureLists.size < 2) return null
+
+        // PASS 1 — the signatures present in EVERY constituent.
+        val result = mutableListOf<Signature>()
+        for (i in signatureLists.indices) {
+            for (signature in signatureLists[i]) {
+                if (result.isEmpty() ||
+                    findMatchingSignature(result, signature, partialMatch = false, ignoreReturnTypes = true) == null
+                ) {
+                    val unionSignatures = findMatchingSignatures(signatureLists, signature, i)
+                    if (unionSignatures != null) {
+                        result.add(
+                            if (unionSignatures.size > 1) createUnionSignature(signature, unionSignatures)
+                            else signature
+                        )
+                    }
+                }
+            }
+        }
+        if (result.isNotEmpty()) return result
+
+        // PASS 2 — one signature that handles all of them. Only when the overloads live
+        // in a SINGLE constituent.
+        if (multipleOverloadSets) return null
+        val masterList = signatureLists[if (indexWithLengthOverOne >= 0) indexWithLengthOverOne else 0]
+        var results: MutableList<Signature>? = masterList.toMutableList()
+        for (signatures in signatureLists) {
+            if (signatures === masterList) continue
+            val signature = signatures[0]
+            val current = results ?: break
+            if (!signature.typeParameters.isNullOrEmpty() &&
+                current.any { unionCalleeGenericSignaturesIncompatible(listOf(signature, it)) }
+            ) {
+                results = null
+                break
+            }
+            results = current.mapTo(mutableListOf()) { combineSignaturesOfUnionMembers(it, signature) }
+        }
+        return results?.takeIf { it.isNotEmpty() }
     }
 
     /**
@@ -160128,7 +160562,14 @@ interface DataView {
                     val hasNullSig = sigsList.any { it == null }
                     if (!hasNullSig) {
                         val sigs = sigsList.map { it!! }
-                        val differ = run {
+                        // (CHK.97) tsc runs `getUnionSignatures` over the CONSTRUCT lists
+                        // too, so a union whose members' construct signatures COMBINE is
+                        // constructable — this branch's only verdict was `differ → TS2351`,
+                        // i.e. every `new (typeof A | typeof B)(…)` with differing ctor
+                        // parameters was a false positive. Fall through to the ordinary
+                        // construct resolution below, which now reads the combined list.
+                        val ctorCombined = combineUnionSignatures(calleeType, construct = true)
+                        val differ = if (ctorCombined != null) false else run {
                             for (i in sigs.indices) for (j in i + 1 until sigs.size) {
                                 val s1 = sigs[i]; val s2 = sigs[j]
                                 if ((s1.typeParameters?.size ?: 0) != (s2.typeParameters?.size ?: 0)) return@run true
@@ -161536,6 +161977,11 @@ interface DataView {
             resolveStructuredTypeMembers(type)
             return type.constructSignatures ?: emptyList()
         }
+        // (CHK.97) tsc's `resolveUnionTypeMembers` runs `getUnionSignatures` over the
+        // CONSTRUCT lists too. Unlike the CALL side this arm is safe to add here rather
+        // than at one call site: a union's construct signatures were unconditionally
+        // EMPTY, so no existing reader can lose an answer — it can only gain one.
+        if (type is Type.Union) return combineUnionSignatures(type, construct = true) ?: emptyList()
         return emptyList()
     }
 
@@ -164052,7 +164498,15 @@ interface DataView {
                 // because the literal arrived as `number` and `number` relates to every
                 // numeric enum; `fEnum(-1)` reported all along only because a negated
                 // literal is typed as its literal by `getTypeOfExpression`.
-                val ctxAppliedRaw = if (propTypeContainsLiteral(paramType)) {
+                // (CHK.97) `never` joins the literal-keeping targets: tsc's
+                // `reportRelationError` keeps a literal source against a `never` target
+                // ("we really want the original type displayed for use-cases like
+                // 'assertNever'", CLAUDE.md's (PARITY.1)(b) rule), and B516's retired
+                // union branch had exactly this clause as its `showLiteral`. Both
+                // references print `'"x"'` where the widened source prints `'string'`;
+                // the VERDICT is unchanged (a literal and its base primitive both fail
+                // against `never`), only the display.
+                val ctxAppliedRaw = if (propTypeContainsLiteral(paramType) || paramType === neverType) {
                     literalTypeOfExpression(arg) ?: widened
                 } else enumTargetLiteralSource(arg, paramType) ?: widened
                 ArgSections.close(ArgSections.N_LITERAL, litT)
@@ -165647,7 +166101,20 @@ interface DataView {
                 (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
                 !typeContainsForeignTypeParam(paramType, emptySet()) &&
                 readonlyToMutableArrayLike(argType, paramType)
-            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) return CAAS_CONTINUE
+            // (CHK.97) a SYNTHESIZED union-combined parameter is trusted — see
+            // [Signature.fromUnionCombination]. Retired B516 ran `checkTypeRelatedTo`
+            // directly for this population, so this restores that reach rather than
+            // widening the firewall for anything a user wrote.
+            // The same two guards its neighbours carry, both MEASURED: a REST position's
+            // `paramType` is the ARRAY (`1[]`), and comparing an argument against it is a
+            // false positive that `checkRestArgsAgainstArrayElementType` owns correctly
+            // against the ELEMENT; and a combined parameter carrying a free type parameter
+            // (`T & string`, from a generic member combined with a non-generic one) is a
+            // verdict only inference can reach.
+            val allowCombinedUnionParam = sig.fromUnionCombination &&
+                (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
+                !typeContainsForeignTypeParam(paramType, emptySet())
+            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj && !allowCombinedUnionParam) return CAAS_CONTINUE
             // Round 79l (orchestrated — Agent A plan): for a contextually-typed
             // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
             // body-return type (allowFuncReturnMismatch), TypeScript reports a
@@ -166012,7 +166479,18 @@ interface DataView {
             val arg = args[i]
             if (arg is SpreadElement) continue
             // (CHK.83): a rest ELEMENT is an argument — the enum literal rule applies.
-            val argType0 = enumTargetLiteralSource(arg, elementType) ?: getTypeOfExpression(arg)
+            // (CHK.97): and so does the LITERAL one, at both of the main loop's targets.
+            // Without it `h(1)` against `...xs: 1[]` was a FALSE POSITIVE — the literal
+            // arrived widened to `number`, which does not relate to `1` — and the display
+            // against a `never` element printed the base primitive where both references
+            // print the literal. CLAUDE.md's (CHK.55) rule: an argument-acceptance rule
+            // added at one of the two sites and not the other is a divergence.
+            val argType0 =
+                if (propTypeContainsLiteral(elementType) || elementType === neverType)
+                    literalTypeOfExpression(arg)
+                        ?: enumTargetLiteralSource(arg, elementType)
+                        ?: getTypeOfExpression(arg)
+                else enumTargetLiteralSource(arg, elementType) ?: getTypeOfExpression(arg)
             // M3.4 (round 429d): mirror B469 — a reference arg in a REST position
             // narrows by the flow graph too (`cond ? diag(…, deprecatedEntity) : …`
             // truthy-narrows the `string | undefined` rest arg to `string` — tsc

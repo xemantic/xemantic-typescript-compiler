@@ -89,7 +89,10 @@ class IifeConstFnNonNullishTest {
             }
             """
         ) should {
-            have(any { it.code == 2349 })
+            // (CHK.97) a NULLISH union callee is TS2722 — tsc checks nullability
+            // before it asks for signatures; both references agree on this shape.
+            have(any { it.code == 2722 })
+            have(none { it.code == 2349 })
         }
     }
 
@@ -103,7 +106,10 @@ class IifeConstFnNonNullishTest {
             }
             """
         ) should {
-            have(any { it.code == 2349 })
+            // (CHK.97) a NULLISH union callee is TS2722 — tsc checks nullability
+            // before it asks for signatures; both references agree on this shape.
+            have(any { it.code == 2722 })
+            have(none { it.code == 2349 })
         }
     }
 }

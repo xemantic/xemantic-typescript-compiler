@@ -322,7 +322,19 @@ class Signature(
     var resolvedReturnType: Type? = null,
     val minArgumentCount: Int = 0,
     val isAbstract: Boolean = false,
-)
+) {
+    /**
+     * (CHK.97) Was this signature SYNTHESIZED by `Checker.combineUnionSignatures`
+     * (tsc's `getUnionSignatures`) for a union callee? Its parameter types are then
+     * built by the combiner — an INTERSECTION at every position where the members
+     * disagree — rather than written by a user, which is why the argument gate's
+     * FP firewall (`caasNonSimpleParamChecks`) trusts them and lets the relation
+     * decide. Retired B516 ran the relation directly for exactly this population;
+     * without the flag the firewall swallows an object argument against a combined
+     * intersection parameter, which is a row this compiler used to report.
+     */
+    var fromUnionCombination: Boolean = false
+}
 
 // ---------------------------------------------------------------------------
 // IndexInfo — index signature (e.g., [key: string]: number)

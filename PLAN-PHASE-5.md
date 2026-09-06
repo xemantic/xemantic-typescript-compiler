@@ -25,6 +25,104 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.29) — union callees are COMBINED, not silently `any` (stage 1 of (CHK.97)), and four of the item's own predictions are measured wrong (2026-09-06)
+
+**Suite 17,874 → 17,916 / 0 / 3** — 42 pins in the new `UnionCalleeSignatureTest`; no baseline
+moved and no `LogicalParityDivergence` is needed. Orchestrated as the house pattern: one
+implementation subagent owned Gradle and landed stage 1 with its own 12-arm ablation table; the
+full suite, `cost_gate.py`, `huge_methods.py` and the 8-profile grid were run here.
+
+**(CHK.97) STAGE 1 LANDED.** The call RESULT was `any` for EVERY union callee — the two return
+readers answered before any signature was read — and the argument positions were judged off a
+CONCATENATED signature list. **One home**, `combineUnionSignatures(union, construct)` (tsc's
+`getUnionSignatures`, checker.ts:14313), memoized by the union's `Type.id` (null memoized too,
+and the key is exact because INV.5(a) interns unions by member-id list), with the helpers
+mirrored 1:1 — `isMatchingSignature` (:25370), `compareSignaturesIdentical` (:25397, minus the
+`this` arm), `findMatchingSignature(s)` (:14271/:14278), `createUnionSignature` (:14159),
+`combineUnionParameters` (:14400), `combineSignaturesOfUnionMembers` (:14447) — plus the
+`getTypeAtPosition` family. PASS 1 (a generic member needs an exact identity match, a non-generic
+one may partial-match with returns ignored, keeping a CLONE of the first member's signature with
+the returns UNIONED) and PASS 2 (only when pass 1 is empty and at most ONE member is overloaded:
+the longest parameter list, positions INTERSECTED through `reduceIntersectionForWriteType`, a
+missing position `unknown`, rest = `Array<∩ of ELEMENT types>` on the interned array,
+`minArgumentCount` the MAX) both land. Consumers: both return readers, a NEW union arm of
+`getConstructSignaturesOfType` and the `new` branch (which kills the false TS2351 on every union
+`new` — 20 rows on `unionTypeConstructSignatures`), `ccetUnionCalleeChecks` case (c) handing off
+to the ordinary argument gate, and the nullish check moved ABOVE the union branch. **Against
+pristine 6.0.3 the 26-row matrix goes 23 rows with 6 WRONG → 58 of 73 matched with ZERO
+ours-only**; the 15 misses are each attributed (array fallback 4, optional-call result 4, generic
+inference 2, `this`/TS2684 1, contextual callback typing 2, r09 1, tuple `map` result 1).
+
+**FOUR OF THE ITEM'S OWN PREDICTIONS ARE MEASURED WRONG** — the item is recon, and this is the
+third round running in which building it refuted part of it.
+- **"the too-FEW TS2554 comes free" is FALSE.** TS2554 fires for a *function-declaration* callee
+  only: `declare const kk: (a, b) => void; kk("x")` and `kk("x", 1, 2)` are BOTH silent on HEAD.
+  A union callee is a variable by construction, so nothing was ever going to arrive free — the
+  arity had to be emitted explicitly (`unionCalleeArityDiagnostic`, both directions), and losing
+  it cost the corpus baseline `functionCallOnConstrainedTypeVariable` until it was put back.
+  **That variable-callee silence is a PRE-EXISTING gap this round measured and did not fix.**
+- **Arm a2's predicted victims were wrong.** `[1] | [1, 2]`.indexOf and r03 are answered by
+  PASS 1, which never calls the reducer at all, and `getIntersectionType` reduces primitives
+  identically — so the reducer's only measured contribution is the TYPE-PARAMETER case (1 pin).
+  A guard whose predicted witnesses are all answered upstream is a guard whose pin set has to be
+  re-derived, not assumed.
+- **Arm a3 as specified is UNDISCRIMINATED**: the PASS-1 arity pins carry the member's own
+  `minArgumentCount`, so min-instead-of-max changes nothing there. A new pin naming the PASS 2
+  fold (`the PASS 2 fold takes the MAX of the two minimums`, verified on both references) is what
+  makes it discriminate — round 807's law again: only the single-mistake ablation decides.
+- **Arm a8 as specified is not implementable in stage 1** (it names the array fallback, which is
+  stage 2); the trust flag below was substituted.
+
+**THREE RE-HOMINGS THE ITEM DID NOT NAME, each forced by measurement.** `Signature.fromUnionCombination`
+— retired B516 ran the relation directly, and without a trust flag the argument gate's FP firewall
+swallowed an object argument against a combined INTERSECTION, losing a row HEAD reported; it is
+guarded (no rest position, no free type parameter) after two measured false positives. The
+literal-keep rule extended to a `never` parameter at BOTH argument sites ((CHK.55)'s
+add-it-to-both rule), which also closed a **pre-existing false positive**: `declare function
+h(...xs: 1[]); h(1)` was TS2345 on HEAD. And `unionCalleeArityDiagnostic`, above.
+
+**FOUR HAND-WRITTEN PINS WERE PINNING *OUR* DIVERGENCES** and are corrected, each verified against
+both references first: three `TS2349 → TS2722` for a nullish callee (tsc checks nullability at
+checker.ts:37038 BEFORE asking for signatures at :37054), and `TupleArrayMembersTest`'s "a union
+of rest-parameter callables is not TS2349", which asserted SILENCE where both references report
+`Argument of type '1' is not assignable to parameter of type 'never'.` — the rest position
+intersects to `never[]`. Both replacements are VALUE pins where the originals were absence
+assertions, i.e. strictly stronger. Re-verified here against tsgo 7.0.2 and pristine 6.0.3
+directly before accepting them.
+
+**DOUBLE EMISSION: none.** `--passTiming`'s emissions-by-pass over a 6-shape scratch project reads
+all 8 rows from `checkSpine`, one owner — and the ORDER is what buys it: the two dedicated
+rest-TUPLE walkers run BEFORE the combined hand-off, because a rest parameter typed as a
+fixed-length tuple expands positionally in tsc's `getParameterCount` and the new
+`sigTryTypeAtPosition` does not model that. A reordering there re-opens the double emit.
+
+**GATES.** Suite **17,916 / 0 / 3** (corpus **8,837 / 0** with `betterErrorForUnionCall`,
+`newOperator`, `signatureCombiningRestParameters1/3/4/5`, `unionOfArraysFilterCall` and the ten
+`never`-parameter baselines all green). `cost_gate.py` **exit 0, no rebaseline** — and the
+notable reading is how LITTLE moved: `typeOfExpr.calls` +0.89% and `typeNode.*` +0.07-0.11% are
+the SAME deltas (CHK.96) stage 2 already carried, so combining every union callee in the program
+costs ~0.00% on its own, `spine.nodes` and `mapped.*` are +0.00%, and `output.errors` is 46 → 46.
+`huge_methods.py --fail-over 0` **exit 0** — note `ccetUnionCalleeChecks` SHRANK by ~100 lines.
+**Grid 8 × `added=0 removed=0`** (`scripts/chk97-grid.sh`, AFTER arm against last round's stored
+captures — i.e. the binary committed as HEAD — hash-guarded against a self-comparison and
+refusing an empty, truncated or under-8 run).
+
+**ARMS — 12, every one discriminating; no blind pin and no redundant guard found.** a1 combine off
+**27 RED**; a2 reducer swapped 1; a3 PASS-2 min not max 1; a4 rest intersects the ARRAY types 2;
+a5 the >1-overloaded refusal dropped 1; a6 nullish left below the union branch 3; a7 construct
+arm absent 2; a8 the trust flag off 1; a9 memo keyed by member COUNT 1 (a wrong-PROGRAM arm: two
+same-sized unions in one file share a signature); a10 PASS 1 off 2; a11 the ccet hand-off
+reverted to the concatenation **16 RED**; a12 the return-reader union arm absent **19 RED**.
+
+**STAGE 2 STAYS OPEN** — the array fallback (checker.ts:15949, which also lets the `≥2`
+suppression go and makes r09 report), `getCallSignaturesOfType`'s own union arm,
+`cpaComputeArgCtxTypes`/`callableSignaturesForCtx` for callback parameters (then tsc's
+`getIntersectedSignatures` as its own rule), the optional-call result (`f?.()` keeps `any`,
+the conservative direction), and `this` parameters / TS2684 (`Signature` has no `thisParameter`).
+Two PRE-EXISTING gaps recorded rather than fixed: TS2554 does not fire for a variable-typed
+callee at all, and an object argument against an intersection parameter is swallowed by the
+argument gate's firewall (only the `fromUnionCombination` subset is trusted).
+
 ### Round (P18.28) — an object rest, iterables, contextual pattern parameters and the destructured-discriminant carry (stage 2 of (CHK.96), the item CLOSED), and the three defects the gates found (2026-09-06)
 
 **Suite 17,792 → 17,874 / 0 / 3** — 82 pins in the new `BindingElementStage2Test`, plus one
@@ -2454,7 +2552,28 @@ prediction: 17,343 / 0 / 3.**
   bit). Corrects (CHK.46)'s entry: the "write probe answered the right type" there is
   `recordDestructuredConstElementTypes`, a walk-scoped recording, not the symbol.
 
-- [ ] **(CHK.97) UNION CALLEES: tsc's `combineSignaturesOfUnionMembers` — MEASURED 2026-09-06 by
+- [ ] **(CHK.97) STAGE 1 LANDED 2026-09-06 ((P18.29) note) — `combineUnionSignatures` (PASS 1 + PASS 2,
+  memoized by the union's `Type.id`) feeding both return readers, a new construct arm, the ccet hand-off to
+  the ordinary argument gate, and the nullish check moved above the union branch; the matrix goes 23 rows
+  with 6 wrong → 58 of 73 pristine rows matched, ZERO ours-only; 42 pins, 12 arms all discriminating; no
+  double emission (all rows from `checkSpine` — the two dedicated rest-TUPLE walkers run BEFORE the hand-off
+  and a reordering re-opens it); corpus 8,837/0, grid 8×0/0, `cost_gate.py` exit 0 with no rebaseline.
+  **STAGE 2 STAYS OPEN**: (1) tsc's ARRAY FALLBACK (checker.ts:15949) for `(A[] | B[]).filter/map/forEach`
+  where both members are overloaded so PASS 2 bails — needs a receiver-level or member-symbol-parent route,
+  `unionOfArraysFilterCall` must stay green, r15's four rows are the target, and landing it also retires the
+  `≥2` suppression, which is what makes r09 report TS2349; (2) `getCallSignaturesOfType`'s own union arm
+  (still the concatenation — only the one call site reads the combined list); (3)
+  `cpaComputeArgCtxTypes` / `callableSignaturesForCtx`, so a callback argument to a union callee stops being
+  `any` (r23's TS7006, r24), then tsc's `getIntersectedSignatures` (parameters UNIONED) as its own rule,
+  graded with a wrong-typed USE inside the arrow per (CHK.30); (4) the optional-call result — `f?.()` on a
+  nullish union keeps `any` rather than the combined return `| undefined` (deliberate: too many exits in
+  `getReturnTypeOfCallExpression` to wrap without restructuring, and `any` is the conservative direction);
+  (5) `this` parameters / TS2684 (`Signature` at `Type.kt` has no `thisParameter`, `code = 2684` has 0
+  sites). **TWO PRE-EXISTING GAPS the round MEASURED and did not fix**: TS2554 does not fire for a
+  VARIABLE-typed callee at all (`declare const kk: (a, b) => void; kk("x")` is silent on HEAD — which is why
+  the item's "the too-few TS2554 comes free" is false and the arity had to be emitted explicitly), and an
+  object argument against an INTERSECTION parameter is swallowed by the argument gate's FP firewall (only
+  the `Signature.fromUnionCombination` subset is trusted). ORIGINAL ITEM: UNION CALLEES: tsc's `combineSignaturesOfUnionMembers` — MEASURED 2026-09-06 by
   read-only recon against `7dc50053` (fixtures `scratchpad/chk97/p`, 26 rows × 3 compilers, plus
   five pristine fixtures extracted with `pristine_oracle.py --extract` into `chk97/x`; tsgo 7.0.2
   = pristine 6.0.3 on every row bar two divergences below).** The (P18.25) residue was under-

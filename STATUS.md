@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **196,306** lines (191,070 when the metric was created; the (P18.9)-(P18.28) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **196,784** lines (191,070 when the metric was created; the (P18.9)-(P18.29) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,30 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.29) — UNION CALLEES ARE COMBINED, NOT SILENTLY `any` (STAGE 1 OF (CHK.97)), AND FOUR OF THE ITEM'S OWN PREDICTIONS ARE MEASURED WRONG, 17,874 → 17,916 / 0 / 3 (2026-09-06).**
+**(CHK.97) stage 1 LANDED.** The call RESULT was `any` for EVERY union callee and the argument
+positions were judged off a CONCATENATED signature list; one home,
+`combineUnionSignatures` (tsc's `getUnionSignatures`), now does PASS 1 and PASS 2 with the
+helpers mirrored 1:1 and is memoized by the union's `Type.id` (exact, because INV.5(a) interns
+unions by member-id list), feeding both return readers, a new construct arm (which kills the
+false TS2351 on every union `new`) and the ccet hand-off to the ordinary argument gate, with the
+nullish check moved ABOVE the union branch. Against pristine 6.0.3 the matrix goes **23 rows with
+6 WRONG → 58 of 73 matched with ZERO ours-only**, every one of the 15 misses attributed. **Four of
+the item's predictions are refuted by building it**: "the too-few TS2554 comes free" is FALSE
+(TS2554 fires only for a function-DECLARATION callee, and a union callee is a variable by
+construction — a pre-existing gap this round records), arm a2's predicted victims are answered
+upstream by PASS 1, arm a3 as specified is undiscriminated, and arm a8 names stage-2 work. Three
+re-homings were forced by measurement, one of which closed a PRE-EXISTING false positive
+(`declare function h(...xs: 1[]); h(1)` was TS2345 on HEAD), and four hand-written pins turned
+out to be pinning OUR divergences (3 × `TS2349 → TS2722` for a nullish callee, and a silence
+assertion where both references report `'never'`) — all corrected to VALUE pins after
+re-verifying against tsgo 7.0.2 and pristine directly. No double emission (all rows from
+`checkSpine`; the walker ORDER is what buys it). 42 pins, **12 arms, every one discriminating**.
+Corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline — combining every union callee costs
+~0.00% on its own — `huge_methods.py` exit 0 (`ccetUnionCalleeChecks` SHRANK ~100 lines), grid
+8×`added=0 removed=0`. Stage 2 stays open: the array fallback, `getCallSignaturesOfType`'s union
+arm, callback contextual typing, the optional-call result and `this` params/TS2684.
 
 **(P18.28) — AN OBJECT REST, ITERABLES, CONTEXTUAL PATTERN PARAMETERS AND THE DISCRIMINANT CARRY (STAGE 2 OF (CHK.96), THE ITEM CLOSED), AND THE THREE DEFECTS THE GATES FOUND, 17,792 → 17,874 / 0 / 3 (2026-09-06).**
 **(CHK.96) stage 2 LANDED, and the round INHERITED an interrupted session's tree** — the
@@ -77,20 +101,3 @@ regressions; 53 pins, 11 arms (one provably unobservable, recorded); core 16,175
 destructured bindings over ~120 cells: an OBJECT pattern's members are already typed at every reader but
 the argument and TS2367 ones, every ARRAY pattern / default / nested / rest / contextual pattern parameter
 is `any` everywhere — queued as the staged (CHK.96), correcting (CHK.46)'s entry.
-
-**(P18.24) — CONST ASSERTIONS BECOME READ-ONLY (STAGE 2 OF (CHK.93), THE ITEM CLOSED), AND THE TUPLE-MEMBER AND BODY-LOCAL-ARGUMENT RESIDUES ARE MEASURED INTO (CHK.94)/(CHK.95), 17,573 → 17,611 / 0 / 3 (2026-09-05).**
-**(CHK.93) stage 2 LANDED.** A const-context object's members are read-only (TS2540, TS2704 instead of a
-pre-existing TS2790 double, `{ readonly v: "a"; }` display), a const array is a readonly tuple unless its
-contextual type has a mutable array-like constituent (tsc's `isMutableArrayLikeType`, measured), the
-`readonly [T, U]` type operator stops being a no-op, members of a readonly tuple fall to `ReadonlyArray`
-(`push` → TS2339), TS4104 replaces TS2740 for readonly→mutable at every position — as pristine's TS2345
-chain at an argument, where tsgo prints a bare TS4104 (the arc's third reference divergence) — and the
-declared-type twin `declare const rt: readonly [1, 2]` went from 2 of 7 rows to 7 of 7. The grid found
-the round's most important fix: B378's guard install put the guard's OWN predicate type into the
-then-branch, "FP-safe" only while `readonly T[]` related to `T[]` — tsc's own `core.ts:1685` became a false
-TS2345 — so it now installs the declared constituent that relates (tsc's `getNarrowedType`). The pin
-walker `checkReadonlyTupleElaboration` is kept (20/22 codes reproduced under PassLab). 38 pins, 15 arms
-RED; core 16,122/0/3, corpus 8,837/0, `cost_gate.py` exit 0, grid 8×`added=0 removed=0`. Read-only recon
-measured 220 cells into two items: every `Array` member READ on a tuple is `any` (an interned
-`Array<union>` base on the miss path is the seam; the corpus has zero baselines that can see it), and the
-argument gate is silent for EVERY body-local scalar / `let` / annotated-primitive local, not only strings.

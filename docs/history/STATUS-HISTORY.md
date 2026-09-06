@@ -1848,3 +1848,20 @@ removed=0`. **(INV.0) step 4 censused by read-only recon**: the name-resolution 
 into a two-commit `NameResolver` extraction (~1,300 code lines), an ambient row of three reads and
 no writes, eleven invariants each mapped to its pin classes — and tsgo's closure-struct
 `NameResolver` identified as exactly the shape § 10 forbids.
+
+**(P18.24) — CONST ASSERTIONS BECOME READ-ONLY (STAGE 2 OF (CHK.93), THE ITEM CLOSED), AND THE TUPLE-MEMBER AND BODY-LOCAL-ARGUMENT RESIDUES ARE MEASURED INTO (CHK.94)/(CHK.95), 17,573 → 17,611 / 0 / 3 (2026-09-05).**
+**(CHK.93) stage 2 LANDED.** A const-context object's members are read-only (TS2540, TS2704 instead of a
+pre-existing TS2790 double, `{ readonly v: "a"; }` display), a const array is a readonly tuple unless its
+contextual type has a mutable array-like constituent (tsc's `isMutableArrayLikeType`, measured), the
+`readonly [T, U]` type operator stops being a no-op, members of a readonly tuple fall to `ReadonlyArray`
+(`push` → TS2339), TS4104 replaces TS2740 for readonly→mutable at every position — as pristine's TS2345
+chain at an argument, where tsgo prints a bare TS4104 (the arc's third reference divergence) — and the
+declared-type twin `declare const rt: readonly [1, 2]` went from 2 of 7 rows to 7 of 7. The grid found
+the round's most important fix: B378's guard install put the guard's OWN predicate type into the
+then-branch, "FP-safe" only while `readonly T[]` related to `T[]` — tsc's own `core.ts:1685` became a false
+TS2345 — so it now installs the declared constituent that relates (tsc's `getNarrowedType`). The pin
+walker `checkReadonlyTupleElaboration` is kept (20/22 codes reproduced under PassLab). 38 pins, 15 arms
+RED; core 16,122/0/3, corpus 8,837/0, `cost_gate.py` exit 0, grid 8×`added=0 removed=0`. Read-only recon
+measured 220 cells into two items: every `Array` member READ on a tuple is `any` (an interned
+`Array<union>` base on the miss path is the seam; the corpus has zero baselines that can see it), and the
+argument gate is silent for EVERY body-local scalar / `let` / annotated-primitive local, not only strings.

@@ -142,9 +142,14 @@ class CalleeNarrowingNotCallableTest {
     }
 
     /**
-     * Negative control: an UNGUARDED possibly-undefined callable must still fire
-     * TS2349 — the fix only suppresses when narrowing actually removes the
-     * non-callable member.
+     * Negative control: an UNGUARDED possibly-undefined callable must still fire —
+     * the fix only suppresses when narrowing actually removes the non-callable member.
+     *
+     * (CHK.97) the CODE moved from TS2349 to **TS2722**: tsc checks nullability before
+     * it asks for signatures (checker.ts:37038 above :37054), so a nullish member is
+     * "Cannot invoke an object which is possibly 'undefined'." and never the case-b
+     * "Not all constituents … are callable". Measured identical on tsgo 7.0.2 and
+     * pristine `typescript@6.0.3`; the old expectation pinned a divergence.
      */
     @Test
     fun `negative control - an unguarded possibly-undefined callee still fires`() {
@@ -155,7 +160,8 @@ class CalleeNarrowingNotCallableTest {
             }
             """
         ) should {
-            have(any { it.code == 2349 })
+            have(any { it.code == 2722 })
+            have(none { it.code == 2349 })
         }
     }
 

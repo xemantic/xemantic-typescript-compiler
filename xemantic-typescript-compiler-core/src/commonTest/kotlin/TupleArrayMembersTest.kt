@@ -401,9 +401,20 @@ class TupleArrayMembersTest {
         assert(diags("declare const u: 1[] | (1 | 2)[]; const r: boolean = u.map(x => x)").isEmpty())
     }
 
+    /**
+     * (CHK.97) the union is now COMBINED, so the rest position carries
+     * `Array<number & string>` = `never[]` and the argument is checked against its
+     * ELEMENT — `Argument of type '1' is not assignable to parameter of type 'never'.`
+     * on tsgo 7.0.2 and pristine `typescript@6.0.3` alike. What this pin still owns is
+     * that the union is not TS2349; the silence it asserted was the pre-combination
+     * state, not the reference answer.
+     */
     @Test
-    fun `a union of rest-parameter callables is not TS2349`() {
-        assert(diags("declare const u: ((...xs: number[]) => void) | ((...xs: string[]) => void); u(1)").isEmpty())
+    fun `a union of rest-parameter callables is not TS2349 - its element intersects to never`() {
+        val d = diags("declare const u: ((...xs: number[]) => void) | ((...xs: string[]) => void); u(1)")
+        assert(d.map { it.code to it.message } == listOf(
+            2345 to "Argument of type '1' is not assignable to parameter of type 'never'."
+        ))
     }
 
     @Test
