@@ -25,6 +25,99 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.27) — destructured bindings get their types (stage 1 of (CHK.96)), and contextual callback typing is re-measured into (CHK.98) (2026-09-06)
+
+**Suite 17,717 → 17,792 / 0 / 3** — the 75 new pins in `BindingElementTypeTest`; no baseline
+moved and no `LogicalParityDivergence` is needed. Orchestrated as before: one implementation
+subagent owned Gradle and landed (CHK.96) stage 1; a read-only recon subagent measured
+contextual callback-parameter typing over 99 rows against the `d98a090d` snapshot and both
+references, now queued as (CHK.98)/(98b)/(98c) — and it found CLAUDE.md's (CHK.30) entry STALE
+since (CHK.39), corrected this round.
+
+**(CHK.96) STAGE 1 LANDED.** A pure `bindingElementType(elem, parent, isConst, refuseFnMembers)`
+with `bindingElementSlotType`: an object member through `getApparentType` + `propertyTypeOnCarrier`,
+optional → `| undefined`, a string index as fallback, object rest refused; a tuple slot /
+optional slot / rest as a SLICED MUTABLE tuple (tsc's `sliceTupleType`), `Array<T>` /
+`ReadonlyArray<T>` → `T` / `T[]`, `string`; `tupleHasRest`, an index past the slots,
+`noUncheckedIndexedAccess`, Map/iterables and nullish / any / unknown / type-parameter
+constituents refused; a union parent lifted per constituent EXCEPT tsc's
+`getNarrowedTypeOfSymbol` precondition (a non-rest, non-defaulted element of a `const` /
+parameter pattern with ≥2 elements — the destructured-discriminant carry, stage 2; the
+corpus's `arrayDestructuringInSwitch2` found it: the lifted union is a false TS2322 in an
+exhausted `default`); defaults `nonUndefined(slot) ∪ default` through `flowJoinUnion` ((CHK.66)'s
+drop), a const keeping the literal and a let/param widening, an annotated owner →
+`nonUndefined` alone; an array-literal initializer read as the contextual TUPLE element-wise
+(`const [x] = [1, "a"]` → `number`, silent as tsc). The seven plug points landed as specified:
+(a) `recordDestructuredElementTypes` replaces round 464b's object-only recorder and
+`applyDestructuredShadow` is generalised; (b) `registerBindingPatternParamLocals`, a refusal
+still registering `anyType`; (c) `populateParameterLocalTypes`'s pattern arm types leaves into
+`currentLocalTypes` while still filling `currentParamBindingNames`, with B516's gate made
+union-aware and deep; (d) a leave-time arm in `ccetApplyDeclRecordings` (the pre-scan adds
+pattern names to (CHK.95)'s per-body set); (e) `spineArithRecordVarDecl`'s pattern arm,
+unions skipped; (f) `forOfElementTypeOf` + `forOfHeadBindings` for the cta / cpa / ccet
+for-of heads; (g) the SYMBOL half — an `is BindingElement ->` arm in `getTypeOfVariableOrProperty`
+through `bindingElementDeclaredType` (fn members refused — parser.ts's `const { createToken:
+factoryCreateToken } = factory`). Over the recon's matrix: **0 ours-only rows**; the readers
+fixture and the defaults fixture match pristine 19/19 and 9/9; the round-475 cross-file shadow
+fixture 4/4; what is missing is stage 2 by name (object rest, `for [k, v] of Map`, contextual
+pattern params, a return inferred from a pattern-param body) and the refusals as specified.
+**FOUR grid-forced ROOT fixes, each an ours-only row on tsc's own sources**: an OPTIONAL
+property's `T["k"]` now includes `undefined` (`getIndexedAccessType`; moduleSpecifiers.ts:242);
+mapped `-?` strips `undefined` from a source-optional member (`Required<Pick<SymbolTracker,
+…>>`, 11 rows in expressionToTypeNode.ts + harness watchUtils.ts); a generic type guard whose
+target TP has no inference site narrows to its CONSTRAINT (tsc's `getInferredType`;
+watchUtilities.ts:628 — a PRE-EXISTING false positive on Identifier parameters too, now
+closed); and a TP-carrying annotation's fn members are refused in (b)/(c) (watchPublic.ts:152),
+with the cpa/ccet for-of heads kept narrow (convertParamsToDestructuredObject.ts — a namespace-
+qualified enum discriminant does not narrow a loop variable or an Identifier param on HEAD,
+pre-existing). **One dedupe pair** named by `--passTiming`'s emissions census: `checkSpine` +
+`checkDestructuredParamOptionalMemberArgs` (B193, runs second) — `diagnosticAlreadyEmitted` in
+B193 and its sibling B191.
+
+**Pins and ablation.** 75 pins. Nine arms: a1 the array arm off (**25 RED**); a2 (c) off (**9**
+— the ARG / TS2367 / property-access reader pins, the pure decl-reader param pin GREEN through
+(b): a round-927 PAIR, recorded); a3 the symbol arm off (**1** — the DIRECT `getTypeOfSymbol`
+pin; NO diagnostic pin sees (g), because the file-level ARG and TS2367 readers are also served
+by (d)/(e) — a second pair, recorded as the CLAUDE.md entry); a4 the subtype drop off (**4**,
+`'number | 5'`); a5 refusal-leaves-name-unregistered (**1**, the round-475 fixture); a6 the
+COUNTER arm (recording moved into the ccet pre-scan): `typeOfExpr.calls` 613,091 → 613,115,
+`globals.lookups` 803,175 → 803,196 — flat on this profile, so the leave-time placement stands
+on B420's ORDER argument, not on a counter; a7 the attribution arm ((d) off): `typeOfExpr.calls`
+613,091 → 601,896 — **(d) is +11,195 of the round's +13,900 (80%)**. Final `Checker.class`
+sha256 `52f386e8…`, `cmp`-verified restores throughout.
+
+**Gates** (against `52f386e8`): 30 classes / 391 / 0 (the new class, the 16 named
+`Destructured*` / `BindingPattern*` / `ForOf*` classes, `BodyLocalLiteralArgumentTest`,
+`ConstAssertionTest`); corpus **25 classes / 8,837 / 0**, all 60 guard baselines and the
+dedicated-walker set confirmed run; core **848 classes / 16,303 / 0 / 3**; full suite 17,792 /
+0 / 3 over 968 result files; `cost_gate.py` **rebaselined with attribution** — `typeOfExpr.calls`
++2.32%, `typeOfExpr.distinct` +2.33%, `narrow.walks` +1.76%, `globals.lookups` +0.22%,
+`output.errors` 46, `spine.nodes` +0.00%, 80% of it the ccet leave-time typing of the 305
+pattern initializers on the compiler profile (arm a7); `huge_methods.py --fail-over 0` **exit
+0**; grid `d98a090d` → `52f386e8`, marker `bindingElementType`: **8 × `added=0 removed=0`**
+(the eighth profile re-run by hand after the 590 s cap); `spine_closure_audit.py` green; 0 `w:`.
+
+**(CHK.98) MEASURED by recon, and two CLAUDE.md entries corrected.** (CHK.39) already typed a
+callback's parameters for the assignability reader and hover — `take((node) => { const bad:
+string = node.kind })` REPORTS on HEAD, and 44 of 55 ours-rows match both references — so the
+(CHK.30) entry ("supplies an ARITY, not a TYPE … both silent") was stale since 2026-08-25. The
+residue is per READER and per SOURCE: the ccet ARGUMENT reader writes every own parameter
+`anyType` (5 of 5 sources silent at `takeS(n)`), the PROPERTY-ACCESS family gets no context
+under a declaration annotation / class property / objlit METHOD, and the pull has no
+Conditional / New / `=` / `as` / rest / `this` arm. And (CHK.39c)'s refusal mechanism no
+longer holds: (CHK.41) closed the assignment/`typeof` narrowing, 12 of the 15 refused knip rows
+are avoided today, and the 3 that remain are two OTHER narrowing gaps, queued as (CHK.98b)
+(a nested-ternary predicate narrow) and (CHK.98c) (an optional-chain `typeof`).
+
+**Residues.** Stage 2 as written (object rest, iterable for-of heads, contextual pattern
+params, the destructured-discriminant carry); pre-existing and newly measured: arrow /
+function-expression OWN parameters are `any` at the ccet gate even when ANNOTATED (`(p:
+number) => takeB(p)` — 8 tsc rows lost; (CHK.98)(a)'s site), `export const { p } = obj` is not
+an export (a false TS2305 on import), a namespace-qualified enum discriminant does not narrow,
+`CreateProgram<T>`'s alias name is lost through carrier instantiation (display), and
+`isBP(program)` is a TS2345 against a generic guard parameter with `| undefined`. Trim-on-
+write: the (P18.16) note moved to `docs/history/PLAN-PHASE-5-HISTORY.md`.
+
 ### Round (P18.26) — a body-local scalar const reaches the argument gate, and union callees are measured into (CHK.97) (2026-09-06)
 
 **Suite 17,664 → 17,717 / 0 / 3** — the 53 new pins in `BodyLocalLiteralArgumentTest`; no
@@ -1032,82 +1125,6 @@ Build warning-clean (`--rerun-tasks`, 0 `w:`).
 **Suite: 17,308 → 17,337 / 1 / 3 on the first run** — the count was predicted exactly and the one
 failure was the `declare global` display above, fixed here with 6 further pins. **Revised
 prediction: 17,343 / 0 / 3.**
-
-### Round (P18.16) — the enum display generalization lands, and the pins it would have blinded become tsc-verifiable instead (2026-09-04)
-
-**Full suite after the round: 17,286 → 17,308 / 0 / 3 — exactly the +22 new pins, no baseline moved, no `LogicalParityDivergence`, as predicted** (run by the orchestrating session).
-
-**(PARITY.2) CLOSED — the conversion was the round, and the population had to be
-re-derived to find it.** The queue named 13 classes / 47 assertions from a grep-based
-sweep; a MECHANICAL re-derivation (build the arm, run **all 170** core test classes whose
-fixtures declare a TypeScript `enum`, read the failures off the XMLs) says **14 classes,
-45 tests**. The extra one is the whole point of not trusting the list:
-`IndexedAccessOnInstantiationTest` expects `'ModifierSK'` — a type ALIAS name for a member
-union — so no grep for a dotted member rendering can see it, and it is the only pin in the
-population whose expectation is an alias. Two more the sweep would have mis-classified in
-the other direction: `EnumNegativeNarrowingTest`'s and `EnumArgumentSecondChanceTest`'s
-INTERFACE controls are NOT convertible, because the round-441 `never`-parameter arm
-DISCARDS every narrowed result that is not `never` outside its enum exception (measured:
-at a `never` target tsc reads `Ident0` and we read the declared `Node0`).
-
-**Every converted expectation is verified against BOTH references, and 50 of the 54 rows
-are byte-identical to them.** One scratch project carrying every converted fixture, run
-through `tools/tsgo-7.0.2/lib/tsc` and pristine `typescript@6.0.3` — which agree with each
-other on all 54 — then through our AFTER binary. The four that differ are all PRE-EXISTING
-and all recorded at their own pins: our alias display for an interned member union
-((INC.27)), our `K.A` where tsc widens a mutable object-literal property to `K`, and two
-rows of a missing TS2367 for an impossible enum-vs-enum equality.
-
-**Three pins were NOT converted, and saying which is part of the deliverable.** The two
-interface controls above (the discard). `ConstEnumMemberTypeTest`'s `let` control, because
-at a `never` annotation tsc reads the FLOW type of a `let` initialised from a member
-(`K.A`) where we read the widened declared type (`K`) — converting it would pin a
-divergence instead of the widening, which stays pinned by the assignment-legality pin
-beside it; it is BLIND at `string` and the note says so. And the two `string`-target twins
-(`EnumExhaustionToNeverTest`, `EnumNeverParamNarrowingTest`) are re-expected to the
-GENERALIZED `K` rather than moved: their job is to be a twin at a DIFFERENT target kind, and
-`K` is exactly what both references print there. **A finding rather than a weakening: at an
-ARGUMENT position there is now NO non-`never` target that both reports and keeps the member
-here** — a literal parameter and an enum parameter are both silent ((CHK.83)) — so the
-member-naming half of that twin cannot be preserved and the note records where it moved.
-
-**The corpus prediction was made from an enumeration, not a sample, and held.** All 3,145
-active `.errors.txt` baselines scanned: **135** declare an enum; exactly **2** carry an
-assignability source (top-level OR chain) naming a member of an enum they declare
-(`enumLiteralAssignableToEnumInsideUnion`, `inferFromGenericFunctionReturnTypes3`), and
-both sit at suppressing targets; three more (`enumAssignmentCompat3`/`6`/`7`) carry a
-dotted source that is an enum's OWN type qualified by a NAMESPACE, which this rule does not
-touch. All 135 families run: **715 subtests, 0 moved**. No `LogicalParityDivergence` needed.
-
-**Ablation, one mistake at a time, five arms.** a1 the enum arm of
-`getBaseTypeOfLiteralType` (**20 RED** — every generalize pin, every flavour, every union,
-and both re-expected twins; every keep pin and every converted `never`-target narrowing pin
-GREEN, which is the receipt that the conversion does not depend on the fix); a2
-`isUnitLikeType`'s `EnumLiteral` admission (**3 RED**, the member-union family — a NESTED
-red set inside a1's, recorded as such rather than claimed independent, since a1 is strictly
-stronger); a3 the `never` guard in `relationErrorSourceDisplayType` (**73 RED** across 12
-classes — it was a 2-pin arm last round and is now what the whole conversion rests on); a4
-`ts2322KeepsSourceLiteral`'s enum-flavoured-target arm (**9 RED**, the keep family,
-disjoint from a1 and a3); a5 `canonicalEnumSymbol` inside `baseTypeOfEnumLikeType`
-(**0 RED** — a measured REDUNDANT guard, kept with its reason in the KDoc, per round 807).
-Source restored from a snapshot (not `git checkout`, since the round is uncommitted),
-rebuilt, and the restored `Checker.class` sha256 matched the gated AFTER binary; the later
-KDoc-only edit was proved bytecode-identical with `javap -c -p | grep -v 'line'` ((CHK.57)).
-
-**Gates.** 170 at-risk core classes + the 135 at-risk corpus families: **2,631 / 0**
-(2,010 → 2,032 on the class half, exactly the +22 new pins in
-`TypeDisplayParityPositionsTest`, 27 → 49 `@Test`). externals **290 / 0**, project
-**848 / 0**, kir at-risk **41 / 0**. `cost_gate.py` **exit 0** (`output.errors` 46
-unchanged; largest move `globals.lookups` −0.49%, i.e. the generalization does LESS work).
-`huge_methods.py --fail-over 0` **exit 0**. 8-profile grid `PARITY1_MARKER=baseTypeOfEnumLikeType`:
-all eight **added=0 removed=0** — a CONTROL, per (P18.15)'s count that 0 of its 417 rows
-carries an assignability message. **Suite prediction: 17,286 → 17,308 / 0 / 3.**
-
-**Four residues queued** — (CHK.84) `never` is unassignable at a RETURN position here and
-nowhere else; (CHK.85) a mutable object-literal property, and a `let`, do not widen an enum
-member the way tsc's flow/widening does; (CHK.86) no TS2367 and no `never` narrow for an
-impossible enum-vs-enum equality; and (PARITY.3) the namespace prefix a generalized
-namespace-scoped enum loses.
 
 - [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
   HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
@@ -2200,7 +2217,15 @@ namespace-scoped enum loses.
   arms: literal arm off (~30 RED), let-widening off (`'"a"'` printed for a `let`),
   annotated-primitive arm off, collision guard off.
 
-- [ ] **(CHK.96) DESTRUCTURED BINDINGS GET THEIR TYPES — MEASURED 2026-09-05 by read-only recon
+- [ ] **(CHK.96) STAGE 1 LANDED 2026-09-06 ((P18.27) note) — `bindingElementType` at plug points (a)-(g); the
+  ~120-cell matrix has 0 ours-only rows; 75 pins, 9 arms ((c)↔(b) and (g)↔(d)/(e) are round-927 pairs, the counter arm
+  flat); corpus 8,837/0, core 16,303/0, grid 8×0/0, cost_gate rebaselined (+2.32% `typeOfExpr.calls`, 80% the ccet
+  leave-time initializer typing), huge_methods 0. FOUR grid-forced ROOT fixes: an optional `T["k"]` carries
+  `undefined`, mapped `-?` strips it, an uninferrable guard TP narrows to its constraint, TP-carrying fn members
+  refused. **STAGE 2 STAYS OPEN as written below**, plus three new residues: arrow/fn-expression OWN parameters are
+  `any` at the ccet gate even when annotated ((CHK.98)(a)'s site), `export const { p } = obj` is not an export (a
+  false TS2305 on import), a namespace-qualified enum discriminant does not narrow a loop var or an Identifier
+  param. ORIGINAL ITEM: DESTRUCTURED BINDINGS GET THEIR TYPES — MEASURED 2026-09-05 by read-only recon
   against `bc484c83` (fixtures `scratchpad/chk96/{f,b,p,r,r2,h}`, ~120 cells; tsgo 7.0.2 =
   pristine 6.0.3 on EVERY cell, union order included).** The gap is two-shaped and (CHK.46)'s
   CLAUDE.md entry does not separate the halves: an OBJECT pattern's top-level member is ALREADY
@@ -2409,6 +2434,103 @@ namespace-scoped enum loses.
   1)[]` for `[1] | [1, 2]`.map's result (member order; ours = tsgo); `unionTypeCallSignatures6.ts:39`
   is TS2741 in tsgo and TS2684 in pristine. All 23 of ours on the matrix come from `checkSpine`
   (one owner, no tail-walker double-emit on these shapes).
+
+- [ ] **(CHK.98) CONTEXTUAL PARAMETER TYPES REACH THE *ARGUMENT* AND *PROPERTY-ACCESS* READERS,
+  AND THE PULL'S EXACT NON-GENERIC ARMS LAND — MEASURED 2026-09-06 by read-only recon against
+  `d98a090d` (`scratchpad/chk98/{m,m2,m3,m4,k}`, 99 rows; tsgo 7.0.2 = pristine 6.0.3 on every
+  row, union order included).** (CHK.39) ALREADY typed a callback's parameters for the
+  assignability reader and hover (`pullContextualTypeAt` ~148912 + `applyPulledContextualParamTypes`
+  ~149074 at `checkFunctionBody` ~102970 and `ctaFnBodyFrame` ~3800): `take((node) => { const
+  bad: string = node.kind })` REPORTS on HEAD, and so do function expressions, property-
+  assignment arrows, objlit methods, var annotations, return positions, array-literal elements,
+  overloaded callees and generic callees (44 of 55 ours-rows) — so CLAUDE.md's "CONTEXTUAL TYPING
+  SUPPLIES AN ARITY, NOT A TYPE … BOTH silent" is STALE since 2026-08-25 (rewritten this round).
+  The residue is per READER and per SOURCE: **(a)** the ccet frame writes EVERY own parameter
+  `anyType` (`ccetEnterFunctionLike` ~2148, `ccetObjlitMemberFrame` ~2160) unless the enclosing
+  var carries a `FunctionType` annotation (B246 ~2130), so `take(n => { takeS(n) })` is silent
+  at the ARGUMENT reader for 5 of 5 sources (r22 / r25 / s03) — a THIRD apply site (CHK.39)
+  never wired; wire `applyPulledContextualParamTypes` after the `anyType` pre-pass there, and
+  land a per-node MEMO of `pullContextualTypeAt` with it (the pull is then asked three times per
+  function expression; the first two sites cost `typeNode.bypassed` +31%). **(b)** the
+  PROPERTY-ACCESS family gets no contextual type under a declaration ANNOTATION (the spine
+  anchor ~3077 walks the initializer bare; `cpaCtxAt` has no VariableDeclaration arm — the
+  (CHK.39) dead leg), a class property initializer, or an objlit METHOD (`cpaExprObjectLiteral`
+  ~148225 `else -> {}` — the body is not walked): r28 / r29 / p07 / p20, the two KNOWN-GAP pins
+  in `ContextualParameterTypeTest` (:137, :147). Install `contextualType` at those sites **gated
+  to a NON-union contextual parameter type** — measured: (CHK.41) CLOSED the assignment /
+  `typeof` narrowing mechanism (CHK.39c) refused on (`if (typeof cfg === "function") cfg =
+  cfg(); cfg.files2` reports `string` and `cfg.nope` on the narrowed `{ files2: string; }`), and
+  re-running the 15 refused knip rows as annotated-parameter probes AVOIDS 12 of them (ava 3,
+  eleventy 3, mdxlint 2, remark 2, yarn 2); the 3 that remain are two OTHER narrowing gaps — a
+  nested-ternary predicate narrow (`isX(c) ? [c.extensions?.codegen] : [c]`, graphql-codegen,
+  TS2339 on the union) and an optional-chain `typeof` (`typeof c.github?.releaseNotes ===
+  'string'` then `c.github.releaseNotes`, release-it, TS18048) — queued below as (CHK.98b) /
+  (CHK.98c), after which the union gate lifts. knip on HEAD is 49 rows, none in those seven
+  plugin files (checkout `…/a3ddeca4-…/scratchpad/libs/knip-dc7aca5…`, `node_modules` +
+  `@types/node` present). **(c)** the pull's missing EXACT arms (`else -> null` ~148960):
+  ConditionalExpression (r16; tsc :32553 — the cpa family already passes it through, so the
+  property-access reader is right and the assignability reader silent), NewExpression argument
+  (`new Promise<number>((resolve) => …)`, tsc :32797), the `=` LHS type (r34, tsc :32259
+  `getTypeOfExpression(left)`; the pull refuses `=` per (CHK.40)), `as` / `satisfies` (r36, tsc
+  :32809, `as const` excluded), a REST parameter (r18 — `dotDotDotToken` skipped at ~149092; tsc
+  `getRestTypeAtPosition` :38522), a `this` parameter (r20; tsc `getContextualThisParameterType`
+  :31884 — write `currentLocalTypes["this"]`), and the ARITY walker's array-literal edge:
+  `many([x => {}])` is an ours-only FALSE TS7006 because the call-arg edge (~63441) records
+  `typed = true` with no TYPE and the array edge (~63344) needs `cur.type` for `elemCtx` — while
+  the assignability half types `x: number` through (CHK.40)(a)'s pull. **Pre-check before (a)**:
+  a union parameter narrowed by `typeof` and passed as an argument in the then-branch
+  (`takeU(x => { if (typeof x === "string") takeS(x) })`) must STAY silent — the ccet argument
+  reader's flow narrowing was measured only for function-declaration parameters (CLAUDE.md's
+  "live only for a PARAMETER source"); and `typeContainsUnresolvedTypeParam` (~149096) has NO
+  `Type.Object` arm, so a callback-TYPED contextual parameter carrying an unresolved TP inside
+  its signature is written un-substituted — a latent hazard (a) exposes to the argument
+  relation; add the arm. **Gates**: 8-profile grid `added=0 removed=0` (1,456 argument-position
+  arrows on the compiler profile — 1,012 single bare param, 354 block-bodied — 3,150 on harness,
+  every one gaining a typed parameter at the argument reader; the exposure is the argument
+  RELATION over types the assignability reader has judged at grid 0 since (CHK.39); the false-
+  positive sources to pre-check with the REAL declarations are a narrowed union parameter not
+  narrowed at the argument reader, (CHK.83)'s refused `ArrayLike` / `Iterable` apparent-members
+  gap (`forEach(s => f(s))` with `f(x: Iterable<string>)`), and a `Record`-initial `reduce`);
+  knip 49 → 49 against a REBUILT parent; `cost_gate.py` with `typeNode.bypassed` accounted; the
+  59 active TS7006 baselines (`chk98/active-errors.txt`), the 60 active `*contextual*` baselines,
+  and the fixture-selected corpus (every case declaring an arrow / function expression in
+  argument or initializer position — (CHK.88)'s method); existing pins to keep green:
+  `ContextualParameterTypeTest` 36 (its two KNOWN-GAP absence pins FLIP), `ProjectContextualParamHoverTest`,
+  `ImplicitAnyContextualTypingTest`, `ContextualFnMemberParamsTest`, `MapCallbackReturnInferenceTest`,
+  `ContextualReturnAnnotationTest`, `ImplicitAnyCtxSourcesTest`, `ContextualParamShadowingTest`,
+  `UninferredTpCallbackParamTest`, `CallbackReturnTpParamTest`, `NestedArrowLocalShadowingTest`,
+  `OverloadedCallbackArityTest`, `ReduceOverloadContextualSelectionTest`. **Pins**: one value pin
+  per SOURCE × READER (a wrong-typed `const w: boolean = x`, a `takeS(x)` argument, an `x.nope`
+  member), the r22 then-branch silence and the r26 knip shape as negative controls; **arms**: a1
+  the ccet site removed (reddens only the argument pins), a2 the cpa annotation source, a3 the
+  objlit-method walk, a4 the union gate dropped (must redden the k3a / k5a-shaped pins), a5 each
+  new pull arm answering null, a6 the array-edge type dropped (only the r15 TS7006 pin), a7
+  `this` / rest dropped. **STAGE 2, a separate item**: union-of-arrays callees
+  (`cpaComputeArgCtxTypes` ~147781 `calleeType !is Type.Object → null` — r04 / r41), `Promise.then`
+  / `PromiseLike.then` / any method whose TP DEFAULT names the class TP (`q<R = T>` reads `any` —
+  q01 / s01), a union-with-null callback parameter of a CLASS TP (`TypeInstantiator.
+  instantiateContextualParamType` descends only a bare fn-shaped `Type.Object`; a Union falls to a
+  no-op `instantiateType` → unresolved `T` → skipped), predicate-`filter` S inference (p03,
+  archive :918), the real `Visitor<NonNullable<TIn>, TVisited>` alias shapes (s02, silent — safe
+  direction), `reduce(cb, {} as Record<…>)` — an ours-only FALSE POSITIVE `acc: string` /
+  `acc.nope` TS2339, because the mapped alias reads bare `any` ((EXT.11b)), every overload
+  matches, `strictSelect` goes ambiguous and the legacy `candidates[0]` wins (q02; `new Map()`
+  initial is fine) — destructured parameters ((CHK.96) stage 2), namespace-import callees
+  ((CHK.73)). Also recorded, outside this item: tsc's own `filter(x => typeof x === "string")`
+  answers `string[]` (5.5 inferred predicates) where ours answers `(string | Nd)[]` — a
+  pre-existing MEANING divergence.
+- [ ] **(CHK.98b) NESTED-TERNARY PREDICATE NARROWING** — `isX(c) ? [c.extensions?.codegen] :
+  [c]` reads `Property 'extensions' does not exist on type 'GraphqlCodegenTypes |
+  GraphqlConfigTypes'` here (knip's graphql-codegen plugin, measured 2026-09-06 as an annotated-
+  parameter probe, `scratchpad/chk98/k`): a type-guard CALL as a ternary CONDITION narrows the
+  then-operand in tsc and not in the property-access family here. One of the two remaining knip
+  false positives that keep (CHK.98)(b)'s union gate closed.
+- [ ] **(CHK.98c) OPTIONAL-CHAIN `typeof` NARROWING** — `typeof c.github?.releaseNotes ===
+  'string'` then `c.github.releaseNotes` reads TS18048 here (knip's release-it plugin, two rows,
+  measured 2026-09-06 as an annotated-parameter probe): a `typeof` guard over an optional chain
+  narrows the chain's every link non-nullish in tsc (a `"string"` result cannot come from a
+  short-circuited chain). The other remaining knip false positive behind (CHK.98)(b)'s union
+  gate.
 
 - [x] **(CHK.86) AN IMPOSSIBLE ENUM-vs-ENUM EQUALITY PRODUCES NEITHER TS2367 NOR A `never`
   NARROW — the DIAGNOSTIC half CLOSED (P18.17); the NARROW half re-queued as (CHK.87).**

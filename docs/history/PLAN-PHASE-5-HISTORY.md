@@ -1,3 +1,79 @@
+### Round (P18.16) — the enum display generalization lands, and the pins it would have blinded become tsc-verifiable instead (2026-09-04)
+
+**Full suite after the round: 17,286 → 17,308 / 0 / 3 — exactly the +22 new pins, no baseline moved, no `LogicalParityDivergence`, as predicted** (run by the orchestrating session).
+
+**(PARITY.2) CLOSED — the conversion was the round, and the population had to be
+re-derived to find it.** The queue named 13 classes / 47 assertions from a grep-based
+sweep; a MECHANICAL re-derivation (build the arm, run **all 170** core test classes whose
+fixtures declare a TypeScript `enum`, read the failures off the XMLs) says **14 classes,
+45 tests**. The extra one is the whole point of not trusting the list:
+`IndexedAccessOnInstantiationTest` expects `'ModifierSK'` — a type ALIAS name for a member
+union — so no grep for a dotted member rendering can see it, and it is the only pin in the
+population whose expectation is an alias. Two more the sweep would have mis-classified in
+the other direction: `EnumNegativeNarrowingTest`'s and `EnumArgumentSecondChanceTest`'s
+INTERFACE controls are NOT convertible, because the round-441 `never`-parameter arm
+DISCARDS every narrowed result that is not `never` outside its enum exception (measured:
+at a `never` target tsc reads `Ident0` and we read the declared `Node0`).
+
+**Every converted expectation is verified against BOTH references, and 50 of the 54 rows
+are byte-identical to them.** One scratch project carrying every converted fixture, run
+through `tools/tsgo-7.0.2/lib/tsc` and pristine `typescript@6.0.3` — which agree with each
+other on all 54 — then through our AFTER binary. The four that differ are all PRE-EXISTING
+and all recorded at their own pins: our alias display for an interned member union
+((INC.27)), our `K.A` where tsc widens a mutable object-literal property to `K`, and two
+rows of a missing TS2367 for an impossible enum-vs-enum equality.
+
+**Three pins were NOT converted, and saying which is part of the deliverable.** The two
+interface controls above (the discard). `ConstEnumMemberTypeTest`'s `let` control, because
+at a `never` annotation tsc reads the FLOW type of a `let` initialised from a member
+(`K.A`) where we read the widened declared type (`K`) — converting it would pin a
+divergence instead of the widening, which stays pinned by the assignment-legality pin
+beside it; it is BLIND at `string` and the note says so. And the two `string`-target twins
+(`EnumExhaustionToNeverTest`, `EnumNeverParamNarrowingTest`) are re-expected to the
+GENERALIZED `K` rather than moved: their job is to be a twin at a DIFFERENT target kind, and
+`K` is exactly what both references print there. **A finding rather than a weakening: at an
+ARGUMENT position there is now NO non-`never` target that both reports and keeps the member
+here** — a literal parameter and an enum parameter are both silent ((CHK.83)) — so the
+member-naming half of that twin cannot be preserved and the note records where it moved.
+
+**The corpus prediction was made from an enumeration, not a sample, and held.** All 3,145
+active `.errors.txt` baselines scanned: **135** declare an enum; exactly **2** carry an
+assignability source (top-level OR chain) naming a member of an enum they declare
+(`enumLiteralAssignableToEnumInsideUnion`, `inferFromGenericFunctionReturnTypes3`), and
+both sit at suppressing targets; three more (`enumAssignmentCompat3`/`6`/`7`) carry a
+dotted source that is an enum's OWN type qualified by a NAMESPACE, which this rule does not
+touch. All 135 families run: **715 subtests, 0 moved**. No `LogicalParityDivergence` needed.
+
+**Ablation, one mistake at a time, five arms.** a1 the enum arm of
+`getBaseTypeOfLiteralType` (**20 RED** — every generalize pin, every flavour, every union,
+and both re-expected twins; every keep pin and every converted `never`-target narrowing pin
+GREEN, which is the receipt that the conversion does not depend on the fix); a2
+`isUnitLikeType`'s `EnumLiteral` admission (**3 RED**, the member-union family — a NESTED
+red set inside a1's, recorded as such rather than claimed independent, since a1 is strictly
+stronger); a3 the `never` guard in `relationErrorSourceDisplayType` (**73 RED** across 12
+classes — it was a 2-pin arm last round and is now what the whole conversion rests on); a4
+`ts2322KeepsSourceLiteral`'s enum-flavoured-target arm (**9 RED**, the keep family,
+disjoint from a1 and a3); a5 `canonicalEnumSymbol` inside `baseTypeOfEnumLikeType`
+(**0 RED** — a measured REDUNDANT guard, kept with its reason in the KDoc, per round 807).
+Source restored from a snapshot (not `git checkout`, since the round is uncommitted),
+rebuilt, and the restored `Checker.class` sha256 matched the gated AFTER binary; the later
+KDoc-only edit was proved bytecode-identical with `javap -c -p | grep -v 'line'` ((CHK.57)).
+
+**Gates.** 170 at-risk core classes + the 135 at-risk corpus families: **2,631 / 0**
+(2,010 → 2,032 on the class half, exactly the +22 new pins in
+`TypeDisplayParityPositionsTest`, 27 → 49 `@Test`). externals **290 / 0**, project
+**848 / 0**, kir at-risk **41 / 0**. `cost_gate.py` **exit 0** (`output.errors` 46
+unchanged; largest move `globals.lookups` −0.49%, i.e. the generalization does LESS work).
+`huge_methods.py --fail-over 0` **exit 0**. 8-profile grid `PARITY1_MARKER=baseTypeOfEnumLikeType`:
+all eight **added=0 removed=0** — a CONTROL, per (P18.15)'s count that 0 of its 417 rows
+carries an assignability message. **Suite prediction: 17,286 → 17,308 / 0 / 3.**
+
+**Four residues queued** — (CHK.84) `never` is unassignable at a RETURN position here and
+nowhere else; (CHK.85) a mutable object-literal property, and a `let`, do not widen an enum
+member the way tsc's flow/widening does; (CHK.86) no TS2367 and no `never` narrow for an
+impossible enum-vs-enum equality; and (PARITY.3) the namespace prefix a generalized
+namespace-scoped enum loses.
+
 ### Round (P18.15) — the literal-union collapse at every position, and an enum generalization refused for a reason worth more than the fix (2026-09-04)
 
 **(PARITY.1) CLOSED.** The queue item named three emitters; a trace over the `Diagnostic`

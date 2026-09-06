@@ -1915,14 +1915,28 @@ class Checker(
                     nm !in topF.paramBindings &&
                         (globals[nm] != null || topF.localTypes.containsKey(nm))
                 }
+                // (CHK.96)(f): the head's bindings are TYPED over the element type — an
+                // Identifier head as the element, a pattern's leaves through
+                // [bindingElementType] — so `for (const s of xs) takeB(s)` reaches the
+                // argument gate; a refused leaf keeps the colliding-name `any` below.
+                val typed = ArrayList<Pair<String, Type>>(2)
+                if (p is ForOfStatement) {
+                    withCcetFrameAmbient(topF) {
+                        forOfElementTypeOf(getTypeOfExpression(p.expression), wide = false)?.let {
+                            forOfHeadBindings(init, it, typed, refuseTypeParams = true)
+                        }
+                    }
+                }
                 val id = (node as NodeBase).nodeId
-                if (colliding.isNotEmpty() && id >= 0) {
+                if ((colliding.isNotEmpty() || typed.isNotEmpty()) && id >= 0) {
                     SpineDispatch.work()
-                    val prev = colliding.map { topF.localTypes[it] }
-                    val had = colliding.map { topF.localTypes.containsKey(it) }
+                    val names = LinkedHashSet<String>(colliding).also { s -> typed.forEach { s.add(it.first) } }.toList()
+                    val prev = names.map { topF.localTypes[it] }
+                    val had = names.map { topF.localTypes.containsKey(it) }
                     val added = colliding.filter { it !in topF.paramBindings }
                     for (nm in colliding) { topF.localTypes.remove(nm); topF.paramBindings.add(nm) }
-                    ccetRestores.addLast(CcetRestore(id, topF, colliding, prev, had, added))
+                    for ((nm, t) in typed) topF.localTypes[nm] = t
+                    ccetRestores.addLast(CcetRestore(id, topF, names, prev, had, added))
                 }
             }
         }
@@ -2257,7 +2271,23 @@ class Checker(
      *  callable-shadow anyType bail. Applied at decl leaves for the m3
      *  anchors (the spine's per-node order = the legacy interleave). */
     private fun ccetApplyDeclRecordings(decl: VariableDeclaration) {
-        val nm = decl.name as? Identifier
+        val pat = decl.name
+        if (pat is ObjectBindingPattern || pat is ArrayBindingPattern) {
+            // (CHK.96)(d): a destructured local's leaves are typed at the declaration's
+            // LEAVE — the initializer has been walked, so typing it here is not B420's
+            // first-touch hazard the pre-scan ([shadowCallTypesDeclList]) is shaped
+            // around. The pre-scan put every name into the side set (`any`) and wrote
+            // `anyType` for a duplicate or inherited name; the `== null` guard keeps
+            // those (round 460 / (CHK.95)), and a fresh name takes its answer here.
+            // Round 464b's fn-member refusal holds at this reader as at the cta one.
+            val source = bindingPatternSourceType(decl) ?: return
+            if (source === anyType || source === errorType || source === unknownType) return
+            forEachBindingPatternLeaf(pat, source, varDeclIsImmutableBinding(decl), refuseFnMembers = true) { name, t ->
+                if (t != null && currentLocalTypes[name] == null) currentLocalTypes[name] = t
+            }
+            return
+        }
+        val nm = pat as? Identifier
         val ann = decl.type
         if (nm != null && ann != null && currentLocalTypes[nm.text] == null) {
             val t = getTypeFromTypeNode(ann)
@@ -2884,34 +2914,22 @@ class Checker(
             val p = parent
             if ((p is ForInStatement && p.statement === node) || (p is ForOfStatement && p.statement === node)) {
                 val init = if (p is ForInStatement) p.initializer else (p as ForOfStatement).initializer
-                val name = when (init) {
-                    is Identifier -> init.text
-                    is VariableDeclarationList -> (init.declarations.firstOrNull()?.name as? Identifier)?.text
-                    else -> null
+                val top = cpaFrames.last()
+                // (CHK.96)(f): a PATTERN head binds every leaf over the element type;
+                // an Identifier head binds the element itself, as before.
+                val bindings = ArrayList<Pair<String, Type>>(2)
+                withCpaFrameAmbient(top) {
+                    val elementType: Type? = if (p is ForInStatement) stringType
+                        else forOfElementTypeOf(getTypeOfExpression((p as ForOfStatement).expression), wide = false)
+                    if (elementType != null) forOfHeadBindings(init, elementType, bindings, refuseTypeParams = true)
                 }
-                if (name != null) {
-                    val top = cpaFrames.last()
-                    val overrideType: Type? = if (p is ForInStatement) stringType else {
-                        var t: Type? = null
-                        withCpaFrameAmbient(top) {
-                            val iterableT = getTypeOfExpression((p as ForOfStatement).expression)
-                            t = when {
-                                iterableT === stringType -> stringType
-                                iterableT is Type.Reference && iterableT.target.symbol?.name == "Array" ->
-                                    iterableT.resolvedTypeArguments?.firstOrNull()
-                                else -> null
-                            }
-                        }
-                        t
-                    }
-                    if (overrideType != null) {
-                        val bodyId = (node as NodeBase).nodeId
-                        if (bodyId >= 0) {
-                            SpineDispatch.work()
-                            cpaLoopVarRestores.addLast(CpaLoopVarRestore(bodyId, name,
-                                top.localTypes.containsKey(name), top.localTypes[name]))
-                            top.localTypes[name] = overrideType
-                        }
+                val bodyId = (node as NodeBase).nodeId
+                if (bindings.isNotEmpty() && bodyId >= 0) {
+                    SpineDispatch.work()
+                    for ((name, overrideType) in bindings) {
+                        cpaLoopVarRestores.addLast(CpaLoopVarRestore(bodyId, name,
+                            top.localTypes.containsKey(name), top.localTypes[name]))
+                        top.localTypes[name] = overrideType
                     }
                 }
             }
@@ -3840,26 +3858,18 @@ class Checker(
      * it is answered they keep the pre-existing `any`, which is a false NEGATIVE
      * and not a false positive.
      */
-    private fun ctaForOfBinding(node: ForOfStatement): Pair<String, Type>? {
+    private fun ctaForOfBinding(node: ForOfStatement): List<Pair<String, Type>>? {
         val list = node.initializer as? VariableDeclarationList ?: return null
-        val name = (list.declarations.singleOrNull()?.name as? Identifier)?.text ?: return null
+        if (list.declarations.size != 1) return null
         var element: Type? = null
+        val out = ArrayList<Pair<String, Type>>(2)
         withCtaFrameLocals(ctaFrames.last()) {
-            val iterable = getTypeOfExpression(node.expression)
-            element = when {
-                iterable === stringType -> stringType
-                iterable is Type.Object && iterable.tupleElementTypes != null ->
-                    getUnionType(iterable.tupleElementTypes!!)
-                iterable is Type.Reference &&
-                    (iterable.target.symbol?.name == "Array" ||
-                        iterable.target.symbol?.name == "ReadonlyArray") ->
-                    iterable.resolvedTypeArguments?.firstOrNull()
-                else -> null
-            }
+            element = forOfElementTypeOf(getTypeOfExpression(node.expression), wide = true)
+            // (CHK.96)(f): a PATTERN head's leaves through [bindingElementType].
+            element?.let { forOfHeadBindings(list, it, out, refuseTypeParams = false) }
         }
-        val elementType = element ?: return null
-        if (elementType === anyType || elementType === errorType) return null
-        return name to elementType
+        if (element == null || out.isEmpty()) return null
+        return out
     }
 
     private fun ctaSpineEnter(node: Node) {
@@ -3886,7 +3896,7 @@ class Checker(
         // resolved on `any`, i.e. not at all.
         if (node is ForOfStatement && !spineIsDts) {
             val bodyId = (node.statement as NodeBase).nodeId
-            if (bodyId >= 0) ctaForOfBinding(node)?.let { ctaM3NarrowThen[bodyId] = listOf(it) }
+            if (bodyId >= 0) ctaForOfBinding(node)?.let { ctaM3NarrowThen[bodyId] = it }
         }
         // (cta-m3i): a registered then node gets the NARROWING frame — the
         // legacy wrapper's localTypes copy + write + narrowedDeclared entry.
@@ -62479,7 +62489,20 @@ interface DataView {
      * [spineArithInstalled], so currentLocalTypes IS [spineArithLocals].
      */
     private fun spineArithRecordVarDecl(decl: VariableDeclaration, isConst: Boolean) {
-        val declName = (decl.name as? Identifier)?.text
+        val pat = decl.name
+        if (pat is ObjectBindingPattern || pat is ArrayBindingPattern) {
+            // (CHK.96)(e): a destructured declaration's leaves record their
+            // [bindingElementType] answer, SKIPPING a union as the annotated Identifier
+            // arm below skips one — this pass has no flow narrowing, and an un-narrowed
+            // union at a comparison is a false TS2367.
+            val source = bindingPatternSourceType(decl) ?: return
+            if (source === anyType || source === errorType || source === unknownType) return
+            forEachBindingPatternLeaf(pat, source, isConst, refuseFnMembers = true) { name, t ->
+                if (t != null && t !is Type.Union && t !== unknownType) currentLocalTypes[name] = t
+            }
+            return
+        }
+        val declName = (pat as? Identifier)?.text
         if (declName != null && decl.type != null) {
             // expr.ts: record an ANNOTATED function-body local's declared type
             // so later arithmetic/comparison checks resolve interface/enum/
@@ -102540,8 +102563,8 @@ interface DataView {
                 // `parent.operatorToken`. Register the binding names as shadowed and
                 // resolve each from the destructured property type so a following user
                 // type-guard narrows the RIGHT type.
-                if (d.name is ObjectBindingPattern && d.initializer != null) {
-                    applyDestructuredShadow(d.name, d.initializer, paramNames)
+                if ((d.name is ObjectBindingPattern || d.name is ArrayBindingPattern) && d.initializer != null) {
+                    applyDestructuredShadow(d, paramNames)
                     continue
                 }
                 val nm = (d.name as? Identifier)?.text ?: continue
@@ -102708,28 +102731,27 @@ interface DataView {
      *  pattern and record each from the destructured property type of `init` (so a following
      *  user type-guard narrows the RIGHT type, not the shadowed outer/leaked binding). Only
      *  names that ALSO have an outer binding are shadowed; a pure local is left untouched. */
-    private fun applyDestructuredShadow(pattern: ObjectBindingPattern, initializer: Expression, paramNames: Set<String>) {
-        var initType: Type? = null
-        var initResolved = false
-        for (el in pattern.elements) {
-            if (el.dotDotDotToken) continue
-            val bnName = (el.name as? Identifier)?.text ?: continue
-            if (bnName in paramNames) continue
-            // INV.3(d): + currentFileLocals — see applyBodyLocalShadowing's inGlobals note.
-            if (!currentLocalTypes.containsKey(bnName) && !globals.containsKey(bnName) &&
-                currentFileLocals?.containsKey(bnName) != true
-            ) continue
-            currentShadowedNames.add(bnName)
-            if (!initResolved) {
-                initType = getTypeOfExpression(initializer)
-                initResolved = true
-            }
-            val propName = (el.propertyName as? Identifier)?.text ?: bnName
-            val pt = if (initType != null && initType !== anyType && initType !== errorType) {
-                getPropertyOfType(getApparentType(initType), propName)?.let { getTypeOfSymbol(it) }
-            } else null
-            if (pt != null && pt !== anyType && pt !== errorType) currentLocalTypes[bnName] = pt
-            else currentLocalTypes.remove(bnName)
+    private fun applyDestructuredShadow(decl: VariableDeclaration, paramNames: Set<String>) {
+        // (CHK.96): both pattern kinds, every leaf, through [bindingElementType] — the
+        // same answer the declaration reader records, so the two cannot disagree about
+        // a shadowing name; an ARRAY pattern's leaf shadowing an outer binding was left
+        // resolving to the OUTER declaration before this.
+        val names = mutableSetOf<String>()
+        collectBindingIdentifierNames(decl.name, names)
+        // INV.3(d): + currentFileLocals — see applyBodyLocalShadowing's inGlobals note.
+        val shadowing = names.filter { n ->
+            n !in paramNames && (currentLocalTypes.containsKey(n) || globals.containsKey(n) ||
+                currentFileLocals?.containsKey(n) == true)
+        }
+        if (shadowing.isEmpty()) return
+        for (n in shadowing) {
+            currentShadowedNames.add(n)
+            currentLocalTypes.remove(n)
+        }
+        val source = bindingPatternSourceType(decl)
+            ?.takeIf { it !== anyType && it !== errorType && it !== unknownType } ?: return
+        forEachBindingPatternLeaf(decl.name, source, varDeclIsImmutableBinding(decl), refuseFnMembers = true) { n, t ->
+            if (t != null && n in shadowing) currentLocalTypes[n] = t
         }
     }
 
@@ -103004,46 +103026,19 @@ interface DataView {
         val annType = annotation?.let {
             getTypeFromTypeNode(it)
         }?.takeIf { it !== anyType && it !== errorType }
-        fun register(p: Expression, memberSource: Type?) {
-            when (p) {
-                is ObjectBindingPattern -> for (el in p.elements) {
-                    val nm = el.name
-                    if (nm is ObjectBindingPattern || nm is ArrayBindingPattern) {
-                        register(nm, null)
-                        continue
-                    }
-                    val bound = (nm as? Identifier)?.text ?: continue
-                    var t: Type? = null
-                    if (memberSource != null && !el.dotDotDotToken) {
-                        val propName = (el.propertyName as? Identifier)?.text ?: bound
-                        val sym = getPropertyOfType(memberSource, propName)
-                        if (sym != null) {
-                            var mt = getTypeOfSymbol(sym)
-                            if (mt !== errorType) {
-                                if (mt !== anyType && isOptionalProperty(sym) && el.initializer == null &&
-                                    !typeIncludesUndefined(mt)
-                                ) {
-                                    mt = getUnionType(listOf(mt, undefinedType))
-                                }
-                                t = mt
-                            }
-                        }
-                    }
-                    currentLocalTypes[bound] = t ?: anyType
-                }
-                is ArrayBindingPattern -> for (el in p.elements) {
-                    val binding = el as? BindingElement ?: continue
-                    val nm = binding.name
-                    if (nm is ObjectBindingPattern || nm is ArrayBindingPattern) {
-                        register(nm, null)
-                        continue
-                    }
-                    (nm as? Identifier)?.text?.let { currentLocalTypes[it] = anyType }
-                }
-                else -> {}
-            }
+        // (CHK.96)(b): the leaves answer through [bindingElementType] — an ARRAY pattern
+        // param, a default, a nested pattern and a union annotation were all `any` here.
+        // B516's TP-referencing fn-type gate applies to a member type as it does to a
+        // parameter's own annotation; a refusal registers `anyType` — round 475's contract.
+        // A fn-shaped member of a GENERIC-INSTANTIATION annotation carrying a type
+        // parameter (`IncrementalProgramOptions<T>`'s `createProgram?: CreateProgram<T>`) is
+        // refused: its alias instantiation with a bare `T` argument is (INC.42)'s B57.1b
+        // gap, and the un-narrowed `Fn | undefined` then reached the callee check as a
+        // false TS2349 (watchPublic.ts:152). A concrete instantiation keeps its members.
+        val refuseFn = annType != null && typeContainsUnresolvedTypeParam(annType)
+        forEachBindingPatternLeaf(pattern, annType, isConst = false, refuseFnMembers = refuseFn) { name, t ->
+            currentLocalTypes[name] = t?.takeIf { !isTpReferencingFnTypeOrUnion(it) } ?: anyType
         }
-        register(pattern, annType)
     }
 
     /**
@@ -105395,35 +105390,438 @@ interface DataView {
      *  from the source's declared members. Optional members widen with undefined;
      *  any collision with an existing entry, a union/any source, defaults, rest,
      *  or nested patterns are all skipped (conservative, first-decl-wins). */
-    private fun recordDestructuredConstElementTypes(pattern: ObjectBindingPattern, init: Expression?) {
-        if (init == null) return
-        val initT = getTypeOfExpression(init)
-        if (initT === anyType || initT === errorType || initT === unknownType || initT is Type.Union) return
-        val apparent = getApparentType(initT)
-        for (el in pattern.elements) {
-            val inner = el.name as? Identifier ?: continue
-            if (inner.text.isEmpty() || el.dotDotDotToken || el.initializer != null) continue
-            if (currentLocalTypes.containsKey(inner.text)) continue
-            if (inner.text in ambiguousBlockLocalNames) continue
-            val propName = (el.propertyName as? Identifier)?.text ?: inner.text
-            val sym = getPropertyOfType(apparent, propName) ?: continue
-            val t = getTypeOfSymbol(sym)
-            if (t === anyType || t === errorType) continue
-            // FUNCTION-shaped member types stay unrecorded: re-checking a
-            // destructured fn value against its interface target rides the
-            // fn-type relation's M3 gaps (tsbuildPublic.ts's
-            // changeCompilerHostLikeToUseCache elements FP'd when recorded) —
-            // data members are the safe, high-value subset. A fn member may
-            // arrive lazily-membered or wrapped `| undefined` — resolve + check
-            // union constituents.
-            fun fnShaped(x: Type): Boolean = (x as? Type.Object)?.let { o ->
-                resolveStructuredTypeMembers(o)
-                !o.callSignatures.isNullOrEmpty() || !o.constructSignatures.isNullOrEmpty()
-            } == true
-            if (fnShaped(t) || (t is Type.Union && t.types.any { fnShaped(it) })) continue
-            val eff = if (isOptionalProperty(sym) && !typeIncludesUndefined(t))
-                getUnionType(listOf(t, undefinedType)) else t
-            currentLocalTypes[inner.text] = eff
+    // -----------------------------------------------------------------------
+    // (CHK.96) stage 1: the type of a BINDING ELEMENT — one function, seven
+    // plug points.
+    // -----------------------------------------------------------------------
+
+    /**
+     * (CHK.96) stage 1 — THE TYPE OF THE BINDING ELEMENT [elem] READ FROM THE TYPE
+     * [parent] ITS PATTERN DESTRUCTURES, or null where this stage REFUSES.
+     *
+     * tsc's `getBindingElementTypeFromParentType` (checker.ts:11746-11829), transcribed
+     * for the shapes whose answer is a function of [parent] alone:
+     *
+     *  * an OBJECT pattern member: the property of [parent]'s APPARENT type named by the
+     *    element (`{ p }`, `{ p: q }`, `{ "p": q }`, `{ 0: q }`, `{ ["p"]: q }` — a computed
+     *    key is literal-only), read through [propertyTypeOnCarrier] so a generic carrier's
+     *    member is instantiated; an OPTIONAL member reads `| undefined` under
+     *    `strictNullChecks`; a missing member falls to the STRING index signature and
+     *    otherwise refuses (the TS2339 walkers own the absence); an object REST refuses
+     *    (stage 2, tsc's `getRestType`);
+     *  * an ARRAY pattern slot: a tuple slot (`| undefined` where the slot is optional), a
+     *    rest over a tuple as the SLICED tuple (`sliceTupleType` — MUTABLE, as tsc's), an
+     *    `Array<T>` / `ReadonlyArray<T>` slot as `T` and its rest as `T[]`
+     *    (`createArrayType` — mutable, as tsc's), a `string` as `string`; a tuple whose
+     *    rest has been collapsed ((CHK.94)'s `tupleHasRest`), an index past the slots
+     *    (TS2493's walkers), `noUncheckedIndexedAccess` (B221's), and every other
+     *    iterable — `Map`, `Set`, a generator, an `Iterable<T>` (stage 2, `[Symbol.iterator]`)
+     *    — refuse;
+     *  * a UNION parent: the union of the per-constituent answers, refused when any
+     *    constituent refuses; a nullish, `any`, `unknown`, `error` or type-parameter
+     *    constituent refuses (the nullable-destructure and TS18048 walkers own the first,
+     *    an indexed access `T["p"]` the last); and REFUSED outright where tsc's
+     *    `getNarrowedTypeOfSymbol` would re-read the element from the flow-narrowed
+     *    parent — a non-rest, non-defaulted element of a `const` / parameter pattern with
+     *    two or more elements (the destructured-discriminant carry, stage 2);
+     *  * a DEFAULT (`{ o: od = 5 }`, `[d = "x"]`): `nonUndefined(slot) ∪ default` with the
+     *    default read as [literalTypeOfExpression] `?:` [getTypeOfExpression], a `const`
+     *    keeping the literal and a `let` / parameter widening it ((WIDEN.1)), then (CHK.66)'s
+     *    SUBTYPE DROP through [flowJoinUnion] — `getUnionType` performs no subtype
+     *    reduction, and without the drop `{ o: od = 5 }` prints `number | 5` where both
+     *    references print `number`; an ANNOTATED owner instead answers `nonUndefined(slot)`
+     *    alone when the default is not undefined-typed (tsc's `getEffectiveTypeAnnotationNode`
+     *    branch).
+     *
+     * A refusal is a null, and EVERY CALLER STILL REGISTERS `anyType` (or leaves the
+     * pre-scan's `anyType` in place) for the name — round 475's contract: the `any` shadow
+     * protects a bare read of a destructured name from resolving a same-named CROSS-FILE
+     * binding through the merged globals. A typed name is protected by its type, a refused
+     * name by `anyType`, and a name left UNREGISTERED is the false positive.
+     *
+     * [refuseFnMembers] keeps round 464b's refusal of a FUNCTION-shaped object member at
+     * the readers where re-checking a destructured fn value against an interface target
+     * rides the fn-type relation's M3 gaps (the cta / spineArith / ccet DECLARATION readers);
+     * the parameter registrars keep registering them as they always did, behind B516's
+     * TP-referencing gate.
+     *
+     * No type-parameter policy lives here: the parameter registrars answer under the
+     * function's own TP scope, the declaration reader applies its foreign-TP refusal
+     * ([typeContainsForeignTypeParam]), and the symbol half mirrors the
+     * `VariableDeclaration` arm, which has none.
+     */
+    private fun bindingElementType(
+        elem: BindingElement, parent: Type, isConst: Boolean, refuseFnMembers: Boolean = false,
+    ): Type? {
+        if (parent === anyType || parent === errorType || parent === unknownType) return null
+        val pattern = (elem as NodeBase).parent ?: return null
+        val slot: Type = if (parent is Type.Union) {
+            // tsc's `getNarrowedTypeOfSymbol` (checker.ts): a non-rest, non-defaulted element
+            // of a `const` / parameter pattern with >= 2 elements over a UNION parent is
+            // re-read at EVERY use from the FLOW-NARROWED parent — `const { kind, a } = x;
+            // switch (kind) { … default: return a }` reads `a` as `never` there, where the
+            // lifted `[1] | []` is a false TS2322 (the corpus's `arrayDestructuringInSwitch2`).
+            // That carry is stage 2; exactly its precondition refuses here, so a single-element
+            // pattern (`const { p } = uni`), a `let` and a defaulted element still lift.
+            if (elem.initializer == null && !elem.dotDotDotToken &&
+                bindingPatternElementCount(pattern) >= 2 && bindingPatternRootIsConstOrParam(elem)
+            ) return null
+            val parts = ArrayList<Type>(parent.types.size)
+            for (c in parent.types) {
+                parts.add(bindingElementSlotType(elem, pattern, c, refuseFnMembers) ?: return null)
+            }
+            getUnionType(parts)
+        } else bindingElementSlotType(elem, pattern, parent, refuseFnMembers) ?: return null
+        if (slot === anyType || slot === errorType || slot === unknownType) return null
+        val init = elem.initializer ?: return slot
+        val defRaw = literalTypeOfExpression(init) ?: getTypeOfExpression(init)
+        if (defRaw === anyType || defRaw === errorType || defRaw === unknownType) return null
+        if (bindingPatternRootIsAnnotated(elem)) {
+            return if (strictNullChecks && !typeIncludesUndefined(defRaw)) nonUndefinedType(slot) else slot
+        }
+        val def = if (isConst) defRaw else widenLiteralMembers(defRaw)
+        val base = if (strictNullChecks) nonUndefinedType(slot) else slot
+        if (base === def) return base
+        return flowJoinUnion(listOf(base, def), base)
+    }
+
+    /** (CHK.96) one constituent of [bindingElementType] — see there. */
+    private fun bindingElementSlotType(
+        elem: BindingElement, pattern: Node, c: Type, refuseFnMembers: Boolean,
+    ): Type? {
+        if (c === anyType || c === errorType || c === unknownType) return null
+        if (c.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void or TypeFlags.Never)) return null
+        if (c is Type.TypeParam) return null
+        when (pattern) {
+            is ObjectBindingPattern -> {
+                if (elem.dotDotDotToken) return null
+                val propName = bindingElementPropertyName(elem) ?: return null
+                val obj = getApparentType(c) as? Type.Object ?: return null
+                val sym = getPropertyOfType(obj, propName)
+                if (sym == null) {
+                    if (options.noUncheckedIndexedAccess) return null
+                    if (propName.isEmpty() || propName[0].isDigit()) return null
+                    val idx = obj.stringIndexInfo?.type ?: return null
+                    if (idx === anyType || idx === errorType || typeContainsUnresolvedTypeParam(idx)) return null
+                    return idx
+                }
+                var mt = propertyTypeOnCarrier(obj, sym)
+                if (mt === anyType || mt === errorType) return null
+                if (refuseFnMembers && bindingMemberIsFnShaped(mt)) return null
+                if (strictNullChecks && isOptionalProperty(sym) && !typeIncludesUndefined(mt)) {
+                    mt = getUnionType(listOf(mt, undefinedType))
+                }
+                return mt
+            }
+            is ArrayBindingPattern -> {
+                if (options.noUncheckedIndexedAccess) return null
+                val index = pattern.elements.indexOfFirst { it === elem }
+                if (index < 0) return null
+                val rest = elem.dotDotDotToken
+                when {
+                    c === stringType -> return if (rest) getArrayType(stringType) else stringType
+                    c is Type.Object && c !is Type.Interface && c.tupleElementTypes != null -> {
+                        if (c.tupleHasRest) return null
+                        val elems = c.tupleElementTypes!!
+                        if (rest) {
+                            if (index > elems.size) return null
+                            val tail = elems.subList(index, elems.size)
+                            val flags = (index until elems.size).map { tupleSlotIsOptional(c, it) }
+                                .takeIf { fl -> fl.any { it } }
+                            // tsc's `sliceTupleType` builds a MUTABLE tuple whatever the
+                            // parent's readonly-ness: `const [, ...r] = rtup` reads `[string, boolean]`.
+                            return buildTupleFromTypes(tail, flags, readonly = false)
+                        }
+                        if (index >= elems.size) return null
+                        val slot = elems[index]
+                        return if (strictNullChecks && tupleSlotIsOptional(c, index) && !typeIncludesUndefined(slot))
+                            getUnionType(listOf(slot, undefinedType)) else slot
+                    }
+                    c is Type.Reference && (c.target.symbol?.name == "Array" || c.target.symbol?.name == "ReadonlyArray") -> {
+                        val el = c.resolvedTypeArguments?.singleOrNull() ?: return null
+                        if (el === errorType) return null
+                        return if (rest) getArrayType(el) else el
+                    }
+                    else -> return null
+                }
+            }
+            else -> return null
+        }
+    }
+
+    /** (CHK.96) is slot [i] of the tuple [t] optional (`[T?]`)? Round 452's side channel. */
+    private fun tupleSlotIsOptional(t: Type.Object, i: Int): Boolean =
+        t.members?.get(i.toString())?.id?.let { it in optionalTupleMemberIds } == true
+
+    /**
+     * (CHK.96) the member an object binding element READS: the explicit property name
+     * (`{ p: q }` — an Identifier, a string or numeric literal, or a computed LITERAL key)
+     * or the bound name (`{ p }`). Null for a computed non-literal key.
+     */
+    private fun bindingElementPropertyName(elem: BindingElement): String? {
+        val pn = elem.propertyName ?: return (elem.name as? Identifier)?.text?.takeIf { it.isNotEmpty() }
+        return getMemberName(pn) ?: computedLiteralKey(pn)
+    }
+
+    /**
+     * (CHK.96) has an identical row — same file, start, code and message — already been
+     * emitted? The dedicated destructured-parameter walkers (B193's
+     * [checkDestructuredParamOptionalMemberArgs], B191's
+     * [checkOptionalDestructuredParamCallArgs]) run AFTER the spine, and the argument gate
+     * now reaches the pattern-parameter shapes they were written for, so the identity test
+     * lives in them — CLAUDE.md's rule: dedupe in whichever pass runs SECOND.
+     */
+    private fun diagnosticAlreadyEmitted(fileName: String, start: Int, code: Int, message: String): Boolean =
+        diagnostics.any { it.fileName == fileName && it.start == start && it.code == code && it.message == message }
+
+    /** Round 464b's refusal, factored: a call/construct-signature-carrying member, alone or as a union constituent. */
+    private fun bindingMemberIsFnShaped(t: Type): Boolean {
+        fun fnShaped(x: Type): Boolean = (x as? Type.Object)?.let { o ->
+            resolveStructuredTypeMembers(o)
+            !o.callSignatures.isNullOrEmpty() || !o.constructSignatures.isNullOrEmpty()
+        } == true
+        return fnShaped(t) || (t is Type.Union && t.types.any { fnShaped(it) })
+    }
+
+    /** (CHK.96) tsc's `getNonUndefinedType`: [t] with its `undefined` constituent removed. */
+    private fun nonUndefinedType(t: Type): Type {
+        if (t !is Type.Union) return if (t.flags.hasAny(TypeFlags.Undefined)) neverType else t
+        val kept = t.types.filter { !it.flags.hasAny(TypeFlags.Undefined) }
+        return when (kept.size) {
+            t.types.size -> t
+            0 -> neverType
+            1 -> kept[0]
+            else -> getUnionType(kept)
+        }
+    }
+
+    /** (CHK.96) (WIDEN.1) for a default's type: every literal constituent widens to its base, an enum member to its enum. */
+    private fun widenLiteralMembers(t: Type): Type = when (t) {
+        is Type.Union -> getUnionType(t.types.map { widenEnumMemberTypes(getWidenedLiteralType(it)) })
+        else -> widenEnumMemberTypes(getWidenedLiteralType(t))
+    }
+
+    /**
+     * (CHK.96) the DECLARATION a binding element's pattern chain hangs off — the
+     * [VariableDeclaration] or [Parameter] at the root — or null (an unindexed tree, an
+     * owner this stage does not know).
+     */
+    private fun bindingPatternRoot(elem: BindingElement): Node? {
+        var n: Node = elem
+        var hops = 0
+        while (hops++ < 64) {
+            val p = (n as NodeBase).parent ?: return null
+            when (p) {
+                is ObjectBindingPattern, is ArrayBindingPattern, is BindingElement -> n = p
+                is VariableDeclaration, is Parameter -> return p
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    private fun bindingPatternRootIsAnnotated(elem: BindingElement): Boolean =
+        when (val root = bindingPatternRoot(elem)) {
+            is VariableDeclaration -> root.type != null
+            is Parameter -> root.type != null
+            else -> false
+        }
+
+    private fun bindingPatternRootIsConst(elem: BindingElement): Boolean =
+        (bindingPatternRoot(elem) as? VariableDeclaration)?.let { varDeclIsImmutableBinding(it) } == true
+
+    private fun bindingPatternRootIsConstOrParam(elem: BindingElement): Boolean =
+        when (val root = bindingPatternRoot(elem)) {
+            is VariableDeclaration -> varDeclIsImmutableBinding(root)
+            is Parameter -> true
+            else -> false
+        }
+
+    private fun bindingPatternElementCount(pattern: Node): Int = when (pattern) {
+        is ObjectBindingPattern -> pattern.elements.size
+        is ArrayBindingPattern -> pattern.elements.size
+        else -> 0
+    }
+
+    /**
+     * (CHK.96) walks the binding pattern [pattern] over the source type [parent],
+     * handing every LEAF name to [register] with its [bindingElementType] answer — null
+     * on a refusal, and null throughout when [parent] itself is null. A nested pattern
+     * recurses with its own element's answer as the parent; a hole is skipped.
+     */
+    private fun forEachBindingPatternLeaf(
+        pattern: Expression, parent: Type?, isConst: Boolean, refuseFnMembers: Boolean,
+        register: (name: String, type: Type?) -> Unit,
+    ) {
+        val elements: List<Node> = when (pattern) {
+            is ObjectBindingPattern -> pattern.elements
+            is ArrayBindingPattern -> pattern.elements
+            else -> return
+        }
+        for (el in elements) {
+            val be = el as? BindingElement ?: continue
+            val t = if (parent == null) null else bindingElementType(be, parent, isConst, refuseFnMembers)
+            when (val nm = be.name) {
+                is Identifier -> if (nm.text.isNotEmpty()) register(nm.text, t)
+                is ObjectBindingPattern, is ArrayBindingPattern ->
+                    forEachBindingPatternLeaf(nm, t, isConst, refuseFnMembers, register)
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * (CHK.96) the SOURCE type the binding pattern of [decl] destructures — the annotation
+     * when there is one, else the initializer's type, else (a `for…of` / `for…in` head)
+     * the iterable's element type — or null.
+     *
+     * An ARRAY-LITERAL initializer under an array pattern is read as the TUPLE tsc gives
+     * it through the pattern's implied contextual type (`getTypeFromBindingPattern`,
+     * checker.ts:12433): element-wise, each element's own expression type — a literal
+     * node already answers its base primitive here, a `const`'s regular literal stays
+     * (tsc widens FRESH literals only), an enum member widens to its enum. Measured:
+     * `const [x] = [1, "a"]; const wq: number = x` is SILENT in both references (x is
+     * `number`), where the array literal's own `(string | number)[]` would have made every
+     * slot a false positive. A spread element or an empty literal refuses; a const-asserted
+     * literal is an `AsExpression` and takes [getTypeOfExpression]'s readonly tuple.
+     */
+    private fun bindingPatternSourceType(decl: VariableDeclaration): Type? {
+        decl.type?.let { return getTypeFromTypeNode(it) }
+        val init = decl.initializer
+        if (init == null) {
+            val head = (decl.parent as? VariableDeclarationList)?.parent
+            return when (head) {
+                is ForOfStatement -> forOfElementTypeOf(getTypeOfExpression(head.expression), wide = true)
+                is ForInStatement -> stringType
+                else -> null
+            }
+        }
+        if (decl.name is ArrayBindingPattern) {
+            var e: Expression = init
+            while (e is ParenthesizedExpression) e = e.expression
+            if (e is ArrayLiteralExpression) return arrayLiteralAsDestructuringTuple(e)
+        }
+        return getTypeOfExpression(init)
+    }
+
+    /** (CHK.96) see [bindingPatternSourceType]. */
+    private fun arrayLiteralAsDestructuringTuple(lit: ArrayLiteralExpression): Type? {
+        if (lit.elements.isEmpty() || lit.elements.any { it is SpreadElement || it is OmittedExpression }) return null
+        val types = ArrayList<Type>(lit.elements.size)
+        for (el in lit.elements) {
+            val t = widenEnumMemberTypes(getTypeOfExpression(el))
+            if (t === errorType) return null
+            types.add(t)
+        }
+        return buildTupleFromTypes(types)
+    }
+
+    /**
+     * (CHK.96)(f) the ELEMENT type of a `for…of` head over [iterable], for the shapes
+     * whose element type is a function of the subject's type alone — a string, a tuple
+     * (its `Array<union>` base's element, (CHK.94)), an `Array<T>` / `ReadonlyArray<T>` —
+     * or null. An `Iterable<T>`, a generator and a `Map` reach their element through
+     * `[Symbol.iterator]`'s return, which is (CHK.23)'s / stage 2's question.
+     */
+    private fun forOfElementTypeOf(iterable: Type, wide: Boolean): Type? {
+        val t = when {
+            iterable === stringType -> stringType
+            // The cta arm has read a tuple and a `ReadonlyArray<T>` since (CHK.29); the cpa
+            // and ccet arms keep the `Array<T>`-only set the cpa arm always had: the
+            // property-access reader's discriminant narrowing of a `readonly Entry[]`
+            // loop variable is a PRE-EXISTING gap (`entry.kind === FAR.EntryKind.Span` on a
+            // namespace-qualified enum does not narrow — a false TS2339 on
+            // `convertParamsToDestructuredObject.ts:236-286`, reproducible on HEAD with a
+            // mutable array), and widening the set there would surface it.
+            wide && iterable is Type.Object && iterable !is Type.Interface && iterable.tupleElementTypes != null ->
+                tupleArrayBase(iterable)?.resolvedTypeArguments?.singleOrNull()
+            iterable is Type.Reference && (iterable.target.symbol?.name == "Array" ||
+                (wide && iterable.target.symbol?.name == "ReadonlyArray")) ->
+                iterable.resolvedTypeArguments?.singleOrNull()
+            else -> null
+        } ?: return null
+        return t.takeIf { it !== anyType && it !== errorType }
+    }
+
+    /**
+     * (CHK.96)(f) every `(name, type)` a `for…of` head binds over [elementType]: an
+     * Identifier head is the element itself, a pattern's leaves go through
+     * [bindingElementType]; a refused leaf contributes nothing (the head's names are
+     * per-iteration scoped, so nothing outer is being shadowed by omission).
+     */
+    private fun forOfHeadBindings(
+        init: Node?, elementType: Type, out: MutableList<Pair<String, Type>>, refuseTypeParams: Boolean,
+    ) {
+        // The cpa / ccet arms refuse a binding carrying a TYPE PARAMETER: an un-inferred
+        // callee's `T` (`for (const name of arrayFrom(keys))`, tsc's own project.ts:2604)
+        // reached the argument gate as `T` and reported a false TS2345 against `string`.
+        // The cta arm keeps typing it, as it did before this round.
+        fun add(name: String, t: Type) {
+            if (refuseTypeParams && typeContainsUnresolvedTypeParam(t)) return
+            out.add(name to t)
+        }
+        when (init) {
+            is Identifier -> add(init.text, elementType)
+            is VariableDeclarationList -> {
+                val d = init.declarations.singleOrNull() ?: return
+                when (val n = d.name) {
+                    is Identifier -> add(n.text, elementType)
+                    is ObjectBindingPattern, is ArrayBindingPattern ->
+                        forEachBindingPatternLeaf(
+                            n, elementType, isConst = init.flags == SyntaxKind.ConstKeyword, refuseFnMembers = true,
+                        ) { name, t -> if (t != null) add(name, t) }
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * (CHK.96)(g) the type of the binding element [elem] read from its DECLARATION
+     * alone — the owner's annotation or initializer, walked up through nested patterns —
+     * or null where any level refuses. The symbol half: what a FILE-level (or
+     * namespace-level) destructured name answers to every consumer that resolves it
+     * through its symbol, the argument gate and the TS2367 reader included.
+     */
+    private fun bindingElementDeclaredType(elem: BindingElement, depth: Int): Type? {
+        if (depth > 16) return null
+        val pattern = (elem as NodeBase).parent ?: return null
+        val parent: Type = when (val owner = (pattern as NodeBase).parent) {
+            is VariableDeclaration -> bindingPatternSourceType(owner) ?: return null
+            is Parameter -> owner.type?.let { getTypeFromTypeNode(it) } ?: return null
+            is BindingElement -> bindingElementDeclaredType(owner, depth + 1) ?: return null
+            else -> return null
+        }
+        // Round 464b's fn-member refusal holds at the symbol half too: tsc's own parser.ts
+        // destructures `factory`'s methods at file level (`const { createToken:
+        // factoryCreateToken, … } = factory`), and a generic `createToken<TKind>` typed
+        // through it rides the fn-type relation's M3 gaps — measured, a false TS2322
+        // against `Modifier | undefined` at `parser.ts:8003` on every profile.
+        return bindingElementType(elem, parent, bindingPatternRootIsConst(elem), refuseFnMembers = true)
+    }
+
+    /**
+     * (CHK.96)(a) — the cta DECLARATION reader: every leaf of a destructured declaration
+     * is recorded into [currentLocalTypes] with its [bindingElementType] answer. Round
+     * 464b's rules survive it: first-decl-wins (an absent name only), a round-460
+     * ambiguous name stays `any`, a function-shaped member is refused, and an inferred
+     * type carrying a FOREIGN type parameter is refused as [cvdaRecordInferredLocalType]
+     * refuses it (round 573). What it adds: every ARRAY / tuple pattern, every default,
+     * nested pattern and union receiver, which round 464b's object-only, top-level-only,
+     * non-union recorder left `any` at this reader.
+     */
+    private fun recordDestructuredElementTypes(decl: VariableDeclaration, typeParams: Set<String>) {
+        val pattern = decl.name
+        val source = bindingPatternSourceType(decl) ?: return
+        if (source === anyType || source === errorType || source === unknownType) return
+        val annotated = decl.type != null
+        forEachBindingPatternLeaf(pattern, source, varDeclIsImmutableBinding(decl), refuseFnMembers = true) { name, t ->
+            if (t == null) return@forEachBindingPatternLeaf
+            if (currentLocalTypes.containsKey(name)) return@forEachBindingPatternLeaf
+            if (name in ambiguousBlockLocalNames) return@forEachBindingPatternLeaf
+            if (!annotated && typeContainsForeignTypeParam(t, typeParams)) return@forEachBindingPatternLeaf
+            currentLocalTypes[name] = t
         }
     }
 
@@ -105467,14 +105865,17 @@ interface DataView {
             (decl.initializer as? ObjectLiteralExpression)?.let {
                 checkBindingPatternExcessProperties(name, it, source, fileName)
             }
-            // Round 464b: record each TOP-LEVEL element's member type into
-            // currentLocalTypes — a destructured const (`const { kind, index } = ref`)
-            // is B83.5-unbound, so a later use of `index` resolved anyType and every
-            // consumer bailed (tsc program.ts getReferencedFileLocation: the anyType
-            // `index` made `file.referencedFiles[index]` any, defeating the
-            // destructuring-overwrite narrowing for pos/end). Conservative: absent
-            // names only (first-decl-wins), non-union sources, no defaults/rest.
-            recordDestructuredConstElementTypes(name, decl.initializer)
+        }
+        // Round 464b: record each element's member type into currentLocalTypes — a
+        // destructured const (`const { kind, index } = ref`) is B83.5-unbound, so a
+        // later use of `index` resolved anyType and every consumer bailed (tsc
+        // program.ts getReferencedFileLocation: the anyType `index` made
+        // `file.referencedFiles[index]` any, defeating the destructuring-overwrite
+        // narrowing for pos/end). Absent names only (first-decl-wins).
+        // (CHK.96)(a): every ARRAY / tuple pattern, default, nested pattern and union
+        // receiver too, through [bindingElementType].
+        if (name is ObjectBindingPattern || name is ArrayBindingPattern) {
+            recordDestructuredElementTypes(decl, typeParams)
         }
         if (name !is Identifier) return
         if (cvdaPrologueWalkers(decl, name, source, fileName)) return
@@ -116948,6 +117349,23 @@ interface DataView {
                 decl.type?.let { return getTypeFromTypeNode(it) }
                 anyType
             }
+            is BindingElement -> {
+                // (CHK.96)(g): the SYMBOL half — a FILE-level (or namespace-level)
+                // destructured name is bound (Binder.kt's `bindVariableDeclarationName`,
+                // `valueDeclaration = BindingElement`) and answered `any` here for every
+                // consumer that resolves it through its symbol: the argument gate, the
+                // TS2367 reader, the lexical consumers of (CHK.47), the oracle's hover.
+                // Same namespace push as the `VariableDeclaration` arm; round 778's write
+                // gate applies by construction, and [symbolTypeResolutionInProgress]
+                // covers `const { a } = f(a)`. A function-shaped member is refused (the
+                // 464b rule — see [bindingElementDeclaredType]).
+                val pushed = pushInferenceNamespaceFor(symbol)
+                try {
+                    bindingElementDeclaredType(decl, 0) ?: anyType
+                } finally {
+                    if (pushed) inferenceNamespaceStack.removeLast()
+                }
+            }
             else -> anyType
         }
     }
@@ -125193,6 +125611,26 @@ interface DataView {
             }
         } else {
             getTypeFromTypeNode(targetTypeNode)
+        }
+        if ((targetType === errorType || targetType === anyType) && tpNames.isNotEmpty()) {
+            // (CHK.96): a predicate target that IS one of the guard's own type parameters
+            // with NO inference site in the predicate parameter — tsc's own
+            // `isBuilderProgram<T extends BuilderProgram>(program: Program | BuilderProgram):
+            // program is T` — infers `T` from nothing, and tsc's `getInferredType` then
+            // falls to the CONSTRAINT (`unknown` fails `extends BuilderProgram`). Without
+            // it the guard narrowed nothing and `program.getProgramOrUndefined()` on the
+            // positive branch was a false TS2339 on `BuilderProgram | Program`
+            // (watchUtilities.ts:628, every profile; reproducible on HEAD with an
+            // Identifier parameter — the pattern parameter merely reached it).
+            val tpRef = targetTypeNode as? TypeReference
+            val tpName = (tpRef?.typeName as? Identifier)?.text
+            if (tpRef != null && tpRef.typeArguments.isNullOrEmpty() && tpName != null && tpName in tpNames) {
+                val constraintNode = typeParams?.firstOrNull { it.name.text == tpName }?.constraint
+                if (constraintNode != null) {
+                    val c = getTypeFromTypeNode(constraintNode)
+                    if (c !== errorType && c !== anyType) targetType = c
+                }
+            }
         }
         if (targetType === errorType || targetType === anyType) {
             // Round 460: a FUNCTION-BODY-local alias predicate target (B83.5-unbound —
@@ -140223,8 +140661,11 @@ interface DataView {
             val start = arg.pos
             val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
             val (line, character) = getLineAndCharacterOfPosition(source, start)
+            val message = "Argument of type '$display' is not assignable to parameter of type '${typeToString(paramType)}'."
+            // (CHK.96): the argument gate types the pattern parameter's members now.
+            if (diagnosticAlreadyEmitted(fileName, start, 2345, message)) return
             diagnostics.add(Diagnostic(
-                message = "Argument of type '$display' is not assignable to parameter of type '${typeToString(paramType)}'.",
+                message = message,
                 category = DiagnosticCategory.Error,
                 code = 2345,
                 fileName = fileName,
@@ -147487,29 +147928,20 @@ interface DataView {
                 // (Array<T> → T, string → string). Push into currentLocalTypes for the
                 // body walk. Conservative: only handle Array<T> Reference and string
                 // iterables — other shapes (Iterable, generators) fall through.
-                val forOfVarName = when (val init = stmt.initializer) {
-                    is Identifier -> init.text
-                    is VariableDeclarationList -> (init.declarations.firstOrNull()?.name as? Identifier)?.text
-                    else -> null
+                // (CHK.96)(f): a PATTERN head binds every leaf over the element type.
+                val bindings = ArrayList<Pair<String, Type>>(2)
+                forOfElementTypeOf(getTypeOfExpression(stmt.expression), wide = false)?.let {
+                    forOfHeadBindings(stmt.initializer, it, bindings, refuseTypeParams = true)
                 }
-                val elemType: Type? = if (forOfVarName != null) {
-                    val iterableT = getTypeOfExpression(stmt.expression)
-                    when {
-                        iterableT === stringType -> stringType
-                        iterableT is Type.Reference && iterableT.target.symbol?.name == "Array" ->
-                            iterableT.resolvedTypeArguments?.firstOrNull()
-                        else -> null
-                    }
-                } else null
-                val prevType = forOfVarName?.let { currentLocalTypes[it] }
-                val hadPrev = forOfVarName != null && currentLocalTypes.containsKey(forOfVarName)
-                if (forOfVarName != null && elemType != null) currentLocalTypes[forOfVarName] = elemType
+                val prevTypes = bindings.map { currentLocalTypes[it.first] }
+                val hadPrev = bindings.map { currentLocalTypes.containsKey(it.first) }
+                for ((name, t) in bindings) currentLocalTypes[name] = t
                 try {
                     checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
                 } finally {
-                    if (forOfVarName != null && elemType != null) {
-                        if (hadPrev) currentLocalTypes[forOfVarName] = prevType!!
-                        else currentLocalTypes.remove(forOfVarName)
+                    for ((i, b) in bindings.withIndex()) {
+                        if (hadPrev[i]) currentLocalTypes[b.first] = prevTypes[i]!!
+                        else currentLocalTypes.remove(b.first)
                     }
                 }
             }
@@ -149109,6 +149541,33 @@ interface DataView {
      *  signature references a Type.TypeParam — calls to a param of such a type are owned
      *  by `checkFnTypedParamCalls`, so it must NOT be registered in [currentLocalTypes]
      *  (double-emit; see the inline comment at the annotated-param branch). */
+    /**
+     * (CHK.96) B516's gate through an OPTIONAL member's `| undefined`: a pattern
+     * parameter's `createProgram?: CreateProgram<T>` reads `Fn | undefined`, and the
+     * bare test above answered false for the union — registered, its call reached the
+     * callee check as a nullish union with no assignment narrowing and reported a false
+     * TS2349 (`watchPublic.ts:152`, every profile). The Identifier form of the same
+     * parameter has always been refused here.
+     */
+    private fun isTpReferencingFnTypeOrUnion(t: Type): Boolean =
+        if (t is Type.Union) t.types.any { isTpReferencingFnTypeDeep(it) } else isTpReferencingFnTypeDeep(t)
+
+    /**
+     * (CHK.96) B516's shape with the parameter and return tests looking THROUGH a union:
+     * `CreateProgram<T>`'s `oldProgram?: T | undefined` reads as a union at the parameter,
+     * so the exact `is Type.TypeParam` test let it through, and the pattern-typed member
+     * then reached the callee check as an un-narrowed `Fn | undefined` (watchPublic.ts:152).
+     * The Identifier-parameter gate is untouched — this is the PATTERN registrars' test.
+     */
+    private fun isTpReferencingFnTypeDeep(t: Type): Boolean =
+        t is Type.Object && t !is Type.Interface &&
+            t.properties.isNullOrEmpty() &&
+            !t.callSignatures.isNullOrEmpty() &&
+            t.callSignatures!!.any { sig ->
+                sig.parameters.any { typeContainsUnresolvedTypeParam(getTypeOfSymbol(it)) } ||
+                    sig.resolvedReturnType?.let { typeContainsUnresolvedTypeParam(it) } == true
+            }
+
     private fun isTpReferencingFnType(t: Type): Boolean =
         t is Type.Object && t !is Type.Interface &&
             t.properties.isNullOrEmpty() &&
@@ -149276,6 +149735,28 @@ interface DataView {
                 collectBindingNames(paramName, bindingNames)
                 for (n in bindingNames) {
                     if (currentLocalTypes.containsKey(n)) currentLocalTypes[n] = anyType
+                }
+                // (CHK.96)(c): an ANNOTATED pattern param's leaves are TYPED here too —
+                // this function has 26 callers (the cpa, ccet and spineArith frames), so
+                // one recording reaches the argument, TS2367 and property-access readers
+                // for `function f({ p }: I) { takeB(p) }` at once, where the side set above
+                // answered `any`. `currentLocalTypes` is consulted BEFORE the side set, so
+                // a typed leaf wins and a refused one keeps the set's `any` (round 475).
+                // B516's TP-referencing fn-type gate applies to a member as to a param.
+                if (paramType != null && !(param.dotDotDotToken && nonArrayKeywordText(paramType) != null)) {
+                    val bridgeNs = inferenceNamespaceStack.isEmpty() &&
+                        propertyAccessEnclosingNamespaces.isNotEmpty()
+                    if (bridgeNs) inferenceNamespaceStack.addLast(propertyAccessEnclosingNamespaces.last())
+                    try {
+                        val annType = getTypeFromTypeNode(paramType)
+                        if (annType !== anyType && annType !== errorType) {
+                            // See [registerBindingPatternParamLocals] for the fn-member rule.
+                            val refuseFn = typeContainsUnresolvedTypeParam(annType)
+                            forEachBindingPatternLeaf(paramName, annType, isConst = false, refuseFnMembers = refuseFn) { name, t ->
+                                if (t != null && !isTpReferencingFnTypeOrUnion(t)) currentLocalTypes[name] = t
+                            }
+                        }
+                    } finally { if (bridgeNs) inferenceNamespaceStack.removeLast() }
                 }
             }
         }
@@ -155720,7 +156201,10 @@ interface DataView {
                     // An INHERITED currentLocalTypes entry (e.g. the file-level
                     // `const version = "5.0"` recording) is consulted BEFORE the
                     // side set — override it like the Identifier branch does.
-                    if (currentLocalTypes.containsKey(bn)) currentLocalTypes[bn] = anyType
+                    // (CHK.96)(d): a SECOND declaration of the name in this body reads
+                    // `any` too ((CHK.95)'s per-body name set), so the leave-time
+                    // recording in [ccetApplyDeclRecordings] types a fresh name only.
+                    if (!bodyNames.add(bn) || currentLocalTypes.containsKey(bn)) currentLocalTypes[bn] = anyType
                 }
                 continue
             }
@@ -172553,7 +173037,22 @@ interface DataView {
                 // Round 718: `-?` STRIPS optionality, the exact `?` analogue of the
                 // `-readonly` case above — and it needs the same side-channel for the
                 // same reason: the carried source declaration still has its `?`.
-                if (node.questionMinus) mappedRequiredMemberIds.add(sym.id)
+                var memberType = propType
+                if (node.questionMinus) {
+                    mappedRequiredMemberIds.add(sym.id)
+                    // (CHK.96): `-?` also STRIPS `undefined` from a source-OPTIONAL property's
+                    // type — tsc's `resolveMappedTypeMembers` (`!isOptional && modifiersProp
+                    // & Optional → getTypeWithFacts(propType, NEUndefined)`). The indexed access
+                    // `T[P]` of an optional property now carries `| undefined` (see
+                    // [getIndexedAccessType]), so without this `Required<Pick<SymbolTracker,
+                    // "reportInferenceFallback">>` kept it and `context.tracker.
+                    // reportInferenceFallback(node)` was a false TS2349 at eleven sites of
+                    // tsc's own expressionToTypeNode.ts.
+                    if (strictNullChecks && homomorphicSourceType != null) {
+                        val srcProp = getPropertyOfType(homomorphicSourceType, key)
+                        if (srcProp != null && isOptionalProperty(srcProp)) memberType = nonUndefinedType(propType)
+                    }
+                }
                 // Round 728: the plain `?` token ADDS optionality (`Partial<T>`), exactly
                 // as the plain `readonly` token above adds readonly-ness — and it was the
                 // one modifier of the four never recorded, so `Partial<T>`'s members stayed
@@ -172561,7 +173060,7 @@ interface DataView {
                 else if (node.questionToken) sym.flags = sym.flags or SymbolFlags.MappedOptional
                 members[key] = sym
                 properties.add(sym)
-                symbolTypes[sym.id] = propType
+                symbolTypes[sym.id] = memberType
             }
             result.members = members
             result.properties = properties
@@ -172761,10 +173260,22 @@ interface DataView {
             // union arm above turns one `any` part into an `any` whole, which is how
             // tsc's own `Modifier["kind"]` (the `isModifierKind` predicate target)
             // resolved to `any` and narrowed nothing.
-            if (prop != null) return (objectType as? Type.Object)
-                ?.takeIf { R783_INDEXED_ACCESS_CARRIER }
-                ?.let { propertyTypeOnCarrier(it, prop) }
-                ?: getTypeOfSymbol(prop)
+            if (prop != null) {
+                val pt = (objectType as? Type.Object)
+                    ?.takeIf { R783_INDEXED_ACCESS_CARRIER }
+                    ?.let { propertyTypeOnCarrier(it, prop) }
+                    ?: getTypeOfSymbol(prop)
+                // (CHK.96): an OPTIONAL property's indexed access includes `undefined` —
+                // in tsc an optional property's type CARRIES it under strictNullChecks,
+                // where here optionality is a symbol attribute (the round-424 gotcha).
+                // `UserPreferences["importModuleSpecifierEnding"]` read `"auto" | … | "js"`
+                // and a destructured `importModuleSpecifierEnding` (`… | undefined`, the
+                // correct type) then failed against it — a false TS2345 at tsc's own
+                // moduleSpecifiers.ts:242 on every profile.
+                return if (strictNullChecks && pt !== anyType && pt !== errorType &&
+                    isOptionalProperty(prop) && !typeIncludesUndefined(pt)
+                ) getUnionType(listOf(pt, undefinedType)) else pt
+            }
             // Check string index signature
             if (objectType is Type.Object) {
                 resolveStructuredTypeMembers(objectType)
@@ -177623,8 +178134,11 @@ interface DataView {
                         val spec = specs.getOrNull(i) ?: continue
                         if (spec != bk) continue  // "" (accepts undefined) or mismatched prim → skip
                         val (line, ch) = getLineAndCharacterOfPosition(source, argId.pos)
+                        val message = "Argument of type '$bk | undefined' is not assignable to parameter of type '$bk'."
+                        // (CHK.96): the argument gate types the pattern parameter's members now.
+                        if (diagnosticAlreadyEmitted(fileName, argId.pos, 2345, message)) continue
                         diagnostics.add(Diagnostic(
-                            message = "Argument of type '$bk | undefined' is not assignable to parameter of type '$bk'.",
+                            message = message,
                             category = DiagnosticCategory.Error, code = 2345,
                             fileName = fileName, line = line, character = ch,
                             start = argId.pos, length = argId.text.length,

@@ -1,3 +1,18 @@
+**(P18.22) — A LOCAL INITIALIZED FROM AN ENUM MEMBER IS READ AT ITS FLOW TYPE AT EVERY READER, IN BOTH DIRECTIONS, 17,462 → 17,516 / 0 / 3 (2026-09-05).**
+**(CHK.85)(b) LANDED and (CHK.85) is CLOSED** ((c) is the staged `as const` item (CHK.93), designed
+by read-only recon over 32 measured rows). `let k = K.A; k = K.B; const w: K.B = k` was an ours-only
+TS2322 and `if (k === K.B)` a lost TS2367: `narrowByAssignmentRhs` gains tsc's
+`getAssignmentReducedType` over enum atoms (symbol lookup only), `isNarrowableTarget` admits an enum
+target, the const symbol half keeps the member, the arith and ccet recorders record an
+enum-initialized body local, and the TS2367 emitter reads the flow type through a new REPORTING walk
+kind — the flow walk's stale-antecedent pass-through for an unclassified overwrite is sound for a
+suppression consumer and a false positive for a reporting one (`classifier.ts`'s
+`token = scanner.reScanTemplateToken()`). 49/49 recon rows and 60+ probe rows match both
+references bar four form residues; a (CHK.91) pin was corrected (both references WIDEN `{ v: k }` for
+a `const k = K.A`). 52 pins, 17 arms; core 16,027/0, corpus 8,837/0, `cost_gate.py` rebaselined
+(`globals.lookups` +2.30% = 414 reporting walks, attributed), grid 8×`added=0 removed=0` after an
+intermediate build's +3/+4 rows were closed by the reporting walk and a `let` widening.
+
 **(P18.21) — AN OBJECT LITERAL'S ENUM MEMBER WIDENS THE WAY tsc WIDENS IT, FREE OF THE DISCRIMINATED-UNION LOSSES THAT REFUSED IT TWICE, 17,424 → 17,462 / 0 / 3 (2026-09-05).**
 **(CHK.91) LANDED, closing (CHK.85)(a).** The (P18.18) arm was rebuilt ALONE to NAME its 22 grid
 sites (tsbuildPublic returns and a `Map.set`, conditional returns in six services files, two

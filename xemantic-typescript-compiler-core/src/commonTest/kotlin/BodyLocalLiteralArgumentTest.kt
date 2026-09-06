@@ -430,6 +430,10 @@ class BodyLocalLiteralArgumentTest {
 
     @Test
     fun `residue - a for-of head const is not recorded`() {
+        // (CHK.96)(f) types a `for…of` head in the ccet frame over a `string` or an
+        // `Array<T>` only; a const-asserted literal is a READONLY TUPLE, which that arm
+        // deliberately leaves `any` (a readonly array-like loop variable surfaced a
+        // pre-existing discriminant-narrowing gap on tsc's own sources).
         assert(messages("function f() { for (const s of [\"a\"] as const) { takeB(s) } }").isEmpty())
     }
 

@@ -1,13 +1,29 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **195,204** lines (191,070 when the metric was created; the (P18.9)-(P18.26) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **195,718** lines (191,070 when the metric was created; the (P18.9)-(P18.27) checker-parity arc ADDED ~2,400, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: three
 checker reads, one table write, stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.27) — DESTRUCTURED BINDINGS GET THEIR TYPES (STAGE 1 OF (CHK.96)), AND CONTEXTUAL CALLBACK TYPING IS RE-MEASURED INTO (CHK.98), 17,717 → 17,792 / 0 / 3 (2026-09-06).**
+**(CHK.96) stage 1 LANDED.** Every ARRAY / tuple pattern, default, nested pattern and pattern PARAMETER was
+`any` at every reader and an object pattern `any` at the argument and TS2367 readers; a pure
+`bindingElementType` (tsc's `getBindingElementTypeFromParentType`: slots, optional → `| undefined`, rest as a
+sliced MUTABLE tuple, defaults joined with the subtype drop, unions lifted per constituent except tsc's
+narrowed-symbol precondition the corpus found) now feeds seven plug points including the symbol half. The
+grid forced FOUR root fixes on tsc's own sources: an optional property's `T["k"]` carries `undefined`,
+mapped `-?` strips it, an uninferrable type-guard TP narrows to its constraint (a pre-existing false
+positive), TP-carrying fn members are refused. 0 ours-only rows over ~120 cells; 75 pins, 9 arms with two
+round-927 pairs recorded; core 16,303/0, corpus 8,837/0, `cost_gate.py` rebaselined with attribution
+(+2.32% `typeOfExpr.calls`, 80% the ccet leave-time typing of 305 pattern initializers), grid
+8×`added=0 removed=0`. Read-only recon measured contextual callback typing over 99 rows: (CHK.39) already
+types a callback's parameters for the assignability reader and hover — CLAUDE.md's (CHK.30) entry was
+STALE and is corrected — and the residue is the ccet ARGUMENT reader plus three property-access sources,
+queued as (CHK.98) with two narrowing gaps (98b/98c) behind its union gate.
 
 **(P18.26) — A BODY-LOCAL SCALAR CONST REACHES THE ARGUMENT GATE, AND UNION CALLEES ARE MEASURED INTO (CHK.97), 17,664 → 17,717 / 0 / 3 (2026-09-06).**
 **(CHK.95) LANDED.** In every body context `const s = "a"; takeB(s)` was silent for every non-enum scalar
@@ -72,18 +88,3 @@ removed=0`. **(INV.0) step 4 censused by read-only recon**: the name-resolution 
 into a two-commit `NameResolver` extraction (~1,300 code lines), an ambient row of three reads and
 no writes, eleven invariants each mapped to its pin classes — and tsgo's closure-struct
 `NameResolver` identified as exactly the shape § 10 forbids.
-
-**(P18.22) — A LOCAL INITIALIZED FROM AN ENUM MEMBER IS READ AT ITS FLOW TYPE AT EVERY READER, IN BOTH DIRECTIONS, 17,462 → 17,516 / 0 / 3 (2026-09-05).**
-**(CHK.85)(b) LANDED and (CHK.85) is CLOSED** ((c) is the staged `as const` item (CHK.93), designed
-by read-only recon over 32 measured rows). `let k = K.A; k = K.B; const w: K.B = k` was an ours-only
-TS2322 and `if (k === K.B)` a lost TS2367: `narrowByAssignmentRhs` gains tsc's
-`getAssignmentReducedType` over enum atoms (symbol lookup only), `isNarrowableTarget` admits an enum
-target, the const symbol half keeps the member, the arith and ccet recorders record an
-enum-initialized body local, and the TS2367 emitter reads the flow type through a new REPORTING walk
-kind — the flow walk's stale-antecedent pass-through for an unclassified overwrite is sound for a
-suppression consumer and a false positive for a reporting one (`classifier.ts`'s
-`token = scanner.reScanTemplateToken()`). 49/49 recon rows and 60+ probe rows match both
-references bar four form residues; a (CHK.91) pin was corrected (both references WIDEN `{ v: k }` for
-a `const k = K.A`). 52 pins, 17 arms; core 16,027/0, corpus 8,837/0, `cost_gate.py` rebaselined
-(`globals.lookups` +2.30% = 414 reporting walks, attributed), grid 8×`added=0 removed=0` after an
-intermediate build's +3/+4 rows were closed by the reporting walk and a `let` widening.
