@@ -25,6 +25,96 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.34) — a namespace-qualified enum member narrows ((CHK.100)), and the grid's ADDED row was the positive control (2026-09-06)
+
+**Suite 18,021 → 18,043 / 0 / 3** — 22 pins in the new `QualifiedEnumDiscriminantTest`; no baseline
+moved and no `LogicalParityDivergence` is needed. Same orchestration: an implementation subagent
+owned Gradle; the full suite, `cost_gate.py`, `huge_methods.py` and an independent 8-profile grid
+ran here.
+
+**(CHK.100) LANDED.** A dotted-path container descent — `resolveEnumSymbolForQualifiedPath(segs,
+keyNode)` with `enumPathSegments` / `enumPathTypeSegments` / `enumPathHeadSymbol` / `enumPathDeref`
+/ `enumPathResolveSpec` — mirroring tsc's `resolveEntityName` walking a qualified name segment by
+segment through container `exports`. **A single segment is delegated VERBATIM to
+`resolveEnumSymbolForDiscriminant`**, so every established resolution and round 425's
+canonicalization are inherited, and the answer goes through `canonicalEnumSymbol` exactly once so a
+key minted from a qualified path and one minted from a bare name are the same string — the
+round-425 split-key hazard the item cites, discharged by construction rather than by care.
+`enumPathDeref` is the part that reaches tsc's own layout: an import alias hops to the symbol it
+names, and an `import * as ns` hops to the target module **FILE**, because a namespace import's
+members live in the file's locals and behind its `export *` barrels and no symbol carries them.
+Beside it: `enumSymbolBehindConstAlias` (tsc gives `const EK = NS.K` the type `typeof NS.K`;
+deliberately narrow — `const` only, no annotation, a plain dotted initializer) and
+`enumMemberLiteralTypeOf`, a shared tail extracted so the two type readers cannot drift.
+Eleven CLI fixtures against both references (which agree on every row): **45 rows → 10**, and all
+ten are reference-agreeing rows, row-for-row identical in text.
+
+**THREE MEASURED CONTRADICTIONS OF THE ITEM — the seventh round running.**
+- **"so both sides fail" is FALSE — only the RHS readers fail.** Shown two independent ways: on the
+  PARENT binary, `import AK = NS.K; if (u.kind === AK.B)` with QUALIFIED `kind: NS.K.A` annotations
+  already narrows correctly; and arm **a2** (revert the annotation arm alone) reads **0 RED over 22
+  pins**. The annotation half is already served by the type-side producer
+  `enumDiscriminantKeysOfType` (REL.1(c) step 5b), which replaced that AST reader. The change is
+  kept anyway — it is the key-space agreement the item rightly demands — and is **recorded as a
+  MEASURED REDUNDANT GUARD after two discrimination attempts, not claimed as covered.**
+- **"expect REMOVED rows on those profiles" is FALSE — 0 removed on all eight.** The 23
+  `Pascal.Pascal.Pascal` sites carry NO diagnostic on the parent: the un-narrowed union's member
+  read is conservatively suppressed and the receiver types `any`. **On the profiles this class is
+  LOST PRECISION, not a false positive**, so the grid is a control here exactly as the corpus is.
+- **The four named readers are not the complete set.** A FIFTH,
+  `enumSwitchKeysFromTypeNode`'s `QualifiedName` arm, had no keys for a `switch` over a WHOLE
+  qualified enum, so `requiredEnumSwitchKeys` answered null and the parent emitted an ours-only
+  **TS2366**. Arm a3 discriminates it uniquely. (A sixth caller, `enumMemberLateBoundKeyName`, was
+  measured to have NO gap and deliberately left alone — widening it would add member names to
+  object-literal types and move excess-property checking for nothing.)
+
+**THE GRID'S *ADDED* ROW WAS THE POSITIVE CONTROL, AND IT EXPOSED A PRE-EXISTING ROOT DEFECT.** With
+only the enum change in, the grid read `added=1` on harness / server / services — all the same row,
+`convertParamsToDestructuredObject.ts:238:21`, TS2322 `'Node' is not assignable to
+'ValidMethodSignature'`. That row exists BECAUSE `entry.kind === FindAllReferences.EntryKind.Span`
+began to narrow, making `entry.node` a real `Node` where it had been `any` — i.e. it is proof the
+qualified resolution reaches tsc's `_namespaces/ts.js` → `import * as FindAllReferences` →
+`export *` barrel chain, on a profile where the item predicted the grid would show `removed` rows
+and it shows none. Reduced, it is **pre-existing**: `checkPropertyAccessAssignment` had **no flow
+narrowing at all**, where the var-decl, plain-assignment and return readers have had a
+suppression-only leg since rounds 410/438/456. Fixed at the root with the same monotone rule (adopt
+the narrowed type only where it makes the write relate; refuse `never`), which takes the grid to
+`added=0` everywhere. **Verified here independently against both references**: with `u: A | B`,
+`if (u.kind === "a") { h.v = u.node }` is silent and the `"b"` twin still reports TS2322 — the
+suppression does not swallow the true positive, and ours now prints exactly that one row.
+
+**GATES.** Suite **18,043 / 0 / 3**, corpus **8,837 / 0**. `cost_gate.py` **exit 0 at `+0.00%` on
+every counter**, `output.errors` 46 → 46. `huge_methods.py --fail-over 0` **exit 0**. **Grid
+8 × `added=0 removed=0`** (`scripts/chk100-grid.sh`, BEFORE arm = the committed `717076707` binary,
+sha-guarded). No double emission — no new emitter is added (the assignment leg only SUPPRESSES) and
+every fixture matches the references' row COUNT exactly, which rules a duplicate out.
+
+**ARMS — 7. a1 the RHS readers 10 RED; a2 the annotation reader 0 (the redundant guard above);
+a3 the switch-keys whole-enum arm 1, uniquely (TS2366); a4 the `const EK = NS.K` leg 2, uniquely;
+a5 the root property-access-assignment narrowing 1, with its no-guard control staying green; a6 the
+`import * as ns` → module-FILE hop 2, uniquely (depths 3 and 4); a7 the `export *` leg 1, uniquely.
+NO round-927 pair**: a1/a2 are the two halves the item said must land together and measured a1 is
+everything; a6/a7 are two legs of one descent with DISJOINT red sets, i.e. independently
+load-bearing. **Two pins were repaired mid-round after reading `0 RED` — BLIND, not redundant**: the
+`never` probe for a whole-enum switch is served by per-case flow narrowing (a3 needed a TS2366
+shape), and the first barrel fixture reached the enum through `tr.locals` (a7 needed an
+`export *`-only container). Both discriminate now.
+
+**THE (P18.27) UNBLOCK IS ONLY HALF TRUE.** A MUTABLE `for (const e of xs: U[])` head now narrows
+(`takeN(e)` prints `'SB'` where the parent printed `'U'`), so the machinery works once the
+discriminant resolves. But a **`readonly`** head is still silent — **and so is `readonly string[]`
+with no enum anywhere** (2 rows lost against both references). The readonly head's `any` is
+therefore INDEPENDENT of the enum discriminant, and widening it must cover the non-enum case too,
+which the item's "kept narrow for exactly this shape" framing does not say.
+
+**LEFT OPEN, measured**: `let EK = NS.K` and an annotated `const EK: typeof NS.K = NS.K` are refused
+by the const-alias leg by design, where tsc narrows through both; and the `diagnose` MULTI-FILE
+harness cannot resolve `import * as Mid from './mid'` where `mid.ts` is `export * from './lib'` — a
+TYPE-position `Mid.FAR.EK.Span` reads TS2694 there while the identical shape through
+`ProjectCompiler` + a real tsconfig is clean on ours AND on both references. That harness-vs-project
+divergence forced one pin to take its annotation through the direct import, and is now a CLAUDE.md
+entry.
+
 ### Round (P18.33) — an exported destructuring IS an export ((CHK.99)), and FOUR of the item's six sites were wrong (2026-09-06)
 
 **Suite 17,981 → 18,021 / 0 / 3** — 40 pins across three files with three different harnesses; no
@@ -3207,7 +3297,30 @@ prediction: 17,343 / 0 / 3.**
   file — the class is structurally invisible to the corpus (same axis as (CHK.29)/(CFG.1)), so
   the instrument is a `-project` fixture. MEANING (false positive).
 
-- [ ] **(CHK.100) A NAMESPACE-QUALIFIED ENUM MEMBER (`NS.K.B`, `Outer.Inner.K.B`, imported
+- [x] **(CHK.100) CLOSED 2026-09-06 ((P18.34) note) — `resolveEnumSymbolForQualifiedPath`, a dotted-path
+  container descent mirroring tsc's `resolveEntityName`, with a SINGLE segment delegated VERBATIM to
+  `resolveEnumSymbolForDiscriminant` and the answer canonicalized exactly once, so round 425's split-key
+  hazard is discharged by construction. `enumPathDeref` hops an import alias to its symbol and an
+  `import * as ns` to the target module FILE (a namespace import's members live in the file's locals and
+  behind its `export *` barrels). 11 CLI fixtures against both references: **45 rows → 10**, all ten
+  reference-agreeing. **THREE of the item's claims are measured WRONG**: "both sides fail" (only the RHS
+  readers do — the annotation half is already served by `enumDiscriminantKeysOfType`, and arm a2 reads
+  **0 RED over 22 pins**; kept for key-space agreement and RECORDED as a measured redundant guard);
+  "expect REMOVED rows" (0 removed on all eight — the 23 profile sites carry NO diagnostic, so the class
+  is LOST PRECISION there, not a false positive, and the grid is a control); and the four named readers
+  are incomplete (a FIFTH, `enumSwitchKeysFromTypeNode`'s whole-enum arm, owned an ours-only TS2366).
+  **The grid's ADDED row was the positive control**: with only the enum change in, harness/server/services
+  gained `convertParamsToDestructuredObject.ts:238:21` BECAUSE the discriminant began to narrow — which
+  exposed a PRE-EXISTING root defect, `checkPropertyAccessAssignment` having no flow narrowing at all
+  where the var-decl/assignment/return readers have had a suppression-only leg since rounds 410/438/456.
+  Fixed at the root (verified against both references: the narrowed-to-`A` write is silent and the `"b"`
+  twin still reports). 22 pins, 7 arms, no round-927 pair (a6/a7 have DISJOINT red sets); two pins were
+  repaired mid-round after reading 0 RED — BLIND, not redundant. Suite 18,043/0/3, corpus 8,837/0,
+  `cost_gate.py` exit 0 at +0.00%, grid 8×0/0. **The (P18.27) unblock is only HALF true**: a MUTABLE
+  `for-of` head now narrows, but a READONLY head is still silent — and so is `readonly string[]` with no
+  enum anywhere, so that gap is INDEPENDENT of the discriminant and must be fixed for the non-enum case
+  too. LEFT OPEN: `let EK = NS.K` and an annotated `const EK: typeof NS.K` are refused by design where tsc
+  narrows through both. ORIGINAL: A NAMESPACE-QUALIFIED ENUM MEMBER (`NS.K.B`, `Outer.Inner.K.B`, imported
   `FAR.EntryKind.Span`) NARROWS NOTHING — not `===`/`!==`/`==`, not a `switch` case, not through
   a `const EK = NS.K` alias — so every discriminated union declared `kind: NS.K.A` reports a
   false TS2339 on the un-narrowed union and renders it in every message — MEASURED 2026-09-06

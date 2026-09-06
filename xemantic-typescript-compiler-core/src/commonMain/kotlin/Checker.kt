@@ -1399,6 +1399,12 @@ class Checker(
      */
     private var enumReceiverNames: Set<String> = emptySet()
 
+    /** (CHK.100): names bound by a file-level `const E = <dotted name>` whose tail names an
+     *  enum declared in the program — tsc types such a binding `typeof NS.K`, so `E.B` is an
+     *  enum-member reference and narrows. A separate population from [enumReceiverNames]
+     *  (which holds enum and import-alias names) so the (CHK.85)(b) pre-gate stays exact. */
+    private var enumConstAliasNames: Set<String> = emptySet()
+
     /** (CHK.85)(b): see [enumMemberTypeOfExprGated] — `"<file>|<name>"` -> the file-level enum symbol. */
     private val enumReceiverSymCache = HashMap<String, Symbol>()
 
@@ -15818,12 +15824,21 @@ class Checker(
         // skip above — an alias of an enum lives in a file that declares none.
         val receivers = HashSet<String>(enumDeclaredNames)
         receivers.addAll(lexicalBlockScopedEnumNames)
+        val constAliases = HashSet<String>()
         for (result in binderResults) {
             for ((name, symbol) in result.locals) {
                 if (symbol.flags.hasAny(SymbolFlags.Alias)) receivers.add(name)
+                // (CHK.100): `const EK = NS.K` — a VALUE alias of an enum. Purely
+                // syntactic and one string probe per candidate: the initializer's LAST
+                // dotted segment must name an enum the program declares.
+                val vd = symbol.valueDeclaration as? VariableDeclaration ?: continue
+                if (vd.type != null) continue
+                val tail = enumPathSegments(vd.initializer ?: continue)?.lastOrNull() ?: continue
+                if (tail in enumDeclaredNames) constAliases.add(name)
             }
         }
         enumReceiverNames = receivers
+        enumConstAliasNames = constAliases
     }
 
     /**
@@ -100378,7 +100393,20 @@ interface DataView {
             }
             is TypeReference -> {
                 val tn = node.typeName
-                if (tn is QualifiedName) return enumMemberKeysOfTypeNode(node)  // Enum.Member
+                if (tn is QualifiedName) {
+                    // (CHK.100): the WHOLE enum written qualified (`k: NS.K`) — the
+                    // exhaustive-switch reader's twin of the member case below, and the
+                    // reason a `switch` over such a discriminant reached its `never`
+                    // probe with the enum unreduced.
+                    val segs = enumPathTypeSegments(tn)
+                    if (segs != null && segs.size > 1) {
+                        resolveEnumSymbolForQualifiedPath(segs, node)?.let { esym ->
+                            val vals = enumValues[esym.id] ?: return null
+                            return vals.keys.map { enumDiscriminantKey(esym, it) }.toSet()
+                        }
+                    }
+                    return enumMemberKeysOfTypeNode(node)  // Enum.Member
+                }
                 if (tn is Identifier) {
                     resolveEnumSymbolForDiscriminant(tn.text, node)?.let { esym ->
                         val vals = enumValues[esym.id] ?: return null
@@ -113057,6 +113085,25 @@ interface DataView {
         // literal against an object target still reads its base primitive.
         val literalValue = propertyWriteLiteralValueType(value, valueType)
         if (literalValue != null && checkTypeRelatedTo(literalValue, ptForRel, assignableRelation)) return
+        // (CHK.100) grid-forced: this reader had NO flow narrowing at all, where the
+        // var-decl, plain-assignment and return readers have had a suppression-only
+        // narrowing leg since rounds 410/438/456 — so a guard-narrowed reference
+        // written through a PROPERTY-ACCESS target (`grouped.signature = entry.node.parent`
+        // inside `if (isValidMethodSignature(entry.node.parent))`, tsc's own
+        // convertParamsToDestructuredObject.ts) reported its DECLARED type. It was
+        // invisible while the receiver typed as `any`; giving the qualified enum
+        // discriminant its narrowing made the receiver real and unmasked it on three
+        // profiles. Same monotone rule as its siblings: the narrowed type is adopted
+        // ONLY when it makes the write relate, so the verdict can move from a rejection
+        // to an acceptance and never the other way, and a `never` (an unreachable
+        // position, whose adoption would DELETE a diagnostic — CLAUDE.md's rule) is
+        // refused.
+        if (value is Identifier || value is PropertyAccessExpression) {
+            val narrowedValue = getNarrowedTypeForReference(valueType, value)
+            if (narrowedValue !== valueType && narrowedValue !== neverType &&
+                checkTypeRelatedTo(narrowedValue, ptForRel, assignableRelation)
+            ) return
+        }
         // Object literal — emit TS2353 for excess instead
         if (value is ObjectLiteralExpression) {
             val displayTarget = typeToString(ptForRel)
@@ -127554,6 +127601,235 @@ interface DataView {
             ?: resolveEnumSymbolFileLevel(enumIdent, keyNode)
             ?: enumSymbolFromEnclosingNamespace(enumIdent, keyNode)
 
+    // --- (CHK.100) namespace-QUALIFIED enum-member discriminants -----------------------------
+    //
+    // Every AST reader of the `"symId#member"` discriminant key space took the enum's
+    // receiver as `pa.expression as? Identifier` / `qn.left as? Identifier`, so a member
+    // written `NS.K.B`, `Outer.Inner.K.B` or `FindAllReferences.EntryKind.Node` answered
+    // null and the union NEVER narrowed — a false TS2339 at every use in the guarded
+    // branch and the un-narrowed union in every message. The axis is qualification DEPTH
+    // >= 2, not imports: a same-file `LocalNS.K.B` fails identically, and an
+    // `import AK = NS.K; AK.B` (a single-segment receiver) always worked.
+    //
+    // All of this is FLOW-ONLY / key-space work, exactly like the round-409 barrel
+    // resolvers it reuses: narrowing only ever REMOVES union constituents, and a member
+    // whose annotation cannot be keyed is conservatively KEPT — so a resolution that
+    // fails here is the status quo, never a new diagnostic.
+
+    /** The dotted segments of an identifier-rooted value path `A.B.C` (`["A","B","C"]`),
+     *  or null for anything else (a call, an element access, `this`, a literal root). */
+    private fun enumPathSegments(expr: Expression): List<String>? {
+        var cur: Expression = unwrapParensExpr(expr)
+        val out = ArrayList<String>(4)
+        var hops = 0
+        while (hops++ < 16) {
+            when (cur) {
+                is Identifier -> {
+                    if (cur.text.isEmpty()) return null
+                    out.add(cur.text)
+                    out.reverse()
+                    return out
+                }
+                is PropertyAccessExpression -> {
+                    val n = cur.name.text
+                    if (n.isEmpty()) return null
+                    out.add(n)
+                    cur = unwrapParensExpr(cur.expression)
+                }
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    /** The dotted segments of an identifier-rooted type name `A.B.C`. */
+    private fun enumPathTypeSegments(name: Node): List<String>? {
+        var cur: Node = name
+        val out = ArrayList<String>(4)
+        var hops = 0
+        while (hops++ < 16) {
+            when (cur) {
+                is Identifier -> {
+                    if (cur.text.isEmpty()) return null
+                    out.add(cur.text)
+                    out.reverse()
+                    return out
+                }
+                is QualifiedName -> {
+                    val n = cur.right.text
+                    if (n.isEmpty()) return null
+                    out.add(n)
+                    cur = cur.left
+                }
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    /** One container hop for a dotted enum path: an import alias resolved either to the
+     *  SYMBOL it names or, for `import * as ns from "spec"`, to the target module FILE
+     *  (whose members live in the file's locals and behind its `export *` barrels — no
+     *  symbol carries them, which is why [resolveImportedSymbolGeneral] stops there). */
+    private fun enumPathDeref(sym: Symbol): Pair<Symbol?, SourceFile?>? {
+        for (decl in sym.declarations) {
+            when (decl) {
+                is ImportSpecifier -> {
+                    val originalName = decl.propertyName?.text ?: decl.name.text
+                    val (contextFile, importDecl) = findEnclosingImport(decl) ?: continue
+                    val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                    val targetFile = enumPathResolveSpec(spec, importDecl, contextFile) ?: continue
+                    val tr = fileResults[targetFile] ?: continue
+                    val s = tr.locals[originalName]
+                        ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
+                        ?: continue
+                    if (s !== sym) return s to null
+                }
+                is ImportDeclaration -> {
+                    val nb = decl.importClause?.namedBindings
+                    if (nb !is NamespaceImport || nb.name.text != sym.name) continue
+                    val spec = (decl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                    val contextFile = owningSourceFile(decl)?.fileName ?: continue
+                    val targetFile = enumPathResolveSpec(spec, decl, contextFile) ?: continue
+                    fileResults[targetFile]?.sourceFile?.let { return null to it }
+                }
+                else -> {}
+            }
+        }
+        return null
+    }
+
+    /** The four-way module-specifier ladder the flow-only import resolvers use — the
+     *  `.js`-aware and directory-relative legs are load-bearing for tsc's own
+     *  `./_namespaces/ts.js` barrels (round 409 / INV.3(d)(ii)). */
+    private fun enumPathResolveSpec(spec: String, importNode: Node, contextFile: String): String? =
+        resolveModuleSpecifier(spec, importNode)
+            ?: resolveModuleSpecifierRelative(spec, contextFile)
+            ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+            ?: resolveImportTargetFallback(spec, contextFile)
+
+    /** The container the HEAD segment of a dotted enum path names, resolved in the same
+     *  three scopes [resolveEnumSymbolForDiscriminant] uses and in the same order (file
+     *  locals / per-file merged globals, then the enclosing-namespace chain), but WITHOUT
+     *  the enum-flavour requirement — a head is a namespace, a module or an import alias. */
+    private fun enumPathHeadSymbol(name: String, keyNode: Node): Symbol? {
+        currentFileLocals?.get(name)?.let { return it }
+        lookupPerFileForNode(keyNode, name)?.let { return it }
+        var cur: Node? = keyNode
+        var hops = 0
+        var res: BinderResult? = null
+        var resolved = false
+        while (cur != null && hops++ < 4096) {
+            if (cur is SourceFile) return null
+            if (cur is ModuleDeclaration) {
+                if (!resolved) {
+                    resolved = true
+                    res = owningSourceFile(keyNode)?.fileName?.let { fileResults[it] }
+                }
+                res?.nodeToSymbol?.get(nodeKey(cur))?.exports?.get(name)?.let { return it }
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return null
+    }
+
+    /**
+     * The canonical enum symbol a dotted path `A.B.…K` names, or null.
+     *
+     * A single segment is delegated verbatim to [resolveEnumSymbolForDiscriminant], so
+     * every established resolution (lexical / file-level / enclosing namespace / barrel
+     * alias) and its round-425 canonicalization are inherited unchanged. Two or more
+     * segments resolve the head as a CONTAINER and descend through `exports`, hopping an
+     * import alias to its symbol or, for a namespace import, to its module FILE (where
+     * `export *` barrels are followed by [resolveExportedSymbolThroughStars]).
+     *
+     * The answer goes through [canonicalEnumSymbol] exactly once, so a key minted from a
+     * qualified path and one minted from a bare name for the SAME enum are the same
+     * string — the round-425 split key space is the one failure mode this space cannot
+     * survive, and it is what makes the RHS and ANNOTATION halves land together.
+     */
+    private fun resolveEnumSymbolForQualifiedPath(segs: List<String>, keyNode: Node): Symbol? {
+        if (segs.isEmpty()) return null
+        if (segs.size == 1) return resolveEnumSymbolForDiscriminant(segs[0], keyNode)
+        // The last segment IS the enum's own name, so the (CHK.85)(b) receiver pre-gate
+        // applies unchanged: a path whose tail names no enum in the program cannot resolve.
+        if (segs.last() !in enumReceiverNames) return null
+        var curSym: Symbol? = enumPathHeadSymbol(segs[0], keyNode) ?: return null
+        var curFile: SourceFile? = null
+        var i = 1
+        var hops = 0
+        while (i < segs.size && hops++ < 32) {
+            val seg = segs[i]
+            val next: Symbol?
+            val sym = curSym
+            if (sym != null) {
+                next = sym.exports?.get(seg)
+                if (next == null) {
+                    val hop = enumPathDeref(sym) ?: return null
+                    curSym = hop.first
+                    curFile = hop.second
+                    if (curSym == null && curFile == null) return null
+                    continue
+                }
+            } else {
+                val f = curFile ?: return null
+                val tr = fileResults[f.fileName] ?: return null
+                next = tr.locals[seg] ?: resolveExportedSymbolThroughStars(f, seg)
+            }
+            if (next == null) return null
+            curSym = resolveAlias(next)
+            curFile = null
+            i++
+        }
+        val target = curSym ?: return null
+        return if (target.flags.hasAny(SymbolFlags.Enum)) canonicalEnumSymbol(target) else null
+    }
+
+    /** The interned `EnumLiteral` type of [member] on the already-canonical enum [sym],
+     *  or null when the constant evaluator never keyed it — the shared tail of
+     *  [enumMemberTypeOfExpr] and [enumMemberTypeOfExprGated], so the two cannot drift. */
+    private fun enumMemberLiteralTypeOf(sym: Symbol, member: String): Type? {
+        if (enumValues[sym.id]?.containsKey(member) != true) return null
+        val memberSym = sym.exports?.get(member) ?: return null
+        if (memberSym.flags.hasNone(SymbolFlags.EnumMember)) return null
+        val t = getDeclaredTypeOfEnumMember(memberSym)
+        return if (t.flags.hasAny(TypeFlags.EnumLiteral)) t else null
+    }
+
+    /** The enum a value-position member RECEIVER names — the bare-identifier case
+     *  verbatim, plus the dotted one. */
+    private fun enumSymbolOfReceiverExpr(recv: Expression, keyNode: Node): Symbol? {
+        if (recv is Identifier) {
+            resolveEnumSymbolForDiscriminant(recv.text, keyNode)?.let { return it }
+            return enumSymbolBehindConstAlias(recv, keyNode)
+        }
+        val segs = enumPathSegments(recv) ?: return null
+        return resolveEnumSymbolForQualifiedPath(segs, keyNode)
+    }
+
+    /**
+     * (CHK.100): the enum behind a `const EK = NS.K` VALUE alias — tsc gives such a
+     * binding the type `typeof NS.K`, so `x.kind === EK.B` narrows there and did not
+     * here (the alias resolves to a VARIABLE symbol, which carries no `Enum` flag).
+     *
+     * Deliberately narrow, and every restriction is load-bearing: `const` only (a
+     * reassignable binding is not an alias), NO type annotation (an annotated one is
+     * whatever it says), and the initializer must be a plain dotted NAME — a call, an
+     * element access or a conditional is not a `typeof` alias. The tail check against
+     * [enumConstAliasNames] is the pre-gate, so a program with no such binding pays one
+     * set probe.
+     */
+    private fun enumSymbolBehindConstAlias(ident: Identifier, keyNode: Node): Symbol? {
+        if (ident.text !in enumConstAliasNames) return null
+        val sym = currentFileLocals?.get(ident.text)
+            ?: lookupPerFileForNode(keyNode, ident.text) ?: return null
+        val vd = sym.valueDeclaration as? VariableDeclaration ?: return null
+        if (vd.type != null) return null
+        if (((vd as NodeBase).parent as? VariableDeclarationList)?.flags != SyntaxKind.ConstKeyword) return null
+        val segs = enumPathSegments(vd.initializer ?: return null) ?: return null
+        return resolveEnumSymbolForQualifiedPath(segs, vd)
+    }
+
     /**
      * (REL.4)(a) round 782: the enum name resolved in the INV.2(c) SCOPE space — an `enum`
      * declared inside a FUNCTION/arrow/block body, which the main binder never binds
@@ -127778,10 +128054,10 @@ interface DataView {
 
     private fun enumMemberKeyOfExpr(expr: Expression): String? {
         val pa = unwrapParensExpr(expr) as? PropertyAccessExpression ?: return null
-        val enumIdent = (pa.expression as? Identifier)?.text ?: return null
         val member = pa.name.text
         if (member.isEmpty()) return null
-        val sym = resolveEnumSymbolForDiscriminant(enumIdent, pa) ?: return null
+        // (CHK.100): the receiver may be a dotted path (`NS.K`, `FindAllReferences.EntryKind`).
+        val sym = enumSymbolOfReceiverExpr(pa.expression, pa) ?: return null
         if (enumValues[sym.id]?.containsKey(member) != true) return null
         return enumDiscriminantKey(sym, member)
     }
@@ -127817,36 +128093,35 @@ interface DataView {
      */
     private fun enumMemberTypeOfExprGated(expr: Expression): Type? {
         val pa = unwrapParensExpr(expr) as? PropertyAccessExpression ?: return null
-        val recv = pa.expression as? Identifier ?: return null
-        val enumIdent = recv.text
-        if (enumIdent !in enumReceiverNames) return null
         val member = pa.name.text
         if (member.isEmpty()) return null
+        val recv = pa.expression as? Identifier
+            // (CHK.100): a dotted receiver takes the uncached path — the memo below is
+            // keyed by a single NAME, and a qualified path's head is not that name. The
+            // pre-gate still applies: [resolveEnumSymbolForQualifiedPath] refuses a path
+            // whose LAST segment (the enum's own name) is outside [enumReceiverNames].
+            ?: return resolveEnumSymbolForQualifiedPath(enumPathSegments(pa.expression) ?: return null, pa)
+                ?.let { enumMemberLiteralTypeOf(it, member) }
+        val enumIdent = recv.text
+        if (enumIdent !in enumReceiverNames && enumIdent !in enumConstAliasNames) return null
         val file = currentCheckFileName
         val key = if (file != null && enumIdent !in lexicalBlockScopedEnumNames) "$file|$enumIdent" else null
         val sym = key?.let { enumReceiverSymCache[it] }
             ?: lexicalEnumSymbolForDiscriminant(enumIdent, pa)
             ?: resolveEnumSymbolFileLevel(enumIdent, pa)?.also { if (key != null) enumReceiverSymCache[key] = it }
             ?: enumSymbolFromEnclosingNamespace(enumIdent, pa)
+            ?: enumSymbolBehindConstAlias(recv, pa)
             ?: return null
-        if (enumValues[sym.id]?.containsKey(member) != true) return null
-        val memberSym = sym.exports?.get(member) ?: return null
-        if (memberSym.flags.hasNone(SymbolFlags.EnumMember)) return null
-        val t = getDeclaredTypeOfEnumMember(memberSym)
-        return if (t.flags.hasAny(TypeFlags.EnumLiteral)) t else null
+        return enumMemberLiteralTypeOf(sym, member)
     }
 
     private fun enumMemberTypeOfExpr(expr: Expression): Type? {
         val pa = unwrapParensExpr(expr) as? PropertyAccessExpression ?: return null
-        val enumIdent = (pa.expression as? Identifier)?.text ?: return null
         val member = pa.name.text
         if (member.isEmpty()) return null
-        val sym = resolveEnumSymbolForDiscriminant(enumIdent, pa) ?: return null
-        if (enumValues[sym.id]?.containsKey(member) != true) return null
-        val memberSym = sym.exports?.get(member) ?: return null
-        if (memberSym.flags.hasNone(SymbolFlags.EnumMember)) return null
-        val t = getDeclaredTypeOfEnumMember(memberSym)
-        return if (t.flags.hasAny(TypeFlags.EnumLiteral)) t else null
+        // (CHK.100): the receiver may be a dotted path.
+        val sym = enumSymbolOfReceiverExpr(pa.expression, pa) ?: return null
+        return enumMemberLiteralTypeOf(sym, member)
     }
 
     /** An enum-member TYPE annotation `Enum.Member`, or a `UnionType` of such, → the set of
@@ -127862,14 +128137,19 @@ interface DataView {
             is TypeReference -> {
                 val qn = node.typeName as? QualifiedName
                 if (qn != null) {
-                    val enumIdent = (qn.left as? Identifier)?.text ?: return null
                     val member = qn.right.text
                     if (member.isEmpty()) return null
-                    val sym = resolveEnumSymbolForDiscriminant(enumIdent, node)
+                    // (CHK.100): the enum's own name may itself be qualified
+                    // (`NS.K.A`, `Outer.Inner.K.A`) — the ANNOTATION half of the same
+                    // gap the value-position readers have, landed together so the two
+                    // sides of the key space cannot disagree (round 425).
+                    val segs = enumPathTypeSegments(qn.left) ?: return null
+                    val sym = resolveEnumSymbolForQualifiedPath(segs, node)
                     if (sym != null) {
                         if (enumValues[sym.id]?.containsKey(member) != true) return null
                         return setOf(enumDiscriminantKey(sym, member))
                     }
+                    val enumIdent = (qn.left as? Identifier)?.text ?: return null
                     // Round 477: `ns.AliasName` — a namespace-import-qualified type alias
                     // (`eventName: protocol.CloseFileWatcherEventName` on tsc's server
                     // event interfaces) resolves to the target module's alias body and

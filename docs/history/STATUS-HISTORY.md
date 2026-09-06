@@ -1933,3 +1933,27 @@ wrong (the second needs flow-narrowed branch elements, which `getTypeOfExpressio
 so the shape now refuses, as HEAD does, and is queued as (CHK.107). Corpus 8,837/0, core
 16,385/0, `cost_gate.py` exit 0 with no rebaseline (`typeOfExpr.calls` +0.89%), `huge_methods.py`
 exit 0, grid 8×`added=0 removed=0`.
+
+**(P18.29) — UNION CALLEES ARE COMBINED, NOT SILENTLY `any` (STAGE 1 OF (CHK.97)), AND FOUR OF THE ITEM'S OWN PREDICTIONS ARE MEASURED WRONG, 17,874 → 17,916 / 0 / 3 (2026-09-06).**
+**(CHK.97) stage 1 LANDED.** The call RESULT was `any` for EVERY union callee and the argument
+positions were judged off a CONCATENATED signature list; one home,
+`combineUnionSignatures` (tsc's `getUnionSignatures`), now does PASS 1 and PASS 2 with the
+helpers mirrored 1:1 and is memoized by the union's `Type.id` (exact, because INV.5(a) interns
+unions by member-id list), feeding both return readers, a new construct arm (which kills the
+false TS2351 on every union `new`) and the ccet hand-off to the ordinary argument gate, with the
+nullish check moved ABOVE the union branch. Against pristine 6.0.3 the matrix goes **23 rows with
+6 WRONG → 58 of 73 matched with ZERO ours-only**, every one of the 15 misses attributed. **Four of
+the item's predictions are refuted by building it**: "the too-few TS2554 comes free" is FALSE
+(TS2554 fires only for a function-DECLARATION callee, and a union callee is a variable by
+construction — a pre-existing gap this round records), arm a2's predicted victims are answered
+upstream by PASS 1, arm a3 as specified is undiscriminated, and arm a8 names stage-2 work. Three
+re-homings were forced by measurement, one of which closed a PRE-EXISTING false positive
+(`declare function h(...xs: 1[]); h(1)` was TS2345 on HEAD), and four hand-written pins turned
+out to be pinning OUR divergences (3 × `TS2349 → TS2722` for a nullish callee, and a silence
+assertion where both references report `'never'`) — all corrected to VALUE pins after
+re-verifying against tsgo 7.0.2 and pristine directly. No double emission (all rows from
+`checkSpine`; the walker ORDER is what buys it). 42 pins, **12 arms, every one discriminating**.
+Corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline — combining every union callee costs
+~0.00% on its own — `huge_methods.py` exit 0 (`ccetUnionCalleeChecks` SHRANK ~100 lines), grid
+8×`added=0 removed=0`. Stage 2 stays open: the array fallback, `getCallSignaturesOfType`'s union
+arm, callback contextual typing, the optional-call result and `this` params/TS2684.

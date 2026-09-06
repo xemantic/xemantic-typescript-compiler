@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **197,349** lines (191,070 when the metric was created; the (P18.9)-(P18.33) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **197,629** lines (191,070 when the metric was created; the (P18.9)-(P18.34) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,30 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.34) — A NAMESPACE-QUALIFIED ENUM MEMBER NARROWS ((CHK.100)), AND THE GRID'S *ADDED* ROW WAS THE POSITIVE CONTROL, 18,021 → 18,043 / 0 / 3 (2026-09-06).**
+**(CHK.100) CLOSED.** `resolveEnumSymbolForQualifiedPath` is a dotted-path container descent
+mirroring tsc's `resolveEntityName`, with a SINGLE segment delegated verbatim to the existing
+resolver and the answer canonicalized exactly once — so round 425's split-key hazard is discharged
+by construction rather than by care; `enumPathDeref` hops an `import * as ns` to the target module
+FILE, because a namespace import's members live in the file's locals and behind its `export *`
+barrels. 11 CLI fixtures against both references go **45 rows → 10**, all ten reference-agreeing.
+**Three of the item's claims are measured wrong**: "both sides fail" (only the RHS readers do — arm
+a2 reverting the annotation arm reads **0 RED over 22 pins**; kept for key-space agreement and
+recorded as a measured redundant guard), "expect REMOVED rows on the profiles" (0 removed on all
+eight — the 23 sites carry no diagnostic, so the class is LOST PRECISION there and the grid is a
+control), and the four named readers are incomplete (a fifth owned an ours-only TS2366).
+**The grid's ADDED row was the positive control**: with only the enum change in, three profiles
+gained a row BECAUSE the discriminant began to narrow — which exposed a PRE-EXISTING root defect,
+`checkPropertyAccessAssignment` having no flow narrowing at all where the var-decl, assignment and
+return readers have had a suppression-only leg since rounds 410/438/456. Fixed at the root and
+verified here against both references (the narrowed-to-`A` write is silent; the `"b"` twin still
+reports), taking the grid to `added=0` everywhere. 22 pins, 7 arms, no round-927 pair (two legs of
+one descent have DISJOINT red sets); two pins were repaired mid-round after reading 0 RED — BLIND,
+not redundant. Corpus 8,837/0, `cost_gate.py` exit 0 at **+0.00% on every counter**,
+`huge_methods.py` exit 0, grid 8×`added=0 removed=0`. The (P18.27) unblock is only HALF true: a
+mutable `for-of` head now narrows, but a readonly head is still silent — and so is
+`readonly string[]` with no enum anywhere, so that gap is independent of the discriminant.
 
 **(P18.33) — AN EXPORTED DESTRUCTURING IS AN EXPORT ((CHK.99)), AND FOUR OF THE ITEM'S SIX SITES WERE WRONG, 17,981 → 18,021 / 0 / 3 (2026-09-06).**
 **(CHK.99) CLOSED.** `bindingPatternNames` — the checker-side mirror of
@@ -98,27 +122,3 @@ fired, and the arm was rebuilt from `git show HEAD:` into a directory the subage
 pins, 11 arms (9 discriminating; a2/a10 recorded as redundant guards on every reachable shape and
 kept as tsc's own rules). Corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline,
 `huge_methods.py` exit 0, grid 8×`added=0 removed=0`.
-
-**(P18.29) — UNION CALLEES ARE COMBINED, NOT SILENTLY `any` (STAGE 1 OF (CHK.97)), AND FOUR OF THE ITEM'S OWN PREDICTIONS ARE MEASURED WRONG, 17,874 → 17,916 / 0 / 3 (2026-09-06).**
-**(CHK.97) stage 1 LANDED.** The call RESULT was `any` for EVERY union callee and the argument
-positions were judged off a CONCATENATED signature list; one home,
-`combineUnionSignatures` (tsc's `getUnionSignatures`), now does PASS 1 and PASS 2 with the
-helpers mirrored 1:1 and is memoized by the union's `Type.id` (exact, because INV.5(a) interns
-unions by member-id list), feeding both return readers, a new construct arm (which kills the
-false TS2351 on every union `new`) and the ccet hand-off to the ordinary argument gate, with the
-nullish check moved ABOVE the union branch. Against pristine 6.0.3 the matrix goes **23 rows with
-6 WRONG → 58 of 73 matched with ZERO ours-only**, every one of the 15 misses attributed. **Four of
-the item's predictions are refuted by building it**: "the too-few TS2554 comes free" is FALSE
-(TS2554 fires only for a function-DECLARATION callee, and a union callee is a variable by
-construction — a pre-existing gap this round records), arm a2's predicted victims are answered
-upstream by PASS 1, arm a3 as specified is undiscriminated, and arm a8 names stage-2 work. Three
-re-homings were forced by measurement, one of which closed a PRE-EXISTING false positive
-(`declare function h(...xs: 1[]); h(1)` was TS2345 on HEAD), and four hand-written pins turned
-out to be pinning OUR divergences (3 × `TS2349 → TS2722` for a nullish callee, and a silence
-assertion where both references report `'never'`) — all corrected to VALUE pins after
-re-verifying against tsgo 7.0.2 and pristine directly. No double emission (all rows from
-`checkSpine`; the walker ORDER is what buys it). 42 pins, **12 arms, every one discriminating**.
-Corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline — combining every union callee costs
-~0.00% on its own — `huge_methods.py` exit 0 (`ccetUnionCalleeChecks` SHRANK ~100 lines), grid
-8×`added=0 removed=0`. Stage 2 stays open: the array fallback, `getCallSignaturesOfType`'s union
-arm, callback contextual typing, the optional-call result and `this` params/TS2684.
