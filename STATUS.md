@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **197,328** lines (191,070 when the metric was created; the (P18.9)-(P18.31) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **197,347** lines (191,070 when the metric was created; the (P18.9)-(P18.32) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,28 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.32) — A WEAK GUARD TARGET NARROWS ((CHK.98b), WHOSE DIAGNOSIS WAS WRONG), AND (CHK.98)(b)'s UNION GATE LIFTS, 17,963 → 17,981 / 0 / 3 (2026-09-06).**
+**(CHK.98b) CLOSED — and the round's main finding is that the item misdiagnosed it.** Queued as
+"NESTED-TERNARY predicate narrowing", it is neither about ternaries nor about the property-access
+family: a plain `if`, a single ternary, `&&` and the nested ternary all fail identically, and the
+guard narrows correctly the moment its TARGET declares one REQUIRED member. The axis is the
+target's OPTIONALITY, and the mechanism is a round-480 ASYMMETRY — that round gave
+`missingVsOptionalProvesNotSubtype` to the NEGATIVE guard filter and never to the POSITIVE one, so
+the negative branch was right all along. The positive arm now mirrors tsc's
+`getNarrowedType(assumeTrue)`, with a vetoed member falling to the existing narrow-DOWN arm so the
+two together are tsc's `mapType`. **(CHK.98)(b)'s union gate LIFTED, with a three-binary receipt
+rather than a green grid**: grid 8×`added=0 removed=0` and knip 51 → 51 byte-identical, while a
+third binary (gate lifted, 98b reverted) reads **52** — the extra row being exactly the one the
+item named, which is what proves the gate's population is live and the green is not vacuous; the 8
+profiles carry ~26 such annotations in total and are closer to a control. **The item's knip number
+49 is stale** (a REBUILT parent reads 51; 49 was the pre-(CHK.98) recon commit) — a recorded
+baseline is a claim about a BUILD, not a commit, now shown for a library baseline too. 18 net pins,
+2 arms (8 RED / 3 RED) with two negative controls recorded as non-discriminating BY CONSTRUCTION
+rather than counted, and every arm carrying a pin-COUNT assertion after (P18.31)'s deleted-pins
+hazard. Corpus 8,837/0, **`cost_gate.py` exit 0 at +0.00% on every counter**, `huge_methods.py`
+exit 0. Residue pinned as a KNOWN GAP: a nullish union contextual parameter types correctly but the
+property-access reader emits no TS18048 — a false NEGATIVE, which is why the lift is safe.
 
 **(P18.31) — CONTEXTUAL PARAMETER TYPES REACH THE ARGUMENT AND PROPERTY-ACCESS READERS ((CHK.98)(a)/(b)/(c)), AND A SCRIPTED SPLICE THAT SILENTLY DELETED THREE PINS, 17,932 → 17,963 / 0 / 3 (2026-09-06).**
 **(CHK.98)(a)/(b)/(c) LANDED.** The ccet ARGUMENT reader (TWO `anyType` sites, not the one the
@@ -101,19 +123,3 @@ wrong (the second needs flow-narrowed branch elements, which `getTypeOfExpressio
 so the shape now refuses, as HEAD does, and is queued as (CHK.107). Corpus 8,837/0, core
 16,385/0, `cost_gate.py` exit 0 with no rebaseline (`typeOfExpr.calls` +0.89%), `huge_methods.py`
 exit 0, grid 8×`added=0 removed=0`.
-
-**(P18.27) — DESTRUCTURED BINDINGS GET THEIR TYPES (STAGE 1 OF (CHK.96)), AND CONTEXTUAL CALLBACK TYPING IS RE-MEASURED INTO (CHK.98), 17,717 → 17,792 / 0 / 3 (2026-09-06).**
-**(CHK.96) stage 1 LANDED.** Every ARRAY / tuple pattern, default, nested pattern and pattern PARAMETER was
-`any` at every reader and an object pattern `any` at the argument and TS2367 readers; a pure
-`bindingElementType` (tsc's `getBindingElementTypeFromParentType`: slots, optional → `| undefined`, rest as a
-sliced MUTABLE tuple, defaults joined with the subtype drop, unions lifted per constituent except tsc's
-narrowed-symbol precondition the corpus found) now feeds seven plug points including the symbol half. The
-grid forced FOUR root fixes on tsc's own sources: an optional property's `T["k"]` carries `undefined`,
-mapped `-?` strips it, an uninferrable type-guard TP narrows to its constraint (a pre-existing false
-positive), TP-carrying fn members are refused. 0 ours-only rows over ~120 cells; 75 pins, 9 arms with two
-round-927 pairs recorded; core 16,303/0, corpus 8,837/0, `cost_gate.py` rebaselined with attribution
-(+2.32% `typeOfExpr.calls`, 80% the ccet leave-time typing of 305 pattern initializers), grid
-8×`added=0 removed=0`. Read-only recon measured contextual callback typing over 99 rows: (CHK.39) already
-types a callback's parameters for the assignability reader and hover — CLAUDE.md's (CHK.30) entry was
-STALE and is corrected — and the residue is the ccet ARGUMENT reader plus three property-access sources,
-queued as (CHK.98) with two narrowing gaps (98b/98c) behind its union gate.

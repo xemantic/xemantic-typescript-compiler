@@ -1895,3 +1895,19 @@ residues; 53 pins, 7 arms; core 16,228/0, corpus 8,837/0, `cost_gate.py` exit 0 
 pristine fixtures): the call RESULT is `any` for EVERY union callee, three wrong-row families beside the
 silences, and TS2349 where tsc says TS2722 — queued as (CHK.97) around tsc's two-pass `getUnionSignatures`
 plus its array fallback.
+
+**(P18.27) — DESTRUCTURED BINDINGS GET THEIR TYPES (STAGE 1 OF (CHK.96)), AND CONTEXTUAL CALLBACK TYPING IS RE-MEASURED INTO (CHK.98), 17,717 → 17,792 / 0 / 3 (2026-09-06).**
+**(CHK.96) stage 1 LANDED.** Every ARRAY / tuple pattern, default, nested pattern and pattern PARAMETER was
+`any` at every reader and an object pattern `any` at the argument and TS2367 readers; a pure
+`bindingElementType` (tsc's `getBindingElementTypeFromParentType`: slots, optional → `| undefined`, rest as a
+sliced MUTABLE tuple, defaults joined with the subtype drop, unions lifted per constituent except tsc's
+narrowed-symbol precondition the corpus found) now feeds seven plug points including the symbol half. The
+grid forced FOUR root fixes on tsc's own sources: an optional property's `T["k"]` carries `undefined`,
+mapped `-?` strips it, an uninferrable type-guard TP narrows to its constraint (a pre-existing false
+positive), TP-carrying fn members are refused. 0 ours-only rows over ~120 cells; 75 pins, 9 arms with two
+round-927 pairs recorded; core 16,303/0, corpus 8,837/0, `cost_gate.py` rebaselined with attribution
+(+2.32% `typeOfExpr.calls`, 80% the ccet leave-time typing of 305 pattern initializers), grid
+8×`added=0 removed=0`. Read-only recon measured contextual callback typing over 99 rows: (CHK.39) already
+types a callback's parameters for the assignability reader and hover — CLAUDE.md's (CHK.30) entry was
+STALE and is corrected — and the residue is the ccet ARGUMENT reader plus three property-access sources,
+queued as (CHK.98) with two narrowing gaps (98b/98c) behind its union gate.

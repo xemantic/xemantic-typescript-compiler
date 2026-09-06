@@ -189,20 +189,89 @@ class ContextualParamReadersTest {
     }
 
     /**
-     * THE UNION GATE. The property-access family has narrowing gaps a call
-     * argument's contextual types happen not to reach; until (CHK.98b) lands, an
-     * annotation-sourced context refuses a UNION contextual parameter type rather
-     * than manufacturing TS2339 on a body that narrows it. Both references
-     * REPORT here — this pin records a deliberate false NEGATIVE, and goes red on
-     * the day the gate lifts.
+     * THE UNION GATE, LIFTED (2026-09-06). (CHK.98)(b) refused a UNION contextual
+     * parameter type from an annotation source, because the property-access family
+     * had two narrowing gaps a call argument's contextual types happened not to
+     * reach. Both are closed — (CHK.98c)'s optional-chain `typeof`, and (CHK.98b)'s
+     * positive type-guard filter, which kept every member of a union guarded onto an
+     * all-optional target — so this pin FLIPS from a recorded false negative to the
+     * value both references give. Measured with the gate lifted: knip is 51 rows
+     * before and after, byte-identical, and the 8-profile grid is 8 × 0/0.
      */
     @Test
-    fun `KNOWN GAP - an annotation-sourced UNION contextual parameter type is refused`() {
+    fun `an annotation-sourced UNION contextual parameter type is typed`() {
         val d = diagnose(
             prelude + "type UF = (u: N | { other: string }) => void;\n" +
                 "const hu: UF = u => { u.nope; };"
         )
+        assert(d.count { it.code == 2339 } == 1)
+    }
+
+    /** The same union, one reader over: a FUNCTION EXPRESSION under the annotation.
+     *  Both references report `string | number` here. */
+    @Test
+    fun `an annotated function expression's UNION parameter is typed`() {
+        val d = diagnose(
+            prelude + "type UF2 = (u: string | number) => void;\n" +
+                "const hu2: UF2 = function (u) { u.nope; };"
+        )
+        assert(d.count { it.code == 2339 } == 1)
+    }
+
+    /** …and an object-literal METHOD's, which needs the annotation gate's OTHER
+     *  half ([cpaExprObjlitMethod]) as well as the lifted union refusal. */
+    @Test
+    fun `an annotated object-literal method's UNION parameter is typed`() {
+        val d = diagnose(
+            prelude + "interface UV { m(u: string | number): void }\n" +
+                "const hu3: UV = { m(u) { u.nope; } };"
+        )
+        assert(d.count { it.code == 2339 } == 1)
+    }
+
+    /** NEGATIVE CONTROL for the lift: a member legal on EVERY constituent stays
+     *  silent, so the pins above cannot be satisfied by typing the parameter as
+     *  anything that merely fails. */
+    @Test
+    fun `negative control - a member present on every constituent of the typed union is silent`() {
+        val d = diagnose(
+            prelude + "type UF3 = (u: string | string[]) => void;\n" +
+                "const hu4: UF3 = u => { const n: number = u.length; };"
+        )
         assert(d.none { it.code == 2339 })
+        assert(d.none { it.code == 2322 })
+    }
+
+    /** NEGATIVE CONTROL for the lift, the (CHK.98b) half: an annotated UNION
+     *  parameter NARROWED by a type-guard call must stay silent — that narrow is
+     *  exactly what the union gate stood in for, and it is (CHK.98b) that supplies
+     *  it. Reverting (CHK.98b)'s subtype veto reddens this and nothing else here.
+     */
+    @Test
+    fun `negative control - a guarded UNION parameter under an annotation narrows`() {
+        val d = diagnose(
+            """
+            interface Cod { generates: string; }
+            interface CfgW { extensions?: string; }
+            declare function isW(c: Cod | CfgW): c is CfgW;
+            type RC = (c: Cod | CfgW) => string;
+            const rc: RC = c => (isW(c) ? c.extensions ?? "" : c.generates);
+            """.trimIndent()
+        )
+        assert(d.none { it.code == 2339 })
+    }
+
+    /** KNOWN GAP recorded with the lift: a NULLISH union contextual parameter is
+     *  typed, and the property-access reader still emits no TS18048 for it — both
+     *  references report `'x' is possibly 'undefined'`. A false NEGATIVE, so the
+     *  lift is safe; queued rather than fixed. */
+    @Test
+    fun `KNOWN GAP - a nullish UNION contextual parameter reports no TS18048 here`() {
+        val d = diagnose(
+            prelude + "type UF4 = (u: N | undefined) => void;\n" +
+                "const hu5: UF4 = u => { u.kind; };"
+        )
+        assert(d.none { it.code == 18048 })
     }
 
     // --- (c) the pull's exact arms ------------------------------------------------

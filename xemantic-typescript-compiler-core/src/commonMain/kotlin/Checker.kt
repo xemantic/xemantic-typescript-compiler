@@ -2616,15 +2616,22 @@ class Checker(
      * that came from a written ANNOTATION — a variable declaration's, a class
      * property's, or an object-literal member's — rather than from a call argument.
      *
-     * The three new sources are exactly the ones the cpa family had no edge for, and
-     * they are opened behind a gate because this family has narrowing gaps a call
-     * argument's contextual types happen not to reach: a UNION contextual parameter
-     * type is what (CHK.98b)'s nested-ternary predicate narrow and (CHK.98c)'s
-     * optional-chain `typeof` need, and without them the same annotated parameter is
-     * a false TS2339 / TS18048 on real code (measured: 3 of the 15 refused knip rows
-     * survive as annotated-parameter probes, and both are narrowing, not typing).
-     * The gate lifts when those two land — it is a statement about the READER, not
-     * about the source.
+     * The three new sources are exactly the ones the cpa family had no edge for.
+     * (CHK.98)(b) additionally REFUSED a UNION contextual parameter type here,
+     * because this family had two narrowing gaps a call argument's contextual types
+     * happened not to reach — (CHK.98c)'s optional-chain `typeof` and (CHK.98b)'s
+     * positive type-guard filter, which kept every member of a union guarded onto an
+     * all-optional target. **BOTH have landed and THE UNION GATE IS LIFTED**
+     * (2026-09-06): knip is 51 rows before and after, byte-identical, and that
+     * library is where the shape lives — every one of its plugins is a
+     * `ResolveConfig<A | B | C>`-annotated const whose body guards the union, which
+     * is why an 8-profile grid is a control for this half and the library is the
+     * receipt (tsc's own 78 sources carry ~26 such annotations at all).
+     *
+     * What the flag still gates is the OBJECT-LITERAL METHOD walk
+     * ([cpaExprObjlitMethod]): opening that to EVERY object literal costs
+     * `inlineVariable.ts:102` on three profiles, so the walk stays scoped to an
+     * annotation-sourced context.
      */
     private var cpaAnnotationCtx: Boolean = false
 
@@ -126253,7 +126260,25 @@ interface DataView {
                         // targets like CallChain and downstream chain shifts — do not
                         // re-add without a per-site diff.)
                         typeGuardMemberDisjoint(member, targetType) -> {}
-                        checkTypeRelatedTo(member, targetType, assignableRelation) -> narrowed.add(member)
+                        // (CHK.98b) round 480's SUBTYPE approximation, applied to the
+                        // POSITIVE branch. tsc's `getNarrowedType`(assumeTrue) keeps a
+                        // member `m` when `isTypeSubtypeOf(m, c)`; ours asked
+                        // ASSIGNABILITY, in which a source MISSING a target's OPTIONAL
+                        // property still relates — so EVERY member of a union guarded
+                        // onto an all-optional (WEAK) target was kept and the guard
+                        // narrowed NOTHING (knip's `isGraphqlConfigTypes(config): config
+                        // is GraphqlConfigTypes`, whose target declares only
+                        // `extensions?`; measured `Cod | Cfg` where both references read
+                        // `Cfg`). Round 480 added exactly this veto to the NEGATIVE
+                        // filter and never to this one — the asymmetry IS the defect,
+                        // and it is why a REQUIRED-member target has always narrowed
+                        // correctly here. A member vetoed here falls through to the
+                        // narrow-DOWN arm below, which is tsc's `isTypeSubtypeOf(c, m) ?
+                        // c` leg; where that fails too the member is dropped, exactly as
+                        // tsc's `mapType` drops a `neverType` constituent.
+                        checkTypeRelatedTo(member, targetType, assignableRelation) &&
+                            !missingVsOptionalProvesNotSubtype(member, targetType) ->
+                            narrowed.add(member)
                         else -> for (c in candidates) {
                             if (candidates.size > 1 && typeGuardMemberDisjoint(member, c)) continue
                             if (checkTypeRelatedTo(c, member, assignableRelation)) narrowed.add(c)
@@ -149366,8 +149391,6 @@ interface DataView {
                     // (the param stays any — suppression-only), matching the
                     // B136 concreteness discipline.
                     if (typeContainsUnresolvedTypeParam(pType)) continue
-                    // (CHK.98)(b) the annotation-sourced gate — see [cpaAnnotationCtx].
-                    if (cpaAnnotationCtx && pType is Type.Union) continue
                     currentLocalTypes[pName.text] = pType
                 }
                 if (expr.body is Expression) {
@@ -149548,8 +149571,6 @@ interface DataView {
                     val pType = getTypeOfSymbol(sp)
                     if (pType === anyType || pType === errorType) continue
                     if (typeContainsUnresolvedTypeParam(pType)) continue
-                    // (CHK.98)(b) the annotation-sourced gate — see [cpaAnnotationCtx].
-                    if (pType is Type.Union) continue
                     currentLocalTypes[pName] = pType
                 }
             }
@@ -149644,8 +149665,6 @@ interface DataView {
                     // Round 569: skip un-inferred callee TPs (see the
                     // ArrowFunction twin above).
                     if (typeContainsUnresolvedTypeParam(pType)) continue
-                    // (CHK.98)(b) the annotation-sourced gate — see [cpaAnnotationCtx].
-                    if (cpaAnnotationCtx && pType is Type.Union) continue
                     currentLocalTypes[pName.text] = pType
                 }
             }

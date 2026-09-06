@@ -25,6 +25,76 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.32) — a WEAK guard target narrows ((CHK.98b), whose diagnosis was wrong), and (CHK.98)(b)'s union gate LIFTS (2026-09-06)
+
+**Suite 17,963 → 17,981 / 0 / 3** — 13 pins in the new `PositiveGuardWeakTargetNarrowingTest` and 5
+net in `ContextualParamReadersTest` (one KNOWN-GAP pin FLIPPED to a value pin); no baseline moved
+and no `LogicalParityDivergence` is needed. Same orchestration: an implementation subagent owned
+Gradle, the full suite / `cost_gate.py` / `huge_methods.py` / an independent 8-profile grid ran here.
+
+**THE ITEM'S DIAGNOSIS IS WRONG, AND THAT IS THE ROUND'S MAIN FINDING.** (CHK.98b) was queued as
+"NESTED-TERNARY PREDICATE NARROWING". It is neither about ternaries nor about the property-access
+family: measured on the parent binary, the same union, guard and reader fail IDENTICALLY under a
+plain `if`, a single ternary, `&&` and the nested ternary — and narrow CORRECTLY the moment the
+guard's target declares one REQUIRED member.
+
+| guard target | `if (isX(c)) { const w: number = c }` printed | both references |
+| --- | --- | --- |
+| `CfgW { extensions?: string }` (WEAK) | `Cod \| CfgW` | `CfgW` |
+| `CfgR { extensions: string }` | `CfgR` | `CfgR` |
+
+**The axis is the guard TARGET's optionality; the ternary was incidental to the one library site the
+recon happened to read.** Verified here against tsgo 7.0.2 and pristine 6.0.3 independently of the
+subagent. **The mechanism is a round-480 ASYMMETRY**: that round added exactly this
+`missingVsOptionalProvesNotSubtype` veto to the NEGATIVE guard filter
+(`NegativeGuardOptionalDistinguisherTest`) and never to the POSITIVE one — the negative branch was
+right all along. `narrowByCallPredicateWorker`'s direct-relate arm now keeps a union member only
+when `checkTypeRelatedTo(member, target, assignable) && !missingVsOptionalProvesNotSubtype(member,
+target)`, mirroring tsc's `getNarrowedType(assumeTrue)` (keep `m` when `isTypeSubtypeOf(m, c)`); a
+vetoed member falls through to the existing narrow-DOWN arm (tsc's `isTypeSubtypeOf(c, m) ? c`), so
+the two arms together are tsc's `mapType` over the candidate.
+
+**(CHK.98)(b)'s UNION GATE IS LIFTED, with a three-binary receipt rather than a green grid.** All
+three `pType is Type.Union -> continue` sites under `cpaAnnotationCtx` are gone; the helper survives
+because it still gates the objlit-method walk, whose widening cost `inlineVariable.ts:102` last
+round, and its KDoc now says so. **The measurement that makes this more than a vacuous green**: the
+grid is `8 x added=0 removed=0` and knip is **51 → 51 byte-identical**, but a THIRD binary — gate
+lifted with (CHK.98b) REVERTED — reads knip at **52**, and the single extra row is exactly the one
+the item named (`graphql-codegen/index.ts:59:17`, TS2339 on the un-narrowed union). So the gate's
+population IS live in knip (every plugin is a `ResolveConfig<A|B|C>`-annotated const) and
+(CHK.98b) is precisely what closes it — where the 8 profiles carry ~26 such annotations in total
+and are closer to a control here. **Round 902's dead-arm law satisfied by construction**: the arm
+that would have looked like "the gate was pointless" is the one that produces the extra row.
+
+**AND THE ITEM'S knip NUMBER IS STALE**: it records **49** for HEAD; a REBUILT parent at
+`abbd34e7e` reads **51**, untruncated. The 49 was taken at the pre-(CHK.98) recon commit
+`d98a090d`. CLAUDE.md's rule that a recorded counter baseline is a claim about a BUILD, not a
+commit, applied to a library baseline.
+
+**GATES.** Suite **17,981 / 0 / 3**, corpus **8,837 / 0**. **`cost_gate.py` exit 0 at `+0.00%` on
+EVERY counter** — the lift was flagged as likely to move `narrow.memoServed` the way (CHK.98)(a)
+did, and it moves nothing, for the same reason the grid is a control: the profile hardly carries
+the shape. `huge_methods.py --fail-over 0` **exit 0**. **Grid 8 x `added=0 removed=0`**
+(`scripts/chk98b-grid.sh`, BEFORE arm = the committed `abbd34e7e` binary, sha-guarded, in a
+directory the subagent never wrote to — it kept to its own `chk98b-p32/` prefix as briefed).
+Reference matrix: 7 fixtures, 35 cells, both references agreeing on every one; **16 → 34 matching**.
+
+**ARMS — 2, both discriminating.** A1 (the subtype veto reverted to plain assignability) **8 RED**
+— all seven weak-target pins plus the guarded-union-parameter control; A2 (the union gate restored
+at all three sites) **3 RED** — the flipped gate pin plus the fn-expression and objlit-method value
+pins. **The two `ContextualParamReadersTest` negative controls do not discriminate A2 BY
+CONSTRUCTION** and are recorded as such rather than counted: with the gate on, the parameter is
+`any`, so both absence assertions are satisfied vacuously — they exist to discriminate A1. Every
+arm carried an anchor-count-checked patch, a `cmp` against its own snapshot, **and a pin-COUNT
+assertion on both test files (36 / 13) — (P18.31)'s deleted-pins hazard, now part of the protocol.**
+No double emission (`--passTiming` reads `4 checkSpine`, one netting pass, on both fixture families).
+
+**RESIDUES**, each pinned or recorded: a NULLISH union contextual parameter under an annotation now
+types correctly but the property-access reader emits no **TS18048** (`const h: (u: N|undefined) =>
+void = u => { u.kind }`; both references report) — a false NEGATIVE, which is why the lift is safe,
+pinned as a KNOWN GAP; and an arrow with an EXPRESSION body inside a ternary operand has its return
+un-checked, ours-only on the parent binary too, i.e. pre-existing and unrelated.
+
 ### Round (P18.31) — contextual parameter types reach the argument and property-access readers ((CHK.98)(a)/(b)/(c)), and a scripted splice that silently deleted three pins (2026-09-06)
 
 **Suite 17,932 → 17,963 / 0 / 3** — 31 pins in the new `ContextualParamReadersTest`, plus FIVE
@@ -2986,7 +3056,24 @@ prediction: 17,343 / 0 / 3.**
   ((CHK.73)). Also recorded, outside this item: tsc's own `filter(x => typeof x === "string")`
   answers `string[]` (5.5 inferred predicates) where ours answers `(string | Nd)[]` — a
   pre-existing MEANING divergence.
-- [ ] **(CHK.98b) NESTED-TERNARY PREDICATE NARROWING** — `isX(c) ? [c.extensions?.codegen] :
+- [x] **(CHK.98b) CLOSED 2026-09-06 ((P18.32) note) — AND ITS DIAGNOSIS WAS WRONG. It is not about
+  ternaries and not about the property-access family**: measured on the parent binary, the same union,
+  guard and reader fail IDENTICALLY under a plain `if`, a single ternary, `&&` and the nested ternary, and
+  narrow CORRECTLY as soon as the guard's target declares one REQUIRED member. The axis is the guard
+  TARGET's OPTIONALITY — a weak target (every member optional) did not narrow — and the ternary was
+  incidental to the one library site the recon read. The mechanism is a round-480 ASYMMETRY: that round
+  gave `missingVsOptionalProvesNotSubtype` to the NEGATIVE guard filter and never to the POSITIVE one, so
+  the negative branch was right all along. `narrowByCallPredicateWorker`'s direct-relate arm now keeps a
+  member only when it relates AND is not veto'd, mirroring tsc's `getNarrowedType(assumeTrue)`; a vetoed
+  member falls to the existing narrow-DOWN arm, so the two arms together are tsc's `mapType`.
+  **(CHK.98)(b)'s UNION GATE IS LIFTED** with a three-binary receipt: grid 8×0/0 and knip 51 → 51
+  byte-identical, while a third binary (gate lifted, 98b reverted) reads **52** — the extra row being
+  exactly the one this item named, which is what proves the gate's population is live and not a vacuous
+  green. **The item's knip number 49 is STALE** (a rebuilt parent at `abbd34e7e` reads 51; 49 was the
+  pre-(CHK.98) recon commit). 18 net pins, 2 arms (8 RED / 3 RED), `cost_gate.py` exit 0 at +0.00% on
+  every counter. RESIDUE, pinned as a KNOWN GAP: a NULLISH union contextual parameter now types correctly
+  but the property-access reader emits no TS18048 — a false NEGATIVE, which is why the lift is safe.
+  ORIGINAL: NESTED-TERNARY PREDICATE NARROWING** — `isX(c) ? [c.extensions?.codegen] :
   [c]` reads `Property 'extensions' does not exist on type 'GraphqlCodegenTypes |
   GraphqlConfigTypes'` here (knip's graphql-codegen plugin, measured 2026-09-06 as an annotated-
   parameter probe, `scratchpad/chk98/k`): a type-guard CALL as a ternary CONDITION narrows the
