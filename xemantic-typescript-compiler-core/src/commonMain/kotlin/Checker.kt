@@ -47263,7 +47263,8 @@ class Checker(
                     val optionalFlags = elems.indices.map { i ->
                         type.members?.get(i.toString())?.id?.let { it in optionalTupleMemberIds } ?: false
                     }.takeIf { flags -> flags.any { it } }
-                    return buildTupleFromTypes(widenedElems, optionalFlags, readonly = type.readonlyTuple)
+                    return buildTupleFromTypes(widenedElems, optionalFlags, readonly = type.readonlyTuple,
+                        restIndex = type.tupleRestIndex)
                 }
                 // Recursively widen anonymous object literal member types — matches
                 // TypeScript's behavior where `let x = {a: true}` infers `{a: boolean}`.
@@ -125826,10 +125827,91 @@ interface DataView {
      * services/utilities.ts `diagnosticToString`, a grid row). EXISTENCE only: the
      * member's type is not modelled (a tuple method call stays `any`, pre-existing).
      */
-    private fun tupleInheritsArrayMember(t: Type, name: String): Boolean =
-        t is Type.Object && t.tupleElementTypes != null &&
-            // (CHK.93) stage 2: a READONLY tuple's base is `ReadonlyArray<T>` — no `push`.
-            getPropertyOfType(if (t.readonlyTuple) (globalReadonlyArrayType ?: globalArrayType) else globalArrayType, name) != null
+    private fun tupleInheritsArrayMember(t: Type, name: String): Boolean {
+        if (t !is Type.Object || t is Type.Interface || t.tupleElementTypes == null) return false
+        // (CHK.94): routed through the tuple's `Array<union>` base where it has one; a REST
+        // tuple has none and falls to the bare target, which answers the same EXISTENCE
+        // question (the target's member table is what decides a name either way).
+        val base: Type = tupleArrayBase(t) ?: tupleArrayBaseTarget(t)
+        return getPropertyOfType(base, name) != null
+    }
+
+    /** (CHK.93) stage 2: a READONLY tuple's base target is `ReadonlyArray<T>` — no `push`. */
+    private fun tupleArrayBaseTarget(t: Type.Object): Type.Interface =
+        if (t.readonlyTuple) (globalReadonlyArrayType ?: globalArrayType) else globalArrayType
+
+    /**
+     * (CHK.94): the `Array<union of elements>` / `ReadonlyArray<…>` BASE of the tuple [t] —
+     * tsc's `getTupleBaseType` (`createArrayType(getUnionType(elementTypes), type.readonly)`),
+     * inherited by `resolveObjectTypeMembers` — or null where [t] is not a tuple or has no
+     * exact base here. A tuple's own member table holds only its numbered slots and
+     * `length`; every `Array<T>` member READ on it (`t.slice(1)`, `t.map(x => …)`,
+     * `t.push(3)`) answered `any` before this, so its calls were never checked and its
+     * callbacks never contextually typed. The base is consulted on the MISS path only, at
+     * [computeRawTypeOfPropertyAccess] and [resolveMemberPropertyType], and the call path,
+     * overload selection, argument checking and callback typing then follow through the
+     * same `resolveGenericPropertyType` instantiation `arr.push` on `number[]` uses.
+     *
+     * A REST slot is stored as the rest's ARRAY type, so it is INDEXED (tsc's
+     * `getTupleBaseType`: `getIndexedAccessType(t, numberType)` for a variadic slot) — an
+     * `Array<number | string[]>` base would make `a.indexOf("x")` on `[number, ...string[]]`
+     * a false TS2345 where tsc's base is `Array<string | number>`; a rest slot that is not
+     * an array reference or a tuple (`...T` on a type parameter) REFUSES the base (null).
+     * An OPTIONAL slot joins `undefined` to the union under strictNullChecks (tsc's
+     * `addOptionality` in `createNormalizedTupleType`: `[1, 2?]` → `Array<1 | 2 | undefined>`).
+     * An empty tuple's base is `Array<never>`.
+     *
+     * INTERNED: `getOrInternReference` on an interned union, so one reference per element
+     * set and the `resolveGenericPropertyType` memo (keyed by `ref.id`) serves repeats —
+     * no per-tuple cache in front of it (the closed caching direction).
+     *
+     * Union ORDER: tsgo 7.0.2 prints `(1 | 2)[]` and pristine 6.0.3 `(2 | 1)[]` for the
+     * same base (the two references DIVERGE here — FORM only); ours orders as tsgo.
+     */
+    private fun tupleArrayBase(t: Type): Type.Reference? {
+        if (t !is Type.Object || t is Type.Interface) return null
+        val elems = t.tupleElementTypes ?: return null
+        val types = ArrayList<Type>(elems.size + 1)
+        for ((i, e) in elems.withIndex()) {
+            types.add(if (i == t.tupleRestIndex) (restSlotElementType(e) ?: return null) else e)
+        }
+        if (strictNullChecks) {
+            val members = t.members
+            val anyOptional = members != null && elems.indices.any { i ->
+                members[i.toString()]?.id?.let { it in optionalTupleMemberIds } == true
+            }
+            if (anyOptional) types.add(undefinedType)
+        }
+        val element = when (types.size) {
+            0 -> neverType
+            1 -> types[0]
+            else -> getUnionType(types)
+        }
+        return getOrInternReference(tupleArrayBaseTarget(t), listOf(element))
+    }
+
+    /** (CHK.94): the ELEMENT of a rest slot's array-like type, or null where it has none here. */
+    private fun restSlotElementType(rest: Type): Type? = when (rest) {
+        is Type.Reference ->
+            if (rest.target === globalArrayType || (globalReadonlyArrayType != null && rest.target === globalReadonlyArrayType))
+                rest.resolvedTypeArguments?.singleOrNull() else null
+        is Type.Object -> if (rest !is Type.Interface && rest.tupleElementTypes != null)
+            tupleArrayBase(rest)?.resolvedTypeArguments?.singleOrNull() else null
+        else -> null
+    }
+
+    /**
+     * (CHK.94): the type of the `Array<T>` member [propName] read on the tuple [tuple]
+     * through its base, or null where the tuple has no base or the base lacks the member.
+     * The instantiation is `resolveGenericPropertyType`'s — the same one `arr.push` on
+     * `number[]` takes — so the member's parameters, return and callback parameters carry
+     * the element union in place of `T`.
+     */
+    private fun tupleArrayMemberType(tuple: Type, propName: String): Type? {
+        val base = tupleArrayBase(tuple) ?: return null
+        val prop = getPropertyOfType(base, propName) ?: return null
+        return optionalMemberAccessType(prop, resolveGenericPropertyType(base, prop) ?: getTypeOfSymbol(prop))
+    }
 
     /**
      * (CHK.93) stage 2: is [t] a READONLY array-like receiver — a readonly tuple or a
@@ -129994,6 +130076,10 @@ interface DataView {
                 // PROVABLY UNOBSERVABLE, not as coverage; `continue` is kept because it
                 // saves recomputing the rescue.
                 if (objLitLiteralPropsSatisfyParam(arg, argType, constrainedParamType)) continue
+                // (CHK.94) SECOND CHANCE for an ARRAY-LITERAL argument whose elements are
+                // literals — the array analogue of the rescue above, see
+                // [arrayLitLiteralElemsSatisfyParam].
+                if (arrayLitLiteralElemsSatisfyParam(arg, constrainedParamType)) continue
                 // Round 743: SECOND CHANCE against the FLOW-narrowed type.
                 // [getTypeOfIdentifier] answers from `currentLocalTypes` and the
                 // declaration tables — so an `if (isFoo(x))` narrow is visible here
@@ -132697,6 +132783,9 @@ interface DataView {
             return if (apparent is Type.Reference) resolveGenericPropertyType(apparent, prop) ?: getTypeOfSymbol(prop)
             else getTypeOfSymbol(prop)
         }
+        // (CHK.94): a TUPLE constituent — a union member (`[1] | [1, 2]`) or the narrowed
+        // receiver of `if (m) m.push(3)` — reads an `Array<T>` member through its base.
+        tupleArrayMemberType(apparent, propName)?.let { return it }
         if (apparent is Type.Intersection) {
             val contributed = mutableListOf<Type>()
             for (c in apparent.types) {
@@ -132913,6 +133002,10 @@ interface DataView {
                 }
                 return optionalMemberAccessType(prop, getTypeOfSymbol(prop))
             }
+            // (CHK.94): a TUPLE receiver reads an `Array<T>` member through its
+            // `Array<union>` / `ReadonlyArray<union>` base — the MISS path only, so the
+            // tuple's own slots and `length` above are untouched.
+            tupleArrayMemberType(apparentType, propName)?.let { return it }
         }
         // Fallback: try namespace/module lookup for property access
         val objExpr = expr.expression
@@ -157464,13 +157557,24 @@ interface DataView {
                         return true
                     }
                     for (i in 0 until minOf(args.size, pc)) {
+                        // (CHK.94): REDUCED, as tsc's intersection is at construction —
+                        // `1 & (1 | 2)` is `1`, not an un-distributed intersection that
+                        // rejected `u.indexOf(1)` on `[1] | [1, 2]` and displayed
+                        // `1 & 1 | 2`; object constituents fall to `getIntersectionType`
+                        // inside the reducer, so `number & boolean` still reads `never`.
                         val combinedParamType =
-                            getIntersectionType(sigs.mapNotNull { s ->
+                            reduceIntersectionForWriteType(sigs.mapNotNull { s ->
                                 s.parameters.getOrNull(i)?.let { getTypeOfSymbol(it) }
                             })
                         val arg = args[i]
                         if (arg is SpreadElement) continue
-                        val argType = getTypeOfExpression(arg)
+                        // (CHK.94): against a LITERAL(-union) combined parameter keep the
+                        // literal argument type — `allArgumentsMatch`'s overloadingOnConstants2
+                        // rule; `getTypeOfExpression` widens `1` to `number`, which rejected
+                        // `u.indexOf(1)` against the combined `1` (a false positive).
+                        val argType = if (propTypeContainsLiteral(combinedParamType))
+                            literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
+                        else getTypeOfExpression(arg)
                         if (argType === anyType || argType === errorType) continue
                         if (!checkTypeRelatedTo(argType, combinedParamType, assignableRelation)) {
                             val paramIsLiteral = getWidenedLiteralType(combinedParamType) !== combinedParamType
@@ -157555,6 +157659,17 @@ interface DataView {
                     false
                 }
                 if (differ) {
+                    // (CHK.94): tsc's `getUnionSignatures` COMBINES differing single
+                    // signatures (`combineSignaturesOfUnionMembers`, TS 3.3) and reports
+                    // "none compatible" ONLY when two GENERIC members' type parameters are
+                    // not identical (`compareTypeParametersIdentical`: same count, identical
+                    // constraints). `map` on `[1] | [1, 2]` — `Array<1>.map<U>` beside
+                    // `Array<1 | 2>.map<U>` — and `(...xs: number[]) | (...xs: string[])`
+                    // are both combined there and were TS2349 here (a false positive that
+                    // was silent on a tuple union only because its members were `any`).
+                    // The combination itself is not modelled beyond the `combinable` case
+                    // above, so a combinable union is answered by SILENCE, not by a check.
+                    if (!unionCalleeGenericSignaturesIncompatible(sigs)) return true
                     val (start, length) = computeSpan()
                     if (length > 0) {
                         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -157569,6 +157684,34 @@ interface DataView {
                         ))
                     }
                     return true
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * (CHK.94): tsc's `getUnionSignatures` refusal — some PAIR of GENERIC member
+     * signatures whose type parameters are not identical (`compareTypeParametersIdentical`:
+     * equal count, and each constraint identical once the second list's constraints are
+     * instantiated over the first's parameters, so `<T, U extends T>` matches `<A, B
+     * extends A>`). A non-generic member never refuses (tsc combines it with anything),
+     * which is why `betterErrorForUnionCall`'s `(<T extends number>(a: T) => void) |
+     * (<T>(a: string) => void)` is TS2349 and `Array<1>.map | Array<1 | 2>.map` is not.
+     */
+    private fun unionCalleeGenericSignaturesIncompatible(sigs: List<Signature>): Boolean {
+        for (i in sigs.indices) {
+            val tp1 = sigs[i].typeParameters?.takeIf { it.isNotEmpty() } ?: continue
+            for (j in i + 1 until sigs.size) {
+                val tp2 = sigs[j].typeParameters?.takeIf { it.isNotEmpty() } ?: continue
+                if (tp1.size != tp2.size) return true
+                val mapper = createTypeMapper(tp2, tp1)
+                for (k in tp1.indices) {
+                    val c1 = tp1[k].constraint
+                    val c2 = tp2[k].constraint
+                    if (c1 == null && c2 == null) continue
+                    if (c1 == null || c2 == null) return true
+                    if (!checkTypeRelatedTo(c1, instantiateType(c2, mapper), identityRelation)) return true
                 }
             }
         }
@@ -159813,6 +159956,9 @@ interface DataView {
                 // Round 728: an OBJECT-LITERAL arg whose only failure is a WIDENED
                 // literal property (`{ usage: "sort" }` vs `usage?: "sort" | "search"`).
                 if (objLitLiteralPropsSatisfyParam(arg, argType, paramType)) continue
+                // (CHK.94): an ARRAY-LITERAL arg whose only failure is its WIDENED elements
+                // (`[1]` vs `ConcatArray<1 | 2>`) — the same rule at both sites, (CHK.55).
+                if (arrayLitLiteralElemsSatisfyParam(arg, paramType)) continue
                 // B70.15: Bivariant fallback for function-vs-function under @strict: false.
                 // Also try reverse direction; if param accepts arg's shape going either way,
                 // count as match. Only fires for anonymous function-typed Type.Object pairs
@@ -159837,6 +159983,28 @@ interface DataView {
             if (applyWeakRule && weakOverloadArgRefuses(arg, argType, paramType)) return false
         }
         return true
+    }
+
+    /**
+     * (CHK.94): does an ARRAY-LITERAL argument satisfy [paramType] once its literal
+     * elements are read as their LITERAL types — `[1]` against `ConcatArray<1 | 2>`?
+     *
+     * tsc contextually types each candidate's arguments, so `t.concat([1])` on a
+     * `[1, 2]` (or a `(1 | 2)[]`) selects `concat(...items: ConcatArray<T>[])` with the
+     * literal kept as `1[]`; [getTypeOfExpression] widens the literal to `number[]`, which
+     * `ConcatArray<1 | 2>`'s number index refuses, and BOTH overloads were passed over —
+     * a false TS2769 on every `concat`/`push`-style call with a literal array argument
+     * against a literal-union element (pre-existing on arrays, inherited by tuples the
+     * moment their members were typed). The literal array is
+     * [literalTypeOfExpression]'s round-471 arm (`arrayCtx = true`, ≥ 1 literal element,
+     * no spread), and the rescue is evaluated ONLY after the relation has FAILED, so it
+     * is suppression-only: it can turn a rejection into an acceptance and never the
+     * reverse. Applied at BOTH overload-acceptance sites ((CHK.55)'s law).
+     */
+    private fun arrayLitLiteralElemsSatisfyParam(arg: Expression, paramType: Type): Boolean {
+        if (arg !is ArrayLiteralExpression) return false
+        val lit = literalTypeOfExpression(arg, arrayCtx = true) ?: return false
+        return checkTypeRelatedTo(lit, paramType, assignableRelation)
     }
 
     /**
@@ -171385,7 +171553,11 @@ interface DataView {
         // into `node.elementOptional` (the `?` tokens are stripped from `elements`), so an
         // all-optional tuple target does not count its elements as required — `[] : [a?, b?]`
         // no longer FP's TS2739 (moduleSpecifiers.ts `return emptyArray as []`).
-        return buildTupleFromTypes(elementTypes, node.elementOptional, readonly)
+        // (CHK.94): a REST element (`...string[]`, named or not) marks the tuple — its slot is
+        // the rest's ARRAY type, so its `length` is `number` (tsc `createTupleTargetType`) and
+        // [tupleArrayBase] indexes that slot rather than unioning the array type in.
+        val restIndex = node.elements.indexOfFirst { it is RestType || (it is NamedTupleMember && it.dotDotDotToken) }
+        return buildTupleFromTypes(elementTypes, node.elementOptional, readonly, restIndex)
     }
 
     /** Build a tuple `Type.Object` (with `tupleElementTypes`, numbered props, length, number index sig).
@@ -171393,9 +171565,11 @@ interface DataView {
      *  (recorded in [optionalTupleMemberIds] so [isOptionalProperty] can see it). */
     private fun buildTupleFromTypes(
         elementTypes: List<Type>, optionalFlags: List<Boolean>? = null, readonly: Boolean = false,
+        restIndex: Int = -1,
     ): Type {
         val tupleObj = Type.Object()
         tupleObj.tupleElementTypes = elementTypes
+        tupleObj.tupleRestIndex = restIndex
         // (CHK.93) stage 2: a readonly tuple's slots and `length` are read-only members
         // (tsc `createTupleType`: `CheckFlags.Readonly` on every element symbol and on
         // `length`), so `rt[0] = 1` is TS2540 through the same side-channel `Readonly<T>`
@@ -171425,7 +171599,11 @@ interface DataView {
         )
         val maxLen = elementTypes.size
         val minLen = optionalFlags?.indexOfFirst { it }?.takeIf { it >= 0 } ?: maxLen
-        symbolTypes[lengthSymbol.id] = if (minLen >= maxLen) {
+        // (CHK.94): a REST tuple's length is unbounded — `number` (tsc: `combinedFlags &
+        // ElementFlags.Variable`); the literal `2` read here for `[number, ...string[]]` before.
+        symbolTypes[lengthSymbol.id] = if (restIndex >= 0) {
+            numberType
+        } else if (minLen >= maxLen) {
             Type.NumberLiteral(maxLen.toDouble())
         } else {
             getUnionType((minLen..maxLen).map { Type.NumberLiteral(it.toDouble()) })

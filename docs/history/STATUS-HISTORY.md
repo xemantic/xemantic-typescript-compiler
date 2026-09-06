@@ -1,3 +1,21 @@
+**(P18.20) — AN ENUM MEMBER STOPS RELATING TO A LITERAL IT DOES NOT EQUAL, A LITERAL ARGUMENT STOPS BEING INVISIBLE TO AN ENUM PARAMETER, AND THE (CHK.85) UNBLOCKER IS DESIGNED, 17,394 → 17,424 / 0 / 3 (2026-09-05).**
+An orchestrated round: one implementation subagent owned Gradle; a read-only recon subagent
+worked against a frozen snapshot of the HEAD binary. **(CHK.83) CLOSED.** `const l1: 5 = em` was
+silent at every position because `isSimpleTypeRelatedTo`'s `EnumLiteral` leg accepted a member
+against ANY number literal (`NumberLike ⊇ NumberLiteral`); it now relates by VALUE through the
+tsc-value view, so an ambient opaque member relates to no literal. `fEnum(3)` at an argument, a
+rest element, a return, an arrow body, the overload chain and object-literal members now reports
+as both references do; the enum-union display puts `null`/`undefined` last. The overload-set
+unification is STOPPED: `checkRecursiveFunctionTypes` pins four mechanisms, not one. **(CHK.91)
+DESIGNED** — the (CHK.85)(a) unblocker: a FRESHNESS gate (tsc widens only an enum-member ACCESS
+expression; the built arm widened `{ v: a }`, `{ v: k }` and shorthands too) plus a PULL-derived
+contextual keep mirroring tsc's `getContextualType` roots, decided by `isLiteralOfContextualType`'s
+SOME rule; the eleven losses are exactly the union-annotated declaration / nested / conditional
+return / arrow body / assignment positions, where an emitter fires and the push field never
+arrives. 30 pins, twelve arms all discriminating, one redundant guard retired by its own arm;
+core 15,935/0, corpus 8,837/0, `cost_gate.py` exit 0, `huge_methods.py` exit 0, grid 8×`added=0
+removed=0`. Residues queued as (CHK.92).
+
 **(P18.19) — AN ENUM MEMBER KEEPS ITS ENUM AT A RETURN, THE TS2367 CATEGORY RULE TAKES ITS BASES, AND A STRING ENUM STOPS BEING A NUMBER, 17,369 → 17,394 / 0 / 3 predicted (2026-09-05).**
 Two items landed whole and the third partly; every row reproduced against tsgo 7.0.2 AND
 pristine 6.0.3 before any code was written, and **one reference DIVERGENCE was found and

@@ -25,6 +25,87 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.25) — a tuple's array members get types and its calls get checked, and destructured bindings are measured into (CHK.96) (2026-09-05)
+
+**Suite 17,611 → 17,664 / 0 / 3** — the 53 new pins in `TupleArrayMembersTest`; no baseline
+moved and no `LogicalParityDivergence` is needed. Orchestrated as before: one implementation
+subagent owned Gradle and landed (CHK.94); a read-only recon subagent measured destructured
+bindings over ~120 cells against the `bc484c83` snapshot and both references, now queued as
+(CHK.96) with corrections to (CHK.46)'s CLAUDE.md entry.
+
+**(CHK.94) LANDED.** A tuple was an uninterned `Type.Object` of numbered slots, `length` and a
+number index, so every `Array` member READ on it was `any` — `slice`, `map`, `join`, `indexOf`,
+`reduce`, `includes`, `push`, `concat`, callback parameters — and every call through one was
+unchecked. Now `Type.Object.tupleRestIndex` (+ `tupleHasRest`) is set by `getTupleType` for a
+`RestType` / dotted `NamedTupleMember` and carried by `buildTupleFromTypes` and `widenType`'s
+rebuild; a rest tuple's `length` is `number` (the one-line fix landed); `tupleArrayBase(t)` is
+an INTERNED `Array<union>` / `ReadonlyArray<union>` — a rest slot is INDEXED rather than
+refused (tsc's `getIndexedAccessType(t, number)`: `[number, ...string[]]` → `(string | number)[]`,
+`push(true)` → `'string | number'`; refused only for a non-array-like `...T`), optional slots
+join `undefined`, an empty tuple is `Array<never>`; it is consulted on the MISS path only, at
+`computeRawTypeOfPropertyAccess` and `resolveMemberPropertyType` (union / narrowed receivers),
+and `tupleInheritsArrayMember` is routed through it. Over the recon's 128 cells the match to
+tsgo went **46 → 83 with 0 regressions**; the 45 that remain are all pre-existing on plain
+arrays (`[...t]` displays `'array'`, inferred predicates, the TS2769 column, argument display
+of a literal, `this.t` receivers, `this` returns, a union of callables' RESULT) or out of scope
+(TS2493, destructuring — (CHK.96)). **"Follows for free" held for the call path, single-
+signature argument checking, overload selection, callback contextual typing and narrowed
+receivers — and did NOT hold for two PRE-EXISTING array defects the typed members made
+reachable, both fixed rather than inherited**: an array-literal argument against a literal-
+union element (`t.concat([1])`, and `(1 | 2)[].concat([1])` on HEAD) was a false TS2769 —
+round 471's `arrayLitLiteralElemsSatisfyParam` (suppression-only) now sits at BOTH overload
+sites, (CHK.55)'s rule; and a union receiver `[1] | [1, 2]`'s `.map` became a false TS2349 —
+`unionCalleeGenericSignaturesIncompatible` implements tsc's `compareTypeParametersIdentical`
+gate (TS2349 only for generic-vs-generic non-identical type parameters), the B516 combinable
+branch reads `reduceIntersectionForWriteType` (`1 & (1 | 2)` is `1`, was displayed `1 & 1 | 2`
+and rejected `u.indexOf(1)`) and keeps a literal argument against a literal combined
+parameter. **The grid found the same defect on tsc's own sources**: `fourslashImpl.ts:1218:60`
+`expected.map(…)` over a union of array types was an ours-only TS2349 on the harness profile,
+and the refinement closes it — the round's one `removed=1`, checked against tsgo (silent
+there).
+
+**Pins and ablation.** 53 pins. Eleven arms, one mistake each: a1 the base off (**31 RED**); a2
+the readonly bit ignored (**2**); a3 the rest slot not indexed (**6**); a4 optional off (**2**);
+a5 the union/narrowed site off (**1**, only after a union-`indexOf` pin was added — the narrowed
+receiver is served by the single-object path); a6 `tupleInheritsArrayMember` not routed (**0 —
+provably unobservable**, existence is the same member table either way; recorded, not
+claimed); a7 the array-literal rescue off (**3**); a8 the union-callee refinement off (**3**);
+a9 the rest length off (**1**); a10 the reducer off (**2**); a11 the literal-argument keep off
+(**2**). Every arm patched with an anchor-count assert and `cmp`-verified both ways; restored
+`Checker.class` sha256 `7dc50053…`.
+
+**Gates** (against `7dc50053`): core **846 classes / 16,175 / 0 / 3**; corpus **25 classes /
+8,837 / 0**, with `tupleTypes`, `awaitedType`, `emitCapturingThisInTupleDestructuring2`,
+`restParameterWithBindingPattern3`, `readonlyTupleAndArrayElaboration`, `betterErrorForUnionCall`,
+`newOperator`, `signatureCombiningRestParameters5`, `parseBigInt` confirmed run; full suite
+17,664 / 0 / 3 over 966 result files; `cost_gate.py` **exit 0** (`output.errors` 46,
+`spine.nodes` +0.00%, `typeOfExpr.calls` +0.16%, largest move `mapped.keyed` −1.29%);
+`huge_methods.py --fail-over 0` **exit 0**; grid `bc484c83` → `7dc50053`, marker
+`tupleArrayBase`: seven profiles `added=0 removed=0`, **harness `removed=1`** (the closed
+TS2349 above), the eighth profile re-run by hand after the script's 590 s cap. 0 `w:`.
+
+**(CHK.96) MEASURED by recon — destructured bindings, ~120 cells, both references agreeing on
+every one.** The gap is two-shaped and (CHK.46)'s entry did not separate the halves: an OBJECT
+pattern's top-level member is ALREADY typed at the declaration, return, property-access,
+flow-reassignment and narrowing readers in both scopes (three walk-scoped recorders: round
+464b's `recordDestructuredConstElementTypes`, round 475's `registerBindingPatternParamLocals`,
+and `cmamDestructuredReceiverType`) and is `any` only at the ARGUMENT and TS2367 readers; every
+ARRAY / tuple pattern, default, nested pattern, object rest, union receiver, for-of head,
+array-pattern parameter and contextual pattern parameter is `any` at EVERY reader; the symbol
+half has no `BindingElement` arm by construction, and a pattern PARAMETER's names have no
+symbol anywhere but the lexical tables. The staged item names a pure `bindingElementType`
+with seven plug points and round 475's contract (a refused name still registers `anyType` —
+the `any` shadow is what stops a same-named cross-file function resolving through the merged
+globals), the 60 active corpus baselines that guard it, the ~15 dedicated destructuring
+walkers it may double-emit with, and the grid shapes to pre-check.
+
+**Residues.** A union of callables' call RESULT answers `any` (tsc's
+`combineSignaturesOfUnionMembers` for generic/rest members is not modelled; `u.push(3)` on
+`[1] | [1, 2]` is silent where tsc reports TS2345 `'1'` — HEAD's silence); `[...t]` displays
+`'array'`; the TS2769 column sits on the array literal where tsc points at the element; an
+argument's literal displays as its base primitive ((CHK.92)(a)'s family). Trim-on-write: the
+(P18.14) note moved to `docs/history/PLAN-PHASE-5-HISTORY.md`.
+
 ### Round (P18.24) — const assertions become read-only: stage 2 of (CHK.93) lands, and the tuple-member and body-local-argument residues are measured into (CHK.94)/(CHK.95) (2026-09-05)
 
 **Suite 17,573 → 17,611 / 0 / 3** — 38 new pins (`ReadonlyTupleTest` 29, `ConstAssertionTest`
@@ -980,85 +1061,6 @@ way:** `scripts/parity1-grid.sh`'s positive-control marker was HARD-CODED to (P1
 and is now a parameter (a round-853 frozen instrument in the making), and the grid's blindness to
 display changes was re-confirmed by counting — **0 of its 417 rows carries an assignability
 message**. New MEANING residues queued as (CHK.83).
-
-### Round (P18.14) — a primitive-only union stops being invisible to an object annotation, and a literal union starts printing the way tsc prints it (2026-09-04)
-
-**Full suite after the round: 17,236 → 17,259 / 0 / 3** — exactly the 23 new pins, **no baseline moved and no `LogicalParityDivergence` was needed**, which is what the round predicted from its enumeration of the 4 literal-union-source and 18 `not assignable to type 'never'` baselines (run by the orchestrating session).
-
-**Full suite after the round: NOT RUN BY THIS SESSION** (the corpus is the gate for this item and the
-orchestrating session runs it). Filtered core `*TypeDisplayParity*` **23 / 0**; the at-risk corpus
-subtests named below **42 / 0**; `*Display*`/`*Enum*`/`*Union*`/`*Assignab*`/`*Literal*`/`*Narrow*`/
-`*Widen*` (and their lowercase corpus twins) **2,691 / 0**; externals `jvmTest` **290 / 0**;
-`cost_gate.py` **exit 0** (`output.errors` 46 unchanged, largest move `globals.lookups` −0.49%);
-`huge_methods.py --fail-over 0` **exit 0**; the 8-profile grid **all eight `added=0 removed=0`**
-(`scripts/parity1-grid.sh`, two snapshotted class dirs, self-comparison and positive-control checks
-armed).
-
-**(PARITY.1)(c) LANDED — a MEANING defect, not a parity question.** `canUseTypeEngine` refused a
-`Type.Union` SOURCE against an object TARGET wholesale, so `const t: { x: number } = u` with
-`u: "a" | "b"` reported **nothing** where tsgo 7.0.2 and pristine `typescript@6.0.3` both report
-TS2322 — likewise `string | number`, `string | undefined`, and the same union against a named
-interface, an array and a function type, at declaration, assignment AND return positions. **Argument
-and object-literal-member positions already reported, which is why a probe written either of those
-ways reads as working.** The fix is the UNION LIFT of the two `sourceIsPrimitive && targetType is
-Type.Object` rules the gate already had one at a time: a union EVERY constituent of which is
-primitive-like is exactly N comparisons the engine is already trusted to make. An OBJECT-carrying
-union keeps the round-461 skip (the "narrowing we don't implement" comment is about a union that can
-narrow INTO the target; a primitive-only union cannot — every narrowing of it is a SUBSET of its own
-constituents). The one subset that WOULD relate is `never`, so the var-decl and assignment
-suppression-only narrowing predicates gained a bare `Type.Object` arm in the same commit — they
-listed `Type.Interface`/`Type.Reference` and `isNarrowableTarget` excludes an anonymous
-`{ x: number }`, so an unreachable branch would have false-positived.
-
-**(PARITY.1)(b) LANDED IN PART — the declaration and assignment displays.** tsc's
-`reportRelationError` generalizes a literal source to its base type unless the target could hold a
-top-level singleton, and two halves of that line were missing here: `getBaseTypeOfLiteralType` MAPS
-OVER A UNION where `getWidenedLiteralType` has no union arm (so `"a" | "b"` against `number` read
-`Type '"a" | "b"'` and now reads `Type 'string'`; `"a" | 1` reads `string | number`), and tsc's
-explicit **`never` guard** keeps the literal for the `assertNever` case (`const t: never = one` with
-`one: "a"` read `Type 'string'` and now reads `Type '"a"'` — a pre-existing SINGLE-literal
-divergence, and six ACTIVE corpus baselines print a literal against a `never` target).
-`getWidenedLiteralType` itself was NOT given a union arm — ~115 call sites, mostly
-inference/contextual typing; `relationErrorSourceDisplayType` is a display-only home. The union arm
-is additionally gated to a target kind measured against tsgo (`Type.Intrinsic` or
-`Type.Object`/Interface/Reference), which is what keeps
-`complicatedIndexedAccessKeyofReliesOnKeyofNeverUpperBound`'s `'"text" | "email"'` against
-`T & "text"` and `exactOptionalPropertyTypesIdentical`'s `'0 | 1'` against a deferred conditional:
-tsc's `typeCouldHaveTopLevelSingletonTypes` recurses through `UnionOrIntersection` where
-`propTypeContainsLiteral` has no intersection arm. **STILL OPEN: the ARGUMENT (TS2345), RETURN and
-OBJECT-LITERAL-MEMBER displays** still print the un-collapsed union — those are separate emitters
-with their own display conventions and no display-widening decision to swap, so wiring them is a
-change whose only gate is the corpus.
-
-**(PARITY.1)(a) MEASURED AND REFUSED — with three findings that correct the queue item.**
-(i) The rule is **enum-ONLY**: on one scratch project tsgo renders `import("<path>").ZzzEnum` for an
-enum, a `const enum` and an enum MEMBER, and renders `ZzzIface` / `ZzzAlias` / `ZzzClass` bare in the
-same message list — and none of them qualifies once the name IS imported into the erroring file.
-(ii) The queue item's "we satisfy the 103 baselines through hard-coded `pinDiag` sites" is **wrong**:
-the six `pinDiag` sites carrying `import(` are unrelated (dynamic-import namespace TS2339s, a
-node_modules symlink duplicate, TS1340 `typeof import('pkg')` suggestions), and
-`enumAssignmentCompat6`'s BOTH-forms shape is served by a real mechanism — rounds 745-749's
-`enumCollisionQualifiedDisplays` / `enumTypeQualifiedDisplay` / `enumModuleImportPrefix`, which is
-tsc's `getTypeNamesForErrorDisplay` SAME-STRING retry. **What is missing is tsc's OTHER
-qualification mechanism**, `symbolToTypeNode`'s `getAccessibleSymbolChain` accessibility test, which
-needs an enclosing-declaration node-builder context, `getContainersOfSymbol` and
-`getSpecifierForModuleSymbol` — and `typeToString` here is a pure `(Type) -> String` with 718
-message-construction sites downstream.
-(iii) **There is no gate for it.** All 46 rows of seven profiles (and 95 of `harness`) are
-`Cannot find name …` — TS2304/2584/2591 — so the 8-profile grid names no TYPE at all; only **10** of
-the 2,881 ACTIVE `.errors.txt` baselines carry an `import("…").Name` rendering, and of those only
-`enumAssignmentCompat6` and `errorWithSameNameType` come from the node builder. Landing it would
-rewrite the display of every message naming a module-declared exported enum from a file that does
-not bind the name, with the corpus as its sole instrument.
-
-**Pins** — `TypeDisplayParityTest`, 23. **Ablation, one mistake at a time, seven arms, every one
-discriminating with its own red set**: a1 the (c) union lift (**7 RED**), a2 the var-decl
-anonymous-object narrowing arm (1 — the never-narrow control), a3 the assignment one (1), a4 the (b)
-union arm (9), a5 the (b) `never` guard (2), a6 the (b) target-kind allowlist (1 — the intersection
-pin, which was WRITTEN because a6 first read 0 RED against the corpus baselines it was built for),
-a7 widening (c)'s primitive-only guard to any union (3 — all three round-461 negative controls).
-Source restored and rebuilt after the batch, confirmed by `javap` and by a `sha256sum` of
-`Checker.class` against the grid's own AFTER snapshot.
 
 - [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
   HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
@@ -2032,7 +2034,17 @@ Source restored and rebuilt after the batch, confirmed by `javap` and by a `sha2
   TS2345 — tuple method calls are not argument-checked), and `readonly number[]` → `number[]` prints
   TS2740 for tsc's TS4104.
 
-- [ ] **(CHK.94) TUPLES: ARRAY MEMBERS WITH TYPES AND CHECKED CALLS — MEASURED 2026-09-05 by
+- [x] **(CHK.94) LANDED 2026-09-05 ((P18.25) note) — `tupleRestIndex`/`tupleHasRest` + a rest tuple's `length` is
+  `number`; the interned `tupleArrayBase` (a rest slot INDEXED, not refused; optional slots join `undefined`; empty →
+  `never[]`) consulted on the miss path at `computeRawTypeOfPropertyAccess` / `resolveMemberPropertyType`, with
+  `tupleInheritsArrayMember` routed through it (measured unobservable); the call / overload / argument / callback
+  paths followed for free EXCEPT two pre-existing array defects the typed members exposed and fixed —
+  `arrayLitLiteralElemsSatisfyParam` at both overload sites, and the union-callee TS2349 confined to tsc's
+  non-identical-generic case with the B516 combined parameter reduced and its literal argument kept (a closed
+  ours-only TS2349 on the harness profile); 128 cells 46 → 83 matching tsgo, 0 regressions; 53 pins, 11 arms (a6
+  dead by construction); core 16,175/0/3, corpus 8,837/0, cost_gate exit 0, grid 7×0/0 + harness removed=1.
+  Residue: a union of callables' call RESULT is `any` (`combineSignaturesOfUnionMembers` unmodelled). ORIGINAL ITEM:
+  TUPLES: ARRAY MEMBERS WITH TYPES AND CHECKED CALLS — MEASURED 2026-09-05 by
   read-only recon against `b7cd50d8` (fixtures `scratchpad/chk94/a_*`, `c_*`, 90 cells; tsgo
   7.0.2 = pristine 6.0.3 on every row bar the union ORDER — pristine prints `(2 | 1)[]` for
   tsgo's `(1 | 2)[]`, ours orders as tsgo; FORM, pin tsgo's and record the divergence).** A
@@ -2133,6 +2145,124 @@ Source restored and rebuilt after the batch, confirmed by `javap` and by a `sha2
   (`takeS(s)` on `const s = "a"`, `takeNum(n)`), let-widening display, closure, duplicate names;
   arms: literal arm off (~30 RED), let-widening off (`'"a"'` printed for a `let`),
   annotated-primitive arm off, collision guard off.
+
+- [ ] **(CHK.96) DESTRUCTURED BINDINGS GET THEIR TYPES — MEASURED 2026-09-05 by read-only recon
+  against `bc484c83` (fixtures `scratchpad/chk96/{f,b,p,r,r2,h}`, ~120 cells; tsgo 7.0.2 =
+  pristine 6.0.3 on EVERY cell, union order included).** The gap is two-shaped and (CHK.46)'s
+  CLAUDE.md entry does not separate the halves: an OBJECT pattern's top-level member is ALREADY
+  typed at the declaration, return, property-access, flow-reassignment and narrowing readers in
+  both file and body scope — by three walk-scoped recorders, `recordDestructuredConstElementTypes`
+  (~105380, round 464b: no defaults / rest / nesting / union, and NO array arm — `if (name !is
+  Identifier) return` ~105461), round 475's `registerBindingPatternParamLocals` (~102985,
+  annotated pattern PARAMS; array elements → `anyType` ~103023) and the cpa receiver path
+  `cmamDestructuredReceiverType` (~152189, object only) — and is `any` ONLY at the ARGUMENT
+  reader (ccet: `shadowCallTypesDeclList` ~155562 and `populateParameterLocalTypes` ~149115
+  register the names into `currentParamBindingNames` → `anyType` ~119742, body AND file) and the
+  TS2367 reader (`spineArithRecordVarDecl` ~62468 records Identifier declarations only). Every
+  ARRAY / tuple pattern, every default (`{ o: od = 5 }` → tsc `number`, `[d = "x"] = number[]` →
+  `number | "x"`), nested pattern, object rest, union receiver, `let [a] = tup; a = "s"`, `for
+  (const [k, v] of map)` head, array-pattern parameter and CONTEXTUAL pattern parameter
+  (`arr.map(({ p }) => …)`, 159 sites on the 8 profiles) is `any` at EVERY reader. The symbol
+  half is `any` by construction: a FILE-level pattern name IS bound (`Binder.kt:398-419`,
+  `valueDeclaration = BindingElement`) but `getTypeOfVariableOrProperty`'s `when (decl)` has no
+  `BindingElement` arm (`else -> anyType` ~116933) and `buildFileLocalTypeMapPhases` ~17344
+  reads only `VariableDeclaration.type`; the MAIN binder binds no parameter at all
+  (`Binder.kt:1254` is lexical-only), so a pattern PARAMETER's names have no symbol anywhere but
+  the lexical tables. tsc: `getBindingElementTypeFromParentType` checker.ts:11746-11829 (object
+  member = `getIndexedAccessType` + `getFlowTypeOfDestructuring` :11777; rest = `getRestType`
+  :11611; array slot = `getIndexedAccessTypeOrUndefined(parent, numberLiteral(i))` :11802, rest
+  = `sliceTupleType` :18028 / `createArrayType`; default = `getUnionType([nonUndefined(t),
+  init], UnionReduction.Subtype)` then const-keeps-literal :11820), the pattern's IMPLIED type
+  as the initializer's contextual type (`getTypeFromBindingPattern` :12433, wired at
+  :32017-32029 — what makes `const [i1, i2] = [1, "a"]` a tuple), contextual pattern params via
+  `getContextuallyTypedParameterType` :31937. **STAGE 1 — a pure `bindingElementType(elem:
+  BindingElement, parent: Type, isConst: Boolean): Type?`** (null = REFUSE, and every refusal
+  must STILL register `anyType` — round 475's contract: the `any` shadow protects an object-
+  literal SHORTHAND / bare read of a destructured name from resolving a same-named CROSS-FILE
+  function through the merged globals; a typed name is protected by its type, a refused name by
+  `anyType`, and a name left UNREGISTERED is the false positive): any/error/unknown parent →
+  refuse; a union parent → `getUnionType` of per-constituent answers, refuse if any constituent
+  refuses; an object member via `getPropertyOfType(getApparentType(parent), propName)` →
+  `getTypeOfSymbol` (or `propertyTypeOnCarrier`, (REL.2) ~172500), optional-without-default → `|
+  undefined`, string index as fallback, computed names literal-only; object REST → refuse (stage
+  2); array: a tuple whose rest has been COLLAPSED (refuse the whole pattern until (CHK.94)(1)'s
+  `tupleHasRest` bit) or an index past the slots (TS2493's walkers own it) → refuse, slot
+  `tupleElementTypes[i]` (+ `| undefined` when `optionalTupleMemberIds` marks it), rest →
+  `buildTupleFromTypes(slice(i), readonly = parent.readonlyTuple)`; `Array<T>` /
+  `ReadonlyArray<T>` → `T`, rest → `getArrayType(T)`, `string` → `string`;
+  `noUncheckedIndexedAccess` → refuse (B221 owns it); Map / Set / iterables → refuse (stage 2);
+  hole → skip; an ARRAY-LITERAL initializer (not const-asserted) → refuse the whole pattern —
+  measured, `const [x] = [1, "a"]; const wq: number = x` is SILENT in tsc (x is `number` through
+  the contextual tuple) and a `string | number` slot would be an ours-only false positive; a
+  nested pattern → recurse; DEFAULT → `nonUndefined(t) ∪ default` with the default typed by
+  `literalTypeOfExpression(def) ?: getTypeOfExpression(def)`, a `const` keeping the literal and a
+  `let`/param widening ((WIDEN.1)), plus (CHK.66)'s subtype drop (`getUnionType` has no subtype
+  reduction — without it `{ o: od = 5 }` prints `number | 5` where both references print
+  `number`), and an ANNOTATED ancestor → `nonUndefined(t)` alone when the default is not
+  undefined-typed; a fn-shaped member keeps round 464b's refusal. **Plug points**: (a)
+  `checkVarDeclAssignabilityCore` ~105440 — the ArrayBindingPattern arm, and the object arm
+  routed through the function (defaults / nested / union lift); (b)
+  `registerBindingPatternParamLocals` over the annotation type (array-pattern params typed,
+  nested recursion); (c) `populateParameterLocalTypes`'s pattern arm ~149115 — record the
+  answers into `currentLocalTypes` (annotation only; B516's TP-referencing fn-type gate applies
+  to member types too) while STILL adding every name to `currentParamBindingNames` — 25
+  callers, so this one edit reaches the argument, TS2367 and property-access readers for
+  pattern PARAMS at once; (d) ccet locals: a pattern arm in the LEAVE-time
+  `ccetApplyDeclRecordings` ~2259 (which already resolves `getTypeFromTypeNode` there), NOT in
+  the pre-scan `shadowCallTypesDeclList` (B420 first-touch, the (CHK.95) rule; the pre-scan
+  keeps its `anyType` registration as the fallback, and `currentLocalTypes` is consulted before
+  the side set so the leave-time write wins); (e) `spineArithRecordVarDecl` ~62468 — a pattern
+  arm SKIPPING union answers as its Identifier rule does; (f) the cpa for-of head ~147340 and
+  the cta/ccet for-of arms over the element type the cpa arm already computes (`Array<T>` /
+  `string` only; Map/iterables stage 2); (g) the SYMBOL half: an `is BindingElement ->` arm in
+  `getTypeOfVariableOrProperty` walking `parent` to the owner (VariableDeclaration annotation ?:
+  initializer, Parameter annotation, BindingElement recursion) — what closes the FILE-level
+  argument and TS2367 readers, the oracle's hover on a destructured name
+  (`typeCaptureDestructured` ~8416 answers null for every array pattern today) and (CHK.47)'s
+  lexical consumers; round 778's write gate applies by construction, and
+  `symbolTypeResolutionInProgress` must cover `const { a } = f(a)`. **STAGE 2**: contextual
+  pattern parameters (the contextual signature's parameter type at the pattern's position), the
+  pattern's IMPLIED type as the initializer's contextual type (an array literal becomes a
+  tuple, lifting the array-literal refusal), object REST (`getRestType`: omit + spreadability),
+  `[Symbol.iterator]`-typed sources (Map / Set / generators, for-of heads over a Map —
+  coordinate with (CHK.94)), and `getFlowTypeOfDestructuring`'s parent-narrowing carry.
+  **Guards / at-risk**: corpus — 60 ACTIVE `.errors.txt` baselines carry a binding pattern AND a
+  TS2322/TS2345 row (8 declaration-shaped: `bigintPropertyName`, `circularResolvedSignature`,
+  `computedPropertyBindingElementDeclarationNoCrash1`, `contextualTupleTypeParameterReadonly`,
+  `contextualTypingArrayDestructuringWithDefaults`, `destructuringAssignmentWithDefault2`,
+  `flatArrayNoExcessiveStackDepth`, `signatureCombiningRestParameters1`; 53 parameter-shaped,
+  listed in `scratchpad/chk96/corpus_guard.txt`) + the dedicated-walker set
+  (`restParameterWithBindingPattern3`, `indexedAccessWithVariableElement`, `destructuringTuple`,
+  `downlevelLetConst16`, `emitCapturingThisInTupleDestructuring2`,
+  `readonlyTupleAndArrayElaboration`) + the 16 `Destructured*` / `BindingPattern*` / `ForOf*`
+  hand-written classes; DOUBLE-EMISSION with ~15 dedicated destructuring walkers
+  (`checkTupleDestructDecl` ~143147, `checkDestructuringDefaultTypeMismatches` ~178436,
+  `checkDestructuredParamOptionalMemberArgs` ~139934, `checkOptionalDestructuredParamCallArgs`
+  ~177251, and `checkReadonlyTupleElaboration`'s (P18.24)-recorded pattern-param miss, which
+  stage 1 reaches) — name the pairs with `--passTiming`'s emissions-by-pass. Grid: the compiler
+  profile holds 256 `const {` / 36 `const [` / 13 `let [` / 14 `for (const [` / 22 annotated + 9
+  contextual pattern params (8-profile union 472 array patterns, 257 + 159 pattern params);
+  pre-check over the REAL declarations: `const { kind } = node` discriminants (already byte-
+  identical at the decl reader; the ARG reader newly judges them after a `switch`), `const [,
+  major, minor = "0", …] = match` over `RegExpExecArray` (holes + defaults — the subtype drop
+  must give `string`), `let [kind, specifiers, …] = tryGetModuleSpecifiersFromCacheWorker(…)`
+  (a `let` slot feeds the assignment reader — a wrong optional/rest slot is a false TS2322),
+  `const [specifier, mode] = memoizedReverseKeys.get(key)!` (the `!` must strip), `const { … }
+  = node` over a UNION receiver (25 sites — per-constituent agreement or refuse), patterns over
+  `any` / unresolved imports (refuse, already). **Pins**: the ~120-cell matrix as VALUE pins by
+  shape × reader × scope; negative controls (`const [x] = [1, "a"]` silent, `{ o: od = 5 }` →
+  `number`, a rest tuple refused, `noUncheckedIndexedAccess` refused, a fn-shaped member
+  refused, the round-475 shadow fixture — a cross-file `function alpha()` + `function f({ alpha
+  }: Inner) { alpha.x }` — still silent); **arms**: array arm off; (c) off (pattern-param ARG /
+  TS2367 RED while the decl reader stays GREEN through (b) — a round-927 PAIR, record it);
+  symbol arm off (file-level ARG / TS2367 RED); subtype drop off (`'number | 5'` RED);
+  refusal-leaves-name-unregistered (the round-475 fixture RED); recording moved into the ccet
+  PRE-scan (a COUNTER arm: `typeOfExpr.calls` / `globals.lookups` move — (CHK.68)'s signature).
+  Cost: array patterns' initializers become typed in the cta walk (49 declarations on the
+  compiler profile) — attribute `typeOfExpr.calls` and `narrow.walks`. Coordinate with (CHK.95)
+  (both touch `ccetApplyDeclRecordings` / `shadowCallTypesDeclList`) and (CHK.94)(1) (the rest
+  bit). Corrects (CHK.46)'s entry: the "write probe answered the right type" there is
+  `recordDestructuredConstElementTypes`, a walk-scoped recording, not the symbol.
 
 - [x] **(CHK.86) AN IMPOSSIBLE ENUM-vs-ENUM EQUALITY PRODUCES NEITHER TS2367 NOR A `never`
   NARROW — the DIAGNOSTIC half CLOSED (P18.17); the NARROW half re-queued as (CHK.87).**

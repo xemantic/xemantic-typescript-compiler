@@ -189,6 +189,16 @@ sealed class Type {
          * it never relates to a MUTABLE array or tuple (TS4104).
          */
         var readonlyTuple: Boolean = false
+        /**
+         * (CHK.94): the index of a tuple's REST element (`[number, ...string[]]` → 1;
+         * tsc's `hasRestElement`), or -1 for none. The rest slot is stored in
+         * [tupleElementTypes] as the rest's ARRAY type (`getTupleType` collapses it — the
+         * B526 gotcha), so its `length` is `number` and its `Array<union>` base indexes
+         * that slot's element (`Checker.tupleArrayBase`). A tuple has at most ONE rest
+         * element (TS1265). Meaningful only while [tupleElementTypes] is non-null.
+         */
+        var tupleRestIndex: Int = -1
+        val tupleHasRest: Boolean get() = tupleRestIndex >= 0
         override fun toString(): kotlin.String = symbol?.name ?: "Object#$id"
     }
 

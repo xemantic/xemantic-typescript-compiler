@@ -1,3 +1,82 @@
+### Round (P18.14) — a primitive-only union stops being invisible to an object annotation, and a literal union starts printing the way tsc prints it (2026-09-04)
+
+**Full suite after the round: 17,236 → 17,259 / 0 / 3** — exactly the 23 new pins, **no baseline moved and no `LogicalParityDivergence` was needed**, which is what the round predicted from its enumeration of the 4 literal-union-source and 18 `not assignable to type 'never'` baselines (run by the orchestrating session).
+
+**Full suite after the round: NOT RUN BY THIS SESSION** (the corpus is the gate for this item and the
+orchestrating session runs it). Filtered core `*TypeDisplayParity*` **23 / 0**; the at-risk corpus
+subtests named below **42 / 0**; `*Display*`/`*Enum*`/`*Union*`/`*Assignab*`/`*Literal*`/`*Narrow*`/
+`*Widen*` (and their lowercase corpus twins) **2,691 / 0**; externals `jvmTest` **290 / 0**;
+`cost_gate.py` **exit 0** (`output.errors` 46 unchanged, largest move `globals.lookups` −0.49%);
+`huge_methods.py --fail-over 0` **exit 0**; the 8-profile grid **all eight `added=0 removed=0`**
+(`scripts/parity1-grid.sh`, two snapshotted class dirs, self-comparison and positive-control checks
+armed).
+
+**(PARITY.1)(c) LANDED — a MEANING defect, not a parity question.** `canUseTypeEngine` refused a
+`Type.Union` SOURCE against an object TARGET wholesale, so `const t: { x: number } = u` with
+`u: "a" | "b"` reported **nothing** where tsgo 7.0.2 and pristine `typescript@6.0.3` both report
+TS2322 — likewise `string | number`, `string | undefined`, and the same union against a named
+interface, an array and a function type, at declaration, assignment AND return positions. **Argument
+and object-literal-member positions already reported, which is why a probe written either of those
+ways reads as working.** The fix is the UNION LIFT of the two `sourceIsPrimitive && targetType is
+Type.Object` rules the gate already had one at a time: a union EVERY constituent of which is
+primitive-like is exactly N comparisons the engine is already trusted to make. An OBJECT-carrying
+union keeps the round-461 skip (the "narrowing we don't implement" comment is about a union that can
+narrow INTO the target; a primitive-only union cannot — every narrowing of it is a SUBSET of its own
+constituents). The one subset that WOULD relate is `never`, so the var-decl and assignment
+suppression-only narrowing predicates gained a bare `Type.Object` arm in the same commit — they
+listed `Type.Interface`/`Type.Reference` and `isNarrowableTarget` excludes an anonymous
+`{ x: number }`, so an unreachable branch would have false-positived.
+
+**(PARITY.1)(b) LANDED IN PART — the declaration and assignment displays.** tsc's
+`reportRelationError` generalizes a literal source to its base type unless the target could hold a
+top-level singleton, and two halves of that line were missing here: `getBaseTypeOfLiteralType` MAPS
+OVER A UNION where `getWidenedLiteralType` has no union arm (so `"a" | "b"` against `number` read
+`Type '"a" | "b"'` and now reads `Type 'string'`; `"a" | 1` reads `string | number`), and tsc's
+explicit **`never` guard** keeps the literal for the `assertNever` case (`const t: never = one` with
+`one: "a"` read `Type 'string'` and now reads `Type '"a"'` — a pre-existing SINGLE-literal
+divergence, and six ACTIVE corpus baselines print a literal against a `never` target).
+`getWidenedLiteralType` itself was NOT given a union arm — ~115 call sites, mostly
+inference/contextual typing; `relationErrorSourceDisplayType` is a display-only home. The union arm
+is additionally gated to a target kind measured against tsgo (`Type.Intrinsic` or
+`Type.Object`/Interface/Reference), which is what keeps
+`complicatedIndexedAccessKeyofReliesOnKeyofNeverUpperBound`'s `'"text" | "email"'` against
+`T & "text"` and `exactOptionalPropertyTypesIdentical`'s `'0 | 1'` against a deferred conditional:
+tsc's `typeCouldHaveTopLevelSingletonTypes` recurses through `UnionOrIntersection` where
+`propTypeContainsLiteral` has no intersection arm. **STILL OPEN: the ARGUMENT (TS2345), RETURN and
+OBJECT-LITERAL-MEMBER displays** still print the un-collapsed union — those are separate emitters
+with their own display conventions and no display-widening decision to swap, so wiring them is a
+change whose only gate is the corpus.
+
+**(PARITY.1)(a) MEASURED AND REFUSED — with three findings that correct the queue item.**
+(i) The rule is **enum-ONLY**: on one scratch project tsgo renders `import("<path>").ZzzEnum` for an
+enum, a `const enum` and an enum MEMBER, and renders `ZzzIface` / `ZzzAlias` / `ZzzClass` bare in the
+same message list — and none of them qualifies once the name IS imported into the erroring file.
+(ii) The queue item's "we satisfy the 103 baselines through hard-coded `pinDiag` sites" is **wrong**:
+the six `pinDiag` sites carrying `import(` are unrelated (dynamic-import namespace TS2339s, a
+node_modules symlink duplicate, TS1340 `typeof import('pkg')` suggestions), and
+`enumAssignmentCompat6`'s BOTH-forms shape is served by a real mechanism — rounds 745-749's
+`enumCollisionQualifiedDisplays` / `enumTypeQualifiedDisplay` / `enumModuleImportPrefix`, which is
+tsc's `getTypeNamesForErrorDisplay` SAME-STRING retry. **What is missing is tsc's OTHER
+qualification mechanism**, `symbolToTypeNode`'s `getAccessibleSymbolChain` accessibility test, which
+needs an enclosing-declaration node-builder context, `getContainersOfSymbol` and
+`getSpecifierForModuleSymbol` — and `typeToString` here is a pure `(Type) -> String` with 718
+message-construction sites downstream.
+(iii) **There is no gate for it.** All 46 rows of seven profiles (and 95 of `harness`) are
+`Cannot find name …` — TS2304/2584/2591 — so the 8-profile grid names no TYPE at all; only **10** of
+the 2,881 ACTIVE `.errors.txt` baselines carry an `import("…").Name` rendering, and of those only
+`enumAssignmentCompat6` and `errorWithSameNameType` come from the node builder. Landing it would
+rewrite the display of every message naming a module-declared exported enum from a file that does
+not bind the name, with the corpus as its sole instrument.
+
+**Pins** — `TypeDisplayParityTest`, 23. **Ablation, one mistake at a time, seven arms, every one
+discriminating with its own red set**: a1 the (c) union lift (**7 RED**), a2 the var-decl
+anonymous-object narrowing arm (1 — the never-narrow control), a3 the assignment one (1), a4 the (b)
+union arm (9), a5 the (b) `never` guard (2), a6 the (b) target-kind allowlist (1 — the intersection
+pin, which was WRITTEN because a6 first read 0 RED against the corpus baselines it was built for),
+a7 widening (c)'s primitive-only guard to any union (3 — all three round-461 negative controls).
+Source restored and rebuilt after the batch, confirmed by `javap` and by a `sha256sum` of
+`Checker.class` against the grid's own AFTER snapshot.
+
 ### Round (P18.13) — the augmentation residues: a package augmentation stops inventing two errors, and a block's own declarations become visible and importable (2026-09-04)
 
 **Full suite after the round: 17,224 → 17,236 / 0 / 3** (run by the orchestrating session; externals 290/0 with the Kotlin/JS gate live).
