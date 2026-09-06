@@ -1139,6 +1139,19 @@ class Checker(
     private var ambiguousBlockLocalNames: MutableSet<String> = mutableSetOf()
 
     /**
+     * (CHK.96) stage 2 — the destructured-discriminant CARRY's name filter: every leaf
+     * name [bindingElementType] has lifted over a union parent under tsc's
+     * `getNarrowedTypeOfSymbol` precondition. [getNarrowedTypeForReference] consults
+     * [destructuredDiscriminantCarry] only for an Identifier spelled here — a hash probe
+     * before the lexical lookup that decides it. Names only, never scopes: a collision
+     * costs one refused lookup.
+     */
+    private val discriminantCarryNames = HashSet<String>()
+
+    /** See [destructuredDiscriminantCarry] — its sibling walks must not re-enter it. */
+    private var discriminantCarryDepth = 0
+
+    /**
      * M1.9: DECLARED (pre-narrowing) types for names the assignability walk narrowed via
      * an if-condition (`if (x !== undefined)` overwrites `currentLocalTypes[x]` for the
      * then-branch so READS see the narrowed type). An assignment TARGET must be checked
@@ -2144,8 +2157,20 @@ class Checker(
             if (ctxAnn != null) {
                 populateParameterLocalTypes(params)
                 for ((i, p) in params.withIndex()) {
-                    val nm = (p.name as? Identifier)?.text ?: continue
                     if (p.dotDotDotToken) continue
+                    val pn = p.name
+                    if (p.type == null && (pn is ObjectBindingPattern || pn is ArrayBindingPattern)) {
+                        // (CHK.96) stage 2: a PATTERN parameter's leaves over the
+                        // annotation's parameter type.
+                        val base = ctxAnn.parameters.getOrNull(i)?.takeIf { !it.dotDotDotToken }
+                            ?.type?.let { getTypeFromTypeNode(it) } ?: continue
+                        if (base === anyType || base === errorType) continue
+                        forEachBindingPatternLeaf(pn, base, isConst = false, refuseFnMembers = false) { leaf, t ->
+                            if (t != null && !isTpReferencingFnTypeOrUnion(t)) currentLocalTypes[leaf] = t
+                        }
+                        continue
+                    }
+                    val nm = (pn as? Identifier)?.text ?: continue
                     val base: Type? = if (p.type != null) currentLocalTypes[nm]
                     else ctxAnn.parameters.getOrNull(i)?.takeIf { !it.dotDotDotToken }
                         ?.type?.let { getTypeFromTypeNode(it) }
@@ -2162,6 +2187,12 @@ class Checker(
                 val ownNames = mutableSetOf<String>()
                 for (p in params) collectBindingNames(p.name, ownNames)
                 for (n in ownNames) currentLocalTypes[n] = anyType
+                // (CHK.96) stage 2: a contextual PATTERN parameter's leaves are typed at the
+                // argument reader (`objs.map(({ p }) => takeB(p))`); the identifier
+                // parameters keep the `any` above — that wiring is (CHK.98)(a).
+                if (params.any { it.type == null && !it.dotDotDotToken && (it.name is ObjectBindingPattern || it.name is ArrayBindingPattern) }) {
+                    applyPulledContextualParamTypes(node, params, patternsOnly = true)
+                }
                 val body = if (node is ArrowFunction) node.body else (node as FunctionExpression).body
                 (body as? Block)?.let { b ->
                     applyCallTypesBodyLocalShadowing(b.statements, params)
@@ -78252,6 +78283,12 @@ interface DataView {
             if (el is SpreadElement) return
             knownLen++
         }
+        // (CHK.96) stage 2: the literal is the TUPLE the pattern's implied type makes it
+        // (`arrayLiteralAsDestructuringTuple`), so the message names `'[number]' of length
+        // '1'` for `const [a, b] = [1]` as both references do; the empty literal stays `[]`.
+        val tupleDisplay = if (knownLen == 0) "[]"
+            else arrayLiteralAsDestructuringTuple(init)?.let { typeToString(it) } ?: "[]"
+        val tupleLen = if (tupleDisplay == "[]") 0 else knownLen
         for ((i, binding) in pattern.elements.withIndex()) {
             if (binding !is BindingElement) continue  // OmittedExpression etc.
             if (binding.dotDotDotToken) continue  // rest gets the remainder (possibly empty)
@@ -78262,7 +78299,7 @@ interface DataView {
             val nameLen = nameNode.text.length
             val (line, character) = getLineAndCharacterOfPosition(source, namePos)
             diagnostics.add(Diagnostic(
-                message = "Tuple type '[]' of length '0' has no element at index '$i'.",
+                message = "Tuple type '$tupleDisplay' of length '$tupleLen' has no element at index '$i'.",
                 category = DiagnosticCategory.Error,
                 code = 2493,
                 fileName = fileName,
@@ -85805,9 +85842,15 @@ interface DataView {
         }
         if (suppressed) return
         for ((nm, pos) in hits.sortedBy { it.second }) {
+            // (CHK.96) stage 2 gave an object REST its own type, so the spine's member-access
+            // reader now emits this row for every NON-generic source ([objectRestType] refuses a
+            // generic one, where tsc answers `Omit<T, K>` and only this walker can). This pass
+            // runs AFTER checkSpine, so the identity test lives here — CLAUDE.md's rule.
+            val message = "Property '$nm' does not exist on type '$display'."
+            if (diagnosticAlreadyEmitted(fileName, pos, 2339, message)) continue
             val (l, c) = getLineAndCharacterOfPosition(source, pos)
             diagnostics.add(Diagnostic(
-                message = "Property '$nm' does not exist on type '$display'.",
+                message = message,
                 category = DiagnosticCategory.Error, code = 2339,
                 fileName = fileName, line = l, character = c, start = pos, length = nm.length,
             ))
@@ -105463,9 +105506,13 @@ interface DataView {
             // lifted `[1] | []` is a false TS2322 (the corpus's `arrayDestructuringInSwitch2`).
             // That carry is stage 2; exactly its precondition refuses here, so a single-element
             // pattern (`const { p } = uni`), a `let` and a defaulted element still lift.
+            // (CHK.96) stage 2: the carry LANDED — the element lifts, its name is recorded,
+            // and every flow-narrowing reader re-reads it from the narrowed parent
+            // ([destructuredDiscriminantCarry]), which is what answers `never` in that
+            // exhausted `default` and `number` under `if (kind === "a")`.
             if (elem.initializer == null && !elem.dotDotDotToken &&
                 bindingPatternElementCount(pattern) >= 2 && bindingPatternRootIsConstOrParam(elem)
-            ) return null
+            ) (elem.name as? Identifier)?.text?.let { discriminantCarryNames.add(it) }
             val parts = ArrayList<Type>(parent.types.size)
             for (c in parent.types) {
                 parts.add(bindingElementSlotType(elem, pattern, c, refuseFnMembers) ?: return null)
@@ -105494,7 +105541,8 @@ interface DataView {
         if (c is Type.TypeParam) return null
         when (pattern) {
             is ObjectBindingPattern -> {
-                if (elem.dotDotDotToken) return null
+                // (CHK.96) stage 2: an object REST reads tsc's `getRestType`.
+                if (elem.dotDotDotToken) return objectRestType(c, pattern)
                 val propName = bindingElementPropertyName(elem) ?: return null
                 val obj = getApparentType(c) as? Type.Object ?: return null
                 val sym = getPropertyOfType(obj, propName)
@@ -105532,7 +105580,11 @@ interface DataView {
                             // parent's readonly-ness: `const [, ...r] = rtup` reads `[string, boolean]`.
                             return buildTupleFromTypes(tail, flags, readonly = false)
                         }
-                        if (index >= elems.size) return null
+                        // (CHK.96) stage 2: an index PAST a fixed tuple's slots is `undefined` —
+                        // measured, `const [a, b] = t` over `[number]` reads `b` as `undefined` in
+                        // both references beside the TS2493 the dedicated walkers own; a
+                        // rest tuple refused above, so the slot count here is exact.
+                        if (index >= elems.size) return undefinedType
                         val slot = elems[index]
                         return if (strictNullChecks && tupleSlotIsOptional(c, index) && !typeIncludesUndefined(slot))
                             getUnionType(listOf(slot, undefinedType)) else slot
@@ -105542,11 +105594,189 @@ interface DataView {
                         if (el === errorType) return null
                         return if (rest) getArrayType(el) else el
                     }
-                    else -> return null
+                    // (CHK.96) stage 2: every other iterable — a `Map` / `Set` (its
+                    // `[Symbol.iterator]`), a generator, an `Iterable<T>` — yields its
+                    // iteration type; a rest over it is that type's array (tsc's
+                    // `checkIteratedTypeOrElementType` + `createArrayType`).
+                    else -> {
+                        val yieldType = iterationYieldTypeOf(c) ?: return null
+                        return if (rest) getArrayType(yieldType) else yieldType
+                    }
                 }
             }
             else -> return null
         }
+    }
+
+    /**
+     * (CHK.96) stage 2 — tsc's `getRestType` (checker.ts:11611) for a NON-GENERIC object
+     * source [c]: the members of its apparent type that the pattern's other elements do
+     * not name, each COPIED into a fresh symbol the rest object owns (round 449's rule
+     * for the object-literal spread — a shared symbol lets a later write corrupt the
+     * source's member table), MUTABLE whatever the source said (tsc's `getSpreadSymbol(prop,
+     * readonly = false)` — `{ readonly r }` rests as `{ r }`), minus `private` / `protected`
+     * members and `#private` names, and minus a CLASS's methods and accessors (tsc's
+     * `isSpreadableProperty` — an interface's `m(): void` and an object literal's accessor
+     * spread), with the source's index signatures carried over. Refused: a generic source
+     * (tsc answers `Omit<T, K>` there), a source that is not an object (TS2700's walker
+     * owns it — a primitive's apparent wrapper is not a spread source), and a pattern
+     * naming a member by a computed non-literal key.
+     */
+    private fun objectRestType(c: Type, pattern: ObjectBindingPattern): Type? {
+        if (c !is Type.Object) return null
+        if (typeContainsUnresolvedTypeParam(c)) return null
+        val obj = getApparentType(c) as? Type.Object ?: return null
+        resolveStructuredTypeMembers(obj)
+        val omit = HashSet<String>()
+        for (el in pattern.elements) {
+            if (el.dotDotDotToken) continue
+            omit.add(bindingElementPropertyName(el) ?: return null)
+        }
+        val members = symbolTable()
+        val properties = ArrayList<Symbol>()
+        for (prop in obj.properties.orEmpty()) {
+            if (prop.name in omit || !objectRestMemberSpreads(prop)) continue
+            val t = propertyTypeOnCarrier(obj, prop)
+            if (t === errorType) return null
+            val local = Symbol(prop.flags, prop.name).also {
+                it.declarations.addAll(prop.declarations)
+                it.valueDeclaration = prop.valueDeclaration
+                it.parent = prop.parent
+            }
+            symbolTypes[local.id] = t
+            mappedMutableMemberIds.add(local.id)
+            members[prop.name] = local
+            properties.add(local)
+        }
+        val result = Type.Object()
+        result.members = members
+        result.properties = properties
+        result.stringIndexInfo = obj.stringIndexInfo
+        result.numberIndexInfo = obj.numberIndexInfo
+        return result
+    }
+
+    /** tsc's `isSpreadableProperty` plus its private/protected exclusion — see [objectRestType]. */
+    private fun objectRestMemberSpreads(prop: Symbol): Boolean {
+        if (prop.name.startsWith("#")) return false
+        var classMember = false
+        for (d in prop.declarations) {
+            val mods = when (d) {
+                is PropertyDeclaration -> d.modifiers
+                is MethodDeclaration -> d.modifiers
+                is GetAccessor -> d.modifiers
+                is SetAccessor -> d.modifiers
+                is Parameter -> d.modifiers
+                else -> emptySet()
+            }
+            if (ModifierFlag.Private in mods || ModifierFlag.Protected in mods) return false
+            val owner = (d as NodeBase).parent
+            if (owner is ClassDeclaration || owner is ClassExpression) classMember = true
+        }
+        if (classMember && prop.flags.hasAny(SymbolFlags.Method or SymbolFlags.GetAccessor or SymbolFlags.SetAccessor)) return false
+        if (classMember && prop.declarations.any { it is MethodDeclaration || it is GetAccessor || it is SetAccessor }) return false
+        return true
+    }
+
+    /**
+     * (CHK.96) stage 2 — the YIELD type of the iterable [t] (tsc's
+     * `getIterationTypesOfIterable(...).yieldType`), or null.
+     *
+     * Two legs, tsc's own: the FAST one reads the type argument of a reference to
+     * `Iterable` / `IterableIterator` / `IteratorObject` / `Generator` and to the built-in
+     * iterators (`ArrayIterator` / `MapIterator` / `SetIterator` / `StringIterator`); the
+     * SLOW one reads `[Symbol.iterator]()`'s return, then that ITERATOR's yield —
+     * the same fast names, else its `next()`'s `IteratorResult<T, R>` /
+     * `IteratorYieldResult<T>` reference (a union of yield and return results keeps the
+     * yield halves), else an object with a `value` member. Every question it cannot
+     * answer refuses — a false NEGATIVE, the head or slot staying the `any` it was.
+     *
+     * Under the EMBEDDED lib only the fast leg answers: `interface Iterable<T> { }` is
+     * empty there and `Map` / `Set` declare no `[Symbol.iterator]` at all (the corpus
+     * runs on it; the real libs are the opposite — CLAUDE.md's archive entry on
+     * (CHK.23)). A `this`-typed iterator return reads as `any` here and is answered by
+     * [iteratorMethodThisReturn], round 946's instrument. Array-likes and strings are
+     * the caller's question and never reach this.
+     */
+    private fun iterationYieldTypeOf(t: Type): Type? {
+        if (t === anyType || t === errorType || t === unknownType) return null
+        if (t is Type.TypeParam || t is Type.Union || t is Type.Intersection) return null
+        iteratorFastYieldType(t)?.let { return it }
+        val carrier = getApparentType(t) as? Type.Object ?: return null
+        if (carrier.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never)) return null
+        val sym = getPropertyOfType(carrier, SYMBOL_ITERATOR_MEMBER) ?: return null
+        if (isOptionalProperty(sym)) return null
+        val methodType = propertyTypeOnCarrier(carrier, sym)
+        if (methodType === anyType || methodType === errorType || methodType === unknownType) return null
+        val zeroArg = getCallSignaturesOfType(methodType).filter { it.minArgumentCount == 0 }
+        if (zeroArg.size != 1) return null
+        var iterator = zeroArg[0].resolvedReturnType ?: return null
+        if (iterator === anyType || iterator === errorType || iterator === unknownType) {
+            iterator = iteratorMethodThisReturn(sym) ?: return null
+            if (iterator !== carrier) return null
+        }
+        return iteratorYieldTypeOf(iterator)
+    }
+
+    /** The yield type of a reference to one of tsc's fast-path global iterable / iterator types. */
+    private fun iteratorFastYieldType(t: Type): Type? {
+        val ref = t as? Type.Reference ?: return null
+        when (ref.target.symbol?.name) {
+            "Iterable", "IterableIterator", "IteratorObject", "Generator", "Iterator",
+            "ArrayIterator", "MapIterator", "SetIterator", "StringIterator" -> {}
+            else -> return null
+        }
+        val yieldType = ref.resolvedTypeArguments?.firstOrNull() ?: return null
+        return yieldType.takeIf { it !== anyType && it !== errorType && it !== unknownType }
+    }
+
+    /** See [iterationYieldTypeOf] — the ITERATOR half (tsc's `getIterationTypesOfIterator`). */
+    private fun iteratorYieldTypeOf(iterator: Type): Type? {
+        iteratorFastYieldType(iterator)?.let { return it }
+        val obj = iterator as? Type.Object ?: return null
+        if (obj.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never)) return null
+        resolveStructuredTypeMembers(obj)
+        val next = getPropertyOfType(obj, "next") ?: return null
+        if (isOptionalProperty(next)) return null
+        val nextType = propertyTypeOnCarrier(obj, next)
+        if (nextType === anyType || nextType === errorType || nextType === unknownType) return null
+        val zeroArg = getCallSignaturesOfType(nextType).filter { it.minArgumentCount == 0 }
+        if (zeroArg.size != 1) return null
+        val result = zeroArg[0].resolvedReturnType ?: return null
+        return iteratorResultYieldTypeOf(result)
+    }
+
+    /** See [iterationYieldTypeOf] — tsc's `getIterationTypesOfIteratorResult`, the yield half. */
+    private fun iteratorResultYieldTypeOf(result: Type): Type? {
+        if (result === anyType || result === errorType || result === unknownType) return null
+        if (result is Type.Union) {
+            val yields = ArrayList<Type>(result.types.size)
+            for (member in result.types) {
+                if (member is Type.Reference && member.target.symbol?.name == "IteratorReturnResult") continue
+                yields.add(iteratorResultYieldTypeOf(member) ?: return null)
+            }
+            return when (yields.size) {
+                0 -> null
+                1 -> yields[0]
+                else -> getUnionType(yields)
+            }
+        }
+        if (result is Type.Reference) {
+            when (result.target.symbol?.name) {
+                "IteratorResult", "IteratorYieldResult" ->
+                    return result.resolvedTypeArguments?.firstOrNull()
+                        ?.takeIf { it !== anyType && it !== errorType && it !== unknownType }
+                "IteratorReturnResult" -> return null
+            }
+        }
+        val obj = result as? Type.Object ?: return null
+        resolveStructuredTypeMembers(obj)
+        val value = getPropertyOfType(obj, "value") ?: return null
+        // A `done: true` shape is a RETURN result — its `value` is not yielded.
+        val done = getPropertyOfType(obj, "done")?.let { propertyTypeOnCarrier(obj, it) }
+        if (done === trueType) return null
+        val vt = propertyTypeOnCarrier(obj, value)
+        return vt.takeIf { it !== anyType && it !== errorType && it !== unknownType }
     }
 
     /** (CHK.96) is slot [i] of the tuple [t] optional (`[T?]`)? Round 452's side channel. */
@@ -105700,19 +105930,53 @@ interface DataView {
             var e: Expression = init
             while (e is ParenthesizedExpression) e = e.expression
             if (e is ArrayLiteralExpression) return arrayLiteralAsDestructuringTuple(e)
+            if (e is ConditionalExpression && conditionalOfArrayLiterals(e)) return null
         }
         return getTypeOfExpression(init)
     }
 
+    /**
+     * (CHK.96) stage 2 — is [expr] an array literal, or a conditional whose every branch
+     * is one? Such an initializer under an ARRAY pattern REFUSES the whole pattern.
+     *
+     * tsc gives the pattern's implied type to the initializer as a CONTEXTUAL type, and a
+     * contextual type propagates into both branches of a conditional, so
+     * `const [s, e] = c ? [n, undefined] : [o.pos, o.end]` reads
+     * `[number, undefined] | [number, number]` and its first slot is `number`.
+     * Reconstructing that HERE would need each element's FLOW-NARROWED type at its own
+     * branch — `por` is `number` only inside `typeof por === "number"` — and
+     * [getTypeOfExpression] never narrows (CLAUDE.md), so the branch tuples would carry
+     * the declared type and slot 0 would read `number | { pos: number; end: number; }`:
+     * an ours-only TS2322 on `services.ts:3264`, measured on all three profiles that
+     * carry `src/services/services.ts`. Refusing keeps every leaf at `anyType` (round
+     * 475's contract) — silent, which is what stage 1 and HEAD both do for this shape.
+     * The narrowed-branch reconstruction is queued as (CHK.107).
+     */
+    private fun conditionalOfArrayLiterals(expr: Expression): Boolean {
+        var e: Expression = expr
+        while (e is ParenthesizedExpression) e = e.expression
+        return when (e) {
+            is ArrayLiteralExpression -> true
+            is ConditionalExpression -> conditionalOfArrayLiterals(e.whenTrue) && conditionalOfArrayLiterals(e.whenFalse)
+            else -> false
+        }
+    }
+
     /** (CHK.96) see [bindingPatternSourceType]. */
     private fun arrayLiteralAsDestructuringTuple(lit: ArrayLiteralExpression): Type? {
-        if (lit.elements.isEmpty() || lit.elements.any { it is SpreadElement || it is OmittedExpression }) return null
+        if (lit.elements.any { it is SpreadElement || it is OmittedExpression }) return null
         val types = ArrayList<Type>(lit.elements.size)
         for (el in lit.elements) {
-            val t = widenEnumMemberTypes(getTypeOfExpression(el))
+            // (CHK.96) stage 2: EVERY literal element widens — the pattern's implied
+            // contextual type has `any` in the slot, so tsc's `checkExpressionForMutableLocation`
+            // widens a fresh `true` to `boolean` and a `const one = 1` element to `number`
+            // (measured: `const [a, ...r] = [1, "x", true]` reads `r` as `[string, boolean]`).
+            val t = widenLiteralMembers(getTypeOfExpression(el))
             if (t === errorType) return null
             types.add(t)
         }
+        // An EMPTY literal is the empty tuple `[]` — its slot is `undefined`, so
+        // `const [x = 1] = []` reads the default alone (both references print `number`).
         return buildTupleFromTypes(types)
     }
 
@@ -105738,6 +106002,23 @@ interface DataView {
             iterable is Type.Reference && (iterable.target.symbol?.name == "Array" ||
                 (wide && iterable.target.symbol?.name == "ReadonlyArray")) ->
                 iterable.resolvedTypeArguments?.singleOrNull()
+            // (CHK.96) stage 2: a UNION subject iterates as the union of its constituents'
+            // elements (tsc maps `getIterationTypesOfIterable` over the union) — the cta
+            // arm only, for the reason the readonly-array set is: the narrow arms'
+            // property-access reader is where a union loop variable meets the
+            // pre-existing discriminant-narrowing gap.
+            wide && iterable is Type.Union -> {
+                val parts = ArrayList<Type>(iterable.types.size)
+                for (c in iterable.types) parts.add(forOfElementTypeOf(c, wide) ?: return null)
+                getUnionType(parts)
+            }
+            // (CHK.96) stage 2: every other iterable yields through `[Symbol.iterator]`
+            // (a `Map` / `Set` head, a generator, an `Iterable<T>`). An array-like that
+            // the arms above deliberately refuse (a tuple or a `ReadonlyArray` in the
+            // narrow arms) must not re-enter through its `Array` base's iterator.
+            iterable is Type.Object && iterable.tupleElementTypes == null &&
+                !(iterable is Type.Reference && iterable.target.symbol?.name == "ReadonlyArray") ->
+                iterationYieldTypeOf(iterable)
             else -> null
         } ?: return null
         return t.takeIf { it !== anyType && it !== errorType }
@@ -120158,7 +120439,23 @@ interface DataView {
         return lib
     }
 
+    /**
+     * (CHK.96) stage 2 — the destructured-discriminant CARRY sits on the identifier's
+     * DECLARED type, as tsc's `checkIdentifier` puts `getNarrowedTypeOfSymbol` under
+     * `getFlowTypeOfReference`: a reader that never flow-narrows (the return reader
+     * against a primitive target, round 784's gate) still reads `never` for the
+     * element in an exhausted `default`, which is the corpus's
+     * `arrayDestructuringInSwitch2`. Free where no such element was recorded.
+     */
     private fun getTypeOfIdentifier(id: Identifier): Type {
+        val t = getTypeOfIdentifierCore(id)
+        if (t is Type.Union && discriminantCarryNames.isNotEmpty() && id.text in discriminantCarryNames) {
+            return destructuredDiscriminantCarry(id, t) ?: t
+        }
+        return t
+    }
+
+    private fun getTypeOfIdentifierCore(id: Identifier): Type {
         return when (id.text) {
             "undefined" -> undefinedType
             "null" -> nullType
@@ -120712,15 +121009,167 @@ interface DataView {
         // element-access, etc.) — those bail to declared type.
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
+        // (CHK.96) stage 2: a destructured discriminant sibling re-reads its DECLARED
+        // type from the flow-narrowed parent first; the ordinary walk then narrows
+        // that (tsc: `getNarrowedTypeOfSymbol`, then `getFlowTypeOfReference` on it).
+        val declared = if (expr is Identifier && expr.text in discriminantCarryNames)
+            destructuredDiscriminantCarry(expr, declaredType) ?: declaredType else declaredType
         val seen = NarrowSeen()
-        return flowWalkWithTripCheck(expr, kind, declaredType.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path)) {
+        return flowWalkWithTripCheck(expr, kind, declared.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path)) {
             // (ENGINE.2d)(a): the lambda runs iff a real traversal happens — see
             // [narrowWalkLaunches].
             narrowWalkLaunches++
             val memo = NarrowFlowMemo()
             memo.overwriteResetsToDeclared = overwriteResetsToDeclared
-            narrowTypeFromFlow(declaredType, flow, path, seen, depth = 0, memo)
-        } ?: declaredType
+            narrowTypeFromFlow(declared, flow, path, seen, depth = 0, memo)
+        } ?: declared
+    }
+
+    /**
+     * (CHK.96) stage 2 — tsc's `getNarrowedTypeOfSymbol` (checker.ts:30923) for the
+     * destructured-discriminant CARRY: the type of the binding element [expr] names,
+     * re-read at [expr]'s flow position from its pattern's PARENT union narrowed by
+     * the flow types of the pattern's SIBLING elements there. `const { kind, payload }
+     * = act; if (kind === "a") payload` reads `payload` from the constituent whose
+     * `kind` is `"a"`; in a `switch` that exhausts `kind`, the parent narrows to
+     * nothing and the element is `never` (the corpus's `arrayDestructuringInSwitch2`).
+     *
+     * tsc narrows the PATTERN as a pseudo-reference against which a sibling read is a
+     * discriminant property access. This checker narrows by path STRINGS, so the same
+     * question is asked the other way round: each sibling's own flow-narrowed type at
+     * [expr] (the ordinary walk over its name — equality, `switch`, `typeof`,
+     * truthiness and type guards alike) FILTERS the parent's constituents to those
+     * whose member relates to it. A sibling the walk leaves at its declared type
+     * filters nothing; a sibling narrowed to `never` empties the parent.
+     *
+     * tsc's preconditions, all of them: a non-rest, non-defaulted element of a pattern
+     * with two or more elements, directly under a `const` declaration or a parameter
+     * NONE of whose leaves is assigned in the body (`isSomeSymbolAssigned`), over a
+     * parent that is a union. Null is "no carry" — [declaredType] stands. The sibling
+     * walks run with [discriminantCarryDepth] raised, so a sibling that is itself a
+     * carry name is read by the ordinary walk and the two never recurse into each
+     * other.
+     */
+    private fun destructuredDiscriminantCarry(expr: Identifier, declaredType: Type): Type? {
+        if (discriminantCarryDepth > 0) return null
+        val name = expr.text
+        // The INV.2(c) tables of the OWNING file, read without the cpa-only ambient
+        // ([lexicalTypeSymbolForNode]'s consult) — every flow-narrowing reader reaches
+        // this, most of them with `currentLexicalScopes` unset.
+        val symbol = run {
+            val owner = owningSourceFile(expr)
+            val scopes = owner?.let { fileResults[it.fileName]?.lexicalScopes }
+            var cur: Node? = (expr as NodeBase).parent
+            while (scopes != null && cur != null) {
+                scopes[(cur as NodeBase).nodeId]?.symbols?.get(name)?.let { return@run it }
+                cur = (cur as NodeBase).parent
+            }
+            lookupPerFileForNode(expr, name)
+        } ?: return null
+        if (symbol.declarations.size != 1) return null
+        val elem = symbol.valueDeclaration as? BindingElement ?: return null
+        if (elem.initializer != null || elem.dotDotDotToken) return null
+        val pattern = (elem as NodeBase).parent ?: return null
+        if (bindingPatternElementCount(pattern) < 2) return null
+        val parent: Type = when (val owner = (pattern as NodeBase).parent) {
+            is VariableDeclaration -> {
+                if (!varDeclIsImmutableBinding(owner)) return null
+                bindingPatternSourceType(owner) ?: return null
+            }
+            is Parameter -> {
+                val fn = (owner as NodeBase).parent ?: return null
+                val body = when (fn) {
+                    is FunctionDeclaration -> fn.body
+                    is FunctionExpression -> fn.body
+                    is ArrowFunction -> fn.body
+                    is MethodDeclaration -> fn.body
+                    is Constructor -> fn.body
+                    else -> null
+                } ?: return null
+                val leaves = HashSet<String>()
+                collectBindingNames(owner.name, leaves)
+                if (patternLeafAssignedIn(body, leaves)) return null
+                owner.type?.let { getTypeFromTypeNode(it) } ?: return null
+            }
+            else -> return null
+        }
+        if (parent !is Type.Union) return null
+        val flow = getFlowAt(expr) ?: return null
+        val elements: List<Node> = when (pattern) {
+            is ObjectBindingPattern -> pattern.elements
+            is ArrayBindingPattern -> pattern.elements
+            else -> return null
+        }
+        var constituents: List<Type> = parent.types
+        discriminantCarryDepth++
+        try {
+            for ((index, sib) in elements.withIndex()) {
+                val be = sib as? BindingElement ?: continue
+                if (be === elem || be.dotDotDotToken) continue
+                val sibName = (be.name as? Identifier)?.text ?: continue
+                val prop = if (pattern is ObjectBindingPattern) bindingElementPropertyName(be) ?: continue
+                    else index.toString()
+                val memberTypes = ArrayList<Type?>(constituents.size)
+                var seenMember = false
+                for (c in constituents) {
+                    val obj = getApparentType(c) as? Type.Object
+                    val sym = obj?.let { getPropertyOfType(it, prop) }
+                    val mt = sym?.let { propertyTypeOnCarrier(obj, it) }?.takeIf { it !== anyType && it !== errorType }
+                    if (mt != null) seenMember = true
+                    memberTypes.add(mt)
+                }
+                if (!seenMember) continue
+                val declaredSib = getUnionType(memberTypes.filterNotNull())
+                val narrowedSib = flowWalkWithTripCheck(
+                    expr, WK_NARROW,
+                    declaredSib.id.toLong() shl 32 or (sibName.hashCode().toLong() and 0xFFFF_FFFFL),
+                    flowPathRoot(sibName),
+                ) {
+                    narrowWalkLaunches++
+                    narrowTypeFromFlow(declaredSib, flow, sibName, NarrowSeen(), depth = 0, NarrowFlowMemo())
+                } ?: declaredSib
+                if (narrowedSib === declaredSib) continue
+                if (narrowedSib === neverType) { constituents = emptyList(); break }
+                constituents = constituents.filterIndexed { i, _ ->
+                    val mt = memberTypes[i] ?: return@filterIndexed true
+                    checkTypeRelatedTo(narrowedSib, mt, assignableRelation) ||
+                        checkTypeRelatedTo(mt, narrowedSib, assignableRelation)
+                }
+                if (constituents.isEmpty()) break
+            }
+        } finally {
+            discriminantCarryDepth--
+        }
+        if (constituents.size == parent.types.size) return null
+        if (constituents.isEmpty()) return neverType
+        val narrowedParent = if (constituents.size == 1) constituents[0] else getUnionType(constituents)
+        return bindingElementType(elem, narrowedParent, isConst = true, refuseFnMembers = false)
+    }
+
+    /** See [destructuredDiscriminantCarry] — tsc's `isSomeSymbolAssigned`, syntactically: is any of [names] written in [body]? */
+    private fun patternLeafAssignedIn(body: Node, names: Set<String>): Boolean {
+        var found = false
+        fun visit(n: Node) {
+            if (found) return
+            when (n) {
+                is BinaryExpression -> {
+                    val left = n.left
+                    if (isAssignmentOperator(n.operator) && left is Identifier && left.text in names) { found = true; return }
+                }
+                is PrefixUnaryExpression -> {
+                    val operand = n.operand
+                    if ((n.operator == SyntaxKind.PlusPlus || n.operator == SyntaxKind.MinusMinus) && operand is Identifier && operand.text in names) { found = true; return }
+                }
+                is PostfixUnaryExpression -> {
+                    val operand = n.operand
+                    if (operand is Identifier && operand.text in names) { found = true; return }
+                }
+                else -> {}
+            }
+            forEachChild(n) { visit(it) }
+        }
+        visit(body)
+        return found
     }
 
     /**
@@ -120744,10 +121193,13 @@ interface DataView {
     ): Type {
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
+        // (CHK.96) stage 2: the destructured-discriminant carry, as in [getNarrowedTypeForReference].
+        val declared = if (expr is Identifier && expr.text in discriminantCarryNames)
+            destructuredDiscriminantCarry(expr, declaredType) ?: declaredType else declaredType
         val seen = NarrowSeen()
-        return flowWalkWithTripCheck(expr, WK_NARROW_LOOP, declaredType.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path)) {
-            narrowTypeFromFlowFollowLoopEntry(declaredType, flow, path, seen, depth = 0)
-        } ?: declaredType
+        return flowWalkWithTripCheck(expr, WK_NARROW_LOOP, declared.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path)) {
+            narrowTypeFromFlowFollowLoopEntry(declared, flow, path, seen, depth = 0)
+        } ?: declared
     }
 
     /**
@@ -124678,6 +125130,23 @@ interface DataView {
      *  expects a TUPLE, which tsc gets via contextual typing we don't model —
      *  builder.ts's `map(key => [toFileId(key), toFileIdListId(…)])` must stay
      *  un-inferred rather than bind `U := (FileId | FileIdListId)[]`. */
+    /**
+     * (CHK.96) stage 2 — installs a lambda parameter [name] at [type] for the
+     * inference body re-typing above: an Identifier as itself, a PATTERN as its
+     * leaves through [bindingElementType] (a refused leaf is left as the enclosing
+     * scope has it, which is the pre-existing `any`).
+     */
+    private fun installInferenceLambdaParam(name: Expression, type: Type) {
+        when (name) {
+            is Identifier -> currentLocalTypes[name.text] = type
+            is ObjectBindingPattern, is ArrayBindingPattern ->
+                forEachBindingPatternLeaf(name, type, isConst = false, refuseFnMembers = false) { leaf, t ->
+                    if (t != null) currentLocalTypes[leaf] = t
+                }
+            else -> {}
+        }
+    }
+
     private fun retypeInferenceBodyExpr(expr: Expression): Type {
         val saved = inInferenceBodyTyping
         inInferenceBodyTyping = true
@@ -128838,6 +129307,10 @@ interface DataView {
                             // spreading literal is in a const context (tsc `getSpreadType`'s
                             // `readonly` argument) — a spread outside one drops the bit.
                             if (inConstContext) mappedReadonlyMemberIds.add(local.id)
+                            // (CHK.96) stage 2: and MUTABLE outside one — the copy carries the
+                            // source's `readonly` declaration, which the display and the write
+                            // check would otherwise read (`{ ...o }` printed `readonly r`).
+                            else mappedMutableMemberIds.add(local.id)
                             members[pn] = local
                             properties.add(local)
                         }
@@ -129623,6 +130096,18 @@ interface DataView {
                     if (p.name.isEmpty()) continue
                     val pt = getTypeOfSymbol(p)
                     if (pt !== anyType && pt !== errorType) currentLocalTypes[p.name] = pt
+                }
+                // (CHK.96) stage 2: a PATTERN parameter's leaves, over the annotated or
+                // contextual parameter type, so `objs.map(({ p }) => p)` infers `number[]`
+                // where the body's `p` read `any` (a placeholder-named symbol above).
+                for (p in params) {
+                    val pn = (p.valueDeclaration as? Parameter)?.name ?: continue
+                    if (pn !is ObjectBindingPattern && pn !is ArrayBindingPattern) continue
+                    val pt = getTypeOfSymbol(p)
+                    if (pt === anyType || pt === errorType || typeContainsUnresolvedTypeParam(pt)) continue
+                    forEachBindingPatternLeaf(pn, pt, isConst = false, refuseFnMembers = false) { leaf, t ->
+                        if (t != null) currentLocalTypes[leaf] = t
+                    }
                 }
                 when {
                     // Round 480 (tsc): a block body with NO returns whose EVERY path
@@ -131413,10 +131898,15 @@ interface DataView {
                         if (argParamsLocal != null && argBody != null &&
                             argParamsLocal.isNotEmpty() &&
                             argParamsLocal.size <= sigParamTypes.size) {
-                            val lpNames = mutableListOf<String>()
+                            val lpNames = mutableListOf<Expression>()
                             var lpOk = true
                             for (lp in argParamsLocal) {
-                                val lpName = (lp.name as? Identifier)?.text
+                                // (CHK.96) stage 2: a PATTERN parameter qualifies beside an
+                                // Identifier one — its leaves are installed below
+                                // (`objs.map(({ p }) => p)` infers `number[]`).
+                                val lpName = lp.name.takeIf {
+                                    it is Identifier || it is ObjectBindingPattern || it is ArrayBindingPattern
+                                }
                                 if (lp.dotDotDotToken || lpName == null || lp.type != null) {
                                     lpOk = false; break
                                 }
@@ -131442,7 +131932,7 @@ interface DataView {
                                     val savedLocalTypes = currentLocalTypes
                                     currentLocalTypes = EpochMap(currentLocalTypes)
                                     for ((idx, name) in lpNames.withIndex()) {
-                                        currentLocalTypes[name] = sigParamTypes[idx]
+                                        installInferenceLambdaParam(name, sigParamTypes[idx])
                                     }
                                     val bodyType = try {
                                         retypeInferenceBodyExpr(effectiveBodyExpr)
@@ -131505,10 +131995,15 @@ interface DataView {
                         if (argParamsLocal != null && argBody != null &&
                             argParamsLocal.size == callbackSig.parameters.size) {
                             // Validate ALL lambda params: Identifier-named, no dotDotDot, no annotation.
-                            val lpNames = mutableListOf<String>()
+                            val lpNames = mutableListOf<Expression>()
                             var lpOk = true
                             for (lp in argParamsLocal) {
-                                val lpName = (lp.name as? Identifier)?.text
+                                // (CHK.96) stage 2: a PATTERN parameter qualifies beside an
+                                // Identifier one — its leaves are installed below
+                                // (`objs.map(({ p }) => p)` infers `number[]`).
+                                val lpName = lp.name.takeIf {
+                                    it is Identifier || it is ObjectBindingPattern || it is ArrayBindingPattern
+                                }
                                 if (lp.dotDotDotToken || lpName == null || lp.type != null) {
                                     lpOk = false; break
                                 }
@@ -131534,7 +132029,7 @@ interface DataView {
                                     val savedLocalTypes = currentLocalTypes
                                     currentLocalTypes = EpochMap(currentLocalTypes)
                                     for ((idx, name) in lpNames.withIndex()) {
-                                        currentLocalTypes[name] = slotMapped[idx]
+                                        installInferenceLambdaParam(name, slotMapped[idx])
                                     }
                                     // B86.1b-3 (multi-param): publish ALL slot TP→mapped bindings to
                                     // currentInferenceMapper so any nested ArrowFunction body re-typing
@@ -148543,7 +149038,19 @@ interface DataView {
                 for ((i, param) in expr.parameters.withIndex()) {
                     if (param.type != null) continue
                     if (i >= sig.parameters.size) break
-                    val pName = param.name as? Identifier ?: continue
+                    val pn = param.name
+                    if (pn is ObjectBindingPattern || pn is ArrayBindingPattern) {
+                        // (CHK.96) stage 2: a PATTERN parameter's leaves at the
+                        // property-access reader (`objs.map(({ p }) => p.nope)`), the
+                        // round-569 TP gate applying to the parent type.
+                        val parentType = getTypeOfSymbol(sig.parameters[i])
+                        if (parentType === anyType || parentType === errorType || typeContainsUnresolvedTypeParam(parentType)) continue
+                        forEachBindingPatternLeaf(pn, parentType, isConst = false, refuseFnMembers = false) { leaf, t ->
+                            if (t != null && !isTpReferencingFnTypeOrUnion(t)) currentLocalTypes[leaf] = t
+                        }
+                        continue
+                    }
+                    val pName = pn as? Identifier ?: continue
                     val pType = getTypeOfSymbol(sig.parameters[i])
                     if (pType === anyType || pType === errorType) continue
                     // Round 569: an UN-INFERRED callee TP in the contextual
@@ -148718,7 +149225,19 @@ interface DataView {
                 for ((i, param) in expr.parameters.withIndex()) {
                     if (param.type != null) continue
                     if (i >= sig.parameters.size) break
-                    val pName = param.name as? Identifier ?: continue
+                    val pn = param.name
+                    if (pn is ObjectBindingPattern || pn is ArrayBindingPattern) {
+                        // (CHK.96) stage 2: a PATTERN parameter's leaves at the
+                        // property-access reader (`objs.map(({ p }) => p.nope)`), the
+                        // round-569 TP gate applying to the parent type.
+                        val parentType = getTypeOfSymbol(sig.parameters[i])
+                        if (parentType === anyType || parentType === errorType || typeContainsUnresolvedTypeParam(parentType)) continue
+                        forEachBindingPatternLeaf(pn, parentType, isConst = false, refuseFnMembers = false) { leaf, t ->
+                            if (t != null && !isTpReferencingFnTypeOrUnion(t)) currentLocalTypes[leaf] = t
+                        }
+                        continue
+                    }
+                    val pName = pn as? Identifier ?: continue
                     val pType = getTypeOfSymbol(sig.parameters[i])
                     if (pType === anyType || pType === errorType) continue
                     // Round 569: skip un-inferred callee TPs (see the
@@ -149312,7 +149831,17 @@ interface DataView {
         val sig = fnType.callSignatures?.singleOrNull() ?: return
         for ((i, param) in parameters.withIndex()) {
             if (param.type != null || param.dotDotDotToken) continue
-            val name = (param.name as? Identifier)?.text ?: continue
+            val pn = param.name
+            if (pn is ObjectBindingPattern || pn is ArrayBindingPattern) {
+                // (CHK.96) stage 2: a PATTERN parameter's leaves at the TS2367 reader.
+                val pType = sig.parameters.getOrNull(i)?.let { getTypeOfSymbol(it) } ?: continue
+                if (pType === anyType || pType === errorType || typeContainsUnresolvedTypeParam(pType)) continue
+                forEachBindingPatternLeaf(pn, pType, isConst = false, refuseFnMembers = false) { leaf, t ->
+                    if (t != null && !isTpReferencingFnTypeOrUnion(t)) currentLocalTypes[leaf] = t
+                }
+                continue
+            }
+            val name = (pn as? Identifier)?.text ?: continue
             if (currentLocalTypes[name] != null) continue
             val sigParam = sig.parameters.getOrNull(i) ?: continue
             val pType = getTypeOfSymbol(sigParam)
@@ -149503,16 +150032,27 @@ interface DataView {
      * the position supplies a concrete type, so it can turn an `any` into a real
      * type and can never redirect one that already resolved.
      */
-    private fun applyPulledContextualParamTypes(fn: Node, parameters: List<Parameter>) {
-        // The population is exactly the un-annotated identifier parameters; the
-        // gate is what keeps the (possibly inference-driving) pull off every
-        // other function body in the program.
-        if (parameters.none { it.type == null && !it.dotDotDotToken && it.name is Identifier }) return
+    private fun applyPulledContextualParamTypes(fn: Node, parameters: List<Parameter>, patternsOnly: Boolean = false) {
+        // The population is exactly the un-annotated identifier and PATTERN parameters;
+        // the gate is what keeps the (possibly inference-driving) pull off every
+        // other function body in the program. (CHK.96) stage 2 adds the patterns —
+        // `objs.map(({ p }) => …)` — whose leaves go through [bindingElementType] over
+        // the contextual parameter type (tsc's `getContextuallyTypedParameterType` as
+        // the binding element's parent type); [patternsOnly] is the ccet argument
+        // reader's call, which types pattern parameters here and leaves its identifier
+        // parameters to (CHK.98)(a).
+        if (parameters.none {
+                it.type == null && !it.dotDotDotToken &&
+                    ((it.name is Identifier && !patternsOnly) || it.name is ObjectBindingPattern || it.name is ArrayBindingPattern)
+            }) return
         val ctx = pullContextualTypeAt(fn) ?: return
         val sig = callableSignaturesForCtx(ctx)?.singleOrNull() ?: return
         for ((i, param) in parameters.withIndex()) {
             if (param.type != null || param.dotDotDotToken) continue
-            val name = (param.name as? Identifier)?.text ?: continue
+            val pattern = param.name.takeIf { it is ObjectBindingPattern || it is ArrayBindingPattern }
+            val name = (param.name as? Identifier)?.text
+            if (name == null && pattern == null) continue
+            if (pattern == null && patternsOnly) continue
             val sigParam = sig.parameters.getOrNull(i) ?: continue
             val pType = getTypeOfSymbol(sigParam)
             if (pType === anyType || pType === errorType) continue
@@ -149531,9 +150071,16 @@ interface DataView {
             // [checkCallTypesInContextualFnExpr]).
             val optional = (sigParam.valueDeclaration as? Parameter)
                 ?.let { it.questionToken && it.initializer == null } == true
-            currentLocalTypes[name] =
-                if (optional && strictNullChecks) getUnionType(listOf(pType, undefinedType))
-                else pType
+            val effective = if (optional && strictNullChecks) getUnionType(listOf(pType, undefinedType)) else pType
+            if (pattern != null) {
+                // A refused leaf keeps the `anyType` the pre-pass registered — round 475's
+                // contract; B516's gate applies to a member as to a parameter.
+                forEachBindingPatternLeaf(pattern, effective, isConst = false, refuseFnMembers = false) { leaf, t ->
+                    currentLocalTypes[leaf] = t?.takeIf { !isTpReferencingFnTypeOrUnion(it) } ?: anyType
+                }
+                continue
+            }
+            currentLocalTypes[name!!] = effective
         }
     }
 
@@ -152817,7 +153364,24 @@ interface DataView {
         if (currentLocalTypes.containsKey(name)) return null
         if (name in currentShadowedNames) return null
         val element = cmamBindingElementDeclaration(objectExpr, name) ?: return null
-        if (element.dotDotDotToken) return null
+        if (element.dotDotDotToken || (element as NodeBase).parent is ArrayBindingPattern ||
+            bindingPatternSourceIsUnion(element)) {
+            // (CHK.96) stage 2: an object REST and an ARRAY-pattern element answer through
+            // the declaration reader's own function (`const { p, ...rest } = obj; rest.nope`,
+            // `const [t] = tup; t.nope`) — both refused here before; the refusals below
+            // (nullish, class instance, an unresolved type parameter) apply as they do to
+            // a member.
+            var t = bindingElementDeclaredType(element, 0) ?: return null
+            // The discriminant carry applies to the receiver's DECLARED type here as
+            // [getTypeOfIdentifier] applies it to a parameter's — a block-scoped
+            // destructured name never reaches that function (B83.5).
+            if (t is Type.Union && name in discriminantCarryNames) t = destructuredDiscriminantCarry(objectExpr, t) ?: t
+            if (t === anyType || t === errorType || t === unknownType) return null
+            if (typeContainsUnresolvedTypeParam(t)) return null
+            if (typeHasNullishConstituent(t)) return null
+            if (t is Type.Interface && t.symbol?.flags?.hasAny(SymbolFlags.Class) == true) return null
+            return t
+        }
         val memberName = (element.propertyName ?: element.name) as? Identifier ?: return null
         val source = typeCaptureDestructured(element, 0) ?: return null
         if (source === anyType || source === errorType || source === unknownType) return null
@@ -152831,6 +153395,18 @@ interface DataView {
         if (typeHasNullishConstituent(t)) return null
         if (t is Type.Interface && t.symbol?.flags?.hasAny(SymbolFlags.Class) == true) return null
         return t
+    }
+
+    /** (CHK.96) stage 2 — does [element]'s pattern destructure a UNION (its top-level owner's source)? The
+     *  member route below answers only a SINGLE member symbol; a union source lifts per constituent
+     *  through [bindingElementDeclaredType], where the discriminant carry then narrows it. */
+    private fun bindingPatternSourceIsUnion(element: BindingElement): Boolean {
+        val pattern = (element as NodeBase).parent ?: return false
+        return when (val owner = (pattern as NodeBase).parent) {
+            is VariableDeclaration -> bindingPatternSourceType(owner) is Type.Union
+            is Parameter -> owner.type?.let { getTypeFromTypeNode(it) } is Type.Union
+            else -> false
+        }
     }
 
     /**
@@ -172124,6 +172700,18 @@ interface DataView {
         // [tupleArrayBase] indexes that slot rather than unioning the array type in.
         val restIndex = node.elements.indexOfFirst { it is RestType || (it is NamedTupleMember && it.dotDotDotToken) }
         return buildTupleFromTypes(elementTypes, node.elementOptional, readonly, restIndex)
+    }
+
+    /**
+     * (CHK.96) stage 2 — the tuple [t] with its slots replaced by [elements] (the
+     * instantiator's tuple arm): optionality, readonly-ness and the rest index carry
+     * over. Before this a tuple reached through a generic instantiation — `Map<K, V>`'s
+     * `[Symbol.iterator](): MapIterator<[K, V]>` — was rebuilt as a plain `{ 0: K; 1: V;
+     * length: 2; }` by the instantiator's member walk, which no tuple consumer recognised.
+     */
+    internal fun instantiateTupleElements(t: Type.Object, elements: List<Type>): Type {
+        val flags = elements.indices.map { tupleSlotIsOptional(t, it) }.takeIf { fl -> fl.any { it } }
+        return buildTupleFromTypes(elements, flags, t.readonlyTuple, t.tupleRestIndex)
     }
 
     /** Build a tuple `Type.Object` (with `tupleElementTypes`, numbered props, length, number index sig).

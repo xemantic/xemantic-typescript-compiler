@@ -252,25 +252,25 @@ class DestructuredReceiverTypeTest {
     }
 
     /**
-     * An ARRAY pattern is out of scope by construction: `typeCaptureDestructured`
-     * answers null for anything whose pattern is not an `ObjectBindingPattern`, so
-     * tuple and iterable destructuring never reaches the member lookup. tsc reports.
+     * (CHK.96) stage 2: an ARRAY pattern's element answers through the declaration
+     * reader's own `bindingElementDeclaredType` (`typeCaptureDestructured` still answers
+     * null for it), so `head.zzznope` reports as tsc does.
      */
     @Test
-    fun `refusal - an ARRAY pattern is not typed`() {
+    fun `an ARRAY pattern element is typed - CHK96 stage 2`() {
         val d = diagnose(
             prelude + "declare const xs: Inner[];\nexport function f() { const [head] = xs; head.zzznope; }"
         )
-        assert(d.none { it.code == 2339 })
+        assert(d.map { it.code to it.message } == listOf(2339 to "Property 'zzznope' does not exist on type 'Inner'."))
     }
 
     /**
-     * A UNION source answers the member name once PER CONSTITUENT, and the receiver
-     * is then a union of those member types which this does not build; a single
-     * answer is required. tsc reports.
+     * (CHK.96) stage 2: a UNION source lifts per constituent through
+     * `bindingElementDeclaredType`, so the receiver is the union of the member types
+     * and the all-missing verdict names it, as tsc does.
      */
     @Test
-    fun `refusal - a UNION source answering per constituent is not typed`() {
+    fun `a UNION source's element is the union of the member types - CHK96 stage 2`() {
         val d = diagnose(
             """
             interface Left { shared: Inner }
@@ -281,7 +281,7 @@ class DestructuredReceiverTypeTest {
             export function f() { const { shared } = either; shared.zzznope; }
             """.trimIndent()
         )
-        assert(d.none { it.code == 2339 })
+        assert(d.map { it.code to it.message } == listOf(2339 to "Property 'zzznope' does not exist on type 'Inner | Middle'."))
     }
 
     /**

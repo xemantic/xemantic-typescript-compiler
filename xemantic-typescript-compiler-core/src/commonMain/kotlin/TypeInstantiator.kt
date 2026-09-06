@@ -126,6 +126,13 @@ internal class TypeInstantiator(
                 if (type.symbol != null) return type
                 if (!type.callSignatures.isNullOrEmpty()) return type
                 if (!type.constructSignatures.isNullOrEmpty()) return type
+                // (CHK.96) stage 2: a TUPLE is rebuilt as a tuple — its slots mapped, its
+                // flags kept — never as the member walk's plain `{ 0: T; length: N; }`.
+                type.tupleElementTypes?.let { elems ->
+                    val mapped = elems.map { instantiateType(it, mapper) }
+                    return if (mapped.zip(elems).all { (a, b) -> a === b }) type
+                    else checker.instantiateTupleElements(type, mapped)
+                }
                 val origMembers = type.members ?: return type
                 if (origMembers.isEmpty()) return type
                 var anyChanged = false

@@ -424,14 +424,17 @@ class BindingElementTypeTest {
         assertSilent("function f({ q }: I) { const [a] = tup; const { p } = obj; const w: number = a + p; takeB(q === \"s\") }")
 
     @Test
-    fun `negative control - a refused name still shadows a same-file function - round 475`() {
-        // `{ ...alpha }` is an object REST, which stage 1 REFUSES; the name must still
-        // register `any`, or the read resolves the same-named FUNCTION below and prints
-        // its signature. tsc reports the rest's object type here (a recorded residue).
+    fun `a rest name shadows a same-file function with the rest's own type - round 475`() {
+        // Stage 1 REFUSED `{ ...alpha }` and the `any` shadow kept the same-named FUNCTION
+        // below from resolving in its place; stage 2 types the rest, and the type is what
+        // shadows it now — the read must never print the function's signature.
         val src = "function f({ ...alpha }: I) { const w: boolean = alpha }\nfunction alpha(): number { return 1 }"
         val d = diagnose(prelude + src)
-        assert(d.none { "=>" in it.message })
-        assert(d.isEmpty())
+        // The hazard is the SHADOWED function's own signature (`alpha(): number` renders
+        // `() => number`); `I`'s own `cb` member legitimately prints an arrow, so the guard
+        // must name the function's rendering rather than reject every `=>`.
+        assert(d.none { "() => number" in it.message })
+        assert(d.map { it.message } == listOf(decl("{ p: number; q: string; o?: number | undefined; s?: string | undefined; n: { r: string; }; cb: (x: number) => void; u: string | number; }")))
     }
 
     @Test
@@ -568,19 +571,22 @@ class BindingElementTypeTest {
         assertOne("function f() { let { p, ...rest } = uni; const w: boolean = p }", 2322, decl("string | number"), "w:")
 
     @Test
-    fun `residue - an object rest is any`() =
-        assertSilent("function f() { const { p, ...others } = obj; const w: boolean = others }")
+    fun `stage 2 - an object rest reads the rest`() =
+        assertOne(
+            "function f() { const { p, ...others } = obj; const w: boolean = others }", 2322,
+            decl("{ q: string; o?: number | undefined; s?: string | undefined; n: { r: string; }; cb: (x: number) => void; u: string | number; }"), "w:",
+        )
 
     @Test
-    fun `residue - a contextual pattern parameter is any`() =
-        assertSilent("objs.map(({ p }) => { const w: boolean = p; return p })")
+    fun `stage 2 - a contextual pattern parameter reads the member`() =
+        assertOne("objs.map(({ p }) => { const w: boolean = p; return p })", 2322, decl("number"), "w:")
 
     @Test
-    fun `residue - a for-of over a Map head is any`() {
+    fun `stage 2 - a for-of over a Map head reads the key`() {
         val d = diagnose(
             prelude + "declare const m: Map<string, number>\nfunction f() { for (const [k, v] of m) { const w: boolean = k } }",
             directives = "// @strict: true\n// @useRealLibs: true",
         )
-        assert(d.isEmpty())
+        assert(d.map { it.message } == listOf(decl("string")))
     }
 }

@@ -25,6 +25,117 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.28) — an object rest, iterables, contextual pattern parameters and the destructured-discriminant carry (stage 2 of (CHK.96), the item CLOSED), and the three defects the gates found (2026-09-06)
+
+**Suite 17,792 → 17,874 / 0 / 3** — 82 pins in the new `BindingElementStage2Test`, plus one
+re-expressed control in `BindingElementTypeTest`; no baseline moved and no
+`LogicalParityDivergence` is needed. **This round INHERITED an interrupted session's tree**: the
+(CHK.96) stage-2 implementation (620 lines of `Checker.kt`, 7 of `TypeInstantiator.kt`, the
+585-line pin class) was already written and already compiled, with the gates unrun and ONE pin
+red. Its receipts survived in the previous session's scratchpad, which is how the arm logs below
+could be read rather than re-derived. **Everything the gates then found is recorded under
+"THREE DEFECTS" — that half is this round's actual work, and two of the three were REGRESSIONS
+the implementation introduced.**
+
+**(CHK.96) STAGE 2 LANDED — the five deliverables the item named.**
+1. **Object REST** — `objectRestType` + `objectRestMemberSpreads` (tsc's `getRestType`
+   checker.ts:11611 and `isSpreadableProperty`): the apparent type's properties minus the ones
+   the pattern names, each COPIED into a fresh `Symbol` the rest object owns, typed through
+   `propertyTypeOnCarrier`, registered MUTABLE (`mappedMutableMemberIds` — tsc's
+   `getSpreadSymbol(prop, readonly = false)`, so `{ readonly r }` rests as `{ r }`), index
+   signatures carried; a non-object or GENERIC source refuses (tsc answers `Omit<T, K>` there).
+   The drop set is `#private` / `Private` / `Protected` irrespective of container, plus methods
+   and accessors **only when the declaring container is a class** — an interface's `m(): void`
+   and an object literal's accessor DO spread. A sibling root fix landed in the object-literal
+   SPREAD's own copy, which carried the source's `readonly` declaration and printed it.
+2. **`[Symbol.iterator]` sources** — `iterationYieldTypeOf` with tsc's two legs: a FAST one
+   reading the first type argument of `Iterable` / `IterableIterator` / `IteratorObject` /
+   `Generator` / `Iterator` / `ArrayIterator` / `MapIterator` / `SetIterator` / `StringIterator`,
+   and a SLOW one through `[Symbol.iterator]()` → `next()` → `IteratorResult<T, R>` (a union
+   keeping only the yield halves). Wired at `bindingElementSlotType`'s array `else` and at a new
+   trailing arm of `forOfElementTypeOf`, which also gained a `wide`-only union arm. **What makes
+   `Map<K, V>`'s `MapIterator<[K, V]>` readable at all is the `TypeInstantiator` change**: its
+   anonymous-object arm now maps a tuple's `tupleElementTypes` and rebuilds through
+   `Checker.instantiateTupleElements` instead of falling into the member walk that produced a
+   plain `{ 0: K; 1: V; length: 2; }`.
+3. **Contextual pattern parameters** (tsc's `getContextuallyTypedParameterType`) —
+   `applyPulledContextualParamTypes` gained a `patternsOnly` flag and a pattern branch, and the
+   same arm landed at five more readers: `ccetEnterFunctionLike`'s annotated and argument
+   branches, `cpaExprArrowFunction` / `cpaExprFunctionExpression`, and
+   `applyContextualParamTypesForArrow`. Return inference follows through
+   `getTypeOfArrowFunction` and the two `tispGatherCallbackCandidates` sites, whose `lpNames`
+   went from `String` to `Expression` and install through `installInferenceLambdaParam`.
+4. **The pattern's IMPLIED contextual type** — `arrayLiteralAsDestructuringTuple` stopped
+   refusing an EMPTY literal (it is the empty tuple) and every element now widens through
+   `widenLiteralMembers`; an index past a fixed tuple's slots reads `undefined` rather than
+   refusing, and TS2493 names the real tuple instead of a hardcoded `'[]'` / `'0'`.
+5. **The destructured-discriminant carry** — `destructuredDiscriminantCarry` +
+   `patternLeafAssignedIn` (tsc's `getNarrowedTypeOfSymbol` / `isSomeSymbolAssigned`). The union
+   arm no longer refuses under tsc's precondition; it lifts and records the leaf in
+   `discriminantCarryNames`, and four readers re-read a recorded name from the flow-narrowed
+   parent. Because this checker narrows by path STRINGS rather than tsc's pseudo-reference, the
+   question is INVERTED: each SIBLING element's own narrowed type filters the parent's
+   constituents to those whose member relates to it, a sibling at its declared type filtering
+   nothing and one narrowed to `never` emptying the parent. `discriminantCarryDepth` is the
+   recursion guard and it changes the ANSWER, not just termination — a sibling that is itself a
+   carry name is read by the ordinary walk, so the two never recurse into each other.
+
+**THREE DEFECTS THE GATES FOUND — the round's real content.**
+- **(a) A BLIND PIN, not a compiler defect.** The one red pin the interrupted session left,
+  `a rest name shadows a same-file function with the rest's own type - round 475`, asserted
+  `d.none { "=>" in it.message }` beside an expected message that itself contains
+  `cb: (x: number) => void`. The two assertions CONTRADICTED each other; the compiler was
+  producing exactly the expected row. The guard's intent is the shadowed FUNCTION's rendering,
+  so it now names it (`"() => number"`). **A guard broad enough to catch an unrelated member of
+  the fixture's own prelude is a guard that fails on a working binary.**
+- **(b) A CORPUS REGRESSION — double emission, exactly the hazard the item's Guards paragraph
+  named.** `destructuringUnspreadableIntoRest` went **50 → 72 rows**: giving an object rest a
+  type made the spine's member-access reader emit TS2339 for every row the dedicated
+  `checkObjectRestUnspreadableAccess` (B353/B357/B359) already owned. `--passTiming`'s
+  emissions-by-pass named both in one run — **`checkObjectRestUnspreadableAccess` 44,
+  `checkSpine` 22** — and the 22 are precisely the duplicated rows. The walker still UNIQUELY
+  owns the 22 generic `Omit<this, …>` / `Omit<T, …>` rows that `objectRestType` refuses, so the
+  answer is a dedupe and not a retirement; it goes in the walker because that pass runs SECOND
+  (CLAUDE.md's rule), through stage 1's own `diagnosticAlreadyEmitted`. Scratch fixture 66 → 44
+  rows, 0 duplicates. Ablated (the one `continue` removed), **exactly the new pin goes RED and
+  nothing else** — 1 of 82.
+- **(c) A GRID REGRESSION — one ours-only TS2322 on the three profiles carrying
+  `src/services/services.ts`,** at `services.ts:3264`:
+  `const [startPosition, endPosition] = typeof positionOrRange === "number" ? [positionOrRange,
+  undefined] : [positionOrRange.pos, positionOrRange.end]`. This is **stage 1's recorded
+  array-literal hazard one level of indirection out**. tsc pushes the pattern's implied
+  contextual type into BOTH branches of the conditional, so the source is
+  `[number, undefined] | [number, number]` and slot 0 is `number`; reading the conditional's own
+  type gives each branch's un-contextual `(number | undefined)[]` and slot 0 becomes
+  `number | undefined`. The obvious fix — union the two branches' `arrayLiteralAsDestructuringTuple`
+  — was BUILT and is WRONG for a second reason: the elements need their FLOW-NARROWED types at
+  their own branch (`positionOrRange` is `number` only inside the `typeof` guard) and
+  `getTypeOfExpression` never narrows, so slot 0 measured
+  `number | { pos: number; end: number; }` — a different wrong answer. **A
+  conditional-of-array-literals under an array pattern therefore REFUSES the whole pattern**
+  (`conditionalOfArrayLiterals`), every leaf keeping `anyType` per round 475's contract: silent,
+  which is what HEAD does for the shape, so nothing correct is lost. Both wrong states were
+  measured on real binaries before the refusal landed, and both references agree slot 0 is
+  `number` — queued as **(CHK.107)**.
+
+**GATES.** Suite **17,874 / 0 / 3** (core 16,385 / 0, corpus **8,837 / 0** with every guard
+baseline run, project 848, externals 290, kir 159, lsp 58, daemon 66, api 30, client 20, cli
+18). `cost_gate.py` **exit 0, no rebaseline** — the largest move is `typeOfExpr.calls` **+0.89%**
+(613,091 → 618,526, the rest / iterator / contextual-parameter typing), `narrow.walks` +0.03%,
+`globals.lookups` +0.06%, `typeNode.bypassed` +0.11%, and `output.errors` 46 → 46 on the
+compiler profile. `huge_methods.py --fail-over 0` **exit 0** (census clean, largest 5,651).
+**Grid 8 × `added=0 removed=0`** via `scripts/chk96s2-grid.sh` — two snapshotted class dirs
+(stage-1 HEAD vs this tree), refusing a byte-identical self-comparison, an empty or TRUNCATED
+capture, and fewer than 8 profiles; its BEFORE arm is cached behind a `Checker.class` sha guard
+so a frozen-instrument reuse is impossible (round 853).
+
+**RESIDUES** (recorded, all OURS and outside the item): the TS2367 reader has no contextual
+types for a call-argument arrow and no anonymous-object-versus-primitive verdict; a binding
+element naming NO member of its parent reports nothing; `new Set([1, 2])` constructs `Set<any>`;
+an object literal's un-annotated getter reads `any`; TS2493 for a DECLARED tuple is not reported
+inside a body; a body-local carried discriminant is not re-read at the property-access reader
+though its parameter twin is; and (CHK.107)'s conditional-of-array-literals refusal above.
+
 ### Round (P18.27) — destructured bindings get their types (stage 1 of (CHK.96)), and contextual callback typing is re-measured into (CHK.98) (2026-09-06)
 
 **Suite 17,717 → 17,792 / 0 / 3** — the 75 new pins in `BindingElementTypeTest`; no baseline
@@ -2217,7 +2328,7 @@ prediction: 17,343 / 0 / 3.**
   arms: literal arm off (~30 RED), let-widening off (`'"a"'` printed for a `let`),
   annotated-primitive arm off, collision guard off.
 
-- [ ] **(CHK.96) STAGE 1 LANDED 2026-09-06 ((P18.27) note) — `bindingElementType` at plug points (a)-(g); the
+- [x] **(CHK.96) CLOSED 2026-09-06 — STAGE 2 LANDED ((P18.28) note): the object REST (tsc's `getRestType`), `[Symbol.iterator]` sources (which needed the instantiator to rebuild a TUPLE as a tuple), CONTEXTUAL pattern parameters at six readers, the pattern's IMPLIED contextual type, and the destructured-discriminant CARRY (tsc's `getNarrowedTypeOfSymbol`, inverted through the siblings' flow types). 82 pins in `BindingElementStage2Test`; corpus 8,837/0, grid 8×0/0, `cost_gate.py` exit 0 with no rebaseline. THREE defects the gates found are written up in the note — a blind pin, a double emission against `checkObjectRestUnspreadableAccess` (deduped in the walker, which runs SECOND), and an ours-only TS2322 on `services.ts:3264` where a CONDITIONAL of array literals gets no implied contextual tuple; that shape REFUSES and is queued as (CHK.107). STAGE 1 LANDED 2026-09-06 ((P18.27) note) — `bindingElementType` at plug points (a)-(g); the
   ~120-cell matrix has 0 ours-only rows; 75 pins, 9 arms ((c)↔(b) and (g)↔(d)/(e) are round-927 pairs, the counter arm
   flat); corpus 8,837/0, core 16,303/0, grid 8×0/0, cost_gate rebaselined (+2.32% `typeOfExpr.calls`, 80% the ccet
   leave-time initializer typing), huge_methods 0. FOUR grid-forced ROOT fixes: an optional `T["k"]` carries
@@ -2531,6 +2642,212 @@ prediction: 17,343 / 0 / 3.**
   narrows the chain's every link non-nullish in tsc (a `"string"` result cannot come from a
   short-circuited chain). The other remaining knip false positive behind (CHK.98)(b)'s union
   gate.
+
+- [ ] **(CHK.99) A DESTRUCTURED `export const/let/var { … } = …` / `[ … ] = …` IS NOT AN EXPORT TO
+  ANY AST-DERIVED EXPORT SET — MEASURED 2026-09-06 by read-only recon against `52f386e8`
+  (`scratchpad/chk99/r1`: 10 false TS2305 on every named import of a pattern name, through
+  `export *` barrels too, a false TS2339 on `typeof NS` for a namespace-scoped pattern export,
+  and `import * as A; A.p` typed `any`; both references 0 rows).** The TYPE of a direct named
+  import already resolves because `Binder.bindVariableDeclarationName` (Binder.kt:398-419)
+  declares every pattern leaf; what misses them is FIVE copies of `(decl.name as? Identifier)`
+  over a `VariableStatement` — `getModuleNamedExports` (~56368, the TS2305 set),
+  `collectExportedNamesInBody` (~46157), `collectFileDirectExportedNames` (~46186), the `typeof
+  NS` merged member set (~38412), the `nsImportTargets` builder (~19767) — plus the `varDecls`
+  index (~80944) behind `computeExportedVarDeclThroughStars` (~56266). SEAM: one
+  `bindingPatternNames(name): List<String>` (object/array, nested, defaults, rest, holes) at
+  those six sites; tsc's rule is binder.ts:3648 / :887-888 (every element of an exported pattern
+  is an export). PINS: shorthand, renamed, array, hole, default, nested, `let`/`var`, rest,
+  barrel, namespace-import member, namespace-scoped, an in-file read control. POPULATION: 0 on
+  all 8 profiles (the grid is a control). CORPUS: the `export*BindingPattern` baselines are all
+  INACTIVE (amd/system variants); the two ACTIVE exported-destructuring baselines are single-
+  file — the class is structurally invisible to the corpus (same axis as (CHK.29)/(CFG.1)), so
+  the instrument is a `-project` fixture. MEANING (false positive).
+
+- [ ] **(CHK.100) A NAMESPACE-QUALIFIED ENUM MEMBER (`NS.K.B`, `Outer.Inner.K.B`, imported
+  `FAR.EntryKind.Span`) NARROWS NOTHING — not `===`/`!==`/`==`, not a `switch` case, not through
+  a `const EK = NS.K` alias — so every discriminated union declared `kind: NS.K.A` reports a
+  false TS2339 on the un-narrowed union and renders it in every message — MEASURED 2026-09-06
+  (`chk99/r2` + `r2b`: 9 false TS2339 + 2 un-narrowed displays against 0 in both references;
+  flat `K2.B` and a single-segment imported `FlatK.B` are the controls that pass).** The axis is
+  qualification DEPTH ≥ 2, not imports (the (P18.27) note is corrected: same-file `LocalNS.K.B`
+  fails identically). MECHANISM: the RHS readers `enumMemberKeyOfExpr` (~127119),
+  `enumMemberTypeOfExprGated` (~127158), `enumMemberTypeOfExpr` (~127179) and the ANNOTATION
+  reader `enumMemberKeysOfTypeNode` (~127203) all take `pa.expression as? Identifier` /
+  `qn.left as? Identifier`, and `resolveEnumSymbolForDiscriminant` (~126890) resolves a bare
+  NAME only — so both sides fail. SEAM: a `resolveEnumSymbolForQualifiedReceiver(receiver,
+  keyNode)` walking a dotted chain (`descendToConstEnum` ~14582 is the shape,
+  `resolveNamespaceQualifiedTypeAlias` ~127314 the precedent) feeding all four readers — both
+  sides in ONE commit (round 425's split-key hazard). UNBLOCKS widening the cpa/ccet readonly
+  for-of head (P18.27) kept narrow for exactly this shape (`takeB(e)` over a `readonly X[]` head
+  is `any` at the argument reader today, r2b:6/8/10 — the g4 silence was `any` at the head, not
+  narrowing). POPULATION: 23 `=== Pascal.Pascal.Pascal` sites (harness 8, server 8, services 5,
+  typingsInstallerCore 2 — `FindAllReferences.EntryKind.Span/Node` ×12,
+  `JsTyping.NameValidationResult.Ok` ×8), so the grid CAN see it: expect REMOVED rows on those
+  profiles. CORPUS: no ACTIVE baseline carries the shape; the enum-discriminant guard set is the
+  (REL.2)/(CHK.85) pin classes. MEANING.
+
+- [ ] **(CHK.101) A NULLISH-CARRYING OBJECT UNION ARGUMENT AGAINST AN INTERFACE OR INTERFACE-
+  UNION PARAMETER IS SILENT AT THE ARGUMENT POSITION — `useM(x)` with `x: Pr | BP | undefined`
+  against `p: Pr | BP` reports nothing, while the same pair reports at a declaration and a
+  return, and `string | undefined` → `string` reports as an argument — MEASURED 2026-09-06
+  (`chk99/r3b`: 9 lost TS2345, all `Type 'undefined' is not assignable`; `r3`: 8 more through a
+  type-guard callee). The (P18.27) note's residue (3) is INVERTED: `isBP(program)` is a LOST
+  diagnostic, not an ours-only one (pristine reports TS2345 there; the g2 reduction changed the
+  parameter shape — tsc's real `isBuilderProgram<T extends BuilderProgram>(program: Program |
+  BuilderProgram): program is T` sits below `if (!program) return false;` on the profile).**
+  MECHANISM: `caasNonSimpleParamChecks` (~164897: `!isArgCheckableType(paramType)`, an interface
+  or interface-union is not simple per `isSimpleCheckableType` ~165679) exits with
+  `CAAS_CONTINUE` (~165075) for a non-primitive argument before the relation (~165196) is
+  asked; `canUseTypeEngine` (~101035) admits the union TARGET, which is why the other positions
+  report. SEAM: in `caasNonSimpleParamChecks`, when `argType` is a union carrying Null/Undefined,
+  the nullish constituent does not relate to `paramType` and the NON-nullish remainder does,
+  emit the standard TS2345 with the nullish chain line — decidable without structural
+  completeness because the only failing constituent is the nullish one. (b) the generic guard
+  keeps `undefined` in `T` (`isBP<T extends BP>(p: Pr | T)` narrows to `BP | undefined` where tsc
+  gives `BP`): `tryInferSingleTypeParamFromArgs` / `tispCheckConstraint` (~130841) lack tsc's
+  `getInferredType` fallback to the instantiated constraint (checker.ts:27655-27660) — the
+  sibling of (P18.27)'s "no inference site → constraint". (c) a body-local `const x = mk()`
+  whose initializer is an object/nullish union is `any` at every reader — (CHK.95)'s scalar set,
+  stage 2. GRID RISK HIGH by construction: this reads flow narrowing at a parameter, and
+  `watchUtilities.ts:611/628` (`if (!program) return false; … isBuilderProgram(program)`) is the
+  shape that must stay silent — the truthiness early-return AND the negated `isArray` guard must
+  both narrow at the argument reader; run the grid BEFORE pins. CORPUS: the argument-position
+  nullish families (`unionArgOkForOptionalParam` ~165179, `isUndefinedArgForOptionalParam`
+  ~165175, the M1.7a optional-param rule ~164445) — run every `*OptionalParam*` / `*NullishArg*`
+  / `*Undefined*Argument*` class plus the (CHK.63) classes. MEANING.
+
+- [ ] **(CHK.102) A GENERIC INTERFACE'S FUNCTION-TYPED PROPERTY SIGNATURE (`interface Box<T> { f:
+  (x: T) => T }`) IS ONE OBJECT SHARED BY EVERY INSTANTIATION AND FROZEN AT FIRST TOUCH —
+  `Box<string>.f` reads `(x: number) => number` after a `Box<number>` was touched first: a FALSE
+  TS2345 on `bs.f("a")`, a LOST one on `bs.f(1)`, and the wrong display everywhere; methods
+  (`m(x: T): T`), `v: T` and `o: { v: T }` are correct — MEASURED 2026-09-06 (`chk99/r4b`
+  lines 18-20 and `r4c` lines 4/12/14, mirror images by declaration order; `r4d` Map is
+  unaffected).** MECHANISM: `resolveReferenceMembers` (~118188-118197) shares the target's
+  symbol whenever `instantiateType` answers the same object, and `TypeInstantiator.instantiateType`
+  (:116-128) deliberately no-ops every function-shaped `Type.Object`;
+  `resolveGenericPropertyTypeWorker` (~112044-112227) has no `PropertySignature` arm (`else ->
+  null`), so `propertyTypeOnCarrier` (~125951) falls to the shared symbol; the substitution that
+  lands later mutates that shared object in place (the 17.39 `substituteOuterTypeArgs*` family
+  ~112111/~112200 — find the interface-member writer with a probe printing the identity of
+  `bs.f`'s type at the two reads). SEAM: mint per instantiation — `instantiateTypeFnAware`
+  (~172028, round 465, "mints FRESH objects, never mutates") in `resolveReferenceMembers` for
+  fn-shaped members, and a `PropertySignature` arm mirroring the PropertyDeclaration one; also
+  closes the optional-member `T` leak (`b.f` on `Box<number>` rendering `(x: T) => T`). PINS: two
+  instantiations in one file in BOTH orders (a pin in one order is green on the frozen binary),
+  call + read + mis-assignment probes, a method control, a `Map` control. POPULATION: 108 fn-
+  typed members carrying a bare `T` on the profiles (sys.ts:190/:503, resolutionCache.ts:854,
+  builder.ts:539, …) — exposure needs two instantiations with differing args reaching one
+  member in one compile; the grid's 46 rows show none, so the grid is a control and the both-
+  orders pin is the gate. CORPUS: `Inv5GenericGateTest`, the round-465 `Sel<T>` fixture; grep
+  the archive for "instantiateType for Type.Object" before touching the no-op. MEANING (false
+  positive + lost diagnostic).
+
+- [ ] **(CHK.103) AN ARRAY LITERAL CONTAINING A SPREAD IS `any` — every `f([...xs])` argument is
+  unchecked (12 lost TS2345 on `chk99/r5`, including `[...tup] as const` → `readonly [1, 2]`),
+  `const t: [number, number] = [...nums]` loses its TS2322, and the var-decl string layer prints
+  `Type 'array'` where tsc prints `number[]` — MEASURED 2026-09-06; the (P18.27) note's "display
+  only" is corrected: MEANING.** MECHANISM: `getTypeOfArrayLiteral` (~129337) `if (el is
+  SpreadElement) return anyType // spread not yet supported`, `constContextTupleOfArrayLiteral`
+  (~129404) the same, and `inferSimpleExprType`'s `is ArrayLiteralExpression -> "array"`
+  (~174456, consumed by `isAssignableTo`'s string rules). SEAM: tsc's `checkArrayLiteral`
+  (checker.ts:33329-33374) — a spread contributes its iterated element type
+  (`checkIteratedTypeOrElementType(IterationUse.Spread, …)`; here an array / readonly-array /
+  tuple element union, `string` → `string`, `Set<T>` / iterable → `T`, else refuse to `any` as
+  today); a tuple spread outside a const context contributes its element UNION (`(1 | 2)[]`),
+  inside one the slice. DISPLAY: pristine prints `(2 | 1)[]` and tsgo `(1 | 2)[]` for a `[1, 2]`
+  spread — pin on pristine and record the order. POPULATION: ~660 `[...x` array-literal spreads
+  on the profiles — the grid will see any wrong element type; run it before pins. CORPUS: 15
+  ACTIVE `.errors.txt` echo a spread in an array literal (`recursiveConditionalTypes` 9×TS2345 /
+  21×TS2322, `restParameterWithBindingPattern3`, `iteratorExtraParameters`,
+  `literalFreshnessPropagationOnNarrowing`, `indexedAccessWithVariableElement`,
+  `excessiveStackDepthFlatArray`, `indexSignatureTypeCheck{,2}`, `destructuringTuple`,
+  `assignmentRestElementWithErrorSourceType`, …) — run all by fixture.
+
+- [ ] **(CHK.104) CALLING A LITERAL-TYPED OR OBJECT-TYPED VALUE IS A SILENT TS2349 — `const s =
+  "a"; s()`, `const n = 1; n()`, `1n`, `K.A()`, a `"a"`-annotated const or parameter, a template
+  literal, `"a" as const`, a body-local, `({})()`, `[1]()` and a `new C()` instance in a const are
+  all silent; `let sl = "a"` (`String`), an annotated `string`/`number`, `symbol`, a union and
+  `undefined` (TS2722) report — MEASURED 2026-09-06 (`chk99/r6`: 12 lost rows against 19/19 in
+  both references).** MECHANISM: `ccetNoCallSignatureDiagnostics` (~158296) has a union arm
+  (~158403), an `is Type.Intrinsic` arm (~158452) and a `new X()`-callee arm (~158505); a
+  `Type.StringLiteral` / `NumberLiteral` / `BigIntLiteral` / enum-member type and a resolved
+  `Type.Object` / `Type.Interface` / array reference without call signatures fall through (the
+  "empty Type.Object from incomplete resolution" firewall ~158509). SEAM: extend the intrinsic arm
+  to the literal flags (display = tsc's apparent wrapper: `Type 'String' has no call
+  signatures.` / `Number` / `BigInt` / `Boolean`; an enum member is `Number` / `String`), and
+  admit a resolved object callee only with POSITIVE evidence its table is complete ((CHK.45)'s
+  rule: an own-file class instance, an array reference, an object literal with no signatures and
+  no index signature — never a lib heritage type or an unresolved member table). GRID RISK: LOW
+  for the literal arm, MEDIUM for the object arm (every `x()` on an incompletely-resolved
+  receiver is a false positive) — the object half needs the grid before pins. CORPUS (ACTIVE):
+  `betterErrorForAccidentalCall` (10 × `String`), `computedPropertiesInDestructuring1{,_ES6}`,
+  `methodChainError`, `strictModeReservedWord` (its dedicated walker ~138763 already dedups
+  against a spine emission at the same position — keep that), `functionExpressionShadowedByParams`
+  / `checkJsFiles_skipDiagnostics` (`Number`), `typeParameterWithInvalidConstraintType` /
+  `typeParameterExplicitlyExtendsAny` (`{}`), `callOnInstance` /
+  `untypedFunctionCallsWithTypeParameters1` (`C`/`D`) — run by fixture. MEANING.
+
+- [ ] **(CHK.105) TS2454 IS MISSING FOR THREE SHAPES BOTH REFERENCES REPORT — MEASURED 2026-09-06
+  (`chk99/r7` + `r7b`: 16 of 20 rows already agree; 4 + 3 lost TS2454, 3 lost TS2345): a `const`
+  used before its declaration in the same container (`const c = x; const x = 1` — TS2448 alone
+  here, TS2448 + TS2454 in tsc), a POSSIBLY-unassigned read after a join (`let x: string; if (c) x
+  = "a"; use(x)`, a `try { x = … } catch {}`, a closure reading a never-assigned outer `let`),
+  and — a sibling lost TS2345 — a `let x: string | undefined;` (no initializer, or `= undefined`)
+  is untyped at the argument reader. The (P18.27) note's "TS2454 absent" is corrected: ours
+  emits it for every never-assigned `let`/`var`.** MECHANISM: `emitTS2448` (~87371) gates the
+  co-emit on `(!isConst || isUnreachableDecl)` — B78.1's rule was read off
+  `typeGuardNarrowsIndexedAccessOfKnownProperty10`, whose const is `any`-typed (tsc's
+  `assumeInitialized` on `AnyOrUnknown`, checker.ts:31197-31200), NOT const-ness; the set pass
+  `collectUninitializedVars` (~24893) has no join (a set, not a flow lattice) and
+  `spineDaFlowFileEnd` (~25882) only dedups. SEAM: (a) tsc's predicate — co-emit unless the
+  declared type is any/unknown/void, the use is an outer-variable read of an INITIALIZED
+  declaration, or the declaration is ambient / `!`-asserted (checker.ts:31172-31205); (b) the
+  join: tsc's `getFlowTypeOfReference(node, type, getOptionalType(type))` + `containsUndefinedType`
+  — the flow walk already exists, the ask is a `let`/`var` without initializer read through it
+  (also fixes the `let x: T | undefined;` argument rows, the same read); keep "TS2563 OR TS2454,
+  never both" (~10891). POPULATION: ~6,500 `let x: T;` lines on the profiles — the grid will see
+  a join mistake. CORPUS (ACTIVE): `typeGuardNarrowsIndexedAccessOfKnownProperty10` (must STAY
+  TS2448-only — the `any` control), `controlFlowFunctionLikeCircular1` (16 × 2454 / 18 × 2448),
+  `decoratorUsedBeforeDeclaration`, `forwardRefInClassProperties`,
+  `useBeforeDeclaration_destructuring`, plus the 187 ACTIVE TS2454 baselines by fixture. MEANING.
+
+- [ ] **(CHK.106) FORM — display-only residues from the same probes, grouped (2026-09-06).** (a)
+  an ALIAS NAME is lost through a carrier instantiation — `Obj<T>` → `{ v: T; }`, `Fn<T>` → `(x:
+  T) => T`, `Fn<number>` → `(x: number) => number`, `CreateProgram<T>` (`chk99/r4`, `chk96-impl/g5`):
+  `aliasDisplayMap` is keyed by the interned type id of the alias BODY and an instantiated
+  reference through a member table never registers; tsc keys the alias on the REFERENCE
+  (`getTypeOfInstantiatedSymbol` checker.ts:12873 carries `aliasSymbol` + `aliasTypeArguments`),
+  so this is (INC.27)/(INC.29)'s interning-key question, not a table fix — record, do not
+  attempt in `aliasDisplayMap`; (b) the generic-guard narrowing display `BP | undefined` vs `BP`
+  is (CHK.101)(b) and closes with it; (c) the un-narrowed sub-line displays on `chk99/r2` are
+  (CHK.100)'s and close with it; (d) `(2 | 1)[]` (pristine) vs `(1 | 2)[]` (tsgo) for a tuple
+  spread — a reference divergence to record when (CHK.103) lands, pin on pristine. Each is form
+  per `docs/logical-parity.md` § 2; only (a) needs its own decision.
+
+- [ ] **(CHK.107) AN ARRAY PATTERN WHOSE INITIALIZER IS A *CONDITIONAL OF ARRAY LITERALS*
+  REFUSES, SO EVERY LEAF READS `any` — `const [s, e] = c ? [n, undefined] : [o.pos, o.end]`
+  reads `s` and `e` as `any` where both references read `number` and `number | undefined`
+  (MEASURED 2026-09-06, (P18.28) defect (c); `services.ts:3264` is the shipped instance, 1 site
+  on 3 of the 8 profiles).** The refusal is DELIBERATE and is the safe direction: it is what
+  HEAD and stage 1 do, and the two obvious reconstructions are both measured WRONG. Reading the
+  conditional's own type gives each branch's un-contextual `(number | undefined)[]`, whose
+  element union makes slot 0 `number | undefined` — an ours-only TS2322 on all three profiles.
+  Unioning the branches' `arrayLiteralAsDestructuringTuple` (built, measured, reverted) gives
+  slot 0 `number | { pos: number; end: number; }`, because the branch elements are typed by
+  `getTypeOfExpression`, which NEVER flow-narrows (CLAUDE.md) — `positionOrRange` is `number`
+  only inside its own `typeof` guard. MECHANISM: tsc pushes the pattern's implied contextual
+  type (`getTypeFromBindingPattern` checker.ts:12433) into BOTH branches
+  (`checkConditionalExpression` types each branch against the same contextual type), so the
+  source is `[number, undefined] | [number, number]` and the union arm of `bindingElementType`
+  then gives `number` / `number | undefined`. SEAM: `conditionalOfArrayLiterals`
+  (`bindingPatternSourceType`'s refusal) is the one gate to lift; what it needs is each element
+  expression's type AT ITS OWN FLOW POSITION — i.e. `getNarrowedTypeForReference` for a
+  reference element, the ordinary type otherwise — so the branch tuples carry the narrowed
+  types. PINS: the `services.ts` shape both ways round, a branch that is not an array literal
+  (must keep refusing), a nested conditional, and the existing refusal pin in
+  `BindingElementStage2Test` inverted. POPULATION: 1 site on the 8 profiles, so the GRID IS THE
+  GATE and it is a `removed=1` there, not an `added`. CORPUS: no ACTIVE baseline carries the
+  shape (the round's refusal moved none). MEANING (lost diagnostic).
 
 - [x] **(CHK.86) AN IMPOSSIBLE ENUM-vs-ENUM EQUALITY PRODUCES NEITHER TS2367 NOR A `never`
   NARROW — the DIAGNOSTIC half CLOSED (P18.17); the NARROW half re-queued as (CHK.87).**

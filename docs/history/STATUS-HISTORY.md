@@ -1831,3 +1831,20 @@ actually protects); **no baseline moved and no `LogicalParityDivergence` was nee
 round predicted by enumerating the 4 literal-union-source and 18 `never`-target baselines. New
 CLAUDE.md entry: the 8-profile grid is structurally BLIND to every type-display change (all its
 rows are `Cannot find name …`).
+
+**(P18.23) — CONST ASSERTIONS STOP BEING `any` (STAGE 1 OF (CHK.93)), AND THE NAME-RESOLUTION SEAM IS CENSUSED FOR (INV.0) STEP 4, 17,516 → 17,573 / 0 / 3 (2026-09-05).**
+**(CHK.93) stage 1 LANDED.** Every object, array and enum-member `as const` was `any` (the `const`
+type reference fell off the resolution ladder to `errorType`); now the assertion answers its operand's
+const-context type, object members keep their literals with the context computed once, a const array
+is a frozen tuple — which needed the relation rule tuples always needed (tuple → `Array<T>` by
+elements, removing a pre-existing false TS2740 on every declared tuple against an array) and an
+existence-only tuple-inherits-Array answer the grid demanded (`isArray(diag) ? diag.slice(1)` in tsc's
+own utilities.ts) — TS1355 is tsc's `isValidConstAssertionArgument` in both spellings, and the
+prerequisite literal-property-write false positive (`mo.v = "a"` against `v: "a"` reported `'string'`)
+is closed first. 16 of 30 recon rows byte-identical to pristine; the readonly half (TS2540, TS4104,
+`push` on a const tuple, `readonly [1, 2]` display) stays queued as stage 2. 57 pins, 12 arms all
+RED; core 16,084/0/3, corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline, grid 8×`added=0
+removed=0`. **(INV.0) step 4 censused by read-only recon**: the name-resolution surface partitioned
+into a two-commit `NameResolver` extraction (~1,300 code lines), an ambient row of three reads and
+no writes, eleven invariants each mapped to its pin classes — and tsgo's closure-struct
+`NameResolver` identified as exactly the shape § 10 forbids.
