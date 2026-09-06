@@ -1865,3 +1865,18 @@ RED; core 16,122/0/3, corpus 8,837/0, `cost_gate.py` exit 0, grid 8×`added=0 re
 measured 220 cells into two items: every `Array` member READ on a tuple is `any` (an interned
 `Array<union>` base on the miss path is the seam; the corpus has zero baselines that can see it), and the
 argument gate is silent for EVERY body-local scalar / `let` / annotated-primitive local, not only strings.
+
+**(P18.25) — A TUPLE'S ARRAY MEMBERS GET TYPES AND ITS CALLS GET CHECKED, AND DESTRUCTURED BINDINGS ARE MEASURED INTO (CHK.96), 17,611 → 17,664 / 0 / 3 (2026-09-05).**
+**(CHK.94) LANDED.** Every `Array` member READ on a tuple was `any` and every call through one unchecked;
+an interned `Array<union>` / `ReadonlyArray<union>` base (a rest slot INDEXED as tsc does, optional slots
+joining `undefined`) is consulted on the miss path only, and the call, overload, argument and callback
+paths followed for free — except two PRE-EXISTING array defects the typed members exposed and fixed: an
+array-literal argument against a literal-union element was a false TS2769 (`(1 | 2)[].concat([1])` on
+HEAD), and a union receiver's `.map` became a false TS2349 because tsc combines union signatures and
+refuses only generic-vs-generic non-identical ones — the grid found the same ours-only TS2349 on tsc's own
+`fourslashImpl.ts` and the refinement closes it. 128 measured cells went 46 → 83 matching tsgo with 0
+regressions; 53 pins, 11 arms (one provably unobservable, recorded); core 16,175/0/3, corpus 8,837/0,
+`cost_gate.py` exit 0, grid 7×`added=0 removed=0` + harness `removed=1`. Read-only recon measured
+destructured bindings over ~120 cells: an OBJECT pattern's members are already typed at every reader but
+the argument and TS2367 ones, every ARRAY pattern / default / nested / rest / contextual pattern parameter
+is `any` everywhere — queued as the staged (CHK.96), correcting (CHK.46)'s entry.

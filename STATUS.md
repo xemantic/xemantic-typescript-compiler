@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **196,784** lines (191,070 when the metric was created; the (P18.9)-(P18.29) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **196,976** lines (191,070 when the metric was created; the (P18.9)-(P18.30) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,28 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.30) — THE ARRAY FALLBACK, INTERSECTED CALLBACK SIGNATURES AND THE OPTIONAL-CALL RESULT (STAGE 2 OF (CHK.97)), AND A `noImplicitAny` GATE THAT WAS INERT ON EVERY STRICT PROJECT, 17,916 → 17,932 / 0 / 3 (2026-09-06).**
+**(CHK.97) stage 2 LANDED** — three of five deliverables: tsc's ARRAY FALLBACK (checker.ts:15949),
+derived from the RECEIVER because a method type here has no parent symbol, which costs one extra
+CALLABLE gate a signature-list route would not need; tsc's `getIntersectedSignatures` (:33085),
+one `intersection` flag on `combineUnionParameters` wired through `callableSignaturesForCtx` and
+`cpaComputeArgCtxTypes`, so a callback ARGUMENT of a union callee is typed and graded with a
+wrong-typed USE rather than the TS7006 silence; and the OPTIONAL-call result. Matrix 55 → 61 of 73
+pristine rows, ours-only unchanged at 3 (display only). **Three more of the item's claims are
+measured wrong**: retiring the `≥2` suppression does NOT make r09 report (a SECOND suppression,
+the `differ` branch's non-generic silence, sits above it); the `noImplicitAny` gate written as tsc
+spells it is **inert on every `strict` project** — the field is not implied by `strict` here and
+the repo-wide spelling is the disjunction (29 sites), caught only because the build measured ZERO
+row movement, which a green suite/corpus/grid all look like too; and our `identityRelation` is
+LENIENT for a function type nested in a signature parameter, which is what keeps the fallback out
+of tuple-union `.filter`. **The round's own instrument hazard**: the implementation subagent ran
+its grid in the same `build/bench` directory this session had snapshotted its BEFORE arm into, so
+the captures were overwritten with the post-change binary — the grid script's `sha256sum` refusal
+fired, and the arm was rebuilt from `git show HEAD:` into a directory the subagent never saw. 16
+pins, 11 arms (9 discriminating; a2/a10 recorded as redundant guards on every reachable shape and
+kept as tsc's own rules). Corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline,
+`huge_methods.py` exit 0, grid 8×`added=0 removed=0`.
 
 **(P18.29) — UNION CALLEES ARE COMBINED, NOT SILENTLY `any` (STAGE 1 OF (CHK.97)), AND FOUR OF THE ITEM'S OWN PREDICTIONS ARE MEASURED WRONG, 17,874 → 17,916 / 0 / 3 (2026-09-06).**
 **(CHK.97) stage 1 LANDED.** The call RESULT was `any` for EVERY union callee and the argument
@@ -86,18 +108,3 @@ residues; 53 pins, 7 arms; core 16,228/0, corpus 8,837/0, `cost_gate.py` exit 0 
 pristine fixtures): the call RESULT is `any` for EVERY union callee, three wrong-row families beside the
 silences, and TS2349 where tsc says TS2722 — queued as (CHK.97) around tsc's two-pass `getUnionSignatures`
 plus its array fallback.
-
-**(P18.25) — A TUPLE'S ARRAY MEMBERS GET TYPES AND ITS CALLS GET CHECKED, AND DESTRUCTURED BINDINGS ARE MEASURED INTO (CHK.96), 17,611 → 17,664 / 0 / 3 (2026-09-05).**
-**(CHK.94) LANDED.** Every `Array` member READ on a tuple was `any` and every call through one unchecked;
-an interned `Array<union>` / `ReadonlyArray<union>` base (a rest slot INDEXED as tsc does, optional slots
-joining `undefined`) is consulted on the miss path only, and the call, overload, argument and callback
-paths followed for free — except two PRE-EXISTING array defects the typed members exposed and fixed: an
-array-literal argument against a literal-union element was a false TS2769 (`(1 | 2)[].concat([1])` on
-HEAD), and a union receiver's `.map` became a false TS2349 because tsc combines union signatures and
-refuses only generic-vs-generic non-identical ones — the grid found the same ours-only TS2349 on tsc's own
-`fourslashImpl.ts` and the refinement closes it. 128 measured cells went 46 → 83 matching tsgo with 0
-regressions; 53 pins, 11 arms (one provably unobservable, recorded); core 16,175/0/3, corpus 8,837/0,
-`cost_gate.py` exit 0, grid 7×`added=0 removed=0` + harness `removed=1`. Read-only recon measured
-destructured bindings over ~120 cells: an OBJECT pattern's members are already typed at every reader but
-the argument and TS2367 ones, every ARRAY pattern / default / nested / rest / contextual pattern parameter
-is `any` everywhere — queued as the staged (CHK.96), correcting (CHK.46)'s entry.

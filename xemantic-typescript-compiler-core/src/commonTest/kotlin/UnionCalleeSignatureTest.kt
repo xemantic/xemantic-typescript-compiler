@@ -54,19 +54,19 @@ import kotlin.test.Test
  * and a REST position carrying `Array<the intersection of the ELEMENT types>` — not
  * the intersection of the array types, (CHK.83)'s rest lesson.
  *
- * RECORDED residues, each measured and each OUTSIDE this stage (the expectation
- * below is OURS): tsc's ARRAY FALLBACK (checker.ts:15949) for a union of
- * `Array`/`ReadonlyArray` members with no combined signature, so
- * `(number[] | string[]).filter/map/forEach` stays silent and the `≥2`-overloaded
- * suppression still owns `unionOfArraysFilterCall`; a union whose members are BOTH
- * overloaded is silent where tsc reports TS2349 (it was a WRONG TS2345 before);
- * `getCallSignaturesOfType`'s own union arm still answers the concatenation, so only
- * the ONE call site reads the combined list; the contextual-typing consumers
- * (`cpaComputeArgCtxTypes` / `callableSignaturesForCtx`) are untouched, so a callback
- * ARGUMENT to a union callee is still `any` and TS7006 does not fire for one; an
- * OPTIONAL call on a nullish union keeps `any` as its result rather than the combined
- * return `| undefined`; `this` parameters are not modelled at all (tsc intersects them
- * and reports TS2684 — [Signature] has no `thisParameter`); and TS2554 fires for a
+ * RECORDED residues, each measured and each OUTSIDE this stage. THREE were closed by
+ * (CHK.97) stage 2 and their pins live in `UnionCalleeStage2Test`: tsc's ARRAY FALLBACK
+ * (checker.ts:15949), tsc's `getIntersectedSignatures` (:33085) for a callback ARGUMENT
+ * of a union callee, and the OPTIONAL-call result. What is still open (the expectation
+ * below is OURS): a union whose members are BOTH overloaded is silent where tsc reports
+ * TS2349 (it was a WRONG TS2345 before), and retiring the `≥2` suppression alone does
+ * NOT change that — the `differ` branch's non-generic silence, (CHK.94), is a SECOND
+ * suppression above it; `getCallSignaturesOfType`'s own union arm still answers the
+ * concatenation, so only the ONE call site reads the combined list; TS7006 does not fire
+ * for an un-annotated parameter whose contextual type is a union of DIFFERING signatures
+ * (tsc's `getContextualSignature` answers undefined there); `f?.(1)`'s ARGUMENT is still
+ * unchecked; `this` parameters are not modelled at all (tsc intersects them and reports
+ * TS2684 — [Signature] has no `thisParameter`); and TS2554 fires for a
  * FUNCTION-DECLARATION callee only, in BOTH directions, so a combined signature's
  * arity is never reported — the item's "the too-FEW TS2554 comes free" is measured
  * FALSE and is a pre-existing gap that has nothing to do with unions.
@@ -712,13 +712,13 @@ class UnionCalleeSignatureTest {
     }
 
     /**
-     * RESIDUE — tsc's ARRAY FALLBACK is stage 2: `filter`/`map`/`forEach` have TWO
-     * overloads on BOTH members, so the combination is refused and the `≥2` suppression
-     * answers with SILENCE (which is what keeps `unionOfArraysFilterCall` green).
-     * tsc answers `(string | number)[]` through the fallback.
+     * (CHK.97) stage 2 LANDED — tsc's ARRAY FALLBACK now answers this row; the pin lives
+     * in `UnionCalleeStage2Test` and the shape is kept here as the boundary between the
+     * two stages: `filter` has TWO overloads on BOTH members, so PASS 1 finds nothing and
+     * PASS 2 is refused, which is exactly tsc's `!length(result)` precondition.
      */
     @Test
-    fun `an array union's filter is silent - the array fallback is not modelled`() =
+    fun `an array union's filter is answered by the array fallback`() =
         assert(rows(
             """
             declare const u: number[] | string[];
@@ -726,7 +726,7 @@ class UnionCalleeSignatureTest {
             export {}
             """.trimIndent(),
             realLibs = true,
-        ).isEmpty())
+        ) == listOf(2322 to decl("(string | number)[]")))
 
     // ------------------------------------------------------------------
     // The memo is keyed by the union's own Type.id

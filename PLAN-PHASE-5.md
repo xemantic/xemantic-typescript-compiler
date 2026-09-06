@@ -25,6 +25,99 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.30) — the array fallback, intersected callback signatures and the optional-call result (stage 2 of (CHK.97)), and a `noImplicitAny` gate that was inert on every strict project (2026-09-06)
+
+**Suite 17,916 → 17,932 / 0 / 3** — 16 pins in the new `UnionCalleeStage2Test`, plus one stage-1
+residue pin flipped from a SILENCE assertion to the fallback's value; no baseline moved and no
+`LogicalParityDivergence` is needed. Same orchestration: an implementation subagent owned Gradle,
+the full suite / `cost_gate.py` / `huge_methods.py` / the 8-profile grid were run here.
+
+**THREE OF (CHK.97)'s FIVE STAGE-2 DELIVERABLES LANDED.**
+- **tsc's ARRAY FALLBACK** (`getSignaturesOfType`'s `arrayFallbackSignatures`, checker.ts:15949) —
+  `unionArrayFallbackReceiver` / `unionArrayFallbackMemberType`, consulted on the union branch of
+  `computeRawTypeOfPropertyAccess` and `resolveMemberPropertyType`. tsc asks the question of the
+  MEMBER type through `t.symbol.parent`; a method type here has neither a parent symbol nor a
+  mapper, so the rewrite `(A[] | B[]) → (A | B)[]` is derived from the RECEIVER (`tupleArrayBase`
+  covers the tuple half, `ReadonlyArray` when ANY member is readonly — tsc's `someType`). **That
+  route costs one extra gate that the signature-list route would not need: the answer must be
+  CALLABLE**, because a signature-list route can never reach a non-callable member while a
+  receiver route would silently retype one.
+- **tsc's `getIntersectedSignatures`** (:33085 + `combineSignaturesOfIntersectionMembers` :33155)
+  — `combineUnionParameters` gained ONE `intersection` flag, which is the single line separating
+  tsc's two otherwise-identical functions (UNION the positions instead of intersecting), wired
+  through an INTERSECTION arm on `callableSignaturesForCtx` and a UNION arm on
+  `cpaComputeArgCtxTypes` (also `pullContextualTypeAt`'s CallExpression source, so the
+  assignability reader inside the arrow body sees it — graded with a wrong-typed USE, never with
+  the TS7006 silence, per (CHK.30)).
+- **The optional-call result** — `f?.()` on a nullish union answers the combined return
+  `| undefined` instead of `any`, through a save/restore flag read by a thin wrapper over the
+  renamed `getReturnTypeOfCallExpressionCore` (the resolution has many exits below the union arm).
+
+Matrix **55 → 61 of 73 pristine rows matched**, ours-only unchanged at 3 (all display text, no new
+rows); four new fixture sets add 22 more matched rows.
+
+**THREE MORE OF THE ITEM'S CLAIMS ARE MEASURED WRONG — the fourth round running in which building
+the item refutes part of it.**
+- **"Landing the array fallback lets the `≥2` suppression go, which is what makes r09 report
+  TS2349" is FALSE.** Removing that line changes r09 by NOTHING: the `differ` branch below it
+  returns silence for any non-generic differing pair ((CHK.94)'s rule), so there is a **SECOND
+  suppression above the one the item names**. Making r09 report needs `differ` to separate
+  "combinable" from "no combination possible", which would also fire wherever OUR combination
+  refuses and tsc's succeeds. Left un-retired and recorded.
+- **The `noImplicitAny` gate is not spellable as tsc spells it.** Written as tsc's
+  `getStrictOptionValue(compilerOptions, "noImplicitAny")` → `options.noImplicitAny`, the gate is
+  **INERT ON EVERY `strict` PROJECT** — i.e. on every fixture and all eight profiles —
+  because `CompilerOptions.noImplicitAny` is NOT implied by `strict` here and the repo-wide
+  spelling is the disjunction. **It was caught only because the first build of the second and
+  third pieces measured ZERO row movement**, which is the one symptom a green suite cannot show.
+- **Our `identityRelation` is LENIENT for a function type nested in a signature parameter**, and
+  that leniency makes PASS 1 match where tsc's does not: `(value: 1, …) => unknown` and
+  `(value: 1 | 2, …) => unknown` compare identical, so `([1] | [1, 2]).filter` takes PASS 1 and
+  answers `1[] | (1 | 2)[]` where both references answer `(1 | 2)[]` through the fallback. A
+  PLAIN `1` vs `1 | 2` parameter compares correctly (arm-free probe), so it is specific to nested
+  function types — and it is what keeps the array fallback out of tuple-union `.filter`.
+
+**AND THE ROUND'S OWN INSTRUMENT HAZARD, caught by a guard rather than by luck.** The
+implementation subagent ran its own grid in `build/bench/chk97/`, the SAME directory this session
+had snapshotted stage 1's arm and captures into, so by gating time `classes-after` and every
+`*.after.txt` there had been overwritten with the stage-2 binary. Reusing them as the BEFORE arm
+is a self-comparison that prints `added=0 removed=0` on all eight and proves nothing — round
+853's frozen-instrument hazard one directory over. The `sha256sum` refusal in the grid script
+fired (`REFUSED: the two arms' Checker.class are byte-identical`), and the BEFORE arm was rebuilt
+from `git show HEAD:` into a directory the subagent never saw; its class sha then matched the one
+stage 1 had reported for that commit (`f6bf258e…`), which is what confirms the baseline. The
+capture mtimes (14:12, against a 13:07 commit) are the other tell.
+
+**GATES.** Suite **17,932 / 0 / 3**, corpus **8,837 / 0** (`unionOfArraysFilterCall`,
+`betterErrorForUnionCall`, `newOperator`, `signatureCombiningRestParameters1/3/4/5` green — the
+round-302 silence became the fallback WITHOUT adding a row). `cost_gate.py` **exit 0, no
+rebaseline** — `typeOfExpr.calls` +0.89% and `typeNode.*` +0.09-0.11% are still (CHK.96) stage 2's
+deltas, `spine.nodes` +0.00%, `output.errors` 46 → 46. `huge_methods.py --fail-over 0` **exit 0**.
+**Grid 8 × `added=0 removed=0`** (`scripts/chk97b-grid.sh`, both arms from snapshotted class dirs).
+
+**ARMS — 11, nine discriminating and TWO RECORDED AS REDUNDANT GUARDS rather than claimed.** a1
+array fallback off **5 RED**; a2 the callable gate dropped **0**; a3 the "no combined signatures"
+precondition dropped 3; a4 the fold intersects instead of unioning 5; a5
+`callableSignaturesForCtx`'s intersection arm removed 5; a6 `cpaComputeArgCtxTypes`' union arm
+removed 3; a7 the `noImplicitAny` gate read as the bare field 5; a8 the `| undefined` wrap dropped
+2; a9 the wrap applied to a NON-optional call 2; a10 the readonly half of the fallback receiver
+dropped **0**; a11 the fallback folds only the first element 5. **a5/a6 are LAYERED, not
+redundant** — a6 supplies the contextual type and a5 interprets it, and the two
+intersection-annotation pins are uniquely a5's. **a2 and a10 redden nothing on any REACHABLE
+shape** and are kept deliberately: `Array<T>`'s only non-callable member is `length` (`number` on
+both constituents, so no union and no fallback), and a member `ReadonlyArray` lacks is TS2339 at
+the property lookup ABOVE the fallback — they are tsc's own rules and the soundness guards of the
+receiver-level derivation, i.e. round 927's pair recorded rather than deleted.
+
+**STAGE 3 STAYS OPEN**: `getCallSignaturesOfType`'s own union arm — which **needs a
+`?: concatenation` tail**, since a plain replacement makes every REFUSED union answer
+`emptyList()`, i.e. "not callable"; r09 and the two-suppression problem above; TS7006 for a union
+contextual type of differing signatures ((CHK.98) territory); `f?.(1)`'s ARGUMENT check (the
+round-408 pre-pass consumes the call); generic inference through a combined signature
+(`(number[] | string[]).map` → `any`); `this` parameters / TS2684; and two FORM divergences — our
+union member ORDER (`.slice` prints `number[] | string[]` where both references print
+`string[] | number[]`) and an intersection of function types printed without parentheses.
+
 ### Round (P18.29) — union callees are COMBINED, not silently `any` (stage 1 of (CHK.97)), and four of the item's own predictions are measured wrong (2026-09-06)
 
 **Suite 17,874 → 17,916 / 0 / 3** — 42 pins in the new `UnionCalleeSignatureTest`; no baseline
@@ -2552,7 +2645,31 @@ prediction: 17,343 / 0 / 3.**
   bit). Corrects (CHK.46)'s entry: the "write probe answered the right type" there is
   `recordDestructuredConstElementTypes`, a walk-scoped recording, not the symbol.
 
-- [ ] **(CHK.97) STAGE 1 LANDED 2026-09-06 ((P18.29) note) — `combineUnionSignatures` (PASS 1 + PASS 2,
+- [ ] **(CHK.97) STAGES 1 AND 2 LANDED 2026-09-06 ((P18.29)/(P18.30) notes). STAGE 2 closed THREE of its five
+  deliverables — tsc's ARRAY FALLBACK (checker.ts:15949, derived from the RECEIVER because a method type has
+  no parent symbol here, which costs one extra CALLABLE gate a signature-list route would not need), tsc's
+  `getIntersectedSignatures` (:33085 — `combineUnionParameters` + one `intersection` flag, wired through
+  `callableSignaturesForCtx` and `cpaComputeArgCtxTypes`), and the OPTIONAL-call result (`f?.()` answers the
+  combined return `| undefined`). Matrix 55 → 61 of 73 pristine rows, ours-only unchanged at 3 (display
+  only); 16 pins, 11 arms (9 discriminating, a2/a10 recorded as REDUNDANT GUARDS on every reachable shape
+  and kept as tsc's own rules); corpus 8,837/0, grid 8×0/0, `cost_gate.py` exit 0 with no rebaseline.
+  **STAGE 3 STAYS OPEN**: (1) `getCallSignaturesOfType`'s own union arm — **it needs a `?: concatenation`
+  tail**, since a plain replacement makes every REFUSED union answer `emptyList()`, i.e. "not callable", and
+  no measured row moves without it; (2) r09 (a both-overloaded union is silent where tsc reports TS2349) —
+  **the item's claim that retiring the `≥2` suppression fixes this is MEASURED FALSE**: the `differ` branch
+  below it returns silence for any non-generic differing pair ((CHK.94)'s rule), so there is a SECOND
+  suppression, and making r09 report needs `differ` to separate "combinable" from "no combination possible",
+  which would also fire wherever OUR combination refuses and tsc's succeeds; (3) TS7006 for a union
+  contextual type of DIFFERING signatures (tsc's `getContextualSignature` answers undefined — (CHK.98)
+  territory; the arity walker records `typed = true` with no type); (4) `f?.(1)`'s ARGUMENT check (the
+  round-408 pre-pass consumes the call); (5) generic INFERENCE through a combined signature
+  (`(number[] | string[]).map` → `any`); (6) `this` parameters / TS2684 (`Signature` has no `thisParameter`).
+  **FORM residues**: our union member ORDER (`.slice` prints `number[] | string[]` where both references
+  print `string[] | number[]`) and an intersection of function types printed without parentheses.
+  **A THIRD PRE-EXISTING FINDING**: our `identityRelation` is LENIENT for a function type nested in a
+  signature parameter (`(value: 1, …) => unknown` ≡ `(value: 1 | 2, …) => unknown`), which makes PASS 1
+  match where tsc's does not and is what keeps the array fallback out of tuple-union `.filter`; a PLAIN
+  `1` vs `1 | 2` parameter compares correctly. ORIGINAL STAGE 1 SUMMARY: `combineUnionSignatures` (PASS 1 + PASS 2,
   memoized by the union's `Type.id`) feeding both return readers, a new construct arm, the ccet hand-off to
   the ordinary argument gate, and the nullish check moved above the union branch; the matrix goes 23 rows
   with 6 wrong → 58 of 73 pristine rows matched, ZERO ours-only; 42 pins, 12 arms all discriminating; no

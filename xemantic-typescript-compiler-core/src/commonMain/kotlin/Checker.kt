@@ -39678,6 +39678,18 @@ class Checker(
      * Null when the type provides no signatures.
      */
     private fun callableSignaturesForCtx(type: Type?): List<Signature>? {
+        // (CHK.97) stage 2: an INTERSECTION contextual type — tsc's
+        // `getContextualCallSignature` concatenates its constituents' signatures and folds
+        // them through [getIntersectedSignatures]. This is the contextual type a callback
+        // argument of a UNION callee is handed (PASS 2 intersects the members' parameters),
+        // so without it every such callback parameter stays `any`.
+        if (type is Type.Intersection) {
+            val sigs = mutableListOf<Signature>()
+            for (m in type.types) sigs.addAll(getCallSignaturesOfType(m))
+            if (sigs.isEmpty()) return null
+            if (sigs.size == 1) return sigs
+            return getIntersectedSignatures(sigs)?.let { listOf(it) }
+        }
         val obj: Type.Object = when (type) {
             is Type.Union -> {
                 var single: Type.Object? = null
@@ -126851,6 +126863,66 @@ interface DataView {
     }
 
     /**
+     * (CHK.97) stage 2 — tsc's ARRAY FALLBACK receiver (checker.ts:15949-15964).
+     *
+     * tsc asks the question of the MEMBER type union (`(A[] | B[])["filter"]`), through
+     * `t.symbol.parent` being the global `Array`/`ReadonlyArray` symbol and `t.mapper`
+     * carrying the element. A method type here carries neither a parent symbol nor a
+     * mapper, so the same transformation is derived from the RECEIVER instead: every
+     * constituent must be an `Array<T>` / `ReadonlyArray<T>` reference or a TUPLE (whose
+     * `Array<union>` base [tupleArrayBase] already computes, rest slots indexed and
+     * optional slots joined with `undefined`), and the answer is `Array<union of the
+     * elements>` — `ReadonlyArray` when ANY constituent is readonly, which is tsc's
+     * `someType(type, t => isReadonlyArraySymbol(t.symbol.parent))`.
+     *
+     * "since we pretend array is covariant anyway" is tsc's own justification for the
+     * rewrite; it is what makes `(Fizz[] | Buzz[]).filter(item => item.id < 5)` legal
+     * (`unionOfArraysFilterCall`, whose last row additionally needs the readonly and
+     * optional-slot halves to reach its TS18048).
+     */
+    private fun unionArrayFallbackReceiver(union: Type.Union): Type.Reference? {
+        if (union.types.size < 2) return null
+        val ro = globalReadonlyArrayType
+        val elements = ArrayList<Type>(union.types.size)
+        var anyReadonly = false
+        for (t in union.types) {
+            val ref: Type.Reference? = when {
+                t is Type.Reference && (t.target === globalArrayType || (ro != null && t.target === ro)) -> t
+                t is Type.Object && t !is Type.Interface && t.tupleElementTypes != null -> tupleArrayBase(t)
+                else -> null
+            }
+            if (ref == null) return null
+            if (ro != null && ref.target === ro) anyReadonly = true
+            elements.add(ref.resolvedTypeArguments?.singleOrNull() ?: return null)
+        }
+        val target = if (anyReadonly && ro != null) ro else globalArrayType
+        return getOrInternReference(target, listOf(getUnionType(elements)))
+    }
+
+    /**
+     * (CHK.97) stage 2 — the type of [propName] read off [unionArrayFallbackReceiver],
+     * or null where the fallback does not apply.
+     *
+     * GATED exactly as tsc gates it, on the two conditions that keep it from displacing
+     * a correct answer: the member union must have NO combined call signatures
+     * ([combineUnionSignatures] null — `.slice` / `.indexOf` / `.push` are answered by
+     * PASS 1 or PASS 2 and keep their per-member combination, which is why `push` on
+     * `number[] | string[]` still rejects against `never`), and the fallback's own answer
+     * must be CALLABLE. The second is the price of deriving this from the receiver rather
+     * than from `t.symbol.parent`: tsc's fallback rewrites a SIGNATURE LIST, so it can
+     * never be reached for a non-callable member, where a receiver-level route would
+     * happily answer `Array<A | B>["someProperty"]` and silently retype it.
+     */
+    private fun unionArrayFallbackMemberType(union: Type.Union, propName: String, resolved: Type): Type? {
+        val memberUnion = resolved as? Type.Union ?: return null
+        if (combineUnionSignatures(memberUnion) != null) return null
+        val fallback = unionArrayFallbackReceiver(union) ?: return null
+        val candidate = resolveMemberPropertyType(fallback, propName) ?: return null
+        if (getCallSignaturesOfType(candidate).isEmpty()) return null
+        return candidate
+    }
+
+    /**
      * (CHK.93) stage 2: is [t] a READONLY array-like receiver — a readonly tuple or a
      * `ReadonlyArray<T>` reference — and [name] an `Array<T>` member that `ReadonlyArray<T>`
      * lacks (`push`, `pop`, `splice`, …)? Such an access is TS2339 on the readonly display
@@ -130527,7 +130599,29 @@ interface DataView {
         return getOrInternReference(roTarget, listOf(elem))
     }
 
+    /**
+     * (CHK.97) stage 2 — set by the UNION arm of [getReturnTypeOfCallExpressionCore] when
+     * the call is OPTIONAL (`f?.()`) over a callee whose union carries a nullish
+     * constituent: the call is then resolved against the NON-nullish part and its result
+     * carries `| undefined`, because the whole call short-circuits to `undefined` when the
+     * callee is nullish. The flag exists because that resolution has many exits, all of
+     * them below the arm; [getReturnTypeOfCallExpression] is the one wrapper that reads it,
+     * and it SAVES AND RESTORES around the core so a nested call resolved inside the tail
+     * cannot consume or clobber the outer call's pending wrap.
+     */
+    private var optionalCallResultPendingUndefined = false
+
     private fun getReturnTypeOfCallExpression(expr: CallExpression): Type {
+        val saved = optionalCallResultPendingUndefined
+        optionalCallResultPendingUndefined = false
+        val result = getReturnTypeOfCallExpressionCore(expr)
+        val wrap = optionalCallResultPendingUndefined
+        optionalCallResultPendingUndefined = saved
+        if (!wrap || result === anyType || result === errorType || !strictNullChecks) return result
+        return getUnionType(listOf(result, undefinedType))
+    }
+
+    private fun getReturnTypeOfCallExpressionCore(expr: CallExpression): Type {
         // 16.0: super(...) call inside a constructor returns void
         if (expr.expression is Identifier && (expr.expression).text == "super") return voidType
         // B209: `Array.from(x)` — bounded single-arg resolution to `T[]`.
@@ -130658,11 +130752,22 @@ interface DataView {
                 val nonNullish = calleeType.types.filter { !isNullishConstituent(it) }
                 when {
                     nonNullish.size == calleeType.types.size -> combineUnionSignatures(calleeType)
-                    expr.questionDotToken || nonNullish.isEmpty() -> return anyType
-                    else -> when (val eff = getUnionType(nonNullish)) {
-                        is Type.Union -> combineUnionSignatures(eff)
-                        is Type.Object -> { resolveStructuredTypeMembers(eff); eff.callSignatures }
-                        else -> return anyType
+                    nonNullish.isEmpty() -> return anyType
+                    else -> {
+                        // (CHK.97) stage 2: an OPTIONAL call over a nullish union resolves
+                        // against the non-nullish part and its RESULT carries `| undefined`
+                        // (the call short-circuits). Stage 1 kept `any` here — the
+                        // conservative direction, but it made `const n: number = f?.()`
+                        // silently legal. The wrap is applied by the caller through
+                        // [optionalCallResultPendingUndefined]; a NON-optional call over the
+                        // same union is TS2721/2722/2723 (emitted by
+                        // [ccetUnionCalleeChecks]) and resolves without the wrap.
+                        if (expr.questionDotToken) optionalCallResultPendingUndefined = true
+                        when (val eff = getUnionType(nonNullish)) {
+                            is Type.Union -> combineUnionSignatures(eff)
+                            is Type.Object -> { resolveStructuredTypeMembers(eff); eff.callSignatures }
+                            else -> return anyType
+                        }
                     }
                 }
             }
@@ -133844,7 +133949,11 @@ interface DataView {
                 parts.add(t)
             }
             if (parts.isNotEmpty()) {
-                return if (parts.size == 1) parts[0] else getUnionType(parts)
+                val merged = if (parts.size == 1) parts[0] else getUnionType(parts)
+                // (CHK.97) stage 2: the same ARRAY FALLBACK as the primary path — this is
+                // the route a NARROWED or nested union receiver takes.
+                unionArrayFallbackMemberType(apparent, propName, merged)?.let { return it }
+                return merged
             }
         }
         // Round 468: a NUMERIC key resolves through an ARRAY-LIKE constituent's number
@@ -133943,7 +134052,11 @@ interface DataView {
                 propTypes.add(propType)
             }
             if (allHaveProp && propTypes.isNotEmpty()) {
-                return if (propTypes.size == 1) propTypes[0] else getUnionType(propTypes)
+                val merged = if (propTypes.size == 1) propTypes[0] else getUnionType(propTypes)
+                // (CHK.97) stage 2: tsc's ARRAY FALLBACK, consulted only where the member
+                // union has no combined call signatures — see [unionArrayFallbackMemberType].
+                unionArrayFallbackMemberType(unionForProp, propName, merged)?.let { return it }
+                return merged
             }
             // fall through to standard handling for the non-Union case below
             // (which will hit the original `getApparentType(union)` no-op +
@@ -148757,9 +148870,18 @@ interface DataView {
                 }
                 else -> return@run null
             }
-            if (calleeType !is Type.Object) return@run null
-            resolveStructuredTypeMembers(calleeType)
-            val sigs = calleeType.callSignatures
+            // (CHK.97) stage 2: a UNION callee's signatures are tsc's `getUnionSignatures`
+            // ([combineUnionSignatures]) — before this the function returned null for every
+            // non-`Type.Object` callee, so a callback argument to a union callee got NO
+            // contextual type at all and its parameters stayed `any`.
+            val sigs: List<Signature>? = when {
+                calleeType is Type.Object -> {
+                    resolveStructuredTypeMembers(calleeType)
+                    calleeType.callSignatures
+                }
+                calleeType is Type.Union -> combineUnionSignatures(calleeType)
+                else -> return@run null
+            }
             if (sigs.isNullOrEmpty()) return@run null
             // Single signature: use its parameter types directly.
             // Multiple overloads: per-arg-position, only adopt the first
@@ -159098,7 +159220,12 @@ interface DataView {
      * intersection of the array types, which is (CHK.83)'s rest lesson and is what makes
      * `((...a: string[]) | (...a: number[]))()` reject its argument against `never`.
      */
-    private fun combineUnionParameters(left: Signature, right: Signature, mapper: TypeMapper?): List<Symbol> {
+    private fun combineUnionParameters(
+        left: Signature,
+        right: Signature,
+        mapper: TypeMapper?,
+        intersection: Boolean = false,
+    ): List<Symbol> {
         val leftCount = left.parameters.size
         val rightCount = right.parameters.size
         val longest = if (leftCount >= rightCount) left else right
@@ -159112,7 +159239,15 @@ interface DataView {
             if (longest === right && mapper != null) longestParamType = instantiateType(longestParamType, mapper)
             var shorterParamType = sigTryTypeAtPosition(shorter, i) ?: unknownType
             if (shorter === right && mapper != null) shorterParamType = instantiateType(shorterParamType, mapper)
-            val combined = reduceIntersectionForWriteType(listOf(longestParamType, shorterParamType))
+            // (CHK.97) The one line that separates tsc's `combineUnionParameters` from its
+            // `combineIntersectionParameters` (checker.ts:33108): a UNION callee's
+            // parameters are INTERSECTED (an argument must satisfy every member), an
+            // INTERSECTION contextual type's are UNIONED (the callback is called with
+            // whichever the caller picks). Everything else — the longest list, the
+            // `unknown` for a missing position, the rest tail — is verbatim in both.
+            val combined =
+                if (intersection) getUnionType(listOf(longestParamType, shorterParamType))
+                else reduceIntersectionForWriteType(listOf(longestParamType, shorterParamType))
             val isRestParam = eitherHasRest && !needsExtraRestElement && i == longestCount - 1
             val leftName = if (i >= leftCount) null else left.parameters[i].name
             val rightName = if (i >= rightCount) null else right.parameters[i].name
@@ -159166,6 +159301,63 @@ interface DataView {
             resolvedReturnType = getUnionType(listOf(left.resolvedReturnType ?: anyType, rightReturn)),
             minArgumentCount = maxOf(left.minArgumentCount, right.minArgumentCount),
         ).also { it.fromUnionCombination = true }
+    }
+
+    /**
+     * (CHK.97) stage 2 — tsc's `combineSignaturesOfIntersectionMembers` (checker.ts:33155),
+     * the MIRROR of [combineSignaturesOfUnionMembers]: type parameters from the first with
+     * the second's mapped onto them, the arity the MAX of the two minimums, and the
+     * parameters UNIONED rather than intersected ([combineUnionParameters]'s one flag).
+     */
+    private fun combineSignaturesOfIntersectionMembers(left: Signature, right: Signature): Signature {
+        val typeParams = left.typeParameters?.takeIf { it.isNotEmpty() }
+            ?: right.typeParameters?.takeIf { it.isNotEmpty() }
+        val ltp = left.typeParameters
+        val rtp = right.typeParameters
+        val paramMapper =
+            if (!ltp.isNullOrEmpty() && !rtp.isNullOrEmpty()) createTypeMapper(rtp, ltp) else null
+        val params = combineUnionParameters(left, right, paramMapper, intersection = true)
+        return Signature(
+            declaration = left.declaration,
+            typeParameters = typeParams,
+            parameters = params,
+            // tsc leaves the return UNRESOLVED (`compositeSignatures` computes it lazily as
+            // the INTERSECTION of the members' returns); this family only ever reads such a
+            // signature for its PARAMETERS (a contextual signature), so the left return is
+            // kept verbatim rather than approximated.
+            resolvedReturnType = left.resolvedReturnType,
+            minArgumentCount = maxOf(left.minArgumentCount, right.minArgumentCount),
+        ).also { it.fromUnionCombination = true }
+    }
+
+    /**
+     * (CHK.97) stage 2 — tsc's `getIntersectedSignatures` (checker.ts:33085), the fold
+     * `getContextualCallSignature` applies when a contextual type offers SEVERAL applicable
+     * signatures. It is what types the callback parameter of a call whose callee is a UNION:
+     * PASS 2 intersects the members' parameters, so the callback's own contextual type is an
+     * INTERSECTION of function types, and the parameter it hands the arrow is the UNION of
+     * the members' — `(number[] | string[]).forEach(x => …)` gives `x: string | number`.
+     *
+     * Gated on `noImplicitAny` exactly as tsc gates it (the fold exists to avoid a spurious
+     * TS7006 and is deliberately not applied where implicit `any` is legal), and REFUSED
+     * where two members' type parameters are not identical
+     * ([unionCalleeGenericSignaturesIncompatible], tsc's `compareTypeParametersIdentical`).
+     */
+    private fun getIntersectedSignatures(sigs: List<Signature>): Signature? {
+        // `noImplicitAny` is not implied by `strict` on [CompilerOptions] — the repo-wide
+        // spelling of tsc's `getStrictOptionValue(compilerOptions, "noImplicitAny")` is the
+        // disjunction, and reading the bare field made this fold inert on every `strict`
+        // project (i.e. on every fixture and every dashboard profile).
+        if (!(options.noImplicitAny || options.strict)) return null
+        if (sigs.isEmpty()) return null
+        var left = sigs[0]
+        for (i in 1 until sigs.size) {
+            val right = sigs[i]
+            if (left === right) continue
+            if (unionCalleeGenericSignaturesIncompatible(listOf(left, right))) return null
+            left = combineSignaturesOfIntersectionMembers(left, right)
+        }
+        return left
     }
 
     /**
