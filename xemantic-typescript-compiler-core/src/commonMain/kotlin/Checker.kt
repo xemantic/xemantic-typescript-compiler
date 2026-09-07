@@ -135412,6 +135412,132 @@ interface DataView {
     }
 
     /**
+     * (CHK.104): is [t] a NON-CALLABLE primitive-like callee — the population TS2349's
+     * primitive arm decides outright?
+     *
+     * The arm used to read `calleeType is Type.Intrinsic` alone, which is exactly the
+     * WIDENED half of the population: `let s = "a"` (type `string`) reported and
+     * `const s = "a"` (type `"a"`) did not, and so did every string/number/bigint
+     * LITERAL, a `"a"`-annotated const or parameter, a template literal, an `as const`
+     * and an enum MEMBER — 12 of the 15 rows both references report and this checker
+     * lost. A literal's callability is decided by the same wrapper interface its base
+     * primitive's is, so there is no new decision here, only a wider gate.
+     *
+     * `void`/`null`/`undefined`/`never`/`unknown` keep their exclusions: the nullish
+     * pair is TS2721/2722/2723 above, and `never`/`unknown`/`void` are not user errors
+     * this arm owns.
+     */
+    private fun calleeIsNonCallablePrimitiveLike(t: Type): Boolean {
+        if (t === voidType || t === nullType || t === undefinedType || t === unknownType) return false
+        if (t is Type.Intrinsic || t is Type.StringLiteral ||
+            t is Type.NumberLiteral || t is Type.BigIntLiteral
+        ) return true
+        // An enum MEMBER is a member-less `Type.Object` ((REL.1)(b)), so it matches none
+        // of the classes above; tsc displays it by the wrapper of its VALUE's flavour.
+        return enumMemberTypeIsStringValued(t) != null
+    }
+
+    /**
+     * (CHK.104): the type TS2349's `Type '{0}' has no call signatures.` sub-line names —
+     * tsc's `getApparentType` of the callee.
+     *
+     * It goes through [primitiveApparentWrapper] rather than [getApparentType] for the
+     * reason that helper's own KDoc gives: `getApparentType` covers String/Number/Boolean
+     * and NOT `bigint` or `symbol`, so a `symbol` callee printed `Type 'symbol'` here
+     * where both tsgo 7.0.2 and pristine `typescript@6.0.3` print `Type 'Symbol'` — a
+     * pre-existing FORM divergence this closes on the way past. An enum MEMBER has no
+     * wrapper of its own and is displayed by its VALUE's flavour (`Number` / `String`),
+     * which is what both references print.
+     */
+    private fun noCallSignatureDisplay(t: Type): String {
+        primitiveApparentWrapper(t)?.let { return typeToString(it) }
+        enumMemberTypeIsStringValued(t)?.let { isString ->
+            primitiveApparentWrapper(if (isString) stringType else numberType)
+                ?.let { return typeToString(it) }
+        }
+        return typeToString(getApparentType(t))
+    }
+
+    /**
+     * (CHK.104): does [calleeType] carry POSITIVE evidence that its member table is
+     * COMPLETE, so "it has no call signatures" is a verdict rather than a resolution
+     * failure?
+     *
+     * (CHK.45)'s rule, applied to TS2349. The firewall this sits inside exists because a
+     * `Type.Object` with an empty member table is indistinguishable from one whose
+     * resolution we simply did not finish — the B153 class — so an OBJECT callee may be
+     * reported only when something says the table is what the source says. Three sources
+     * of that evidence, each measured on the 8-profile grid:
+     *
+     *  * an ARRAY / `ReadonlyArray` reference — its members are the lib `Array`
+     *    interface's, which `resolveReferenceMembers` builds from a declaration this
+     *    compiler always has (`[1]()` and an array-typed identifier both land here);
+     *  * a CLASS INSTANCE declared in a PROGRAM file with NO heritage — its members are
+     *    its own class body, so nothing can be missing; a base type is excluded because a
+     *    call signature can arrive through one and this checker's base resolution is the
+     *    part (CHK.45) found unreliable;
+     *  * an anonymous object with a NON-EMPTY member table, no call/construct signature
+     *    and no index signature — the shape an object LITERAL mints. An EMPTY anonymous
+     *    object is refused, and that is the whole reason `const o = {}; o()` stays a
+     *    stated false negative: `{}` from a literal and `{}` from an unfinished
+     *    resolution are the same type here, and no predicate over the TYPE separates
+     *    them.
+     *
+     * The `new X()` callee has its own arm below this one (round B60's), gated on the
+     * EXPRESSION rather than the type, and is deliberately left alone.
+     */
+    private fun calleeObjectTableIsComplete(calleeExpr: Expression, calleeType: Type): Boolean {
+        // A DUPLICATE IDENTIFIER is the one shape where the callee's TYPE is not the whole
+        // story: the binder's `canMerge` refuses Variable+Function, so `globals[name]`
+        // keeps ONE of them and this reader can be handed the VARIABLE's type while the
+        // call itself is checked against the FUNCTION's signature — the corpus's
+        // `errorElaboration` (a `declare function foo(x)` and a `const foo = { bar: 'a' }`
+        // in one file, where tsc reports only the TS2345 at the argument) grew an
+        // ours-only TS2349 the moment the object arm opened. The same program scan the
+        // TS2348 arm above already runs, widened to classes, and reached only on this rare
+        // path (an object-typed callee with no call signatures).
+        var core: Expression = calleeExpr
+        while (core is ParenthesizedExpression) core = core.expression
+        val name = (core as? Identifier)?.text
+        if (name != null && binderResults.any { br ->
+                br.sourceFile.statements.any { st ->
+                    (st is FunctionDeclaration && st.name?.text == name) ||
+                        (st is ClassDeclaration && st.name?.text == name)
+                }
+            }
+        ) return false
+        if (isArrayLikeReference(calleeType)) return true
+        val obj = calleeType as? Type.Object ?: return false
+        resolveStructuredTypeMembers(obj)
+        if (!obj.callSignatures.isNullOrEmpty() || !obj.constructSignatures.isNullOrEmpty()) return false
+        val sym = (obj as? Type.Interface)?.symbol ?: (obj as? Type.Reference)?.target?.symbol
+        if (sym != null && sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)) {
+            val decls = sym.declarations
+            if (decls.isEmpty() || decls.any { it in builtinLibDecls }) return false
+            // Only an `extends` clause can bring a member this checker did not build; an
+            // `implements` clause adds NOTHING to the instance type, so it is admitted
+            // (`class Impl implements I { p = 1 }` is reported by both references and
+            // was the one shape a blanket heritage refusal lost). A `Date` and every
+            // other lib type stays out through the declaration test above — (CHK.45)'s
+            // measured rule, whose 2 knip false positives were a cross-file interface
+            // with a heritage clause.
+            return decls.all { d ->
+                val heritage = when (d) {
+                    is ClassDeclaration -> d.heritageClauses
+                    is InterfaceDeclaration -> d.heritageClauses
+                    else -> return false
+                }
+                heritage.isNullOrEmpty() ||
+                    heritage.none { it.token == SyntaxKind.ExtendsKeyword }
+            }
+        }
+        if (obj is Type.Interface || obj is Type.Reference) return false
+        if (obj.symbol != null) return false
+        if (obj.stringIndexInfo != null || obj.numberIndexInfo != null) return false
+        return !obj.properties.isNullOrEmpty()
+    }
+
+    /**
      * (CHK.32) Is [target] a plain MEMBER-shaped object — it declares something, and
      * it carries no index signature? Members and index infos alike
      * are resolved first (round 833: the table is lazy, so a reader that does not
@@ -160589,10 +160715,8 @@ interface DataView {
                 }
             }
         }
-        if (!firedTs6234 && calleeType is Type.Intrinsic && calleeType !== voidType &&
-            calleeType !== nullType && calleeType !== undefinedType &&
-            calleeType !== neverType && calleeType !== unknownType) {
-            val displayType = typeToString(getApparentType(calleeType))
+        if (!firedTs6234 && calleeIsNonCallablePrimitiveLike(calleeType)) {
+            val displayType = noCallSignatureDisplay(calleeType)
             // 17.84: When the callee is a PropertyAccessExpression, squiggle just
             // the property name (matches TypeScript's per-segment elaboration for
             // chained calls like `obj.method().notMethod()` — only `notMethod`
@@ -160659,8 +160783,14 @@ interface DataView {
                 sy.name == "Function" && sy.declarations.isNotEmpty() &&
                     sy.declarations.all { it in builtinLibDecls }
             } == true
-            if (core is NewExpression && !isGlobalFunctionType) {
-                val displayType = typeToString(getApparentType(calleeType))
+            // (CHK.104): the `new X()` shape is gated on the EXPRESSION; the sibling
+            // gate is on the TYPE, and admits an object callee only with positive
+            // evidence its member table is complete — see
+            // [calleeObjectTableIsComplete].
+            if ((core is NewExpression || calleeObjectTableIsComplete(calleeExpr, calleeType)) &&
+                !isGlobalFunctionType
+            ) {
+                val displayType = noCallSignatureDisplay(calleeType)
                 val start = calleeExpr.pos
                 val length = expressionTrueEnd(calleeExpr) - start
                 if (length > 0) {
@@ -194873,6 +195003,13 @@ interface DataView {
             if (calleeType !is Type.Interface) return
             val start = callee.pos
             val length = (expressionTrueEnd(callee) - start).coerceAtLeast(1)
+            // (CHK.104): the ccet callee check now emits this row on the SPINE for a
+            // class/interface instance whose member table it can prove complete, and this
+            // pass runs AFTER it — the same dedupe the `strictModeReservedWord` walker
+            // carries, and it must live HERE because the pass that runs FIRST cannot see
+            // the other's row (`untypedFunctionCallsWithTypeParameters1`, named by
+            // `--passTiming`'s emissions-by-pass census).
+            if (diagnostics.any { it.fileName == fileName && it.code == 2349 && it.start == start }) return
             val (line, character) = getLineAndCharacterOfPosition(source, start)
             diagnostics.add(Diagnostic(
                 message = "This expression is not callable.",

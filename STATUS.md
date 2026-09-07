@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,100** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **198,237** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,30 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.39) — CALLING A LITERAL-TYPED OR OBJECT-TYPED VALUE IS TS2349 ((CHK.104)), AND THE OBJECT ARM NEEDED TWO GUARDS THE ITEM DID NOT NAME, 18,136 → 18,157 / 0 / 3 (2026-09-07).**
+**(CHK.104) CLOSED, 7 → 19 of the reference's 22 rows; (CHK.109) queued.** The primitive arm read
+`calleeType is Type.Intrinsic`, i.e. exactly the WIDENED half of the population: `let s = "a"`
+reported and `const s = "a"` did not, nor did a number/bigint literal, an annotated literal const or
+parameter, a template literal, an `as const`, an enum MEMBER, a body-local or a `never`; the object
+arm fired only for a syntactic `new X()`, so a class instance, an interface-typed value, an array
+and an object literal's type were all silent. A literal's callability is decided by the same wrapper
+its base primitive's is (a wider gate, no new decision); the object half is (CHK.45)'s rule —
+positive evidence the member table is complete. **The item under-counted its own population (15
+lost rows, not 12) and named NEITHER guard the object arm needs**: a DUPLICATE IDENTIFIER makes the
+callee's TYPE not the whole story (the binder's `canMerge` refuses Variable+Function, so this reader
+got the VARIABLE's type while the call was checked against the FUNCTION's signature —
+`errorElaboration`), and `tryEmitUncallableTypeArgs` OWNS the same row for an explicit-type-argument
+call and runs AFTER the spine (`untypedFunctionCallsWithTypeParameters1` printed it twice; the
+`--passTiming` emissions-by-pass census named both emitters in one run and the dedupe went into the
+pass that runs SECOND). **A pre-existing FORM divergence closed on the way past**: `getApparentType`
+covers String/Number/Boolean and not `bigint`/`symbol`, so `sym()` printed `Type 'symbol'` for both
+references' `Type 'Symbol'`. Two open decisions were settled by measurement: the heritage refusal is
+keyed on `extends` alone (an `implements` clause adds nothing to an instance type), and `never` is
+admitted because both references report it and the grid is what licenses it. 21 pins, all read from
+pristine; 7 arms, ALL discriminating, plus one arm recorded as NOT ablated with its reason. Grid
+**8 × added=0 removed=0** on the final binary, `cost_gate.py` exit 0 (largest delta **+0.03%**),
+`huge_methods.py` exit 0, build warning-clean.
 
 **(P18.38) — AN ARRAY-LIKE *ARGUMENT* IS DECIDABLE AGAINST AN ARRAY-LIKE *PARAMETER* ((CHK.103) STAGE 2), AND FIVE OF THE ITEM'S SIX ROWS CARRY NO SPREAD, 18,110 → 18,136 / 0 / 3 (2026-09-07).**
 **(CHK.103) stage 2 CLOSED; (CHK.108) queued with its mechanism named.** The item called its
@@ -108,27 +132,3 @@ BLIND because their observing mechanism IS (a)); two of the round's own pins wer
 the compiler, expecting `'1'`/`'2'` where all three compilers print `'number'`. Corpus 8,837/0,
 at-risk coverage asserted from the result XMLs (150 classes, 0 missing), `cost_gate.py` exit 0,
 `huge_methods.py` exit 0, grid 8×`added=0 removed=0`.
-
-**(P18.34) — A NAMESPACE-QUALIFIED ENUM MEMBER NARROWS ((CHK.100)), AND THE GRID'S *ADDED* ROW WAS THE POSITIVE CONTROL, 18,021 → 18,043 / 0 / 3 (2026-09-06).**
-**(CHK.100) CLOSED.** `resolveEnumSymbolForQualifiedPath` is a dotted-path container descent
-mirroring tsc's `resolveEntityName`, with a SINGLE segment delegated verbatim to the existing
-resolver and the answer canonicalized exactly once — so round 425's split-key hazard is discharged
-by construction rather than by care; `enumPathDeref` hops an `import * as ns` to the target module
-FILE, because a namespace import's members live in the file's locals and behind its `export *`
-barrels. 11 CLI fixtures against both references go **45 rows → 10**, all ten reference-agreeing.
-**Three of the item's claims are measured wrong**: "both sides fail" (only the RHS readers do — arm
-a2 reverting the annotation arm reads **0 RED over 22 pins**; kept for key-space agreement and
-recorded as a measured redundant guard), "expect REMOVED rows on the profiles" (0 removed on all
-eight — the 23 sites carry no diagnostic, so the class is LOST PRECISION there and the grid is a
-control), and the four named readers are incomplete (a fifth owned an ours-only TS2366).
-**The grid's ADDED row was the positive control**: with only the enum change in, three profiles
-gained a row BECAUSE the discriminant began to narrow — which exposed a PRE-EXISTING root defect,
-`checkPropertyAccessAssignment` having no flow narrowing at all where the var-decl, assignment and
-return readers have had a suppression-only leg since rounds 410/438/456. Fixed at the root and
-verified here against both references (the narrowed-to-`A` write is silent; the `"b"` twin still
-reports), taking the grid to `added=0` everywhere. 22 pins, 7 arms, no round-927 pair (two legs of
-one descent have DISJOINT red sets); two pins were repaired mid-round after reading 0 RED — BLIND,
-not redundant. Corpus 8,837/0, `cost_gate.py` exit 0 at **+0.00% on every counter**,
-`huge_methods.py` exit 0, grid 8×`added=0 removed=0`. The (P18.27) unblock is only HALF true: a
-mutable `for-of` head now narrows, but a readonly head is still silent — and so is
-`readonly string[]` with no enum anywhere, so that gap is independent of the discriminant.

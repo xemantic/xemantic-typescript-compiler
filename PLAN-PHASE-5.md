@@ -25,6 +25,73 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.39) — calling a LITERAL-typed or OBJECT-typed value is TS2349 ((CHK.104)), and the object arm needed TWO guards the item did not name (2026-09-07)
+
+**Suite 18,136 → 18,157 / 0 / 3** — 21 pins in the new `NonCallableValueTest`, every expectation
+read from pristine `typescript@6.0.3`. Grid **8 × added=0 removed=0** on the FINAL binary;
+`cost_gate.py` exit 0 (largest delta `mapped.hits` **+0.03%**, no rebaseline), `huge_methods.py
+--fail-over 0` exit 0, build warning-clean (`--rerun-tasks`, 0 `w:`).
+
+**(CHK.104) CLOSED, 7 → 19 of the reference's 22 rows on its own fixture.** The primitive arm read
+`calleeType is Type.Intrinsic`, which is exactly the WIDENED half of the population: `let s = "a"`
+(type `string`) reported and `const s = "a"` (type `"a"`) did not — nor did a number or bigint
+literal, a `"a"`-annotated const or parameter, a template literal, an `as const`, an enum MEMBER, a
+body-local or a `never`. The object arm fired only for a syntactic `new X()` callee, so a class
+instance, an interface-typed value, an array and an object literal's type were all silent. A
+literal's callability is decided by the same wrapper interface its base primitive's is, so the
+primitive half is a WIDER GATE and no new decision; the object half is (CHK.45)'s rule — POSITIVE
+evidence that the member table is complete (an array reference, a class or interface declared in a
+PROGRAM file with no `extends`, or an anonymous object with a non-empty table and no signatures).
+
+**THE ITEM UNDER-COUNTED ITS OWN POPULATION AND MISSED BOTH GUARDS THE OBJECT ARM NEEDS.** It says
+12 lost rows; measured, 15. And two shapes it did not mention each cost a corpus baseline:
+- **A DUPLICATE IDENTIFIER makes the callee's TYPE not the whole story.** The binder's `canMerge`
+  refuses Variable+Function, so `globals[name]` keeps ONE of them and this reader was handed the
+  VARIABLE's type while the call itself is checked against the FUNCTION's signature —
+  `errorElaboration` (a `declare function foo(x)` beside a `const foo = { bar: 'a' }`) grew an
+  ours-only TS2349 where tsc reports only the argument error. The guard is the same program scan
+  the TS2348 arm above already runs, widened to classes.
+- **`tryEmitUncallableTypeArgs` OWNS THE SAME ROW** for a class-instance callee carrying explicit
+  type arguments, and it runs AFTER the spine — `untypedFunctionCallsWithTypeParameters1` printed
+  the row TWICE. `--passTiming`'s emissions-by-pass census named both emitters in one run
+  (`checkCallTypeArgCount` 7, `checkSpine` 2), and the dedupe went into the pass that runs SECOND,
+  which is (CHK.46)'s rule and the idiom `strictModeReservedWord`'s walker already carries.
+
+**A PRE-EXISTING FORM DIVERGENCE CLOSED ON THE WAY PAST**: `getApparentType` covers
+String/Number/Boolean and NOT `bigint` or `symbol`, so a `symbol` callee printed `Type 'symbol'`
+where both references print `Type 'Symbol'`. `noCallSignatureDisplay` goes through
+`primitiveApparentWrapper` instead — the helper whose own KDoc records why widening
+`getApparentType` is a change to member lookup, narrowing and display at once. An enum MEMBER has
+no wrapper and is named by its VALUE's flavour (`Number` / `String`), which is what tsc prints.
+
+**Two decisions the item left open, both measured.** An `implements` clause adds NOTHING to an
+instance type where an `extends` clause can bring a member this checker did not build, so the
+heritage refusal is keyed on `SyntaxKind.ExtendsKeyword` alone — that is the only reason
+`class Impl implements I` and a plain `interface I` report. And `never` was excluded by the arm's
+own inherited guard while BOTH references report `nv()`; admitting it is one row and the grid is
+what licensed it (a false `never` from over-narrowing would have shown there).
+
+**Ablation: 7 arms, one mistake each, ALL discriminating.** c1 the widened primitive gate
+(**11 RED**); c2 the display helper (**4 RED** — bigint, symbol and both enum flavours); c3 the
+object arm (**5 RED**); c4 the `extends`-only heritage refinement (**1 RED**); c5 the
+duplicate-identifier guard (**1 RED**); c6 the second-pass dedupe (**1 RED**); c7 the `never`
+admission (**1 RED**). **c8 — the lib-declaration refusal — was NOT ablated and is recorded as
+such**: its instrument is a real-library baseline this round did not re-take, and (CHK.45) already
+measured it as two false positives on knip. Source restored from a snapshot throughout (never
+`git checkout` — the round is uncommitted), `cmp`-verified after every arm, and the final binary
+rebuilt before every gate.
+
+**Residues, recorded and NOT pinned.**
+- **An EMPTY anonymous object** (`const o = {}; o()`) — `{}` from a literal and `{}` from an
+  unfinished resolution are the SAME type here, and no predicate over the type separates them.
+  Blocked on the B153 class, not on this item.
+- **An INLINE literal callee** (`({})()`, `[1]()`, `({ a: 1 })()`) — measured, the CALLEE typing
+  path answers `any` for it (the same literal types correctly at a declaration and through a
+  variable, and `const w = ({ a: 1 }); w()` reports), so `ccetNoCallSignatureDiagnostics` returns
+  at its `calleeType === anyType` bail before any arm. Queued as (CHK.109).
+- **A class with an `extends` clause and a LIB type** (`Date`) — both reported by both references,
+  both deliberate refusals with the reasons above.
+
 ### Round (P18.38) — an array-like ARGUMENT is decidable against an array-like PARAMETER ((CHK.103) stage 2), and FIVE of the item's six rows carry no spread at all (2026-09-07)
 
 **Suite 18,110 → 18,136 / 0 / 3** — 26 pins in the new `ArrayLikeArgumentAssignabilityTest`,
@@ -2478,7 +2545,26 @@ parameter (`Promise<number>`, `Map<…>`), and `const l1: 5 = em`.
   equal literals are two members. CORPUS: the 15 ACTIVE `.errors.txt` echoing an array-literal
   spread are all GREEN as of stage 1.
 
-- [ ] **(CHK.104) CALLING A LITERAL-TYPED OR OBJECT-TYPED VALUE IS A SILENT TS2349 — `const s =
+- [ ] **(CHK.109) AN *INLINE* LITERAL CALLEE IS TYPED `any`, SO EVERY TS2349 ARM IS UNREACHABLE FOR
+  IT — `({})()`, `[1]()` and `({ a: 1 })()` are silent here and reported by BOTH references
+  (measured 2026-09-07, (P18.39); scratch `chk104/r2` lines 7-9 and `chk104/r5`).** The type itself
+  is fine: the SAME literal reads `{ a: number; }` / `number[]` at a declaration
+  (`const z: string = ({ a: 1 })` reports with that display) and through a variable the (CHK.104)
+  object arm reports (`const w = ({ a: 1 }); w()`). So the gap is the CALLEE typing path answering
+  `any`, and `ccetNoCallSignatureDiagnostics` returns at its `calleeType === anyType ||
+  calleeType === errorType` bail (`Checker.kt`, just above the union-callee branch) before any arm
+  runs. SEAM: find where a callee expression is typed for `checkSingleCallExpressionTypesCore` —
+  `getCalleeType` and the ParenthesizedExpression unwrap around it — and answer the literal's own
+  type; the (CHK.104) arms then need no change at all, which is the cheap way to grade it (the
+  object arm's evidence predicate already admits a non-empty anonymous object and an array
+  reference). RISK: LOW-MEDIUM — it changes what EVERY inline-literal callee resolves to, so the
+  8-profile grid runs first; the shape is vanishingly rare in real code, which is also why this is
+  small. MEANING.
+
+- [x] **(CHK.104) CLOSED 2026-09-07 ((P18.39) note): 7 → 19 of the reference's 22 rows; the item
+  under-counted its population (15 lost rows, not 12) and named NEITHER of the two guards the object
+  arm needs — a DUPLICATE IDENTIFIER (`errorElaboration`) and the second-pass dedupe against
+  `tryEmitUncallableTypeArgs` (`untypedFunctionCallsWithTypeParameters1`). ORIGINAL: CALLING A LITERAL-TYPED OR OBJECT-TYPED VALUE IS A SILENT TS2349 — `const s =
   "a"; s()`, `const n = 1; n()`, `1n`, `K.A()`, a `"a"`-annotated const or parameter, a template
   literal, `"a" as const`, a body-local, `({})()`, `[1]()` and a `new C()` instance in a const are
   all silent; `let sl = "a"` (`String`), an annotated `string`/`number`, `symbol`, a union and

@@ -2046,3 +2046,27 @@ is structurally invisible to the corpus, so the 40 pins run across THREE harness
 cross-file half — with every positive pin a VALUE pin. 9 arms all discriminating; 8 controls
 recorded as non-discriminating rather than counted. Corpus 8,837/0, `-project` 848 → 865/0,
 `huge_methods.py` exit 0, grid 8×`added=0 removed=0`.
+
+**(P18.34) — A NAMESPACE-QUALIFIED ENUM MEMBER NARROWS ((CHK.100)), AND THE GRID'S *ADDED* ROW WAS THE POSITIVE CONTROL, 18,021 → 18,043 / 0 / 3 (2026-09-06).**
+**(CHK.100) CLOSED.** `resolveEnumSymbolForQualifiedPath` is a dotted-path container descent
+mirroring tsc's `resolveEntityName`, with a SINGLE segment delegated verbatim to the existing
+resolver and the answer canonicalized exactly once — so round 425's split-key hazard is discharged
+by construction rather than by care; `enumPathDeref` hops an `import * as ns` to the target module
+FILE, because a namespace import's members live in the file's locals and behind its `export *`
+barrels. 11 CLI fixtures against both references go **45 rows → 10**, all ten reference-agreeing.
+**Three of the item's claims are measured wrong**: "both sides fail" (only the RHS readers do — arm
+a2 reverting the annotation arm reads **0 RED over 22 pins**; kept for key-space agreement and
+recorded as a measured redundant guard), "expect REMOVED rows on the profiles" (0 removed on all
+eight — the 23 sites carry no diagnostic, so the class is LOST PRECISION there and the grid is a
+control), and the four named readers are incomplete (a fifth owned an ours-only TS2366).
+**The grid's ADDED row was the positive control**: with only the enum change in, three profiles
+gained a row BECAUSE the discriminant began to narrow — which exposed a PRE-EXISTING root defect,
+`checkPropertyAccessAssignment` having no flow narrowing at all where the var-decl, assignment and
+return readers have had a suppression-only leg since rounds 410/438/456. Fixed at the root and
+verified here against both references (the narrowed-to-`A` write is silent; the `"b"` twin still
+reports), taking the grid to `added=0` everywhere. 22 pins, 7 arms, no round-927 pair (two legs of
+one descent have DISJOINT red sets); two pins were repaired mid-round after reading 0 RED — BLIND,
+not redundant. Corpus 8,837/0, `cost_gate.py` exit 0 at **+0.00% on every counter**,
+`huge_methods.py` exit 0, grid 8×`added=0 removed=0`. The (P18.27) unblock is only HALF true: a
+mutable `for-of` head now narrows, but a readonly head is still silent — and so is
+`readonly string[]` with no enum anywhere, so that gap is independent of the discriminant.
