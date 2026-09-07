@@ -128822,19 +128822,39 @@ interface DataView {
         // contextual target's element type contains literals (tsc contextual typing —
         // `const ops: readonly Op[] = ["a", "b"]` stays `("a" | "b")[]`, not
         // `string[]`; tsc services.ts invalidOperationsInPartialSemanticMode).
-        // Requires ≥1 literal element (otherwise null — no behavior change); spreads
-        // and empty arrays bail. Elements dedupe structurally like getTypeOfArrayLiteral.
+        // Requires ≥1 literal element (otherwise null — no behavior change); empty
+        // arrays bail. Elements dedupe structurally like getTypeOfArrayLiteral.
         is ArrayLiteralExpression -> run {
             // Only in an ARRAY-LIKE contextual position ([arrayCtx]) — a literal target
             // like `const n4: 0 = [0]` provides no element context, so the array widens
             // (tsc assignmentIndexedToPrimitives displays `number[]`, not `0[]`).
             if (!arrayCtx) return@run null
-            if (expr.elements.isEmpty() || expr.elements.any { it is SpreadElement }) return@run null
+            if (expr.elements.isEmpty()) return@run null
             var sawLiteral = false
             val elems = mutableListOf<Type>()
             for (el in expr.elements) {
-                val lt = literalTypeOfExpression(el, arrayCtx)
-                val t = if (lt != null) { sawLiteral = true; lt } else getTypeOfExpression(el)
+                // (CHK.103): a SPREAD contributes its ITERATED element type
+                // ([arrayLiteralSpreadElementType]) and this arm no longer bails on one.
+                // THAT BAIL IS WHAT MADE THE REST OF (CHK.103) A REGRESSION: round 471
+                // built this arm for tsc's OWN `invalidOperationsInPartialSemanticMode`
+                // (services.ts:~1560, no spread) and its sibling
+                // `invalidOperationsInSyntacticMode` (:1607) is the SAME shape WITH a
+                // spread — so before this the whole literal fell back to
+                // [getTypeOfArrayLiteral], whose elements widen to their base primitive
+                // (`getTypeOfExpression` answers `string` for a literal NODE), unioning a
+                // bare `string` into `readonly (keyof LanguageService)[]` and reporting a
+                // false TS2322 on 3 of the 8 profiles. A spread is NOT a literal element,
+                // so `sawLiteral` is unmoved: a spread-only literal still answers null and
+                // falls back exactly as it did, and this arm can only ever NARROW the
+                // element union it already produced for the same literal without one.
+                val t = if (el is SpreadElement) {
+                    val contributed = arrayLiteralSpreadElementType(el) ?: return@run null
+                    if (contributed === anyType) return@run null
+                    contributed
+                } else {
+                    val lt = literalTypeOfExpression(el, arrayCtx)
+                    if (lt != null) { sawLiteral = true; lt } else getTypeOfExpression(el)
+                }
                 if (t === errorType) return@run null
                 if (elems.none { it === t || ts2403Identical(it, t, 0) == Ts2403Cmp.IDENTICAL }) {
                     elems.add(t)
@@ -130375,11 +130395,29 @@ interface DataView {
         // Infer element type as union of all element types
         val elementTypes = mutableListOf<Type>()
         for (el in expr.elements) {
-            if (el is SpreadElement) return anyType // spread not yet supported
+            if (el is SpreadElement) {
+                val contributed = arrayLiteralSpreadElementType(el) ?: return anyType
+                if (elementTypes.none { it === contributed || ts2403Identical(it, contributed, 0) == Ts2403Cmp.IDENTICAL }) {
+                    elementTypes.add(contributed)
+                }
+                continue
+            }
             val raw = if (elemCtx != null && el is ObjectLiteralExpression) {
                 val savedCtx = contextualType
                 contextualType = elemCtx
                 try { getTypeOfExpression(el) } finally { contextualType = savedCtx }
+            // (CHK.103): a LITERAL element under a literal-containing contextual element
+            // type keeps its literal type (tsc's `checkExpressionForMutableLocation` +
+            // `isLiteralOfContextualType`; round 471's rule, already applied by
+            // [checkArrayLiteralElementsAgainstType] one layer up and by (CHK.91)'s
+            // object-literal member keep). `getTypeOfExpression` answers the BASE
+            // primitive for a literal NODE, so without this a `readonly (keyof X)[] =
+            // [...ops, "getCompletionsAtPosition"]` unions `string` into its element type
+            // and the whole declaration becomes a false TS2322 — measured on the grid
+            // (`services.ts:1607`, 3 profiles), reachable only now that such a literal
+            // has a type at all.
+            } else if (elemCtx != null && propTypeContainsLiteral(elemCtx)) {
+                literalTypeOfExpression(el, true) ?: getTypeOfExpression(el)
             } else getTypeOfExpression(el)
             // Round 459: an ELEMENT that is a flow-narrowed bare Identifier reads its
             // narrowed type — the array-literal sibling of round 438's object-literal
@@ -130431,6 +130469,72 @@ interface DataView {
         ?.takeIf { it !== anyType && it !== errorType }
 
     /**
+     * (CHK.103): the ELEMENT type a `...x` element of an array literal contributes to the
+     * literal's element union, or null where this checker cannot answer (the whole literal
+     * then keeps the `any` it has had since before this — a false NEGATIVE, never a wrong
+     * type).
+     *
+     * tsc's `checkArrayLiteral` (checker.ts:33329-33374) has two arms for a spread and this
+     * mirrors both. An ARRAY-LIKE source (`isArrayLikeType`) is pushed as a VARIADIC tuple
+     * slot, and the array path's union then reads `getIndexedAccessTypeOrUndefined(t,
+     * numberType)` off it — so `[...nums]` over `number[]` contributes `number` and
+     * `[...tup]` over `[number, string]` contributes the element UNION `number | string`,
+     * which is exactly [tupleArrayBase]'s type argument ((CHK.94)'s `getTupleBaseType`:
+     * rest slots INDEXED, an optional slot joining `undefined`, an empty tuple `never`).
+     * Everything else takes `checkIteratedTypeOrElementType(IterationUse.Spread, …)`, i.e.
+     * (CHK.96) stage 2's [iterationYieldTypeOf] — a `Set<T>` / `Map<K,V>` / generator /
+     * `Iterable<T>` yields its iteration type — with `string` answered directly (tsc's
+     * `getIteratedTypeOrElementType` special-cases it, and the EMBEDDED lib's `String`
+     * declares no `[Symbol.iterator]`, so the iteration leg alone would refuse the whole
+     * corpus's string spreads).
+     *
+     * REFUSED, each a stated false negative rather than a guess: a UNION source (tsc
+     * distributes the indexed access — `number[] | string[]` contributes `string | number`
+     * — but the member ORDER of a distributed union is not this checker's, and (INC.27)'s
+     * interning makes it undecidable per reference), an intersection, a type parameter, and
+     * `any` / `unknown` / `error` (tsc reports TS2488 on `unknown`; that diagnostic is not
+     * modelled here, and answering `any` would be a wrong type rather than a missing row).
+     *
+     * NO SUBTYPE REDUCTION: tsc's union here is `UnionReduction.Subtype`, so `[...lt, 3]`
+     * over `readonly [1, 2]` collapses to `number[]` where ours reads `(1 | 2 | number)[]`
+     * — FORM only (every literal member relates to the widened one, so no verdict moves).
+     */
+    private fun arrayLiteralSpreadElementType(el: SpreadElement): Type? {
+        val t = getTypeOfExpression(el.expression)
+        if (t === anyType || t === errorType || t === unknownType) return null
+        if (t is Type.TypeParam || t is Type.Union || t is Type.Intersection) return null
+        if (t === stringType) return stringType
+        if (isArrayLikeReference(t)) {
+            val arg = (t as Type.Reference).resolvedTypeArguments?.singleOrNull() ?: return null
+            return arg.takeIf { it !== errorType }
+        }
+        if (t is Type.Object && t !is Type.Interface && t.tupleElementTypes != null) {
+            return tupleArrayBase(t)?.resolvedTypeArguments?.singleOrNull()?.takeIf { it !== errorType }
+        }
+        return iterationYieldTypeOf(t)
+    }
+
+    /**
+     * (CHK.103): the SLOTS a `...x` element of a CONST-CONTEXT array literal contributes,
+     * each with its own optionality, or null where this checker cannot answer.
+     *
+     * A const context makes tsc build a TUPLE (`createTupleType(elementTypes, elementFlags,
+     * readonly)`), and `createNormalizedTupleType` INLINES a variadic slot whose type is a
+     * fixed tuple — so `[...tup] as const` over `[number, string]` is `readonly [number,
+     * string]`, which both references print. Only that case is answered: a spread of an
+     * ARRAY (`[...nums] as const` → tsc's `readonly number[]`, not a tuple at all), of a
+     * REST tuple, or of any other iterable keeps the `any` the whole literal had, because
+     * the tuple this function's caller is building has no way to express a variadic slot.
+     */
+    private fun constContextSpreadSlots(el: SpreadElement): List<Pair<Type, Boolean>>? {
+        val t = getTypeOfExpression(el.expression)
+        if (t !is Type.Object || t is Type.Interface) return null
+        val elems = t.tupleElementTypes ?: return null
+        if (t.tupleHasRest) return null
+        return elems.mapIndexed { i, e -> e to tupleSlotIsOptional(t, i) }
+    }
+
+    /**
      * (CHK.93)(c): the tuple an array literal in a CONST context denotes — one slot per
      * element, each its const-context type ([constContextTypeOf]; a nested literal reads
      * the context through the walk). A spread element keeps today's `any` (unsupported
@@ -130441,8 +130545,17 @@ interface DataView {
     private fun constContextTupleOfArrayLiteral(expr: ArrayLiteralExpression): Type {
         val elemCtx = arrayLiteralElementContext()
         val elementTypes = ArrayList<Type>(expr.elements.size)
+        val optionalFlags = ArrayList<Boolean>(expr.elements.size)
         for (el in expr.elements) {
-            if (el is SpreadElement) return anyType
+            if (el is SpreadElement) {
+                val slots = constContextSpreadSlots(el) ?: return anyType
+                for ((slot, optional) in slots) {
+                    if (slot === anyType || slot === errorType) return anyType
+                    elementTypes.add(slot)
+                    optionalFlags.add(optional)
+                }
+                continue
+            }
             val lit = literalTypeOfExpression(el)
             val t = if (lit != null) {
                 registerConstContextLiteral(lit)
@@ -130461,6 +130574,7 @@ interface DataView {
             }
             if (t === anyType || t === errorType) return anyType
             elementTypes.add(t)
+            optionalFlags.add(false)
         }
         // (CHK.93) stage 2: READONLY unless the contextual type has a MUTABLE array-like
         // constituent — tsc `checkArrayLiteral`: `createTupleType(…, readonly =
@@ -130471,7 +130585,11 @@ interface DataView {
         // declaration / assignment / return / argument / member sites for a const-asserted
         // array literal exactly as they install it for an object literal.
         val readonly = contextualType?.let { !typeHasMutableArrayLikeConstituent(it) } ?: true
-        val tuple = buildTupleFromTypes(elementTypes, readonly = readonly)
+        val tuple = buildTupleFromTypes(
+            elementTypes,
+            optionalFlags = optionalFlags.takeIf { fl -> fl.any { it } },
+            readonly = readonly,
+        )
         frozenObjectTypeIds.add(tuple.id)
         return tuple
     }
@@ -170547,9 +170665,61 @@ interface DataView {
             }
             return
         }
+        // (CHK.103): tsc elaborates an array literal ELEMENT-WISE only while its
+        // tupleized form (`checkArrayLiteral(node, Contextual, forceTuple)`) is
+        // TUPLE-LIKE, and falls back to one whole-literal message otherwise
+        // (`elaborateArrayLiteral`: `if (isTupleLikeType(tupleizedType)) …; return false`).
+        // A spread of a non-tuple array-like or of an iterable contributes a
+        // VARIADIC / REST slot, so a literal made only of those normalizes to a plain
+        // ARRAY and is not tuple-like — measured: `const s: string[] = [...nums]`,
+        // `[...m]` and `[...nums, ...bools]` each report ONE row at the `[` naming the
+        // whole array type, where `[...tup]`, `[...nums, ...tup]`, `[...nums, 3]` and
+        // `["x", ...nums]` report per element. This checker has no whole-literal
+        // array-to-array fallback here (the same gap `const a: [number, number] =
+        // [1, 2, 3]` shows, pre-existing), so the not-tuple-like case stays SILENT
+        // rather than inventing a row at the wrong node.
+        val elaborateSpreadElements = arrLit.elements.any { el ->
+            el !is SpreadElement || (constContextSpreadSlots(el)?.isNotEmpty() == true)
+        }
+        // Conservative: a contributed type already reported for an earlier spread of this
+        // literal is not reported twice — `[...tup, ...tup]` is ONE row in both references
+        // (tsc's per-node tuple INDEX, which this does not model) and would otherwise be
+        // two. It can only REMOVE a row, never add one.
+        val reportedSpreadTypes = ArrayList<Type>(2)
         // Primitive element type — TS2322 per element
         for (elem in arrLit.elements) {
-            if (elem is SpreadElement) continue
+            // (CHK.103): a SPREAD element contributes its ITERATED element type and is
+            // elaborated exactly like an ordinary one — `generateLimitedTupleElements`
+            // yields the spread's own node as the error node, so `const s: string[] =
+            // [...tup]` over `[number, string]` reports `Type 'string | number' is not
+            // assignable to type 'string'` AT the `...tup`. Placed ABOVE the
+            // [literalElementsOnly] gate deliberately: that gate exists to avoid
+            // double-emitting with the var-decl element walker (B180), which emits
+            // nothing for a spread — before this the arm was a bare `continue` and every
+            // spread element went unchecked at every position.
+            if (elem is SpreadElement) {
+                if (!elaborateSpreadElements) continue
+                val spreadElem = arrayLiteralSpreadElementType(elem) ?: continue
+                if (spreadElem === anyType || spreadElem === errorType) continue
+                if (checkTypeRelatedTo(spreadElem, elementType, assignableRelation)) continue
+                if (reportedSpreadTypes.any { it === spreadElem }) continue
+                reportedSpreadTypes.add(spreadElem)
+                val start = elem.pos
+                val length = expressionTrueEnd(elem) - start
+                if (length <= 0) continue
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Type '${typeToString(spreadElem)}' is not assignable to type '${typeToString(elementType)}'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+                continue
+            }
             // B180: the var-decl caller covers only LITERAL elements — call-expression
             // elements (`[myVar.voidFn()]`) are already emitted by the pre-existing
             // var-decl element walker; without this gate they double-emit

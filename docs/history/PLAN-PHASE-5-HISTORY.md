@@ -58696,3 +58696,1341 @@ Owner decisions 2026-09-02:
   allocation as well as on `cost_gate.py`; flag ON is MEASURED on both program shapes
   before any later stage is priced.
 
+### Round (P18.17) — `never` stops being unassignable at one position, an impossible enum comparison starts reporting, and a generalized enum prints its namespace (2026-09-05)
+
+**Full suite after the round: 17,308 → 17,343 / 0 / 3** — the 29 + 6 new pins, no baseline moved, no `LogicalParityDivergence`. The first run read 17,337 / **1** / 3: `DeclareGlobalAugmentationTest` reddened on the (PARITY.3) qualification (`global.ZzzEnum`), a class the round's hand-written at-risk set could not reach because it selected classes BY NAME — the class names no enum and no namespace. Censused afterwards: **488 core classes mention `enum` or `never` in their SOURCE and the name patterns reached 149**, so 69% of the population was unscanned; the fixture-grep sweep (485 classes / 5,169 tests, every intended class confirmed present in the XMLs) is now the method, and it is in CLAUDE.md.
+
+**Three of (P18.16)'s four residues LANDED; (CHK.85) STOPPED with its measurement, because
+it is MEANING and a design.** Every row below was reproduced against tsgo 7.0.2 AND
+pristine `typescript@6.0.3` BEFORE any code was written, and the two references agree on
+every one of them — no reference divergence was found this round.
+
+**(CHK.84).** `declare const n: never; function f(): string { return n }` was an ours-only
+TS2322. The string-layer `isAssignableTo` had no BOTTOM-type rule, and the reason only the
+RETURN position showed it is structural rather than accidental: of that function's five
+call sites only `checkReturnAssignabilityCore`'s adds an IDENTIFIER fallback
+(`?: (expr as? Identifier)?.let { varTypes[it.text] }`) below `inferSimpleExprType`, so a
+`never`-annotated NAME never reached the string layer at the var-decl, assignment or
+`this.p` sites — and the engine cannot fire either, because it correctly ACCEPTS a `never`
+source and an accepted relation does not early-return. One line, mirroring
+`isSimpleTypeRelatedTo`'s own rule. **At-risk enumeration: EMPTY by construction** — the
+change can only delete a row whose source display is exactly `never`, and **no baseline in
+the whole 9,055-file corpus carries `'never' is not assignable` as a SOURCE**; tsc cannot
+produce one. The 225 active baselines that mention `never` at all were run as the superset.
+
+**(CHK.86), the diagnostic half.** `comparabilityCategory` maps a numeric enum to
+`"number"` and a string enum to `"string"` — deliberately, so `k === num` and `s1 === "p"`
+stay legal — so two enums of one flavour read as the SAME category and the rule fell
+through. The enum question is about IDENTITY and is now asked separately, ABOVE the
+category rule, which also fixed a display that rule was getting wrong (`k === S.P` read
+`'K' and 'S.P'` against both references' `'K' and 'S'`). The display is tsc's
+`getBaseTypesIfUnrelated` transcribed, and that ONE line accounts for every measured row:
+`ka === kb` prints `'K.A' and 'K.B'` because the bases are one enum and therefore related,
+while `ka === jx`, `ka === j`, `kab === jx` and `c1 === K.A` all print their ENUMS. Two
+siblings measured and deliberately left out, each queued with its mechanism: the `never`
+NARROW ((CHK.87)) and the enum-member-vs-numeric-literal case ((CHK.88)).
+
+**(PARITY.3), and it was NOT the rounds-745-749 same-string retry's job.** tsc's
+`reportRelationError` computes the source display TWICE:
+`getTypeNamesForErrorDisplay` gives a BARE name, then the generalize branch re-renders the
+generalized source under `TypeFormatFlags.UseFullyQualifiedType`. That is the whole
+asymmetry (P18.16) recorded: the SAME `Ns.Inner.I` prints qualified at a `string` target
+and bare at a `never` one. **The qualification cannot be keyed on "the type changed"** — a
+WHOLE enum enters the branch too, because in tsc a numeric enum IS a union flagged
+`EnumLiteral` (so `isLiteralType` admits it) while `getBaseTypeOfEnumLikeType` returns it
+unchanged, so entering the branch has the RE-RENDER as its only observable effect. Scope is
+deliberately narrower than tsc's: only a NAMESPACE chain is walked, so a top-level enum is
+byte-identical to before and a MODULE-scoped one keeps its bare name where tsc prints
+`import("<absolute path>").E` — (P18.14)'s refused mechanism. TWO container kinds must be
+refused as chain segments and BOTH earned their own pins. An AMBIENT module (`declare
+module "amb"`) renders `amb.AE` without its guard, a string that reads as a namespace and
+is wrong in a NEW way. A GLOBAL AUGMENTATION (`declare global { … }`) is worse, because it
+shipped in the first cut and the corpus caught it: it is not a container a consumer can
+SPELL — it IS the global scope — so both references print its members BARE, and we read
+`global.ZzzEnum`. Its guard STOPS the walk rather than refusing the chain, because a real
+namespace nested inside the block IS an ordinary container and does qualify (`declare
+global { namespace N { enum NE {} } }` reads `'N.NE'` in both references, and
+`Deep.Inner.DE` keeps both segments); and it is keyed on the `declare` MODIFIER, not on the
+NAME, because a plain `namespace global { export enum GE {} }` is an ordinary namespace
+that both references print as `'global.GE'`. The third form — a modifier-less `global { … }`
+inside an ambient module — needs no arm, since the ambient guard already refuses that chain
+one hop later for the same bare answer. The rounds-745-749 retry
+was left untouched and is ORDERED against this rule the way tsc orders them (the retry
+compares BARE strings; this overrides afterwards), which is why
+`enumAssignmentCompat3/6/7` are unmoved.
+
+**(CHK.85) STOPPED — MEANING, and three gaps rather than one.** `const o = { v: K.A };
+const w: K.A = o.v` is an ERROR in both references (a mutable object-literal property
+widens to `K`) and is **SILENT here** — a lost TRUE POSITIVE, not a display divergence —
+and so is its return-position twin. Beside it: a `let`/`const` local's READ answers the
+FLOW type in both references (`K.A`, and `K.B` after a reassignment) where we answer the
+widened declared `K`; and an `as const` property read is reported by both references and is
+entirely missing here. Two further facts for whoever takes it — our ARGUMENT and
+DECLARATION paths disagree with EACH OTHER on the identical expression, and (WIDEN.1)'s
+recording-site rule does not reach the object-literal half at all, because the widening tsc
+performs is in `getTypeOfObjectLiteral`'s member typing, i.e. every object literal's member
+types program-wide.
+
+**Pins and ablation.** 35 pins in the new `EnumNeverParityTest`, plus one (P18.16)
+expectation UPDATED — `TypeDisplayParityPositionsTest`'s namespace pin was written to
+RECORD this divergence ("OURS, NOT tsc's, AND THE DIVERGENCE IS PRE-EXISTING") and now
+reads the references' `'Ns.Inner'`; it was found by the at-risk gate, not by grep. Six
+arms, one mistake each, all discriminating: a1 the `never` string rule (**2 RED** — the two
+return pins, with the declaration/assignment/argument pin GREEN, which is the receipt that
+those positions never reach the string layer); a2 the generalize GATE (**3 RED**, all three
+`never`-target controls); a3 the qualification itself (**6 RED**, disjoint from a2); a4 the
+(CHK.86) emission (**10 RED**); a5 the base-vs-original display rule (**2 RED**, a NESTED
+set inside a4's, recorded as such per round 807); a6 the ambient-module refusal (**1 RED**,
+its own pin); a7 the global-augmentation stop (**4 RED**, the four `declare global`
+qualification pins); a8 keying that guard on the NAME instead of the `declare` modifier
+(**1 RED**, the `namespace global` control, disjoint from a7). Source restored from a snapshot (the round is uncommitted, so never `git
+checkout`), rebuilt, and the restored `Checker.class` sha256 (`a87300a1`) matched the
+binary every gate had run against.
+
+**At-risk enumeration, and the half of it that was WRONG.** The CORPUS half was sound and
+was done by EXECUTION over all 3,145 active `.errors.txt` baselines: 147 mention `enum`
+(case-insensitive; 135 declare one), 225 mention `never`; union **360 families, 1,481
+subtests, 0 moved**, every family confirmed to have actually run — the first attempt's
+`--tests` patterns contained BACKTICKS and matched **nothing** for the corpus families
+while still exiting 0, which is why the coverage assertion is now part of the method. **The
+HAND-WRITTEN half selected classes by NAME (`*Enum*`, `*Display*`, `*Narrow*`, …) and that
+cannot see a FIXTURE**: `DeclareGlobalAugmentationTest` declares an enum inside a `declare
+global` block, names no enum and no namespace in its own name or its expectations, and went
+RED in the full suite. Censused afterwards, **488 core test classes mention `enum` or
+`never` in their SOURCE and the name patterns reached only 149 of them — 339 missed**. The
+sweep that would have caught it is (PARITY.2)'s and is cheap: grep the test SOURCES, run
+every class, assert every intended class appears in the result XMLs. Re-run that way:
+**485 classes, 5,169 tests, 0 failed** (the 3 non-classes are `BenchMain` and friends). No
+`LogicalParityDivergence` needed.
+
+**Gates**, all against the final binary (`6d6751fb`). Fixture-selected core classes
+**485 / 5,169 / 0**; at-risk corpus families **3,168 / 0 / 0**; externals `jvmTest`
+**290 / 0**; project `jvmTest` **848 / 0**. `cost_gate.py` **exit 0** (`output.errors` 46
+unchanged, `spine.nodes` +0.00%; largest move `mapped.hits` +1.22%, and `globals.lookups`
+−0.49%). `huge_methods.py --fail-over 0` **exit 0**. 8-profile grid
+`PARITY1_MARKER=enumComparisonNoOverlapDisplays`, two snapshotted class dirs with the
+self-comparison and positive-control refusals armed: **all eight `added=0 removed=0`** —
+and per (P18.15) that is a CONTROL for the display half (0 of its 417 rows carries an
+assignability message), while for (CHK.86) it is the real gate that no TS2367 was added.
+Build warning-clean (`--rerun-tasks`, 0 `w:`).
+
+**Suite: 17,308 → 17,337 / 1 / 3 on the first run** — the count was predicted exactly and the one
+failure was the `declare global` display above, fixed here with 6 further pins. **Revised
+prediction: 17,343 / 0 / 3.**
+
+- [x] **(LIC.1) DONE 2026-09-01 — LICENCE STRINGS: THE README SAYS `AGPL-3.0-or-later`; THE 1,078 SOURCE
+  HEADERS SAY `AGPL-3.0-only WITH LicenseRef-xtsc-output-exception`. MAKE EVERY DOC SAY THE
+  LATTER.** The source headers are the licence; the docs drifted. Sweep README.md and docs/
+  for `AGPL-3.0-or-later` (and any project-licence description missing the output exception)
+  and align on the header string. One commit.
+
+- [x] **(DOC.1) DONE 2026-09-01 — `docs/language-service.md` § 3b COMPARED AGAINST THE WRONG tsgo — THE
+  `--incremental` CLI IN FRESH PROCESSES — AND ATTRIBUTES A 182 ms PROCESS FLOOR TO tsgo.**
+  The relevant comparison is `tsgo --lsp`: a long-lived session with snapshot updates and
+  lazy per-file checking, which pays no such floor. Re-title the table honestly ("vs tsgo
+  CLI"), mark the LSP-session comparison as PENDING (LSP.3), and remove the "long-lived
+  host" conclusion until it is measured. This closes the previous session's question — we
+  compared against the wrong tsgo.
+
+- [x] **(DOC.2) DONE 2026-09-01 — README REPOSITIONED ON BRANCH `docs/reposition` (pushed;
+  awaiting owner review; a REVIEW FLAG in the branch commit notes the verbatim-kept "Honest
+  limits" bullet about non-incremental queries is stale since the (INC.\*) arc).** Thesis: (1) type-check and compile
+  TypeScript with no Node and no Go anywhere in the toolchain; (2) embed a whole-program
+  checker in a Kotlin application (`Project`); (3) generate Kotlin externals with resolved
+  types; (4) run TypeScript as JVM bytecode (KIR). Drop "drop-in replacement for tsc" as
+  the lead. Keep every measured number and "Honest limits" verbatim.
+
+- [x] **(LIC.2) DONE 2026-09-02 (owner-approved 2026-09-02, the proposed two-entry shape) — THE ROOT
+  POM DECLARED "The Apache License, Version 2.0" WHILE THE PROJECT IS `AGPL-3.0-only WITH
+  LicenseRef-xtsc-output-exception`** (build.gradle.kts, `subprojects` → `pom` → `licenses`).
+  Found during (LIC.1); worse than the README drift because it is the metadata Maven Central
+  would publish. Landed: the first `license` entry names the SPDX expression with `url` at
+  the repo's `LICENSE` (main branch), a second entry names the Output Exception with `url` at
+  `LICENSE-EXCEPTION`, both `distribution = "repo"`. Verified by generating the core JVM POM
+  (`generatePomFileForJvmPublication`) and reading its `<licenses>` block. Nothing was
+  published under the wrong metadata.
+
+- [x] **(LIC.3) DONE 2026-09-02 — CONTRIBUTING.md (owner decision 2026-09-02, recorded in § Approvals above,
+  where the owner labels it "(LIC.2)" — queued as (LIC.3) here because the (LIC.2) queue
+  label was already taken by the POM item): until the contributor agreement exists,
+  CONTRIBUTING.md states that external pull requests cannot be merged; issues and
+  reproductions are welcome. One commit.**
+
+- [x] **(EXT.1) DONE 2026-09-01 (worktree wave, merged) — KOTLIN EXTERNALS GENERATOR, FIRST CUT — ONE INTERFACE END-TO-END WITH A
+  PIN.** New module `xemantic-typescript-compiler-externals` (JVM first; pre-approved
+  2026-09-01). Consume the checker the way `-kir` already does (`kir/front/CheckedFacts.kt`
+  is the precedent: `CheckedNodeSink.declaration` + `CheckedLens`), so the eager
+  architecture is NOT an obstacle. Deliverable: given a program with one exported
+  interface, emit a Kotlin/JS `external interface` with resolved member types; pin the
+  emitted text, and GATE: the generated Kotlin must compile — reuse the
+  kotlin-compiler-embeddable in-test compile check `-kir` already has.
+
+- [x] **(EXT.2) DONE 2026-09-01 — GENERICS, INTERFACE REFERENCES, TYPE ALIASES.** A
+  generic interface renders its TP names (constraints/defaults become loud header
+  markers); a member typed by another EXPORTED interface renders that name under
+  POSITIVE identity evidence (`===` against the pre-scanned exported declarations — a
+  lib type or non-exported neighbour sharing the spelling falls back); a generic
+  reference renders `Box<String>` only when EVERY argument maps; an exported
+  non-generic alias with a mappable body becomes `public typealias` (uses still render
+  RESOLVED — the Dukat pin holds; an unmappable body is a loud skip, never
+  `typealias = Any?`). **Mechanism finding for EXT.3+: the lens at an
+  interface-declaration callback resolves a bare own-`T` annotation to `any` (an
+  interface's TPs are not the reconstructed FN-TP ambient), so own-TP annotations are
+  answered SYNTACTICALLY in `annotationText` — the one place annotations become Kotlin
+  text.** Module 21/0; the compile gate's fixture now carries generics + references +
+  typealias, negative control intact.
+
+- [x] **(EXT.3) DONE 2026-09-01 — TOP-LEVEL FUNCTIONS, FUNCTION TYPES, OPTIONAL
+  METHODS.** `export function` → `public external fun` (generic TPs syntactic,
+  constraints as markers above the fun; membership by === against the pre-scanned
+  TOP-LEVEL exported set, so nested declarations stay silent; an overloaded name is a
+  loud skip — (EXT.4)); function-TYPE annotations map recursively and syntactically
+  (`(name: string) => void` → `(String) -> Unit`; alias pieces still resolve through
+  the lens), REFUSING as a whole on a generic fn type, an OPTIONAL parameter (arity,
+  not nullability) or a REST parameter; an optional method flips to a nullable
+  function-typed property `((String) -> Unit)?`. **The compile-gate variant renders a
+  non-external function with the body `= null!!`** — `Nothing`-typed, legal for any
+  return type, built from language built-ins alone, which is what a zero-classpath
+  metadata compile allows. Module 29/0; gate fixture carries every new shape.
+
+- [x] **(EXT.4…n) DONE 2026-09-02 — every rung the item named has landed and the fixture ladder is green end to end (mitt → smol-toml → RxJS → typescript.d.ts); the residue is (EXT.17)/(EXT.18)/(CHK.77) below. EXTERNALS MVP LADDER, REMAINING RUNGS — decompose as the work
+  progresses.** DONE 2026-09-02 ((P18.5) note): classes (`external class` +
+  primary ctor + companion statics) and enums (`sealed external interface` +
+  companion entry vals; `const enum` a loud skip); generic ALIASES (syntactic
+  body under the alias's own TP scope), generic METHODS (own TPs + markers,
+  the optional-generic combination a loud skip), interface/class method
+  OVERLOADS (rendered as Kotlin overloads; ones collapsing to a duplicate
+  mapped signature — the marker-stripped key — keep the first and mark the
+  rest); DEFAULT exports (loud marker on every kind; module wiring —
+  `@JsModule`/`@JsName` — is still a later rung) and generic references to
+  GENERATED targets (`Emitter<Events>` — target named by checker identity,
+  arguments from their own annotations), which together made the **mitt rung
+  GREEN**: `KotlinExternalsMittGateTest` embeds the verbatim `mitt@3.0.1`
+  `index.d.ts` (MIT, attributed) and its generated Kotlin metadata-compiles.
+  DONE 2026-09-02 ((EXT.7), (P18.6) note): the **smol-toml rung is GREEN** —
+  MULTI-FILE generation (`generateKotlinExternals(List<SourceFileEntry>)`, one
+  Binder + one Checker, cross-file by-name rendering under the same identity
+  evidence, a second exported TYPE name across files a loud skip), top-level
+  function OVERLOADS rendered (implementation signature omitted, duplicates
+  collapsed by the (EXT.5) key), `#private` members omitted like `private`,
+  heritage markers NAME the base (`extends Date`), and every export-wiring
+  statement (`export default <value>`, `export =`, `export { } [from]`,
+  `export *`) a loud marker with `export {}` silent; `KotlinExternalsSmolTomlGateTest`
+  embeds the verbatim seven `smol-toml@1.7.1` declaration files (BSD-3-Clause,
+  notices retained) and metadata-compiles the output.
+  DONE 2026-09-02 ((EXT.8), (P18.6) note): HERITAGE to GENERATED targets —
+  `interface B extends A, Box<string>` → `: A, Box<String>`, a class's
+  `extends`/`implements` of generated targets → supertypes, `override` on
+  redeclared members (property by name, method by mapped signature; a
+  differing signature is an overload) with `open` on the class member some
+  generated subclass overrides, `open external class` for every non-abstract
+  class (the Dukat/kotlin-wrappers convention), an inherited constructor for a
+  subclass declaring none, cross-file bases through the new lens member
+  `heritageBaseSymbol`; the gate variant renders classes `abstract` with the
+  superclass call. Lib/non-exported/wrong-kind bases stay per-base markers.
+  DONE 2026-09-02 ((EXT.9), (P18.6) note): exported VALUES (`export [declare]
+  const|let|var x: T` → `public external val|var x: T`; un-annotated ones
+  by the checker's answer with a `const`'s literal type widened to its base;
+  a destructuring export a loud skip) and ACCESSORS (a get/set pair one
+  property, getter-only `val`, setter-only `var`, emitted at the first
+  accessor's position; static accessors in the companion; interface
+  accessors too; private/`#` accessors omitted).
+  DONE 2026-09-02 ((EXT.10), (P18.8) note): references to a GENERATED ALIAS
+  render by NAME wherever the resolved body has no Kotlin spelling — a
+  generic instantiation (`Handler<string>` → `Handler<String>`, arguments from
+  their annotations, exact arity) and a function-typed non-generic alias
+  (`type Cb = () => void` is now emitted and its uses spell `Cb`) — against
+  the checker's identity evidence through the new lens member
+  `typeReferenceSymbol` (import alias followed); the Dukat pin holds (a
+  mapped body still renders resolved, `Species` → `String`); a skipped
+  alias, a lib alias and a same-named non-exported alias keep the fallback.
+  DONE 2026-09-02 ((EXT.11a), (P18.9) note): the **RxJS core rung COMPILES** —
+  `rxjs@7.8.2`'s 15 `internal/` declaration files (`KotlinExternalsRxjsGateTest`,
+  verbatim, Apache-2.0) generate with zero checker diagnostics and zero Kotlin
+  compile errors. A single-call-signature interface is a function-type alias
+  (`public typealias UnaryFunction<T, R> = (T) -> R`), an empty interface over
+  one is an alias to it (`OperatorFunction<T, R> = UnaryFunction<Observable<T>,
+  Observable<R>>`, transitively), nameable but never a supertype; other call
+  and construct signatures are loud skips; `typeof X` refuses with a marker
+  naming the WRITTEN query; the arity guard refuses an un-instantiated generic
+  name; a function type's `this:` parameter is a Kotlin RECEIVER
+  (`SchedulerAction<T>.(T) -> Unit`) and a declaration's is dropped loudly.
+  New instrument: `ExternalsLibraryProbe` (env-gated jvmTest; generated Kotlin +
+  compile errors + diagnostics + a marker census per mechanism).
+  DONE 2026-09-02 ((EXT.13), (P18.9) note): NAMESPACES — the root ambient namespace
+  flattens, nested ones are `external object`s; `typescript.d.ts` compiles.
+  DONE 2026-09-02 ((EXT.15), (P18.9) note): INDEX SIGNATURES as an `operator fun
+  get`/`set` pair (string/number keys, read nullable, `readonly` drops the set,
+  other keys a loud skip) and PARAMETER PROPERTIES as explicit members at the
+  start of the class body (`public`/`readonly` → `var`/`val`, private/protected
+  omitted). Still to emit: module wiring (`@JsModule`/`@JsName`, the package's
+  public surface through its re-export graph) — (EXT.16). Ladder rungs green:
+  mitt, smol-toml, RxJS (core + all 250 files), typescript.d.ts. (`class Subject<T> extends
+  Observable<T>` is (EXT.8)'s shape; `export declare const EMPTY:
+  Observable<never>` is (EXT.9)'s). Unions and other inexpressible shapes: ONE
+  documented fallback per shape, never silent. Fixture ladder: `mitt` → `smol-toml` →
+  RxJS → `typescript.d.ts`; GATE at every rung: the generated Kotlin compiles.
+
+- [x] **(LSP.1) DONE 2026-09-01 (worktree wave, merged) — LSP SERVER: initialize + didOpen +
+  hover.** New module `xemantic-typescript-compiler-lsp` (JVM; distributed later as a
+  GraalVM native image through the EXISTING nativeImage configuration; a Kotlin/Native
+  target is a later item; pre-approved 2026-09-01). JSON-RPC 2.0 over stdio using
+  kotlinx-serialization-json + kotlinx-io from the version catalog — **NO new
+  dependencies; lsp4j is NOT approved** (JVM-only Java; this repo is KMP). Positions: LSP
+  is 0-based line + UTF-16 code units; `Project` is 0-based char offsets with 1-based
+  `positionAt` — `docs/language-service.md` § 6 and § 12 are the spec; PIN the conversion
+  at a non-BMP character. (LSP.1) = initialize + didOpen + hover → `quickInfoAt`, against
+  a fixture project the `-project` tests already use.
+
+- [x] **(LSP.2) DONE 2026-09-01 — THE REMAINING FEATURES + THE NATIVE-IMAGE WIRING.**
+  didChange (Full sync; ranged changes SKIPPED and pinned) / didClose → `reloadFile` /
+  didSave (text authoritative, else reload) / watched-files; definition, references
+  (includeDeclaration honoured), documentHighlight (read=2/write=3), completion (labels +
+  detail + textEdit over the replacement span), signatureHelp, prepareRename (parse-only via
+  `nodeInfoAt`) / rename (a RenamePlan refusal → JSON-RPC error `-32803` CARRYING the
+  refusal name + conflicts), pull diagnostics, and PROJECT-WIDE publishDiagnostics off the
+  narrowed `diagnostics()` (on open/close/save/watched-files, deliberately never per
+  keystroke; cleared files republished empty). 16 new pins, all self-consistency against a
+  parallel `Project`; module 58/0 warning-clean. The nativeImage task is WIRED (mirror of
+  `-cli`'s, entry `XtscLspMainKt`, output `xtsc-lsp`) and configures; no GraalVM on this
+  box, so the first verified image build is a CI/another-host step — same status as the
+  cli's arm. didChange →
+  `updateFile`; didClose → drop the overlay; didSave and watched-files → `reloadFile`;
+  definition → `definitionsAt`; completion → `completionsAt`; signatureHelp →
+  `signatureHelpAt`; references → `referencesAt`; documentHighlight →
+  `documentHighlightsAt`; prepareRename/rename → `renameAt` (a RenamePlan refusal becomes
+  an LSP error carrying its reason); diagnostics → `textDocument/diagnostic` pull AND
+  project-wide publish via the narrowed `diagnostics()` — the one feature tsgo's LSP
+  lacks; keep it. Then the native image through the existing configuration.
+
+- [x] **(LSP.3) DONE 2026-09-01 — THE HONEST COMPARISON, MEASURED: `xtsc-lsp` vs
+  `tsgo --lsp`, BOTH LONG-LIVED, ON tsc's 78 SOURCES — AND IT IS THEIRS BY 30-50x ON
+  PER-EDIT HOVER.** first-open→first-hover **255 ms vs 24,839** (different work: they
+  lazily checked one node; we eagerly published the whole 46-row project error list on a
+  cold JVM); hover after body edit **14 vs 630 ms**, after signature edit **17 vs 398**
+  (shape-independent on our side, per (INC.90)); project-wide publish **524 ms / 5 files
+  / exactly 46 rows** vs n/a (their session pushed 1 notification, 2 rows, open file
+  only); per-file pull receipt caught the 46-vs-65 gap surfacing (1 item theirs, 0 ours,
+  binder.ts). Mechanism named, not lamented: their lazy NodeLinks answering vs our
+  narrowed-build-per-question — INVERSION-DESIGN's bin-B gap measured end-to-end, the
+  strongest number for its Stage 1-2. Harness `scripts/lsp3-bench.py` (probe receipts,
+  CRLF-preserving reads, row-count receipts); published in
+  `docs/perf/incremental-vs-tsgo.md` (new LSP arm section) + language-service.md § 3b
+  updated. tsgo 7.0.2 `--lsp -stdio` does not exit on `exit` (killed after grace). Cells: first-open to first hover; hover after a body-only edit;
+  hover after a signature edit; whole-project diagnostics. Publish in
+  `docs/perf/incremental-vs-tsgo.md`, REPLACING the CLI table (DOC.1) retitled. This is
+  the number the previous comparison should have been.
+
+- [x] **(API.18) DONE 2026-09-02 ((P18.5) note: ownership of the file-final token decided by a raw-end last-match descent whose leaf must START at the token — consulted by `realEndOf`, so the ordinary `pathAt` descent and all three invariant rules heal with no carve-outs; abutters and punctuation-final files keep today's conservative answers) — A FILE-FINAL TOKEN IS UNREACHABLE BY EVERY `-project` POSITION LOOKUP
+  WHEN THE FILE LACKS A TRAILING NEWLINE — found by (LSP.1), pinned as a recorded edge in
+  `XtscLspServerTest`; TWO `realEndOf`-LOCAL FIXES WERE BUILT AND REVERTED 2026-09-01, AND
+  THE ANALYSIS SAYS NO SPAN-ARITHMETIC FIX EXISTS.** The defect: the file-final token's
+  raw `end` is EXACT (the EOF lookahead is zero-width), so `realEndOf`'s strictly-below
+  snap manufactures an empty span and `quickInfoAt` answers null inside the last
+  identifier, silently. **What the two attempts measured:** (1) accepting an exact end at
+  EOF only when `best <= pos` heals the LEAF but not the DESCENT — every ANCESTOR of the
+  final token shares the exact bound and gets truncated before its last token, so `pathAt`
+  stops at `SourceFile`; (2) accepting it ahead of the strictly-below branch heals the
+  descent and breaks the EOF-RECOVERY population (dangling `.` anchors, open arg lists,
+  the touch rule): the zero-width EOF token makes a naive membership test vacuous, and —
+  the load-bearing finding — **a true container of the final token and a node merely
+  ABUTTING it are indistinguishable by `(pos, rawEnd)` alone** (`ex` and its enclosing
+  PropertyAccess in `…ex.` share BOTH pos and raw end; `a` in `f(a)` covers the `)` by
+  overshoot exactly as a statement covers its own final token). **The fix therefore lives
+  in `pathAt`'s DESCENT, not in `realEndOf`**: bound each child's end by its NEXT
+  SIBLING's pos, letting the LAST child inherit the parent's bound, with the root bound =
+  the last REAL token's end (not `textLength`, or the trailing-newline caret re-enters the
+  tree) — the rule round 910's own CLAUDE.md entry already prescribes and `SourceIndex`
+  approximates by tokens. Derived ownership rule for the follow-up: token `[ts, te)` is
+  OWNED by node N iff `N.pos <= ts`, `te <= N.rawEnd`, and NOT `bestBelow(N.rawEnd) == ts`
+  (that equality identifies the one-token overshoot). Gates when attempted: -project +
+  -lsp module suites (five EOF-population pins redden on a wrong cut: CompletionAnchor,
+  ProjectCompletion END-of-buffer, SignatureAnchor open-arg-list, the LSP touch rule, the
+  recorded edge), `TokenIndexInvariants`, `scripts/round920-token-gate.sh`.
+
+- [x] **(TEST.1) DONE 2026-09-02 ((P18.6) note) — NOT order-sensitivity: A DATA RACE IN
+  THE TEST'S OWN COUNTING WRAPPER.** `CountingVfs.readText` kept `reads++` and a plain
+  `HashMap` put while the crawl reads from 16 concurrent workers; measured under 8 threads
+  the old wrapper lost 3,120 of 16,000 reads, and losing exactly one path's bucket
+  insertion is `afterFirst == 0`. Fixed with stdlib atomics + a copy-on-write per-path
+  map; `CountingVfsConcurrencyTest` (jvmTest, real threads) reddens the old wrapper.
+  ORIGINAL: `ProjectTrustedFilesystemTest`'s NEGATIVE CONTROL IS ORDER-SENSITIVE
+  (found 2026-09-02): green in the full suite and alone (19/0), red in a two-module
+  filtered run — `afterFirst == 0`, i.e. the FIRST build never read `b.ts` through the
+  counting wrapper at all. Suspects were `CrawlParseCache` and the resident-content
+  path; neither the module alone nor the suspected predecessor classes reproduced it,
+  which is what pointed at a race rather than an order.
+
+- [x] **(INV.D) DONE 2026-09-01 — `docs/INVERSION-DESIGN.md`: WHICH OF tsgo's 142 API QUERIES CAN
+  xtsc ANSWER TODAY, WHICH NEED THE INVERSION, AND WHAT THE INVERSION COSTS.** A written
+  design, NO code (CLAUDE.md: analysis items produce artifacts before code). Census every
+  method of tsgo's `tsc/internal/api/proto.go` (sparse-clone microsoft/TypeScript
+  `tsc/internal/api` + `tsc/internal/checker`; the local `typescript-go-repo` clone is the
+  fallback source at tag typescript/v7.0.2) into three bins: (a) answerable post-hoc TODAY
+  from the retained Symbol/Type graph (declaration-level: symbol at location, declared
+  type, members/exports, signatures from declarations, typeToString); (b) needs
+  walk-scoped state (expression types, narrowing, resolved signatures, contextual types);
+  (c) not applicable. For (b), design the minimal memoisation that moves it to (a),
+  following ARCHITECTURE-RETHINK § 3's target: tree-derived scope resolution
+  (binder-attached container locals + parent-chain resolveName), a NodeLinks-style
+  per-node cache (resolvedType / resolvedSymbol / resolvedSignature), on-demand flow
+  typing over the existing `Flow.kt` CFG, canonical type identity (interned unions and
+  instantiations). Then a staged, corpus-gated migration plan whose FIRST sub-step lands
+  as one commit. Use the two consumers being built (EXT, LSP) as the concrete query
+  inventory the design must serve. Queue (INV.1) as BLOCKED-PENDING-USER with the
+  proposal — implementation does NOT start in the session that writes the design.
+
+- [x] **(EXT.11b) DONE 2026-09-02 ((P18.9) note: 97 → 62 markers on the RxJS core, externals 102/0, suite 16,889/0/3) — THE RxJS CORE CENSUS'S CHEAP MAPPING WINS — 74 `unmapped` markers in 42
+  shapes after (EXT.11a), and the top mechanisms are Kotlin-expressible.** In order of
+  occurrences (probe census, (P18.9) note): (1) NULLABLE UNIONS — `X | null`, `X |
+  undefined`, `X | null | undefined` → `X?` where X maps, both syntactically (a `UnionType`
+  annotation, so it composes inside function types) and on the resolved `Type.Union`
+  (members filtered by the `null`/`undefined` intrinsics; exactly one survivor); any other
+  union stays the marker. (2) `any` and `unknown` → `Any?` WITHOUT a marker — the fallback
+  is already `Any?`, so this is marker removal that unblocks every composite carrying an
+  `any` (`(err: any) => void`, arrays, unions); `errorType` (intrinsic name `error`, a
+  DEGRADED resolution) must stay marked. (3) ARRAYS — `T[]`, `Array<T>`, `ReadonlyArray<T>`
+  → `Array<T>` (syntactic `ArrayType`; a `TypeReference` named `Array`/`ReadonlyArray`
+  whose symbol's declarations all sit in a `lib.*.d.ts` file — positive lib evidence, never
+  spelling); a REST parameter of a declaration `...xs: T[]` → `vararg xs: T` (inside a
+  function TYPE still refused). (4) LITERAL TYPES widen to their base (`"N"` → `String`,
+  `1` → `Double`, `true` → `Boolean`) — the same widening `collectValue` already applies.
+  (5) OPTIONAL PARAMETERS INSIDE A FUNCTION TYPE stay refused (arity), as documented.
+  `Promise<T>` stays a marker: the gate has no classpath and `kotlin.js.Promise` is not a
+  built-in. Gate: the RxJS core census must drop accordingly (pin the new counts in the
+  gate test: e.g. `public var observers: Array<Observer<T>>`, `error: (Any?) -> Unit`,
+  `source: Observable<Any?>?`), all three library gates green, pins per rule with a
+  negative control each (a two-member union stays marked; `errorType` stays marked; a
+  same-named non-lib `Array` is not an array).
+
+- [x] **(EXT.11c) DONE 2026-09-02 ((P18.9) note: 37 → 0 compile errors on all 250 files, the Kotlin overload-equivalence table MEASURED and pinned, externals 118/0, suite 16,920/0/3; one brief assumption refuted — the collapse key and the override key are different relations) — THE WHOLE `rxjs@7.8.2` SURFACE — ALL 250 `dist/types` FILES THROUGH THE
+  PROBE (2026-09-02, after (EXT.11b)): 496 declarations (348 fun, 68 interface, 39 val,
+  32 class, 8 typealias, 1 sealed interface), 967 markers, 3 checker diagnostics (ONE
+  parser defect, (PARSE.1)), **37 COMPILE ERRORS IN THREE MECHANISMS**, none of which the
+  core rung could show.** (1) 24 `Conflicting overloads`: the (EXT.5) collapse key is
+  TEXTUAL and Kotlin's equivalence is not — after (EXT.11b) two overloads differing only in
+  NULLABILITY (`first(…, defaultValue: D)` vs `D?`), in TYPE-PARAMETER NAMES (`<T, D>`
+  vs `<T, S>` on identical shapes), in the TP-list LENGTH with identical parameter texts
+  (`<A> zip(sources: Any?)` vs `<A, R> zip(sourcesAndResultSelector: Any?)`), or between an
+  unbounded bare TP parameter and `Any?` (`<T> of(value: T)` vs `<A> of(x: Any?)`) conflict.
+  Derive the key EMPIRICALLY against the metadata compiler (small pairs through
+  `compileCheck`), then make `overloadSignature` produce it: TP names positional, `?`
+  stripped, an unbounded bare TP parameter ≡ `Any?`, the TP list itself not part of the key —
+  and PIN each equivalence with a pair that compiled-conflicting before. (2) 12
+  `Conflicting declarations`: a VALUE and a TYPE sharing a name in one package
+  (`export interface AjaxError …` + `export declare const AjaxError: AjaxErrorCtor`, the
+  TS "companion value" idiom, seven error classes + `TimeoutError`) — Kotlin cannot hold
+  both at top level; the value becomes a loud skip naming the type it collides with (the
+  `@JsName` wiring that could rename it is the module-wiring rung). (3) 1 override type
+  mismatch: a subclass REDECLARING a base `var` with a narrower type
+  (`ConnectableObservable.source: Observable<T>` over `Observable.source: Observable<any> |
+  undefined` → `var source: Observable<Any?>?`) — Kotlin needs the base's type on a `var`
+  override; render the base's type with a marker naming the TS narrowing (the sibling of the
+  `readonly narrows an inherited var` rule). Gate: a fourth gate test embedding ONLY the
+  files exercising each mechanism verbatim (`internal/ajax/errors.d.ts`,
+  `internal/observable/zip.d.ts`, `internal/operators/first.d.ts`,
+  `internal/observable/ConnectableObservable.d.ts` + what they import), compiling; record
+  the 250-file census in the session note (the 291 `re-export` markers and 123 constraint
+  markers are the expected module-wiring / constraint residue, not defects).
+
+- [x] **(PARSE.1) DONE 2026-09-02 ((P18.9) note; one line in `parseNamedExports`, 15 pins, suite 16,904/0/3, cost_gate +0.00%) — `export { from } from './x'` REPORTS TS1005/TS1141/TS1434 — `from` AS AN
+  EXPORTED NAME ENDS THE CLAUSE (found 2026-09-02 on rxjs's own `index.d.ts:43`; tsc accepts
+  it, `from` is a contextual keyword inside a specifier list).** Fix in the parser's
+  import/export specifier loop mirroring tsc's `parseImportOrExportSpecifier`; pin every
+  sibling shape (`from as f`, `f as from`, `import { from }`, default import named `from`,
+  `type from`, `from` not first) plus a negative control; huge_methods on the parser.
+
+- [x] **(CHK.73b) DONE 2026-09-02 ((P18.9) note; generator-side refusal through `heritageBaseSymbol`, class/enum/namespace objects; the checker-side static type stays (CHK.73); externals 122/0, suite 16,924/0/3) — A CLASS VALUE IS TYPED AS ITS INSTANCE TYPE, AND THE EXTERNALS GENERATOR
+  RENDERS `export const plain = Plain` AS `val plain: Plain` — WRONG AND COMPILING (found by
+  (EXT.11a)).** The generic case is refused by the arity guard; the non-generic one is
+  silent. Either the checker grows a static-side type for a class value ((CHK.73)'s blocker)
+  or the generator refuses a value whose initializer/annotation resolves to a class's
+  instance type through an identifier naming the CLASS (`lens.typeReferenceSymbol`-style
+  identity: the value's symbol IS a class declaration). Pin both directions.
+
+- [x] **(EXT.12) DONE 2026-09-02 ((P18.9) note; least-marked survivor, ties first, slots kept; 49 collapses unchanged, 6 rxjs survivors cleaner; externals 126/0, suite 16,928/0/3) — OVERLOAD COLLAPSE POLICY — "MOST-MAPPED SIGNATURE WINS" INSTEAD OF FIRST-WINS
+  (recorded by (EXT.11c), not taken).** Kotlin-equivalent overloads collapse to the FIRST in
+  declaration order, which on rxjs keeps `of(...valuesAndScheduler: Any?)` and drops the clean
+  `<T> of(value: T): Observable<T>`, and keeps `first`'s `null`-predicate twin over the typed
+  one. Decide and pin: among an equivalence class keep the member with the FEWEST markers
+  (ties → first), render the dropped ones as today's markers naming the kept signature. Both
+  gates and the 250-file probe are the receipt (the collapse count must not move, the kept
+  spellings must).
+
+- [x] **(EXT.13) DONE 2026-09-02 ((P18.9) note: `typescript.d.ts` → 9,792 lines of Kotlin compiling at 0 errors, 5,422 declarations; externals 145/0, suite 16,947/0/3; the checker's namespace resolution defects it found are (CHK.76)) — THE NAMESPACE RUNG — `typescript.d.ts` (the ladder's fourth rung) IS ONE
+  `declare namespace ts { … }` WITH `export = ts`, AND THE GENERATOR EMITS NOTHING FOR IT
+  (probed 2026-09-02: 1,296 root declarations, none carrying `export` — ambient-namespace
+  members are implicitly exported; nested `server`/`server.protocol`/`JsTyping`/
+  `ScriptSnapshot`; `export import X = ts.X` aliases).** Design: the ROOT ambient namespace
+  (and a `declare module "m"`) FLATTENS to the module surface under one loud header marker
+  (a Kotlin `typealias` is top-level only, and `export = ts` makes the body the surface a
+  consumer's `@file:JsModule` will bind); NESTED namespaces are `external object` members
+  (a nested alias a loud skip, its uses resolving through the checker); references render by
+  the shortest path from the use site; `Inheritance` keys by qualified path. Gate:
+  `KotlinExternalsTypescriptGateTest` over the local `typescript.d.ts` (env/default path,
+  loud skip when absent — the receipt is the note's census) plus hermetic pins.
+
+- [x] **(CHK.75) DONE 2026-09-02 ((P18.9) note; tsc's `checkAmbientInitializer` mirrored at both emitters, 73-row matrix byte-identical to tsgo, 48 pins, cost_gate +0.00%, suite 16,995/0/3) — TS1039 FALSE POSITIVE ON `typescript.d.ts:2610` — `protected readonly
+  latestDistTag = "latest";` IN AN AMBIENT (`declare namespace`) ABSTRACT CLASS (found
+  2026-09-02 by the externals probe; tsc 6.0.3's own declaration file, so pristine is silent
+  by construction).** tsc permits a LITERAL initializer on a `readonly` property in an ambient
+  context (the constant-initializer rule of `checkGrammarProperty`/`isValidAmbientInitializer`:
+  string/number/`-number`/boolean literals, template without substitutions, enum member
+  references); our emitter of TS1039 has no readonly-literal exemption. Fix at the walker,
+  pin all literal kinds plus the negative control (a non-literal initializer still reports,
+  a non-readonly literal still reports), corpus + cost_gate.
+
+- [x] **(CHK.76) DONE 2026-09-02 ((P18.9) note; `lookupInEnclosingNamespaces` consulted at seven resolver sites, 8 pins red by ablation, 8-profile grid unchanged, cost_gate within tolerance, suite 17,017/0/3; the generator's syntactic arm is now redundant where the lens answers — retiring it is (EXT.14)) — NAME RESOLUTION INSIDE A `declare namespace` BODY IS WRONG IN BOTH
+  DIRECTIONS, MEASURED BY (EXT.13) ON `typescript.d.ts` (2026-09-02): inside a nested namespace
+  a bare `Project` resolves to `any` (a sibling declared in the same namespace), a bare `Node`
+  resolves to the ROOT's `Node` where the namespace declares its own, `server.protocol.Request`
+  resolves to a type that fails identity, and inside the flattened root a bare heritage base
+  fails `heritageBaseSymbol` — 509 of tsc's `extends Node`-shaped clauses.** The generator
+  works around it with a SYNTACTIC lexical resolver over its own per-file tree
+  (`writtenTarget`, consulted for a qualified name or a name written inside a namespace body);
+  `typeReferenceSymbol` refuses qualified names by contract. These are checker defects on real
+  declaration files (B83.5's family: namespace-scoped declarations and the INV.2(c) chain):
+  reproduce each with a `.d.ts` fixture against tsgo, fix at the resolver, then retire the
+  generator's third syntactic arm where the lens answers. Instrument: the `typescript.d.ts`
+  probe's heritage-skip count (7 after the workaround; hundreds through the lens alone).
+
+- [x] **(EXT.14) DONE 2026-09-02 ((P18.9) note; the per-file ladder removed, a program-wide written-name fallback kept for the two shapes the lens cannot answer, `typescript.d.ts` byte-identical, externals 149/0, suite 17,021/0/3; four checker residues queued as (CHK.77)) — RETIRE THE GENERATOR'S THIRD SYNTACTIC ARM WHERE THE LENS NOW ANSWERS
+  ((CHK.76) landed).** `writtenTarget` resolves qualified names and names written inside a
+  namespace body over the generator's own per-file tree; with (CHK.76) the checker resolves
+  them too. Measure first (the `typescript.d.ts` probe: heritage skips 9, unmapped 847, the
+  compile at 0 errors) with the arm consulted AFTER the lens, then with it removed; keep it
+  only for what the lens still cannot answer (a `declare module "m"` body — deliberately
+  skipped by the resolver — and whatever the probe shows), and say which in the KDoc. The
+  ladder's four gates are the receipt. Also the residue (CHK.76) recorded: a `.d.ts` namespace
+  body reports no TS2304 for an undeclared name (tsgo does) — the unresolved-names family's
+  declaration-file gate, separate item if it survives a reproduction.
+
+- [x] **(EXT.16) DONE 2026-09-02 ((P18.9) note; `ModuleWiring(moduleName, entryFileName)`, the surface through the re-export graph, `@file:JsModule`/`@JsNonModule`/`@JsName`, rxjs re-export markers 291 → 0 and 101 honest internal paths; externals 179/0, suite 17,051/0/3) — MODULE WIRING — THE LAST LADDER RUNG THE UMBRELLA NAMES.** The generation
+  takes the npm MODULE NAME (`generateKotlinExternals(files, moduleName = "rxjs")`, null = a
+  global script) and an ENTRY file (the package's `types` entry, `index.d.ts`); the real
+  output opens with `@file:JsModule("rxjs")` (the gate variant renders neither `external` nor
+  the JS annotations — a renderer flag, as today). The module's PUBLIC SURFACE is computed
+  through the re-export graph from the entry (`export { a } from`, `export * from`, `export
+  { a as b }`, `export default`, `export =`): a declaration reachable under its own name needs
+  nothing; one reachable under ANOTHER name gets `@JsName("<exported name>")` (a default export
+  → `@JsName("default")`; an `export =` of a value/class/function → `@JsName("default")` is
+  WRONG for CJS — it is the module object itself; decide against tsgo's emit and pin); a
+  VALUE/function/class not reachable from the entry is a loud marker ("not exported by the
+  package entry - internal path"), while an unreachable TYPE is fine (no runtime). The
+  `re-export … module wiring is a later rung` markers (291 on rxjs) become the wiring or
+  vanish. `export as namespace X` (UMD) → `@file:JsNonModule` + `@file:JsQualifier`? — measure
+  what Kotlin/JS needs and pin. Gate: the smol-toml/rxjs gates re-pinned with the annotations,
+  the 250-file probe's re-export markers → 0.
+
+- [x] **(EXT.17) DONE 2026-09-02 as a LOCAL gate ((P18.9) note; `JsCompileCheck` drives
+  `K2JSCompiler` from the embeddable jar already on the test classpath, the JS stdlib klib located
+  by `XTSC_KOTLIN_STDLIB_JS` or the Gradle cache, 19 gate tests skipping LOUDLY without it; it
+  found and closed two silent generator defects; externals 201/0 with the klib, suite 17,073/0/3).
+  **THE CI HALF DONE 2026-09-03 (owner-approved the same day) — the klib is DECLARED, not
+  located.** `configurations.dependencyScope("kotlinStdlibJsDependencies")` +
+  `configurations.resolvable("kotlinStdlibJs")` with the artifact-only notation
+  `org.jetbrains.kotlin:kotlin-stdlib-js:<catalog kotlin>@klib` (deliberately artifact-only:
+  it bypasses variant-aware resolution, so the configuration needs no Kotlin/JS platform
+  attributes and cannot be handed a JVM or Native variant), passed to `jvmTest` as the
+  ENVIRONMENT variable the gate already reads (Gradle does not forward `-D` to the test JVM).
+  **The ablation exposed a second defect and it is fixed in the same commit:** with the
+  environment variable pointed at a non-existent path the whole gate read **28 tests, 0
+  failures** having compiled NOTHING — loud on stdout, quietly green in JUnit. `JsStdlib.locate`
+  now splits the two cases: an ABSENT variable is a fact about the BOX (a developer outside
+  Gradle) and still skips loudly; a variable that is SET and names nothing is a fact about the
+  BUILD, which cannot be true on a correct one, and `check`s. Ablated: 28/0 green before, **27
+  of 28 RED** after. Module 242/0, build warning-clean, no new published dependency. A KOTLIN/JS COMPILE GATE FOR THE *REAL* EXTERNALS
+  OUTPUT.** The metadata gate compiles the annotation-free, `external`-free variant only, so
+  `@file:JsModule` + `external var`, `@JsName` on a `sealed external interface`, nested
+  `external object`s and the JS-side rules of every annotation are UNVERIFIED by any compiler
+  ((EXT.16)'s caveat; (EXT.16) read the 2.4.10 compiler jar for the declaration-level
+  diagnostics but could not run them). Proposal: a `js()` target (or a jvmTest that drives
+  `K2JSCompiler` from the already-present `kotlin-compiler-embeddable`, the way
+  `MetadataCompileCheck` drives `KotlinMetadataCompiler` — check whether that class and the JS
+  stdlib klib are on the test classpath; if they are, NO build change is needed and this item
+  is not blocked) compiling each gate's real `kotlin` output. A build-file change is an
+  owner decision; the in-test compiler route is not.
+
+- [x] **(EXT.18) DONE 2026-09-02 ((P18.9) note; `<Name>Value`/`<Name>Fn` under wiring, measured against Kotlin/JS; rxjs 9 → 0 skips, `@types/node` 48 → 0; externals 229/0, suite 17,113/0/3; (EXT.22) queued from the probe's new Kotlin/JS arm) — RENAME THROUGH `@JsName` WHERE KOTLIN REFUSES A COLLISION TS ALLOWS.** With
+  wiring in hand, a VALUE sharing a generated TYPE's name (`const AjaxError: AjaxErrorCtor`
+  beside `interface AjaxError`, 6 in rxjs extras / 11 in typescript.d.ts) and a function
+  equal to a class's constructor can render under a Kotlin-legal name with
+  `@JsName("<original>")` instead of the loud skip; decide the renaming scheme (a suffix the
+  consumer can predict), keep the skip without wiring, pin both.
+
+- [x] **(CHK.77) DONE 2026-09-02 ((P18.9) note; all four residues match tsgo row for row, 12 pins, 8-profile grid unchanged, cost_gate exit 0, suite 17,085/0/3; the `@types/node` receipt exposed an externals rendering interaction queued as (EXT.19) and two pre-existing augmentation divergences queued as (CHK.78)) — THE FOUR NAMESPACE-RESOLUTION RESIDUES (EXT.14) MEASURED AFTER (CHK.76), each
+  with probe evidence in the (P18.9) note — the generator keeps a written-name fallback for
+  exactly these until the checker answers.** (1) A `declare module "m"` BODY: `lookupInEnclosingNamespaces`
+  skips string-named modules by design (the augmentation hazard, INV.3(c)(iv)), so a bare `Widget`
+  beside its own declaration types `any` and `heritageBaseSymbol` answers null — consult the
+  block's exports only when the specifier resolves to NO program file (a genuine ambient module,
+  not an augmentation). (2) A QUALIFIED heritage base whose head is a TYPE-ONLY namespace
+  (`extends JsTyping.TypingResolutionHost`, `typescript.d.ts:2679`): `resolveHeritageBaseSymbol`'s
+  Identifier arm asks `Type|Value` of the head where a namespace of interfaces is a
+  `NamespaceModule` — use the qualified-left meaning for a head; the same resolver's
+  implicit-export rule reads only the OUTERMOST `declare`d namespace, so `extends ts.server.A`
+  across files is skipped while the annotation beside it resolves. (3) `typeReferenceSymbol`
+  refuses a qualified name by contract (`Checker.kt` ~5789) — route it through
+  `resolveQualifiedName` so `ts.Cb`/`server.Gen<number>` reach the alias-name rule. (4) CROSS-FILE
+  NAMESPACE MERGING is invisible to `lookupInEnclosingNamespaces` (it reads `nodeSymbolOf(cur)`,
+  the per-file symbol, not the merged instance): `declare namespace ts { interface A }` in one
+  file and `interface B extends A { x: A }` in another's `ts` block → `any` + a heritage skip —
+  `@types/node`-style packages are made of this. Pins per shape against tsgo; the externals
+  fallback pins (`KotlinExternalsGeneratorTest`'s (EXT.14) four) are the receipt that the arm
+  can then be narrowed further.
+
+- [x] **(EXT.19) DONE 2026-09-02 ((P18.9) note — the mechanism named here was WRONG: an ARITY cascade, not a spelling; `@types/node` metadata errors 86 → 0, heritage skips 137 → 113, externals 207/0, suite 17,091/0/3; follow-ups (EXT.20)/(CHK.79)) — `@types/node` AFTER (CHK.77): +45 `'X' overrides nothing` METADATA ERRORS —
+  A SPELLED SUPERTYPE RESOLVES TO THE WRONG GENERATED DECLARATION.** `declare module "stream"
+  { namespace internal { class Readable extends Stream implements NodeJS.ReadableStream } }`:
+  the `implements NodeJS.ReadableStream` clause now RESOLVES (residue 2's head rule), the
+  inherited-member rung renders `override` members, but the Kotlin supertype text
+  `ReadableStream` spelled inside `object Stream` resolves (Kotlin's innermost-first rule) to a
+  DIFFERENT generated `ReadableStream` than the file-level one carrying those members.
+  `shortestSpelling` must spell the qualified path whenever a nearer scope declares the same
+  simple name (the shadowing case (EXT.13) refused loudly for the ROOT; here it is a nested
+  scope shadowing an outer one — render `NodeJS.ReadableStream`-style paths from the root, or
+  refuse loudly). Also the four new heritage skips (`net.Socket`, `tls.TlsOptions`…): the lens
+  now resolves a base through an `import * as net` alias inside an ambient block to a nameable
+  declaration and the generator's kind/spelling step refuses where the written-name fallback
+  rendered. Receipt: the `@types/node` probe (`build/chk73/node_modules/@types/node`, 66 files;
+  metadata errors 86 → 35 or fewer, heritage skips 137 → ≤ 133) plus the five ladder gates.
+
+- [x] **(EXT.20) DONE 2026-09-02 ((P18.9) note; `export =` targets never vanish, declaration MERGING implemented per tsgo's measured surface, `@types/node` 0 metadata errors and 17 merges rendered, externals 219/0, suite 17,103/0/3; the flattening residue is (EXT.21)) — `declare module "m" { class X {} … export = X }` — THE UN-`export`-MODIFIED
+  CLASS/INTERFACE INSIDE AN `export =` MODULE BODY VANISHES SILENTLY (found by (EXT.19) on
+  `@types/node`: events.d.ts's `class EventEmitter`, stream.d.ts's `class Stream` — the 13
+  remaining `extends EventEmitter` skips).** The surface rule treats an un-modified member of a
+  string-named block as non-exported; with `export = X` the reach rule must make `X` (and what
+  it merges with — class + interface + namespace of the same name; a namespace object currently
+  TAKES the merged name) the module's surface. Design the merge: a class merged with a
+  namespace renders the class with the namespace's members as companion/nested; an interface
+  merged with a class is the class's members. Pin each; the `@types/node` probe's heritage
+  skips (113 → ≤ 100) and metadata compile (0 errors) are the receipt. Also the probe's
+  FLATTENING residue: 66 modules in one scope lose `Socket` (dgram vs net), `Module` (vm vs
+  module), `stream/web`'s `ReadableStream` to first-wins — one generation per `declare
+  module` block, or a per-block Kotlin object/package, is the wiring-side answer.
+
+- [x] **(EXT.22) DONE 2026-09-02 ((P18.9) note — the queued mechanism was REFUTED by 70 measured rows: an external class may never spell a superclass call; the real rule is a SECONDARY constructor for a class over a NESTED base; `@types/node` 23 → 0 Kotlin/JS errors, externals 233/0, suite 17,117/0/3; (EXT.23) queued) — AN EXTERNAL SUBCLASS WITH ITS OWN PRIMARY CONSTRUCTOR NEEDS THE SUPERCLASS
+  CALL — 23 PRE-EXISTING KOTLIN/JS ERRORS ON `@types/node` (`No value passed for parameter
+  'opts'` on `class Hash() : Stream.Transform`), found by (EXT.18)'s probe extension that
+  compiles the REAL output as Kotlin/JS; never JS-compiled by any gate before.** Rule: a
+  generated class with its own constructor whose generated superclass declares one renders
+  the superclass call in the REAL variant too — with what arguments? An external class's
+  super call is never executed by Kotlin/JS (it is the JS class's own), but the compiler
+  demands the arity: pass `definedExternally` per parameter (measure with `jsCompileCheck`
+  that `class Hash() : Transform(definedExternally)` compiles; the gate variant keeps
+  `null!!`). Also re-word (EXT.16)'s marker `a nested object member cannot carry @JsName` —
+  refuted by (EXT.18)'s measurement (it can). Receipt: `@types/node` real output 23 → 0
+  Kotlin/JS errors, the JS gate's library fixtures green.
+
+- [x] **(EXT.23) DONE 2026-09-02 ((P18.9) note; `= definedExternally` real / `= null` gate, three measurement tables (90 rows), the nested two-direct-declarer default conflict found and handled; rxjs 123 / `@types/node` 688 / `typescript.d.ts` 236 defaulted parameters, all at 0 errors in both compilers; externals 242/0, suite 17,126/0/3) — A TypeScript-OPTIONAL PARAMETER'S HONEST KOTLIN/JS RENDERING IS `x: T? =
+  definedExternally`, NOT `x: T?` (measured by (EXT.22): a defaulted parameter is what makes a
+  nested base callable with `()` and lets a consumer omit what TS lets it omit).** Today every
+  optional parameter renders nullable-only, so a Kotlin caller must pass `null` where a TS
+  caller passes nothing. An optionality rung touching every optional parameter (functions,
+  methods, constructors, function TYPES — where a default is inexpressible and the arity rule
+  stays), the override machinery (`override` may not restate defaults — measure) and the
+  overload keys (a defaulted parameter does not change Kotlin's conflict relation — measure).
+  Gate variant: `= null` or no default (it is not external); pin the difference. Receipt: the
+  JS gate + all five library gates.
+
+- [x] **(EXT.21) DONE 2026-09-04 — BOTH halves landed: the PACKAGE scheme as (EXT.21a) (2026-09-03, owner-delegated, measured against both Kotlin compilers) and PER-MODULE generation as (EXT.21b) (2026-09-04, (P18.11) note: 51 `@types/node` modules compiling together at 0 errors, the flattening skips 57 → 2). The residue is (EXT.24), cross-module heritage. ORIGINAL: IN PROGRESS — the PACKAGE half DONE 2026-09-03 as (EXT.21a) (owner delegated the
+  choice: "I wish to follow your best recommendation here"); the PER-MODULE half is (EXT.21b)
+  below. THE SCHEME, MEASURED RATHER THAN PROPOSED — and the proposal below was WRONG on one
+  rule.** `KotlinPackageNameCompileTest` asked the metadata compiler and `K2JSCompiler` (they
+  agree on every row): a backtick rescues a HYPHENATED segment, a HARD KEYWORD and a
+  DIGIT-FIRST one and **rescues nothing else** — `.`, `~`, `@`, `:` and `/` are `Name contains
+  illegal characters` inside one — so "any segment that is not a Kotlin identifier backticked"
+  cannot be the rule. Landed: `/`, `:` and `.` are SEPARATORS (`fs/promises` → `fs.promises`,
+  `node:net` → `node.net`), npm's leading `@` is DROPPED (`@types/node` → `types.node`, since
+  it cannot be carried in any form), a keyword/digit-first/hyphenated segment is BACKTICKED,
+  and anything else is REFUSED loudly — no `package` line plus a marker naming the character,
+  which degrades to the pre-(EXT.21) root-package behaviour rather than to a file no compiler
+  accepts. `ModuleWiring.packageRoot` prefixes a multi-module package (`node.fs`, the
+  kotlin-wrappers convention) without hard-coding one ecosystem. Every accepted package name is
+  also spellable in a QUALIFIED reference, backticked segments included — the load-bearing
+  measurement, since that is what makes a cross-package reference expressible at all and so
+  what makes (EXT.21b) viable. 9 measurement rows + 10 end-to-end pins; externals 242 → 261/0;
+  suite 17,150 → 17,169 / 0 / 3. ORIGINAL PROPOSAL (kept for the record; its backtick rule is refuted above): one generation per declaring module; the Kotlin
+  package is the specifier with `:` and `/` → `.`, a leading `@` dropped, and any segment that
+  is not a Kotlin identifier backticked (`node:net` → `node.net`, `fs/promises` →
+  `fs.promises`, `rxjs` → `rxjs`, `@types/foo` → `types.foo`); a reference into another
+  module's generation is spelled fully qualified (`node.net.Socket`) and each generation carries
+  `@file:JsModule("<specifier>")`; single-module inputs (rxjs, typescript.d.ts) keep today's
+  output with the one added `package` line. Say yes, or give the scheme, and it lands. ONE
+  GENERATION PER `declare module` BLOCK — THE `@types/node` FLATTENING
+  RESIDUE, CENSUSED BY (EXT.20) AND LEFT AS A DESIGN.** Today every string-named block flattens
+  into ONE Kotlin scope, so a name two modules declare is first-wins: on `@types/node` 20.19.43
+  that is **112 names declared by more than one module** (`Socket` dgram/net, `Module`
+  module/vm, `Server` http/https/net/tls, `Worker` cluster/worker_threads, `ReadStream`/
+  `WriteStream` fs/tty, `constants` in 10 modules, the whole `dns` vs `dns/promises` and `fs`
+  vs `fs/promises` surfaces), of which 57 surface as `declared again by another file` skips
+  and the rest fall to the overload collapse or the value rule. The census (this round's
+  scratch): 66 files, **107 top-level blocks, 105 distinct specifiers, 55 blocks declaring
+  nothing** (the `node:x` re-export/`export = alias` twins) and **50 declaring modules**; only
+  2 files hold more than one declaring block. A per-block Kotlin `object` named from the
+  specifier is the WRONG wiring (a module is a file-level `@file:JsModule`, and `node:net` is
+  a spelling, not a scope); the honest shape is one generation PER MODULE: extend
+  `ModuleWiring` so `generateKotlinExternals(files, ModuleWiring("node:net", entry))`
+  selects the block(s) whose specifier — or whose `export = <require alias>` / `export *
+  from` chain — matches the wiring's module name, renders THAT block's declarations at the
+  top level under `@file:JsModule("node:net")`, and treats every other block as the imported
+  modules' declarations, reachable only BY NAME through the block's own `import * as X` /
+  `import X = require` bindings (the (EXT.19) `moduleMember` walk already resolves those
+  spellings; the rendered spelling then has to name the OTHER generation's Kotlin package, so
+  a per-module generation needs a `package` line per module — the first `package` this
+  generator emits, an owner-facing choice). Then the probe and the gates run once per
+  declaring module (50 runs), the 57 cross-file skips vanish by construction, and the
+  wired census reads honestly per module. Receipt: `Socket` renders in BOTH `dgram` and
+  `net`, `Module` in both `module` and `vm`, `stream/web`'s `ReadableStream` beside the
+  global one; each per-module output metadata-compiles at 0 errors; rxjs and
+  `typescript.d.ts` byte-identical (single-module generations are the degenerate case).
+
+- [x] **(EXT.21b) DONE 2026-09-04 ((P18.11) note; 51 per-module generations of `@types/node` compile TOGETHER at 0 metadata and 0 Kotlin/JS errors, `declared again by another file` 57 → 2, rxjs and `typescript.d.ts` byte-identical but for the `package` line; 13 pins, 8 discriminating ablation arms; externals 275/0, suite 17,196/0/3; cross-module HERITAGE refused loudly and queued as (EXT.24)) — ONE GENERATION PER DECLARING MODULE — the half (EXT.21a) unblocks, and it needs
+  no owner decision.** With the package scheme measured and landed, what remains is selection
+  and reference spelling: `generateKotlinExternals(files, ModuleWiring("net", entry, root))`
+  renders the declarations whose `Site.moduleSpecifier` is that module (through its
+  `export = <require alias>` / `export * from` chains) at the top level, and treats every other
+  block as an IMPORTED module reachable only BY NAME through the block's own `import * as X` /
+  `import X = require` bindings — spelled FULLY QUALIFIED into that module's own Kotlin package
+  ((EXT.21a) measured every accepted package name qualified-referencable, backticked segments
+  included). `Site.moduleSpecifier` already exists and is the hook. Receipt: `Socket` renders in
+  BOTH `dgram` and `net`, `Module` in both `module` and `vm`, `stream/web`'s `ReadableStream`
+  beside the global one; the 57 `declared again by another file` skips vanish by construction;
+  each per-module output metadata- AND Kotlin/JS-compiles at 0 errors; rxjs and `typescript.d.ts`
+  byte-identical but for their one `package` line (single-module generations are the degenerate
+  case). **The delicate part is the reference-spelling path** (identity evidence + first-wins
+  naming), which is why it is split from (EXT.21a) rather than landed with it.
+
+- [x] **(CHK.79) DONE 2026-09-02 ((P18.9) note; `ambientModuleSurfaceMember` at the heritage PropertyAccess arm, 9 pins with 7 red by ablation, grid unchanged, cost_gate exit 0, suite 17,135/0/3; the generator's namespace-import heritage route retired — 40 dotted bases on `@types/node` were carried by it; follow-ups (CHK.80)) — `heritageBaseSymbol` ANSWERS NULL FOR A DOTTED BASE WHOSE HEAD IS A NAMESPACE
+  IMPORT (`import * as net from "node:net"` / `import net = require("net")`) INSIDE AN AMBIENT
+  MODULE BLOCK — all 17 such bases in `@types/node` after (CHK.77) (before it, the fallback
+  rendered them).** The generator now resolves them syntactically ((EXT.19)'s `Site`/
+  `AmbientModule`/`moduleMember`); the checker should: resolve the head through the block's
+  import bindings to the target module's surface (`export * from`, `export = <namespace>`,
+  `require` alias chains), then the member. Reproduce against tsgo, fix at
+  `resolveHeritageBaseSymbol`/`resolveHeritageBaseHead`, pin, and retire the generator's
+  syntactic path for it where the lens then answers.
+
+- [x] **(CHK.80) DONE 2026-09-02 ((P18.9) note; all four sub-items landed — annotations through a block's namespace-import alias, TS2339 at a missing namespace member in a heritage clause, named-import and `declare global` heritage heads, the alias-into-carrier merge refused; 15 + 4 pins, grid unchanged, cost_gate exit 0, suite 17,150/0/3; (CHK.81) queued) — THE (CHK.79) FOLLOW-UPS, MEASURED ON ITS OWN FIXTURES.** (a) The ANNOTATION
+  side: `x: net.Socket` / `net.ServerOpts` written inside an ambient block still types `any` —
+  `resolveQualifiedName`'s alias leg leaves a fileless `NamespaceImport` alias unresolved; the
+  same `ambientModuleSurfaceMember` would serve it, but it reaches EVERY qualified-name consumer,
+  so it needs its own 8-profile grid + corpus run. (b) `class X extends net.Nope` /
+  `extends notNs.Foo`: tsgo reports TS2339 at the base expression; we report nothing. (c)
+  NAMED-import heritage heads inside ambient blocks (`import { EventEmitter } from
+  "node:events"; class C extends EventEmitter`) — 29 bare bases in `@types/node` still carried
+  by the generator's syntactic path (14 `EventEmitter`, 3 `Stream`, 3 `RefCounted`, 3 `Dict`
+  …), together with `declare global`/`NodeJS` names ((CHK.50)'s open half). (d) A merged
+  ambient carrier can carry the ALIAS bit beside MODULE: `globals["net"]` adopts a module
+  file's `import net = require("net")` and block-scoped `net` aliases by NAME — a pre-existing
+  merge to census and probably refuse. Each with pins; retire the generator's bare-name
+  heritage route where the lens then answers (KDoc'd numbers in `collectHeritage`).
+
+- [x] **(EXT.24) DONE 2026-09-04 ((P18.12) note) — a per-module SET is generated in ONE call
+  (`generateKotlinExternalsPerModule`), two passes, each generation reading the others' lifted
+  models. On `@types/node`: heritage refusals **179 → 0**, `Socket extends stream.Duplex` renders,
+  the 51-module set still compiles TOGETHER at 0 metadata and 0 Kotlin/JS errors, and exactly ONE
+  new (honest) heritage marker. rxjs and `typescript.d.ts` byte-identical. 9 pins + 6 gate cases,
+  eight arms; externals 290/0. Two sub-designs measured INERT and recorded: absolute respelling at
+  lift time (removed) and the reduce's own foreign tables (kept for consistency only).**
+  ORIGINAL: **CROSS-MODULE HERITAGE — THE ONE THING (EXT.21b) COULD NOT DO, MEASURED AND
+  REFUSED (2026-09-04).** `Inheritance` is built over ONE generation and resolves supertypes by
+  TEXT, so admitting a base owned by another module measured **184 `hides member of supertype`
+  + 27 `inherits conflicting members`** on `@types/node` — a set that does not compile; each such
+  base is a loud marker naming the module today (179 of them). The rung: the renderer must know
+  the OTHER generations' declarations (their members, type parameters and their own bases) to
+  key overrides across a module boundary — i.e. a two-pass generation (collect every module's
+  surface, then render each), or a serialized surface a later generation reads. Receipt: those
+  179 refusals become supertypes, the 51-module set still compiles together at 0 errors in both
+  compilers, and `Socket extends stream.Duplex` renders in `node.net`.
+
+- [x] **(CHK.81) CLOSED 2026-09-04 — the main item and four siblings LANDED; of the three residues, two were MEASURED AND REFUSED ((P18.13): both were mis-stated in the queue) and the third is (CHK.73)'s documented blocker, so nothing actionable remains under this number. PARTLY DONE 2026-09-02/09-04 ((P18.9) note; the `require`-of-`export =` main
+  item and four siblings landed and gated — 13 pins all discriminating, grid unchanged,
+  cost_gate exit 0, suite 17,163/0/3 alone and 17,182/0/3 rebased onto (P18.10); the generator's written heritage route closed 5 of its 8
+  bases and STAYS for the remaining 3). **STILL OPEN, carried by this item:** no TS2304 for
+  `Unknown.Foo` — MEASURED 2026-09-04 ((P18.13) note) and REFUSED: the code is **TS2503**, not
+  TS2304, and the axis is **`declare`** (a plain `namespace` body reports it, a `declare
+  namespace` body does not), so the suppression is **B367** — explicit at
+  `spineUResEmit`/`spineUResMarkFilter`, keeping only TS2304/TS2552 inside an ambient
+  `ModuleDeclaration` body because qualified-name resolution there is FP-prone (Blocker #3);
+  lifting it re-opens the family inside every ambient body across ~13k baselines. A wider
+  sibling found beside it: a **`.d.ts`** file reports NONE of the seven unresolved-name shapes
+  tsgo reports. Also MEASURED and REFUSED: the literal-union display, which is neither an alias
+  nor an ambient question — `("a" as "a" | "b")` against `number` is `Type 'string'` under
+  pristine 6.0.3 with no alias and no `declare module` in the program, and the rule is *a
+  literal-union source collapses to its base primitive exactly when the target holds no literal
+  of that base* (`number`/`boolean`/`{x:number}` collapse; `never`/`"a" | "c"`/`1 | 2` keep, as
+  do the six corpus baselines that print one; a mixed `"a" | 1` renders `string | number`),
+  systematic across TS2322 and TS2345 at declaration, argument, return and objlit-member
+  positions — FORM, and gated only by the full corpus suite. Still open beside them:
+  (CHK.73)'s shadow — `p.v` / `p.f()` / `new p.ctor()` through
+  `import p = require("p")` are untyped, a module symbol having no type. ORIGINAL ITEM: `import X = require("m")` OF A BLOCK WHOSE SURFACE IS `export = <class>`
+  RESOLVES TO THE CARRIER (B113), NOT THE CLASS — the 8 bare heritage bases `@types/node` still
+  carries on the generator's written route after (CHK.80) (five `extends EventEmitter` with
+  `import EventEmitter = require("node:events")`, three `extends Stream` written inside
+  `namespace Stream`).** Resolving the `require` alias to `m`'s `export =` target touches the
+  whole B113 family — corpus + 8-profile grid gated. Smaller siblings from the same census,
+  each pre-existing: TS2694's display prints `Namespace '"mod".net'` where tsgo prints
+  `'"node:net"'`; no TS2694 for an interface `extends X.Missing` or an annotation `X.Missing`;
+  no TS2304 for `Unknown.Foo`; a false TS2833 `Cannot find namespace 'net2'` for a `require`
+  alias of an ambient module; `import { Stream } from "node:stream"` resolves to the `export =`
+  class where tsgo says TS2305 (`resolveAmbientModuleExportEquals` over-approximates); tsgo
+  displays a literal-union alias as `string` in a TS2322 where we print the union (display).
+  Also (CHK.73)'s shadow, measured again: `p.v` / `p.f()` / `new p.ctor()` through `import p =
+  require("p")` are untyped (a module symbol has no type).
+
+- [x] **(CHK.78) DONE 2026-09-04 ((P18.12) note; all three parts, and (a) was far broader than stated — EVERY relative side-effect import on a real project read a false TS2882; 13 pins, three arms, grid unchanged, cost_gate exit 0, `@types/node` byte-identical, suite 17,224/0/3; four residues queued as (CHK.82)) — TWO PRE-EXISTING AUGMENTATION DIVERGENCES, MEASURED ON (CHK.77)'s NEGATIVE
+  CONTROL, PLUS ONE IN-WALK LENS ANSWER.** With `types.ts` beside `declare module "./types.js"
+  { interface SourceFile { extra: number } }`: (a) a FALSE TS2882 on the side-effect
+  `import "./types.js"` (tsgo silent); (b) a bare `node: Node` written INSIDE the augmentation
+  block types `any` where tsgo types it by the file's `Node` (`number` probe); (c) the lens's
+  `typeReferenceSymbol` asks the WALK-scoped chain first, which in-walk answers the
+  augmentation block's own PARTIAL interface rather than the merged one. Reproduce each
+  against tsgo, fix at the resolver/import walker, pin; `r1n` under
+  `scratchpad/chk77/` is the fixture.
+
+- [x] **(CHK.82) CLOSED 2026-09-04 — residues (1)(2)(3) LANDED; residue (4) is a FORM divergence reproducing with no augmentation at all, so it belongs to the display family queued as (PARITY.1) below, not here. PARTLY DONE 2026-09-04 ((P18.13) note; residues (1), (2) and (3) landed and
+  gated — 12 pins, eight discriminating arms, grid unchanged, cost_gate exit 0, filtered
+  1,468/0/0, externals 290/0, the `@types/node` per-module CODE byte-identical and its marker
+  text strictly better; a B86.4 display defect fixed beside them). **STILL OPEN, carried by this
+  item: residue (4).** tsgo 7.0.2 AND pristine `typescript@6.0.3` render a module-declared enum
+  as `import("<path>").ZzzEnum` where we render `ZzzEnum` — MEASURED as NOT an augmentation
+  residue (it reproduces with no `declare module` anywhere in the program), so it is a
+  whole-program display question: 103 corpus baselines use the `import("…")` form and we satisfy
+  them through hard-coded `pinDiag` sites rather than a mechanism, and
+  `enumAssignmentCompat6.errors.txt` prints BOTH forms in one message, so the rule is tsc's
+  `getAccessibleSymbolChain` ACCESSIBILITY test — a node-builder feature that would rewrite those
+  pins and reach every message naming such a type. A LOGICAL-PARITY conversation per
+  `docs/logical-parity.md` (FORM: identical code, span and verdict), gated by the full corpus
+  suite. ORIGINAL ITEM: the four augmentation residues (CHK.78) measured and left.
+
+- [x] **(PARITY.1) CLOSED 2026-09-04 ((P18.15) note) — every position of the literal-union collapse landed (SIX emitters, not the three the item named), the enum-member residue was BUILT, MEASURED and REFUSED with its remedy recorded, and (a) stays refused with its measurement. What is left is genuinely new and queued as (PARITY.2)/(CHK.83). PARTLY DONE 2026-09-04 ((P18.14) note) — (c) the MEANING defect LANDED, (b)
+  LANDED at the declaration and assignment displays, (a) MEASURED AND REFUSED. NO
+  `LogicalParityDivergence` was needed: nothing was switched off, both landed halves move our
+  output TOWARD pristine.** STILL OPEN under this number, both FORM: **(b-residue)** the ARGUMENT
+  (TS2345), RETURN and OBJECT-LITERAL-MEMBER displays still print the un-collapsed literal union
+  (`Argument of type '"a" | "b"'` where tsgo reads `'string'`) — separate emitters, each with its
+  own display convention and no existing widening decision to swap, so the only gate is the corpus.
+  **(a)** the `getAccessibleSymbolChain` qualification, refused with the measurement in the (P18.14)
+  note: it is **enum-only**, `enumAssignmentCompat6` is already served by tsc's OTHER mechanism
+  (the `getTypeNamesForErrorDisplay` same-string retry, rounds 745-749), and there is **no gate** —
+  the 8-profile grid names no type at all (all 46/95 rows are `Cannot find name …`) and only 10 of
+  2,881 active error baselines carry the rendering. Landing it needs an enclosing-declaration
+  node-builder context threaded into `typeToString`, which is a pure `(Type) -> String` with 718
+  message-construction sites downstream. Two smaller residues measured beside them and NOT
+  attempted: union member ORDER (`'2 | 1'` pristine vs our `'1 | 2'`), and an enum MEMBER source
+  rendering `ZzzEnum.A` where tsgo renders the parent `ZzzEnum` (a value-set difference, i.e.
+  MEANING, not form). ORIGINAL ITEM: the two form divergences (CHK.81)/(CHK.82) measured and
+  refused as fixes.
+
+- [x] **(PARITY.2) DONE 2026-09-04 ((P18.16) note) — the enum arm of
+  `getBaseTypeOfLiteralType` is wired (`Checker.baseTypeOfEnumLikeType`, plus `EnumLiteral`
+  in `isUnitLikeType` for the member-union case), and the ~25-class population it would
+  have blinded was re-derived MECHANICALLY (14 classes, 45 tests — one of them,
+  `IndexedAccessOnInstantiationTest`, invisible to any grep because its expectation is a
+  type ALIAS name) and converted to `never` probe targets, which makes those pins
+  byte-identical to tsgo 7.0.2 AND pristine 6.0.3 for the first time. Three pins refused
+  conversion with their reasons; two `string`-target twins re-expected to the generalized
+  enum. 22 new pins, five arms; 715 at-risk corpus subtests from an enumeration of all
+  3,145 active baselines, 0 moved; no `LogicalParityDivergence`.** ORIGINAL ITEM: tsc
+  generalizes an enum-member SOURCE to its parent enum wherever the target cannot hold a
+  singleton, at all six emitters, and prints the MEMBER at exactly the three targets where
+  it suppresses the generalization — so it is FORM, and the blocker was the (REL.2) probe
+  discipline, not the corpus.
+
+- [x] **(CHK.84) `never` IS NOT ASSIGNABLE AT A *RETURN* POSITION HERE, AND ONLY THERE —
+  CLOSED (P18.17).** `declare const n: never; function f(): string { return n; }` reported
+  `TS2322: Type 'never' is not assignable to type 'string'.` where tsgo 7.0.2 and pristine
+  `typescript@6.0.3` are both silent. The string-layer `isAssignableTo` had no rule for the
+  BOTTOM type, and of its five call sites only the return one adds an IDENTIFIER fallback
+  below `inferSimpleExprType`, so a `never`-annotated NAME reached it there and nowhere
+  else; the engine cannot fire either, because it correctly ACCEPTS a `never` source and an
+  accepted relation does not early-return. One line, mirroring `isSimpleTypeRelatedTo`'s
+  own "Never source is assignable to everything".
+
+- [x] **(CHK.91) LANDED 2026-09-05 ((P18.21) note) — `objLitMutableMemberType` at the PropertyAssignment
+  site only, the freshness gate `objLitInitIsFreshEnumMemberAccess`, tsc's `isConstContext`, and the SOME-rule keep
+  `isEnumLiteralOfContextualType` over push `propCtx` ?: the pull `objLitMemberContextualType` (every
+  `getContextualType` root); the arm-alone grid named 22 sites and the pull closes all 22 (grid 8×`added=0
+  removed=0`). The ARGUMENT root reads the callee's RAW parameter types, NOT `cpaComputeArgCtxTypes` — measured
+  +2.9% `typeOfExpr.calls` (overload selection) and a circular keep for `id({ v: K.A })`. 38 pins, six arms (a5
+  `as const` unobservable, recorded); core 15,973/0, corpus 8,837/0, cost_gate exit 0. (CHK.85)(a) CLOSED by
+  this; (b)/(c) stay. ORIGINAL ITEM: THE (CHK.85)(a) UNBLOCKER, DESIGNED 2026-09-05 BY READ-ONLY RECON AGAINST
+  BOTH REFERENCES — a PULL-derived contextual KEEP for the object-literal enum-member
+  widening, plus the FRESHNESS gate the built (P18.18) arm lacked.** The arm
+  (`objLitMutableMemberType`, one 34-line function + two call sites at
+  `getTypeOfObjectLiteral`'s member loop, ~`Checker.kt:127023`/`:127130`) read its keep off
+  `propCtx`, i.e. the PUSH field `contextualType` (`:1493`), and that field reaches an object
+  literal only from: a var-decl with an OBJECT target passing `objLitTargetNeedsContext`
+  (`:105368`/`:126907` — `propTypeContainsLiteral` `:131080` has NO enum-literal arm), a
+  return with an object / sole-non-nullish / KEY-unique union target or a returned ARRAY
+  (`:108287-108323`; the discriminant selector is never consulted there), an argument with
+  `paramType is Type.Object` (`:161393`), an assignment with an object target (`:109374`), and
+  nested inheritance (`:127022`). MEASURED (an `f: (x) => 0` member reads `(x: number)` when
+  per-property context reached and `(x: any)` when not): the positions where an emitter
+  fires for a widened discriminant AND no context reaches are declaration-with-UNION-
+  annotation, nested-under-such-a-declaration, a CONDITIONAL return
+  (`findAllReferences.ts:1236`), an ARROW expression body, and a union-target ASSIGNMENT —
+  exactly the eleven-loss class; plain return / argument / `push` / `Map.set` are SILENT for
+  a widened discriminant either way (so `getUpToDateStatusWorker`'s returns cannot be where
+  the `tsbuildPublic.ts` rows came from — rebuild the arm and dump the grid to name the 22;
+  no capture survives). Land as: (1) the arm's function unchanged; (2) widen ONLY a member
+  whose initializer is syntactically an enum-member ACCESS (`enumMemberTypeOfExpr`
+  `:126119`, extended through `?:` branches and `||`/`??` operands) — tsc widens only a FRESH
+  literal (`getWidenedLiteralType` `checker.ts:25661`, `getDeclaredTypeOfEnum` `:13555`), so
+  `{ v: a }` with `a: K.A`, `{ v: k }` with `let k = K.A`, `{ v: K.A as K.A }` and every
+  SHORTHAND stay un-widened (measured on both references; the arm widened all of these and
+  would have manufactured two false positives); (3) the keep = push `propCtx` ?: a NEW
+  `objLitMemberContextualType(prop)` walking the parent chain as tsc's `getContextualType`
+  (`checker.ts:32781`) does — VariableDeclaration annotation, ReturnStatement/arrow body →
+  the enclosing function's return annotation, call argument → `cpaComputeArgCtxTypes(call,
+  null)[i]` (`:146400`; NEVER `cpaCtxAt` `:2503`, which stops at statements and reads
+  `cpaFrames.last()`), assignment → the left operand's type, `as`/`satisfies` → the type node
+  (`as const` → keep, tsc `isConstContext` `:41486`), conditional/parens/logical/array-
+  element/nested-property → inherit, a UNION context answering the member across ALL
+  constituents — deciding keep by tsc's `isLiteralOfContextualType` (`:41459`: SOME
+  constituent carries an enum/number literal for a numeric member, a string/template literal
+  for a string one), NOT by `enumComparisonAtoms` (`:115020`, an EVERY test that widens
+  against `kind?: E.X` and never keeps against `0 | 1`). Consulted only for enum-member-
+  valued members (265 on the compiler profile, ≤331 on any), so `cost_gate.py` is the
+  receipt. Designs REFUSED with reasons: (A) a side "fresh" type beside the widened member
+  makes the literal's type two-faced and leaks into every later use; (C) widening at the
+  READ leaves whole-object / inference / destructuring / `typeof` display wrong, all of which
+  tsc reports and our engines already report once the member is `K`. Pins (tsgo 7.0.2 and
+  pristine 6.0.3 agree on every row): the (a) triple — `const w: K.A = o.v` / `return o.v`
+  report `Type 'K'`, `o.v = K.B` silent — plus the string-enum twin; the freshness negatives
+  silent; `{ v: cond ? K.A : K.B }` widens; whole-object / `id({…}).v` / destructuring rows
+  now report through the EXISTING engines; `if (o.kind === K.B)` on `{ kind: K.A }` no
+  longer an ours-only TS2367 (a row the entry below did not know); a discriminated enum
+  `kind` at EVERY position (decl union, nested, plain return, returned array, conditional
+  return, arrow body, assignment, argument/`push`/`Map.set`), each with a correct literal
+  (silent) and a non-discriminant mismatch (reports where the emitter reaches). Gates: the
+  8-profile grid at `added=0 removed=0`, the whole active `.errors.txt` corpus (diagnostic-
+  adding), `cost_gate.py`. Two more facts for the implementer: the (CHK.32) comment at
+  `:105360` ("an object literal's type is MEMOISED per node") is FALSE — `getTypeOfObjectLiteral`
+  mints on every call, which is why an order-independent PULL keep is necessary; and the
+  `never`-parameter probe is blind on OUR side for an enum-member LOCAL (tsc 5 rows, ours 0)
+  — grade (CHK.85)(b) with a primitive mis-assignment. Fixtures: the recon's scratch set is
+  reproduced in the (P18.20) note.
+
+- [x] **(CHK.85)(b) LANDED 2026-09-05 ((P18.22) note) — the four seams plus a REPORTING flow walk
+  (`WK_NARROW_REPORT`, `NarrowFlowMemo.overwriteResetsToDeclared`) the item did not name; 49/49 recon rows and
+  60+ probe rows match both references bar four form residues (loop join, file-level arrow, objlit method,
+  assignment position); 52 pins, 17 arms; corpus 8,837/0, core 16,027/0, grid 8×0/0, cost_gate rebaselined
+  (+2.3% `globals.lookups` = 414 reporting walks, attributed). ORIGINAL ITEM: REWRITTEN 2026-09-05 BY READ-ONLY RECON (`scratchpad/chk85b`, 49 rows,
+  both references agree on all; Checker.kt lines are commit 7685baf8) — A `let`/`const` LOCAL
+  INITIALIZED FROM AN ENUM MEMBER IS READ WRONGLY AT FOUR READERS, IN BOTH DIRECTIONS: MEANING,
+  not the "widened declared `K`" form divergence the entry below records.** `let k = K.A` reads
+  `K` everywhere here where both references read the FLOW type: `const w: K.B = k` / `takeB(k)`
+  / `return k` print `'K'` for `'K.A'` (form), and after `k = K.B` the same three are ours-only
+  FALSE POSITIVES (w3/a3/r3/sw2/an2, 6 rows); `if (k === K.B)` is a lost TS2367 for `const`
+  AND `let` (d1/d2/bd1/bd2/an4); a BODY-LOCAL `const k = K.A` is `any` at the argument gate
+  and the `never` arm (ba1/bv1 silent — 7 lost true positives). Mechanism: (i)
+  `narrowByAssignmentRhs` (~120857) has no enum-member RHS arm and every reducing arm needs
+  `declaredType is Type.Union` (`narrowUnionByRhsAssignment` ~122174 returns `declared` for a
+  non-union, and our enum `K` is an atomic `Type.Object`); (ii) `isNarrowableTarget` (~119592:
+  Intrinsic / string-number-bigint literal / never) refuses an `EnumLiteral` target so the
+  var-decl reader never asks; (iii) the const SYMBOL half (`getTypeOfVariableOrProperty`
+  ~116472-116490) widens an enum-member initializer through `inferTypeFromInitializer` →
+  `widenType` → `enumTypeOfMemberType` where the LOCAL half (`cvdaRecordInferredLocalType`
+  ~105781-105845, R783) keeps it — which is what the argument gate, the never arm and the
+  TS2367 pass read for a file-level const; (iv) `spineArithRecordVarDecl` (~62429) records only
+  `literalTypeOfExpression` results, so the cta/ccet frame never holds an enum-initialized
+  body local (B83.5 → `any`). Seam, four edits and no new pass: S1 an `enumMemberRhsType` arm
+  first in `narrowByAssignmentRhs` — the RHS is a `PropertyAccessExpression` whose receiver
+  resolves by SYMBOL LOOKUP (file locals / lexical / globals, NEVER `getTypeOfExpression`:
+  (CHK.62)'s law, this helper runs at every `FlowAssignment` visit) to an enum owning that
+  member, reducing an enum / enum-carrying-union declared type to the member (tsc's
+  `getAssignmentReducedType` checker.ts:28118 over the enum-as-union), and answering the
+  ANTECEDENT — never `never` — for a member outside the declared enum; S2 admit
+  `EnumLiteral`/`Enum` in `isNarrowableTarget` (its three sites: var-decl ~105419, return
+  ~108360, assignment ~109431; the argument gate's M34 arm ~161612 already substitutes a
+  narrowed result that relates); S3 the R783 keep in the symbol half (`varDeclIsImmutableBinding`
+  → keep an `EnumLiteral`-flagged initializer type; the local half already registers the
+  interned id in `widen1ImmutableLiteralTypeIds` ~105816, so the assignment-target widen-back
+  is unchanged); S4 record `if (isConst) member else enumTypeOfMemberType(member)` in
+  `spineArithRecordVarDecl`, plus ONE flow read for an Identifier operand at the
+  (CHK.86)/(CHK.88) emitter (~165973/165993) — a new `narrow.walks` move to justify in
+  `cost_gate.py`. Guards measured: a nested FUNCTION DECLARATION resets to `K` (n1w/n2w —
+  checker.ts:31181-31191 excludes it from the flow-container loop) while an ARROW keeps `K.A`
+  (n4w); silent after reassignment stays silent (d3/bd3); the loop join stays form-only
+  (`'K'` for tsc's `'K.A | K.B'`, (CHK.69)); S2's var-decl branch substitutes UNCONDITIONALLY
+  (not suppression-only), so a wrong narrow is a false positive; S3 changes a file-level
+  const's type PROGRAM-WIDE (every consumer, including `o.kind === X` discriminants) — grid
+  all 8 profiles. **GRADE WITH `const w: K.B = k` / `takeB(k)` / `nv(k)` / `k === K.B`** — the
+  primitive mis-assignment probe (P18.20) recommended is BLIND ON BOTH SIDES (`const p:
+  string = k` prints `Type 'K'` in tsc's `reportRelationError` generalization AND in ours),
+  so CLAUDE.md's "a narrowing probe must target a PRIMITIVE" needs the enum refinement: a
+  same-flavour literal MEMBER target. Interacts with (CHK.92)(d): d15 `const k = Cmp.X; k === 5`
+  prints `'Cmp'` here through the symbol half and `'Cmp.X'` in both references.
+
+- [x] **(CHK.85) CLOSED 2026-09-05 — (a) by (CHK.91) ((P18.21)), (b) by the sub-item above ((P18.22)), (c)
+  re-queued as the staged (CHK.93). ORIGINAL: (a) CLOSED 2026-09-05 BY (CHK.91) ((P18.21) note) — `const w: K.A = o.v` and `return o.v`
+  report `Type 'K'`, `o.v = K.B` is legal, and the discriminated-union selections survive; what remains is
+  (b) (the rewritten sub-item above) and (c) `as const`, now the measured staged item (CHK.93) below (scalars already keep their
+  literal at a declaration; object/array/enum-member assertions are `any` and the readonly half is shared
+  with the no-op `readonly [T, U]` type operator). PREVIOUS
+  STATE: STOPPED A SECOND TIME 2026-09-05 ((P18.18) note), NOW WITH THE BLAST
+  RADIUS THE ENTRY ASKED FOR — (a) WAS BUILT AND COSTS MEANING: +7 rows on every profile
+  and +22 on harness, ALL of them DISCRIMINATED-UNION SELECTION losses** (`UpToDateStatus`
+  in tsbuildPublic.ts, `Invocation` in signatureHelp.ts, `SymbolAndEntries` in
+  findAllReferences.ts, and eight more). The widening RULE is right — its contextual keep is
+  tsc's `isLiteralOfContextualType` — so what is missing is the CONTEXT reaching
+  `getTypeOfObjectLiteral` at those sites, and THAT is the unblocker to queue next. Two
+  corrections to the entry below: (a) is a lost true positive AND an ADDED false positive
+  (`const o = { v: K.A }; o.v = K.B` is an ours-only TS2322 both references accept); and the
+  widening is missing for ENUMS ONLY for a structural reason — an object-literal member's
+  value is typed by `getTypeOfExpression`, which answers the BASE primitive for a literal
+  node, so string/number/boolean members are already widened by construction. (c) is not an
+  enum question at all: `({ v: "a" } as const).v` and `[1, 2] as const` are equally
+  unmodelled here, so a const ASSERTION is a FEATURE, not a residue. ORIGINAL ITEM: A MUTABLE BINDING DOES NOT WIDEN AN ENUM MEMBER THE WAY tsc DOES —
+  STOPPED (P18.17): it is **MEANING**, not display, and it is a design.** Re-measured
+  against both references at BOTH positions, it is not one gap but three, and the third
+  was not in the original item: (a) a mutable OBJECT-LITERAL PROPERTY must widen — `const o
+  = { v: K.A }; const w: K.A = o.v` is an ERROR in both references (`o.v` is `K`) and is
+  **SILENT here**, i.e. we lose a true positive, and so is the return-position twin; (b) a
+  `let`/`const` local's READ answers the FLOW type there (`let k = K.A; probe(k)` reads
+  `K.A`, and `K.B` after `k = K.B`) where we answer the widened declared `K`; (c) an
+  `as const` property read (`{ v: K.A } as const`).`v` is reported by both references and
+  is **entirely missing** here. Two more facts for whoever takes it: our ARGUMENT and
+  DECLARATION paths disagree with EACH OTHER on the identical expression (`const o = { v:
+  K.A }; o.v` displays `K` at an argument and `K.A` at a declaration), and (WIDEN.1)'s "the
+  const rule is applied where `currentLocalTypes` is RECORDED" does not reach (a) at all —
+  the widening tsc performs is in `getTypeOfObjectLiteral`'s member typing, i.e. a change
+  to every object literal's member types program-wide. Fixtures: `chk85a`/`b`/`c` in the
+  (P18.17) note.
+
+- [x] **(CHK.93) CLOSED 2026-09-05 — STAGE 2 LANDED ((P18.24) note): const-context members are read-only
+  (TS2540/TS2704, `readonly` display), a const array is a readonly tuple unless its contextual type has a mutable
+  array-like constituent (`Type.Object.readonlyTuple`, also set by the `readonly [T, U]` operator), members fall to
+  `ReadonlyArray` (`push` → TS2339), TS4104 replaces TS2740 for readonly→mutable at declaration/assignment/return/
+  class-property and as pristine's TS2345 chain at an argument (tsgo prints a bare TS4104 there), slots are read-only;
+  the pin walker `checkReadonlyTupleElaboration` is KEPT (20/22 codes reproduced); two pre-existing false positives
+  closed (`const t: [1] = [1]`, TS2790 beside TS2704) and B378's guard install filtered to the declared constituent
+  (a grid row on tsc's own `core.ts`); 38 pins, 15 arms RED; core 16,122/0/3, corpus 8,837/0, cost_gate exit 0, grid
+  8×0/0. Residue: r20 `zt[5]` TS2493 (dedicated-walker-only), a subclass-of-`Array` contextual type reads readonly.
+  STAGE 1 LANDED 2026-09-05 ((P18.23) note) — a const assertion answers its operand's
+  const-context type (`constContextTypeOf`, recognised syntactically by `isConstAssertionExpr`), object members keep
+  their literals with the context computed once, a const array is a frozen tuple with the relation rule tuples
+  always needed (tuple → `Array<T>`/`ReadonlyArray<T>` by elements, removing a pre-existing false TS2740 on every
+  declared tuple) and the existence-only `tupleInheritsArrayMember`, TS1355 is tsc's `isValidConstAssertionArgument`
+  in both spellings, and the (e) prerequisite makes a literal property write a second chance by literal. 16 of the 30
+  rows byte-identical to pristine; stage-2 edges r03 r09 r10 r12 r18 r20 r26 r30 pinned at today's answer. 57 pins,
+  12 arms; core 16,084/0/3, corpus 8,837/0, cost_gate exit 0, grid 8×0/0. **STAGE 2 (readonly-ness) STAYS OPEN as
+  written below**, plus two facts for it: a `let` read of an enum-member ELEMENT widens to the enum (shared member
+  instances carry no mark), and the type-faithful tuple member table (`mt.slice(1)` typed, not `any`) was REFUSED
+  this round as an unpriced program-wide change — price it on the grid first. ORIGINAL ITEM: CONST ASSERTIONS —
+  `x as const` / `<const>x` — MEASURED 2026-09-05 by read-only
+  recon (fixtures `scratchpad/chk85c/` r01-r30 + probes; tsgo 7.0.2 ≡ pristine 6.0.3 on all 32 rows;
+  Checker.kt lines are commit 1331d33a). The (CHK.85)(c) successor.** Every OBJECT, ARRAY and
+  ENUM-MEMBER const assertion is `any` on HEAD: `getTypeOfExpressionCore` types an
+  `AsExpression`/`TypeAssertionExpression` as `getTypeFromTypeNode(expr.type)` (~119303-119304) and a
+  `const` TypeReference falls off `getTypeFromTypeReference`'s ladder to `errorType` (~114005-114006).
+  Scalars survive ONLY at a declaration, through `literalTypeOfExpression`'s `as const` arm
+  (~126756-126763) read by the recorders (~62429, ~105380) — which is why `1 as const`, `"a" as const`,
+  `-1 as const` and `let x = "a" as const` answer the literal at a declaration while `probe(1 as const)`
+  is silent, and why (CHK.91)'s `objLitConstContextOf` keep (~127045) is REACHED and then discarded
+  (arm a5's 0 RED). TS1355 is modelled narrowly (`emitTS1355IfInvalidConstAssertion` ~90429-90471,
+  corpus-pinned by ACTIVE `constantEnumAssert`): an identifier operand, a call, the `<const>` form and a
+  body-local base are missed. **STAGE 1 — literal types through a const context, no readonly-ness
+  (one commit):** (a) at ~119303-119304 a const type-ref assertion answers its OPERAND's const-context
+  type — scalar/paren/`-`num via `literalTypeOfExpression`, an `Enum.Member` access via
+  `getTypeOfExpression` (already `K.A`), an object/array literal via `getTypeOf{Object,Array}Literal`
+  (they read the context through the walk; the assertion IS the literal's parent) — tsc's
+  `checkAssertionWorker` (checker.ts:38110-38122) returns `getRegularTypeOfLiteralType(exprType)`
+  (rows r01 r02 r05 r07 r08 r12-form r13 r19 r21 r22 r23 r24 r28); (b) `getTypeOfObjectLiteral`
+  ~127453: under a const context `raw = literalTypeOfExpression(init) ?: getTypeOfExpression(init)`
+  (tsc `checkExpressionForMutableLocation` :41496-41500), the context computed ONCE per literal and
+  threaded down (tsc :33541); (c) `getTypeOfArrayLiteral` ~128118: under a const context build a
+  TUPLE (`buildTupleFromTypes` ~170428) of literal-kept elements (tsc :33396-33397) so `t[0]` reads
+  `1` (r04 r14, the TS2493 half of r20) — an array literal NEVER becomes a tuple here outside a
+  contextual tuple target (~126970), so this is new machinery, not a keep; the stage-1 residue is
+  named: it displays `[1, 2]` not `readonly [1, 2]` and TS4104 does not fire (r03/r18/r26); (d) TS1355
+  general — transcribe `isValidConstAssertionArgument` (:38082-38108) over the existing slice
+  (identifier r06, call r27, `<const>`, a body-local base via `lexicalScopeSymbol`), `constantEnumAssert`
+  stays green; (e) PREREQUISITE in the same commit: `checkPropertyAccessAssignment` (~111924) types a
+  literal RHS as its base primitive, so `declare const mo: { v: "a" }; mo.v = "a"` is an ours-only
+  TS2322 `'string'` TODAY with no `as const` anywhere — stage 1 would add that row at every
+  `constObj.v = "a"`; second chance with `literalTypeOfExpression(value)` on the rejecting path
+  (~111998). Gates: the 30-row fixture as a pin class against the recorded answers (VALUE pins — read
+  the type out of a wrong-typed target, never silence); the 8-profile grid `added=0 removed=0` (19
+  sites on the compiler profile, 32 on harness — `[a, b] as const` pushed into typed arrays, `{
+  throwIfNoEntry: false } as const` as an argument, `} as const` objects, and discriminant keeps like
+  `{ type: "symbol" as const }` in completions.ts:2927 must all survive); the 19 ACTIVE `.errors.txt`
+  baselines mentioning the construct run by name (`awaitedType`, `bigintPropertyName`, `bigintWithLib`,
+  `builtinIterator`, `computedPropertiesNarrowed`, `constantEnumAssert`,
+  `contextualTupleTypeParameterReadonly`, `excessivelyLargeTupleSpread`,
+  `inferFromNestedSameShapeTuple`, the four `isolatedDeclaration*`, `isolatedDeclarationsAddUndefined`,
+  `mappedTypeIndexedAccessConstraint`, `readonlyTupleAndArrayElaboration`, `strictOptionalProperties1`,
+  `temporal`); `cost_gate.py` (~19 literals per profile, the context computed once each). **STAGE 2 —
+  readonly-ness (a separate commit; MEANING rows r09 `push` on `[1, 2] as const` → TS2339, r10/r30
+  TS2540 on a const-asserted property, r18 `readonly [1,2]` → `[1, 2]` silent; FORM rows r03 r12 r26):**
+  (f) const-context object members join `mappedReadonlyMemberIds` at the mint (~127523-127528) —
+  `isReadonlySymbol` (~80524) already consults it, giving TS2540 via `isReadonlyPropertyAccess`
+  (~80426) and TS2704 on delete; a spread OUTSIDE a const context must NOT carry the bit (tsc
+  `getSpreadType` :20137, r13 keeps the literal types but drops readonly); the `{ readonly v: "a"; }`
+  display needs the prefix at `typeToString` ~133121/~133174, which is display-WIDE (`Readonly<T>`
+  ~128657 and mapped `readonly` ~171318 members render BARE today) — grep the active baselines for
+  `{ readonly ` and classify FORM first; (g) READONLY TUPLES — a `readonlyTuple` bit on `Type.Object`
+  beside `tupleElementTypes` (Type.kt:183), set by the const-context array AND by the `readonly [T, U]`
+  TYPE OPERATOR, which is a documented no-op today (~171157-171163) — the declared-type twin `declare
+  const rt: readonly [1, 2]` shows the SAME three gaps with no `as const` at all (`rt.push` silent,
+  `→ number[]` TS2740 where tsc says TS4104, `→ [1, 2]` SILENT), so stage 2 is designed for both
+  spellings at once; members fall to `globalReadonlyArrayType` (push → TS2339); the relation emits
+  TS4104 (tsc :22731/:22739) for a readonly array/tuple source against a mutable target, replacing
+  today's TS2740 for readonly arrays (FORM — count the active baselines carrying it) and closing the
+  silent tuple case (MEANING); retire the pin walker `checkReadonlyTupleElaboration` (~71493, 22
+  `pinDiag`s on `readonlyTupleAndArrayElaboration.ts`) only if the general rule reproduces its rows
+  with the walker PassLab-disabled; pin the unmeasured subtlety that `[1, 2] as const` under a MUTABLE
+  contextual array type stays mutable (tsc :33397 `isMutableArrayLikeType` :25541). **The corpus is
+  structurally blind**: the canonical `constAssertions`, `variadicTuples1` and
+  `typeSatisfaction_errorLocations1` baselines have NO case file (18 of 37 inactive); use
+  `scripts/pristine_oracle.py --extract` on `constAssertions` as the offline oracle. Two neighbouring
+  gaps measured and deliberately NOT chased here: `mt.push(3)` on a mutable `[1, 2]` is silent (tsc
+  TS2345 — tuple method calls are not argument-checked), and `readonly number[]` → `number[]` prints
+  TS2740 for tsc's TS4104.
+
+- [x] **(CHK.94) LANDED 2026-09-05 ((P18.25) note) — `tupleRestIndex`/`tupleHasRest` + a rest tuple's `length` is
+  `number`; the interned `tupleArrayBase` (a rest slot INDEXED, not refused; optional slots join `undefined`; empty →
+  `never[]`) consulted on the miss path at `computeRawTypeOfPropertyAccess` / `resolveMemberPropertyType`, with
+  `tupleInheritsArrayMember` routed through it (measured unobservable); the call / overload / argument / callback
+  paths followed for free EXCEPT two pre-existing array defects the typed members exposed and fixed —
+  `arrayLitLiteralElemsSatisfyParam` at both overload sites, and the union-callee TS2349 confined to tsc's
+  non-identical-generic case with the B516 combined parameter reduced and its literal argument kept (a closed
+  ours-only TS2349 on the harness profile); 128 cells 46 → 83 matching tsgo, 0 regressions; 53 pins, 11 arms (a6
+  dead by construction); core 16,175/0/3, corpus 8,837/0, cost_gate exit 0, grid 7×0/0 + harness removed=1.
+  Residue: a union of callables' call RESULT is `any` (`combineSignaturesOfUnionMembers` unmodelled). ORIGINAL ITEM:
+  TUPLES: ARRAY MEMBERS WITH TYPES AND CHECKED CALLS — MEASURED 2026-09-05 by
+  read-only recon against `b7cd50d8` (fixtures `scratchpad/chk94/a_*`, `c_*`, 90 cells; tsgo
+  7.0.2 = pristine 6.0.3 on every row bar the union ORDER — pristine prints `(2 | 1)[]` for
+  tsgo's `(1 | 2)[]`, ours orders as tsgo; FORM, pin tsgo's and record the divergence).** A
+  tuple is an uninterned `Type.Object` (`buildTupleFromTypes` ~171111) holding only its
+  numbered slots, `length` and a number index; `getPropertyOfType` (~118384) misses every
+  `Array` member and `computeRawTypeOfPropertyAccess` answers `any` (~132749), so `t.slice(1)`
+  / `.map` / `.indexOf("x")` / `.push("z")` / `.push(3)` / `.concat` / `.join` / `.includes` /
+  `.reduce` / `.sort` are SILENT on `[1, 2]`, `[1, "a"]`, `readonly [1, 2]` and `[1, 2] as const`
+  where both references report (TS2345 `'"z"' ⊄ '1 | 2'`, TS2322 `'(1 | 2)[]'`, TS2339 `'push'
+  does not exist on type 'readonly [1, 2]'`), callback parameters are never contextually typed
+  (`t.map(x => …)`, `q.forEach(x => …)`), and `tupleInheritsArrayMember` (~125763) grants
+  EXISTENCE against the mutable `Array` even to a readonly tuple. `length`, `t[0]`, `for-of`
+  and the tuple→array relation are already right. tsc: `createTupleTargetType` checker.ts:17876
+  + `getTupleBaseType` :13312 (`createArrayType(union of elements, readonly)`) inherited by
+  `resolveObjectTypeMembers` :14099-14106. **(0) prerequisite, unrecorded on HEAD**: `const t:
+  [1, 2] = [1, 2]` is an ours-only `TS2322 'number' ⊄ '1'` PAIR at the declaration
+  (`checkArrayLiteralElementsAgainstTuple` ~167780 reads `getTypeOfExpression(elem)`; use
+  `literalTypeOfExpression(elem) ?:`). **(1)** two bits on the tuple, set at mint and carried by
+  `widenType`'s rebuild (~47261): `isReadonlyTuple` (the readonly-tuple arm of
+  `getTypeFromTypeOperator` ~171836-171847, a no-op today, and `constContextTupleOfArrayLiteral`
+  ~128749 — (CHK.93) stage 2's first rung, coordinate with it) and `tupleHasRest` (`getTupleType`
+  ~171092: `RestType` / `NamedTupleMember.dotDotDotToken` — a rest slot is stored as the rest's
+  ARRAY type, so an `Array<number | string[]>` base would make `a.indexOf(x)` on `[number,
+  ...string[]]` a FALSE TS2345; `a.length` also reads `2` there where tsc reads `number`,
+  pre-existing). **(2)** `tupleArrayBase(t)`: null for a rest tuple (and for an optional-slot
+  tuple unless `undefined` joins the union — tsc's base for `[1, 2?]` is `Array<1 | 2 |
+  undefined>`), else `getOrInternReference(readonly ? globalReadonlyArrayType : globalArrayType,
+  listOf(numberIndexInfo.type ?: never))` — interned, once per element set. **(3)** consult it on
+  the MISS path only at `computeRawTypeOfPropertyAccess` (~132725, through
+  `resolveGenericPropertyType` ~111538 — the instantiation `arr.push` on `number[]` already uses
+  at ~132704) and `resolveMemberPropertyType` (~132504: union / narrowed receivers — `[1] | [1,
+  2]`, `[1, 2] | undefined` after `if (m)`), and rewrite `tupleInheritsArrayMember` over the base
+  so a readonly/const tuple LOSES `push` (TS2339; display `'[1, 2]'` until stage 2 — FORM). The
+  call path, overload selection, argument checking and callback contextual typing then follow
+  with no further edit. **Guards**: legal calls must stay silent (`t.some`, `t.join(",")` into
+  string, `t.forEach(x => number = x)`, `t.concat([1])` into `(1|2)[]`, `g(...t)` — silent in all
+  three compilers); `[p[0], p[1]].forEach` is an ARRAY literal, unaffected; `t.concat([9])` is
+  TS2769 in both references (a report or today's silence both acceptable — a false report on
+  `[1]` is not); `<T>(t: [T, T]) => t.slice(1)` is `T[]` (pin; `TypeInstantiator.kt:283`
+  excludes tuples from fn-aware instantiation, not a blocker); `t[5]` TS2493 and `const [a, b] =
+  t` stay OUT of scope (TS2493 has only dedicated pin walkers — ~67870 / ~87751 / ~135570 /
+  ~78177 — and there is no `BindingElement` arm, silent for `number[]` too, (CHK.46)). Corpus:
+  ZERO active `.errors.txt` baselines call an array method on a tuple-typed name — it cannot
+  see the member types; run by name `tupleTypes`, `awaitedType`,
+  `emitCapturingThisInTupleDestructuring2`, `restParameterWithBindingPattern3`,
+  `readonlyTupleAndArrayElaboration`, plus (P18.23)'s 18 `as const` baselines. Grid: the compiler
+  profile's ONLY tuple-receiver method call is `relatedInfo.push(info)` (checker.ts:22624) on a
+  REST tuple (refused → unchanged); `args.*` at :32162 / :36271 / :36289 are arrays; the 8
+  profiles hold 39-93 tuple annotations and 63 tuple-receiver sites, so expect 8 × `added=0
+  removed=0` as a CONTROL — the pin class is the gate. Pins: the 90-cell matrix as VALUE pins,
+  readonly-loses-mutators, rest/optional/generic refusals, union and narrowed receivers, the (0)
+  declaration pair; arms: base off, readonly bit off (`[1, 2] as const` `.push` must read
+  TS2339), rest refusal off (the `indexOf` false positive), the (0) literal read off. Cost: one
+  interned reference per element set; `cost_gate` expected ~+0.00%.
+
+- [x] **(CHK.95) LANDED 2026-09-06 ((P18.26) note) — a resolution-free scalar arm in
+  `shadowCallTypesDeclList` (`isResolutionFreeScalarLiteral`; a const or const-asserted let keeps the literal, a
+  let/var widens) and a primitive/literal-annotation arm in `ccetApplyDeclRecordings`, with a per-body name set so an
+  annotated duplicate reads `any`; the MUTABLE boolean refused after measurement (tsc's `boolean` narrows by
+  assignment, ours cannot — its file-level twin is a pre-existing false positive); two post-spine emitters deduped;
+  125 cells, 89 matching both references, 6 excluded (const tuple), 30 named residues; 53 pins, 7 arms incl. a
+  counter arm; core 16,228/0, corpus 8,837/0, cost_gate exit 0 (`globals.lookups` −0.31%), grid 8×0/0. ORIGINAL
+  ITEM: THE ARGUMENT GATE'S BODY-LOCAL LITERAL CONST — MEASURED 2026-09-05 by
+  read-only recon against `b7cd50d8` (fixtures `scratchpad/chk94/b_*`, `d_*`, 72 cells; tsgo
+  7.0.2 = pristine 6.0.3 on every cell but the const-TUPLE argument, where tsgo prints TS4104
+  and pristine TS2345 — (CHK.93) stage 2, excluded).** In EVERY body context (function, arrow,
+  method, nested function, annotated function) `const s = "a"; takeB(s)` is SILENT for a string,
+  number, boolean, bigint, `as const` scalar and template initializer, for a `let` of each, AND
+  for an ANNOTATED `const s: string = "a"` — while the same lines report at file level and an
+  enum initializer reports everywhere ((P18.22)'s S4). So the (P18.22) note's "a body-local
+  STRING const is equally silent" is every non-enum scalar initializer, every `let`, and every
+  annotated primitive local; only annotated literal UNIONS and callables are recorded.
+  Mechanism: the gate reads `getTypeOfExpression(arg)` (~162473) → `getTypeOfIdentifier`
+  (~119659) → `currentLocalTypes` (~119668) = the ccet frame's `localTypes` (`CcetFrame` ~1562,
+  `withCcetFrameAmbient` ~1595), whose only writers are parameters (~148779), the S4 pre-scan
+  `shadowCallTypesDeclList` (~155326-155400, enum initializers only at ~155370-155386), the
+  if-arm type-guard override (~1930) and the leave-time `ccetApplyDeclRecordings` (~2254-2285:
+  annotated CALLABLES, unions of callables, unions of LITERALS); everything else falls to
+  B83.5's `anyType` (~119725) and the gate `continue`s at ~162660. **Fix**: (a) in
+  `shadowCallTypesDeclList`, under the enum arm's collision guard (`!globals.containsKey(nm) &&
+  currentFileLocals?.containsKey(nm) != true`), an un-annotated arm over a RESOLUTION-FREE
+  scalar subset of `literalTypeOfExpression` (~127098: string / no-subst template / numeric /
+  `-`numeric / bigint / `true` / `false` / paren / `!` / `as const` scalar — NOT its
+  `ConditionalExpression` arm, which calls `getTypeOfExpression` at ~127123 and is the B420
+  first-touch hazard the pre-scan is shaped around, and not arrays), a `const` recording the
+  literal and a `let` its base primitive ((WIDEN.1); `let s = "a"` → `string`, which both
+  references print; `let b = true` → `boolean` where they print `true`, the file-level form
+  residue); the duplicate-name `containsKey → anyType` rule (~155366) comes free, so two sibling
+  blocks' `const s` and the shadow-in/out shapes stay silent where tsc reports the first block's
+  `"a"` (safe direction, pin as silence); (b) in `ccetApplyDeclRecordings`, whose
+  `getTypeFromTypeNode(ann)` already runs at leave time (~2259), record an intrinsic primitive or
+  literal annotation beside the union-of-literals arm. A closure `() => takeB(s)` inherits
+  through `ccetEnterFunctionLike`'s `EpochMap(top.localTypes)` (~2121). **Residues to pin**:
+  ternary / `||` / `??` initializers (tsc `"a" | "c"`), `takeB(o.v)` on `const o = { v: "a" }`
+  (tsc `string`, ours `any`), `s === "b"` TS2367 (a different reader; TS2678 on `switch` already
+  fires), the const-tuple argument, a local named after a lib global under `dom` (`name` /
+  `length` / `top` — the collision guard keeps it `any`). **Guards**: corpus `parseBigInt` (the
+  one active baseline with a literal-argument TS2345 beside a body-local literal const),
+  `EnumMemberLocalFlowTest`, `ConstAssertionTest` (its body-local `takeB(zx)` silence pin FLIPS
+  — update it), the enum-arc classes; grid 8 × 0/0 expected — `const x = "…"; f(x)` is
+  ubiquitous in tsc's sources and the only new reports are ones tsc also makes. Cost: the
+  pre-scan already walks every declaration per body entry; the gate then judges every
+  scalar-local argument it used to skip — attribute `globals.lookups` / `narrow.walks` as
+  (P18.22) did. Pins: the 72-cell context × initializer matrix as VALUE pins, negative controls
+  (`takeS(s)` on `const s = "a"`, `takeNum(n)`), let-widening display, closure, duplicate names;
+  arms: literal arm off (~30 RED), let-widening off (`'"a"'` printed for a `let`),
+  annotated-primitive arm off, collision guard off.
+
+- [x] **(CHK.96) CLOSED 2026-09-06 — STAGE 2 LANDED ((P18.28) note): the object REST (tsc's `getRestType`), `[Symbol.iterator]` sources (which needed the instantiator to rebuild a TUPLE as a tuple), CONTEXTUAL pattern parameters at six readers, the pattern's IMPLIED contextual type, and the destructured-discriminant CARRY (tsc's `getNarrowedTypeOfSymbol`, inverted through the siblings' flow types). 82 pins in `BindingElementStage2Test`; corpus 8,837/0, grid 8×0/0, `cost_gate.py` exit 0 with no rebaseline. THREE defects the gates found are written up in the note — a blind pin, a double emission against `checkObjectRestUnspreadableAccess` (deduped in the walker, which runs SECOND), and an ours-only TS2322 on `services.ts:3264` where a CONDITIONAL of array literals gets no implied contextual tuple; that shape REFUSES and is queued as (CHK.107). STAGE 1 LANDED 2026-09-06 ((P18.27) note) — `bindingElementType` at plug points (a)-(g); the
+  ~120-cell matrix has 0 ours-only rows; 75 pins, 9 arms ((c)↔(b) and (g)↔(d)/(e) are round-927 pairs, the counter arm
+  flat); corpus 8,837/0, core 16,303/0, grid 8×0/0, cost_gate rebaselined (+2.32% `typeOfExpr.calls`, 80% the ccet
+  leave-time initializer typing), huge_methods 0. FOUR grid-forced ROOT fixes: an optional `T["k"]` carries
+  `undefined`, mapped `-?` strips it, an uninferrable guard TP narrows to its constraint, TP-carrying fn members
+  refused. **STAGE 2 STAYS OPEN as written below**, plus three new residues: arrow/fn-expression OWN parameters are
+  `any` at the ccet gate even when annotated ((CHK.98)(a)'s site), `export const { p } = obj` is not an export (a
+  false TS2305 on import), a namespace-qualified enum discriminant does not narrow a loop var or an Identifier
+  param. ORIGINAL ITEM: DESTRUCTURED BINDINGS GET THEIR TYPES — MEASURED 2026-09-05 by read-only recon
+  against `bc484c83` (fixtures `scratchpad/chk96/{f,b,p,r,r2,h}`, ~120 cells; tsgo 7.0.2 =
+  pristine 6.0.3 on EVERY cell, union order included).** The gap is two-shaped and (CHK.46)'s
+  CLAUDE.md entry does not separate the halves: an OBJECT pattern's top-level member is ALREADY
+  typed at the declaration, return, property-access, flow-reassignment and narrowing readers in
+  both file and body scope — by three walk-scoped recorders, `recordDestructuredConstElementTypes`
+  (~105380, round 464b: no defaults / rest / nesting / union, and NO array arm — `if (name !is
+  Identifier) return` ~105461), round 475's `registerBindingPatternParamLocals` (~102985,
+  annotated pattern PARAMS; array elements → `anyType` ~103023) and the cpa receiver path
+  `cmamDestructuredReceiverType` (~152189, object only) — and is `any` ONLY at the ARGUMENT
+  reader (ccet: `shadowCallTypesDeclList` ~155562 and `populateParameterLocalTypes` ~149115
+  register the names into `currentParamBindingNames` → `anyType` ~119742, body AND file) and the
+  TS2367 reader (`spineArithRecordVarDecl` ~62468 records Identifier declarations only). Every
+  ARRAY / tuple pattern, every default (`{ o: od = 5 }` → tsc `number`, `[d = "x"] = number[]` →
+  `number | "x"`), nested pattern, object rest, union receiver, `let [a] = tup; a = "s"`, `for
+  (const [k, v] of map)` head, array-pattern parameter and CONTEXTUAL pattern parameter
+  (`arr.map(({ p }) => …)`, 159 sites on the 8 profiles) is `any` at EVERY reader. The symbol
+  half is `any` by construction: a FILE-level pattern name IS bound (`Binder.kt:398-419`,
+  `valueDeclaration = BindingElement`) but `getTypeOfVariableOrProperty`'s `when (decl)` has no
+  `BindingElement` arm (`else -> anyType` ~116933) and `buildFileLocalTypeMapPhases` ~17344
+  reads only `VariableDeclaration.type`; the MAIN binder binds no parameter at all
+  (`Binder.kt:1254` is lexical-only), so a pattern PARAMETER's names have no symbol anywhere but
+  the lexical tables. tsc: `getBindingElementTypeFromParentType` checker.ts:11746-11829 (object
+  member = `getIndexedAccessType` + `getFlowTypeOfDestructuring` :11777; rest = `getRestType`
+  :11611; array slot = `getIndexedAccessTypeOrUndefined(parent, numberLiteral(i))` :11802, rest
+  = `sliceTupleType` :18028 / `createArrayType`; default = `getUnionType([nonUndefined(t),
+  init], UnionReduction.Subtype)` then const-keeps-literal :11820), the pattern's IMPLIED type
+  as the initializer's contextual type (`getTypeFromBindingPattern` :12433, wired at
+  :32017-32029 — what makes `const [i1, i2] = [1, "a"]` a tuple), contextual pattern params via
+  `getContextuallyTypedParameterType` :31937. **STAGE 1 — a pure `bindingElementType(elem:
+  BindingElement, parent: Type, isConst: Boolean): Type?`** (null = REFUSE, and every refusal
+  must STILL register `anyType` — round 475's contract: the `any` shadow protects an object-
+  literal SHORTHAND / bare read of a destructured name from resolving a same-named CROSS-FILE
+  function through the merged globals; a typed name is protected by its type, a refused name by
+  `anyType`, and a name left UNREGISTERED is the false positive): any/error/unknown parent →
+  refuse; a union parent → `getUnionType` of per-constituent answers, refuse if any constituent
+  refuses; an object member via `getPropertyOfType(getApparentType(parent), propName)` →
+  `getTypeOfSymbol` (or `propertyTypeOnCarrier`, (REL.2) ~172500), optional-without-default → `|
+  undefined`, string index as fallback, computed names literal-only; object REST → refuse (stage
+  2); array: a tuple whose rest has been COLLAPSED (refuse the whole pattern until (CHK.94)(1)'s
+  `tupleHasRest` bit) or an index past the slots (TS2493's walkers own it) → refuse, slot
+  `tupleElementTypes[i]` (+ `| undefined` when `optionalTupleMemberIds` marks it), rest →
+  `buildTupleFromTypes(slice(i), readonly = parent.readonlyTuple)`; `Array<T>` /
+  `ReadonlyArray<T>` → `T`, rest → `getArrayType(T)`, `string` → `string`;
+  `noUncheckedIndexedAccess` → refuse (B221 owns it); Map / Set / iterables → refuse (stage 2);
+  hole → skip; an ARRAY-LITERAL initializer (not const-asserted) → refuse the whole pattern —
+  measured, `const [x] = [1, "a"]; const wq: number = x` is SILENT in tsc (x is `number` through
+  the contextual tuple) and a `string | number` slot would be an ours-only false positive; a
+  nested pattern → recurse; DEFAULT → `nonUndefined(t) ∪ default` with the default typed by
+  `literalTypeOfExpression(def) ?: getTypeOfExpression(def)`, a `const` keeping the literal and a
+  `let`/param widening ((WIDEN.1)), plus (CHK.66)'s subtype drop (`getUnionType` has no subtype
+  reduction — without it `{ o: od = 5 }` prints `number | 5` where both references print
+  `number`), and an ANNOTATED ancestor → `nonUndefined(t)` alone when the default is not
+  undefined-typed; a fn-shaped member keeps round 464b's refusal. **Plug points**: (a)
+  `checkVarDeclAssignabilityCore` ~105440 — the ArrayBindingPattern arm, and the object arm
+  routed through the function (defaults / nested / union lift); (b)
+  `registerBindingPatternParamLocals` over the annotation type (array-pattern params typed,
+  nested recursion); (c) `populateParameterLocalTypes`'s pattern arm ~149115 — record the
+  answers into `currentLocalTypes` (annotation only; B516's TP-referencing fn-type gate applies
+  to member types too) while STILL adding every name to `currentParamBindingNames` — 25
+  callers, so this one edit reaches the argument, TS2367 and property-access readers for
+  pattern PARAMS at once; (d) ccet locals: a pattern arm in the LEAVE-time
+  `ccetApplyDeclRecordings` ~2259 (which already resolves `getTypeFromTypeNode` there), NOT in
+  the pre-scan `shadowCallTypesDeclList` (B420 first-touch, the (CHK.95) rule; the pre-scan
+  keeps its `anyType` registration as the fallback, and `currentLocalTypes` is consulted before
+  the side set so the leave-time write wins); (e) `spineArithRecordVarDecl` ~62468 — a pattern
+  arm SKIPPING union answers as its Identifier rule does; (f) the cpa for-of head ~147340 and
+  the cta/ccet for-of arms over the element type the cpa arm already computes (`Array<T>` /
+  `string` only; Map/iterables stage 2); (g) the SYMBOL half: an `is BindingElement ->` arm in
+  `getTypeOfVariableOrProperty` walking `parent` to the owner (VariableDeclaration annotation ?:
+  initializer, Parameter annotation, BindingElement recursion) — what closes the FILE-level
+  argument and TS2367 readers, the oracle's hover on a destructured name
+  (`typeCaptureDestructured` ~8416 answers null for every array pattern today) and (CHK.47)'s
+  lexical consumers; round 778's write gate applies by construction, and
+  `symbolTypeResolutionInProgress` must cover `const { a } = f(a)`. **STAGE 2**: contextual
+  pattern parameters (the contextual signature's parameter type at the pattern's position), the
+  pattern's IMPLIED type as the initializer's contextual type (an array literal becomes a
+  tuple, lifting the array-literal refusal), object REST (`getRestType`: omit + spreadability),
+  `[Symbol.iterator]`-typed sources (Map / Set / generators, for-of heads over a Map —
+  coordinate with (CHK.94)), and `getFlowTypeOfDestructuring`'s parent-narrowing carry.
+  **Guards / at-risk**: corpus — 60 ACTIVE `.errors.txt` baselines carry a binding pattern AND a
+  TS2322/TS2345 row (8 declaration-shaped: `bigintPropertyName`, `circularResolvedSignature`,
+  `computedPropertyBindingElementDeclarationNoCrash1`, `contextualTupleTypeParameterReadonly`,
+  `contextualTypingArrayDestructuringWithDefaults`, `destructuringAssignmentWithDefault2`,
+  `flatArrayNoExcessiveStackDepth`, `signatureCombiningRestParameters1`; 53 parameter-shaped,
+  listed in `scratchpad/chk96/corpus_guard.txt`) + the dedicated-walker set
+  (`restParameterWithBindingPattern3`, `indexedAccessWithVariableElement`, `destructuringTuple`,
+  `downlevelLetConst16`, `emitCapturingThisInTupleDestructuring2`,
+  `readonlyTupleAndArrayElaboration`) + the 16 `Destructured*` / `BindingPattern*` / `ForOf*`
+  hand-written classes; DOUBLE-EMISSION with ~15 dedicated destructuring walkers
+  (`checkTupleDestructDecl` ~143147, `checkDestructuringDefaultTypeMismatches` ~178436,
+  `checkDestructuredParamOptionalMemberArgs` ~139934, `checkOptionalDestructuredParamCallArgs`
+  ~177251, and `checkReadonlyTupleElaboration`'s (P18.24)-recorded pattern-param miss, which
+  stage 1 reaches) — name the pairs with `--passTiming`'s emissions-by-pass. Grid: the compiler
+  profile holds 256 `const {` / 36 `const [` / 13 `let [` / 14 `for (const [` / 22 annotated + 9
+  contextual pattern params (8-profile union 472 array patterns, 257 + 159 pattern params);
+  pre-check over the REAL declarations: `const { kind } = node` discriminants (already byte-
+  identical at the decl reader; the ARG reader newly judges them after a `switch`), `const [,
+  major, minor = "0", …] = match` over `RegExpExecArray` (holes + defaults — the subtype drop
+  must give `string`), `let [kind, specifiers, …] = tryGetModuleSpecifiersFromCacheWorker(…)`
+  (a `let` slot feeds the assignment reader — a wrong optional/rest slot is a false TS2322),
+  `const [specifier, mode] = memoizedReverseKeys.get(key)!` (the `!` must strip), `const { … }
+  = node` over a UNION receiver (25 sites — per-constituent agreement or refuse), patterns over
+  `any` / unresolved imports (refuse, already). **Pins**: the ~120-cell matrix as VALUE pins by
+  shape × reader × scope; negative controls (`const [x] = [1, "a"]` silent, `{ o: od = 5 }` →
+  `number`, a rest tuple refused, `noUncheckedIndexedAccess` refused, a fn-shaped member
+  refused, the round-475 shadow fixture — a cross-file `function alpha()` + `function f({ alpha
+  }: Inner) { alpha.x }` — still silent); **arms**: array arm off; (c) off (pattern-param ARG /
+  TS2367 RED while the decl reader stays GREEN through (b) — a round-927 PAIR, record it);
+  symbol arm off (file-level ARG / TS2367 RED); subtype drop off (`'number | 5'` RED);
+  refusal-leaves-name-unregistered (the round-475 fixture RED); recording moved into the ccet
+  PRE-scan (a COUNTER arm: `typeOfExpr.calls` / `globals.lookups` move — (CHK.68)'s signature).
+  Cost: array patterns' initializers become typed in the cta walk (49 declarations on the
+  compiler profile) — attribute `typeOfExpr.calls` and `narrow.walks`. Coordinate with (CHK.95)
+  (both touch `ccetApplyDeclRecordings` / `shadowCallTypesDeclList`) and (CHK.94)(1) (the rest
+  bit). Corrects (CHK.46)'s entry: the "write probe answered the right type" there is
+  `recordDestructuredConstElementTypes`, a walk-scoped recording, not the symbol.

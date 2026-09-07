@@ -2003,3 +2003,25 @@ a contextually-typed parameter becomes a NARROWABLE REFERENCE where an `any` one
 `spine.nodes` +0.00%, `output.errors` 46 → 46. Corpus 8,837/0, `huge_methods.py` exit 0, grid
 8×`added=0 removed=0` with the BEFORE arm rebuilt in a directory no subagent wrote to. 19 arms
 (a12 recorded as a redundant guard).
+
+**(P18.32) — A WEAK GUARD TARGET NARROWS ((CHK.98b), WHOSE DIAGNOSIS WAS WRONG), AND (CHK.98)(b)'s UNION GATE LIFTS, 17,963 → 17,981 / 0 / 3 (2026-09-06).**
+**(CHK.98b) CLOSED — and the round's main finding is that the item misdiagnosed it.** Queued as
+"NESTED-TERNARY predicate narrowing", it is neither about ternaries nor about the property-access
+family: a plain `if`, a single ternary, `&&` and the nested ternary all fail identically, and the
+guard narrows correctly the moment its TARGET declares one REQUIRED member. The axis is the
+target's OPTIONALITY, and the mechanism is a round-480 ASYMMETRY — that round gave
+`missingVsOptionalProvesNotSubtype` to the NEGATIVE guard filter and never to the POSITIVE one, so
+the negative branch was right all along. The positive arm now mirrors tsc's
+`getNarrowedType(assumeTrue)`, with a vetoed member falling to the existing narrow-DOWN arm so the
+two together are tsc's `mapType`. **(CHK.98)(b)'s union gate LIFTED, with a three-binary receipt
+rather than a green grid**: grid 8×`added=0 removed=0` and knip 51 → 51 byte-identical, while a
+third binary (gate lifted, 98b reverted) reads **52** — the extra row being exactly the one the
+item named, which is what proves the gate's population is live and the green is not vacuous; the 8
+profiles carry ~26 such annotations in total and are closer to a control. **The item's knip number
+49 is stale** (a REBUILT parent reads 51; 49 was the pre-(CHK.98) recon commit) — a recorded
+baseline is a claim about a BUILD, not a commit, now shown for a library baseline too. 18 net pins,
+2 arms (8 RED / 3 RED) with two negative controls recorded as non-discriminating BY CONSTRUCTION
+rather than counted, and every arm carrying a pin-COUNT assertion after (P18.31)'s deleted-pins
+hazard. Corpus 8,837/0, **`cost_gate.py` exit 0 at +0.00% on every counter**, `huge_methods.py`
+exit 0. Residue pinned as a KNOWN GAP: a nullish union contextual parameter types correctly but the
+property-access reader emits no TS18048 — a false NEGATIVE, which is why the lift is safe.

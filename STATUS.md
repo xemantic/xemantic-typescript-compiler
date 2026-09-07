@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **197,746** lines (191,070 when the metric was created; the (P18.9)-(P18.36) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **197,916** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,31 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.37) — AN ARRAY LITERAL WITH A SPREAD GETS A REAL TYPE ((CHK.103) STAGE 1), AND THE ROUND-471 ARM IT WOKE WAS THE REGRESSION, 18,098 → 18,110 / 0 / 3 (2026-09-07, RECOVERED ROUND).**
+**(CHK.103) stage 1 landed; stage 2 re-queued with its 6 residual rows named.** Every array literal
+carrying a `...spread` was `any`, so `f([...xs])` went unchecked at every position and the var-decl
+string layer printed `Type 'array'`. A spread now contributes its ITERATED element type (array-like
+→ element type, tuple → element UNION, `string` → `string`, else the iteration type; REFUSED for a
+union / intersection / type parameter / `any` — stated false negatives, never a guess), a const
+context inlines a fixed tuple's slots, and the elaborator reports a spread at its own node. On the
+item's population fixture ours goes **1 → 6 of the reference's 12 rows, all six byte-identical to
+pristine `typescript@6.0.3`** — including the `readonly [number, string]` row where **tsgo 7.0.2
+diverges** (TS4104) and pristine outranks it.
+**THE ROUND WAS RECOVERED FROM AN INTERRUPTED SESSION, AND THAT IS THE FINDING.** The work sat
+uncommitted with a `Checker.class` NEWER than its source and a complete-looking `grid-after`, so it
+read as finished; the capture was in fact 4 minutes OLDER than the session's last fix, and re-running
+the grid on the final binary produced a **byte-identical** result — that last fix was INERT and the
+round as left would have shipped **a false TS2322 on 3 of the 8 profiles**. Cause: giving the shape a
+type at all made ROUND 471's literal-preserving arm reachable for the first time, and **that arm bails
+on any spread of its own** — it was built for tsc's own `invalidOperationsInPartialSemanticMode`
+(`services.ts:~1560`, no spread) and its sibling `invalidOperationsInSyntacticMode` (`:1607`) is the
+same shape WITH one, so the literal fell back to a path that widens each element to its base
+primitive and unioned a bare `string` into `readonly (keyof LanguageService)[]`. The dead session had
+patched the wrong layer; the landed fix is the spread contribution inside round 471's arm. Four
+20-second probes settled what three readings had not. 12 pins, all read from pristine; grid
+**8 × added=0 removed=0**; `cost_gate.py` exit 0 (`typeOfExpr.calls` **+0.07%** = 445 spread
+expressions no longer skipped, rebaselined in this commit); `huge_methods.py --fail-over 0` exit 0.
 
 **(P18.36) — A GENERIC INTERFACE'S FN-TYPED MEMBER STOPS BEING FROZEN AT FIRST TOUCH ((CHK.102)), AND THE FREEZER IS INV.5(c)'s CACHE, 18,076 → 18,098 / 0 / 3 (2026-09-07).**
 **(CHK.102) CLOSED.** `interface Box<T> { f: (x: T) => T }` was ONE object shared by every
@@ -103,25 +128,3 @@ is structurally invisible to the corpus, so the 40 pins run across THREE harness
 cross-file half — with every positive pin a VALUE pin. 9 arms all discriminating; 8 controls
 recorded as non-discriminating rather than counted. Corpus 8,837/0, `-project` 848 → 865/0,
 `huge_methods.py` exit 0, grid 8×`added=0 removed=0`.
-
-**(P18.32) — A WEAK GUARD TARGET NARROWS ((CHK.98b), WHOSE DIAGNOSIS WAS WRONG), AND (CHK.98)(b)'s UNION GATE LIFTS, 17,963 → 17,981 / 0 / 3 (2026-09-06).**
-**(CHK.98b) CLOSED — and the round's main finding is that the item misdiagnosed it.** Queued as
-"NESTED-TERNARY predicate narrowing", it is neither about ternaries nor about the property-access
-family: a plain `if`, a single ternary, `&&` and the nested ternary all fail identically, and the
-guard narrows correctly the moment its TARGET declares one REQUIRED member. The axis is the
-target's OPTIONALITY, and the mechanism is a round-480 ASYMMETRY — that round gave
-`missingVsOptionalProvesNotSubtype` to the NEGATIVE guard filter and never to the POSITIVE one, so
-the negative branch was right all along. The positive arm now mirrors tsc's
-`getNarrowedType(assumeTrue)`, with a vetoed member falling to the existing narrow-DOWN arm so the
-two together are tsc's `mapType`. **(CHK.98)(b)'s union gate LIFTED, with a three-binary receipt
-rather than a green grid**: grid 8×`added=0 removed=0` and knip 51 → 51 byte-identical, while a
-third binary (gate lifted, 98b reverted) reads **52** — the extra row being exactly the one the
-item named, which is what proves the gate's population is live and the green is not vacuous; the 8
-profiles carry ~26 such annotations in total and are closer to a control. **The item's knip number
-49 is stale** (a REBUILT parent reads 51; 49 was the pre-(CHK.98) recon commit) — a recorded
-baseline is a claim about a BUILD, not a commit, now shown for a library baseline too. 18 net pins,
-2 arms (8 RED / 3 RED) with two negative controls recorded as non-discriminating BY CONSTRUCTION
-rather than counted, and every arm carrying a pin-COUNT assertion after (P18.31)'s deleted-pins
-hazard. Corpus 8,837/0, **`cost_gate.py` exit 0 at +0.00% on every counter**, `huge_methods.py`
-exit 0. Residue pinned as a KNOWN GAP: a nullish union contextual parameter types correctly but the
-property-access reader emits no TS18048 — a false NEGATIVE, which is why the lift is safe.
