@@ -25483,12 +25483,35 @@ class Checker(
                 }
             }
             is IfStatement -> {
-                // Assignments in if/else branches — scan both branches
-                markAssignmentsInStmt(stmt.thenStatement, uninitialized)
-                stmt.elseStatement?.let { markAssignmentsInStmt(it, uninitialized) }
+                // (CHK.105)(b): an `if` marks a variable assigned only when it is
+                // DEFINITELY assigned — both branches assign it, or the branch that does
+                // not cannot complete normally. Scanning both branches unconditionally is
+                // what made `let b: string; if (cond) b = "a"; use(b)` silent here where
+                // both tsgo 7.0.2 and pristine `typescript@6.0.3` report TS2454; it is the
+                // "a set, not a flow lattice" the item names, and the lattice it needs is
+                // round 450's [daWalkStmt], already written and corpus-proven for the
+                // `while (true)` case.
+                //
+                // CONSERVATIVE TO REMOVE: [ifDefinitelyAssignsOrUnknown] answers TRUE — i.e.
+                // keeps today's removal — for every shape the walk BAILS on, so the only
+                // behaviour that changes is the one it can prove.
+                if (uninitialized.isNotEmpty()) {
+                    val toRemove = uninitialized.filter { ifDefinitelyAssignsOrUnknown(stmt, it) }
+                    uninitialized.removeAll(toRemove.toSet())
+                }
             }
             is SwitchStatement -> {
-                // Assignments in switch cases — scan all case bodies
+                // Assignments in switch cases — scan all case bodies.
+                //
+                // (CHK.105)(b) BUILT AND REVERTED: requiring a `default` clause before
+                // removing (tsc's rule, weakly) closes `let t: string; switch (k) { case 1:
+                // t = "a"; break; } use(t)`, which both references report — and it costs
+                // **two ours-only TS2454 on ALL EIGHT profiles**, at
+                // `checker.ts:38141`'s `getAssertionTypeAndExpression`, whose switch over
+                // `node.kind` has no default and IS exhaustive. tsc's
+                // `isExhaustiveSwitchStatement` proves every path assigns; this checker
+                // cannot, so the removal stays unconditional and the missing row is
+                // recorded rather than bought with a false positive on real code.
                 for (clause in stmt.caseBlock) {
                     val clauseStmts = when (clause) {
                         is CaseClause -> clause.statements
@@ -25520,6 +25543,24 @@ class Checker(
         }
     }
 
+    /**
+     * (CHK.105)(b): does [stmt] (an `if`) leave [v] DEFINITELY assigned — or is it a shape
+     * round 450's walk cannot decide, in which case the answer is TRUE so the pre-existing
+     * removal stands?
+     *
+     * The walk already models sequential flow, the if/else join and abrupt completion
+     * (`break`/`continue`/`return`/`throw`), and it BAILS on a `try` or a labeled statement.
+     * A `!fallsThrough` completion means the statement's continuation is unreachable, which
+     * tsc does not flag — so that too answers TRUE.
+     */
+    private fun ifDefinitelyAssignsOrUnknown(stmt: IfStatement, v: String): Boolean {
+        val st = DaState(bailOnUnassignedCall = true)
+        val c = daWalkStmt(stmt, v, assignedOnEntry = false, st = st)
+        if (st.bail) return true
+        if (!c.fallsThrough) return true
+        return c.assigned
+    }
+
     /** `while (true)` / `do…while (true)` constant-true condition (round 450). */
     private fun isConstantTrueCondition(expr: Expression): Boolean =
         (expr as? Identifier)?.text == "true" ||
@@ -25528,7 +25569,23 @@ class Checker(
     /** Completion state for the [whileTrueDefinitelyAssigns] walk. */
     private class DaComp(val fallsThrough: Boolean, val assigned: Boolean)
 
-    private class DaState {
+    private class DaState(
+        /**
+         * (CHK.105)(b): treat an unassigned CALL statement as an unknown completion.
+         *
+         * tsc's binder makes the flow UNREACHABLE after a call to a never-returning
+         * function, so `if (a) { x = 1 } else { Debug.fail("…") }` leaves `x` definitely
+         * assigned — measured on `services/codefixes/fixPropertyOverrideAccessor.ts:83`,
+         * where the naive walk produced two ours-only TS2454 on three profiles. Deciding
+         * it needs the callee's RETURN TYPE, which this walker must not resolve, so the
+         * conservative answer is to bail.
+         *
+         * OFF for round 450's `while (true)` caller, where a bail means "do NOT remove"
+         * and would therefore ADD diagnostics — the opposite direction. ON for
+         * [ifDefinitelyAssignsOrUnknown], where a bail means "keep today's removal".
+         */
+        val bailOnUnassignedCall: Boolean = false,
+    ) {
         var allBreaksAssigned = true
         var bail = false
     }
@@ -25555,7 +25612,13 @@ class Checker(
         if (st.bail) return DaComp(false, false)
         return when (stmt) {
             is Block -> daWalkList(stmt.statements, v, assignedOnEntry, st)
-            is ExpressionStatement -> DaComp(true, assignedOnEntry || exprAssignsVarSimple(stmt.expression, v))
+            is ExpressionStatement -> {
+                val a = assignedOnEntry || exprAssignsVarSimple(stmt.expression, v)
+                if (!a && st.bailOnUnassignedCall && exprIsTopLevelCall(stmt.expression)) {
+                    st.bail = true
+                    DaComp(false, false)
+                } else DaComp(true, a)
+            }
             is IfStatement -> {
                 val t = daWalkStmt(stmt.thenStatement, v, assignedOnEntry, st)
                 val e = stmt.elseStatement?.let { daWalkStmt(it, v, assignedOnEntry, st) }
@@ -25595,6 +25658,23 @@ class Checker(
             assigned = c.assigned
         }
         return DaComp(true, assigned)
+    }
+
+    /** (CHK.105)(b): is [expr] a CALL (or `new`) in statement position, through parentheses,
+     *  `await` and the comma operator — the shape whose completion this walk cannot decide
+     *  without resolving the callee's return type? See [DaState.bailOnUnassignedCall]. */
+    private fun exprIsTopLevelCall(expr: Expression): Boolean {
+        var e: Expression = expr
+        var hops = 0
+        while (hops++ < 16) {
+            e = when (e) {
+                is ParenthesizedExpression -> e.expression
+                is AwaitExpression -> e.expression
+                is BinaryExpression -> if (e.operator == SyntaxKind.Comma) e.right else return false
+                else -> return e is CallExpression || e is NewExpression
+            }
+        }
+        return false
     }
 
     /** Does evaluating [expr] definitely assign the simple variable [v] (`v = …`, `[v] = …`,
@@ -87041,7 +87121,7 @@ interface DataView {
                         decl.isNamespace -> {} // namespaces have a hoisted binding; no TS2448/2449/2450 on the name itself
                         decl.isEnum -> emitTS2450(expr, decl.pos, expr.text, source, fileName)
                         decl.isClass -> emitTS2449(expr, decl.pos, expr.text, source, fileName)
-                        else -> emitTS2448(expr, decl.pos, expr.text, source, fileName, decl.isConst, decl.hasInitializer, decl.isUnreachable)
+                        else -> emitTS2448(expr, decl.pos, expr.text, source, fileName, decl.isConst, decl.hasInitializer, decl.isUnreachable, decl.varDeclNode, inStaticInit)
                     }
                 }
             }
@@ -87183,6 +87263,9 @@ interface DataView {
          * which expects only TS2448 for `const id = ...` used out-of-order in the
          * same reachable arrow body). */
         val isUnreachable: Boolean = false,
+        /** (CHK.105)(a): the variable declaration itself, for the TS2454 co-emit's
+         *  `assumeInitialized` test — see [ubdDeclAssumesInitialized]. */
+        val varDeclNode: VariableDeclaration? = null,
     )
 
     private fun collectBlockScopedDeclsEx(stmts: List<Statement>, source: String): MutableMap<String, BlockScopedDecl> {
@@ -87206,7 +87289,7 @@ interface DataView {
                     val isConstDecl = kind == SyntaxKind.ConstKeyword
                     for (d in stmt.declarationList.declarations) {
                         val objLit = if (isConstDecl) d.initializer as? ObjectLiteralExpression else null
-                        collectBindingNamesEx(d.name, decls, isConst = isConstDecl, hasInit = d.initializer != null, constInitObjLit = objLit, isUnreachable = unreachable)
+                        collectBindingNamesEx(d.name, decls, isConst = isConstDecl, hasInit = d.initializer != null, constInitObjLit = objLit, isUnreachable = unreachable, varDeclNode = d)
                     }
                 }
             }
@@ -87259,9 +87342,9 @@ interface DataView {
         }
     }
 
-    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>, isConst: Boolean = false, hasInit: Boolean = false, constInitObjLit: ObjectLiteralExpression? = null, isUnreachable: Boolean = false) {
+    private fun collectBindingNamesEx(name: Node, decls: MutableMap<String, BlockScopedDecl>, isConst: Boolean = false, hasInit: Boolean = false, constInitObjLit: ObjectLiteralExpression? = null, isUnreachable: Boolean = false, varDeclNode: VariableDeclaration? = null) {
         when (name) {
-            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos, isConst = isConst, hasInitializer = hasInit, constInitObjLit = constInitObjLit, isUnreachable = isUnreachable)
+            is Identifier -> decls[name.text] = BlockScopedDecl(name.pos, isConst = isConst, hasInitializer = hasInit, constInitObjLit = constInitObjLit, isUnreachable = isUnreachable, varDeclNode = varDeclNode)
             is ObjectBindingPattern -> for (el in name.elements) {
                 collectBindingNamesEx(el.name, decls, isConst, hasInit, isUnreachable = isUnreachable)
             }
@@ -87505,7 +87588,38 @@ interface DataView {
         }
     }
 
-    private fun emitTS2448(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String, isConst: Boolean = false, hasInitializer: Boolean = false, isUnreachableDecl: Boolean = false) {
+    /**
+     * (CHK.105)(a): tsc's `assumeInitialized` (checker.ts:31172-31205), for the TS2454
+     * co-emit at a use-before-declaration.
+     *
+     * B78.1 read the rule off `typeGuardNarrowsIndexedAccessOfKnownProperty10` and
+     * recorded it as CONST-NESS — reachable `const x = init` used out of order fires only
+     * TS2448. Measured against both references, that is wrong: the baseline's const is
+     * `const id = foo.bar` with `Foo.bar: any`, and what suppresses tsc's TS2454 there is
+     * the TYPE (`AnyOrUnknown | Void` is assumed initialized), not the `const`. With an
+     * ordinary type both tsgo 7.0.2 and pristine `typescript@6.0.3` report TS2448 AND
+     * TS2454 at the same position, and this checker reported only the first.
+     *
+     * The initializer is typed ONLY on this path, which is reached only where a name is
+     * used before its own declaration — a population of a handful per program, which is
+     * why the B420 first-touch hazard does not bite here (`cost_gate.py`:
+     * `typeOfExpr.calls` +0.00%).
+     */
+    private fun ubdDeclAssumesInitialized(decl: VariableDeclaration?): Boolean {
+        if (decl == null) return false
+        if (decl.exclamationToken) return true
+        val ann = decl.type
+        if (ann != null) {
+            val k = (ann as? KeywordTypeNode)?.kind
+            return k == SyntaxKind.AnyKeyword || k == SyntaxKind.UnknownKeyword ||
+                k == SyntaxKind.VoidKeyword
+        }
+        val init = decl.initializer ?: return false
+        val t = getTypeOfExpression(init)
+        return t === anyType || t === unknownType || t === voidType || t === errorType
+    }
+
+    private fun emitTS2448(useNode: Identifier, declPos: Int, name: String, source: String, fileName: String, isConst: Boolean = false, hasInitializer: Boolean = false, isUnreachableDecl: Boolean = false, varDeclNode: VariableDeclaration? = null, inStaticInit: Boolean = false) {
         val start = useNode.pos
         val length = name.length
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -87541,7 +87655,15 @@ interface DataView {
         // fires only TS2448 because the const WILL be assigned by the time the live program
         // reaches that use site at runtime (TDZ runtime error, but not a use-before-assigned
         // flow analysis result). B78.1.
-        if (strictNullChecks && hasInitializer && (!isConst || isUnreachableDecl)) {
+        // (CHK.105)(a): a CLASS STATIC INITIALIZER is a different control-flow container
+        // from the module-level declaration, which is tsc's `isOuterVariable` half of
+        // `assumeInitialized` — measured, both references report TS2448 alone for
+        // `class Foo { static m = ObjLiteral.A } const ObjLiteral = { A: 1 }`
+        // (the corpus's `classStaticInitializersUsePropertiesBeforeDeclaration`), and
+        // TS2448 + TS2454 for the same shape inside one function body.
+        if (strictNullChecks && hasInitializer && !inStaticInit &&
+            (!isConst || isUnreachableDecl || !ubdDeclAssumesInitialized(varDeclNode))
+        ) {
             diagnostics.add(Diagnostic(
                 message = "Variable '$name' is used before being assigned.",
                 category = DiagnosticCategory.Error,

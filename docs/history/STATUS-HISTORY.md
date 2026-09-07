@@ -2070,3 +2070,26 @@ not redundant. Corpus 8,837/0, `cost_gate.py` exit 0 at **+0.00% on every counte
 `huge_methods.py` exit 0, grid 8×`added=0 removed=0`. The (P18.27) unblock is only HALF true: a
 mutable `for-of` head now narrows, but a readonly head is still silent — and so is
 `readonly string[]` with no enum anywhere, so that gap is independent of the discriminant.
+
+**(P18.35) — THREE SHIPPED NARROWING DEFECTS CLOSE, AND (CHK.101)'s OWN DELIVERABLE IS BUILT, MEASURED CORRECT AND *REFUSED* ON GRID EVIDENCE, 18,043 → 18,076 / 0 / 3 (2026-09-07).**
+**The item's deliverable (a) is REFUSED, and that is the round's most valuable output.** The
+nullish-constituent emission was built, measured **correct on 20 of 20 reference rows**, and removed
+entirely: the grid reads **+19 to +21 ours-only rows on EVERY profile** for its reader half. Correct
+on every fixture and unlandable on real code is exactly what the 8-profile grid exists to catch, and
+the refusal is verified by VALUE (the item's fixture reads parent = 2, final = 2). **What landed
+instead are three OTHER shipped narrowing defects, two of them ours-only FALSE POSITIVES** —
+verified here against both references: a loose `==`/`!=` against `null` now tests BOTH nullish
+values (tsc's `TypeFacts.EQUndefinedOrNull`), a DEFAULTED parameter no longer sees `undefined` in
+its body (`getNonUndefinedType`), and a logical assignment's VALUE is the surviving LHS ∪ RHS rather
+than the whole declared LHS. **Four of the item's claims are measured wrong**: "the same pair
+reports at a declaration and a return" held only because its fixture used a UNION target, which
+`canUseTypeEngine` admits by its own line — for a non-union object target every position is silent
+(20 reference rows against 2 of ours), so the stated seam covers under half the defect; its named
+grid risk already narrows on the parent; and sub-part (c) is broader than stated. Only the mechanism
+was right. **The four narrowing gaps that must close before (a) is re-attempted are now recorded
+with reduced fixtures** — they were invisible until now precisely because (a)'s diagnostic is what
+would expose them. 33 pins, 7 arms (one a measured redundant guard with a mechanism, two recorded
+BLIND because their observing mechanism IS (a)); two of the round's own pins were wrong rather than
+the compiler, expecting `'1'`/`'2'` where all three compilers print `'number'`. Corpus 8,837/0,
+at-risk coverage asserted from the result XMLs (150 classes, 0 missing), `cost_gate.py` exit 0,
+`huge_methods.py` exit 0, grid 8×`added=0 removed=0`.

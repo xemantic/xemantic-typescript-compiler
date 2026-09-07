@@ -209,7 +209,9 @@ class BodyLocalLiteralArgumentTest {
     @Test
     fun `a use before the declaration still reads the literal beside TS2448`() {
         val d = diagnose(prelude + "function f() { takeB(s); const s = \"a\" }")
-        assert(d.map { it.code }.sorted() == listOf(2345, 2448))
+        // (CHK.105)(a): the TS2454 co-emit is what BOTH references print here beside the
+        // TS2448 — B78.1's const-ness rule suppressed it and was measured wrong.
+        assert(d.map { it.code }.sorted() == listOf(2345, 2448, 2454))
         assert(d.first { it.code == 2345 }.message == aNotB)
     }
 

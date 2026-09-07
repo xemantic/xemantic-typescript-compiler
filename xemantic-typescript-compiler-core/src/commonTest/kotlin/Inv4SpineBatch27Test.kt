@@ -70,13 +70,48 @@ class Inv4SpineBatch27Test {
         assert(d.count { it.code == 2454 } == 1)
     }
 
+    /**
+     * (CHK.105)(a) CORRECTED 2026-09-07: B78.1 read this rule as CONST-NESS off
+     * `typeGuardNarrowsIndexedAccessOfKnownProperty10`, whose const is `any`-typed.
+     * Measured against BOTH tsgo 7.0.2 and pristine `typescript@6.0.3`, a reachable
+     * const used before its declaration co-emits TS2454 — what suppresses it in that
+     * baseline is the TYPE (tsc's `assumeInitialized` on `AnyOrUnknown | Void`), and the
+     * `any` control now lives beside this pin. The class-static-initializer shape, where
+     * both references DO report TS2448 alone, is tsc's `isOuterVariable` half and has its
+     * own guard.
+     */
     @Test
-    fun `reachable const used before declaration fires TS2448 only`() {
+    fun `reachable const used before declaration co-emits TS2454`() {
         val d = diagnose("""
             function f() {
                 console.log(x);
                 const x = 1;
             }
+        """)
+        assert(d.count { it.code == 2448 } == 1)
+        assert(d.count { it.code == 2454 } == 1)
+    }
+
+    @Test
+    fun `an any-typed const used before its declaration stays TS2448 only`() {
+        val d = diagnose("""
+            function f() {
+                const p: any = q;
+                const q: any = 1;
+                return p;
+            }
+        """)
+        assert(d.count { it.code == 2448 } == 1)
+        assert(d.count { it.code == 2454 } == 0)
+    }
+
+    @Test
+    fun `a class static initializer reading a later const stays TS2448 only`() {
+        val d = diagnose("""
+            class Foo {
+                static m = ObjLiteral.A;
+            }
+            const ObjLiteral = { A: 1 };
         """)
         assert(d.count { it.code == 2448 } == 1)
         assert(d.count { it.code == 2454 } == 0)

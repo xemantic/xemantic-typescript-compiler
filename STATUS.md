@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,237** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **198,359** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,29 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.40) — TS2454 FOR AN `if` JOIN, AND THE TS2448 CO-EMIT'S RULE WAS THE *TYPE* AND NOT CONST-NESS ((CHK.105)), 18,157 → 18,172 / 0 / 3 (2026-09-07).**
+**(CHK.105) CLOSED for (a) and the `if` join; (CHK.110) queued with all three residues attributed.**
+B78.1 read the co-emit rule as CONST-NESS off `typeGuardNarrowsIndexedAccessOfKnownProperty10`,
+whose const is `any`-typed — what suppresses tsc's TS2454 there is tsc's `assumeInitialized` on
+`AnyOrUnknown | Void`, and with an ordinary type BOTH references report TS2448 **and** TS2454. **Two
+hand-written pins in this repo were pinning that wrong answer and are repaired here.** The corpus
+then found the other half of `assumeInitialized` this population reaches: a CLASS STATIC INITIALIZER
+is a different control-flow container from the declaration (tsc's `isOuterVariable`), where both
+references report TS2448 alone. For the join, `markAssignments` scanned both branches of an `if`
+unconditionally; the lattice it needed was already written — round 450's `daWalkStmt`, built for
+`while (true)` — and is now consulted per variable, CONSERVATIVE TO REMOVE, so only what the walk
+can prove changes. **The grid found the one guard the naive form needs and it is a tsc BINDER rule**:
+the flow is unreachable after a call to a never-returning function, so an unassigned CALL statement
+bails (two ours-only rows on three profiles at `fixPropertyOverrideAccessor.ts:83` without it) — as
+a `DaState` FLAG, because in round 450's caller a bail means "do NOT remove" and would ADD
+diagnostics. **A third deliverable was BUILT AND REVERTED**: requiring a `default` before a switch
+removal costs two ours-only rows on ALL EIGHT profiles at `checker.ts:38141`, an exhaustive
+default-less switch tsc proves and we cannot. **Three of the item's claims are wrong** — its "3 lost
+TS2345" rows are the (CHK.63)-adjacent ARGUMENT-reader gap for a BODY-LOCAL source (the TYPE is
+already exact at the declaration position), its population is 4 rows not 7, and the join is lost in
+`markAssignments`, not in the set pass it names. 13 pins + 2, 5 arms all discriminating, grid
+**8 × added=0 removed=0**, `cost_gate.py` exit 0, `huge_methods.py` exit 0, build warning-clean.
 
 **(P18.39) — CALLING A LITERAL-TYPED OR OBJECT-TYPED VALUE IS TS2349 ((CHK.104)), AND THE OBJECT ARM NEEDED TWO GUARDS THE ITEM DID NOT NAME, 18,136 → 18,157 / 0 / 3 (2026-09-07).**
 **(CHK.104) CLOSED, 7 → 19 of the reference's 22 rows; (CHK.109) queued.** The primitive arm read
@@ -109,26 +132,3 @@ classes with coverage asserted from the XMLs, `cost_gate.py` exit 0 — minting 
 per compile moves **no counter**, the repo's own "an allocation count is not a cost" on a fourth
 instrument — `huge_methods.py` exit 0, grid 8×`added=0 removed=0`. No ambient read added to
 `TypeInstantiator`; ledger row 3 stands at four.
-
-**(P18.35) — THREE SHIPPED NARROWING DEFECTS CLOSE, AND (CHK.101)'s OWN DELIVERABLE IS BUILT, MEASURED CORRECT AND *REFUSED* ON GRID EVIDENCE, 18,043 → 18,076 / 0 / 3 (2026-09-07).**
-**The item's deliverable (a) is REFUSED, and that is the round's most valuable output.** The
-nullish-constituent emission was built, measured **correct on 20 of 20 reference rows**, and removed
-entirely: the grid reads **+19 to +21 ours-only rows on EVERY profile** for its reader half. Correct
-on every fixture and unlandable on real code is exactly what the 8-profile grid exists to catch, and
-the refusal is verified by VALUE (the item's fixture reads parent = 2, final = 2). **What landed
-instead are three OTHER shipped narrowing defects, two of them ours-only FALSE POSITIVES** —
-verified here against both references: a loose `==`/`!=` against `null` now tests BOTH nullish
-values (tsc's `TypeFacts.EQUndefinedOrNull`), a DEFAULTED parameter no longer sees `undefined` in
-its body (`getNonUndefinedType`), and a logical assignment's VALUE is the surviving LHS ∪ RHS rather
-than the whole declared LHS. **Four of the item's claims are measured wrong**: "the same pair
-reports at a declaration and a return" held only because its fixture used a UNION target, which
-`canUseTypeEngine` admits by its own line — for a non-union object target every position is silent
-(20 reference rows against 2 of ours), so the stated seam covers under half the defect; its named
-grid risk already narrows on the parent; and sub-part (c) is broader than stated. Only the mechanism
-was right. **The four narrowing gaps that must close before (a) is re-attempted are now recorded
-with reduced fixtures** — they were invisible until now precisely because (a)'s diagnostic is what
-would expose them. 33 pins, 7 arms (one a measured redundant guard with a mechanism, two recorded
-BLIND because their observing mechanism IS (a)); two of the round's own pins were wrong rather than
-the compiler, expecting `'1'`/`'2'` where all three compilers print `'number'`. Corpus 8,837/0,
-at-risk coverage asserted from the result XMLs (150 classes, 0 missing), `cost_gate.py` exit 0,
-`huge_methods.py` exit 0, grid 8×`added=0 removed=0`.

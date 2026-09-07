@@ -25,6 +25,73 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.40) — TS2454 for an `if` JOIN, and the TS2448 co-emit's rule was the TYPE and not CONST-NESS ((CHK.105)) (2026-09-07)
+
+**Suite 18,157 → 18,172 / 0 / 3** — 13 pins in the new `DefiniteAssignmentJoinTest` plus 2 added
+to `Inv4SpineBatch27Test`; TWO EXISTING PINS WERE REPAIRED because they encoded a measurably wrong
+rule. Grid **8 × added=0 removed=0** on the FINAL binary; `cost_gate.py` exit 0 (largest delta
+`narrow.memoServed` **+0.02%**, `typeOfExpr.calls` **+0.00%**, no rebaseline), `huge_methods.py
+--fail-over 0` exit 0, build warning-clean.
+
+**(a) B78.1's co-emit rule was CONST-NESS and is really the TYPE.** It was read off
+`typeGuardNarrowsIndexedAccessOfKnownProperty10` and recorded as "a reachable `const x = init`
+used out of order fires TS2448 only". That baseline's const is `const id = foo.bar` with
+`Foo.bar: any`, and what suppresses tsc's TS2454 there is tsc's `assumeInitialized` on
+`AnyOrUnknown | Void`. With an ordinary type BOTH references report TS2448 **and** TS2454 at the
+same position — so **two hand-written pins in this repo were pinning the wrong answer** and are
+repaired here (`Inv4SpineBatch27Test`'s `reachable const … fires TS2448 only` and
+`BodyLocalLiteralArgumentTest`'s `[2345, 2448]`), with the `any` control kept beside them.
+The initializer is typed only on this path — a name used before its own declaration, a handful per
+program — which is why the B420 first-touch hazard does not bite (`typeOfExpr.calls` +0.00%).
+
+**The OTHER half of `assumeInitialized` this population reaches, found by the corpus:** a CLASS
+STATIC INITIALIZER is a different control-flow container from the module-level declaration (tsc's
+`isOuterVariable`), and there both references report TS2448 ALONE —
+`classStaticInitializersUsePropertiesBeforeDeclaration` went red until the guard was added. The
+walker already carried the `inStaticInit` flag it needed.
+
+**(b) the `if` join, and the lattice was already written.** `markAssignments` scanned both branches
+of an `if` unconditionally, so `let b: string; if (cond) b = "a"; use(b)` removed `b` from the
+uninitialized set — the item's "a set, not a flow lattice". The lattice it needs is round 450's
+`daWalkStmt`, built for `while (true)` and already modelling sequential flow, the if/else join and
+abrupt completion; it is now consulted per variable and is **CONSERVATIVE TO REMOVE** — every shape
+the walk bails on keeps the previous removal, so only what the walk can PROVE changes.
+
+**THE GRID FOUND THE ONE GUARD THE NAIVE FORM NEEDS, AND IT IS A tsc BINDER RULE:** the flow is
+UNREACHABLE after a call to a never-returning function, so
+`if (a) { x = 1 } else { Debug.fail("…") }` leaves `x` definitely assigned. Deciding that needs the
+callee's RETURN TYPE, which this walker must not resolve, so an unassigned CALL statement bails —
+without it, two ours-only TS2454 on three profiles at
+`services/codefixes/fixPropertyOverrideAccessor.ts:83`. The bail is a `DaState` FLAG rather than a
+change to `daWalkStmt`, because in round 450's caller a bail means "do NOT remove" and would
+therefore ADD diagnostics — the opposite direction.
+
+**A THIRD DELIVERABLE WAS BUILT AND REVERTED, AND THAT IS THE ROUND'S OTHER RECEIPT.** A `switch`
+with no `default` has a path running no clause, so requiring a default before removing closes
+`let t: string; switch (k) { case 1: t = "a"; break; } use(t)`, which both references report. It
+costs **two ours-only TS2454 on ALL EIGHT profiles**, at `checker.ts:38141`'s
+`getAssertionTypeAndExpression`, whose switch over `node.kind` has no default and IS EXHAUSTIVE:
+tsc's `isExhaustiveSwitchStatement` proves every path assigns and this checker cannot. Reverted,
+with the measurement recorded in the source at the site.
+
+**Three of the item's claims are wrong.** Its "3 lost TS2345" rows are NOT this item's: measured,
+the TYPE of `let m: string | undefined;` is already exactly right at the DECLARATION position
+(`string | undefined` / `undefined`, matching both references row for row) and what is silent is
+the ARGUMENT reader for a BODY-LOCAL source — the recorded (CHK.63)-adjacent gap, since the same
+value at FILE level reports. Its population is 4 TS2454 rows, not 4+3. And "the set pass has no
+join" names `collectUninitializedVars`, which is not where the join is lost: `markAssignments` is.
+
+**Ablation: 5 arms, one mistake each, ALL discriminating.** e1 the co-emit predicate (**1 RED**);
+e2 the static-initializer guard (**1 RED**); e3 the `assumeInitialized` type test (**2 RED**, both
+`any` controls); e4 the `if` join (**1 RED**); e5 the unassigned-call bail (**1 RED**). Source
+restored from a snapshot throughout, `cmp`-verified after every arm, final binary rebuilt before
+every gate (`fca2302e`).
+
+**Residues, recorded and NOT pinned**: a `try { x = … } catch {}` join and a read inside an
+EXPRESSION-bodied arrow (the BLOCK-bodied form already reports, so the gap is that a `spineDa`
+frame is built for statement lists only), plus the reverted `switch` case above. Queued as
+(CHK.110).
+
 ### Round (P18.39) — calling a LITERAL-typed or OBJECT-typed value is TS2349 ((CHK.104)), and the object arm needed TWO guards the item did not name (2026-09-07)
 
 **Suite 18,136 → 18,157 / 0 / 3** — 21 pins in the new `NonCallableValueTest`, every expectation
@@ -2588,7 +2655,27 @@ parameter (`Promise<number>`, `Map<…>`), and `const l1: 5 = em`.
   `typeParameterExplicitlyExtendsAny` (`{}`), `callOnInstance` /
   `untypedFunctionCallsWithTypeParameters1` (`C`/`D`) — run by fixture. MEANING.
 
-- [ ] **(CHK.105) TS2454 IS MISSING FOR THREE SHAPES BOTH REFERENCES REPORT — MEASURED 2026-09-06
+- [ ] **(CHK.110) THE THREE DEFINITE-ASSIGNMENT SHAPES (CHK.105) LEFT OPEN, EACH WITH ITS MECHANISM
+  MEASURED (2026-09-07, (P18.40); scratch `chk105/r5`).** (a) A `try { x = … } catch {}` JOIN —
+  `let d: string; try { d = "a"; } catch {} use(d)` is TS2454 in both references and silent here;
+  `markAssignments` has NO `TryStatement` arm, so nothing removes `d`, which means the silence comes
+  from somewhere ELSE (`checkTryCatchOnlyAssignedVarReads` (B223) and the `spineDa` frame's own
+  handling are the two candidates) — attribute before designing. (b) A read inside an
+  EXPRESSION-BODIED arrow (`const g = () => use(e)`) is silent while the BLOCK-bodied form
+  (`() => { use(e); }`) already reports, so the gap is that a `spineDa` frame is built for statement
+  LISTS only and an expression body has none; the B78.2 leak set (`frame.currentLeak`) already
+  computes exactly the names to carry in. (c) A `switch` with NO `default` — BUILT AND REVERTED in
+  (P18.40): requiring a default costs **two ours-only TS2454 on all eight profiles** at
+  `checker.ts:38141`, whose switch over `node.kind` has no default and IS exhaustive, so this one
+  needs tsc's `isExhaustiveSwitchStatement` (a discriminant-union exhaustiveness proof) FIRST and is
+  not a `markAssignments` question at all. RISK: (a)/(b) LOW-MEDIUM, (c) BLOCKED. MEANING.
+
+- [x] **(CHK.105) CLOSED 2026-09-07 ((P18.40) note) for (a) and the `if` join; its "3 lost TS2345"
+  rows are measured NOT to be this item's (the TYPE is already exact at the declaration position —
+  the ARGUMENT reader for a BODY-LOCAL source is the (CHK.63)-adjacent gap), and its "the set pass
+  has no join" names the wrong function (`markAssignments`, not `collectUninitializedVars`). Two
+  hand-written pins in this repo were pinning B78.1's measurably wrong CONST-NESS rule and are
+  repaired. Residues re-queued as (CHK.110). ORIGINAL: TS2454 IS MISSING FOR THREE SHAPES BOTH REFERENCES REPORT — MEASURED 2026-09-06
   (`chk99/r7` + `r7b`: 16 of 20 rows already agree; 4 + 3 lost TS2454, 3 lost TS2345): a `const`
   used before its declaration in the same container (`const c = x; const x = 1` — TS2448 alone
   here, TS2448 + TS2454 in tsc), a POSSIBLY-unassigned read after a join (`let x: string; if (c) x
