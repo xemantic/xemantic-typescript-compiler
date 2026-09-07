@@ -1,3 +1,28 @@
+**(P18.38) — AN ARRAY-LIKE *ARGUMENT* IS DECIDABLE AGAINST AN ARRAY-LIKE *PARAMETER* ((CHK.103) STAGE 2), AND FIVE OF THE ITEM'S SIX ROWS CARRY NO SPREAD, 18,110 → 18,136 / 0 / 3 (2026-09-07).**
+**(CHK.103) stage 2 CLOSED; (CHK.108) queued with its mechanism named.** The item called its
+residue a spread question and named a whole-literal array-to-array fallback as the seam. Measured,
+**five of its six rows carry no spread at all** — `takeStrArr(nums)` with `nums: number[]` against
+`(x: string[])` is silent here and reported by both references, and so are `Bar[]` → `Foo[]`,
+`C2[]` → `C1[]`, `number[][]` → `string[][]` and both tuple shapes — so the gap is the ARGUMENT
+reader's FP firewall having no array-vs-array gate, and the item's seam covers one row of six.
+The licence is the DECLARATION position (as (CHK.83)'s was), so the decidability question is asked
+one level down, of the ELEMENT pair, by `canUseTypeEngine` ITSELF — the rule cannot drift from the
+position that licenses it, and `any[]` is refused in both directions with no rule of its own. On
+the item's fixture ours goes **6 → 12 of the reference's 12 rows, all twelve byte-identical to
+pristine**. **The grid found exactly ONE ours-only row on all eight profiles and it was a NARROWING
+gap**: `Debug.assertEachNode(elements, isArrayBindingElement)` narrows by an `asserts nodes is
+readonly U[]` signature, and `narrowByAssertCall`'s type-parameter recovery understood only a BARE
+`U` — **an array OF a type parameter RESOLVES**, so it is neither `errorType` nor `anyType` and the
+recovery's own gate never opened for it (the first attempt put the fix inside that gate and was
+inert). **Two traps, both found with a probe rather than by reading**: `ternaryOfArrayLiterals`
+SUBSUMES an `init !is ArrayLiteralExpression` test, so relaxing the `!is` alone did nothing through
+a whole build cycle; and an EMPTY array literal IS tuple-like (tsc's empty tuple) where
+`elements.any { … }` says false, which the full suite caught and no other instrument could. 26 pins,
+all read from pristine; 9 arms, 8 discriminating, a3/a4 a round-927 PAIR and a7 recorded
+NON-DISCRIMINATED with its reason rather than claimed. Grid **8 × added=0 removed=0** on the final
+binary (a1's +1 row is the round's own positive control that the harness is live), `cost_gate.py`
+exit 0 (largest delta **+0.03%**, no rebaseline), `huge_methods.py` exit 0, build warning-clean.
+
 **(P18.22) — A LOCAL INITIALIZED FROM AN ENUM MEMBER IS READ AT ITS FLOW TYPE AT EVERY READER, IN BOTH DIRECTIONS, 17,462 → 17,516 / 0 / 3 (2026-09-05).**
 **(CHK.85)(b) LANDED and (CHK.85) is CLOSED** ((c) is the staged `as const` item (CHK.93), designed
 by read-only recon over 32 measured rows). `let k = K.A; k = K.B; const w: K.B = k` was an ours-only

@@ -10875,6 +10875,34 @@ class Checker(
      *  init-order trap. */
     private val enumTypesRelationCache = HashMap<Long, EnumRelFailure?>()
 
+    /**
+     * (PERF.1) round 949: memo for [flowJoinUnion]'s SUBTYPE REDUCTION, keyed by
+     * `packIdPair(joined.id, declaredType.id)`. Declared before `init` per the
+     * init-order trap.
+     *
+     * WHY. The reduction is a `members x members` grid of [isTypeAssignableTo] and it
+     * runs only when some member is FOREIGN to the declaration — which (CHK.66) noted
+     * "makes the reduction free on almost every join". (CHK.85)(b) took that away for a
+     * whole class of joins without meaning to: its enum arm makes a branch answer an
+     * enum MEMBER (`K.A`) where the declared type is the atomic enum `K`, and
+     * [flowJoinMemberIsDeclared] reads a member as foreign, so every enum-typed join
+     * fell onto the quadratic path. Measured on the compiler profile, that is
+     * **9.9 s of a 37.0 s check** (ablation: forcing the free path reads 27.1 s with
+     * all 46 diagnostics unchanged) — and NO counter in `cost_gate.py` can see it,
+     * because the walk COUNT barely moves (round 735's flow-narrowing tail).
+     *
+     * WHY A MEMO RATHER THAN A PREDICATE FIX. Reading `K.A` as declared would also
+     * disable the reduction that a join genuinely needs (`K.A | K` must reduce to `K`),
+     * i.e. it would change output. The memo cannot: the reduction is a pure function of
+     * `(joined, declaredType)` — [getUnionType] interns by member-id list, so `joined.id`
+     * identifies the member SET exactly, and [isTypeAssignableTo] is itself already
+     * cached by id pair, so this adds no staleness class the relation cache does not
+     * already have. `Type.id` is >= 1, so the packed key never reaches [LongKeyMap]'s
+     * 0 sentinel; the map is never iterated, which is what makes it a legal container
+     * (rounds 754/776/778's order hazard becomes a compile error).
+     */
+    private val flowJoinReduceCache = LongKeyMap<Type>()
+
     /** (REL.1)(c) round 747: tsc's `TypeFormatFlags.UseFullyQualifiedType`, restricted to
      *  ENUM names — while set, [typeToString] renders an enum (or enum-member) type with its
      *  namespace path, at ANY nesting depth, so a colliding pair inside a rendered function
@@ -123687,6 +123715,24 @@ interface DataView {
             if (!flowJoinMemberIsDeclared(m, declared, declaredType)) { anyForeign = true; break }
         }
         if (!anyForeign) return joined
+        // (PERF.1) round 949: the grid below is quadratic in the member count and is a
+        // pure function of (joined, declaredType) — see [flowJoinReduceCache].
+        val cacheKey = packIdPair(joined.id, declaredType.id)
+        flowJoinReduceCache.get(cacheKey)?.let { return it }
+        val reduced = flowJoinReduceSubtypes(joined, members, declared, declaredType)
+        flowJoinReduceCache.put(cacheKey, reduced)
+        return reduced
+    }
+
+    /**
+     * (PERF.1) round 949: [flowJoinUnion]'s subtype reduction, verbatim, split out so the
+     * memo above has something to key. Kept a separate function rather than inlined
+     * behind the cache probe so the reduction's own shape stays reviewable against
+     * (CHK.66), which is the entry that put it there.
+     */
+    private fun flowJoinReduceSubtypes(
+        joined: Type, members: List<Type>, declared: List<Type>?, declaredType: Type,
+    ): Type {
         var kept: MutableList<Type>? = null
         for (i in members.indices) {
             val m = members[i]

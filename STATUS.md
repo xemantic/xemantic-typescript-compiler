@@ -10,6 +10,35 @@ stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
 
+**(P18.43) — THE FLOW-JOIN SUBTYPE REDUCTION IS MEMOIZED, AND A 3.2× *WALL* REGRESSION EVERY COUNTER GATE WAS BLIND TO IS CLOSED ((PERF.1)), 18,185 → 18,188 / 0 / 3 (2026-09-07).**
+**Warm A/B −57.7% and −58.9%, replicated in two batches** (16,981 → 7,176 ms, 16,584 → 6,817 ms,
+`files/errors` 78/46 on every arm); cold CLI 35,893 → 26,740 ms (−25.5%). **The degradation the
+bench series has carried since 2026-09-05 is ONE COMMIT, not refactoring drift**: `warm/tsc` is
+0.36-0.44× for the rows before `9a49e44c2060` ((CHK.85)(b)) and 1.13-1.56× for all 25 rows since,
+with tsc's own time ranging 7.29-13.81 s across the after-rows — and the **native AOT arm regressed
+4.8× too**, so it is not a JIT or AOT-cache artifact. **Every deterministic counter is FLAT**
+(`spine.nodes` bit-identical, `narrow.walks` +1.2%, and nothing above +4.5% even 25 rounds later),
+because the cost is per-ARRIVAL and `cost_gate.py` counts LAUNCHES — the round-735 tail law, with
+the (CHK.85)(b) note's own "414 reporting walks" as the count that hid ~90% of narrowing time.
+**The mechanism was not the one the diff suggests**: `--narrowSections` reads `narrowByAssignmentRhs`
+(the new enum arm's home, and this round's original target) **FLAT at 209.7 → 221.0 ms**, while
+`getUnionType at a branch label` goes 368.7 → **20,384.7 ms** on +1.7% calls and `relations(depth0)`
+1,235 → **14,512 ms**. (CHK.66)'s subtype reduction runs only when a member is FOREIGN to the
+declaration — "free on almost every join" — and (CHK.85)(b)'s enum arm makes a branch answer a
+MEMBER (`K.A`) where the declared type is the atomic enum `K`, so a whole class of joins fell onto
+the quadratic path. Ablations attribute it exactly: forcing the free path is **−9.9 s with all 46
+diagnostics unchanged**, skipping the enum sort is −0.8 s. **Fixed as a MEMO, not a predicate
+change, because reading `K.A` as declared would disable the reduction a join genuinely needs**
+(`K.A | K` must reduce to `K`); keyed `packIdPair(joined.id, declaredType.id)`, which is exact —
+`getUnionType` interns by member-id list and `isTypeAssignableTo` is already id-cached. Post-fix
+`relations(depth0)` is 1,226 ms, fully back to the pre-regression 1,235. **Fix (2), bounding the
+reporting walk, is REFUSED on this round's own measurement** (the ≥1 ms tail is 306/2,520 ms against
+the pre-regression 210/1,360 — the walk was never expensive, only the reduction it triggered was).
+3 pins; the poisoned-memo ablation reddens **exactly P2**, the served ask, and one arm is recorded
+**BLIND** rather than redundant (`anyForeign`'s early exit returns above the cache probe). Grid
+**8 × added=0 removed=0**, `cost_gate.py` exit 0 (all counters within ±0.03%, no rebaseline),
+`huge_methods.py` exit 0, build warning-clean.
+
 **(P18.42) — AN INTERSECTION DEDUPES ITS CONSTITUENTS BY TYPE ID ((CHK.106)(b)), AND (a) IS BROADER THAN THE ITEM RECORDED, 18,179 → 18,185 / 0 / 3 (2026-09-07).**
 **(CHK.106) CLOSED — one part fixed, three verified against both references.** (b) had MOVED since
 the item was written: (CHK.101) closed its `| undefined` half and what remained was `BP & BP` vs
@@ -94,28 +123,3 @@ admitted because both references report it and the grid is what licenses it. 21 
 pristine; 7 arms, ALL discriminating, plus one arm recorded as NOT ablated with its reason. Grid
 **8 × added=0 removed=0** on the final binary, `cost_gate.py` exit 0 (largest delta **+0.03%**),
 `huge_methods.py` exit 0, build warning-clean.
-
-**(P18.38) — AN ARRAY-LIKE *ARGUMENT* IS DECIDABLE AGAINST AN ARRAY-LIKE *PARAMETER* ((CHK.103) STAGE 2), AND FIVE OF THE ITEM'S SIX ROWS CARRY NO SPREAD, 18,110 → 18,136 / 0 / 3 (2026-09-07).**
-**(CHK.103) stage 2 CLOSED; (CHK.108) queued with its mechanism named.** The item called its
-residue a spread question and named a whole-literal array-to-array fallback as the seam. Measured,
-**five of its six rows carry no spread at all** — `takeStrArr(nums)` with `nums: number[]` against
-`(x: string[])` is silent here and reported by both references, and so are `Bar[]` → `Foo[]`,
-`C2[]` → `C1[]`, `number[][]` → `string[][]` and both tuple shapes — so the gap is the ARGUMENT
-reader's FP firewall having no array-vs-array gate, and the item's seam covers one row of six.
-The licence is the DECLARATION position (as (CHK.83)'s was), so the decidability question is asked
-one level down, of the ELEMENT pair, by `canUseTypeEngine` ITSELF — the rule cannot drift from the
-position that licenses it, and `any[]` is refused in both directions with no rule of its own. On
-the item's fixture ours goes **6 → 12 of the reference's 12 rows, all twelve byte-identical to
-pristine**. **The grid found exactly ONE ours-only row on all eight profiles and it was a NARROWING
-gap**: `Debug.assertEachNode(elements, isArrayBindingElement)` narrows by an `asserts nodes is
-readonly U[]` signature, and `narrowByAssertCall`'s type-parameter recovery understood only a BARE
-`U` — **an array OF a type parameter RESOLVES**, so it is neither `errorType` nor `anyType` and the
-recovery's own gate never opened for it (the first attempt put the fix inside that gate and was
-inert). **Two traps, both found with a probe rather than by reading**: `ternaryOfArrayLiterals`
-SUBSUMES an `init !is ArrayLiteralExpression` test, so relaxing the `!is` alone did nothing through
-a whole build cycle; and an EMPTY array literal IS tuple-like (tsc's empty tuple) where
-`elements.any { … }` says false, which the full suite caught and no other instrument could. 26 pins,
-all read from pristine; 9 arms, 8 discriminating, a3/a4 a round-927 PAIR and a7 recorded
-NON-DISCRIMINATED with its reason rather than claimed. Grid **8 × added=0 removed=0** on the final
-binary (a1's +1 row is the round's own positive control that the harness is live), `cost_gate.py`
-exit 0 (largest delta **+0.03%**, no rebaseline), `huge_methods.py` exit 0, build warning-clean.
