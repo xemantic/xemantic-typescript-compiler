@@ -70,15 +70,14 @@ import kotlin.test.Test
  * and pristine renders a const-asserted `[1, 2]` spread `(2 | 1)[]` where tsgo
  * renders `(1 | 2)[]`.
  *
- * ## Stated residue - deliberately NOT pinned
+ * ## Stage 2 CLOSED the residue this class used to record
  *
  * A literal whose ONLY elements are spreads of non-tuple array-likes normalizes to a
- * plain array in tsc and is not tuple-like, so tsc reports ONE whole-literal row;
- * this checker has no whole-literal array-to-array fallback at that reader and stays
- * SILENT rather than inventing a row at the wrong node. `takeStrArr([...nums])`,
- * `[..."abc"]` / `[...set]` at an argument, `const t: [number, number] = [...nums]`
- * and an INLINE `f([...tup] as const)` are the six such rows. Per CLAUDE.md a known-
- * open gap is recorded in the session note, never pinned as a control.
+ * plain array in tsc and is not tuple-like, so tsc reports ONE whole-literal row. Stage
+ * 1 stayed SILENT for it rather than inventing a row at the wrong node; stage 2 supplies
+ * that row at the argument reader and at both var-decl readers, and its pins live in
+ * [ArrayLikeArgumentAssignabilityTest]. Five of the six rows turned out to carry no
+ * spread at all — see that class for what the residue actually was.
  */
 class ArrayLiteralSpreadElementTest {
 

@@ -107372,7 +107372,14 @@ interface DataView {
         // target is a tuple `Type.Object` (`tupleElementTypes != null`), init is NOT an
         // array literal (literals are checked element-wise elsewhere and ARE tuple-
         // assignable), and not already assignable. Emits at the var name.
-        if (init !is ArrayLiteralExpression && !ternaryOfArrayLiterals(init) &&
+        // (CHK.103) stage 2: a NOT-TUPLE-LIKE array literal — one whose every element is a
+        // variadic spread — is the ONE literal shape that is not checked element-wise, so
+        // the exclusion above does not apply to it and this whole-literal row is the row
+        // both references print: `const t2: [number, number] = [...nums]` is
+        // `Type 'number[]' is not assignable to type '[number, number]'.` with the same
+        // arity sub-line. See [arrayLiteralIsTupleLike] for the rule and for why the two
+        // shapes are exclusive.
+        if (!ternaryOfArrayLiterals(init, tupleLikeOnly = true) &&
             sourceType is Type.Reference && sourceType.target.symbol?.name == "Array" &&
             targetType is Type.Object && targetType !is Type.Reference &&
             targetType.tupleElementTypes != null && !isAssignable &&
@@ -107511,7 +107518,12 @@ interface DataView {
         // the element-mismatch walker) already covers the specific mismatches;
         // the outer diagnostic would just duplicate them. Matches TypeScript's
         // baseline for tests like `contextualTyping21_ts`.
+        // (CHK.103) stage 2: the suppression is about a literal that OWNS its per-element
+        // rows, and a NOT-TUPLE-LIKE one does not — tsc reports ONE whole-literal row for
+        // it and no element rows, so it falls through to the standard TS2322 below
+        // (`const s: string[] = [...nums]`, measured on both references).
         if (canUse && !isAssignable && init is ArrayLiteralExpression &&
+            arrayLiteralIsTupleLike(init) &&
             targetType is Type.Reference && targetType.target.symbol?.name == "Array"
         ) {
             // B180: the per-element PRIMITIVE mismatch loop (long live on the CALL-ARG
@@ -124907,8 +124919,43 @@ interface DataView {
                 return if (kept.size == 1) kept[0] else getUnionType(kept)
             }
         }
+        // (CHK.103) stage 2: `asserts nodes is readonly U[]` (and the mutable `U[]`) —
+        // tsc's `Debug.assertEachNode<T extends Node, U extends T>(nodes: readonly T[],
+        // test: (node: T) => node is U): asserts nodes is readonly U[]`. The recovery
+        // below infers a BARE type-parameter target from a sibling type-guard argument;
+        // here the target is that parameter wrapped in an ARRAY, so the same inference
+        // runs on the ELEMENT and the answer is re-wrapped.
+        //
+        // It must be detected SYNTACTICALLY and enter the recovery on its own: an array
+        // OF a type parameter RESOLVES (to `ReadonlyArray<U>` with `U` a `Type.TypeParam`),
+        // so it is neither `errorType` nor `anyType` and the round-424 gate below never
+        // opens for it. Without this `Debug.assertEachNode(elements, isArrayBindingElement)`
+        // narrows NOTHING and the next line's `factory.createArrayBindingPattern(elements)`
+        // is an ours-only TS2345 on all eight profiles
+        // (`transformers/destructuring.ts:602`).
+        var tpNode: TypeNode = targetTypeNode
+        // 0 = no wrapper, 1 = `U[]`, 2 = `readonly U[]`.
+        var arrayWrap = 0
+        val roInner = (tpNode as? TypeOperator)
+            ?.takeIf { it.operator == SyntaxKind.ReadonlyKeyword }?.type as? ArrayType
+        if (roInner != null) {
+            arrayWrap = 2
+            tpNode = roInner.elementType
+        } else if (tpNode is ArrayType) {
+            arrayWrap = 1
+            tpNode = tpNode.elementType
+        }
+        val tpName = (tpNode as? TypeReference)
+            ?.let { (it.typeName as? Identifier)?.text }
+        val calleeTps = when (decl) {
+            is FunctionDeclaration -> decl.typeParameters
+            is MethodDeclaration -> decl.typeParameters
+            else -> null
+        }
+        val targetIsOwnTpArray = arrayWrap != 0 && tpName != null &&
+            calleeTps != null && calleeTps.any { it.name.text == tpName }
         var targetType = getTypeFromTypeNode(targetTypeNode)
-        if (targetType === errorType || targetType === anyType) {
+        if (targetType === errorType || targetType === anyType || targetIsOwnTpArray) {
             // M1.12 (round 424): `asserts node is U` where U is the callee's own
             // INFERRED type param (tsc `Debug.assertNode<T extends Node, U extends
             // T>(node: T | undefined, test: (node: T) => node is U): asserts node
@@ -124924,13 +124971,7 @@ interface DataView {
             //     link's constraint classifies provably non-nullish, exclude
             //     nullish from the walked path (drop-nullish only, suppression-
             //     safe). Any unresolvable link bails.
-            val tps = when (decl) {
-                is FunctionDeclaration -> decl.typeParameters
-                is MethodDeclaration -> decl.typeParameters
-                else -> null
-            }
-            val tpName = (targetTypeNode as? TypeReference)
-                ?.let { (it.typeName as? Identifier)?.text }
+            val tps = calleeTps
             var inferred: Type? = null
             // Round 424b: EXPLICIT type arguments bind the asserted TP directly —
             // `Debug.type<TypeMapper>(this)` (tsc debug.ts `type<T>(value: unknown):
@@ -124966,7 +125007,10 @@ interface DataView {
                 }
             }
             if (inferred == null) {
-                if (tps != null) {
+                // (CHK.103) stage 2: the drop-nullish constraint-chain fallback is about a
+                // BARE type-parameter target; with an array wrapper the chased constraint
+                // belongs to the ELEMENT and says nothing about the array, so it is skipped.
+                if (tps != null && arrayWrap == 0) {
                     val tpByName = tps.associateBy { it.name.text }
                     var refName = tpName
                     var hops = 0
@@ -124982,7 +125026,11 @@ interface DataView {
                 }
                 return null
             }
-            targetType = inferred
+            targetType = when (arrayWrap) {
+                1 -> getOrInternReference(globalArrayType, listOf(inferred))
+                2 -> getOrInternReference(globalReadonlyArrayType ?: globalArrayType, listOf(inferred))
+                else -> inferred
+            }
         }
         // After assertion succeeds, narrow to target type.
         if (t is Type.Union) {
@@ -130526,6 +130574,29 @@ interface DataView {
      * REST tuple, or of any other iterable keeps the `any` the whole literal had, because
      * the tuple this function's caller is building has no way to express a variadic slot.
      */
+    /**
+     * (CHK.103): tsc's `elaborateArrayLiteral` tuple-likeness test, as a named predicate —
+     * true when the literal's tupleized form (`checkArrayLiteral(node, Contextual,
+     * forceTuple)`) is a TUPLE, i.e. when at least one element contributes a FIXED slot.
+     * A spread of a non-tuple array-like or of an iterable contributes a VARIADIC slot,
+     * so a literal made only of those normalizes to a plain ARRAY and is NOT tuple-like.
+     *
+     * It decides which of tsc's two shapes reports, and the two are EXCLUSIVE: tuple-like
+     * elaborates ELEMENT-WISE and suppresses the outer row; not-tuple-like reports ONE
+     * whole-literal row. Stage 1 used it for the first half (which elements to elaborate);
+     * stage 2 uses it for the second (whether the whole-literal argument row may fire),
+     * which is why it is one predicate rather than two.
+     */
+    private fun arrayLiteralIsTupleLike(arrLit: ArrayLiteralExpression): Boolean =
+        // An EMPTY literal is the EMPTY TUPLE in tsc (`createTupleType([])`), which is
+        // tuple-like — a bare `any {}` answers false for it and made
+        // `const t: [a?: number, b?: string] = []` a false TS2322 (the source is `any[]`
+        // by B87.6, which does not relate to the tuple). Caught by the corpus-adjacent
+        // pin `OptionalTupleAssignabilityTest`, and by nothing else.
+        arrLit.elements.isEmpty() || arrLit.elements.any { el ->
+            el !is SpreadElement || (constContextSpreadSlots(el)?.isNotEmpty() == true)
+        }
+
     private fun constContextSpreadSlots(el: SpreadElement): List<Pair<Type, Boolean>>? {
         val t = getTypeOfExpression(el.expression)
         if (t !is Type.Object || t is Type.Interface) return null
@@ -167194,7 +167265,28 @@ interface DataView {
             val allowCombinedUnionParam = sig.fromUnionCombination &&
                 (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
                 !typeContainsForeignTypeParam(paramType, emptySet())
-            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj && !allowCombinedUnionParam) return CAAS_CONTINUE
+            // (CHK.103) stage 2: an ARRAY-LIKE argument against an ARRAY-LIKE parameter —
+            // the licence and the measurement are in [argArrayLikeVsArrayLikeCheckable].
+            // The same three guards its neighbours carry, each of them measured on one of
+            // them: a REST position's `paramType` is the ARRAY while the argument is one
+            // ELEMENT of it (`checkRestArgsAgainstArrayElementType` owns that verdict), a
+            // call whose ARITY is already wrong reports TS2554 and NOTHING per argument in
+            // tsc, and a FREE type parameter on either side is a verdict only inference can
+            // reach.
+            // A TUPLE-LIKE array LITERAL argument is elaborated ELEMENT-WISE and its outer
+            // row SUPPRESSED (tsc's `elaborateArrayLiteral` returning true) — measured:
+            // `takeStrArr([1, 2])` is two TS2322 rows at the elements in both references
+            // and NOT a TS2345 at the literal. Only a literal that is not tuple-like — one
+            // whose every element is a variadic spread — gets the whole-literal row, which
+            // is exactly the shape (CHK.103) stage 1 left open.
+            val allowArrayLikeVsArrayLike = arityOk &&
+                (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
+                (arg !is ArrayLiteralExpression || !arrayLiteralIsTupleLike(arg)) &&
+                !typeContainsForeignTypeParam(paramType, emptySet()) &&
+                !typeContainsForeignTypeParam(argType, emptySet()) &&
+                argArrayLikeVsArrayLikeCheckable(argType, paramType) &&
+                !argArrayLikeNarrowsToRelated(arg, argType, paramType)
+            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj && !allowCombinedUnionParam && !allowArrayLikeVsArrayLike) return CAAS_CONTINUE
             // Round 79l (orchestrated — Agent A plan): for a contextually-typed
             // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
             // body-return type (allowFuncReturnMismatch), TypeScript reports a
@@ -167911,6 +168003,85 @@ interface DataView {
         // (exactly one call signature) and a construct-signature-only type are unaffected.
         if ((obj.callSignatures?.size ?: 0) > 1) return false
         return !obj.callSignatures.isNullOrEmpty() || !obj.constructSignatures.isNullOrEmpty()
+    }
+
+    /**
+     * (CHK.103) stage 2: is an ARRAY-LIKE (or tuple) ARGUMENT decidable against an
+     * ARRAY-LIKE (or tuple) PARAMETER?
+     *
+     * MEASURED, and it is what the item's own residue turned out to be: the six rows
+     * (CHK.103) stage 1 left open are NOT a spread question at all. `takeStrArr(nums)`
+     * with `nums: number[]` against `(x: string[])` is silent here and reported by BOTH
+     * tsgo 7.0.2 and pristine `typescript@6.0.3` — and so are `Bar[]` -> `Foo[]`,
+     * `C2[]` -> `C1[]`, `number[][]` -> `string[][]`, `[number, string]` -> `string[]`
+     * and `[string, number]` -> `[number, string]`, none of which carries a spread.
+     * An array argument reaches [caasNonSimpleParamChecks]'s FP firewall with a
+     * non-primitive parameter and, before this, no `allow*` gate claiming it.
+     *
+     * The LICENCE is the DECLARATION position, exactly as (CHK.83)'s was: the identical
+     * pairs go through [canUseTypeEngine]'s Object-vs-Object branch there and match both
+     * references row for row — message AND elaboration chain — including every pair that
+     * must stay SILENT (`Wide[]` -> `Foo[]` where `Wide` has `Foo`'s members,
+     * `string[]` -> `readonly string[]`, `number[]` -> `any[]`, `any[]` -> `string[]`,
+     * `number[]` -> `unknown[]`).
+     *
+     * The decidability question is asked ONE LEVEL DOWN, of the ELEMENT pair, by
+     * [canUseTypeEngine] ITSELF rather than by a parallel classifier — so this rule
+     * cannot drift from the position that licenses it. A tuple is first normalized to
+     * its `Array<union>` base ([tupleArrayBase], tsc's own `getTupleBaseType`), so
+     * `[number, string]` asks `string | number` against the target's element. An
+     * `any`/`error` element is refused at the top of that predicate, which is what keeps
+     * `any[]` out in BOTH directions with no rule of its own.
+     */
+    private fun argArrayLikeVsArrayLikeCheckable(argType: Type, paramType: Type): Boolean {
+        val argElem = arrayLikeElementForArgCheck(argType) ?: return false
+        val paramElem = arrayLikeElementForArgCheck(paramType) ?: return false
+        return canUseTypeEngine(argElem, paramElem)
+    }
+
+    /**
+     * (CHK.103) stage 2: the SECOND CHANCE on the REJECTING path for
+     * [argArrayLikeVsArrayLikeCheckable] — true when the ARGUMENT reference's FLOW type
+     * relates where its declared type does not, i.e. when the only reason this gate found
+     * a mismatch is that the argument reader does not narrow.
+     *
+     * `getTypeOfExpression` never flow-narrows and narrowing at this reader is opt-in per
+     * arm (CLAUDE.md), and opening the gate found exactly one shape on the 8 profiles that
+     * needs it: `Debug.assertEachNode(elements, isArrayBindingElement)` followed by
+     * `factory.createArrayBindingPattern(elements)` (`transformers/destructuring.ts:602`),
+     * where an `asserts nodes is readonly U[]` signature narrows the array ITSELF. Both
+     * references accept it (their flow type is the intersection `T[] & readonly U[]`) and
+     * we reported an ours-only TS2345 on all eight profiles.
+     *
+     * SUPPRESSION-ONLY and on the rejecting path only: the plain relation is asked first
+     * (a `Relation` cache hit for the caller's own later ask), so an argument that already
+     * relates pays no flow walk — round 764's (REL.2)(C) rule, which measured the
+     * unconditional form at +4.78% `narrow.walks`. It can only turn a rejection into
+     * silence, so no shape that was accepted before can start failing.
+     */
+    private fun argArrayLikeNarrowsToRelated(arg: Expression, argType: Type, paramType: Type): Boolean {
+        if (arg !is Identifier && arg !is PropertyAccessExpression) return false
+        if (checkTypeRelatedTo(argType, paramType, assignableRelation)) return false
+        val narrowed = getNarrowedTypeForReference(argType, arg)
+        if (narrowed === argType || narrowed === errorType) return false
+        return checkTypeRelatedTo(narrowed, paramType, assignableRelation)
+    }
+
+    /**
+     * (CHK.103) stage 2: the ELEMENT type of an array-like [t] for
+     * [argArrayLikeVsArrayLikeCheckable], or null where [t] is not array-like here. A
+     * tuple answers its [tupleArrayBase] element UNION (a tuple whose base this checker
+     * cannot build — a non-array rest slot — answers null and is refused); an
+     * `Array`/`ReadonlyArray` reference answers its single type argument.
+     */
+    private fun arrayLikeElementForArgCheck(t: Type): Type? {
+        val o = t as? Type.Object ?: return null
+        if (o !is Type.Interface && o.tupleElementTypes != null)
+            return tupleArrayBase(o)?.resolvedTypeArguments?.singleOrNull()
+        if (o is Type.Reference &&
+            (o.target.symbol?.name == "Array" || o.target.symbol?.name == "ReadonlyArray")
+        ) return o.resolvedTypeArguments?.singleOrNull()
+        return null
     }
 
     // -----------------------------------------------------------------------
@@ -170678,9 +170849,7 @@ interface DataView {
         // array-to-array fallback here (the same gap `const a: [number, number] =
         // [1, 2, 3]` shows, pre-existing), so the not-tuple-like case stays SILENT
         // rather than inventing a row at the wrong node.
-        val elaborateSpreadElements = arrLit.elements.any { el ->
-            el !is SpreadElement || (constContextSpreadSlots(el)?.isNotEmpty() == true)
-        }
+        val elaborateSpreadElements = arrayLiteralIsTupleLike(arrLit)
         // Conservative: a contributed type already reported for an earlier spread of this
         // literal is not reported twice — `[...tup, ...tup]` is ONE row in both references
         // (tsc's per-node tuple INDEX, which this does not model) and would otherwise be
@@ -175795,13 +175964,28 @@ interface DataView {
     /** A (possibly nested, paren-wrapped) ternary whose leaves are ALL array
      *  literals — contextually tuple-typed by tsc like a bare array literal
      *  (see the B87.6b gate). */
-    private fun ternaryOfArrayLiterals(e: Expression?): Boolean {
+    /**
+     * True when [e] is an array LITERAL, or a (possibly nested) ternary all of whose
+     * leaves are — the shapes tsc contextually tuple-types and therefore elaborates
+     * ELEMENT-WISE rather than as one whole-literal row.
+     *
+     * (CHK.103) stage 2: with [tupleLikeOnly] the leaf test is [arrayLiteralIsTupleLike],
+     * so the ONE literal shape tsc does NOT elaborate element-wise — every element a
+     * variadic spread — answers false and is therefore NOT excluded by a caller using this
+     * to mean "a literal owns its own per-element rows". Its bare form additionally
+     * SUBSUMES an `init !is ArrayLiteralExpression` test (a bare literal is its own base
+     * case), which is why the one call site could not be opened by relaxing that `!is`
+     * alone — measured with a probe, and it is why `const t: [number, number] = [...nums]`
+     * was silent where both references report.
+     */
+    private fun ternaryOfArrayLiterals(e: Expression?, tupleLikeOnly: Boolean = false): Boolean {
         var n = e ?: return false
         while (n is ParenthesizedExpression) n = n.expression
         return when (n) {
-            is ArrayLiteralExpression -> true
+            is ArrayLiteralExpression -> !tupleLikeOnly || arrayLiteralIsTupleLike(n)
             is ConditionalExpression ->
-                ternaryOfArrayLiterals(n.whenTrue) && ternaryOfArrayLiterals(n.whenFalse)
+                ternaryOfArrayLiterals(n.whenTrue, tupleLikeOnly) &&
+                    ternaryOfArrayLiterals(n.whenFalse, tupleLikeOnly)
             else -> false
         }
     }

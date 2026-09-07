@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **197,916** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **198,100** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,31 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.38) — AN ARRAY-LIKE *ARGUMENT* IS DECIDABLE AGAINST AN ARRAY-LIKE *PARAMETER* ((CHK.103) STAGE 2), AND FIVE OF THE ITEM'S SIX ROWS CARRY NO SPREAD, 18,110 → 18,136 / 0 / 3 (2026-09-07).**
+**(CHK.103) stage 2 CLOSED; (CHK.108) queued with its mechanism named.** The item called its
+residue a spread question and named a whole-literal array-to-array fallback as the seam. Measured,
+**five of its six rows carry no spread at all** — `takeStrArr(nums)` with `nums: number[]` against
+`(x: string[])` is silent here and reported by both references, and so are `Bar[]` → `Foo[]`,
+`C2[]` → `C1[]`, `number[][]` → `string[][]` and both tuple shapes — so the gap is the ARGUMENT
+reader's FP firewall having no array-vs-array gate, and the item's seam covers one row of six.
+The licence is the DECLARATION position (as (CHK.83)'s was), so the decidability question is asked
+one level down, of the ELEMENT pair, by `canUseTypeEngine` ITSELF — the rule cannot drift from the
+position that licenses it, and `any[]` is refused in both directions with no rule of its own. On
+the item's fixture ours goes **6 → 12 of the reference's 12 rows, all twelve byte-identical to
+pristine**. **The grid found exactly ONE ours-only row on all eight profiles and it was a NARROWING
+gap**: `Debug.assertEachNode(elements, isArrayBindingElement)` narrows by an `asserts nodes is
+readonly U[]` signature, and `narrowByAssertCall`'s type-parameter recovery understood only a BARE
+`U` — **an array OF a type parameter RESOLVES**, so it is neither `errorType` nor `anyType` and the
+recovery's own gate never opened for it (the first attempt put the fix inside that gate and was
+inert). **Two traps, both found with a probe rather than by reading**: `ternaryOfArrayLiterals`
+SUBSUMES an `init !is ArrayLiteralExpression` test, so relaxing the `!is` alone did nothing through
+a whole build cycle; and an EMPTY array literal IS tuple-like (tsc's empty tuple) where
+`elements.any { … }` says false, which the full suite caught and no other instrument could. 26 pins,
+all read from pristine; 9 arms, 8 discriminating, a3/a4 a round-927 PAIR and a7 recorded
+NON-DISCRIMINATED with its reason rather than claimed. Grid **8 × added=0 removed=0** on the final
+binary (a1's +1 row is the round's own positive control that the harness is live), `cost_gate.py`
+exit 0 (largest delta **+0.03%**, no rebaseline), `huge_methods.py` exit 0, build warning-clean.
 
 **(P18.37) — AN ARRAY LITERAL WITH A SPREAD GETS A REAL TYPE ((CHK.103) STAGE 1), AND THE ROUND-471 ARM IT WOKE WAS THE REGRESSION, 18,098 → 18,110 / 0 / 3 (2026-09-07, RECOVERED ROUND).**
 **(CHK.103) stage 1 landed; stage 2 re-queued with its 6 residual rows named.** Every array literal
@@ -107,24 +132,3 @@ not redundant. Corpus 8,837/0, `cost_gate.py` exit 0 at **+0.00% on every counte
 `huge_methods.py` exit 0, grid 8×`added=0 removed=0`. The (P18.27) unblock is only HALF true: a
 mutable `for-of` head now narrows, but a readonly head is still silent — and so is
 `readonly string[]` with no enum anywhere, so that gap is independent of the discriminant.
-
-**(P18.33) — AN EXPORTED DESTRUCTURING IS AN EXPORT ((CHK.99)), AND FOUR OF THE ITEM'S SIX SITES WERE WRONG, 17,981 → 18,021 / 0 / 3 (2026-09-06).**
-**(CHK.99) CLOSED.** `bindingPatternNames` — the checker-side mirror of
-`Binder.bindVariableDeclarationName`, i.e. tsc's rule that every leaf of an exported pattern is an
-export — at four name-set sites. An `Identifier` answers itself, so it is a DROP-IN, which is the
-arithmetic reason `cost_gate.py` reads **+0.00% on every counter**. The item's fixture goes 26 → 16
-rows against 17 in both references: ten false TS2305 and a false TS2339 on `typeof NS` gone, and a
-barrel import GAINED a true TS2345 it had been losing. **Four of the item's six sites were wrong**:
-the `typeof NS` line it names is a different walker's set (the real site it never names), the
-`nsImportTargets` site is an unrelated decl-emit walker, **`varDecls` must NOT be changed** — its
-consumer reads `d.type`, so a registered leaf mistypes an ANNOTATED exported pattern, proven by an
-arm and inert on every non-collision fixture (the first guard pin was blind and had to spell the
-collision out) — and "`import * as A; A.p` is `any`" is a general namespace-import gap equally true
-of a plain `export const`, so it cannot discriminate the fix. **Two lost diagnostics the item did
-not mention also close**: TS2308 and TS2484. The harness split is the point: population is **0 on
-all eight profiles** (re-derived here, so the grid is a CONTROL rather than coverage) and the class
-is structurally invisible to the corpus, so the 40 pins run across THREE harnesses — 11 direct
-`Parser`, 12 `diagnose()`, and 17 in `-project` through `ProjectCompiler` + a `Vfs` for the
-cross-file half — with every positive pin a VALUE pin. 9 arms all discriminating; 8 controls
-recorded as non-discriminating rather than counted. Corpus 8,837/0, `-project` 848 → 865/0,
-`huge_methods.py` exit 0, grid 8×`added=0 removed=0`.

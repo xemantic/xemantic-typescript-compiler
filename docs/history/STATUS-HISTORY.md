@@ -2025,3 +2025,24 @@ rather than counted, and every arm carrying a pin-COUNT assertion after (P18.31)
 hazard. Corpus 8,837/0, **`cost_gate.py` exit 0 at +0.00% on every counter**, `huge_methods.py`
 exit 0. Residue pinned as a KNOWN GAP: a nullish union contextual parameter types correctly but the
 property-access reader emits no TS18048 — a false NEGATIVE, which is why the lift is safe.
+
+**(P18.33) — AN EXPORTED DESTRUCTURING IS AN EXPORT ((CHK.99)), AND FOUR OF THE ITEM'S SIX SITES WERE WRONG, 17,981 → 18,021 / 0 / 3 (2026-09-06).**
+**(CHK.99) CLOSED.** `bindingPatternNames` — the checker-side mirror of
+`Binder.bindVariableDeclarationName`, i.e. tsc's rule that every leaf of an exported pattern is an
+export — at four name-set sites. An `Identifier` answers itself, so it is a DROP-IN, which is the
+arithmetic reason `cost_gate.py` reads **+0.00% on every counter**. The item's fixture goes 26 → 16
+rows against 17 in both references: ten false TS2305 and a false TS2339 on `typeof NS` gone, and a
+barrel import GAINED a true TS2345 it had been losing. **Four of the item's six sites were wrong**:
+the `typeof NS` line it names is a different walker's set (the real site it never names), the
+`nsImportTargets` site is an unrelated decl-emit walker, **`varDecls` must NOT be changed** — its
+consumer reads `d.type`, so a registered leaf mistypes an ANNOTATED exported pattern, proven by an
+arm and inert on every non-collision fixture (the first guard pin was blind and had to spell the
+collision out) — and "`import * as A; A.p` is `any`" is a general namespace-import gap equally true
+of a plain `export const`, so it cannot discriminate the fix. **Two lost diagnostics the item did
+not mention also close**: TS2308 and TS2484. The harness split is the point: population is **0 on
+all eight profiles** (re-derived here, so the grid is a CONTROL rather than coverage) and the class
+is structurally invisible to the corpus, so the 40 pins run across THREE harnesses — 11 direct
+`Parser`, 12 `diagnose()`, and 17 in `-project` through `ProjectCompiler` + a `Vfs` for the
+cross-file half — with every positive pin a VALUE pin. 9 arms all discriminating; 8 controls
+recorded as non-discriminating rather than counted. Corpus 8,837/0, `-project` 848 → 865/0,
+`huge_methods.py` exit 0, grid 8×`added=0 removed=0`.

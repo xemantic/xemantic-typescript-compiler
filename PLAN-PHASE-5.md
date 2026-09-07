@@ -25,6 +25,113 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.38) — an array-like ARGUMENT is decidable against an array-like PARAMETER ((CHK.103) stage 2), and FIVE of the item's six rows carry no spread at all (2026-09-07)
+
+**Suite 18,110 → 18,136 / 0 / 3** — 26 pins in the new `ArrayLikeArgumentAssignabilityTest`,
+every expectation read from pristine `typescript@6.0.3`. Grid **8 × added=0 removed=0** on the
+FINAL binary; `cost_gate.py` exit 0 (largest delta `mapped.hits` **+0.03%**, no rebaseline),
+`huge_methods.py --fail-over 0` exit 0, build warning-clean (`--rerun-tasks`, 0 `w:`).
+
+**(CHK.103) stage 2 CLOSED, and the item's mechanism is wrong on its main claim.** The item
+described its residue as a spread question and named "a whole-literal array-to-array fallback at
+the argument reader" as the seam. Measured, **five of its six rows carry no spread**:
+`takeStrArr(nums)` with `nums: number[]` against `(x: string[])` is silent here and reported by
+BOTH references, and so are `Bar[]` → `Foo[]`, `C2[]` → `C1[]`, `number[][]` → `string[][]`,
+`[number, string]` → `string[]` and `[string, number]` → `[number, string]`. The gap is the
+ARGUMENT reader's FP firewall (`caasNonSimpleParamChecks`): a non-primitive parameter needs some
+`allow*` gate to claim it and **no gate claimed an array**. The item's named seam covers ONE row
+of six. Found by running the residue's own shapes with the spread REMOVED — two 20-second probes.
+
+**What landed, three parts.**
+- **(A) `allowArrayLikeVsArrayLike`** at the argument reader. The LICENCE is the DECLARATION
+  position, exactly as (CHK.83)'s was: the identical pairs go through `canUseTypeEngine`'s
+  Object-vs-Object branch there and match both references row for row — message AND elaboration
+  chain — including all six pairs that must stay SILENT (`Wide[]` → `Foo[]`, `string[]` →
+  `readonly string[]`, `number[]` → `any[]`, `any[]` → `string[]`, `number[]` → `unknown[]`, a
+  generic `T[]` parameter). So the decidability question is asked ONE LEVEL DOWN, of the ELEMENT
+  pair, by `canUseTypeEngine` ITSELF rather than by a parallel classifier — the rule cannot drift
+  from the position that licenses it, and `any`/`error` elements are refused at the top of that
+  predicate with no rule of their own. A tuple is normalized to its `tupleArrayBase` element union
+  first (tsc's `getTupleBaseType`). Three guards, each measured by its own arm: the REST position
+  (whose `paramType` is the ARRAY while the argument is one ELEMENT — without it we emit the
+  wrong-TARGET row), the ARITY gate (tsc reports TS2554 and nothing per argument), and a FREE type
+  parameter on either side.
+- **(B) the whole-literal row at the two var-decl readers.** tsc's `elaborateArrayLiteral` reports
+  a literal ELEMENT-WISE while its tupleized form is a TUPLE and reports ONE whole-literal row
+  otherwise; the two are EXCLUSIVE, which is why `arrayLiteralIsTupleLike` is ONE predicate used
+  by stage 1 (which elements to elaborate) and by stage 2 (whether the whole row may fire).
+- **(C) `narrowByAssertCall` learns `asserts x is readonly U[]` / `U[]`** — see the grid finding.
+
+**On the item's fixture ours goes 6 → 12 of the reference's 12 rows, all twelve byte-identical to
+pristine** — including the `readonly [number, string]` row where **tsgo 7.0.2 diverges** (TS4104)
+and pristine outranks it per CLAUDE.md.
+
+**THE GRID FOUND EXACTLY ONE OURS-ONLY ROW, ON ALL EIGHT PROFILES, AND IT WAS A NARROWING GAP.**
+`transformers/destructuring.ts:602`: `Debug.assertEachNode(elements, isArrayBindingElement)`
+narrows `elements` by an `asserts nodes is readonly U[]` signature and the next line's
+`factory.createArrayBindingPattern(elements)` takes the narrowed type. `narrowByAssertCall`'s
+type-parameter recovery understood only a BARE `U` target, and **an array OF a type parameter
+RESOLVES** (to `ReadonlyArray<U>` with `U` a `Type.TypeParam`), so it is neither `errorType` nor
+`anyType` and the recovery's own gate never opened for it — the first attempt put the wrapper
+detection INSIDE that gate and was inert. It is detected syntactically now, U is inferred from the
+sibling type-guard argument exactly as the bare form does, and the answer is re-wrapped; the
+argument gate consults the flow through a SUPPRESSION-ONLY second chance taken on the REJECTING
+path only (round 764's (REL.2)(C) rule — `narrow.walks` moves by **1** on the compiler profile).
+**The a1 grid — one added row on eight profiles — is this round's own positive control that the
+grid harness is live and attributable** (round 853's frozen-instrument law).
+
+**TWO TRAPS, BOTH FOUND WITH A PROBE RATHER THAN BY READING.**
+- **`ternaryOfArrayLiterals` SUBSUMES an `init !is ArrayLiteralExpression` test**, because a bare
+  array literal is its own base case. The B87.6b array-to-tuple emitter is gated
+  `init !is ArrayLiteralExpression && !ternaryOfArrayLiterals(init)`, so relaxing the `!is` alone
+  did nothing and `const t: [number, number] = [...nums]` stayed silent through a whole build
+  cycle. Three readings did not see it; one temporary diagnostic printing the gate's operands did,
+  in one run (`ternary=true` for a plain literal). The predicate now takes `tupleLikeOnly`.
+- **AN EMPTY ARRAY LITERAL IS TUPLE-LIKE** — tsc's tupleized `[]` is the EMPTY TUPLE — and
+  `elements.any { … }` answers false for it, which made `const t: [a?: number, b?: string] = []` a
+  false TS2322 (its source is `any[]` by B87.6, which does not relate to the tuple). Caught by the
+  full suite (`OptionalTupleAssignabilityTest`) and by NOTHING else: it is invisible to the grid,
+  to `cost_gate.py` and to the item's own fixtures. The predicate now answers true for an empty
+  literal explicitly.
+
+**Ablation: 9 arms, one mistake each; 8 discriminate.** a1 the gate (**8 RED**, every positive
+rule-A pin); a2 the tuple-like-literal guard at the argument reader (**2 RED**); a3 the
+suppression-only second chance and a4 the assert-array recovery (**2 RED each, IDENTICAL red
+sets — a round-927 PAIR**: either layer alone restores the profile FP, and no pin can separate
+"the narrowing does not exist" from "the gate does not consult it", so they are recorded as ONE
+observable); a5 the `tupleLikeOnly` change (**1 RED**); a6 the array-target suppression guard
+(**1 RED**); a7 reading a tuple's FIRST SLOT instead of its base union (**0 RED — recorded as
+NON-DISCRIMINATED, not claimed**: the element choice affects only DECIDABILITY, never a verdict,
+and on every shape reachable from these pins both choices decide the same way; the base union is
+kept because it is tsc's own `getTupleBaseType` and because the first slot ignores slots 2..n);
+a8 the rest guard (**1 RED**); a9 the arity guard (**1 RED**). Source restored from a snapshot
+throughout (never `git checkout` — the round is uncommitted), `cmp`-verified after every arm, and
+the final binary rebuilt and md5-matched against the one every gate ran on
+(`15ab6ce2`).
+
+**Gates.** Suite by module: core 860 classes / **16,630** / 0 / 3, project 865/0, externals 290/0,
+kir 159/0, lsp 58/0, daemon 66/0, api 30/0, client 20/0, cli 18/0 — **18,136 / 0 / 3**. Grid
+8 × `added=0 removed=0` against a before-capture taken on the committed HEAD binary. `cost_gate.py`
+exit 0 with `output.errors` 46 unchanged and `spine.nodes` +0.00%.
+
+**Residues, recorded and NOT pinned** (a known-open gap is a countdown, not a control).
+- **A PLAIN array literal with the wrong element COUNT against a tuple target** —
+  `const t: [number, number] = [1]` and `= [1, 2, 3]` and `= []` — is silent here and reported by
+  both references, which force-tuple the literal and print `[number]` /
+  `[number, number, number]` / `[]` as the source. A different mechanism (a contextual tuple type
+  for a literal), pre-dating both stages. Queued as (CHK.108).
+- **A rest parameter whose ELEMENT is itself an array** (`restArr(nums)` against
+  `...xs: string[][]`) is reported by both references against the ELEMENT (`string[]`);
+  `checkRestArgsAgainstArrayElementType` owns that verdict here and does not cover an array
+  element, so the row is a stated false negative. What the round's guard pins is that we do not
+  emit the WRONG-target row.
+- **A tuple source whose element UNION is object-carrying** (`[Foo, Bar]` → `Foo[]`) is refused by
+  `canUseTypeEngine` (a union source against an object target) and stays silent where both
+  references report. The conservative direction, and the same gap (CHK.101) records.
+- **FORM, MEASURED IDENTICAL ON THE PARENT so not this round's**: a union ELEMENT renders
+  parenthesized (`(ABC)[]` for pristine's `ABC[]`), and the per-element elaboration CHAIN under an
+  array-to-array row is absent for a union element.
+
 ### Round (P18.37) — an array literal with a spread gets a real type ((CHK.103) stage 1), and the ROUND-471 ARM IT WOKE was the regression (2026-09-07, recovered round)
 
 **Suite 18,098 → 18,110 / 0 / 3** — 12 pins in the new `ArrayLiteralSpreadElementTest`, every
@@ -2329,7 +2436,28 @@ parameter (`Promise<number>`, `Map<…>`), and `const l1: 5 = em`.
   the archive for "instantiateType for Type.Object" before touching the no-op. MEANING (false
   positive + lost diagnostic).
 
-- [ ] **(CHK.103) stage 2 — A LITERAL WHOSE *ONLY* ELEMENTS ARE SPREADS OF NON-TUPLE ARRAY-LIKES
+- [ ] **(CHK.108) A PLAIN ARRAY LITERAL WITH THE WRONG ELEMENT *COUNT* AGAINST A TUPLE TARGET IS
+  SILENT — `const t: [number, number] = [1]`, `= [1, 2, 3]` and `= []` are all silent here and
+  reported by BOTH references, which force-tuple the literal and print `[number]` /
+  `[number, number, number]` / `[]` as the SOURCE (measured 2026-09-07, (P18.38); scratch fixtures
+  `chk103b/p7` lines 7/9 and `chk103b/p9` line 2).** MECHANISM: tsc's `checkArrayLiteral(node,
+  CheckMode.Contextual, forceTuple = true)` types a literal under a TUPLE contextual type as a
+  TUPLE of its elements, so the arity mismatch is a tuple-vs-tuple relation failure; this checker
+  types every array literal as `Array<union of elements>` (`getTypeOfArrayLiteral`), so the source
+  is `number[]` and the ARITY is not expressible. (CHK.103) stage 2's B87.6b opening does not reach
+  it, because that emitter is the ARRAY-source-to-tuple one and a plain literal is tuple-like, i.e.
+  element-wise-owned. SEAM: a contextual-tuple form of `getTypeOfArrayLiteral` — the const-context
+  path (`constContextTupleOfArrayLiteral`) already builds exactly that tuple and is gated on
+  `objLitConstContextOf`, so the ask is a second entry gated on a TUPLE contextual type instead;
+  `checkArrayLiteralElementsAgainstTuple` (B407) then owns the per-element half and only the COUNT
+  row is new. RISK: MEDIUM — it changes the TYPE of every contextually-tuple-typed array literal, so
+  the 8-profile grid runs before any pin, and the const-context tuple's own pins
+  (`ArrayLiteralSpreadElementTest`) are the control that the two paths do not diverge. MEANING.
+
+- [x] **(CHK.103) stage 2 — CLOSED 2026-09-07 ((P18.38) note): the residue was NOT a spread question —
+  FIVE of the six rows carry no spread and the gap was the ARGUMENT reader's FP firewall having no
+  array-vs-array gate; the item's named seam covers one row of six. Ours goes 6 → 12 of the reference's
+  12 rows on its own fixture, all twelve byte-identical to pristine. ORIGINAL: A LITERAL WHOSE *ONLY* ELEMENTS ARE SPREADS OF NON-TUPLE ARRAY-LIKES
   IS STILL UNCHECKED AT THE ARGUMENT AND TUPLE-TARGET READERS (6 of the reference's 12 rows;
   stage 1 landed (P18.37) and closed the other 6, matching pristine byte for byte).** The
   remaining rows on the stage-1 fixture (`build/bench/chk103-a/f1`): `takeStrArr([...nums])`,
