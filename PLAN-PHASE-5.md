@@ -25,6 +25,51 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.42) — an intersection dedupes its constituents by type ID ((CHK.106)(b)), and (a) is BROADER than the item recorded (2026-09-07)
+
+**Suite 18,179 → 18,185 / 0 / 3** — 6 pins in the new `IntersectionConstituentDedupeTest`. Grid
+**8 × added=0 removed=0** on the final binary; `cost_gate.py` exit 0 (largest delta `mapped.hits`
+**+0.03%**, no rebaseline), `huge_methods.py --fail-over 0` exit 0, build warning-clean.
+
+**(CHK.106) CLOSED — one part fixed, three verified.** The item is a FORM bundle and its four parts
+were measured one by one against both references.
+
+**(b) FIXED, and it had MOVED since the item was written.** The item records the residue as
+`BP | undefined` vs `BP`; (CHK.101) closed the `| undefined` half, and what is left is
+`BP & BP` vs `BP` — an idempotent intersection. `getIntersectionType` flattened, dropped `unknown`
+and reduced primitives but never DEDUPED, where tsc's `addTypeToIntersection` keys its set by type
+ID. So a generic type guard `isBP<T>(x: T): x is T & BP` applied to a value that already satisfies
+it printed the constituent twice.
+
+**THE DEDUPE NEEDED AN EXEMPTION, AND THE EXEMPTION IS AN INTERNING DIVERGENCE RATHER THAN A RULE.**
+An unrestricted id-dedupe was built and measured: it also collapses
+`{ p: number } & { p: number }` — which BOTH references print in full — because two separate
+type-literal NODES are two types in tsc and ONE interned type here on the PROJECT path. An anonymous
+object constituent is therefore exempt. That leaves `T1 & T1` (an alias to an anonymous body) at
+today's `T1 & T1` where both references print `T1`, and the residue is recorded rather than bought:
+the only rule separating it from the anonymous pair reads `aliasDisplayMap`, which is populated
+FIRST-WINS during the walk and would make the dedupe a function of resolution ORDER (round 776).
+
+**(a) IS BROADER THAN THE ITEM RECORDED and stays refused.** It names the loss through a CARRIER
+instantiation (`Carrier<number>.o` reads `{ v: number; }` for `Obj<number>`); measured, a **DIRECT**
+`Fn<number>` annotation loses the name too (`(x: number) => number`), while a direct `Obj<number>`
+keeps it — so the residue is not only about carriers. It remains (INC.27)/(INC.29)'s interning-key
+question and is deliberately not attempted in `aliasDisplayMap`.
+
+**(c) is CLOSED by (CHK.100)** — a namespace-qualified enum reads `NS.E` on all three compilers —
+and **(d) is a REFERENCE DIVERGENCE**: for a const-asserted tuple spread pristine prints `(2 | 1)[]`
+and tsgo `(1 | 2)[]`, and ours follows tsgo. Both verified here.
+
+**Ablation: 3 arms; 2 discriminate and ONE IS RECORDED BLIND.** g1 dropping the dedupe (**2 RED**);
+g3 exempting EVERY `Type.Object` rather than only an anonymous one (**2 RED**, same set — a
+round-927 pair with g1 in effect, since a named constituent is the only thing the dedupe ever
+collapses in these pins); **g2, the unrestricted dedupe, reads 0 RED and is recorded as BLIND, not
+as a redundant guard**: under `diagnose()` the two anonymous literals get DISTINCT ids, so the
+exemption is unobservable there. Its evidence is the PROJECT path — on `build/bench/chk106/r4` the
+unrestricted build prints `Type '{ p: number; }'` and the guarded one prints
+`Type '{ p: number; } & { p: number; }'` — and a pin that could see it belongs in the `-project`
+module. Said in the pin's own KDoc rather than left to a reader.
+
 ### Round (P18.41) — a conditional of array literals under an array pattern types each branch at its own flow position ((CHK.107)), and the grid the item called the gate is a CONTROL (2026-09-07)
 
 **Suite 18,172 → 18,179 / 0 / 3** — 7 pins in the new `ConditionalArrayPatternTest`, plus the
@@ -2735,7 +2780,11 @@ parameter (`Promise<number>`, `Map<…>`), and `const l1: 5 = em`.
   `decoratorUsedBeforeDeclaration`, `forwardRefInClassProperties`,
   `useBeforeDeclaration_destructuring`, plus the 187 ACTIVE TS2454 baselines by fixture. MEANING.
 
-- [ ] **(CHK.106) FORM — display-only residues from the same probes, grouped (2026-09-06).** (a)
+- [x] **(CHK.106) CLOSED 2026-09-07 ((P18.42) note): (b) FIXED (it had MOVED to `BP & BP` vs `BP`
+  after (CHK.101), and the dedupe needs an ANONYMOUS-constituent exemption because our interner gives
+  two type-literal nodes ONE id where tsc gives two); (a) stays refused and is BROADER than recorded
+  (a DIRECT `Fn<number>` annotation loses the name too, not only a carrier member); (c) verified
+  closed by (CHK.100); (d) verified a reference divergence, ours = tsgo. ORIGINAL: FORM — display-only residues from the same probes, grouped (2026-09-06).** (a)
   an ALIAS NAME is lost through a carrier instantiation — `Obj<T>` → `{ v: T; }`, `Fn<T>` → `(x:
   T) => T`, `Fn<number>` → `(x: number) => number`, `CreateProgram<T>` (`chk99/r4`, `chk96-impl/g5`):
   `aliasDisplayMap` is keyed by the interned type id of the alias BODY and an instantiated

@@ -176312,7 +176312,28 @@ interface DataView {
         // If any constituent is never, the intersection is never
         if (flattened.any { it.flags.hasAny(TypeFlags.Never) }) return neverType
         // Remove unknown types (unknown & X = X)
-        val filtered = flattened.filter { !it.flags.hasAny(TypeFlags.Unknown) }
+        val unknownFiltered = flattened.filter { !it.flags.hasAny(TypeFlags.Unknown) }
+        // (CHK.106)(b): DEDUPE by type ID — tsc's `addTypeToIntersection` keys its set by
+        // id, so a constituent an instantiation repeats collapses. Measured: a generic type
+        // guard `isBP<T>(x: T): x is T & BP` applied to a `BP` displayed `Type 'BP & BP'`
+        // where both tsgo 7.0.2 and pristine `typescript@6.0.3` display `Type 'BP'`.
+        // Identity, not structure — two DISTINCT declarations of the same shape keep both
+        // slots (`A1 & B1`), exactly as tsc does.
+        //
+        // An ANONYMOUS object constituent is EXEMPT, and the reason is an interning
+        // divergence rather than a rule: two separate `{ p: number }` type-literal NODES
+        // are two types in tsc and ONE interned type here, so deduping them collapses
+        // `{ p: number; } & { p: number; }` — which both references print — to a single
+        // member. The exemption also leaves `T1 & T1` (an alias to an anonymous body) at
+        // today's `T1 & T1` where both references print `T1`; that residue is recorded
+        // rather than bought with a regression, because the only rule that separates the
+        // two reads `aliasDisplayMap`, which is populated FIRST-WINS during the walk and
+        // would make the dedupe a function of resolution ORDER (round 776).
+        val seenIds = HashSet<Int>(unknownFiltered.size)
+        val filtered = unknownFiltered.filter { t ->
+            if (t is Type.Object && t !is Type.Interface && t !is Type.Reference && t.symbol == null)
+                true else seenIds.add(t.id)
+        }
         if (filtered.isEmpty()) return unknownType
         // If any constituent is any, the intersection is any
         filtered.firstOrNull { it.flags.hasAny(TypeFlags.Any) }?.let { return it }

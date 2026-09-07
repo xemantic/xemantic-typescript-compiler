@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,414** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **198,435** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,26 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.42) — AN INTERSECTION DEDUPES ITS CONSTITUENTS BY TYPE ID ((CHK.106)(b)), AND (a) IS BROADER THAN THE ITEM RECORDED, 18,179 → 18,185 / 0 / 3 (2026-09-07).**
+**(CHK.106) CLOSED — one part fixed, three verified against both references.** (b) had MOVED since
+the item was written: (CHK.101) closed its `| undefined` half and what remained was `BP & BP` vs
+`BP`, an idempotent intersection — `getIntersectionType` flattened, dropped `unknown` and reduced
+primitives but never DEDUPED, where tsc's `addTypeToIntersection` keys its set by type ID. **The
+dedupe needed an exemption, and the exemption is an INTERNING DIVERGENCE rather than a rule**: an
+unrestricted id-dedupe also collapses `{ p: number } & { p: number }`, which both references print
+in full, because two separate type-literal NODES are two types in tsc and ONE interned type here on
+the project path. That leaves `T1 & T1` (an alias to an anonymous body) unfixed, recorded rather
+than bought — the only rule separating it reads `aliasDisplayMap`, which is FIRST-WINS during the
+walk and would make the dedupe a function of resolution ORDER (round 776). **(a) is BROADER than
+recorded and stays refused**: it names the loss through a CARRIER member, and a DIRECT `Fn<number>`
+annotation loses the name too while a direct `Obj<number>` keeps it — still (INC.27)/(INC.29)'s
+interning-key question. (c) verified closed by (CHK.100); (d) verified a reference divergence
+(pristine `(2 | 1)[]`, tsgo and ours `(1 | 2)[]`). 6 pins; 3 arms of which **one is recorded BLIND
+rather than redundant** — the unrestricted-dedupe arm reads 0 RED because `diagnose()` gives the two
+anonymous literals distinct ids, so the guard's evidence is the project path and a pin that could
+see it belongs in `-project`. Grid **8 × added=0 removed=0**, `cost_gate.py` exit 0,
+`huge_methods.py` exit 0, build warning-clean.
 
 **(P18.41) — A CONDITIONAL OF ARRAY LITERALS UNDER AN ARRAY PATTERN TYPES EACH BRANCH AT ITS OWN FLOW POSITION ((CHK.107)), AND THE GRID THE ITEM CALLED THE GATE IS A CONTROL, 18,172 → 18,179 / 0 / 3 (2026-09-07).**
 **(CHK.107) CLOSED, 1 → 6 of the reference's 6 rows.** `const [s, e] = typeof por === "number" ?
@@ -99,28 +119,3 @@ all read from pristine; 9 arms, 8 discriminating, a3/a4 a round-927 PAIR and a7 
 NON-DISCRIMINATED with its reason rather than claimed. Grid **8 × added=0 removed=0** on the final
 binary (a1's +1 row is the round's own positive control that the harness is live), `cost_gate.py`
 exit 0 (largest delta **+0.03%**, no rebaseline), `huge_methods.py` exit 0, build warning-clean.
-
-**(P18.37) — AN ARRAY LITERAL WITH A SPREAD GETS A REAL TYPE ((CHK.103) STAGE 1), AND THE ROUND-471 ARM IT WOKE WAS THE REGRESSION, 18,098 → 18,110 / 0 / 3 (2026-09-07, RECOVERED ROUND).**
-**(CHK.103) stage 1 landed; stage 2 re-queued with its 6 residual rows named.** Every array literal
-carrying a `...spread` was `any`, so `f([...xs])` went unchecked at every position and the var-decl
-string layer printed `Type 'array'`. A spread now contributes its ITERATED element type (array-like
-→ element type, tuple → element UNION, `string` → `string`, else the iteration type; REFUSED for a
-union / intersection / type parameter / `any` — stated false negatives, never a guess), a const
-context inlines a fixed tuple's slots, and the elaborator reports a spread at its own node. On the
-item's population fixture ours goes **1 → 6 of the reference's 12 rows, all six byte-identical to
-pristine `typescript@6.0.3`** — including the `readonly [number, string]` row where **tsgo 7.0.2
-diverges** (TS4104) and pristine outranks it.
-**THE ROUND WAS RECOVERED FROM AN INTERRUPTED SESSION, AND THAT IS THE FINDING.** The work sat
-uncommitted with a `Checker.class` NEWER than its source and a complete-looking `grid-after`, so it
-read as finished; the capture was in fact 4 minutes OLDER than the session's last fix, and re-running
-the grid on the final binary produced a **byte-identical** result — that last fix was INERT and the
-round as left would have shipped **a false TS2322 on 3 of the 8 profiles**. Cause: giving the shape a
-type at all made ROUND 471's literal-preserving arm reachable for the first time, and **that arm bails
-on any spread of its own** — it was built for tsc's own `invalidOperationsInPartialSemanticMode`
-(`services.ts:~1560`, no spread) and its sibling `invalidOperationsInSyntacticMode` (`:1607`) is the
-same shape WITH one, so the literal fell back to a path that widens each element to its base
-primitive and unioned a bare `string` into `readonly (keyof LanguageService)[]`. The dead session had
-patched the wrong layer; the landed fix is the spread contribution inside round 471's arm. Four
-20-second probes settled what three readings had not. 12 pins, all read from pristine; grid
-**8 × added=0 removed=0**; `cost_gate.py` exit 0 (`typeOfExpr.calls` **+0.07%** = 445 spread
-expressions no longer skipped, rebaselined in this commit); `huge_methods.py --fail-over 0` exit 0.

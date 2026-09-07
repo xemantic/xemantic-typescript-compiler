@@ -2119,3 +2119,28 @@ classes with coverage asserted from the XMLs, `cost_gate.py` exit 0 — minting 
 per compile moves **no counter**, the repo's own "an allocation count is not a cost" on a fourth
 instrument — `huge_methods.py` exit 0, grid 8×`added=0 removed=0`. No ambient read added to
 `TypeInstantiator`; ledger row 3 stands at four.
+
+**(P18.37) — AN ARRAY LITERAL WITH A SPREAD GETS A REAL TYPE ((CHK.103) STAGE 1), AND THE ROUND-471 ARM IT WOKE WAS THE REGRESSION, 18,098 → 18,110 / 0 / 3 (2026-09-07, RECOVERED ROUND).**
+**(CHK.103) stage 1 landed; stage 2 re-queued with its 6 residual rows named.** Every array literal
+carrying a `...spread` was `any`, so `f([...xs])` went unchecked at every position and the var-decl
+string layer printed `Type 'array'`. A spread now contributes its ITERATED element type (array-like
+→ element type, tuple → element UNION, `string` → `string`, else the iteration type; REFUSED for a
+union / intersection / type parameter / `any` — stated false negatives, never a guess), a const
+context inlines a fixed tuple's slots, and the elaborator reports a spread at its own node. On the
+item's population fixture ours goes **1 → 6 of the reference's 12 rows, all six byte-identical to
+pristine `typescript@6.0.3`** — including the `readonly [number, string]` row where **tsgo 7.0.2
+diverges** (TS4104) and pristine outranks it.
+**THE ROUND WAS RECOVERED FROM AN INTERRUPTED SESSION, AND THAT IS THE FINDING.** The work sat
+uncommitted with a `Checker.class` NEWER than its source and a complete-looking `grid-after`, so it
+read as finished; the capture was in fact 4 minutes OLDER than the session's last fix, and re-running
+the grid on the final binary produced a **byte-identical** result — that last fix was INERT and the
+round as left would have shipped **a false TS2322 on 3 of the 8 profiles**. Cause: giving the shape a
+type at all made ROUND 471's literal-preserving arm reachable for the first time, and **that arm bails
+on any spread of its own** — it was built for tsc's own `invalidOperationsInPartialSemanticMode`
+(`services.ts:~1560`, no spread) and its sibling `invalidOperationsInSyntacticMode` (`:1607`) is the
+same shape WITH one, so the literal fell back to a path that widens each element to its base
+primitive and unioned a bare `string` into `readonly (keyof LanguageService)[]`. The dead session had
+patched the wrong layer; the landed fix is the spread contribution inside round 471's arm. Four
+20-second probes settled what three readings had not. 12 pins, all read from pristine; grid
+**8 × added=0 removed=0**; `cost_gate.py` exit 0 (`typeOfExpr.calls` **+0.07%** = 445 spread
+expressions no longer skipped, rebaselined in this commit); `huge_methods.py --fail-over 0` exit 0.
