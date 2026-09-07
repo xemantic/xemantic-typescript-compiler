@@ -1957,3 +1957,25 @@ Corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline — combining every uni
 ~0.00% on its own — `huge_methods.py` exit 0 (`ccetUnionCalleeChecks` SHRANK ~100 lines), grid
 8×`added=0 removed=0`. Stage 2 stays open: the array fallback, `getCallSignaturesOfType`'s union
 arm, callback contextual typing, the optional-call result and `this` params/TS2684.
+
+**(P18.30) — THE ARRAY FALLBACK, INTERSECTED CALLBACK SIGNATURES AND THE OPTIONAL-CALL RESULT (STAGE 2 OF (CHK.97)), AND A `noImplicitAny` GATE THAT WAS INERT ON EVERY STRICT PROJECT, 17,916 → 17,932 / 0 / 3 (2026-09-06).**
+**(CHK.97) stage 2 LANDED** — three of five deliverables: tsc's ARRAY FALLBACK (checker.ts:15949),
+derived from the RECEIVER because a method type here has no parent symbol, which costs one extra
+CALLABLE gate a signature-list route would not need; tsc's `getIntersectedSignatures` (:33085),
+one `intersection` flag on `combineUnionParameters` wired through `callableSignaturesForCtx` and
+`cpaComputeArgCtxTypes`, so a callback ARGUMENT of a union callee is typed and graded with a
+wrong-typed USE rather than the TS7006 silence; and the OPTIONAL-call result. Matrix 55 → 61 of 73
+pristine rows, ours-only unchanged at 3 (display only). **Three more of the item's claims are
+measured wrong**: retiring the `≥2` suppression does NOT make r09 report (a SECOND suppression,
+the `differ` branch's non-generic silence, sits above it); the `noImplicitAny` gate written as tsc
+spells it is **inert on every `strict` project** — the field is not implied by `strict` here and
+the repo-wide spelling is the disjunction (29 sites), caught only because the build measured ZERO
+row movement, which a green suite/corpus/grid all look like too; and our `identityRelation` is
+LENIENT for a function type nested in a signature parameter, which is what keeps the fallback out
+of tuple-union `.filter`. **The round's own instrument hazard**: the implementation subagent ran
+its grid in the same `build/bench` directory this session had snapshotted its BEFORE arm into, so
+the captures were overwritten with the post-change binary — the grid script's `sha256sum` refusal
+fired, and the arm was rebuilt from `git show HEAD:` into a directory the subagent never saw. 16
+pins, 11 arms (9 discriminating; a2/a10 recorded as redundant guards on every reachable shape and
+kept as tsc's own rules). Corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline,
+`huge_methods.py` exit 0, grid 8×`added=0 removed=0`.

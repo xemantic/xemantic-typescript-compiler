@@ -25,6 +25,83 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.35) — three shipped narrowing defects close, and (CHK.101)'s own deliverable is BUILT, MEASURED CORRECT and REFUSED on grid evidence (2026-09-07)
+
+**Suite 18,043 → 18,076 / 0 / 3** — 33 pins in the new `NullishUnionAssignabilityTest`; no baseline
+moved and no `LogicalParityDivergence` is needed. Same orchestration: an implementation subagent
+owned Gradle; the full suite, `cost_gate.py`, `huge_methods.py` and an independent 8-profile grid
+ran here.
+
+**THE ITEM'S DELIVERABLE (a) IS REFUSED — and that is the round's most valuable output.** The
+nullish-constituent emission was BUILT, measured **correct on 20 of 20 reference rows**, and then
+**removed entirely** because the grid reads **+19 to +21 ours-only rows on EVERY profile** for its
+reader half and **+4 to +7** for its argument half. Correct on every fixture and unlandable on real
+code is exactly the shape the 8-profile grid exists to catch, and the refusal is verified by VALUE
+rather than by absence: the item's own fixture reads parent = 2 rows, final = 2 rows, identical.
+The queue item is updated with the four gaps that must close first.
+
+**WHAT DID LAND — three flow-narrowing fixes, each mirroring a named tsc rule, and TWO OF THEM WERE
+SHIPPED OURS-ONLY FALSE POSITIVES.** Verified here against tsgo 7.0.2 and pristine 6.0.3 directly:
+all three shapes are silent on both references and are now silent on ours.
+- **A1** `narrowByLooseNullishEquality` — a loose `==` / `!=` against `null` or `undefined` tests
+  BOTH nullish values (tsc's `TypeFacts.EQUndefinedOrNull` / `NEUndefinedOrNull` in
+  `narrowTypeByEquality`). `f(x: string | undefined) { if (x != null) takeS(x) }` was an ours-only
+  TS2345.
+- **A2** `defaultStrippedParamType` — a DEFAULTED parameter does not see `undefined` inside the body
+  (tsc's `getTypeForVariableLikeDeclaration` → `getNonUndefinedType`; `undefined` only, never
+  `null`, and the initializer's own type is consulted). `f(x: string | undefined = "a") { takeS(x) }`
+  was an ours-only TS2345.
+- **A3** `combineBinaryTypes`' logical-assignment arm — the expression VALUE is the surviving LHS ∪
+  RHS (`x ??= v` is `NonNullable<x> | v`, `x ||= v` is `truthy(x) | v`, `x &&= v` is `falsy(x) | v`);
+  it had been unioning the WHOLE declared LHS back in.
+
+**FOUR MEASURED CONTRADICTIONS OF THE ITEM — the eighth round running.**
+- **"the same pair reports at a declaration and a return" is FALSE**, and it held in the item only
+  because its fixture used a UNION target, which `canUseTypeEngine` admits by a separate line. For a
+  NON-union object target — a named interface, a class, an object-literal alias, an array, a
+  function type — the declaration, return AND assignment readers are silent too: one fixture reads
+  **20 rows on both references against 2 on ours**. So (a) is a `canUseTypeEngine` hole at least as
+  much as an argument-gate one, and the item's stated seam covers under half of it.
+- **The item's named grid risk is not the real one.** It named `watchUtilities.ts:611/628` (the
+  truthiness early-return and the negated `isArray` guard); **both already narrow correctly on the
+  parent**, measured directly. The actual blockers are FOUR other narrowing gaps, invisible until
+  now precisely because the diagnostic that would expose them is the one (a) adds: a `??=` / `||=`
+  whose RHS the walk cannot prove non-nullish; an optional-chain truthiness guard not narrowing its
+  RECEIVER; `getTypeOfExpression` never flow-narrowing, so a `??` OPERAND is read un-narrowed; and
+  the memoization idiom's final read where the assignment RHS is a body-local const typing `any`
+  (sub-part (c) — **13 of the 19 reader rows**). A1 and A3 close two of the four.
+- **Sub-part (c) is broader than stated** — not only `const x = mk()`: `const y = x!`,
+  `const y = x as Pr` and even `const y = x` after a narrowing all read `any` (3 rows lost against
+  both references).
+- **The one thing the item got right is its mechanism**: the nullish verdict IS decidable without
+  structural completeness, and the built emission matched both references exactly. It is the
+  BLAST RADIUS, not the rule, that refuses it.
+
+**GATES.** Suite **18,076 / 0 / 3**, corpus **8,837 / 0**. At-risk classes derived by grepping test
+SOURCES (148 classes) with **coverage asserted from the result XMLs** — 150 classes / 1,469 tests /
+0 failed, 0 missing. `cost_gate.py` **exit 0** (`typeOfExpr.calls` +0.01%, `narrow.memoServed`
+−0.07%, `spine.nodes` and `output.errors` +0.00% / 46 → 46). `huge_methods.py --fail-over 0`
+**exit 0**. **Grid 8 × `added=0 removed=0`** (`scripts/chk101-grid.sh`, BEFORE arm = the committed
+`183cce3a1` binary, sha-guarded), and the rebuilt binary was re-verified row-for-row against the
+grid's AFTER arm — (CHK.54)'s trap. No double emission: all three fixes change TYPES only, no new
+emission site exists, and every fixture matches the references' row COUNT exactly.
+
+**ARMS — 7, six discriminating.** a1 A1's loose routing 8 RED; a2 A1's `keep` half **1, uniquely**;
+a3 A2 off 4; a4 A2 ignoring the initializer's own type **1, uniquely**; a5 A3 unioning the whole LHS
+back 4; a6 A3's `&&=` keeping truthy not falsy **2, uniquely**; a7 A3's `never` guard **0 — a
+MEASURED REDUNDANT GUARD with a stated mechanism** (`getUnionType` already drops a `never` member),
+kept as intent and not claimed as covered. **Two pins read 0 RED and are recorded BLIND, not
+redundant** — their observing mechanism IS (a), which this round refused; they are renamed and kept
+with a comment, and go live the moment (a) lands. **And two of the round's own pins were wrong, not
+the compiler**: literal-union controls expecting `'1'` / `'2'` where ours, tsgo AND pristine all
+print `'number'` ((PARITY.1)(b)'s display generalization); replaced with `1 | 3`-shaped targets where
+the generalization is suppressed and the control actually discriminates — the original pair would
+have been blind in both directions.
+
+**LEFT**: (a), blocked on the four narrowing gaps above, each with a reduced fixture recorded;
+(b) the generic-guard constraint fallback, not reached; (c) measured and characterised, not
+attempted.
+
 ### Round (P18.34) — a namespace-qualified enum member narrows ((CHK.100)), and the grid's ADDED row was the positive control (2026-09-06)
 
 **Suite 18,021 → 18,043 / 0 / 3** — 22 pins in the new `QualifiedEnumDiscriminantTest`; no baseline
@@ -3343,7 +3420,33 @@ prediction: 17,343 / 0 / 3.**
   profiles. CORPUS: no ACTIVE baseline carries the shape; the enum-discriminant guard set is the
   (REL.2)/(CHK.85) pin classes. MEANING.
 
-- [ ] **(CHK.101) A NULLISH-CARRYING OBJECT UNION ARGUMENT AGAINST AN INTERFACE OR INTERFACE-
+- [ ] **(CHK.101) DELIVERABLE (a) BUILT, MEASURED CORRECT AND *REFUSED* 2026-09-07 ((P18.35) note) — correct on
+  20 of 20 reference rows and **+19 to +21 ours-only rows on EVERY profile** for its reader half, +4 to +7
+  for its argument half; removed entirely, verified by VALUE (the item's own fixture reads parent = 2,
+  final = 2). THREE OTHER shipped narrowing defects closed instead, two of them ours-only FALSE POSITIVES:
+  A1 `narrowByLooseNullishEquality` (loose `==`/`!=` against `null`/`undefined` tests BOTH nullish values,
+  tsc's `TypeFacts.EQUndefinedOrNull`), A2 `defaultStrippedParamType` (a DEFAULTED parameter does not see
+  `undefined` in the body, tsc's `getNonUndefinedType`), A3 the logical-assignment VALUE (`x ??= v` is
+  `NonNullable<x> | v`, not the whole declared LHS). 33 pins, 7 arms (a7 a measured redundant guard with a
+  mechanism; two pins recorded BLIND because their observing mechanism IS (a)); suite 18,076/0/3, corpus
+  8,837/0, `cost_gate.py` exit 0, grid 8×0/0.
+  **FOUR of the item's claims are measured WRONG.** "The same pair reports at a declaration and a return"
+  held only because the fixture used a UNION target, which `canUseTypeEngine` admits by its own line — for
+  a NON-union object target the declaration, return AND assignment readers are silent too (20 reference
+  rows against 2 of ours), so (a) is a `canUseTypeEngine` hole at least as much as an argument-gate one and
+  the stated seam covers under half of it. The named grid risk (`watchUtilities.ts:611/628`) is NOT the
+  real one — both shapes already narrow on the parent. Sub-part (c) is broader than stated (`const y = x!`,
+  `const y = x as Pr`, even `const y = x` after a narrowing all read `any`). Only the MECHANISM is right:
+  the nullish verdict is decidable without structural completeness, and the built emission matched both
+  references exactly — it is the BLAST RADIUS that refuses it.
+  **BEFORE RE-ATTEMPTING (a), CLOSE THESE FOUR NARROWING GAPS** (each with a reduced fixture, invisible
+  until now precisely because (a)'s diagnostic is what would expose them): (i) a `??=` / `||=` whose RHS
+  the walk cannot prove non-nullish (`moduleSpecifiers.ts:418`) — A1/A3 close part of this; (ii) an
+  optional-chain truthiness guard does not narrow its RECEIVER (`checker.ts:7735`); (iii)
+  `getTypeOfExpression` never flow-narrows, so a `??` OPERAND is read un-narrowed
+  (`expressionToTypeNode.ts:662`); (iv) the memoization idiom's final read where the assignment RHS is a
+  body-local const typing `any` — sub-part (c), and **13 of the 19 reader rows**. (b) the generic-guard
+  constraint fallback was not reached. ORIGINAL ITEM: A NULLISH-CARRYING OBJECT UNION ARGUMENT AGAINST AN INTERFACE OR INTERFACE-
   UNION PARAMETER IS SILENT AT THE ARGUMENT POSITION — `useM(x)` with `x: Pr | BP | undefined`
   against `p: Pr | BP` reports nothing, while the same pair reports at a declaration and a
   return, and `string | undefined` → `string` reports as an argument — MEASURED 2026-09-06

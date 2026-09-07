@@ -127264,7 +127264,55 @@ interface DataView {
             enumImpossibleEqualityNarrow(t, other, equal)?.let { return it }
             return t
         }
+        // (CHK.101)(A1): LOOSE equality against a nullish KEYWORD tests BOTH nullish
+        // values — `x != null` is true exactly when `x` is neither `null` nor
+        // `undefined` (tsc's `TypeFacts.EQUndefinedOrNull` / `NEUndefinedOrNull`,
+        // checker.ts `narrowTypeByEquality`). Before this, the loose operators were
+        // routed into [narrowUnionByLiteral] identically to the STRICT ones, so
+        // `x != null` on a `Pr | undefined` removed only the `null` that was never
+        // there and the reference kept its `undefined`.
+        //
+        // MEASURED AS A SHIPPED FALSE POSITIVE, not merely a lost narrowing: with a
+        // PRIMITIVE non-nullish part the argument reader already emits, so
+        // `function q(x: string | undefined) { if (x != null) takeS(x) }` reported an
+        // ours-only `TS2345` that neither tsgo 7.0.2 nor pristine typescript@6.0.3
+        // has. It is also the precondition for this round's own emission: `!= null`
+        // is the commonest nullish guard in real TypeScript, so emitting the nullish
+        // refusal without it would have manufactured that false positive across every
+        // object-typed union in the program.
+        //
+        // Confined to the two nullish KEYWORD literals: for any other literal the loose
+        // and strict operators do differ (`0 == ""`), and modelling JavaScript's
+        // coercion table is neither needed here nor safe to guess at.
+        if ((expr.operator == SyntaxKind.EqualsEquals ||
+                expr.operator == SyntaxKind.ExclamationEquals) &&
+            (literalType === nullType || literalType === undefinedType)
+        ) return narrowByLooseNullishEquality(t, keep = equal)
         return narrowUnionByLiteral(t, literalType, keep = equal)
+    }
+
+    /**
+     * (CHK.101)(A1): the `== null` / `!= null` (and `== undefined` / `!= undefined`)
+     * narrowing, which tests the nullish PAIR rather than one keyword.
+     *
+     * [keep] = true is the branch where the reference IS nullish, so only the nullish
+     * constituents survive; [keep] = false is [narrowByExcludingNullUndefined], the
+     * established helper every other nullish-stripping site already uses.
+     *
+     * Both directions are conservative in the same way the surrounding walkers are: a
+     * filter that keeps NOTHING returns [t] unchanged rather than `never`. Adopting
+     * `never` here would DELETE diagnostics inside the branch, which is the direction
+     * CLAUDE.md warns about, and nothing in this round needs it.
+     */
+    private fun narrowByLooseNullishEquality(t: Type, keep: Boolean): Type {
+        if (!keep) return narrowByExcludingNullUndefined(t)
+        if (t !is Type.Union) return t
+        val kept = t.types.filter { it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+        return when {
+            kept.isEmpty() || kept.size == t.types.size -> t
+            kept.size == 1 -> kept[0]
+            else -> getUnionType(kept)
+        }
     }
 
     /**
@@ -134873,11 +134921,40 @@ interface DataView {
             SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals, SyntaxKind.CaretEquals,
             SyntaxKind.LessThanLessThanEquals, SyntaxKind.GreaterThanGreaterThanEquals,
             SyntaxKind.GreaterThanGreaterThanGreaterThanEquals -> leftType
-            // Logical assignment ops — type is the union of LHS (kept) and RHS (assigned).
+            // Logical assignment ops — type is the union of the LHS part that SURVIVES
+            // the short circuit and the RHS that is assigned when it does not.
+            //
+            // (CHK.101): before this the WHOLE left type was unioned in, so
+            // `return type.resolvedBase ??= errorType` read `Ty | undefined` and reported
+            // an ours-only TS2322 — the memoization idiom, and the shape tsc's own
+            // `checker.ts` writes at `getBaseConstructorTypeOfClass`. The surviving part is
+            // exactly what the `&&` / `||` arms just below already compute for the
+            // non-assigning operators, so the three assigning ones are brought onto the
+            // same two helpers rather than a fourth rule:
+            //   `x ??= v` is `NonNullable<x> | v`  (the RHS runs only when x is nullish)
+            //   `x ||= v` is `truthy(x)   | v`
+            //   `x &&= v` is `falsy(x)    | v`
+            // Both helpers are conservative in the same direction the readers rely on — a
+            // filter that keeps nothing returns the type unchanged rather than `never` —
+            // so this can only ever make the expression's type NARROWER, never wider, and
+            // a narrower source is only ever more assignable.
             SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.BarBarEquals,
             SyntaxKind.QuestionQuestionEquals -> {
                 val rightT = contextualAssignmentRhsType(leftType, right)
-                if (leftType === rightT) leftType else getUnionType(listOf(leftType, rightT))
+                val keptLeft = when (operator) {
+                    SyntaxKind.QuestionQuestionEquals -> narrowByExcludingNullUndefined(leftType)
+                    SyntaxKind.BarBarEquals -> narrowByTruthiness(leftType, truthy = true)
+                    else -> narrowByTruthiness(leftType, truthy = false)
+                }
+                // [narrowByTruthiness] CAN answer `never` (an always-truthy LHS under
+                // `&&=`, an always-falsy one under `||=`), which is the correct verdict
+                // "the LHS never survives" — take the RHS alone rather than minting a
+                // union with a `never` member in it.
+                when {
+                    keptLeft === neverType -> rightT
+                    keptLeft === rightT -> keptLeft
+                    else -> getUnionType(listOf(keptLeft, rightT))
+                }
             }
 
             // Logical → union of operands
@@ -150925,6 +151002,43 @@ interface DataView {
                     sig.resolvedReturnType is Type.TypeParam
             }
 
+    /**
+     * (CHK.101)(A2): a parameter with a DEFAULT VALUE does not see `undefined` inside the
+     * body — tsc's `getTypeForVariableLikeDeclaration` strips it
+     * (`declaration.initializer && !(getFalsyFlags(...) & TypeFlags.Undefined)`), because
+     * the default is what the body receives when the caller passes nothing.
+     *
+     * The strip is BODY-SIDE ONLY, which is why it lives here rather than in
+     * [getTypeOfSymbol]: a caller still sees `Pr | undefined` at the call site (the
+     * parameter is optional to it), and the two questions must not be conflated.
+     *
+     * `undefined` ONLY, never `null`: measured against tsgo 7.0.2 and pristine
+     * typescript@6.0.3, `x: Pr | null = null` keeps its `null` inside the body — the
+     * default IS `null` — while `x: Pr | undefined = { pk: 1 }` reads `Pr` there. The
+     * initializer's own type is consulted for exactly that reason, and it is consulted
+     * only for the parameters whose annotation carries `undefined` at all, which is a
+     * handful per program.
+     *
+     * MEASURED AS A SHIPPED FALSE POSITIVE like its (A1) sibling: with a primitive
+     * non-nullish part the argument reader already emitted, so
+     * `function q(x: string | undefined = "a") { takeS(x) }` reported an ours-only
+     * `TS2345` neither reference has.
+     */
+    private fun defaultStrippedParamType(param: Parameter, declared: Type): Type {
+        val init = param.initializer ?: return declared
+        if (declared !is Type.Union) return declared
+        if (!declared.types.any { it.flags.hasAny(TypeFlags.Undefined) }) return declared
+        val initType = getTypeOfExpression(init)
+        if (initType === errorType) return declared
+        if (initType === anyType || initType.flags.hasAny(TypeFlags.Undefined)) return declared
+        val kept = declared.types.filter { !it.flags.hasAny(TypeFlags.Undefined) }
+        return when {
+            kept.isEmpty() -> declared
+            kept.size == 1 -> kept[0]
+            else -> getUnionType(kept)
+        }
+    }
+
     private fun populateParameterLocalTypes(parameters: List<Parameter>) {
         for (param in parameters) {
             val paramName = param.name
@@ -150949,7 +151063,7 @@ interface DataView {
                     propertyAccessEnclosingNamespaces.isNotEmpty()
                 if (bridgeNs) inferenceNamespaceStack.addLast(propertyAccessEnclosingNamespaces.last())
                 try {
-                    val resolvedType = getTypeFromTypeNode(paramType)
+                    val resolvedType = defaultStrippedParamType(param, getTypeFromTypeNode(paramType))
                     if (resolvedType !== anyType && resolvedType !== errorType) {
                         // B516: do NOT register a function-typed param whose signature
                         // references a type parameter — calls to it are owned by

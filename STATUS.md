@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **197,629** lines (191,070 when the metric was created; the (P18.9)-(P18.34) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **197,743** lines (191,070 when the metric was created; the (P18.9)-(P18.35) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,29 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.35) — THREE SHIPPED NARROWING DEFECTS CLOSE, AND (CHK.101)'s OWN DELIVERABLE IS BUILT, MEASURED CORRECT AND *REFUSED* ON GRID EVIDENCE, 18,043 → 18,076 / 0 / 3 (2026-09-07).**
+**The item's deliverable (a) is REFUSED, and that is the round's most valuable output.** The
+nullish-constituent emission was built, measured **correct on 20 of 20 reference rows**, and removed
+entirely: the grid reads **+19 to +21 ours-only rows on EVERY profile** for its reader half. Correct
+on every fixture and unlandable on real code is exactly what the 8-profile grid exists to catch, and
+the refusal is verified by VALUE (the item's fixture reads parent = 2, final = 2). **What landed
+instead are three OTHER shipped narrowing defects, two of them ours-only FALSE POSITIVES** —
+verified here against both references: a loose `==`/`!=` against `null` now tests BOTH nullish
+values (tsc's `TypeFacts.EQUndefinedOrNull`), a DEFAULTED parameter no longer sees `undefined` in
+its body (`getNonUndefinedType`), and a logical assignment's VALUE is the surviving LHS ∪ RHS rather
+than the whole declared LHS. **Four of the item's claims are measured wrong**: "the same pair
+reports at a declaration and a return" held only because its fixture used a UNION target, which
+`canUseTypeEngine` admits by its own line — for a non-union object target every position is silent
+(20 reference rows against 2 of ours), so the stated seam covers under half the defect; its named
+grid risk already narrows on the parent; and sub-part (c) is broader than stated. Only the mechanism
+was right. **The four narrowing gaps that must close before (a) is re-attempted are now recorded
+with reduced fixtures** — they were invisible until now precisely because (a)'s diagnostic is what
+would expose them. 33 pins, 7 arms (one a measured redundant guard with a mechanism, two recorded
+BLIND because their observing mechanism IS (a)); two of the round's own pins were wrong rather than
+the compiler, expecting `'1'`/`'2'` where all three compilers print `'number'`. Corpus 8,837/0,
+at-risk coverage asserted from the result XMLs (150 classes, 0 missing), `cost_gate.py` exit 0,
+`huge_methods.py` exit 0, grid 8×`added=0 removed=0`.
 
 **(P18.34) — A NAMESPACE-QUALIFIED ENUM MEMBER NARROWS ((CHK.100)), AND THE GRID'S *ADDED* ROW WAS THE POSITIVE CONTROL, 18,021 → 18,043 / 0 / 3 (2026-09-06).**
 **(CHK.100) CLOSED.** `resolveEnumSymbolForQualifiedPath` is a dotted-path container descent
@@ -100,25 +123,3 @@ a contextually-typed parameter becomes a NARROWABLE REFERENCE where an `any` one
 `spine.nodes` +0.00%, `output.errors` 46 → 46. Corpus 8,837/0, `huge_methods.py` exit 0, grid
 8×`added=0 removed=0` with the BEFORE arm rebuilt in a directory no subagent wrote to. 19 arms
 (a12 recorded as a redundant guard).
-
-**(P18.30) — THE ARRAY FALLBACK, INTERSECTED CALLBACK SIGNATURES AND THE OPTIONAL-CALL RESULT (STAGE 2 OF (CHK.97)), AND A `noImplicitAny` GATE THAT WAS INERT ON EVERY STRICT PROJECT, 17,916 → 17,932 / 0 / 3 (2026-09-06).**
-**(CHK.97) stage 2 LANDED** — three of five deliverables: tsc's ARRAY FALLBACK (checker.ts:15949),
-derived from the RECEIVER because a method type here has no parent symbol, which costs one extra
-CALLABLE gate a signature-list route would not need; tsc's `getIntersectedSignatures` (:33085),
-one `intersection` flag on `combineUnionParameters` wired through `callableSignaturesForCtx` and
-`cpaComputeArgCtxTypes`, so a callback ARGUMENT of a union callee is typed and graded with a
-wrong-typed USE rather than the TS7006 silence; and the OPTIONAL-call result. Matrix 55 → 61 of 73
-pristine rows, ours-only unchanged at 3 (display only). **Three more of the item's claims are
-measured wrong**: retiring the `≥2` suppression does NOT make r09 report (a SECOND suppression,
-the `differ` branch's non-generic silence, sits above it); the `noImplicitAny` gate written as tsc
-spells it is **inert on every `strict` project** — the field is not implied by `strict` here and
-the repo-wide spelling is the disjunction (29 sites), caught only because the build measured ZERO
-row movement, which a green suite/corpus/grid all look like too; and our `identityRelation` is
-LENIENT for a function type nested in a signature parameter, which is what keeps the fallback out
-of tuple-union `.filter`. **The round's own instrument hazard**: the implementation subagent ran
-its grid in the same `build/bench` directory this session had snapshotted its BEFORE arm into, so
-the captures were overwritten with the post-change binary — the grid script's `sha256sum` refusal
-fired, and the arm was rebuilt from `git show HEAD:` into a directory the subagent never saw. 16
-pins, 11 arms (9 discriminating; a2/a10 recorded as redundant guards on every reachable shape and
-kept as tsc's own rules). Corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline,
-`huge_methods.py` exit 0, grid 8×`added=0 removed=0`.
