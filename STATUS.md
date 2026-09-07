@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,359** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **198,414** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,24 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.41) — A CONDITIONAL OF ARRAY LITERALS UNDER AN ARRAY PATTERN TYPES EACH BRANCH AT ITS OWN FLOW POSITION ((CHK.107)), AND THE GRID THE ITEM CALLED THE GATE IS A CONTROL, 18,172 → 18,179 / 0 / 3 (2026-09-07).**
+**(CHK.107) CLOSED, 1 → 6 of the reference's 6 rows.** `const [s, e] = typeof por === "number" ?
+[por, undefined] : [por.pos, por.end]` read both leaves as `any`. tsc pushes the pattern's implied
+contextual type into BOTH branches, so the source is `[number, undefined] | [number, number]` and
+`bindingElementType`'s union arm gives `number` / `number | undefined`; the reconstruction is a
+UNION of the branch tuples with **each element read AT ITS OWN FLOW POSITION** — the one thing
+(CHK.96) stage 2 could not do, since `getTypeOfExpression` never flow-narrows and an un-narrowed
+branch tuple reads slot 0 as `number | { pos: number; end: number; }`. The narrowing is a PARAMETER
+of `arrayLiteralAsDestructuringTuple`, so the plain array-literal path is untouched. **The item's
+gate claim is measured wrong and saying so is the point**: it predicts `removed=1` at
+`services.ts:3264` and the grid is `added=0 removed=0` on all eight — the refusal made both leaves
+`any`, which is SILENT, and that site's leaves feed a `RefactorContext` whose members are exactly
+`number` and `number | undefined`, so neither arm has a wrong-typed USE to report. The grade is the
+fixture, whose shape is `getRefactorContext` verbatim. 7 pins plus the stage-2 REFUSAL pin inverted;
+3 arms all discriminating, one of them REDESIGNED after reading the same red set as another
+(refusing every conditional is refusing the mechanism). `cost_gate.py` exit 0, `huge_methods.py`
+exit 0, build warning-clean.
 
 **(P18.40) — TS2454 FOR AN `if` JOIN, AND THE TS2448 CO-EMIT'S RULE WAS THE *TYPE* AND NOT CONST-NESS ((CHK.105)), 18,157 → 18,172 / 0 / 3 (2026-09-07).**
 **(CHK.105) CLOSED for (a) and the `if` join; (CHK.110) queued with all three residues attributed.**
@@ -106,29 +124,3 @@ patched the wrong layer; the landed fix is the spread contribution inside round 
 20-second probes settled what three readings had not. 12 pins, all read from pristine; grid
 **8 × added=0 removed=0**; `cost_gate.py` exit 0 (`typeOfExpr.calls` **+0.07%** = 445 spread
 expressions no longer skipped, rebaselined in this commit); `huge_methods.py --fail-over 0` exit 0.
-
-**(P18.36) — A GENERIC INTERFACE'S FN-TYPED MEMBER STOPS BEING FROZEN AT FIRST TOUCH ((CHK.102)), AND THE FREEZER IS INV.5(c)'s CACHE, 18,076 → 18,098 / 0 / 3 (2026-09-07).**
-**(CHK.102) CLOSED.** `interface Box<T> { f: (x: T) => T }` was ONE object shared by every
-instantiation and frozen at first touch, so `Box<string>.f` read `(x: number) => number` after a
-`Box<number>` was touched first — a false TS2345, a LOST one and the wrong display, **in both
-declaration orders**. The two `substituteOuterTypeArgs*` helpers are now NON-MUTATING (round 465's
-"mints FRESH objects, never mutates", applied to the one member of the family that kept the
-in-place form), with a signature's own type parameters CLONED when the outer mapper moves a
-constraint or default. **The item's mechanism is wrong in four places, found with an identity PROBE
-rather than by reading**: the freezer is INV.5(c)'s context-keyed `mappedNodeTypes` cache and NOT
-the `resolveReferenceMembers` seam the item named (never touched) — two instantiations of one
-interface produce an identical fingerprint because the target's own `Type.TypeParam` is in scope
-both times, so **17.39's KDoc precondition "rawType is always freshly allocated" has been FALSE
-since INV.5(c) added a second cache below the bypass**; there is no `PropertySignature` node kind in
-this parser at all; the grid is a control not because the shape is unreached but because a frozen
-member never DECIDES a diagnostic there (the compiler profile makes **6,383 minting calls over 46
-nodes asked with ≥2 distinct argument vectors**, the most-exposed being `lib.es5.d.ts`'s `Array<T>`
-at 30); and two freezes go unnamed — a method's fn-typed PARAMETER, and an inner generic
-signature's constraint, which survives a fix to the object half. 22 pins, every claim in BOTH
-orders (one order is green on the frozen binary — the item's own trap, cleared); 5 arms, with a2/a3
-a round-927 pair and **a5 exposing two BLIND pins** (discarding the mint yields the raw `T`, one
-absence replacing another), recorded rather than claimed. Corpus 8,837/0, at-risk set 151/151
-classes with coverage asserted from the XMLs, `cost_gate.py` exit 0 — minting ~6,400 fresh objects
-per compile moves **no counter**, the repo's own "an allocation count is not a cost" on a fourth
-instrument — `huge_methods.py` exit 0, grid 8×`added=0 removed=0`. No ambient read added to
-`TypeInstantiator`; ledger row 3 stands at four.

@@ -2093,3 +2093,29 @@ BLIND because their observing mechanism IS (a)); two of the round's own pins wer
 the compiler, expecting `'1'`/`'2'` where all three compilers print `'number'`. Corpus 8,837/0,
 at-risk coverage asserted from the result XMLs (150 classes, 0 missing), `cost_gate.py` exit 0,
 `huge_methods.py` exit 0, grid 8×`added=0 removed=0`.
+
+**(P18.36) — A GENERIC INTERFACE'S FN-TYPED MEMBER STOPS BEING FROZEN AT FIRST TOUCH ((CHK.102)), AND THE FREEZER IS INV.5(c)'s CACHE, 18,076 → 18,098 / 0 / 3 (2026-09-07).**
+**(CHK.102) CLOSED.** `interface Box<T> { f: (x: T) => T }` was ONE object shared by every
+instantiation and frozen at first touch, so `Box<string>.f` read `(x: number) => number` after a
+`Box<number>` was touched first — a false TS2345, a LOST one and the wrong display, **in both
+declaration orders**. The two `substituteOuterTypeArgs*` helpers are now NON-MUTATING (round 465's
+"mints FRESH objects, never mutates", applied to the one member of the family that kept the
+in-place form), with a signature's own type parameters CLONED when the outer mapper moves a
+constraint or default. **The item's mechanism is wrong in four places, found with an identity PROBE
+rather than by reading**: the freezer is INV.5(c)'s context-keyed `mappedNodeTypes` cache and NOT
+the `resolveReferenceMembers` seam the item named (never touched) — two instantiations of one
+interface produce an identical fingerprint because the target's own `Type.TypeParam` is in scope
+both times, so **17.39's KDoc precondition "rawType is always freshly allocated" has been FALSE
+since INV.5(c) added a second cache below the bypass**; there is no `PropertySignature` node kind in
+this parser at all; the grid is a control not because the shape is unreached but because a frozen
+member never DECIDES a diagnostic there (the compiler profile makes **6,383 minting calls over 46
+nodes asked with ≥2 distinct argument vectors**, the most-exposed being `lib.es5.d.ts`'s `Array<T>`
+at 30); and two freezes go unnamed — a method's fn-typed PARAMETER, and an inner generic
+signature's constraint, which survives a fix to the object half. 22 pins, every claim in BOTH
+orders (one order is green on the frozen binary — the item's own trap, cleared); 5 arms, with a2/a3
+a round-927 pair and **a5 exposing two BLIND pins** (discarding the mint yields the raw `T`, one
+absence replacing another), recorded rather than claimed. Corpus 8,837/0, at-risk set 151/151
+classes with coverage asserted from the XMLs, `cost_gate.py` exit 0 — minting ~6,400 fresh objects
+per compile moves **no counter**, the repo's own "an allocation count is not a cost" on a fourth
+instrument — `huge_methods.py` exit 0, grid 8×`added=0 removed=0`. No ambient read added to
+`TypeInstantiator`; ledger row 3 stands at four.

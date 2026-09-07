@@ -138,20 +138,22 @@ class BindingElementStage2Test {
             assert(d.map { it.message } == listOf(missing("acc", "{ q: string; }"), missing("meth", "{ q: string; }")))
         }
 
+    /**
+     * (CHK.107) INVERTED 2026-09-07: the refusal is lifted. tsc pushes the pattern's implied
+     * contextual type into BOTH branches, so slot 0 of `c ? [n, undefined] : [o.pos, o.end]`
+     * is `number` and slot 1 `number | undefined` (tsgo 7.0.2 and pristine agree). The
+     * reconstruction needs each element's FLOW-NARROWED type at its own branch, which is
+     * what `arrayLiteralAsDestructuringTuple(narrowElements = true)` now supplies — typing
+     * it from the DECLARED types instead read slot 0 as
+     * `number | { pos: number; end: number; }`, an ours-only TS2322 on `services.ts:3264`.
+     */
     @Test
-    fun `refusal - a conditional of array literals under an array pattern is not typed`() {
-        // tsc pushes the pattern's implied contextual type into BOTH branches, so slot 0 of
-        // `c ? [n, undefined] : [o.pos, o.end]` is `number` (tsgo and pristine agree, and
-        // slot 1 is `number | undefined`). Reconstructing that needs each element's
-        // FLOW-NARROWED type at its own branch, which `getTypeOfExpression` never gives, so
-        // the whole pattern refuses and both leaves keep `anyType`. Typing it from the
-        // DECLARED types instead read slot 0 as `number | { pos: number; end: number; }` —
-        // an ours-only TS2322 on `services.ts:3264`, on all three profiles carrying it.
-        // (CHK.107) owns the narrowed reconstruction.
+    fun `a conditional of array literals under an array pattern types each branch at its own flow position`() {
         val src = "declare const por: number | { pos: number; end: number }\n" +
             "function g() { const [s, e] = typeof por === \"number\" ? [por, undefined] : [por.pos, por.end]\n" +
             "  const w1: boolean = s; const w2: boolean = e }"
-        assert(diagnose(prelude + src).isEmpty())
+        val d = diagnose(prelude + src)
+        assert(d.map { it.message } == listOf(decl("number"), decl("number | undefined")))
     }
 
     @Test

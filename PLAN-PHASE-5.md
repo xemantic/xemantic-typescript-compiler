@@ -25,6 +25,42 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.41) — a conditional of array literals under an array pattern types each branch at its own flow position ((CHK.107)), and the grid the item called the gate is a CONTROL (2026-09-07)
+
+**Suite 18,172 → 18,179 / 0 / 3** — 7 pins in the new `ConditionalArrayPatternTest`, plus the
+(CHK.96) stage-2 REFUSAL pin in `BindingElementStage2Test` INVERTED to the reference answer. Grid
+**8 × added=0 removed=0** on the final binary; `cost_gate.py` exit 0 (largest delta
+`narrow.memoServed` **+0.02%**, no rebaseline), `huge_methods.py --fail-over 0` exit 0, build
+warning-clean.
+
+**(CHK.107) CLOSED.** `const [s, e] = typeof por === "number" ? [por, undefined] : [por.pos, por.end]`
+read both leaves as `any`; ours goes **1 → 6 of the reference's 6 rows** on the item's fixture,
+including the `number | undefined` display. tsc pushes the pattern's implied contextual type into
+BOTH branches of the conditional, so the source is `[number, undefined] | [number, number]` and
+`bindingElementType`'s union arm gives `number` / `number | undefined`. The reconstruction is a
+UNION of the branch tuples with **each element read AT ITS OWN FLOW POSITION** — the one thing
+(CHK.96) stage 2 could not do, since `getTypeOfExpression` never flow-narrows and an un-narrowed
+branch tuple reads slot 0 as `number | { pos: number; end: number; }`. `narrowElements` is a
+parameter of `arrayLiteralAsDestructuringTuple` rather than a change to it, so the plain
+array-literal path is untouched and the arm that proves it is f2.
+
+**THE ITEM'S GATE CLAIM IS WRONG, AND SAYING SO IS THE POINT.** It states "the GRID IS THE GATE and
+it is a `removed=1` there". Measured, the grid is `added=0 removed=0` on all eight profiles: the
+refusal made both leaves `any`, which is SILENT, and `services.ts:3264`'s two leaves feed a
+`RefactorContext` whose members are exactly `number` and `number | undefined`, so there is no
+wrong-typed USE for either arm to report. The grid is a CONTROL; the grade is the fixture, whose
+shape is `getRefactorContext` verbatim and whose every expectation was read from pristine
+`typescript@6.0.3`. This is CLAUDE.md's (CHK.30) law on a fourth instrument — a typing fix whose
+only evidence is a silence has probably typed nothing.
+
+**Ablation: 3 arms, all discriminating, and one had to be REDESIGNED because it was equivalent to
+another.** f1 restoring the refusal (**5 RED**); f2 dropping the flow narrowing (**3 RED** — the two
+`typeof`-guard pins and the inverted stage-2 pin, exactly the shapes where a narrow is what
+separates `number` from `number | Range`); f3 the nested-conditional recursion (**1 RED**). f3's
+first formulation — deleting the `ConditionalExpression` arm — read the SAME 5 RED as f1, because
+refusing every conditional is refusing the mechanism; it was re-cut as a depth bound so it names the
+nested case alone. Recorded rather than counted as two arms.
+
 ### Round (P18.40) — TS2454 for an `if` JOIN, and the TS2448 co-emit's rule was the TYPE and not CONST-NESS ((CHK.105)) (2026-09-07)
 
 **Suite 18,157 → 18,172 / 0 / 3** — 13 pins in the new `DefiniteAssignmentJoinTest` plus 2 added
@@ -2712,7 +2748,9 @@ parameter (`Promise<number>`, `Map<…>`), and `const l1: 5 = em`.
   spread — a reference divergence to record when (CHK.103) lands, pin on pristine. Each is form
   per `docs/logical-parity.md` § 2; only (a) needs its own decision.
 
-- [ ] **(CHK.107) AN ARRAY PATTERN WHOSE INITIALIZER IS A *CONDITIONAL OF ARRAY LITERALS*
+- [x] **(CHK.107) CLOSED 2026-09-07 ((P18.41) note) — 1 → 6 of the reference's 6 rows; its GATE claim
+  is measured wrong (the grid is `added=0 removed=0` on all eight, a CONTROL, not the `removed=1` it
+  predicts), and the stage-2 refusal pin is inverted. ORIGINAL: AN ARRAY PATTERN WHOSE INITIALIZER IS A *CONDITIONAL OF ARRAY LITERALS*
   REFUSES, SO EVERY LEAF READS `any` — `const [s, e] = c ? [n, undefined] : [o.pos, o.end]`
   reads `s` and `e` as `any` where both references read `number` and `number | undefined`
   (MEASURED 2026-09-06, (P18.28) defect (c); `services.ts:3264` is the shipped instance, 1 site

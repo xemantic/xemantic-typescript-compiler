@@ -106195,7 +106195,8 @@ interface DataView {
             var e: Expression = init
             while (e is ParenthesizedExpression) e = e.expression
             if (e is ArrayLiteralExpression) return arrayLiteralAsDestructuringTuple(e)
-            if (e is ConditionalExpression && conditionalOfArrayLiterals(e)) return null
+            if (e is ConditionalExpression && conditionalOfArrayLiterals(e))
+                return conditionalArrayLiteralTuples(e)
         }
         return getTypeOfExpression(init)
     }
@@ -106227,8 +106228,55 @@ interface DataView {
         }
     }
 
+    /**
+     * (CHK.107): the UNION of the branch tuples of a conditional-of-array-literals
+     * initializer under an array pattern — tsc's answer, because the pattern's implied
+     * contextual type propagates into BOTH branches of a conditional
+     * (`checkConditionalExpression` types each branch against the same contextual type),
+     * so `const [s, e] = c ? [n, undefined] : [o.pos, o.end]` is
+     * `[number, undefined] | [number, number]` and `bindingElementType`'s union arm then
+     * gives `number` / `number | undefined`.
+     *
+     * The elements are typed AT THEIR OWN FLOW POSITION ([narrowElements]) and that is the
+     * whole reason (CHK.96) stage 2 refused this shape: `getTypeOfExpression` never
+     * flow-narrows (CLAUDE.md), so an un-narrowed reconstruction reads slot 0 as
+     * `number | { pos: number; end: number; }` — `positionOrRange` is `number` only inside
+     * its own `typeof` guard — which is an ours-only TS2322 on `services.ts:3264`.
+     * Null (the previous refusal, every leaf `anyType`) for any branch this cannot build.
+     */
+    private fun conditionalArrayLiteralTuples(expr: Expression): Type? {
+        val branches = ArrayList<Type>(2)
+        if (!collectConditionalArrayLiteralTuples(expr, branches, 0)) return null
+        return when (branches.size) {
+            0 -> null
+            1 -> branches[0]
+            else -> getUnionType(branches)
+        }
+    }
+
+    /** (CHK.107): [conditionalArrayLiteralTuples]' recursion, depth-bounded. */
+    private fun collectConditionalArrayLiteralTuples(
+        expr: Expression, out: MutableList<Type>, depth: Int,
+    ): Boolean {
+        if (depth > 8) return false
+        var e: Expression = expr
+        while (e is ParenthesizedExpression) e = e.expression
+        return when (e) {
+            is ArrayLiteralExpression -> {
+                out.add(arrayLiteralAsDestructuringTuple(e, narrowElements = true) ?: return false)
+                true
+            }
+            is ConditionalExpression ->
+                collectConditionalArrayLiteralTuples(e.whenTrue, out, depth + 1) &&
+                    collectConditionalArrayLiteralTuples(e.whenFalse, out, depth + 1)
+            else -> false
+        }
+    }
+
     /** (CHK.96) see [bindingPatternSourceType]. */
-    private fun arrayLiteralAsDestructuringTuple(lit: ArrayLiteralExpression): Type? {
+    private fun arrayLiteralAsDestructuringTuple(
+        lit: ArrayLiteralExpression, narrowElements: Boolean = false,
+    ): Type? {
         if (lit.elements.any { it is SpreadElement || it is OmittedExpression }) return null
         val types = ArrayList<Type>(lit.elements.size)
         for (el in lit.elements) {
@@ -106236,7 +106284,14 @@ interface DataView {
             // contextual type has `any` in the slot, so tsc's `checkExpressionForMutableLocation`
             // widens a fresh `true` to `boolean` and a `const one = 1` element to `number`
             // (measured: `const [a, ...r] = [1, "x", true]` reads `r` as `[string, boolean]`).
-            val t = widenLiteralMembers(getTypeOfExpression(el))
+            // (CHK.107): inside a CONDITIONAL the element must be read at ITS OWN flow
+            // position — a bare reference in the `typeof x === "number"` branch is
+            // `number` there and its declared union everywhere else. Only the conditional
+            // caller asks for it, so the plain array-literal path is untouched.
+            val raw = getTypeOfExpression(el)
+            val flowed = if (narrowElements && (el is Identifier || el is PropertyAccessExpression))
+                getNarrowedTypeForReference(raw, el) else raw
+            val t = widenLiteralMembers(flowed)
             if (t === errorType) return null
             types.add(t)
         }
