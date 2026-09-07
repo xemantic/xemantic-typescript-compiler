@@ -25,6 +25,93 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.36) — a generic interface's fn-typed member stops being frozen at first touch ((CHK.102)), and the freezer is INV.5(c)'s cache, not the seam the item named (2026-09-07)
+
+**Suite 18,076 → 18,098 / 0 / 3** — 22 pins in the new `GenericFnMemberInstantiationOrderTest`, every
+claim asserted in BOTH declaration orders; no baseline moved. Same orchestration: an implementation
+subagent owned Gradle; the full suite, `cost_gate.py`, `huge_methods.py` and an independent
+8-profile grid ran here.
+
+**(CHK.102) LANDED.** `substituteOuterTypeArgsInGenericFnObject` and
+`substituteOuterTypeArgsInSignature` are now NON-MUTATING, and their two call sites in
+`resolveGenericPropertyTypeWorker` consume the returned object — round 465's own discipline
+(`instantiateTypeFnAware` "mints FRESH objects, never mutates") applied to the one member of the
+family that had kept the in-place form; tsc mints an instantiated member type per instantiation
+(`instantiateAnonymousType`) and never writes it back onto the declared type. **Two halves, both
+needed**: the fn-shaped `Type.Object` is MINTED rather than having its `callSignatures` overwritten,
+and a signature's own `Type.TypeParam`s are CLONED when the outer mapper moves a constraint or
+default, with the clone map composed under the mapper so the signature's parameters and return
+follow the clone. Verified here directly: `Box<number>` and `Box<string>` in one file now give
+exactly the one row both references give, at the same column.
+
+**THE ITEM'S MECHANISM IS WRONG IN FOUR PLACES — the ninth round running, and this one was found
+with a probe rather than by reading.** A probe printing the resolved object's identity at both
+instantiations reads `rawId=35` at BOTH, already substituted at the second.
+- **The freezer is INV.5(c)'s context-keyed cache** (`getTypeFromTypeNodeBypassed` →
+  `state.mappedNodeTypes`, keyed on node identity plus an ns/tp-scope/alias fingerprint), NOT
+  `resolveReferenceMembers`' symbol sharing — **the item's named seam was not touched at all.** Two
+  instantiations of one interface produce an IDENTICAL fingerprint because the target's own
+  `Type.TypeParam` is in scope both times. **17.39's stated precondition — "rawType is always
+  freshly allocated" — was true when written and has been false since INV.5(c) added a second cache
+  below the bypass.**
+- **There is no `PropertySignature` node kind in this parser.** `parseTypeMember` builds a
+  `PropertyDeclaration` for an interface's `f: (x: T) => T`, and the arm exists and is reached — so
+  the item's "no `PropertySignature` arm, so `propertyTypeOnCarrier` falls to the shared symbol" is
+  wrong on both halves.
+- **The grid is a control, but NOT for the item's reason.** It says exposure "needs two
+  instantiations with differing args reaching one member in one compile" and that the profiles show
+  none. Censused: the compiler profile makes **6,425 calls of which 6,383 now MINT**, over 59
+  distinct annotation nodes of which **46 are asked with ≥2 DISTINCT type-argument vectors in one
+  compile** (services 46, harness 49; the most-exposed node is asked with **30**, and it is
+  `lib.es5.d.ts`'s `Array<T>` members). The exposure condition is met CONSTANTLY on tsc's own
+  sources — the grid is a control because those frozen types never decide a diagnostic there, not
+  because they are not reached.
+- **Two freezes the item does not name.** The helper's SECOND call site — the `MethodDeclaration`
+  arm (B81.1d) — freezes a method's **fn-typed PARAMETER**, giving two false TS2322 inside a
+  callback passed to the second instantiation plus one invented and one lost row; the item's
+  "methods are correct" holds for `m(x: T): T` and not for this. And
+  `substituteOuterTypeArgsInSignature`'s in-place `tp.constraint` write freezes an **inner generic
+  signature's constraint** (`<U extends T>(x: U) => U`), which SURVIVES a fix to the object half —
+  arm a2 is what proves it.
+
+**BOTH-ORDERS PINS CLEAR THE ITEM'S OWN TRAP.** On the parent, the mirror-image fixtures fail in
+BOTH orders — `bs.f("a")` is a false TS2345 `string → number` when `Box<number>` is declared first
+and `bn.f(1)` is the mirror when `Box<string>` is — with a lost row in each and a mis-anchored
+return read. Both references agree on every row of every fixture (they never disagreed, so nothing
+hinged on the pristine tiebreak), and after the fix all four fixtures are row-for-row AND
+column-for-column identical to them.
+
+**GATES.** Suite **18,098 / 0 / 3**, corpus **8,837 / 0** (25 classes, all present in the XMLs),
+at-risk hand-written set grepped from test SOURCES with coverage asserted from the XMLs —
+**151/151 classes, 1,711 tests, 0 failed**; `-project` 865/0 and `-externals` 290/0; 0 build
+warnings. `cost_gate.py` **exit 0** — and the notable reading is that minting ~6,400 fresh
+`Type.Object`s per compile that the parent did not moves **no counter at all** (`typeNode.*`
++0.00-0.01%), which is CLAUDE.md's own "an allocation count is not a cost" on a fourth instrument.
+`huge_methods.py --fail-over 0` **exit 0**. **Grid 8 × `added=0 removed=0`**
+(`scripts/chk102-grid.sh`, BEFORE arm = the committed `ba9a6c130` binary, sha-guarded). No double
+emission — the change adds no `diagnostics.add`, and `--passTiming` reads one pass with the
+reference row count. **No ambient read was added to `TypeInstantiator`**: its `checker.*` call
+census is byte-identical before and after, so `docs/inversion-ambient-ledger.md` row 3 stands at
+four.
+
+**ARMS — 5. a1** the object half writing back in place (the pre-fix state) **16 RED — every family,
+in both orders**; **a2** the TP half reassigning `constraint`/`default` in place 2 (inner-generic,
+both orders); **a3** TP clones minted but not threaded into the signature's shape 2, an **IDENTICAL
+red set and identical failure text to a2**, so **a2/a3 are a round-927 PAIR recorded as one
+observable** — cloning without threading is as useless as not cloning, and neither is redundant;
+**a4** call site 1 discarding the minted object 12, including round 465's own pin; **a5** call site
+2 (the method fn parameter) **1 — and that one is the NEGATIVE control**. **a5 exposes TWO BLIND
+PINS**, recorded rather than claimed: the positive "a method's fn-typed parameter is not frozen"
+pins stay GREEN under a5 because discarding the mint yields the raw un-substituted `T` — one
+absence replaced by another. They do discriminate a1, so they stay, but site 2 is gated by its
+negative control alone.
+
+**LEFT OVER — two pre-existing, both reproducing on the parent and neither this item's**: a
+`((x: T) => T) | undefined` member read at a PRIMITIVE target is silent where both references report
+(a fn-typed union constituent at a primitive target — the `canUseTypeEngine` family, and the sibling
+of (P18.35)'s finding); and a generic-reference relation failure carries no elaboration chain where
+both references give four sub-lines (FORM per `docs/logical-parity.md`).
+
 ### Round (P18.35) — three shipped narrowing defects close, and (CHK.101)'s own deliverable is BUILT, MEASURED CORRECT and REFUSED on grid evidence (2026-09-07)
 
 **Suite 18,043 → 18,076 / 0 / 3** — 33 pins in the new `NullishUnionAssignabilityTest`; no baseline
@@ -3476,7 +3563,32 @@ prediction: 17,343 / 0 / 3.**
   ~165175, the M1.7a optional-param rule ~164445) — run every `*OptionalParam*` / `*NullishArg*`
   / `*Undefined*Argument*` class plus the (CHK.63) classes. MEANING.
 
-- [ ] **(CHK.102) A GENERIC INTERFACE'S FUNCTION-TYPED PROPERTY SIGNATURE (`interface Box<T> { f:
+- [x] **(CHK.102) CLOSED 2026-09-07 ((P18.36) note) — `substituteOuterTypeArgsInGenericFnObject` and
+  `substituteOuterTypeArgsInSignature` made NON-MUTATING (round 465's "mints FRESH objects, never mutates",
+  applied to the one member of the family that kept the in-place form), with a signature's own
+  `Type.TypeParam`s CLONED when the outer mapper moves a constraint/default and the clone map composed
+  under the mapper. 22 pins, every claim in BOTH declaration orders; 5 arms; suite 18,098/0/3, corpus
+  8,837/0, `cost_gate.py` exit 0, grid 8×0/0. **THE ITEM'S MECHANISM IS WRONG IN FOUR PLACES**, found with
+  an identity PROBE rather than by reading: (1) **the freezer is INV.5(c)'s context-keyed cache**
+  (`getTypeFromTypeNodeBypassed` → `state.mappedNodeTypes`), NOT `resolveReferenceMembers`' symbol sharing
+  — the item's named seam was never touched, and two instantiations of one interface produce an IDENTICAL
+  fingerprint because the target's own `Type.TypeParam` is in scope both times, so **17.39's KDoc
+  precondition "rawType is always freshly allocated" has been FALSE since INV.5(c)**; (2) **there is no
+  `PropertySignature` node kind in this parser** — `parseTypeMember` builds a `PropertyDeclaration` and the
+  arm exists and is reached; (3) the grid is a control but NOT because the shape is unreached — the
+  compiler profile makes **6,425 calls, 6,383 minting, over 46 nodes asked with ≥2 distinct argument
+  vectors in one compile** (the most-exposed is `lib.es5.d.ts`'s `Array<T>`, asked with 30) — it is a
+  control because a frozen member never DECIDES a diagnostic there, and the gate is the both-orders pin;
+  (4) **two freezes it does not name** — the `MethodDeclaration` call site freezes a method's fn-typed
+  PARAMETER (so "methods are correct" holds only for `m(x: T): T`), and the in-place `tp.constraint` write
+  freezes an inner generic signature's constraint, which SURVIVES a fix to the object half. a2/a3 are a
+  round-927 PAIR (identical red sets and failure text); **a5 exposes TWO BLIND PINS** — the positive
+  method-fn-param pins stay green under it because discarding the mint yields the raw un-substituted `T`,
+  one absence replaced by another, so site 2 is gated by its negative control alone. No ambient read added
+  to `TypeInstantiator` (ledger row 3 stands at four). LEFT, both pre-existing: a `((x: T) => T) | undefined`
+  member read at a PRIMITIVE target is silent where both references report (the `canUseTypeEngine` family,
+  sibling of (P18.35)'s finding), and a generic-reference relation failure carries no elaboration chain
+  (FORM). ORIGINAL: A GENERIC INTERFACE'S FUNCTION-TYPED PROPERTY SIGNATURE (`interface Box<T> { f:
   (x: T) => T }`) IS ONE OBJECT SHARED BY EVERY INSTANTIATION AND FROZEN AT FIRST TOUCH —
   `Box<string>.f` reads `(x: number) => number` after a `Box<number>` was touched first: a FALSE
   TS2345 on `bs.f("a")`, a LOST one on `bs.f(1)`, and the wrong display everywhere; methods

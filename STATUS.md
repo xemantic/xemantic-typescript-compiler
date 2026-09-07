@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **197,743** lines (191,070 when the metric was created; the (P18.9)-(P18.35) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **197,746** lines (191,070 when the metric was created; the (P18.9)-(P18.36) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,32 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.36) — A GENERIC INTERFACE'S FN-TYPED MEMBER STOPS BEING FROZEN AT FIRST TOUCH ((CHK.102)), AND THE FREEZER IS INV.5(c)'s CACHE, 18,076 → 18,098 / 0 / 3 (2026-09-07).**
+**(CHK.102) CLOSED.** `interface Box<T> { f: (x: T) => T }` was ONE object shared by every
+instantiation and frozen at first touch, so `Box<string>.f` read `(x: number) => number` after a
+`Box<number>` was touched first — a false TS2345, a LOST one and the wrong display, **in both
+declaration orders**. The two `substituteOuterTypeArgs*` helpers are now NON-MUTATING (round 465's
+"mints FRESH objects, never mutates", applied to the one member of the family that kept the
+in-place form), with a signature's own type parameters CLONED when the outer mapper moves a
+constraint or default. **The item's mechanism is wrong in four places, found with an identity PROBE
+rather than by reading**: the freezer is INV.5(c)'s context-keyed `mappedNodeTypes` cache and NOT
+the `resolveReferenceMembers` seam the item named (never touched) — two instantiations of one
+interface produce an identical fingerprint because the target's own `Type.TypeParam` is in scope
+both times, so **17.39's KDoc precondition "rawType is always freshly allocated" has been FALSE
+since INV.5(c) added a second cache below the bypass**; there is no `PropertySignature` node kind in
+this parser at all; the grid is a control not because the shape is unreached but because a frozen
+member never DECIDES a diagnostic there (the compiler profile makes **6,383 minting calls over 46
+nodes asked with ≥2 distinct argument vectors**, the most-exposed being `lib.es5.d.ts`'s `Array<T>`
+at 30); and two freezes go unnamed — a method's fn-typed PARAMETER, and an inner generic
+signature's constraint, which survives a fix to the object half. 22 pins, every claim in BOTH
+orders (one order is green on the frozen binary — the item's own trap, cleared); 5 arms, with a2/a3
+a round-927 pair and **a5 exposing two BLIND pins** (discarding the mint yields the raw `T`, one
+absence replacing another), recorded rather than claimed. Corpus 8,837/0, at-risk set 151/151
+classes with coverage asserted from the XMLs, `cost_gate.py` exit 0 — minting ~6,400 fresh objects
+per compile moves **no counter**, the repo's own "an allocation count is not a cost" on a fourth
+instrument — `huge_methods.py` exit 0, grid 8×`added=0 removed=0`. No ambient read added to
+`TypeInstantiator`; ledger row 3 stands at four.
 
 **(P18.35) — THREE SHIPPED NARROWING DEFECTS CLOSE, AND (CHK.101)'s OWN DELIVERABLE IS BUILT, MEASURED CORRECT AND *REFUSED* ON GRID EVIDENCE, 18,043 → 18,076 / 0 / 3 (2026-09-07).**
 **The item's deliverable (a) is REFUSED, and that is the round's most valuable output.** The
@@ -99,27 +125,3 @@ rather than counted, and every arm carrying a pin-COUNT assertion after (P18.31)
 hazard. Corpus 8,837/0, **`cost_gate.py` exit 0 at +0.00% on every counter**, `huge_methods.py`
 exit 0. Residue pinned as a KNOWN GAP: a nullish union contextual parameter types correctly but the
 property-access reader emits no TS18048 — a false NEGATIVE, which is why the lift is safe.
-
-**(P18.31) — CONTEXTUAL PARAMETER TYPES REACH THE ARGUMENT AND PROPERTY-ACCESS READERS ((CHK.98)(a)/(b)/(c)), AND A SCRIPTED SPLICE THAT SILENTLY DELETED THREE PINS, 17,932 → 17,963 / 0 / 3 (2026-09-06).**
-**(CHK.98)(a)/(b)/(c) LANDED.** The ccet ARGUMENT reader (TWO `anyType` sites, not the one the
-item named — and `ccetObjlitMemberFrame` additionally had to COPY the `localTypes` map it was
-SHARING with the enclosing frame), the PROPERTY-ACCESS readers (`cpaAnnotationCtx` at four sites
-plus an objlit-METHOD arm, gated to a NON-union contextual parameter type), and the pull's exact
-arms (Conditional, As/Satisfies, `=`, `this`, REST, the array-literal edge). Matrix **99 → 125
-rows matched against both references, ours-only 7 → 2**. Three defects the item did not name
-landed with it, including **(CHK.98c)** as (b)'s prerequisite — which is PRE-EXISTING on HEAD and
-fires for a plain function-declaration parameter. **Five of the item's claims are measured wrong**,
-the sharpest being its `typeNode.bypassed` **+31%** memo precondition: measured **+0.22%** with no
-memo built, so the memo is not one. 31 new pins plus **five flipped from an absence assertion to a
-value one** — two the item predicted, and two residues of EARLIER rounds found only because the
-full suite ran; every flip re-verified here against tsgo 7.0.2 AND pristine 6.0.3 before being
-accepted. **The round's instrument hazard is a THIRD way an arm reads a false zero**: a scripted
-splice silently DELETED three pins, so two arms read `0 RED` while `git diff --shortstat` and a
-per-arm `cmp` both passed — they test the source under ablation, never the pin POPULATION.
-**`cost_gate.py` FAILED and was rebaselined WITH ATTRIBUTION** in the same commit: an arm disabling
-only (a) reads exit 0, and (a) owns 83% of the `narrow.memoServed` rise (+2.29%) and 43% of
-`mapped.hits` (+2.22%) — both cache-HIT counters rising faster than their own populations, because
-a contextually-typed parameter becomes a NARROWABLE REFERENCE where an `any` one was not;
-`spine.nodes` +0.00%, `output.errors` 46 → 46. Corpus 8,837/0, `huge_methods.py` exit 0, grid
-8×`added=0 removed=0` with the BEFORE arm rebuilt in a directory no subagent wrote to. 19 arms
-(a12 recorded as a redundant guard).

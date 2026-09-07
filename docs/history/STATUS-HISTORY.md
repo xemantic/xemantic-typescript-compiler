@@ -1979,3 +1979,27 @@ fired, and the arm was rebuilt from `git show HEAD:` into a directory the subage
 pins, 11 arms (9 discriminating; a2/a10 recorded as redundant guards on every reachable shape and
 kept as tsc's own rules). Corpus 8,837/0, `cost_gate.py` exit 0 with no rebaseline,
 `huge_methods.py` exit 0, grid 8×`added=0 removed=0`.
+
+**(P18.31) — CONTEXTUAL PARAMETER TYPES REACH THE ARGUMENT AND PROPERTY-ACCESS READERS ((CHK.98)(a)/(b)/(c)), AND A SCRIPTED SPLICE THAT SILENTLY DELETED THREE PINS, 17,932 → 17,963 / 0 / 3 (2026-09-06).**
+**(CHK.98)(a)/(b)/(c) LANDED.** The ccet ARGUMENT reader (TWO `anyType` sites, not the one the
+item named — and `ccetObjlitMemberFrame` additionally had to COPY the `localTypes` map it was
+SHARING with the enclosing frame), the PROPERTY-ACCESS readers (`cpaAnnotationCtx` at four sites
+plus an objlit-METHOD arm, gated to a NON-union contextual parameter type), and the pull's exact
+arms (Conditional, As/Satisfies, `=`, `this`, REST, the array-literal edge). Matrix **99 → 125
+rows matched against both references, ours-only 7 → 2**. Three defects the item did not name
+landed with it, including **(CHK.98c)** as (b)'s prerequisite — which is PRE-EXISTING on HEAD and
+fires for a plain function-declaration parameter. **Five of the item's claims are measured wrong**,
+the sharpest being its `typeNode.bypassed` **+31%** memo precondition: measured **+0.22%** with no
+memo built, so the memo is not one. 31 new pins plus **five flipped from an absence assertion to a
+value one** — two the item predicted, and two residues of EARLIER rounds found only because the
+full suite ran; every flip re-verified here against tsgo 7.0.2 AND pristine 6.0.3 before being
+accepted. **The round's instrument hazard is a THIRD way an arm reads a false zero**: a scripted
+splice silently DELETED three pins, so two arms read `0 RED` while `git diff --shortstat` and a
+per-arm `cmp` both passed — they test the source under ablation, never the pin POPULATION.
+**`cost_gate.py` FAILED and was rebaselined WITH ATTRIBUTION** in the same commit: an arm disabling
+only (a) reads exit 0, and (a) owns 83% of the `narrow.memoServed` rise (+2.29%) and 43% of
+`mapped.hits` (+2.22%) — both cache-HIT counters rising faster than their own populations, because
+a contextually-typed parameter becomes a NARROWABLE REFERENCE where an `any` one was not;
+`spine.nodes` +0.00%, `output.errors` 46 → 46. Corpus 8,837/0, `huge_methods.py` exit 0, grid
+8×`added=0 removed=0` with the BEFORE arm rebuilt in a directory no subagent wrote to. 19 arms
+(a12 recorded as a redundant guard).

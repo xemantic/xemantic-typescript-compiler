@@ -112529,11 +112529,11 @@ interface DataView {
                         // Without this, `interface I<S> { f: <T extends S>(x: T) => void }`'s
                         // f.signature.T retains constraint `S` (un-substituted) at the call site,
                         // blocking 16.4ds per-property elaboration of arg-vs-constraint and 16.4i
-                        // TS2345-via-constraint emission. Safe to mutate rawType in-place because
-                        // getTypeFromTypeNode bypasses its cache when currentTypeParamScope != null
-                        // (active here from the lines above), so rawType is always freshly allocated.
+                        // TS2345-via-constraint emission. (CHK.102) the helper MINTS — it may
+                        // NOT mutate `rawType`, which INV.5(c)'s context-keyed
+                        // `mappedNodeTypes` shares between every instantiation resolving this
+                        // annotation node under the target's own type-param scope.
                         substituteOuterTypeArgsInGenericFnObject(rawType, mapper)
-                        rawType
                     } else instantiateType(rawType, mapper)
                 }
                 is GetAccessor -> {
@@ -112620,9 +112620,12 @@ interface DataView {
                                                     // gotcha). Use the in-place sig walker so callers
                                                     // resolving the method's param type for contextual
                                                     // inference (B81.1b FunctionExpression branch) see
-                                                    // the substituted inner sig.
+                                                    // the substituted inner sig. (CHK.102): the helper
+                                                    // MINTS — the same shared-annotation freeze applies
+                                                    // to a method's fn-typed PARAMETER, measured as a
+                                                    // false TS2322 inside every callback passed to the
+                                                    // second instantiation of `Cb<T>.m(cb: (x: T) => T)`.
                                                     substituteOuterTypeArgsInGenericFnObject(rawParamType, mapper)
-                                                    rawParamType
                                                 } else instantiateType(rawParamType, mapper)
                                 symbolTypes[sym.id] = paramType
                                 sym
@@ -174034,7 +174037,7 @@ interface DataView {
     private fun instantiateSignature(sig: Signature, mapper: TypeMapper): Signature =
         instantiator.instantiateSignature(sig, mapper)
 
-    private fun substituteOuterTypeArgsInGenericFnObject(rawType: Type.Object, mapper: TypeMapper) =
+    private fun substituteOuterTypeArgsInGenericFnObject(rawType: Type.Object, mapper: TypeMapper): Type.Object =
         instantiator.substituteOuterTypeArgsInGenericFnObject(rawType, mapper)
 
     private fun instantiateTypeFnAware(type: Type, mapper: TypeMapper): Type =

@@ -254,19 +254,62 @@ internal class TypeInstantiator(
     }
 
     /**
-     * 17.39: Substitute outer typeArgs into a freshly-resolved function-typed property's
-     * inner generic signatures — typeParam constraints/defaults, param types, return
-     * type. Mutates [rawType]'s callSignatures/constructSignatures lists in place; the
-     * inner Signatures' typeParameters are also mutated in place (their `constraint` /
-     * `default` fields reassigned). Caller must guarantee [rawType] is freshly allocated
-     * (e.g. resolved through `getTypeFromTypeNode` while `currentTypeParamScope != null`)
-     * — this is currently the case in `resolveGenericPropertyType`'s PropertyDeclaration
-     * branch. Preserves the inner sig's typeParameter list (T stays generic) so call-site
-     * inference + constraint check via 16.4ds / 16.4i still fires.
+     * 17.39: Substitute outer typeArgs into a function-typed property's inner generic
+     * signatures — typeParam constraints/defaults, param types, return type. Preserves
+     * the inner sig's typeParameter list (T stays generic) so call-site inference + the
+     * constraint check via 16.4ds / 16.4i still fires. Answers [rawType] ITSELF when
+     * nothing moved, so identity is preserved for the non-generic majority.
+     *
+     * ## (CHK.102) — this used to MUTATE [rawType] in place, and that was a shipped
+     * first-touch freeze
+     *
+     * The pre-(CHK.102) body assigned the substituted signature lists back onto
+     * [rawType]'s own fields, with a KDoc precondition that the caller had freshly
+     * allocated it ("`getTypeFromTypeNode` bypasses its cache when
+     * `currentTypeParamScope != null`"). That precondition was TRUE when 17.39 was
+     * written and INV.5(c) later made it false: `getTypeFromTypeNodeCore`'s `cacheable`
+     * gate does refuse the plain `nodeTypes` map under a type-param scope, but the
+     * bypassed path then consults a SECOND, context-KEYED cache
+     * (`getTypeFromTypeNodeBypassed` → `state.mappedNodeTypes`, keyed by
+     * `(node identity, ns/tpScope/aliasArgs fingerprint)`). Two instantiations of one
+     * generic interface resolve the SAME annotation node under the SAME tpScope — the
+     * target's own `Type.TypeParam` is in scope both times — so the fingerprints are
+     * equal and the second ask is served the first ask's object.
+     *
+     * Measured on `interface Box<T> { f: (x: T) => T }` with a `Box<number>` and a
+     * `Box<string>` in one file: a probe printed `rawId=35 before=(x: T) => T` for the
+     * first and `rawId=35 before=(x: number) => number` for the second — one object,
+     * already substituted, and the second substitution then a no-op. The observable is
+     * a FALSE TS2345 on `bs.f("a")`, a LOST one on `bs.f(1)`, and the wrong type
+     * everywhere `bs.f` is displayed; declaration order decides which instantiation is
+     * right, so a pin written in one order is green on the frozen binary.
+     *
+     * Minting instead of mutating is the round-465 discipline
+     * ([instantiateTypeFnAware] "mints FRESH objects, never mutates") applied to the
+     * one member of this family that had kept the in-place form. It is strictly safer
+     * than restoring the precondition by suppressing the cache: a shared *input* is now
+     * fine, which is the property a cache may not silently take away.
      */
-    fun substituteOuterTypeArgsInGenericFnObject(rawType: Type.Object, mapper: TypeMapper) {
-        rawType.callSignatures = rawType.callSignatures?.map { substituteOuterTypeArgsInSignature(it, mapper) }
-        rawType.constructSignatures = rawType.constructSignatures?.map { substituteOuterTypeArgsInSignature(it, mapper) }
+    fun substituteOuterTypeArgsInGenericFnObject(rawType: Type.Object, mapper: TypeMapper): Type.Object {
+        val oldCall = rawType.callSignatures
+        val oldCtor = rawType.constructSignatures
+        val newCall = oldCall?.map { substituteOuterTypeArgsInSignature(it, mapper) }
+        val newCtor = oldCtor?.map { substituteOuterTypeArgsInSignature(it, mapper) }
+        val callSame = oldCall == null || newCall!!.zip(oldCall).all { (a, b) -> a === b }
+        val ctorSame = oldCtor == null || newCtor!!.zip(oldCtor).all { (a, b) -> a === b }
+        if (callSame && ctorSame) return rawType
+        return Type.Object(rawType.flags).also { o ->
+            o.symbol = rawType.symbol
+            o.callSignatures = newCall
+            o.constructSignatures = newCtor
+            o.members = rawType.members
+            o.properties = rawType.properties
+            o.stringIndexInfo = rawType.stringIndexInfo
+            o.numberIndexInfo = rawType.numberIndexInfo
+            o.tupleElementTypes = rawType.tupleElementTypes
+            o.readonlyTuple = rawType.readonlyTuple
+            o.tupleRestIndex = rawType.tupleRestIndex
+        }
     }
 
     /**
@@ -335,22 +378,58 @@ internal class TypeInstantiator(
         )
     }
 
+    /**
+     * 17.39's per-signature half: the outer type arguments substituted into one inner
+     * signature, with the signature's OWN type parameters preserved as parameters (so
+     * `f: <U extends T>(x: U) => U` stays generic at the call site and only its
+     * CONSTRAINT is substituted).
+     *
+     * ## (CHK.102) — the type parameters are CLONED, not reassigned
+     *
+     * The pre-(CHK.102) body wrote `tp.constraint = instantiateType(tp.constraint, …)`
+     * straight onto the signature's own `Type.TypeParam` objects, on the same "the
+     * caller freshly allocated this" precondition INV.5(c) had already invalidated (see
+     * [substituteOuterTypeArgsInGenericFnObject]'s KDoc for the measurement). That is
+     * the SECOND freeze of the same family and it survives a fix to the first: with
+     * `interface Box<T> { gen: <U extends T>(x: U) => U }` the object can be minted
+     * fresh and `U.constraint` is still whatever the first instantiation left behind,
+     * so `bn.gen(1)` reports `Argument of type 'number' is not assignable to parameter
+     * of type 'string'` after a `Box<string>` was touched first.
+     *
+     * A moved constraint/default therefore mints a CLONE of the type parameter, and the
+     * clones are composed onto [mapper] so the signature's params and return follow the
+     * clone rather than keeping a reference to the original — otherwise the returned
+     * signature would list a type parameter that appears nowhere in its own shape, and
+     * call-site inference would have nothing to bind. A parameter whose constraint and
+     * default are both unmoved is answered as ITSELF, which is the whole population for
+     * a non-generic inner signature (`f: (x: T) => T`), so nothing is allocated there.
+     */
     fun substituteOuterTypeArgsInSignature(sig: Signature, mapper: TypeMapper): Signature {
-        // Mutate sig's typeParameter constraints/defaults in place — they reference the
-        // outer interface's TypeParams (e.g. `<T extends S>` where S is the outer one),
-        // and we want substituted forms visible at the call site without erasing T's
-        // generic identity. TPs are fresh per-call (see uncached getTypeFromTypeNode).
-        sig.typeParameters?.forEach { tp ->
-            tp.constraint = tp.constraint?.let { instantiateType(it, mapper) }
-            tp.default = tp.default?.let { instantiateType(it, mapper) }
+        val oldTps = sig.typeParameters
+        var tpClones: MutableMap<Type.TypeParam, Type.TypeParam>? = null
+        val newTps = oldTps?.map { tp ->
+            val c = tp.constraint?.let { instantiateType(it, mapper) }
+            val d = tp.default?.let { instantiateType(it, mapper) }
+            if (c === tp.constraint && d === tp.default) tp
+            else Type.TypeParam(c, d).also { clone ->
+                clone.symbol = tp.symbol
+                val m = tpClones ?: HashMap<Type.TypeParam, Type.TypeParam>().also { tpClones = it }
+                m[tp] = clone
+            }
         }
+        // Compose the clone map UNDER the outer mapper so the signature's own shape
+        // follows its cloned parameters. `Type.TypeParam` is a plain class, so the map
+        // is identity-keyed (round 471's deep-hashCode hazard is about AST data classes).
+        val clones = tpClones
+        val effective = if (clones == null) mapper
+            else TypeMapper { tp -> clones[tp] ?: mapper.map(tp) }
         // Round 465: fn-AWARE return/param instantiation — a NESTED fn type inside the
         // sig (`get: (index: number) => ((node: T) => T) | undefined`) otherwise keeps
         // the raw outer TypeParam (instantiateType no-ops fn-shaped objects).
-        val newReturnType = sig.resolvedReturnType?.let { instantiateTypeFnAware(it, mapper) }
+        val newReturnType = sig.resolvedReturnType?.let { instantiateTypeFnAware(it, effective) }
         val newParams = sig.parameters.map { param ->
             val paramType = checker.getTypeOfSymbol(param)
-            val instantiated = instantiateTypeFnAware(paramType, mapper)
+            val instantiated = instantiateTypeFnAware(paramType, effective)
             if (instantiated !== paramType) {
                 val newParam = Symbol(param.flags, param.name)
                 newParam.declarations.addAll(param.declarations)
@@ -361,10 +440,11 @@ internal class TypeInstantiator(
         }
         val paramsChanged = newParams.zip(sig.parameters).any { (a, b) -> a !== b }
         val returnChanged = newReturnType !== sig.resolvedReturnType
-        if (!paramsChanged && !returnChanged) return sig
+        val tpsChanged = clones != null
+        if (!paramsChanged && !returnChanged && !tpsChanged) return sig
         return Signature(
             declaration = sig.declaration,
-            typeParameters = sig.typeParameters, // preserve — still generic at call site
+            typeParameters = newTps ?: sig.typeParameters, // preserve — still generic at call site
             parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
