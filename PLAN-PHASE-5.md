@@ -25,6 +25,70 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.47) — the rest-tuple model is fixed ((CHK.111)), the item's named seam was WRONG rather than incomplete, and the regression it caused was in another module (2026-09-08)
+
+**Suite 18,271 → 18,302 / 0 / 3** — 31 pins in the new `RestTupleModelTest`. Grid
+**8 × added=0 removed=0**, re-run INDEPENDENTLY; `cost_gate.py` exit 0 (largest delta **+0.03%**,
+no rebaseline), `huge_methods.py --fail-over 0` exit 0, build warning-clean under `--rerun-tasks`.
+
+**(CHK.111) CLOSED, and the item under-counted its own defect by 9x.** It recorded "exactly 1 false
+positive", at the class property. Measured, a DECLARED tuple source produced a false row at **all
+five** positions — the shielding claim holds only for an ARRAY-LITERAL source — and the gain is
+**10 rows, not 5** (`[]` *and* an element mismatch, at each of the five). `p1` and `p2` are now
+byte-identical to pristine, sub-lines included.
+
+**THE NAMED SEAM IS WRONG, NOT MERELY INCOMPLETE, AND THAT IS THE ENTRY-WORTHY PART.** "Make slots
+at `>= tupleRestIndex` OPTIONAL" fixes only the `[number]` half: `[number, string]` failed because
+the rest MEMBER was typed `string[]` (the whole rest array) rather than `string` (its element). And
+optionality is the wrong CHANNEL — `optionalTupleMemberIds` also injects `| undefined` into every
+element read and into `tupleArrayBase`'s union. What works is the member carrying the rest's
+**element** type plus a **separate non-required mark** (`restTupleMemberIds`), which is also why
+dropping the numbered member entirely (literal tsc) is refused: it would lose `[number, number]`'s
+position-1 element row. Arm a7 of (P18.44) is likewise not the whole ablation — dropping the
+exclusion alone leaves the model bug, and six further decisions were needed.
+
+**THE DISPLAY HALF LANDED IN FULL**: `[number, ...string[]]`, `readonly [...]`, a leading
+`[...string[], number]` and a middle `[number, ...string[], boolean]` all render exactly as both
+references, and an EMPTY tuple `[]` is unchanged — a control that the ellipsis is keyed on
+`tupleRestIndex` rather than sprayed. Named tuple members and optional markers are still dropped
+(pre-existing, out of scope).
+
+**THE REGRESSION THIS ROUND CAUSED WAS IN ANOTHER MODULE, AND ONLY THE FULL SUITE COULD SEE IT.**
+`typeToString` feeds the externals generator's `xtsc: unmapped <type>` markers, so the ellipsis
+moved three RxJS gate expectations — while the 8-profile grid and all ~13k corpus baselines stayed
+clean. **The pins encoded the OLD, LESS ACCURATE text and were updated with proof, not weakened**:
+rxjs declares `zip<A extends readonly unknown[]>(sources: [...ObservableInputTuple<A>])`, i.e. a
+tuple whose single slot IS a rest, so the old `[any]` spelled a FIXED one-element tuple — a
+different type from the variadic one — and both references print the ellipsis on all six shapes
+measured. **Two of three stale expectations were reported and the third was hidden**, because a
+block of `assert(<local>)` calls throws at the FIRST false one; fixing only the reported pair would
+have failed again on the next line. Both facts are now CLAUDE.md entries, and the (P18.44) entry
+this round makes stale was REWRITTEN rather than left standing.
+
+**ARMS — 14, and three of the recorded outcomes matter.** a1 the rest-member id set 8 RED; a2 the
+element-vs-array member type 4; a3 the source-side rest rejection 1; a4 arity rung 4 1; a5 the
+(CHK.108) exclusion 7; a6 tsc's `generateLimitedTupleElements` skip 2; a7 the display ellipsis 10;
+a8 the class-property arity refusal 3; a9 the elaboration expansion 2; a10 the tuple→Array rule 1;
+a12 the B407 positional-chain fallback 2; a13 the argument gate 1. **a3/a4 are a round-927 pair on
+one observable** (row lost vs row kept with the wrong chain) and were separated only by adding a
+presence-only pin. **a14 first read 0 RED because the PIN SET was blind** — every LITERAL index is
+served by the numbered member, so only a non-literal `t[i]` reaches the index signature; added, and
+it reddens. **a11 is REDUNDANT by measurement**, round 813's whole-output diff over six fixtures
+including purpose-built adversarial shapes, because a6's skip refuses every index it would serve.
+
+**A PROCESS FAILURE, SELF-REPORTED BY THE IMPLEMENTATION AGENT AND WORTH RECORDING.** It misread a
+still-running ablation batch as killed and started a second Gradle invocation — two concurrent
+builds, which CLAUDE.md forbids. It was detected by an IMPOSSIBLE class sha, and both affected arms
+(a11, a14) were re-run alone in the foreground with source md5 and class sha verified at each step.
+No result in the round comes from an overlapped run. The detector that worked is the same one the
+restore-without-rebuild entry relies on: a sha that cannot be what it is.
+
+**ORCHESTRATOR RECEIPT.** The agent's grid BEFORE arm sha (`bd4d9c35…`) equals the binary the
+orchestrator built and gated last round; its final binary (`eb69f4bc…`) equals the binary this
+round's green suite ran on, and differs from the grid binary only by a KDoc (`javap -c -p` minus
+line numbers byte-identical), so the grid stands. The independent re-run reproduced
+`added=0 removed=0` on all eight.
+
 ### Round (P18.46) — definite assignment joins a `try`/`catch` and reaches an expression-bodied arrow ((CHK.110)(a)/(b)), and the suppressor was NEITHER candidate the item named (2026-09-08)
 
 **Suite 18,234 → 18,271 / 0 / 3** — 37 pins in the new `Ts2454TryJoinAndArrowBodyTest`, every
@@ -1469,7 +1533,12 @@ where the order sends you.
   the archive for "instantiateType for Type.Object" before touching the no-op. MEANING (false
   positive + lost diagnostic).
 
-- [ ] **(CHK.111) A REST TUPLE CARRIES ITS REST SLOT AS A *REQUIRED* NUMBERED MEMBER, SO
+- [x] **(CHK.111) CLOSED 2026-09-08 ((P18.47) note): the false-positive population was **9x** the item's
+  count (all FIVE positions for a declared tuple source, not the class property alone), the gain was 10
+  rows not 5, and the item's named seam — make the rest slots OPTIONAL — is WRONG rather than incomplete
+  (optionality injects `| undefined` into element reads and fixes only half the false positives). The
+  working model is the rest member carrying the rest's ELEMENT type plus a separate non-required mark.
+  The DISPLAY half landed in full. ORIGINAL: A REST TUPLE CARRIES ITS REST SLOT AS A *REQUIRED* NUMBERED MEMBER, SO
   `[number]` FAILS AGAINST `[number, ...string[]]` OUTRIGHT — a false TS2741 neither reference
   prints, PRE-EXISTING and reproduced on the (CHK.108) parent binary with a DECLARED tuple source
   (measured 2026-09-08, (P18.44); `build/bench/chk108-sub/probe4` line 11).** Four of the five

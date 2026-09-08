@@ -1825,8 +1825,14 @@ export { zipWith } from './internal/operators/zipWith';
         // renamed ajax values — and (EXT.18) exactly the five renames'
         // `@JsName`s: rxjs re-exports nothing under another name.
         val header = rendered.startsWith("@file:JsModule(\"rxjs\")\n\n")
-        val operatorZipInternal = "/* xtsc: function zip is not exported by the package entry - an internal path a consumer cannot bind */\npublic external fun <T, A, R> zip(otherInputsAndProject: Any? /* xtsc: unmapped [any] */, project: Any? /* xtsc: unmapped (...values: Cons<T, A>) => any */): OperatorFunction<T, R>\n" in rendered
-        val observableZipBound = "/* xtsc: constraint on A: readonly unknown[] not carried */\npublic external fun <A> zip(sources: Any? /* xtsc: unmapped [any] */): Observable<A>\n" in rendered
+        // (CHK.111): the marker renders `[...ObservableInputTuple<A>]` — a tuple whose single
+        // slot is a REST — and until (CHK.111) [typeToString] dropped the `...`, so the marker
+        // read `[any]`: a FIXED one-element tuple, which is a different type from the variadic
+        // one the source declares and one both references spell with the ellipsis. The element
+        // still renders `any` because `ObservableInputTuple<A>` is unmappable here (B58.1),
+        // which is what the enclosing `xtsc: unmapped` marker exists to announce.
+        val operatorZipInternal = "/* xtsc: function zip is not exported by the package entry - an internal path a consumer cannot bind */\npublic external fun <T, A, R> zip(otherInputsAndProject: Any? /* xtsc: unmapped [...any] */, project: Any? /* xtsc: unmapped (...values: Cons<T, A>) => any */): OperatorFunction<T, R>\n" in rendered
+        val observableZipBound = "/* xtsc: constraint on A: readonly unknown[] not carried */\npublic external fun <A> zip(sources: Any? /* xtsc: unmapped [...any] */): Observable<A>\n" in rendered
         val internalPaths = Regex("not exported by the package entry").findAll(rendered).count() == 10
         val fiveJsNames = Regex("^@JsName\\(", RegexOption.MULTILINE).findAll(rendered).count() == 5
         assert(header)
@@ -1858,7 +1864,7 @@ export { zipWith } from './internal/operators/zipWith';
         // The tuple-typed sources, the construct signatures behind the
         // companion values and the `typeof` re-routes keep their markers;
         // nothing collapsed silently into a plain `Any?` parameter.
-        val tupleSources = "public external fun <A> zip(sources: Any? /* xtsc: unmapped [any] */): Observable<A>\n" in rendered
+        val tupleSources = "public external fun <A> zip(sources: Any? /* xtsc: unmapped [...any] */): Observable<A>\n" in rendered
         val constructSignature = "public external interface AjaxErrorCtor {\n    /* xtsc: skipped construct signature */\n}\n" in rendered
         val booleanConstructor = "predicate: Any? /* xtsc: unmapped BooleanConstructor */" in rendered
         // (EXT.12) The `null`-predicate `first` is the collapse's loser and

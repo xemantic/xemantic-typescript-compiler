@@ -1,3 +1,23 @@
+**(P18.42) — AN INTERSECTION DEDUPES ITS CONSTITUENTS BY TYPE ID ((CHK.106)(b)), AND (a) IS BROADER THAN THE ITEM RECORDED, 18,179 → 18,185 / 0 / 3 (2026-09-07).**
+**(CHK.106) CLOSED — one part fixed, three verified against both references.** (b) had MOVED since
+the item was written: (CHK.101) closed its `| undefined` half and what remained was `BP & BP` vs
+`BP`, an idempotent intersection — `getIntersectionType` flattened, dropped `unknown` and reduced
+primitives but never DEDUPED, where tsc's `addTypeToIntersection` keys its set by type ID. **The
+dedupe needed an exemption, and the exemption is an INTERNING DIVERGENCE rather than a rule**: an
+unrestricted id-dedupe also collapses `{ p: number } & { p: number }`, which both references print
+in full, because two separate type-literal NODES are two types in tsc and ONE interned type here on
+the project path. That leaves `T1 & T1` (an alias to an anonymous body) unfixed, recorded rather
+than bought — the only rule separating it reads `aliasDisplayMap`, which is FIRST-WINS during the
+walk and would make the dedupe a function of resolution ORDER (round 776). **(a) is BROADER than
+recorded and stays refused**: it names the loss through a CARRIER member, and a DIRECT `Fn<number>`
+annotation loses the name too while a direct `Obj<number>` keeps it — still (INC.27)/(INC.29)'s
+interning-key question. (c) verified closed by (CHK.100); (d) verified a reference divergence
+(pristine `(2 | 1)[]`, tsgo and ours `(1 | 2)[]`). 6 pins; 3 arms of which **one is recorded BLIND
+rather than redundant** — the unrestricted-dedupe arm reads 0 RED because `diagnose()` gives the two
+anonymous literals distinct ids, so the guard's evidence is the project path and a pin that could
+see it belongs in `-project`. Grid **8 × added=0 removed=0**, `cost_gate.py` exit 0,
+`huge_methods.py` exit 0, build warning-clean.
+
 **(P18.41) — A CONDITIONAL OF ARRAY LITERALS UNDER AN ARRAY PATTERN TYPES EACH BRANCH AT ITS OWN FLOW POSITION ((CHK.107)), AND THE GRID THE ITEM CALLED THE GATE IS A CONTROL, 18,172 → 18,179 / 0 / 3 (2026-09-07).**
 **(CHK.107) CLOSED, 1 → 6 of the reference's 6 rows.** `const [s, e] = typeof por === "number" ?
 [por, undefined] : [por.pos, por.end]` read both leaves as `any`. tsc pushes the pattern's implied

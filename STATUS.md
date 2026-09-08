@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,912** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **199,073** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,35 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.47) — THE REST-TUPLE MODEL IS FIXED ((CHK.111)), THE ITEM'S NAMED SEAM WAS *WRONG* RATHER THAN INCOMPLETE, AND THE REGRESSION IT CAUSED WAS IN ANOTHER MODULE, 18,271 → 18,302 / 0 / 3 (2026-09-08).**
+**(CHK.111) CLOSED, and the item under-counted its own defect by 9x** — it recorded "exactly 1 false
+positive" at the class property; measured, a DECLARED tuple source produced a false TS2741/TS2322 at
+**all five** positions (the shielding claim holds only for an ARRAY-LITERAL source), and the gain is
+**10 rows, not 5**. **The named seam is WRONG, not merely incomplete**: making rest slots OPTIONAL
+fixes only the `[number]` half — `[number, string]` failed because the rest MEMBER was typed
+`string[]` (the whole rest array) rather than `string` (its element) — and optionality is the wrong
+CHANNEL, since it also injects `| undefined` into every element read and into `tupleArrayBase`'s
+union. What works is the member carrying the rest's ELEMENT type plus a SEPARATE non-required mark,
+which is also why dropping the numbered member entirely (literal tsc) is refused: it would lose
+`[number, number]`'s position-1 element row. **The DISPLAY half landed in full** —
+`[number, ...string[]]`, `readonly [...]`, leading and middle rests all render as both references,
+with an empty `[]` unchanged as the control that the ellipsis is keyed on `tupleRestIndex`.
+**The regression this round caused was in ANOTHER MODULE and only the full suite could see it**:
+`typeToString` feeds the externals generator's `xtsc: unmapped <type>` markers, so the ellipsis moved
+three RxJS gate expectations while the grid and all ~13k corpus baselines stayed clean. Those pins
+encoded the OLD, LESS ACCURATE text and were updated **with proof, not weakened** — rxjs declares
+`sources: [...ObservableInputTuple<A>]`, a tuple whose single slot IS a rest, so `[any]` spelled a
+FIXED one-element tuple. **Two of the three stale expectations were reported and the third was
+hidden**, because a block of `assert(<local>)` calls throws at the FIRST false one — both facts are
+now CLAUDE.md entries, and (P18.44)'s rest-tuple entry, which this round makes stale, was REWRITTEN
+rather than left standing. 31 pins; 14 arms — a3/a4 a round-927 pair separated only by adding a
+presence-only pin, **a14 first blind** (every literal index is served by the numbered member, so
+only a non-literal `t[i]` reaches the index signature), **a11 REDUNDANT by whole-output diff** over
+six fixtures. The implementation agent self-reported starting a second concurrent Gradle build,
+detected by an impossible class sha; both affected arms were re-run alone in the foreground and no
+result comes from an overlapped run. Grid **8 × added=0 removed=0** re-run independently;
+`cost_gate.py` exit 0 (largest delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean.
 
 **(P18.46) — DEFINITE ASSIGNMENT JOINS A `try`/`catch` AND REACHES AN EXPRESSION-BODIED ARROW ((CHK.110)(a)/(b)), AND THE SUPPRESSOR WAS NEITHER CANDIDATE THE ITEM NAMED, 18,234 → 18,271 / 0 / 3 (2026-09-08).**
 **(CHK.110)(a)/(b) CLOSED; (c) and two newly-measured gaps moved to (CHK.112).** The item named
@@ -119,24 +148,4 @@ the pre-regression 210/1,360 — the walk was never expensive, only the reductio
 3 pins; the poisoned-memo ablation reddens **exactly P2**, the served ask, and one arm is recorded
 **BLIND** rather than redundant (`anyForeign`'s early exit returns above the cache probe). Grid
 **8 × added=0 removed=0**, `cost_gate.py` exit 0 (all counters within ±0.03%, no rebaseline),
-`huge_methods.py` exit 0, build warning-clean.
-
-**(P18.42) — AN INTERSECTION DEDUPES ITS CONSTITUENTS BY TYPE ID ((CHK.106)(b)), AND (a) IS BROADER THAN THE ITEM RECORDED, 18,179 → 18,185 / 0 / 3 (2026-09-07).**
-**(CHK.106) CLOSED — one part fixed, three verified against both references.** (b) had MOVED since
-the item was written: (CHK.101) closed its `| undefined` half and what remained was `BP & BP` vs
-`BP`, an idempotent intersection — `getIntersectionType` flattened, dropped `unknown` and reduced
-primitives but never DEDUPED, where tsc's `addTypeToIntersection` keys its set by type ID. **The
-dedupe needed an exemption, and the exemption is an INTERNING DIVERGENCE rather than a rule**: an
-unrestricted id-dedupe also collapses `{ p: number } & { p: number }`, which both references print
-in full, because two separate type-literal NODES are two types in tsc and ONE interned type here on
-the project path. That leaves `T1 & T1` (an alias to an anonymous body) unfixed, recorded rather
-than bought — the only rule separating it reads `aliasDisplayMap`, which is FIRST-WINS during the
-walk and would make the dedupe a function of resolution ORDER (round 776). **(a) is BROADER than
-recorded and stays refused**: it names the loss through a CARRIER member, and a DIRECT `Fn<number>`
-annotation loses the name too while a direct `Obj<number>` keeps it — still (INC.27)/(INC.29)'s
-interning-key question. (c) verified closed by (CHK.100); (d) verified a reference divergence
-(pristine `(2 | 1)[]`, tsgo and ours `(1 | 2)[]`). 6 pins; 3 arms of which **one is recorded BLIND
-rather than redundant** — the unrestricted-dedupe arm reads 0 RED because `diagnose()` gives the two
-anonymous literals distinct ids, so the guard's evidence is the project path and a pin that could
-see it belongs in `-project`. Grid **8 × added=0 removed=0**, `cost_gate.py` exit 0,
 `huge_methods.py` exit 0, build warning-clean.

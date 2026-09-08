@@ -4456,6 +4456,18 @@ class Checker(
      *  non-null during the check pipeline. */
     private val optionalTupleMemberIds = mutableSetOf<Int>()
 
+    /** (CHK.111): ids of tuple member symbols synthesized by [buildTupleFromTypes] for a slot
+     *  AT OR AFTER the rest slot (`[number, ...string[]]`'s member `1`). tsc creates no
+     *  numbered property there at all (`createTupleTargetType` stops at the first variadic
+     *  element), so such a member is never REQUIRED of a target — `[number]` satisfies
+     *  `[number, ...string[]]`, which was an ours-only TS2741 at all five assignability
+     *  positions before this. It is kept as a member, typed with the rest's ELEMENT type, so
+     *  a source slot that IS present is still compared against it (`[number, number]` still
+     *  reports at position 1). Deliberately separate from [optionalTupleMemberIds]: that
+     *  channel also joins `undefined` into an element READ and into [tupleArrayBase]'s union,
+     *  neither of which is true of a rest slot. Declared before `init`. */
+    private val restTupleMemberIds = mutableSetOf<Int>()
+
     /** M1.10: the INVERSE of [mappedReadonlyMemberIds] — ids of members synthesized by a
      *  `-readonly` mapped type (`Mutable<T> = { -readonly [K in keyof T]: T[K] }`). A
      *  homomorphic mapped member carries its SOURCE property's declaration (for
@@ -106209,6 +106221,40 @@ interface DataView {
         t.members?.get(i.toString())?.id?.let { it in optionalTupleMemberIds } == true
 
     /**
+     * (CHK.111): is [sym] the member of a tuple slot at or after its REST slot? Such a member
+     * is never a REQUIRED property of a relation TARGET (tsc synthesizes none at all), so the
+     * three missing-property deciders — [propertiesRelatedTo], [collectMissingProperties] and
+     * [getMissingRequiredPropertySymbol] — skip it. It is NOT optional in the access sense:
+     * `t[1]` on `[number, ...string[]]` is `string`, never `string | undefined`.
+     */
+    private fun isRestTupleMember(sym: Symbol): Boolean = sym.id in restTupleMemberIds
+
+    /**
+     * (CHK.111): [elementTypes] with every slot at or after [restIndex] replaced by the rest's
+     * ELEMENT type — `[number, ...string[]]` → `[number, string]`. `tupleElementTypes` stores a
+     * rest slot as the rest's ARRAY type (the B526 collapse `getTupleType` performs), which is
+     * the right shape for [tupleArrayBase]'s own expansion and for nothing else: compared
+     * positionally it makes `[number, string]` an ours-only failure against
+     * `[number, ...string[]]` (`string` against `string[]`), and read as a member it answers
+     * `string[]` where tsc answers `string`. Falls back to the slot as stored where the rest is
+     * not an array-like this checker can index (`...T` on a bare type parameter), which is the
+     * pre-(CHK.111) behaviour for that slot.
+     */
+    private fun tupleRelationElementTypes(elementTypes: List<Type>, restIndex: Int): List<Type> {
+        if (restIndex < 0 || restIndex >= elementTypes.size) return elementTypes
+        val rest = elementTypes[restIndex]
+        val elem = restSlotElementType(rest) ?: return elementTypes
+        return elementTypes.mapIndexed { i, t -> if (i >= restIndex) elem else t }
+    }
+
+    /** (CHK.111): [tupleRelationElementTypes] for a tuple TYPE, or null where [t] is not one. */
+    private fun tupleRelationElementTypes(t: Type): List<Type>? {
+        if (t !is Type.Object || t is Type.Interface) return null
+        val elems = t.tupleElementTypes ?: return null
+        return tupleRelationElementTypes(elems, t.tupleRestIndex)
+    }
+
+    /**
      * (CHK.108) tsc's `minLength` for a tuple — the number of LEADING slots that are
      * neither optional nor the rest slot. `[number, number?]` and `[number, ...string[]]`
      * are both 1; `[number, number]` is 2; `[]` is 0.
@@ -106265,6 +106311,16 @@ interface DataView {
                 "  Target requires $targetMin element(s) but source may have fewer."
             } else {
                 "  Target allows only $targetArity element(s) but source may have more."
+            }
+        }
+        // (CHK.111) the FOURTH rung, from tsc's per-element loop below that ladder: a target
+        // position the target REQUIRES but the source only MAY provide (it lies at or after the
+        // source's own rest slot). Reachable only when both sides carry a rest — every other
+        // shape is caught by a rung above — which is why it sits last:
+        // `[number, ...string[]]` → `[number, string, ...string[]]`.
+        for (i in 0 until targetMin) {
+            if (i >= sourceMin) {
+                return "  Source provides no match for required element at position $i in target."
             }
         }
         return null
@@ -107969,7 +108025,13 @@ interface DataView {
             // number] = [1]` was silent because this block owned the failure and had no
             // row for it.
             if (!checkArrayLiteralElementsAgainstTuple(init, targetType, source, fileName)) {
-                tupleArityChain(sourceType, targetType)?.let { arityChain ->
+                // (CHK.111): the element-wise elaboration now says nothing about a REST
+                // position either (tsc's `generateLimitedTupleElements` skip), so the chain is
+                // the arity one where there IS one and otherwise the POSITIONAL one — which is
+                // what both references print for `const t: [number, ...string[]] = [1, 2]`.
+                val chain = tupleArityChain(sourceType, targetType)?.let { listOf(it) }
+                    ?: getPropertyElaborationChain(sourceType, targetType)
+                if (chain != null) {
                     val arityTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
                     val (aLine, aChar) = getLineAndCharacterOfPosition(source, name.pos)
                     diagnostics.add(Diagnostic(
@@ -107977,7 +108039,7 @@ interface DataView {
                         category = DiagnosticCategory.Error, code = 2322,
                         fileName = fileName, line = aLine, character = aChar,
                         start = name.pos, length = name.text.length,
-                        messageChain = listOf(arityChain),
+                        messageChain = chain,
                     ))
                 }
             }
@@ -109009,7 +109071,14 @@ interface DataView {
             val displaySource = typeToString(sourceType)
             val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
             val (line, character) = getLineAndCharacterOfPosition(source, propName.pos)
+            // (CHK.111): (CHK.108) taught [collectMissingProperties] and
+            // [getMissingRequiredPropertySymbol] that a tuple ARITY mismatch is never reported as
+            // a missing NUMBERED member — but this emitter reads [propertiesRelatedTo]'s own
+            // side channel and so kept printing `Property '0' is missing in type '[]'` where the
+            // other four positions had already moved to the TS2322 both references print. The
+            // CLASS-PROPERTY position was the one left behind; the refusal is the same one.
             val missingProp = lastMissingPropertyName
+                ?.takeIf { tupleArityChain(sourceType, targetType) == null }
             val missingPropSym = lastMissingPropertySymbol
             if (missingProp != null) {
                 val allMissing = collectMissingProperties(sourceType, targetType)
@@ -131002,10 +131071,11 @@ interface DataView {
         val ctx = contextualType ?: return null
         val ctxTuple = contextualTupleConstituent(ctx) ?: return null
         if (expr.elements.any { it is SpreadElement }) return null
-        val slots = ctxTuple.tupleElementTypes ?: return null
+        // (CHK.111): rest-EXPANDED, and a trailing rest also types the elements PAST its slot.
+        val slots = tupleRelationElementTypes(ctxTuple) ?: return null
         val elementTypes = ArrayList<Type>(expr.elements.size)
         for ((i, el) in expr.elements.withIndex()) {
-            val slot = slots.getOrNull(i)
+            val slot = contextualTupleSlot(ctxTuple, slots, i)
             val raw = if (slot != null && (el is ArrayLiteralExpression || el is ObjectLiteralExpression)) {
                 val savedCtx = contextualType
                 contextualType = slot
@@ -131035,10 +131105,20 @@ interface DataView {
      * whole-argument one beside it.
      */
     private fun arrayLiteralTupleArityOnlyMismatch(argType: Type, paramType: Type): Boolean {
-        if (tupleArityChain(argType, paramType) == null) return false
-        val slots = (paramType as? Type.Object)?.tupleElementTypes ?: return false
-        val srcSlots = (argType as? Type.Object)?.tupleElementTypes ?: return false
+        // (CHK.111): rest-EXPANDED on both sides — see [tupleRelationElementTypes].
+        val ctxTuple = paramType as? Type.Object ?: return false
+        val restIndex = ctxTuple.tupleRestIndex
+        // (CHK.111): a REST-position mismatch is the second shape the element-wise
+        // elaboration is silent about (it skips every index at or after the rest slot, as
+        // tsc's `generateLimitedTupleElements` does), so the whole-argument row owns that too
+        // — `f([1, 2])` against `[number, ...string[]]` is a TS2345 at the argument in both
+        // references. Only where the ARITY is also fine and every non-skipped index relates is
+        // there nothing for this predicate to license.
+        if (restIndex < 0 && tupleArityChain(argType, paramType) == null) return false
+        val slots = tupleRelationElementTypes(paramType) ?: return false
+        val srcSlots = tupleRelationElementTypes(argType) ?: return false
         for (i in srcSlots.indices) {
+            if (restIndex in 0..i) continue
             val slot = slots.getOrNull(i) ?: continue
             if (!checkTypeRelatedTo(srcSlots[i], slot, assignableRelation)) return false
         }
@@ -131052,8 +131132,37 @@ interface DataView {
     private fun contextualTupleConstituent(t: Type): Type.Object? = when (t) {
         is Type.Union -> t.types.firstNotNullOfOrNull { contextualTupleConstituent(it) }
         is Type.Intersection -> t.types.firstNotNullOfOrNull { contextualTupleConstituent(it) }
-        is Type.Object -> t.takeIf { it.tupleElementTypes != null && !it.tupleHasRest }
+        // (CHK.111): the REST exclusion (CHK.108) added is GONE. It was a trade forced by the
+        // rest MODEL, not by contextual typing: with the rest slot carrying its array type as a
+        // REQUIRED member, force-tupling `[1]` against `[number, ...string[]]` turned a silent
+        // row into an ours-only TS2741 at every position. The model now types that member with
+        // the rest's ELEMENT type and never requires it, so the ten rows this exclusion was
+        // suppressing — `[]` and an element mismatch, at all five positions — are back.
+        is Type.Object -> t.takeIf { it.tupleElementTypes != null }
         else -> null
+    }
+
+    /**
+     * (CHK.111): the slot a tuple contextually types element [i] with — the rest-EXPANDED slot,
+     * and for an index PAST the slots the rest's element where the rest is TRAILING (an
+     * `[number, ...string[]]` context types `[1, "a", "b"]`'s third element as `string`). A
+     * LEADING or MIDDLE rest (`[...string[], number]`) is refused past the end: which slot such
+     * an index denotes is a normalization this checker does not model, and guessing it would
+     * contextually type an element with the wrong slot silently.
+     *
+     * MEASURED REDUNDANT (2026-09-08, round 813's whole-output method): ablated to a bare
+     * `slots.getOrNull(i)`, the compiler's output over six fixtures — including shapes built to
+     * expose it, a literal-carrying rest slot and a nested-tuple one — is byte-identical, because
+     * [checkArrayLiteralElementsAgainstTuple] skips every index at or after the rest slot anyway
+     * and the rest MEMBER is never required. What it still buys is the SOURCE TYPE the contextual
+     * builder answers (`[number, "a" | "b", "a" | "b"]` rather than `[number, string, string]`),
+     * which no row names today. Kept as the second layer of a paired guard and recorded here
+     * rather than claimed as covered.
+     */
+    private fun contextualTupleSlot(ctxTuple: Type.Object, slots: List<Type>, i: Int): Type? {
+        slots.getOrNull(i)?.let { return it }
+        val rest = ctxTuple.tupleRestIndex
+        return if (rest >= 0 && rest == slots.size - 1) slots.lastOrNull() else null
     }
 
     /**
@@ -136483,7 +136592,13 @@ interface DataView {
                 val tupleElems = type.tupleElementTypes
                 if (tupleElems != null) {
                     val ro = if (type.readonlyTuple) "readonly " else ""
-                    return "$ro[${tupleElems.joinToString(", ") { typeToString(it) }}]"
+                    // (CHK.111): a REST slot is spelled `...T[]` — both references print
+                    // `[number, ...string[]]` where the bare join printed `[number, string[]]`,
+                    // a type no TypeScript source can spell.
+                    val rest = type.tupleRestIndex
+                    return "$ro[" + tupleElems.mapIndexed { i, e ->
+                        (if (i == rest) "..." else "") + typeToString(e)
+                    }.joinToString(", ") + "]"
                 }
                 // B198: self-recursion cut for function-symbol types — a function whose
                 // return annotation is `typeof <itself>` renders the nested occurrence as
@@ -169357,7 +169472,10 @@ interface DataView {
                 (globalReadonlyArrayType != null && target.target === globalReadonlyArrayType))
         ) {
             val elt = target.resolvedTypeArguments?.singleOrNull()
-            if (elt != null && source.tupleElementTypes!!.all { checkTypeRelatedTo(it, elt, relation) }) {
+            // (CHK.111): rest-EXPANDED — `[number, ...string[]]` relates to `(number|string)[]`
+            // in both references, and comparing the stored `string[]` slot refused it.
+            val srcElems = tupleRelationElementTypes(source) ?: source.tupleElementTypes!!
+            if (elt != null && srcElems.all { checkTypeRelatedTo(it, elt, relation) }) {
                 return true
             }
         }
@@ -169753,7 +169871,10 @@ interface DataView {
             if (source.symbol?.flags?.hasAny(SymbolFlags.Class) == true &&
                 isLibPhantomMemberOfModuleInterface(target, targetName)) continue
             // Check if property is optional (question mark in declaration)
-            val isOptional = isOptionalProperty(targetProp)
+            // (CHK.111): a slot at or after the target's REST slot is not a required member —
+            // tsc synthesizes no numbered property there — so `[number]` relates to
+            // `[number, ...string[]]`.
+            val isOptional = isOptionalProperty(targetProp) || isRestTupleMember(targetProp)
             val sourceProp = sourceMembers[targetName]
             if (sourceProp == null) {
                 // B418: a source INDEX SIGNATURE does NOT satisfy a target's required
@@ -169768,6 +169889,15 @@ interface DataView {
                     return false // missing required property
                 }
                 continue
+            }
+            // (CHK.111): the mirror of the rule above, on the SOURCE side — a slot at or after
+            // the source's own REST slot only MAY be present, so it cannot satisfy a REQUIRED
+            // target slot (tsc's tuple element loop: `targetFlags & Required` with a source
+            // flag that is not, reported as "Source provides no match for required element at
+            // position N in target"). Without it `[number, ...string[]]` relates to
+            // `[number, string, ...string[]]`, which both references reject.
+            if (!isOptional && isRestTupleMember(sourceProp)) {
+                return false
             }
             // Private-brand mismatch: if both source and target declare this property as
             // `private` but on different parent classes, TypeScript treats them as unrelated
@@ -170486,7 +170616,8 @@ interface DataView {
         // Reverted: `toString` is filtered like any other prototype prop.
         val missing = mutableListOf<String>()
         for (prop in targetProps) {
-            if (isOptionalProperty(prop)) continue
+            // (CHK.111): a rest slot's member is never "missing" — see [isRestTupleMember].
+            if (isOptionalProperty(prop) || isRestTupleMember(prop)) continue
             // Skip target static members — they live on the class's static side and
             // are not part of the instance shape we're comparing against.
             if (targetStatics != null && targetStatics.containsKey(prop.name)) continue
@@ -171865,9 +171996,19 @@ interface DataView {
         arrLit: ArrayLiteralExpression, tupleType: Type.Object, source: String, fileName: String,
     ): Boolean {
         var emitted = false
-        val slots = tupleType.tupleElementTypes ?: return false
+        // (CHK.111): rest-EXPANDED, so an element compared against a rest slot is compared
+        // against the rest's ELEMENT type and an element past a TRAILING rest is compared at all.
+        val slots = tupleRelationElementTypes(tupleType) ?: return false
+        val restIndex = tupleType.tupleRestIndex
         for ((i, elem) in arrLit.elements.withIndex()) {
             if (elem is SpreadElement) return emitted
+            // (CHK.111) tsc's `generateLimitedTupleElements`: "Skip elements which do not exist
+            // in the target — a length error on the tuple overall is likely better than an error
+            // on a mismatched index signature". A tuple has NO numbered property at or after its
+            // rest slot in tsc, so every such index is skipped here and the WHOLE-LITERAL row
+            // owns the failure — `const t: [number, ...string[]] = [1, 2]` is one TS2322 at the
+            // declaration with `Type at position 1 …`, not a bare row at the element.
+            if (restIndex in 0..i) continue
             val slot = slots.getOrNull(i) ?: continue
             if (slot === anyType || slot === errorType || slot is Type.TypeParam) continue
             // (CHK.108): a NESTED tuple slot — `[[1], 2]` against `[[number, number],
@@ -174160,8 +174301,12 @@ interface DataView {
         // not compatible with type at position N in target." per TypeScript
         // convention. When both sides have tupleElementTypes and the same arity,
         // iterate positionally and emit per-mismatch chain.
-        val srcTuple = source.tupleElementTypes
-        val tgtTuple = target.tupleElementTypes
+        // (CHK.111): rest-EXPANDED, so a position compared against a rest slot names the
+        // rest's ELEMENT type — `Type 'number' is not assignable to type 'string'`, not to
+        // `string[]`. The VERDICT above already compares the same expanded types (the tuple's
+        // member table carries them since (CHK.111)), so the two cannot disagree.
+        val srcTuple = tupleRelationElementTypes(source)
+        val tgtTuple = tupleRelationElementTypes(target)
         // (CHK.108): an ARITY mismatch is reported by ONE sub-line and never per position
         // — tsc decides it above the element walk, so this arm sits above the equal-arity
         // one (which by construction it cannot reach: every rung needs a differing count
@@ -174927,7 +175072,8 @@ interface DataView {
             if (targetStatics != null && targetStatics.containsKey(targetProp.name)) continue
             if (sourceMembers[targetProp.name] != null) continue
             if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
-            if (isOptionalProperty(targetProp)) continue
+            // (CHK.111): a rest slot's member is never "missing" — see [isRestTupleMember].
+            if (isOptionalProperty(targetProp) || isRestTupleMember(targetProp)) continue
             if (srcIndex != null) {
                 val targetPropType = getPropertyTypeForRelation(target, targetProp)
                 if (checkTypeRelatedTo(srcIndex.type, targetPropType, assignableRelation)) continue
@@ -175295,13 +175441,26 @@ interface DataView {
         // Create numbered property symbols: "0", "1", "2", ...
         val props = mutableListOf<Symbol>()
         val members = symbolTable()
-        for ((i, elemType) in elementTypes.withIndex()) {
+        // (CHK.111): a REST slot's MEMBER carries the rest's ELEMENT type, never its array
+        // type — tsc's `createTupleTargetType` gives slot `i` the type parameter the
+        // instantiation binds to the element, so `[number, ...string[]]`'s member `1` is
+        // `string` where `tupleElementTypes[1]` (the B526 collapse) is `string[]`.
+        val memberTypes = tupleRelationElementTypes(elementTypes, restIndex)
+        for ((i, elemType) in memberTypes.withIndex()) {
             val propSymbol = Symbol(
                 flags = SymbolFlags.Property,
                 name = i.toString(),
             )
             symbolTypes[propSymbol.id] = elemType
             if (optionalFlags?.getOrNull(i) == true) optionalTupleMemberIds.add(propSymbol.id)
+            // (CHK.111): tsc creates NO numbered property at or after the rest slot
+            // (`createTupleTargetType`'s `if (!(combinedFlags & ElementFlags.Variable))`), so
+            // such a slot is never a REQUIRED member of the target. We keep the member — it is
+            // what still reports `[number, number]` at position 1 — and record it here so the
+            // three missing-property deciders skip it. Deliberately NOT [optionalTupleMemberIds]:
+            // that channel also adds `| undefined` to an element READ and to [tupleArrayBase]'s
+            // union, and a rest slot is not optional in either sense.
+            if (restIndex in 0..i) restTupleMemberIds.add(propSymbol.id)
             if (readonly) mappedReadonlyMemberIds.add(propSymbol.id)
             props.add(propSymbol)
             members[propSymbol.name] = propSymbol
@@ -175330,10 +175489,12 @@ interface DataView {
         members["length"] = lengthSymbol
         tupleObj.properties = props
         tupleObj.members = members
-        // Tuple has a number index signature for element access
-        if (elementTypes.isNotEmpty()) {
-            val elementUnion = if (elementTypes.size == 1) elementTypes[0]
-                else getUnionType(elementTypes)
+        // Tuple has a number index signature for element access. (CHK.111): over the
+        // rest-EXPANDED slots, so `[number, ...string[]]` indexes `number | string` and not
+        // `number | string[]` (tsc's `getIndexTypeOfType(t, numberType)`).
+        if (memberTypes.isNotEmpty()) {
+            val elementUnion = if (memberTypes.size == 1) memberTypes[0]
+                else getUnionType(memberTypes)
             tupleObj.numberIndexInfo = IndexInfo(keyType = numberType, type = elementUnion)
         }
         return tupleObj

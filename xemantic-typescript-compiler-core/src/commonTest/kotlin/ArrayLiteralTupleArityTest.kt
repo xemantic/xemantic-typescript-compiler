@@ -193,9 +193,10 @@ class ArrayLiteralTupleArityTest {
      * two read `Type at position 1 …` and `Types of property 'length' are incompatible`,
      * neither of which either reference prints.
      *
-     * The type DISPLAYS still diverge in FORM (`[number, string[]]` for
-     * `[number, ...string[]]`, and the optional markers dropped) — a pre-existing tuple
-     * rendering gap, deliberately not asserted here.
+     * The type DISPLAYS diverged in FORM when this was written (`[number, string[]]` for
+     * `[number, ...string[]]`); (CHK.111) closed the rest half of that and pins it in
+     * [RestTupleModelTest]. The dropped optional markers are still a pre-existing gap and
+     * are deliberately not asserted here.
      */
     @Test
     fun `a rest-tuple source against a fixed tuple names the target's requirement`() {
@@ -304,17 +305,17 @@ class ArrayLiteralTupleArityTest {
     }
 
     /**
-     * (CHK.108) the pin for the REST exclusion in [contextualTupleConstituent], and the
-     * measurement that says the exclusion is a TRADE rather than a redundant guard.
+     * (CHK.108) the pin for the REST exclusion in [contextualTupleConstituent] — RESOLVED by
+     * (CHK.111), which removed the exclusion; this stays as the silence it always asserted.
      *
-     * Dropping it gains FIVE correct rows (`[]` against a rest tuple, at the declaration,
-     * the return, the assignment, the argument and the class property) and introduces ONE
-     * false positive — exactly this shape, `TS2741 Property '1' is missing in type
-     * '[number]'`, which neither reference prints. The cause predates (CHK.108): our rest
-     * tuples carry the rest slot as a REQUIRED numbered member, so `[number]` fails against
-     * `[number, ...string[]]` for a declared tuple source too. The other four positions
-     * happen to be shielded (their element-wise owners swallow the row); the class-property
-     * one is not. Fix the rest MODEL and the exclusion can go.
+     * The (CHK.108) measurement recorded the exclusion as a TRADE: dropping it gained five
+     * correct rows and introduced one false positive, `TS2741 Property '1' is missing in type
+     * '[number]'` at exactly this shape. (CHK.111) re-measured against pristine 6.0.3 and the
+     * false-positive half was LARGER than recorded — every one of the five positions produced
+     * it for a DECLARED tuple source, not the class property alone — and its cause was the
+     * rest MODEL: the rest slot was a REQUIRED member typed with the rest's ARRAY type. With
+     * both halves fixed the exclusion is gone and the gained rows are ten, not five; see
+     * [RestTupleModelTest].
      */
     @Test
     fun `negative control - a rest tuple class property accepts its prefix`() {
