@@ -207,20 +207,47 @@ class EnumAndNullableRelationDisplayTest {
         )
     }
 
+    /**
+     * CORRECTED by (CHK.113)(b), which is the residue (CHK.92) recorded beside itself and
+     * then pinned here in its UNFIXED form — the third such countdown pin in four rounds.
+     * The TARGET half was and stays right; only the SOURCE was wrong, and the two references
+     * agree with the corrected expectation verbatim:
+     *
+     * ```
+     * tsgo 7.0.2      t.ts(3,4): error TS2345: Argument of type '1' is not assignable to parameter of type 'boolean | undefined'.
+     * pristine 6.0.3  t.ts(3,4): error TS2345: Argument of type '1' is not assignable to parameter of type 'boolean | undefined'.
+     * ```
+     *
+     * The mechanism is the same one this test's own name states: `boolean` is itself a
+     * union, so the strip declines and the `| undefined` survives — and a SURVIVING nullish
+     * member is a top-level singleton to tsc's `typeCouldHaveTopLevelSingletonTypes`, which
+     * is exactly the condition under which the source is NOT generalized either.
+     */
     @Test
-    fun `an optional boolean parameter keeps its undefined because boolean is itself a union`() {
+    fun `an optional boolean parameter keeps its undefined and the source literal`() {
         assert(
             ts2345("gB(1);") ==
-                listOf("Argument of type 'number' is not assignable to parameter of type 'boolean | undefined'."),
+                listOf("Argument of type '1' is not assignable to parameter of type 'boolean | undefined'."),
         )
     }
 
+    /**
+     * CORRECTED by (CHK.113)(b) — see the sibling above. Measured on both references:
+     *
+     * ```
+     * tsgo 7.0.2      t.ts(5,4): error TS2345: Argument of type 'true' is not assignable to parameter of type 'string | number | undefined'.
+     * pristine 6.0.3  t.ts(5,4): error TS2345: Argument of type 'true' is not assignable to parameter of type 'string | number | undefined'.
+     * ```
+     *
+     * Here the strip declines for the OTHER reason — two non-nullable members remain — and
+     * the source keeps its literal for the same one.
+     */
     @Test
-    fun `an optional union parameter keeps its undefined`() {
+    fun `an optional union parameter keeps its undefined and the source literal`() {
         assert(
             ts2345("gN(true);") ==
                 listOf(
-                    "Argument of type 'boolean' is not assignable to parameter of type " +
+                    "Argument of type 'true' is not assignable to parameter of type " +
                         "'string | number | undefined'.",
                 ),
         )
@@ -309,11 +336,20 @@ class EnumAndNullableRelationDisplayTest {
         )
     }
 
+    /**
+     * CORRECTED by (CHK.113)(b) — the declaration sibling of the two argument pins above,
+     * and the same correction. Both references:
+     *
+     * ```
+     * tsgo 7.0.2      t.ts(1,7): error TS2322: Type '1' is not assignable to type 'boolean | undefined'.
+     * pristine 6.0.3  t.ts(1,7): error TS2322: Type '1' is not assignable to type 'boolean | undefined'.
+     * ```
+     */
     @Test
-    fun `a variable declaration keeps a boolean or undefined annotation whole`() {
+    fun `a variable declaration keeps a boolean or undefined annotation whole and the source literal`() {
         assert(
             messages("const v: boolean | undefined = 1;", 2322) ==
-                listOf("Type 'number' is not assignable to type 'boolean | undefined'."),
+                listOf("Type '1' is not assignable to type 'boolean | undefined'."),
         )
     }
 

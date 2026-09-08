@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,416** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **199,532** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,34 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.49) — A `number` STOPS BEING SILENTLY ACCEPTED BY A STRING ENUM ((CHK.113)(a)), THE SOURCE LITERAL SURVIVES TO A NULLISH-TARGET DISPLAY ((b)), AND THE ROUND BEFORE IT LEFT THREE COUNTDOWN PINS, 18,338 → 18,375 / 0 / 3 (2026-09-08).**
+**(a) is a FALSE NEGATIVE in the most basic position and the item under-counted it** — a `number`
+source was silently ACCEPTED against a string enum target; the item named the declaration, and
+measured it is **all five positions plus a union target, 8 silent rows**, TS2322/TS2345 in both
+references for every one. The fix demands POSITIVE evidence of string-ness through `enumMemberEntries`
+(the tsc view), so an opaque ambient member, an unfoldable value, an empty enum and every mixed or
+numeric enum keep today's acceptance — and **arm a2 demonstrates CLAUDE.md's own trap #2 directly**:
+inverting it to "positive numeric evidence" reddens exactly the two opaque-member controls.
+**(b)'s second shape did not exist** — the item says `gN(true)` prints `'boolean'` for `'true'`, but
+BOTH references print `'boolean'` there too, so that row was never a divergence — and **the display
+predicate alone is completely INERT**, because `getTypeOfExpression` answers the BASE primitive for a
+literal NODE: the source is widened at ACQUISITION, so nothing downstream has a literal left to keep
+(CLAUDE.md's round-781 entry earned its place again; the recovery re-reads the literal from its AST
+node at three display heads). **The inherited risk was re-scoped rather than accepted**:
+`ts2322KeepsSourceLiteral`'s two recorded FP incidents are about the ACQUISITION gate, which feeds the
+relation VERDICT, not the display predicate — widening acquisition was considered and REFUSED with
+that distinction stated. **Three stale pins were inverted, and the IMMEDIATELY PRECEDING round created
+them**: (CHK.92) recorded its own residue as pins asserting `'number'`/`'boolean'`, which both
+references contradict. That is the third countdown pin in four rounds, and CLAUDE.md's entry is
+reinforced with the sharper form — *a round that records its own residue as a pin hands the next round
+a failing suite*, and a red pin asserting a known-wrong value is indistinguishable from a regression
+until someone re-derives it against pristine. 37 pins + 3 inverted; 6 arms — a1 10 RED, a2 2 uniquely,
+a3 1, b1 12, and **b2/b3 REDUNDANT BY MEASUREMENT** (round 813's whole-output diff over a 43-row
+family, byte-identical on all three binaries), kept and recorded rather than claimed as coverage.
+Three pre-existing residues confirmed on the BEFORE binary are queued as (CHK.114). Grid
+**8 × added=0 removed=0** re-run independently; `cost_gate.py` exit 0, `huge_methods.py` exit 0,
+corpus 8,837/0, externals 290/0, `-project` 866/0, build warning-clean.
 
 **(P18.48) — THE ENUM AND NULLABLE-TARGET DISPLAY RESIDUES CLOSE ((CHK.92), ALL FOUR PARTS), AND A DISPLAY RULE PUT IN THE GENERAL RENDERER BROKE THE LANGUAGE SERVICE, 18,302 → 18,338 / 0 / 3 (2026-09-08).**
 **All four parts LANDED**: (a) neither side of an object-literal member mismatch is widened any more
@@ -119,32 +147,3 @@ four distinct class shas, none blind or redundant; every other `getCalleeType` c
 shown unable to emit for a literal. Grid **8 × added=0 removed=0** re-run independently after both
 agent arms were verified byte-identical to orchestrator-built binaries; `cost_gate.py` exit 0
 (largest delta **+0.03%**), `huge_methods.py` exit 0 (834 classes, 0 over), build warning-clean.
-
-**(P18.44) — A TUPLE'S *ARITY* BECOMES EXPRESSIBLE ((CHK.108)), THE ITEM'S SEAM WAS NECESSARY AND NOT SUFFICIENT, AND THE `WORK ORDER` NOTE CLAUDE.md POINTS AT HAD BEEN ARCHIVED OUT OF THE PLAN, 18,188 → 18,212 / 0 / 3 (2026-09-08).**
-**(CHK.108) CLOSED, 11 of the reference's 12 rows**, byte-identical to pristine at all five
-positions (var-decl, argument TS2345, return, assignment, class property), for a readonly target,
-inside a union target, and at the INNER span of a nested literal. **The item's named seam — a
-contextual-tuple form of `getTypeOfArrayLiteral` — closed 0 of 12 rows on its own**: the
-contextual type was never INSTALLED for a plain array literal at any of the five positions, and
-`checkArrayLiteralElementsAgainstTuple` (B407) unconditionally `return true`s. **The half the item
-never mentions is the ELABORATION, and it is the bigger one** — with a genuine tuple source the
-arity mismatch already reached every emitter and printed the wrong thing, so a DECLARED tuple
-source with no array literal anywhere printed TS2741 / TS2739 / `Types of property 'length' are
-incompatible` where both references print TS2322 with an arity sub-line; `tupleArityChain`
-transcribes tsc's three rungs, which carry three DIFFERENT counts, each verified row-for-row
-against pristine. **The one refused row is a measured TRADE whose cause is the rest MODEL, not
-this item** — dropping the rest-tuple exclusion gains 5 correct rows and introduces 1 false
-positive (`class K { p: [number, ...string[]] = [1] }` → TS2741), reproduced on the PARENT binary
-because our rest tuples carry the rest slot as a REQUIRED numbered member; queued as **(CHK.111)**,
-which also closes the `[number, string[]]` display. **A stale hand-written pin was asserting an
-answer no reference prints** (TS2739 for `[] → [number, string]`) and the corpus structurally could
-not say so — its `tupleTypes.ts` baseline is served by a pin walker that WIPES and re-pins it, so
-baseline and pin can disagree indefinitely with both green. 19 pins + 1 corrected; 12 arms, of
-which **a5 is REDUNDANT by whole-output diff (45 rows, 7 fixtures, byte-identical)** and **a3 first
-read 0 RED because the PIN SET was blind — no array literal can reach rung 3 at all**. Grid
-**8 × added=0 removed=0**, re-run INDEPENDENTLY by the orchestrator after verifying both agent arms
-byte-identical to binaries it built itself; `cost_gate.py` exit 0 (largest delta **+0.03%**),
-`huge_methods.py` exit 0, build warning-clean. **PROCESS:** the `WORK ORDER` note CLAUDE.md tells
-every agent to read was added by `cc09770a3` and archived out with the four COMPLETED items beneath
-it, leaving a pointer to a heading that had not existed for ~25 rounds — restored, with an addendum
-recording that the order's tail is (INV.0) while the arc has been (CHK.\*).

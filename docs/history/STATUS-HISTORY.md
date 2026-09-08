@@ -1,3 +1,32 @@
+**(P18.44) — A TUPLE'S *ARITY* BECOMES EXPRESSIBLE ((CHK.108)), THE ITEM'S SEAM WAS NECESSARY AND NOT SUFFICIENT, AND THE `WORK ORDER` NOTE CLAUDE.md POINTS AT HAD BEEN ARCHIVED OUT OF THE PLAN, 18,188 → 18,212 / 0 / 3 (2026-09-08).**
+**(CHK.108) CLOSED, 11 of the reference's 12 rows**, byte-identical to pristine at all five
+positions (var-decl, argument TS2345, return, assignment, class property), for a readonly target,
+inside a union target, and at the INNER span of a nested literal. **The item's named seam — a
+contextual-tuple form of `getTypeOfArrayLiteral` — closed 0 of 12 rows on its own**: the
+contextual type was never INSTALLED for a plain array literal at any of the five positions, and
+`checkArrayLiteralElementsAgainstTuple` (B407) unconditionally `return true`s. **The half the item
+never mentions is the ELABORATION, and it is the bigger one** — with a genuine tuple source the
+arity mismatch already reached every emitter and printed the wrong thing, so a DECLARED tuple
+source with no array literal anywhere printed TS2741 / TS2739 / `Types of property 'length' are
+incompatible` where both references print TS2322 with an arity sub-line; `tupleArityChain`
+transcribes tsc's three rungs, which carry three DIFFERENT counts, each verified row-for-row
+against pristine. **The one refused row is a measured TRADE whose cause is the rest MODEL, not
+this item** — dropping the rest-tuple exclusion gains 5 correct rows and introduces 1 false
+positive (`class K { p: [number, ...string[]] = [1] }` → TS2741), reproduced on the PARENT binary
+because our rest tuples carry the rest slot as a REQUIRED numbered member; queued as **(CHK.111)**,
+which also closes the `[number, string[]]` display. **A stale hand-written pin was asserting an
+answer no reference prints** (TS2739 for `[] → [number, string]`) and the corpus structurally could
+not say so — its `tupleTypes.ts` baseline is served by a pin walker that WIPES and re-pins it, so
+baseline and pin can disagree indefinitely with both green. 19 pins + 1 corrected; 12 arms, of
+which **a5 is REDUNDANT by whole-output diff (45 rows, 7 fixtures, byte-identical)** and **a3 first
+read 0 RED because the PIN SET was blind — no array literal can reach rung 3 at all**. Grid
+**8 × added=0 removed=0**, re-run INDEPENDENTLY by the orchestrator after verifying both agent arms
+byte-identical to binaries it built itself; `cost_gate.py` exit 0 (largest delta **+0.03%**),
+`huge_methods.py` exit 0, build warning-clean. **PROCESS:** the `WORK ORDER` note CLAUDE.md tells
+every agent to read was added by `cc09770a3` and archived out with the four COMPLETED items beneath
+it, leaving a pointer to a heading that had not existed for ~25 rounds — restored, with an addendum
+recording that the order's tail is (INV.0) while the arc has been (CHK.\*).
+
 **(P18.43) — THE FLOW-JOIN SUBTYPE REDUCTION IS MEMOIZED, AND A 3.2× *WALL* REGRESSION EVERY COUNTER GATE WAS BLIND TO IS CLOSED ((PERF.1)), 18,185 → 18,188 / 0 / 3 (2026-09-07).**
 **Warm A/B −57.7% and −58.9%, replicated in two batches** (16,981 → 7,176 ms, 16,584 → 6,817 ms,
 `files/errors` 78/46 on every arm); cold CLI 35,893 → 26,740 ms (−25.5%). **The degradation the

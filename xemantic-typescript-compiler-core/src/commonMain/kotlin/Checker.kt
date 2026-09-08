@@ -108093,7 +108093,9 @@ interface DataView {
         // references and not `Type '1' … 'string | undefined'`. Answers `targetType`
         // unchanged whenever the strip does not apply, so a non-nullable target is inert.
         val nullStrippedTarget = nullableTargetDisplay(targetType, sourceType, optionalDeclaration = false)
-        val displaySourceType = relationErrorSourceDisplayType(sourceType, nullStrippedTarget)
+        val displaySourceType = relationErrorSourceDisplayType(
+            relationErrorSourceLiteral(init, sourceType, nullStrippedTarget), nullStrippedTarget,
+        )
         // B471: a bare class identifier in value position is its CONSTRUCTOR
         // (`typeof C`), but getTypeOfExpression resolves it to the instance type
         // (display `C`). When the init is a pure class identifier whose display
@@ -110495,7 +110497,9 @@ interface DataView {
         // `'string'`), tsc's `never` guard (`function f(): never { return one }` with
         // `one: "a"` read `Type 'string'`, both references read `'"a"'`) and the
         // enum-member arm.
-        val displaySourceType = relationErrorSourceDisplayType(sourceType, targetType)
+        val displaySourceType = relationErrorSourceDisplayType(
+            relationErrorSourceLiteral(stmt.expression, sourceType, targetType), targetType,
+        )
         val displaySource = relationErrorSourceQualified(displaySourceType, targetType)
             ?: typeToString(displaySourceType)
         val displayTarget = if (returnTypeNode is TypeQuery && targetType is Type.Object &&
@@ -116471,6 +116475,37 @@ interface DataView {
         val lit = source as? Type.NumberLiteral ?: return true
         val domain = enumKnownDomainValues(target) ?: return true
         return domain.any { it is ConstantValue.NumberValue && it.value == lit.value }
+    }
+
+    /**
+     * (CHK.113)(a): may a `number`-flavoured source be assigned to the enum-flavoured
+     * [target] at all?
+     *
+     * tsc models an all-literal enum as the UNION of its members' literal types, and
+     * `isSimpleTypeRelatedTo` accepts a `Number`/`NumberLiteral` source only against a
+     * constituent that is itself a NUMERIC enum literal (`t & NumberLiteral &&
+     * t & EnumLiteral`) or against a *computed* enum, which carries no literal domain
+     * at all. A pure STRING enum therefore has no constituent a number can reach —
+     * measured on both references, `const m: SOne = <number>` is `TS2322` for
+     * `enum SOne { A = "a" }` — while [numericLiteralFitsEnum] answers `true` for
+     * every non-literal source, so before this the wide `number` was accepted against
+     * every enum whatever its flavour.
+     *
+     * **POSITIVE EVIDENCE OF STRING-NESS ONLY, because this can only ever ADD a
+     * diagnostic.** The values are read through [enumMemberEntries] — the view that
+     * answers `null` for a member tsc treats as OPAQUE (an ambient non-`const` member
+     * with no initializer, which [enumValues] auto-numbers for the Transformer) — and
+     * an opaque member, an enum with no comparable declaration and an empty enum all
+     * keep today's acceptance. Only an enum EVERY one of whose members is proved
+     * string-valued rejects, which is exactly [isStringEnumObjectType]'s conservatism
+     * with the ambient case additionally honoured. A MIXED enum accepts, and tsc
+     * agrees: its numeric member is a constituent the number reaches.
+     */
+    private fun enumTargetAdmitsNumericSource(target: Type): Boolean {
+        val sym = (target as? Type.Object)?.symbol ?: return true
+        val entries = enumMemberEntries(sym) ?: return true
+        if (entries.isEmpty()) return true
+        return entries.any { it.second !is ConstantValue.StringValue }
     }
 
     /**
@@ -134570,7 +134605,83 @@ interface DataView {
             // tsgo 7.0.2 AND pristine `typescript@6.0.3` on
             // `enumLiteralAssignableToEnumInsideUnion`'s three shapes (`boolean | Foo`,
             // `boolean | Foo.A`, `boolean | Foo.B`), all of which print `Type 'Foo.A'`.
-            (targetType is Type.Union && targetType.types.any { ts2322KeepsSourceLiteral(it) })
+            (targetType is Type.Union && targetType.types.any { ts2322KeepsSourceLiteral(it) }) ||
+            // (CHK.113)(b): tsc's `TypeFlags.Unit` CONTAINS `Nullable`, so `undefined` and
+            // `null` are unit types to `typeCouldHaveTopLevelSingletonTypes` and a target
+            // union that still SHOWS one keeps the source literal — `gB(1)` against
+            // `b?: boolean` reads `Type '1' is not assignable to type 'boolean | undefined'`
+            // on both references, where a bare `boolean` target reads `Type 'number'`.
+            //
+            // "STILL SHOWS one" is the whole guard, and it is what makes this arm agree
+            // with the display at every call site whether or not the caller has already
+            // applied [nullableTargetDisplay]: tsc strips the nullish member BEFORE
+            // reporting, so `s?: string` is `string` by the time the singleton question is
+            // asked and the literal generalizes as it does today. A union whose nullish
+            // member SURVIVES the strip is exactly one the strip declines — a remainder of
+            // two or more members, or a single remainder that is itself union-like
+            // (`boolean`, a >= 2-member enum) — which is [unionLikeForNullableStrip]'s
+            // question, asked here without needing the source.
+            nullishTargetSurvivesStrip(targetType)
+
+    /**
+     * (CHK.113)(b): does [targetType] carry a nullish member that [nullableTargetDisplay]
+     * would NOT remove?
+     *
+     * The source half of tsc's rewrite (`source.flags & DefinitelyNonNullable`) is
+     * deliberately not asked: a source that fails it is a union, a type parameter,
+     * `unknown` or a nullish type, none of which this predicate's callers generalize
+     * anyway, and leaving it out keeps the answer a pure function of the target — which
+     * is what lets a caller ask it before or after the strip and get the same display.
+     */
+    private fun nullishTargetSurvivesStrip(targetType: Type): Boolean {
+        if (targetType !is Type.Union) return false
+        val (nullish, remainder) = targetType.types.partition {
+            it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+        }
+        if (nullish.isEmpty()) return false
+        return remainder.size != 1 || unionLikeForNullableStrip(remainder[0])
+    }
+
+    /**
+     * (CHK.113)(b): the SOURCE a relation error displays when the target still shows a
+     * nullish member — the literal the source NODE spells, rather than the base primitive
+     * [getTypeOfExpression] answers for a literal node ((WIDEN.1): there is no fresh
+     * literal expression type in this checker).
+     *
+     * **DISPLAY ONLY, AND PROVABLY SO**: it runs at the message, below every relation
+     * call, and its result is never handed back to [checkTypeRelatedTo]. That is what
+     * separates it from the *acquisition* gate (`propTypeContainsLiteral(target)` at the
+     * var-decl / argument / assignment sites), which feeds the VERDICT and whose widening
+     * is the two false-positive incidents [ts2322KeepsSourceLiteral]'s KDoc records —
+     * `literalTypeOfExpression` does not unwrap a `NonNullExpression`, so `x!` acquires
+     * its PRE-assertion type there.
+     *
+     * The [literalWidensTo] test is the guard that makes the recovered literal a
+     * RE-SPELLING of the type the relation actually used rather than a second opinion
+     * about the expression: only a literal whose own base IS [sourceType] is taken, so an
+     * `x!`, a narrowed reference or any node whose literal reading disagrees with the
+     * checked type keeps today's display.
+     *
+     * **BOTH GUARDS HERE ABLATE TO ZERO AND ARE KEPT AS MEASURED-REDUNDANT, NOT AS
+     * CLAIMED COVERAGE** ((CHK.113), round 813's whole-output diff over a 43-row family
+     * covering `x!`, `as const`, an enum member, a literal-union reference, negative /
+     * hex / exponent / template literals, `null`, `undefined!`, all five positions and an
+     * object literal — byte-identical on all three binaries). Each is redundant for its
+     * own reason, which is why they are recorded rather than removed: the
+     * [nullishTargetSurvivesStrip] gate is re-decided one layer down, because the
+     * recovered literal goes straight into [relationErrorSourceDisplayType], which
+     * generalizes it again for exactly the targets this gate refuses — a round-927 pair,
+     * with the gate additionally saving an AST read at every relation error; and no shape
+     * could be built on which [literalTypeOfExpression] answers non-null with a base that
+     * is not [sourceType], so [literalWidensTo] is the FP-safety belt for the `x!`
+     * incident [ts2322KeepsSourceLiteral]'s KDoc records rather than a live discriminator.
+     */
+    private fun relationErrorSourceLiteral(node: Expression?, sourceType: Type, targetType: Type): Type {
+        if (node == null) return sourceType
+        if (!nullishTargetSurvivesStrip(targetType)) return sourceType
+        val lit = literalTypeOfExpression(node) ?: return sourceType
+        return if (literalWidensTo(lit, sourceType)) lit else sourceType
+    }
 
     /**
      * (PARITY.1)(b2) / (PARITY.2): tsc's `getBaseTypeOfLiteralType` for ONE constituent.
@@ -168577,7 +168688,9 @@ interface DataView {
             val paramDisplayType = nullableTargetDisplay(
                 paramType, argType, isOptionalParameterSymbol(params.getOrNull(i)),
             )
-            val argTypeStr = relationErrorSourceDisplay(argType, paramDisplayType)
+            val argTypeStr = relationErrorSourceDisplay(
+                relationErrorSourceLiteral(arg, argType, paramDisplayType), paramDisplayType,
+            )
             val paramTypeStr = relationErrorTargetDisplay(paramDisplayType)
             val start = arg.pos
             // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
@@ -169284,7 +169397,10 @@ interface DataView {
         // proved out of range.
         if (sf.hasAny(TypeFlags.NumberLike) && target is Type.Object && target.symbol != null &&
             target.symbol!!.flags.hasAny(SymbolFlags.Enum)) {
-            if (numericLiteralFitsEnum(source, target)) return true
+            // (CHK.113)(a): and FLAVOUR-AWARE for the wide `number` too — a pure STRING
+            // enum has no numeric constituent to reach, so it is not "any enum" that a
+            // number may be assigned to.
+            if (enumTargetAdmitsNumericSource(target) && numericLiteralFitsEnum(source, target)) return true
         }
         // M3.1 (round 428b): numeric-enum → number (a numeric enum's values ARE
         // numbers — tsc debug.ts `formatEnum(this.flags, …)` where flags: FlowFlags

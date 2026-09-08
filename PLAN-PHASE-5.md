@@ -25,6 +25,61 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.49) — a `number` stops being silently accepted by a string enum ((CHK.113)(a)), the source literal survives to a nullish-target display ((b)), and the round before it left three countdown pins (2026-09-08)
+
+**Suite 18,338 → 18,375 / 0 / 3** — 37 pins in the new `NumericSourceEnumTargetTest`, plus THREE
+stale pins inverted in `EnumAndNullableRelationDisplayTest`. Grid **8 × added=0 removed=0**, re-run
+INDEPENDENTLY; `cost_gate.py` exit 0 (largest delta **+0.03%**), `huge_methods.py` exit 0, corpus
+8,837/0, externals 290/0, `-project` 866/0, build warning-clean under `--rerun-tasks`.
+
+**(a) IS A FALSE NEGATIVE IN THE MOST BASIC POSITION AND THE ITEM UNDER-COUNTED IT.** A `number`
+source was silently ACCEPTED against a string enum target — the item named the declaration; measured,
+it is **all five positions plus a union target, 8 silent rows**, and both references report TS2322 /
+TS2345 for every one. The fix demands POSITIVE evidence of string-ness through `enumMemberEntries`
+(the tsc view), so an opaque ambient member, an unfoldable value, an empty enum and every mixed or
+numeric enum keep today's acceptance — **and arm a2 demonstrates CLAUDE.md's own trap #2 directly**:
+inverting that to "positive numeric evidence" reddens exactly the ambient-no-initializer and
+unfoldable-value controls.
+
+**(b)'s SECOND SHAPE DID NOT EXIST, AND ITS MECHANISM NEEDED TWO CHANGES RATHER THAN ONE.** The item
+says `gN(true)` prints `'boolean'` for `'true'`; measured, **both references print `'boolean'` there
+too** — that row was never a divergence, and the real second shape is a target whose non-nullish
+remainder is not strippable (`p3(true)` against `string | number | undefined`). More usefully:
+adding the nullish arm to `ts2322KeepsSourceLiteral` alone is **completely INERT**, because
+`getTypeOfExpression` answers the BASE primitive for a literal NODE — the source is widened at
+ACQUISITION, so nothing downstream has a literal left to keep. **CLAUDE.md's round-781 entry
+("there is no fresh-literal expression type … any rule that needs a literal must read the AST")
+earned its place again**, and the recovery re-reads the literal from its node at three display heads.
+
+**THE RISK THE ITEM INHERITED WAS RE-SCOPED RATHER THAN ACCEPTED.** `ts2322KeepsSourceLiteral`'s
+KDoc records two prior false-positive incidents from widening it — but those are about the
+ACQUISITION gate (`propTypeContainsLiteral`, which feeds the relation VERDICT), not the display
+predicate. The landed recovery is display-only and runs below every relation call, so no verdict can
+move; widening acquisition was considered and REFUSED, with that distinction stated. The grid and
+corpus confirm it.
+
+**THREE STALE PINS WERE INVERTED, AND THEY WERE CREATED BY THE IMMEDIATELY PRECEDING ROUND.**
+(CHK.92) recorded its own (b) residue as pins asserting `'number'`/`'boolean'`; both references print
+the corrected values, so this round flipped them with transcripts in each KDoc. **That is the third
+countdown pin in four rounds** ((P18.44), (P18.48), (P18.49)) — CLAUDE.md's "do not pin a known-open
+gap" entry is reinforced with the sharper form: *a round that records its own residue as a pin hands
+the next round a failing suite*, and a red pin asserting a known-wrong value is indistinguishable
+from a regression until someone re-derives it against pristine.
+
+**ARMS — 6. a1 the enum-string gate 10 RED; a2 the positive-evidence direction 2 (uniquely the two
+opaque-member controls); a3 the empty-enum early return 1; b1 the nullish arm 12.** b2 and b3 are
+**REDUNDANT BY MEASUREMENT, not by argument** — round 813's whole-output diff over a **43-row
+family** (`x!`, `as const`, enum members, literal-union references, negative/hex/exponent/template
+literals, `null`, `undefined!`, all five positions, an object literal) is byte-identical on all three
+binaries; b3 is a round-927 pair with `relationErrorSourceDisplayType`, which re-generalizes one
+layer down for exactly the targets the gate refuses. Both kept and recorded as measured-redundant in
+their KDoc rather than claimed as coverage.
+
+**THREE RESIDUES CONFIRMED ON THE *BEFORE* BINARY** — i.e. pre-existing, not this round's — are
+queued as (CHK.114): (CHK.92)(c)'s `nullableTargetDisplay` is wired to three of its five heads (the
+RETURN head and the OPTIONAL CLASS PROPERTY are missing, one wiring each), and a cross-flavour enum
+member source does not collapse where both references collapse it.
+
 ### Round (P18.48) — the enum and nullable-target display residues close ((CHK.92), all four parts), and a display rule put in the general renderer broke the LANGUAGE SERVICE (2026-09-08)
 
 **Suite 18,302 → 18,338 / 0 / 3** — 35 pins in the new `EnumAndNullableRelationDisplayTest`, one
@@ -1975,7 +2030,27 @@ where the order sends you.
   `UnionOrIntersection` and an `Instantiable`'s constraint — widening it is corpus-gated because
   that allowlist is what protects two baselines.
 
-- [ ] **(CHK.113) THE TWO MEANING RESIDUES (CHK.92) MEASURED BESIDE ITS OWN PARTS, AND (d)'s REFUSED
+- [ ] **(CHK.114) THREE FORM RESIDUES CONFIRMED ON THE *BEFORE* BINARY BY (CHK.113), i.e. PRE-EXISTING
+  AND UNCHANGED BY IT (2026-09-08, (P18.49); fixtures `build/bench/chk113-sub`).** (a) and (b) are
+  (CHK.92)(c)'s `nullableTargetDisplay` reaching only three of its five heads. (a) **THE RETURN HEAD
+  NEVER CALLS IT**: `function q(): string | undefined { return 1 }` prints the target
+  `'string | undefined'` where both references print `'string'` — the strip is implemented and simply
+  not wired there. (b) **AN OPTIONAL CLASS PROPERTY DOES NOT GET `optionalDeclaration = true`**, so
+  `class C { p?: boolean = … }` prints `'boolean'` where both references print `'boolean | undefined'`
+  — the ADD half, missing at that one declaration kind. Both are one wiring each, and (CHK.92)'s own
+  16 (c) pins plus (CHK.113)'s 7 are the regression net. (c) **A CROSS-FLAVOUR ENUM MEMBER SOURCE
+  DOES NOT COLLAPSE**: `const m: SOne = NOne.A` prints `'NOne.A'` where both references print `'NOne'`
+  (and the mirror `SOne.A` → `'SOne'`), while the SAME-flavour case correctly keeps `'STwo.A'` — i.e.
+  the collapse is per FLAVOUR-MISMATCH, a different rule from (CHK.92)(d)'s one-member collapse and
+  from `relationErrorSourceDisplayType`'s generalization. RISK: (a)/(b) LOW — but they are DISPLAY, so
+  per (CHK.92) the grid is a control and the instruments are the corpus, the externals module and the
+  `-project` module. FORM.
+
+- [x] **(CHK.113) (a) AND (b) CLOSED 2026-09-08 ((P18.49) note); (c) STAYS BLOCKED and is pinned as a
+  recorded refusal. (a) was UNDER-COUNTED (all five positions plus a union target, 8 silent rows, not 2);
+  (b)(ii) was WRONG — `gN(true)` prints `'boolean'` in BOTH references too, so that row was never a
+  divergence — and (b)'s mechanism needed TWO changes, not one, because the source is widened at
+  ACQUISITION. Three residues found beside it are queued as (CHK.114). ORIGINAL: THE TWO MEANING RESIDUES (CHK.92) MEASURED BESIDE ITS OWN PARTS, AND (d)'s REFUSED
   HALF (2026-09-08, (P18.48); fixtures `build/bench/chk92-sub`).** (a) **A `number` SOURCE IS SILENTLY
   ACCEPTED AGAINST A *STRING ENUM* TARGET** — `const m: SOne = <number>` and `const m: STwo = <number>`
   are silent here and TS2322 in BOTH references. A genuine MEANING gap and separate from (CHK.92)(b),
