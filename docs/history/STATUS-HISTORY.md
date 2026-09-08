@@ -1,3 +1,27 @@
+**(P18.39) — CALLING A LITERAL-TYPED OR OBJECT-TYPED VALUE IS TS2349 ((CHK.104)), AND THE OBJECT ARM NEEDED TWO GUARDS THE ITEM DID NOT NAME, 18,136 → 18,157 / 0 / 3 (2026-09-07).**
+**(CHK.104) CLOSED, 7 → 19 of the reference's 22 rows; (CHK.109) queued.** The primitive arm read
+`calleeType is Type.Intrinsic`, i.e. exactly the WIDENED half of the population: `let s = "a"`
+reported and `const s = "a"` did not, nor did a number/bigint literal, an annotated literal const or
+parameter, a template literal, an `as const`, an enum MEMBER, a body-local or a `never`; the object
+arm fired only for a syntactic `new X()`, so a class instance, an interface-typed value, an array
+and an object literal's type were all silent. A literal's callability is decided by the same wrapper
+its base primitive's is (a wider gate, no new decision); the object half is (CHK.45)'s rule —
+positive evidence the member table is complete. **The item under-counted its own population (15
+lost rows, not 12) and named NEITHER guard the object arm needs**: a DUPLICATE IDENTIFIER makes the
+callee's TYPE not the whole story (the binder's `canMerge` refuses Variable+Function, so this reader
+got the VARIABLE's type while the call was checked against the FUNCTION's signature —
+`errorElaboration`), and `tryEmitUncallableTypeArgs` OWNS the same row for an explicit-type-argument
+call and runs AFTER the spine (`untypedFunctionCallsWithTypeParameters1` printed it twice; the
+`--passTiming` emissions-by-pass census named both emitters in one run and the dedupe went into the
+pass that runs SECOND). **A pre-existing FORM divergence closed on the way past**: `getApparentType`
+covers String/Number/Boolean and not `bigint`/`symbol`, so `sym()` printed `Type 'symbol'` for both
+references' `Type 'Symbol'`. Two open decisions were settled by measurement: the heritage refusal is
+keyed on `extends` alone (an `implements` clause adds nothing to an instance type), and `never` is
+admitted because both references report it and the grid is what licenses it. 21 pins, all read from
+pristine; 7 arms, ALL discriminating, plus one arm recorded as NOT ablated with its reason. Grid
+**8 × added=0 removed=0** on the final binary, `cost_gate.py` exit 0 (largest delta **+0.03%**),
+`huge_methods.py` exit 0, build warning-clean.
+
 **(P18.38) — AN ARRAY-LIKE *ARGUMENT* IS DECIDABLE AGAINST AN ARRAY-LIKE *PARAMETER* ((CHK.103) STAGE 2), AND FIVE OF THE ITEM'S SIX ROWS CARRY NO SPREAD, 18,110 → 18,136 / 0 / 3 (2026-09-07).**
 **(CHK.103) stage 2 CLOSED; (CHK.108) queued with its mechanism named.** The item called its
 residue a spread question and named a whole-literal array-to-array fallback as the seam. Measured,

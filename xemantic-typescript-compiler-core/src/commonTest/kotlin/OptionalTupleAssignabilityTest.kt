@@ -97,8 +97,16 @@ class OptionalTupleAssignabilityTest {
         }
     }
 
+    /**
+     * (CHK.108) CORRECTED: this shape is `TS2322` plus the ARITY sub-line in pristine
+     * `typescript@6.0.3` AND tsgo 7.0.2 — measured, and the corpus's own `tupleTypes.ts`
+     * baseline (line 41) says the same. It read `TS2739 Type '[]' is missing the following
+     * properties … 0, 1` here, which no reference prints; the pin asserted OUR shape rather
+     * than the references', and the corpus could not see it because that whole file is
+     * served by a pin walker.
+     */
     @Test
-    fun `negative control - empty source vs an all-required tuple still fires TS2739`() {
+    fun `negative control - empty source vs an all-required tuple is TS2322 with the arity line`() {
         diagnose(
             """
             declare const emptyArray: never[];
@@ -107,7 +115,11 @@ class OptionalTupleAssignabilityTest {
             }
             """,
         ) should {
-            have(any { it.code == 2739 })
+            have(any {
+                it.code == 2322 &&
+                    it.message == "Type '[]' is not assignable to type '[number, string]'." &&
+                    it.messageChain == listOf("  Source has 0 element(s) but target requires 2.")
+            })
         }
     }
 }

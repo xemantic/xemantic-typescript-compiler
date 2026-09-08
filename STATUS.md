@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,435** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **198,746** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,35 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.44) — A TUPLE'S *ARITY* BECOMES EXPRESSIBLE ((CHK.108)), THE ITEM'S SEAM WAS NECESSARY AND NOT SUFFICIENT, AND THE `WORK ORDER` NOTE CLAUDE.md POINTS AT HAD BEEN ARCHIVED OUT OF THE PLAN, 18,188 → 18,212 / 0 / 3 (2026-09-08).**
+**(CHK.108) CLOSED, 11 of the reference's 12 rows**, byte-identical to pristine at all five
+positions (var-decl, argument TS2345, return, assignment, class property), for a readonly target,
+inside a union target, and at the INNER span of a nested literal. **The item's named seam — a
+contextual-tuple form of `getTypeOfArrayLiteral` — closed 0 of 12 rows on its own**: the
+contextual type was never INSTALLED for a plain array literal at any of the five positions, and
+`checkArrayLiteralElementsAgainstTuple` (B407) unconditionally `return true`s. **The half the item
+never mentions is the ELABORATION, and it is the bigger one** — with a genuine tuple source the
+arity mismatch already reached every emitter and printed the wrong thing, so a DECLARED tuple
+source with no array literal anywhere printed TS2741 / TS2739 / `Types of property 'length' are
+incompatible` where both references print TS2322 with an arity sub-line; `tupleArityChain`
+transcribes tsc's three rungs, which carry three DIFFERENT counts, each verified row-for-row
+against pristine. **The one refused row is a measured TRADE whose cause is the rest MODEL, not
+this item** — dropping the rest-tuple exclusion gains 5 correct rows and introduces 1 false
+positive (`class K { p: [number, ...string[]] = [1] }` → TS2741), reproduced on the PARENT binary
+because our rest tuples carry the rest slot as a REQUIRED numbered member; queued as **(CHK.111)**,
+which also closes the `[number, string[]]` display. **A stale hand-written pin was asserting an
+answer no reference prints** (TS2739 for `[] → [number, string]`) and the corpus structurally could
+not say so — its `tupleTypes.ts` baseline is served by a pin walker that WIPES and re-pins it, so
+baseline and pin can disagree indefinitely with both green. 19 pins + 1 corrected; 12 arms, of
+which **a5 is REDUNDANT by whole-output diff (45 rows, 7 fixtures, byte-identical)** and **a3 first
+read 0 RED because the PIN SET was blind — no array literal can reach rung 3 at all**. Grid
+**8 × added=0 removed=0**, re-run INDEPENDENTLY by the orchestrator after verifying both agent arms
+byte-identical to binaries it built itself; `cost_gate.py` exit 0 (largest delta **+0.03%**),
+`huge_methods.py` exit 0, build warning-clean. **PROCESS:** the `WORK ORDER` note CLAUDE.md tells
+every agent to read was added by `cc09770a3` and archived out with the four COMPLETED items beneath
+it, leaving a pointer to a heading that had not existed for ~25 rounds — restored, with an addendum
+recording that the order's tail is (INV.0) while the arc has been (CHK.\*).
 
 **(P18.43) — THE FLOW-JOIN SUBTYPE REDUCTION IS MEMOIZED, AND A 3.2× *WALL* REGRESSION EVERY COUNTER GATE WAS BLIND TO IS CLOSED ((PERF.1)), 18,185 → 18,188 / 0 / 3 (2026-09-07).**
 **Warm A/B −57.7% and −58.9%, replicated in two batches** (16,981 → 7,176 ms, 16,584 → 6,817 ms,
@@ -99,27 +128,3 @@ TS2345" rows are the (CHK.63)-adjacent ARGUMENT-reader gap for a BODY-LOCAL sour
 already exact at the declaration position), its population is 4 rows not 7, and the join is lost in
 `markAssignments`, not in the set pass it names. 13 pins + 2, 5 arms all discriminating, grid
 **8 × added=0 removed=0**, `cost_gate.py` exit 0, `huge_methods.py` exit 0, build warning-clean.
-
-**(P18.39) — CALLING A LITERAL-TYPED OR OBJECT-TYPED VALUE IS TS2349 ((CHK.104)), AND THE OBJECT ARM NEEDED TWO GUARDS THE ITEM DID NOT NAME, 18,136 → 18,157 / 0 / 3 (2026-09-07).**
-**(CHK.104) CLOSED, 7 → 19 of the reference's 22 rows; (CHK.109) queued.** The primitive arm read
-`calleeType is Type.Intrinsic`, i.e. exactly the WIDENED half of the population: `let s = "a"`
-reported and `const s = "a"` did not, nor did a number/bigint literal, an annotated literal const or
-parameter, a template literal, an `as const`, an enum MEMBER, a body-local or a `never`; the object
-arm fired only for a syntactic `new X()`, so a class instance, an interface-typed value, an array
-and an object literal's type were all silent. A literal's callability is decided by the same wrapper
-its base primitive's is (a wider gate, no new decision); the object half is (CHK.45)'s rule —
-positive evidence the member table is complete. **The item under-counted its own population (15
-lost rows, not 12) and named NEITHER guard the object arm needs**: a DUPLICATE IDENTIFIER makes the
-callee's TYPE not the whole story (the binder's `canMerge` refuses Variable+Function, so this reader
-got the VARIABLE's type while the call was checked against the FUNCTION's signature —
-`errorElaboration`), and `tryEmitUncallableTypeArgs` OWNS the same row for an explicit-type-argument
-call and runs AFTER the spine (`untypedFunctionCallsWithTypeParameters1` printed it twice; the
-`--passTiming` emissions-by-pass census named both emitters in one run and the dedupe went into the
-pass that runs SECOND). **A pre-existing FORM divergence closed on the way past**: `getApparentType`
-covers String/Number/Boolean and not `bigint`/`symbol`, so `sym()` printed `Type 'symbol'` for both
-references' `Type 'Symbol'`. Two open decisions were settled by measurement: the heritage refusal is
-keyed on `extends` alone (an `implements` clause adds nothing to an instance type), and `never` is
-admitted because both references report it and the grid is what licenses it. 21 pins, all read from
-pristine; 7 arms, ALL discriminating, plus one arm recorded as NOT ablated with its reason. Grid
-**8 × added=0 removed=0** on the final binary, `cost_gate.py` exit 0 (largest delta **+0.03%**),
-`huge_methods.py` exit 0, build warning-clean.

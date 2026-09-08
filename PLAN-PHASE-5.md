@@ -25,6 +25,89 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.44) — a tuple's ARITY becomes expressible ((CHK.108)), the item's seam was necessary and not sufficient, and the WORK ORDER note CLAUDE.md points at had been archived out of this file (2026-09-08)
+
+**Suite 18,188 → 18,212 / 0 / 3** — 19 pins in the new `ArrayLiteralTupleArityTest` plus one
+stale pin CORRECTED in `OptionalTupleAssignabilityTest`. Grid **8 × added=0 removed=0**, run
+TWICE and re-run INDEPENDENTLY by the orchestrator against its own BEFORE arm;
+`cost_gate.py` exit 0 (largest delta `mapped.hits` **+0.03%**, no rebaseline),
+`huge_methods.py --fail-over 0` exit 0, build warning-clean.
+
+**(CHK.108) CLOSED: 11 of the reference's 12 rows, and the population is LARGER than the item
+recorded.** `const t: [number, number] = [1]` / `= [1, 2, 3]` / `= []` were silent; both
+references force-tuple the literal and print `Type '[number]' is not assignable to type
+'[number, number]'` plus `Source has 1 element(s) but target requires 2.` Every row is now
+byte-identical to pristine at all five positions (var-decl, argument TS2345, return, assignment,
+class property), for a readonly target, inside a union target, and at the INNER span of a nested
+literal.
+
+**THE ITEM'S NAMED SEAM WAS NECESSARY AND NOT SUFFICIENT, AND THE HALF IT OMITS IS THE BIGGER
+ONE.** A contextual-tuple form of `getTypeOfArrayLiteral` is exactly right and, alone, closed
+**0 of 12 rows** — because the contextual type was never INSTALLED for a plain array literal at
+any of the five positions, and because `checkArrayLiteralElementsAgainstTuple` (B407)
+unconditionally `return true`s, so even with a tuple source every var-decl row stayed suppressed.
+**And the ELABORATION is the other half, which the item does not mention at all**: with a genuine
+tuple source the arity mismatch already reached every emitter and printed the wrong thing. So a
+DECLARED tuple source — no array literal anywhere — printed `TS2741 Property '1' is missing`,
+`TS2739 … missing the following properties: 0, 1` or `Types of property 'length' are
+incompatible` where both references print TS2322 with an arity sub-line. That family is strictly
+larger than the item's and is fixed here; `tupleArityChain` is a transcription of tsc's three
+rungs from `structuredTypeRelatedTo`'s tuple arm, and **the three rungs carry three DIFFERENT
+counts** — each was verified row-for-row against pristine rather than derived.
+
+**THE ONE REFUSED ROW IS A TRADE, AND ITS CAUSE IS THE REST MODEL, NOT THIS ITEM.** Dropping the
+rest-tuple exclusion GAINS 5 correct rows (`[]` against `[number, ...string[]]` at every
+position) and INTRODUCES 1 false positive — `class K { p: [number, ...string[]] = [1] }` →
+TS2741, which neither reference prints. Reproduced on the PARENT binary with a declared tuple
+source, i.e. pre-existing: our rest tuples carry the rest slot as a **required** numbered member,
+so `[number]` fails against `[number, ...string[]]` outright. Four of the five positions are
+shielded by their element-wise owners and the class-property one is not — an accident, not a
+design. Queued as **(CHK.111)**; fixing the model also fixes the `[number, string[]]` display.
+
+**A STALE PIN WAS PINNING AN ANSWER NO REFERENCE PRINTS, AND THE CORPUS STRUCTURALLY COULD NOT
+SAY SO.** `OptionalTupleAssignabilityTest` asserted TS2739 for `[] → [number, string]`; the
+corpus's own `tupleTypes.ts` baseline (line 41) says TS2322 + the arity line, and **that file is
+served by a pin walker that WIPES and re-pins it** — so the baseline and the hand-written pin
+could disagree indefinitely with both green. Now pins the reference value.
+
+**ARMS — 12, and two of the recorded outcomes are the entry-worthy ones.** a1/a2/a3 the three
+arity rungs (10 / 2 / 2 RED); a4 `collectMissingProperties`' refusal 4; a6 the contextual tuple
+11; a7 the rest exclusion 1; a8 the spread refusal 1; a9 B407's emitted flag 6; a10 the
+nested-slot arm 1; a11 the per-element refusal 1; a12 the var-decl install 7. **a5 is REDUNDANT
+and that is a MEASUREMENT** — ablated alone the output over 45 rows of 7 tuple fixtures is
+byte-identical (round 813's whole-output-diff method), because `collectMissingProperties` refuses
+first at every site that reaches it; kept as the second layer of a round-927 pair over 10 call
+sites. **a3 first read 0 RED and the PIN SET was BLIND, not the guard redundant**: no array
+LITERAL can reach rung 3 (an all-fixed-slot builder makes `minLength == arity`, so rung 2 always
+fires first) — it is reachable only from a declared tuple source, and two pins were added before
+a3 discriminated. a12's first attempt was REFUSED by the driver on `ANCHOR COUNT 2`.
+
+**CLAUDE.md's restore-without-rebuild entry earned its place again**, in flight: after a1-a3 the
+driver restored the source (`cmp` clean, `git status` clean) and the class dir still held a3's
+binary, so two probes read plausible-but-wrong output that looked like a stage-2 regression. The
+tell was an IMPOSSIBLE change — a shape correct one build earlier. The driver now rebuilds after
+every restore and prints the resulting `Checker.class` sha.
+
+**A PROCESS FINDING WORTH MORE THAN THE FIX: THE `WORK ORDER` NOTE CLAUDE.md TELLS EVERY AGENT TO
+READ HAD BEEN ARCHIVED OUT OF THIS FILE.** It was added by `cc09770a3` (the 2026-09-01
+re-pointing) and was already gone by `ac71dc5e3` — carried out with its neighbouring COMPLETED
+items ((LIC.1), (DOC.1), (EXT.1), (LSP.1)), which sat under it. Only the pointer at line 20
+survived, naming a section that does not exist. **The drift it permitted is visible in the
+shrinkage dashboard**: the order's tail is (INV.D) → (INV.0), every (EXT.\*)/(LSP.\*) item is
+checked off and `docs/INVERSION-DESIGN.md` exists, yet the last ~25 rounds all went to (CHK.\*)
+parity items the order never named — and STATUS.md records that arc as having ADDED ~5,200 lines
+to `Checker.kt` with zero extractions. Restored below, verbatim from `cc09770a3` minus its four
+completed items, with a dated addendum recording where the arc actually stands. **The owner was
+asked and chose to CONTINUE the (CHK.\*) lane for this session** — so the note is a record, not a
+redirection, and the ordering question is stated in it rather than left to be re-derived.
+
+**ORCHESTRATOR RECEIPT.** Both of the implementation agent's grid arms were verified
+byte-identical (`sha256sum`) to binaries the orchestrator built itself — BEFORE from stashed
+HEAD, AFTER = the binary the green suite ran on — which is what rules out the round-853 /
+2026-09-06 self-comparison hazard; the independent 8-profile re-run then reproduced
+`added=0 removed=0` exactly. Incidental: `harness` measures **94** rows on both arms where
+CLAUDE.md's (PARITY.1) entry says 95 — pre-existing drift from a later round, corrected there.
+
 ### Round (P18.43) — the flow-join subtype reduction is memoized, and a 3.2x WALL regression that every counter gate was blind to is closed ((PERF.1)) (2026-09-07)
 
 **Suite 18,185 → 18,188 / 0 / 3** — 3 pins in the new `AFlowJoinReductionMemoTest`. Grid
@@ -745,6 +828,54 @@ TYPE-position `Mid.FAR.EK.Span` reads TS2694 there while the identical shape thr
 divergence forced one pin to take its annotation through the direct import, and is now a CLAUDE.md
 entry.
 
+### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
+
+**RESTORED 2026-09-08 ((P18.44)).** This section was added by `cc09770a3` and was archived out of
+the file with the four COMPLETED items that sat under it ((LIC.1), (DOC.1), (EXT.1), (LSP.1)),
+leaving CLAUDE.md § "Execution protocol" pointing at a heading that did not exist for ~25 rounds.
+Text below is verbatim from `cc09770a3` minus those items; the dated addendum at the end records
+where the arc actually stands. **A completed item may not be archived without checking whether a
+load-bearing note travels with it.**
+
+**THE PROJECT IS RE-POINTED.** The JetBrains WebStorm evaluation paused: their need was a
+post-hoc TYPE ORACLE with the query shape of tsgo's `tsc/internal/api/proto.go` (142 methods),
+and this checker cannot serve one — its answers are functions of walk-scoped state, which
+`CheckedProgram.kt` and `TypeCapture.kt` already document. tsgo is the free, official default;
+competing with it on "a TypeScript compiler" is not the mission. **The mission is TypeScript
+for the JVM and Kotlin**: no Node and no Go in the toolchain, an embeddable whole-program
+checker, a Kotlin-externals generator with resolved types, a JVM bytecode backend (KIR), and an
+LSP anyone can try in five minutes. See CLAUDE.md § "AI agent mission" for the full directive
+and the pre-approved Guardrails (two new modules, no new dependencies, `docs/reposition` branch
+for README positioning text).
+
+**THE (INC.\*) FAMILY IS CLOSED (closing note).** It ran ~93 rounds and took the incremental
+floor from ~1,219 ms ((INC.3)) to **94-110 ms** ((INC.72b)/(INC.89)) at 2,401 files, with the
+plugin's own `diagnosticsOf` query at **93-217 ms** independent of edit shape ((INC.90)).
+Nothing above — externals generation, the LSP, the inversion — changes outcome at that scale,
+and the one real remaining gap ((INC.90)'s signature-edit cliff, 12.8x) was refused on
+SOUNDNESS by (INC.91)'s own census. **REFUSE a further (INC.\*) round unless a plugin-facing
+query is measured > 300 ms warm**, and do not touch `Checker.kt` for latency without that
+measurement in hand. The remaining unchecked (INC.\*) items below stay as a RECORD, except
+(INC.92)/(INC.93), which remain live as CORRECTNESS items (process-global state under the
+plugin's N-thread shape), not latency ones.
+
+**Work order for this arc, top to bottom:** (LIC.1) → (DOC.1) → (DOC.2, on `docs/reposition`)
+→ (EXT.1…n) → (LSP.1…n) → (INV.D) → (INV.0).
+
+**ADDENDUM 2026-09-08 ((P18.44)) — WHERE THE ARC ACTUALLY STANDS, AND THE STANDING QUESTION.**
+(LIC.1), (DOC.1), (DOC.2), the whole (EXT.\*) ladder, the whole (LSP.\*) ladder and (INV.D) are
+CHECKED OFF; `docs/INVERSION-DESIGN.md` exists. **So the order's tail — (INV.0) — is what it
+points at next**, and it is unchecked (steps 1 and 4 both below). What has actually happened for
+~25 rounds instead is the **(CHK.\*) checker-parity arc**, which the order never names: it was
+surfaced by the externals and library-readiness probes, it serves the "embeddable whole-program
+checker" leg, and every round of it is measured against both references — but STATUS.md's own
+shrinkage dashboard records that it **ADDED ~5,200 lines to `Checker.kt` and made zero
+extractions**, which is the metric (INV.0) exists to move. **The owner was asked on 2026-09-08
+and chose to CONTINUE the (CHK.\*) lane**; that decision is scoped to that session. A round that
+picks a (CHK.\*) item over (INV.0) is not violating the order, but it SHOULD say so and name its
+successor — and the moment the parity arc stops paying in measured reference rows, (INV.0) is
+where the order sends you.
+
 - [ ] **(CHK.97) STAGES 1 AND 2 LANDED 2026-09-06 ((P18.29)/(P18.30) notes). STAGE 2 closed THREE of its five
   deliverables — tsc's ARRAY FALLBACK (checker.ts:15949, derived from the RECEIVER because a method type has
   no parent symbol here, which costs one extra CALLABLE gate a signature-list route would not need), tsc's
@@ -1217,7 +1348,29 @@ entry.
   the archive for "instantiateType for Type.Object" before touching the no-op. MEANING (false
   positive + lost diagnostic).
 
-- [ ] **(CHK.108) A PLAIN ARRAY LITERAL WITH THE WRONG ELEMENT *COUNT* AGAINST A TUPLE TARGET IS
+- [ ] **(CHK.111) A REST TUPLE CARRIES ITS REST SLOT AS A *REQUIRED* NUMBERED MEMBER, SO
+  `[number]` FAILS AGAINST `[number, ...string[]]` OUTRIGHT — a false TS2741 neither reference
+  prints, PRE-EXISTING and reproduced on the (CHK.108) parent binary with a DECLARED tuple source
+  (measured 2026-09-08, (P18.44); `build/bench/chk108-sub/probe4` line 11).** Four of the five
+  target positions are shielded by their element-wise owners and the CLASS-PROPERTY one is not —
+  an accident, not a design, and it is what forced (CHK.108)'s rest-tuple exclusion. That
+  exclusion is a measured TRADE, not a safety guard: dropping it GAINS 5 correct rows (`[]`
+  against a rest tuple at declaration / return / assignment / argument / class property, i.e.
+  (CHK.108)'s refused row J generalised) and INTRODUCES exactly that 1 false positive. SEAM: make
+  slots at index `>= tupleRestIndex` OPTIONAL in the tuple model, then delete the exclusion (arm
+  a7 of (P18.44) is the ablation that re-opens it). The same model bug is also the DISPLAY
+  divergence beside it — a rest tuple renders `[number, string[]]` where both references print
+  `[number, ...string[]]` — so one fix closes a MEANING row set and a FORM one. RISK: MEDIUM-HIGH
+  — it changes the member table of every rest tuple in the program, so the 8-profile grid runs
+  before any pin and `ArrayLiteralTupleArityTest`'s five rest-tuple negative controls are the
+  regression net. MEANING.
+
+- [x] **(CHK.108) CLOSED 2026-09-08 ((P18.44) note): 11 of the reference's 12 rows, plus a family the
+  item never named — a DECLARED tuple source printed TS2741/TS2739/`length` where both references print
+  TS2322 with an arity sub-line, so the ELABORATION was half the fix and the item does not mention it.
+  The named seam was necessary and NOT sufficient (the contextual type was never installed at any of the
+  five positions, and B407 `return true`s). The rest-tuple case is REFUSED with its measurement, and the
+  cause is the rest MODEL — (CHK.111). ORIGINAL: A PLAIN ARRAY LITERAL WITH THE WRONG ELEMENT *COUNT* AGAINST A TUPLE TARGET IS
   SILENT — `const t: [number, number] = [1]`, `= [1, 2, 3]` and `= []` are all silent here and
   reported by BOTH references, which force-tuple the literal and print `[number]` /
   `[number, number, number]` / `[]` as the SOURCE (measured 2026-09-07, (P18.38); scratch fixtures

@@ -106077,6 +106077,68 @@ interface DataView {
         t.members?.get(i.toString())?.id?.let { it in optionalTupleMemberIds } == true
 
     /**
+     * (CHK.108) tsc's `minLength` for a tuple — the number of LEADING slots that are
+     * neither optional nor the rest slot. `[number, number?]` and `[number, ...string[]]`
+     * are both 1; `[number, number]` is 2; `[]` is 0.
+     */
+    private fun tupleMinLength(t: Type.Object): Int {
+        val elems = t.tupleElementTypes ?: return 0
+        for (i in elems.indices) if (i == t.tupleRestIndex || tupleSlotIsOptional(t, i)) return i
+        return elems.size
+    }
+
+    /**
+     * (CHK.108) the ARITY sub-line tsc prints for a tuple-to-tuple relation failure, or
+     * null when the two arities are compatible — in which case the ordinary per-position
+     * elaboration owns the row.
+     *
+     * A TRANSCRIPTION of tsc's three-rung ladder (checker.ts `structuredTypeRelatedTo`,
+     * the `isTupleType(source) && isTupleType(target)` arm), measured row-for-row against
+     * pristine 6.0.3 and tsgo 7.0.2 — note which COUNT each message carries, because the
+     * three rungs use three different ones (the source's ARITY, the source's MIN length,
+     * and the target's):
+     *
+     *  - `!sourceRest && sourceArity < targetMin` → "Source has {sourceArity} element(s)
+     *    but target requires {targetMin}."      `[number]` → `[number, number]`
+     *  - `!targetRest && targetArity < sourceMin` → "Source has {sourceMin} element(s) but
+     *    target allows only {targetArity}."     `[number, number, number]` → `[number, number]`
+     *  - `!targetRest && (sourceRest || targetArity < sourceArity)` → "Target requires
+     *    {targetMin} element(s) but source may have fewer." when `sourceMin < targetMin`,
+     *    else "Target allows only {targetArity} element(s) but source may have more."
+     *
+     * DISPLAY ONLY: it never decides a verdict, so wiring it can neither add nor remove a
+     * diagnostic. What it DOES change is the CODE of an existing row — [collectMissingProperties]
+     * and [getMissingRequiredPropertySymbol] refuse a pair this answers for, so an arity
+     * mismatch stops being reported as TS2741 `Property '1' is missing …` / TS2739 and
+     * becomes the TS2322 both references print.
+     */
+    private fun tupleArityChain(source: Type, target: Type): String? {
+        if (source !is Type.Object || target !is Type.Object) return null
+        val src = source.tupleElementTypes ?: return null
+        val tgt = target.tupleElementTypes ?: return null
+        val sourceArity = src.size
+        val targetArity = tgt.size
+        val sourceRest = source.tupleHasRest
+        val targetRest = target.tupleHasRest
+        val sourceMin = tupleMinLength(source)
+        val targetMin = tupleMinLength(target)
+        if (!sourceRest && sourceArity < targetMin) {
+            return "  Source has $sourceArity element(s) but target requires $targetMin."
+        }
+        if (!targetRest && targetArity < sourceMin) {
+            return "  Source has $sourceMin element(s) but target allows only $targetArity."
+        }
+        if (!targetRest && (sourceRest || targetArity < sourceArity)) {
+            return if (sourceMin < targetMin) {
+                "  Target requires $targetMin element(s) but source may have fewer."
+            } else {
+                "  Target allows only $targetArity element(s) but source may have more."
+            }
+        }
+        return null
+    }
+
+    /**
      * (CHK.96) the member an object binding element READS: the explicit property name
      * (`{ p: q }` — an Identifier, a string or numeric literal, or a computed LITERAL key)
      * or the bound name (`{ p }`). Null for a computed non-literal key.
@@ -106592,6 +106654,14 @@ interface DataView {
         // `getContextualType` passes the outer context through a const assertion). A
         // UNION annotation (`number[] | string`) is a context too.
         if (constAssertedArrayLiteralOf(init) != null) contextualType = targetType
+        // (CHK.108): a PLAIN array literal reads a TUPLE target as its contextual type, so
+        // [getTypeOfArrayLiteral] can answer a tuple and the element COUNT becomes part of
+        // the source type. Gated on a non-rest tuple constituent, which is what keeps an
+        // ordinary `number[]` target — where installing a context would newly distribute an
+        // element type — out of this path entirely.
+        if (init is ArrayLiteralExpression && contextualTupleConstituent(targetType) != null) {
+            contextualType = targetType
+        }
         // 17.66: contextual literal preservation. When the target type contains
         // literal types (e.g. `"x" | "y"`, `keyof typeof obj`), and the init is
         // a literal-typed expression (string/number/bigint/template literal,
@@ -107762,7 +107832,23 @@ interface DataView {
         if (init is ArrayLiteralExpression && targetType is Type.Object &&
             targetType !is Type.Reference && targetType.tupleElementTypes != null && !isAssignable
         ) {
-            checkArrayLiteralElementsAgainstTuple(init, targetType, source, fileName)
+            // (CHK.108): the element-wise rows come first and, when there are none, the
+            // whole-literal ARITY row is what both references print — `const t: [number,
+            // number] = [1]` was silent because this block owned the failure and had no
+            // row for it.
+            if (!checkArrayLiteralElementsAgainstTuple(init, targetType, source, fileName)) {
+                tupleArityChain(sourceType, targetType)?.let { arityChain ->
+                    val arityTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                    val (aLine, aChar) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '${typeToString(sourceType)}' is not assignable to type '$arityTarget'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = aLine, character = aChar,
+                        start = name.pos, length = name.text.length,
+                        messageChain = listOf(arityChain),
+                    ))
+                }
+            }
             return true
         }
         // intersectionsAndOptionalProperties (#38348): `const yy: number[] &
@@ -108748,6 +108834,14 @@ interface DataView {
         // type as its contextual type (a mutable array-like context keeps the tuple mutable).
         val savedContextual = contextualType
         if (constAssertedArrayLiteralOf(init) != null) contextualType = targetType
+        // (CHK.108): a PLAIN array literal reads a TUPLE target as its contextual type, so
+        // [getTypeOfArrayLiteral] can answer a tuple and the element COUNT becomes part of
+        // the source type. Gated on a non-rest tuple constituent, which is what keeps an
+        // ordinary `number[]` target — where installing a context would newly distribute an
+        // element type — out of this path entirely.
+        if (init is ArrayLiteralExpression && contextualTupleConstituent(targetType) != null) {
+            contextualType = targetType
+        }
         val sourceType = try { getTypeOfExpression(init) } finally { contextualType = savedContextual }
         lastMissingPropertyName = null
         val canUse = canUseTypeEngine(sourceType, targetType)
@@ -109579,7 +109673,10 @@ interface DataView {
                 arrLitCtx != null ||
                 // (CHK.93) stage 2: a returned const-asserted ARRAY literal reads the declared
                 // return type as its contextual type (a mutable array-like keeps it mutable).
-                (expr != null && constAssertedArrayLiteralOf(expr) != null)
+                (expr != null && constAssertedArrayLiteralOf(expr) != null) ||
+                // (CHK.108): a returned PLAIN array literal reads a TUPLE return type as
+                // its context — see the var-decl site for the gate's reason.
+                (expr is ArrayLiteralExpression && contextualTupleConstituent(targetType) != null)
             if (useCtx) contextualType = objLitCtx ?: arrLitCtx ?: targetType
             // 17.70: contextual literal preservation for return-statement source —
             // mirrors 17.66 (var-decl init) / 17.67 (call arg). When return type
@@ -110654,6 +110751,11 @@ interface DataView {
                     // (CHK.93) stage 2: a const-asserted ARRAY literal reads the target as
                     // its contextual type (a mutable array-like keeps the tuple mutable).
                     if (constAssertedArrayLiteralOf(expr.right) != null) contextualType = tt
+                    // (CHK.108): a PLAIN array literal RHS reads a TUPLE target as its
+                    // context — see the var-decl site for the gate's reason.
+                    if (expr.right is ArrayLiteralExpression && contextualTupleConstituent(tt) != null) {
+                        contextualType = tt
+                    }
                     // 17.66: contextual literal preservation for assignment RHS — when
                     // target is a literal-containing type and RHS is a literal expression,
                     // preserve the literal instead of widening to the primitive (matches
@@ -130661,6 +130763,12 @@ interface DataView {
         // → `createTupleType`), so `([1, 2] as const)[0]` reads `1`. Readonly-ness is
         // stage 2: the tuple displays `[1, 2]` where tsc displays `readonly [1, 2]`.
         if (objLitConstContextOf(expr)) return constContextTupleOfArrayLiteral(expr)
+        // (CHK.108): under a TUPLE contextual type an array literal denotes a TUPLE of its
+        // elements (tsc `checkArrayLiteral`'s `inTupleContext`), which is what makes the
+        // element COUNT expressible at all — typed as `Array<union>` the arity is simply
+        // not part of the source type and `const t: [number, number] = [1]` is silent.
+        // ABOVE the empty-literal early return, because `[]` is exactly one of the rows.
+        contextualTupleOfArrayLiteral(expr)?.let { return it }
         if (expr.elements.isEmpty()) return getArrayType(anyType) // empty array → any[] (B87.6)
         val elemCtx = arrayLiteralElementContext()
         // Infer element type as union of all element types
@@ -130725,6 +130833,95 @@ interface DataView {
             else -> getUnionType(elementTypes)
         }
         return getArrayType(elementType)
+    }
+
+    /**
+     * (CHK.108) the TUPLE an array literal denotes under a tuple contextual type, or null
+     * where this checker declines to build one (the literal then keeps the `Array<union>`
+     * it has always had — a missing row, never a wrong type).
+     *
+     * tsc's `checkArrayLiteral` builds a tuple whenever `someType(contextualType,
+     * isTupleLikeType)`, and that is the whole reason an arity mismatch is REPORTABLE:
+     * the source type has to carry the element count before [tupleArityChain] has anything
+     * to compare. Every downstream emitter (declaration, return, assignment, argument, a
+     * union target) already handles a genuine tuple source, so this one seam serves all of
+     * them.
+     *
+     * FOUR REFUSALS, each a stated false negative rather than a guess:
+     *  - a contextual tuple with a REST slot. Our rest tuples relate WRONGLY today —
+     *    `[number]` against `[number, ...string[]]` is an ours-only TS2741 with a genuine
+     *    tuple source, i.e. a defect that predates this — so building the tuple here would
+     *    propagate it to every `const c: [number, ...string[]] = [1]`. Costs the one row
+     *    `const c: [number, ...string[]] = []`.
+     *  - a SPREAD element: the tuple built here has no way to express a variadic slot
+     *    (the const-context builder's [constContextSpreadSlots] inlines only a FIXED
+     *    tuple, and a literal whose spread is not one is not tuple-like at all).
+     *  - an element typing to `any` / `error`: the whole literal keeps `any[]`, as both
+     *    the ordinary and the const-context builders do.
+     *  - no tuple-like constituent in the contextual type: `number[]` is untouched, which
+     *    is what keeps every ordinary array-literal declaration out of this path.
+     *
+     * A nested ARRAY or OBJECT literal element is typed under its own SLOT as contextual
+     * type, which is what gives `[[1], 2]` the nested source `[[number], number]`; a
+     * literal element against a literal-carrying slot keeps its literal type ((CHK.103)'s
+     * rule, as [checkArrayLiteralElementsAgainstTuple] already applies it one layer up).
+     */
+    private fun contextualTupleOfArrayLiteral(expr: ArrayLiteralExpression): Type? {
+        val ctx = contextualType ?: return null
+        val ctxTuple = contextualTupleConstituent(ctx) ?: return null
+        if (expr.elements.any { it is SpreadElement }) return null
+        val slots = ctxTuple.tupleElementTypes ?: return null
+        val elementTypes = ArrayList<Type>(expr.elements.size)
+        for ((i, el) in expr.elements.withIndex()) {
+            val slot = slots.getOrNull(i)
+            val raw = if (slot != null && (el is ArrayLiteralExpression || el is ObjectLiteralExpression)) {
+                val savedCtx = contextualType
+                contextualType = slot
+                try { getTypeOfExpression(el) } finally { contextualType = savedCtx }
+            } else if (slot != null && propTypeContainsLiteral(slot)) {
+                literalTypeOfExpression(el, true) ?: getTypeOfExpression(el)
+            } else getTypeOfExpression(el)
+            // Round 459's identifier narrowing, exactly as both sibling builders apply it.
+            val t = if (el is Identifier) {
+                val narrowed = getNarrowedTypeForReference(raw, el)
+                if (objLitValueNullishStrip(raw, narrowed)) narrowed else raw
+            } else raw
+            if (t === anyType || t === errorType) return null
+            elementTypes.add(t)
+        }
+        return buildTupleFromTypes(elementTypes)
+    }
+
+    /**
+     * (CHK.108) is a tuple pair's ONLY failure the element COUNT — i.e. would the
+     * element-wise elaboration report nothing, leaving the whole-literal row to fire?
+     *
+     * The two shapes are EXCLUSIVE in tsc: `elaborateArrayLiteral` walks only the indices
+     * the TARGET has, so a per-element mismatch suppresses the outer row while a pure
+     * arity mismatch produces no element row at all. Asking both questions here is what
+     * keeps `take([1, "x", 3])` at its one element row instead of adding a second,
+     * whole-argument one beside it.
+     */
+    private fun arrayLiteralTupleArityOnlyMismatch(argType: Type, paramType: Type): Boolean {
+        if (tupleArityChain(argType, paramType) == null) return false
+        val slots = (paramType as? Type.Object)?.tupleElementTypes ?: return false
+        val srcSlots = (argType as? Type.Object)?.tupleElementTypes ?: return false
+        for (i in srcSlots.indices) {
+            val slot = slots.getOrNull(i) ?: continue
+            if (!checkTypeRelatedTo(srcSlots[i], slot, assignableRelation)) return false
+        }
+        return true
+    }
+
+    /**
+     * (CHK.108) tsc's `someType(contextualType, isTupleLikeType)` — the tuple constituent
+     * of a contextual type, REST tuples excluded (see [contextualTupleOfArrayLiteral]).
+     */
+    private fun contextualTupleConstituent(t: Type): Type.Object? = when (t) {
+        is Type.Union -> t.types.firstNotNullOfOrNull { contextualTupleConstituent(it) }
+        is Type.Intersection -> t.types.firstNotNullOfOrNull { contextualTupleConstituent(it) }
+        is Type.Object -> t.takeIf { it.tupleElementTypes != null && !it.tupleHasRest }
+        else -> null
     }
 
     /**
@@ -165960,7 +166157,10 @@ interface DataView {
                     // (CHK.93) stage 2: a const-asserted ARRAY or OBJECT literal reads the
                     // parameter as its contextual type — a mutable array-like keeps the
                     // tuple mutable (tsc passes the outer context through the assertion).
-                    constAssertedArrayLiteralOf(arg) != null || constAssertedObjectLiteralOf(arg) != null)
+                    constAssertedArrayLiteralOf(arg) != null || constAssertedObjectLiteralOf(arg) != null ||
+                    // (CHK.108): a PLAIN array literal argument reads a TUPLE parameter as
+                    // its context — see the var-decl site for the gate's reason.
+                    (arg is ArrayLiteralExpression && contextualTupleConstituent(paramType) != null))
             if (useCtx) contextualType = paramType
             // (CALL.6) the level-S classification. Taken INSIDE the already-open
             // L_ARGTYPE row, so it adds no boundary — every nanosecond it
@@ -167634,7 +167834,13 @@ interface DataView {
             // is exactly the shape (CHK.103) stage 1 left open.
             val allowArrayLikeVsArrayLike = arityOk &&
                 (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
-                (arg !is ArrayLiteralExpression || !arrayLiteralIsTupleLike(arg)) &&
+                (arg !is ArrayLiteralExpression || !arrayLiteralIsTupleLike(arg) ||
+                    // (CHK.108): …EXCEPT when the only failure is the element COUNT. The
+                    // element-wise elaboration has nothing to say about a surplus or an
+                    // absent index (neither has a slot), so tsc's `elaborateArrayLiteral`
+                    // reports nothing and the whole-argument row is what fires —
+                    // `take([1])` against `[number, number]` is a TS2345 in both references.
+                    arrayLiteralTupleArityOnlyMismatch(argType, paramType)) &&
                 !typeContainsForeignTypeParam(paramType, emptySet()) &&
                 !typeContainsForeignTypeParam(argType, emptySet()) &&
                 argArrayLikeVsArrayLikeCheckable(argType, paramType) &&
@@ -170096,6 +170302,11 @@ interface DataView {
 
     private fun collectMissingProperties(sourceType: Type, targetType: Type): List<String> {
         if (sourceType !is Type.Object || targetType !is Type.Object) return emptyList()
+        // (CHK.108): a tuple pair whose ARITY is the problem is reported by tsc as ONE
+        // TS2322 with the arity sub-line, never as a missing NUMBERED member — `[number]`
+        // against `[number, number]` was `Property '1' is missing in type '[number]'`.
+        // Refusing here is what lets the coarse TS2322 + [tupleArityChain] own the row.
+        if (tupleArityChain(sourceType, targetType) != null) return emptyList()
         resolveStructuredTypeMembers(sourceType)
         resolveStructuredTypeMembers(targetType)
         val sourceMembers = sourceType.members ?: return emptyList()
@@ -171478,14 +171689,48 @@ interface DataView {
         return checkTypeRelatedTo(elemType, slotType, assignableRelation)
     }
 
+    /**
+     * Per-element TS2322 for an array literal against a TUPLE target. Answers whether it
+     * EMITTED — (CHK.108): tsc attempts the element-wise elaboration first and reports the
+     * whole-literal row only when it produced nothing, which is exactly how an ARITY
+     * mismatch surfaces (the surplus/absent indices have no slot, so no element row fires).
+     */
     private fun checkArrayLiteralElementsAgainstTuple(
         arrLit: ArrayLiteralExpression, tupleType: Type.Object, source: String, fileName: String,
-    ) {
-        val slots = tupleType.tupleElementTypes ?: return
+    ): Boolean {
+        var emitted = false
+        val slots = tupleType.tupleElementTypes ?: return false
         for ((i, elem) in arrLit.elements.withIndex()) {
-            if (elem is SpreadElement) return
+            if (elem is SpreadElement) return emitted
             val slot = slots.getOrNull(i) ?: continue
             if (slot === anyType || slot === errorType || slot is Type.TypeParam) continue
+            // (CHK.108): a NESTED tuple slot — `[[1], 2]` against `[[number, number],
+            // number]` is reported at the INNER literal in both references, with that
+            // pair's own arity sub-line. The slot is not `isSimpleCheckableType`, so
+            // without this arm the element is skipped and the outer row (whose arities
+            // MATCH) never fires either: the row is lost entirely.
+            if (elem is ArrayLiteralExpression && slot is Type.Object && slot.tupleElementTypes != null) {
+                val savedCtx = contextualType
+                contextualType = slot
+                val nested = try { getTypeOfExpression(elem) } finally { contextualType = savedCtx }
+                val nestedChain = tupleArityChain(nested, slot)
+                if (nestedChain != null) {
+                    val nStart = elem.pos
+                    val nLength = expressionTrueEnd(elem) - nStart
+                    if (nLength > 0) {
+                        val (nLine, nChar) = getLineAndCharacterOfPosition(source, nStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '${typeToString(nested)}' is not assignable to type '${typeToString(slot)}'.",
+                            category = DiagnosticCategory.Error, code = 2322,
+                            fileName = fileName, line = nLine, character = nChar,
+                            start = nStart, length = nLength,
+                            messageChain = listOf(nestedChain),
+                        ))
+                        emitted = true
+                    }
+                }
+                continue
+            }
             if (!isSimpleCheckableType(slot)) continue
             // (CHK.93) stage 2: an element is contextually typed by its slot, so a LITERAL
             // element keeps its literal against a literal-carrying slot — `const t: [1] =
@@ -171521,6 +171766,7 @@ interface DataView {
                                     start = start, length = length,
                                 )),
                             ))
+                            emitted = true
                         }
                     }
                 }
@@ -171539,8 +171785,10 @@ interface DataView {
                     code = 2322, fileName = fileName, line = line, character = character,
                     start = start, length = length,
                 ))
+                emitted = true
             }
         }
+        return emitted
     }
 
     /**
@@ -173748,6 +173996,11 @@ interface DataView {
         // iterate positionally and emit per-mismatch chain.
         val srcTuple = source.tupleElementTypes
         val tgtTuple = target.tupleElementTypes
+        // (CHK.108): an ARITY mismatch is reported by ONE sub-line and never per position
+        // — tsc decides it above the element walk, so this arm sits above the equal-arity
+        // one (which by construction it cannot reach: every rung needs a differing count
+        // or a rest slot).
+        tupleArityChain(source, target)?.let { return listOf(it) }
         if (srcTuple != null && tgtTuple != null && srcTuple.size == tgtTuple.size) {
             for (i in srcTuple.indices) {
                 val sElem = srcTuple[i]
@@ -173756,6 +174009,10 @@ interface DataView {
                     val chain = mutableListOf<String>()
                     chain.add("  Type at position $i in source is not compatible with type at position $i in target.")
                     chain.add("    Type '${typeToString(sElem)}' is not assignable to type '${typeToString(tElem)}'.")
+                    // (CHK.108): a NESTED tuple pair carries its own arity line one level
+                    // deeper — `[[number], number]` vs `[[number, number], number]` is
+                    // three sub-lines in both references, not two.
+                    tupleArityChain(sElem, tElem)?.let { chain.add("    $it") }
                     return chain
                 }
             }
@@ -174486,6 +174743,14 @@ interface DataView {
      * can attach matching TS2728 "'X' is declared here." related info to TS2322.
      */
     private fun getMissingRequiredPropertySymbol(source: Type.Object, target: Type.Object): Symbol? {
+        // (CHK.108): see [collectMissingProperties] — an arity mismatch is not a missing
+        // member, and reporting it as one is the shape both references never print.
+        // MEASURED REDUNDANT (2026-09-08): ablated alone, the compiler's output over 45
+        // rows of seven tuple fixtures is byte-identical, because [collectMissingProperties]
+        // refuses first at every site that reaches here with a tuple pair. Kept as the
+        // second layer of a paired guard — this helper has ten call sites and an eleventh
+        // would otherwise be exposed — and recorded rather than claimed as covered.
+        if (tupleArityChain(source, target) != null) return null
         resolveStructuredTypeMembers(source)
         resolveStructuredTypeMembers(target)
         val targetProps = target.properties ?: return null
