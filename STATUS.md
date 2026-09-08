@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,626** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **199,748** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,34 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.51) — THE NULLABLE-TARGET RULE REACHES ALL FIVE HEADS ((CHK.114)), (c)'s STATED AXIS WAS WRONG, AND THE REFERENCES COULD NOT ADJUDICATE THE PIN THAT BROKE, 18,413 → 18,437 / 0 / 3 (2026-09-08).**
+All three stages landed **plus a PREREQUISITE the item did not name**: tsc RESTORES the aliased target
+before reporting, and three already-wired heads were silently stripping aliases — so wiring (a) alone
+would have REGRESSED `function q(): OptAlias` from correct to wrong. The guard is deliberately NOT
+applied at the argument and object-literal heads, which render the target from the TYPE, where keeping
+the alias buys one wrong string for another (measured). **(c)'s stated axis is wrong**: it calls the
+collapse CROSS-FLAVOUR, but both references KEEP the member spelling for `STwo = NTwo.A`,
+`NTwo = STwo.A` and even the cross-flavour-AND-cross-arity `SOne = NTwo.A` — **every collapsing row has
+a ONE-MEMBER source enum**, i.e. it is (CHK.92)(d)'s own fact on the SOURCE side, not a new rule. The
+item's "one wiring each" is true of neither (a) (8 rows, and it needs stage 0 first) nor (b) (two
+changes — once the target shows `| undefined` the written source literal must survive). **The failing
+pin could not be adjudicated by its own fixture, and that is the reusable lesson**:
+`ThisMethodCallAssignmentNarrowTest`'s subject is that a call does NOT narrow, and it broke on the
+TARGET's rendering while the row still fired at the same code and span — a full-text pin in an
+unrelated family silently depends on every display rule, and only the full suite sees it. Asked about
+the target, both references answered a THIRD thing (they drill to the offending MEMBER, because the
+source is a FRESH object literal); a sibling fixture with a NON-FRESH source forces them onto the
+whole-object form, where all three compilers are byte-identical at `'ZzzRes'` — confirming the strip
+and showing the pin had captured our own pre-existing divergence. The sweep found 5 files carrying a
+nullish target in a full-text expectation and **all are correct for the right reason** (16 shapes
+through both references), and the green-for-the-wrong-reason population is **provably empty** — a pin
+asserting a stripped target at a newly-wired head would have been RED before the change. 24 new pins;
+7 arms, **a7 REDUNDANT BY MEASUREMENT** over ~120 rows and its pin RENAMED so it no longer claims
+ordering coverage. Refused with measurements: a type-side alias test (unsound — id-keyed, first-wins,
+(INC.27)) and the (c) collapse inside a union source (needs `typeToString`'s union rendering, which
+(P18.48) forbids). Grid **8 × added=0 removed=0** re-run independently; corpus 10,344/0, externals
+290/0, `-project` 866/0, `cost_gate.py` exit 0, `huge_methods.py` exit 0, build warning-clean.
 
 **(P18.50) — THE CLASS-MEMBER DEFINITE-ASSIGNMENT PATH EXISTS ((CHK.112)(a)), AND THE MISSING PLUMBING WAS WRONG IN *BOTH* DIRECTIONS, 18,375 → 18,413 / 0 / 3 (2026-09-08).**
 **11 missing rows AND 6 ours-only FALSE POSITIVES from the same gap** — a bare identifier, an
@@ -124,28 +152,3 @@ six fixtures. The implementation agent self-reported starting a second concurren
 detected by an impossible class sha; both affected arms were re-run alone in the foreground and no
 result comes from an overlapped run. Grid **8 × added=0 removed=0** re-run independently;
 `cost_gate.py` exit 0 (largest delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean.
-
-**(P18.46) — DEFINITE ASSIGNMENT JOINS A `try`/`catch` AND REACHES AN EXPRESSION-BODIED ARROW ((CHK.110)(a)/(b)), AND THE SUPPRESSOR WAS NEITHER CANDIDATE THE ITEM NAMED, 18,234 → 18,271 / 0 / 3 (2026-09-08).**
-**(CHK.110)(a)/(b) CLOSED; (c) and two newly-measured gaps moved to (CHK.112).** The item named
-`markAssignments` (which really has no `TryStatement` arm) and B223 (which only sees a `var`
-declared INSIDE the try) as the two candidates for (a)'s silence; the suppressor is a THIRD
-mechanism — **`checkUsesOfUninitialized`'s own `TryStatement` arm**, which walked the try block
-against the CALLER's live frame set, so the try's assignments escaped the try statement
-unconditionally. **The evidence needed no instrumentation, because the same line was wrong in the
-OPPOSITE direction**: `try {} catch {} finally { d = "c" }` was an ours-only FALSE POSITIVE both
-references are silent about, since that arm walks the try block ONLY. One escape, two opposite
-defects; a second pre-existing ours-only row closes with it. The merge (`tryDefinitelyAssigns`) is
-decided by REACHABILITY through round 450's `daWalkStmt` — neither block reaches the continuation
-→ remove, only the catch → the catch's assignments, only the try → the try's, both → the
-intersection, `finally` always counts. **The first design was refuted by the fixture matrix while
-the GRID stayed clean**: a `tcvHasTerminator` conservatism suppressed 6 rows both references
-report, and the 8-profile grid read `added=0 removed=0` on that binary AND on the guard-free one —
-**the grid cannot grade conservatism**, only the reference matrix can, now a CLAUDE.md entry. (b)
-is a dispatch gap whose two arms (`spineDaEnterNode` and its `SpineDispatch.enterClosure` entry)
-are a round-927 PAIR reading the same 7 RED — no pin can separate "not called" from "not written".
-**The item's (b) scope was wrong in one place**: a class property initializer is silent for a
-BLOCK-bodied arrow, a function expression and a bare identifier alike, so that leak path is absent
-entirely and is a different mechanism → (CHK.112). 37 pins, all read from pristine; 10 arms, all
-discriminating. Grid **8 × added=0 removed=0** re-run independently; `cost_gate.py` exit 0 (largest
-delta **+0.03%**), `huge_methods.py` exit 0, **`spine_closure_audit.py` exit 0**, build
-warning-clean under `--rerun-tasks`.

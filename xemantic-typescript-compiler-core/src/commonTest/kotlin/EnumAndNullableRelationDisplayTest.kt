@@ -448,4 +448,287 @@ class EnumAndNullableRelationDisplayTest {
                 ),
         )
     }
+
+    // ================================================================ (CHK.114)
+    //
+    // Three residues (CHK.113) confirmed on the BEFORE binary, i.e. pre-existing. Every
+    // expectation below is TRANSCRIBED from pristine `typescript@6.0.3`, which agreed with
+    // tsgo 7.0.2 on all 28 measured rows of the fixture these pins are cut from
+    // (`build/bench/chk114-sub/g`). The grid grades none of it, for the reason this class's
+    // header gives.
+
+    // -------------------------------------------------- (CHK.114)(a) the RETURN head
+
+    @Test
+    fun `a return against an explicitly nullable union strips the undefined from its target`() {
+        assert(
+            messages("function q(): string | undefined { return 1 }", 2322) ==
+                listOf("Type 'number' is not assignable to type 'string'."),
+        )
+    }
+
+    @Test
+    fun `a return against an explicitly nullable union strips the null from its target`() {
+        assert(
+            messages("function q(): string | null { return 1 }", 2322) ==
+                listOf("Type 'number' is not assignable to type 'string'."),
+        )
+    }
+
+    @Test
+    fun `a return against a three member nullable union strips both nullish members`() {
+        assert(
+            messages("function q(): string | null | undefined { return 1 }", 2322) ==
+                listOf("Type 'number' is not assignable to type 'string'."),
+        )
+    }
+
+    /**
+     * NEGATIVE CONTROL for (a): tsc's strip declines when the remainder is itself union-like,
+     * and `boolean` IS the union `true | false` there — so this row must keep its
+     * `| undefined`, and with the nullish member still SHOWING the source keeps its literal.
+     * Both references print exactly this.
+     */
+    @Test
+    fun `a return against a boolean nullable union keeps its undefined and its source literal`() {
+        assert(
+            messages("function q(): boolean | undefined { return 1 }", 2322) ==
+                listOf("Type '1' is not assignable to type 'boolean | undefined'."),
+        )
+    }
+
+    /** NEGATIVE CONTROL for (a): a union with no nullish member is not the strip's business. */
+    @Test
+    fun `a return against a non nullable union is unchanged`() {
+        assert(
+            messages("function q(): string | number { return true }", 2322) ==
+                listOf("Type 'boolean' is not assignable to type 'string | number'."),
+        )
+    }
+
+    /** NEGATIVE CONTROL for (a): a remainder of TWO members is not a candidate. */
+    @Test
+    fun `a return against a nullable union with a two member remainder keeps its undefined`() {
+        assert(
+            messages("function q(): string | number | undefined { return true }", 2322) ==
+                listOf("Type 'true' is not assignable to type 'string | number | undefined'."),
+        )
+    }
+
+    /**
+     * (CHK.114) stage 0. tsc reports the ORIGINAL target whenever it carries an `aliasSymbol`
+     * (checker.ts:22825 and :22878), so a nullable ALIAS is never stripped — without this,
+     * wiring the return head would have turned the accidentally-correct `'OptAlias'` into
+     * `'string'`.
+     *
+     * ONLY THE TARGET IS PINNED, DELIBERATELY. Both references print `Type '1'` for the
+     * source here and we print `Type 'number'`: with the target unstripped its `undefined` is
+     * a unit type, so tsc's `typeCouldHaveTopLevelSingletonTypes` keeps the written literal,
+     * and (CHK.113)(b)'s recovery is gated on `nullishTargetSurvivesStrip`, which is a
+     * question about the TYPE and cannot see that an alias blocked the strip. That residue is
+     * recorded here rather than pinned — a pin asserting today's `'number'` would be a
+     * countdown that the round closing it has to invert.
+     */
+    @Test
+    fun `a return against a named nullable alias keeps the alias name as its target`() {
+        val m = messages("type OA = string | undefined\nfunction q(): OA { return 1 }", 2322)
+        val single = m.singleOrNull() ?: ""
+        assert(single.endsWith("is not assignable to type 'OA'."))
+    }
+
+    // ------------------------------------ (CHK.114)(b) the OPTIONAL CLASS PROPERTY head
+
+    @Test
+    fun `an optional class property shows the undefined its effective type carries`() {
+        assert(
+            messages("class Ca { p?: boolean = 1 }", 2322) ==
+                listOf("Type '1' is not assignable to type 'boolean | undefined'."),
+        )
+    }
+
+    @Test
+    fun `an optional class property whose remainder strips reads the bare remainder`() {
+        assert(
+            messages("class Cb { s?: string = 1 }", 2322) ==
+                listOf("Type 'number' is not assignable to type 'string'."),
+        )
+    }
+
+    @Test
+    fun `an optional class property with a two member remainder keeps its undefined`() {
+        assert(
+            messages("class Cc { t?: string | number = true }", 2322) ==
+                listOf("Type 'true' is not assignable to type 'string | number | undefined'."),
+        )
+    }
+
+    @Test
+    fun `a static an ecmascript private and a private optional class property all add undefined`() {
+        val statik = messages("class Cf { static st?: boolean = 1 }", 2322)
+        val hashed = messages("class Cg { #h?: boolean = 1 }", 2322)
+        val privat = messages("class Ch { private pv?: boolean = 1 }", 2322)
+        val expected = listOf("Type '1' is not assignable to type 'boolean | undefined'.")
+        assert(statik == expected)
+        assert(hashed == expected)
+        assert(privat == expected)
+    }
+
+    /** NEGATIVE CONTROL for (b): a REQUIRED property carries no `undefined` to show. */
+    @Test
+    fun `a required class property does not add undefined to its target`() {
+        assert(
+            messages("class Ce { req: boolean = 1 }", 2322) ==
+                listOf("Type 'number' is not assignable to type 'boolean'."),
+        )
+    }
+
+    /** NEGATIVE CONTROL for (b): a required non union target is untouched in both halves. */
+    @Test
+    fun `a required string class property is unchanged`() {
+        assert(
+            messages("class Cd { w: string = 1 }", 2322) ==
+                listOf("Type 'number' is not assignable to type 'string'."),
+        )
+    }
+
+    /**
+     * NEGATIVE CONTROL for (CHK.114) stage 0's SECOND half, and the one shape that separates
+     * "the target as WRITTEN is a name" from "the annotation is a name": `z?: RI2` spells a
+     * TypeReference, but the union is SYNTHESIZED by the optional-add and so carries no
+     * `aliasSymbol` in tsc. Both references read `'RI2'`; an alias guard keyed on the
+     * annotation alone reads `'RI2 | undefined'`.
+     */
+    @Test
+    fun `an optional class property naming an interface strips the synthesized undefined`() {
+        assert(
+            messages("interface RI2 { a: number; b: number }\nclass Ci { z?: RI2 = {} }", 2739) ==
+                listOf("Type '{}' is missing the following properties from type 'RI2': a, b"),
+        )
+    }
+
+    /**
+     * Stage 0 at the class-property head. Target only, for the reason
+     * the return-position alias pin above gives.
+     */
+    @Test
+    fun `an optional class property typed by a nullable alias keeps the alias name`() {
+        val m = messages("type OA = string | undefined\nclass Cj { p?: OA = 1 }", 2322)
+        val single = m.singleOrNull() ?: ""
+        assert(single.endsWith("is not assignable to type 'OA'."))
+    }
+
+    // ------------------------- (CHK.114)(c) the ONE-member enum collapse on the SOURCE
+
+    private val arity = """
+        namespace Ns { export enum QOne { A = 7 } export enum QTwo { A = 1, B = 2 } }
+        enum NOne { A }
+        enum SOne { A = "a" }
+        enum NTwo { A, B }
+        enum STwo { A = "a", B = "b" }
+    """.trimIndent()
+
+    @Test
+    fun `a one member enum's member renders as the enum as a SOURCE at a declaration`() {
+        assert(
+            messages("$arity\nconst z3: STwo = NOne.A", 2322) ==
+                listOf("Type 'NOne' is not assignable to type 'STwo'."),
+        )
+    }
+
+    @Test
+    fun `a one member enum's member renders as the enum as a SOURCE at an argument`() {
+        assert(
+            messages("$arity\ndeclare function fq(x: STwo): void;\nfq(NOne.A)", 2345) ==
+                listOf("Argument of type 'NOne' is not assignable to parameter of type 'STwo'."),
+        )
+    }
+
+    @Test
+    fun `a one member enum's member renders as the enum as a SOURCE at a return`() {
+        assert(
+            messages("$arity\nfunction fr(): STwo { return NOne.A }", 2322) ==
+                listOf("Type 'NOne' is not assignable to type 'STwo'."),
+        )
+    }
+
+    @Test
+    fun `a one member enum's member renders as the enum as a SOURCE at an object literal member`() {
+        assert(
+            messages("$arity\ninterface Pb { m: STwo }\nconst z8: Pb = { m: NOne.A }", 2322) ==
+                listOf("Type 'NOne' is not assignable to type 'STwo'."),
+        )
+    }
+
+    @Test
+    fun `a one member enum's member renders as the enum as a SOURCE at a class property`() {
+        assert(
+            messages("$arity\nclass Zc { c: STwo = NOne.A }", 2322) ==
+                listOf("Type 'NOne' is not assignable to type 'STwo'."),
+        )
+    }
+
+    /**
+     * NEGATIVE CONTROL for (c), AND THE ROW THAT REFUTES THE ITEM'S FRAMING. (CHK.114) states
+     * the collapse as "a CROSS-FLAVOUR enum member source does not collapse"; measured on both
+     * references, a cross-flavour pair of TWO-member enums keeps its qualified spelling in
+     * BOTH directions. The axis is the SOURCE enum's member COUNT — a one-member enum's
+     * declared type IS its member's type in tsc — which is (CHK.92)(d)'s fact on the other
+     * side of the relation. The rows that looked cross-flavour had a one-member source.
+     */
+    @Test
+    fun `a two member enum's member keeps its qualified spelling as a SOURCE in both directions`() {
+        assert(
+            messages("$arity\nconst z5: STwo = NTwo.A", 2322) ==
+                listOf("Type 'NTwo.A' is not assignable to type 'STwo'."),
+        )
+        assert(
+            messages("$arity\nconst z6: NTwo = STwo.A", 2322) ==
+                listOf("Type 'STwo.A' is not assignable to type 'NTwo'."),
+        )
+    }
+
+    /**
+     * NEGATIVE CONTROL for (c): the TARGET's arity decides the TARGET's display and says
+     * nothing about the source's. A two-member source against a ONE-member target keeps its
+     * member while the target collapses — both halves in one row.
+     */
+    @Test
+    fun `a two member source against a one member enum target keeps the member and collapses the target`() {
+        assert(
+            messages("$arity\nconst z7: SOne = NTwo.A", 2322) ==
+                listOf("Type 'NTwo.A' is not assignable to type 'SOne'."),
+        )
+    }
+
+    @Test
+    fun `a one member enum in a namespace collapses to its bare name against an enum target`() {
+        assert(
+            messages("$arity\nconst z2: STwo = Ns.QOne.A", 2322) ==
+                listOf("Type 'QOne' is not assignable to type 'STwo'."),
+        )
+    }
+
+    /**
+     * (c) DOES NOT BREAK THE (PARITY.3) NAMESPACE QUALIFICATION: against a GENERALIZING
+     * target the source is widened to the parent enum first, so the qualification still owns
+     * the display and the namespace path survives. Both references print `'Ns.QOne'` for this
+     * non-module fixture (a MODULE one would read `import("…").Ns.QOne` — the (P18.14)-refused
+     * module-prefix residue, which is why the fixture is deliberately script-scoped).
+     *
+     * IT IS NOT AN ORDERING CONTROL, AND SAYING SO WOULD BE A CLAIM THE MEASUREMENT REFUSES.
+     * Arm a7 reverses the two legs of `relationErrorSourceRender` and reads **0 RED** over all
+     * 59 pins, and round 813's whole-output diff over the eight (CHK.114) fixtures (~120 rows,
+     * covering every position, both enum flavours, both arities and the namespaced case) is
+     * BYTE-IDENTICAL between the two binaries. The order is REDUNDANT by construction — the
+     * qualification fires only when the source has already been widened past `EnumMember`, so
+     * the collapse can never see a type it would answer for — and it is recorded as
+     * measured-redundant rather than claimed as coverage.
+     */
+    @Test
+    fun `a namespaced one member enum still qualifies against a generalizing target`() {
+        assert(
+            messages("$arity\nconst z1: string = Ns.QOne.A", 2322) ==
+                listOf("Type 'Ns.QOne' is not assignable to type 'string'."),
+        )
+    }
 }

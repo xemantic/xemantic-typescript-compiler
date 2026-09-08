@@ -25,6 +25,66 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.51) — the nullable-target rule reaches all five heads ((CHK.114)), (c)'s stated axis was wrong, and the references could not adjudicate the pin that broke (2026-09-08)
+
+**Suite 18,413 → 18,437 / 0 / 3** — `EnumAndNullableRelationDisplayTest` 35 → 59, plus one
+unrelated-family pin whose EXPECTATION was updated. Grid **8 × added=0 removed=0**, re-run
+INDEPENDENTLY; corpus 10,344/0, externals 290/0, `-project` 866/0, `cost_gate.py` exit 0 (largest
+delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean.
+
+**A PREREQUISITE THE ITEM DID NOT NAME HAD TO LAND FIRST.** tsc RESTORES the aliased target before
+reporting (`checker.ts:22825`, `:22878`); three already-wired heads were silently stripping aliases,
+so wiring (a) alone would have REGRESSED `function q(): OptAlias` from correct to wrong. The guard is
+`conceptual === targetType && targetSpelledByName(targetAnnotation)`, and it is deliberately NOT
+applied at the argument and object-literal heads — those render the target from the TYPE, so keeping
+the alias there buys one wrong string for another (measured; the strip stays).
+
+**(c)'s STATED AXIS IS WRONG, AND THE MEASUREMENT SAYS SO PLAINLY.** The item calls it a
+CROSS-FLAVOUR collapse. Both references KEEP the member spelling for `STwo = NTwo.A` and
+`NTwo = STwo.A` — cross-flavour — and for `SOne = NTwo.A`, which is cross-flavour AND cross-arity.
+**Every collapsing row has a ONE-MEMBER source enum**, so this is (CHK.92)(d)'s own fact appearing on
+the SOURCE side, not a new rule. Implemented as such in `relationErrorSourceRender`.
+
+**THE ITEM'S "ONE WIRING EACH" IS TRUE OF NEITHER (a) NOR (b).** (a) is 8 rows across arrow, method
+and plain returns at every nullish arity, and needs stage 0 first; (b) needed TWO changes — the
+target half (`optionalDeclaration`) and the SOURCE half, because once the target shows `| undefined`
+the written literal must survive to be comparable.
+
+**THE FAILING PIN COULD NOT BE ADJUDICATED BY ITS OWN FIXTURE, AND THAT IS THE ROUND'S REUSABLE
+LESSON.** `ThisMethodCallAssignmentNarrowTest`'s subject is that a `this`-method call does NOT narrow;
+it broke on the TARGET's rendering while the row still fired at the same code and span — a **full-text
+pin in an unrelated family silently depends on every display rule**, and only the full suite sees it.
+Asked about the target, both references answered a THIRD thing: they drill to the offending MEMBER and
+never print the outer target, because the source is a FRESH object literal. **A reference that answers
+a different question is not evidence either way.** A sibling fixture with a NON-FRESH source
+(`declare const s: {…}; return s`) forces them onto the whole-object form, where all three compilers
+are byte-identical at `'ZzzRes'` — confirming the strip and showing the pin had been capturing our own
+pre-existing divergence. Expectation updated, test name and assertions untouched. Both facts are now
+CLAUDE.md entries.
+
+**THE SWEEP FOUND FIVE FILES CARRYING A NULLISH TARGET IN A FULL-TEXT EXPECTATION AND ALL ARE CORRECT
+FOR THE RIGHT REASON** — 16 shapes run through both references, all byte-identical: the strip declines
+where the remainder is union-like (`boolean` is `true | false`; a ≥2-member enum), where the remainder
+is two-membered, or where the source is `null` and so fails `DefinitelyNonNullable`. **And the
+green-for-the-wrong-reason population is provably EMPTY here**: a pin asserting a STRIPPED target at a
+newly-wired head would have been RED before the change, so it cannot exist as a passing pin — an
+argument worth reusing whenever a change only ever makes an output MORE correct at a head that did not
+run.
+
+**ARMS — 7. a1 the return head's call 3 RED; a2 stage 0's alias guard 2 uniquely; a3 its
+`conceptual === targetType` half 1 uniquely; a4 the class-property optionality signal 3; a5 that
+head's shared source render 3 uniquely; a6 the one-member source collapse 6.** **a7 is REDUNDANT BY
+MEASUREMENT** — reversing the collapse/qualification order is byte-identical over ~120 rows of eight
+fixtures (round 813's method), because qualification only fires after the source is widened past
+`EnumMember`; **the pin was RENAMED** from "keeps its namespace path" to "still qualifies" so it no
+longer claims ordering coverage it does not have.
+
+**REFUSED, WITH MEASUREMENTS**: a type-side alias test (`aliasDisplayMap`/`unionAliasStructural`) —
+built first and UNSOUND, being id-keyed and first-wins ((INC.27)), so one `type Opt<T> = T | undefined`
+makes every inline `string | undefined` read as aliased; and the (c) collapse INSIDE a union source,
+which needs `typeToString`'s union rendering and is exactly what (P18.48) forbids. Two out-of-scope
+residues recorded: the `OptAlias` SOURCE display, and a `Promise<string | undefined>` target.
+
 ### Round (P18.50) — the class-member definite-assignment path exists ((CHK.112)(a)), and the missing plumbing was wrong in BOTH directions (2026-09-08)
 
 **Suite 18,375 → 18,413 / 0 / 3** — 38 pins in the new `Ts2454ClassMemberInitializerTest`, plus one
@@ -2110,7 +2170,11 @@ where the order sends you.
   `UnionOrIntersection` and an `Instantiable`'s constraint — widening it is corpus-gated because
   that allowlist is what protects two baselines.
 
-- [ ] **(CHK.114) THREE FORM RESIDUES CONFIRMED ON THE *BEFORE* BINARY BY (CHK.113), i.e. PRE-EXISTING
+- [x] **(CHK.114) CLOSED 2026-09-08 ((P18.51) note): all three stages landed, plus a PREREQUISITE the item
+  did not name (tsc RESTORES the aliased target before reporting — three already-wired heads were silently
+  stripping aliases). **(c)'s framing was WRONG**: cross-flavour is not the axis — every collapsing row has
+  a ONE-MEMBER source enum, i.e. it is (CHK.92)(d)'s own fact on the source side, not a new rule. Two
+  sub-scopes refused with measurements. ORIGINAL: THREE FORM RESIDUES CONFIRMED ON THE *BEFORE* BINARY BY (CHK.113), i.e. PRE-EXISTING
   AND UNCHANGED BY IT (2026-09-08, (P18.49); fixtures `build/bench/chk113-sub`).** (a) and (b) are
   (CHK.92)(c)'s `nullableTargetDisplay` reaching only three of its five heads. (a) **THE RETURN HEAD
   NEVER CALLS IT**: `function q(): string | undefined { return 1 }` prints the target

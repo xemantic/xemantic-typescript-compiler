@@ -130,6 +130,18 @@ class ThisMethodCallAssignmentNarrowTest {
         // COVERAGE, not a control: ablation arm a2 (treat any resolved `this.m()` as
         // non-nullish regardless of its own return annotation) reddens this row and
         // nothing else. tsc 7.0.2 reports here too.
+        //
+        // (CHK.114)(a) changed the TARGET RENDERING of this row and nothing else: the row
+        // still fires, at the same code and the same span, from the same unnarrowed member.
+        // The return head now applies tsc's nullable-target strip, so `ZzzRes | undefined`
+        // reads `ZzzRes` — measured, both references print exactly that for this pair when
+        // they print the whole-object form (`declare const srcA: { zzzProj: ZzzProj |
+        // undefined }; function r(): ZzzRes | undefined { return srcA }` reads
+        // `Type '{ zzzProj: ZzzProj | undefined; }' is not assignable to type 'ZzzRes'.` in
+        // tsgo 7.0.2 AND pristine 6.0.3). On THIS fixture they do not print it at all: a
+        // FRESH object literal drills to the member (`Type 'ZzzProj | undefined' is not
+        // assignable to type 'ZzzProj'`, at the member's column), which is the elaboration
+        // -shape residue this class's KDoc already records. The narrowing claim is untouched.
         val rows = diagnose(
             inClass(
                 "  zzzC5(): ZzzRes | undefined {\n" +
@@ -140,7 +152,7 @@ class ThisMethodCallAssignmentNarrowTest {
             ),
         ).filter { it.code == 2322 }
         assert(rows.size == 1)
-        assert(rows[0].message == "Type '{ zzzProj: ZzzProj | undefined; }' is not assignable to type 'ZzzRes | undefined'.")
+        assert(rows[0].message == "Type '{ zzzProj: ZzzProj | undefined; }' is not assignable to type 'ZzzRes'.")
     }
 
     @Test

@@ -108186,7 +108186,9 @@ interface DataView {
         // `const v: string | undefined = 1` reads `Type 'number' … 'string'` in both
         // references and not `Type '1' … 'string | undefined'`. Answers `targetType`
         // unchanged whenever the strip does not apply, so a non-nullable target is inert.
-        val nullStrippedTarget = nullableTargetDisplay(targetType, sourceType, optionalDeclaration = false)
+        val nullStrippedTarget = nullableTargetDisplay(
+            targetType, sourceType, optionalDeclaration = false, targetAnnotation = typeAnnotation,
+        )
         val displaySourceType = relationErrorSourceDisplayType(
             relationErrorSourceLiteral(init, sourceType, nullStrippedTarget), nullStrippedTarget,
         )
@@ -108196,8 +108198,7 @@ interface DataView {
         // collapsed to the bare class name, render the source as `typeof C`
         // (matches tsc — `var x: number = C` → "Type 'typeof C' ..."). typeName1.
         val displaySource = run {
-            val base = relationErrorSourceQualified(displaySourceType, nullStrippedTarget)
-                ?: typeToString(displaySourceType)
+            val base = relationErrorSourceRender(displaySourceType, nullStrippedTarget)
             if (init is Identifier && base == init.text) {
                 val s = currentFileLocals?.get(init.text) ?: globals[init.text]
                 if (s != null && s.flags.hasAny(SymbolFlags.Class) &&
@@ -109178,8 +109179,30 @@ interface DataView {
         // server project.ts). Mirrors the property-write path's empty own-TP set.
         if (typeContainsForeignTypeParam(sourceType, emptySet())) return
         if (canUse && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
-            val displaySource = typeToString(sourceType)
-            val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+            // (CHK.114)(b): the CLASS-PROPERTY head is the one declaration kind that never
+            // told [nullableTargetDisplay] its target was OPTIONAL — `class C { p?: boolean = 1 }`
+            // printed `Type 'number' is not assignable to type 'boolean'` where tsgo 7.0.2 and
+            // pristine `typescript@6.0.3` both print `Type '1' … 'boolean | undefined'`. An
+            // optional property's effective type includes `undefined` in tsc; ours does not
+            // carry it, so the conceptual target is built there and tsc's own strip applied,
+            // which is why `p?: string = 1` still reads `'string'` while `p?: boolean = 1`
+            // keeps its `| undefined` (the remainder `boolean` IS the union `true | false`).
+            // The optionality is read off the OWNER declaration rather than added to the
+            // signature so the two call sites cannot disagree about it.
+            val ownerDecl = (propName as NodeBase).parent as? PropertyDeclaration
+            val nullStrippedTarget = nullableTargetDisplay(
+                targetType, sourceType, ownerDecl?.questionToken == true, typeAnnotation,
+            )
+            // Routed through the shared source rule for the same reason the var-decl and
+            // return heads are: with the target now SHOWING `| undefined`, tsc's
+            // `typeCouldHaveTopLevelSingletonTypes` is true and the written literal survives
+            // ((CHK.113)(b)) — which is the `'1'` half of the measured row.
+            val displaySourceType = relationErrorSourceDisplayType(
+                relationErrorSourceLiteral(init, sourceType, nullStrippedTarget), nullStrippedTarget,
+            )
+            val displaySource = relationErrorSourceRender(displaySourceType, nullStrippedTarget)
+            val displayTarget = if (nullStrippedTarget !== targetType) typeToString(nullStrippedTarget)
+                else formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
             val (line, character) = getLineAndCharacterOfPosition(source, propName.pos)
             // (CHK.111): (CHK.108) taught [collectMissingProperties] and
             // [getMissingRequiredPropertySymbol] that a tuple ARITY mismatch is never reported as
@@ -110591,12 +110614,25 @@ interface DataView {
         // `'string'`), tsc's `never` guard (`function f(): never { return one }` with
         // `one: "a"` read `Type 'string'`, both references read `'"a"'`) and the
         // enum-member arm.
-        val displaySourceType = relationErrorSourceDisplayType(
-            relationErrorSourceLiteral(stmt.expression, sourceType, targetType), targetType,
+        // (CHK.114)(a): the RETURN head was the ONE of (CHK.92)(c)'s five that never called
+        // [nullableTargetDisplay] — `function q(): string | undefined { return 1 }` printed
+        // the whole union where tsgo 7.0.2 and pristine `typescript@6.0.3` both print
+        // `'string'`. Computed FIRST, exactly as at the other four heads, because tsc strips
+        // in `isRelatedTo` BEFORE `reportRelationError` and the SOURCE generalization is then
+        // decided against the stripped target. The annotation is handed in so an ALIASED
+        // nullable return keeps its name (stage 0) — without it `(): OptAlias` would have
+        // regressed from the correct `'OptAlias'` to `'string'`.
+        val nullStrippedReturn = nullableTargetDisplay(
+            targetType, sourceType, optionalDeclaration = false, targetAnnotation = returnTypeNode,
         )
-        val displaySource = relationErrorSourceQualified(displaySourceType, targetType)
-            ?: typeToString(displaySourceType)
-        val displayTarget = if (returnTypeNode is TypeQuery && targetType is Type.Object &&
+        val displaySourceType = relationErrorSourceDisplayType(
+            relationErrorSourceLiteral(stmt.expression, sourceType, nullStrippedReturn), nullStrippedReturn,
+        )
+        val displaySource = relationErrorSourceRender(displaySourceType, nullStrippedReturn)
+        val displayTarget = if (nullStrippedReturn !== targetType) typeToString(nullStrippedReturn)
+            // (CHK.92)(c): a STRIPPED target is no longer the type the annotation spells, so
+            // it is rendered from the type — the var-decl head's own rule.
+            else if (returnTypeNode is TypeQuery && targetType is Type.Object &&
                 targetType !is Type.Interface && !targetType.callSignatures.isNullOrEmpty() &&
                 targetType.symbol?.flags?.hasAny(SymbolFlags.Function) == true)
                 typeToString(targetType) // B198: tsc unfolds `typeof <fn>` to its signature form
@@ -134941,10 +134977,42 @@ interface DataView {
     private fun relationErrorConstituentDisplay(constituent: Type, targetType: Type): String =
         relationErrorSourceDisplay(constituent, targetType)
 
-    private fun relationErrorSourceDisplay(sourceType: Type, targetType: Type): String {
-        val displayType = relationErrorSourceDisplayType(sourceType, targetType)
-        return relationErrorSourceQualified(displayType, targetType) ?: typeToString(displayType)
-    }
+    private fun relationErrorSourceDisplay(sourceType: Type, targetType: Type): String =
+        relationErrorSourceRender(relationErrorSourceDisplayType(sourceType, targetType), targetType)
+
+    /**
+     * (CHK.114)(c): render an ALREADY-generalized source display type for a relation error.
+     *
+     * Split out of [relationErrorSourceDisplay] so the two heads that build their own display
+     * type inline — the var-decl one, which then has a `typeof C` rule of its own, and the
+     * return one — share every rule that decides the STRING. Every relation-error source
+     * display in this checker goes through here.
+     *
+     * THE COLLAPSE: the ONE-member enum rule (CHK.92)(d) landed for the TARGET applies to
+     * the SOURCE too — `const m: STwo = NOne.A` reads `Type 'NOne'` in tsgo 7.0.2 AND pristine
+     * `typescript@6.0.3`, at the declaration, argument, return, object-literal-member and
+     * class-property positions alike. THE ITEM'S FRAMING — "a CROSS-FLAVOUR enum member source
+     * does not collapse" — IS WRONG AND THE MEASUREMENT SAYS SO: `const m: STwo = NTwo.A` and
+     * `const m: NTwo = STwo.A` are cross-flavour and BOTH references keep `'NTwo.A'` / `'STwo.A'`,
+     * while `const m: SOne = NTwo.A` (cross-flavour, two-member source, ONE-member target) also
+     * keeps. What every collapsing row has in common is that the SOURCE enum declares exactly one
+     * member — the same fact (CHK.92)(d) already names, since such an enum's declared type IS its
+     * member's type in tsc. The rows that look cross-flavour are the ones whose source enum
+     * happened to be one-member.
+     *
+     * ORDER: the (PARITY.3) qualification is written FIRST and the two are DISJOINT by
+     * construction — it fires only for a target that GENERALIZES the source, and against such a
+     * target [relationErrorSourceDisplayType] has already widened a member to its parent enum,
+     * which carries `SymbolFlags.Enum` and not `EnumMember`, so the collapse can never see a
+     * type it would answer for. RECORDED AS MEASURED-REDUNDANT, NOT ARGUED: (CHK.114) arm a7
+     * reverses the two legs and reads 0 RED over 59 pins, with round 813's whole-output diff
+     * over the round's eight fixtures (~120 rows, every position, both flavours, both arities,
+     * namespaced and not) byte-identical between the two binaries.
+     */
+    private fun relationErrorSourceRender(displayType: Type, targetType: Type): String =
+        relationErrorSourceQualified(displayType, targetType)
+            ?: oneMemberEnumCollapsedDisplay(displayType)
+            ?: typeToString(displayType)
 
     /**
      * (PARITY.3): the qualified render of an ALREADY-generalized source display type, or
@@ -135247,6 +135315,7 @@ interface DataView {
         targetType: Type,
         sourceType: Type,
         optionalDeclaration: Boolean,
+        targetAnnotation: TypeNode? = null,
     ): Type {
         if (!strictNullChecks) return targetType
         val conceptual =
@@ -135255,6 +135324,36 @@ interface DataView {
             ) getUnionType(listOf(targetType, undefinedType))
             else targetType
         if (conceptual !is Type.Union) return conceptual
+        // (CHK.114) stage 0: tsc REPORTS THE UNSTRIPPED TARGET WHEN IT CARRIES AN ALIAS.
+        // The strip above transcribes `isRelatedTo`'s rewrite (checker.ts:22804-22813), but
+        // both of the calls that consume its result restore the original first —
+        // `reportRelationError(headMessage, source, originalTarget.aliasSymbol ? originalTarget
+        // : target)` (checker.ts:22825) and `reportErrorResults`' `target =
+        // (originalTarget.aliasSymbol || targetHasBase) ? originalTarget : target`
+        // (checker.ts:22878). Measured on tsgo 7.0.2 AND pristine `typescript@6.0.3`:
+        // `type OptAlias = string | undefined` reads `Type '1' is not assignable to type
+        // 'OptAlias'` at a declaration, an argument, an object-literal member and a return,
+        // while the inline `string | undefined` at those positions reads
+        // `Type 'number' … 'string'`. Without this, wiring the RETURN head in stage (a)
+        // would have turned that head's accidentally-correct `'OptAlias'` into `'string'`.
+        //
+        // THE TEST IS SYNTACTIC ON PURPOSE. The type-side stand-in — "is this type in
+        // [aliasDisplayMap] / [unionAliasStructural]" — was built first and is UNSOUND here:
+        // that map is id-keyed and FIRST-WINS ((INC.27)), so one `type Opt<T> = T | undefined`
+        // anywhere in the program registers the interned `string | undefined` and then EVERY
+        // inline `string | undefined` target in that program reads as aliased. tsc's
+        // `aliasSymbol` is a property of how the type was WRITTEN, and the annotation is what
+        // this checker has of that. Unwrapping [ParenthesizedType] is measured too: both
+        // references strip `(string | undefined)` and keep `(OptAlias)`.
+        //
+        // `conceptual === targetType` is the second half and is load-bearing: the
+        // optional-declaration ADD above SYNTHESIZES the union, and that synthesized type has
+        // no `aliasSymbol` in tsc however the remainder was spelled. Without it, `z?: RI` — an
+        // annotation naming an INTERFACE, not an alias — refuses the strip and reads
+        // `'RI | undefined'` where both references read `'RI'`. Measured, and it is the one
+        // shape that separates "the target as WRITTEN is a name" from "the annotation is a
+        // name": only when nothing was added does the annotation describe the whole target.
+        if (conceptual === targetType && targetSpelledByName(targetAnnotation)) return conceptual
         if (!isDefinitelyNonNullableType(sourceType)) return conceptual
         val remainder = conceptual.types.filter {
             !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
@@ -135263,6 +135362,22 @@ interface DataView {
         val only = remainder[0]
         if (unionLikeForNullableStrip(only)) return conceptual
         return only
+    }
+
+    /**
+     * (CHK.114) stage 0: is [ann] a target the source SPELLS BY NAME — i.e. the shape that
+     * carries an `aliasSymbol` in tsc and so survives the nullable-target strip unstripped?
+     *
+     * A [TypeReference] is the only annotation form that names a type alias (bare, dotted or
+     * generic); every structural form — an inline [UnionType], a literal, an array, a type
+     * literal — builds a fresh type with no alias. `null` (no annotation reachable) answers
+     * false, which keeps the strip exactly where it already was.
+     */
+    private fun targetSpelledByName(ann: TypeNode?): Boolean {
+        var n: TypeNode? = ann
+        var hops = 0
+        while (n is ParenthesizedType && hops++ < 16) n = n.type
+        return n is TypeReference
     }
 
     /** (CHK.92)(c): is [paramSym] an OPTIONAL parameter (`x?: T` or `x: T = …`)? */
@@ -168779,6 +168894,13 @@ interface DataView {
             // runs in `isRelatedTo` BEFORE the report — so it is computed first and the
             // SOURCE display is then generalized against the STRIPPED target, exactly as
             // `reportRelationError` sees it.
+            // (CHK.114) stage 0: the alias guard is DELIBERATELY NOT passed here — see
+            // [targetSpelledByName]. This head renders the target from the TYPE
+            // ([relationErrorTargetDisplay]), so refusing the strip for an aliased target
+            // buys `'string | undefined'` where both references print the alias NAME, i.e.
+            // it trades one wrong string for another. Keeping the strip leaves the
+            // pre-existing `'string'`, which is at least what tsc prints for the
+            // alias-FREE spelling of the same target. Measured, both arms.
             val paramDisplayType = nullableTargetDisplay(
                 paramType, argType, isOptionalParameterSymbol(params.getOrNull(i)),
             )

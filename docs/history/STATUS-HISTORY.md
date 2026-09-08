@@ -1,3 +1,28 @@
+**(P18.46) — DEFINITE ASSIGNMENT JOINS A `try`/`catch` AND REACHES AN EXPRESSION-BODIED ARROW ((CHK.110)(a)/(b)), AND THE SUPPRESSOR WAS NEITHER CANDIDATE THE ITEM NAMED, 18,234 → 18,271 / 0 / 3 (2026-09-08).**
+**(CHK.110)(a)/(b) CLOSED; (c) and two newly-measured gaps moved to (CHK.112).** The item named
+`markAssignments` (which really has no `TryStatement` arm) and B223 (which only sees a `var`
+declared INSIDE the try) as the two candidates for (a)'s silence; the suppressor is a THIRD
+mechanism — **`checkUsesOfUninitialized`'s own `TryStatement` arm**, which walked the try block
+against the CALLER's live frame set, so the try's assignments escaped the try statement
+unconditionally. **The evidence needed no instrumentation, because the same line was wrong in the
+OPPOSITE direction**: `try {} catch {} finally { d = "c" }` was an ours-only FALSE POSITIVE both
+references are silent about, since that arm walks the try block ONLY. One escape, two opposite
+defects; a second pre-existing ours-only row closes with it. The merge (`tryDefinitelyAssigns`) is
+decided by REACHABILITY through round 450's `daWalkStmt` — neither block reaches the continuation
+→ remove, only the catch → the catch's assignments, only the try → the try's, both → the
+intersection, `finally` always counts. **The first design was refuted by the fixture matrix while
+the GRID stayed clean**: a `tcvHasTerminator` conservatism suppressed 6 rows both references
+report, and the 8-profile grid read `added=0 removed=0` on that binary AND on the guard-free one —
+**the grid cannot grade conservatism**, only the reference matrix can, now a CLAUDE.md entry. (b)
+is a dispatch gap whose two arms (`spineDaEnterNode` and its `SpineDispatch.enterClosure` entry)
+are a round-927 PAIR reading the same 7 RED — no pin can separate "not called" from "not written".
+**The item's (b) scope was wrong in one place**: a class property initializer is silent for a
+BLOCK-bodied arrow, a function expression and a bare identifier alike, so that leak path is absent
+entirely and is a different mechanism → (CHK.112). 37 pins, all read from pristine; 10 arms, all
+discriminating. Grid **8 × added=0 removed=0** re-run independently; `cost_gate.py` exit 0 (largest
+delta **+0.03%**), `huge_methods.py` exit 0, **`spine_closure_audit.py` exit 0**, build
+warning-clean under `--rerun-tasks`.
+
 **(P18.45) — AN INLINE LITERAL CALLEE GETS ITS OWN TYPE ((CHK.109)), AND THE CALLEE *EXPRESSION* IS EVIDENCE THE CALLEE *TYPE* CANNOT CARRY, 18,212 → 18,234 / 0 / 3 (2026-09-08).**
 **(CHK.109) CLOSED, 1 → 15 of the reference's 16 rows**, byte-identical to pristine on every one
 (`({})()`, `({ a: 1 })()`, `[1]()`, string / number / template / boolean / regex, nested
