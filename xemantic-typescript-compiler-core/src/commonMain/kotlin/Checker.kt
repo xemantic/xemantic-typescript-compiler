@@ -23928,6 +23928,7 @@ class Checker(
             NodeKind.BLOCK -> { node as Block; if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements) }
             NodeKind.MODULE_BLOCK -> { node as ModuleBlock; if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements) }
             NodeKind.ARROW_FUNCTION -> spineDaExpressionBody(node as ArrowFunction)
+            NodeKind.PARAMETER -> spineDaParamDefault(node as Parameter)
             NodeKind.CLASS_DECLARATION -> spineDaClassMembers(node, (node as ClassDeclaration).members)
             NodeKind.CLASS_EXPRESSION -> spineDaClassMembers(node, (node as ClassExpression).members)
             else -> {}
@@ -24021,6 +24022,76 @@ class Checker(
     }
 
     /**
+     * (CHK.115)(b): a PARAMETER's DEFAULT against the B78.2 leak set — the legacy
+     * default-argument drop.
+     *
+     * A default is evaluated in the fn-like's OWN flow, so tsc reaches it with
+     * `isOuterVariable` true and reports only when the outer `let` is assigned NOWHERE
+     * (`isNeverInitialized`, checker.ts:31196) — which is exactly what the leak set holds.
+     * Measured, that is the whole population: `f(p = e)` with `e` assigned before OR after
+     * the declaration is silent in both references, and with `e` never assigned both report
+     * — for a plain function, an arrow, a method, a constructor, an object-literal method
+     * and a PARAMETER PROPERTY (`constructor(public p = e)`, the shape the item named)
+     * alike. Nothing walked any of them: [checkUsesOfUninitialized] has no fn-like arm and
+     * [findUninitializedRefs] deliberately stops at a fn-like.
+     *
+     * THE OWN PARAMETER NAMES MUST BE SUBTRACTED, and it is not cosmetic: with
+     * `let e: string; function f(e: string, p: string = e)` the default reads the
+     * PARAMETER, and both references are silent — the same shadow rule
+     * [spineDaExpressionBody] applies one node lower, extended to binding-pattern leaves
+     * because a destructured parameter binds names too.
+     *
+     * The pattern's OWN defaults are walked as well (`f({ a = e })`), which both references
+     * report at the same span; [findUninitializedRefs] cannot reach them because a
+     * `BindingElement` is not an `Expression`.
+     */
+    private fun spineDaParamDefault(param: Parameter) {
+        val hasName = param.name.let { it is ObjectBindingPattern || it is ArrayBindingPattern }
+        if (param.initializer == null && !hasName) return
+        if (spineDaFrames.isEmpty()) return
+        val owner = (param as NodeBase).parent ?: return
+        val params = when (owner) {
+            is FunctionDeclaration -> owner.parameters
+            is FunctionExpression -> owner.parameters
+            is ArrowFunction -> owner.parameters
+            is MethodDeclaration -> owner.parameters
+            is Constructor -> owner.parameters
+            is GetAccessor -> owner.parameters
+            is SetAccessor -> owner.parameters
+            else -> return
+        }
+        var leak = spineDaLeakOf(owner)
+        if (leak.isEmpty()) return
+        val shadows = mutableSetOf<String>()
+        for (other in params) {
+            val n = other.name
+            if (n is Identifier) { if (n.text != "this") shadows.add(n.text) }
+            else shadows.addAll(bindingPatternNames(n))
+        }
+        if (shadows.isNotEmpty()) {
+            leak = leak - shadows
+            if (leak.isEmpty()) return
+        }
+        val live = HashSet(leak)
+        param.initializer?.let { findUninitializedRefs(it, live, spineSource, spineFileName) }
+        if (hasName) spineDaBindingPatternDefaults(param.name, live)
+    }
+
+    /** A binding pattern's own element DEFAULTS — see [spineDaParamDefault]. */
+    private fun spineDaBindingPatternDefaults(pattern: Expression, live: MutableSet<String>) {
+        val elements: List<Node> = when (pattern) {
+            is ObjectBindingPattern -> pattern.elements
+            is ArrayBindingPattern -> pattern.elements
+            else -> return
+        }
+        for (el in elements) {
+            if (el !is BindingElement) continue
+            el.initializer?.let { findUninitializedRefs(it, live, spineSource, spineFileName) }
+            spineDaBindingPatternDefaults(el.name, live)
+        }
+    }
+
+    /**
      * (CHK.112)(a): a class's PROPERTY-INITIALIZER expressions against the B78.2 leak set.
      *
      * A [SpineDaFrame] is opened at a statement LIST, so every member BODY (a method, a
@@ -24044,14 +24115,21 @@ class Checker(
      * The copy is per CLASS: [findUninitializedRefs] REMOVES on an assignment as it walks,
      * so members sequence within the body and the enclosing frame is untouched.
      *
-     * NOT reached here (measured, both references report, separate mechanisms): a PARAMETER
-     * PROPERTY's default (`constructor(public p = e)` — the legacy default-argument drop)
-     * and a DECORATOR expression (an unlisted [spineDaEdge] edge).
+     * (CHK.115)(c) added the MEMBER DECORATORS to this walk — they answer to the same leak
+     * (measured: `class A { @mk(e) m() {} } e = "z"` is silent in both references, so a
+     * member decorator is `isOuterVariable` exactly as a member BODY is). A CLASS decorator
+     * is the OPPOSITE case and lives in [checkUsesOfUninitialized]'s `ClassDeclaration` arm;
+     * a PARAMETER's default is [spineDaParamDefault].
      */
     private fun spineDaClassMembers(classNode: Node, members: List<ClassElement>) {
         if (spineDaFrames.isEmpty()) return
         var any = false
         for (m in members) {
+            if (memberDecoratorsOf(m) != null) { any = true; break }
+            // A parameter decorator (`experimentalDecorators`) is written on no member.
+            if (options.experimentalDecorators &&
+                memberParametersOf(m).any { it.decorators?.isNotEmpty() == true }
+            ) { any = true; break }
             if (m !is PropertyDeclaration) continue
             if (m.initializer != null || m.name is ComputedPropertyName) { any = true; break }
         }
@@ -24060,6 +24138,29 @@ class Checker(
         if (leak.isEmpty()) return
         val live = HashSet(leak)
         for (m in members) {
+            // (CHK.115)(c): a MEMBER decorator (on a method, an accessor, a property with
+            // or without an initializer, or — under `experimentalDecorators` — a
+            // parameter). Measured, all of them answer to the B78.2 LEAK and not to the
+            // live set: `class A { @mk(e) m() {} } e = "z"` is silent in both references
+            // while the same class with `e` assigned NOWHERE reports, which is tsc's
+            // `isOuterVariable && !isNeverInitialized` (checker.ts:31197) — a class member
+            // is its own control-flow container. A CLASS decorator is the opposite case
+            // and lives in [checkUsesOfUninitialized]'s `ClassDeclaration` arm.
+            memberDecoratorsOf(m)?.forEach {
+                findUninitializedRefs(it.expression, live, spineSource, spineFileName)
+            }
+            // A PARAMETER decorator is legal — and therefore evaluated — only under
+            // `experimentalDecorators`; without it the parser's TS1206 is the whole
+            // answer and both references stop there, so walking it anyway is an
+            // ours-only TS2454 beside a syntax error. Measured; no profile carries the
+            // shape, so only a purpose-built fixture sees it.
+            if (options.experimentalDecorators) {
+                for (param in memberParametersOf(m)) {
+                    param.decorators?.forEach {
+                        findUninitializedRefs(it.expression, live, spineSource, spineFileName)
+                    }
+                }
+            }
             if (m !is PropertyDeclaration) continue
             val name = m.name
             if (name is ComputedPropertyName) {
@@ -24069,11 +24170,31 @@ class Checker(
         }
     }
 
+    /** The decorators written on a class member, or null — see [spineDaClassMembers]. */
+    private fun memberDecoratorsOf(m: ClassElement): List<Decorator>? = when (m) {
+        is MethodDeclaration -> m.decorators
+        is PropertyDeclaration -> m.decorators
+        is GetAccessor -> m.decorators
+        is SetAccessor -> m.decorators
+        is Constructor -> m.decorators
+        else -> null
+    }?.takeIf { it.isNotEmpty() }
+
+    /** A class member's parameter list (empty for a non-callable member). */
+    private fun memberParametersOf(m: ClassElement): List<Parameter> = when (m) {
+        is MethodDeclaration -> m.parameters
+        is Constructor -> m.parameters
+        is GetAccessor -> m.parameters
+        is SetAccessor -> m.parameters
+        else -> emptyList()
+    }
+
     /**
      * The B78.2 leak reaching a fn-like boundary: the innermost core frame's
      * per-statement [SpineDaFrame.currentLeak] when the fn-like sits on a
      * leak-PRESERVING path from its core-list statement (a LEAK-flavored
-     * status), else empty (the legacy default-argument drop).
+     * status), else empty. (CHK.115)(b) made a PARAMETER a leak-carrying edge, so a fn-like
+     * or class expression written in a DEFAULT is no longer part of that drop.
      */
     private fun spineDaLeakOf(fnLike: Node): Set<String> {
         val st = spineDaStatus(fnLike)
@@ -24146,8 +24267,10 @@ class Checker(
      * The edge rules — the deleted checkDefiniteAssignmentInNestedScopes (STMT_*
      * arms) and checkDefiniteAssignmentInExprContext (EXPR_* arms) verbatim.
      * Unlisted edges are NONE (the legacy `else -> {}`s: if/loop CONDITIONS,
-     * for headers, parameter defaults, class-DECLARATION property initializers,
-     * throw expressions, decorators, computed names, type positions).
+     * for headers, throw expressions, decorators, computed names, type positions).
+     * Two of those were closed since: (CHK.112)(a) gave a class-DECLARATION property
+     * initializer a MEMBER status, and (CHK.115)(b) made a PARAMETER carry the leak into
+     * its DEFAULT.
      */
     private fun spineDaEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
         DA_ROOT, DA_CORE -> spineDaStmtOrCore(child, leak = true)
@@ -24162,9 +24285,17 @@ class Checker(
         DA_STMT_LEAK, DA_STMT_NOLEAK -> {
             val leak = pStatus == DA_STMT_LEAK
             when (parent) {
-                is FunctionDeclaration ->
-                    if (ModifierFlag.Declare !in parent.modifiers && child === parent.body) DA_CORE
-                    else DA_NONE
+                is FunctionDeclaration -> when {
+                    ModifierFlag.Declare in parent.modifiers -> DA_NONE
+                    child === parent.body -> DA_CORE
+                    // (CHK.115)(b): a PARAMETER carries the leak into its DEFAULT — see
+                    // [spineDaParamDefault]. The status is what a fn-like or class
+                    // expression NESTED in that default reads back through
+                    // [spineDaLeakOf], which is the other half of the legacy
+                    // default-argument drop (`f(g = () => use(e))`).
+                    child is Parameter -> if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK
+                    else -> DA_NONE
+                }
                 // (CHK.112)(a): a PropertyDeclaration and a static block are members
                 // exactly as a method is — the class-DECLARATION arm listed only the
                 // BODY-bearing three, so everything under `class C { g = () => use(e) }`
@@ -24219,14 +24350,23 @@ class Checker(
         DA_MEMBER_LEAK, DA_MEMBER_NOLEAK -> {
             val leak = pStatus == DA_MEMBER_LEAK
             when (parent) {
-                is MethodDeclaration -> if (child === parent.body) DA_CORE else DA_NONE
-                is Constructor -> if (child === parent.body) DA_CORE else DA_NONE
-                is GetAccessor -> if (child === parent.body) DA_CORE else DA_NONE
-                is SetAccessor -> if (child === parent.body) DA_CORE else DA_NONE
+                // (CHK.115)(b): `child is Parameter` carries the leak into a default.
+                is MethodDeclaration -> if (child === parent.body) DA_CORE
+                    else if (child is Parameter) (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK)
+                    else DA_NONE
+                is Constructor -> if (child === parent.body) DA_CORE
+                    else if (child is Parameter) (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK)
+                    else DA_NONE
+                is GetAccessor -> if (child === parent.body) DA_CORE
+                    else if (child is Parameter) (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK)
+                    else DA_NONE
+                is SetAccessor -> if (child === parent.body) DA_CORE
+                    else if (child is Parameter) (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK)
+                    else DA_NONE
                 // (CHK.112)(a): a `static { … }` body is a statement list like any other
-                // member body — its READS are checked; its ASSIGNMENTS escaping into the
-                // enclosing flow (which both references model) is a separate mechanism
-                // and stays open.
+                // member body, so its READS are checked here. Its ASSIGNMENTS escape into
+                // the enclosing flow — a separate mechanism, closed by (CHK.115)(a) in
+                // [markClassStaticBlockAssignments].
                 is ClassStaticBlockDeclaration -> if (child === parent.body) DA_CORE else DA_NONE
                 // class-EXPRESSION property initializers ARE reached (the legacy
                 // ClassExpression arm); class-DECLARATION members never mint a
@@ -24252,12 +24392,22 @@ class Checker(
                         child is GetAccessor || child is SetAccessor ||
                         child is PropertyDeclaration ||
                         child is ClassStaticBlockDeclaration) member else DA_NONE
-                is FunctionExpression -> if (child === parent.body) DA_CORE else DA_NONE
+                // (CHK.115)(b): `child is Parameter` carries the leak into a default.
+                is FunctionExpression -> if (child === parent.body) DA_CORE
+                    else if (child is Parameter) expr else DA_NONE
                 is ArrowFunction -> when {
+                    child is Parameter -> expr
                     child !== parent.body -> DA_NONE
                     child is Block -> DA_CORE
                     else -> expr // expression body passes the leak through
                 }
+                // (CHK.115)(b): the default itself, and a binding pattern's own defaults.
+                is Parameter -> if (child === parent.initializer || child === parent.name)
+                    expr else DA_NONE
+                is BindingElement -> if (child === parent.initializer || child === parent.name)
+                    expr else DA_NONE
+                is ObjectBindingPattern -> if (parent.elements.anyIdentical(child)) expr else DA_NONE
+                is ArrayBindingPattern -> if (parent.elements.anyIdentical(child)) expr else DA_NONE
                 is CallExpression ->
                     if (child === parent.expression || parent.arguments.anyIdentical(child)) expr
                     else DA_NONE
@@ -25420,6 +25570,17 @@ class Checker(
                         findUninitializedRefs(type.expression, uninitialized, source, fileName)
                     }
                 }
+                // (CHK.115)(c): a CLASS decorator is evaluated in the ENCLOSING flow, at
+                // the class statement's position — measured, `@mk(e) class A {}` reports in
+                // both references when `e` is assigned only AFTER the class and is silent
+                // when it is assigned before, which is the LIVE set and not the B78.2 leak.
+                // (tsc: a `ClassDeclaration` is not a control-flow container, so the
+                // decorator's `flowContainer` is the enclosing function and the ordinary
+                // flow analysis runs — binder.ts:3816.) A MEMBER decorator answers the
+                // OTHER way and is handled in [spineDaClassMembers].
+                stmt.decorators?.forEach {
+                    findUninitializedRefs(it.expression, uninitialized, source, fileName)
+                }
             }
             is Block -> {
                 for (s in stmt.statements) {
@@ -25659,14 +25820,37 @@ class Checker(
             is VariableStatement -> {
                 // Variable with initializer — it's assigned
                 for (decl in stmt.declarationList.declarations) {
-                    if (decl.initializer != null) {
-                        val name = decl.name
-                        if (name is Identifier) {
-                            uninitialized.remove(name.text)
-                        }
+                    val init = decl.initializer ?: continue
+                    val name = decl.name
+                    if (name is Identifier) {
+                        uninitialized.remove(name.text)
+                    }
+                    // (CHK.115)(a): `const A = class { static { e = "x" } }` evaluates the
+                    // class expression HERE, so its static blocks run here too. Only the
+                    // class expression itself is unwrapped — walking the whole initializer
+                    // through [markAssignmentsInExpr] would be a separate, wider change.
+                    val cls = unwrapTypeOnlyWrapper(init)
+                    if (cls is ClassExpression) {
+                        markClassStaticBlockAssignments(cls.members, uninitialized)
                     }
                 }
             }
+            // (CHK.115)(a): a `static { … }` block runs at CLASS-EVALUATION time, in the
+            // ENCLOSING flow — tsc's binder says so in one line, treating it exactly as an
+            // IIFE (`isImmediatelyInvoked = … || node.kind === ClassStaticBlockDeclaration`,
+            // binder.ts:1010), so no fresh `Start` flow is created and `currentFlow` is NOT
+            // restored on the way out. Before this, `class C { static { e = "x" } } use(e)`
+            // drew an ours-only TS2454 that both tsgo 7.0.2 and pristine `typescript@6.0.3`
+            // are silent about, in the class-DECLARATION and class-EXPRESSION spellings and
+            // through a destructuring assignment (`[e] = ["x"]`) alike.
+            //
+            // NOTHING ELSE IN A CLASS BODY ESCAPES, and that boundary is measured rather
+            // than assumed: a member decorator, a method body, an INSTANCE property
+            // initializer AND a STATIC property initializer all keep reporting in both
+            // references — tsc gives a `PropertyDeclaration` WITH an initializer its own
+            // control-flow container (binder.ts:3872) precisely so its assignments do not
+            // escape, and a method/accessor/constructor is a plain non-invoked one.
+            is ClassDeclaration -> markClassStaticBlockAssignments(stmt.members, uninitialized)
             is IfStatement -> {
                 // (CHK.105)(b): an `if` marks a variable assigned only when it is
                 // DEFINITELY assigned — both branches assign it, or the branch that does
@@ -25996,7 +26180,38 @@ class Checker(
                 expr.elements.forEach { markAssignmentsInExpr(it, uninitialized) }
             }
             is ParenthesizedExpression -> markAssignmentsInExpr(expr.expression, uninitialized)
+            // (CHK.115)(a): evaluating a class expression runs its static blocks — see
+            // [markClassStaticBlockAssignments]. This arm is what carries an inline
+            // `(class { static { e = "x" } })` and, through [exprAssignsVarSimple], round
+            // 450's `while (true)` / `if` definite-assignment lattice.
+            is ClassExpression -> markClassStaticBlockAssignments(expr.members, uninitialized)
             else -> {}
+        }
+    }
+
+    /**
+     * (CHK.115)(a): the ASSIGNMENTS of a class's `static { … }` blocks, applied to the
+     * ENCLOSING flow's live set in declaration order.
+     *
+     * tsc splices a static block's flow into its container exactly as it does an IIFE's
+     * (binder.ts:1010) — so the block's statements are ordinary statements of the enclosing
+     * flow and get the ordinary lattice: [markAssignments], not a bare
+     * "some assignment exists" scan. That is load-bearing in three measured shapes both
+     * references report and a scan would silence: a CONDITIONAL assignment
+     * (`static { if (c) e = "x" }`), one inside a `try` (`static { try { e = "x" } catch {} }`),
+     * and — in the other direction — a `static { while (true) { … e = "x"; break … } }`,
+     * which round 450's arm proves and which we reported before this.
+     *
+     * The READS inside a static block are a different question and are NOT served here:
+     * they go through [spineDaSpawnCore]'s own core frame against the B78.2 leak.
+     */
+    private fun markClassStaticBlockAssignments(
+        members: List<ClassElement>, uninitialized: MutableSet<String>,
+    ) {
+        if (uninitialized.isEmpty()) return
+        for (m in members) {
+            if (m !is ClassStaticBlockDeclaration) continue
+            for (s in m.body.statements) markAssignments(s, uninitialized)
         }
     }
 

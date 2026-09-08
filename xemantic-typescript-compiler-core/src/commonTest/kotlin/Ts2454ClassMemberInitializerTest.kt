@@ -82,14 +82,13 @@ import kotlin.test.Test
  *    to do with class members, and every fixture here is function-scoped for that
  *    reason. A file-level read inside a plain nested `function` is silent too, on the
  *    same binary and for the same conservatism.
- *  * a static block's ASSIGNMENTS escaping into the enclosing flow. A `static { … }`
- *    runs at class-evaluation time, so both references are silent at a statement read
- *    after it, and we report — a pre-existing ours-only row this round leaves exactly
- *    as it found it. That is an ESCAPE into `markAssignments`, a different mechanism
- *    from this one; its READS are closed here.
- *  * a PARAMETER PROPERTY's default (`constructor(public p = e)`) — the legacy
- *    default-argument drop — and a DECORATOR expression, an unlisted `spineDaEdge`
- *    edge. Both report in both references.
+ *  * a static block's ASSIGNMENTS escaping into the enclosing flow, a PARAMETER's
+ *    DEFAULT and a DECORATOR expression were all open when this class was written and
+ *    are CLOSED by (CHK.115) — see `Ts2454StaticBlockParamDefaultDecoratorTest`. What
+ *    remains open there is a READ inside a static block that a LATER static block's
+ *    assignment silences (static blocks are flow-ORDERED and one leak set per class
+ *    cannot express that), and a static block inside a nested `function` suppressing an
+ *    outer read.
  */
 class Ts2454ClassMemberInitializerTest {
 

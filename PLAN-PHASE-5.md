@@ -25,6 +25,51 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.52) — static blocks escape, parameter defaults and decorators are reached ((CHK.115)), and the decorator family is TWO opposite mechanisms (2026-09-08)
+
+**Suite 18,437 → 18,477 / 0 / 3** — 40 pins in the new
+`Ts2454StaticBlockParamDefaultDecoratorTest`. Grid **8 × added=0 removed=0**, re-run INDEPENDENTLY;
+corpus 10,344/0, `spine_closure_audit.py` exit 0 (mandatory — a new `spineDaEnterNode` arm),
+`cost_gate.py` exit 0 (largest delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean.
+**43 fixtures, and pristine 6.0.3 and tsgo 7.0.2 agreed on every one** — no adjudication needed.
+
+**(a) REMOVES an ours-only FALSE POSITIVE, and its boundary is counter-intuitive.** A static block's
+assignments now escape into the enclosing flow — tsc's binder says so literally
+(`isImmediatelyInvoked = <IIFE> || node.kind === ClassStaticBlockDeclaration`, binder.ts:1010) — so
+`class A { static { e = "x" } } use(e)` is silent as in both references. **But a static PROPERTY
+INITIALIZER, which also runs at class-evaluation time, does NOT escape**, because tsc gives an
+initialized `PropertyDeclaration` its own control-flow container (binder.ts:3872). The item did not
+state that boundary; arm a13 exists for it. And the escape had to be the **full `markAssignments`
+lattice, not a scan** — a conditional and a `try` must not escape while a `while (true) { … break }`
+must (arms a3/a12).
+
+**(b) IS NINE ROWS, NOT ONE.** The item names the parameter-property case; measured, it is ALL FIVE
+parameter-default spellings (parameter property, constructor, function, arrow, method), plus an
+object-literal method, a binding-pattern element default, an arrow nested inside a default, and a
+class-expression static block inside a default.
+
+**(c) IS TWO OPPOSITE MECHANISMS WEARING ONE SYNTAX.** A MEMBER decorator answers to the LEAK (tsc's
+`isOuterVariable && !isNeverInitialized`); a CLASS decorator answers to the LIVE set, because a
+`ClassDeclaration` is **not a control-flow container** in tsc. A single rule is wrong for one of them,
+and both directions are pinned (arms a8 vs a10b). **A new ours-only row was manufactured and caught
+only by the final full reference sweep**: under STANDARD decorators a parameter decorator is TS1206
+and both references stop there, so the ungated walk added a TS2454 beside it — no profile carries the
+shape, so neither the grid nor the corpus could see it. Now gated on `experimentalDecorators` at two
+layers.
+
+**ARMS — 13, and three of the recorded outcomes are the instructive ones.** a1 4 RED, a2/a12/a13/a4/a5
+1 each uniquely, a3 2, a6 8, a7 2 uniquely, a8 2, a9 5, a10b/a11 1 each uniquely. **a6 is the
+mask/closure pair** — it edits `SpineDispatch.kt` only, so `Checker.class` is UNCHANGED and
+`spine_closure_audit.py` FAILS under it, a second independent instrument. **a10 and a14 were each DEAD
+ALONE** because a `leak.isEmpty()` early return and an `any` gate fire above them; a10b and the a11+a14
+pair are what discriminate — round-927 pairs found by measurement, not by reading. **11 pins are never
+RED and that is correct**: they are POSITIVE CONTROLS asserting today's conservatism, so only an arm
+making the change MORE aggressive can redden them — which a3/a12/a13 are, for the three sharpest.
+
+**THREE RESIDUES MEASURED AND LEFT OPEN**, queued as (CHK.116): static blocks are flow-ORDERED and one
+leak set per class cannot express a read silenced by a LATER block's assignment; and a static block
+inside a nested `function` does not suppress an outer read.
+
 ### Round (P18.51) — the nullable-target rule reaches all five heads ((CHK.114)), (c)'s stated axis was wrong, and the references could not adjudicate the pin that broke (2026-09-08)
 
 **Suite 18,413 → 18,437 / 0 / 3** — `EnumAndNullableRelationDisplayTest` 35 → 59, plus one
@@ -1882,7 +1927,26 @@ where the order sends you.
   `typeParameterExplicitlyExtendsAny` (`{}`), `callOnInstance` /
   `untypedFunctionCallsWithTypeParameters1` (`C`/`D`) — run by fixture. MEANING.
 
-- [ ] **(CHK.115) THE DEFINITE-ASSIGNMENT RESIDUES AFTER (CHK.112), THREE OF THEM NEWLY MEASURED
+- [ ] **(CHK.116) THE LAST DEFINITE-ASSIGNMENT RESIDUES, THREE NEWLY MEASURED BY (CHK.115) AND (d)
+  CARRIED FORWARD UNCHANGED (2026-09-08, (P18.52); fixtures `build/bench/chk115-sub`).** (a) **STATIC
+  BLOCKS ARE FLOW-*ORDERED* AND ONE LEAK SET PER CLASS CANNOT EXPRESS IT** — a READ in one static block
+  is wrongly silenced by a LATER static block's assignment (fixtures a3, a10: both references report at
+  `4:26`, we are silent). This is a per-block ordering model, not another edge. (b) A static block
+  inside a nested `function` does not suppress an outer read (a11: both references report at `5:7`).
+  (c) **CARRIED FORWARD FROM (CHK.115)(d), unchanged and still out of scope**: a `switch` with NO
+  `default` stays BLOCKED on tsc's `isExhaustiveSwitchStatement` (built and reverted in (P18.40) at two
+  ours-only TS2454 on all eight profiles); a catch block with an unassigned CALL stays an ACCEPTED
+  PRICE from (CHK.105) (`Debug.fail(…)` and `report(e)` are indistinguishable without the callee's
+  RETURN TYPE); and a block round 450's `daWalkStmt` bails on keeps the pre-(CHK.110) removal.
+  **EVERY FIXTURE MUST BE FUNCTION-SCOPED** — `SpineDaFrame.enableLeak` is `false` at file level by
+  design. RISK: (a) MEDIUM (an ordering model is a new mechanism, not a wiring), (b) LOW, (c) BLOCKED.
+  MEANING for (a)/(b).
+
+- [x] **(CHK.115) (a)/(b)/(c) CLOSED 2026-09-08 ((P18.52) note); (d) carried to (CHK.116) unchanged.
+  (b) is NOT the parameter-property case — it is ALL FIVE parameter-default spellings plus binding-pattern
+  defaults, 9 silent rows not 1; (c) is TWO OPPOSITE mechanisms, since a CLASS decorator answers to the
+  LIVE set and a MEMBER decorator to the LEAK; and (a)'s boundary is counter-intuitive — a static BLOCK
+  escapes and a static PROPERTY INITIALIZER does not. ORIGINAL: THE DEFINITE-ASSIGNMENT RESIDUES AFTER (CHK.112), THREE OF THEM NEWLY MEASURED
   (2026-09-08, (P18.50); fixtures `build/bench/chk112-sub`).** (a) **A STATIC BLOCK'S *ASSIGNMENTS*
   DO NOT ESCAPE INTO THE ENCLOSING FLOW** — `class C { static { e = "x" } } use(e)` is silent in both
   references and we REPORT (fixture `p1`). (CHK.112) closed the LEAK direction (a sibling closure no

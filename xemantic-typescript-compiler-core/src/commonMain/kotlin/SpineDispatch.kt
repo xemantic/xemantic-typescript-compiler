@@ -183,7 +183,9 @@ object SpineDispatch {
             NodeKind.ARROW_FUNCTION,
             // (CHK.112)(a): a class's property INITIALIZERS — CLASS_DECLARATION is already
             // in STATEMENT_KINDS; a CLASS_EXPRESSION is not a statement and must be listed.
-            NodeKind.CLASS_EXPRESSION)),
+            NodeKind.CLASS_EXPRESSION,
+            // (CHK.115)(b): a PARAMETER's DEFAULT — see `Checker.spineDaParamDefault`.
+            NodeKind.PARAMETER)),
         /*  9 spineOsEnterNode         */ null,
         /* 10 spinePdEnterNode         */ intArrayOf(
             NodeKind.SOURCE_FILE, NodeKind.BLOCK, NodeKind.MODULE_BLOCK,

@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,748** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **199,963** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,31 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.52) — STATIC BLOCKS ESCAPE, PARAMETER DEFAULTS AND DECORATORS ARE REACHED ((CHK.115)), AND THE DECORATOR FAMILY IS *TWO OPPOSITE MECHANISMS*, 18,437 → 18,477 / 0 / 3 (2026-09-08).**
+43 fixtures, and **pristine 6.0.3 and tsgo 7.0.2 agreed on every one**. **(a) removes an ours-only
+FALSE POSITIVE**: a static block's assignments now escape into the enclosing flow — tsc's binder says
+so literally (`isImmediatelyInvoked = <IIFE> || node.kind === ClassStaticBlockDeclaration`) — **but a
+static PROPERTY INITIALIZER, which also runs at class-evaluation time, does NOT escape**, because tsc
+gives an initialized `PropertyDeclaration` its own control-flow container. The item did not state that
+boundary. The escape had to be the full `markAssignments` LATTICE, not a scan: a conditional and a
+`try` must not escape while a `while (true) { … break }` must. **(b) is NINE rows, not one** — all five
+parameter-default spellings plus an object-literal method, a binding-pattern element default, an arrow
+nested in a default and a class-expression static block in a default. **(c) is two opposite mechanisms
+wearing one syntax**: a MEMBER decorator answers to the LEAK, a CLASS decorator to the LIVE set,
+because a `ClassDeclaration` is not a control-flow container in tsc — one rule is wrong for one of
+them, and both directions are pinned. **A new ours-only row was manufactured and caught only by the
+final full reference sweep**: under STANDARD decorators a parameter decorator is TS1206 and both
+references stop there, so an ungated walk added a TS2454 beside it — no profile carries the shape, so
+neither the grid nor the corpus could see it. 40 pins; 13 arms — **a6 is the mask/closure pair**
+(edits `SpineDispatch.kt` only, so `Checker.class` is unchanged and `spine_closure_audit.py` FAILS
+under it), **a10 and a14 were each DEAD ALONE** behind an early return and an `any` gate, so a10b and
+the a11+a14 pair are what discriminate, and **11 pins are never RED by construction** — they are
+positive controls asserting today's conservatism, reddenable only by an arm that makes the change more
+aggressive, which a3/a12/a13 are. Three residues queued as (CHK.116), including that static blocks are
+flow-ORDERED and one leak set per class cannot express it. Grid **8 × added=0 removed=0** re-run
+independently; corpus 10,344/0, `spine_closure_audit.py` exit 0, `cost_gate.py` exit 0,
+`huge_methods.py` exit 0, build warning-clean.
 
 **(P18.51) — THE NULLABLE-TARGET RULE REACHES ALL FIVE HEADS ((CHK.114)), (c)'s STATED AXIS WAS WRONG, AND THE REFERENCES COULD NOT ADJUDICATE THE PIN THAT BROKE, 18,413 → 18,437 / 0 / 3 (2026-09-08).**
 All three stages landed **plus a PREREQUISITE the item did not name**: tsc RESTORES the aliased target
@@ -123,32 +148,3 @@ measurement: (d)'s TS2367 freshness half (this checker mints no fresh enum-membe
 shapes share one `Type`). Two MEANING residues queued as (CHK.113). 35 pins + 1 consumer-side pin;
 13 arms, all discriminating. Grid **8 × added=0 removed=0** re-run independently; `cost_gate.py`
 exit 0, `huge_methods.py` exit 0, build warning-clean.
-
-**(P18.47) — THE REST-TUPLE MODEL IS FIXED ((CHK.111)), THE ITEM'S NAMED SEAM WAS *WRONG* RATHER THAN INCOMPLETE, AND THE REGRESSION IT CAUSED WAS IN ANOTHER MODULE, 18,271 → 18,302 / 0 / 3 (2026-09-08).**
-**(CHK.111) CLOSED, and the item under-counted its own defect by 9x** — it recorded "exactly 1 false
-positive" at the class property; measured, a DECLARED tuple source produced a false TS2741/TS2322 at
-**all five** positions (the shielding claim holds only for an ARRAY-LITERAL source), and the gain is
-**10 rows, not 5**. **The named seam is WRONG, not merely incomplete**: making rest slots OPTIONAL
-fixes only the `[number]` half — `[number, string]` failed because the rest MEMBER was typed
-`string[]` (the whole rest array) rather than `string` (its element) — and optionality is the wrong
-CHANNEL, since it also injects `| undefined` into every element read and into `tupleArrayBase`'s
-union. What works is the member carrying the rest's ELEMENT type plus a SEPARATE non-required mark,
-which is also why dropping the numbered member entirely (literal tsc) is refused: it would lose
-`[number, number]`'s position-1 element row. **The DISPLAY half landed in full** —
-`[number, ...string[]]`, `readonly [...]`, leading and middle rests all render as both references,
-with an empty `[]` unchanged as the control that the ellipsis is keyed on `tupleRestIndex`.
-**The regression this round caused was in ANOTHER MODULE and only the full suite could see it**:
-`typeToString` feeds the externals generator's `xtsc: unmapped <type>` markers, so the ellipsis moved
-three RxJS gate expectations while the grid and all ~13k corpus baselines stayed clean. Those pins
-encoded the OLD, LESS ACCURATE text and were updated **with proof, not weakened** — rxjs declares
-`sources: [...ObservableInputTuple<A>]`, a tuple whose single slot IS a rest, so `[any]` spelled a
-FIXED one-element tuple. **Two of the three stale expectations were reported and the third was
-hidden**, because a block of `assert(<local>)` calls throws at the FIRST false one — both facts are
-now CLAUDE.md entries, and (P18.44)'s rest-tuple entry, which this round makes stale, was REWRITTEN
-rather than left standing. 31 pins; 14 arms — a3/a4 a round-927 pair separated only by adding a
-presence-only pin, **a14 first blind** (every literal index is served by the numbered member, so
-only a non-literal `t[i]` reaches the index signature), **a11 REDUNDANT by whole-output diff** over
-six fixtures. The implementation agent self-reported starting a second concurrent Gradle build,
-detected by an impossible class sha; both affected arms were re-run alone in the foreground and no
-result comes from an overlapped run. Grid **8 × added=0 removed=0** re-run independently;
-`cost_gate.py` exit 0 (largest delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean.

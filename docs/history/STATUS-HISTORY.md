@@ -1,3 +1,32 @@
+**(P18.47) — THE REST-TUPLE MODEL IS FIXED ((CHK.111)), THE ITEM'S NAMED SEAM WAS *WRONG* RATHER THAN INCOMPLETE, AND THE REGRESSION IT CAUSED WAS IN ANOTHER MODULE, 18,271 → 18,302 / 0 / 3 (2026-09-08).**
+**(CHK.111) CLOSED, and the item under-counted its own defect by 9x** — it recorded "exactly 1 false
+positive" at the class property; measured, a DECLARED tuple source produced a false TS2741/TS2322 at
+**all five** positions (the shielding claim holds only for an ARRAY-LITERAL source), and the gain is
+**10 rows, not 5**. **The named seam is WRONG, not merely incomplete**: making rest slots OPTIONAL
+fixes only the `[number]` half — `[number, string]` failed because the rest MEMBER was typed
+`string[]` (the whole rest array) rather than `string` (its element) — and optionality is the wrong
+CHANNEL, since it also injects `| undefined` into every element read and into `tupleArrayBase`'s
+union. What works is the member carrying the rest's ELEMENT type plus a SEPARATE non-required mark,
+which is also why dropping the numbered member entirely (literal tsc) is refused: it would lose
+`[number, number]`'s position-1 element row. **The DISPLAY half landed in full** —
+`[number, ...string[]]`, `readonly [...]`, leading and middle rests all render as both references,
+with an empty `[]` unchanged as the control that the ellipsis is keyed on `tupleRestIndex`.
+**The regression this round caused was in ANOTHER MODULE and only the full suite could see it**:
+`typeToString` feeds the externals generator's `xtsc: unmapped <type>` markers, so the ellipsis moved
+three RxJS gate expectations while the grid and all ~13k corpus baselines stayed clean. Those pins
+encoded the OLD, LESS ACCURATE text and were updated **with proof, not weakened** — rxjs declares
+`sources: [...ObservableInputTuple<A>]`, a tuple whose single slot IS a rest, so `[any]` spelled a
+FIXED one-element tuple. **Two of the three stale expectations were reported and the third was
+hidden**, because a block of `assert(<local>)` calls throws at the FIRST false one — both facts are
+now CLAUDE.md entries, and (P18.44)'s rest-tuple entry, which this round makes stale, was REWRITTEN
+rather than left standing. 31 pins; 14 arms — a3/a4 a round-927 pair separated only by adding a
+presence-only pin, **a14 first blind** (every literal index is served by the numbered member, so
+only a non-literal `t[i]` reaches the index signature), **a11 REDUNDANT by whole-output diff** over
+six fixtures. The implementation agent self-reported starting a second concurrent Gradle build,
+detected by an impossible class sha; both affected arms were re-run alone in the foreground and no
+result comes from an overlapped run. Grid **8 × added=0 removed=0** re-run independently;
+`cost_gate.py` exit 0 (largest delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean.
+
 **(P18.46) — DEFINITE ASSIGNMENT JOINS A `try`/`catch` AND REACHES AN EXPRESSION-BODIED ARROW ((CHK.110)(a)/(b)), AND THE SUPPRESSOR WAS NEITHER CANDIDATE THE ITEM NAMED, 18,234 → 18,271 / 0 / 3 (2026-09-08).**
 **(CHK.110)(a)/(b) CLOSED; (c) and two newly-measured gaps moved to (CHK.112).** The item named
 `markAssignments` (which really has no `TryStatement` arm) and B223 (which only sees a `var`
