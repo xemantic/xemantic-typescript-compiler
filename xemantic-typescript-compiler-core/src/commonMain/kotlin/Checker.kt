@@ -23928,6 +23928,8 @@ class Checker(
             NodeKind.BLOCK -> { node as Block; if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements) }
             NodeKind.MODULE_BLOCK -> { node as ModuleBlock; if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements) }
             NodeKind.ARROW_FUNCTION -> spineDaExpressionBody(node as ArrowFunction)
+            NodeKind.CLASS_DECLARATION -> spineDaClassMembers(node, (node as ClassDeclaration).members)
+            NodeKind.CLASS_EXPRESSION -> spineDaClassMembers(node, (node as ClassExpression).members)
             else -> {}
         }
     }
@@ -23972,6 +23974,10 @@ class Checker(
             is ArrowFunction -> if (parent.body === owner) {
                 preInit = collectParamNames(parent.parameters); leak = spineDaLeakOf(parent)
             }
+            is ClassStaticBlockDeclaration -> if (parent.body === owner) {
+                // No parameters, so nothing shadows the leak.
+                leak = spineDaLeakOf(parent)
+            }
             else -> {} // Block-as-statement / ModuleBlock: fresh core
         }
         spineDaFrames.add(spineDaNewFrame(
@@ -24012,6 +24018,55 @@ class Checker(
             if (leak.isEmpty()) return
         }
         findUninitializedRefs(body, HashSet(leak), spineSource, spineFileName)
+    }
+
+    /**
+     * (CHK.112)(a): a class's PROPERTY-INITIALIZER expressions against the B78.2 leak set.
+     *
+     * A [SpineDaFrame] is opened at a statement LIST, so every member BODY (a method, a
+     * constructor, an accessor, a static block) is reached through [spineDaSpawnCore] and
+     * an arrow property's body through [spineDaExpressionBody] — but a property
+     * initializer that is a plain EXPRESSION has no statement list and no fn-like of its
+     * own, and no walker descended into it: `class C { g = e }`, `class C { g = { p: e } }`
+     * and `class C { [e] = 1 }` were all silent here where tsgo 7.0.2 and pristine
+     * `typescript@6.0.3` both report TS2454. It is NOT the expression-body gap (CHK.110)(b)
+     * closed — measured, the class-member path was absent in every member flavour.
+     *
+     * THE SET IS THE LEAK AND NOT THE FRAME'S LIVE SET, and that is load-bearing in both
+     * directions. A class body's assignments must NOT escape the class statement (a member
+     * only runs at instantiation / class evaluation), so `class C { a = (e = "x") } use(e)`
+     * still reports at `use(e)` in both references — which a walk mutating the caller's set
+     * would lose, exactly the (CHK.110)(a) defect. And an assignment ANYWHERE in the class
+     * body suppresses a read in ANY member, in either order (`class C { b = e; a = (e = "x") }`
+     * is silent in both references), which is precisely what the leak set already encodes
+     * once [collectClassMemberAssignments] is reached from the two assignment collectors.
+     *
+     * The copy is per CLASS: [findUninitializedRefs] REMOVES on an assignment as it walks,
+     * so members sequence within the body and the enclosing frame is untouched.
+     *
+     * NOT reached here (measured, both references report, separate mechanisms): a PARAMETER
+     * PROPERTY's default (`constructor(public p = e)` — the legacy default-argument drop)
+     * and a DECORATOR expression (an unlisted [spineDaEdge] edge).
+     */
+    private fun spineDaClassMembers(classNode: Node, members: List<ClassElement>) {
+        if (spineDaFrames.isEmpty()) return
+        var any = false
+        for (m in members) {
+            if (m !is PropertyDeclaration) continue
+            if (m.initializer != null || m.name is ComputedPropertyName) { any = true; break }
+        }
+        if (!any) return
+        val leak = spineDaLeakOf(classNode)
+        if (leak.isEmpty()) return
+        val live = HashSet(leak)
+        for (m in members) {
+            if (m !is PropertyDeclaration) continue
+            val name = m.name
+            if (name is ComputedPropertyName) {
+                findUninitializedRefs(name.expression, live, spineSource, spineFileName)
+            }
+            m.initializer?.let { findUninitializedRefs(it, live, spineSource, spineFileName) }
+        }
     }
 
     /**
@@ -24110,10 +24165,17 @@ class Checker(
                 is FunctionDeclaration ->
                     if (ModifierFlag.Declare !in parent.modifiers && child === parent.body) DA_CORE
                     else DA_NONE
+                // (CHK.112)(a): a PropertyDeclaration and a static block are members
+                // exactly as a method is — the class-DECLARATION arm listed only the
+                // BODY-bearing three, so everything under `class C { g = () => use(e) }`
+                // was DA_NONE and its arrow's leak set came back empty. The
+                // ClassExpression arm below already listed PropertyDeclaration.
                 is ClassDeclaration ->
                     if (ModifierFlag.Declare !in parent.modifiers &&
                         (child is MethodDeclaration || child is Constructor ||
-                            child is GetAccessor || child is SetAccessor)
+                            child is GetAccessor || child is SetAccessor ||
+                            child is PropertyDeclaration ||
+                            child is ClassStaticBlockDeclaration)
                     ) (if (leak) DA_MEMBER_LEAK else DA_MEMBER_NOLEAK)
                     else DA_NONE
                 is ModuleDeclaration -> when {
@@ -24161,6 +24223,11 @@ class Checker(
                 is Constructor -> if (child === parent.body) DA_CORE else DA_NONE
                 is GetAccessor -> if (child === parent.body) DA_CORE else DA_NONE
                 is SetAccessor -> if (child === parent.body) DA_CORE else DA_NONE
+                // (CHK.112)(a): a `static { … }` body is a statement list like any other
+                // member body — its READS are checked; its ASSIGNMENTS escaping into the
+                // enclosing flow (which both references model) is a separate mechanism
+                // and stays open.
+                is ClassStaticBlockDeclaration -> if (child === parent.body) DA_CORE else DA_NONE
                 // class-EXPRESSION property initializers ARE reached (the legacy
                 // ClassExpression arm); class-DECLARATION members never mint a
                 // PropertyDeclaration MEMBER status, preserving the asymmetry.
@@ -24183,7 +24250,8 @@ class Checker(
                 is ClassExpression ->
                     if (child is MethodDeclaration || child is Constructor ||
                         child is GetAccessor || child is SetAccessor ||
-                        child is PropertyDeclaration) member else DA_NONE
+                        child is PropertyDeclaration ||
+                        child is ClassStaticBlockDeclaration) member else DA_NONE
                 is FunctionExpression -> if (child === parent.body) DA_CORE else DA_NONE
                 is ArrowFunction -> when {
                     child !== parent.body -> DA_NONE
@@ -24961,8 +25029,40 @@ class Checker(
             }
             is LabeledStatement -> collectAllAssignmentsAnywhere(stmt.statement, candidates, found)
             is FunctionDeclaration -> stmt.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+            // (CHK.112)(a): a class DECLARATION's members were not collected at all, where
+            // a class EXPRESSION's method bodies already were — so an assignment in
+            // `class A { m() { e = "x" } }` left `e` in the leak and a read in a SIBLING
+            // closure drew an ours-only TS2454 both references are silent about (four
+            // measured shapes: a method, an accessor, a property initializer and an arrow
+            // property). Removal-only, so a straight-line STATEMENT read is untouched:
+            // `class A { a = (e = "x") } use(e)` still reports, as both references do.
+            is ClassDeclaration -> collectClassMemberAssignments(stmt.members, candidates, found)
             is ReturnStatement -> stmt.expression?.let { collectAssignmentsInExpr(it, candidates, found) }
             is ThrowStatement -> stmt.expression?.let { collectAssignmentsInExpr(it, candidates, found) }
+            else -> {}
+        }
+    }
+
+    /**
+     * B78.2 assignment collection over a class body — the one home for both flavours, so a
+     * class DECLARATION and a class EXPRESSION cannot drift (they had: the expression form
+     * collected its three body-bearing member kinds and the declaration form collected
+     * nothing). PROPERTY INITIALIZERS and STATIC BLOCKS are collected here as well: an
+     * assignment in either one can run at any point relative to an outer read, which is the
+     * round-469 rule that keeps the leak removal-only.
+     */
+    private fun collectClassMemberAssignments(
+        members: List<ClassElement>, candidates: Set<String>, found: MutableSet<String>,
+    ) {
+        for (m in members) when (m) {
+            is MethodDeclaration -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+            is Constructor -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+            is GetAccessor -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+            is SetAccessor -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+            is PropertyDeclaration -> m.initializer?.let { collectAssignmentsInExpr(it, candidates, found) }
+            is ClassStaticBlockDeclaration -> m.body.statements.forEach {
+                collectAllAssignmentsAnywhere(it, candidates, found)
+            }
             else -> {}
         }
     }
@@ -25027,13 +25127,7 @@ class Checker(
                 else -> {}
             }
             is FunctionExpression -> expr.body.statements.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
-            is ClassExpression -> for (m in expr.members) when (m) {
-                is MethodDeclaration -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
-                is Constructor -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
-                is GetAccessor -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
-                is SetAccessor -> m.body?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
-                else -> {}
-            }
+            is ClassExpression -> collectClassMemberAssignments(expr.members, candidates, found)
             is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
                 is PropertyAssignment -> collectAssignmentsInExpr(p.initializer, candidates, found)
                 is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { collectAssignmentsInExpr(it, candidates, found) }

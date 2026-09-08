@@ -25,6 +25,62 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.50) — the class-member definite-assignment path exists ((CHK.112)(a)), and the missing plumbing was wrong in BOTH directions (2026-09-08)
+
+**Suite 18,375 → 18,413 / 0 / 3** — 38 pins in the new `Ts2454ClassMemberInitializerTest`, plus one
+countdown pin INVERTED with transcripts. Grid **8 × added=0 removed=0**, re-run INDEPENDENTLY;
+`spine_closure_audit.py` exit 0 (mandatory — two new `spineDaEnterNode` arms), `cost_gate.py` exit 0
+(largest delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean under `--rerun-tasks`.
+
+**(CHK.112)(a) CLOSED, and the strongest evidence is that the SAME missing plumbing was wrong in BOTH
+DIRECTIONS** — 11 missing rows (a bare identifier, an expression- and a block-bodied arrow, a
+function expression, an IIFE, an object literal, a computed member name and a `static { }` block, in
+a class DECLARATION and a class EXPRESSION alike) **and 6 ours-only FALSE POSITIVES** (a method, a
+property initializer, a static block, an arrow property, an accessor or a class-expression property
+that ASSIGNS the variable did not suppress a sibling closure's read). (CHK.110)(a) found its defect
+the same way; a shape that fails both ways is the cheapest attribution there is, and it is free to
+look for.
+
+**IT WAS TWO INDEPENDENT MECHANISMS, NOT ONE.** The reach classifier never gave a `PropertyDeclaration`
+under a class *declaration* a status — so (CHK.110)(b)'s handler, correct in itself, saw an empty leak
+there — **and** nothing anywhere walked a property initializer that is a plain expression
+(`checkUsesOfUninitialized`'s `ClassDeclaration` arm walks heritage clauses and nothing else, and
+`findUninitializedRefs` has no `ClassExpression` arm at all). Arms a1 and a6 separate them cleanly.
+
+**THE ITEM'S OWN HEADLINE FIXTURE IS SILENT FOR A SECOND, UNRELATED REASON, AND THAT WOULD HAVE READ
+AS AN INERT FIX.** `SpineDaFrame.enableLeak` is `false` at file level by design ("a file-level `let`
+may be assigned externally"), so a file-level `let` never leaks into ANY nested function — class or
+not — and both references do not share the conservatism. Taking the item's example literally measures
+no change on a correct fix. **Every fixture and pin in this round is function-scoped for that
+reason**, and it is now a CLAUDE.md entry: vary the scope before believing any TS2454 repro.
+
+**THE FOURTH COUNTDOWN PIN IN FIVE ROUNDS, AND THE PUREST ONE YET.** `Inv4SpineBatch25Test` carried
+`a class-expression property initializer arrow is reached with the leak` (row FIRES) directly beside
+`negative control - a class-DECLARATION property initializer arrow is unreached` (row does NOT) under
+a section header calling the difference a "reach quirk". Both references report BOTH spellings at the
+same position (transcripts in the pin's KDoc), so **the pair was a written record of our own
+asymmetry and the "negative control" was the defect**. Inverted to match its twin; the section header
+and the class KDoc's "reach quirks pinned as negative controls" list were fixed too — three places,
+which is the point: **a comment naming a quirk outlives the pin and misleads the next reader.**
+
+**THE SWEEP WAS DONE AGAINST THE ORACLE, NOT BY READING.** 49 `@Test` blocks mention TS2454 with a
+class-ish fixture; 11 are pre-existing and 4 could touch the new path. All four were run through both
+references — three are green FOR THE RIGHT REASON, one is unreachable (it asserts TS2347). Two extra
+fixtures were then BUILT to test the at-risk static-initializer suppression at function scope
+(`assumeInitialized`'s outer-variable rule): both references report TS2448 without TS2454 and we
+match, including the sharpest shape — a static initializer reading a `let` declared LATER.
+
+**ARMS — 11, ALL DISCRIMINATING, NONE BLIND OR REDUNDANT.** a3/a5 are a round-927 PAIR with identical
+2-test RED sets (two layers on one property: a3 stops the frame opening, a5 opens it with an empty
+leak). **a6/a7 are the mask/closure pair** and a7 changes only `SpineDispatch.kt`, so its
+`Checker.class` sha is UNCHANGED — the handler is present and unreachable — and
+`spine_closure_audit.py` correctly FAILS under it, a second independent instrument on that arm.
+
+**REFUSED ON MEASUREMENT, NOT TASTE**: using the frame's live set for the member walk (arm a8 is the
+receipt — it breaks three shapes both references are silent about), and adding a `ClassDeclaration`
+arm to `collectClosureAssignedNames` (it would silence two shapes both references report). Three
+residues measured and left open are queued as **(CHK.115)**.
+
 ### Round (P18.49) — a `number` stops being silently accepted by a string enum ((CHK.113)(a)), the source literal survives to a nullish-target display ((b)), and the round before it left three countdown pins (2026-09-08)
 
 **Suite 18,338 → 18,375 / 0 / 3** — 37 pins in the new `NumericSourceEnumTargetTest`, plus THREE
@@ -1766,7 +1822,31 @@ where the order sends you.
   `typeParameterExplicitlyExtendsAny` (`{}`), `callOnInstance` /
   `untypedFunctionCallsWithTypeParameters1` (`C`/`D`) — run by fixture. MEANING.
 
-- [ ] **(CHK.112) THE DEFINITE-ASSIGNMENT RESIDUES AFTER (CHK.110), EACH MEASURED AGAINST BOTH
+- [ ] **(CHK.115) THE DEFINITE-ASSIGNMENT RESIDUES AFTER (CHK.112), THREE OF THEM NEWLY MEASURED
+  (2026-09-08, (P18.50); fixtures `build/bench/chk112-sub`).** (a) **A STATIC BLOCK'S *ASSIGNMENTS*
+  DO NOT ESCAPE INTO THE ENCLOSING FLOW** — `class C { static { e = "x" } } use(e)` is silent in both
+  references and we REPORT (fixture `p1`). (CHK.112) closed the LEAK direction (a sibling closure no
+  longer sees a stale unassigned) but the statement read goes through `frame.uninitialized`, not the
+  leak, so closing this needs an escape in `markAssignments` — i.e. modelling "a static block runs at
+  class-evaluation time". Same class of question as (c) below. (b) A PARAMETER PROPERTY's default,
+  `constructor(public p = e)`, is silent — the legacy default-argument drop. (c) A DECORATOR
+  expression is silent — an unlisted `spineDaEdge` edge. (d) CARRIED FORWARD FROM (CHK.112),
+  unchanged: a `switch` with NO `default` stays **BLOCKED** on tsc's `isExhaustiveSwitchStatement`
+  (built and reverted in (P18.40): two ours-only TS2454 on all eight profiles at `checker.ts:38141`);
+  a catch block containing an unassigned CALL stays an ACCEPTED PRICE from (CHK.105), because
+  `Debug.fail(…)` (returns `never`) and `report(e)` are indistinguishable without the callee's RETURN
+  TYPE, and removing the bail makes `catch { fail("boom") }` an ours-only row (measured both ways);
+  and a block round 450's `daWalkStmt` bails on keeps the pre-(CHK.110) removal. **EVERY FIXTURE HERE
+  MUST BE FUNCTION-SCOPED** — `SpineDaFrame.enableLeak` is `false` at file level by design, so the
+  file-level spelling of any of these is silent on a working binary and a broken one alike. RISK: (a)
+  MEDIUM (it removes a diagnostic, so the grid is a control and the corpus is the gate), (b)/(c) LOW,
+  (d) BLOCKED. MEANING for (a)-(c).
+
+- [x] **(CHK.112) (a) CLOSED 2026-09-08 ((P18.50) note) — 11 missing rows AND **6 ours-only FALSE
+  POSITIVES**, the same missing plumbing wrong in both directions. It was TWO mechanisms, not one, and the
+  item's own headline fixture is silent for a SECOND reason (a file-level `let` never leaks — every
+  fixture must be function-scoped). (b)/(c)/(d) carried forward to (CHK.115) with three newly measured
+  residues. ORIGINAL: THE DEFINITE-ASSIGNMENT RESIDUES AFTER (CHK.110), EACH MEASURED AGAINST BOTH
   REFERENCES (2026-09-08, (P18.46); fixtures `build/bench/chk110-sub/f1…f9`).** (a) **THE
   CLASS-PROPERTY-INITIALIZER LEAK PATH IS ABSENT ENTIRELY, AND THE ITEM (CHK.110) NAMED IT AS AN
   EXPRESSION-BODY GAP, WHICH IT IS NOT** — measured pre-change, a BLOCK-bodied arrow, a function

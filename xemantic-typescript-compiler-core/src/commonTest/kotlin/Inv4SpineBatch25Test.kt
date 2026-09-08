@@ -50,12 +50,17 @@ import kotlin.test.Test
  * All pins verified against the OLD walker (pre-migration checker) — a pure
  * reach-preserving migration. Reach quirks pinned as negative controls:
  * if-CONDITION function expressions, throw-expression function expressions,
- * class-DECLARATION property initializers, and for/param-default positions
- * are unreached; try-block statement lists get NO per-statement set-pass
+ * and for/param-default positions are unreached; try-block statement lists
+ * get NO per-statement set-pass
  * step (the flow pass owns those bodies); the B78.2 leak is dropped at
  * every block-statement boundary (if/loop/switch/labeled descent, Block
  * fresh cores, ModuleBlocks) and carried only over fn-boundary +
  * expression-context edges.
+ *
+ * (CHK.112)(a), 2026-09-08: a class-DECLARATION property initializer is NO LONGER
+ * among the unreached quirks — it was pinned as a negative control, and both
+ * reference compilers report there, so that pin was a record of the defect. See
+ * `a class-declaration property initializer arrow is reached with the leak`.
  */
 class Inv4SpineBatch25Test {
 
@@ -318,7 +323,13 @@ class Inv4SpineBatch25Test {
         assert(d.count { it.code == 2454 } == 1)
     }
 
-    // ── reach quirks: class declarations vs class expressions ───────────────
+    // ── class declarations and class expressions — the SAME reach ──────────
+    //
+    // These two used to differ: the `spineDaEdge` class-DECLARATION arm listed only
+    // the three BODY-bearing member kinds, so a PropertyDeclaration under a class
+    // DECLARATION was DA_NONE while the class-EXPRESSION arm already reached it.
+    // (CHK.112)(a) removed the asymmetry (2026-09-08) — both references report for
+    // both spellings, and the pair below now pins that they agree.
 
     @Test
     fun `a class-expression method body is reached with the leak`() {
@@ -344,17 +355,31 @@ class Inv4SpineBatch25Test {
         assert(d.count { it.code == 2454 } == 1)
     }
 
+    /**
+     * (CHK.112)(a), 2026-09-08: this pin asserted `none { it.code == 2454 }` and named
+     * itself a negative control, and it was encoding the DEFECT — the shape is reported
+     * by both reference compilers, at the same position we now answer:
+     *
+     * ```
+     * pristine typescript@6.0.3   t.ts(3,34): error TS2454: Variable 'x' is used before being assigned.
+     * tsgo 7.0.2                  t.ts(3,34): error TS2454: Variable 'x' is used before being assigned.
+     * ```
+     *
+     * Its twin above spells the SAME shape as a class EXPRESSION and has always asserted
+     * exactly one row, so the two together were a written record of the declaration-vs-
+     * expression asymmetry rather than of anything either reference does. Adding
+     * `PropertyDeclaration` to `spineDaEdge`'s class-DECLARATION arm closed it.
+     */
     @Test
-    fun `negative control - a class-DECLARATION property initializer arrow is unreached`() {
-        diagnose("""
+    fun `a class-declaration property initializer arrow is reached with the leak`() {
+        val d = diagnose("""
             function f() {
                 let x: number;
                 class C { p = () => { return x + 1; }; }
                 return C;
             }
-        """) should {
-            have(none { it.code == 2454 })
-        }
+        """)
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test

@@ -180,7 +180,10 @@ object SpineDispatch {
             NodeKind.SOURCE_FILE, NodeKind.MODULE_BLOCK,
             // (CHK.110)(b): an EXPRESSION-bodied arrow opens no frame and so was never
             // reached — see `Checker.spineDaExpressionBody`.
-            NodeKind.ARROW_FUNCTION)),
+            NodeKind.ARROW_FUNCTION,
+            // (CHK.112)(a): a class's property INITIALIZERS — CLASS_DECLARATION is already
+            // in STATEMENT_KINDS; a CLASS_EXPRESSION is not a statement and must be listed.
+            NodeKind.CLASS_EXPRESSION)),
         /*  9 spineOsEnterNode         */ null,
         /* 10 spinePdEnterNode         */ intArrayOf(
             NodeKind.SOURCE_FILE, NodeKind.BLOCK, NodeKind.MODULE_BLOCK,

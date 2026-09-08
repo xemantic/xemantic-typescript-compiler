@@ -1,3 +1,31 @@
+**(P18.45) — AN INLINE LITERAL CALLEE GETS ITS OWN TYPE ((CHK.109)), AND THE CALLEE *EXPRESSION* IS EVIDENCE THE CALLEE *TYPE* CANNOT CARRY, 18,212 → 18,234 / 0 / 3 (2026-09-08).**
+**(CHK.109) CLOSED, 1 → 15 of the reference's 16 rows**, byte-identical to pristine on every one
+(`({})()`, `({ a: 1 })()`, `[1]()`, string / number / template / boolean / regex, nested
+parentheses, `?.()`, explicit type arguments at exactly ONE row, and an object literal carrying a
+method); an inline arrow, function expression, async arrow and every literal RECEIVER stay silent.
+tsgo 7.0.2 and pristine 6.0.3 agree on all 16, so no oracle conflict arose. **The item's named
+seam was right and exactly HALF the fix, and it fails on the item's own first example**:
+`getCalleeType`'s `else -> anyType` is the source of the `any`, but after fixing it `({})()` and
+`(/x/)()` are still refused by `calleeObjectTableIsComplete` — (CHK.45)'s rule wants positive
+evidence a member table is complete, and **an empty anonymous object is exactly what a TYPE cannot
+vouch for**, since `{}` from a literal and `{}` from an unfinished resolution are the same type. The
+closing rule is SYNTACTIC, and arm a3's RED set is precisely the three empty-`{}` pins and nothing
+else — for a non-empty literal the type-only rule already suffices. **A parser fact cost a third
+leg**: `true`/`false` are reserved words the Parser renders as an `Identifier`, so `(true)()`
+reaches the Identifier arm and resolves to nothing (the leg sits on the miss path, so no ordinary
+callee pays for it). **Population 3 → 15**; `(class {})()` (TS2348, needs a
+`typeof (Anonymous class)` naming mechanism) and `new ({})()` (TS2351, every `new`-path emitter is
+`Identifier`-gated) are a DIFFERENT diagnostic, verified inert under the change and recorded as
+stated refusals. **Four display divergences are made visible and are not this item's** — `[]()`
+prints `any[]` for `never[]`, `[() => 1]()` loses a parenthesization, an objlit getter prints
+`readonly g: any`, a computed key prints `{ ["k"]: number; }` — **all four reproduce on the PARENT
+binary at a declaration position**, all FORM, all refused rather than folded in ( fixing `[]` alone
+would change the empty-array-literal type program-wide). 22 pins; 4 arms ALL discriminating with
+four distinct class shas, none blind or redundant; every other `getCalleeType` caller audited and
+shown unable to emit for a literal. Grid **8 × added=0 removed=0** re-run independently after both
+agent arms were verified byte-identical to orchestrator-built binaries; `cost_gate.py` exit 0
+(largest delta **+0.03%**), `huge_methods.py` exit 0 (834 classes, 0 over), build warning-clean.
+
 **(P18.44) — A TUPLE'S *ARITY* BECOMES EXPRESSIBLE ((CHK.108)), THE ITEM'S SEAM WAS NECESSARY AND NOT SUFFICIENT, AND THE `WORK ORDER` NOTE CLAUDE.md POINTS AT HAD BEEN ARCHIVED OUT OF THE PLAN, 18,188 → 18,212 / 0 / 3 (2026-09-08).**
 **(CHK.108) CLOSED, 11 of the reference's 12 rows**, byte-identical to pristine at all five
 positions (var-decl, argument TS2345, return, assignment, class property), for a readonly target,

@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,532** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **199,626** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,36 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.50) — THE CLASS-MEMBER DEFINITE-ASSIGNMENT PATH EXISTS ((CHK.112)(a)), AND THE MISSING PLUMBING WAS WRONG IN *BOTH* DIRECTIONS, 18,375 → 18,413 / 0 / 3 (2026-09-08).**
+**11 missing rows AND 6 ours-only FALSE POSITIVES from the same gap** — a bare identifier, an
+expression- and a block-bodied arrow, a function expression, an IIFE, an object literal, a computed
+member name and a `static { }` block, in a class DECLARATION and a class EXPRESSION alike, were all
+silent; and a method / property initializer / static block / arrow property / accessor /
+class-expression property that ASSIGNS the variable did not suppress a sibling closure's read.
+(CHK.110)(a) found its defect the same way — **a shape that fails both ways is the cheapest
+attribution there is.** **It was TWO mechanisms**: the reach classifier never gave a
+`PropertyDeclaration` under a class DECLARATION a status (so (CHK.110)(b)'s handler saw an empty leak
+there), and nothing anywhere walked a property initializer that is a plain expression. **The item's
+own headline fixture is silent for a SECOND reason and that would have read as an inert fix**:
+`SpineDaFrame.enableLeak` is `false` at file level by design, so a file-level `let` never leaks into
+ANY nested function, class or not, and both references do not share the conservatism — every fixture
+here is function-scoped, now a CLAUDE.md entry. **The FOURTH countdown pin in five rounds, and the
+purest yet**: `Inv4SpineBatch25Test` paired `a class-expression property initializer arrow is reached`
+with `negative control - a class-DECLARATION property initializer arrow is unreached`, under a header
+calling the difference a "reach quirk" — both references report BOTH spellings, so the pair recorded
+our own asymmetry and the "negative control" WAS the defect. Inverted with transcripts; the section
+header and the class KDoc's quirk list were fixed too, **three places, because a comment naming a
+quirk outlives the pin**. The sweep for siblings was run against the ORACLE, not by reading: of 49
+TS2454 class-ish `@Test` blocks, the 4 reachable ones were run through both references (3 green for
+the right reason, 1 unreachable), plus 2 fixtures BUILT to test the at-risk static-initializer
+suppression at function scope — both references TS2448 without TS2454, and we match. 38 pins + 1
+inverted; 11 arms all discriminating, with a3/a5 a round-927 pair and a6/a7 the mask/closure pair
+(a7 leaves `Checker.class` UNCHANGED and `spine_closure_audit.py` fails under it — a second
+independent instrument). Refused on measurement: the frame's live set for the member walk (arm a8 is
+the receipt) and a `ClassDeclaration` arm on `collectClosureAssignedNames`. Three residues queued as
+(CHK.115). Grid **8 × added=0 removed=0** re-run independently; `spine_closure_audit.py` exit 0,
+`cost_gate.py` exit 0, `huge_methods.py` exit 0, build warning-clean.
 
 **(P18.49) — A `number` STOPS BEING SILENTLY ACCEPTED BY A STRING ENUM ((CHK.113)(a)), THE SOURCE LITERAL SURVIVES TO A NULLISH-TARGET DISPLAY ((b)), AND THE ROUND BEFORE IT LEFT THREE COUNTDOWN PINS, 18,338 → 18,375 / 0 / 3 (2026-09-08).**
 **(a) is a FALSE NEGATIVE in the most basic position and the item under-counted it** — a `number`
@@ -119,31 +149,3 @@ entirely and is a different mechanism → (CHK.112). 37 pins, all read from pris
 discriminating. Grid **8 × added=0 removed=0** re-run independently; `cost_gate.py` exit 0 (largest
 delta **+0.03%**), `huge_methods.py` exit 0, **`spine_closure_audit.py` exit 0**, build
 warning-clean under `--rerun-tasks`.
-
-**(P18.45) — AN INLINE LITERAL CALLEE GETS ITS OWN TYPE ((CHK.109)), AND THE CALLEE *EXPRESSION* IS EVIDENCE THE CALLEE *TYPE* CANNOT CARRY, 18,212 → 18,234 / 0 / 3 (2026-09-08).**
-**(CHK.109) CLOSED, 1 → 15 of the reference's 16 rows**, byte-identical to pristine on every one
-(`({})()`, `({ a: 1 })()`, `[1]()`, string / number / template / boolean / regex, nested
-parentheses, `?.()`, explicit type arguments at exactly ONE row, and an object literal carrying a
-method); an inline arrow, function expression, async arrow and every literal RECEIVER stay silent.
-tsgo 7.0.2 and pristine 6.0.3 agree on all 16, so no oracle conflict arose. **The item's named
-seam was right and exactly HALF the fix, and it fails on the item's own first example**:
-`getCalleeType`'s `else -> anyType` is the source of the `any`, but after fixing it `({})()` and
-`(/x/)()` are still refused by `calleeObjectTableIsComplete` — (CHK.45)'s rule wants positive
-evidence a member table is complete, and **an empty anonymous object is exactly what a TYPE cannot
-vouch for**, since `{}` from a literal and `{}` from an unfinished resolution are the same type. The
-closing rule is SYNTACTIC, and arm a3's RED set is precisely the three empty-`{}` pins and nothing
-else — for a non-empty literal the type-only rule already suffices. **A parser fact cost a third
-leg**: `true`/`false` are reserved words the Parser renders as an `Identifier`, so `(true)()`
-reaches the Identifier arm and resolves to nothing (the leg sits on the miss path, so no ordinary
-callee pays for it). **Population 3 → 15**; `(class {})()` (TS2348, needs a
-`typeof (Anonymous class)` naming mechanism) and `new ({})()` (TS2351, every `new`-path emitter is
-`Identifier`-gated) are a DIFFERENT diagnostic, verified inert under the change and recorded as
-stated refusals. **Four display divergences are made visible and are not this item's** — `[]()`
-prints `any[]` for `never[]`, `[() => 1]()` loses a parenthesization, an objlit getter prints
-`readonly g: any`, a computed key prints `{ ["k"]: number; }` — **all four reproduce on the PARENT
-binary at a declaration position**, all FORM, all refused rather than folded in ( fixing `[]` alone
-would change the empty-array-literal type program-wide). 22 pins; 4 arms ALL discriminating with
-four distinct class shas, none blind or redundant; every other `getCalleeType` caller audited and
-shown unable to emit for a literal. Grid **8 × added=0 removed=0** re-run independently after both
-agent arms were verified byte-identical to orchestrator-built binaries; `cost_gate.py` exit 0
-(largest delta **+0.03%**), `huge_methods.py` exit 0 (834 classes, 0 over), build warning-clean.
