@@ -104440,7 +104440,9 @@ interface DataView {
         // [formatTypeForDisplay] reduces a `QualifiedName` to its LAST name, which is
         // right for a namespaced interface (tsc prints the bare name there) and wrong
         // for an enum member, whose display name in tsc always carries its enum.
-        if (targetType.flags.hasAny(TypeFlags.EnumLiteral)) return typeToString(targetType)
+        // (CHK.92)(d): the ONE-member enum collapse rides on this relation-error target
+        // renderer, never on [typeToString] — see [relationErrorTargetDisplay].
+        if (targetType.flags.hasAny(TypeFlags.EnumLiteral)) return relationErrorTargetDisplay(targetType)
         // (REL.1)(c) round 746: a UNION carrying enum-flavored constituents likewise —
         // see [enumUnionTargetDisplay], which is B266's display rule moved into the
         // general path so the walker can retire.
@@ -108085,14 +108087,20 @@ interface DataView {
         // contain literal members (mirrors B69.5 in checkAssignmentExpression).
         // `var b: Boolean = true` displays as `Type 'boolean' is not
         // assignable to type 'Boolean'`, not `'true'`.
-        val displaySourceType = relationErrorSourceDisplayType(sourceType, targetType)
+        // (CHK.92)(c): tsc's `isRelatedTo` nullable-target strip runs BEFORE the report,
+        // so the SOURCE generalization is decided against the STRIPPED target — that is why
+        // `const v: string | undefined = 1` reads `Type 'number' … 'string'` in both
+        // references and not `Type '1' … 'string | undefined'`. Answers `targetType`
+        // unchanged whenever the strip does not apply, so a non-nullable target is inert.
+        val nullStrippedTarget = nullableTargetDisplay(targetType, sourceType, optionalDeclaration = false)
+        val displaySourceType = relationErrorSourceDisplayType(sourceType, nullStrippedTarget)
         // B471: a bare class identifier in value position is its CONSTRUCTOR
         // (`typeof C`), but getTypeOfExpression resolves it to the instance type
         // (display `C`). When the init is a pure class identifier whose display
         // collapsed to the bare class name, render the source as `typeof C`
         // (matches tsc — `var x: number = C` → "Type 'typeof C' ..."). typeName1.
         val displaySource = run {
-            val base = relationErrorSourceQualified(displaySourceType, targetType)
+            val base = relationErrorSourceQualified(displaySourceType, nullStrippedTarget)
                 ?: typeToString(displaySourceType)
             if (init is Identifier && base == init.text) {
                 val s = currentFileLocals?.get(init.text) ?: globals[init.text]
@@ -108103,7 +108111,13 @@ interface DataView {
         }
         // Use annotation text for display (handles generics correctly); B119
         // unfolds a primitive-resolving type-alias reference to the primitive.
-        val displayTarget = displayTargetAnnotation(typeAnnotation, targetType)
+        val displayTarget =
+            // (CHK.92)(c): a STRIPPED target is no longer the type the annotation spells,
+            // so it must be rendered from the type. Unchanged otherwise, which keeps the
+            // annotation's own spelling (alias names, qualified enum members) everywhere
+            // the strip is inert.
+            if (nullStrippedTarget !== targetType) typeToString(nullStrippedTarget)
+            else displayTargetAnnotation(typeAnnotation, targetType)
         // B559: a FRESH empty array literal `[]` is `never[]` in tsc (we type it
         // `any[]`, B87.6 — do NOT change globally), and tsc lists a missing-property
         // set OWN-first (own members before inherited). For `var x: <named class/
@@ -110488,7 +110502,12 @@ interface DataView {
                 targetType !is Type.Interface && !targetType.callSignatures.isNullOrEmpty() &&
                 targetType.symbol?.flags?.hasAny(SymbolFlags.Function) == true)
                 typeToString(targetType) // B198: tsc unfolds `typeof <fn>` to its signature form
-            else formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
+            // (CHK.92)(d): a ONE-member enum's member type is rendered from the TYPE, not
+            // from the annotation's spelling — the return position is the one relation head
+            // that reads the AST here where [displayTargetAnnotation] already pre-empts on
+            // `EnumLiteral`. Answers null for every other shape, so nothing else moves.
+            else oneMemberEnumCollapsedDisplay(targetType)
+            ?: formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
         val returnKeywordLength = 6
         val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
         // B49.3: TS2739/TS2740 missing-properties emission for return-statement
@@ -116628,7 +116647,57 @@ interface DataView {
      * single-member/whole-enum case.
      */
     private fun enumOperandDisplay(t: Type): String =
-        enumUnionTargetDisplay(t) ?: typeToString(t)
+        enumUnionTargetDisplay(t)
+            // (CHK.92)(d): NO bypass is needed here — the ONE-member collapse lives on the
+            // relation-error target path ([relationErrorTargetDisplay]) and not in
+            // [typeToString], so this operand keeps `Cmp.X` by construction. That is the
+            // right answer for the FRESH cases and the wrong one for the widened ones:
+            // measured on both references, `Cmp.X === 5` and `const cx = Cmp.X; cx === 5`
+            // read `'Cmp.X'` while `let lx = Cmp.X; lx === 5` and an annotated
+            // `declare const av: Cmp.X` read `'Cmp'`. TS2367's rule is literal FRESHNESS,
+            // which this checker does not model (it mints no fresh enum-member type), so the
+            // four shapes share ONE type and the split is not expressible; the two widened
+            // rows stay divergent and are recorded rather than closed by a syntactic proxy.
+            ?: typeToString(t)
+
+    /**
+     * (CHK.92)(d): the string a RELATION ERROR prints for a TARGET — [typeToString] plus the
+     * ONE-member enum collapse.
+     *
+     * A one-member enum's declared type IS its member's regular type in tsc
+     * (`getDeclaredTypeOfEnum` unions the member types; `getUnionType` of a single type
+     * returns that type), so `const a: Cmp.X = <string>`, `f(x: Cmp.X)`, a `Cmp.X`-typed
+     * property and a `Cmp.X`-annotated return all read `'Cmp'` in tsgo 7.0.2 and pristine
+     * 6.0.3, while a TWO-member enum keeps `'Two.P'`.
+     *
+     * IT LIVES HERE AND NOT IN [typeToString] BECAUSE THAT RENDERER HAS CONSUMERS BEYOND
+     * DIAGNOSTICS. It feeds the language service's `quickInfoAt` and the externals
+     * generator's markers, and the collapse is measurably wrong for the first: asked through
+     * `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`, a caret on the sole member of
+     * `enum Valued { Gamma = 5 }` answers `(enum member) Valued.Gamma = 5` — the qualified
+     * name, exactly as a two-member enum's member does. A first attempt DID put it in
+     * `typeToString` with a bypass at the TS2367 operand; the second bypass the language
+     * service then needed is the signal that the rule was in the wrong place.
+     */
+    private fun relationErrorTargetDisplay(t: Type): String =
+        oneMemberEnumCollapsedDisplay(t) ?: typeToString(t)
+
+    /**
+     * (CHK.92)(d): the PARENT enum's name when [memberSym]'s enum declares exactly one
+     * member, else null — see [relationErrorTargetDisplay].
+     */
+    private fun oneMemberEnumCollapsedDisplay(t: Type): String? {
+        val sym = (t as? Type.Object)?.symbol ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.EnumMember)) return null
+        return oneMemberEnumParentName(sym)
+    }
+
+    private fun oneMemberEnumParentName(memberSym: Symbol): String? {
+        val parent = memberSym.parent ?: return null
+        if (!parent.flags.hasAny(SymbolFlags.Enum)) return null
+        if ((enumMemberEntries(parent)?.size ?: 0) != 1) return null
+        return parent.name
+    }
 
     /**
      * (CHK.88): the literal's display when [enumType] is enum-flavored, [otherExpr] is a
@@ -134825,6 +134894,178 @@ interface DataView {
         return if (lit is Type.NumberLiteral || lit is Type.StringLiteral) lit else null
     }
 
+    /**
+     * (CHK.92)(a): tsc's `isLiteralOfContextualType` (checker.ts:41459), reduced to the
+     * literal kinds this checker mints — does [contextual] hold a literal of [candidate]'s
+     * OWN FLAVOUR?
+     *
+     * This is the rule that decides whether an object-literal MEMBER keeps its written
+     * literal or widens to the base primitive, and it is per FLAVOUR, not per
+     * literal-ness: measured against tsgo 7.0.2 AND pristine `typescript@6.0.3`,
+     * `{ e: "z" }` against a NUMERIC enum member reads `Type 'string'` while `{ e: 3 }`
+     * against the same target reads `Type '3'`, and the two swap for a STRING enum
+     * (`'"z"'` / `'number'`). We printed the raw literal for all four.
+     *
+     * An ENUM is a union of its members' literal types in tsc, so its flavour is its
+     * members' — [isStringEnumObjectType] / [isNumericEnumObjectType] answer that here,
+     * because our enum member types carry `EnumLiteral` ALONE and not the
+     * `StringLiteral`/`NumberLiteral` bit tsc's carry beside it.
+     *
+     * DISPLAY-ONLY, deliberately: the RELATION source stays [enumTargetLiteralSource]'s
+     * un-widened literal, because our relation accepts `number` against a string enum
+     * where tsc rejects it — widening the relation input as well would silently drop the
+     * four (CHK.92)(b) rows this round just gained.
+     */
+    private fun literalKeptByContextualType(candidate: Type, contextual: Type): Boolean {
+        if (contextual is Type.Union) return contextual.types.any { literalKeptByContextualType(candidate, it) }
+        if (contextual is Type.Intersection) {
+            return contextual.types.any { literalKeptByContextualType(candidate, it) }
+        }
+        return when {
+            candidate.flags.hasAny(TypeFlags.StringLiteral) ->
+                contextual.flags.hasAny(
+                    TypeFlags.StringLiteral or TypeFlags.TemplateLiteral or TypeFlags.StringMapping,
+                ) || isStringEnumObjectType(contextual)
+            candidate.flags.hasAny(TypeFlags.NumberLiteral) ->
+                contextual.flags.hasAny(TypeFlags.NumberLiteral) || isNumericEnumObjectType(contextual)
+            candidate.flags.hasAny(TypeFlags.BigIntLiteral) ->
+                contextual.flags.hasAny(TypeFlags.BigIntLiteral)
+            candidate.flags.hasAny(TypeFlags.BooleanLiteral) ->
+                contextual.flags.hasAny(TypeFlags.BooleanLiteral)
+            else -> false
+        }
+    }
+
+    /**
+     * (CHK.92)(a): the SOURCE type an object-literal per-property mismatch DISPLAYS —
+     * tsc's `checkExpressionForMutableLocation` widening, applied where we report.
+     *
+     * There is no fresh-literal expression type in this checker ((WIDEN.1)), so the
+     * member's recorded type is already the base primitive and the two emitters printed
+     * that: `{ p: 6 }` against `p: 5` read `Type 'number' is not assignable to type
+     * 'number'` — the source widened and the target widened by [getWidenedLiteralType] —
+     * where both references read `'6'` / `'5'`. Recovering the literal from the VALUE
+     * NODE and keeping it exactly when [literalKeptByContextualType] holds reproduces
+     * tsc's answer on every measured row of both flavours.
+     */
+    private fun objLitMemberDisplaySource(
+        value: Expression?,
+        sourcePropType: Type,
+        targetPropType: Type,
+    ): Type {
+        val lit = value?.let { literalTypeOfExpression(it) } ?: return sourcePropType
+        if (!lit.flags.hasAny(
+                TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                    TypeFlags.BigIntLiteral or TypeFlags.BooleanLiteral,
+            )
+        ) return sourcePropType
+        return if (literalKeptByContextualType(lit, targetPropType)) lit else baseTypeOfLiteralType(lit)
+    }
+
+    /**
+     * (CHK.92)(c): tsc's `TypeFlags.DefinitelyNonNullable` (types.ts:6391) —
+     * `StringLike | NumberLike | BigIntLike | BooleanLike | EnumLike | ESSymbolLike |
+     * Object | NonPrimitive`.
+     *
+     * It is a flag MASK, so a UNION, an INTERSECTION, a TYPE PARAMETER, `unknown`,
+     * `any`, `void`, `null` and `undefined` are all OUTSIDE it — those are exactly the
+     * sources measured to keep the `| undefined` in a nullable target's display.
+     */
+    private fun isDefinitelyNonNullableType(t: Type): Boolean {
+        if (t === anyType || t === errorType) return false
+        if (t is Type.Union || t is Type.Intersection || t is Type.TypeParam) return false
+        if (t.flags.hasAny(
+                TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never or TypeFlags.Void or
+                    TypeFlags.Null or TypeFlags.Undefined,
+            )
+        ) return false
+        if (t.flags.hasAny(
+                TypeFlags.StringLike or TypeFlags.NumberLike or TypeFlags.BigIntLike or
+                    TypeFlags.BooleanLike or TypeFlags.EnumLike or TypeFlags.ESSymbolLike or
+                    TypeFlags.NonPrimitive,
+            )
+        ) return true
+        return t is Type.Object
+    }
+
+    /**
+     * (CHK.92)(c): would tsc see this remainder as a UNION of two or more members?
+     *
+     * tsc's strip is expressed as an ARITY test over the target union's members
+     * (`types.length === 2 … : types.length === 3 …`), which is the same thing as
+     * "removing the nullables leaves exactly one member" ONLY because tsc's `boolean`
+     * IS the union `true | false` and an enum IS the union of its members. Both are
+     * single objects here, so the two shapes have to be named: `boolean | undefined`
+     * and `E2 | undefined` (E2 with two members) KEEP their `| undefined` in both
+     * references, while `string | undefined` and a ONE-member enum lose it.
+     */
+    private fun unionLikeForNullableStrip(t: Type): Boolean {
+        if (t is Type.Union) return true
+        if (t.flags.hasAny(TypeFlags.Boolean)) return true
+        val sym = (t as? Type.Object)?.symbol ?: return false
+        if (sym.flags.hasAny(SymbolFlags.EnumMember) || !sym.flags.hasAny(SymbolFlags.Enum)) return false
+        return (enumMemberEntries(sym)?.size ?: 0) >= 2
+    }
+
+    /**
+     * (CHK.92)(c): the TARGET a relation error DISPLAYS when that target is nullable —
+     * tsc's `isRelatedTo` rewrite (checker.ts:22803-22813), reproduced at display time.
+     *
+     * ```
+     * if (source.flags & DefinitelyNonNullable && target.flags & Union) {
+     *     const types = (target as UnionType).types;
+     *     const candidate = types.length === 2 && types[0].flags & Nullable ? types[1] :
+     *         types.length === 3 && types[0].flags & Nullable && types[1].flags & Nullable ? types[2] :
+     *         undefined;
+     *     if (candidate && !(candidate.flags & Nullable)) target = getNormalizedType(candidate, true);
+     * }
+     * ```
+     *
+     * It runs BEFORE the structural comparison, so `reportRelationError` is handed the
+     * ALREADY-STRIPPED target — which is why `const v: string | undefined = 1` reads
+     * `Type 'number' is not assignable to type 'string'` and not `Type '1'`: with the
+     * target reduced to `string`, `typeCouldHaveTopLevelSingletonTypes` is false and the
+     * SOURCE generalizes too. Callers must therefore compute this FIRST and pass the
+     * result to [relationErrorSourceDisplay].
+     *
+     * [optionalDeclaration] is the other half of the same rule: an optional parameter's
+     * and an optional property's effective type includes `undefined` in tsc, and ours do
+     * NOT carry it — so the conceptual target is built here and then stripped, which
+     * makes ONE rule cover both directions the item measured. `gU(1)` against `s?: string`
+     * adds and strips (net `'string'`, unchanged); `gU(t)` with `t: T` adds and keeps
+     * (`'string | undefined'`); `gX(1)` against an EXPLICIT `string | undefined` strips
+     * (`'string'`).
+     *
+     * DISPLAY ONLY: no relation input moves, so no verdict can change.
+     */
+    private fun nullableTargetDisplay(
+        targetType: Type,
+        sourceType: Type,
+        optionalDeclaration: Boolean,
+    ): Type {
+        if (!strictNullChecks) return targetType
+        val conceptual =
+            if (optionalDeclaration && !typeIncludesUndefinedOrTop(targetType) &&
+                targetType !== anyType && targetType !== errorType
+            ) getUnionType(listOf(targetType, undefinedType))
+            else targetType
+        if (conceptual !is Type.Union) return conceptual
+        if (!isDefinitelyNonNullableType(sourceType)) return conceptual
+        val remainder = conceptual.types.filter {
+            !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+        }
+        if (remainder.size != 1) return conceptual
+        val only = remainder[0]
+        if (unionLikeForNullableStrip(only)) return conceptual
+        return only
+    }
+
+    /** (CHK.92)(c): is [paramSym] an OPTIONAL parameter (`x?: T` or `x: T = …`)? */
+    private fun isOptionalParameterSymbol(paramSym: Symbol?): Boolean {
+        val decl = paramSym?.valueDeclaration as? Parameter ?: return false
+        return decl.questionToken || decl.initializer != null
+    }
+
     /** (CHK.83): [t] is enum-flavored, or a union with an enum-flavored constituent. */
     private fun typeHasEnumFlavoredConstituent(t: Type): Boolean =
         t.flags.hasAny(TypeFlags.EnumLike) ||
@@ -136658,6 +136899,17 @@ interface DataView {
                     val enumQualified = if (enumDisplayFullyQualified) enumTypeQualifiedDisplay(type) else null
                     if (enumQualified != null) enumQualified
                     else if (sym != null && sym.flags.hasAny(SymbolFlags.EnumMember)) {
+                        // (CHK.92)(d): the ONE-MEMBER enum collapse is NOT here. It is a
+                        // RELATION-ERROR display rule ([relationErrorTargetDisplay]), and
+                        // `typeToString` is the GENERAL renderer — it also feeds the language
+                        // service's `quickInfoAt` and the externals generator's markers, where
+                        // the collapse is measurably WRONG: `tools/tsgo-7.0.2/lib/tsc --lsp
+                        // -stdio` answers `(enum member) Valued.Gamma = 5` for a caret on the
+                        // sole member of `enum Valued { Gamma = 5 }`, exactly as it does for a
+                        // two-member enum's `Plain.Beta = 1`. Putting the rule here also
+                        // destroyed (API.15)'s negative control, whose whole point is that the
+                        // answer NAMES THE OWNER so a block-scoped `enum Local` is told apart
+                        // from an imported enum with the same member spelling.
                         sym.parent?.let { "${it.name}.${sym.name}" } ?: sym.name
                     } else if (sym != null) sym.name
                     else {
@@ -167211,7 +167463,16 @@ interface DataView {
             val targetPropType = getTypeOfSymbol(targetProp)
             if (targetPropType === anyType || targetPropType === errorType) continue
             val sourcePropSym = argType.members?.get(propName) ?: continue
-            val sourcePropType = getTypeOfSymbol(sourcePropSym)
+            // (CHK.92)(b): an enum-flavored target MEMBER keeps the value's LITERAL, the
+            // same (CHK.83) leg the DECLARATION twin
+            // ([emitPerPropertyMismatchesForObjectLiteral]) has carried since that round.
+            // Without it `fs({ e: 3 })` against `{ e: StringEnum }` compares the widened
+            // `number`, which our relation accepts against a string enum, and `fn({ e: 3 })`
+            // against a NUMERIC enum compares `number`, which the bit-flag rule accepts
+            // against every numeric enum — both silent where both references report.
+            val sourcePropType = enumTargetLiteralSource(
+                unwrapToObjLitValue(propNode.initializer), targetPropType,
+            ) ?: getTypeOfSymbol(sourcePropSym)
             if (sourcePropType === anyType || sourcePropType === errorType) continue
             // didYouMean: an object-literal property whose VALUE is a CONSTRUCTOR
             // value (`typeof Class` / `DateConstructor` — has construct sigs, but
@@ -167300,8 +167561,17 @@ interface DataView {
                     }
                 }
             }
-            val bothSimple = isSimpleCheckableType(targetPropType) &&
+            // (CHK.92)(b): a WHOLE enum target carries `TypeFlags.Enum`, which is disjoint
+            // from the `EnumLiteral` [isSimpleCheckableType] admits, so an enum-typed member
+            // was refused OUTRIGHT here while the DECLARATION twin checked it — measured, all
+            // four of `fn({ e: "z" })` / `fn({ e: 3 })` / `fs({ e: "z" })` / `fs({ e: 3 })`
+            // were silent against rows both references report. The source half keeps
+            // [isSimpleCheckableType]: only a primitive-like value is decidable against an
+            // enum without inference, which is the same firewall the argument gates use.
+            val enumTargetPair = targetPropType.flags.hasAny(TypeFlags.EnumLike) &&
                 isSimpleCheckableType(sourcePropType)
+            val bothSimple = enumTargetPair || (isSimpleCheckableType(targetPropType) &&
+                isSimpleCheckableType(sourcePropType))
             val tgtIsAnonFunc = targetPropType is Type.Object &&
                 targetPropType !is Type.Interface &&
                 !(targetPropType).callSignatures.isNullOrEmpty() &&
@@ -167341,8 +167611,27 @@ interface DataView {
             // target read `Type 'string'` where tsgo 7.0.2 and pristine read `'"a"'`, and a
             // literal-union member value read `'"a" | "b"'` where both read `'string'`.
             // The TARGET display is deliberately left on the bare widening.
-            val displaySource = relationErrorSourceDisplay(sourcePropType, targetPropType)
-            val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
+            // (CHK.92)(a): the object-literal MEMBER display is tsc's
+            // `checkExpressionForMutableLocation` widening on the SOURCE and NO widening at
+            // all on the TARGET. `reportRelationError` generalizes the source only when
+            // `!typeCouldHaveTopLevelSingletonTypes(target)`, and a LITERAL target could —
+            // so `{ p: 6 }` against `p: 5` reads `'6'` / `'5'` in tsgo 7.0.2 and pristine
+            // 6.0.3 where the [getWidenedLiteralType] here printed the self-contradictory
+            // `Type 'number' is not assignable to type 'number'`.
+            // (CHK.92)(c): an OPTIONAL target property's effective type includes `undefined`
+            // in tsc, and ours does not carry it — [nullableTargetDisplay] adds it and then
+            // applies tsc's own strip, which is why `{ s: 1 }` against `s?: string` still
+            // reads `'string'` while `{ b: 1 }` against `b?: boolean` reads
+            // `'boolean | undefined'` (the remainder `boolean` IS the union `true | false`
+            // in tsc, so the strip declines). Measured on both references.
+            val displayTargetPropType = nullableTargetDisplay(
+                targetPropType, sourcePropType, isOptionalProperty(targetProp),
+            )
+            val displaySource = relationErrorSourceDisplay(
+                objLitMemberDisplaySource(valueNode, sourcePropType, targetPropType),
+                displayTargetPropType,
+            )
+            val displayTargetProp = relationErrorTargetDisplay(displayTargetPropType)
             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
             val related = mutableListOf<Diagnostic>()
             val tpDecl = targetProp.declarations.firstOrNull()
@@ -168281,8 +168570,15 @@ interface DataView {
             // where tsgo 7.0.2 and pristine `typescript@6.0.3` both read `'string'`, and a
             // single-literal reference read `'"a"'` for their `'string'`. `f(true)` — the
             // fresh case the old rule DID widen — is unchanged.
-            val argTypeStr = relationErrorSourceDisplay(argType, paramType)
-            val paramTypeStr = typeToString(paramType)
+            // (CHK.92)(c): the PARAMETER display takes tsc's nullable-target strip, which
+            // runs in `isRelatedTo` BEFORE the report — so it is computed first and the
+            // SOURCE display is then generalized against the STRIPPED target, exactly as
+            // `reportRelationError` sees it.
+            val paramDisplayType = nullableTargetDisplay(
+                paramType, argType, isOptionalParameterSymbol(params.getOrNull(i)),
+            )
+            val argTypeStr = relationErrorSourceDisplay(argType, paramDisplayType)
+            val paramTypeStr = relationErrorTargetDisplay(paramDisplayType)
             val start = arg.pos
             // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
             // end of source line containing the body's `{`. TypeScript clips at the
@@ -172395,10 +172691,19 @@ interface DataView {
                 val effValueType = if (propTypeContainsLiteral(tgtMemberType))
                     literalTypeOfExpression(value) ?: valueType
                 else enumTargetLiteralSource(value, tgtMemberType) ?: valueType // (CHK.83)
-                // (CHK.83): the enum case DISPLAYS the literal it compared; every other
-                // shape keeps the display it had.
-                val displayValueType = if (effValueType !== valueType &&
-                    typeHasEnumFlavoredConstituent(tgtMemberType)) effValueType else valueType
+                // (CHK.92)(a): the NESTED / return-position object-literal member is the
+                // THIRD emitter of this display — the item named two — and it takes the same
+                // per-FLAVOUR rule: tsc's `isLiteralOfContextualType` keeps the written
+                // literal only against a target holding a literal of its own kind, so
+                // `{ e: 3 }` against a STRING enum reads `Type 'number'` in tsgo 7.0.2 and
+                // pristine 6.0.3 where the (CHK.83) rule below printed `'3'`.
+                val displayValueType = objLitMemberDisplaySource(value, valueType, tgtMemberType)
+                // (CHK.92)(c): the optional-property half of tsc's nullable-target strip,
+                // at the nested leaf — see [nullableTargetDisplay].
+                val tgtDisplayType = nullableTargetDisplay(
+                    tgtMemberType, displayValueType,
+                    targetMemberSym(propName)?.let { isOptionalProperty(it) } == true,
+                )
                 // An OPTIONAL target property `a?: T` accepts a `T | undefined` source when
                 // exactOptionalPropertyTypes is off (widenOptionalTargetPropType, source-nullish
                 // gated) — e.g. `sourceIndex: hasSource ? n : undefined` (`number | undefined`)
@@ -172430,7 +172735,11 @@ interface DataView {
                     // [relationErrorSourceDisplayType] — the nested / return-position
                     // object-literal member reaches THIS emitter, not the two per-property
                     // ones. The TARGET display keeps its bare widening.
-                    message = "Type '${relationErrorSourceDisplay(displayValueType, tgtMemberType)}' is not assignable to type '${typeToString(getWidenedLiteralType(tgtMemberType))}'.",
+                    // (CHK.92)(a): the TARGET is NOT widened — `reportRelationError` prints
+                    // `getTypeNamesForErrorDisplay(source, target)`, which renders the target
+                    // as written, and a literal target is what makes the source keep its own
+                    // literal (`typeCouldHaveTopLevelSingletonTypes`).
+                    message = "Type '${relationErrorSourceDisplay(displayValueType, tgtDisplayType)}' is not assignable to type '${relationErrorTargetDisplay(tgtDisplayType)}'.",
                     category = DiagnosticCategory.Error,
                     code = 2322,
                     fileName = fileName,
@@ -174022,8 +174331,27 @@ interface DataView {
             // target read `Type 'string'` where tsgo 7.0.2 and pristine read `'"a"'`, and a
             // literal-union member value read `'"a" | "b"'` where both read `'string'`.
             // The TARGET display is deliberately left on the bare widening.
-            val displaySource = relationErrorSourceDisplay(sourcePropType, targetPropType)
-            val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
+            // (CHK.92)(a): the object-literal MEMBER display is tsc's
+            // `checkExpressionForMutableLocation` widening on the SOURCE and NO widening at
+            // all on the TARGET. `reportRelationError` generalizes the source only when
+            // `!typeCouldHaveTopLevelSingletonTypes(target)`, and a LITERAL target could —
+            // so `{ p: 6 }` against `p: 5` reads `'6'` / `'5'` in tsgo 7.0.2 and pristine
+            // 6.0.3 where the [getWidenedLiteralType] here printed the self-contradictory
+            // `Type 'number' is not assignable to type 'number'`.
+            // (CHK.92)(c): an OPTIONAL target property's effective type includes `undefined`
+            // in tsc, and ours does not carry it — [nullableTargetDisplay] adds it and then
+            // applies tsc's own strip, which is why `{ s: 1 }` against `s?: string` still
+            // reads `'string'` while `{ b: 1 }` against `b?: boolean` reads
+            // `'boolean | undefined'` (the remainder `boolean` IS the union `true | false`
+            // in tsc, so the strip declines). Measured on both references.
+            val displayTargetPropType = nullableTargetDisplay(
+                targetPropType, sourcePropType, isOptionalProperty(targetProp),
+            )
+            val displaySource = relationErrorSourceDisplay(
+                objLitMemberDisplaySource(freshVal, sourcePropType, targetPropType),
+                displayTargetPropType,
+            )
+            val displayTargetProp = relationErrorTargetDisplay(displayTargetPropType)
             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
             val related = mutableListOf<Diagnostic>()
             val tpDecl = targetProp.declarations.firstOrNull()
@@ -185995,11 +186323,26 @@ interface DataView {
                         "      Type 'string' is not assignable to type 'number'.",
                     )))
             }
-            // (B) SWAP the degenerate `string ≁ string` TS2322 → keep the literals + TS6500.
+            // (B) The TS2322 at `return {foo:"bar"}` — ATTACH the TS6500 the engine has no
+            // mechanism for, and normalise the message.
+            //
+            // (CHK.92)(a) CLOSED THE MESSAGE HALF OF THIS PIN: the engine now prints
+            // `Type '"bar"' is not assignable to type '"foo"'.` itself, because an
+            // object-literal member keeps its written literal against a literal-holding
+            // target ([literalKeptByContextualType]) and the TARGET is no longer widened.
+            // Before this round it printed the degenerate `string ≁ string` the swap below
+            // was matching by TEXT — so an exact-message probe is what made the pin stale,
+            // and this predicate now accepts BOTH spellings. What stays pin-owned is the
+            // TS6500, whose anchor is the MAPPED TYPE NODE: a mapped member has no ordinary
+            // declaration, so `createPropertyDeclaredHereRelatedInfo` (the engine's related-
+            // info builder) answers null for it and no engine site can place this row.
             val testFn = stmts.filterIsInstance<FunctionDeclaration>().firstOrNull { it.name?.text == "test" }
             val mappedType = testFn?.type
             val idx2322 = diagnostics.indexOfFirst {
-                it.code == 2322 && it.fileName == fileName && it.message == "Type 'string' is not assignable to type 'string'."
+                it.code == 2322 && it.fileName == fileName && (
+                    it.message == "Type 'string' is not assignable to type 'string'." ||
+                        it.message == "Type '\"bar\"' is not assignable to type '\"foo\"'."
+                    )
             }
             if (idx2322 >= 0 && mappedType != null) {
                 var mp = mappedType.pos

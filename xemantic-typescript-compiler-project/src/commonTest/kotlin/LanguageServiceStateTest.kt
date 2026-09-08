@@ -215,6 +215,44 @@ class LanguageServiceStateTest {
         assert(local?.displayString == "Local.Alpha")
     }
 
+    /**
+     * (CHK.92)(d) THE CONSUMER-SIDE PIN. `typeToString` is the GENERAL renderer and
+     * `quickInfoAt` is one of its consumers, so a rule written for RELATION ERRORS must not
+     * be put there — and the ONE-member enum collapse is the measured instance: tsc's own
+     * hover does NOT collapse.
+     *
+     * GROUND TRUTH, asked of `tools/tsgo-7.0.2/lib/tsc --lsp -stdio` through
+     * `scripts/lsp_hover.py` (verbatim, one caret per member DECLARATION):
+     *
+     * ```
+     * decl Plain.Beta                  (enum member) Plain.Beta = 1
+     * decl Valued.Gamma (ONE member)   (enum member) Valued.Gamma = 5
+     * decl Konst.Eps    (ONE member)   (enum member) Konst.Eps = 0
+     * decl Str.Zeta     (ONE member)   (enum member) Str.Zeta = "z"
+     * decl One.Solo     (ONE member)   (enum member) One.Solo = 0
+     * decl OneVal.Only  (ONE member)   (enum member) OneVal.Only = 7
+     * ```
+     *
+     * i.e. a one-member enum's member hovers with its QUALIFIED name, exactly as a
+     * two-member enum's does — while a relation error naming the same type reads the bare
+     * enum (`const a: Cmp.X = st` → `Type 'string' is not assignable to type 'Cmp'.` in both
+     * references). The two answers DIFFER, so the collapse lives on
+     * `Checker.relationErrorTargetDisplay` and nowhere else.
+     *
+     * A first attempt put it in `typeToString` with a bypass at the TS2367 operand; the
+     * SECOND bypass the language service then needed is the signal that the rule was in the
+     * wrong place, and the only thing that caught it was the full suite. This pin makes the
+     * constraint visible from the display side.
+     */
+    @Test
+    fun `a ONE member enum's member hovers with its qualified name - not the bare enum`() {
+        val source = "enum Solo { Only = 7 }\nenum Pair { Aleph = 1, Beth = 2 }\n" +
+            "const u = [Solo.Only, Pair.Aleph];\nexport { u };\n"
+        val project = projectWith(source)
+        assert(project.quickInfoAt(file, offsetOf(source, "Only = 7", plus = 1))?.displayString == "Solo.Only")
+        assert(project.quickInfoAt(file, offsetOf(source, "Aleph = 1", plus = 1))?.displayString == "Pair.Aleph")
+    }
+
     // --- gap 3: an object literal's own method ----------------------------------
 
     private val methodSource =

@@ -25,6 +25,68 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.48) — the enum and nullable-target display residues close ((CHK.92), all four parts), and a display rule put in the general renderer broke the LANGUAGE SERVICE (2026-09-08)
+
+**Suite 18,302 → 18,338 / 0 / 3** — 35 pins in the new `EnumAndNullableRelationDisplayTest`, one
+consumer-side pin in `LanguageServiceStateTest`, one stale pin INVERTED with proof. Grid
+**8 × added=0 removed=0** (re-run by the agent after production code moved, then re-run
+INDEPENDENTLY by the orchestrator); `cost_gate.py` exit 0 (largest delta **+0.03%**),
+`huge_methods.py` exit 0, build warning-clean under `--rerun-tasks`.
+
+**ALL FOUR PARTS LANDED**: (a) neither side of an object-literal member mismatch is widened any more
+(`'6'` → `'5'`, not `'number'` → `'number'`), with tsc's per-FLAVOUR literal keep; (b) the four
+MEANING rows — an enum-target object-literal member at an ARGUMENT — now report byte-exactly; (c)
+one home, `nullableTargetDisplay`, implements tsc's `DefinitelyNonNullable`-gated strip AND the
+optional-declaration add, correcting **both** directions at five call sites; (d) a one-member enum's
+relation-error display collapses to the parent at four positions.
+
+**THE ROUND'S LESSON IS ARCHITECTURAL AND COST TWO ROUND-TRIPS: A DISPLAY RULE SPECIFIC TO RELATION
+ERRORS MUST NOT LIVE IN `typeToString`.** (d) was first implemented in the general renderer with a
+TS2367 bypass bolted on — and the full suite then found it had broken `Project.quickInfoAt`, turning
+a hover on a one-member enum's member from `Valued.Gamma` into `Valued`. That is not a cosmetic
+loss: `LanguageServiceStateTest`'s shadowing case is (API.15)'s deliberate NEGATIVE CONTROL, whose
+whole purpose is that the answer names the OWNER, so the collapse destroyed the distinction the pin
+exists to make. **The oracle was asked rather than argued** — `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`
+via `scripts/lsp_hover.py` answers `(enum member) Valued.Gamma = 5` for all four one-member shapes,
+i.e. tsgo does NOT collapse in hover where both references DO collapse in a relation error. One
+renderer cannot serve both. The rule now lives in `relationErrorTargetDisplay` (5 call sites, all
+relation-error heads), the TS2367 bypass is DELETED because it only existed to undo the
+misplacement, and **needing a second per-consumer bypass is recorded as the signal that a rule is in
+the wrong place**. Arm a12 is now the PLACEMENT arm — it puts the collapse back into `typeToString`
+and is graded on the `-project` module, 3 RED.
+
+**A STALE PIN WAS INVERTED WITH PROOF, AND ITS OWN NAME SAID SO.** `ConstAssertionTest`'s
+`residue - the argument elaboration through a const assertion widens the target display - r24`
+asserted the known-wrong `'string'`; (a) made it print `'"b"'`, which is what pristine 6.0.3 AND
+tsgo 7.0.2 both print. Renamed, expectation updated, both transcripts in its KDoc. Second such pin
+in three rounds — a pin whose name contains "residue" is a countdown, and CLAUDE.md already says
+not to pin a known-open gap as a control.
+
+**FOUR OF THE ITEM'S CLAIMS WERE WRONG OR INCOMPLETE.** (a) names TWO emitters and there are THREE
+(`checkNestedObjLitPropTypes` owns the nested/return leaf); (d)'s exception is literal FRESHNESS in
+full, not the two syntactic cases listed; (c)'s "three sites" is five; and the binding constraint for
+(a) was not its 21-baseline guard set but a corpus PIN WALKER (`checkErrorElaboration`) that locates
+its row by exact message TEXT — (a) made the engine emit the right text directly, so the pin's probe
+found nothing and its TS6500 vanished. Fixed by accepting both spellings.
+
+**AND THAT PIN WALKER ALSO CONFOUNDED THE ROUND'S OWN INSTRUMENT**: a message-text marker (round
+947's positive control) reddens the baseline on the **BEFORE** arm wherever such a walker matches on
+text, so a working binary reads as broken. The decisive experiment was the CORPUS HARNESS on both
+arms — a scratch CLI run uses the REAL libs where the corpus uses the embedded one, so a different
+emitter fired and the first two diagnoses were about the wrong site. Now a CLAUDE.md entry.
+
+**REFUSED, WITH THE MEASUREMENT**: (d)'s TS2367 freshness half — `Cmp.X === 5` and `const cx = Cmp.X`
+keep the member while `let lx = …` and an annotation-derived `declare const av: Cmp.X` collapse, and
+this checker mints no fresh enum-member type, so the four shapes share one `Type`. Pinned as a
+recorded refusal. **Two MEANING residues found beside the item** are queued as (CHK.113): a `number`
+source is silently ACCEPTED against a string-enum target (TS2322 in both references), and
+argument-position source freshness needs a widening of `ts2322KeepsSourceLiteral`, whose KDoc records
+two prior FP incidents from exactly that.
+
+**ARMS — 13, ALL DISCRIMINATING, NONE BLIND OR REDUNDANT.** a1/a2 are NOT a pair (a1's 2 rows are a
+strict subset of a2's 4, so both mechanisms are separately load-bearing); a12 is the placement arm
+described above.
+
 ### Round (P18.47) — the rest-tuple model is fixed ((CHK.111)), the item's named seam was WRONG rather than incomplete, and the regression it caused was in another module (2026-09-08)
 
 **Suite 18,271 → 18,302 / 0 / 3** — 31 pins in the new `RestTupleModelTest`. Grid
@@ -1913,7 +1975,29 @@ where the order sends you.
   `UnionOrIntersection` and an `Instantiable`'s constraint — widening it is corpus-gated because
   that allowlist is what protects two baselines.
 
-- [ ] **(CHK.92) THE (CHK.83) DISPLAY/ARGUMENT RESIDUES — MEASURED 2026-09-05 by read-only
+- [ ] **(CHK.113) THE TWO MEANING RESIDUES (CHK.92) MEASURED BESIDE ITS OWN PARTS, AND (d)'s REFUSED
+  HALF (2026-09-08, (P18.48); fixtures `build/bench/chk92-sub`).** (a) **A `number` SOURCE IS SILENTLY
+  ACCEPTED AGAINST A *STRING ENUM* TARGET** — `const m: SOne = <number>` and `const m: STwo = <number>`
+  are silent here and TS2322 in BOTH references. A genuine MEANING gap and separate from (CHK.92)(b),
+  which was the argument-position OBJECT-LITERAL half; this one is the plain declaration. (b) FORM,
+  argument-position source FRESHNESS: `gB(1)` against `b?: boolean` prints `'number'` where both
+  references print `'1'`, and `gN(true)` prints `'boolean'` for `'true'` — tsc keeps them because
+  `undefined` is a UNIT type in `typeCouldHaveTopLevelSingletonTypes` and our `propTypeContainsLiteral`
+  has no nullish arm. **Refused in (CHK.92) as SCOPE, not as wrong**: the fix widens
+  `ts2322KeepsSourceLiteral`, whose KDoc records two prior false-positive incidents from exactly that
+  widening — so it needs its own round with the 21-baseline literal-target guard set. (c) (CHK.92)(d)'s
+  TS2367 half stays REFUSED: `Cmp.X === 5` and `const cx = Cmp.X` keep the member while `let lx = Cmp.X`
+  and an annotation-derived `declare const av: Cmp.X` collapse in both references, i.e. the rule is
+  literal FRESHNESS, and this checker mints no fresh enum-member type — the four shapes share one
+  `Type` and cannot be separated by it. Closing it needs a SYNTACTIC freshness proxy at that emitter,
+  which is a second copy of a rule the type system does not carry; pinned as a recorded refusal in
+  `EnumAndNullableRelationDisplayTest`. RISK: (a) LOW-MEDIUM and MEANING, (b) MEDIUM, (c) BLOCKED.
+
+- [x] **(CHK.92) CLOSED 2026-09-08 ((P18.48) note): all four parts landed, and (d)'s TS2367 freshness
+  half is REFUSED with its mechanism (this checker mints no fresh enum-member type, so the four shapes
+  share one `Type`). The item named TWO emitters for (a) and there are THREE, and its (d) exception is
+  literal FRESHNESS in full rather than the two syntactic cases it lists. Two MEANING residues found
+  beside it are recorded in (CHK.113). ORIGINAL: THE (CHK.83) DISPLAY/ARGUMENT RESIDUES — MEASURED 2026-09-05 by read-only
   recon (`scratchpad/chk92`, 45 rows; tsgo 7.0.2 and pristine 6.0.3 agree on every row;
   Checker.kt lines are commit 7685baf8).** (a) FORM. `emitPerPropertyMismatchesForObjectLiteral`
   (~168702) and `caasObjLitPerPropertyMismatch` (~162327) print `'number' is not assignable to

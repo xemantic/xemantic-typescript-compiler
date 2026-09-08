@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,073** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **199,416** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,34 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.48) — THE ENUM AND NULLABLE-TARGET DISPLAY RESIDUES CLOSE ((CHK.92), ALL FOUR PARTS), AND A DISPLAY RULE PUT IN THE GENERAL RENDERER BROKE THE LANGUAGE SERVICE, 18,302 → 18,338 / 0 / 3 (2026-09-08).**
+**All four parts LANDED**: (a) neither side of an object-literal member mismatch is widened any more
+(`'6'` → `'5'`, not `'number'` → `'number'`), with tsc's per-FLAVOUR literal keep; (b) the four
+MEANING rows — an enum-target object-literal member at an ARGUMENT — now report byte-exactly; (c) one
+home, `nullableTargetDisplay`, implements tsc's `DefinitelyNonNullable`-gated strip AND the
+optional-declaration add, correcting BOTH directions at five call sites; (d) a one-member enum's
+relation-error display collapses to the parent at four positions. **The round's lesson is
+architectural and cost two round-trips: a display rule specific to RELATION ERRORS must not live in
+`typeToString`.** (d) was first put in the general renderer with a TS2367 bypass bolted on, and the
+full suite found it had broken `Project.quickInfoAt` — a hover on a one-member enum's member went
+from `Valued.Gamma` to `Valued`, destroying the distinction (API.15)'s deliberate negative control
+exists to make. **The oracle was asked rather than argued**: `tsgo --lsp -stdio` answers
+`(enum member) Valued.Gamma = 5` for all four one-member shapes, i.e. tsgo does NOT collapse in hover
+where both references DO collapse in a relation error — one renderer cannot serve both. The rule now
+lives in `relationErrorTargetDisplay` (5 relation-error heads), the bypass is DELETED, and **needing
+a second per-consumer bypass is recorded as the signal a rule is misplaced**; arm a12 is now the
+PLACEMENT arm, graded on the `-project` module at 3 RED. **A stale pin was INVERTED with proof** —
+`ConstAssertionTest`'s r24 asserted the known-wrong `'string'` and both references print `'"b"'`
+(second such pin in three rounds; a pin whose name says "residue" is a countdown). **Four of the
+item's claims were wrong**: (a) names two emitters and there are three, (d)'s exception is literal
+FRESHNESS in full, (c)'s "three sites" is five, and the binding constraint for (a) was a corpus PIN
+WALKER matching on exact message TEXT — which **also confounded the round's own instrument**, since a
+message-text marker reddens the BEFORE arm wherever such a walker exists. REFUSED with its
+measurement: (d)'s TS2367 freshness half (this checker mints no fresh enum-member type, so the four
+shapes share one `Type`). Two MEANING residues queued as (CHK.113). 35 pins + 1 consumer-side pin;
+13 arms, all discriminating. Grid **8 × added=0 removed=0** re-run independently; `cost_gate.py`
+exit 0, `huge_methods.py` exit 0, build warning-clean.
 
 **(P18.47) — THE REST-TUPLE MODEL IS FIXED ((CHK.111)), THE ITEM'S NAMED SEAM WAS *WRONG* RATHER THAN INCOMPLETE, AND THE REGRESSION IT CAUSED WAS IN ANOTHER MODULE, 18,271 → 18,302 / 0 / 3 (2026-09-08).**
 **(CHK.111) CLOSED, and the item under-counted its own defect by 9x** — it recorded "exactly 1 false
@@ -120,32 +148,3 @@ byte-identical to binaries it built itself; `cost_gate.py` exit 0 (largest delta
 every agent to read was added by `cc09770a3` and archived out with the four COMPLETED items beneath
 it, leaving a pointer to a heading that had not existed for ~25 rounds — restored, with an addendum
 recording that the order's tail is (INV.0) while the arc has been (CHK.\*).
-
-**(P18.43) — THE FLOW-JOIN SUBTYPE REDUCTION IS MEMOIZED, AND A 3.2× *WALL* REGRESSION EVERY COUNTER GATE WAS BLIND TO IS CLOSED ((PERF.1)), 18,185 → 18,188 / 0 / 3 (2026-09-07).**
-**Warm A/B −57.7% and −58.9%, replicated in two batches** (16,981 → 7,176 ms, 16,584 → 6,817 ms,
-`files/errors` 78/46 on every arm); cold CLI 35,893 → 26,740 ms (−25.5%). **The degradation the
-bench series has carried since 2026-09-05 is ONE COMMIT, not refactoring drift**: `warm/tsc` is
-0.36-0.44× for the rows before `9a49e44c2060` ((CHK.85)(b)) and 1.13-1.56× for all 25 rows since,
-with tsc's own time ranging 7.29-13.81 s across the after-rows — and the **native AOT arm regressed
-4.8× too**, so it is not a JIT or AOT-cache artifact. **Every deterministic counter is FLAT**
-(`spine.nodes` bit-identical, `narrow.walks` +1.2%, and nothing above +4.5% even 25 rounds later),
-because the cost is per-ARRIVAL and `cost_gate.py` counts LAUNCHES — the round-735 tail law, with
-the (CHK.85)(b) note's own "414 reporting walks" as the count that hid ~90% of narrowing time.
-**The mechanism was not the one the diff suggests**: `--narrowSections` reads `narrowByAssignmentRhs`
-(the new enum arm's home, and this round's original target) **FLAT at 209.7 → 221.0 ms**, while
-`getUnionType at a branch label` goes 368.7 → **20,384.7 ms** on +1.7% calls and `relations(depth0)`
-1,235 → **14,512 ms**. (CHK.66)'s subtype reduction runs only when a member is FOREIGN to the
-declaration — "free on almost every join" — and (CHK.85)(b)'s enum arm makes a branch answer a
-MEMBER (`K.A`) where the declared type is the atomic enum `K`, so a whole class of joins fell onto
-the quadratic path. Ablations attribute it exactly: forcing the free path is **−9.9 s with all 46
-diagnostics unchanged**, skipping the enum sort is −0.8 s. **Fixed as a MEMO, not a predicate
-change, because reading `K.A` as declared would disable the reduction a join genuinely needs**
-(`K.A | K` must reduce to `K`); keyed `packIdPair(joined.id, declaredType.id)`, which is exact —
-`getUnionType` interns by member-id list and `isTypeAssignableTo` is already id-cached. Post-fix
-`relations(depth0)` is 1,226 ms, fully back to the pre-regression 1,235. **Fix (2), bounding the
-reporting walk, is REFUSED on this round's own measurement** (the ≥1 ms tail is 306/2,520 ms against
-the pre-regression 210/1,360 — the walk was never expensive, only the reduction it triggered was).
-3 pins; the poisoned-memo ablation reddens **exactly P2**, the served ask, and one arm is recorded
-**BLIND** rather than redundant (`anyForeign`'s early exit returns above the cache probe). Grid
-**8 × added=0 removed=0**, `cost_gate.py` exit 0 (all counters within ±0.03%, no rebaseline),
-`huge_methods.py` exit 0, build warning-clean.

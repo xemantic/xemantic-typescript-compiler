@@ -1,3 +1,32 @@
+**(P18.43) — THE FLOW-JOIN SUBTYPE REDUCTION IS MEMOIZED, AND A 3.2× *WALL* REGRESSION EVERY COUNTER GATE WAS BLIND TO IS CLOSED ((PERF.1)), 18,185 → 18,188 / 0 / 3 (2026-09-07).**
+**Warm A/B −57.7% and −58.9%, replicated in two batches** (16,981 → 7,176 ms, 16,584 → 6,817 ms,
+`files/errors` 78/46 on every arm); cold CLI 35,893 → 26,740 ms (−25.5%). **The degradation the
+bench series has carried since 2026-09-05 is ONE COMMIT, not refactoring drift**: `warm/tsc` is
+0.36-0.44× for the rows before `9a49e44c2060` ((CHK.85)(b)) and 1.13-1.56× for all 25 rows since,
+with tsc's own time ranging 7.29-13.81 s across the after-rows — and the **native AOT arm regressed
+4.8× too**, so it is not a JIT or AOT-cache artifact. **Every deterministic counter is FLAT**
+(`spine.nodes` bit-identical, `narrow.walks` +1.2%, and nothing above +4.5% even 25 rounds later),
+because the cost is per-ARRIVAL and `cost_gate.py` counts LAUNCHES — the round-735 tail law, with
+the (CHK.85)(b) note's own "414 reporting walks" as the count that hid ~90% of narrowing time.
+**The mechanism was not the one the diff suggests**: `--narrowSections` reads `narrowByAssignmentRhs`
+(the new enum arm's home, and this round's original target) **FLAT at 209.7 → 221.0 ms**, while
+`getUnionType at a branch label` goes 368.7 → **20,384.7 ms** on +1.7% calls and `relations(depth0)`
+1,235 → **14,512 ms**. (CHK.66)'s subtype reduction runs only when a member is FOREIGN to the
+declaration — "free on almost every join" — and (CHK.85)(b)'s enum arm makes a branch answer a
+MEMBER (`K.A`) where the declared type is the atomic enum `K`, so a whole class of joins fell onto
+the quadratic path. Ablations attribute it exactly: forcing the free path is **−9.9 s with all 46
+diagnostics unchanged**, skipping the enum sort is −0.8 s. **Fixed as a MEMO, not a predicate
+change, because reading `K.A` as declared would disable the reduction a join genuinely needs**
+(`K.A | K` must reduce to `K`); keyed `packIdPair(joined.id, declaredType.id)`, which is exact —
+`getUnionType` interns by member-id list and `isTypeAssignableTo` is already id-cached. Post-fix
+`relations(depth0)` is 1,226 ms, fully back to the pre-regression 1,235. **Fix (2), bounding the
+reporting walk, is REFUSED on this round's own measurement** (the ≥1 ms tail is 306/2,520 ms against
+the pre-regression 210/1,360 — the walk was never expensive, only the reduction it triggered was).
+3 pins; the poisoned-memo ablation reddens **exactly P2**, the served ask, and one arm is recorded
+**BLIND** rather than redundant (`anyForeign`'s early exit returns above the cache probe). Grid
+**8 × added=0 removed=0**, `cost_gate.py` exit 0 (all counters within ±0.03%, no rebaseline),
+`huge_methods.py` exit 0, build warning-clean.
+
 **(P18.42) — AN INTERSECTION DEDUPES ITS CONSTITUENTS BY TYPE ID ((CHK.106)(b)), AND (a) IS BROADER THAN THE ITEM RECORDED, 18,179 → 18,185 / 0 / 3 (2026-09-07).**
 **(CHK.106) CLOSED — one part fixed, three verified against both references.** (b) had MOVED since
 the item was written: (CHK.101) closed its `| undefined` half and what remained was `BP & BP` vs

@@ -661,13 +661,23 @@ class ConstAssertionTest {
     // ---------------------------------------------------------------------
 
     @Test
-    fun `residue - the argument elaboration through a const assertion widens the target display - r24`() {
-        // Both references: `Type '"a"' is not assignable to type '"b"'.` at `v`. The
-        // position and the source are theirs; the target `'string'` is (CHK.92)(a)'s
-        // per-property emitter widening the target literal for display, not this round's.
+    fun `the argument elaboration through a const assertion keeps the target literal - r24`() {
+        // CLOSED 2026-09-08 by (CHK.92)(a), which this pin's own note had already named as
+        // the owner: the two per-property emitters printed the target through
+        // `getWidenedLiteralType`, so a literal target read `'string'`. tsc widens NEITHER
+        // side — `reportRelationError` renders the target as written and generalizes the
+        // source only when the target could not hold a singleton — and BOTH references
+        // print the same row for this exact fixture, re-measured on the day the pin was
+        // inverted:
+        //
+        //   tsgo 7.0.2:      z.ts(6,48): error TS2322: Type '"a"' is not assignable to type '"b"'.
+        //   pristine 6.0.3:  z.ts(6,48): error TS2322: Type '"a"' is not assignable to type '"b"'.
+        //
+        // The pin was NOT weakened: it asserted a KNOWN-WRONG value (its old name said
+        // "residue … widens the target display") and now asserts the references' own.
         val src = "declare function zf(x: { v: \"b\" }): void; zf({ v: \"a\" } as const)"
         val d = diagnose(prelude + src)
-        assert(d.map { it.message } == listOf("Type '\"a\"' is not assignable to type 'string'."))
+        assert(d.map { it.message } == listOf("Type '\"a\"' is not assignable to type '\"b\"'."))
         assert(d[0].code == 2322)
         assert(d[0].character == col(src, "v: \"a\" } as const"))
     }
