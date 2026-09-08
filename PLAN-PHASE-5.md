@@ -25,6 +25,70 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.45) — an inline literal callee gets its own type ((CHK.109)), and the callee EXPRESSION is evidence the callee TYPE cannot carry (2026-09-08)
+
+**Suite 18,212 → 18,234 / 0 / 3** — 22 pins in the new `InlineLiteralCalleeTest`. Grid
+**8 × added=0 removed=0**, re-run INDEPENDENTLY by the orchestrator; `cost_gate.py` exit 0
+(largest delta `mapped.hits` **+0.03%**, no rebaseline), `huge_methods.py --fail-over 0` exit 0
+(834 classes, 0 over), build warning-clean.
+
+**(CHK.109) CLOSED: 1 → 15 of the reference's 16 rows**, byte-identical to pristine on every one.
+`({})()`, `({ a: 1 })()`, `[1]()`, `("x")()`, `(1)()`, a template, a boolean, a regex, nested
+parentheses, `?.()`, explicit type arguments (exactly ONE row — the `tryEmitUncallableTypeArgs`
+dedupe holds) and an object literal carrying a method all report; an inline arrow, function
+expression, async arrow and every literal RECEIVER stay silent. tsgo 7.0.2 and pristine 6.0.3
+agree on all 16 rows, so no oracle conflict arose.
+
+**THE ITEM'S SEAM WAS RIGHT AND EXACTLY HALF THE FIX, AND THE HALF IT MISSES IS THE ENTRY-WORTHY
+ONE.** `getCalleeType`'s `else -> anyType` is where the `any` came from, and eight literal arms fix
+it — but the item then predicts "the (CHK.104) arms need no change at all", and that is **false for
+its own first example**. `({})()` and `(/x/)()` are still refused after the seam, by
+`calleeObjectTableIsComplete`: (CHK.45)'s rule demands positive evidence a member table is
+complete, and **an empty anonymous object is precisely the shape a TYPE cannot vouch for** — `{}`
+from a literal and `{}` from an unfinished resolution are the same type. The closing rule is
+therefore SYNTACTIC (`core is ObjectLiteralExpression || core is RegularExpressionLiteralNode`),
+and ablation a3 shows it is not decorative: its RED set is exactly the three EMPTY-`{}` pins and
+nothing else, because for a NON-empty literal the type-only rule already suffices. The general law
+— **the callee expression can be evidence the callee type cannot carry** — is now a CLAUDE.md
+entry.
+
+**A PARSER FACT COST A THIRD LEG: `true`/`false` ARE RESERVED WORDS THE PARSER RENDERS AS AN
+`Identifier`** (`Parser.kt:7003`), so `(true)()` reaches `getCalleeType`'s Identifier arm and
+resolves to nothing. The leg sits on the `lookupPerFileForNode` MISS path only, so no ordinary
+callee pays for it. Also a CLAUDE.md entry — any dispatcher with an `Identifier` arm inherits it.
+
+**POPULATION 3 → 15, and TWO SHAPES ARE A DIFFERENT DIAGNOSTIC AND STAY OPEN, WITH THEIR
+MECHANISM.** `(class {})()` is **TS2348** with a `typeof (Anonymous class)` display — that arm is
+gated on an `Identifier` callee and the display is a naming mechanism this compiler does not have
+— and `new ({})()` is **TS2351**, where every emitter on the `new` path is gated on an
+`Identifier`/`PropertyAccessExpression` callee. Both were checked to be INERT under this change (a
+class expression's type has construct signatures, so the completeness predicate returns false) and
+are recorded as stated refusals in the test KDoc rather than pinned.
+
+**FOUR DISPLAY DIVERGENCES ARE MADE VISIBLE AND ARE NOT THIS ITEM'S** — `[]()` prints `any[]` for
+`never[]`, `[() => 1]()` prints `() => number[]` for `(() => number)[]` (a missing
+parenthesization in `typeToString`), an object-literal getter prints `readonly g: any`, and a
+computed key prints `{ ["k"]: number; }`. **All four reproduce on the PARENT binary at a
+DECLARATION position**, i.e. this round only makes the row fire; each is an independent
+pre-existing defect and all are FORM per `docs/logical-parity.md` (code, span and the fact that the
+row fires are correct in every case). Fixing `[]` alone would change the empty-array-literal type
+program-wide, which is why it was refused rather than folded in.
+
+**ARMS — 4, ALL DISCRIMINATING, NONE BLIND OR REDUNDANT.** a1 the eight literal `when` arms **14
+RED**; a2 the `true`/`false` leg **1**, uniquely; a3 the `ObjectLiteralExpression` admission **3**,
+exactly the empty-`{}` pins; a4 the `RegularExpressionLiteralNode` admission **1**, uniquely. Four
+distinct `Checker.class` shas, so no arm was dead. **Every other `getCalleeType` caller was
+audited** (signature help, construct-signature capture, tagged template, `new`,
+`tryEmitUncallableTypeArgs`) and none can now emit for a literal — the tagged-template path needs
+`signatures.size == 1`, the others are `Identifier`-gated, and the two API paths merely get a more
+accurate empty signature list than `anyType` gave them.
+
+**ORCHESTRATOR RECEIPT.** The implementation agent's grid BEFORE arm was byte-identical
+(`fb2b6561…`) to the binary the orchestrator built and gated LAST round, and its AFTER arm
+(`eac83544…`) to the binary this round's green suite ran on — so both arms were verified with no
+extra build, and last round's AFTER captures were reused as this round's BEFORE captures (same
+binary) before the independent re-run reproduced `added=0 removed=0` on all eight.
+
 ### Round (P18.44) — a tuple's ARITY becomes expressible ((CHK.108)), the item's seam was necessary and not sufficient, and the WORK ORDER note CLAUDE.md points at had been archived out of this file (2026-09-08)
 
 **Suite 18,188 → 18,212 / 0 / 3** — 19 pins in the new `ArrayLiteralTupleArityTest` plus one
@@ -1412,7 +1476,11 @@ where the order sends you.
   equal literals are two members. CORPUS: the 15 ACTIVE `.errors.txt` echoing an array-literal
   spread are all GREEN as of stage 1.
 
-- [ ] **(CHK.109) AN *INLINE* LITERAL CALLEE IS TYPED `any`, SO EVERY TS2349 ARM IS UNREACHABLE FOR
+- [x] **(CHK.109) CLOSED 2026-09-08 ((P18.45) note): 1 → 15 of the reference's 16 rows. The item's named
+  seam was right and HALF the fix — its own headline shape `({})()` stays silent after it, because
+  `calleeObjectTableIsComplete` refuses an empty anonymous object on the TYPE alone and only a SYNTACTIC
+  admission can close it; population 3 → 15, and `(class {})()` / `new ({})()` are a different diagnostic
+  (TS2348 / TS2351), refused with their mechanism. ORIGINAL: AN *INLINE* LITERAL CALLEE IS TYPED `any`, SO EVERY TS2349 ARM IS UNREACHABLE FOR
   IT — `({})()`, `[1]()` and `({ a: 1 })()` are silent here and reported by BOTH references
   (measured 2026-09-07, (P18.39); scratch `chk104/r2` lines 7-9 and `chk104/r5`).** The type itself
   is fine: the SAME literal reads `{ a: number; }` / `number[]` at a declaration

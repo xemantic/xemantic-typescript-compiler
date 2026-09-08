@@ -1,3 +1,26 @@
+**(P18.40) — TS2454 FOR AN `if` JOIN, AND THE TS2448 CO-EMIT'S RULE WAS THE *TYPE* AND NOT CONST-NESS ((CHK.105)), 18,157 → 18,172 / 0 / 3 (2026-09-07).**
+**(CHK.105) CLOSED for (a) and the `if` join; (CHK.110) queued with all three residues attributed.**
+B78.1 read the co-emit rule as CONST-NESS off `typeGuardNarrowsIndexedAccessOfKnownProperty10`,
+whose const is `any`-typed — what suppresses tsc's TS2454 there is tsc's `assumeInitialized` on
+`AnyOrUnknown | Void`, and with an ordinary type BOTH references report TS2448 **and** TS2454. **Two
+hand-written pins in this repo were pinning that wrong answer and are repaired here.** The corpus
+then found the other half of `assumeInitialized` this population reaches: a CLASS STATIC INITIALIZER
+is a different control-flow container from the declaration (tsc's `isOuterVariable`), where both
+references report TS2448 alone. For the join, `markAssignments` scanned both branches of an `if`
+unconditionally; the lattice it needed was already written — round 450's `daWalkStmt`, built for
+`while (true)` — and is now consulted per variable, CONSERVATIVE TO REMOVE, so only what the walk
+can prove changes. **The grid found the one guard the naive form needs and it is a tsc BINDER rule**:
+the flow is unreachable after a call to a never-returning function, so an unassigned CALL statement
+bails (two ours-only rows on three profiles at `fixPropertyOverrideAccessor.ts:83` without it) — as
+a `DaState` FLAG, because in round 450's caller a bail means "do NOT remove" and would ADD
+diagnostics. **A third deliverable was BUILT AND REVERTED**: requiring a `default` before a switch
+removal costs two ours-only rows on ALL EIGHT profiles at `checker.ts:38141`, an exhaustive
+default-less switch tsc proves and we cannot. **Three of the item's claims are wrong** — its "3 lost
+TS2345" rows are the (CHK.63)-adjacent ARGUMENT-reader gap for a BODY-LOCAL source (the TYPE is
+already exact at the declaration position), its population is 4 rows not 7, and the join is lost in
+`markAssignments`, not in the set pass it names. 13 pins + 2, 5 arms all discriminating, grid
+**8 × added=0 removed=0**, `cost_gate.py` exit 0, `huge_methods.py` exit 0, build warning-clean.
+
 **(P18.39) — CALLING A LITERAL-TYPED OR OBJECT-TYPED VALUE IS TS2349 ((CHK.104)), AND THE OBJECT ARM NEEDED TWO GUARDS THE ITEM DID NOT NAME, 18,136 → 18,157 / 0 / 3 (2026-09-07).**
 **(CHK.104) CLOSED, 7 → 19 of the reference's 22 rows; (CHK.109) queued.** The primitive arm read
 `calleeType is Type.Intrinsic`, i.e. exactly the WIDENED half of the population: `let s = "a"`

@@ -69,10 +69,12 @@ import kotlin.test.Test
  * (`const o = {}; o()`) are all reported by both references and stay silent here: a
  * base type can bring a member this checker did not build, a lib heritage type is the
  * exact shape (CHK.45) measured two false positives on, and `{}` from a literal is
- * indistinguishable from `{}` from an unfinished resolution. A parenthesized inline
- * literal callee (`({ a: 1 })()`) is silent for a different reason — its type reaches
- * the reader as `any`. Per CLAUDE.md a known-open gap is recorded in the session note,
- * never pinned as a control.
+ * indistinguishable from `{}` from an unfinished resolution. Per CLAUDE.md a known-open
+ * gap is recorded in the session note, never pinned as a control.
+ *
+ * A parenthesized inline literal callee (`({ a: 1 })()`) was silent here for a DIFFERENT
+ * reason — its type reached the reader as `any`, so no arm of this family ran at all —
+ * and (CHK.109) closed that in [Checker.getCalleeType]; see `InlineLiteralCalleeTest`.
  */
 class NonCallableValueTest {
 

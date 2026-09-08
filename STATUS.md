@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,746** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
+extraction):** `Checker.kt` **198,781** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
 (INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
 3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
 for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
@@ -9,6 +9,34 @@ checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one t
 stated in the ledger). Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.45) — AN INLINE LITERAL CALLEE GETS ITS OWN TYPE ((CHK.109)), AND THE CALLEE *EXPRESSION* IS EVIDENCE THE CALLEE *TYPE* CANNOT CARRY, 18,212 → 18,234 / 0 / 3 (2026-09-08).**
+**(CHK.109) CLOSED, 1 → 15 of the reference's 16 rows**, byte-identical to pristine on every one
+(`({})()`, `({ a: 1 })()`, `[1]()`, string / number / template / boolean / regex, nested
+parentheses, `?.()`, explicit type arguments at exactly ONE row, and an object literal carrying a
+method); an inline arrow, function expression, async arrow and every literal RECEIVER stay silent.
+tsgo 7.0.2 and pristine 6.0.3 agree on all 16, so no oracle conflict arose. **The item's named
+seam was right and exactly HALF the fix, and it fails on the item's own first example**:
+`getCalleeType`'s `else -> anyType` is the source of the `any`, but after fixing it `({})()` and
+`(/x/)()` are still refused by `calleeObjectTableIsComplete` — (CHK.45)'s rule wants positive
+evidence a member table is complete, and **an empty anonymous object is exactly what a TYPE cannot
+vouch for**, since `{}` from a literal and `{}` from an unfinished resolution are the same type. The
+closing rule is SYNTACTIC, and arm a3's RED set is precisely the three empty-`{}` pins and nothing
+else — for a non-empty literal the type-only rule already suffices. **A parser fact cost a third
+leg**: `true`/`false` are reserved words the Parser renders as an `Identifier`, so `(true)()`
+reaches the Identifier arm and resolves to nothing (the leg sits on the miss path, so no ordinary
+callee pays for it). **Population 3 → 15**; `(class {})()` (TS2348, needs a
+`typeof (Anonymous class)` naming mechanism) and `new ({})()` (TS2351, every `new`-path emitter is
+`Identifier`-gated) are a DIFFERENT diagnostic, verified inert under the change and recorded as
+stated refusals. **Four display divergences are made visible and are not this item's** — `[]()`
+prints `any[]` for `never[]`, `[() => 1]()` loses a parenthesization, an objlit getter prints
+`readonly g: any`, a computed key prints `{ ["k"]: number; }` — **all four reproduce on the PARENT
+binary at a declaration position**, all FORM, all refused rather than folded in ( fixing `[]` alone
+would change the empty-array-literal type program-wide). 22 pins; 4 arms ALL discriminating with
+four distinct class shas, none blind or redundant; every other `getCalleeType` caller audited and
+shown unable to emit for a literal. Grid **8 × added=0 removed=0** re-run independently after both
+agent arms were verified byte-identical to orchestrator-built binaries; `cost_gate.py` exit 0
+(largest delta **+0.03%**), `huge_methods.py` exit 0 (834 classes, 0 over), build warning-clean.
 
 **(P18.44) — A TUPLE'S *ARITY* BECOMES EXPRESSIBLE ((CHK.108)), THE ITEM'S SEAM WAS NECESSARY AND NOT SUFFICIENT, AND THE `WORK ORDER` NOTE CLAUDE.md POINTS AT HAD BEEN ARCHIVED OUT OF THE PLAN, 18,188 → 18,212 / 0 / 3 (2026-09-08).**
 **(CHK.108) CLOSED, 11 of the reference's 12 rows**, byte-identical to pristine at all five
@@ -105,26 +133,3 @@ fixture, whose shape is `getRefactorContext` verbatim. 7 pins plus the stage-2 R
 3 arms all discriminating, one of them REDESIGNED after reading the same red set as another
 (refusing every conditional is refusing the mechanism). `cost_gate.py` exit 0, `huge_methods.py`
 exit 0, build warning-clean.
-
-**(P18.40) — TS2454 FOR AN `if` JOIN, AND THE TS2448 CO-EMIT'S RULE WAS THE *TYPE* AND NOT CONST-NESS ((CHK.105)), 18,157 → 18,172 / 0 / 3 (2026-09-07).**
-**(CHK.105) CLOSED for (a) and the `if` join; (CHK.110) queued with all three residues attributed.**
-B78.1 read the co-emit rule as CONST-NESS off `typeGuardNarrowsIndexedAccessOfKnownProperty10`,
-whose const is `any`-typed — what suppresses tsc's TS2454 there is tsc's `assumeInitialized` on
-`AnyOrUnknown | Void`, and with an ordinary type BOTH references report TS2448 **and** TS2454. **Two
-hand-written pins in this repo were pinning that wrong answer and are repaired here.** The corpus
-then found the other half of `assumeInitialized` this population reaches: a CLASS STATIC INITIALIZER
-is a different control-flow container from the declaration (tsc's `isOuterVariable`), where both
-references report TS2448 alone. For the join, `markAssignments` scanned both branches of an `if`
-unconditionally; the lattice it needed was already written — round 450's `daWalkStmt`, built for
-`while (true)` — and is now consulted per variable, CONSERVATIVE TO REMOVE, so only what the walk
-can prove changes. **The grid found the one guard the naive form needs and it is a tsc BINDER rule**:
-the flow is unreachable after a call to a never-returning function, so an unassigned CALL statement
-bails (two ours-only rows on three profiles at `fixPropertyOverrideAccessor.ts:83` without it) — as
-a `DaState` FLAG, because in round 450's caller a bail means "do NOT remove" and would ADD
-diagnostics. **A third deliverable was BUILT AND REVERTED**: requiring a `default` before a switch
-removal costs two ours-only rows on ALL EIGHT profiles at `checker.ts:38141`, an exhaustive
-default-less switch tsc proves and we cannot. **Three of the item's claims are wrong** — its "3 lost
-TS2345" rows are the (CHK.63)-adjacent ARGUMENT-reader gap for a BODY-LOCAL source (the TYPE is
-already exact at the declaration position), its population is 4 rows not 7, and the join is lost in
-`markAssignments`, not in the set pass it names. 13 pins + 2, 5 arms all discriminating, grid
-**8 × added=0 removed=0**, `cost_gate.py` exit 0, `huge_methods.py` exit 0, build warning-clean.

@@ -135926,6 +135926,16 @@ interface DataView {
                 }
             }
         ) return false
+        // (CHK.109) An INLINE LITERAL callee answers the completeness question in the
+        // SYNTAX rather than in the type: the expression IS the value, so nothing that
+        // was not written here can be missing from its member table and "it has no call
+        // signatures" is a verdict. That is what admits an EMPTY `({})()` — the one shape
+        // the type-only evidence below must refuse, because `{}` minted from a literal and
+        // `{}` left by an unfinished resolution are the same type and no predicate over
+        // the TYPE separates them. A regex literal is here for the same reason one rung
+        // up: `RegExp`'s members come from a lib declaration this compiler always has, and
+        // the declaration test below would otherwise refuse it as a lib type.
+        if (core is ObjectLiteralExpression || core is RegularExpressionLiteralNode) return true
         if (isArrayLikeReference(calleeType)) return true
         val obj = calleeType as? Type.Object ?: return false
         resolveStructuredTypeMembers(obj)
@@ -163561,7 +163571,18 @@ interface DataView {
                 // INV.3(c)(iii) round 507: node-keyed — a callee with no per-file
                 // meaning must not check args against a foreign module file's leaked
                 // signature (tsc: TS2304 → any; suppression-only).
-                val symbol = lookupPerFileForNode(expr, expr.text) ?: return anyType
+                val symbol = lookupPerFileForNode(expr, expr.text)
+                    // (CHK.109) `true`/`false` are RESERVED WORDS the Parser renders as an
+                    // `Identifier` (Parser.kt's Boolean-literal arm), so a boolean literal
+                    // callee arrives here and resolves to nothing. Read on the MISS path
+                    // only: no scope can bind either spelling, so a hit is never one of
+                    // them and the ordinary callee pays nothing. `(true)()` is `Boolean` to
+                    // both references.
+                    ?: return if (expr.text == "true" || expr.text == "false") {
+                        getTypeOfExpression(expr)
+                    } else {
+                        anyType
+                    }
                 // (CHK.49) the callee position is a VALUE position, and a module
                 // file's TYPE-only declaration/import of a lib name does not hide
                 // the lib's `declare var` — which is exactly the case the
@@ -163576,6 +163597,19 @@ interface DataView {
             is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
             is ElementAccessExpression -> getTypeOfElementAccess(expr)
             is ParenthesizedExpression -> getCalleeType(expr.expression)
+            // (CHK.109) An INLINE LITERAL callee. There is no name to resolve and no
+            // declaration to find: the expression IS the value, so its type is exactly
+            // what the source spells and [getTypeOfExpression] answers it outright. Before
+            // this these fell to the `else` below, so `({})()`, `[1]()` and `({ a: 1 })()`
+            // arrived at `checkSingleCallExpressionTypesCore` as `anyType` and left at its
+            // `anyType || errorType` bail — i.e. EVERY TS2349 arm was unreachable for them,
+            // while the SAME literal read its real type at a declaration. Both references
+            // report all of these.
+            is ObjectLiteralExpression, is ArrayLiteralExpression,
+            is StringLiteralNode, is NumericLiteralNode, is BigIntLiteralNode,
+            is NoSubstitutionTemplateLiteralNode, is TemplateExpression,
+            is RegularExpressionLiteralNode,
+            -> getTypeOfExpression(expr)
             // (CHK.61d) `f!()` — the ASSERTION must reach the callee type, or a
             // `T | undefined` callee stays a union and TS2349 fires where tsc is
             // silent. Mirrors [getTypeOfExpression]'s own NonNullExpression arm.
