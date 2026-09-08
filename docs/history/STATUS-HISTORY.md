@@ -1,3 +1,21 @@
+**(P18.41) — A CONDITIONAL OF ARRAY LITERALS UNDER AN ARRAY PATTERN TYPES EACH BRANCH AT ITS OWN FLOW POSITION ((CHK.107)), AND THE GRID THE ITEM CALLED THE GATE IS A CONTROL, 18,172 → 18,179 / 0 / 3 (2026-09-07).**
+**(CHK.107) CLOSED, 1 → 6 of the reference's 6 rows.** `const [s, e] = typeof por === "number" ?
+[por, undefined] : [por.pos, por.end]` read both leaves as `any`. tsc pushes the pattern's implied
+contextual type into BOTH branches, so the source is `[number, undefined] | [number, number]` and
+`bindingElementType`'s union arm gives `number` / `number | undefined`; the reconstruction is a
+UNION of the branch tuples with **each element read AT ITS OWN FLOW POSITION** — the one thing
+(CHK.96) stage 2 could not do, since `getTypeOfExpression` never flow-narrows and an un-narrowed
+branch tuple reads slot 0 as `number | { pos: number; end: number; }`. The narrowing is a PARAMETER
+of `arrayLiteralAsDestructuringTuple`, so the plain array-literal path is untouched. **The item's
+gate claim is measured wrong and saying so is the point**: it predicts `removed=1` at
+`services.ts:3264` and the grid is `added=0 removed=0` on all eight — the refusal made both leaves
+`any`, which is SILENT, and that site's leaves feed a `RefactorContext` whose members are exactly
+`number` and `number | undefined`, so neither arm has a wrong-typed USE to report. The grade is the
+fixture, whose shape is `getRefactorContext` verbatim. 7 pins plus the stage-2 REFUSAL pin inverted;
+3 arms all discriminating, one of them REDESIGNED after reading the same red set as another
+(refusing every conditional is refusing the mechanism). `cost_gate.py` exit 0, `huge_methods.py`
+exit 0, build warning-clean.
+
 **(P18.40) — TS2454 FOR AN `if` JOIN, AND THE TS2448 CO-EMIT'S RULE WAS THE *TYPE* AND NOT CONST-NESS ((CHK.105)), 18,157 → 18,172 / 0 / 3 (2026-09-07).**
 **(CHK.105) CLOSED for (a) and the `if` join; (CHK.110) queued with all three residues attributed.**
 B78.1 read the co-emit rule as CONST-NESS off `typeGuardNarrowsIndexedAccessOfKnownProperty10`,

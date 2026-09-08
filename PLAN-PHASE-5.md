@@ -25,6 +25,63 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.46) — definite assignment joins a `try`/`catch` and reaches an expression-bodied arrow ((CHK.110)(a)/(b)), and the suppressor was NEITHER candidate the item named (2026-09-08)
+
+**Suite 18,234 → 18,271 / 0 / 3** — 37 pins in the new `Ts2454TryJoinAndArrowBodyTest`, every
+expectation read from pristine 6.0.3. Grid **8 × added=0 removed=0**, re-run INDEPENDENTLY;
+`cost_gate.py` exit 0 (largest delta **+0.03%**, no rebaseline), `huge_methods.py --fail-over 0`
+exit 0, **`spine_closure_audit.py` exit 0** (mandatory — the round adds a `spineDaEnterNode` arm),
+build warning-clean under `--rerun-tasks`.
+
+**THE ITEM NAMED TWO CANDIDATES FOR (a)'s SILENCE AND BOTH ARE WRONG.** `markAssignments` really
+has no `TryStatement` arm, and B223's `checkTryCatchOnlyAssignedVarReads` only looks at a
+`var x = init` declared INSIDE the try, so it never sees a `let d` declared outside. The suppressor
+is a THIRD mechanism: **`checkUsesOfUninitialized`'s own `TryStatement` arm** ran
+`markAssignments(s, uninitialized)` over the try block **against the caller's live frame set**, so
+the try block's assignments escaped the try statement unconditionally.
+
+**AND THE EVIDENCE THAT ATTRIBUTED IT NEEDED NO INSTRUMENTATION — THE SAME LINE WAS WRONG IN THE
+OPPOSITE DIRECTION.** `try {} catch {} finally { d = "c" }` was an ours-only **false positive**
+both references are silent about, because that arm walks the try block ONLY. One escape, two
+opposite defects, both explained by that one line and by neither candidate. A second pre-existing
+ours-only row (`try { throw 1 } catch { d = "b" }`) closes with it. **A shape that fails in BOTH
+directions is a stronger attribution than any single missing row**, and it is free to look for.
+
+**THE MERGE IS DECIDED BY REACHABILITY, AND MY FIRST DESIGN WAS REFUTED BY THE FIXTURE MATRIX
+WHILE THE GRID STAYED CLEAN.** `tryDefinitelyAssigns` asks which of the two blocks can REACH the
+continuation, using round 450's `daWalkStmt`/`daWalkList`: neither → remove (unreachable); only the
+catch → the catch's assignments; only the try → the try's; both → the intersection; `finally`
+always counts. The first cut instead used `tcvHasTerminator(tryBlock)` as a conservatism — it
+**suppressed 6 rows both references report**, and the 8-profile grid was `added=0 removed=0` on
+that binary AND on the guard-free one. **The grid cannot grade conservatism** (tsc's own sources
+carry none of these shapes), so only the reference matrix could see it; that is now a CLAUDE.md
+entry.
+
+**(b) IS A DISPATCH GAP AND ITS TWO ARMS ARE A ROUND-927 PAIR.** `spineDaExpressionBody` runs
+`findUninitializedRefs` over an expression body against `spineDaLeakOf(arrow)` minus the arrow's
+own parameters, on a copy; a `NodeKind.ARROW_FUNCTION` arm was added to `spineDaEnterNode` **and**
+to its `SpineDispatch.enterClosure` entry. Ablating either reads the SAME 7 RED — b1 deletes the
+handler, b2 leaves it present and unreachable behind the enter mask — and **no pin can distinguish
+"not called" from "not written"**, which is exactly the mask/closure hazard CLAUDE.md mandates
+pairing for. Recorded as a pair, not a redundancy.
+
+**THE ITEM'S (b) SCOPE WAS ALSO WRONG IN ONE PLACE**: it names "an expression-bodied arrow in a
+class property initializer" as part of the same gap. Measured pre-change, a BLOCK-bodied arrow, a
+function expression and a **bare identifier** in a class property initializer are ALL silent — the
+class-member leak path is absent from this pass entirely, so it is a different mechanism. Moved to
+**(CHK.112)** with (c)'s still-blocked switch exhaustiveness and the two accepted prices.
+
+**ARMS — 10, ALL DISCRIMINATING.** a1 the `HashSet(uninitialized)` copy **8 RED** (every (a)
+positive); a2 the `markAssignments` try arm **13** (every (a) negative control); a3 the
+unassigned-call bail 1; a4/a5/a6 the three reachability cases 1 / 2 / 2, each uniquely; a7 the
+lenient `switch`/`while(true)` readings 3; b1/b2 the dispatch pair 7 each; b3 the own-parameter
+subtraction 1. Restored `Checker.class` sha printed and identical after every arm.
+
+**ORCHESTRATOR RECEIPT.** The agent's grid BEFORE arm sha (`eac83544…`) equals the binary the
+orchestrator built and gated last round, and its final binary (`bd4d9c35…`) equals the binary this
+round's green suite ran on; last round's AFTER captures were reused as this round's BEFORE captures
+before the independent re-run reproduced `added=0 removed=0` on all eight.
+
 ### Round (P18.45) — an inline literal callee gets its own type ((CHK.109)), and the callee EXPRESSION is evidence the callee TYPE cannot carry (2026-09-08)
 
 **Suite 18,212 → 18,234 / 0 / 3** — 22 pins in the new `InlineLiteralCalleeTest`. Grid
@@ -1523,7 +1580,30 @@ where the order sends you.
   `typeParameterExplicitlyExtendsAny` (`{}`), `callOnInstance` /
   `untypedFunctionCallsWithTypeParameters1` (`C`/`D`) — run by fixture. MEANING.
 
-- [ ] **(CHK.110) THE THREE DEFINITE-ASSIGNMENT SHAPES (CHK.105) LEFT OPEN, EACH WITH ITS MECHANISM
+- [ ] **(CHK.112) THE DEFINITE-ASSIGNMENT RESIDUES AFTER (CHK.110), EACH MEASURED AGAINST BOTH
+  REFERENCES (2026-09-08, (P18.46); fixtures `build/bench/chk110-sub/f1…f9`).** (a) **THE
+  CLASS-PROPERTY-INITIALIZER LEAK PATH IS ABSENT ENTIRELY, AND THE ITEM (CHK.110) NAMED IT AS AN
+  EXPRESSION-BODY GAP, WHICH IT IS NOT** — measured pre-change, a BLOCK-bodied arrow, a function
+  expression AND a bare identifier in a class property initializer are all silent, so
+  `class Inner { g = () => use(e) }` is not fixed by (CHK.110)(b) and needs the leak set carried
+  into a class member's initializer. (b) A `switch` with NO `default` — still BLOCKED exactly as
+  (CHK.110)(c) recorded: requiring a default costs two ours-only TS2454 on ALL EIGHT profiles at
+  `checker.ts:38141`, an exhaustive default-less switch over `node.kind`, so it needs tsc's
+  `isExhaustiveSwitchStatement` (a discriminant-union exhaustiveness proof) FIRST and is not a
+  `markAssignments` question. (c) A catch block containing an unassigned CALL is suppressed, so
+  `try { d = f() } catch (e) { report(e) } use(d)` loses a row both references report — an ACCEPTED
+  price inherited from (CHK.105), because `Debug.fail(…)` (returns `never`) and `report(e)` are
+  indistinguishable without resolving the callee's RETURN TYPE; removing the bail makes
+  `catch { fail("boom") }` an ours-only row (measured both ways). Resolving it needs the callee
+  return type at that point, which is the same unblocker (CHK.105)'s own note names. (d) A block
+  round 450's `daWalkStmt` bails on (a nested `try`, a labeled statement) keeps the
+  pre-(CHK.110) removal. RISK: (a) LOW-MEDIUM, (b) BLOCKED, (c) MEDIUM (it is a callee-resolution
+  question, not a flow one). MEANING.
+
+- [x] **(CHK.110) (a) AND (b) CLOSED 2026-09-08 ((P18.46) note); (c) AND TWO NEWLY-MEASURED GAPS MOVED TO
+  (CHK.112). NEITHER of (a)'s two named candidates was the suppressor — it is `checkUsesOfUninitialized`'s
+  OWN `TryStatement` arm, which walked the try block against the CALLER's live set, and the same line was
+  ALSO a pre-existing ours-only FALSE POSITIVE in the other direction. ORIGINAL: THE THREE DEFINITE-ASSIGNMENT SHAPES (CHK.105) LEFT OPEN, EACH WITH ITS MECHANISM
   MEASURED (2026-09-07, (P18.40); scratch `chk105/r5`).** (a) A `try { x = … } catch {}` JOIN —
   `let d: string; try { d = "a"; } catch {} use(d)` is TS2454 in both references and silent here;
   `markAssignments` has NO `TryStatement` arm, so nothing removes `d`, which means the silence comes

@@ -23915,6 +23915,7 @@ class Checker(
             }
             NodeKind.BLOCK -> { node as Block; if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements) }
             NodeKind.MODULE_BLOCK -> { node as ModuleBlock; if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements) }
+            NodeKind.ARROW_FUNCTION -> spineDaExpressionBody(node as ArrowFunction)
             else -> {}
         }
     }
@@ -23965,6 +23966,40 @@ class Checker(
             owner, statements, preInit, fileLocals = null,
             enableLeak = true, outerLeak = leak,
         ))
+    }
+
+    /**
+     * (CHK.110)(b): an EXPRESSION-bodied arrow's body against the B78.2 leak set.
+     *
+     * A [SpineDaFrame] is opened at a `Block`, so `() => { use(e); }` is checked and
+     * `() => use(e)` — which has no statement list and therefore no frame — was silent,
+     * for every read both references report: a bare arrow, a nested one, an IIFE, an
+     * `async` one, an object-literal property. The names to carry in are exactly what the
+     * block-bodied path carries: [spineDaLeakOf]'s leak for THIS fn-like, minus its own
+     * parameters, which is what [spineDaSpawnCore] computes one node lower.
+     *
+     * NOT this: a read inside a CLASS PROPERTY INITIALIZER, which stays silent — measured
+     * pre-(CHK.110), the block-bodied arrow, a function expression and a bare identifier
+     * there are ALL silent, so the class-member leak path is absent from this pass
+     * entirely rather than the expression body being what it lacks.
+     *
+     * The set handed to [findUninitializedRefs] is a COPY because that walk REMOVES on an
+     * assignment (`() => (e = 1)`) as it goes, and the leak set is the enclosing frame's.
+     */
+    private fun spineDaExpressionBody(arrow: ArrowFunction) {
+        // A BLOCK body is a `Statement` and not an `Expression`, so this one test also
+        // hands the block-bodied form back to [spineDaSpawnCore], which owns it.
+        val body = arrow.body
+        if (body !is Expression) return
+        if (spineDaFrames.isEmpty()) return
+        var leak = spineDaLeakOf(arrow)
+        if (leak.isEmpty()) return
+        val params = collectParamNames(arrow.parameters)
+        if (params.isNotEmpty()) {
+            leak = leak - params
+            if (leak.isEmpty()) return
+        }
+        findUninitializedRefs(body, HashSet(leak), spineSource, spineFileName)
     }
 
     /**
@@ -25291,9 +25326,25 @@ class Checker(
                 findUninitializedRefs(stmt.expression, uninitialized, source, fileName)
             }
             is TryStatement -> {
+                // (CHK.110)(a): READS inside the try block must see the try block's own
+                // straight-line assignments, but those assignments must NOT ESCAPE the try
+                // statement — an exception may fire before any of them, so the post-try
+                // state is decided by which of the two blocks can REACH the continuation
+                // ([tryDefinitelyAssigns]). Before this the walk
+                // mutated the CALLER's live set, which is what made
+                // `let d: string; try { d = "a"; } catch {} use(d)` silent here where both
+                // tsgo 7.0.2 and pristine `typescript@6.0.3` report TS2454 — the silence
+                // was here and NOT in [markAssignments] (which has no `TryStatement` arm at
+                // all) nor in B223's [checkTryCatchOnlyAssignedVarReads] (which only ever
+                // looks at `var x = init` DECLARED inside the try block).
+                //
+                // The merge itself is [markAssignments]' own `TryStatement` arm, which the
+                // caller runs right after this one; here the walk runs on a COPY so the
+                // reads are unchanged and nothing leaks.
+                val tryLocal = HashSet(uninitialized)
                 for (s in stmt.tryBlock.statements) {
-                    checkUsesOfUninitialized(s, uninitialized, source, fileName)
-                    markAssignments(s, uninitialized)
+                    checkUsesOfUninitialized(s, tryLocal, source, fileName)
+                    markAssignments(s, tryLocal)
                 }
             }
             is LabeledStatement -> {
@@ -25552,6 +25603,17 @@ class Checker(
             is Block -> {
                 for (s in stmt.statements) markAssignments(s, uninitialized)
             }
+            is TryStatement -> {
+                // (CHK.110)(a): the post-try merge. tsc's catch-clause entry flow is the
+                // try block's START flow (an exception may fire anywhere inside it), so a
+                // variable is definitely assigned after the statement only when the
+                // `finally` assigns it, or every path that can REACH the continuation
+                // assigns it.
+                if (uninitialized.isNotEmpty()) {
+                    val toRemove = tryDefinitelyAssigns(stmt, uninitialized)
+                    if (toRemove.isNotEmpty()) uninitialized.removeAll(toRemove)
+                }
+            }
             is WhileStatement -> {
                 // Round 450: a `while (true)` loop's ONLY normal exit is a `break` (its
                 // condition never becomes false), so a variable assigned before EVERY
@@ -25587,6 +25649,76 @@ class Checker(
         if (st.bail) return true
         if (!c.fallsThrough) return true
         return c.assigned
+    }
+
+    /**
+     * (CHK.110)(a): which of [uninitialized] does the whole `try` statement leave
+     * DEFINITELY assigned at its continuation?
+     *
+     * `finally` runs on every path, so whatever it assigns is assigned. Otherwise the
+     * continuation is reached from the end of the try block and from the end of the catch
+     * block, and tsc gives the catch clause the try block's ENTRY state (an exception may
+     * fire anywhere inside it) — so the answer is decided by which of the two can REACH
+     * the continuation at all:
+     *
+     *  * neither: the continuation is unreachable, which tsc does not flag — remove;
+     *  * only the catch (the try block returns/throws): the catch's assignments stand;
+     *  * only the try (the catch returns/throws): the try's assignments stand;
+     *  * both: the intersection.
+     *
+     * Every one of those four was MEASURED against tsgo 7.0.2 and pristine
+     * `typescript@6.0.3`, which agree row for row; the third and fourth are the two the
+     * (CHK.110) item names, and the second additionally closes a PRE-EXISTING ours-only
+     * row (`try { throw 1; } catch { x = "b"; } use(x)`).
+     *
+     * Reachability and per-path assignment come from round 450's [daWalkStmt];
+     * ASSIGNMENT additionally takes [markAssignments]' more generous reading first,
+     * because that one credits a `switch` and a `while (true)` which the walk treats as
+     * opaque, and being more willing to remove here can only ever suppress.
+     *
+     * CONSERVATIVE TO REMOVE, exactly as [ifDefinitelyAssignsOrUnknown] is: a block the
+     * walk BAILS on keeps the pre-(CHK.110) removal, so the only behaviour that changes is
+     * what it can PROVE. The bail that matters is (CHK.105)'s
+     * [DaState.bailOnUnassignedCall]: `try { d = compute(); } catch { Debug.fail("…"); }`
+     * is silent in both references because `fail` returns `never`, and deciding that needs
+     * the callee's RETURN TYPE, which this walker must not resolve. The price is stated —
+     * an ordinary logging catch (`catch (e) { report(e); }`) is indistinguishable from it
+     * and is suppressed too, a row both references report and this one does not.
+     */
+    private fun tryDefinitelyAssigns(stmt: TryStatement, uninitialized: Set<String>): Set<String> {
+        fun assignedBy(stmts: List<Statement>): Set<String> {
+            if (stmts.isEmpty()) return emptySet()
+            val work = HashSet(uninitialized)
+            for (s in stmts) markAssignments(s, work)
+            return uninitialized - work
+        }
+        val inFinally = stmt.finallyBlock?.let { assignedBy(it.statements) } ?: emptySet()
+        val catchBlock = stmt.catchClause?.block ?: return assignedBy(stmt.tryBlock.statements) + inFinally
+        val inTry = assignedBy(stmt.tryBlock.statements)
+        val inCatch = assignedBy(catchBlock.statements)
+        val out = HashSet(inFinally)
+        for (v in uninitialized) {
+            if (v in out) continue
+            val st = DaState(bailOnUnassignedCall = true)
+            val t = daWalkList(stmt.tryBlock.statements, v, entryAssigned = false, st = st)
+            val tryBailed = st.bail
+            val st2 = DaState(bailOnUnassignedCall = true)
+            val c = daWalkList(catchBlock.statements, v, entryAssigned = false, st = st2)
+            if (tryBailed || st2.bail) {
+                if (v in inTry) out.add(v) // keep the pre-(CHK.110) removal
+                continue
+            }
+            val tryAssigns = v in inTry || t.assigned
+            val catchAssigns = v in inCatch || c.assigned
+            val keep = when {
+                !t.fallsThrough && !c.fallsThrough -> true // the continuation is unreachable
+                !t.fallsThrough -> catchAssigns
+                !c.fallsThrough -> tryAssigns
+                else -> tryAssigns && catchAssigns
+            }
+            if (keep) out.add(v)
+        }
+        return out
     }
 
     /** `while (true)` / `do…while (true)` constant-true condition (round 450). */

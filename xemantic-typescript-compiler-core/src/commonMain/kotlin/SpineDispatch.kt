@@ -177,7 +177,10 @@ object SpineDispatch {
         /*  6 spineArithEnterNode      */ null,
         /*  7 spineIanyEnterNode       */ null,
         /*  8 spineDaEnterNode         */ union(STATEMENT_KINDS, intArrayOf(
-            NodeKind.SOURCE_FILE, NodeKind.MODULE_BLOCK)),
+            NodeKind.SOURCE_FILE, NodeKind.MODULE_BLOCK,
+            // (CHK.110)(b): an EXPRESSION-bodied arrow opens no frame and so was never
+            // reached — see `Checker.spineDaExpressionBody`.
+            NodeKind.ARROW_FUNCTION)),
         /*  9 spineOsEnterNode         */ null,
         /* 10 spinePdEnterNode         */ intArrayOf(
             NodeKind.SOURCE_FILE, NodeKind.BLOCK, NodeKind.MODULE_BLOCK,
