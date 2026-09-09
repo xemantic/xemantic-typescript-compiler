@@ -51,9 +51,16 @@ import kotlin.test.Test
  * file is checked next. No corpus baseline, no `cost_gate.py` counter and no
  * `--listAll` diff can see it, so [Relater.recursionResidue] exists to be asserted.
  *
- * The pins that follow the residue one are its POSITIVE CONTROLS and a leak
- * detector — a residue of zero over a program that performed no comparison would
- * be vacuous, which is the shape round 790 warns about.
+ * The pins that follow the residue one are POSITIVE CONTROLS — a residue of zero
+ * over a program that performed no comparison would be vacuous, which is the shape
+ * round 790 warns about.
+ *
+ * ABLATION RESULT, recorded rather than claimed. Five arms, one injected mistake
+ * each: dropping the comparison-stack pop (a1), the `relationDepth--` (a2) or the
+ * two target-stack pops (a3) from the `finally` each redden the residue pin and
+ * NOTHING else; flipping `REL2_ENUM_TO_MEMBER` (a5) reddens its own control and
+ * nothing else. Disabling the `isDeeplyNested` bail (a4) reddens NOTHING — see the
+ * two renamed pins below, whose KDocs carry the mechanism.
  */
 class RelaterTest {
 
@@ -110,11 +117,21 @@ class RelaterTest {
         assert(checker.relaterRecursionResidue == 0)
     }
 
+    /**
+     * MEASURED UNDISCRIMINATED, and renamed to say so (round 813's rule). This was
+     * written as a leak detector — a stale pair key makes the SECOND comparison of the
+     * same `(source.id, target.id)` answer `true` through the cycle break — and arm a1,
+     * which deletes exactly that pop, leaves it GREEN. The reason is a mechanism worth
+     * recording: `checkTypeRelatedToCore` writes a `false` verdict into the [Relation]
+     * cache, which is probed ABOVE the comparison stack, so for an IDENTICAL pair the
+     * cache answers before a leaked key can be consulted. A leak is therefore only
+     * observable through a pair whose verdict was NOT cacheable (one decided under a
+     * cycle break), which no fixture here constructs. The residue pin above is what
+     * carries that invariant; this one is a positive control that the two mechanisms
+     * agree.
+     */
     @Test
-    fun `a recursive pair compared twice in one program answers the same way both times`() {
-        // A leaked pair key does not fail — it makes the SECOND comparison of the same
-        // (source.id, target.id) answer true through the cycle break. Both assignments
-        // below are the same pair, so an asymmetric answer is the leak's signature.
+    fun `positive control - a repeated identical comparison is served by the relation cache`() {
         val diagnostics = diagnose(
             """
             interface CycA { x: CycA; only: number }
@@ -128,11 +145,18 @@ class RelaterTest {
         assert(rows.size == 2)
     }
 
+    /**
+     * ALSO MEASURED UNDISCRIMINATED, and renamed. `DeepA<T>` / `DeepB<T>` expand without
+     * ever repeating a pair, so id-based cycle detection never fires and only the
+     * 5-occurrence `isDeeplyNested` scan over the two target stacks was expected to end
+     * it — but arm a4, which makes `countOccurrences` answer 0 and so disables that bail
+     * entirely, leaves this GREEN: `maxRelationDepth` is a SECOND and sufficient bound,
+     * at 100 levels. So the two guards are a round-927 pair — neither is redundant (the
+     * bail is what keeps the cost bounded, the ceiling what keeps it finite) and no
+     * shape here separates them.
+     */
     @Test
-    fun `the deeply-nested bail keeps an infinitely-expanding generic pair terminating`() {
-        // GenA<T> vs GenB<T> expand without ever repeating a pair, so id-based cycle
-        // detection never fires; only the 5-occurrence scan over the two target stacks
-        // ends it. If those stacks stopped being pushed, this does not terminate.
+    fun `positive control - an infinitely-expanding generic pair terminates without a depth diagnostic`() {
         val diagnostics = diagnose(
             """
             interface DeepA<T> { x: DeepA<() => T> }
