@@ -47,7 +47,14 @@ import kotlin.test.Test
  * side agreed. A pin asserting only that "it compiles" would pass on a drifted
  * binary, because a drifted binary still reports the `TS2322`.
  *
- * ABLATION RESULT, recorded rather than claimed — see the round note.
+ * ABLATION RESULT, recorded rather than claimed — and this is the first of the
+ * session's three extraction rounds in which EVERY pin discriminates. Three arms,
+ * one injected mistake each: disabling late binding (`lateBoundComputedKeyName`
+ * answers null) reddens the three late-binding pins and nothing else; raising
+ * `LATE_BIND_ALIAS_HOPS` from 8 to 100 reddens ONLY the past-the-limit pin — and it
+ * edits `Checker.kt`, so `MemberNames.kt` is byte-unchanged under it, which is the
+ * arm's own control; dropping the `StringLiteralNode` arm of the shared name
+ * extractor reddens ONLY the string-named-method pin.
  */
 class MemberNamesTest {
 
