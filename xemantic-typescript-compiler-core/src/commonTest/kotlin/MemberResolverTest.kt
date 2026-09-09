@@ -45,7 +45,17 @@ import kotlin.test.Test
  * with no counter, no baseline and no `--listAll` row to show it. Hence
  * [MemberResolver.resolutionResidue].
  *
- * ABLATION RESULT, recorded rather than claimed — see the round note.
+ * ABLATION RESULT, recorded rather than claimed. Three arms, one injected mistake
+ * each. Deleting the `finally`'s `memberResolutionInProgress.remove(type.id)` (b1)
+ * reddens BOTH residue pins and nothing else. Making the cycle break never refuse
+ * — `memberInProgressAdded` forced true (b3) — reddens the heritage pin, and its
+ * failure message is the mechanism verbatim: the compile answers ONE diagnostic,
+ * `TS2589 … at (0,0)`, which is `reportCheckerStackOverflow`'s signature, and the
+ * real circular-base row is gone. **The third arm is DEAD BY CONSTRUCTION and is
+ * recorded as such** (round 902's law): deleting the `mrProbeDepth--` changes
+ * nothing, because that counter only moves under `PassTiming.detailed`, which no
+ * test enables — so the `mrProbeDepth` term of [MemberResolver.resolutionResidue]
+ * is UNPINNED here and is carried by the `--passTiming` receipt instead.
  */
 class MemberResolverTest {
 
