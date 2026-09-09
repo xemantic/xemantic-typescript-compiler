@@ -2537,6 +2537,26 @@ where the order sends you.
   JVM name — `internal` adds a `$<module>` suffix and a VALUE-class parameter adds a `-<hash>` one,
   both of which read as "this hop was never compiled".**
 
+- [ ] **(INV.0) STEP 5 — THE RELATER: `checkTypeRelatedTo`'s ALGORITHM INTO THE `TypeRelationCache.kt`
+  SEAM (ledger row 2 put the cache TYPE there in 2026-09-02 precisely so this extraction would not
+  start from a 198k-line neighbourhood). PARTIAL RECON 2026-09-09 ((P18.55)), read-only, at
+  `Checker.kt` 198,022 — NOT a finished plan, and the next round should say so rather than treat it
+  as one.** Seven named entry points, spans brace-matched over a length-preserving stripped copy:
+  `isSimpleTypeRelatedTo` 168011-168144 (134), `checkTypeRelatedTo` 168146-168164 (**19 — it is a
+  WRAPPER**), `structuredTypeRelatedTo` 168406-168816 (**411, the body**), `propertiesRelatedTo`
+  168889-169029 (141), `signaturesRelatedTo` 172159-172181 (23), `signatureRelatedTo` 172201-172390
+  (**190**), `isTypeAssignableTo` 174395-174401 (7) — **925 lines between them**, but they are NOT
+  contiguous and the whole 168011-174401 region is ~6,390 lines, so **the first job of that round is
+  to census which of the ~5,400 intervening lines are the relater and which are neighbours** (the
+  same brace-matched census these three steps used; `scripts/ccet_split_analyze.py`'s `strip` plus a
+  positive control). **`checkTypeRelatedTo` has 363 call sites**, so the delegation surface is large
+  but every hop is mechanical and unchanged — step 4's `resolveAlias` had 80 and cost nothing.
+  **Inherit step 4's three constraints** (constructor input declared above `Checker.kt:666`; a field
+  whose initializer side-effects another field cannot move; grep the MANGLED JVM name), and expect
+  the ambient row to be the WORST it will look until the family closes — that is ledger row 6's
+  measured finding. § 10 receipts as before, with the per-pass counter table (420 rows byte-identical
+  against a rebuilt pristine) as the primary evidence rather than `cost_gate.py`.
+
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to
   `TypeRelationCache.kt`) ledger row 2; step 3 (`TypeInstantiator` — the instantiation
