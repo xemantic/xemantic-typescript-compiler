@@ -25,6 +25,76 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.57) — (INV.0) step 6a: MEMBER RESOLUTION becomes `MemberResolver.kt`, and the queue item's open question is answered (2026-09-09)
+
+**Suite 18,493 / 0 / 3** (18,489 + 4 new pins). `Checker.kt` **196,797 → 196,172** (−625);
+`MemberResolver.kt` **814**. cost_gate exit 0, huge_methods exit 0 (**837** classes,
+`Checker.<init>` 5,675 → 5,705), warning-clean, ledger row 8. Two commits: `c26520a8e` the
+split, `c8b2349e4` the ablation record. **Second extraction of the session.**
+
+**THE QUEUE ITEM ASKED WHETHER THE SEAM IS THE TABLE BUILDERS *WITHOUT* `getTypeOfSymbol`.
+IT IS**, and the census said so before any code moved: this family reads `getTypeOfSymbol`
+at ONE site and `getTypeOfExpression` at one, so a seam that took them would have had to
+take the whole checker — which is exactly why `docs/INVERSION-DESIGN.md` § 6 puts them in
+Stage 3 ("their ambient IS the checker"). The answer is written into the class KDoc rather
+than left in a round note.
+
+**AND IT IS A MUCH BETTER-SHAPED SEAM THAN THE RELATER, WHICH MAKES ROW 7 THE OUTLIER OF
+THIS ARC RATHER THAN THE TREND**: one contiguous span against five, 657 lines against
+1,256, **21 ambient reads against 45**, **1 write against 5**, three surviving entry points
+against six. The single write (`memberResolutionTruncated`, (INC.23)'s truncation flag) is
+never read back here — a pure OUT channel, so the columns are DISJOINT, which row 7's are
+not.
+
+**THERE IS NO CHEAP ABSORPTION HERE, AND THAT IS THE OPPOSITE OF ROW 7 — MEASURED.** Row 7
+had seven members with no other caller in `Checker.kt`, so absorbing them was mechanical.
+Here it is **ZERO of 22**: the scarcest are `isLibSymbolForCensus` (2 other callers),
+`memberResolutionTruncated` (4), `resolveBaseTypesLazy` (5); the densest are
+`getTypeOfExpression` (372), `getTypeFromTypeNode` (347), `getTypeOfSymbol` (243). Shrinking
+this row means extracting the NEIGHBOURS — the member-NAME family at `Checker.getMemberName`
+and Stage 3's symbol typing — not tidying it.
+
+**THE RECEIPT IS NOW TRANSITIVE ACROSS THREE BINARIES.** The same **488 deterministic
+`--passTiming` lines** — all 420 per-pass rows, the 46 diagnostics, the emissions census,
+the counter block, globals lookups — are byte-identical for pre-step-5 pristine, step 5 AND
+step 6a, i.e. **one receipt now covers 1,882 moved lines**. It cost no extra build: the
+step-5 capture taken earlier in the session IS this round's pristine arm.
+
+**A NEW AND SHARPER FORM OF THE JVM-NAME-MANGLING TRAP, HIT TWICE IN ONE RUN.** Rows 5/6
+record that `internal` adds a `$<module>` suffix so a receipt grep for the SOURCE name reads
+zero rows. This round shows the worse case: **widening a member to `internal` AS PART OF THE
+SPLIT mangles a site a PREVIOUS round's receipt was reading**. `getTypeOfExpression` — one
+of § 10's three standing hot sites — went `private` → `internal` here, so the unmangled grep
+reads **574 rows in the before-arm and 0 in the after-arm**, which reads exactly like a site
+that stopped being compiled. Grep BOTH forms across any round that widens visibility, and
+say which one you used.
+
+**THE SPLIT IMPROVED INLINING AT THE HOT LOOKUP FOR THE FOURTH ROW RUNNING**:
+`resolveStructuredTypeMembers` (244 call-site lines) was refused `too large` at **189**
+sites as a `Checker` method (`239 inline + 61 inline (hot) + 189 too large`); the hop reads
+`233 inline + 55 inline (hot)` with **ZERO refusals**. ab-interleaved 6 pairs **+38 ms
+(+0.15%) B-wins-3/6 NOISE-DOMINATED**, both arms 46 errors; `new MemberResolver` at exactly
+ONE bytecode in the module. Recorded honestly: **`checkArgumentsAgainstSignature` — the only
+standing site (P18.56) proved stable — DID move** (`4 inline + 1 too large + 3 hot-too-big`
+→ `6 + 1 + 5`), which is what 19 visibility widenings in one commit do to a caller's inline
+tree.
+
+**4 pins, 3 arms, and ONE ARM IS DEAD BY CONSTRUCTION — recorded, not counted as coverage.**
+`MemberResolver.resolutionResidue` is row 7's `recursionResidue` one seam over. Arm b1
+(delete the `finally`'s `memberResolutionInProgress.remove`) reddens both residue pins; arm
+b3 (make the B202.1 break never refuse) reddens the heritage pin and **its failure message
+is the mechanism verbatim** — the compile answers ONE diagnostic, `TS2589 … at (0,0)`, i.e.
+`reportCheckerStackOverflow`'s signature, and the real circular-base row is gone. **Arm b2
+changes nothing**: `mrProbeDepth` only moves under `PassTiming.detailed`, which no test
+enables, so that term of the residue is unpinned by any test and is carried by the
+`--passTiming` receipt instead.
+
+**NEXT**: step 6b, the member-NAME / late-binding family (`getMemberName`,
+`declaredMemberName`, the computed/late-bound key machinery from `Checker.kt` ~118017 to
+~118657, ~640 lines) — the seam this round deliberately left whole, and the one that most
+improves row 8's DECLARATION-READING group.
+
+
 ### Round (P18.56) — (INV.0) step 5: the RELATER becomes `Relater.kt`, and the region's ~6,390 lines are only 1,256 of algorithm (2026-09-09)
 
 **Suite 18,489 / 0 / 3** (18,484 + 5 new pins). `Checker.kt` **198,022 → 196,797** (−1,225);
@@ -2648,29 +2718,43 @@ where the order sends you.
   is NOT stable across processes, leaving `checkArgumentsAgainstSignature` the only one of
   the three that can separate arms.**
 
-- [ ] **(INV.0) STEP 6 — MEMBER RESOLUTION: the seam `docs/INVERSION-DESIGN.md` § 6 Stage 0
-  names next in the core order, and the one that most improves ledger row 7.** Row 7's own
-  MEMBER-RESOLUTION group is the starting census: `getTypeOfSymbol`,
-  `resolveStructuredTypeMembers`, `resolveBaseTypesLazy`, `getPropertyTypeForRelation`,
-  `getStaticMembersOfType`, `getApparentType`, `primitiveApparentWrapper`, `isOptionalProperty`
-  — eight of the relater's 45 reads. **`getTypeOfSymbol` is Stage-3-shaped by § 6's own
-  reckoning ("their ambient IS the checker"), so the round's first job is to decide whether
-  the seam is `resolveStructuredTypeMembers` + the member TABLE builders WITHOUT it** — a
-  census of that family's own size and ambient surface, exactly as step 5's census was.
-  Note the two lazy-table traps this file already records: a member table is built on first
-  ask (round 833 — a new reader must `resolveStructuredTypeMembers(target)` first), and a
-  `keyof` over an IN-FLIGHT table must answer from the DECLARATIONS rather than re-enter
-  resolution ((INC.25)). **Inherit step 4's three constraints and step 5's three**: a
-  constructor input must be declared above `Checker.kt:666`; a field whose initializer
-  side-effects another field cannot move; grep the MANGLED JVM name; sort the `--passTiming`
-  pass rows for the receipt; grade against a REBUILT pristine, not the recorded baseline;
-  and use `checkArgumentsAgainstSignature` as the only stable `PrintInlining` site.
-  **A cheap sweetener, measured in (P18.56) and mechanical**: seven of the relater's reads
-  (`enumLiteralApparentPrimitive`, `enumMemberValueEqualsLiteral`,
-  `enumTargetAdmitsNumericSource`, `numericLiteralFitsEnum`,
-  `intersectionMergedSatisfiesTarget`, `intersectionMergedContradictsTarget`,
-  `targetIsMemberShaped`) have NO other caller in `Checker.kt`; absorbing them into
-  `Relater` takes row 7 from 45 reads to 38 with no design decision at all.
+- [x] **(INV.0) STEP 6a — MEMBER RESOLUTION: DONE 2026-09-09 ((P18.57), commits `c26520a8e`
+  split + `c8b2349e4` ablation record). `MemberResolver.kt` is **814 lines**; `Checker.kt`
+  **196,797 → 196,172 (−625)**; ledger row 8. **The item's open question is ANSWERED: the seam
+  IS the table builders WITHOUT `getTypeOfSymbol`**, which stays an ambient read exactly as
+  § 6 predicts, and the answer is recorded in the class KDoc. Ambient: **21 reads, 1 write,
+  columns DISJOINT** — a far better-shaped seam than row 7 (one span vs five, 657 lines vs
+  1,256, three entry points vs six), which makes the relater the arc's outlier rather than
+  its trend. **Measured and worth carrying: there is NO cheap absorption here — ZERO of 22
+  members lack another caller in `Checker.kt`**, against row 7's seven, so this row shrinks
+  only by extracting its NEIGHBOURS. The receipt is now TRANSITIVE: the same 488 deterministic
+  `--passTiming` lines are byte-identical across pre-step-5 pristine, step 5 and step 6a —
+  one receipt over 1,882 moved lines, at no extra build. **NEW CONSTRAINT FOR EVERY LATER
+  ROW: widening a member to `internal` as part of a split MANGLES its JVM name, so a § 10
+  receipt grep that a PREVIOUS round used reads zero rows** — `getTypeOfExpression` went
+  private → internal here and its unmangled grep reads 574 rows before and 0 after. Grep both
+  forms and say which you used.**
+
+- [ ] **(INV.0) STEP 6b — THE MEMBER-NAME / LATE-BINDING FAMILY, the seam step 6a deliberately
+  left whole and the one that most improves ledger row 8's DECLARATION-READING group.**
+  Candidate span `Checker.kt` ~118017 to ~118657 (~640 lines): `getMemberName`,
+  `declaredMemberName` / `declaredComputedMemberName`, `computedLiteralKey`,
+  `computedSymbolKey`, `lateBoundComputedKeyName`, `lateBoundKeyValue`,
+  `lateBoundValueOfVarDecl`, `lateBoundTypeNodeValue`, `templateLiteralTypeFixedText`,
+  `qualifiedLateBoundKeyValue`, `resolveDottedInStatements`, `moduleNamePath`,
+  `enumMemberValueFromDecl` / `enumMemberValueOf`, `lateBindStatementsOf`, `literalKeyValueOf`,
+  `lateBindResolveVarDecl`, `enumMemberLateBoundKeyName`, `objLitElementMemberName`,
+  `staticMemberNameOf`, `wellKnownSymbolKey`, `writtenMemberNameSpan`. **RUN THE CENSUS FIRST**
+  (the step-5/6a method: brace-matched spans over a length-preserving stripped copy with a
+  positive control, then the ambient scan and the per-entry-point caller counts) — the span
+  boundaries above are from a members listing, not from a dependency closure, and rounds 5
+  and 6a both found the item's own boundaries wrong. Two traps this family owns and CLAUDE.md
+  already records: a member name derived from a TYPE is not a function of the program here, so
+  a late-bound key must be resolved SYNTACTICALLY (round 935 — the two passes drifted and
+  emitted a correct TS2322 beside a false TS2339 in one compile); and `declaredMemberName` is
+  the single source of truth for a member's name, so an extraction that leaves a second
+  `decl.name as? Identifier` behind re-opens (CHK.40)(c). **Inherit every constraint rows 4-8
+  established**, including step 6a's new one about visibility widening and receipt greps.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

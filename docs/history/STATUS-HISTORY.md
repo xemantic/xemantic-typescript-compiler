@@ -1,5 +1,31 @@
 **(P18.47) — THE REST-TUPLE MODEL IS FIXED ((CHK.111)), THE ITEM'S NAMED SEAM WAS *WRONG* RATHER THAN INCOMPLETE, AND THE REGRESSION IT CAUSED WAS IN ANOTHER MODULE, 18,271 → 18,302 / 0 / 3 (2026-09-08).**
 
+
+**(P18.52) — STATIC BLOCKS ESCAPE, PARAMETER DEFAULTS AND DECORATORS ARE REACHED ((CHK.115)), AND THE DECORATOR FAMILY IS *TWO OPPOSITE MECHANISMS*, 18,437 → 18,477 / 0 / 3 (2026-09-08).**
+43 fixtures, and **pristine 6.0.3 and tsgo 7.0.2 agreed on every one**. **(a) removes an ours-only
+FALSE POSITIVE**: a static block's assignments now escape into the enclosing flow — tsc's binder says
+so literally (`isImmediatelyInvoked = <IIFE> || node.kind === ClassStaticBlockDeclaration`) — **but a
+static PROPERTY INITIALIZER, which also runs at class-evaluation time, does NOT escape**, because tsc
+gives an initialized `PropertyDeclaration` its own control-flow container. The item did not state that
+boundary. The escape had to be the full `markAssignments` LATTICE, not a scan: a conditional and a
+`try` must not escape while a `while (true) { … break }` must. **(b) is NINE rows, not one** — all five
+parameter-default spellings plus an object-literal method, a binding-pattern element default, an arrow
+nested in a default and a class-expression static block in a default. **(c) is two opposite mechanisms
+wearing one syntax**: a MEMBER decorator answers to the LEAK, a CLASS decorator to the LIVE set,
+because a `ClassDeclaration` is not a control-flow container in tsc — one rule is wrong for one of
+them, and both directions are pinned. **A new ours-only row was manufactured and caught only by the
+final full reference sweep**: under STANDARD decorators a parameter decorator is TS1206 and both
+references stop there, so an ungated walk added a TS2454 beside it — no profile carries the shape, so
+neither the grid nor the corpus could see it. 40 pins; 13 arms — **a6 is the mask/closure pair**
+(edits `SpineDispatch.kt` only, so `Checker.class` is unchanged and `spine_closure_audit.py` FAILS
+under it), **a10 and a14 were each DEAD ALONE** behind an early return and an `any` gate, so a10b and
+the a11+a14 pair are what discriminate, and **11 pins are never RED by construction** — they are
+positive controls asserting today's conservatism, reddenable only by an arm that makes the change more
+aggressive, which a3/a12/a13 are. Three residues queued as (CHK.116), including that static blocks are
+flow-ORDERED and one leak set per class cannot express it. Grid **8 × added=0 removed=0** re-run
+independently; corpus 10,344/0, `spine_closure_audit.py` exit 0, `cost_gate.py` exit 0,
+`huge_methods.py` exit 0, build warning-clean.
+
 **(P18.51) — THE NULLABLE-TARGET RULE REACHES ALL FIVE HEADS ((CHK.114)), (c)'s STATED AXIS WAS WRONG, AND THE REFERENCES COULD NOT ADJUDICATE THE PIN THAT BROKE, 18,413 → 18,437 / 0 / 3 (2026-09-08).**
 All three stages landed **plus a PREREQUISITE the item did not name**: tsc RESTORES the aliased target
 before reporting, and three already-wired heads were silently stripping aliases — so wiring (a) alone
