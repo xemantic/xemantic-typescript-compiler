@@ -25,6 +25,101 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.56) — (INV.0) step 5: the RELATER becomes `Relater.kt`, and the region's ~6,390 lines are only 1,256 of algorithm (2026-09-09)
+
+**Suite 18,489 / 0 / 3** (18,484 + 5 new pins). `Checker.kt` **198,022 → 196,797** (−1,225);
+`Relater.kt` **1,446**. cost_gate exit 0, huge_methods exit 0 (**836** classes, `Checker.<init>`
+5,634 → 5,675), build warning-clean, ledger row 7. Two commits: `579092d93` the split,
+`03d455241` the ablation record.
+
+**THE CENSUS THE QUEUE ITEM ASKED FOR CHANGED THE SHAPE OF THE WORK.** The item named seven
+entry points spanning 925 lines inside a ~6,390-line region and said the round's first job was
+to find out which of the ~5,400 intervening lines are the relater. **They are not**: the
+algorithm is **1,256 lines in five contiguous spans**, and the remainder is ELABORATION —
+`getPropertyElaborationChain` (546), `getFunctionMismatchElaborationWorker` (407),
+`checkExcessProperties` (231), the no-overlap family, the array/object-literal checks. Those
+answer *what do we SAY about the failure*, a different seam from *does it relate*.
+
+**AND IT WAS DELIBERATELY NOT SPLIT, WHERE 4b WAS.** 4b had two independent families and a
+natural seam; this is ONE mutually-recursive algorithm (`checkTypeRelatedTo` →
+`structuredTypeRelatedTo` → `objectTypeRelatedTo` → `signaturesRelatedTo` →
+`signatureRelatedTo` → back), so any mid-recursion cut puts a `Checker` hop inside the
+compiler's hottest recursion and inflates the ambient row for no verification benefit — the
+verification cost is identical at 600 lines and at 1,256.
+
+**THE DELEGATION SURFACE IS SIX, NOT 363.** `checkTypeRelatedTo` has 329 surviving call sites
+and every one is byte-unchanged behind a one-line private hop; eight of the fourteen moved
+functions have zero callers left and get none. Public surface 6 = `relater.` references 6 by
+construction (7 = 7 with the test seam).
+
+**THE RECEIPT PROTOCOL NEEDED A FIX, AND IT IS THE ROUND'S MOST REUSABLE FINDING. The
+`--passTiming` pass table is printed in DESCENDING WALL-TIME order, so its row ORDER is a
+timing artefact even though every column the receipt keeps is deterministic** — the first
+comparison read **804 diff lines between two binaries that are in fact identical**, all of it
+equal-count rows shuffled by ms. Sorting the pass rows and dropping every line carrying a
+millisecond figure or a TIME-BUCKETED count (`narrowWalk cost distribution`, `huge(>=1ms)`,
+the per-kind ns/node table) leaves **488 deterministic lines byte-identical between rebuilt
+pristine HEAD and the split** — all 420 per-pass rows, the 46 diagnostics, the emissions
+census, the counter block, the globals-lookup line — with a SAME-BINARY control confirming
+the normalisation is not merely hiding everything. `scratchpad/pt_norm.py`.
+
+**A SECOND MEASUREMENT LESSON: cost_gate's ±2% column is NOT a statement about the change.**
+Six counters read non-zero deltas (`typeOfExpr.calls` +13, `narrow.walks` −4, …) and
+**pristine HEAD reads exactly the same deltas** — `docs/perf/cost-counters.txt` is simply
+stale by a few rounds. A pure split must be graded against a REBUILT pristine, never against
+a recorded baseline; the gate is the control.
+
+**A THIRD STANDING HOT SITE IS UNSTABLE ACROSS PROCESSES.** Row 4 showed
+`getTypeOfExpression`'s `PrintInlining` row is not stable; running arm A TWICE this round
+shows `isTypeAssignableTo` is not either (`4 inline + 4 inline (hot)` vs `4 inline + 2 inline
+(hot)` on ONE binary), so only `checkArgumentsAgainstSignature` — byte-identical across A's
+two runs — can separate arms here. It moved by one row in each direction with the refusal
+COUNT unchanged. **And the split IMPROVED inlining for the third row running**: as a monolith
+`checkTypeRelatedTo` was refused `too large` at **344** sites and its hop now reads `294
+inline + 38 inline (hot)` with ZERO refusals; `isSimpleTypeRelatedTo` went from `24 inline +
+9 too large + 13 hot-method-too-big` to a hop with no refusal at all. ab-interleaved 6 pairs
+**−11 ms (−0.04%) B-wins-3/6 NOISE-DOMINATED**, both arms 46 errors. The § 10 allocation
+receipt was taken STATICALLY and is sharper than JFR for the claim it makes: **`new Relater`
+appears at exactly ONE bytecode in the whole module**, in `Checker.<init>`.
+
+**ONE PRODUCTION MEMBER WAS ADDED ON PURPOSE — a named test seam.**
+`Relater.recursionResidue` sums the three comparison stacks, `relProbeDepth` and
+`checker.relationDepth`; `RelaterTest` asserts it is 0 after a whole-program check.
+B202.3's finally-hygiene is otherwise unpinnable: a stale `(source.id, target.id)` key does
+not fail, it makes every LATER comparison of that pair answer `true` through the cycle break,
+i.e. it deletes diagnostics in whatever file is checked next — invisible to the corpus, to
+`cost_gate.py` and to a `--listAll` diff alike. **`relationDepth` is in that sum because it
+is the ONE counter this class must not own**: `resolveGenericPropertyType` gates INV.5(d1)'s
+2,000-computation budget on `relationDepth > 0`, so tidying it into a private `Relater` field
+— the obvious refactor, since the other four counters ARE owned — silently re-opens the
+deep-generic blowup.
+
+**5 pins; 5 arms; TWO PINS MEASURED UNDISCRIMINATED AND RENAMED RATHER THAN CLAIMED.**
+Dropping the comparison-stack pop (a1), the `relationDepth--` (a2) or the two target-stack
+pops (a3) from the `finally` each redden the residue pin and nothing else; flipping
+`REL2_ENUM_TO_MEMBER` (a5) reddens its own control. **A leak DETECTOR cannot work** — the
+`Relation` cache is probed ABOVE the comparison stack, so for an identical pair it answers
+before a stale key is consulted, and a1 leaves that pin green. **And the `isDeeplyNested`
+bail is not the only bound** — arm a4 disables it entirely and the expanding generic pair
+still terminates, because `maxRelationDepth` at 100 is a second sufficient ceiling; the two
+are a round-927 pair.
+
+**THE AMBIENT ROW IS THE LARGEST OF THE ARC — 45 reads, 5 writes — AND THAT IS THE DESIGN'S
+OWN PREDICTION, not a regression**: § 6 puts `getTypeOfSymbol`/`getTypeOfExpression` in Stage
+3 because "their ambient IS the checker", and the relater sits one step below. **The cheap
+next step was measured and the measurement REFUTED the plan the round began with**: the brief
+asserted the 16-member enum group had no callers outside the moved region, and a caller
+census says only **seven** of the 48 members do — absorbing those takes the reads 45 → 38,
+while `enumTypesRelation` (3 other callers) and `enumOfMemberTypeSymbol` (8) belong to an
+ENUM seam of their own. The three elaboration WRITES are the opposite kind of debt: a RETURN
+CHANNEL that paying means giving the relation a result richer than `Boolean` (tsc's
+`errorInfo`), which is a semantic change and not Stage 0.
+
+**NEXT**, per `docs/INVERSION-DESIGN.md` § 6 Stage 0's order: **member resolution** — the
+8-member group this row names is a seam of its own and is what most improves row 7. Then
+signatures and flow; `getTypeOfSymbol`/`getTypeOfExpression` stay Stage-3-shaped.
+
+
 ### Round (P18.55) — (INV.0) step 4 is COMPLETE: `NameResolver.kt` is 2,284 lines and `Checker.kt` lost 1,941 (2026-09-09)
 
 **Suite 18,484 / 0 / 3** (a pure move adds no pins). `Checker.kt` 198,781 → **198,022**;
@@ -2537,25 +2632,45 @@ where the order sends you.
   JVM name — `internal` adds a `$<module>` suffix and a VALUE-class parameter adds a `-<hash>` one,
   both of which read as "this hop was never compiled".**
 
-- [ ] **(INV.0) STEP 5 — THE RELATER: `checkTypeRelatedTo`'s ALGORITHM INTO THE `TypeRelationCache.kt`
-  SEAM (ledger row 2 put the cache TYPE there in 2026-09-02 precisely so this extraction would not
-  start from a 198k-line neighbourhood). PARTIAL RECON 2026-09-09 ((P18.55)), read-only, at
-  `Checker.kt` 198,022 — NOT a finished plan, and the next round should say so rather than treat it
-  as one.** Seven named entry points, spans brace-matched over a length-preserving stripped copy:
-  `isSimpleTypeRelatedTo` 168011-168144 (134), `checkTypeRelatedTo` 168146-168164 (**19 — it is a
-  WRAPPER**), `structuredTypeRelatedTo` 168406-168816 (**411, the body**), `propertiesRelatedTo`
-  168889-169029 (141), `signaturesRelatedTo` 172159-172181 (23), `signatureRelatedTo` 172201-172390
-  (**190**), `isTypeAssignableTo` 174395-174401 (7) — **925 lines between them**, but they are NOT
-  contiguous and the whole 168011-174401 region is ~6,390 lines, so **the first job of that round is
-  to census which of the ~5,400 intervening lines are the relater and which are neighbours** (the
-  same brace-matched census these three steps used; `scripts/ccet_split_analyze.py`'s `strip` plus a
-  positive control). **`checkTypeRelatedTo` has 363 call sites**, so the delegation surface is large
-  but every hop is mechanical and unchanged — step 4's `resolveAlias` had 80 and cost nothing.
-  **Inherit step 4's three constraints** (constructor input declared above `Checker.kt:666`; a field
-  whose initializer side-effects another field cannot move; grep the MANGLED JVM name), and expect
-  the ambient row to be the WORST it will look until the family closes — that is ledger row 6's
-  measured finding. § 10 receipts as before, with the per-pass counter table (420 rows byte-identical
-  against a rebuilt pristine) as the primary evidence rather than `cost_gate.py`.
+- [x] **(INV.0) STEP 5 — THE RELATER: DONE 2026-09-09 ((P18.56), commits `579092d93` split +
+  `03d455241` ablation record). `Relater.kt` is **1,446 lines**; `Checker.kt` **198,022 →
+  196,797 (−1,225)**; ledger row 7. Ambient: **45 reads, 5 writes** — the largest row of the
+  arc, and the design's own prediction rather than a regression. The item's recon was
+  corrected by the census: the algorithm is **1,256 lines in five contiguous spans**, not
+  spread through the ~6,390-line region — the rest is ELABORATION and stays. NOT split
+  (one mutually-recursive algorithm; a mid-recursion seam would put a `Checker` hop inside
+  the hottest recursion). Delegation surface **six**, not 363. **THREE THINGS ESTABLISHED
+  HERE FOR LATER ROWS**: the `--passTiming` pass table is printed in DESCENDING WALL-TIME
+  order, so a "byte-identical rows" receipt must SORT the rows and drop every ms-bearing or
+  time-bucketed line (804 spurious diff lines otherwise); `cost_gate.py`'s recorded baseline
+  can be stale, so a pure split is graded against a REBUILT pristine and the gate is the
+  control; and `isTypeAssignableTo` joins `getTypeOfExpression` as a `PrintInlining` site that
+  is NOT stable across processes, leaving `checkArgumentsAgainstSignature` the only one of
+  the three that can separate arms.**
+
+- [ ] **(INV.0) STEP 6 — MEMBER RESOLUTION: the seam `docs/INVERSION-DESIGN.md` § 6 Stage 0
+  names next in the core order, and the one that most improves ledger row 7.** Row 7's own
+  MEMBER-RESOLUTION group is the starting census: `getTypeOfSymbol`,
+  `resolveStructuredTypeMembers`, `resolveBaseTypesLazy`, `getPropertyTypeForRelation`,
+  `getStaticMembersOfType`, `getApparentType`, `primitiveApparentWrapper`, `isOptionalProperty`
+  — eight of the relater's 45 reads. **`getTypeOfSymbol` is Stage-3-shaped by § 6's own
+  reckoning ("their ambient IS the checker"), so the round's first job is to decide whether
+  the seam is `resolveStructuredTypeMembers` + the member TABLE builders WITHOUT it** — a
+  census of that family's own size and ambient surface, exactly as step 5's census was.
+  Note the two lazy-table traps this file already records: a member table is built on first
+  ask (round 833 — a new reader must `resolveStructuredTypeMembers(target)` first), and a
+  `keyof` over an IN-FLIGHT table must answer from the DECLARATIONS rather than re-enter
+  resolution ((INC.25)). **Inherit step 4's three constraints and step 5's three**: a
+  constructor input must be declared above `Checker.kt:666`; a field whose initializer
+  side-effects another field cannot move; grep the MANGLED JVM name; sort the `--passTiming`
+  pass rows for the receipt; grade against a REBUILT pristine, not the recorded baseline;
+  and use `checkArgumentsAgainstSignature` as the only stable `PrintInlining` site.
+  **A cheap sweetener, measured in (P18.56) and mechanical**: seven of the relater's reads
+  (`enumLiteralApparentPrimitive`, `enumMemberValueEqualsLiteral`,
+  `enumTargetAdmitsNumericSource`, `numericLiteralFitsEnum`,
+  `intersectionMergedSatisfiesTarget`, `intersectionMergedContradictsTarget`,
+  `targetIsMemberShaped`) have NO other caller in `Checker.kt`; absorbing them into
+  `Relater` takes row 7 from 45 reads to 38 with no design decision at all.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

@@ -1,16 +1,47 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,022** lines (**−1,941 across (P18.53)-(P18.55)**, the first
+extraction):** `Checker.kt` **196,797** lines (**−3,166 across (P18.53)-(P18.56)**, the first
 sustained movement in the extraction direction since the metric was created; 191,070 when it was
 created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not
-extractions). FOUR collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient
-surface none for both — `TypeInstantiator` (four checker reads, one table write) and
-**`NameResolver`, 2,284 lines, the name-resolution seam COMPLETE over three steps (26 checker
-reads, NO writes; the row IMPROVED as the family closed, absorbing four of its own earlier
-reads)**, all stated in the ledger. Reference points:
+extractions). FIVE collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient
+surface none for both — `TypeInstantiator` (four checker reads, one table write),
+`NameResolver` (2,284 lines, 26 reads, no writes — the name-resolution seam COMPLETE over three
+steps) and **`Relater`, 1,446 lines, the RELATION seam in one commit: 45 reads and 5 writes, the
+largest ambient row of the arc and the design's own prediction, since § 6 puts
+`getTypeOfSymbol`/`getTypeOfExpression` in Stage 3 for exactly that reason**, all stated in the
+ledger. Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.56) — (INV.0) STEP 5: THE RELATER IS `Relater.kt`, AND THE 6,390-LINE REGION IS ONLY 1,256 LINES OF ALGORITHM, 18,489 / 0 / 3 (2026-09-09).**
+`Checker.kt` **198,022 → 196,797**; `Relater.kt` 1,446; ledger row 7. **The census the item asked
+for changed the shape of the work**: the seven named entry points span a ~6,390-line region and the
+relater is **1,256 lines in five contiguous spans** — the rest is ELABORATION
+(`getPropertyElaborationChain` 546, `getFunctionMismatchElaborationWorker` 407,
+`checkExcessProperties` 231), which answers *what do we SAY about the failure*, a different seam.
+**Deliberately NOT split** where 4b was: one mutually-recursive algorithm, so a mid-recursion cut
+puts a `Checker` hop inside the hottest recursion for no verification benefit. **Delegation surface
+SIX, not 363** — `checkTypeRelatedTo`'s 329 call sites are byte-unchanged behind a one-line hop, and
+eight moved functions have no caller left. **THE MOST REUSABLE FINDING IS A RECEIPT FIX: the
+`--passTiming` pass table is printed in DESCENDING WALL-TIME order**, so its row ORDER is a timing
+artefact and the first comparison read **804 diff lines between two identical binaries**; sorted, and
+with every ms-bearing or time-BUCKETED line dropped, **488 deterministic lines are byte-identical
+against a REBUILT pristine HEAD** (all 420 per-pass rows, the 46 diagnostics, the emissions census,
+the counters, globals lookups) with a same-binary control. **A second: `cost_gate.py`'s ±2% column is
+not a statement about the change** — six counters read non-zero and pristine HEAD reads exactly the
+same deltas, i.e. the recorded baseline is stale; grade a split against a rebuilt pristine and treat
+the gate as the control. **A third: `isTypeAssignableTo` joins `getTypeOfExpression` as a
+`PrintInlining` site that is NOT stable across processes** (proved by running arm A twice), leaving
+`checkArgumentsAgainstSignature` the only one of § 10's three that can separate arms. The split
+IMPROVED inlining for the third row running (`checkTypeRelatedTo`: 344 `too large` refusals → a hop
+with ZERO). ab-interleaved **−11 ms (−0.04%) B-wins-3/6 NOISE-DOMINATED**; `new Relater` appears at
+exactly ONE bytecode in the module. Verbatim proved twice by two methods for the fourth round
+running. **5 pins, 5 arms, and TWO PINS MEASURED UNDISCRIMINATED AND RENAMED rather than claimed**: a
+leak detector cannot work, because the `Relation` cache is probed ABOVE the comparison stack and
+answers an identical pair before a stale key is consulted; and the `isDeeplyNested` bail is not the
+only bound — disabling it entirely still terminates, since `maxRelationDepth` is a second ceiling.
+cost_gate exit 0, huge_methods exit 0 (836 classes), warning-clean.
 
 **(P18.55) — (INV.0) STEP 4 IS COMPLETE: `NameResolver.kt` IS 2,284 LINES AND `Checker.kt` LOST 1,941, 18,484 / 0 / 3 (2026-09-09).**
 4b-ii moved the namespace / heritage / type-name group (19 functions, 2 fields) VERBATIM, closing
@@ -103,117 +134,3 @@ aggressive, which a3/a12/a13 are. Three residues queued as (CHK.116), including 
 flow-ORDERED and one leak set per class cannot express it. Grid **8 × added=0 removed=0** re-run
 independently; corpus 10,344/0, `spine_closure_audit.py` exit 0, `cost_gate.py` exit 0,
 `huge_methods.py` exit 0, build warning-clean.
-
-**(P18.51) — THE NULLABLE-TARGET RULE REACHES ALL FIVE HEADS ((CHK.114)), (c)'s STATED AXIS WAS WRONG, AND THE REFERENCES COULD NOT ADJUDICATE THE PIN THAT BROKE, 18,413 → 18,437 / 0 / 3 (2026-09-08).**
-All three stages landed **plus a PREREQUISITE the item did not name**: tsc RESTORES the aliased target
-before reporting, and three already-wired heads were silently stripping aliases — so wiring (a) alone
-would have REGRESSED `function q(): OptAlias` from correct to wrong. The guard is deliberately NOT
-applied at the argument and object-literal heads, which render the target from the TYPE, where keeping
-the alias buys one wrong string for another (measured). **(c)'s stated axis is wrong**: it calls the
-collapse CROSS-FLAVOUR, but both references KEEP the member spelling for `STwo = NTwo.A`,
-`NTwo = STwo.A` and even the cross-flavour-AND-cross-arity `SOne = NTwo.A` — **every collapsing row has
-a ONE-MEMBER source enum**, i.e. it is (CHK.92)(d)'s own fact on the SOURCE side, not a new rule. The
-item's "one wiring each" is true of neither (a) (8 rows, and it needs stage 0 first) nor (b) (two
-changes — once the target shows `| undefined` the written source literal must survive). **The failing
-pin could not be adjudicated by its own fixture, and that is the reusable lesson**:
-`ThisMethodCallAssignmentNarrowTest`'s subject is that a call does NOT narrow, and it broke on the
-TARGET's rendering while the row still fired at the same code and span — a full-text pin in an
-unrelated family silently depends on every display rule, and only the full suite sees it. Asked about
-the target, both references answered a THIRD thing (they drill to the offending MEMBER, because the
-source is a FRESH object literal); a sibling fixture with a NON-FRESH source forces them onto the
-whole-object form, where all three compilers are byte-identical at `'ZzzRes'` — confirming the strip
-and showing the pin had captured our own pre-existing divergence. The sweep found 5 files carrying a
-nullish target in a full-text expectation and **all are correct for the right reason** (16 shapes
-through both references), and the green-for-the-wrong-reason population is **provably empty** — a pin
-asserting a stripped target at a newly-wired head would have been RED before the change. 24 new pins;
-7 arms, **a7 REDUNDANT BY MEASUREMENT** over ~120 rows and its pin RENAMED so it no longer claims
-ordering coverage. Refused with measurements: a type-side alias test (unsound — id-keyed, first-wins,
-(INC.27)) and the (c) collapse inside a union source (needs `typeToString`'s union rendering, which
-(P18.48) forbids). Grid **8 × added=0 removed=0** re-run independently; corpus 10,344/0, externals
-290/0, `-project` 866/0, `cost_gate.py` exit 0, `huge_methods.py` exit 0, build warning-clean.
-
-**(P18.50) — THE CLASS-MEMBER DEFINITE-ASSIGNMENT PATH EXISTS ((CHK.112)(a)), AND THE MISSING PLUMBING WAS WRONG IN *BOTH* DIRECTIONS, 18,375 → 18,413 / 0 / 3 (2026-09-08).**
-**11 missing rows AND 6 ours-only FALSE POSITIVES from the same gap** — a bare identifier, an
-expression- and a block-bodied arrow, a function expression, an IIFE, an object literal, a computed
-member name and a `static { }` block, in a class DECLARATION and a class EXPRESSION alike, were all
-silent; and a method / property initializer / static block / arrow property / accessor /
-class-expression property that ASSIGNS the variable did not suppress a sibling closure's read.
-(CHK.110)(a) found its defect the same way — **a shape that fails both ways is the cheapest
-attribution there is.** **It was TWO mechanisms**: the reach classifier never gave a
-`PropertyDeclaration` under a class DECLARATION a status (so (CHK.110)(b)'s handler saw an empty leak
-there), and nothing anywhere walked a property initializer that is a plain expression. **The item's
-own headline fixture is silent for a SECOND reason and that would have read as an inert fix**:
-`SpineDaFrame.enableLeak` is `false` at file level by design, so a file-level `let` never leaks into
-ANY nested function, class or not, and both references do not share the conservatism — every fixture
-here is function-scoped, now a CLAUDE.md entry. **The FOURTH countdown pin in five rounds, and the
-purest yet**: `Inv4SpineBatch25Test` paired `a class-expression property initializer arrow is reached`
-with `negative control - a class-DECLARATION property initializer arrow is unreached`, under a header
-calling the difference a "reach quirk" — both references report BOTH spellings, so the pair recorded
-our own asymmetry and the "negative control" WAS the defect. Inverted with transcripts; the section
-header and the class KDoc's quirk list were fixed too, **three places, because a comment naming a
-quirk outlives the pin**. The sweep for siblings was run against the ORACLE, not by reading: of 49
-TS2454 class-ish `@Test` blocks, the 4 reachable ones were run through both references (3 green for
-the right reason, 1 unreachable), plus 2 fixtures BUILT to test the at-risk static-initializer
-suppression at function scope — both references TS2448 without TS2454, and we match. 38 pins + 1
-inverted; 11 arms all discriminating, with a3/a5 a round-927 pair and a6/a7 the mask/closure pair
-(a7 leaves `Checker.class` UNCHANGED and `spine_closure_audit.py` fails under it — a second
-independent instrument). Refused on measurement: the frame's live set for the member walk (arm a8 is
-the receipt) and a `ClassDeclaration` arm on `collectClosureAssignedNames`. Three residues queued as
-(CHK.115). Grid **8 × added=0 removed=0** re-run independently; `spine_closure_audit.py` exit 0,
-`cost_gate.py` exit 0, `huge_methods.py` exit 0, build warning-clean.
-
-**(P18.49) — A `number` STOPS BEING SILENTLY ACCEPTED BY A STRING ENUM ((CHK.113)(a)), THE SOURCE LITERAL SURVIVES TO A NULLISH-TARGET DISPLAY ((b)), AND THE ROUND BEFORE IT LEFT THREE COUNTDOWN PINS, 18,338 → 18,375 / 0 / 3 (2026-09-08).**
-**(a) is a FALSE NEGATIVE in the most basic position and the item under-counted it** — a `number`
-source was silently ACCEPTED against a string enum target; the item named the declaration, and
-measured it is **all five positions plus a union target, 8 silent rows**, TS2322/TS2345 in both
-references for every one. The fix demands POSITIVE evidence of string-ness through `enumMemberEntries`
-(the tsc view), so an opaque ambient member, an unfoldable value, an empty enum and every mixed or
-numeric enum keep today's acceptance — and **arm a2 demonstrates CLAUDE.md's own trap #2 directly**:
-inverting it to "positive numeric evidence" reddens exactly the two opaque-member controls.
-**(b)'s second shape did not exist** — the item says `gN(true)` prints `'boolean'` for `'true'`, but
-BOTH references print `'boolean'` there too, so that row was never a divergence — and **the display
-predicate alone is completely INERT**, because `getTypeOfExpression` answers the BASE primitive for a
-literal NODE: the source is widened at ACQUISITION, so nothing downstream has a literal left to keep
-(CLAUDE.md's round-781 entry earned its place again; the recovery re-reads the literal from its AST
-node at three display heads). **The inherited risk was re-scoped rather than accepted**:
-`ts2322KeepsSourceLiteral`'s two recorded FP incidents are about the ACQUISITION gate, which feeds the
-relation VERDICT, not the display predicate — widening acquisition was considered and REFUSED with
-that distinction stated. **Three stale pins were inverted, and the IMMEDIATELY PRECEDING round created
-them**: (CHK.92) recorded its own residue as pins asserting `'number'`/`'boolean'`, which both
-references contradict. That is the third countdown pin in four rounds, and CLAUDE.md's entry is
-reinforced with the sharper form — *a round that records its own residue as a pin hands the next round
-a failing suite*, and a red pin asserting a known-wrong value is indistinguishable from a regression
-until someone re-derives it against pristine. 37 pins + 3 inverted; 6 arms — a1 10 RED, a2 2 uniquely,
-a3 1, b1 12, and **b2/b3 REDUNDANT BY MEASUREMENT** (round 813's whole-output diff over a 43-row
-family, byte-identical on all three binaries), kept and recorded rather than claimed as coverage.
-Three pre-existing residues confirmed on the BEFORE binary are queued as (CHK.114). Grid
-**8 × added=0 removed=0** re-run independently; `cost_gate.py` exit 0, `huge_methods.py` exit 0,
-corpus 8,837/0, externals 290/0, `-project` 866/0, build warning-clean.
-
-**(P18.48) — THE ENUM AND NULLABLE-TARGET DISPLAY RESIDUES CLOSE ((CHK.92), ALL FOUR PARTS), AND A DISPLAY RULE PUT IN THE GENERAL RENDERER BROKE THE LANGUAGE SERVICE, 18,302 → 18,338 / 0 / 3 (2026-09-08).**
-**All four parts LANDED**: (a) neither side of an object-literal member mismatch is widened any more
-(`'6'` → `'5'`, not `'number'` → `'number'`), with tsc's per-FLAVOUR literal keep; (b) the four
-MEANING rows — an enum-target object-literal member at an ARGUMENT — now report byte-exactly; (c) one
-home, `nullableTargetDisplay`, implements tsc's `DefinitelyNonNullable`-gated strip AND the
-optional-declaration add, correcting BOTH directions at five call sites; (d) a one-member enum's
-relation-error display collapses to the parent at four positions. **The round's lesson is
-architectural and cost two round-trips: a display rule specific to RELATION ERRORS must not live in
-`typeToString`.** (d) was first put in the general renderer with a TS2367 bypass bolted on, and the
-full suite found it had broken `Project.quickInfoAt` — a hover on a one-member enum's member went
-from `Valued.Gamma` to `Valued`, destroying the distinction (API.15)'s deliberate negative control
-exists to make. **The oracle was asked rather than argued**: `tsgo --lsp -stdio` answers
-`(enum member) Valued.Gamma = 5` for all four one-member shapes, i.e. tsgo does NOT collapse in hover
-where both references DO collapse in a relation error — one renderer cannot serve both. The rule now
-lives in `relationErrorTargetDisplay` (5 relation-error heads), the bypass is DELETED, and **needing
-a second per-consumer bypass is recorded as the signal a rule is misplaced**; arm a12 is now the
-PLACEMENT arm, graded on the `-project` module at 3 RED. **A stale pin was INVERTED with proof** —
-`ConstAssertionTest`'s r24 asserted the known-wrong `'string'` and both references print `'"b"'`
-(second such pin in three rounds; a pin whose name says "residue" is a countdown). **Four of the
-item's claims were wrong**: (a) names two emitters and there are three, (d)'s exception is literal
-FRESHNESS in full, (c)'s "three sites" is five, and the binding constraint for (a) was a corpus PIN
-WALKER matching on exact message TEXT — which **also confounded the round's own instrument**, since a
-message-text marker reddens the BEFORE arm wherever such a walker exists. REFUSED with its
-measurement: (d)'s TS2367 freshness half (this checker mints no fresh enum-member type, so the four
-shapes share one `Type`). Two MEANING residues queued as (CHK.113). 35 pins + 1 consumer-side pin;
-13 arms, all discriminating. Grid **8 × added=0 removed=0** re-run independently; `cost_gate.py`
-exit 0, `huge_methods.py` exit 0, build warning-clean.

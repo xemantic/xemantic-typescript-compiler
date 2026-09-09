@@ -16,6 +16,7 @@ the next stage must either pay or justify.
 
 | 5 | `NameResolver` step **4b-i** (`NameResolver.kt`) — the PER-FILE LOOKUP core: the per-file scope tables and their two build passes, the INV.3(b)(ii) visibility sets and their (INC.71) deferral, the probe funnel, the four consults built on them (`lookupPerFile` / `lookupInFileScope` / `globalsForFile` / `lookupPerFileForNode`), the (CHK.49) lib-value recovery, the (BIND.1) owning-file probes and the four first-hit program scans (design § 6 Stage 0, "name resolution") | 20 functions + 11 fields taken VERBATIM from `Checker.kt`; 15 with a surviving caller became one-line delegations, 5 whose only readers moved got no hop | **seven** `Checker` members: `augmentationContextSymbol`, `findTypeParamInStatements`, `globalAugmentationAddedSymbols`, `installGlobalsLookupClassifier`, `isModuleFile`, `libGlobals`, `moduleLocalContributesGlobally` — `libGlobals` and `globalAugmentationAddedSymbols` are deliberately READS and NOT constructor inputs (see the note) | **none** — the eleven fields the family owns moved with it | ~656 (`Checker.kt` 199,405 → 198,781; `NameResolver.kt` 669 → 1,418) | suite 18,484/0/3 with all 17 named invariant gate classes green; **all 420 per-pass `--passTiming` rows and the 46 diagnostics byte-identical against PRE-4a pristine**, i.e. one receipt covering rows 4 and 5 together; cost_gate exit 0, counter column identical to pristine; huge_methods exit 0, 0 over limit, 835 classes, `Checker.<init>` 5,701 → 5,656; ab-interleaved 6 pairs −120 ms (−0.45%) B-wins-3/6 NOISE-DOMINATED, both arms 46 errors; **PrintInlining shows the split IMPROVED the hottest hop** — `lookupPerFileForNode` was `4 inline (hot) + 57 too large` as a monolith and its 9-byte hop is now `57 inline + 41 inline (hot)` with ZERO refusals, the body unchanged; build warning-clean |
 | 6 | `NameResolver` step **4b-ii** (`NameResolver.kt`) — NAMESPACE / HERITAGE / TYPE-NAME resolution, which COMPLETES the name-resolution seam: the (CHK.76) enclosing-namespace consult and the (CHK.77) merged-level machinery under it, the (CHK.78) augmentation-context pair, the INV.3(d) global-contribution predicate, round 748's `lexicalTypeSymbolForNode`, `resolveQualifiedName`, the heritage pair with `isInAmbientContext`, the (CHK.79) surface walk, `resolveTypeNameToSymbol` + its two helpers, and the INV.3(d) namespace-qualified family | 19 functions + 2 fields taken VERBATIM from `Checker.kt` | **+9 new** (`QUALIFIED_LEFT_MEANING`, `ambientModuleOfImportAlias`, `enclosingAmbientBlockMember`, `isDtsFile`, `lexicalBlockScopedEnumNames`, `mergeSharedKeepNames`, `moduleFiles`, `moduleNamedExportsOf`, `umdGlobalNames`) **and −4 ABSORBED** from rows 4 and 5 (`resolveQualifiedName`, `ambientModuleSurfaceMember`, `augmentationContextSymbol`, `moduleLocalContributesGlobally` now live here) → **NET 26 distinct reads for the whole collaborator** | **none** | ~788 (`Checker.kt` 198,781 → 198,022; `NameResolver.kt` 1,418 → 2,284). **STEP 4 TOTAL: 199,963 → 198,022, −1,941 lines** | suite 18,484/0/3, all 20 named gate classes green (incl. `KotlinExternalsGeneratorTest`, another module); **all 420 per-pass `--passTiming` rows and the 46 diagnostics byte-identical against PRE-4a pristine — one receipt for the whole of step 4**; cost_gate exit 0, counter column identical to pristine; huge_methods exit 0, 0 over limit, 835 classes, `Checker.<init>` 5,656 → 5,634; PrintInlining ZERO refusals on every hop, both STABLE standing hot sites identical to pristine (`getTypeOfExpression` deliberately not quoted — row 4's note shows it is unstable across processes); ab-interleaved 6 pairs +39 ms (+0.15%) B-wins-4/6 NOISE-DOMINATED, both arms 46 errors; warning-clean |
+| 7 | `Relater` (`Relater.kt`) — the RELATION seam: the whole of Phase 4's items 4a-4e, i.e. the algorithm that decides whether one `Type` is assignable to / comparable with / identical to another (design § 6 Stage 0, "relations" in the core order; ledger row 2 put the `Relation` cache in `TypeRelationCache.kt` in 2026-09-02 so this extraction would not start from a 198k-line neighbourhood) | 14 functions + 4 fields taken VERBATIM from **five contiguous spans** of `Checker.kt` — the flag fast path `isSimpleTypeRelatedTo`, the entry `checkTypeRelatedTo` with its `--passTiming` reentrance probe and the recursive `checkTypeRelatedToCore` under it, `structuredTypeRelatedTo` / `objectTypeRelatedTo` / `propertiesRelatedTo`, `signaturesRelatedTo` / `signatureRelatedTo` / `methodSignaturesBivariantlyRelated`, and `isTypeAssignableTo`. Six kept a surviving caller and became one-line private delegations; the other eight had ZERO callers left and got no hop. NOT split, unlike step 4b: this is ONE mutually-recursive algorithm, so a mid-recursion seam would put a `Checker` hop inside the compiler's hottest recursion | **45** — the largest row of the arc, and expected: the relater's ambient IS the type system. ENUM RELATION (16): `enumLiteralApparentPrimitive`, `enumMemberTypeIsStringValued`, `enumMemberTypesAreSameMember`, `enumMemberTypesOf`, `enumMemberValueEqualsLiteral`, `enumOfMemberTypeSymbol`, `enumOwnTypeSymbol`, `enumTargetAdmitsNumericSource`, `enumTargetsAreOwnMembers`, `enumTypesRelation`, `numericLiteralFitsEnum`, `isNumericEnumObjectType`, `isStringEnumObjectType`, `intersectionMergedSatisfiesTarget`, `intersectionMergedContradictsTarget`, `targetIsMemberShaped`; MEMBER RESOLUTION (8): `getTypeOfSymbol`, `resolveStructuredTypeMembers`, `resolveBaseTypesLazy`, `getPropertyTypeForRelation`, `getStaticMembersOfType`, `getApparentType`, `primitiveApparentWrapper`, `isOptionalProperty`; TYPE CONSTRUCTION (4): `getUnionType`, `getIntersectionType`, `getOrInternReference`, `instantiateType`; PREDICATES/WIDENINGS (12): `isArrayLikeReference`, `isRestTupleMember`, `tupleRelationElementTypes`, `readonlyToMutableArrayLike`, `typeContainsUnresolvedTypeParam`, `typeIncludesUndefined`, `propTypeContainsLiteral`, `literalTypeOfExpression`, `isPropPrivateBrandMismatch`, `isLibPhantomMemberOfModuleInterface`, `widenOptionalSourcePropType`, `widenOptionalTargetPropType`; STATE (5): `strictNullChecks`, `freshObjLitRange`, `globalArrayType`, `globalReadonlyArrayType`, `relationDepth`. Plus, by NAME rather than through `checker`: 4 `companion` name sets and the file-private (REL.2) switch `REL2_ENUM_TO_MEMBER`, both widened to `internal` | **5** — `relationDepth` and `genericPropInstantiationBudget` (recursion bookkeeping) and `lastMissingPropertyName` / `lastMissingPropertySymbol` / `lastMissingIndexSigKind`, which are an ELABORATION RETURN CHANNEL and not state the algorithm consults. **No ambient writes to CONTAINERS**: the three stacks it mutates are handed in as the objects and `CheckerState` keeps owning them | ~1,256 (`Checker.kt` 198,022 → **196,797**; `Relater.kt` 1,446) | suite **18,489/0/3** (18,484 + 5 new pins); **488 deterministic lines of `--passTiming` byte-identical against a REBUILT pristine HEAD** — all 420 per-pass rows, the 46 diagnostics, the emissions census, the counter block and the globals-lookup line — with a SAME-BINARY control showing the receipt stable; `cost_gate.py` exit 0 and its counter column identical to pristine's; `huge_methods.py` exit 0, 0 over limit, **836** classes (835 + `Relater`), `Checker.<init>` 5,634 → 5,675; ab-interleaved 6 pairs **−11 ms (−0.04%) B-wins-3/6 NOISE-DOMINATED**, both arms 46 errors; PrintInlining ZERO refusals on every hop and the split REMOVED 344 + 9 `too large` refusals at the two hottest entry points; `new Relater` appears at **exactly one** bytecode in the module (`Checker.<init>`); build warning-clean |
 ## Notes per row
 
 ### 1 — TypeInterner
@@ -244,3 +245,98 @@ remove in a split: `installGlobalsLookupClassifier` stays in `Checker` because i
 the walk-scoped `currentFileLocals`, and `augmentationContextSymbol` calls
 `lookupPerFile`/`nodeSymbolOf` back. A resolver given an `AmbientModuleIndex` and a
 `ScopeResolver` as inputs would have an empty row; that is the shape row 7 reaches for.
+
+### 7 — Relater, and the ambient row the design predicted
+
+**The census was the round's first job and it changed the shape of the work.** The
+queue item named seven entry points spanning 925 lines inside a ~6,390-line region
+and said to find out which of the ~5,400 intervening lines are the relater. They
+are not: **1,256 lines in five contiguous spans are the algorithm**, and the rest is
+ELABORATION — `getPropertyElaborationChain` (546), `getFunctionMismatchElaborationWorker`
+(407), `checkExcessProperties` (231), the no-overlap family, the array- and
+object-literal checks. Those answer "what do we SAY about the failure", which is a
+different seam from "does it relate".
+
+**It was deliberately NOT split, where step 4b was.** 4b had two independent families
+(per-file lookup / namespace-heritage) and a natural seam. This is one mutually
+recursive algorithm — `checkTypeRelatedTo` → `structuredTypeRelatedTo` →
+`objectTypeRelatedTo` → `signaturesRelatedTo` → `signatureRelatedTo` → back — so any
+mid-recursion cut puts a `Checker` hop inside the compiler's hottest recursion and
+inflates this row temporarily for no verification benefit. The verification cost is
+the same at 600 lines as at 1,256.
+
+**The delegation surface is SIX, not 363.** `checkTypeRelatedTo` has 329 surviving
+call sites and every one is byte-unchanged behind a one-line private hop. Eight of
+the fourteen moved functions have zero callers left and get none, so the public
+surface of `Relater` (6) equalled the `relater.` reference count (6) by construction —
+7 and 7 once the test seam below was added.
+
+**This row is the largest in the arc and that is the design's own prediction, not a
+regression.** § 6 puts `getTypeOfSymbol`/`getTypeOfExpression` in Stage 3 because
+"their ambient IS the checker"; the relater sits one step below that. The reads
+group cleanly: MEMBER RESOLUTION (8) is the seam § 6 calls "member resolution" and
+will be a collaborator of its own; TYPE CONSTRUCTION (4) is half-owned by rows 1 and
+3 already. **The cheap next step was MEASURED rather than assumed, and the
+measurement REFUTED the plan the round started with**: the brief asserted the enum
+group had no other callers, and a caller census says only **seven** of the 48 members
+do (`enumLiteralApparentPrimitive`, `enumMemberValueEqualsLiteral`,
+`enumTargetAdmitsNumericSource`, `numericLiteralFitsEnum`,
+`intersectionMergedSatisfiesTarget`, `intersectionMergedContradictsTarget`,
+`targetIsMemberShaped`) — absorbing them is mechanical and takes the reads 45 → 38,
+while `enumTypesRelation` (3 other callers) and `enumOfMemberTypeSymbol` (8) belong
+to an ENUM seam of their own.
+
+**The three elaboration WRITES are the opposite kind of debt.** `lastMissingPropertyName`
+/ `lastMissingPropertySymbol` / `lastMissingIndexSigKind` are a RETURN CHANNEL: they
+are how the TS2322/TS2345 path learns WHICH property failed, which a `Boolean` result
+has no room to carry. Paying them means giving the relation a richer result (tsc's own
+`errorInfo` chain) — a semantic change, and Stage 2 or later work, not Stage 0.
+
+**`relationDepth` is the one counter this class must NOT own, and the reason is
+invisible.** `Checker.resolveGenericPropertyType` gates INV.5(d1)'s 2,000-computation
+budget on `relationDepth > 0`. Tidying it into a private `Relater` field — the obvious
+refactor, since the other four counters ARE owned — leaves that gate reading 0 forever
+and re-opens the deep-generic blowup the budget exists to bound, with no diagnostic
+and no corpus failure. It is part of `Relater.recursionResidue` for that reason.
+
+**The receipt protocol needed one fix and gained one control.** The `--passTiming` pass
+table is printed in DESCENDING WALL-TIME order, so its row ORDER is a timing artefact
+even though every column the receipt keeps is deterministic: the first comparison read
+804 diff lines on two binaries that are in fact identical. Sorting the pass rows and
+dropping every line carrying a millisecond figure or a TIME-BUCKETED count leaves **488
+deterministic lines**, byte-identical between pristine HEAD and the split — and a
+same-binary control confirms the normalisation is not simply hiding everything.
+
+**A THIRD standing hot site is now known to be unstable across processes.** Row 4
+showed `getTypeOfExpression`'s `PrintInlining` row is not stable; this round ran arm A
+TWICE and `isTypeAssignableTo` moves as well (`4 inline + 4 inline (hot)` against
+`4 inline + 2 inline (hot)` on ONE binary), while `checkArgumentsAgainstSignature` is
+byte-identical across A's two runs and is therefore the only one of the three that can
+separate arms here. It moved by one row in each direction (`5 inline + 2 too large + 2
+hot-too-big` → `4 + 1 + 3`) with the refusal COUNT unchanged, which is what a split
+does to a caller's inline tree.
+
+**And the split IMPROVED inlining at the two hottest entry points, for the third row
+running.** As a monolith `Checker::checkTypeRelatedTo` was refused `too large` at **344**
+sites; the hop reads `294 inline + 38 inline (hot)` with ZERO refusals.
+`isSimpleTypeRelatedTo` went from `24 inline + 9 too large + 13 hot-method-too-big` to a
+hop with `6 inline + 4 inline (hot)` and no refusal at all. Rows 1 and 5 found the same
+thing on `getOrInternReference` and `lookupPerFileForNode`.
+
+**One production member was added deliberately: a NAMED TEST SEAM.**
+`Relater.recursionResidue` (and `Checker.relaterRecursionResidue` in front of it) sums
+the three stacks, `relProbeDepth` and `checker.relationDepth`, and `RelaterTest` asserts
+it is 0 after a whole-program check. B202.3's finally-hygiene is otherwise unpinnable:
+a stale `(source.id, target.id)` key does not fail, it makes every LATER comparison of
+that pair answer `true` through the cycle break — i.e. it deletes diagnostics in
+whatever file is checked next, which no corpus baseline, `cost_gate.py` counter or
+`--listAll` diff can see. Three ablation arms (dropping the stack pop, the
+`relationDepth--`, or the two target-stack pops) each redden it and nothing else.
+
+**Two pins were measured UNDISCRIMINATED and renamed rather than claimed** (round 813).
+A leak DETECTOR cannot work for an identical pair, because the `Relation` cache is
+probed ABOVE the comparison stack and answers the second ask before a stale key is
+consulted; and the `isDeeplyNested` bail is not the only bound on an infinitely
+expanding generic pair — disabling it entirely (arm a4) still terminates, because
+`maxRelationDepth` at 100 is a second, sufficient ceiling. The two guards are a
+round-927 pair.
