@@ -1,15 +1,37 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,405** lines (**−558 at (P18.53)**, the first movement in the
-extraction direction since the metric was created; 191,070 when it was created, and the
-(P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions).
-FOUR collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none for
-both — `TypeInstantiator` (four checker reads, one table write) and now `NameResolver`
-(fourteen checker reads, NO writes; `Checker` no longer names `state.symbolTargets`), all
-stated in the ledger. Reference points:
+extraction):** `Checker.kt` **198,781** lines (**−1,182 across (P18.53)+(P18.54)**, the first
+movement in the extraction direction since the metric was created; 191,070 when it was created,
+and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not
+extractions). FOUR collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient
+surface none for both — `TypeInstantiator` (four checker reads, one table write) and
+`NameResolver`, now 1,418 lines over two steps (4a: 14 reads; 4b-i: 7 more; NO writes in either,
+and `Checker` no longer names `state.symbolTargets`), all stated in the ledger. Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.54) — (INV.0) STEP 4b-i: THE PER-FILE LOOKUP CORE JOINS `NameResolver.kt`, THE ITEM'S OWN HOIST IS UNSAFE, AND THE FILE THE ARC GROWS INTO WAS UNREVIEWABLE BY DIFF, 18,484 / 0 / 3 (2026-09-09).**
+`Checker.kt` **199,405 → 198,781**; `NameResolver.kt` 669 → 1,418; ledger row 5. 20 functions and
+11 fields moved VERBATIM — the per-file scope tables and their build passes, the INV.3(b)(ii)
+visibility sets and their deferral, the probe funnel, the four consults, the (CHK.49) lib-value
+recovery, the (BIND.1) owning-file probes and the four first-hit program scans. Ambient row:
+**seven reads, no writes**, two of them intended BIDIRECTIONAL pairs. **The full 4b censused at
+1,363 lines so it was SPLIT**; 4b-ii (namespace / qualified-name / heritage, ~780 lines) is what
+remains of step 4. **THE ITEM'S OWN INSTRUCTION IS UNSAFE**: hoisting `libGlobals`'s declaration
+above the construction site — which it asks for — would reorder `parseBuiltinLib()`, whose side
+effect fills a field deliberately declared before it for the Kotlin init-order gotcha; that field
+and one other became ambient reads instead. **THE SPLIT IMPROVED THE COMPILER'S HOTTEST LOOKUP**:
+`lookupPerFileForNode` (~2M calls/self-compile) was `4 inline (hot) + 57 too large` as a monolith
+and its 9-byte hop is now `57 inline + 41 inline (hot)` with ZERO refusals — row 1's finding on a
+far bigger population — with a receipt trap attached, since Kotlin mangles an `internal` member's
+JVM name and a grep for the source name reads zero rows. **AND THE FILE THIS ARC GROWS INTO WAS
+RENDERING AS A BINARY BLOB**: `UNRESOLVED_MODULE_SPEC`'s literal NUL sat at byte 7,910, inside
+git's 8,000-byte detection window, so 4a and 4b-i have NO line diff for it; fixed in `2db1c14ca`
+with the compiled class BYTE-IDENTICAL as the receipt. Receipts: **all 420 per-pass `--passTiming`
+rows and the 46 diagnostics byte-identical against PRE-4a pristine** (one receipt covering both
+rows), all 17 named gate classes green, cost_gate exit 0, huge_methods exit 0 with
+`Checker.<init>` 5,701 → 5,656, ab-interleaved −0.45% B-wins-3/6 NOISE-DOMINATED, warning-clean.
 
 **(P18.53) — (INV.0) STEP 4a: THE NAME/MODULE-RESOLUTION LEAF BECOMES `NameResolver.kt`, AND TWO OF THE FOUR § 10 INSTRUMENTS NEED A SAME-BINARY CONTROL, 18,477 → 18,484 / 0 / 3 (2026-09-09).**
 The owner chose **(INV.0)** — the WORK ORDER's tail — so the (CHK.\*) lane is parked and the

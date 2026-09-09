@@ -25,6 +25,61 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.54) — (INV.0) step 4b-i: the PER-FILE LOOKUP core joins `NameResolver.kt`, the item's own hoist is UNSAFE, and the file the arc grows into was UNREVIEWABLE BY DIFF (2026-09-09)
+
+**Suite 18,484 / 0 / 3** (unchanged — a pure move adds no pins). `Checker.kt`
+**199,405 → 198,781** (−624; **−1,182 across 4a+4b-i**); `NameResolver.kt` 669 → 1,418.
+cost_gate exit 0, huge_methods exit 0 (835 classes, `Checker.<init>` 5,701 → **5,656**),
+build warning-clean, ledger row 5. **The full 4b censused at 1,363 lines over 39 functions, so
+it was SPLIT** per the protocol's decompose rule; the namespace / qualified-name / heritage
+group (~780 lines) is 4b-ii and is what remains of step 4.
+
+**THE ITEM'S OWN INSTRUCTION IS UNSAFE, AND FINDING THAT OUT WAS THE ROUND'S FIRST REAL WORK.**
+Step 4 says to hoist `libGlobals`'s declaration above the collaborator's construction site so it
+can be a constructor input. `libGlobals` is initialized by `parseBuiltinLib()`, whose SIDE EFFECT
+fills `realLibUnknownNames` — a field whose own KDoc records that it is "DECLARED BEFORE
+[libGlobals] on purpose — the Kotlin field-init order gotcha". Hoisting that chain reorders lib
+parsing against ~9,300 lines of field initialization. `libGlobals` and
+`globalAugmentationAddedSymbols` became ambient READS instead (both are declared BELOW line 705,
+where a constructor input would have captured **null**). **General rule for the rest of the arc: a
+constructor input must be declared above 705, and a field whose initializer has a side effect on
+another field cannot be moved at all.**
+
+**THE SPLIT IMPROVED INLINING AT THE COMPILER'S HOTTEST LOOKUP — row 1's finding, on a much
+bigger population.** `lookupPerFileForNode` has ~67 callers and ~2M calls per self-compile. As a
+monolithic `Checker` method C2 refused it at 57 sites (`4 inline (hot) + 57 too large`); the
+9-byte delegation hop now reads **`57 inline + 41 inline (hot)` with ZERO refusals**, with the
+body's own rows unchanged. `globalsForFile` is the same shape. **A receipt-reading trap came with
+it: Kotlin mangles an `internal` member's JVM name with a `$<module>` suffix**, so a
+`PrintInlining` grep for the source name reads ZERO rows for exactly the three hot hops that
+matter — which reads as "the hop was never compiled" rather than as a bad grep.
+
+**THE FILE THIS WHOLE ARC GROWS INTO WAS UNREVIEWABLE BY DIFF, AND NOBODY HAD NOTICED.**
+`UNRESOLVED_MODULE_SPEC` holds a literal NUL byte (deliberate and load-bearing — no filename can
+contain one). After 4a it sat at byte offset **7,910**, inside the 8,000-byte window git's binary
+heuristic scans, so `NameResolver.kt` rendered as `Bin 41763 -> 83630 bytes` with **no line diff**
+in `git show` / `git diff` — i.e. commits `da92e5bd3` (4a) and `84dd8ad5d` (4b-i) cannot be
+reviewed by diff for that file. `Checker.kt` escapes only by accident, its own NULs sitting at
+byte 4.6M. Fixed separately in `2db1c14ca` by escaping both to `\u0000`, and **the receipt is
+that the compiled `NameResolver.class` is BYTE-IDENTICAL across the edit** (`cmp` clean, md5
+`ac116f49…`), with a diffability probe afterwards confirming the file now renders as text. The two
+earlier commits are left alone rather than rewritten: their content was verified by other means (a
+reverse-transform diff and an independent multiset check of the moved region).
+
+**RECEIPTS.** Suite 18,484/0/3 with all **17** named invariant gate classes confirmed green;
+**all 420 per-pass `--passTiming` rows and the 46 diagnostics byte-identical against PRE-4a
+pristine**, so one receipt covers rows 4 and 5 together; cost_gate's counter column identical to
+pristine (the ±0.03% shown against `cost-counters.txt` is HEAD's own drift, last rebaselined at
+`1917f1ca3`); ab-interleaved 6 pairs −120 ms (−0.45%) B-wins-3/6 NOISE-DOMINATED with both arms at
+46 errors. Verbatim proved twice by two methods again — the agent's reverse-transform diff and the
+orchestrator's independent multiset check, whose only unaccounted lines were the 15 signatures
+whose visibility changed and the new class KDoc.
+
+**AMBIENT ROW: SEVEN reads, NO writes.** Two of the seven are BIDIRECTIONAL pairs and are recorded
+as intended rather than as defects: `installGlobalsLookupClassifier` stays in `Checker` (it reads
+the walk-scoped `currentFileLocals`) while the taxonomies it classifies against live in the
+resolver, and `augmentationContextSymbol` calls `lookupPerFile`/`nodeSymbolOf` back.
+
 ### Round (P18.53) — (INV.0) step 4a: the NAME/MODULE RESOLUTION leaf becomes `NameResolver.kt`, and TWO OF THE FOUR § 10 INSTRUMENTS NEED A SAME-BINARY CONTROL (2026-09-09)
 
 **Suite 18,477 → 18,484 / 0 / 3** — 7 pins in the new `NameResolverTest`. `Checker.kt`
@@ -2409,7 +2464,22 @@ where the order sends you.
   prints `Type 'E'` today), with a syntactic freshness override at the (CHK.86)/(CHK.88)
   emitter (~165973/165993). Population 26 baselines / 4 ACTIVE, 0 member-form lines anywhere.
 
-- [ ] **(INV.0) STEP 4 — 4a LANDED 2026-09-09 ((P18.53)): `NameResolver.kt` holds the LEAF (15
+- [ ] **(INV.0) STEP 4 — 4a AND 4b-i LANDED 2026-09-09 ((P18.53)/(P18.54)); ONLY **4b-ii** REMAINS.
+  `NameResolver.kt` is 1,418 lines (ledger rows 4 and 5); `Checker.kt` 199,963 → **198,781**.
+  **4b-ii is the namespace / qualified-name / heritage group, ~780 lines, censused at post-4b-i
+  HEAD**: `lookupInEnclosingNamespaces`, `globalAugmentationLevelSymbol`, `mergedNamespaceLevels`,
+  `ambientModuleBlockIsFileless` (+ `ambientModuleFilelessCache`), `ambientModuleSurfaceMember`,
+  `augmentationContextSymbol`(+`ForNode`), `moduleLocalContributesGlobally`,
+  `lexicalTypeSymbolForNode`, `resolveQualifiedName`, `resolveTypeNameToSymbol`,
+  `symbolHasTypeSideDeclaration`, `typeSideImportFallback` (+ its cache), `namespaceAliasMemberSymbol`,
+  `resolveNamespaceQualifiedSymbol`, `resolveNsQualifiedFromQualifiedName`, `resolveHeritageBaseHead`,
+  `resolveHeritageBaseSymbol`, `isInAmbientContext`. It ABSORBS three of 4b-i's seven ambient reads
+  (`augmentationContextSymbol`, `moduleLocalContributesGlobally`, and `resolveQualifiedName` from row
+  4) — the two halves call each other, which is why the row gets BETTER as the family completes.
+  **Two constraints established the hard way and not to be re-derived**: a constructor input must be
+  declared ABOVE `Checker.kt:705` (below it, the field is still null at construction), and a field
+  whose initializer has a SIDE EFFECT on another field (`libGlobals` → `realLibUnknownNames`) cannot
+  be moved at all. ORIGINAL 4a NOTE ((P18.53)): `NameResolver.kt` holds the LEAF (15
   functions, 3 fields, 593 lines verbatim; `Checker.kt` 199,963 → 199,405; ledger row 4; ambient
   fourteen reads / no writes). Three deviations recorded there, one FORCED by the warning-clean
   rule. **4b (the scope side, ~1,270 lines) IS WHAT REMAINS** — and several of 4a's ambient reads

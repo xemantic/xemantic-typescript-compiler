@@ -14,6 +14,7 @@ the next stage must either pay or justify.
 | 3 | `TypeInstantiator` + file-level `TypeMapper`/`createTypeMapper` (`TypeInstantiator.kt`) — the INSTANTIATION seam: `instantiateType` / `instantiateSignature` / the fn-aware pair / the contextual pair / the two outer-arg substituters (design § 6 Stage 0, "instantiation" in the core order) | the `// Generic type instantiation` region of `Checker.kt` (291 lines), verbatim; each call site a one-line private delegation | `Checker.getTypeOfSymbol` (resolution of member/parameter types), `Checker.getUnionType` / `getIntersectionType` (normalization — identity moved in row 1, the reduction rules did not), `Checker.instantiateTupleElements` (the tuple rebuild, added (P18.28)/(CHK.96) stage 2), `TypeInterner.reference` — all through the FINAL class, no interface, no lambda | **`symbolTypes`** (the id-keyed type table, handed in as the object; written for every rebuilt member/parameter symbol) | ~290 | corpus 16,819/0/3 byte-identical; cost_gate +0.00% every counter; huge_methods 0 (815 classes); ab-interleaved 6 pairs −188 ms (−0.81%) B-wins-3/6 NOISE-DOMINATED (no wall effect); JFR alloc 1,903 vs 1,999 samples, same leaf families, no new frame; PrintInlining: the 10 B `Checker::instantiateType` hop `inline` ×55 / `inline (hot)` ×32 (refused only at 20 cold or size-capped callers), `instantiateSignature` hop `inline` ×15, `instantiateTypeFnAware` hop `inline (hot)` ×4 — the 1,265 B body was never inlinable before the split either (A: 1,241 B `callee is too large` ×81, identically); the three standing hot sites row-for-row identical across arms; core `--rerun` compile 77.8/79.2 s → 86.8/80.6 s (run 2 quoted: flat) |
 | 4 | `NameResolver` (`NameResolver.kt`) — the NAME / MODULE RESOLUTION seam: the alias ladder (`resolveAlias` / `resolveAliasTarget` / `resolveImportTargetFallback` / `resolveAliasJsModuleSpecifier` / `resolveImportedSymbolGeneral` + computer), the specifier ladder (`resolveModuleSpecifier` + computer, the two relative resolvers, `augmentationTargetFile`), the scope probes `resolveNamePath` / `findSymbolInExports`, and the checker-local symbol-target LINK STORE (design § 6 Stage 0, "name resolution" in the core order) | 15 functions + 3 fields taken VERBATIM from `Checker.kt` (593 lines; a reverse-transform of the moved region `diff`s byte-identical against the original spans); the 11 with a surviving caller became one-line private delegations, the 4 whose only readers moved with them got no hop | **fourteen** `Checker` members, all reached through the FINAL class: `ambientModuleSurfaceMember`, `ambientRequireAliasTarget`, `blockLevelImportOf`, `createModuleSymbol`, `enclosingImportsOf`, `findEnclosingImport`, `findSymbolInAllNamespaceScopes`, `isImportBindingDecl`, `normalizePath`, `resolveAmbientModuleExportEquals`, `resolveExportedSymbolThroughStars`, `resolveExpressionToSymbol`, `resolveModuleExportAssignment`, `resolveQualifiedName` (16 call sites) | **none** — `symbolTargets` is handed in as the object; the two memos are owned here | ~593 (`Checker.kt` 199,963 → 199,405; `NameResolver.kt` 669) | suite 18,484/0/3 (18,477 baseline + the 7 new pins), all eleven named invariant gate classes confirmed green; **all 420 per-pass `--passTiming` counter rows and the 46 diagnostics byte-identical against a rebuilt pristine HEAD** (a stronger statement than cost_gate's 20 aggregates), cost_gate exit 0; the only differing section is the node-kind histogram, which a SAME-BINARY control moves more (70 lines A-vs-A vs 64 A-vs-B) — the documented crawl-worker race; huge_methods exit 0, 0 over limit, 835 classes (834 + `NameResolver`), `Checker.<init>` 5,701/8,000; ab-interleaved 6 pairs −152 ms (−0.57%) B-wins-2/6 NOISE-DOMINATED, both arms 46 errors; PrintInlining every hop `inline`/`inline (hot)` with ZERO refusals, two standing hot sites row-identical and `getTypeOfExpression` shown UNSTABLE across processes on one binary (A's 2nd run == B); JFR alloc: `NameResolver` never an allocated type, symmetric sampler tails, counts A 2,527/2,626 vs B 2,737/2,534 (no separation); core compile 1m25s both arms; build warning-clean |
 
+| 5 | `NameResolver` step **4b-i** (`NameResolver.kt`) — the PER-FILE LOOKUP core: the per-file scope tables and their two build passes, the INV.3(b)(ii) visibility sets and their (INC.71) deferral, the probe funnel, the four consults built on them (`lookupPerFile` / `lookupInFileScope` / `globalsForFile` / `lookupPerFileForNode`), the (CHK.49) lib-value recovery, the (BIND.1) owning-file probes and the four first-hit program scans (design § 6 Stage 0, "name resolution") | 20 functions + 11 fields taken VERBATIM from `Checker.kt`; 15 with a surviving caller became one-line delegations, 5 whose only readers moved got no hop | **seven** `Checker` members: `augmentationContextSymbol`, `findTypeParamInStatements`, `globalAugmentationAddedSymbols`, `installGlobalsLookupClassifier`, `isModuleFile`, `libGlobals`, `moduleLocalContributesGlobally` — `libGlobals` and `globalAugmentationAddedSymbols` are deliberately READS and NOT constructor inputs (see the note) | **none** — the eleven fields the family owns moved with it | ~656 (`Checker.kt` 199,405 → 198,781; `NameResolver.kt` 669 → 1,418) | suite 18,484/0/3 with all 17 named invariant gate classes green; **all 420 per-pass `--passTiming` rows and the 46 diagnostics byte-identical against PRE-4a pristine**, i.e. one receipt covering rows 4 and 5 together; cost_gate exit 0, counter column identical to pristine; huge_methods exit 0, 0 over limit, 835 classes, `Checker.<init>` 5,701 → 5,656; ab-interleaved 6 pairs −120 ms (−0.45%) B-wins-3/6 NOISE-DOMINATED, both arms 46 errors; **PrintInlining shows the split IMPROVED the hottest hop** — `lookupPerFileForNode` was `4 inline (hot) + 57 too large` as a monolith and its 9-byte hop is now `57 inline + 41 inline (hot)` with ZERO refusals, the body unchanged; build warning-clean |
 ## Notes per row
 
 ### 1 — TypeInterner
@@ -155,3 +156,50 @@ memoized as the `UNRESOLVED_MODULE_SPEC` sentinel and mapped back to null on rea
 (round 483's single-lookup form), so an edit that "simplifies" the sentinel returns
 the sentinel STRING as a resolved file name — from the second call onward only,
 which a single-ask pin cannot see.
+
+### 5 — NameResolver, step 4b-i (the per-file lookup core)
+
+**The queue item's own instruction was UNSAFE and is not followed.** It asks for
+`libGlobals`'s declaration to be hoisted above the collaborator's construction site so
+it can be a constructor input. `libGlobals` is initialized by `parseBuiltinLib()`,
+whose SIDE EFFECT fills `realLibUnknownNames` — a field whose own KDoc records that it
+is "DECLARED BEFORE [libGlobals] on purpose — the Kotlin field-init order gotcha".
+Hoisting that chain above line 705 reorders lib parsing against ~9,300 lines of field
+initialization. So `libGlobals` and `globalAugmentationAddedSymbols` (both declared
+BELOW the construction, where a constructor input would capture null) are ambient
+READS instead, which is sound because every reader here runs during or after the init
+passes. The general rule for the rest of this arc: **a constructor input must be
+declared above line 705, and a field whose initializer has a side effect on another
+field cannot be moved at all.**
+
+**One coupling is BIDIRECTIONAL and intended.**
+`Checker.installGlobalsLookupClassifier` stays in `Checker` — it reads the walk-scoped
+`currentFileLocals` — while the two taxonomies it classifies against
+(`classifierModuleLocalNames` / `classifierNonModuleVisible`) live here; so it reads
+them off this class and calls `ensurePerFileVisibility()`, and
+`computePerFileVisibility` calls it back. `augmentationContextSymbol` is a second such
+pair (it calls `lookupPerFile` and `nodeSymbolOf` back). Neither is a defect to remove
+in a split; both are named so a later stage can price them.
+
+**THE EXTRACTION IMPROVED HOT INLINING, which is row 1's finding on the compiler's
+hottest lookup.** `lookupPerFileForNode` has ~67 callers and runs ~2M times per
+self-compile. As a monolithic `Checker` method C2 refused it at 57 sites
+(`4 inline (hot) + 57 too large`); the 9-byte delegation hop now reads
+`57 inline + 41 inline (hot)` with ZERO refusals while the body's own rows are
+unchanged (`7 inline (hot) + 58 too large`). `globalsForFile` is the same shape.
+**Receipt-reading trap: Kotlin mangles an `internal` member's JVM name with a
+`$<module>` suffix**, so a `PrintInlining` grep for the source name silently reads
+ZERO rows for exactly the three hot hops that matter here.
+
+**The four first-hit program scans moved VERBATIM and are FLAGGED, not fixed**:
+`resolveIdentifierInFile` / `findTypeAliasByName` / `findTypeParamDeclByName` /
+`findNamespaceLocalInterface` answer a (BIND.1)-class cross-file question by scanning
+the program for a first hit. A split is not the place to change that.
+
+**A REVIEW HAZARD FOUND HERE AND FIXED SEPARATELY (`2db1c14ca`).**
+`UNRESOLVED_MODULE_SPEC` holds a literal NUL byte, and after 4a it sat at offset 7,910
+— inside the 8,000-byte window git's binary heuristic scans. So `NameResolver.kt`, the
+file this whole arc grows into, rendered as `Bin … bytes` with NO line diff, and
+commits `da92e5bd3` and `84dd8ad5d` are unreviewable by diff for it. The escape is
+provably a no-op: the compiled class is BYTE-IDENTICAL across it. `Checker.kt` escapes
+only by accident, its own NULs sitting at byte 4.6M.
