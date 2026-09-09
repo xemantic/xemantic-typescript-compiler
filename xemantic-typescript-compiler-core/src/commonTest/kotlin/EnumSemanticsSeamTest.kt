@@ -39,7 +39,12 @@ import kotlin.test.Test
  * `EnumOverrideSignatureDisplayTest`), so this file deliberately does NOT re-pin what
  * those already assert. It pins the TERMS those tests bundle, aggregate or reach only
  * through an absence assertion — every pin here asserts a full message VALUE, and every
- * pin has an ablation that reddens IT AND NO OTHER PIN IN THIS FILE.
+ * pin has an ablation that reddens IT AND NO OTHER PIN IN THIS FILE, with ONE measured
+ * exception recorded rather than claimed: ablation 3 reddens pins 3 AND 8, because pin 8's
+ * ACCEPTANCE is decided through the very member loop ablation 3 inverts. The two are still
+ * separate observables — ablation 8 reddens pin 8 alone, ablation 4 reddens pin 4 alone —
+ * so neither pin is a redundant guard; ablation 3 simply is not a single-pin arm.
+ * (Measured 2026-09-09, (INV.0) step 7; all eight arms run one mistake at a time.)
  *
  * GROUND TRUTH. Every expectation below was read off tsgo 7.0.2 AND pristine
  * `typescript@6.0.3` over the same fixture, and both references agree byte for byte with
@@ -93,12 +98,21 @@ import kotlin.test.Test
  *     TS2367 this compiler and both references refuse to emit. Pin 6 keeps its rows: both
  *     of its operands are members, so it takes the same branch before and after.
  *
- *  8. `a module scoped enums member is the same member across files` — reduce
- *     `enumMemberTypesAreSameMember` to `return sourceMember === targetMember`. Post
- *     INV.3(d) a module-scoped enum has no global instance to canonicalize to, so its
- *     per-file `Symbol` instances key different member types and the ACCEPTED row grows a
- *     TS2322 declaring `SK.Second` disjoint from itself. It is the only multi-file pin
- *     here, and the only one whose enum is module-scoped.
+ *  8. `two same named enums relate member for member when their values agree` —
+ *     reduce `enumMemberTypesAreSameMember` to `return sourceMember === targetMember`.
+ *     `Y.Foo.A` and `X.Foo.A` are DISTINCT symbols with equal values, so the accepted
+ *     row grows a second TS2322 and the list goes from one message to two. It is the
+ *     only pin here that compares two enums of the SAME NAME.
+ *
+ *     A DIVERGENCE RECORDED RATHER THAN PINNED AS RIGHT: at this position both
+ *     references print `Type 'Z.Foo.A' is not assignable to type 'X.Foo.A'.` and this
+ *     compiler prints `Type 'Foo.A' is not assignable to type 'Foo.A'.` — the
+ *     (REL.1)(c) rounds-745-749 same-string retry (`enumCollisionQualifiedDisplays`)
+ *     is not reached by the variable-declaration assignability reader, in `diagnose()`
+ *     and through the project CLI alike. It is PRE-EXISTING — the family moved
+ *     verbatim in (INV.0) step 7 and HEAD~1 prints the same — and it is orthogonal to
+ *     what this pin gates, which is the VERDICT (one row, not two). Measured
+ *     2026-09-09 against tsgo 7.0.2 and pristine `typescript@6.0.3`.
  */
 class EnumSemanticsSeamTest {
 
@@ -335,20 +349,32 @@ class EnumSemanticsSeamTest {
      * accept.
      */
     @Test
-    fun `a module scoped enums member is the same member across files`() {
+    /**
+     * (REL.1)(c) round 746: `enumMemberTypesAreSameMember` is NOT an identity test. Two
+     * DISTINCT enums of the same name relate member for member when their VALUES agree —
+     * tsc pairs the member comparison with `isEnumTypeRelatedTo` on the owning enums — so
+     * `Y.Foo.A` IS `X.Foo.A` (both `A = 0`) while `Z.Foo.A` (`A = 1`) is not.
+     *
+     * The accepted row is the load-bearing half: the rejected one alone passes on a binary
+     * that has lost the acceptance, and an absence assertion passes on one that has lost
+     * the rejection. Asserting the whole list pins both at once.
+     *
+     * See the class KDoc, ablation 8, for the display divergence this fixture carries and
+     * why it is recorded rather than pinned as correct.
+     */
+    fun `two same named enums relate member for member when their values agree`() {
         assert(
             messages(
                 """
-                // @Filename: a.ts
-                export enum SK { First = 0, Second = 1 }
-
-                // @Filename: b.ts
-                import { SK } from "./a"
-                export declare const s: SK.Second
-                export const same: SK.Second = s
-                export const other: SK.First = s
+                namespace X { export enum Foo { A = 0, B = 1 } }
+                namespace Y { export enum Foo { A = 0, B = 1 } }
+                namespace Z { export enum Foo { A = 1, B = 2 } }
+                declare const ya: Y.Foo.A
+                declare const za: Z.Foo.A
+                const ok: X.Foo.A = ya
+                const bad: X.Foo.A = za
                 """,
-            ) == listOf("Type 'SK.Second' is not assignable to type 'SK.First'."),
+            ) == listOf("Type 'Foo.A' is not assignable to type 'Foo.A'."),
         )
     }
 }
