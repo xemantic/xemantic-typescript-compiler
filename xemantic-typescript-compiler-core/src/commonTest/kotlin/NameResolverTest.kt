@@ -64,13 +64,18 @@ class NameResolverTest {
         }
         val fileResults = results.associateBy { it.sourceFile.fileName }
         val checker = Checker(options, results, isMultiFileSource = true)
+        // NAMED arguments deliberately: the parameter list carries several
+        // same-typed containers, so a positional permutation would type-check
+        // (CLAUDE.md — the `cpcScanFiles` gotcha).
         return NameResolver(
-            checker,
-            options,
-            fileResults,
-            mutableMapOf(),
-            emptyMap(),
-            IntKeyMap(),
+            checker = checker,
+            options = options,
+            binderResults = results,
+            fileResults = fileResults,
+            globals = mutableMapOf(),
+            moduleResolutions = emptyMap(),
+            moduleImportAliasNames = emptySet(),
+            symbolTargets = IntKeyMap(),
         )
     }
 

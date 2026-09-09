@@ -270,46 +270,6 @@ class Checker(
         binderResults.associateBy { it.sourceFile.fileName }
 
     /**
-     * (BIND.1) The [BinderResult] of the file [node] was parsed from, or null when the
-     * node is not reachable to a `SourceFile` — a `copy()`/Transformer-synthesized node,
-     * or a file that is not in this program.
-     *
-     * The two `nodeKey(pos, end)`-keyed binder tables are PER FILE (see
-     * `Binder.nodeToSymbol`), so a reader that holds only a [Node] has to name the file
-     * before it may probe them: `nodeKey` carries no file identity and positions restart
-     * at 0 in every file, so "search every result and take the first hit" answers with
-     * whichever file happens to have a node at those coincident offsets.
-     */
-    private fun owningBinderResult(node: Node): BinderResult? =
-        owningSourceFile(node)?.fileName?.let { fileResults[it] }
-
-    /**
-     * (BIND.1) The symbol the binder recorded for the declaration [node], asked of the
-     * file that OWNS it.
-     *
-     * An owner that recorded nothing answers null and the scan is NOT reattempted — an
-     * absent entry in the owning file is the correct answer, and falling through to the
-     * other files is precisely the collision this exists to remove. The scan survives for
-     * an UNINDEXED node only, where there is no file to ask and the pre-(BIND.1)
-     * behaviour is the conservative one.
-     */
-    private fun nodeSymbolOf(node: Node): Symbol? {
-        owningBinderResult(node)?.let { return it.nodeToSymbol[nodeKey(node)] }
-        val key = nodeKey(node)
-        for (result in binderResults) result.nodeToSymbol[key]?.let { return it }
-        return null
-    }
-
-    /** (BIND.1) [nodeSymbolOf]'s twin for `moduleInstanceStates`, with the same rule
-     *  about an owner that recorded nothing. */
-    private fun moduleInstanceStateOf(node: Node): ModuleInstanceState? {
-        owningBinderResult(node)?.let { return it.moduleInstanceStates[nodeKey(node)] }
-        val key = nodeKey(node)
-        for (result in binderResults) result.moduleInstanceStates[key]?.let { return it }
-        return null
-    }
-
-    /**
      * (CHK.76) tsc's `resolveName` `ModuleDeclaration` arm: [name] looked up in the
      * `exports` of every NAMESPACE enclosing [node], innermost first — the `M` of
      * `namespace N { namespace M { <node> } }`, then `N` — each read from the owning
@@ -701,9 +661,13 @@ class Checker(
     /** (INV.0) step 3 — the instantiation collaborator; see `TypeInstantiator.kt`. */
     private val instantiator = TypeInstantiator(this, state.symbolTypes, state.interner)
 
-    /** (INV.0) step 4a — the name/module-resolution collaborator; see `NameResolver.kt`. */
+    /** (INV.0) steps 4a + 4b-i — the name/module-resolution and per-file-lookup
+     *  collaborator; see `NameResolver.kt`. */
     private val nameResolver =
-        NameResolver(this, options, fileResults, globals, moduleResolutions, state.symbolTargets)
+        NameResolver(
+            this, options, binderResults, fileResults, globals, moduleResolutions,
+            moduleImportAliasNames, state.symbolTargets,
+        )
 
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
@@ -9963,38 +9927,6 @@ class Checker(
     }
 
     /**
-     * 17.32a: per-file scope tables — "true visible scope" for each file =
-     * lib + script-file locals (across all files) + this file's own locals.
-     * Built but NOT YET CONSUMED — keyed by `sourceFile.fileName`. Future
-     * substeps will flip individual identifier-resolution call sites to
-     * consult this map instead of the merged [globals] (which conflates
-     * module-file exports across files). KNOWN_GLOBALS is companion-level
-     * data and stays consulted directly at lookup sites; storing it per-file
-     * would just duplicate ~400 strings without any visibility refinement.
-     */
-    private val perFileScope: MutableMap<String, SymbolTable> = mutableMapOf()
-
-    /** (WARM.23) round 896 — [perFileScopeOf]'s one-entry reference-compared memo.
-     *  Declared HERE, beside the map it fronts and far above the `init` block that
-     *  runs the whole check: a checker field declared below `init` is still at its
-     *  JVM default while every pass executes. */
-    private var perFileScopeMemoKey: String? = null
-    private var perFileScopeMemoValue: SymbolTable? = null
-
-    /** (INC.70) The program-wide half of every per-file scope — lib globals, script-file
-     *  locals and `declare global` additions — captured by [buildPerFileScopes] and read
-     *  by [buildPerFileScopeFor]. Null until that pass has stood, which is what makes
-     *  [perFileScopeOf] answer null for "scopes unbuilt" exactly as before.
-     *  Declared before `init` per the init-order trap. */
-    private var perFileScopeSharedBase: SymbolTable? = null
-
-    /** (INC.70) fileName -> that file's own top-level locals, the other input of
-     *  [buildPerFileScopeFor]. One map put per program file, against the two
-     *  allocations the eager form paid per file. Declared before `init` per the
-     *  init-order trap. */
-    private val perFileScopeOwnLocals: MutableMap<String, SymbolTable> = HashMap()
-
-    /**
      * (LIB.1)(c): `lib` option entries that are not lib names at all, recorded by
      * [bindRealLibs] and reported by [checkLibOption] as TS6046.
      *
@@ -10005,52 +9937,8 @@ class Checker(
     private var realLibUnknownNames: List<String> = emptyList()
 
     /** Retained lib-globals snapshot for [perFileScope] construction. */
-    private val libGlobals: SymbolTable =
+    internal val libGlobals: SymbolTable =
         FrontEnd.section(FrontEnd.CHK_F_LIB) { parseBuiltinLib() }
-
-    /**
-     * INV.3(b)(ii): names whose ONLY declarations are module-file top-level
-     * locals — the conflation candidates. A `globals` hit on such a name is a
-     * legitimate resolution ONLY when the consulting file itself declares or
-     * imports it; anywhere else it is a foreign module file's local leaking
-     * through the init-block `mergeSymbolTable` conflation (the CONFLATED
-     * class of the INV.3(a) instrumentation). Computed once per program in
-     * [computePerFileVisibility] (init step 1b2): module-file local names
-     * MINUS every name with a module-independent global meaning (lib globals,
-     * script-file locals, names ADDED to [globals] by module augmentations).
-     * Consulted by [globalsForFile]. Declared before `init` (the Kotlin
-     * init-order gotcha) and empty until 1b2 runs, so earlier consults — and
-     * programs where the set is never computed — degrade to legacy behavior.
-     */
-    private var moduleOnlyGlobalNames: Set<String> = emptySet()
-
-    /** (INC.71) `init:snapshotPreAugGlobalKeys`' answer, captured by
-     *  [computePerFileVisibility] and consumed by [ensurePerFileVisibility]. Null until
-     *  that pass has stood, which is what keeps the sets EMPTY before init step 1b2 —
-     *  the same degradation to the legacy merged consult the eager form had.
-     *  Declared before `init` per the init-order trap. */
-    private var perFileVisibilityPreAugKeys: Set<String>? = null
-
-    /** (INC.71) True once [ensurePerFileVisibility] has built the sets. */
-    private var perFileVisibilityComputed: Boolean = false
-
-    /** (INC.71) The INV.3(a) classifier's two taxonomies, built beside the sets and read
-     *  from inside the installed lambda. Empty on every build that never classifies a
-     *  lookup, i.e. everything but tier-3 `--passTiming`. */
-    private var classifierModuleLocalNames: Set<String> = emptySet()
-    private var classifierNonModuleVisible: Set<String> = emptySet()
-
-    /** (INC.71) [moduleOnlyGlobalNames], built on first ask. */
-    private fun moduleOnlyGlobals(): Set<String> {
-        ensurePerFileVisibility()
-        return moduleOnlyGlobalNames
-    }
-
-    /** (INC.71) [libValueShadowNames], built on first ask. */
-    private fun libValueShadows(): Set<String> {
-        ensurePerFileVisibility()
-        return libValueShadowNames
-    }
 
     /**
      * INV.3(d): names with a legitimate NON-module global meaning at merge
@@ -10074,25 +9962,6 @@ class Checker(
      * init-order gotcha).
      */
     private var mergeSharedKeepNames: Set<String> = emptySet()
-
-    /**
-     * (CHK.49) lib global names a MODULE file shadows with a top-level
-     * declaration AND whose lib symbol carries a VALUE declaration
-     * (`declare var Text: { new (…): Text }` beside `interface Text`).
-     *
-     * The shadow is TYPE-space: tsc resolves a name per MEANING, so a module's
-     * `interface Map<K, V>` hides the lib TYPE and leaves the lib VALUE alone.
-     * This checker has one symbol per name per file, so the value half is
-     * restored as a SECOND CHANCE on the rejecting path in [getTypeOfIdentifier]
-     * — it can only turn "not constructable / not callable" back into the lib's
-     * answer, never change a name that already resolved to a value.
-     *
-     * Normally EMPTY (nothing shadows a lib global), which is what makes the
-     * guard affordable on the identifier path. Computed at init step 1b2 by
-     * [computePerFileVisibility]; declared before `init` (the Kotlin init-order
-     * gotcha).
-     */
-    private var libValueShadowNames: Set<String> = emptySet()
 
     /**
      * 17.33: UMD global names registered via `export as namespace X;` in
@@ -10125,7 +9994,7 @@ class Checker(
      * lib/script symbol in place and every scope already holds that object.
      * Declared before `init` (Kotlin initializes properties in declaration order).
      */
-    private val globalAugmentationAddedSymbols: MutableMap<String, Symbol> = mutableMapOf()
+    internal val globalAugmentationAddedSymbols: MutableMap<String, Symbol> = mutableMapOf()
 
     /**
      * 17.33: file names that are modules (have imports/exports OR — for
@@ -15254,7 +15123,7 @@ class Checker(
      * Everything else is module-scoped in real tsc: visible only to the file
      * itself and its importers, served by [lookupPerFile]/[globalsForFile].
      */
-    private fun moduleLocalContributesGlobally(name: String, symbol: Symbol): Boolean {
+    internal fun moduleLocalContributesGlobally(name: String, symbol: Symbol): Boolean {
         if (name == "global") return true
         if (name in umdGlobalNames) return true
         if (name in mergeSharedKeepNames) return true
@@ -16678,219 +16547,6 @@ class Checker(
     }
 
     /**
-     * 17.32a: Build per-file scope tables (Blocker #3 step 1, infrastructure-only).
-     *
-     * For each file, compute "true visible scope" = lib (built-in stubs) +
-     * script-file locals from ALL files + this file's own locals. Module-file
-     * locals from OTHER files are deliberately excluded — those should require
-     * an explicit import to be visible. Result is stored in [perFileScope]
-     * keyed by `sourceFile.fileName`.
-     *
-     * NOT YET CONSUMED. Future substeps (17.32b+) will flip individual
-     * identifier-resolution call sites to consult this map instead of the
-     * over-merged [globals]. KNOWN_GLOBALS stays at the call site (companion
-     * data, no visibility refinement to add per file).
-     *
-     * IMPORTANT: this MUST NOT call [mergeSymbolTable] across binderResults —
-     * that helper mutates the existing target symbol's `declarations` list via
-     * `addAll`, and the existing init-block merge into [globals] has already
-     * done that mutation once. Re-merging here would duplicate declarations on
-     * the shared symbol object (e.g. `class C<T>` in a.ts + `interface C<T>` in
-     * b.ts ends up with the interface declaration appearing twice on `a.ts.C`,
-     * which masks unused-type-parameter checks). Use direct map assignment
-     * with first-write-wins semantics so the underlying symbols stay clean.
-     */
-    private fun buildPerFileScopes() {
-        // Collect first-occurrence symbol per name across all script files.
-        val scriptFileNames: MutableMap<String, Symbol> = mutableMapOf()
-        for (result in binderResults) {
-            if (!isModuleFile(result.sourceFile.statements)) {
-                for ((name, sym) in result.locals) {
-                    if (name !in scriptFileNames) scriptFileNames[name] = sym
-                }
-            }
-        }
-        // (INC.61) The part that is the SAME for every file, built ONCE. It used to
-        // be copied into a fresh table per file, i.e. `files x libGlobals`
-        // insertions — 13.5 ms on a 2,401-file project whose `lib` is `es2020` and
-        // **175.6 ms on the same program with `dom` added**, which is what an
-        // ordinary project gets by default. See [LayeredSymbolTable] for why the
-        // overlay reproduces the copy's iteration ORDER entry for entry.
-        val sharedBase: SymbolTable = symbolTable()
-        // Lib globals — visible from every file.
-        for ((name, sym) in libGlobals) sharedBase[name] = sym
-        // Script-file locals — visible across all files (TypeScript treats
-        // any file without imports/exports as contributing to the global
-        // namespace).
-        for ((name, sym) in scriptFileNames) {
-            if (name !in sharedBase) sharedBase[name] = sym
-        }
-        // (CHK.50) `declare global { … }` additions — global by construction,
-        // and therefore visible from every file exactly as a script-file local is.
-        for ((name, sym) in globalAugmentationAddedSymbols) {
-            if (name !in sharedBase) sharedBase[name] = sym
-        }
-        // (INC.70) The per-file half is built ON FIRST ASK, by [buildPerFileScopeFor].
-        // What stays eager is everything PROGRAM-WIDE — `sharedBase` above, and the
-        // fileName -> own-locals table below, which is one map put per file against
-        // the two allocations, a `putAll` and a `LayeredSymbolTable` shadow-list the
-        // eager form paid per file whether or not anything ever asked.
-        perFileScopeSharedBase = sharedBase
-        perFileScopeOwnLocals.clear()
-        perFileScope.clear()
-        for (result in binderResults) {
-            perFileScopeOwnLocals[result.sourceFile.fileName] = result.locals
-        }
-        // (WARM.23) round 896 — [perFileScopeOf]'s memo could go stale here and at
-        // [buildPerFileScopeFor]'s store; both clear it. A new write site must too.
-        perFileScopeMemoKey = null
-        perFileScopeMemoValue = null
-    }
-
-    /**
-     * (INC.70) Build ONE file's [perFileScope] entry, the first time it is asked for.
-     *
-     * ## Why this is deferrable and what makes it exact
-     *
-     * The eager loop allocated two maps, copied the file's own locals into one of
-     * them and precomputed a `LayeredSymbolTable`'s shadow list — **per program
-     * file, on every build, whether or not any name was ever resolved in that
-     * file**. On the incremental FLOOR (a build whose check partition is empty)
-     * that is the whole pass: measured on the 2,401-file `many-small-2400-dom`
-     * fixture, `init:buildPerFileScopes` was 3.3 ms of a ~120 ms floor.
-     *
-     * The inputs are frozen by the time the pass stands. `sharedBase` is captured
-     * eagerly, so the lib/script/`declare global` half is exactly what it was; the
-     * only remaining input is `result.locals`, and **the checker's ONE writer of a
-     * `BinderResult.locals` is `collectModuleAugmentations`, dispatched by
-     * `init:mergeModuleAugmentations`, which runs at an EARLIER init step**. So the
-     * snapshot the eager form took and the snapshot this takes are the same table.
-     * That ordering is the whole soundness argument and it is not self-evident from
-     * either function — a new writer of `locals` scheduled after this pass would
-     * make the two disagree silently, and nothing here would print it.
-     *
-     * ## Why the pin is a COUNT
-     *
-     * (INC.16)'s law: whether deferring a per-file table pays is decided by WHO
-     * FORCES it, which is a population to be measured rather than read.
-     * [EagerIndexCensus.perFileScopeBuilds] is that population — `binderResults.size`
-     * before, and on a narrowed build only the files something actually resolved a
-     * name in.
-     */
-    private fun buildPerFileScopeFor(fileName: String): SymbolTable? {
-        val base = perFileScopeSharedBase ?: return null
-        val own = perFileScopeOwnLocals[fileName] ?: return null
-        val scope: SymbolTable = LayeredSymbolTable(base, symbolTable().also { it.putAll(own) })
-        perFileScope[fileName] = scope
-        EagerIndexCensus.perFileScopeBuilds++
-        perFileScopeMemoKey = null
-        perFileScopeMemoValue = null
-        return scope
-    }
-
-    /**
-     * INV.3(b)(ii): compute the per-file visibility model's sets once per
-     * program (init step 1b2, after the [globals] membership settles):
-     *  - `moduleLocalNames` — every top-level local of every MODULE file: the
-     *    conflation candidates (only these names can be module-file leaks);
-     *  - `nonModuleVisible` — names with a legitimate global meaning without
-     *    the conflation: [libGlobals] keys (embedded or real libs), script-file
-     *    locals, and names ADDED to [globals] by [mergeModuleAugmentations]
-     *    (captured as the key-set delta around step 1b).
-     *
-     * Publishes their difference as [moduleOnlyGlobalNames] (the
-     * [globalsForFile] gate) and hands both sets to the INV.3(a) classifier
-     * install (a no-op unless `--passTiming` constructed [globals]
-     * instrumented).
-     */
-    private fun computePerFileVisibility(preAugmentationGlobalsKeys: Set<String>) {
-        // (INC.71) The pass now CAPTURES its one input and installs the classifier;
-        // the sets themselves are built by [ensurePerFileVisibility] on first ask.
-        perFileVisibilityPreAugKeys = preAugmentationGlobalsKeys
-        installGlobalsLookupClassifier()
-    }
-
-    /**
-     * (INC.71) Build the INV.3(b)(ii) visibility sets, the first time one is read.
-     *
-     * ## Why it is deferrable at all
-     *
-     * Everything it reads is frozen by the time [computePerFileVisibility] stands:
-     * each file's `isModuleFile` shape and `locals`, `libGlobals`, and
-     * `globals.keys` against the snapshot taken at `init:snapshotPreAugGlobalKeys`.
-     * **The last one is the ordering claim and it was checked rather than assumed:
-     * the only writers of [globals] are `init:mergeLibGlobals`,
-     * `init:mergeFileLocalsIntoGlobals` and `collectModuleAugmentations` (dispatched
-     * by `init:mergeModuleAugmentations`), and all three run at EARLIER init steps.**
-     * A writer added after this pass would make the eager and deferred answers
-     * disagree silently, exactly as for [buildPerFileScopeFor].
-     *
-     * ## Why it pays
-     *
-     * The sets have three readers — [globalsForFile], [globalsForFileNode] and
-     * [libValueBehindTypeOnlyShadow] — and all three are NAME RESOLUTION. A build
-     * whose check partition is empty resolves no name, so it reads none of them:
-     * measured on the 2,401-file `many-small-2400-dom` fixture, **0 asks on a floor
-     * build against 335,881 on a full one**, which is why the pass was ~5.6-7.2 ms of
-     * a ~136 ms incremental floor that could not be spent.
-     *
-     * ## The one place this is NOT lazy
-     *
-     * The INV.3(a) classifier is installed EAGERLY, at this pass's own moment, and
-     * forces the sets from inside its body — so under tier-3 `--passTiming` every
-     * classified lookup is classified exactly as before and `globals.lookups` /
-     * `globals.conflated` do not move. The visible consequence is that under FULL
-     * `--passTiming` the cost lands on whichever pass performs the first `globals`
-     * lookup rather than on this row; at the `rows` tier (which is what the floor
-     * decomposition uses) [globals] is not instrumented at all and the row is honest.
-     */
-    private fun ensurePerFileVisibility() {
-        if (perFileVisibilityComputed) return
-        val preAugmentationGlobalsKeys = perFileVisibilityPreAugKeys ?: return
-        perFileVisibilityComputed = true
-        EagerIndexCensus.perFileVisibilityBuilds++
-        val moduleLocalNames = HashSet<String>()
-        // (CHK.49) the LIB key set is deliberately NOT seeded here — see
-        // [mergeSharedKeepNames]'s KDoc. A lib name a MODULE file declares now
-        // falls into [moduleOnlyGlobalNames] and is resolved through
-        // [perFileScope], which already seeds every file with the lib symbol and
-        // lets the declaring file's own local override it. The INV.3(a)
-        // classifier below is still handed the OLD taxonomy (lib keys included)
-        // so its SHARED/CONFLATED counts stay comparable across rounds.
-        val nonModuleVisible = HashSet<String>()
-        for (result in binderResults) {
-            if (isModuleFile(result.sourceFile.statements)) {
-                // INV.3(d): entries the retired merge deliberately KEEPS global
-                // (`declare global` / UMD / ambient-module carriers) classify as
-                // non-module-visible — same predicate as the step-1 merge.
-                for ((name, sym) in result.locals) {
-                    if (moduleLocalContributesGlobally(name, sym)) nonModuleVisible.add(name)
-                    else moduleLocalNames.add(name)
-                }
-            } else {
-                nonModuleVisible.addAll(result.locals.keys)
-            }
-        }
-        for (key in globals.keys) {
-            if (key !in preAugmentationGlobalsKeys) nonModuleVisible.add(key)
-        }
-        moduleOnlyGlobalNames = HashSet(moduleLocalNames).apply { removeAll(nonModuleVisible) }
-        // (CHK.49) the VALUE meaning of a shadowed lib name SURVIVES the shadow:
-        // `interface Map<K, V>` declared in a module file shadows the lib TYPE
-        // and leaves `declare var Map: MapConstructor` reachable, which is what
-        // keeps `new Map()` constructable there. Precomputed (and normally
-        // EMPTY) so [libValueBehindTypeOnlyShadow]'s guard is one set probe on
-        // the ~2 M-identifier path.
-        libValueShadowNames =
-            if (moduleOnlyGlobalNames.isEmpty()) emptySet()
-            else moduleOnlyGlobalNames.filterTo(HashSet()) { n ->
-                libGlobals[n]?.valueDeclaration != null
-            }
-        classifierModuleLocalNames = moduleLocalNames
-        classifierNonModuleVisible = HashSet(nonModuleVisible).apply { addAll(libGlobals.keys) }
-    }
-
-    /**
      * INV.3(a): install the `globals`-lookup classifier onto the
      * [InstrumentedSymbolTable] the field was constructed as under
      * `--passTiming` (no-op otherwise). Each keyed lookup from here on is
@@ -16906,14 +16562,14 @@ class Checker(
      * context). The classifier must never consult [globals] itself — that
      * would recurse the hook.
      */
-    private fun installGlobalsLookupClassifier() {
+    internal fun installGlobalsLookupClassifier() {
         val instrumented = globals as? InstrumentedSymbolTable ?: return
         instrumented.onLookup = { name, sym ->
             // (INC.71) force the sets here, so a classified lookup is classified
             // exactly as it was when they were built eagerly.
             ensurePerFileVisibility()
-            val moduleLocalNames = classifierModuleLocalNames
-            val nonModuleVisible = classifierNonModuleVisible
+            val moduleLocalNames = nameResolver.classifierModuleLocalNames
+            val nonModuleVisible = nameResolver.classifierNonModuleVisible
             val cls = when {
                 sym == null -> GlobalsLookupClass.MISS
                 name !in moduleLocalNames -> GlobalsLookupClass.TRUE_GLOBAL
@@ -16931,261 +16587,6 @@ class Checker(
         }
     }
 
-    /**
-     * INV.3(b): THE per-file resolution primitive. An INV.3(c) family flip
-     * consumes it through [globalsForFile] (which preserves the legacy merged
-     * symbol INSTANCE for legitimately visible names — substituting THIS
-     * function's return directly changes symbol identity for lib/script names,
-     * because [perFileScope] holds the first-occurrence script symbol while
-     * [globals] holds the first-declarer merged instance). Resolution:
-     * [perFileScope]'s table for [fileName] (own top-level locals shadowing
-     * script-file globals shadowing lib — built by [buildPerFileScopes]), with an
-     * own-local IMPORT alias resolved onward through [resolveImportedSymbolGeneral]
-     * to the target module's symbol — the ESM-`.js`/`export *`-barrel following the
-     * merged `globals` used to provide for free (the round-500 measurement: the
-     * conflated traffic is almost entirely barrel-imported `types.ts` names).
-     *
-     * Returns:
-     *  - the resolved target symbol for an ImportSpecifier-declared alias local
-     *    (for a name the file imports, this is the SAME symbol instance the
-     *    conflated `globals` consult returned — which is what makes (c) flips
-     *    byte-identical for imported names);
-     *  - the alias symbol ITSELF when the import cannot be resolved (missing
-     *    module / unsupported alias kind: default imports, `import * as ns`,
-     *    `import =` — extend when a (c) flip needs them) — callers keep their
-     *    existing alias handling;
-     *  - the plain symbol for non-alias names (own declaration / script-file
-     *    global / lib);
-     *  - null when the name has NO per-file meaning — exactly the case where the
-     *    conflated lookup would have leaked a foreign module file's local.
-     *
-     * `internal` for direct construction tests (Inv3PerFileLookupTest); unconsumed
-     * by checker paths until INV.3(c).
-     */
-    /**
-     * (WARM.23) THE funnel for every `perFileScope` read — round 894 candidate
-     * (2a). Two things ride on it and neither is expressible at the raw `[]`:
-     * the census counts how many full file-PATH hashes a rebuild pays (the map
-     * is keyed by a 60-100 character path and probed per NAME lookup), and
-     * `--perFileScopeAmp N` prices ONE probe by round 759's amplification,
-     * because a single probe is well under a timestamp pair.
-     *
-     * Off (both modes at their defaults) this is `perFileScope[fileName]` and
-     * two not-taken branches.
-     */
-    private fun perFileScopeOf(fileName: String): SymbolTable? {
-        // (WARM.23) round 896 — a ONE-ENTRY memo compared by REFERENCE, the shape
-        // round 895(D) landed for `SrcScanCache`: **a miss is never wrong, only
-        // slower.** A hit is sound because the same `String` INSTANCE cannot get
-        // a different answer out of a map that is not mutated in between — and
-        // the one mutation site ([buildPerFileScopes]' store) clears it, so
-        // staleness is not expressible either.
-        //
-        // Identity is the right test rather than a weakness: `perFileScope`'s keys
-        // ARE `sourceFile.fileName`, and every hot caller reaches here with that
-        // very instance ([lookupPerFileForNode] via `owner.fileName`), so the hit
-        // rate is a property of the traversal, not of string equality. Keying the
-        // MAP by identity would be the unsound version — an equal-but-distinct
-        // path would answer null and silently resolve a name to a foreign
-        // module's local, which is why the map probe stays authoritative.
-        if (fileName === perFileScopeMemoKey) {
-            if (MapCensus.on) MapCensus.perFileMemoHits++
-            return perFileScopeMemoValue
-        }
-        val scope = perFileScopeProbe(fileName)
-        perFileScopeMemoKey = fileName
-        perFileScopeMemoValue = scope
-        return scope
-    }
-
-
-    private fun perFileScopeProbe(fileName: String): SymbolTable? {
-        if (MapCensus.on) MapCensus.perFileProbes++
-        val r = MapCensus.perFileScopeReads
-        if (r == 0) return perFileScope[fileName] ?: buildPerFileScopeFor(fileName)
-        if (fileName !in perFileScope) buildPerFileScopeFor(fileName)
-        if (r < 0) {
-            // In-situ EMPTY bracket at the same site and frequency, so `cold` can
-            // be separated from the pair. The real read still happens, outside
-            // the pair, so the compile is unchanged.
-            val e0 = PassTiming.nowNanos()
-            MapCensus.perFileAmpNanos += PassTiming.nowNanos() - e0
-            MapCensus.perFileAmpCalls++
-            return perFileScope[fileName]
-        }
-        val t0 = PassTiming.nowNanos()
-        var result: SymbolTable? = null
-        var seen = 0L
-        var i = 0
-        while (i < r) {
-            val v = perFileScope[fileName]
-            if (v != null) seen++
-            result = v
-            i++
-        }
-        MapCensus.perFileAmpNanos += PassTiming.nowNanos() - t0
-        MapCensus.perFileAmpCalls++
-        MapCensus.sink += seen
-        return result
-    }
-
-    internal fun lookupPerFile(fileName: String, name: String): Symbol? =
-        lookupInFileScope(perFileScopeOf(fileName) ?: return null, name)
-
-    /**
-     * [lookupPerFile] once the file's table is already in hand — the whole of its
-     * body below the `perFileScope` probe.
-     *
-     * (WARM.23) round 896, candidate (2a): [globalsForFile] used to ask
-     * `perFileScope.containsKey(fileName)` and then call [lookupPerFile], which
-     * asked `perFileScope[fileName]` again — the file PATH hashed TWICE per name
-     * lookup on the hottest resolution path in the checker. Splitting the body out
-     * lets the caller pass the table it already resolved. Same answers by
-     * construction: the map's value type is non-nullable, so `containsKey` and
-     * `get() != null` are the same predicate.
-     */
-    private fun lookupInFileScope(scope: SymbolTable, name: String): Symbol? {
-        val sym = scope[name] ?: return null
-        if (sym.flags.hasAny(SymbolFlags.Alias) && sym.declarations.any { it is ImportSpecifier }) {
-            resolveImportedSymbolGeneral(sym)?.let { return it }
-        }
-        return sym
-    }
-
-    /**
-     * INV.3(b)(ii): a `globals[name]` consult made per-file-correct — the flip
-     * shape for the INV.3(c) migration. Returns the merged-globals symbol
-     * (INSTANCE-identical to the legacy consult, which is what keeps a flip
-     * byte-identical for every legitimately visible name) whenever [name] has a
-     * per-file meaning in [fileName]:
-     *  - a name outside [moduleOnlyGlobalNames] (lib / script-file /
-     *    augmentation-added global — no conflation possible), or
-     *  - a module-only name the file itself declares or imports, probed through
-     *    [lookupPerFile] (the INV.3(b) primitive; an import alias resolves
-     *    non-null there whether or not its target module resolves).
-     *
-     * Returns null exactly when the legacy consult would have LEAKED a foreign
-     * module file's local (the CONFLATED class of the INV.3(a)
-     * instrumentation): the caller behaves as if the name did not resolve,
-     * which is what real tsc sees in that file. A [fileName] without a
-     * [perFileScope] entry (scopes unbuilt, or a file outside the program)
-     * degrades to the legacy consult.
-     *
-     * The conflated branch never touches [globals], so under `--passTiming`
-     * the per-pass conflated tables keep measuring only UN-migrated traffic.
-     */
-    internal fun globalsForFile(fileName: String, name: String): Symbol? {
-        if (NameCensus.on) {
-            NameCensus.publish(moduleOnlyGlobals(), globals.keys)
-            NameCensus.nameProbe(name, name in moduleOnlyGlobals(), node = false)
-        }
-        if (name in moduleOnlyGlobals()) {
-            // (WARM.23) round 896 — ONE probe. This used to be
-            // `perFileScope.containsKey(fileName)` here and `perFileScope[fileName]`
-            // again inside [lookupPerFile]: the file PATH hashed twice per name.
-            val scope = perFileScopeOf(fileName)
-            if (scope != null) {
-                // INV.3(d): the retired merge no longer puts module-only names into
-                // [globals] at all — the per-file resolution IS the symbol (the
-                // declaring file's own clean instance; an import alias resolves
-                // onward through [resolveImportedSymbolGeneral] inside
-                // [lookupInFileScope]). Null exactly where the legacy merged
-                // consult would have LEAKED a foreign module file's local.
-                return lookupInFileScope(scope, name)
-            }
-        }
-        return globals[name]
-    }
-
-    /**
-     * INV.3(c)(i): the NODE-keyed per-file consult — a `globals[name]` consult
-     * made per-file-correct for a name READ FROM AN AST NODE. The round-503
-     * measurement: ~82% of conflated traffic resolves names from FOREIGN nodes
-     * (types.ts's union-member `.kind` annotations, read by the discriminant/
-     * kind-domain narrowing machinery) while checking a DIFFERENT file — tsc
-     * resolves such an annotation in its OWNING file's scope, so the owning
-     * file is the correct key there, never `currentCheckFileName` (keying by
-     * the checking file would silently kill the narrowing wherever that file
-     * does not import the name). Resolution: [owningSourceFile] via the
-     * INV.2(a) parent chain, then [globalsForFile] under that file's
-     * visibility — so a name visible in the owning file returns the legacy
-     * merged-globals INSTANCE (byte-identical flips), and null means the name
-     * has no meaning even where the node lives. An UNINDEXED node (data-class
-     * `copy()` / Transformer-synthesized / detached subtree) has no owner —
-     * degrade to the legacy merged consult, mirroring [globalsForFile]'s
-     * unknown-file degradation. `internal` for direct-construction tests.
-     * Consumers (INV.3(c)(ii)): the enum-discriminant readers —
-     * [resolveEnumSymbolForDiscriminant] and the alias fallbacks in
-     * [enumSwitchKeysFromTypeNode]/[enumMemberKeysOfTypeNode].
-     */
-    internal fun lookupPerFileForNode(node: Node, name: String): Symbol? {
-        // Fast path (round 507b): a non-module-only name resolves identically
-        // under EVERY file's visibility ([globalsForFile] ignores the file for
-        // it), so skip the parent-chain walk — this sits on getTypeOfIdentifier's
-        // fallback, which is consulted for ~2M identifiers per self-compile.
-        // Before init step 1b2 the set is empty → everything degrades to the
-        // legacy merged consult (same as the ownerless degradation below).
-        if (NameCensus.on) {
-            NameCensus.publish(moduleOnlyGlobals(), globals.keys)
-            NameCensus.nameProbe(name, name in moduleOnlyGlobals(), node = true)
-        }
-        // (CHK.78)(b) a THIRD clause naming the augmentation-visible names was
-        // built here — so that a name SHARED with a lib global could still reach
-        // the INV.3(c)(iv) leg below — and MEASURED REDUNDANT: (CHK.49) keeps the
-        // LIB key set out of `nonModuleVisible`, so a lib name a MODULE file also
-        // declares IS module-only and never took this path to begin with, and the
-        // only other way to be shared is a SCRIPT-file collision, which
-        // `mergeSharedKeepNames` merges so that `globals[name]` already carries
-        // both declarations. Ablated: the clause plus its index moved neither the
-        // `Node`-collision project fixture nor any pin. The fast path stays one probe.
-        val moduleOnly = name in moduleOnlyGlobals()
-        if (!moduleOnly && (moduleImportAliasNames.isEmpty() || name !in moduleImportAliasNames)) return globals[name]
-        // Walk to the owning SourceFile, capturing the INNERMOST enclosing
-        // `declare module "<spec>"` block on the way (the INV.3(c)(iv)
-        // augmentation-visibility rule below needs it). Mirrors
-        // [owningSourceFile]'s hop-bounded chain walk.
-        var cur: Node? = node
-        var hops = 0
-        var ambientBlock: ModuleDeclaration? = null
-        var owner: SourceFile? = null
-        while (cur != null && hops++ < 4096) {
-            if (cur is SourceFile) { owner = cur; break }
-            if (ambientBlock == null && cur is ModuleDeclaration && cur.name is StringLiteralNode) {
-                ambientBlock = cur
-            }
-            cur = (cur as NodeBase).parent
-        }
-        if (owner == null) return globals[name]
-        // INV.3(c)(iv): a node inside a `declare module "<relative-spec>"`
-        // AUGMENTATION block sees the AUGMENTED module's exports by bare name —
-        // tsc checks the body in that module's context (the round-443 rule;
-        // mirrors buildNamespaceScope's StringLiteralNode branch, which grants
-        // the same visibility to the TS2304 scope). A services/types.ts
-        // augmentation of "../compiler/types.js" references
-        // Node/SymbolFlags/UnionType without importing them; the per-file
-        // consult alone would null those and silently kill e.g. this-predicate
-        // narrowing whose target type lives in the augmented module.
-        //
-        // (CHK.78)(b) asked FIRST, where it used to be the last leg below the
-        // per-file consult. Two things that ordering got wrong, both measured
-        // against tsgo 7.0.2 on the (CHK.77) fixture: a SHARED name never
-        // reached it at all (the fast path answered `globals["Node"]`), and for
-        // a module-only name the augmenting file's OWN import won where tsc
-        // gives the augmented module's export — `import { Zzz } from
-        // "./other.js"` beside `declare module "./types.js" { … pZ: Zzz }`
-        // reads `./types.js`'s `Zzz` under tsc and read `./other.js`'s here.
-        // The augmented module's scope is the INNER one; the augmenting file's
-        // is the enclosing one, so it may only answer on a miss.
-        augmentationContextSymbol(ambientBlock, owner, name)?.let { return it }
-        // (CHK.80)(d) a script-global name some MODULE file imports under the same
-        // name: that file's own alias shadows the global (the per-file scope layers
-        // the file's locals over the script ones); any other file keeps the global.
-        if (!moduleOnly) {
-            val scope = perFileScopeOf(owner.fileName) ?: return globals[name]
-            return lookupInFileScope(scope, name) ?: globals[name]
-        }
-        return globalsForFile(owner.fileName, name)
-    }
 
     /**
      * (CHK.78)(b) INV.3(c)(iv) as a standalone consult, so the rule has ONE home
@@ -17218,7 +16619,7 @@ class Checker(
      * construction — a partial re-declaration is, by definition, of a name the
      * target exports.
      */
-    private fun augmentationContextSymbol(
+    internal fun augmentationContextSymbol(
         ambientBlock: ModuleDeclaration?,
         owner: SourceFile,
         name: String,
@@ -17960,16 +17361,63 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
-    // Symbol resolution helpers
+    // Per-file name lookup — (INV.0) step 4b-i: the per-file scope tables, the
+    // INV.3(b)(ii) visibility sets, the two per-file consults, the (BIND.1)
+    // owning-file probes and the four first-hit program scans now live in
+    // `NameResolver.kt` (ledger row 4). These are the delegation hops the
+    // inlining receipt prices; every call site is unchanged.
+    // `owningBinderResult`, `moduleOnlyGlobals`, `buildPerFileScopeFor`,
+    // `perFileScopeProbe` and `lookupInFileScope` have no caller left in this
+    // file — their only readers moved with them — so they get no hop.
     // -----------------------------------------------------------------------
 
-    private fun resolveIdentifierInFile(name: String, contextNode: Node): Symbol? {
-        for (result in binderResults) {
-            val symbol = result.locals[name]
-            if (symbol != null) return symbol
-        }
-        return globals[name]
+    private fun nodeSymbolOf(node: Node): Symbol? =
+        nameResolver.nodeSymbolOf(node)
+
+    private fun moduleInstanceStateOf(node: Node): ModuleInstanceState? =
+        nameResolver.moduleInstanceStateOf(node)
+
+    private fun libValueShadows(): Set<String> =
+        nameResolver.libValueShadows()
+
+    private fun buildPerFileScopes() {
+        nameResolver.buildPerFileScopes()
     }
+
+    private fun computePerFileVisibility(preAugmentationGlobalsKeys: Set<String>) {
+        nameResolver.computePerFileVisibility(preAugmentationGlobalsKeys)
+    }
+
+    private fun ensurePerFileVisibility() {
+        nameResolver.ensurePerFileVisibility()
+    }
+
+    private fun perFileScopeOf(fileName: String): SymbolTable? =
+        nameResolver.perFileScopeOf(fileName)
+
+    internal fun lookupPerFile(fileName: String, name: String): Symbol? =
+        nameResolver.lookupPerFile(fileName, name)
+
+    internal fun globalsForFile(fileName: String, name: String): Symbol? =
+        nameResolver.globalsForFile(fileName, name)
+
+    internal fun lookupPerFileForNode(node: Node, name: String): Symbol? =
+        nameResolver.lookupPerFileForNode(node, name)
+
+    private fun resolveIdentifierInFile(name: String, contextNode: Node): Symbol? =
+        nameResolver.resolveIdentifierInFile(name, contextNode)
+
+    private fun findTypeParamDeclByName(name: String): TypeParameter? =
+        nameResolver.findTypeParamDeclByName(name)
+
+    private fun findTypeAliasByName(name: String): TypeAliasDeclaration? =
+        nameResolver.findTypeAliasByName(name)
+
+    private fun findNamespaceLocalInterface(fileName: String, name: String): InterfaceDeclaration? =
+        nameResolver.findNamespaceLocalInterface(fileName, name)
+
+    private fun libValueBehindTypeOnlyShadow(name: String, local: Symbol): Symbol? =
+        nameResolver.libValueBehindTypeOnlyShadow(name, local)
 
     // -----------------------------------------------------------------------
     // Name / module resolution — (INV.0) step 4a: the alias ladder, the module-
@@ -20510,7 +19958,7 @@ class Checker(
      * Check if a file is a module (has import/export statements).
      * Non-module files' top-level declarations are global and not checked for unused.
      */
-    private fun isModuleFile(statements: List<Statement>): Boolean {
+    internal fun isModuleFile(statements: List<Statement>): Boolean {
         for (stmt in statements) {
             when (stmt) {
                 is ImportDeclaration -> return true
@@ -36176,18 +35624,7 @@ class Checker(
         ))
     }
 
-    /** Find a TypeParameter AST node by name — searches the current file's
-     *  binder results' AST for any FunctionDeclaration whose typeParameters
-     *  contains a match. Returns null if not found. */
-    private fun findTypeParamDeclByName(name: String): TypeParameter? {
-        for (result in binderResults) {
-            val found = findTypeParamInStatements(result.sourceFile.statements, name)
-            if (found != null) return found
-        }
-        return null
-    }
-
-    private fun findTypeParamInStatements(stmts: List<Statement>, name: String): TypeParameter? {
+    internal fun findTypeParamInStatements(stmts: List<Statement>, name: String): TypeParameter? {
         for (stmt in stmts) {
             when (stmt) {
                 is FunctionDeclaration -> {
@@ -36217,15 +35654,6 @@ class Checker(
             }
             else -> false
         }
-    }
-
-    private fun findTypeAliasByName(name: String): TypeAliasDeclaration? {
-        for (result in binderResults) {
-            for (stmt in result.sourceFile.statements) {
-                if (stmt is TypeAliasDeclaration && stmt.name.text == name) return stmt
-            }
-        }
-        return null
     }
 
     /**
@@ -121051,41 +120479,6 @@ interface DataView {
 
     /** Get the type of an identifier expression. */
     /**
-     * (CHK.49) the lib symbol whose VALUE meaning [local] does not in fact
-     * shadow, or null.
-     *
-     * A module file's `interface Text` / `type Date = …` / an `import { Date }`
-     * of one occupies the TYPE meaning only; tsc keeps resolving the VALUE
-     * meaning of that name to the lib's `declare var`. We carry one symbol per
-     * name per file, so the value half is recovered HERE and only on the
-     * rejecting path: the caller has already found a per-file symbol and this
-     * answers non-null only when that symbol has NO value meaning at all while
-     * the lib one does. An import ALIAS is resolved onward first — its meanings
-     * are its target's.
-     *
-     * [libValueShadowNames] is empty for every program that shadows no lib
-     * global, which is the guard that keeps this off the hot identifier path.
-     *
-     * There is deliberately NO `lib === local` early exit. It was written and
-     * ablated (arm a8) and is provably unobservable: at the identifier site
-     * [local] comes from a [BinderResult]'s own locals, which never holds the lib
-     * symbol, and at the callee site the two coincide only for a file that does
-     * NOT declare the name — where both branches go on to call
-     * `getTypeOfSymbol(lib)`.
-     */
-    private fun libValueBehindTypeOnlyShadow(name: String, local: Symbol): Symbol? {
-        if (name !in libValueShadows()) return null
-        val lib = libGlobals[name] ?: return null
-        var resolved = local
-        if (resolved.flags.hasAny(SymbolFlags.Alias)) {
-            resolved = resolveImportedSymbolGeneral(resolved) ?: resolved
-        }
-        if (resolved.valueDeclaration != null) return null
-        if (resolved.flags.hasAny(SymbolFlags.Value)) return null
-        return lib
-    }
-
-    /**
      * (CHK.96) stage 2 — the destructured-discriminant CARRY sits on the identifier's
      * DECLARED type, as tsc's `checkIdentifier` puts `getNarrowedTypeOfSymbol` under
      * `getFlowTypeOfReference`: a reader that never flow-narrows (the return reader
@@ -164368,23 +163761,6 @@ interface DataView {
             }
         }
         return false
-    }
-
-    /** B199 helper: scan [fileName]'s namespace bodies for an InterfaceDeclaration
-     *  named [name] with exactly 2 type parameters. */
-    private fun findNamespaceLocalInterface(fileName: String, name: String): InterfaceDeclaration? {
-        val sf = binderResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile ?: return null
-        fun scan(stmts: List<Statement>): InterfaceDeclaration? {
-            for (st in stmts) {
-                when (st) {
-                    is InterfaceDeclaration -> if (st.name.text == name && st.typeParameters?.size == 2) return st
-                    is ModuleDeclaration -> (st.body as? ModuleBlock)?.let { scan(it.statements)?.let { r -> return r } }
-                    else -> {}
-                }
-            }
-            return null
-        }
-        return scan(sf.statements)
     }
 
     /**
