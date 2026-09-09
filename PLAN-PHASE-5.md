@@ -25,6 +25,96 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.59) — (INV.0) step 7: the ENUM family becomes `EnumSemantics.kt`, and the arc's ambient TOTAL falls for the first time (2026-09-09)
+
+**Suite 18,506 / 0 / 3** (18,498 + 8 new pins). `Checker.kt` **195,606 → 194,631** (−975);
+`EnumSemantics.kt` **1,137**. cost_gate exit 0, huge_methods exit 0 (**839** classes,
+`Checker.<init>` 5,721 → **5,697**), warning-clean, ledger row 10. Two commits: `1c520fc19`
+the split, `b62d9d376` the ablation record. **Fourth extraction of the session.**
+
+**THE CENSUS THE QUEUE ITEM DEMANDED DECIDED THE ROUND, AND TWO OF ITS THREE CANDIDATES
+ARE NOT SEAMS.** (a) SIGNATURES is a SCATTER — `requiredParameterCount`/`getParameterSymbols`
+at 117338, the call/construct readers at 161778, `instantiateSignature` at 172002, ~50 more
+over six unrelated neighbourhoods. (b) FLOW is a SCATTER — 64 declarations, 22 of them
+singletons or pairs, from line 1091 to 125482. (c) ENUM is ONE contiguous span, 1,013 lines,
+40 declarations, 17 ambient references of which 5 are the family's own state. Taken.
+
+**THE STAGE-0-EXIT DECISION ROW 9's CORRECTION ASKED FOR IS TAKEN, AND IT COST ONE LINE.**
+That correction predicted this extraction would cut ~790 lines and reduce NO ambient row,
+because `Relater`'s enum calls would still route through `Checker` — and that paying row 7
+down needs the collaborators wired to EACH OTHER through "an explicit construction graph in
+`Checker.<init>` … rather than drifted into". **`Checker`'s construction block already IS
+that graph**, so the decision was placing `EnumSemantics` before its two consumers.
+Measured with ONE uniform script across both arms: **`Relater` 49 → 38 checker reads (−11
+over 20 sites), `MemberNames` 5 → 4**, new row 13 reads / ZERO writes. **First fall in the
+arc's ambient total.** (Counting note: row 7 records 45 because it assigns four
+read-modify-write members to the WRITES column; both conventions give −11.)
+
+**A MASKING DEFECT EVERY EARLIER ROUND OF THIS ARC SHARED, and only the compiler saw it.**
+`spanmask`/`strip` blank whole string literals, so a `${ … }` INTERPOLATION — which is code
+— is invisible to the ambient census and unrewritten by the forward transform. One site
+existed (`"import(\"${moduleFileBaseNoExt(f)}\")"`). It failed LOUDLY here, because a
+`Checker` member is not accessible from a collaborator — but that makes the compiler a
+complete detector only for the AMBIENT case: a TOP-LEVEL function called from inside a
+template resolves fine and would simply be absent from a ledger row. `codemask.py` keeps
+interpolations visible and comments blanked; both verbatim proofs are taken with it.
+
+**VERBATIM PROVED TWICE, over CODE positions only**: `inverse(moved region)` is
+byte-identical to `HEAD:Checker.kt[115064..116076]`, and `forward(HEAD span)` is
+byte-identical to the moved region. 50 ambient rewrites over 13 members, 29 visibility
+rewrites, 24 delegations.
+
+**THE RECEIPT NOW SPANS FIVE BINARIES** — the same 488 deterministic `--passTiming` lines
+byte-identical for pre-step-5 pristine, steps 5, 6a, 6b and this: **one receipt over 3,522
+moved lines**, at one extra build for the whole session. **A recipe trap cost one bench run:
+the first capture was taken with `--listAll` where the pristine arm was not, so the
+diagnostics block truncated at 30 in one arm and listed all 46 in the other** — 22 diff
+lines that look like a regression and are a `sed`. A capture is a property of (OUTPUT ×
+RECIPE); re-run the recipe, do not reconcile the diff.
+
+**PrintInlining is FLAT, and that is the honest reading**: 182 → 191 `too large` over the
+20 tracked sites. Rows 4-9 each removed dozens because each moved ONE large body out of a
+caller's inline tree; this family is 40 SMALL functions (largest 1,033 bytecodes), so there
+was no monolith to remove. The one real gain is `isEnumFlavoredObjectType` — **zero** inlines
+at 21 call sites before, 37 after. **A trap that manufactured a fake +137 first**: the twelve
+members that were `internal` on `Checker` are JVM-name-MANGLED there and are plain members of
+an `internal class` afterwards, so a matcher requiring a space after the name reads ZERO rows
+in the PRISTINE arm and every row in the split one. Match `::NAME($suffix|-hash)?\s` on BOTH
+arms. ab-interleaved 6 pairs **−120 ms (−0.46%) B-wins-3/6 NOISE-DOMINATED**, both arms 46.
+
+**SEVEN OF EIGHT PINS DISCRIMINATE EXACTLY; THE EIGHTH WAS BLIND AND THE ARM SAID SO.**
+Arm 8 read `0 RED`, and the pin — not the guard — was the blind half: its fixture (`export
+enum` in one file, imported into another) resolves BOTH the value and the annotation through
+ONE import, so the two member symbols are IDENTICAL and reducing
+`enumMemberTypesAreSameMember` to `sourceMember === targetMember` changes nothing. Two
+further shapes were probed ON THE ABLATED BINARY before concluding — a three-file variant
+(no difference) and two same-NAMED enums with equal values (**1 row vs 2**). Repaired to the
+latter; arm 8 now reddens it and nothing else. **Arm 3 reddens TWO pins (3 and 8) and that
+is recorded rather than smoothed**: pin 8's ACCEPTANCE runs through the very member loop
+arm 3 inverts. Neither is redundant — arm 8 separates them — arm 3 simply is not a
+single-pin arm.
+
+**A DIVERGENCE THE REPAIR SURFACED, RECORDED AND NOT PINNED AS RIGHT.** At a variable
+declaration both references print `Type 'Z.Foo.A' is not assignable to type 'X.Foo.A'.`
+where we print `Type 'Foo.A' is not assignable to type 'Foo.A'.` — the (REL.1)(c)
+rounds-745-749 same-string retry (`enumCollisionQualifiedDisplays`) is not reached by that
+reader, in `diagnose()` and through the project CLI alike, for a namespace-nested AND a
+module-scoped collision. **PRE-EXISTING** (the family moved verbatim; HEAD~1 prints the
+same) and orthogonal to what the pin gates, which is the VERDICT. Queued below as a lead.
+
+**A PROCESS FINDING FROM RUNNING A SUBAGENT BESIDE THE BUILD**: the pin-design agent was
+probing with `java` while this session ran `compileKotlinJvm`; the class dir emptied
+mid-probe and **five shapes read as "our compiler is silent where both references report"**
+— a convincing false divergence family. `grep 'error TS'` hides `Could not find or load
+main class`. CLAUDE.md's "one gradle invocation per BOX, not per agent" has a second half:
+a **`java` probe is a victim too**, and any probe script must grep for the dead-classpath
+line first.
+
+**NEXT**: the ambient TOTAL can now fall per round, but only where a collaborator's reads
+are a FAMILY someone else owns. Census `getPropertiesOfType` / `getPropertyOfType` and the
+member-ACCESS family, which `MemberResolver`'s 22 reads and `Relater`'s remaining 38 both
+point at; SIGNATURES and FLOW stay Stage-3-shaped until an instrument for a scatter exists.
+
 ### Round (P18.58) — (INV.0) step 6b: the MEMBER-NAME / late-binding family becomes `MemberNames.kt`, the arc's cleanest seam (2026-09-09)
 
 **Suite 18,498 / 0 / 3** (18,493 + 5 new pins). `Checker.kt` **196,176 → 195,606** (−570);
@@ -609,1111 +699,6 @@ leak). **a6/a7 are the mask/closure pair** and a7 changes only `SpineDispatch.kt
 receipt — it breaks three shapes both references are silent about), and adding a `ClassDeclaration`
 arm to `collectClosureAssignedNames` (it would silence two shapes both references report). Three
 residues measured and left open are queued as **(CHK.115)**.
-
-### Round (P18.49) — a `number` stops being silently accepted by a string enum ((CHK.113)(a)), the source literal survives to a nullish-target display ((b)), and the round before it left three countdown pins (2026-09-08)
-
-**Suite 18,338 → 18,375 / 0 / 3** — 37 pins in the new `NumericSourceEnumTargetTest`, plus THREE
-stale pins inverted in `EnumAndNullableRelationDisplayTest`. Grid **8 × added=0 removed=0**, re-run
-INDEPENDENTLY; `cost_gate.py` exit 0 (largest delta **+0.03%**), `huge_methods.py` exit 0, corpus
-8,837/0, externals 290/0, `-project` 866/0, build warning-clean under `--rerun-tasks`.
-
-**(a) IS A FALSE NEGATIVE IN THE MOST BASIC POSITION AND THE ITEM UNDER-COUNTED IT.** A `number`
-source was silently ACCEPTED against a string enum target — the item named the declaration; measured,
-it is **all five positions plus a union target, 8 silent rows**, and both references report TS2322 /
-TS2345 for every one. The fix demands POSITIVE evidence of string-ness through `enumMemberEntries`
-(the tsc view), so an opaque ambient member, an unfoldable value, an empty enum and every mixed or
-numeric enum keep today's acceptance — **and arm a2 demonstrates CLAUDE.md's own trap #2 directly**:
-inverting that to "positive numeric evidence" reddens exactly the ambient-no-initializer and
-unfoldable-value controls.
-
-**(b)'s SECOND SHAPE DID NOT EXIST, AND ITS MECHANISM NEEDED TWO CHANGES RATHER THAN ONE.** The item
-says `gN(true)` prints `'boolean'` for `'true'`; measured, **both references print `'boolean'` there
-too** — that row was never a divergence, and the real second shape is a target whose non-nullish
-remainder is not strippable (`p3(true)` against `string | number | undefined`). More usefully:
-adding the nullish arm to `ts2322KeepsSourceLiteral` alone is **completely INERT**, because
-`getTypeOfExpression` answers the BASE primitive for a literal NODE — the source is widened at
-ACQUISITION, so nothing downstream has a literal left to keep. **CLAUDE.md's round-781 entry
-("there is no fresh-literal expression type … any rule that needs a literal must read the AST")
-earned its place again**, and the recovery re-reads the literal from its node at three display heads.
-
-**THE RISK THE ITEM INHERITED WAS RE-SCOPED RATHER THAN ACCEPTED.** `ts2322KeepsSourceLiteral`'s
-KDoc records two prior false-positive incidents from widening it — but those are about the
-ACQUISITION gate (`propTypeContainsLiteral`, which feeds the relation VERDICT), not the display
-predicate. The landed recovery is display-only and runs below every relation call, so no verdict can
-move; widening acquisition was considered and REFUSED, with that distinction stated. The grid and
-corpus confirm it.
-
-**THREE STALE PINS WERE INVERTED, AND THEY WERE CREATED BY THE IMMEDIATELY PRECEDING ROUND.**
-(CHK.92) recorded its own (b) residue as pins asserting `'number'`/`'boolean'`; both references print
-the corrected values, so this round flipped them with transcripts in each KDoc. **That is the third
-countdown pin in four rounds** ((P18.44), (P18.48), (P18.49)) — CLAUDE.md's "do not pin a known-open
-gap" entry is reinforced with the sharper form: *a round that records its own residue as a pin hands
-the next round a failing suite*, and a red pin asserting a known-wrong value is indistinguishable
-from a regression until someone re-derives it against pristine.
-
-**ARMS — 6. a1 the enum-string gate 10 RED; a2 the positive-evidence direction 2 (uniquely the two
-opaque-member controls); a3 the empty-enum early return 1; b1 the nullish arm 12.** b2 and b3 are
-**REDUNDANT BY MEASUREMENT, not by argument** — round 813's whole-output diff over a **43-row
-family** (`x!`, `as const`, enum members, literal-union references, negative/hex/exponent/template
-literals, `null`, `undefined!`, all five positions, an object literal) is byte-identical on all three
-binaries; b3 is a round-927 pair with `relationErrorSourceDisplayType`, which re-generalizes one
-layer down for exactly the targets the gate refuses. Both kept and recorded as measured-redundant in
-their KDoc rather than claimed as coverage.
-
-**THREE RESIDUES CONFIRMED ON THE *BEFORE* BINARY** — i.e. pre-existing, not this round's — are
-queued as (CHK.114): (CHK.92)(c)'s `nullableTargetDisplay` is wired to three of its five heads (the
-RETURN head and the OPTIONAL CLASS PROPERTY are missing, one wiring each), and a cross-flavour enum
-member source does not collapse where both references collapse it.
-
-### Round (P18.48) — the enum and nullable-target display residues close ((CHK.92), all four parts), and a display rule put in the general renderer broke the LANGUAGE SERVICE (2026-09-08)
-
-**Suite 18,302 → 18,338 / 0 / 3** — 35 pins in the new `EnumAndNullableRelationDisplayTest`, one
-consumer-side pin in `LanguageServiceStateTest`, one stale pin INVERTED with proof. Grid
-**8 × added=0 removed=0** (re-run by the agent after production code moved, then re-run
-INDEPENDENTLY by the orchestrator); `cost_gate.py` exit 0 (largest delta **+0.03%**),
-`huge_methods.py` exit 0, build warning-clean under `--rerun-tasks`.
-
-**ALL FOUR PARTS LANDED**: (a) neither side of an object-literal member mismatch is widened any more
-(`'6'` → `'5'`, not `'number'` → `'number'`), with tsc's per-FLAVOUR literal keep; (b) the four
-MEANING rows — an enum-target object-literal member at an ARGUMENT — now report byte-exactly; (c)
-one home, `nullableTargetDisplay`, implements tsc's `DefinitelyNonNullable`-gated strip AND the
-optional-declaration add, correcting **both** directions at five call sites; (d) a one-member enum's
-relation-error display collapses to the parent at four positions.
-
-**THE ROUND'S LESSON IS ARCHITECTURAL AND COST TWO ROUND-TRIPS: A DISPLAY RULE SPECIFIC TO RELATION
-ERRORS MUST NOT LIVE IN `typeToString`.** (d) was first implemented in the general renderer with a
-TS2367 bypass bolted on — and the full suite then found it had broken `Project.quickInfoAt`, turning
-a hover on a one-member enum's member from `Valued.Gamma` into `Valued`. That is not a cosmetic
-loss: `LanguageServiceStateTest`'s shadowing case is (API.15)'s deliberate NEGATIVE CONTROL, whose
-whole purpose is that the answer names the OWNER, so the collapse destroyed the distinction the pin
-exists to make. **The oracle was asked rather than argued** — `tools/tsgo-7.0.2/lib/tsc --lsp -stdio`
-via `scripts/lsp_hover.py` answers `(enum member) Valued.Gamma = 5` for all four one-member shapes,
-i.e. tsgo does NOT collapse in hover where both references DO collapse in a relation error. One
-renderer cannot serve both. The rule now lives in `relationErrorTargetDisplay` (5 call sites, all
-relation-error heads), the TS2367 bypass is DELETED because it only existed to undo the
-misplacement, and **needing a second per-consumer bypass is recorded as the signal that a rule is in
-the wrong place**. Arm a12 is now the PLACEMENT arm — it puts the collapse back into `typeToString`
-and is graded on the `-project` module, 3 RED.
-
-**A STALE PIN WAS INVERTED WITH PROOF, AND ITS OWN NAME SAID SO.** `ConstAssertionTest`'s
-`residue - the argument elaboration through a const assertion widens the target display - r24`
-asserted the known-wrong `'string'`; (a) made it print `'"b"'`, which is what pristine 6.0.3 AND
-tsgo 7.0.2 both print. Renamed, expectation updated, both transcripts in its KDoc. Second such pin
-in three rounds — a pin whose name contains "residue" is a countdown, and CLAUDE.md already says
-not to pin a known-open gap as a control.
-
-**FOUR OF THE ITEM'S CLAIMS WERE WRONG OR INCOMPLETE.** (a) names TWO emitters and there are THREE
-(`checkNestedObjLitPropTypes` owns the nested/return leaf); (d)'s exception is literal FRESHNESS in
-full, not the two syntactic cases listed; (c)'s "three sites" is five; and the binding constraint for
-(a) was not its 21-baseline guard set but a corpus PIN WALKER (`checkErrorElaboration`) that locates
-its row by exact message TEXT — (a) made the engine emit the right text directly, so the pin's probe
-found nothing and its TS6500 vanished. Fixed by accepting both spellings.
-
-**AND THAT PIN WALKER ALSO CONFOUNDED THE ROUND'S OWN INSTRUMENT**: a message-text marker (round
-947's positive control) reddens the baseline on the **BEFORE** arm wherever such a walker matches on
-text, so a working binary reads as broken. The decisive experiment was the CORPUS HARNESS on both
-arms — a scratch CLI run uses the REAL libs where the corpus uses the embedded one, so a different
-emitter fired and the first two diagnoses were about the wrong site. Now a CLAUDE.md entry.
-
-**REFUSED, WITH THE MEASUREMENT**: (d)'s TS2367 freshness half — `Cmp.X === 5` and `const cx = Cmp.X`
-keep the member while `let lx = …` and an annotation-derived `declare const av: Cmp.X` collapse, and
-this checker mints no fresh enum-member type, so the four shapes share one `Type`. Pinned as a
-recorded refusal. **Two MEANING residues found beside the item** are queued as (CHK.113): a `number`
-source is silently ACCEPTED against a string-enum target (TS2322 in both references), and
-argument-position source freshness needs a widening of `ts2322KeepsSourceLiteral`, whose KDoc records
-two prior FP incidents from exactly that.
-
-**ARMS — 13, ALL DISCRIMINATING, NONE BLIND OR REDUNDANT.** a1/a2 are NOT a pair (a1's 2 rows are a
-strict subset of a2's 4, so both mechanisms are separately load-bearing); a12 is the placement arm
-described above.
-
-### Round (P18.47) — the rest-tuple model is fixed ((CHK.111)), the item's named seam was WRONG rather than incomplete, and the regression it caused was in another module (2026-09-08)
-
-**Suite 18,271 → 18,302 / 0 / 3** — 31 pins in the new `RestTupleModelTest`. Grid
-**8 × added=0 removed=0**, re-run INDEPENDENTLY; `cost_gate.py` exit 0 (largest delta **+0.03%**,
-no rebaseline), `huge_methods.py --fail-over 0` exit 0, build warning-clean under `--rerun-tasks`.
-
-**(CHK.111) CLOSED, and the item under-counted its own defect by 9x.** It recorded "exactly 1 false
-positive", at the class property. Measured, a DECLARED tuple source produced a false row at **all
-five** positions — the shielding claim holds only for an ARRAY-LITERAL source — and the gain is
-**10 rows, not 5** (`[]` *and* an element mismatch, at each of the five). `p1` and `p2` are now
-byte-identical to pristine, sub-lines included.
-
-**THE NAMED SEAM IS WRONG, NOT MERELY INCOMPLETE, AND THAT IS THE ENTRY-WORTHY PART.** "Make slots
-at `>= tupleRestIndex` OPTIONAL" fixes only the `[number]` half: `[number, string]` failed because
-the rest MEMBER was typed `string[]` (the whole rest array) rather than `string` (its element). And
-optionality is the wrong CHANNEL — `optionalTupleMemberIds` also injects `| undefined` into every
-element read and into `tupleArrayBase`'s union. What works is the member carrying the rest's
-**element** type plus a **separate non-required mark** (`restTupleMemberIds`), which is also why
-dropping the numbered member entirely (literal tsc) is refused: it would lose `[number, number]`'s
-position-1 element row. Arm a7 of (P18.44) is likewise not the whole ablation — dropping the
-exclusion alone leaves the model bug, and six further decisions were needed.
-
-**THE DISPLAY HALF LANDED IN FULL**: `[number, ...string[]]`, `readonly [...]`, a leading
-`[...string[], number]` and a middle `[number, ...string[], boolean]` all render exactly as both
-references, and an EMPTY tuple `[]` is unchanged — a control that the ellipsis is keyed on
-`tupleRestIndex` rather than sprayed. Named tuple members and optional markers are still dropped
-(pre-existing, out of scope).
-
-**THE REGRESSION THIS ROUND CAUSED WAS IN ANOTHER MODULE, AND ONLY THE FULL SUITE COULD SEE IT.**
-`typeToString` feeds the externals generator's `xtsc: unmapped <type>` markers, so the ellipsis
-moved three RxJS gate expectations — while the 8-profile grid and all ~13k corpus baselines stayed
-clean. **The pins encoded the OLD, LESS ACCURATE text and were updated with proof, not weakened**:
-rxjs declares `zip<A extends readonly unknown[]>(sources: [...ObservableInputTuple<A>])`, i.e. a
-tuple whose single slot IS a rest, so the old `[any]` spelled a FIXED one-element tuple — a
-different type from the variadic one — and both references print the ellipsis on all six shapes
-measured. **Two of three stale expectations were reported and the third was hidden**, because a
-block of `assert(<local>)` calls throws at the FIRST false one; fixing only the reported pair would
-have failed again on the next line. Both facts are now CLAUDE.md entries, and the (P18.44) entry
-this round makes stale was REWRITTEN rather than left standing.
-
-**ARMS — 14, and three of the recorded outcomes matter.** a1 the rest-member id set 8 RED; a2 the
-element-vs-array member type 4; a3 the source-side rest rejection 1; a4 arity rung 4 1; a5 the
-(CHK.108) exclusion 7; a6 tsc's `generateLimitedTupleElements` skip 2; a7 the display ellipsis 10;
-a8 the class-property arity refusal 3; a9 the elaboration expansion 2; a10 the tuple→Array rule 1;
-a12 the B407 positional-chain fallback 2; a13 the argument gate 1. **a3/a4 are a round-927 pair on
-one observable** (row lost vs row kept with the wrong chain) and were separated only by adding a
-presence-only pin. **a14 first read 0 RED because the PIN SET was blind** — every LITERAL index is
-served by the numbered member, so only a non-literal `t[i]` reaches the index signature; added, and
-it reddens. **a11 is REDUNDANT by measurement**, round 813's whole-output diff over six fixtures
-including purpose-built adversarial shapes, because a6's skip refuses every index it would serve.
-
-**A PROCESS FAILURE, SELF-REPORTED BY THE IMPLEMENTATION AGENT AND WORTH RECORDING.** It misread a
-still-running ablation batch as killed and started a second Gradle invocation — two concurrent
-builds, which CLAUDE.md forbids. It was detected by an IMPOSSIBLE class sha, and both affected arms
-(a11, a14) were re-run alone in the foreground with source md5 and class sha verified at each step.
-No result in the round comes from an overlapped run. The detector that worked is the same one the
-restore-without-rebuild entry relies on: a sha that cannot be what it is.
-
-**ORCHESTRATOR RECEIPT.** The agent's grid BEFORE arm sha (`bd4d9c35…`) equals the binary the
-orchestrator built and gated last round; its final binary (`eb69f4bc…`) equals the binary this
-round's green suite ran on, and differs from the grid binary only by a KDoc (`javap -c -p` minus
-line numbers byte-identical), so the grid stands. The independent re-run reproduced
-`added=0 removed=0` on all eight.
-
-### Round (P18.46) — definite assignment joins a `try`/`catch` and reaches an expression-bodied arrow ((CHK.110)(a)/(b)), and the suppressor was NEITHER candidate the item named (2026-09-08)
-
-**Suite 18,234 → 18,271 / 0 / 3** — 37 pins in the new `Ts2454TryJoinAndArrowBodyTest`, every
-expectation read from pristine 6.0.3. Grid **8 × added=0 removed=0**, re-run INDEPENDENTLY;
-`cost_gate.py` exit 0 (largest delta **+0.03%**, no rebaseline), `huge_methods.py --fail-over 0`
-exit 0, **`spine_closure_audit.py` exit 0** (mandatory — the round adds a `spineDaEnterNode` arm),
-build warning-clean under `--rerun-tasks`.
-
-**THE ITEM NAMED TWO CANDIDATES FOR (a)'s SILENCE AND BOTH ARE WRONG.** `markAssignments` really
-has no `TryStatement` arm, and B223's `checkTryCatchOnlyAssignedVarReads` only looks at a
-`var x = init` declared INSIDE the try, so it never sees a `let d` declared outside. The suppressor
-is a THIRD mechanism: **`checkUsesOfUninitialized`'s own `TryStatement` arm** ran
-`markAssignments(s, uninitialized)` over the try block **against the caller's live frame set**, so
-the try block's assignments escaped the try statement unconditionally.
-
-**AND THE EVIDENCE THAT ATTRIBUTED IT NEEDED NO INSTRUMENTATION — THE SAME LINE WAS WRONG IN THE
-OPPOSITE DIRECTION.** `try {} catch {} finally { d = "c" }` was an ours-only **false positive**
-both references are silent about, because that arm walks the try block ONLY. One escape, two
-opposite defects, both explained by that one line and by neither candidate. A second pre-existing
-ours-only row (`try { throw 1 } catch { d = "b" }`) closes with it. **A shape that fails in BOTH
-directions is a stronger attribution than any single missing row**, and it is free to look for.
-
-**THE MERGE IS DECIDED BY REACHABILITY, AND MY FIRST DESIGN WAS REFUTED BY THE FIXTURE MATRIX
-WHILE THE GRID STAYED CLEAN.** `tryDefinitelyAssigns` asks which of the two blocks can REACH the
-continuation, using round 450's `daWalkStmt`/`daWalkList`: neither → remove (unreachable); only the
-catch → the catch's assignments; only the try → the try's; both → the intersection; `finally`
-always counts. The first cut instead used `tcvHasTerminator(tryBlock)` as a conservatism — it
-**suppressed 6 rows both references report**, and the 8-profile grid was `added=0 removed=0` on
-that binary AND on the guard-free one. **The grid cannot grade conservatism** (tsc's own sources
-carry none of these shapes), so only the reference matrix could see it; that is now a CLAUDE.md
-entry.
-
-**(b) IS A DISPATCH GAP AND ITS TWO ARMS ARE A ROUND-927 PAIR.** `spineDaExpressionBody` runs
-`findUninitializedRefs` over an expression body against `spineDaLeakOf(arrow)` minus the arrow's
-own parameters, on a copy; a `NodeKind.ARROW_FUNCTION` arm was added to `spineDaEnterNode` **and**
-to its `SpineDispatch.enterClosure` entry. Ablating either reads the SAME 7 RED — b1 deletes the
-handler, b2 leaves it present and unreachable behind the enter mask — and **no pin can distinguish
-"not called" from "not written"**, which is exactly the mask/closure hazard CLAUDE.md mandates
-pairing for. Recorded as a pair, not a redundancy.
-
-**THE ITEM'S (b) SCOPE WAS ALSO WRONG IN ONE PLACE**: it names "an expression-bodied arrow in a
-class property initializer" as part of the same gap. Measured pre-change, a BLOCK-bodied arrow, a
-function expression and a **bare identifier** in a class property initializer are ALL silent — the
-class-member leak path is absent from this pass entirely, so it is a different mechanism. Moved to
-**(CHK.112)** with (c)'s still-blocked switch exhaustiveness and the two accepted prices.
-
-**ARMS — 10, ALL DISCRIMINATING.** a1 the `HashSet(uninitialized)` copy **8 RED** (every (a)
-positive); a2 the `markAssignments` try arm **13** (every (a) negative control); a3 the
-unassigned-call bail 1; a4/a5/a6 the three reachability cases 1 / 2 / 2, each uniquely; a7 the
-lenient `switch`/`while(true)` readings 3; b1/b2 the dispatch pair 7 each; b3 the own-parameter
-subtraction 1. Restored `Checker.class` sha printed and identical after every arm.
-
-**ORCHESTRATOR RECEIPT.** The agent's grid BEFORE arm sha (`eac83544…`) equals the binary the
-orchestrator built and gated last round, and its final binary (`bd4d9c35…`) equals the binary this
-round's green suite ran on; last round's AFTER captures were reused as this round's BEFORE captures
-before the independent re-run reproduced `added=0 removed=0` on all eight.
-
-### Round (P18.45) — an inline literal callee gets its own type ((CHK.109)), and the callee EXPRESSION is evidence the callee TYPE cannot carry (2026-09-08)
-
-**Suite 18,212 → 18,234 / 0 / 3** — 22 pins in the new `InlineLiteralCalleeTest`. Grid
-**8 × added=0 removed=0**, re-run INDEPENDENTLY by the orchestrator; `cost_gate.py` exit 0
-(largest delta `mapped.hits` **+0.03%**, no rebaseline), `huge_methods.py --fail-over 0` exit 0
-(834 classes, 0 over), build warning-clean.
-
-**(CHK.109) CLOSED: 1 → 15 of the reference's 16 rows**, byte-identical to pristine on every one.
-`({})()`, `({ a: 1 })()`, `[1]()`, `("x")()`, `(1)()`, a template, a boolean, a regex, nested
-parentheses, `?.()`, explicit type arguments (exactly ONE row — the `tryEmitUncallableTypeArgs`
-dedupe holds) and an object literal carrying a method all report; an inline arrow, function
-expression, async arrow and every literal RECEIVER stay silent. tsgo 7.0.2 and pristine 6.0.3
-agree on all 16 rows, so no oracle conflict arose.
-
-**THE ITEM'S SEAM WAS RIGHT AND EXACTLY HALF THE FIX, AND THE HALF IT MISSES IS THE ENTRY-WORTHY
-ONE.** `getCalleeType`'s `else -> anyType` is where the `any` came from, and eight literal arms fix
-it — but the item then predicts "the (CHK.104) arms need no change at all", and that is **false for
-its own first example**. `({})()` and `(/x/)()` are still refused after the seam, by
-`calleeObjectTableIsComplete`: (CHK.45)'s rule demands positive evidence a member table is
-complete, and **an empty anonymous object is precisely the shape a TYPE cannot vouch for** — `{}`
-from a literal and `{}` from an unfinished resolution are the same type. The closing rule is
-therefore SYNTACTIC (`core is ObjectLiteralExpression || core is RegularExpressionLiteralNode`),
-and ablation a3 shows it is not decorative: its RED set is exactly the three EMPTY-`{}` pins and
-nothing else, because for a NON-empty literal the type-only rule already suffices. The general law
-— **the callee expression can be evidence the callee type cannot carry** — is now a CLAUDE.md
-entry.
-
-**A PARSER FACT COST A THIRD LEG: `true`/`false` ARE RESERVED WORDS THE PARSER RENDERS AS AN
-`Identifier`** (`Parser.kt:7003`), so `(true)()` reaches `getCalleeType`'s Identifier arm and
-resolves to nothing. The leg sits on the `lookupPerFileForNode` MISS path only, so no ordinary
-callee pays for it. Also a CLAUDE.md entry — any dispatcher with an `Identifier` arm inherits it.
-
-**POPULATION 3 → 15, and TWO SHAPES ARE A DIFFERENT DIAGNOSTIC AND STAY OPEN, WITH THEIR
-MECHANISM.** `(class {})()` is **TS2348** with a `typeof (Anonymous class)` display — that arm is
-gated on an `Identifier` callee and the display is a naming mechanism this compiler does not have
-— and `new ({})()` is **TS2351**, where every emitter on the `new` path is gated on an
-`Identifier`/`PropertyAccessExpression` callee. Both were checked to be INERT under this change (a
-class expression's type has construct signatures, so the completeness predicate returns false) and
-are recorded as stated refusals in the test KDoc rather than pinned.
-
-**FOUR DISPLAY DIVERGENCES ARE MADE VISIBLE AND ARE NOT THIS ITEM'S** — `[]()` prints `any[]` for
-`never[]`, `[() => 1]()` prints `() => number[]` for `(() => number)[]` (a missing
-parenthesization in `typeToString`), an object-literal getter prints `readonly g: any`, and a
-computed key prints `{ ["k"]: number; }`. **All four reproduce on the PARENT binary at a
-DECLARATION position**, i.e. this round only makes the row fire; each is an independent
-pre-existing defect and all are FORM per `docs/logical-parity.md` (code, span and the fact that the
-row fires are correct in every case). Fixing `[]` alone would change the empty-array-literal type
-program-wide, which is why it was refused rather than folded in.
-
-**ARMS — 4, ALL DISCRIMINATING, NONE BLIND OR REDUNDANT.** a1 the eight literal `when` arms **14
-RED**; a2 the `true`/`false` leg **1**, uniquely; a3 the `ObjectLiteralExpression` admission **3**,
-exactly the empty-`{}` pins; a4 the `RegularExpressionLiteralNode` admission **1**, uniquely. Four
-distinct `Checker.class` shas, so no arm was dead. **Every other `getCalleeType` caller was
-audited** (signature help, construct-signature capture, tagged template, `new`,
-`tryEmitUncallableTypeArgs`) and none can now emit for a literal — the tagged-template path needs
-`signatures.size == 1`, the others are `Identifier`-gated, and the two API paths merely get a more
-accurate empty signature list than `anyType` gave them.
-
-**ORCHESTRATOR RECEIPT.** The implementation agent's grid BEFORE arm was byte-identical
-(`fb2b6561…`) to the binary the orchestrator built and gated LAST round, and its AFTER arm
-(`eac83544…`) to the binary this round's green suite ran on — so both arms were verified with no
-extra build, and last round's AFTER captures were reused as this round's BEFORE captures (same
-binary) before the independent re-run reproduced `added=0 removed=0` on all eight.
-
-### Round (P18.44) — a tuple's ARITY becomes expressible ((CHK.108)), the item's seam was necessary and not sufficient, and the WORK ORDER note CLAUDE.md points at had been archived out of this file (2026-09-08)
-
-**Suite 18,188 → 18,212 / 0 / 3** — 19 pins in the new `ArrayLiteralTupleArityTest` plus one
-stale pin CORRECTED in `OptionalTupleAssignabilityTest`. Grid **8 × added=0 removed=0**, run
-TWICE and re-run INDEPENDENTLY by the orchestrator against its own BEFORE arm;
-`cost_gate.py` exit 0 (largest delta `mapped.hits` **+0.03%**, no rebaseline),
-`huge_methods.py --fail-over 0` exit 0, build warning-clean.
-
-**(CHK.108) CLOSED: 11 of the reference's 12 rows, and the population is LARGER than the item
-recorded.** `const t: [number, number] = [1]` / `= [1, 2, 3]` / `= []` were silent; both
-references force-tuple the literal and print `Type '[number]' is not assignable to type
-'[number, number]'` plus `Source has 1 element(s) but target requires 2.` Every row is now
-byte-identical to pristine at all five positions (var-decl, argument TS2345, return, assignment,
-class property), for a readonly target, inside a union target, and at the INNER span of a nested
-literal.
-
-**THE ITEM'S NAMED SEAM WAS NECESSARY AND NOT SUFFICIENT, AND THE HALF IT OMITS IS THE BIGGER
-ONE.** A contextual-tuple form of `getTypeOfArrayLiteral` is exactly right and, alone, closed
-**0 of 12 rows** — because the contextual type was never INSTALLED for a plain array literal at
-any of the five positions, and because `checkArrayLiteralElementsAgainstTuple` (B407)
-unconditionally `return true`s, so even with a tuple source every var-decl row stayed suppressed.
-**And the ELABORATION is the other half, which the item does not mention at all**: with a genuine
-tuple source the arity mismatch already reached every emitter and printed the wrong thing. So a
-DECLARED tuple source — no array literal anywhere — printed `TS2741 Property '1' is missing`,
-`TS2739 … missing the following properties: 0, 1` or `Types of property 'length' are
-incompatible` where both references print TS2322 with an arity sub-line. That family is strictly
-larger than the item's and is fixed here; `tupleArityChain` is a transcription of tsc's three
-rungs from `structuredTypeRelatedTo`'s tuple arm, and **the three rungs carry three DIFFERENT
-counts** — each was verified row-for-row against pristine rather than derived.
-
-**THE ONE REFUSED ROW IS A TRADE, AND ITS CAUSE IS THE REST MODEL, NOT THIS ITEM.** Dropping the
-rest-tuple exclusion GAINS 5 correct rows (`[]` against `[number, ...string[]]` at every
-position) and INTRODUCES 1 false positive — `class K { p: [number, ...string[]] = [1] }` →
-TS2741, which neither reference prints. Reproduced on the PARENT binary with a declared tuple
-source, i.e. pre-existing: our rest tuples carry the rest slot as a **required** numbered member,
-so `[number]` fails against `[number, ...string[]]` outright. Four of the five positions are
-shielded by their element-wise owners and the class-property one is not — an accident, not a
-design. Queued as **(CHK.111)**; fixing the model also fixes the `[number, string[]]` display.
-
-**A STALE PIN WAS PINNING AN ANSWER NO REFERENCE PRINTS, AND THE CORPUS STRUCTURALLY COULD NOT
-SAY SO.** `OptionalTupleAssignabilityTest` asserted TS2739 for `[] → [number, string]`; the
-corpus's own `tupleTypes.ts` baseline (line 41) says TS2322 + the arity line, and **that file is
-served by a pin walker that WIPES and re-pins it** — so the baseline and the hand-written pin
-could disagree indefinitely with both green. Now pins the reference value.
-
-**ARMS — 12, and two of the recorded outcomes are the entry-worthy ones.** a1/a2/a3 the three
-arity rungs (10 / 2 / 2 RED); a4 `collectMissingProperties`' refusal 4; a6 the contextual tuple
-11; a7 the rest exclusion 1; a8 the spread refusal 1; a9 B407's emitted flag 6; a10 the
-nested-slot arm 1; a11 the per-element refusal 1; a12 the var-decl install 7. **a5 is REDUNDANT
-and that is a MEASUREMENT** — ablated alone the output over 45 rows of 7 tuple fixtures is
-byte-identical (round 813's whole-output-diff method), because `collectMissingProperties` refuses
-first at every site that reaches it; kept as the second layer of a round-927 pair over 10 call
-sites. **a3 first read 0 RED and the PIN SET was BLIND, not the guard redundant**: no array
-LITERAL can reach rung 3 (an all-fixed-slot builder makes `minLength == arity`, so rung 2 always
-fires first) — it is reachable only from a declared tuple source, and two pins were added before
-a3 discriminated. a12's first attempt was REFUSED by the driver on `ANCHOR COUNT 2`.
-
-**CLAUDE.md's restore-without-rebuild entry earned its place again**, in flight: after a1-a3 the
-driver restored the source (`cmp` clean, `git status` clean) and the class dir still held a3's
-binary, so two probes read plausible-but-wrong output that looked like a stage-2 regression. The
-tell was an IMPOSSIBLE change — a shape correct one build earlier. The driver now rebuilds after
-every restore and prints the resulting `Checker.class` sha.
-
-**A PROCESS FINDING WORTH MORE THAN THE FIX: THE `WORK ORDER` NOTE CLAUDE.md TELLS EVERY AGENT TO
-READ HAD BEEN ARCHIVED OUT OF THIS FILE.** It was added by `cc09770a3` (the 2026-09-01
-re-pointing) and was already gone by `ac71dc5e3` — carried out with its neighbouring COMPLETED
-items ((LIC.1), (DOC.1), (EXT.1), (LSP.1)), which sat under it. Only the pointer at line 20
-survived, naming a section that does not exist. **The drift it permitted is visible in the
-shrinkage dashboard**: the order's tail is (INV.D) → (INV.0), every (EXT.\*)/(LSP.\*) item is
-checked off and `docs/INVERSION-DESIGN.md` exists, yet the last ~25 rounds all went to (CHK.\*)
-parity items the order never named — and STATUS.md records that arc as having ADDED ~5,200 lines
-to `Checker.kt` with zero extractions. Restored below, verbatim from `cc09770a3` minus its four
-completed items, with a dated addendum recording where the arc actually stands. **The owner was
-asked and chose to CONTINUE the (CHK.\*) lane for this session** — so the note is a record, not a
-redirection, and the ordering question is stated in it rather than left to be re-derived.
-
-**ORCHESTRATOR RECEIPT.** Both of the implementation agent's grid arms were verified
-byte-identical (`sha256sum`) to binaries the orchestrator built itself — BEFORE from stashed
-HEAD, AFTER = the binary the green suite ran on — which is what rules out the round-853 /
-2026-09-06 self-comparison hazard; the independent 8-profile re-run then reproduced
-`added=0 removed=0` exactly. Incidental: `harness` measures **94** rows on both arms where
-CLAUDE.md's (PARITY.1) entry says 95 — pre-existing drift from a later round, corrected there.
-
-### Round (P18.43) — the flow-join subtype reduction is memoized, and a 3.2x WALL regression that every counter gate was blind to is closed ((PERF.1)) (2026-09-07)
-
-**Suite 18,185 → 18,188 / 0 / 3** — 3 pins in the new `AFlowJoinReductionMemoTest`. Grid
-**8 × added=0 removed=0**, `cost_gate.py` exit 0 (every counter within ±0.03%, no
-rebaseline), `huge_methods.py` exit 0, build warning-clean. **Warm A/B: −57.7% and −58.9%
-in two batches** (16,981 → 7,176 ms and 16,584 → 6,817 ms, `files/errors` 78/46 on every
-arm of both). Cold CLI: 35,893 → 26,740 ms (−25.5%).
-
-**THE ROUND STARTED AS A QUESTION AND THE BENCH SERIES ANSWERED IT: THE PERFORMANCE
-DEGRADATION IS NOT REFACTORING DRIFT, IT IS ONE COMMIT.** `bench-history/README.md`
-separates cleanly at `9a49e44c2060` ((CHK.85)(b), 2026-09-05): `warm/tsc` is **0.36-0.44×
-for the ~20 rows before it and 1.13-1.56× for all 25 rows since**, xtsc warm 2.68 s →
-14.56 s. **The box is normalized out by the series itself** — tsc's own absolute time
-ranges 7.29-13.81 s across the after-rows while the ratio never returns — and **the
-NATIVE AOT arm regressed 4.8× too (4.96 → 23.79 s), so it is not a JIT or AOT-cache
-artifact**; `bench.yml` last changed 2026-08-17, so the harness is not it either.
-Reproduced locally by building both commits: **24,598 / 24,360 / 24,656 ms against
-35,033 / 35,014 / 35,462 ms, +42% cold, 3/3 paired, arm spread <1.5%.** Cold understates
-by construction ((JIT.1)'s dilution law); the warm arm is the honest magnitude.
-
-**EVERY DETERMINISTIC COUNTER IS FLAT AND THAT IS THE ENTRY-WORTHY PART.** Across the
-cliff `spine.nodes` is BIT-IDENTICAL, `narrow.walks` +1.2%, `globals.lookups` +2.3%; even
-at HEAD, 25 rounds later, no counter is more than +4.5% above the pre-regression baseline.
-`cost_gate.py` counts walk LAUNCHES and lookup CALLS, and this cost is entirely
-**per-arrival**, so the gate could not see a 3.2× wall regression — nor could
-`huge_methods.py` (no method grew) nor the 8-profile grid (all 46 diagnostics unchanged
-throughout). The round-735 flow-narrowing-tail law is exactly this shape: the (CHK.85)(b)
-note attributed its own change as "globals.lookups +2.30% = 414 reporting walks", a COUNT,
-and 414 walks is 1.1% of the population and was ~90% of narrowing time.
-
-**THE MECHANISM WAS NOT THE ONE THE ATTRIBUTION FIRST NAMED, AND THE SECTION PROBE IS WHAT
-SAID SO.** `--passTimingRows` puts the whole delta in ONE row (`checkSpine` 18,814 →
-30,891 ms, every other pass flat); `--narrowSections` then splits it, and the reading
-overturns the obvious suspect:
-
-| section | arm A | arm B | reached A→B |
-|---|---:|---:|---|
-| `narrowByAssignmentRhs` (the new enum arm's home) | 209.7 ms | 221.0 ms | 21,184 → 21,631 |
-| `getUnionType at a branch label` | 368.7 ms | **20,384.7 ms** | 111,422 → 113,341 |
-| `relations(depth0)` | 1,235 ms | **14,512 ms** | — |
-
-So the enum arm and its `constituents × atoms` relation grid — the candidate a reading of
-the diff produces, and the one this round set out to memoize — is **FLAT**, and memoizing
-it would have bought nothing. The cost is `flowJoinUnion`, whose section brackets the join
-ONLY (the antecedent recursion happens above `tU`, so the row is EXCLUSIVE and is a price).
-**Two single-mistake ablations attribute it inside that function**: forcing the free path
-(skip the subtype reduction) reads **36,982 → 27,116 ms, −9.9 s, with all 46 diagnostics
-unchanged**; skipping (CHK.85)(b)'s `enumMembersInDeclarationOrder` sort reads −0.8 s, i.e.
-noise. **It is the O(n²) reduction, not the sort.**
-
-**WHY (CHK.85)(b) TURNED IT ON.** (CHK.66)'s reduction runs only when some member is
-FOREIGN to the declaration — its own note says that "makes the reduction free on almost
-every join". (CHK.85)(b)'s enum arm makes a branch answer an enum MEMBER (`K.A`) where the
-declared type is the atomic enum `K`, and `flowJoinMemberIsDeclared` reads a member as
-foreign, so **a whole class of joins silently fell off the free path onto the quadratic
-one**. Nothing about the change looks expensive in the diff; the arm it added is cheap.
-
-**THE FIX IS A MEMO AND NOT A PREDICATE FIX, AND THE REASON IS OUTPUT.** Reading `K.A` as
-declared would also disable the reduction a join genuinely needs (`K.A | K` must reduce to
-`K`) — it would change answers. The reduction is instead memoized on
-`packIdPair(joined.id, declaredType.id)`: [getUnionType] interns by member-id list so
-`joined.id` names the member SET exactly, [isTypeAssignableTo] is itself already cached by
-id pair, so the memo adds no staleness class the relation cache does not already have, and
-`Type.id >= 1` keeps the packed key off [LongKeyMap]'s 0 sentinel. Post-fix the sections
-read `getUnionType at a branch label` **911.6 ms** and `relations(depth0)` **1,226 ms** —
-the latter fully back to arm A's 1,235 — and the diagnostics are byte-identical to HEAD on
-the compiler profile (46 rows, `diff` clean) and on all eight profiles.
-
-**FIX (2) — BOUNDING THE REPORTING WALK — IS REFUSED, ON THIS ROUND'S OWN MEASUREMENT.**
-It was proposed on the first (wrong) mechanism. Post-fix the ≥1 ms tail is 306 walks /
-2,520 ms against arm A's 210 / 1,360 — the `WK_NARROW_REPORT` walk was never intrinsically
-expensive, only the reduction it triggered was. An arbitrary visit budget would risk
-dropping pinned TS2367 rows to buy ~1 s, and would be a guard with no uniquely-its-own
-failure (round 807).
-
-**PINS AND ARMS.** P1/P2/P3 in `AFlowJoinReductionMemoTest`; the ablation storing `joined`
-instead of the reduced type reddens **exactly P2**, the SERVED ask, which is the only claim
-a memo can violate on its own. **One arm is recorded BLIND rather than redundant**: dropping
-`declaredType` from the key reads 0 RED, because a join whose members are all declared
-returns ABOVE the cache probe (`anyForeign`'s early exit), so the obvious
-"the declaration contains the member" fixture never reaches the memo at all — the fixture
-that would discriminate needs two DIFFERENT declared types reaching the memo with an
-identical interned `joined` and different verdicts, which was not constructible here. The
-key keeps `declaredType` because the reduction READS it, not because a pin can see it.
-
-**SUCCESSOR.** The residual `getUnionType at a branch label` gap (911.6 ms against arm A's
-368.7) is (CHK.85)(b)'s enum sort plus 25 rounds of features and is NOT priced; if it is
-opened, price it against ablation D's −0.8 s, which says the sort is most of what is left
-and that it is small.
-
-### Round (P18.42) — an intersection dedupes its constituents by type ID ((CHK.106)(b)), and (a) is BROADER than the item recorded (2026-09-07)
-
-**Suite 18,179 → 18,185 / 0 / 3** — 6 pins in the new `IntersectionConstituentDedupeTest`. Grid
-**8 × added=0 removed=0** on the final binary; `cost_gate.py` exit 0 (largest delta `mapped.hits`
-**+0.03%**, no rebaseline), `huge_methods.py --fail-over 0` exit 0, build warning-clean.
-
-**(CHK.106) CLOSED — one part fixed, three verified.** The item is a FORM bundle and its four parts
-were measured one by one against both references.
-
-**(b) FIXED, and it had MOVED since the item was written.** The item records the residue as
-`BP | undefined` vs `BP`; (CHK.101) closed the `| undefined` half, and what is left is
-`BP & BP` vs `BP` — an idempotent intersection. `getIntersectionType` flattened, dropped `unknown`
-and reduced primitives but never DEDUPED, where tsc's `addTypeToIntersection` keys its set by type
-ID. So a generic type guard `isBP<T>(x: T): x is T & BP` applied to a value that already satisfies
-it printed the constituent twice.
-
-**THE DEDUPE NEEDED AN EXEMPTION, AND THE EXEMPTION IS AN INTERNING DIVERGENCE RATHER THAN A RULE.**
-An unrestricted id-dedupe was built and measured: it also collapses
-`{ p: number } & { p: number }` — which BOTH references print in full — because two separate
-type-literal NODES are two types in tsc and ONE interned type here on the PROJECT path. An anonymous
-object constituent is therefore exempt. That leaves `T1 & T1` (an alias to an anonymous body) at
-today's `T1 & T1` where both references print `T1`, and the residue is recorded rather than bought:
-the only rule separating it from the anonymous pair reads `aliasDisplayMap`, which is populated
-FIRST-WINS during the walk and would make the dedupe a function of resolution ORDER (round 776).
-
-**(a) IS BROADER THAN THE ITEM RECORDED and stays refused.** It names the loss through a CARRIER
-instantiation (`Carrier<number>.o` reads `{ v: number; }` for `Obj<number>`); measured, a **DIRECT**
-`Fn<number>` annotation loses the name too (`(x: number) => number`), while a direct `Obj<number>`
-keeps it — so the residue is not only about carriers. It remains (INC.27)/(INC.29)'s interning-key
-question and is deliberately not attempted in `aliasDisplayMap`.
-
-**(c) is CLOSED by (CHK.100)** — a namespace-qualified enum reads `NS.E` on all three compilers —
-and **(d) is a REFERENCE DIVERGENCE**: for a const-asserted tuple spread pristine prints `(2 | 1)[]`
-and tsgo `(1 | 2)[]`, and ours follows tsgo. Both verified here.
-
-**Ablation: 3 arms; 2 discriminate and ONE IS RECORDED BLIND.** g1 dropping the dedupe (**2 RED**);
-g3 exempting EVERY `Type.Object` rather than only an anonymous one (**2 RED**, same set — a
-round-927 pair with g1 in effect, since a named constituent is the only thing the dedupe ever
-collapses in these pins); **g2, the unrestricted dedupe, reads 0 RED and is recorded as BLIND, not
-as a redundant guard**: under `diagnose()` the two anonymous literals get DISTINCT ids, so the
-exemption is unobservable there. Its evidence is the PROJECT path — on `build/bench/chk106/r4` the
-unrestricted build prints `Type '{ p: number; }'` and the guarded one prints
-`Type '{ p: number; } & { p: number; }'` — and a pin that could see it belongs in the `-project`
-module. Said in the pin's own KDoc rather than left to a reader.
-
-### Round (P18.41) — a conditional of array literals under an array pattern types each branch at its own flow position ((CHK.107)), and the grid the item called the gate is a CONTROL (2026-09-07)
-
-**Suite 18,172 → 18,179 / 0 / 3** — 7 pins in the new `ConditionalArrayPatternTest`, plus the
-(CHK.96) stage-2 REFUSAL pin in `BindingElementStage2Test` INVERTED to the reference answer. Grid
-**8 × added=0 removed=0** on the final binary; `cost_gate.py` exit 0 (largest delta
-`narrow.memoServed` **+0.02%**, no rebaseline), `huge_methods.py --fail-over 0` exit 0, build
-warning-clean.
-
-**(CHK.107) CLOSED.** `const [s, e] = typeof por === "number" ? [por, undefined] : [por.pos, por.end]`
-read both leaves as `any`; ours goes **1 → 6 of the reference's 6 rows** on the item's fixture,
-including the `number | undefined` display. tsc pushes the pattern's implied contextual type into
-BOTH branches of the conditional, so the source is `[number, undefined] | [number, number]` and
-`bindingElementType`'s union arm gives `number` / `number | undefined`. The reconstruction is a
-UNION of the branch tuples with **each element read AT ITS OWN FLOW POSITION** — the one thing
-(CHK.96) stage 2 could not do, since `getTypeOfExpression` never flow-narrows and an un-narrowed
-branch tuple reads slot 0 as `number | { pos: number; end: number; }`. `narrowElements` is a
-parameter of `arrayLiteralAsDestructuringTuple` rather than a change to it, so the plain
-array-literal path is untouched and the arm that proves it is f2.
-
-**THE ITEM'S GATE CLAIM IS WRONG, AND SAYING SO IS THE POINT.** It states "the GRID IS THE GATE and
-it is a `removed=1` there". Measured, the grid is `added=0 removed=0` on all eight profiles: the
-refusal made both leaves `any`, which is SILENT, and `services.ts:3264`'s two leaves feed a
-`RefactorContext` whose members are exactly `number` and `number | undefined`, so there is no
-wrong-typed USE for either arm to report. The grid is a CONTROL; the grade is the fixture, whose
-shape is `getRefactorContext` verbatim and whose every expectation was read from pristine
-`typescript@6.0.3`. This is CLAUDE.md's (CHK.30) law on a fourth instrument — a typing fix whose
-only evidence is a silence has probably typed nothing.
-
-**Ablation: 3 arms, all discriminating, and one had to be REDESIGNED because it was equivalent to
-another.** f1 restoring the refusal (**5 RED**); f2 dropping the flow narrowing (**3 RED** — the two
-`typeof`-guard pins and the inverted stage-2 pin, exactly the shapes where a narrow is what
-separates `number` from `number | Range`); f3 the nested-conditional recursion (**1 RED**). f3's
-first formulation — deleting the `ConditionalExpression` arm — read the SAME 5 RED as f1, because
-refusing every conditional is refusing the mechanism; it was re-cut as a depth bound so it names the
-nested case alone. Recorded rather than counted as two arms.
-
-### Round (P18.40) — TS2454 for an `if` JOIN, and the TS2448 co-emit's rule was the TYPE and not CONST-NESS ((CHK.105)) (2026-09-07)
-
-**Suite 18,157 → 18,172 / 0 / 3** — 13 pins in the new `DefiniteAssignmentJoinTest` plus 2 added
-to `Inv4SpineBatch27Test`; TWO EXISTING PINS WERE REPAIRED because they encoded a measurably wrong
-rule. Grid **8 × added=0 removed=0** on the FINAL binary; `cost_gate.py` exit 0 (largest delta
-`narrow.memoServed` **+0.02%**, `typeOfExpr.calls` **+0.00%**, no rebaseline), `huge_methods.py
---fail-over 0` exit 0, build warning-clean.
-
-**(a) B78.1's co-emit rule was CONST-NESS and is really the TYPE.** It was read off
-`typeGuardNarrowsIndexedAccessOfKnownProperty10` and recorded as "a reachable `const x = init`
-used out of order fires TS2448 only". That baseline's const is `const id = foo.bar` with
-`Foo.bar: any`, and what suppresses tsc's TS2454 there is tsc's `assumeInitialized` on
-`AnyOrUnknown | Void`. With an ordinary type BOTH references report TS2448 **and** TS2454 at the
-same position — so **two hand-written pins in this repo were pinning the wrong answer** and are
-repaired here (`Inv4SpineBatch27Test`'s `reachable const … fires TS2448 only` and
-`BodyLocalLiteralArgumentTest`'s `[2345, 2448]`), with the `any` control kept beside them.
-The initializer is typed only on this path — a name used before its own declaration, a handful per
-program — which is why the B420 first-touch hazard does not bite (`typeOfExpr.calls` +0.00%).
-
-**The OTHER half of `assumeInitialized` this population reaches, found by the corpus:** a CLASS
-STATIC INITIALIZER is a different control-flow container from the module-level declaration (tsc's
-`isOuterVariable`), and there both references report TS2448 ALONE —
-`classStaticInitializersUsePropertiesBeforeDeclaration` went red until the guard was added. The
-walker already carried the `inStaticInit` flag it needed.
-
-**(b) the `if` join, and the lattice was already written.** `markAssignments` scanned both branches
-of an `if` unconditionally, so `let b: string; if (cond) b = "a"; use(b)` removed `b` from the
-uninitialized set — the item's "a set, not a flow lattice". The lattice it needs is round 450's
-`daWalkStmt`, built for `while (true)` and already modelling sequential flow, the if/else join and
-abrupt completion; it is now consulted per variable and is **CONSERVATIVE TO REMOVE** — every shape
-the walk bails on keeps the previous removal, so only what the walk can PROVE changes.
-
-**THE GRID FOUND THE ONE GUARD THE NAIVE FORM NEEDS, AND IT IS A tsc BINDER RULE:** the flow is
-UNREACHABLE after a call to a never-returning function, so
-`if (a) { x = 1 } else { Debug.fail("…") }` leaves `x` definitely assigned. Deciding that needs the
-callee's RETURN TYPE, which this walker must not resolve, so an unassigned CALL statement bails —
-without it, two ours-only TS2454 on three profiles at
-`services/codefixes/fixPropertyOverrideAccessor.ts:83`. The bail is a `DaState` FLAG rather than a
-change to `daWalkStmt`, because in round 450's caller a bail means "do NOT remove" and would
-therefore ADD diagnostics — the opposite direction.
-
-**A THIRD DELIVERABLE WAS BUILT AND REVERTED, AND THAT IS THE ROUND'S OTHER RECEIPT.** A `switch`
-with no `default` has a path running no clause, so requiring a default before removing closes
-`let t: string; switch (k) { case 1: t = "a"; break; } use(t)`, which both references report. It
-costs **two ours-only TS2454 on ALL EIGHT profiles**, at `checker.ts:38141`'s
-`getAssertionTypeAndExpression`, whose switch over `node.kind` has no default and IS EXHAUSTIVE:
-tsc's `isExhaustiveSwitchStatement` proves every path assigns and this checker cannot. Reverted,
-with the measurement recorded in the source at the site.
-
-**Three of the item's claims are wrong.** Its "3 lost TS2345" rows are NOT this item's: measured,
-the TYPE of `let m: string | undefined;` is already exactly right at the DECLARATION position
-(`string | undefined` / `undefined`, matching both references row for row) and what is silent is
-the ARGUMENT reader for a BODY-LOCAL source — the recorded (CHK.63)-adjacent gap, since the same
-value at FILE level reports. Its population is 4 TS2454 rows, not 4+3. And "the set pass has no
-join" names `collectUninitializedVars`, which is not where the join is lost: `markAssignments` is.
-
-**Ablation: 5 arms, one mistake each, ALL discriminating.** e1 the co-emit predicate (**1 RED**);
-e2 the static-initializer guard (**1 RED**); e3 the `assumeInitialized` type test (**2 RED**, both
-`any` controls); e4 the `if` join (**1 RED**); e5 the unassigned-call bail (**1 RED**). Source
-restored from a snapshot throughout, `cmp`-verified after every arm, final binary rebuilt before
-every gate (`fca2302e`).
-
-**Residues, recorded and NOT pinned**: a `try { x = … } catch {}` join and a read inside an
-EXPRESSION-bodied arrow (the BLOCK-bodied form already reports, so the gap is that a `spineDa`
-frame is built for statement lists only), plus the reverted `switch` case above. Queued as
-(CHK.110).
-
-### Round (P18.39) — calling a LITERAL-typed or OBJECT-typed value is TS2349 ((CHK.104)), and the object arm needed TWO guards the item did not name (2026-09-07)
-
-**Suite 18,136 → 18,157 / 0 / 3** — 21 pins in the new `NonCallableValueTest`, every expectation
-read from pristine `typescript@6.0.3`. Grid **8 × added=0 removed=0** on the FINAL binary;
-`cost_gate.py` exit 0 (largest delta `mapped.hits` **+0.03%**, no rebaseline), `huge_methods.py
---fail-over 0` exit 0, build warning-clean (`--rerun-tasks`, 0 `w:`).
-
-**(CHK.104) CLOSED, 7 → 19 of the reference's 22 rows on its own fixture.** The primitive arm read
-`calleeType is Type.Intrinsic`, which is exactly the WIDENED half of the population: `let s = "a"`
-(type `string`) reported and `const s = "a"` (type `"a"`) did not — nor did a number or bigint
-literal, a `"a"`-annotated const or parameter, a template literal, an `as const`, an enum MEMBER, a
-body-local or a `never`. The object arm fired only for a syntactic `new X()` callee, so a class
-instance, an interface-typed value, an array and an object literal's type were all silent. A
-literal's callability is decided by the same wrapper interface its base primitive's is, so the
-primitive half is a WIDER GATE and no new decision; the object half is (CHK.45)'s rule — POSITIVE
-evidence that the member table is complete (an array reference, a class or interface declared in a
-PROGRAM file with no `extends`, or an anonymous object with a non-empty table and no signatures).
-
-**THE ITEM UNDER-COUNTED ITS OWN POPULATION AND MISSED BOTH GUARDS THE OBJECT ARM NEEDS.** It says
-12 lost rows; measured, 15. And two shapes it did not mention each cost a corpus baseline:
-- **A DUPLICATE IDENTIFIER makes the callee's TYPE not the whole story.** The binder's `canMerge`
-  refuses Variable+Function, so `globals[name]` keeps ONE of them and this reader was handed the
-  VARIABLE's type while the call itself is checked against the FUNCTION's signature —
-  `errorElaboration` (a `declare function foo(x)` beside a `const foo = { bar: 'a' }`) grew an
-  ours-only TS2349 where tsc reports only the argument error. The guard is the same program scan
-  the TS2348 arm above already runs, widened to classes.
-- **`tryEmitUncallableTypeArgs` OWNS THE SAME ROW** for a class-instance callee carrying explicit
-  type arguments, and it runs AFTER the spine — `untypedFunctionCallsWithTypeParameters1` printed
-  the row TWICE. `--passTiming`'s emissions-by-pass census named both emitters in one run
-  (`checkCallTypeArgCount` 7, `checkSpine` 2), and the dedupe went into the pass that runs SECOND,
-  which is (CHK.46)'s rule and the idiom `strictModeReservedWord`'s walker already carries.
-
-**A PRE-EXISTING FORM DIVERGENCE CLOSED ON THE WAY PAST**: `getApparentType` covers
-String/Number/Boolean and NOT `bigint` or `symbol`, so a `symbol` callee printed `Type 'symbol'`
-where both references print `Type 'Symbol'`. `noCallSignatureDisplay` goes through
-`primitiveApparentWrapper` instead — the helper whose own KDoc records why widening
-`getApparentType` is a change to member lookup, narrowing and display at once. An enum MEMBER has
-no wrapper and is named by its VALUE's flavour (`Number` / `String`), which is what tsc prints.
-
-**Two decisions the item left open, both measured.** An `implements` clause adds NOTHING to an
-instance type where an `extends` clause can bring a member this checker did not build, so the
-heritage refusal is keyed on `SyntaxKind.ExtendsKeyword` alone — that is the only reason
-`class Impl implements I` and a plain `interface I` report. And `never` was excluded by the arm's
-own inherited guard while BOTH references report `nv()`; admitting it is one row and the grid is
-what licensed it (a false `never` from over-narrowing would have shown there).
-
-**Ablation: 7 arms, one mistake each, ALL discriminating.** c1 the widened primitive gate
-(**11 RED**); c2 the display helper (**4 RED** — bigint, symbol and both enum flavours); c3 the
-object arm (**5 RED**); c4 the `extends`-only heritage refinement (**1 RED**); c5 the
-duplicate-identifier guard (**1 RED**); c6 the second-pass dedupe (**1 RED**); c7 the `never`
-admission (**1 RED**). **c8 — the lib-declaration refusal — was NOT ablated and is recorded as
-such**: its instrument is a real-library baseline this round did not re-take, and (CHK.45) already
-measured it as two false positives on knip. Source restored from a snapshot throughout (never
-`git checkout` — the round is uncommitted), `cmp`-verified after every arm, and the final binary
-rebuilt before every gate.
-
-**Residues, recorded and NOT pinned.**
-- **An EMPTY anonymous object** (`const o = {}; o()`) — `{}` from a literal and `{}` from an
-  unfinished resolution are the SAME type here, and no predicate over the type separates them.
-  Blocked on the B153 class, not on this item.
-- **An INLINE literal callee** (`({})()`, `[1]()`, `({ a: 1 })()`) — measured, the CALLEE typing
-  path answers `any` for it (the same literal types correctly at a declaration and through a
-  variable, and `const w = ({ a: 1 }); w()` reports), so `ccetNoCallSignatureDiagnostics` returns
-  at its `calleeType === anyType` bail before any arm. Queued as (CHK.109).
-- **A class with an `extends` clause and a LIB type** (`Date`) — both reported by both references,
-  both deliberate refusals with the reasons above.
-
-### Round (P18.38) — an array-like ARGUMENT is decidable against an array-like PARAMETER ((CHK.103) stage 2), and FIVE of the item's six rows carry no spread at all (2026-09-07)
-
-**Suite 18,110 → 18,136 / 0 / 3** — 26 pins in the new `ArrayLikeArgumentAssignabilityTest`,
-every expectation read from pristine `typescript@6.0.3`. Grid **8 × added=0 removed=0** on the
-FINAL binary; `cost_gate.py` exit 0 (largest delta `mapped.hits` **+0.03%**, no rebaseline),
-`huge_methods.py --fail-over 0` exit 0, build warning-clean (`--rerun-tasks`, 0 `w:`).
-
-**(CHK.103) stage 2 CLOSED, and the item's mechanism is wrong on its main claim.** The item
-described its residue as a spread question and named "a whole-literal array-to-array fallback at
-the argument reader" as the seam. Measured, **five of its six rows carry no spread**:
-`takeStrArr(nums)` with `nums: number[]` against `(x: string[])` is silent here and reported by
-BOTH references, and so are `Bar[]` → `Foo[]`, `C2[]` → `C1[]`, `number[][]` → `string[][]`,
-`[number, string]` → `string[]` and `[string, number]` → `[number, string]`. The gap is the
-ARGUMENT reader's FP firewall (`caasNonSimpleParamChecks`): a non-primitive parameter needs some
-`allow*` gate to claim it and **no gate claimed an array**. The item's named seam covers ONE row
-of six. Found by running the residue's own shapes with the spread REMOVED — two 20-second probes.
-
-**What landed, three parts.**
-- **(A) `allowArrayLikeVsArrayLike`** at the argument reader. The LICENCE is the DECLARATION
-  position, exactly as (CHK.83)'s was: the identical pairs go through `canUseTypeEngine`'s
-  Object-vs-Object branch there and match both references row for row — message AND elaboration
-  chain — including all six pairs that must stay SILENT (`Wide[]` → `Foo[]`, `string[]` →
-  `readonly string[]`, `number[]` → `any[]`, `any[]` → `string[]`, `number[]` → `unknown[]`, a
-  generic `T[]` parameter). So the decidability question is asked ONE LEVEL DOWN, of the ELEMENT
-  pair, by `canUseTypeEngine` ITSELF rather than by a parallel classifier — the rule cannot drift
-  from the position that licenses it, and `any`/`error` elements are refused at the top of that
-  predicate with no rule of their own. A tuple is normalized to its `tupleArrayBase` element union
-  first (tsc's `getTupleBaseType`). Three guards, each measured by its own arm: the REST position
-  (whose `paramType` is the ARRAY while the argument is one ELEMENT — without it we emit the
-  wrong-TARGET row), the ARITY gate (tsc reports TS2554 and nothing per argument), and a FREE type
-  parameter on either side.
-- **(B) the whole-literal row at the two var-decl readers.** tsc's `elaborateArrayLiteral` reports
-  a literal ELEMENT-WISE while its tupleized form is a TUPLE and reports ONE whole-literal row
-  otherwise; the two are EXCLUSIVE, which is why `arrayLiteralIsTupleLike` is ONE predicate used
-  by stage 1 (which elements to elaborate) and by stage 2 (whether the whole row may fire).
-- **(C) `narrowByAssertCall` learns `asserts x is readonly U[]` / `U[]`** — see the grid finding.
-
-**On the item's fixture ours goes 6 → 12 of the reference's 12 rows, all twelve byte-identical to
-pristine** — including the `readonly [number, string]` row where **tsgo 7.0.2 diverges** (TS4104)
-and pristine outranks it per CLAUDE.md.
-
-**THE GRID FOUND EXACTLY ONE OURS-ONLY ROW, ON ALL EIGHT PROFILES, AND IT WAS A NARROWING GAP.**
-`transformers/destructuring.ts:602`: `Debug.assertEachNode(elements, isArrayBindingElement)`
-narrows `elements` by an `asserts nodes is readonly U[]` signature and the next line's
-`factory.createArrayBindingPattern(elements)` takes the narrowed type. `narrowByAssertCall`'s
-type-parameter recovery understood only a BARE `U` target, and **an array OF a type parameter
-RESOLVES** (to `ReadonlyArray<U>` with `U` a `Type.TypeParam`), so it is neither `errorType` nor
-`anyType` and the recovery's own gate never opened for it — the first attempt put the wrapper
-detection INSIDE that gate and was inert. It is detected syntactically now, U is inferred from the
-sibling type-guard argument exactly as the bare form does, and the answer is re-wrapped; the
-argument gate consults the flow through a SUPPRESSION-ONLY second chance taken on the REJECTING
-path only (round 764's (REL.2)(C) rule — `narrow.walks` moves by **1** on the compiler profile).
-**The a1 grid — one added row on eight profiles — is this round's own positive control that the
-grid harness is live and attributable** (round 853's frozen-instrument law).
-
-**TWO TRAPS, BOTH FOUND WITH A PROBE RATHER THAN BY READING.**
-- **`ternaryOfArrayLiterals` SUBSUMES an `init !is ArrayLiteralExpression` test**, because a bare
-  array literal is its own base case. The B87.6b array-to-tuple emitter is gated
-  `init !is ArrayLiteralExpression && !ternaryOfArrayLiterals(init)`, so relaxing the `!is` alone
-  did nothing and `const t: [number, number] = [...nums]` stayed silent through a whole build
-  cycle. Three readings did not see it; one temporary diagnostic printing the gate's operands did,
-  in one run (`ternary=true` for a plain literal). The predicate now takes `tupleLikeOnly`.
-- **AN EMPTY ARRAY LITERAL IS TUPLE-LIKE** — tsc's tupleized `[]` is the EMPTY TUPLE — and
-  `elements.any { … }` answers false for it, which made `const t: [a?: number, b?: string] = []` a
-  false TS2322 (its source is `any[]` by B87.6, which does not relate to the tuple). Caught by the
-  full suite (`OptionalTupleAssignabilityTest`) and by NOTHING else: it is invisible to the grid,
-  to `cost_gate.py` and to the item's own fixtures. The predicate now answers true for an empty
-  literal explicitly.
-
-**Ablation: 9 arms, one mistake each; 8 discriminate.** a1 the gate (**8 RED**, every positive
-rule-A pin); a2 the tuple-like-literal guard at the argument reader (**2 RED**); a3 the
-suppression-only second chance and a4 the assert-array recovery (**2 RED each, IDENTICAL red
-sets — a round-927 PAIR**: either layer alone restores the profile FP, and no pin can separate
-"the narrowing does not exist" from "the gate does not consult it", so they are recorded as ONE
-observable); a5 the `tupleLikeOnly` change (**1 RED**); a6 the array-target suppression guard
-(**1 RED**); a7 reading a tuple's FIRST SLOT instead of its base union (**0 RED — recorded as
-NON-DISCRIMINATED, not claimed**: the element choice affects only DECIDABILITY, never a verdict,
-and on every shape reachable from these pins both choices decide the same way; the base union is
-kept because it is tsc's own `getTupleBaseType` and because the first slot ignores slots 2..n);
-a8 the rest guard (**1 RED**); a9 the arity guard (**1 RED**). Source restored from a snapshot
-throughout (never `git checkout` — the round is uncommitted), `cmp`-verified after every arm, and
-the final binary rebuilt and md5-matched against the one every gate ran on
-(`15ab6ce2`).
-
-**Gates.** Suite by module: core 860 classes / **16,630** / 0 / 3, project 865/0, externals 290/0,
-kir 159/0, lsp 58/0, daemon 66/0, api 30/0, client 20/0, cli 18/0 — **18,136 / 0 / 3**. Grid
-8 × `added=0 removed=0` against a before-capture taken on the committed HEAD binary. `cost_gate.py`
-exit 0 with `output.errors` 46 unchanged and `spine.nodes` +0.00%.
-
-**Residues, recorded and NOT pinned** (a known-open gap is a countdown, not a control).
-- **A PLAIN array literal with the wrong element COUNT against a tuple target** —
-  `const t: [number, number] = [1]` and `= [1, 2, 3]` and `= []` — is silent here and reported by
-  both references, which force-tuple the literal and print `[number]` /
-  `[number, number, number]` / `[]` as the source. A different mechanism (a contextual tuple type
-  for a literal), pre-dating both stages. Queued as (CHK.108).
-- **A rest parameter whose ELEMENT is itself an array** (`restArr(nums)` against
-  `...xs: string[][]`) is reported by both references against the ELEMENT (`string[]`);
-  `checkRestArgsAgainstArrayElementType` owns that verdict here and does not cover an array
-  element, so the row is a stated false negative. What the round's guard pins is that we do not
-  emit the WRONG-target row.
-- **A tuple source whose element UNION is object-carrying** (`[Foo, Bar]` → `Foo[]`) is refused by
-  `canUseTypeEngine` (a union source against an object target) and stays silent where both
-  references report. The conservative direction, and the same gap (CHK.101) records.
-- **FORM, MEASURED IDENTICAL ON THE PARENT so not this round's**: a union ELEMENT renders
-  parenthesized (`(ABC)[]` for pristine's `ABC[]`), and the per-element elaboration CHAIN under an
-  array-to-array row is absent for a union element.
-
-### Round (P18.37) — an array literal with a spread gets a real type ((CHK.103) stage 1), and the ROUND-471 ARM IT WOKE was the regression (2026-09-07, recovered round)
-
-**Suite 18,098 → 18,110 / 0 / 3** — 12 pins in the new `ArrayLiteralSpreadElementTest`, every
-expectation read from pristine `typescript@6.0.3` and matching it byte for byte. Grid
-**8 × added=0 removed=0**. `cost_gate.py` exit 0 (largest delta `typeOfExpr.calls` **+0.07%** =
-445 spread expressions that used to be skipped by a `return anyType`; rebaselined in this commit),
-`huge_methods.py --fail-over 0` exit 0.
-
-**THIS ROUND WAS RECOVERED, AND THE RECOVERY IS THE FINDING.** The previous session was killed by
-a system restart at 01:59 with the implementation in the tree, uncommitted, no pins, no note. Its
-`Checker.class` was NEWER than its source and its own `build/bench/chk103-a/grid-after` was
-complete-looking — so the round read as finished. It was not: the surviving capture was taken at
-01:53-01:57 from the build BEFORE the session's last fix (01:58), and re-running the grid on the
-final binary produced a capture **byte-identical to it**. That last fix was INERT, and the round as
-left would have shipped **a false TS2322 on 3 of the 8 profiles**.
-
-**The defect, and why the fix that was in the tree could not close it.** `getTypeOfArrayLiteral`
-and `constContextTupleOfArrayLiteral` both opened `if (el is SpreadElement) return anyType`, so
-every array literal carrying a spread was `any`. Removing that made round 471's literal-preserving
-arm (`literalTypeOfExpression`'s `ArrayLiteralExpression` case) reachable for a shape it had never
-seen — and **that arm bails on any spread of its own**
-(`expr.elements.any { it is SpreadElement } -> null`). Round 471 built it for tsc's OWN
-`invalidOperationsInPartialSemanticMode` (`services.ts:~1560`, no spread); its sibling
-`invalidOperationsInSyntacticMode` (`:1607`) is the SAME shape WITH a spread, so the literal fell
-through to `getTypeOfArrayLiteral`, whose elements widen to their base primitive — a bare `string`
-unioned into `readonly (keyof LanguageService)[]`. The dead session had diagnosed the site
-correctly and patched the WRONG layer: it added a literal-keep arm to `getTypeOfArrayLiteral`,
-which is served only when `contextualType` is installed and is not the layer the var-decl reader
-uses. The landed fix is one line of gate plus the spread contribution **in round 471's arm**.
-
-**Measured, not read.** Four probes settled it in ~20 s each where three readings had not: a
-no-spread literal keeps (`"beta"[]`), a spread+literal widens (`(string | "alpha" | …)[]`), a
-spread-only literal is correct (`("alpha" | "beta" | "gamma")[]`), and a literal beside a
-NON-literal element that round 471 cannot mint keeps (`("alpha" | "beta")[]`) — the last one is
-what proved the `getTypeOfArrayLiteral` arm was not the layer being exercised.
-
-**What landed.** A spread contributes its ITERATED element type (`arrayLiteralSpreadElementType`:
-array-like → its element type, tuple → its element UNION via `tupleArrayBase`, `string` → `string`,
-else `iterationYieldTypeOf`; REFUSED for a union, intersection, type parameter, `any`/`unknown`/
-`error` — each a stated false negative, never a guess), a const context inlines a fixed tuple's
-slots (`constContextSpreadSlots`), and the elaborator reports a spread element at its own node.
-On the item's own population fixture ours goes **1 → 6 rows of the reference's 12**, all six
-matching pristine exactly — including `readonly [number, string]`, where **tsgo 7.0.2 diverges**
-(TS4104) and pristine outranks it per CLAUDE.md.
-
-**Residue, re-queued as (CHK.103) stage 2 and deliberately NOT pinned** (CLAUDE.md: a known-open
-gap is a countdown, not a control): a literal whose only elements are spreads of NON-tuple
-array-likes is not tuple-like in tsc, which reports one whole-literal row; we have no
-whole-literal array-to-array fallback at that reader and stay silent rather than emitting at the
-wrong node — 6 rows. Separately recorded as FORM and **measured identical on the parent binary**,
-i.e. NOT this item's: an element union renders a member twice
-(`("alpha" | "beta" | "beta")[]`) because `literalTypeOfExpression` mints a fresh
-`Type.StringLiteral` per node and INV.5(a) interns unions by member id.
-
-### Round (P18.36) — a generic interface's fn-typed member stops being frozen at first touch ((CHK.102)), and the freezer is INV.5(c)'s cache, not the seam the item named (2026-09-07)
-
-**Suite 18,076 → 18,098 / 0 / 3** — 22 pins in the new `GenericFnMemberInstantiationOrderTest`, every
-claim asserted in BOTH declaration orders; no baseline moved. Same orchestration: an implementation
-subagent owned Gradle; the full suite, `cost_gate.py`, `huge_methods.py` and an independent
-8-profile grid ran here.
-
-**(CHK.102) LANDED.** `substituteOuterTypeArgsInGenericFnObject` and
-`substituteOuterTypeArgsInSignature` are now NON-MUTATING, and their two call sites in
-`resolveGenericPropertyTypeWorker` consume the returned object — round 465's own discipline
-(`instantiateTypeFnAware` "mints FRESH objects, never mutates") applied to the one member of the
-family that had kept the in-place form; tsc mints an instantiated member type per instantiation
-(`instantiateAnonymousType`) and never writes it back onto the declared type. **Two halves, both
-needed**: the fn-shaped `Type.Object` is MINTED rather than having its `callSignatures` overwritten,
-and a signature's own `Type.TypeParam`s are CLONED when the outer mapper moves a constraint or
-default, with the clone map composed under the mapper so the signature's parameters and return
-follow the clone. Verified here directly: `Box<number>` and `Box<string>` in one file now give
-exactly the one row both references give, at the same column.
-
-**THE ITEM'S MECHANISM IS WRONG IN FOUR PLACES — the ninth round running, and this one was found
-with a probe rather than by reading.** A probe printing the resolved object's identity at both
-instantiations reads `rawId=35` at BOTH, already substituted at the second.
-- **The freezer is INV.5(c)'s context-keyed cache** (`getTypeFromTypeNodeBypassed` →
-  `state.mappedNodeTypes`, keyed on node identity plus an ns/tp-scope/alias fingerprint), NOT
-  `resolveReferenceMembers`' symbol sharing — **the item's named seam was not touched at all.** Two
-  instantiations of one interface produce an IDENTICAL fingerprint because the target's own
-  `Type.TypeParam` is in scope both times. **17.39's stated precondition — "rawType is always
-  freshly allocated" — was true when written and has been false since INV.5(c) added a second cache
-  below the bypass.**
-- **There is no `PropertySignature` node kind in this parser.** `parseTypeMember` builds a
-  `PropertyDeclaration` for an interface's `f: (x: T) => T`, and the arm exists and is reached — so
-  the item's "no `PropertySignature` arm, so `propertyTypeOnCarrier` falls to the shared symbol" is
-  wrong on both halves.
-- **The grid is a control, but NOT for the item's reason.** It says exposure "needs two
-  instantiations with differing args reaching one member in one compile" and that the profiles show
-  none. Censused: the compiler profile makes **6,425 calls of which 6,383 now MINT**, over 59
-  distinct annotation nodes of which **46 are asked with ≥2 DISTINCT type-argument vectors in one
-  compile** (services 46, harness 49; the most-exposed node is asked with **30**, and it is
-  `lib.es5.d.ts`'s `Array<T>` members). The exposure condition is met CONSTANTLY on tsc's own
-  sources — the grid is a control because those frozen types never decide a diagnostic there, not
-  because they are not reached.
-- **Two freezes the item does not name.** The helper's SECOND call site — the `MethodDeclaration`
-  arm (B81.1d) — freezes a method's **fn-typed PARAMETER**, giving two false TS2322 inside a
-  callback passed to the second instantiation plus one invented and one lost row; the item's
-  "methods are correct" holds for `m(x: T): T` and not for this. And
-  `substituteOuterTypeArgsInSignature`'s in-place `tp.constraint` write freezes an **inner generic
-  signature's constraint** (`<U extends T>(x: U) => U`), which SURVIVES a fix to the object half —
-  arm a2 is what proves it.
-
-**BOTH-ORDERS PINS CLEAR THE ITEM'S OWN TRAP.** On the parent, the mirror-image fixtures fail in
-BOTH orders — `bs.f("a")` is a false TS2345 `string → number` when `Box<number>` is declared first
-and `bn.f(1)` is the mirror when `Box<string>` is — with a lost row in each and a mis-anchored
-return read. Both references agree on every row of every fixture (they never disagreed, so nothing
-hinged on the pristine tiebreak), and after the fix all four fixtures are row-for-row AND
-column-for-column identical to them.
-
-**GATES.** Suite **18,098 / 0 / 3**, corpus **8,837 / 0** (25 classes, all present in the XMLs),
-at-risk hand-written set grepped from test SOURCES with coverage asserted from the XMLs —
-**151/151 classes, 1,711 tests, 0 failed**; `-project` 865/0 and `-externals` 290/0; 0 build
-warnings. `cost_gate.py` **exit 0** — and the notable reading is that minting ~6,400 fresh
-`Type.Object`s per compile that the parent did not moves **no counter at all** (`typeNode.*`
-+0.00-0.01%), which is CLAUDE.md's own "an allocation count is not a cost" on a fourth instrument.
-`huge_methods.py --fail-over 0` **exit 0**. **Grid 8 × `added=0 removed=0`**
-(`scripts/chk102-grid.sh`, BEFORE arm = the committed `ba9a6c130` binary, sha-guarded). No double
-emission — the change adds no `diagnostics.add`, and `--passTiming` reads one pass with the
-reference row count. **No ambient read was added to `TypeInstantiator`**: its `checker.*` call
-census is byte-identical before and after, so `docs/inversion-ambient-ledger.md` row 3 stands at
-four.
-
-**ARMS — 5. a1** the object half writing back in place (the pre-fix state) **16 RED — every family,
-in both orders**; **a2** the TP half reassigning `constraint`/`default` in place 2 (inner-generic,
-both orders); **a3** TP clones minted but not threaded into the signature's shape 2, an **IDENTICAL
-red set and identical failure text to a2**, so **a2/a3 are a round-927 PAIR recorded as one
-observable** — cloning without threading is as useless as not cloning, and neither is redundant;
-**a4** call site 1 discarding the minted object 12, including round 465's own pin; **a5** call site
-2 (the method fn parameter) **1 — and that one is the NEGATIVE control**. **a5 exposes TWO BLIND
-PINS**, recorded rather than claimed: the positive "a method's fn-typed parameter is not frozen"
-pins stay GREEN under a5 because discarding the mint yields the raw un-substituted `T` — one
-absence replaced by another. They do discriminate a1, so they stay, but site 2 is gated by its
-negative control alone.
-
-**LEFT OVER — two pre-existing, both reproducing on the parent and neither this item's**: a
-`((x: T) => T) | undefined` member read at a PRIMITIVE target is silent where both references report
-(a fn-typed union constituent at a primitive target — the `canUseTypeEngine` family, and the sibling
-of (P18.35)'s finding); and a generic-reference relation failure carries no elaboration chain where
-both references give four sub-lines (FORM per `docs/logical-parity.md`).
-
-### Round (P18.35) — three shipped narrowing defects close, and (CHK.101)'s own deliverable is BUILT, MEASURED CORRECT and REFUSED on grid evidence (2026-09-07)
-
-**Suite 18,043 → 18,076 / 0 / 3** — 33 pins in the new `NullishUnionAssignabilityTest`; no baseline
-moved and no `LogicalParityDivergence` is needed. Same orchestration: an implementation subagent
-owned Gradle; the full suite, `cost_gate.py`, `huge_methods.py` and an independent 8-profile grid
-ran here.
-
-**THE ITEM'S DELIVERABLE (a) IS REFUSED — and that is the round's most valuable output.** The
-nullish-constituent emission was BUILT, measured **correct on 20 of 20 reference rows**, and then
-**removed entirely** because the grid reads **+19 to +21 ours-only rows on EVERY profile** for its
-reader half and **+4 to +7** for its argument half. Correct on every fixture and unlandable on real
-code is exactly the shape the 8-profile grid exists to catch, and the refusal is verified by VALUE
-rather than by absence: the item's own fixture reads parent = 2 rows, final = 2 rows, identical.
-The queue item is updated with the four gaps that must close first.
-
-**WHAT DID LAND — three flow-narrowing fixes, each mirroring a named tsc rule, and TWO OF THEM WERE
-SHIPPED OURS-ONLY FALSE POSITIVES.** Verified here against tsgo 7.0.2 and pristine 6.0.3 directly:
-all three shapes are silent on both references and are now silent on ours.
-- **A1** `narrowByLooseNullishEquality` — a loose `==` / `!=` against `null` or `undefined` tests
-  BOTH nullish values (tsc's `TypeFacts.EQUndefinedOrNull` / `NEUndefinedOrNull` in
-  `narrowTypeByEquality`). `f(x: string | undefined) { if (x != null) takeS(x) }` was an ours-only
-  TS2345.
-- **A2** `defaultStrippedParamType` — a DEFAULTED parameter does not see `undefined` inside the body
-  (tsc's `getTypeForVariableLikeDeclaration` → `getNonUndefinedType`; `undefined` only, never
-  `null`, and the initializer's own type is consulted). `f(x: string | undefined = "a") { takeS(x) }`
-  was an ours-only TS2345.
-- **A3** `combineBinaryTypes`' logical-assignment arm — the expression VALUE is the surviving LHS ∪
-  RHS (`x ??= v` is `NonNullable<x> | v`, `x ||= v` is `truthy(x) | v`, `x &&= v` is `falsy(x) | v`);
-  it had been unioning the WHOLE declared LHS back in.
-
-**FOUR MEASURED CONTRADICTIONS OF THE ITEM — the eighth round running.**
-- **"the same pair reports at a declaration and a return" is FALSE**, and it held in the item only
-  because its fixture used a UNION target, which `canUseTypeEngine` admits by a separate line. For a
-  NON-union object target — a named interface, a class, an object-literal alias, an array, a
-  function type — the declaration, return AND assignment readers are silent too: one fixture reads
-  **20 rows on both references against 2 on ours**. So (a) is a `canUseTypeEngine` hole at least as
-  much as an argument-gate one, and the item's stated seam covers under half of it.
-- **The item's named grid risk is not the real one.** It named `watchUtilities.ts:611/628` (the
-  truthiness early-return and the negated `isArray` guard); **both already narrow correctly on the
-  parent**, measured directly. The actual blockers are FOUR other narrowing gaps, invisible until
-  now precisely because the diagnostic that would expose them is the one (a) adds: a `??=` / `||=`
-  whose RHS the walk cannot prove non-nullish; an optional-chain truthiness guard not narrowing its
-  RECEIVER; `getTypeOfExpression` never flow-narrowing, so a `??` OPERAND is read un-narrowed; and
-  the memoization idiom's final read where the assignment RHS is a body-local const typing `any`
-  (sub-part (c) — **13 of the 19 reader rows**). A1 and A3 close two of the four.
-- **Sub-part (c) is broader than stated** — not only `const x = mk()`: `const y = x!`,
-  `const y = x as Pr` and even `const y = x` after a narrowing all read `any` (3 rows lost against
-  both references).
-- **The one thing the item got right is its mechanism**: the nullish verdict IS decidable without
-  structural completeness, and the built emission matched both references exactly. It is the
-  BLAST RADIUS, not the rule, that refuses it.
-
-**GATES.** Suite **18,076 / 0 / 3**, corpus **8,837 / 0**. At-risk classes derived by grepping test
-SOURCES (148 classes) with **coverage asserted from the result XMLs** — 150 classes / 1,469 tests /
-0 failed, 0 missing. `cost_gate.py` **exit 0** (`typeOfExpr.calls` +0.01%, `narrow.memoServed`
-−0.07%, `spine.nodes` and `output.errors` +0.00% / 46 → 46). `huge_methods.py --fail-over 0`
-**exit 0**. **Grid 8 × `added=0 removed=0`** (`scripts/chk101-grid.sh`, BEFORE arm = the committed
-`183cce3a1` binary, sha-guarded), and the rebuilt binary was re-verified row-for-row against the
-grid's AFTER arm — (CHK.54)'s trap. No double emission: all three fixes change TYPES only, no new
-emission site exists, and every fixture matches the references' row COUNT exactly.
-
-**ARMS — 7, six discriminating.** a1 A1's loose routing 8 RED; a2 A1's `keep` half **1, uniquely**;
-a3 A2 off 4; a4 A2 ignoring the initializer's own type **1, uniquely**; a5 A3 unioning the whole LHS
-back 4; a6 A3's `&&=` keeping truthy not falsy **2, uniquely**; a7 A3's `never` guard **0 — a
-MEASURED REDUNDANT GUARD with a stated mechanism** (`getUnionType` already drops a `never` member),
-kept as intent and not claimed as covered. **Two pins read 0 RED and are recorded BLIND, not
-redundant** — their observing mechanism IS (a), which this round refused; they are renamed and kept
-with a comment, and go live the moment (a) lands. **And two of the round's own pins were wrong, not
-the compiler**: literal-union controls expecting `'1'` / `'2'` where ours, tsgo AND pristine all
-print `'number'` ((PARITY.1)(b)'s display generalization); replaced with `1 | 3`-shaped targets where
-the generalization is suppressed and the control actually discriminates — the original pair would
-have been blind in both directions.
-
-**LEFT**: (a), blocked on the four narrowing gaps above, each with a reduced fixture recorded;
-(b) the generic-guard constraint fallback, not reached; (c) measured and characterised, not
-attempted.
-
-### Round (P18.34) — a namespace-qualified enum member narrows ((CHK.100)), and the grid's ADDED row was the positive control (2026-09-06)
-
-**Suite 18,021 → 18,043 / 0 / 3** — 22 pins in the new `QualifiedEnumDiscriminantTest`; no baseline
-moved and no `LogicalParityDivergence` is needed. Same orchestration: an implementation subagent
-owned Gradle; the full suite, `cost_gate.py`, `huge_methods.py` and an independent 8-profile grid
-ran here.
-
-**(CHK.100) LANDED.** A dotted-path container descent — `resolveEnumSymbolForQualifiedPath(segs,
-keyNode)` with `enumPathSegments` / `enumPathTypeSegments` / `enumPathHeadSymbol` / `enumPathDeref`
-/ `enumPathResolveSpec` — mirroring tsc's `resolveEntityName` walking a qualified name segment by
-segment through container `exports`. **A single segment is delegated VERBATIM to
-`resolveEnumSymbolForDiscriminant`**, so every established resolution and round 425's
-canonicalization are inherited, and the answer goes through `canonicalEnumSymbol` exactly once so a
-key minted from a qualified path and one minted from a bare name are the same string — the
-round-425 split-key hazard the item cites, discharged by construction rather than by care.
-`enumPathDeref` is the part that reaches tsc's own layout: an import alias hops to the symbol it
-names, and an `import * as ns` hops to the target module **FILE**, because a namespace import's
-members live in the file's locals and behind its `export *` barrels and no symbol carries them.
-Beside it: `enumSymbolBehindConstAlias` (tsc gives `const EK = NS.K` the type `typeof NS.K`;
-deliberately narrow — `const` only, no annotation, a plain dotted initializer) and
-`enumMemberLiteralTypeOf`, a shared tail extracted so the two type readers cannot drift.
-Eleven CLI fixtures against both references (which agree on every row): **45 rows → 10**, and all
-ten are reference-agreeing rows, row-for-row identical in text.
-
-**THREE MEASURED CONTRADICTIONS OF THE ITEM — the seventh round running.**
-- **"so both sides fail" is FALSE — only the RHS readers fail.** Shown two independent ways: on the
-  PARENT binary, `import AK = NS.K; if (u.kind === AK.B)` with QUALIFIED `kind: NS.K.A` annotations
-  already narrows correctly; and arm **a2** (revert the annotation arm alone) reads **0 RED over 22
-  pins**. The annotation half is already served by the type-side producer
-  `enumDiscriminantKeysOfType` (REL.1(c) step 5b), which replaced that AST reader. The change is
-  kept anyway — it is the key-space agreement the item rightly demands — and is **recorded as a
-  MEASURED REDUNDANT GUARD after two discrimination attempts, not claimed as covered.**
-- **"expect REMOVED rows on those profiles" is FALSE — 0 removed on all eight.** The 23
-  `Pascal.Pascal.Pascal` sites carry NO diagnostic on the parent: the un-narrowed union's member
-  read is conservatively suppressed and the receiver types `any`. **On the profiles this class is
-  LOST PRECISION, not a false positive**, so the grid is a control here exactly as the corpus is.
-- **The four named readers are not the complete set.** A FIFTH,
-  `enumSwitchKeysFromTypeNode`'s `QualifiedName` arm, had no keys for a `switch` over a WHOLE
-  qualified enum, so `requiredEnumSwitchKeys` answered null and the parent emitted an ours-only
-  **TS2366**. Arm a3 discriminates it uniquely. (A sixth caller, `enumMemberLateBoundKeyName`, was
-  measured to have NO gap and deliberately left alone — widening it would add member names to
-  object-literal types and move excess-property checking for nothing.)
-
-**THE GRID'S *ADDED* ROW WAS THE POSITIVE CONTROL, AND IT EXPOSED A PRE-EXISTING ROOT DEFECT.** With
-only the enum change in, the grid read `added=1` on harness / server / services — all the same row,
-`convertParamsToDestructuredObject.ts:238:21`, TS2322 `'Node' is not assignable to
-'ValidMethodSignature'`. That row exists BECAUSE `entry.kind === FindAllReferences.EntryKind.Span`
-began to narrow, making `entry.node` a real `Node` where it had been `any` — i.e. it is proof the
-qualified resolution reaches tsc's `_namespaces/ts.js` → `import * as FindAllReferences` →
-`export *` barrel chain, on a profile where the item predicted the grid would show `removed` rows
-and it shows none. Reduced, it is **pre-existing**: `checkPropertyAccessAssignment` had **no flow
-narrowing at all**, where the var-decl, plain-assignment and return readers have had a
-suppression-only leg since rounds 410/438/456. Fixed at the root with the same monotone rule (adopt
-the narrowed type only where it makes the write relate; refuse `never`), which takes the grid to
-`added=0` everywhere. **Verified here independently against both references**: with `u: A | B`,
-`if (u.kind === "a") { h.v = u.node }` is silent and the `"b"` twin still reports TS2322 — the
-suppression does not swallow the true positive, and ours now prints exactly that one row.
-
-**GATES.** Suite **18,043 / 0 / 3**, corpus **8,837 / 0**. `cost_gate.py` **exit 0 at `+0.00%` on
-every counter**, `output.errors` 46 → 46. `huge_methods.py --fail-over 0` **exit 0**. **Grid
-8 × `added=0 removed=0`** (`scripts/chk100-grid.sh`, BEFORE arm = the committed `717076707` binary,
-sha-guarded). No double emission — no new emitter is added (the assignment leg only SUPPRESSES) and
-every fixture matches the references' row COUNT exactly, which rules a duplicate out.
-
-**ARMS — 7. a1 the RHS readers 10 RED; a2 the annotation reader 0 (the redundant guard above);
-a3 the switch-keys whole-enum arm 1, uniquely (TS2366); a4 the `const EK = NS.K` leg 2, uniquely;
-a5 the root property-access-assignment narrowing 1, with its no-guard control staying green; a6 the
-`import * as ns` → module-FILE hop 2, uniquely (depths 3 and 4); a7 the `export *` leg 1, uniquely.
-NO round-927 pair**: a1/a2 are the two halves the item said must land together and measured a1 is
-everything; a6/a7 are two legs of one descent with DISJOINT red sets, i.e. independently
-load-bearing. **Two pins were repaired mid-round after reading `0 RED` — BLIND, not redundant**: the
-`never` probe for a whole-enum switch is served by per-case flow narrowing (a3 needed a TS2366
-shape), and the first barrel fixture reached the enum through `tr.locals` (a7 needed an
-`export *`-only container). Both discriminate now.
-
-**THE (P18.27) UNBLOCK IS ONLY HALF TRUE.** A MUTABLE `for (const e of xs: U[])` head now narrows
-(`takeN(e)` prints `'SB'` where the parent printed `'U'`), so the machinery works once the
-discriminant resolves. But a **`readonly`** head is still silent — **and so is `readonly string[]`
-with no enum anywhere** (2 rows lost against both references). The readonly head's `any` is
-therefore INDEPENDENT of the enum discriminant, and widening it must cover the non-enum case too,
-which the item's "kept narrow for exactly this shape" framing does not say.
-
-**LEFT OPEN, measured**: `let EK = NS.K` and an annotated `const EK: typeof NS.K = NS.K` are refused
-by the const-alias leg by design, where tsc narrows through both; and the `diagnose` MULTI-FILE
-harness cannot resolve `import * as Mid from './mid'` where `mid.ts` is `export * from './lib'` — a
-TYPE-position `Mid.FAR.EK.Span` reads TS2694 there while the identical shape through
-`ProjectCompiler` + a real tsconfig is clean on ours AND on both references. That harness-vs-project
-divergence forced one pin to take its annotation through the direct import, and is now a CLAUDE.md
-entry.
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
 
@@ -2815,41 +1800,60 @@ where the order sends you.
   field** — `memberNames` is already eight locals, and the field compiles while being shadowed
   at five of them.**
 
-- [ ] **(INV.0) STEP 7 — pick the next seam from `docs/INVERSION-DESIGN.md` § 6's Stage-0
-  order, which after name resolution / relations / member resolution reads SIGNATURES then
-  FLOW.** Two candidates, and the round's first job is to census both and say which it took:
-  (a) **SIGNATURES** — `getSignaturesOfType` / `getParameterSymbols` / `requiredParameterCount`
-  / the signature builders and `instantiateSignature`'s neighbours; note `getParameterSymbols`
-  is already ledger row 8's DECLARATION-READING read, so this seam shrinks row 8 as well.
-  (b) **FLOW** — the narrowing walk, which `Flow.kt` already half-owns; check whether the
-  checker-resident half is a family or a scatter before committing to it.
-  **THE "CHEAP WIN" IS WITHDRAWN — MEASURED 2026-09-09 AND THE LEDGER'S CLAIM WAS WRONG.**
-  Absorbing row 7's seven zero-caller members into `Relater` reads 45 → **42**, not 38: the
-  claim counted what the move REMOVES and never asked what the moved functions READ, and the
-  seven (138 lines) bring in FOUR new reads (`canonicalEnumSymbol`, `enumKnownDomainValues`,
-  `enumMemberEntries`, `enumValues`). Do not do it as a standalone; it drags `Relater` into
-  enum-value machinery that rows 7 and 9 both already reach for.
-  **THE THIRD CANDIDATE, WHICH IS WHAT THAT REVEALED, AND IT IS CENSUSED: (c) the ENUM family**,
-  `Checker.kt` 115080-115870 — **791 lines / 33 declarations**, essentially contiguous, **16
-  ambient references of which FOUR are its own caches** (they move in as owned fields), leaving
-  ~12; **24 of the 33 need a hop, and 10 of those callers are in `Relater.kt` plus 1 in
-  `MemberNames.kt`**. A SEMANTICS-ONLY cut at 115080-115520 (441 lines, 16 declarations) drops
-  the ambient to 11 and is the smaller first bite; the DISPLAY block above it
-  (`relationErrorTargetDisplay`, `oneMemberEnumCollapsedDisplay`, `enumOperandDisplay`,
-  `enumTypeQualifiedDisplay`) is (CHK.92)/(P18.48) territory and a separate question.
-  **AND IT SURFACES A STAGE-0-EXIT DECISION THE LEDGER'S COLUMN HAS BEEN HIDING**: extracting the
-  enum family cuts ~790 lines and reduces NO ambient row, because `Relater`'s ten enum calls would
-  still route through `Checker`'s delegations, and a read through a delegation counts exactly as
-  the original. Paying row 7 down needs the collaborators wired to EACH OTHER — the
-  construction-ORDER dependency row 9 deliberately declined to create — which should be taken
-  deliberately, as an explicit construction graph in `Checker.<init>`, not drifted into. **Until
-  it is taken, expect the ambient TOTAL to plateau while the line count keeps falling; read that
-  as Stage 0 having done what it can, not as a stall.** **Inherit every constraint rows 4-9
-  established**, including: grep `Checker.kt` for a LOCAL of a proposed collaborator-field name;
-  sort the `--passTiming` pass rows and drop ms-bearing lines for the receipt; grade against a
-  REBUILT pristine (each round's capture is the next round's pristine arm, so this costs no
-  extra build); and grep BOTH the mangled and unmangled JVM names on any round that widens
-  visibility.
+- [x] **(INV.0) STEP 7 — THE ENUM FAMILY: DONE 2026-09-09 ((P18.59), commits `1c520fc19`
+  split + `b62d9d376` ablation record). `EnumSemantics.kt` is **1,137 lines**; `Checker.kt`
+  **195,606 → 194,631 (−975)**; ledger row 10. **The census the item demanded decided it: of
+  its three candidates (a) SIGNATURES and (b) FLOW are SCATTERS** — signatures over six
+  unrelated neighbourhoods, flow 64 declarations of which 22 are singletons or pairs from
+  line 1091 to 125482 — **and only (c) ENUM is a family**, one contiguous 1,013-line span of
+  40 declarations. **13 ambient reads, ZERO writes.** **AND THE STAGE-0-EXIT DECISION ROW 9
+  ASKED FOR IS TAKEN**: `Relater` and `MemberNames` call the collaborator DIRECTLY, which
+  cost one line because `Checker`'s construction block already IS an explicit ordered graph
+  — `Relater` **49 → 38** checker reads, `MemberNames` **5 → 4**, the arc's first fall in the
+  ambient TOTAL. Seven of eight pins discriminate exactly; the eighth was BLIND (its fixture
+  resolved both sides through one import, so the two symbols were identical) and was repaired
+  to a shape that reads 1 row vs 2.**
+
+- [ ] **(INV.0) STEP 8 — the ambient row can now fall per round, but ONLY where a
+  collaborator's reads are a FAMILY someone else can own. Census, then take the largest
+  such family.** After step 7 the rows are: `Relater` 38, `NameResolver` 26,
+  `MemberResolver` 22, `EnumSemantics` 13, `MemberNames` 4 (uniform-script counts — see
+  the ledger's counting note, row 7's own column says 45 for a convention reason).
+  **The obvious candidate is the MEMBER-ACCESS / property family** — `getPropertiesOfType`,
+  `getPropertyOfType`, `getApparentType`, `primitiveApparentWrapper`, `isOptionalProperty`,
+  `getPropertyTypeForRelation`, `getStaticMembersOfType` — which `Relater` (8 of its 38) and
+  `MemberResolver` both point at, and which CLAUDE.md already records as a family with
+  known shape rules (a union arm that answers an assignability question, an
+  intersection-only `getPropertyAcrossType`, enum/namespace members living on `Symbol.exports`
+  rather than on a type). **Census it the way step 7 was censused before committing**:
+  contiguity first (a scatter is Stage-3 work, not a seam), then the ambient row of the
+  span, then how many of the reads it ABSORBS from other collaborators — that last number is
+  what step 7 showed is the point.
+  **SIGNATURES and FLOW stay unstarted and the reason is recorded**: both are scatters, and
+  no instrument in this arc extracts a scatter. Opening either needs a different move —
+  gathering the declarations first, as its own commit, with the corpus as the only gate.
+  **Inherit every constraint rows 4-10 established**, including: grep `Checker.kt` for a
+  LOCAL of a proposed collaborator-field name; sort the `--passTiming` pass rows and drop
+  ms-bearing lines for the receipt; **take the pristine capture with the SAME RECIPE**
+  (step 7 lost a bench run to `--listAll` in one arm only); grade against a REBUILT pristine
+  (each round's capture is the next round's pristine arm); grep BOTH the mangled and
+  unmangled JVM names on any round that widens visibility, **and on any per-site inlining
+  comparison at all** — step 7's first tally read a fake +137 refusals because the pristine
+  arm's names were mangled and the split arm's were not; and use `codemask` (not `spanmask`)
+  for any census or transform, because a `${…}` interpolation is code inside a string.
+
+- [ ] **(REL.1)(c) LEAD, measured 2026-09-09 by (P18.59) and NOT fixed: the same-string
+  qualified-display retry is not reached by the VARIABLE-DECLARATION assignability reader.**
+  With two same-named enums whose members collide, both references print
+  `Type 'Z.Foo.A' is not assignable to type 'X.Foo.A'.` and this compiler prints
+  `Type 'Foo.A' is not assignable to type 'Foo.A'.` — for a NAMESPACE-nested collision
+  (`namespace X/Y/Z { export enum Foo … }`) and for a MODULE-scoped one (three files, where
+  the references qualify with `import("…")`), in `diagnose()` and through the project CLI
+  alike. `enumCollisionQualifiedDisplays` exists and fires elsewhere (the
+  `enumAssignmentCompat*` baselines), so this is a READER that does not call it, not a
+  missing rule. PRE-EXISTING — the family moved verbatim in step 7 and HEAD~1 prints the
+  same. `EnumSemanticsSeamTest`'s pin 8 records the divergence in its KDoc and pins the
+  VERDICT only; that pin's expectation is what changes when this is fixed.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

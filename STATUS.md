@@ -1,18 +1,50 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **195,606** lines (**−4,357 across (P18.53)-(P18.58)**, the first
+extraction):** `Checker.kt` **194,631** lines (**−5,332 across (P18.53)-(P18.59)**, the first
 sustained movement in the extraction direction since the metric was created; 191,070 when it was
 created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not
-extractions). SEVEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient
+extractions). EIGHT collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient
 surface none for both — `TypeInstantiator` (4 reads, 1 write), `NameResolver` (2,284 lines,
-26 reads, no writes — the seam COMPLETE over three steps), `Relater` (1,446 lines, 45 reads /
-5 writes — the RELATION algorithm, the arc's largest row and § 6's own prediction),
-`MemberResolver` (814 lines, 21 reads / 1 write, columns disjoint) and **`MemberNames`
-(765 lines, **5 reads / ZERO writes** — the arc's CLEANEST row, because that family owns no
-state and answers a SYNTACTIC question)**, all stated in the ledger. Reference points:
-tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
-`docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+26 reads, no writes — the seam COMPLETE over three steps), `Relater` (1,446 lines — the RELATION
+algorithm, the arc's largest row), `MemberResolver` (814 lines, 22 reads / 1 write),
+`MemberNames` (765 lines, 4 reads / ZERO writes) and **`EnumSemantics` (1,137 lines, 13 reads /
+ZERO writes)**, all stated in the ledger. **AND THE AMBIENT *TOTAL* FELL FOR THE FIRST TIME**:
+(P18.59) wired `Relater` and `MemberNames` to `EnumSemantics` DIRECTLY — the Stage-0-exit
+decision the ledger asked be taken deliberately — taking `Relater` 49 → 38 checker reads and
+`MemberNames` 5 → 4. Reference points: tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files.
+Contract: `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.59) — (INV.0) STEP 7: THE ENUM FAMILY IS `EnumSemantics.kt`, AND THE ARC'S AMBIENT TOTAL FALLS FOR THE FIRST TIME, 18,506 / 0 / 3 (2026-09-09).**
+`Checker.kt` **195,606 → 194,631**; `EnumSemantics.kt` 1,137; ledger row 10. **Fourth extraction
+of the session.** **THE CENSUS THE QUEUE ITEM DEMANDED DECIDED THE ROUND, AND TWO OF ITS THREE
+CANDIDATES ARE NOT SEAMS**: SIGNATURES is a scatter over six unrelated neighbourhoods, FLOW is 64
+declarations of which 22 are singletons or pairs spanning lines 1091 to 125482, and only ENUM is a
+family — one contiguous 1,013-line span, 40 declarations, **13 ambient reads and ZERO writes**.
+**AND THE STAGE-0-EXIT DECISION ROW 9 ASKED BE TAKEN DELIBERATELY IS TAKEN, FOR ONE LINE**:
+`Checker`'s construction block already IS the "explicit construction graph in dependency order"
+the ledger called for, so wiring `Relater` and `MemberNames` to the new collaborator DIRECTLY was
+placing it before them — **`Relater` 49 → 38 checker reads (−11 over 20 sites), `MemberNames`
+5 → 4**, the first fall in the arc's ambient total. **A MASKING DEFECT EVERY EARLIER ROUND OF THIS
+ARC SHARED, found by the compiler**: `spanmask`/`strip` blank whole string literals, so a `${…}`
+INTERPOLATION — which is code — is invisible to the ambient census and unrewritten by the
+transform; it failed loudly here only because a `Checker` member is unreachable from a
+collaborator, so the compiler is a complete detector for the ambient case and NOT for the census.
+`codemask.py` fixes it and both verbatim proofs are taken with it. **THE RECEIPT NOW SPANS FIVE
+BINARIES** — the same 488 deterministic `--passTiming` lines byte-identical for pre-step-5
+pristine, steps 5, 6a, 6b and this: one receipt over 3,522 moved lines. **PrintInlining is FLAT
+and that is the honest reading** (182 → 191 `too large` over 20 sites): this family is 40 small
+functions, not one monolith, so there was nothing to remove — the one real gain is
+`isEnumFlavoredObjectType`, zero inlines at 21 call sites before and 37 after. **A trap that
+manufactured a fake +137 first**: the twelve members that were `internal` on `Checker` are
+JVM-name-MANGLED there and plain members of an `internal class` after, so a matcher requiring a
+space after the name reads ZERO rows in the pristine arm. **SEVEN OF EIGHT PINS DISCRIMINATE
+EXACTLY AND THE EIGHTH WAS BLIND** — its fixture resolved both sides through ONE import, so the
+two member symbols were identical and the ablation could not bite; two further shapes were probed
+ON THE ABLATED BINARY and the pin is now the one that reads 1 row vs 2. Arm 3 reddens TWO pins and
+that is recorded, not smoothed. ab-interleaved −120 ms (−0.46%) B-wins-3/6 NOISE-DOMINATED;
+cost_gate exit 0, huge_methods exit 0 (839 classes, `Checker.<init>` 5,721 → **5,697**),
+warning-clean.
 
 **(P18.58) — (INV.0) STEP 6b: THE MEMBER-NAME / LATE-BINDING FAMILY IS `MemberNames.kt`, THE ARC'S CLEANEST SEAM, 18,498 / 0 / 3 (2026-09-09).**
 `Checker.kt` **196,176 → 195,606**; `MemberNames.kt` 765; ledger row 9. **Third extraction of the
