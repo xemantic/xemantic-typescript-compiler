@@ -459,3 +459,41 @@ and neither alone is evidence.
 **And the absorption census is ZERO again**, as in row 8: the scarcest ambient member
 still has 3 other callers in `Checker.kt` and `expressionTrueEnd` has 274. Row 7's
 seven absorbable members remain the arc's only cheap win.
+
+### An arc-level correction, measured 2026-09-09 after row 9
+
+**ROW 7's "absorbing the seven zero-caller members takes the reads 45 → 38" IS WRONG,
+and the error is one-sided counting.** It counted what the move REMOVES and never asked
+what the moved functions themselves READ. Measured: the seven (138 lines) read eleven
+members, of which `checkTypeRelatedTo` is `Relater`'s own and six are already on row 7 —
+but **four are NEW** (`canonicalEnumSymbol`, `enumKnownDomainValues`, `enumMemberEntries`,
+`enumValues`). So the absorption is **45 − 7 + 4 = 42**, not 38, and it drags `Relater`
+into the enum-VALUE machinery that rows 7 and 9 both already reach for. That is the same
+shape as CLAUDE.md's population-vs-frequency law: a count of one side of a move is not a
+measurement of the move.
+
+**WHAT IT REVEALS IS THE REAL SEAM: an ENUM family, censused here so the next round does
+not have to.** `Checker.kt` 115080-115870 is **791 lines / 33 declarations**, essentially
+contiguous, with **16 ambient references of which FOUR are its own caches**
+(`enumDomainCompleteCache`, `enumMemberEntriesCache`, `enumMemberTypesCache`,
+`enumTypesRelationCache` — they move in as owned fields), leaving ~12: `baseTypeOfLiteralType`,
+`canonicalEnumSymbol`, `enumModuleImportPrefix`, `enumUnionTargetDisplay`, `fmtEnumAsgVal`,
+`getDeclaredTypeOfEnumMember`, `getUnionType`, `isDtsFile`, `isLiteralAssignableToMember`,
+`literalTypeOfExpression`, `typeToString`, `enumValues`. **24 of the 33 need a hop**, and
+the cross-file half of that is the point: **10 are called from `Relater.kt` and 1 from
+`MemberNames.kt`**. A SEMANTICS-ONLY cut at 115080-115520 (441 lines, 16 declarations)
+drops the ambient to 11 and is the smaller first bite; the DISPLAY block above it
+(`relationErrorTargetDisplay`, `oneMemberEnumCollapsedDisplay`, `enumOperandDisplay`,
+`enumTypeQualifiedDisplay`) is (CHK.92)/(P18.48) territory and is a separate question.
+
+**AND IT SURFACES A DESIGN QUESTION THE LEDGER'S OWN COLUMN HAS BEEN HIDING.** Extracting
+the enum family reduces `Checker.kt` by ~790 lines and reduces **no** ambient row, because
+`Relater`'s ten enum calls would still route through `Checker`'s delegations — and a read
+through a delegation counts exactly as the original did. To actually pay row 7 down, the
+collaborators have to be wired to EACH OTHER rather than all through `Checker`, which is
+the construction-ORDER dependency row 9 deliberately declined to create for
+`MemberResolver` → `MemberNames`. **That is a Stage-0-exit decision, not a per-row one**,
+and it should be taken deliberately (an explicit construction graph in `Checker.<init>`,
+in dependency order, with each collaborator's inputs stated) rather than drifted into.
+Until it is taken, expect the ambient TOTAL to plateau while the line count keeps falling —
+and read that plateau as the signal that Stage 0 has done what it can, not as a stall.

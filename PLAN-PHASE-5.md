@@ -2823,11 +2823,28 @@ where the order sends you.
   is already ledger row 8's DECLARATION-READING read, so this seam shrinks row 8 as well.
   (b) **FLOW** — the narrowing walk, which `Flow.kt` already half-owns; check whether the
   checker-resident half is a family or a scatter before committing to it.
-  **A CHEAP WIN AVAILABLE TO EITHER: absorb row 7's seven zero-caller members into `Relater`**
-  (`enumLiteralApparentPrimitive`, `enumMemberValueEqualsLiteral`, `enumTargetAdmitsNumericSource`,
-  `numericLiteralFitsEnum`, `intersectionMergedSatisfiesTarget`, `intersectionMergedContradictsTarget`,
-  `targetIsMemberShaped`) — mechanical, no design decision, takes row 7 from 45 reads to 38;
-  rows 8 and 9 have NO such candidates, measured. **Inherit every constraint rows 4-9
+  **THE "CHEAP WIN" IS WITHDRAWN — MEASURED 2026-09-09 AND THE LEDGER'S CLAIM WAS WRONG.**
+  Absorbing row 7's seven zero-caller members into `Relater` reads 45 → **42**, not 38: the
+  claim counted what the move REMOVES and never asked what the moved functions READ, and the
+  seven (138 lines) bring in FOUR new reads (`canonicalEnumSymbol`, `enumKnownDomainValues`,
+  `enumMemberEntries`, `enumValues`). Do not do it as a standalone; it drags `Relater` into
+  enum-value machinery that rows 7 and 9 both already reach for.
+  **THE THIRD CANDIDATE, WHICH IS WHAT THAT REVEALED, AND IT IS CENSUSED: (c) the ENUM family**,
+  `Checker.kt` 115080-115870 — **791 lines / 33 declarations**, essentially contiguous, **16
+  ambient references of which FOUR are its own caches** (they move in as owned fields), leaving
+  ~12; **24 of the 33 need a hop, and 10 of those callers are in `Relater.kt` plus 1 in
+  `MemberNames.kt`**. A SEMANTICS-ONLY cut at 115080-115520 (441 lines, 16 declarations) drops
+  the ambient to 11 and is the smaller first bite; the DISPLAY block above it
+  (`relationErrorTargetDisplay`, `oneMemberEnumCollapsedDisplay`, `enumOperandDisplay`,
+  `enumTypeQualifiedDisplay`) is (CHK.92)/(P18.48) territory and a separate question.
+  **AND IT SURFACES A STAGE-0-EXIT DECISION THE LEDGER'S COLUMN HAS BEEN HIDING**: extracting the
+  enum family cuts ~790 lines and reduces NO ambient row, because `Relater`'s ten enum calls would
+  still route through `Checker`'s delegations, and a read through a delegation counts exactly as
+  the original. Paying row 7 down needs the collaborators wired to EACH OTHER — the
+  construction-ORDER dependency row 9 deliberately declined to create — which should be taken
+  deliberately, as an explicit construction graph in `Checker.<init>`, not drifted into. **Until
+  it is taken, expect the ambient TOTAL to plateau while the line count keeps falling; read that
+  as Stage 0 having done what it can, not as a stall.** **Inherit every constraint rows 4-9
   established**, including: grep `Checker.kt` for a LOCAL of a proposed collaborator-field name;
   sort the `--passTiming` pass rows and drop ms-bearing lines for the receipt; grade against a
   REBUILT pristine (each round's capture is the next round's pristine arm, so this costs no
