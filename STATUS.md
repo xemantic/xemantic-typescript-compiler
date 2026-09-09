@@ -1,14 +1,40 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,963** lines (191,070 when the metric was created; the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions — the metric counts extraction progress and this arc made none) (was 191,155 at the metric's creation; +107 of those are
-(INV.1)'s store hook and +192 (INV.2)'s companion channels, helpers and lens — ADDITIONS, not extractions;
-3 collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none
-for both — and `TypeInstantiator`, whose ambient row is the first non-none one: FOUR
-checker reads (the fourth, `instantiateTupleElements`, added by (P18.28)), one table write,
-stated in the ledger). Reference points:
+extraction):** `Checker.kt` **199,405** lines (**−558 at (P18.53)**, the first movement in the
+extraction direction since the metric was created; 191,070 when it was created, and the
+(P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not extractions).
+FOUR collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface none for
+both — `TypeInstantiator` (four checker reads, one table write) and now `NameResolver`
+(fourteen checker reads, NO writes; `Checker` no longer names `state.symbolTargets`), all
+stated in the ledger. Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.53) — (INV.0) STEP 4a: THE NAME/MODULE-RESOLUTION LEAF BECOMES `NameResolver.kt`, AND TWO OF THE FOUR § 10 INSTRUMENTS NEED A SAME-BINARY CONTROL, 18,477 → 18,484 / 0 / 3 (2026-09-09).**
+The owner chose **(INV.0)** — the WORK ORDER's tail — so the (CHK.\*) lane is parked and the
+shrinkage metric moves the right way for the first time in ~26 rounds: `Checker.kt`
+**199,963 → 199,405**, `NameResolver.kt` 669, ledger row 4. Fifteen functions and three fields
+moved VERBATIM — the alias ladder, the specifier ladder, two scope probes and the checker-local
+symbol-target link store — as a final class built once per `Checker`, every surviving call site a
+one-line delegation. **The verbatim claim is proved twice by two methods** (a reverse-transform
+`diff` and an independent multiset check) rather than asserted. Ambient row: **fourteen checker
+reads, no writes**; the four functions whose only readers moved with them got no hop and were made
+`private`, so the collaborator's public surface (11) equals the delegation count by construction.
+**THE REUSABLE FINDING IS METHODOLOGICAL.** The counter receipt should be the standard for a split
+and is stronger than the gate: **all 420 per-pass `--passTiming` rows and the 46 diagnostics are
+byte-identical against a rebuilt pristine HEAD**. The only section that moves is the **node-kind
+histogram**, and the SAME BINARY run twice moves it MORE (70 differing lines A-vs-A against 64
+A-vs-B) — the documented crawl-worker race, arriving in a channel nobody had diffed. And
+**`getTypeOfExpression`'s PrintInlining row is NOT stable across processes**: arm A read
+`1 inline (hot) + 372 too large`, arm B `382 too large`, and arm A's SECOND run reproduced arm B
+exactly — so ledger rows 1 and 3's "row-for-row identical across arms" was recorded without this
+control. Every delegation hop reads `inline`/`inline (hot)` with ZERO refusals; ab-interleaved
+−0.57% B-wins-2/6 NOISE-DOMINATED; `NameResolver` is never an allocated type. Three deviations
+from the item, each backed by a grep, including one FORCED by the warning-clean rule. 7 pins;
+3 arms, all discriminating uniquely, with the remaining four pins recorded as positive controls
+rather than claimed as coverage. Next: **step 4b**, the scope side — censused this session at
+~1,270 lines, and several of 4a's ambient reads disappear once it lands.
 
 **(P18.52) — STATIC BLOCKS ESCAPE, PARAMETER DEFAULTS AND DECORATORS ARE REACHED ((CHK.115)), AND THE DECORATOR FAMILY IS *TWO OPPOSITE MECHANISMS*, 18,437 → 18,477 / 0 / 3 (2026-09-08).**
 43 fixtures, and **pristine 6.0.3 and tsgo 7.0.2 agreed on every one**. **(a) removes an ours-only

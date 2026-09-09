@@ -25,6 +25,86 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.53) — (INV.0) step 4a: the NAME/MODULE RESOLUTION leaf becomes `NameResolver.kt`, and TWO OF THE FOUR § 10 INSTRUMENTS NEED A SAME-BINARY CONTROL (2026-09-09)
+
+**Suite 18,477 → 18,484 / 0 / 3** — 7 pins in the new `NameResolverTest`. `Checker.kt`
+**199,963 → 199,405** (−558); `NameResolver.kt` 669. cost_gate exit 0, huge_methods exit 0
+(0 over limit, 835 classes, `Checker.<init>` 5,701/8,000), build warning-clean, ledger row 4.
+**The owner chose (INV.0) for this session**, which is the WORK ORDER's tail; the (CHK.\*) lane
+is parked, and the shrinkage dashboard moves in the right direction for the first time in ~26
+rounds.
+
+**THE ITEM'S CENSUS HELD AT HEAD, WHICH IS WORTH SAYING BECAUSE IT WAS TAKEN 8 ROUNDS AND ~5,200
+ADDED LINES AGO.** All 17 named leaf functions are single-declaration and intact, no cross-file
+caller exists (`CompilerOptions.kt` and `MapCensus.kt` only NAME them in comments), and all six
+constructor inputs are declared above the `:702` anchor — so the collaborator can be built before
+`init`, which Kotlin's declaration-order initialisation requires.
+
+**TWO DEVIATIONS, BOTH MEASURED RATHER THAN ARGUED.** `resolveExportedSymbolThroughStars` and
+`moduleNamedExportsOf` stay in `Checker.kt`: they are 7- and 3-line MEMO WRAPPERS whose computers
+are large checker-resident star walks with ~20 call sites outside the moving set, so moving the
+wrapper alone buys ~31 lines and costs ~20 delegation hops plus 4 ambient entries.
+`ambientModuleFilelessCache` belongs to a 4b function. **The brief predicted "nothing in the
+moving set calls either" and was HALF WRONG** — `computeImportedSymbolGeneral` calls
+`resolveExportedSymbolThroughStars`, so it became a 14th ambient read rather than a free deferral.
+
+**A THIRD DEVIATION IS FORCED BY THE WARNING-CLEAN RULE, NOT CHOSEN, AND IT IMPROVES THE SEAM.**
+`getSymbolTarget` / `setSymbolTarget` / `computeModuleSpecifier` / `computeImportedSymbolGeneral`
+have ZERO callers left in `Checker.kt` once the family moves (their 2/16/1/2 sites are all inside
+the moved spans), so a `private` delegation would be an unused-member warning. They get no hop —
+the LinkStore moved wholesale and **`Checker` no longer names `state.symbolTargets` at all** — and
+their visibility was then narrowed to `private`, so the collaborator's public surface (11) and the
+delegation count (11) are the same number by construction.
+
+**THE VERBATIM CLAIM IS PROVED TWICE, BY TWO METHODS.** The implementation agent reversed the three
+documented transformations and `diff`ed byte-identical against the original 593 lines; the
+orchestrator ran an independent MULTISET check whose only unaccounted lines are the 15 signatures
+whose visibility changed and the new file's header and KDoc. Neither is an argument.
+
+**THE ROUND'S REUSABLE FINDING: TWO OF THE FOUR § 10 INSTRUMENTS CANNOT BE READ AT ONE RUN PER ARM,
+AND LEDGER ROWS 1 AND 3 QUOTE ONE OF THEM WITHOUT A CONTROL.**
+(i) The counter receipt is *stronger* than `cost_gate.py` and should be the standard for a split:
+**all 420 per-pass `--passTiming` rows and the 46 diagnostics are byte-identical against a rebuilt
+pristine HEAD** — a claim about every registered pass, where the gate speaks for 20 aggregates.
+(ii) The ONLY section of that output which moves is the **node-kind histogram**, and the SAME BINARY
+run twice moves it MORE — 70 differing lines A-vs-A against 64 A-vs-B, `Identifier` reading
+375,438 / 373,363 on one binary against 378,748 on the other. That is the `+=`-from-the-crawl-workers
+race CLAUDE.md already documents, arriving in a channel nobody had diffed before; read as a treatment
+effect it is a fabricated regression.
+(iii) **`getTypeOfExpression`'s PrintInlining row is NOT stable across processes.** Arm A read
+`1 inline (hot) + 372 too large` and arm B `382 too large` — a plausible-looking regression at a
+standing hot site — and arm A's SECOND run read `382 too large`, i.e. exactly arm B. Rows 1 and 3
+record that site as "row-for-row identical across arms"; that claim was made without this control.
+The other two standing sites ARE row-identical here.
+(iv) Every delegation hop C2 compiles reads `inline` or `inline (hot)` with **zero** refusals
+(`resolveAlias` 28/4, `resolveModuleSpecifier` 20/5, `resolveAliasTarget` 6/4,
+`resolveImportedSymbolGeneral` 3/4); ab-interleaved 6 pairs −152 ms (−0.57%) B-wins-2/6
+NOISE-DOMINATED with both arms at 46 errors; JFR shows `NameResolver` is never an allocated TYPE
+(constructed once per `Checker`, as § 10 requires) with symmetric sampler tails (37 types only-in-A,
+43 only-in-B) and counts that do not separate the arms (A 2,527/2,626 vs B 2,737/2,534).
+
+**THE TEST IS NOT THE ONE THE ITEM ASKED FOR, BECAUSE THE FUNCTIONS ARE NOT PURE.** Row 3's
+`createTypeMapper` precedent (a file-level pure function pinned without a checker) does not transfer:
+the specifier ladder closes over `fileResults` and `options`. What DOES transfer is the intent, so
+`NameResolverTest` builds a `NameResolver` with an **EMPTY** `globals`, empty `moduleResolutions` and
+an empty symbol-target store — an edit that reaches for checker scope state from the specifier ladder
+fails there rather than silently deepening the ambient row. All eleven named invariant gate classes
+were additionally confirmed GREEN in the gating run rather than assumed.
+
+**ARMS — 3, all discriminating uniquely.** a1 (drop the `UNRESOLVED_MODULE_SPEC` mapping) 2 RED,
+the sentinel pin uniquely plus the js-aware pin as collateral once the memo is poisoned; a2 (drop the
+`.js` strip) 1 RED uniquely; a3 (drop `normalizePath`) 1 RED uniquely. **The remaining four pins are
+positive controls and are recorded as such, not claimed as coverage** — plain relative resolution, the
+two-rung division of labour, memo stability on a HIT, and the absent-file negative control. The
+sentinel pin is the one worth keeping: a miss is memoized as a sentinel and mapped back to null on
+READ, so "simplifying" it returns the sentinel STRING as a resolved file name **from the second ask
+onward only**, which no single-ask pin can see.
+
+**NEXT: step 4b**, the scope side (~1,270 lines). Censused in the same session against HEAD: the
+combined 4a+4b move is **1,870 lines**, and several of 4a's fourteen ambient reads DISAPPEAR once 4b
+lands, because the two halves call each other — which is why the item's two-commit order is right and
+why 4a's row is the worst it will look.
+
 ### Round (P18.52) — static blocks escape, parameter defaults and decorators are reached ((CHK.115)), and the decorator family is TWO opposite mechanisms (2026-09-08)
 
 **Suite 18,437 → 18,477 / 0 / 3** — 40 pins in the new
@@ -2329,7 +2409,12 @@ where the order sends you.
   prints `Type 'E'` today), with a syntactic freshness override at the (CHK.86)/(CHK.88)
   emitter (~165973/165993). Population 26 baselines / 4 ACTIVE, 0 member-form lines anywhere.
 
-- [ ] **(INV.0) STEP 4 — NAME RESOLUTION: EXTRACT `NameResolver.kt` IN TWO COMMITS (4a leaf, 4b
+- [ ] **(INV.0) STEP 4 — 4a LANDED 2026-09-09 ((P18.53)): `NameResolver.kt` holds the LEAF (15
+  functions, 3 fields, 593 lines verbatim; `Checker.kt` 199,963 → 199,405; ledger row 4; ambient
+  fourteen reads / no writes). Three deviations recorded there, one FORCED by the warning-clean
+  rule. **4b (the scope side, ~1,270 lines) IS WHAT REMAINS** — and several of 4a's ambient reads
+  disappear once it lands, since the two halves call each other. ORIGINAL ITEM: EXTRACT
+  `NameResolver.kt` IN TWO COMMITS (4a leaf, 4b
   scope side), VERBATIM, LEDGER ROW 4 — the extraction PLAN, censused 2026-09-05 by read-only
   recon over HEAD 9a49e44c (spans brace-matched over a length-preserving stripped copy, 4,754
   `fun`s raw = stripped; caller counts by `grep -a`).** The surface is 60-odd functions in
