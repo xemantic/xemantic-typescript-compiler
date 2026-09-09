@@ -701,6 +701,10 @@ class Checker(
     /** (INV.0) step 3 — the instantiation collaborator; see `TypeInstantiator.kt`. */
     private val instantiator = TypeInstantiator(this, state.symbolTypes, state.interner)
 
+    /** (INV.0) step 4a — the name/module-resolution collaborator; see `NameResolver.kt`. */
+    private val nameResolver =
+        NameResolver(this, options, fileResults, globals, moduleResolutions, state.symbolTargets)
+
     // -----------------------------------------------------------------------
     // Delegating properties — allow all existing code to work unchanged
     // while mutable state is clearly grouped in CheckerState.
@@ -1075,20 +1079,6 @@ class Checker(
     /** B60.12: AST TypeParameter nodes by name, used by `checkTypeParamTypedOps` walker
      *  to emit TS2208 related info pointing at the correct source position. */
     private var currentTypeParamAstForOps: Map<String, TypeParameter>? = null
-
-    // -----------------------------------------------------------------------
-    // LinkStore helpers — checker-local side map for symbol targets.
-    // Keeps binder output immutable; each parallel checker resolves independently.
-    // -----------------------------------------------------------------------
-
-    /** Get the resolved alias target for a symbol (checker-local, then binder fallback). */
-    private fun getSymbolTarget(symbol: Symbol): Symbol? =
-        state.symbolTargets[symbol.id] ?: symbol.target
-
-    /** Set the resolved alias target for a symbol in the checker-local side map. */
-    private fun setSymbolTarget(symbol: Symbol, target: Symbol) {
-        state.symbolTargets[symbol.id] = target
-    }
 
     /** Local variable types populated during TS2322 checking — enables getTypeOfIdentifier
      *  to resolve function-scoped variable types from their type annotations. */
@@ -10266,12 +10256,6 @@ class Checker(
      *  `init` per the init-order trap. */
     private val importedNamespaceSymCache = HashMap<Int, Symbol?>()
 
-    /** INV.3(b): memo for [resolveImportedSymbolGeneral] (alias symbol id → target
-     *  Symbol, or null) — the kind-AGNOSTIC sibling of [importedGuardDeclCache] /
-     *  [importedNamespaceSymCache], serving [lookupPerFile]. Declared before `init`
-     *  per the init-order trap. */
-    private val importedSymbolGeneralCache = HashMap<Int, Symbol?>()
-
     /** INV.3(d): memo for [typeSideImportFallback] — the import-shadowed-by-
      *  value-local TYPE-space recovery. Keyed `fileName|name`; stored null =
      *  no shadowed type import. Declared before `init`. */
@@ -10499,18 +10483,6 @@ class Checker(
      *  for discriminated-union narrowing keyed on a barrel-imported enum member
      *  (`s.type === UpToDateStatusType.X`). Declared before `init` per the init-order trap. */
     private val importedEnumSymCache = HashMap<Int, Symbol?>()
-
-    /** Perf (round 432): memo for [resolveModuleSpecifier] — the function is a pure
-     *  function of the specifier string ([fileResults]/[options] are fixed before `init`;
-     *  the contextNode param is unused), but its fallback path iterates EVERY program
-     *  file with per-call string stripping. Negative results (null) are the hot case
-     *  (ESM `.js` barrel specifiers, deliberately unresolvable) so they are cached via
-     *  containsKey, not getOrPut. Declared before `init` per the init-order trap. */
-    // Perf: values are non-null; [UNRESOLVED_MODULE_SPEC] sentinel encodes a computed
-    // null result so every lookup (incl. the hot unresolvable case) is a SINGLE map get
-    // instead of containsKey + get. Never a real filename (no ` ` in resolutions).
-    private val UNRESOLVED_MODULE_SPEC = " <unresolved-module-specifier>"
-    private val moduleSpecifierCache = HashMap<String, String>()
 
     /** M0.3(iv): memo for [normalizePath] — a pure function on the module-specifier
      *  resolution hot path (round-618 JFR: 17/24 joinTo samples were its
@@ -15404,45 +15376,6 @@ class Checker(
     }
 
     /**
-     * (CHK.82)(3) The file a `declare module "<spec>"` AUGMENTATION targets — ONE home
-     * for the resolver ladder every augmentation consumer needs, so the merge
-     * ([collectModuleAugmentations]), the TS2664 legality walker
-     * ([checkAmbientModuleAugmentations]) and the TS2305 suppression
-     * ([augmentationDeclaredExportNames]) cannot disagree about what a specifier names.
-     *
-     * The legs, in order: the base resolver; the round-443 `.js`-aware wrapper (an ESM
-     * `declare module "../compiler/types.js"`, whose extension the base resolver
-     * deliberately will not strip); the crawl's own `(importer, specifier)` answer for
-     * THIS file ((CHK.30)/(CHK.78)); and — for a BARE specifier only — the crawl's answer
-     * as recorded for any OTHER file.
-     *
-     * WHY THE LAST LEG EXISTS AND WHY IT IS GUARDED. A bare package specifier's target is
-     * named by the package's `package.json` `types`/`main`/`exports` entry, so no string
-     * transformation of the specifier can find it and only the crawl knows; but the crawl
-     * records a resolution per (importer, specifier) pair and only for specifiers it saw
-     * as IMPORTS, so the file that merely AUGMENTS `"some-pkg"` without importing it has
-     * no entry of its own. Node's lookup walks up from the importer's directory, so two
-     * files can legitimately resolve one bare specifier to two packages (a nested
-     * `node_modules`); the leg therefore requires every recording file to AGREE and
-     * answers null otherwise — a wrong target here would merge an augmentation into
-     * another package's module, which (CFG.1) says nothing in this repo would print.
-     * Relative specifiers are excluded from it outright: theirs is a per-directory
-     * meaning, and the earlier legs already resolve them exactly.
-     */
-    private fun augmentationTargetFile(spec: String, declaringFileName: String): String? {
-        resolveModuleSpecifierRelativeJsAware(spec, declaringFileName)?.let { return it }
-        resolveImportTargetFallback(spec, declaringFileName)?.let { return it }
-        if (spec.startsWith("./") || spec.startsWith("../") || moduleResolutions.isEmpty()) return null
-        var agreed: String? = null
-        for ((_, perFile) in moduleResolutions) {
-            val target = perFile[spec] ?: continue
-            if (target !in fileResults) continue
-            if (agreed == null) agreed = target else if (agreed != target) return null
-        }
-        return agreed
-    }
-
-    /**
      * 17.130 / (CHK.82)(2): does the symbol [augSymbol], declared at the top level of a
      * `declare module "<spec>"` block with body [body], MERGE into the augmented module?
      *
@@ -18038,312 +17971,48 @@ class Checker(
         return globals[name]
     }
 
-    /**
-     * M3.4 (round 409): ESM `.js`-tolerant module resolution for the FLOW-ONLY
-     * [resolveImportedFunctionLikeDecl]. tsc's own sources (and any nodenext
-     * project) import via `.js`/`.jsx`/`.mjs`/`.cjs` specifiers that point at
-     * `.ts`/`.tsx` sources; [resolveModuleSpecifier] deliberately will NOT strip
-     * those (CLAUDE.md — TS2459 FP-avoidance), so a barrel-imported guard's module
-     * could not be resolved at all (the reason round 408's guard-narrowing wire was
-     * inert). Retry with the extension stripped — directory-relative to
-     * [contextFile] first (nested layouts), then globally (flat corpus layouts).
-     */
-    private fun resolveAliasJsModuleSpecifier(specifier: String, contextFile: String?): String? {
-        for (ext in listOf(".js", ".jsx", ".mjs", ".cjs")) {
-            if (!specifier.endsWith(ext)) continue
-            val stripped = specifier.removeSuffix(ext)
-            if (contextFile != null) resolveModuleSpecifierRelative(stripped, contextFile)?.let { return it }
-            resolveModuleSpecifier(stripped)?.let { return it }
-        }
-        return null
-    }
+    // -----------------------------------------------------------------------
+    // Name / module resolution — (INV.0) step 4a: the alias ladder, the module-
+    // specifier ladder, the two scope probes and the checker-local symbol-target
+    // link store now live in `NameResolver.kt` (ledger row 4). These are the
+    // delegation hops the inlining receipt prices; every call site is unchanged.
+    // `getSymbolTarget`/`setSymbolTarget`, `computeModuleSpecifier` and
+    // `computeImportedSymbolGeneral` have no caller left in this file — their
+    // only readers moved with them — so they get no hop.
+    // -----------------------------------------------------------------------
 
-    /**
-     * (CHK.30) round 949 — the LAST-RESORT leg of every import-alias target
-     * resolution, and the reason a type imported from a `node_modules` package used
-     * to be `any`.
-     *
-     * [resolveModuleSpecifier] and its relative siblings are the corpus-era string
-     * matchers: they look a specifier up among the [fileResults] KEYS, and the
-     * non-relative form deliberately refuses `.d.ts` (so `foo` cannot capture an
-     * ambient `foo.d.ts`). That is right for a flat fixture layout and leaves a real
-     * project with NO resolution at all for `import type { V } from 'pkg'` — a
-     * package's `types` / `main` / `exports` entry is not a string transformation of
-     * the specifier. The alias then resolved to nothing and every type it named
-     * degraded to `any`.
-     *
-     * **Nothing in this repo could see it.** `any` is legal everywhere, so no
-     * diagnostic MOVES at the import; what surfaces is the false-positive SHADOW —
-     * a TS7006 on every un-annotated callback parameter whose contextual type lived
-     * in that package (89 of knip's 156 residual rows, which is what (CHK.30) was
-     * opened about and mis-attributed to contextual typing).
-     *
-     * So this answers from [moduleResolutions] — what the project crawl's real
-     * `ModuleResolver` already decided for this exact `(importer, specifier)` pair —
-     * and from nothing else. It is APPENDED after every existing leg at each of the
-     * ten alias ladders, so it can only make MORE specifiers resolve and never
-     * redirect one that already resolved, and a corpus fixture cannot reach it at all
-     * (the map is empty off the project path).
-     *
-     * **AND IT IS DELIBERATELY THE ONLY SOURCE.** The first cut also consulted the
-     * `node_modules` walkers ~15 other checker sites use ([resolveBareNodeModulesAnyPrefix],
-     * [resolveBareViaPackageExportsRoot]); ablating those legs away is **0 RED across
-     * the whole 15,883-test suite**, because wherever they could answer the crawl has
-     * already answered better. Re-adding them would be shipping a leg no gate here
-     * can fail.
-     *
-     * The [fileResults] guard is not cosmetic: the crawl also pulls in `.json` and
-     * un-bound `.js` files, which have no binder result for a caller to read an
-     * export out of.
-     */
-    private fun resolveImportTargetFallback(spec: String, contextFile: String?): String? {
-        if (contextFile == null || spec.isEmpty() || moduleResolutions.isEmpty()) return null
-        val target = moduleResolutions[contextFile]?.get(spec) ?: return null
-        return if (target in fileResults) target else null
-    }
+    private fun augmentationTargetFile(spec: String, declaringFileName: String): String? =
+        nameResolver.augmentationTargetFile(spec, declaringFileName)
 
-    private fun resolveAlias(symbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol {
-        if (!visited.add(symbol.id)) return symbol // cycle detected
-        getSymbolTarget(symbol)?.let { return resolveAlias(it, visited) }
-        // For import aliases, try to resolve the target
-        if (symbol.flags.hasAny(SymbolFlags.Alias)) {
-            for (decl in symbol.declarations) {
-                when (decl) {
-                    is ImportEqualsDeclaration -> {
-                        val ref = decl.moduleReference
-                        when (ref) {
-                            is QualifiedName -> {
-                                val target = resolveQualifiedName(ref) ?: continue
-                                setSymbolTarget(symbol, target)
-                                return resolveAlias(target, visited)
-                            }
-                            is Identifier -> {
-                                val target = globals[ref.text] ?: continue
-                                setSymbolTarget(symbol, target)
-                                return resolveAlias(target, visited)
-                            }
-                            is ExternalModuleReference -> {
-                                // import A = require("mod") — resolve module then its export
-                                val specifier = (ref.expression as? StringLiteralNode)?.text ?: continue
-                                val targetFile = resolveModuleSpecifier(specifier, decl)
-                                if (targetFile == null) {
-                                    // B113: AMBIENT module — `declare module "mod1" { ... }` is
-                                    // bound (Binder) under a symbol whose name == the specifier
-                                    // string, merged into globals at checker init. It is NOT a
-                                    // file, so resolveModuleSpecifier returns null. Resolve the
-                                    // alias to that ambient module symbol so `import m1 =
-                                    // require("mod1"); var x: m1.Foo` finds mod1's exported Foo.
-                                    val ambient = globals[specifier]
-                                    if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module) &&
-                                        ambient.exports != null) {
-                                        // (CHK.81) …unless the block's surface is `export = <value>`,
-                                        // in which case the alias names that value, as in tsc.
-                                        val target = ambientRequireAliasTarget(ambient, visited) ?: ambient
-                                        setSymbolTarget(symbol, target)
-                                        return resolveAlias(target, visited)
-                                    }
-                                    continue
-                                }
-                                val targetResult = fileResults[targetFile] ?: continue
-                                // Look for export = X in the target module
-                                val exportTarget = resolveModuleExportAssignment(targetResult, visited)
-                                if (exportTarget != null) {
-                                    setSymbolTarget(symbol, exportTarget)
-                                    return resolveAlias(exportTarget, visited)
-                                }
-                                // No export = found — create module symbol
-                                val moduleSymbol = createModuleSymbol(symbol.name, targetResult)
-                                setSymbolTarget(symbol, moduleSymbol)
-                                return moduleSymbol
-                            }
-                            else -> {}
-                        }
-                    }
-                    is ImportDeclaration -> {
-                        val specifier = (decl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-                        // Round 512 (the round-511 dir-relative lesson): the bare
-                        // resolver only knows flat corpus-style keys — a path-shaped
-                        // layout (`/proj/src/a.ts` importing `./b`) needs the
-                        // directory-relative leg or the alias never resolves on
-                        // real on-disk projects.
-                        val targetFile = resolveModuleSpecifier(specifier, decl)
-                            ?: owningSourceFile(decl)?.fileName?.let {
-                                resolveModuleSpecifierRelative(specifier, it)
-                            } ?: continue
-                        val targetResult = fileResults[targetFile] ?: continue
+    private fun resolveAliasJsModuleSpecifier(specifier: String, contextFile: String?): String? =
+        nameResolver.resolveAliasJsModuleSpecifier(specifier, contextFile)
 
-                        // Namespace import: import * as Foo from "mod"
-                        val namedBindings = decl.importClause?.namedBindings
-                        if (namedBindings is NamespaceImport) {
-                            val moduleSymbol = createModuleSymbol(symbol.name, targetResult)
-                            setSymbolTarget(symbol, moduleSymbol)
-                            return moduleSymbol
-                        }
+    private fun resolveImportTargetFallback(spec: String, contextFile: String?): String? =
+        nameResolver.resolveImportTargetFallback(spec, contextFile)
 
-                        // Default import: import Foo from "mod"
-                        if (decl.importClause?.name != null &&
-                            symbol.name == decl.importClause.name.text) {
-                            // Look for "default" export in target — first check locals["default"]
-                            val defaultSymbol = targetResult.locals["default"]
-                            if (defaultSymbol != null) {
-                                setSymbolTarget(symbol, defaultSymbol)
-                                return resolveAlias(defaultSymbol, visited)
-                            }
-                            // `export default function f() {}` / `export default class C {}`.
-                            // A DECLARATION carrying both modifiers is neither an
-                            // ExportAssignment nor bound under the name "default" — it is
-                            // bound under its OWN — so every leg around this one misses it
-                            // and the alias used to resolve to nothing, i.e. to `any`.
-                            // SILENTLY: `any` is assignable to everything, so a program
-                            // importing a default-exported function type-checked and every
-                            // misuse of it went unreported (measured against tsgo 7.0.2,
-                            // which reports TS2322 for the same two files).
-                            for (stmt in targetResult.sourceFile.statements) {
-                                val defaultName = when {
-                                    stmt is FunctionDeclaration &&
-                                        ModifierFlag.Export in stmt.modifiers &&
-                                        ModifierFlag.Default in stmt.modifiers -> stmt.name?.text
-                                    stmt is ClassDeclaration &&
-                                        ModifierFlag.Export in stmt.modifiers &&
-                                        ModifierFlag.Default in stmt.modifiers -> stmt.name?.text
-                                    else -> null
-                                } ?: continue
-                                val exported = targetResult.locals[defaultName] ?: continue
-                                setSymbolTarget(symbol, exported)
-                                return resolveAlias(exported, visited)
-                            }
-                            // Scan for `export default X` (ExportAssignment without isExportEquals)
-                            for (stmt in targetResult.sourceFile.statements) {
-                                if (stmt is ExportAssignment && !stmt.isExportEquals) {
-                                    val resolved = resolveExpressionToSymbol(stmt.expression, targetResult, visited)
-                                    if (resolved != null) {
-                                        setSymbolTarget(symbol, resolved)
-                                        return resolveAlias(resolved, visited)
-                                    }
-                                }
-                            }
-                            // Scan for `export { X as default } from "mod"` re-exports
-                            for (stmt in targetResult.sourceFile.statements) {
-                                if (stmt is ExportDeclaration) {
-                                    val clause = stmt.exportClause
-                                    if (clause is NamedExports) {
-                                        val defaultSpec = clause.elements.find { it.name.text == "default" }
-                                        if (defaultSpec != null) {
-                                            val originalName = defaultSpec.propertyName?.text ?: "default"
-                                            val fromSpec = (stmt.moduleSpecifier as? StringLiteralNode)?.text
-                                            val resolvedTarget: Symbol? = if (fromSpec != null) {
-                                                val fromFile = resolveModuleSpecifier(fromSpec, stmt)
-                                                val fromResult = fromFile?.let { fileResults[it] }
-                                                fromResult?.locals?.get(originalName)
-                                            } else {
-                                                targetResult.locals[originalName]
-                                            }
-                                            if (resolvedTarget != null) {
-                                                setSymbolTarget(symbol, resolvedTarget)
-                                                return resolveAlias(resolvedTarget, visited)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            // Fallback: `export = X` is consumed as the DEFAULT import under
-                            // esModuleInterop (TypeScript's synthetic-default rule — a CommonJS
-                            // `export =` module is default-imported as its export-equals value).
-                            // e.g. exp.ts `export = x` + imp.ts `import foo from "./exp"` → foo is x.
-                            // Gated to esModuleInterop (default true) since without it the default
-                            // import of an `export =` module is a TS1259 error, not a value.
-                            if (options.esModuleInterop) {
-                                val exportEqualsTarget = resolveModuleExportAssignment(targetResult, visited)
-                                if (exportEqualsTarget != null) {
-                                    setSymbolTarget(symbol, exportEqualsTarget)
-                                    return resolveAlias(exportEqualsTarget, visited)
-                                }
-                            }
-                            continue
-                        }
+    private fun resolveAlias(symbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol =
+        nameResolver.resolveAlias(symbol, visited)
 
-                        // Named import: import { X } from "mod"
-                        val target = targetResult.locals[symbol.name] ?: continue
-                        setSymbolTarget(symbol, target)
-                        return resolveAlias(target, visited)
-                    }
-                    is ImportSpecifier -> {
-                        // Named import — the original name to look up
-                        val originalName = decl.propertyName?.text ?: decl.name.text
-                        // Find the ImportDeclaration parent for this specifier via the
-                        // prebuilt index (no parent pointers; round 432 — was a
-                        // program-wide structural scan re-run on every call for
-                        // unresolvable barrel aliases).
-                        // (CHK.80)(c) The index holds TOP-LEVEL imports only; a specifier
-                        // written inside a `declare module` block (`import { EventEmitter }
-                        // from "node:events"` — 29 bare heritage bases of `@types/node`)
-                        // reaches its ImportDeclaration through the INV.2(a) parent chain,
-                        // and was left unresolved (`any`) here before.
-                        val enclosingImports = enclosingImportsOf(decl).ifEmpty {
-                            blockLevelImportOf(decl)?.let { listOf(it) } ?: emptyList()
-                        }
-                        for ((_, stmt) in enclosingImports) {
-                            val specifier2 = (stmt.moduleSpecifier as? StringLiteralNode)?.text
-                                ?: continue
-                            // Round 512 (the round-511 dir-relative lesson): the bare
-                            // resolver only knows flat corpus-style keys — path-shaped
-                            // on-disk layouts need the directory-relative leg.
-                            val targetFile2 = resolveModuleSpecifier(specifier2, stmt)
-                                ?: owningSourceFile(stmt)?.fileName?.let {
-                                    resolveModuleSpecifierRelative(specifier2, it)
-                                }
-                            if (targetFile2 == null) {
-                                // Ambient module fallback — `declare module "X"` in a .d.ts file.
-                                val ambient = globals[specifier2]
-                                if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module)) {
-                                    ambient.exports?.get(originalName)?.let { target ->
-                                        setSymbolTarget(symbol, target)
-                                        return resolveAlias(target, visited)
-                                    }
-                                    // Fallback: ambient module body has `export = X`
-                                    // (e.g. `import alias = demoNS; export = alias`) —
-                                    // resolve X then look up `originalName` in X's exports.
-                                    val exportEqualsTarget = resolveAmbientModuleExportEquals(ambient, visited)
-                                    if (exportEqualsTarget != null) {
-                                        exportEqualsTarget.exports?.get(originalName)
-                                            // (CHK.81) …unless that entry is a LOCAL re-export clause's
-                                            // specifier and nothing else (`namespace Stream { export
-                                            // { Stream } }`, `@types/node`'s own shape): it names the
-                                            // ENCLOSING block's class, which only the surface walk below
-                                            // resolves. Since (CHK.81) made a `require` alias name the
-                                            // `export =` CLASS, this leg started landing on that entry
-                                            // and answering `any` for `import { Stream } from
-                                            // "node:stream"` — a LOST TS2322 on real `@types/node`.
-                                            ?.takeIf { t -> !(t.declarations.isNotEmpty() && t.declarations.all { it is ExportSpecifier }) }
-                                            ?.let { target ->
-                                                setSymbolTarget(symbol, target)
-                                                return resolveAlias(target, visited)
-                                            }
-                                    }
-                                    // (CHK.80)(c) the (CHK.79) surface walk: an `export * from
-                                    // "m"` block (`node:net`), and an `export = <alias>` whose
-                                    // target block itself ends in `export = Stream` — the
-                                    // NAMESPACE's members (`import { Readable } from
-                                    // "node:stream"`), which the leg above cannot see.
-                                    ambientModuleSurfaceMember(ambient, originalName, HashSet())?.let { target ->
-                                        setSymbolTarget(symbol, target)
-                                        return resolveAlias(target, visited)
-                                    }
-                                }
-                                continue
-                            }
-                            val targetResult2 = fileResults[targetFile2] ?: continue
-                            val target = targetResult2.locals[originalName] ?: continue
-                            setSymbolTarget(symbol, target)
-                            return resolveAlias(target, visited)
-                        }
-                    }
-                    else -> {}
-                }
-            }
-        }
-        return symbol
-    }
+    private fun resolveNamePath(path: String, result: BinderResult): Symbol? =
+        nameResolver.resolveNamePath(path, result)
+
+    private fun findSymbolInExports(name: String, scope: SymbolTable): Symbol? =
+        nameResolver.findSymbolInExports(name, scope)
+
+    private fun resolveModuleSpecifier(specifier: String, contextNode: Node? = null): String? =
+        nameResolver.resolveModuleSpecifier(specifier, contextNode)
+
+    private fun resolveModuleSpecifierRelative(specifier: String, contextFileName: String): String? =
+        nameResolver.resolveModuleSpecifierRelative(specifier, contextFileName)
+
+    private fun resolveModuleSpecifierRelativeJsAware(specifier: String, contextFileName: String): String? =
+        nameResolver.resolveModuleSpecifierRelativeJsAware(specifier, contextFileName)
+
+    private fun resolveAliasTarget(symbol: Symbol): Symbol? =
+        nameResolver.resolveAliasTarget(symbol)
+
+    private fun resolveImportedSymbolGeneral(aliasSymbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol? =
+        nameResolver.resolveImportedSymbolGeneral(aliasSymbol, visited)
 
     /**
      * (CHK.80)(c) The ImportDeclaration a NAMED-import specifier belongs to, through
@@ -18352,7 +18021,7 @@ class Checker(
      * [enclosingImportIndex] does not hold, i.e. one written inside a `declare
      * module` block. Null for an unindexed (synthesized) node.
      */
-    private fun blockLevelImportOf(spec: ImportSpecifier): Pair<String, ImportDeclaration>? {
+    internal fun blockLevelImportOf(spec: ImportSpecifier): Pair<String, ImportDeclaration>? {
         var cur: Node? = (spec as NodeBase).parent
         var hops = 0
         while (cur != null && hops++ < 4) {
@@ -18369,7 +18038,7 @@ class Checker(
      * Resolve a module's export assignment (`export = expr`) to a symbol.
      * Returns null if no export assignment exists.
      */
-    private fun resolveModuleExportAssignment(result: BinderResult, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
+    internal fun resolveModuleExportAssignment(result: BinderResult, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
         for (stmt in result.sourceFile.statements) {
             if (stmt is ExportAssignment && stmt.isExportEquals) {
                 return resolveExpressionToSymbol(stmt.expression, result, visited)
@@ -18399,7 +18068,7 @@ class Checker(
      * `@types/node` 20.19.43 answered null to the externals generator's lens for the
      * same reason.
      */
-    private fun ambientRequireAliasTarget(ambient: Symbol, visited: MutableSet<Int>): Symbol? {
+    internal fun ambientRequireAliasTarget(ambient: Symbol, visited: MutableSet<Int>): Symbol? {
         val target = resolveAmbientModuleExportEquals(ambient, visited) ?: return null
         if (target === ambient || target.flags.hasAny(SymbolFlags.Alias)) return null
         return if (target.flags.hasAny(EXPORT_EQUALS_VALUE_TARGET)) target else null
@@ -18413,7 +18082,7 @@ class Checker(
      * export = alias` works) before falling back to globals.
      * Returns null if no export-equals exists or the target can't be resolved.
      */
-    private fun resolveAmbientModuleExportEquals(moduleSym: Symbol, visited: MutableSet<Int>): Symbol? {
+    internal fun resolveAmbientModuleExportEquals(moduleSym: Symbol, visited: MutableSet<Int>): Symbol? {
         for (decl in moduleSym.declarations) {
             if (decl !is ModuleDeclaration) continue
             val body = decl.body as? ModuleBlock ?: continue
@@ -18444,7 +18113,7 @@ class Checker(
     /**
      * Resolve an expression to a symbol (for export assignment resolution).
      */
-    private fun resolveExpressionToSymbol(expr: Expression, result: BinderResult, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
+    internal fun resolveExpressionToSymbol(expr: Expression, result: BinderResult, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
         return when (expr) {
             is Identifier -> {
                 // 17.32d: identifiers inside `export default X` / `export = X`
@@ -18476,7 +18145,7 @@ class Checker(
      * exports come from the inner ambient module, not from file-level locals.
      * For regular `.ts` files, uses the file-level locals directly.
      */
-    private fun createModuleSymbol(name: String, targetResult: BinderResult): Symbol {
+    internal fun createModuleSymbol(name: String, targetResult: BinderResult): Symbol {
         val moduleSymbol = Symbol(
             name = name,
             flags = SymbolFlags.Module,
@@ -18527,25 +18196,6 @@ class Checker(
     }
 
     /**
-     * Resolve a dotted name path (e.g., "A.B.C.E") to a symbol by walking the namespace chain.
-     */
-    private fun resolveNamePath(path: String, result: BinderResult): Symbol? {
-        val parts = path.split(".")
-        // First look in file-level locals, then globals
-        var current = result.locals[parts[0]] ?: globals[parts[0]]
-        // If not found at file level, search all namespace scopes across all files
-        if (current == null && parts.size > 1) {
-            current = findSymbolInAllNamespaceScopes(parts[0]) ?: return null
-        }
-        if (current == null) return null
-        for (i in 1 until parts.size) {
-            current = resolveAlias(current!!)
-            current = current.exports?.get(parts[i]) ?: return null
-        }
-        return current
-    }
-
-    /**
      * Search all namespace export scopes in all binder results for a symbol with the given name.
      * Used when a name is only in a namespace scope (e.g., import alias inside a namespace body).
      *
@@ -18555,7 +18205,7 @@ class Checker(
      * local — B83.5-unbound) fell through resolveNamePath to this full-program recursive
      * scan; ~7% of the harness JFR profile sat in this family.
      */
-    private fun findSymbolInAllNamespaceScopes(name: String): Symbol? {
+    internal fun findSymbolInAllNamespaceScopes(name: String): Symbol? {
         namespaceScopeSymbolCache[name]?.let { return it }
         if (namespaceScopeSymbolCache.containsKey(name)) return null
         var found: Symbol? = null
@@ -18567,21 +18217,7 @@ class Checker(
         return found
     }
 
-    private fun findSymbolInExports(name: String, scope: SymbolTable): Symbol? {
-        // Check this scope directly
-        val direct = scope[name]
-        if (direct != null) return direct
-        // Recurse into namespace exports
-        for ((_, sym) in scope) {
-            if (sym.flags.hasAny(SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)) {
-                val found = sym.exports?.let { findSymbolInExports(name, it) }
-                if (found != null) return found
-            }
-        }
-        return null
-    }
-
-    private fun resolveQualifiedName(qn: QualifiedName): Symbol? {
+    internal fun resolveQualifiedName(qn: QualifiedName): Symbol? {
         val left = when (val l = qn.left) {
             // INV.3(d): node-keyed root (was the merged `globals`) — the retired
             // merge no longer holds module-file namespaces; an own/imported root
@@ -18635,118 +18271,6 @@ class Checker(
             // (CHK.80)(a) the value-position twin of [resolveQualifiedName]'s last leg.
             ?: ambientModuleSurfaceMember(resolved, expr.name.text, HashSet())
     }
-
-    /**
-     * Simple module specifier resolution: strip leading `./` and append `.ts` / try `.ts`.
-     * This is a simplified version for the test suite where module specifiers
-     * are relative paths within the same test compilation unit.
-     * Also supports baseUrl-relative non-relative specifiers (e.g., "defs/cc" with baseUrl "/proj").
-     */
-    private fun resolveModuleSpecifier(specifier: String, contextNode: Node? = null): String? {
-        // Perf (round 432): pure function of the specifier ([fileResults]/[options] are
-        // fixed; contextNode is unused) — memoized incl. null results (round 432 note:
-        // getOrPut would recompute the hot unresolvable-specifier case every call).
-        // Single-lookup via the sentinel (round 483): null is the hot result.
-        moduleSpecifierCache[specifier]?.let { return if (it === UNRESOLVED_MODULE_SPEC) null else it }
-        val result = computeModuleSpecifier(specifier)
-        moduleSpecifierCache[specifier] = result ?: UNRESOLVED_MODULE_SPEC
-        return result
-    }
-
-    private fun computeModuleSpecifier(specifier: String): String? {
-        val isRelative = specifier.startsWith("./") || specifier.startsWith("../")
-        val baseName = specifier.removePrefix("./").removePrefix("../")
-        // Try exact match first, then with extensions
-        val candidates = mutableListOf(
-            baseName,
-            "$baseName.ts",
-            "$baseName.tsx",
-            "./$baseName",
-            "./$baseName.ts",
-            "./$baseName.tsx",
-        )
-        // Only try .d.ts for relative specifiers (./X or ../X) to avoid matching ambient module
-        // declarations in non-relative imports like "foo" → "foo.d.ts" (which may have augmentations
-        // from other files that we can't account for).
-        if (isRelative) {
-            candidates.add("$baseName.d.ts")
-            candidates.add("./$baseName.d.ts")
-        }
-        // For non-relative specifiers, also try baseUrl-prefixed paths
-        if (!isRelative && options.baseUrl != null) {
-            val baseUrl = options.baseUrl.trimEnd('/')
-            candidates.add("$baseUrl/$baseName")
-            candidates.add("$baseUrl/$baseName.ts")
-            candidates.add("$baseUrl/$baseName.tsx")
-        }
-        for (candidate in candidates) {
-            if (candidate in fileResults) return candidate
-        }
-        // Try matching by base filename (strips common path prefix)
-        for (fileName in fileResults.keys) {
-            // Only strip .d.ts for relative specifiers (./X); skip .d.ts files for non-relative
-            val fileBase = if (isRelative) {
-                fileName.removePrefix("./").removeSuffix(".d.ts").removeSuffix(".ts").removeSuffix(".tsx")
-            } else {
-                fileName.removePrefix("./").removeSuffix(".ts").removeSuffix(".tsx")
-            }
-            if (fileBase == baseName) return fileName
-            // For non-relative specifiers: check if file ends with /baseName
-            if (!isRelative && (fileBase.endsWith("/$baseName") || fileBase == baseName)) return fileName
-            // For relative specifiers in flat-directory absolute-path test layouts (e.g. @Filename: /foo.ts):
-            // fileBase = "/foo", baseName = "foo" → fileBase == "/$baseName"
-            if (isRelative && fileBase == "/$baseName") return fileName
-        }
-        return null
-    }
-
-    /**
-     * Resolve a module specifier relative to the given context file's directory.
-     * For `folder/bar.ts` importing `./foo`, resolves to `folder/foo.ts`.
-     * Falls back to [resolveModuleSpecifier] if directory-relative resolution fails.
-     */
-    private fun resolveModuleSpecifierRelative(specifier: String, contextFileName: String): String? {
-        if (!specifier.startsWith("./") && !specifier.startsWith("../")) {
-            // Non-relative: use normal resolution
-            return resolveModuleSpecifier(specifier)
-        }
-        // Get directory of the context file
-        val dir = contextFileName.substringBeforeLast('/', "")
-        val resolved = if (dir.isEmpty()) specifier else "$dir/${specifier.removePrefix("./")}"
-        // Normalize `..` segments
-        val normalized = normalizePath(resolved)
-        val candidates = listOf(
-            normalized,
-            "$normalized.ts",
-            "$normalized.tsx",
-            "$normalized.d.ts",
-        )
-        for (candidate in candidates) {
-            if (candidate in fileResults) return candidate
-        }
-        // Also strip leading "./" if present for lookup
-        val candidatesNoPrefix = candidates.map { it.removePrefix("./") }
-        for (candidate in candidatesNoPrefix) {
-            if (candidate in fileResults) return candidate
-        }
-        return resolveModuleSpecifier(specifier)
-    }
-
-    /**
-     * [resolveModuleSpecifierRelative] that ALSO retries with a trailing ESM `.js`/`.jsx`
-     * extension stripped (nodenext resolves `../compiler/types.js` → `../compiler/types.ts`).
-     * The base resolver deliberately avoids `.js` globally (FP-prone per the TS2459 gotcha), so
-     * callers that must be `.js`-tolerant use this. Purely additive — can only make MORE
-     * specifiers resolve, never fewer — so it only ever SUPPRESSES a false-positive
-     * "cannot be found" diagnostic. Consolidates the strip-and-retry pattern inlined at the
-     * TS2694/TS2305/TS2307 augmentation-target sites.
-     */
-    private fun resolveModuleSpecifierRelativeJsAware(specifier: String, contextFileName: String): String? =
-        resolveModuleSpecifierRelative(specifier, contextFileName)
-            ?: (if (specifier.endsWith(".js")) resolveModuleSpecifierRelative(specifier.removeSuffix(".js"), contextFileName) else null)
-            ?: (if (specifier.endsWith(".jsx")) resolveModuleSpecifierRelative(specifier.removeSuffix(".jsx"), contextFileName) else null)
-            ?: (if (specifier.endsWith(".mjs")) resolveModuleSpecifierRelative(specifier.removeSuffix(".mjs"), contextFileName) else null)
-            ?: (if (specifier.endsWith(".cjs")) resolveModuleSpecifierRelative(specifier.removeSuffix(".cjs"), contextFileName) else null)
 
     /**
      * Resolve a relative module specifier strictly relative to the context file's directory,
@@ -18992,7 +18516,7 @@ class Checker(
 
     /** Normalize a path by resolving `..` and `.` segments. Memoized (M0.3(iv)) —
      *  pure function, called per relative-specifier resolution on hot flow paths. */
-    private fun normalizePath(path: String): String = normalizePathMemo.getOrPut(path) {
+    internal fun normalizePath(path: String): String = normalizePathMemo.getOrPut(path) {
         val parts = path.split('/')
         val result = mutableListOf<String>()
         for (part in parts) {
@@ -56913,7 +56437,7 @@ class Checker(
      * the general `resolveAlias` (that regressed the self-compile with a TS2315
      * flood, round 409); the general path stays byte-identical.
      */
-    private fun resolveExportedSymbolThroughStars(file: SourceFile, name: String): Symbol? {
+    internal fun resolveExportedSymbolThroughStars(file: SourceFile, name: String): Symbol? {
         val cacheKey = "${file.fileName} $name"
         if (starExportSymbolCache.containsKey(cacheKey)) return starExportSymbolCache[cacheKey]
         val result = computeExportedSymbolThroughStars(file, name, mutableSetOf(), 0)
@@ -117691,7 +117215,7 @@ interface DataView {
      * (`TlsOptions extends net.ServerOpts`). `NamespaceImportHeritageTest` pins both
      * channels; 7 of its 9 pins redden without this.
      */
-    private fun ambientModuleSurfaceMember(module: Symbol, name: String, visited: MutableSet<Int>): Symbol? {
+    internal fun ambientModuleSurfaceMember(module: Symbol, name: String, visited: MutableSet<Int>): Symbol? {
         if (!visited.add(module.id)) return null
         // An alias that is NOT itself a module: a merged carrier may carry the Alias
         // bit beside its Module one (an `import net = require("net")` alias and the
@@ -118977,18 +118501,6 @@ interface DataView {
             sym.valueDeclaration = param
             sym
         }
-    }
-
-    /** Resolve an import alias to its target symbol, with cycle detection. */
-    private fun resolveAliasTarget(symbol: Symbol): Symbol? {
-        // Use the checker-local LinkStore target if available
-        getSymbolTarget(symbol)?.let { return it }
-        // Trigger full cross-file resolution if no cached target
-        if (symbol.flags.hasAny(SymbolFlags.Alias)) {
-            val resolved = resolveAlias(symbol)
-            return if (resolved !== symbol) resolved else null
-        }
-        return null
     }
 
     // -----------------------------------------------------------------------
@@ -126792,80 +126304,10 @@ interface DataView {
         return null
     }
 
-    /**
-     * INV.3(b): the kind-AGNOSTIC generalization of the flow-only import-resolver
-     * skeleton ([resolveImportedFunctionLikeDecl] / [resolveImportedNamespaceSymbol] /
-     * [resolveImportedEnumSymbol]): an ImportSpecifier-declared alias resolves to the
-     * target module's exported SYMBOL whatever its kind, following ESM `.js`
-     * specifiers (which the general [resolveModuleSpecifier] deliberately won't
-     * strip) and `export *` barrels ([resolveExportedSymbolThroughStars]), hopping
-     * re-import/re-export aliases ([visited]-guarded).
-     *
-     * ADDITIVE: the three kind-specific legacy variants stay untouched — their
-     * per-declaration kind-filter-then-continue semantics differ subtly from
-     * first-resolved-symbol (a multi-declaration alias whose first decl resolves to
-     * the "wrong" kind), so delegating them here would not be behavior-preserving.
-     * They become deletion candidates when their consumers migrate to the per-file
-     * primitive (INV.3(c)/(d)). Like them, this must NEVER be wired into the general
-     * [resolveAlias] (the round-409 TS2315-flood gotcha) — its only consumer is
-     * [lookupPerFile].
-     */
-    private fun resolveImportedSymbolGeneral(aliasSymbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
-        val topLevel = visited.isEmpty()
-        if (MapCensus.boxedKeyCensus && topLevel) MapCensus.bk(MapCensus.BK_RISG, aliasSymbol.id.toLong())
-        val cached = topLevel && importedSymbolGeneralCache.containsKey(aliasSymbol.id)
-        if (MapCensus.on) MapCensus.risgEnter(topLevel, cached)
-        if (cached) {
-            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_RISG, aliasSymbol.id.toLong())
-            return importedSymbolGeneralCache[aliasSymbol.id]
-        }
-        val result = computeImportedSymbolGeneral(aliasSymbol, visited)
-        if (topLevel) {
-            if (MapCensus.boxedKeyCensus) MapCensus.bk(MapCensus.BK_RISG, aliasSymbol.id.toLong())
-            importedSymbolGeneralCache[aliasSymbol.id] = result
-        }
-        return result
-    }
-
-    private fun computeImportedSymbolGeneral(aliasSymbol: Symbol, visited: MutableSet<Int>): Symbol? {
-        if (!visited.add(aliasSymbol.id)) return null
-        for (decl in aliasSymbol.declarations) {
-            if (decl !is ImportSpecifier) continue
-            val originalName = decl.propertyName?.text ?: decl.name.text
-            val (contextFile, importDecl) = findEnclosingImport(decl) ?: continue
-            val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-            // INV.3(d)(ii): the DIR-RELATIVE resolver is load-bearing for path-shaped
-            // layouts (`/proj/src/f1.ts` importing `./lib`) — the plain resolver only
-            // knows flat corpus-style keys, and pre-retire the merged globals masked
-            // the miss (importers free-rode on the merge); a failed hop here returns
-            // the bare alias and every import-mediated type silently dies. The
-            // `.js`-aware leg is unaffected (a `.js` spec fails the relative
-            // candidates and still strips via resolveAliasJsModuleSpecifier).
-            val targetFile = resolveModuleSpecifier(spec, importDecl)
-                ?: resolveModuleSpecifierRelative(spec, contextFile)
-                ?: resolveAliasJsModuleSpecifier(spec, contextFile)
-                ?: resolveImportTargetFallback(spec, contextFile)
-                ?: continue
-            val tr = fileResults[targetFile] ?: continue
-            val sym = tr.locals[originalName]
-                ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
-                ?: continue
-            // [mergeSymbolTable] pollutes same-named symbols' FLAGS (and
-            // declarations) across files — an Alias flag alone cannot identify
-            // an import alias (the isValueExport gotcha: scan declarations,
-            // never flags). A symbol with any non-import-binding declaration
-            // IS the resolution target.
-            if (sym.declarations.isEmpty() || sym.declarations.any { !isImportBindingDecl(it) }) return sym
-            // A pure import-binding alias — a re-import + re-export hop.
-            computeImportedSymbolGeneral(sym, visited)?.let { return it }
-        }
-        return null
-    }
-
     /** INV.3(b): declaration kinds a pure import-alias binding carries — the
      *  binder declares a named import with the ImportSpecifier, and default /
      *  namespace imports with the enclosing ImportDeclaration node. */
-    private fun isImportBindingDecl(decl: Node): Boolean =
+    internal fun isImportBindingDecl(decl: Node): Boolean =
         decl is ImportSpecifier || decl is ImportDeclaration || decl is ImportEqualsDeclaration
 
     /**
@@ -126939,7 +126381,7 @@ interface DataView {
 
     /** Find the ImportDeclaration containing [spec] plus its file (no parent
      *  pointers), for [resolveImportedFunctionLikeDecl]. */
-    private fun findEnclosingImport(spec: ImportSpecifier): Pair<String, ImportDeclaration>? =
+    internal fun findEnclosingImport(spec: ImportSpecifier): Pair<String, ImportDeclaration>? =
         enclosingImportsOf(spec).firstOrNull()
 
     /**
@@ -126949,7 +126391,7 @@ interface DataView {
      * A statement is listed once even if it contains structural duplicates of [spec].
      */
     @Suppress("UNCHECKED_CAST")
-    private fun enclosingImportsOf(spec: ImportSpecifier): List<Pair<String, ImportDeclaration>> =
+    internal fun enclosingImportsOf(spec: ImportSpecifier): List<Pair<String, ImportDeclaration>> =
         when (val entry = enclosingImportIndex[spec]) {
             null -> emptyList()
             // (INC.81) the one-entry representation, which is essentially the whole
