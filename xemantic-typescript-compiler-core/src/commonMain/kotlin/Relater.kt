@@ -130,6 +130,13 @@ package com.xemantic.typescript.compiler
  */
 internal class Relater(
     private val checker: Checker,
+    /**
+     * (INV.0) step 7 — the ENUM collaborator, wired DIRECTLY rather than through
+     * [Checker]. Eleven of this class's ambient reads were enum questions; routing
+     * them here is what takes the row from 45 to 34. Safe by construction order:
+     * `Checker` builds `EnumSemantics` before `Relater`.
+     */
+    private val enumSemantics: EnumSemantics,
     private val assignableRelation: Relation,
     private val identityRelation: Relation,
     /**
@@ -213,10 +220,10 @@ internal class Relater(
         // its OWN enum relates to. Unconditional, this made `Z.Foo.A` assignable to
         // `X.Foo`, which is the verdict B266 existed to supply.
         if (sf.hasAny(TypeFlags.EnumLiteral) && tf.hasAny(TypeFlags.Enum)) {
-            val sourceEnum = checker.enumOfMemberTypeSymbol(source)
-            val targetEnum = checker.enumOwnTypeSymbol(target)
+            val sourceEnum = enumSemantics.enumOfMemberTypeSymbol(source)
+            val targetEnum = enumSemantics.enumOwnTypeSymbol(target)
             if (sourceEnum == null || targetEnum == null) return true
-            if (checker.enumTypesRelation(sourceEnum, targetEnum) == null) return true
+            if (enumSemantics.enumTypesRelation(sourceEnum, targetEnum) == null) return true
         }
         if (sf.hasAny(TypeFlags.UniqueESSymbol) && tf.hasAny(TypeFlags.ESSymbol)) return true
         // String-like types to string
@@ -243,7 +250,7 @@ internal class Relater(
             // (CHK.113)(a): and FLAVOUR-AWARE for the wide `number` too — a pure STRING
             // enum has no numeric constituent to reach, so it is not "any enum" that a
             // number may be assigned to.
-            if (checker.enumTargetAdmitsNumericSource(target) && checker.numericLiteralFitsEnum(source, target)) return true
+            if (enumSemantics.enumTargetAdmitsNumericSource(target) && enumSemantics.numericLiteralFitsEnum(source, target)) return true
         }
         // M3.1 (round 428b): numeric-enum → number (a numeric enum's values ARE
         // numbers — tsc debug.ts `formatEnum(this.flags, …)` where flags: FlowFlags
@@ -274,7 +281,7 @@ internal class Relater(
         // direction, which tsc keeps for bit-flag enums — there is no compatibility rule
         // to justify it.
         if (sf.hasAny(TypeFlags.EnumLiteral) || tf.hasAny(TypeFlags.EnumLiteral)) {
-            checker.enumMemberTypeIsStringValued(source)?.let { sourceIsString ->
+            enumSemantics.enumMemberTypeIsStringValued(source)?.let { sourceIsString ->
                 if (tf.hasAny(if (sourceIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) {
                     // (CHK.83): a LITERAL target is not the wide primitive. tsc relates an
                     // enum member to a string/number literal ONLY by value —
@@ -287,12 +294,12 @@ internal class Relater(
                     // ew` (the WHOLE enum) reported. Falling through here is a rejection:
                     // nothing below relates a member-less enum object to a literal.
                     if (target !is Type.StringLiteral && target !is Type.NumberLiteral) return true
-                    if (checker.enumMemberValueEqualsLiteral(source, target)) return true
+                    if (enumSemantics.enumMemberValueEqualsLiteral(source, target)) return true
                 }
             }
-            checker.enumMemberTypeIsStringValued(target)?.let { targetIsString ->
+            enumSemantics.enumMemberTypeIsStringValued(target)?.let { targetIsString ->
                 if (!targetIsString && sf.hasAny(TypeFlags.NumberLike) &&
-                    checker.numericLiteralFitsEnum(source, target)
+                    enumSemantics.numericLiteralFitsEnum(source, target)
                 ) return true
             }
         }
@@ -403,7 +410,7 @@ internal class Relater(
         // mutually assignable. The verdict is STRUCTURAL, not identity: see
         // [enumMemberTypesAreSameMember].
         if (source.flags.hasAny(TypeFlags.EnumLiteral) && target.flags.hasAny(TypeFlags.EnumLiteral)) {
-            return checker.enumMemberTypesAreSameMember(source, target)
+            return enumSemantics.enumMemberTypesAreSameMember(source, target)
         }
         // (REL.1)(c) round 746: two ENUMS, and an enum MEMBER against an enum, relate by
         // tsc's `isEnumTypeRelatedTo` — every source member present in the target with an
@@ -423,19 +430,19 @@ internal class Relater(
         // members of THIS enum ([enumTargetsAreOwnMembers], the round-746 owner rule):
         // anything else falls through to the pre-existing answer.
         if (REL2_ENUM_TO_MEMBER) run {
-            checker.enumOwnTypeSymbol(source) ?: return@run
+            enumSemantics.enumOwnTypeSymbol(source) ?: return@run
             val targets = if (target is Type.Union) target.types else listOf(target)
-            if (targets.any { checker.enumOfMemberTypeSymbol(it) == null }) return@run
-            if (!checker.enumTargetsAreOwnMembers(source, targets)) return@run
+            if (targets.any { enumSemantics.enumOfMemberTypeSymbol(it) == null }) return@run
+            if (!enumSemantics.enumTargetsAreOwnMembers(source, targets)) return@run
             // A non-decomposable enum cannot be shown to be covered, and an enum whose
             // domain is unknown is not a subtype of a proper subset of it.
-            val members = checker.enumMemberTypesOf(source) ?: return false
-            return members.all { m -> targets.any { checker.enumMemberTypesAreSameMember(m, it) } }
+            val members = enumSemantics.enumMemberTypesOf(source) ?: return false
+            return members.all { m -> targets.any { enumSemantics.enumMemberTypesAreSameMember(m, it) } }
         }
         run {
-            val targetEnum = checker.enumOwnTypeSymbol(target) ?: return@run
-            val sourceEnum = checker.enumOwnTypeSymbol(source) ?: checker.enumOfMemberTypeSymbol(source) ?: return@run
-            return checker.enumTypesRelation(sourceEnum, targetEnum) == null
+            val targetEnum = enumSemantics.enumOwnTypeSymbol(target) ?: return@run
+            val sourceEnum = enumSemantics.enumOwnTypeSymbol(source) ?: enumSemantics.enumOfMemberTypeSymbol(source) ?: return@run
+            return enumSemantics.enumTypesRelation(sourceEnum, targetEnum) == null
         }
         // Check cache
         val cached = relation.get(source.id, target.id)
@@ -824,7 +831,7 @@ internal class Relater(
             // guards its apparent-source work with `relation !== identityRelation`): an
             // enum member is not IDENTICAL to anything the `String` wrapper is.
             if (relation === identityRelation) return false
-            val enumPrimitive = checker.enumLiteralApparentPrimitive(source) ?: return false
+            val enumPrimitive = enumSemantics.enumLiteralApparentPrimitive(source) ?: return false
             return checkTypeRelatedTo(enumPrimitive, target, relation)
         }
         // Primitive source vs Object target: use the source's apparent (wrapper) type

@@ -127,6 +127,11 @@ package com.xemantic.typescript.compiler
 internal class MemberNames(
     private val checker: Checker,
     /**
+     * (INV.0) step 7 — the ENUM collaborator, wired DIRECTLY rather than through
+     * [Checker]; [enumMemberValueFromDecl]'s value lookup is the one site.
+     */
+    private val enumSemantics: EnumSemantics,
+    /**
      * `Checker.fileResults` — the per-file binder results, handed in as the OBJECT
      * (it is a `val` of `Checker` declared above the `Checker.kt:666` constructor
      * boundary, so it is a legal constructor input rather than an ambient read).
@@ -562,7 +567,7 @@ internal class MemberNames(
 
     /** Round 935, extracted round 936: an enum member's VALUE as a property name. */
     private fun enumMemberValueOf(enumSym: Symbol, member: String): String? {
-        val entries = checker.enumMemberEntries(enumSym) ?: return null
+        val entries = enumSemantics.enumMemberEntries(enumSym) ?: return null
         return when (val v = entries.firstOrNull { it.first == member }?.second) {
             is ConstantValue.StringValue -> v.value
             is ConstantValue.NumberValue -> v.toString()
