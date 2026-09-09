@@ -1,18 +1,46 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **196,172** lines (**−3,791 across (P18.53)-(P18.57)**, the first
+extraction):** `Checker.kt` **195,606** lines (**−4,357 across (P18.53)-(P18.58)**, the first
 sustained movement in the extraction direction since the metric was created; 191,070 when it was
 created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not
-extractions). SIX collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient
-surface none for both — `TypeInstantiator` (four checker reads, one table write),
-`NameResolver` (2,284 lines, 26 reads, no writes — the name-resolution seam COMPLETE over three
-steps), `Relater` (1,446 lines, the RELATION seam in one commit, 45 reads / 5 writes — the
-largest ambient row of the arc and § 6's own prediction) and **`MemberResolver` (814 lines,
-21 reads / 1 write with the columns DISJOINT), which makes the relater the arc's OUTLIER
-rather than its trend**, all stated in the ledger. Reference points:
+extractions). SEVEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient
+surface none for both — `TypeInstantiator` (4 reads, 1 write), `NameResolver` (2,284 lines,
+26 reads, no writes — the seam COMPLETE over three steps), `Relater` (1,446 lines, 45 reads /
+5 writes — the RELATION algorithm, the arc's largest row and § 6's own prediction),
+`MemberResolver` (814 lines, 21 reads / 1 write, columns disjoint) and **`MemberNames`
+(765 lines, **5 reads / ZERO writes** — the arc's CLEANEST row, because that family owns no
+state and answers a SYNTACTIC question)**, all stated in the ledger. Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.58) — (INV.0) STEP 6b: THE MEMBER-NAME / LATE-BINDING FAMILY IS `MemberNames.kt`, THE ARC'S CLEANEST SEAM, 18,498 / 0 / 3 (2026-09-09).**
+`Checker.kt` **196,176 → 195,606**; `MemberNames.kt` 765; ledger row 9. **Third extraction of the
+session.** **FIVE ambient reads, ZERO writes** — against the relater's 45/5 and member
+resolution's 21/1 — **and the reason generalises: this family owns NO STATE and answers a
+SYNTACTIC question.** Four of the five reads belong to seams of their own (three enum-value
+helpers, two AST helpers); rows 7 and 8 read the type system because they ARE the type system.
+`fileResults` is a CONSTRUCTOR INPUT rather than a read, which is what takes the row from 6 to 5 —
+rows 5/6's above-line-666 rule paying off. **`MemberResolver` was deliberately NOT rewired**: it
+keeps calling `checker.getMemberName` / `declaredMemberName`, which the delegations serve anyway,
+so the two collaborators carry no construction-ORDER dependency. **The split removed 61 `too
+large` inlining refusals and added none** — the fifth row running (`getMemberName` `16 inline +
+16 too large` → a hop reading `7 inline`, zero refusals; `computedLiteralKey` `20+20` → `6`).
+**THE RECEIPT NOW SPANS FOUR BINARIES** — the same 488 deterministic `--passTiming` lines are
+byte-identical for pre-step-5 pristine, step 5, step 6a and this: **one receipt over 2,509 moved
+lines**, at one extra build for the whole session, because each round's capture is the next
+round's pristine arm. **THE PINS ARE *AGREEMENT* PINS**, which is what this family needs: a
+member's name is asked at REGISTRATION and again at RESOLUTION, and both known failures (round
+935, (CHK.40)(c)) emit a CORRECT diagnostic beside a false one, so a pin asserting "it compiles"
+passes on a broken binary — each pin instead reads the member back through a wrong target type and
+asserts the TS2322 that names the resolved type AND the absence of TS2339 beside it. **Every one
+of the 5 pins discriminates, the session's first round where that is true**; the hop-limit PAIR
+brackets `LATE_BIND_ALIAS_HOPS` (a 2-hop alias chain late-binds, an 11-hop one does not) and
+neither pin alone is evidence. **A naming trap worth carrying: `Checker.kt` already declares
+EIGHT locals named `memberNames`**, so the collaborator field is `memberNamer` — a field of the
+shadowed name compiles and broke the round's own structural check. ab-interleaved −182 ms
+(−0.70%) B-wins-3/6 NOISE-DOMINATED; cost_gate exit 0, huge_methods exit 0 (838 classes),
+warning-clean.
 
 **(P18.57) — (INV.0) STEP 6a: MEMBER RESOLUTION IS `MemberResolver.kt`, AND THE ITEM'S OPEN QUESTION IS ANSWERED, 18,493 / 0 / 3 (2026-09-09).**
 `Checker.kt` **196,797 → 196,172**; `MemberResolver.kt` 814; ledger row 8. **Second extraction of
@@ -88,50 +116,3 @@ both STABLE standing hot sites identical to pristine; ab-interleaved +0.15% B-wi
 NOISE-DOMINATED; cost_gate and huge_methods exit 0; warning-clean. Verbatim proved twice by two
 methods for the third round running. Next per the design's Stage-0 order: the RELATER out of
 `checkTypeRelatedTo` into the `TypeRelationCache.kt` seam row 2 already named.
-
-**(P18.54) — (INV.0) STEP 4b-i: THE PER-FILE LOOKUP CORE JOINS `NameResolver.kt`, THE ITEM'S OWN HOIST IS UNSAFE, AND THE FILE THE ARC GROWS INTO WAS UNREVIEWABLE BY DIFF, 18,484 / 0 / 3 (2026-09-09).**
-`Checker.kt` **199,405 → 198,781**; `NameResolver.kt` 669 → 1,418; ledger row 5. 20 functions and
-11 fields moved VERBATIM — the per-file scope tables and their build passes, the INV.3(b)(ii)
-visibility sets and their deferral, the probe funnel, the four consults, the (CHK.49) lib-value
-recovery, the (BIND.1) owning-file probes and the four first-hit program scans. Ambient row:
-**seven reads, no writes**, two of them intended BIDIRECTIONAL pairs. **The full 4b censused at
-1,363 lines so it was SPLIT**; 4b-ii (namespace / qualified-name / heritage, ~780 lines) is what
-remains of step 4. **THE ITEM'S OWN INSTRUCTION IS UNSAFE**: hoisting `libGlobals`'s declaration
-above the construction site — which it asks for — would reorder `parseBuiltinLib()`, whose side
-effect fills a field deliberately declared before it for the Kotlin init-order gotcha; that field
-and one other became ambient reads instead. **THE SPLIT IMPROVED THE COMPILER'S HOTTEST LOOKUP**:
-`lookupPerFileForNode` (~2M calls/self-compile) was `4 inline (hot) + 57 too large` as a monolith
-and its 9-byte hop is now `57 inline + 41 inline (hot)` with ZERO refusals — row 1's finding on a
-far bigger population — with a receipt trap attached, since Kotlin mangles an `internal` member's
-JVM name and a grep for the source name reads zero rows. **AND THE FILE THIS ARC GROWS INTO WAS
-RENDERING AS A BINARY BLOB**: `UNRESOLVED_MODULE_SPEC`'s literal NUL sat at byte 7,910, inside
-git's 8,000-byte detection window, so 4a and 4b-i have NO line diff for it; fixed in `2db1c14ca`
-with the compiled class BYTE-IDENTICAL as the receipt. Receipts: **all 420 per-pass `--passTiming`
-rows and the 46 diagnostics byte-identical against PRE-4a pristine** (one receipt covering both
-rows), all 17 named gate classes green, cost_gate exit 0, huge_methods exit 0 with
-`Checker.<init>` 5,701 → 5,656, ab-interleaved −0.45% B-wins-3/6 NOISE-DOMINATED, warning-clean.
-
-**(P18.53) — (INV.0) STEP 4a: THE NAME/MODULE-RESOLUTION LEAF BECOMES `NameResolver.kt`, AND TWO OF THE FOUR § 10 INSTRUMENTS NEED A SAME-BINARY CONTROL, 18,477 → 18,484 / 0 / 3 (2026-09-09).**
-The owner chose **(INV.0)** — the WORK ORDER's tail — so the (CHK.\*) lane is parked and the
-shrinkage metric moves the right way for the first time in ~26 rounds: `Checker.kt`
-**199,963 → 199,405**, `NameResolver.kt` 669, ledger row 4. Fifteen functions and three fields
-moved VERBATIM — the alias ladder, the specifier ladder, two scope probes and the checker-local
-symbol-target link store — as a final class built once per `Checker`, every surviving call site a
-one-line delegation. **The verbatim claim is proved twice by two methods** (a reverse-transform
-`diff` and an independent multiset check) rather than asserted. Ambient row: **fourteen checker
-reads, no writes**; the four functions whose only readers moved with them got no hop and were made
-`private`, so the collaborator's public surface (11) equals the delegation count by construction.
-**THE REUSABLE FINDING IS METHODOLOGICAL.** The counter receipt should be the standard for a split
-and is stronger than the gate: **all 420 per-pass `--passTiming` rows and the 46 diagnostics are
-byte-identical against a rebuilt pristine HEAD**. The only section that moves is the **node-kind
-histogram**, and the SAME BINARY run twice moves it MORE (70 differing lines A-vs-A against 64
-A-vs-B) — the documented crawl-worker race, arriving in a channel nobody had diffed. And
-**`getTypeOfExpression`'s PrintInlining row is NOT stable across processes**: arm A read
-`1 inline (hot) + 372 too large`, arm B `382 too large`, and arm A's SECOND run reproduced arm B
-exactly — so ledger rows 1 and 3's "row-for-row identical across arms" was recorded without this
-control. Every delegation hop reads `inline`/`inline (hot)` with ZERO refusals; ab-interleaved
-−0.57% B-wins-2/6 NOISE-DOMINATED; `NameResolver` is never an allocated type. Three deviations
-from the item, each backed by a grep, including one FORCED by the warning-clean rule. 7 pins;
-3 arms, all discriminating uniquely, with the remaining four pins recorded as positive controls
-rather than claimed as coverage. Next: **step 4b**, the scope side — censused this session at
-~1,270 lines, and several of 4a's ambient reads disappear once it lands.

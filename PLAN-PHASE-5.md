@@ -25,6 +25,74 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.58) — (INV.0) step 6b: the MEMBER-NAME / late-binding family becomes `MemberNames.kt`, the arc's cleanest seam (2026-09-09)
+
+**Suite 18,498 / 0 / 3** (18,493 + 5 new pins). `Checker.kt` **196,176 → 195,606** (−570);
+`MemberNames.kt` **765**. cost_gate exit 0, huge_methods exit 0 (**838** classes,
+`Checker.<init>` 5,705 → 5,721), warning-clean, ledger row 9. Two commits: `ecd6c0491` the
+split, `95dff28a1` the ablation record. **Third extraction of the session.**
+
+**FIVE AMBIENT READS, ZERO WRITES — the smallest row of the arc, against the relater's 45/5
+and member resolution's 21/1 — AND THE REASON GENERALISES: the family owns NO STATE and
+answers a SYNTACTIC question.** It is handed a name node and returns a string; everything it
+needs beyond the AST is an enum's constant value (3 reads) plus two AST helpers (2), i.e.
+four of the five belong to seams of their own. Rows 7 and 8 read the type system because they
+ARE the type system; this one does not. **`fileResults` as a CONSTRUCTOR INPUT is what took
+the row from 6 to 5** — it is declared at `Checker.kt:265`, above the 666 boundary — which is
+rows 5/6's rule paying off rather than a judgement call.
+
+**`MemberResolver` WAS DELIBERATELY NOT REWIRED.** Step 6a's collaborator calls
+`getMemberName` ×4 and `declaredMemberName` ×4 and now does so one hop further, through
+`Checker`. That is the right answer and not a shortcut: the delegations exist anyway for the
+other 30 call sites, and routing through `Checker` keeps the two collaborators free of a
+construction-ORDER dependency on a class whose field initializers run ~9,300 lines deep.
+
+**THE SPLIT REMOVED 61 `too large` REFUSALS AND ADDED NONE — the fifth row running.**
+`getMemberName` `16 inline + 16 too large` → a hop reading `7 inline` with zero refusals;
+`computedLiteralKey` `20 + 20` → `6`; `lateBoundComputedKeyName` `17 + 17` → `3`;
+`computedSymbolKey` `6 + 6` → `2`; `objLitElementMemberName` `2 + 2` → `2`. ab-interleaved
+6 pairs **−182 ms (−0.70%) B-wins-3/6 NOISE-DOMINATED**, both arms 46 errors. Recorded
+honestly: `checkArgumentsAgainstSignature` — the only standing site (P18.56) proved stable —
+moved again (`5 hot-too-big + 6 inline + 1 too large` → `4 + 5 + 1`), which is what widening
+members to `internal` does to a caller's inline tree.
+
+**THE RECEIPT NOW SPANS FOUR BINARIES**: the same 488 deterministic `--passTiming` lines are
+byte-identical for pre-step-5 pristine, step 5, step 6a and step 6b — **one receipt over
+2,509 moved lines**, and it has cost one extra build in the whole session, because each
+round's capture is the next round's pristine arm.
+
+**THE PINS ARE *AGREEMENT* PINS, AND THAT IS WHAT THIS FAMILY NEEDS.** A member's name is
+asked at REGISTRATION and again at RESOLUTION, and BOTH known failures of this code produce a
+correct diagnostic beside a false one — round 935's drift emitted a correct TS2322 and a
+false TS2339 for the same member in ONE compile, and (CHK.40)(c) registered a string-named
+METHOD correctly and typed it `any`. **A pin asserting "it compiles" passes on both.** So
+each pin reads the member back through a deliberately WRONG target type and asserts the
+TS2322 that names the resolved type AND the absence of TS2339 beside it.
+
+**EVERY PIN DISCRIMINATES — the first of the session's three extraction rounds where that is
+true.** Disabling late binding reddens the three late-binding pins and nothing else; raising
+`LATE_BIND_ALIAS_HOPS` 8 → 100 reddens ONLY the past-the-limit pin (and since that arm edits
+`Checker.kt`, `MemberNames.kt` is byte-unchanged under it — the arm's own control); dropping
+the `StringLiteralNode` arm reddens ONLY the string-named-method pin. **The hop-limit PAIR is
+the interesting one**: a 2-hop alias chain late-binds and an 11-hop one does not, so the two
+pins bracket the limit and neither alone is evidence.
+
+**Absorption census ZERO again** (row 8's answer, not row 7's): the scarcest ambient member
+still has 3 other callers and `expressionTrueEnd` has 274.
+
+**A DEVIATION WORTH CARRYING: the collaborator's FIELD is `memberNamer`, not `memberNames`.**
+`Checker.kt` already declares EIGHT locals named `memberNames`, five used in the same scope. A
+field of that name compiles — locals shadow it — and it broke the round's own 12-vs-12
+structural check (read 18). **Before naming a new collaborator field, grep `Checker.kt` for a
+local of that name**; the class is large enough that the collision is likely and silent.
+
+**NEXT**: `getPropertiesOfType` / `getPropertyOfType` and the member-ACCESS family just below
+this span — or, per § 6's order, SIGNATURES and FLOW. Row 7's seven absorbable members
+(`enumLiteralApparentPrimitive`, `enumMemberValueEqualsLiteral`, `enumTargetAdmitsNumericSource`,
+`numericLiteralFitsEnum`, `intersectionMergedSatisfiesTarget`, `intersectionMergedContradictsTarget`,
+`targetIsMemberShaped`) remain the arc's one cheap win, taking row 7 from 45 reads to 38.
+
+
 ### Round (P18.57) — (INV.0) step 6a: MEMBER RESOLUTION becomes `MemberResolver.kt`, and the queue item's open question is answered (2026-09-09)
 
 **Suite 18,493 / 0 / 3** (18,489 + 4 new pins). `Checker.kt` **196,797 → 196,172** (−625);
@@ -2735,26 +2803,36 @@ where the order sends you.
   private → internal here and its unmangled grep reads 574 rows before and 0 after. Grep both
   forms and say which you used.**
 
-- [ ] **(INV.0) STEP 6b — THE MEMBER-NAME / LATE-BINDING FAMILY, the seam step 6a deliberately
-  left whole and the one that most improves ledger row 8's DECLARATION-READING group.**
-  Candidate span `Checker.kt` ~118017 to ~118657 (~640 lines): `getMemberName`,
-  `declaredMemberName` / `declaredComputedMemberName`, `computedLiteralKey`,
-  `computedSymbolKey`, `lateBoundComputedKeyName`, `lateBoundKeyValue`,
-  `lateBoundValueOfVarDecl`, `lateBoundTypeNodeValue`, `templateLiteralTypeFixedText`,
-  `qualifiedLateBoundKeyValue`, `resolveDottedInStatements`, `moduleNamePath`,
-  `enumMemberValueFromDecl` / `enumMemberValueOf`, `lateBindStatementsOf`, `literalKeyValueOf`,
-  `lateBindResolveVarDecl`, `enumMemberLateBoundKeyName`, `objLitElementMemberName`,
-  `staticMemberNameOf`, `wellKnownSymbolKey`, `writtenMemberNameSpan`. **RUN THE CENSUS FIRST**
-  (the step-5/6a method: brace-matched spans over a length-preserving stripped copy with a
-  positive control, then the ambient scan and the per-entry-point caller counts) — the span
-  boundaries above are from a members listing, not from a dependency closure, and rounds 5
-  and 6a both found the item's own boundaries wrong. Two traps this family owns and CLAUDE.md
-  already records: a member name derived from a TYPE is not a function of the program here, so
-  a late-bound key must be resolved SYNTACTICALLY (round 935 — the two passes drifted and
-  emitted a correct TS2322 beside a false TS2339 in one compile); and `declaredMemberName` is
-  the single source of truth for a member's name, so an extraction that leaves a second
-  `decl.name as? Identifier` behind re-opens (CHK.40)(c). **Inherit every constraint rows 4-8
-  established**, including step 6a's new one about visibility widening and receipt greps.
+- [x] **(INV.0) STEP 6b — THE MEMBER-NAME / LATE-BINDING FAMILY: DONE 2026-09-09 ((P18.58),
+  commits `ecd6c0491` split + `95dff28a1` ablation record). `MemberNames.kt` is **765 lines**;
+  `Checker.kt` **196,176 → 195,606 (−570)**; ledger row 9. **The arc's CLEANEST seam: five
+  ambient reads, ZERO writes**, because the family owns no state and answers a SYNTACTIC
+  question — four of the five reads belong to an enum seam and a syntax seam. Twelve
+  delegations; `MemberResolver` deliberately NOT rewired (no construction-order dependency).
+  The split removed **61** `too large` inlining refusals and added none. **Every one of the 5
+  pins discriminates** — the session's first round where that is true. **A NAMING TRAP FOR
+  EVERY LATER ROW: grep `Checker.kt` for a LOCAL of the name before naming a collaborator
+  field** — `memberNames` is already eight locals, and the field compiles while being shadowed
+  at five of them.**
+
+- [ ] **(INV.0) STEP 7 — pick the next seam from `docs/INVERSION-DESIGN.md` § 6's Stage-0
+  order, which after name resolution / relations / member resolution reads SIGNATURES then
+  FLOW.** Two candidates, and the round's first job is to census both and say which it took:
+  (a) **SIGNATURES** — `getSignaturesOfType` / `getParameterSymbols` / `requiredParameterCount`
+  / the signature builders and `instantiateSignature`'s neighbours; note `getParameterSymbols`
+  is already ledger row 8's DECLARATION-READING read, so this seam shrinks row 8 as well.
+  (b) **FLOW** — the narrowing walk, which `Flow.kt` already half-owns; check whether the
+  checker-resident half is a family or a scatter before committing to it.
+  **A CHEAP WIN AVAILABLE TO EITHER: absorb row 7's seven zero-caller members into `Relater`**
+  (`enumLiteralApparentPrimitive`, `enumMemberValueEqualsLiteral`, `enumTargetAdmitsNumericSource`,
+  `numericLiteralFitsEnum`, `intersectionMergedSatisfiesTarget`, `intersectionMergedContradictsTarget`,
+  `targetIsMemberShaped`) — mechanical, no design decision, takes row 7 from 45 reads to 38;
+  rows 8 and 9 have NO such candidates, measured. **Inherit every constraint rows 4-9
+  established**, including: grep `Checker.kt` for a LOCAL of a proposed collaborator-field name;
+  sort the `--passTiming` pass rows and drop ms-bearing lines for the receipt; grade against a
+  REBUILT pristine (each round's capture is the next round's pristine arm, so this costs no
+  extra build); and grep BOTH the mangled and unmangled JVM names on any round that widens
+  visibility.
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to

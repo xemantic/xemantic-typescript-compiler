@@ -1,6 +1,54 @@
 **(P18.47) — THE REST-TUPLE MODEL IS FIXED ((CHK.111)), THE ITEM'S NAMED SEAM WAS *WRONG* RATHER THAN INCOMPLETE, AND THE REGRESSION IT CAUSED WAS IN ANOTHER MODULE, 18,271 → 18,302 / 0 / 3 (2026-09-08).**
 
 
+
+**(P18.54) — (INV.0) STEP 4b-i: THE PER-FILE LOOKUP CORE JOINS `NameResolver.kt`, THE ITEM'S OWN HOIST IS UNSAFE, AND THE FILE THE ARC GROWS INTO WAS UNREVIEWABLE BY DIFF, 18,484 / 0 / 3 (2026-09-09).**
+`Checker.kt` **199,405 → 198,781**; `NameResolver.kt` 669 → 1,418; ledger row 5. 20 functions and
+11 fields moved VERBATIM — the per-file scope tables and their build passes, the INV.3(b)(ii)
+visibility sets and their deferral, the probe funnel, the four consults, the (CHK.49) lib-value
+recovery, the (BIND.1) owning-file probes and the four first-hit program scans. Ambient row:
+**seven reads, no writes**, two of them intended BIDIRECTIONAL pairs. **The full 4b censused at
+1,363 lines so it was SPLIT**; 4b-ii (namespace / qualified-name / heritage, ~780 lines) is what
+remains of step 4. **THE ITEM'S OWN INSTRUCTION IS UNSAFE**: hoisting `libGlobals`'s declaration
+above the construction site — which it asks for — would reorder `parseBuiltinLib()`, whose side
+effect fills a field deliberately declared before it for the Kotlin init-order gotcha; that field
+and one other became ambient reads instead. **THE SPLIT IMPROVED THE COMPILER'S HOTTEST LOOKUP**:
+`lookupPerFileForNode` (~2M calls/self-compile) was `4 inline (hot) + 57 too large` as a monolith
+and its 9-byte hop is now `57 inline + 41 inline (hot)` with ZERO refusals — row 1's finding on a
+far bigger population — with a receipt trap attached, since Kotlin mangles an `internal` member's
+JVM name and a grep for the source name reads zero rows. **AND THE FILE THIS ARC GROWS INTO WAS
+RENDERING AS A BINARY BLOB**: `UNRESOLVED_MODULE_SPEC`'s literal NUL sat at byte 7,910, inside
+git's 8,000-byte detection window, so 4a and 4b-i have NO line diff for it; fixed in `2db1c14ca`
+with the compiled class BYTE-IDENTICAL as the receipt. Receipts: **all 420 per-pass `--passTiming`
+rows and the 46 diagnostics byte-identical against PRE-4a pristine** (one receipt covering both
+rows), all 17 named gate classes green, cost_gate exit 0, huge_methods exit 0 with
+`Checker.<init>` 5,701 → 5,656, ab-interleaved −0.45% B-wins-3/6 NOISE-DOMINATED, warning-clean.
+
+**(P18.53) — (INV.0) STEP 4a: THE NAME/MODULE-RESOLUTION LEAF BECOMES `NameResolver.kt`, AND TWO OF THE FOUR § 10 INSTRUMENTS NEED A SAME-BINARY CONTROL, 18,477 → 18,484 / 0 / 3 (2026-09-09).**
+The owner chose **(INV.0)** — the WORK ORDER's tail — so the (CHK.\*) lane is parked and the
+shrinkage metric moves the right way for the first time in ~26 rounds: `Checker.kt`
+**199,963 → 199,405**, `NameResolver.kt` 669, ledger row 4. Fifteen functions and three fields
+moved VERBATIM — the alias ladder, the specifier ladder, two scope probes and the checker-local
+symbol-target link store — as a final class built once per `Checker`, every surviving call site a
+one-line delegation. **The verbatim claim is proved twice by two methods** (a reverse-transform
+`diff` and an independent multiset check) rather than asserted. Ambient row: **fourteen checker
+reads, no writes**; the four functions whose only readers moved with them got no hop and were made
+`private`, so the collaborator's public surface (11) equals the delegation count by construction.
+**THE REUSABLE FINDING IS METHODOLOGICAL.** The counter receipt should be the standard for a split
+and is stronger than the gate: **all 420 per-pass `--passTiming` rows and the 46 diagnostics are
+byte-identical against a rebuilt pristine HEAD**. The only section that moves is the **node-kind
+histogram**, and the SAME BINARY run twice moves it MORE (70 differing lines A-vs-A against 64
+A-vs-B) — the documented crawl-worker race, arriving in a channel nobody had diffed. And
+**`getTypeOfExpression`'s PrintInlining row is NOT stable across processes**: arm A read
+`1 inline (hot) + 372 too large`, arm B `382 too large`, and arm A's SECOND run reproduced arm B
+exactly — so ledger rows 1 and 3's "row-for-row identical across arms" was recorded without this
+control. Every delegation hop reads `inline`/`inline (hot)` with ZERO refusals; ab-interleaved
+−0.57% B-wins-2/6 NOISE-DOMINATED; `NameResolver` is never an allocated type. Three deviations
+from the item, each backed by a grep, including one FORCED by the warning-clean rule. 7 pins;
+3 arms, all discriminating uniquely, with the remaining four pins recorded as positive controls
+rather than claimed as coverage. Next: **step 4b**, the scope side — censused this session at
+~1,270 lines, and several of 4a's ambient reads disappear once it lands.
+
 **(P18.52) — STATIC BLOCKS ESCAPE, PARAMETER DEFAULTS AND DECORATORS ARE REACHED ((CHK.115)), AND THE DECORATOR FAMILY IS *TWO OPPOSITE MECHANISMS*, 18,437 → 18,477 / 0 / 3 (2026-09-08).**
 43 fixtures, and **pristine 6.0.3 and tsgo 7.0.2 agreed on every one**. **(a) removes an ours-only
 FALSE POSITIVE**: a static block's assignments now escape into the enclosing flow — tsc's binder says
