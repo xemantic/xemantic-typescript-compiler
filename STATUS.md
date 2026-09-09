@@ -1,15 +1,36 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,781** lines (**−1,182 across (P18.53)+(P18.54)**, the first
-movement in the extraction direction since the metric was created; 191,070 when it was created,
-and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not
+extraction):** `Checker.kt` **198,022** lines (**−1,941 across (P18.53)-(P18.55)**, the first
+sustained movement in the extraction direction since the metric was created; 191,070 when it was
+created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not
 extractions). FOUR collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient
 surface none for both — `TypeInstantiator` (four checker reads, one table write) and
-`NameResolver`, now 1,418 lines over two steps (4a: 14 reads; 4b-i: 7 more; NO writes in either,
-and `Checker` no longer names `state.symbolTargets`), all stated in the ledger. Reference points:
+**`NameResolver`, 2,284 lines, the name-resolution seam COMPLETE over three steps (26 checker
+reads, NO writes; the row IMPROVED as the family closed, absorbing four of its own earlier
+reads)**, all stated in the ledger. Reference points:
 tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files. Contract:
 `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+
+**(P18.55) — (INV.0) STEP 4 IS COMPLETE: `NameResolver.kt` IS 2,284 LINES AND `Checker.kt` LOST 1,941, 18,484 / 0 / 3 (2026-09-09).**
+4b-ii moved the namespace / heritage / type-name group (19 functions, 2 fields) VERBATIM, closing
+the seam; ledger row 6. `Checker.kt` 198,781 → **198,022**; `Checker.<init>` 5,656 → 5,634.
+**THE AMBIENT ROW GETS BETTER AS A FAMILY COMPLETES, AND THIS ROUND MEASURED IT**: 4b-ii ABSORBS
+four of the reads rows 4 and 5 recorded, because those functions now live inside the collaborator
+— net **26 checker reads, NO writes, for 2,284 lines**. So an intermediate row's ambient count is
+the WORST that family will look, and the ledger should be read by FAMILY, not by row.
+**The constructor-input trap bit a third time and cost nothing**, because (P18.54) put the rule in
+the queue item: six more fields turned out to be declared below the construction site, where an
+input captures null, so all became ambient reads. **A third JVM-name-mangling mechanism turned up**
+— `SymbolFlags` is a VALUE class, so `lookupInEnclosingNamespaces` compiles as
+`lookupInEnclosingNamespaces-bd7vo6s`; like `internal`'s `$<module>` suffix it makes a receipt grep
+read zero rows and look like "never compiled". **RECEIPTS COVER THE WHOLE OF STEP 4**: all 420
+per-pass `--passTiming` rows and the 46 diagnostics byte-identical between PRE-4a pristine and the
+finished seam — one receipt for all 1,941 moved lines; PrintInlining ZERO refusals on every hop with
+both STABLE standing hot sites identical to pristine; ab-interleaved +0.15% B-wins-4/6
+NOISE-DOMINATED; cost_gate and huge_methods exit 0; warning-clean. Verbatim proved twice by two
+methods for the third round running. Next per the design's Stage-0 order: the RELATER out of
+`checkTypeRelatedTo` into the `TypeRelationCache.kt` seam row 2 already named.
 
 **(P18.54) — (INV.0) STEP 4b-i: THE PER-FILE LOOKUP CORE JOINS `NameResolver.kt`, THE ITEM'S OWN HOIST IS UNSAFE, AND THE FILE THE ARC GROWS INTO WAS UNREVIEWABLE BY DIFF, 18,484 / 0 / 3 (2026-09-09).**
 `Checker.kt` **199,405 → 198,781**; `NameResolver.kt` 669 → 1,418; ledger row 5. 20 functions and

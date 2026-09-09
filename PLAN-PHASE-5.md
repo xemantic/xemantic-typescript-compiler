@@ -25,6 +25,62 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.55) — (INV.0) step 4 is COMPLETE: `NameResolver.kt` is 2,284 lines and `Checker.kt` lost 1,941 (2026-09-09)
+
+**Suite 18,484 / 0 / 3** (a pure move adds no pins). `Checker.kt` 198,781 → **198,022**;
+`NameResolver.kt` 1,418 → **2,284**. **STEP 4 TOTAL: 199,963 → 198,022, −1,941 lines.** cost_gate
+exit 0, huge_methods exit 0 (835 classes, `Checker.<init>` 5,656 → **5,634**), build
+warning-clean, ledger row 6. Three commits (`da92e5bd3` 4a, `84dd8ad5d` 4b-i, `b353278a1` 4b-ii)
+plus `2db1c14ca`, the diffability fix.
+
+**THE AMBIENT ROW GETS *BETTER* AS A FAMILY COMPLETES, AND THIS ROUND MEASURED IT.** 4b-ii
+ABSORBS four of the reads the earlier rows recorded — `resolveQualifiedName` and
+`ambientModuleSurfaceMember` (row 4), `augmentationContextSymbol` and
+`moduleLocalContributesGlobally` (row 5) — because those functions now live inside the
+collaborator, so the calls stop crossing the boundary. Net: **26 distinct checker reads, NO
+writes, for 2,284 lines.** The reusable form: **an intermediate row's ambient count is the WORST
+that family will ever look**, so the ledger should be read by FAMILY, not by row — and splitting
+a seam across commits temporarily inflates it, which is a cost of decomposition worth stating
+rather than hiding.
+
+**THE CONSTRUCTOR-INPUT TRAP BIT A THIRD TIME AND COST NOTHING, BECAUSE THE PREVIOUS ROUND WROTE
+THE RULE DOWN.** Six fields this step reads (`umdGlobalNames`, `moduleFiles`,
+`mergeSharedKeepNames`, `lexicalBlockScopedEnumNames`, `QUALIFIED_LEFT_MEANING`, `isDtsFile`) are
+declared BELOW the construction site at `Checker.kt:666`, where a constructor input captures
+**null**. All became ambient reads. That is the difference between a rule recorded in the queue
+item and a rule re-derived per round.
+
+**A THIRD JVM-NAME-MANGLING MECHANISM.** Beside `internal`'s `$<module>` suffix (found last
+round), **`SymbolFlags` is a VALUE class**, so `lookupInEnclosingNamespaces` compiles as
+`lookupInEnclosingNamespaces-bd7vo6s` and a `PrintInlining`/`javap` grep for the source name reads
+ZERO rows. Both mechanisms fail in the direction that reads as "this hop was never compiled";
+both are now CLAUDE.md entries.
+
+**RECEIPTS FOR THE WHOLE OF STEP 4, NOT JUST THIS COMMIT.** **All 420 per-pass `--passTiming`
+rows and the 46 diagnostics are byte-identical between PRE-4a pristine and the completed step 4** —
+one receipt covering all 1,941 moved lines, and a far stronger statement than the gate's 20
+aggregates. PrintInlining: **ZERO refusals on every hop** of 4b-ii, and both STABLE standing hot
+sites (`checkArgumentsAgainstSignature`, `isTypeAssignableTo`) identical to pristine —
+`getTypeOfExpression` is deliberately NOT quoted, since (P18.53) proved it unstable across
+processes on one binary. ab-interleaved 6 pairs +39 ms (+0.15%) B-wins-4/6 NOISE-DOMINATED, both
+arms at 46 errors. Verbatim proved twice by two methods for the third time running: the agent's
+reverse-transform diff, and the orchestrator's independent multiset check whose only unaccounted
+lines were 13 signature lines and 75 lines of new class KDoc.
+
+**THE DIFFABILITY FIX PAID OFF IMMEDIATELY**: this commit renders a real text diff (871
+insertions / 5 deletions) for `NameResolver.kt` where 4a and 4b-i showed only `Bin … bytes`.
+
+**A STRUCTURAL CHECK WORTH REPEATING FOR ROW 7**: the public surface reconciles EXACTLY — 40
+non-private `NameResolver` members against 40 `nameResolver.` references in `Checker.kt` (38
+delegations + the two classifier taxonomy reads); the apparent extras in `javap` are the JVM
+property accessors and the value-class mangled name.
+
+**NEXT.** Step 4 is done, so the order's tail moves on: `docs/INVERSION-DESIGN.md` § 6 Stage 0
+names `getTypeOfSymbol`/`getTypeOfExpression` (Stage-3-shaped — their ambient IS the checker),
+the RELATER's algorithm out of `checkTypeRelatedTo` into the `TypeRelationCache.kt` seam row 2
+already named, signatures, and flow. The relater is the natural row 7: row 2 put its cache type
+in a named file precisely so its extraction would not start from a 198k-line neighbourhood.
+
 ### Round (P18.54) — (INV.0) step 4b-i: the PER-FILE LOOKUP core joins `NameResolver.kt`, the item's own hoist is UNSAFE, and the file the arc grows into was UNREVIEWABLE BY DIFF (2026-09-09)
 
 **Suite 18,484 / 0 / 3** (unchanged — a pure move adds no pins). `Checker.kt`
@@ -2464,122 +2520,22 @@ where the order sends you.
   prints `Type 'E'` today), with a syntactic freshness override at the (CHK.86)/(CHK.88)
   emitter (~165973/165993). Population 26 baselines / 4 ACTIVE, 0 member-form lines anywhere.
 
-- [ ] **(INV.0) STEP 4 — 4a AND 4b-i LANDED 2026-09-09 ((P18.53)/(P18.54)); ONLY **4b-ii** REMAINS.
-  `NameResolver.kt` is 1,418 lines (ledger rows 4 and 5); `Checker.kt` 199,963 → **198,781**.
-  **4b-ii is the namespace / qualified-name / heritage group, ~780 lines, censused at post-4b-i
-  HEAD**: `lookupInEnclosingNamespaces`, `globalAugmentationLevelSymbol`, `mergedNamespaceLevels`,
-  `ambientModuleBlockIsFileless` (+ `ambientModuleFilelessCache`), `ambientModuleSurfaceMember`,
-  `augmentationContextSymbol`(+`ForNode`), `moduleLocalContributesGlobally`,
-  `lexicalTypeSymbolForNode`, `resolveQualifiedName`, `resolveTypeNameToSymbol`,
-  `symbolHasTypeSideDeclaration`, `typeSideImportFallback` (+ its cache), `namespaceAliasMemberSymbol`,
-  `resolveNamespaceQualifiedSymbol`, `resolveNsQualifiedFromQualifiedName`, `resolveHeritageBaseHead`,
-  `resolveHeritageBaseSymbol`, `isInAmbientContext`. It ABSORBS three of 4b-i's seven ambient reads
-  (`augmentationContextSymbol`, `moduleLocalContributesGlobally`, and `resolveQualifiedName` from row
-  4) — the two halves call each other, which is why the row gets BETTER as the family completes.
-  **Two constraints established the hard way and not to be re-derived**: a constructor input must be
-  declared ABOVE `Checker.kt:705` (below it, the field is still null at construction), and a field
-  whose initializer has a SIDE EFFECT on another field (`libGlobals` → `realLibUnknownNames`) cannot
-  be moved at all. ORIGINAL 4a NOTE ((P18.53)): `NameResolver.kt` holds the LEAF (15
-  functions, 3 fields, 593 lines verbatim; `Checker.kt` 199,963 → 199,405; ledger row 4; ambient
-  fourteen reads / no writes). Three deviations recorded there, one FORCED by the warning-clean
-  rule. **4b (the scope side, ~1,270 lines) IS WHAT REMAINS** — and several of 4a's ambient reads
-  disappear once it lands, since the two halves call each other. ORIGINAL ITEM: EXTRACT
-  `NameResolver.kt` IN TWO COMMITS (4a leaf, 4b
-  scope side), VERBATIM, LEDGER ROW 4 — the extraction PLAN, censused 2026-09-05 by read-only
-  recon over HEAD 9a49e44c (spans brace-matched over a length-preserving stripped copy, 4,754
-  `fun`s raw = stripped; caller counts by `grep -a`).** The surface is 60-odd functions in
-  three partitions: (i) POST-HOC-RESOLVABLE (a function of the node and the frozen binder
-  tables — the collaborator), (ii) WALK-SCOPED (reads `currentLocalTypes` /
-  `currentFileLocals` / `spineCurrentScope` / `inferenceNamespaceStack` — stays, or takes the
-  scope as a parameter), (iii) TYPE questions in disguise (`getTypeFromTypeReference`,
-  `getTypeOfIdentifier`'s `getTypeOfSymbol` tail, `lookupInInferenceNamespace` — Stage-3-
-  shaped, out of scope). **4a moves the LEAF (~450 code lines)**: `resolveModuleSpecifier` /
-  `computeModuleSpecifier` / `resolveModuleSpecifierRelative` / `…RelativeJsAware` /
-  `resolveAliasJsModuleSpecifier` / `resolveImportTargetFallback` / `resolveAlias` (242 lines,
-  63 callers, NO diagnostic side effect — grepped) / `getSymbolTarget` + `setSymbolTarget`
-  (with `CheckerState.symbolTargets`, whose only readers they are) / `resolveAliasTarget` /
-  `resolveNamePath` / `findSymbolInExports` / `resolveImportedSymbolGeneral` +
-  `computeImportedSymbolGeneral` / `resolveExportedSymbolThroughStars` / `moduleNamedExportsOf`
-  / `augmentationTargetFile`, plus `moduleSpecifierCache` / `importedSymbolGeneralCache` /
-  `ambientModuleFilelessCache` — every other resolver depends on this set. **4b moves the
-  SCOPE SIDE (~850 code lines)**: `owningBinderResult` / `nodeSymbolOf` /
-  `moduleInstanceStateOf`; `lookupInEnclosingNamespaces` + `globalAugmentationLevelSymbol` +
-  `mergedNamespaceLevels` + `ambientModuleBlockIsFileless`; `moduleLocalContributesGlobally`;
-  `lexicalTypeSymbolForNode`; `buildPerFileScopes` / `buildPerFileScopeFor` /
-  `computePerFileVisibility` (minus the classifier install) / `ensurePerFileVisibility` /
-  `moduleOnlyGlobals` / `libValueShadows` / `perFileScopeOf` / `perFileScopeProbe` /
-  `lookupPerFile` / `lookupInFileScope` / `globalsForFile` / `lookupPerFileForNode` (67
-  callers, ~2 M identifiers per self-compile) / `augmentationContextSymbol` (+`ForNode`) /
-  `libValueBehindTypeOnlyShadow`; `resolveQualifiedName`; `resolveTypeNameToSymbol` +
-  `symbolHasTypeSideDeclaration` + `typeSideImportFallback`; `namespaceAliasMemberSymbol` /
-  `resolveNamespaceQualifiedSymbol` / `resolveNsQualifiedFromQualifiedName`;
-  `resolveHeritageBaseHead` / `resolveHeritageBaseSymbol` / `isInAmbientContext`;
-  `ambientModuleSurfaceMember`; the `resolveIdentifierInFile` / `findTypeAliasByName` /
-  `findTypeParamDeclByName` / `findNamespaceLocalInterface` first-hit program scans (verbatim,
-  FLAGGED in the row as a (BIND.1)-class cross-file answer — not to be "fixed" in a split); and
-  the `perFileScope*` / visibility fields. **Constructor** (row 3's shape — final class, direct
-  calls, objects handed in, no lambdas): `(checker, options, binderResults, fileResults,
-  globals, libGlobals, moduleResolutions, moduleImportAliasNames, umdGlobalNames, moduleFiles,
-  globalAugmentationAddedSymbols)` — the five mutable containers are the SAME objects the init
-  passes fill, so a later fill is visible without an ambient read; declared beside
-  `instantiator` (~:702), i.e. BEFORE `init`, with `libGlobals`'s DECLARATION (~:9866) moved
-  ahead of it (move the declaration, not the initialiser). **tsgo's shape is NOT the model**:
-  `binder.NameResolver` (nameresolver.go:9-22, checker.go:1466-1481) is a struct of 13
-  closures and tsc's `createNameResolver` (utilities.ts:11491-12030) the same — exactly § 10's
-  forbidden capturing-lambda input; what transfers is the SPLIT (a `resolveName(location,
-  name, meaning)` primitive apart from entity-name / alias / external-module resolution), not
-  the wiring. **Stays in `Checker`**: `getTypeOfIdentifier` (its first four legs are walk
-  ambient), `spineScopeLookup` (reads `existing` — must never merge with the `symbols`-only
-  chain), `lexicalScopeSymbol`, the two `inferenceNamespaceStack` consults,
-  `resolveQualifiedValueSymbol` (first leg `currentFileLocals`), `resolveTypeNameInEnclosingScope`
-  / `resolveTypeNameViaNamespaceExports`, the three `currentFileLocals` namespace-member
-  finders, the TS2304 `NameScope` / `lexLevelHasName` / `spineURes*` / `buildNamespaceScope`
-  family, and `installGlobalsLookupClassifier` (reads the resolver's classifier sets through
-  `internal` accessors and calls `resolver.ensurePerFileVisibility()`). **Ambient row after the
-  move**: reads `Checker.findEnclosingImport` (the (INC.81) `enclosingImportIndex`),
-  `Checker.lexicalBlockScopedEnumNames` (an init-pass `var`), the pure predicates
-  `isModuleFile` / `isImportBindingDecl` / `isDtsFile`; writes NONE (`symbolTargets`, the scope
-  maps, the visibility sets and four memos become resolver-owned). ~1,300 code lines / ~2,000
-  with KDoc out of `Checker.kt` — the largest Stage-0 move so far (rows 1-3: 60/79/290).
-  **Invariants the moved code preserves VERBATIM, each with its gate**: (1) `globals[name]` IS
-  the binder's object (`Inv3MergeRetireTest`, `Inv3GlobalsForFileTest`, `Inv3PerFileLookupTest`'s
-  `assertSame`, corpus `extendGenericArray*` / `jsExportMemberMergedWithModuleAugmentation`);
-  (2) (CHK.49)'s un-seeded lib keys in `ensurePerFileVisibility` (`Inv3NodeKeyedLookupTest`,
-  `LibGlobalNameShadowTest`, `PostRetirePerFileConsultsTest`, `NameCensusTest`); (3)
-  `LayeredSymbolTable` order (`LayeredSymbolTableTest`, `PerFileScopeMemoTest`,
-  `ProjectLazyPerFileScopeTest`, `ProjectLazyVisibilitySetsTest`; the VALUE receipt is the
-  corpus, 503 red if the scope is never built); (4) the build calls stay on their OWN
-  `pass("init:…")` lines — init order is the soundness argument (`SetupPhasePartitionTest`,
-  `DeferredSetupPassTest`, `EagerIndexDeferralTest`); (5) `symbols`-only in
-  `lexicalTypeSymbolForNode` (`FunctionScopedEnumTypePositionTest`,
-  `EnumShadowedInFunctionScopeTest`, `Inv2LexicalScopeTest`, `Inv4SpineScopeStateTest`); (6)
-  lexical-first, never as a miss-fallback, in `resolveTypeNameToSymbol` (B83.5;
-  `NamespaceTypeNameShadowingTest`); (7) no cross-file scan on an owner miss ((BIND.1);
-  `NodeKeyCollisionTest`); (8) innermost-first position-derived namespace consult skipping
-  string-named blocks and `declare global` (`NamespaceBodyResolutionTest`,
-  `NamespaceResolutionFollowUpTest`, `NamespaceResolutionResidueTest`,
-  `DeclareGlobalAugmentationTest`); (9) `resolveImportTargetFallback` LAST and
-  `moduleResolutions`-only, and `resolveImportedSymbolGeneral` NEVER inside `resolveAlias`
-  (round 409's TS2315 flood; `ProjectPackageTypeResolutionTest`, `CrawlPerFileResolutionScopeTest`,
-  `ModuleAugmentation*Test`); (10) heritage meanings (`NamespaceImportHeritageTest`,
-  `NamespaceQualifiedBaseInheritanceTest`, `KotlinExternalsGeneratorTest`); (11)
-  `symbolTargets` per-checker and `IntKeyMap`-keyed (`ParallelWorkerIdSpaceTest`,
-  `CompileThreadInvariantTest`). Plus a new `NameResolverTest` pinning the pure
-  `computeModuleSpecifier` / `resolveModuleSpecifierRelative` without a checker (row 3's
-  `createTypeMapper` precedent). **Forbidden-shape notes**: keep `moduleOnlyGlobals()` a
-  method with one boolean guard, NOT `by lazy`; keep `perFileScopeOf`'s reference-compared
-  memo pair verbatim; keep `importedSymbolGeneralCache` the boxed `HashMap<Int,…>` it is (the
-  boxed-key family is measured and refused, round 904 — a split is not the place). **Receipts
-  per commit (§ 10)**: corpus byte-identical + `cost_gate.py` +0.00% (a CONTROL); `scripts/
-  ab-interleaved.sh` wall + win rate; JFR allocation via `scripts/aggregate_jfr.py`;
-  `-XX:+PrintInlining` on the `Checker::lookupPerFileForNode` (from `getTypeOfIdentifier`
-  ~119625, on `getTypeOfExpression`'s Identifier arm), `lookupInEnclosingNamespaces`,
-  `resolveTypeNameToSymbol`, `resolveAliasTarget` (from `getTypeOfSymbolWorker`) and
-  `resolveModuleSpecifier` (73 sites) hops reading `inline (hot)` with the three standing sites
-  row-identical; core `--rerun` compile time; `huge_methods.py --fail-over 0`; `Checker.kt`
-  `wc -l` before/after as the STATUS.md shrinkage row. Cross-file consumers: NONE call these
-  directly — `CheckedLens.resolveName` (~5991) is `spineScopeLookup` and `typeReferenceSymbol`
-  (~6001) composes the per-file legs; `SpineDispatch.kt` and `NameCensus.kt` only NAME them.
+- [x] **(INV.0) STEP 4 — NAME RESOLUTION: DONE 2026-09-09 over three commits ((P18.53) 4a
+  `da92e5bd3`, (P18.54) 4b-i `84dd8ad5d`, (P18.55) 4b-ii `b353278a1`, plus `2db1c14ca` the
+  diffability fix). `NameResolver.kt` is **2,284 lines**; `Checker.kt` **199,963 → 198,022
+  (−1,941)**; ledger rows 4, 5 and 6. Ambient: **26 checker reads, NO writes** — and the row
+  IMPROVED as the family closed, 4b-ii absorbing four of its own earlier reads. The full 4b was
+  SPLIT at its natural seam (per-file lookup core / namespace-heritage group) because it censused
+  at 1,363 lines. Receipts for the WHOLE step: all 420 per-pass `--passTiming` rows and the 46
+  diagnostics byte-identical against PRE-4a pristine; PrintInlining zero refusals on every hop and
+  the split IMPROVED `lookupPerFileForNode` (~2M calls/self-compile) from `4 inline (hot) + 57 too
+  large` to a hop reading `57 inline + 41 inline (hot)`; ab-interleaved noise-dominated at every
+  step. **THREE CONSTRAINTS ESTABLISHED HERE, NOT TO BE RE-DERIVED BY LATER ROWS**: a constructor
+  input must be declared ABOVE `Checker.kt:666` (below it the field is still null at construction);
+  a field whose initializer has a SIDE EFFECT on another field (`libGlobals` →
+  `realLibUnknownNames`) cannot be moved or hoisted at all; and a receipt grep must use the MANGLED
+  JVM name — `internal` adds a `$<module>` suffix and a VALUE-class parameter adds a `-<hash>` one,
+  both of which read as "this hop was never compiled".**
 
 - [ ] **(INV.0) IN PROGRESS — step 1 (`TypeInterner`, canonical type identity, ambient
   surface NONE) DONE 2026-09-02, ledger row 1; step 2 (`Relation`+`Ternary` relocated to
