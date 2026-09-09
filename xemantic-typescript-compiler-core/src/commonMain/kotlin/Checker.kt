@@ -262,259 +262,9 @@ class Checker(
      */
     private val mergedSymbols = IntKeyMap<Symbol>(256)
 
-    /** (CHK.77) [ambientModuleBlockIsFileless]'s memo, keyed `"<file>\u0000<specifier>"`. */
-    private val ambientModuleFilelessCache = HashMap<String, Boolean>()
-
     /** Per-file binder results for lookup. */
     private val fileResults: Map<String, BinderResult> =
         binderResults.associateBy { it.sourceFile.fileName }
-
-    /**
-     * (CHK.76) tsc's `resolveName` `ModuleDeclaration` arm: [name] looked up in the
-     * `exports` of every NAMESPACE enclosing [node], innermost first — the `M` of
-     * `namespace N { namespace M { <node> } }`, then `N` — each read from the owning
-     * file's binder table ([nodeSymbolOf]; for a dotted `namespace A.B.C` the binder
-     * records the innermost segment and its `parent` chain recovers `B` and `A`).
-     * The binder binds EVERY member of a namespace body into the namespace symbol's
-     * `exports` (exported or not), so that one table is what tsc's `locals` +
-     * `exports` pair would answer.
-     *
-     * A parent-chain walk, deliberately NOT an ambient stack: the checker's three
-     * frame families resolved a nested namespace's NAME through the file's locals
-     * and `globals` (where a nested namespace never is) and so pushed only the
-     * OUTERMOST one, which is how a bare `Node` inside `ts.server.protocol` read
-     * as the root's `Node` and a bare `Project` beside its own declaration as
-     * `any` — and a post-hoc reader (the [CheckedLens], the TypeOracle) has no
-     * stack at all. tsc walks `location.parent` for exactly this.
-     *
-     * Only an IDENTIFIER-named declaration is a scope here. A `declare module
-     * "<spec>"` body is skipped on purpose: when the specifier names a program
-     * file the block is an AUGMENTATION whose partial `interface Node` is a
-     * SEPARATE symbol in this checker (the merge is modelled by
-     * [lookupPerFileForNode]'s INV.3(c)(iv) rule, which resolves the bare name in
-     * the AUGMENTED module's own scope) — consulting the block's own exports
-     * answered the partial interface and cost 43 rows on the services profile
-     * (`'../compiler/types.js.SourceFile' is not assignable to 'SourceFile'`).
-     * `declare global` is skipped for the same reason (its members merge into
-     * `globals`, (CHK.50)). A genuine ambient module's bare names keep resolving
-     * exactly as before this consult existed.
-     *
-     * [meaning] is the tsc meaning mask a hit must satisfy — [SymbolFlags.Type]
-     * for a type reference, [SymbolFlags.Value] for an expression identifier,
-     * [QUALIFIED_LEFT_MEANING] for the left of a dotted name; an ALIAS declared in
-     * the body (`import X = …`) is answered for every meaning, as tsc answers it
-     * and lets the caller resolve it. Null where no enclosing namespace declares
-     * the name — callers keep their per-file / global consult below, so a name
-     * declared in NO namespace resolves exactly as before, and a name declared in
-     * an enclosing one now SHADOWS the outer declaration (the B83.5 family's
-     * second failure mode, which is a wrong answer and not a miss).
-     */
-    private fun lookupInEnclosingNamespaces(node: Node, name: String, meaning: SymbolFlags): Symbol? {
-        var cur: Node? = (node as NodeBase).parent
-        var hops = 0
-        var levels: ArrayList<ModuleDeclaration>? = null
-        var owner: SourceFile? = null
-        while (cur != null && hops++ < 4096) {
-            if (cur is SourceFile) { owner = cur; break }
-            if (cur is ModuleDeclaration) {
-                (levels ?: ArrayList<ModuleDeclaration>(4).also { levels = it }).add(cur)
-            }
-            cur = (cur as NodeBase).parent
-        }
-        val enclosing = levels ?: return null
-        val merged = mergedNamespaceLevels(enclosing, owner)
-        // (CHK.80)(c) the index of the innermost `declare global` level, if any: every
-        // level INSIDE it is a GLOBAL namespace whose merged instance lives in
-        // `globals` (`init:mergeGlobalAugmentations` folds each file's `NodeJS` into
-        // one), where the per-file symbol and the (CHK.77) merged view hold this
-        // file's members only — `interface ProcessEnv extends Dict<string>` inside
-        // `declare module "process" { global { namespace NodeJS { … } } }` read the
-        // `Dict` of `globals.d.ts`'s `declare namespace NodeJS` as `any` (a false
-        // TS2339 on every member the base declares).
-        var globalIdx = -1
-        for ((i, decl) in enclosing.withIndex()) {
-            if ((decl.name as? Identifier)?.text == "global") { globalIdx = i; break }
-        }
-        for ((i, decl) in enclosing.withIndex()) {
-            fun accept(hit: Symbol?): Symbol? =
-                if (hit != null && (hit.flags.hasAny(meaning) || hit.flags.hasAny(SymbolFlags.Alias))) hit else null
-            // (CHK.77) the MERGED view of this level, where one exists: its exports are
-            // a superset of the per-file symbol's (the merge folds every declaring
-            // file's table into it), so the per-file walk below is not needed.
-            val mergedLevel = merged?.get(i)
-            if (mergedLevel != null) {
-                var k = mergedLevel.size - 1
-                while (k >= 0) {
-                    accept(mergedLevel[k].exports?.get(name))?.let { return it }
-                    k--
-                }
-            }
-            if (globalIdx > i) {
-                accept(globalAugmentationLevelSymbol(enclosing, globalIdx, i)?.exports?.get(name))?.let { return it }
-            }
-            if (mergedLevel != null) continue
-            var segments = 0
-            var nameExpr: Expression = decl.name
-            while (nameExpr is PropertyAccessExpression) {
-                segments++
-                nameExpr = nameExpr.expression
-            }
-            val consult = when (nameExpr) {
-                is Identifier -> nameExpr.text != "global"
-                // (CHK.77) a genuine ambient module's own block (no merged view, e.g. a
-                // nested `module "a"` whose outer block resolves to no root): the file's
-                // own carrier symbol. An AUGMENTATION block stays skipped (INV.3(c)(iv)).
-                is StringLiteralNode -> owner != null && ambientModuleBlockIsFileless(nameExpr.text, owner.fileName)
-                else -> false
-            }
-            if (!consult) continue
-            var sym = nodeSymbolOf(decl)
-            var seg = 0
-            while (sym != null && seg++ <= segments && sym.flags.hasAny(SymbolFlags.Module)) {
-                accept(sym.exports?.get(name))?.let { return it }
-                sym = sym.parent
-            }
-        }
-        return null
-    }
-
-    /**
-     * (CHK.80)(c) The MERGED global symbol of level [i] of [enclosing], which sits
-     * inside the `declare global` block at index [globalIdx]: descend from
-     * `globals[<outermost segment inside global>]` along every segment down to
-     * level [i] (a dotted `namespace A.B` contributes two). Null where a segment
-     * is not a merged namespace.
-     */
-    private fun globalAugmentationLevelSymbol(enclosing: List<ModuleDeclaration>, globalIdx: Int, i: Int): Symbol? {
-        var sym: Symbol? = null
-        var j = globalIdx - 1
-        while (j >= i) {
-            val segments = ArrayList<String>(2)
-            var nameExpr: Expression = enclosing[j].name
-            while (nameExpr is PropertyAccessExpression) {
-                segments.add(0, nameExpr.name.text)
-                nameExpr = nameExpr.expression
-            }
-            when (nameExpr) {
-                is Identifier -> segments.add(0, nameExpr.text)
-                else -> return null
-            }
-            for (seg in segments) {
-                val next = if (sym == null) globals[seg] else sym.exports?.get(seg)
-                if (next == null || !next.flags.hasAny(SymbolFlags.Module)) return null
-                sym = next
-            }
-            j--
-        }
-        return sym
-    }
-
-    /**
-     * (CHK.77) The MERGED symbols of the namespace levels [enclosing] (innermost
-     * first, as [lookupInEnclosingNamespaces] collects them), or null where the
-     * per-file symbols are the whole story.
-     *
-     * Same-named namespaces across SCRIPT files — `declare namespace ts { … }` in
-     * a.d.ts and again in b.d.ts, `@types/node`'s whole shape — are ONE symbol to
-     * tsc; here `init:mergeFileLocalsIntoGlobals` folds every script file's locals
-     * into `globals`, and [mergeSingleSymbol] ADOPTS the first file's symbol and
-     * appends the others' declarations and exports into it (recursively, so a
-     * nested `server` is merged too). So `globals[root]` IS the merged instance and
-     * every other file's `nodeToSymbol` entry is an UN-merged twin whose exports
-     * hold that file's members only — which is why a bare `A` in b.d.ts's `ts`
-     * block typed `any` and its heritage was skipped. The merged view is reached by
-     * descending from the root along the segment path (`ts` → `server` → …); a
-     * dotted `namespace A.B.C` contributes three segments.
-     *
-     * Roots: an identifier-named outermost level in a SCRIPT program file whose
-     * `globals` entry carries this declaration (a MODULE file's namespace never
-     * merges — INV.3(d) — and keeps the per-file answer; a lib file is not in
-     * [fileResults] and keeps it too); or a string-named `declare module "m"`
-     * block whose specifier resolves to NO program file — a genuine ambient module,
-     * whose definition and every augmentation carrier merge into `globals["m"]`
-     * ([moduleLocalContributesGlobally]) — where a FILE-backed block is an
-     * augmentation whose partial interface is a separate symbol here (INV.3(c)(iv),
-     * +43 rows on three profiles when consulted blindly in (CHK.76)) and yields no
-     * root at all. Where the descent breaks (a level the merge did not reach) the
-     * remaining levels answer null and the caller falls back per level.
-     */
-    private fun mergedNamespaceLevels(enclosing: List<ModuleDeclaration>, owner: SourceFile?): Array<List<Symbol>?>? {
-        if (owner == null || fileResults[owner.fileName] == null) return null
-        val outermost = enclosing[enclosing.size - 1]
-        var rootExpr: Expression = outermost.name
-        while (rootExpr is PropertyAccessExpression) rootExpr = rootExpr.expression
-        val root: Symbol = when (rootExpr) {
-            is Identifier -> {
-                if (rootExpr.text == "global" || owner.fileName in moduleFiles) return null
-                globals[rootExpr.text] ?: return null
-            }
-            is StringLiteralNode -> {
-                if (!ambientModuleBlockIsFileless(rootExpr.text, owner.fileName)) return null
-                globals[rootExpr.text] ?: return null
-            }
-            else -> return null
-        }
-        if (!root.flags.hasAny(SymbolFlags.Module)) return null
-        var carries = false
-        for (d in root.declarations) if (d === outermost) { carries = true; break }
-        if (!carries) return null
-        val result = arrayOfNulls<List<Symbol>>(enclosing.size)
-        var sym: Symbol? = null
-        var i = enclosing.size - 1
-        while (i >= 0) {
-            val decl = enclosing[i]
-            val segments = ArrayList<String>(2)
-            var nameExpr: Expression = decl.name
-            while (nameExpr is PropertyAccessExpression) {
-                segments.add(0, nameExpr.name.text)
-                nameExpr = nameExpr.expression
-            }
-            when (nameExpr) {
-                is Identifier -> segments.add(0, nameExpr.text)
-                is StringLiteralNode -> segments.add(0, nameExpr.text)
-                else -> return result
-            }
-            val level = ArrayList<Symbol>(segments.size)
-            for ((k, seg) in segments.withIndex()) {
-                val next: Symbol? = if (sym == null) {
-                    if (k == 0) root else null
-                } else sym.exports?.get(seg)
-                if (next == null || !next.flags.hasAny(SymbolFlags.Module)) return result
-                level.add(next)
-                sym = next
-            }
-            result[i] = level
-            i--
-        }
-        return result
-    }
-
-    /**
-     * (CHK.77) Does the `declare module "[spec]"` block written in [ownerFileName]
-     * declare a GENUINE ambient module — one whose specifier resolves to no program
-     * file — rather than augment a file the program has? Mirrors
-     * [collectModuleAugmentations]' target resolution (the plain resolver, the
-     * ESM-`.js`-aware relative one, the crawl's package answer — (CHK.30)) and its
-     * B387 rule: a BARE specifier that merely shares a basename with a plain `.ts`
-     * source names a standalone ambient module. Memoized per (file, specifier): the
-     * answer is a property of the program, and the resolvers cache by specifier
-     * alone where the relative one depends on the asking file.
-     */
-    private fun ambientModuleBlockIsFileless(spec: String, ownerFileName: String): Boolean {
-        val key = ownerFileName + "\u0000" + spec
-        ambientModuleFilelessCache[key]?.let { return it }
-        val target = resolveModuleSpecifier(spec)
-            ?: resolveModuleSpecifierRelativeJsAware(spec, ownerFileName)
-            ?: resolveImportTargetFallback(spec, ownerFileName)
-        val fileless = if (target == null) true else {
-            val specifierIsRelative = spec.startsWith("./") || spec.startsWith("../")
-            val targetIsPlainSource = (target.endsWith(".ts") || target.endsWith(".tsx")) &&
-                !target.endsWith(".d.ts") && "node_modules" !in target
-            !specifierIsRelative && targetIsPlainSource
-        }
-        ambientModuleFilelessCache[key] = fileless
-        return fileless
-    }
 
     // -----------------------------------------------------------------------
     // Per-checker mutable state — grouped for parallel-checking readiness.
@@ -4632,7 +4382,7 @@ class Checker(
     private var lastChainMissingPropSymbol: Symbol? = null
 
     /** Check if a file is a declaration file (.d.ts/.d.mts/.d.cts). */
-    private fun isDtsFile(fileName: String): Boolean =
+    internal fun isDtsFile(fileName: String): Boolean =
         fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") || fileName.endsWith(".d.cts")
 
     // Whether strict null checks are enabled (null/undefined not assignable to other types)
@@ -9961,7 +9711,7 @@ class Checker(
      * [moduleLocalContributesGlobally]. Declared before `init` (the Kotlin
      * init-order gotcha).
      */
-    private var mergeSharedKeepNames: Set<String> = emptySet()
+    internal var mergeSharedKeepNames: Set<String> = emptySet()
 
     /**
      * 17.33: UMD global names registered via `export as namespace X;` in
@@ -9972,7 +9722,7 @@ class Checker(
      * doesn't have first-class support for the `export as namespace`
      * construct; it falls through to expression-statement parsing).
      */
-    private val umdGlobalNames: MutableSet<String> = mutableSetOf()
+    internal val umdGlobalNames: MutableSet<String> = mutableSetOf()
 
     /**
      * Names declared inside any file's `declare global { var X: ... }` block.
@@ -10001,7 +9751,7 @@ class Checker(
      * JS files — a top-level `require(...)` call). Used as the second
      * gate for TS2686 emission. Populated alongside [umdGlobalNames].
      */
-    private val moduleFiles: MutableSet<String> = mutableSetOf()
+    internal val moduleFiles: MutableSet<String> = mutableSetOf()
 
     /** B18.3 v3: class names known to be in a circular `extends` chain INSIDE an
      *  ambient `declare namespace`. TypeScript suppresses TS2449 in that case
@@ -10039,7 +9789,7 @@ class Checker(
      * (`M` of `M.D`, `LE` of `LE.Q`): a namespace or an enum — plus an alias, which
      * [lookupInEnclosingNamespaces] answers for every meaning anyway.
      */
-    private val QUALIFIED_LEFT_MEANING: SymbolFlags = SymbolFlags.Module or SymbolFlags.Enum
+    internal val QUALIFIED_LEFT_MEANING: SymbolFlags = SymbolFlags.Module or SymbolFlags.Enum
 
     /**
      * (CHK.81) The meanings an ambient block's `export = X` target may carry for a
@@ -10124,11 +9874,6 @@ class Checker(
      *  of [importedGuardDeclCache] for `Debug.assertIsDefined(x)`. Declared before
      *  `init` per the init-order trap. */
     private val importedNamespaceSymCache = HashMap<Int, Symbol?>()
-
-    /** INV.3(d): memo for [typeSideImportFallback] — the import-shadowed-by-
-     *  value-local TYPE-space recovery. Keyed `fileName|name`; stored null =
-     *  no shadowed type import. Declared before `init`. */
-    private val typeSideImportFallbackCache = HashMap<String, Symbol?>()
 
     /** Round 474 (Blocker #3): memo for [importedCalleeFunctionType], keyed
      *  `"file|name"` (null = no collision / unresolvable — keep the globals path).
@@ -15108,29 +14853,6 @@ class Checker(
     }
 
     /**
-     * INV.3(d): does a MODULE file's top-level local deliberately contribute to
-     * the GLOBAL namespace (and therefore keep merging into [globals] after the
-     * Blocker-#3 conflation retirement)? True for:
-     *  - the `declare global { … }` namespace binding (named `global` — its
-     *    exports are genuine global augmentations in tsc);
-     *  - an `export as namespace X` UMD namespace (the parser misparses the
-     *    construct into a `namespace X` ModuleDeclaration; [umdGlobalNames] is
-     *    regex-collected BEFORE the merge);
-     *  - any symbol declaring an ambient `declare module "spec"` (StringLiteral
-     *    name) — both standalone ambient-module definitions and augmentation
-     *    carriers; [mergeModuleAugmentations] resolves them via
-     *    `globals[specifier]`.
-     * Everything else is module-scoped in real tsc: visible only to the file
-     * itself and its importers, served by [lookupPerFile]/[globalsForFile].
-     */
-    internal fun moduleLocalContributesGlobally(name: String, symbol: Symbol): Boolean {
-        if (name == "global") return true
-        if (name in umdGlobalNames) return true
-        if (name in mergeSharedKeepNames) return true
-        return symbol.declarations.any { it is ModuleDeclaration && it.name is StringLiteralNode }
-    }
-
-    /**
      * Merge module augmentation exports into target module symbols.
      *
      * When `declare module "./foo" { namespace Bar { ... } }` augments a file-based module,
@@ -15482,51 +15204,10 @@ class Checker(
      * one HashSet probe before any ancestor walk. Populated by
      * [computeAllEnumValues], so it is complete before the first check runs.
      */
-    private var lexicalBlockScopedEnumNames: Set<String> = emptySet()
+    internal var lexicalBlockScopedEnumNames: Set<String> = emptySet()
 
     /** (CHK.19) round 945 — the gate for [lexicalTypeAliasArity]; see [lexicalBlockScopedEnumNames]. */
     private var lexicalBlockScopedTypeAliasNames: Set<String> = emptySet()
-
-    /**
-     * (REL.1)(c) step 4: the position-aware TYPE-space consult for a
-     * function-body-scoped `enum`. Walks the node's ancestor chain outward over the
-     * INV.2(c) `lexicalScopes` table of the node's OWNING file and returns the first
-     * SCOPE-SPACE enum symbol of [name].
-     *
-     * **This is a resolution-ORDER change, not a fallback, and it cannot be written
-     * as one** — of the two B83.5 failure modes only the first is a miss: a UNIQUE
-     * name resolved to nothing (annotation → `any`, every check silent, and no TS2304
-     * because the INV.4(c)(iii) family finds the name through these same lexical
-     * scopes, which this resolver did not consult), while a name SHADOWING an outer
-     * one resolved to the OUTER symbol, which is a wrong answer with nothing to
-     * detect.
-     *
-     * SCOPE-SPACE ONLY (`scope.symbols`, never [LexicalScope.existing]) is what makes
-     * it containable: `declareLexical` skips any name the main binder already bound in
-     * that container, so a conventionally-bound name is absent from `symbols`
-     * everywhere and keeps resolving exactly as before. That also gives the shadowing
-     * rule for free — a scope-space binding exists only where the main binder had
-     * none, so the innermost-first walk reaches the inner `enum DC` before the file
-     * root's aliased locals ever offer the module-scoped one.
-     */
-    private fun lexicalTypeSymbolForNode(node: Node, name: String): Symbol? {
-        if (name !in lexicalBlockScopedEnumNames) return null
-        val owner = owningSourceFile(node) ?: return null
-        val scopes = fileResults[owner.fileName]?.lexicalScopes ?: return null
-        if (scopes.isEmpty()) return null
-        var cur: Node? = node
-        var hops = 0
-        while (cur != null && hops++ < 4096) {
-            val id = (cur as NodeBase).nodeId
-            if (id >= 0) {
-                val sym = scopes[id]?.symbols?.get(name)
-                if (sym != null && sym.flags.hasAny(SymbolFlags.Enum)) return sym
-            }
-            if (cur is SourceFile) break
-            cur = cur.parent
-        }
-        return null
-    }
 
     /**
      * (CHK.19) round 945 — the arity of a BLOCK-SCOPED type alias that shadows an outer
@@ -16589,71 +16270,6 @@ class Checker(
 
 
     /**
-     * (CHK.78)(b) INV.3(c)(iv) as a standalone consult, so the rule has ONE home
-     * and both its consumers — [lookupPerFileForNode] and the lens's
-     * `typeReferenceSymbol` — ask the same question.
-     *
-     * [ambientBlock] is the innermost enclosing string-named `declare module
-     * "<spec>"` block (null when the node is in none), [owner] the file the node
-     * lives in. Answers the AUGMENTED module's own symbol for [name] when the
-     * specifier names a program file that EXPORTS it (INV.3(d): the merged
-     * instance no longer exists — the target file's local is the symbol tsc sees
-     * there), and null everywhere else: a fileless AMBIENT target and a
-     * non-relative one keep the resolution they had.
-     *
-     * (CHK.82)(1) SECOND LEG — a name the target does NOT export, declared by the
-     * BLOCK ITSELF (`declare module "./types" { interface ZzzLocal { … };
-     * interface SourceFile { p: ZzzLocal } }`). tsc checks the body in the
-     * augmented module's context, where the block's own declarations are in
-     * scope; here the per-file consult below cannot see them (they live in the
-     * augmentation symbol's `exports`, which the binder filled in
-     * `bindModuleDeclaration`), so `p` typed `any` — silently, since `any` is
-     * legal everywhere.
-     *
-     * THE NARROWING IS LOAD-BEARING AND IS WHY THIS IS TWO LEGS RATHER THAN ONE
-     * TABLE: (CHK.76) measured that consulting a string-named block's body
-     * WHOLESALE costs +43 rows on three profiles, because the block's own
-     * PARTIAL `interface SourceFile` is a separate symbol here (INV.3(c)(iv)) and
-     * would shadow the merged one at every reference. Asking the block only for
-     * a name the target does not export excludes that entire class by
-     * construction — a partial re-declaration is, by definition, of a name the
-     * target exports.
-     */
-    internal fun augmentationContextSymbol(
-        ambientBlock: ModuleDeclaration?,
-        owner: SourceFile,
-        name: String,
-    ): Symbol? {
-        val block = ambientBlock ?: return null
-        val spec = (block.name as? StringLiteralNode)?.text ?: return null
-        val target = resolveModuleSpecifierRelativeJsAware(spec, owner.fileName) ?: return null
-        val targetFile = fileResults[target]?.sourceFile ?: return null
-        if (name in moduleNamedExportsOf(targetFile)) return lookupPerFile(target, name)
-        return nodeSymbolOf(block)?.exports?.get(name)
-    }
-
-    /**
-     * (CHK.78)(c) [augmentationContextSymbol] for a caller holding only the node —
-     * the innermost enclosing string-named `ModuleDeclaration` and the owning
-     * file are recovered by the same bounded parent walk
-     * [lookupPerFileForNode] does. Off the hot path by construction: its one
-     * caller is the lens, which exists only while a [CheckedNodeSink] is attached.
-     */
-    private fun augmentationContextSymbolForNode(node: Node, name: String): Symbol? {
-        var cur: Node? = node
-        var hops = 0
-        var ambientBlock: ModuleDeclaration? = null
-        while (cur != null && hops++ < 4096) {
-            if (cur is SourceFile) return augmentationContextSymbol(ambientBlock, cur, name)
-            if (ambientBlock == null && cur is ModuleDeclaration && cur.name is StringLiteralNode) {
-                ambientBlock = cur
-            }
-            cur = (cur as NodeBase).parent
-        }
-        return null
-    }
-
-    /**
      * 17.33: scan all parsed files to populate [umdGlobalNames] (from
      * `export as namespace X;` in .d.ts files) and [moduleFiles] (any file
      * with imports/exports OR — for .js/.jsx — a top-level `require(...)`
@@ -17461,6 +17077,56 @@ class Checker(
 
     private fun resolveImportedSymbolGeneral(aliasSymbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol? =
         nameResolver.resolveImportedSymbolGeneral(aliasSymbol, visited)
+    // -----------------------------------------------------------------------
+    // Namespace / heritage / type-name resolution — (INV.0) step 4b-ii: the
+    // (CHK.76) enclosing-namespace consult and its (CHK.77) merged-level
+    // machinery, the (CHK.78) augmentation-context consult, the (CHK.79)
+    // ambient-module surface walk, the heritage-base pair, `resolveQualifiedName`,
+    // `resolveTypeNameToSymbol` and the INV.3(d) namespace-qualified family now
+    // live in `NameResolver.kt` (ledger row 6). These are the delegation hops the
+    // inlining receipt prices; every call site is unchanged.
+    // `globalAugmentationLevelSymbol`, `mergedNamespaceLevels`,
+    // `ambientModuleBlockIsFileless`, `augmentationContextSymbol`,
+    // `isInAmbientContext`, `symbolHasTypeSideDeclaration` and
+    // `resolveNsQualifiedFromQualifiedName` have no caller left in this file —
+    // their only readers moved with them — so they get no hop.
+    // -----------------------------------------------------------------------
+
+    private fun lookupInEnclosingNamespaces(node: Node, name: String, meaning: SymbolFlags): Symbol? =
+        nameResolver.lookupInEnclosingNamespaces(node, name, meaning)
+
+    internal fun moduleLocalContributesGlobally(name: String, symbol: Symbol): Boolean =
+        nameResolver.moduleLocalContributesGlobally(name, symbol)
+
+    private fun lexicalTypeSymbolForNode(node: Node, name: String): Symbol? =
+        nameResolver.lexicalTypeSymbolForNode(node, name)
+
+    private fun augmentationContextSymbolForNode(node: Node, name: String): Symbol? =
+        nameResolver.augmentationContextSymbolForNode(node, name)
+
+    internal fun resolveQualifiedName(qn: QualifiedName): Symbol? =
+        nameResolver.resolveQualifiedName(qn)
+
+    private fun resolveHeritageBaseHead(expr: Expression): Symbol? =
+        nameResolver.resolveHeritageBaseHead(expr)
+
+    private fun resolveHeritageBaseSymbol(expr: Expression): Symbol? =
+        nameResolver.resolveHeritageBaseSymbol(expr)
+
+    internal fun ambientModuleSurfaceMember(module: Symbol, name: String, visited: MutableSet<Int>): Symbol? =
+        nameResolver.ambientModuleSurfaceMember(module, name, visited)
+
+    private fun resolveTypeNameToSymbol(node: Node, enclosingNamespacesDone: Boolean = false): Symbol? =
+        nameResolver.resolveTypeNameToSymbol(node, enclosingNamespacesDone)
+
+    private fun namespaceAliasMemberSymbol(alias: Symbol, memberName: String): Symbol? =
+        nameResolver.namespaceAliasMemberSymbol(alias, memberName)
+
+    private fun resolveNamespaceQualifiedSymbol(pa: PropertyAccessExpression): Symbol? =
+        nameResolver.resolveNamespaceQualifiedSymbol(pa)
+
+    private fun typeSideImportFallback(owner: SourceFile, name: String): Symbol? =
+        nameResolver.typeSideImportFallback(owner, name)
 
     /**
      * (CHK.80)(c) The ImportDeclaration a NAMED-import specifier belongs to, through
@@ -17663,38 +17329,6 @@ class Checker(
         }
         namespaceScopeSymbolCache[name] = found
         return found
-    }
-
-    internal fun resolveQualifiedName(qn: QualifiedName): Symbol? {
-        val left = when (val l = qn.left) {
-            // INV.3(d): node-keyed root (was the merged `globals`) — the retired
-            // merge no longer holds module-file namespaces; an own/imported root
-            // resolves per-file to the same declaring-file instance.
-            // (CHK.76) `M.D` written inside `namespace N { namespace M {…} }`: the
-            // root is a member of an enclosing namespace before it is a file-level name.
-            is Identifier -> lookupInEnclosingNamespaces(l, l.text, QUALIFIED_LEFT_MEANING)
-                ?: lookupPerFileForNode(l, l.text)
-            is QualifiedName -> resolveQualifiedName(l)
-            else -> null
-        }
-        val resolved = left?.let { resolveAlias(it) }
-        resolved?.exports?.get(qn.right.text)?.let { return it }
-        // INV.3(d): a namespace-IMPORT-rooted chain (`ts.DocumentRegistry`,
-        // `ts.server.Session`) — resolveAlias cannot follow NamespaceImports
-        // (round 444) and the retired merge no longer leaks the member name;
-        // resolve through the target modules' exports directly.
-        return resolveNsQualifiedFromQualifiedName(qn)
-            // (CHK.80)(a) LAST: the head is a namespace import / `require` alias of a
-            // FILELESS ambient module (`import * as net from "node:net"` inside a
-            // `declare module` block), which `resolveAlias` leaves unresolved, or an
-            // ambient carrier whose own exports lack the name because its body is
-            // wiring (`export = X`, `export * from "m"`) — the (CHK.79) surface walk,
-            // which the heritage arm already takes. Consulted only after every
-            // other leg missed, so a resolvable name costs nothing here; without it
-            // `x: net.Socket` written in such a block typed `any` while `class X
-            // extends net.Socket` beside it inherited (measured: 14 of 15 probes
-            // silent on a (CHK.79)-shaped fixture, tsgo reporting all 15).
-            ?: resolved?.let { ambientModuleSurfaceMember(it, qn.right.text, HashSet()) }
     }
 
     /**
@@ -55993,7 +55627,7 @@ class Checker(
      * Used by TS2614 checking to determine if named imports exist in the module.
      */
     /** M3.4 (round 413): memoized [getModuleNamedExports] for the star-chain leaf gate. */
-    private fun moduleNamedExportsOf(file: SourceFile): Set<String> =
+    internal fun moduleNamedExportsOf(file: SourceFile): Set<String> =
         moduleNamedExportsCache.getOrPut(file.fileName) { getModuleNamedExports(file) }
 
     /**
@@ -116508,225 +116142,10 @@ interface DataView {
     }
 
     /**
-     * Resolve a heritage-clause base expression (Identifier or PropertyAccessExpression)
-     * to a Symbol. For `Foo.I1`, walks `Foo`'s `exports` to find `I1` but only when
-     * `I1` is actually exported (i.e., would be accessible from outside `Foo`). For
-     * multi-segment `A.B.C`, recursively resolves the parent then walks exports.
-     * Returns null when not exported (caller should also emit TS2694).
-     */
-    /**
-     * (CHK.77) The HEAD of a dotted heritage base — the `JsTyping` of `extends
-     * JsTyping.TypingResolutionHost`, the `ts` of `ts.server.A` — asked for the
-     * meaning tsc's `resolveEntityName` gives the left of a qualified name
-     * ([QUALIFIED_LEFT_MEANING]: a namespace or an enum, an alias answered for
-     * every meaning). The Identifier arm of [resolveHeritageBaseSymbol] asks
-     * `Type | Value`, which a namespace holding only interfaces — a
-     * `NamespaceModule`, neither a type nor a value — never satisfies, so
-     * `typescript.d.ts:2679`'s `InstallTypingHost` lost its supertype.
-     */
-    private fun resolveHeritageBaseHead(expr: Expression): Symbol? = when (expr) {
-        is Identifier -> lookupInEnclosingNamespaces(expr, expr.text, QUALIFIED_LEFT_MEANING)
-            ?: lookupPerFileForNode(expr, expr.text)
-        is PropertyAccessExpression -> resolveHeritageBaseSymbol(expr)
-        else -> null
-    }
-
-    /**
-     * (CHK.77) tsc's inherited `NodeFlags.Ambient`: [node] sits under a `declare`d
-     * declaration, or in a declaration file. Bounded parent walk.
-     */
-    private fun isInAmbientContext(node: Node): Boolean {
-        var cur: Node? = (node as NodeBase).parent
-        var hops = 0
-        while (cur != null && hops++ < 4096) {
-            if (cur is SourceFile) return isDtsFile(cur.fileName)
-            if (cur is ModuleDeclaration && ModifierFlag.Declare in cur.modifiers) return true
-            cur = (cur as NodeBase).parent
-        }
-        return false
-    }
-
-    private fun resolveHeritageBaseSymbol(expr: Expression): Symbol? {
-        return when (expr) {
-            // (CHK.49) INV.3(d)(ii), node-keyed — the same treatment the three
-            // Identifier-rooted heritage sites that CALL this one already carry.
-            // A raw `globals` consult reaches a module file's own namespace only
-            // while that namespace's NAME happens to collide with a lib global
-            // and the merge fuses the two: `class Promise<R> implements
-            // Promise.Thenable<R>` resolved (bluebirdStaticThis) and the identical
-            // shape spelled `Zromise` did NOT, on the parent binary. Both work
-            // through the per-file probe, which degrades to `globals` for every
-            // name with no per-file meaning.
-            // (CHK.76) `interface X extends Node` inside `declare namespace ts`: the
-            // base is the namespace's own `Node`, never the lib's — 509 of
-            // `typescript.d.ts`'s clauses answered null (or the DOM's) here.
-            is Identifier -> lookupInEnclosingNamespaces(expr, expr.text, SymbolFlags.Type or SymbolFlags.Value)
-                ?: lookupPerFileForNode(expr, expr.text)
-            is PropertyAccessExpression -> {
-                val parent = resolveHeritageBaseHead(expr.expression) ?: return null
-                val resolvedParent = resolveAlias(parent)
-                val propName = (expr.name).text
-                val memberSym = resolvedParent.exports?.get(propName)
-                    ?: return ambientModuleSurfaceMember(resolvedParent, propName, HashSet())
-                // Implicit-export rules:
-                //  - Sub-namespaces (Module flag) are always accessible (parent.Sub usage).
-                //  - `declare namespace` members are implicitly exported (any decl carries Declare).
-                //  - (CHK.77) …and so are the members of a namespace NESTED in an ambient
-                //    one, or declared in a `.d.ts`: tsc's `setExportContextFlag` reads the
-                //    inherited `NodeFlags.Ambient`, not a `declare` keyword on the block
-                //    itself — `extends ts.server.A` inside `declare namespace ts` was
-                //    skipped here while the annotation `a: ts.server.A` beside it resolved.
-                // Otherwise require explicit `export` modifier on the member declaration.
-                if (memberSym.flags.hasAny(SymbolFlags.Module)) return memberSym
-                val parentIsAmbient = resolvedParent.declarations.any {
-                    it is ModuleDeclaration && (ModifierFlag.Declare in it.modifiers || isInAmbientContext(it))
-                }
-                if (parentIsAmbient) return memberSym
-                val memberIsExported = memberSym.flags.hasAny(SymbolFlags.ExportValue) ||
-                    memberSym.declarations.any { d ->
-                        when (d) {
-                            is FunctionDeclaration -> ModifierFlag.Export in d.modifiers
-                            is ClassDeclaration -> ModifierFlag.Export in d.modifiers
-                            is InterfaceDeclaration -> ModifierFlag.Export in d.modifiers
-                            is TypeAliasDeclaration -> ModifierFlag.Export in d.modifiers
-                            is EnumDeclaration -> ModifierFlag.Export in d.modifiers
-                            is ModuleDeclaration -> ModifierFlag.Export in d.modifiers
-                            else -> false
-                        }
-                    } ||
-                    // VariableStatement export check: scan parent module body
-                    resolvedParent.declarations.any { nsDecl ->
-                        val body = (nsDecl as? ModuleDeclaration)?.body as? ModuleBlock
-                        body?.statements?.any { stmt ->
-                            stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers &&
-                                stmt.declarationList.declarations.any { vd ->
-                                    vd.name is Identifier && (vd.name).text == propName
-                                }
-                        } == true
-                    }
-                if (!memberIsExported) return null
-                memberSym
-            }
-            else -> null
-        }
-    }
-
-    /**
-     * (CHK.79) The symbol [name] denotes on the SURFACE of the ambient module
-     * [module] stands for — [module] being either the alias of a namespace import
-     * (`import * as net from "node:net"` / `import net = require("net")`) that
-     * [resolveAlias] could not follow (a fileless target), or an ambient module
-     * carrier (`globals["node:net"]`) whose own exports lack the name because its
-     * body is WIRING. The walk is the one the externals generator's (EXT.19)
-     * `moduleMember` performs syntactically, on the binder's tables: the block's
-     * own exports; then, in body order, what an `export = X` re-routes (the block's
-     * namespace `X`, or another module through an `import X = require("m")`
-     * alias — `@types/node`'s `node:stream` → `stream` → its namespace `Stream`)
-     * and what each `export * from "m"` re-exports (the `node:net` → `net` idiom).
-     * First declared wins; [visited] cuts a cycle (two blocks re-exporting each
-     * other). An import binding of the block is not a member of its surface
-     * (tsc's `declareModuleMember` exports an import-equals only with the
-     * modifier), so a bare alias declared IN the block is skipped — the `export`
-     * -modified form stays visible, as it is in tsc.
-     *
-     * A FILE-backed target (an ambient block re-exporting a program file) answers
-     * that file's own exported binding, `export *` chains followed
-     * ([resolveExportedSymbolThroughStars]). Null where nothing declares the name,
-     * which is what tsgo reports as TS2339 at the base expression.
-     *
-     * Measured on `@types/node` 20.19.43 after (CHK.77): every dotted heritage base
-     * whose head is such an import answered null here (the lens's
-     * `heritageBaseSymbol` — 40 bases the externals generator reaches, 22 of them
-     * `stream.Transform`; the queue's "17" undercounted), and a consumer of
-     * `tls.TLSSocket` did not inherit `net.Socket`'s members — silently on the class
-     * (an unresolved base is `any`) and as a false TS2339 on an interface
-     * (`TlsOptions extends net.ServerOpts`). `NamespaceImportHeritageTest` pins both
-     * channels; 7 of its 9 pins redden without this.
-     */
-    internal fun ambientModuleSurfaceMember(module: Symbol, name: String, visited: MutableSet<Int>): Symbol? {
-        if (!visited.add(module.id)) return null
-        // An alias that is NOT itself a module: a merged carrier may carry the Alias
-        // bit beside its Module one (an `import net = require("net")` alias and the
-        // `"net"` carrier merge by name here), and its own surface comes first.
-        if (module.flags.hasAny(SymbolFlags.Alias) && !module.flags.hasAny(SymbolFlags.Module)) {
-            val target = ambientModuleOfImportAlias(module) ?: return null
-            return ambientModuleSurfaceMember(target, name, visited)
-        }
-        module.exports?.get(name)?.let { hit ->
-            val importOnly = hit.flags.hasAny(SymbolFlags.Alias) &&
-                hit.declarations.isNotEmpty() &&
-                hit.declarations.all { d ->
-                    isImportBindingDecl(d) && !(d is ImportEqualsDeclaration && ModifierFlag.Export in d.modifiers)
-                }
-            if (!importOnly) return hit
-        }
-        for (decl in module.declarations) {
-            val body = ((decl as? ModuleDeclaration)?.body as? ModuleBlock) ?: continue
-            for (stmt in body.statements) {
-                when (stmt) {
-                    is ExportAssignment -> {
-                        if (!stmt.isExportEquals) continue
-                        val id = stmt.expression as? Identifier ?: continue
-                        val target = module.exports?.get(id.text) ?: continue
-                        val resolved = if (target.flags.hasAny(SymbolFlags.Module)) target
-                        else ambientModuleOfImportAlias(target) ?: resolveAlias(target)
-                        if (resolved === target && resolved.exports == null) continue
-                        ambientModuleSurfaceMember(resolved, name, visited)?.let { return it }
-                    }
-                    is ExportDeclaration -> {
-                        val clause = stmt.exportClause
-                        if (clause != null) {
-                            // (CHK.81) A LOCAL re-export clause — `@types/node`'s `namespace
-                            // EventEmitter { export { internal as EventEmitter } }`, whose
-                            // `internal` is the block's `import internal = require("node:events")`
-                            // — names the member under the EXPORTED spelling; a clause with a
-                            // specifier (`export { a } from "m"`) is not followed.
-                            if (stmt.moduleSpecifier != null || clause !is NamedExports) continue
-                            for (el in clause.elements) {
-                                if (el.name.text != name) continue
-                                val localName = (el.propertyName ?: el.name).text
-                                // The local is the namespace's own member, or — `@types/node`'s
-                                // shape — the ENCLOSING block's `import internal = require(…)`;
-                                // the binder declares the specifier itself under the LOCAL name
-                                // as an alias, which names nothing, so that entry is skipped.
-                                val local = module.exports?.get(localName)
-                                    ?.takeIf { l -> l.declarations.any { it !is ExportSpecifier } }
-                                    ?: enclosingAmbientBlockMember(stmt, localName) ?: continue
-                                val resolved =
-                                    if (local.flags.hasAny(SymbolFlags.Alias) && !local.flags.hasAny(SymbolFlags.Module))
-                                        resolveAlias(local).takeIf { it !== local } ?: ambientModuleOfImportAlias(local) ?: local
-                                    else local
-                                return resolved
-                            }
-                            continue
-                        }
-                        val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-                        val ctx = owningSourceFile(stmt)?.fileName
-                        val targetFile = resolveModuleSpecifier(spec, stmt)
-                            ?: ctx?.let { resolveModuleSpecifierRelativeJsAware(spec, it) }
-                            ?: resolveImportTargetFallback(spec, ctx)
-                        if (targetFile != null) {
-                            val tr = fileResults[targetFile] ?: continue
-                            (tr.locals[name] ?: resolveExportedSymbolThroughStars(tr.sourceFile, name))
-                                ?.let { return it }
-                            continue
-                        }
-                        val target = globals[spec] ?: continue
-                        if (!target.flags.hasAny(SymbolFlags.Module)) continue
-                        ambientModuleSurfaceMember(target, name, visited)?.let { return it }
-                    }
-                    else -> {}
-                }
-            }
-        }
-        return null
-    }
-
-    /**
      * (CHK.81) The member [name] of the nearest string-named `declare module` block
      * enclosing [node] — the block's carrier's exports — or null.
      */
-    private fun enclosingAmbientBlockMember(node: Node, name: String): Symbol? {
+    internal fun enclosingAmbientBlockMember(node: Node, name: String): Symbol? {
         var cur: Node? = (node as NodeBase).parent
         var hops = 0
         while (cur != null && hops++ < 4096) {
@@ -116747,7 +116166,7 @@ interface DataView {
      * ([resolveAlias] already answers that one as a module symbol) and for any
      * other alias shape.
      */
-    private fun ambientModuleOfImportAlias(alias: Symbol): Symbol? {
+    internal fun ambientModuleOfImportAlias(alias: Symbol): Symbol? {
         for (decl in alias.declarations) {
             val spec = when (decl) {
                 is ImportDeclaration ->
@@ -176908,66 +176327,6 @@ interface DataView {
     }
 
     /**
-     * Resolve a TypeReference typeName (Identifier or QualifiedName) to a Symbol.
-     *
-     * INV.3(c)(iv) (round 508): the Identifier branch keys the merged-globals
-     * consult by the NAME NODE'S owning file — a type name resolves under the
-     * visibility of the file its annotation lives in (tsc semantics; a
-     * types.ts annotation resolves in types.ts's scope whatever file is being
-     * checked). A module-only name with no meaning in the owning file returns
-     * null (the conflation leak, killed — real tsc sees TS2304 there); every
-     * visible name keeps resolving to the SAME merged instance, and node-keyed
-     * resolution is a fixed property of the node, so the `nodeTypes` cache
-     * stays valid. Synthesized/unindexed Identifiers degrade to the legacy
-     * merged consult inside [lookupPerFileForNode]. NOTE the two call sites
-     * with their own trailing `?: globals[name]` fallback gate it to
-     * QualifiedName ([getTypeFromTypeReference], [checkConstraintsInTypeNode])
-     * — for an Identifier that fallback was byte-redundant pre-flip and would
-     * silently re-leak post-flip.
-     */
-    private fun resolveTypeNameToSymbol(node: Node, enclosingNamespacesDone: Boolean = false): Symbol? {
-        return when (node) {
-            is Identifier -> {
-                // (REL.1)(c) step 4: a function-body-scoped `enum` is invisible to the
-                // conventional consult (B83.5) and a name SHADOWING an outer one
-                // resolves there to the WRONG (outer) symbol — so the position-aware
-                // lexical consult must come FIRST, not as a miss-fallback.
-                lexicalTypeSymbolForNode(node, node.text)?.let { return it }
-                // (CHK.76) a name declared in an enclosing namespace body — innermost
-                // first, BEFORE the per-file consult, which would otherwise hand a
-                // nested namespace's `Node` to the root's (or a lib's) `Node`.
-                if (!enclosingNamespacesDone) {
-                    lookupInEnclosingNamespaces(node, node.text, SymbolFlags.Type)?.let { return it }
-                }
-                val sym = lookupPerFileForNode(node, node.text)
-                // INV.3(d): the import-shadowed-by-value-local TYPE/VALUE split —
-                // `import { SourceMapSource }` (a type) + a same-named local
-                // `function SourceMapSource` (a value): the binder's last-wins keeps
-                // only the value in file locals, and the retired merge no longer
-                // provides the interface through `globals`. tsc resolves the TYPE
-                // space to the import; recover it from the ImportSpecifier's own
-                // recorded alias symbol when the per-file winner lacks a type side.
-                if (sym != null && !symbolHasTypeSideDeclaration(sym)) {
-                    owningSourceFile(node)?.let { owner ->
-                        typeSideImportFallback(owner, node.text)?.let { return it }
-                    }
-                }
-                sym
-            }
-            is QualifiedName -> resolveQualifiedName(node)
-            else -> null
-        }
-    }
-
-    /** INV.3(d): does [sym] declare anything in TYPE space (or carry an alias hop
-     *  that could)? Declaration-based, never flags (the isValueExport gotcha). */
-    private fun symbolHasTypeSideDeclaration(sym: Symbol): Boolean = sym.declarations.any {
-        it is InterfaceDeclaration || it is ClassDeclaration || it is TypeAliasDeclaration ||
-            it is EnumDeclaration || it is ModuleDeclaration || it is TypeParameter ||
-            isImportBindingDecl(it)
-    }
-
-    /**
      * INV.3(d): resolve `NS.member` where [root] is a NAMESPACE-import alias
      * (`import * as NS from "./mod.js"`) to the target MODULE file's exported
      * symbol [memberName] — ESM-`.js`-aware, `export *`-following. The general
@@ -176978,124 +176337,6 @@ interface DataView {
         val owner = owningSourceFile(root) ?: return null
         val rootSym = fileResults[owner.fileName]?.locals?.get(root.text) ?: return null
         return namespaceAliasMemberSymbol(rootSym, memberName)
-    }
-
-    /** INV.3(d): resolve [memberName] from a namespace-flavored ALIAS symbol —
-     *  hopping NAMED-import re-publications (the round-479 barrel shape:
-     *  `import * as NS from …; export { NS };`) to the underlying
-     *  namespace-import, then reading the member from its target module
-     *  (`export *`-following). Context files derive from the declaration
-     *  nodes' owning files, so intermediate hops need no threading. */
-    private fun namespaceAliasMemberSymbol(alias: Symbol, memberName: String): Symbol? {
-        var cur: Symbol? = alias
-        var hops = 0
-        while (cur != null && hops++ < 5) {
-            // A namespace-import alias — resolve its target module and read the member.
-            val nsImport = cur.declarations.firstOrNull {
-                it is ImportDeclaration && it.importClause?.namedBindings is NamespaceImport
-            } as? ImportDeclaration
-            if (nsImport != null) {
-                val ctx = owningSourceFile(nsImport)?.fileName ?: return null
-                val spec = (nsImport.moduleSpecifier as? StringLiteralNode)?.text ?: return null
-                // Round 513: the DIR-RELATIVE leg (the round-511 lesson class) — a
-                // path-shaped extensionless specifier resolves only relative to the
-                // importing file's directory. Purely additive.
-                val target = resolveModuleSpecifier(spec, nsImport)
-                    ?: resolveAliasJsModuleSpecifier(spec, ctx)
-                    ?: resolveModuleSpecifierRelativeJsAware(spec, ctx)
-                    ?: resolveImportTargetFallback(spec, ctx) ?: return null
-                val tr = fileResults[target] ?: return null
-                if (memberName in moduleNamedExportsOf(tr.sourceFile)) {
-                    tr.locals[memberName]?.let { return it }
-                }
-                return resolveExportedSymbolThroughStars(tr.sourceFile, memberName)
-            }
-            // An `export * as NS from "./x"` re-publication (the tsc `_namespaces`
-            // barrel idiom) — the binder binds NS as an Alias declared by the
-            // ExportDeclaration itself; resolve its specifier and read the member.
-            val nsExport = cur.declarations.firstOrNull {
-                it is ExportDeclaration && it.exportClause is NamespaceExport &&
-                    it.moduleSpecifier is StringLiteralNode
-            } as? ExportDeclaration
-            if (nsExport != null) {
-                val ctx = owningSourceFile(nsExport)?.fileName ?: return null
-                val spec = (nsExport.moduleSpecifier as? StringLiteralNode)?.text ?: return null
-                val target = resolveModuleSpecifier(spec, nsExport)
-                    ?: resolveAliasJsModuleSpecifier(spec, ctx)
-                    ?: resolveModuleSpecifierRelativeJsAware(spec, ctx)
-                    ?: resolveImportTargetFallback(spec, ctx) ?: return null
-                val tr = fileResults[target] ?: return null
-                if (memberName in moduleNamedExportsOf(tr.sourceFile)) {
-                    tr.locals[memberName]?.let { return it }
-                }
-                return resolveExportedSymbolThroughStars(tr.sourceFile, memberName)
-            }
-            // A NAMED-import alias — hop to the target module's binding for the
-            // original name.
-            val spec2 = cur.declarations.firstOrNull { it is ImportSpecifier } as? ImportSpecifier
-                ?: return null
-            val originalName = spec2.propertyName?.text ?: spec2.name.text
-            val (ctxFile, importDecl) = findEnclosingImport(spec2) ?: return null
-            val modSpec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: return null
-            val target = resolveModuleSpecifier(modSpec, importDecl)
-                ?: resolveAliasJsModuleSpecifier(modSpec, ctxFile)
-                ?: resolveModuleSpecifierRelativeJsAware(modSpec, ctxFile) ?: return null
-            val tr = fileResults[target] ?: return null
-            cur = if (originalName in moduleNamedExportsOf(tr.sourceFile)) {
-                tr.locals[originalName] ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
-            } else {
-                resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
-            }
-        }
-        return null
-    }
-
-    /** INV.3(d): resolve a DOTTED namespace-qualified value chain `A.B.…​.member`
-     *  (`ts.server.Logger` — `ts` a namespace-import, `server` a re-published
-     *  namespace-import) to the final member's symbol. Heritage bases use this;
-     *  null on any unresolvable segment. */
-    private fun resolveNamespaceQualifiedSymbol(pa: PropertyAccessExpression): Symbol? {
-        val prefix: Symbol? = when (val e = pa.expression) {
-            is Identifier -> owningSourceFile(e)?.let { o -> fileResults[o.fileName]?.locals?.get(e.text) }
-            is PropertyAccessExpression -> resolveNamespaceQualifiedSymbol(e)
-            else -> null
-        }
-        return prefix?.let { namespaceAliasMemberSymbol(it, pa.name.text) }
-    }
-
-    /** INV.3(d): the [resolveNamespaceQualifiedSymbol] sibling over TYPE-position
-     *  [QualifiedName] chains (`ts.DocumentRegistry`, `ts.server.Session`). */
-    private fun resolveNsQualifiedFromQualifiedName(qn: QualifiedName): Symbol? {
-        val prefix: Symbol? = when (val l = qn.left) {
-            is Identifier -> owningSourceFile(l)?.let { o -> fileResults[o.fileName]?.locals?.get(l.text) }
-            is QualifiedName -> resolveNsQualifiedFromQualifiedName(l)
-            else -> null
-        }
-        return prefix?.let { namespaceAliasMemberSymbol(it, qn.right.text) }
-    }
-
-    /** INV.3(d): resolve the TYPE side of a name whose per-file VALUE local shadowed
-     *  its own file's named import (binder last-wins) — the ImportSpecifier's alias
-     *  symbol is still recorded in the binder's nodeToSymbol; resolve it onward and
-     *  keep the result only when it genuinely has a type side. Memoized per
-     *  (file, name); null (cached) = no shadowed type import. */
-    private fun typeSideImportFallback(owner: SourceFile, name: String): Symbol? {
-        val key = owner.fileName + "|" + name
-        if (typeSideImportFallbackCache.containsKey(key)) return typeSideImportFallbackCache[key]
-        val result = run {
-            val br = fileResults[owner.fileName] ?: return@run null
-            for (stmt in owner.statements) {
-                if (stmt !is ImportDeclaration) continue
-                val named = stmt.importClause?.namedBindings as? NamedImports ?: continue
-                val spec = named.elements.firstOrNull { it.name.text == name } ?: continue
-                val alias = br.nodeToSymbol[nodeKey(spec)] ?: continue
-                return@run resolveImportedSymbolGeneral(alias)
-                    ?.takeIf { it.declarations.any { d -> !isImportBindingDecl(d) } && symbolHasTypeSideDeclaration(it) }
-            }
-            null
-        }
-        typeSideImportFallbackCache[key] = result
-        return result
     }
 
     /**
