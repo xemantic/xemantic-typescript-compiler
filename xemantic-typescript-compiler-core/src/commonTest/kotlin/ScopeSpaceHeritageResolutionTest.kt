@@ -54,6 +54,30 @@ import kotlin.test.Test
  * reason: the DERIVED class is scope-space too, so `new D()` needs the VALUE half of 10b,
  * which is refused until 10b-ii. Every fixture here therefore reads its answer through an
  * `interface` or through a class that is only ever used as an `implements` target.
+ *
+ * ## The ablations, RUN, one mistake at a time
+ *
+ * `scripts/inv0s10c-ablate.py`, against a sha256-verified snapshot. **Union 5 of 5 — every
+ * pin discriminates.**
+ *
+ *  * **C1, the BASE-TYPE consult removed** — 2 RED, one unique.
+ *  * **C2, the same consult as a FALLBACK instead of first** — 1 RED and NO unique pin: its
+ *    red set is a strict subset of C1's, and which pin survives is the finding. A fallback
+ *    closes the UNIQUE half and leaves the SHADOWING one exactly as it was, which is round
+ *    748's ordering law re-measured one resolver over.
+ *  * **C3, the `implements` walker's own probe removed** — 2 RED, BOTH unique, and the
+ *    second is the negative control: without the consult a UNIQUE block-scoped
+ *    `implements` target resolves to nothing and the walker `continue`s, so the TS2420 that
+ *    must fire disappears too. One arm, two directions.
+ *  * **C4, the QUALIFIED-NAME root** — 1 RED, unique.
+ *  * **C5, the qualified root's EVIDENCE gate** (adopt a root that cannot answer a member)
+ *    — **0 RED, UNDISCRIMINATED, and recorded rather than claimed.** Its whole population
+ *    is the `namespace` kind, whose qualified reads are wrong BOTH ways today: with the
+ *    gate they answer the outer namespace's member, without it they answer nothing. A pin
+ *    either way would assert a known-wrong value, which is the countdown CLAUDE.md forbids.
+ *    The guard is kept on the argument in [NameResolver.lexicalQualifiedRootSymbolForNode]
+ *    — no answer is worse than a wrong one here, because it also loses every member that
+ *    DID resolve — and the kind is (INV.0) step 10c's stated residue.
  */
 class ScopeSpaceHeritageResolutionTest {
 

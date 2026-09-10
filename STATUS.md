@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **191,677** lines (**−8,286 across (P18.53)-(P18.63)**; steps 10a/10b are SEMANTIC changes and ADD 85 and 86, not extractions; 191,070 when
+extraction):** `Checker.kt` **191,691** lines (**−8,272 across (P18.53)-(P18.64)**; steps 10a-10c are SEMANTIC changes and ADD 85, 86 and 14, not extractions; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -18,6 +18,36 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.64) — (INV.0) STEP 10c: HERITAGE AND QUALIFIED NAMES, AND THE RESOLVER THE ITEM NAMED WAS NOT THE ONE THAT MATTERED, 18,541 / 0 / 3 (2026-09-10).**
+The item pointed at `NameResolver.resolveHeritageBaseSymbol`; **it was given the consult and
+NOTHING MOVED.** A base type's MEMBERS come from `Checker.getTypeFromBaseTypeExpression` — a
+FOURTH resolver, the one `resolveBaseTypesLazy` calls — so `interface J extends I` with a
+block-scoped `I` had been resolving `J` perfectly since 10a and inheriting nothing; and the
+`implements` VERDICT comes from a FIFTH probe of its own, which is why a class with a
+block-scoped `implements` target reported the whole-class **TS2420 about the OUTER
+interface** where both references report the per-property **TS2416** about the inner one.
+Three resolvers where the item named one, each found by landing a patch and measuring it
+INERT. **PRIZE over a 25-cell matrix** against tsgo 7.0.2 and pristine 6.0.3, which agree on
+all 25, file control 5/5 clean: **10 ours-only / 28 missing → 4 / 20**; `interface extends`
+2/6 → 0/2, `implements` 2/4 → 0/4, qualified enum root 4/6 → 2/2. **THE QUALIFIED ROOT IS
+ADOPTED ONLY ON EVIDENCE**, and the asymmetry is `declareLexical`'s rather than the
+consult's: its enum arm publishes members onto the scope symbol's `exports` and its
+`ModuleDeclaration` arm does not, so a memberless root is deliberately left alone — adopting
+it turns a wrong answer into NO answer and loses every member that did resolve, the one
+place in this arc where resolving correctly is measurably worse. **NOT CLOSED, AND THE BASE
+IS NOT THE REASON**: `class D extends B` needs `new D()`, i.e. 10b's VALUE half, because the
+DERIVED class is scope-space too. **ABLATION: five arms, union 5 of 5 — every pin
+discriminates.** The FALLBACK arm reddens a strict SUBSET of the removal arm's set and the
+survivor is the UNIQUE pin, i.e. round 748's ordering law re-measured one resolver over; the
+`implements` arm reddens BOTH its pins including the negative control (without the consult a
+unique target resolves to nothing and the walker `continue`s, so the row that must fire
+disappears too); the evidence-gate arm is 0 RED and recorded as UNDISCRIMINATED, because its
+whole population is the `namespace` kind, whose qualified reads are wrong both ways today.
+**COST IS EXACTLY ZERO AND THAT IS EXPECTED, NOT A GREEN LIGHT**: all 20 counters identical
+to the 10b run to the last digit, because tsc's own sources carry no scope-space heritage
+base — the grid is a control here and the reference matrix is the measurement. Grid
+8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844 classes), warning-clean.
 
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 `Checker.getTypeOfIdentifierCore` now OVERRIDES a conventional answer with the scope-space
@@ -145,35 +175,4 @@ first time since step 4b-ii**: `typeCaptureVisit`, called per node from `spineEn
 925-byte body refused six times as `too large` and its hop reads `inline ×6`. ab-interleaved
 +52 ms (+0.20%) B-wins-3/6 NOISE-DOMINATED; cost_gate exit 0, huge_methods exit 0 (841 classes,
 `Checker.<init>` 5,697 → **5,621**), warning-clean.
-
-**(P18.59) — (INV.0) STEP 7: THE ENUM FAMILY IS `EnumSemantics.kt`, AND THE ARC'S AMBIENT TOTAL FALLS FOR THE FIRST TIME, 18,506 / 0 / 3 (2026-09-09).**
-`Checker.kt` **195,606 → 194,631**; `EnumSemantics.kt` 1,137; ledger row 10. **Fourth extraction
-of the session.** **THE CENSUS THE QUEUE ITEM DEMANDED DECIDED THE ROUND, AND TWO OF ITS THREE
-CANDIDATES ARE NOT SEAMS**: SIGNATURES is a scatter over six unrelated neighbourhoods, FLOW is 64
-declarations of which 22 are singletons or pairs spanning lines 1091 to 125482, and only ENUM is a
-family — one contiguous 1,013-line span, 40 declarations, **13 ambient reads and ZERO writes**.
-**AND THE STAGE-0-EXIT DECISION ROW 9 ASKED BE TAKEN DELIBERATELY IS TAKEN, FOR ONE LINE**:
-`Checker`'s construction block already IS the "explicit construction graph in dependency order"
-the ledger called for, so wiring `Relater` and `MemberNames` to the new collaborator DIRECTLY was
-placing it before them — **`Relater` 49 → 38 checker reads (−11 over 20 sites), `MemberNames`
-5 → 4**, the first fall in the arc's ambient total. **A MASKING DEFECT EVERY EARLIER ROUND OF THIS
-ARC SHARED, found by the compiler**: `spanmask`/`strip` blank whole string literals, so a `${…}`
-INTERPOLATION — which is code — is invisible to the ambient census and unrewritten by the
-transform; it failed loudly here only because a `Checker` member is unreachable from a
-collaborator, so the compiler is a complete detector for the ambient case and NOT for the census.
-`codemask.py` fixes it and both verbatim proofs are taken with it. **THE RECEIPT NOW SPANS FIVE
-BINARIES** — the same 488 deterministic `--passTiming` lines byte-identical for pre-step-5
-pristine, steps 5, 6a, 6b and this: one receipt over 3,522 moved lines. **PrintInlining is FLAT
-and that is the honest reading** (182 → 191 `too large` over 20 sites): this family is 40 small
-functions, not one monolith, so there was nothing to remove — the one real gain is
-`isEnumFlavoredObjectType`, zero inlines at 21 call sites before and 37 after. **A trap that
-manufactured a fake +137 first**: the twelve members that were `internal` on `Checker` are
-JVM-name-MANGLED there and plain members of an `internal class` after, so a matcher requiring a
-space after the name reads ZERO rows in the pristine arm. **SEVEN OF EIGHT PINS DISCRIMINATE
-EXACTLY AND THE EIGHTH WAS BLIND** — its fixture resolved both sides through ONE import, so the
-two member symbols were identical and the ablation could not bite; two further shapes were probed
-ON THE ABLATED BINARY and the pin is now the one that reads 1 row vs 2. Arm 3 reddens TWO pins and
-that is recorded, not smoothed. ab-interleaved −120 ms (−0.46%) B-wins-3/6 NOISE-DOMINATED;
-cost_gate exit 0, huge_methods exit 0 (839 classes, `Checker.<init>` 5,721 → **5,697**),
-warning-clean.
 

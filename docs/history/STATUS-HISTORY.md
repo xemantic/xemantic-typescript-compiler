@@ -1,5 +1,37 @@
 **(P18.57) — (INV.0) STEP 6a: MEMBER RESOLUTION IS `MemberResolver.kt`, AND THE ITEM'S OPEN QUESTION IS ANSWERED, 18,493 / 0 / 3 (2026-09-09).**
 
+
+**(P18.59) — (INV.0) STEP 7: THE ENUM FAMILY IS `EnumSemantics.kt`, AND THE ARC'S AMBIENT TOTAL FALLS FOR THE FIRST TIME, 18,506 / 0 / 3 (2026-09-09).**
+`Checker.kt` **195,606 → 194,631**; `EnumSemantics.kt` 1,137; ledger row 10. **Fourth extraction
+of the session.** **THE CENSUS THE QUEUE ITEM DEMANDED DECIDED THE ROUND, AND TWO OF ITS THREE
+CANDIDATES ARE NOT SEAMS**: SIGNATURES is a scatter over six unrelated neighbourhoods, FLOW is 64
+declarations of which 22 are singletons or pairs spanning lines 1091 to 125482, and only ENUM is a
+family — one contiguous 1,013-line span, 40 declarations, **13 ambient reads and ZERO writes**.
+**AND THE STAGE-0-EXIT DECISION ROW 9 ASKED BE TAKEN DELIBERATELY IS TAKEN, FOR ONE LINE**:
+`Checker`'s construction block already IS the "explicit construction graph in dependency order"
+the ledger called for, so wiring `Relater` and `MemberNames` to the new collaborator DIRECTLY was
+placing it before them — **`Relater` 49 → 38 checker reads (−11 over 20 sites), `MemberNames`
+5 → 4**, the first fall in the arc's ambient total. **A MASKING DEFECT EVERY EARLIER ROUND OF THIS
+ARC SHARED, found by the compiler**: `spanmask`/`strip` blank whole string literals, so a `${…}`
+INTERPOLATION — which is code — is invisible to the ambient census and unrewritten by the
+transform; it failed loudly here only because a `Checker` member is unreachable from a
+collaborator, so the compiler is a complete detector for the ambient case and NOT for the census.
+`codemask.py` fixes it and both verbatim proofs are taken with it. **THE RECEIPT NOW SPANS FIVE
+BINARIES** — the same 488 deterministic `--passTiming` lines byte-identical for pre-step-5
+pristine, steps 5, 6a, 6b and this: one receipt over 3,522 moved lines. **PrintInlining is FLAT
+and that is the honest reading** (182 → 191 `too large` over 20 sites): this family is 40 small
+functions, not one monolith, so there was nothing to remove — the one real gain is
+`isEnumFlavoredObjectType`, zero inlines at 21 call sites before and 37 after. **A trap that
+manufactured a fake +137 first**: the twelve members that were `internal` on `Checker` are
+JVM-name-MANGLED there and plain members of an `internal class` after, so a matcher requiring a
+space after the name reads ZERO rows in the pristine arm. **SEVEN OF EIGHT PINS DISCRIMINATE
+EXACTLY AND THE EIGHTH WAS BLIND** — its fixture resolved both sides through ONE import, so the
+two member symbols were identical and the ablation could not bite; two further shapes were probed
+ON THE ABLATED BINARY and the pin is now the one that reads 1 row vs 2. Arm 3 reddens TWO pins and
+that is recorded, not smoothed. ab-interleaved −120 ms (−0.46%) B-wins-3/6 NOISE-DOMINATED;
+cost_gate exit 0, huge_methods exit 0 (839 classes, `Checker.<init>` 5,721 → **5,697**),
+warning-clean.
+
 **(P18.58) — (INV.0) STEP 6b: THE MEMBER-NAME / LATE-BINDING FAMILY IS `MemberNames.kt`, THE ARC'S CLEANEST SEAM, 18,498 / 0 / 3 (2026-09-09).**
 `Checker.kt` **196,176 → 195,606**; `MemberNames.kt` 765; ledger row 9. **Third extraction of the
 session.** **FIVE ambient reads, ZERO writes** — against the relater's 45/5 and member
