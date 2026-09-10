@@ -1843,6 +1843,62 @@ internal class NameResolver(
     }
 
     /**
+     * (INV.0) step 10c — the HERITAGE twin of [lexicalTypeSymbolForNode].
+     *
+     * [resolveHeritageBaseSymbol] is a THIRD name resolver
+     * (`lookupInEnclosingNamespaces ?: lookupPerFileForNode`) that reaches neither 10a's
+     * consult nor 10b's, so `class D extends ZzzBase` / `implements ZzzI` where the base
+     * is scope-space answered nothing (a UNIQUE name) or the OUTER declaration (a
+     * SHADOWING one) — measured over a 25-cell matrix against tsgo 7.0.2 and pristine
+     * 6.0.3 as 4 ours-only and 16 lost rows across `extends`, `implements` and
+     * `interface … extends`, with the file-level control 5/5 clean.
+     *
+     * The mask is [SymbolFlags.ScopeTypeDeclaration] rather than the arm's own
+     * `Type or Value`: a heritage base names a `class`, an `interface`, a `type` alias or
+     * an `enum`, and `declareLexical` mints ONE scope symbol per name carrying every flag
+     * its declarations gave it — so the type-space mask reaches a scope-space class in
+     * `extends` position too, and the value-only kinds (`function`, `namespace`) are not
+     * heritage bases at all.
+     */
+    fun lexicalHeritageSymbolForNode(node: Node, name: String): Symbol? {
+        if (name !in checker.lexicalBlockScopedTypeNames) return null
+        val scopes = lexicalResolver.scopesOfOwningFile(node) ?: return null
+        return lexicalResolver.symbolAt(node, name, scopes, flags = SymbolFlags.ScopeTypeDeclaration)
+    }
+
+    /**
+     * (INV.0) step 10c — the QUALIFIED-NAME-ROOT twin, and the FOURTH type-name path.
+     *
+     * `ZzzE.ZA` where `ZzzE` is a scope-space `enum` resolved its root through
+     * [resolveQualifiedName]'s own `lookupInEnclosingNamespaces ?: lookupPerFileForNode`
+     * ladder, i.e. past both earlier consults — measured as 4 ours-only and 6 lost rows
+     * on the step-10c matrix, an exact mirror image (ours reports
+     * `has no exported member 'ZInner'` where pristine reports `'ZOuter'`).
+     *
+     * **The answer is adopted only when the scope symbol CAN answer a member**, i.e. when
+     * it has an `exports` table. `declareLexical`'s enum arm publishes the members onto
+     * the scope symbol; its `ModuleDeclaration` arm does NOT — a scope-space namespace's
+     * members live in the module's own [LexicalScope], not in an `exports` map — so
+     * adopting one unconditionally would turn a wrong answer into NO answer, which
+     * degrades the annotation to `any` and loses the members that DID resolve. That kind
+     * stays exactly as it was and is (INV.0) step 10c's stated residue.
+     */
+    fun lexicalQualifiedRootSymbolForNode(node: Node, name: String): Symbol? {
+        if (name !in checker.lexicalBlockScopedTypeNames &&
+            name !in checker.lexicalBlockScopedValueNames
+        ) {
+            return null
+        }
+        val result = lexicalResolver.resultOfOwningFile(node) ?: return null
+        if (name !in result.scopeTypeNames && name !in result.scopeValueNames) return null
+        val sym = lexicalResolver.symbolAt(
+            node, name, result.lexicalScopes,
+            flags = SymbolFlags.ScopeTypeDeclaration or SymbolFlags.ScopeValueDeclaration,
+        ) ?: return null
+        return sym.takeIf { it.exports != null }
+    }
+
+    /**
      * Round 748's ENUM-ONLY twin of [lexicalTypeSymbolForNode], kept separate because
      * its reader ([Checker.lexicalEnumSymbolForDiscriminant]) hands the answer to
      * `canonicalEnumSymbol` and to the enum-value tables, where a `class` or an
@@ -1929,7 +1985,11 @@ internal class NameResolver(
             // resolves per-file to the same declaring-file instance.
             // (CHK.76) `M.D` written inside `namespace N { namespace M {…} }`: the
             // root is a member of an enclosing namespace before it is a file-level name.
-            is Identifier -> lookupInEnclosingNamespaces(l, l.text, checker.QUALIFIED_LEFT_MEANING)
+            // (INV.0) step 10c: the scope-space root, FIRST and evidence-gated — see
+            // [lexicalQualifiedRootSymbolForNode] for why a root that cannot answer a
+            // member is deliberately not adopted.
+            is Identifier -> lexicalQualifiedRootSymbolForNode(l, l.text)
+                ?: lookupInEnclosingNamespaces(l, l.text, checker.QUALIFIED_LEFT_MEANING)
                 ?: lookupPerFileForNode(l, l.text)
             is QualifiedName -> resolveQualifiedName(l)
             else -> null
@@ -2007,7 +2067,13 @@ internal class NameResolver(
             // (CHK.76) `interface X extends Node` inside `declare namespace ts`: the
             // base is the namespace's own `Node`, never the lib's — 509 of
             // `typescript.d.ts`'s clauses answered null (or the DOM's) here.
-            is Identifier -> lookupInEnclosingNamespaces(expr, expr.text, SymbolFlags.Type or SymbolFlags.Value)
+            // (INV.0) step 10c: the SCOPE-SPACE consult goes FIRST, for round 748's
+            // reason — of the two B83.5 failure modes only one is a miss, so a fallback
+            // cannot fix the shadowing half. `declareLexical` refuses any name the main
+            // binder already bound in that container, so this cannot change how a bound
+            // base resolves.
+            is Identifier -> lexicalHeritageSymbolForNode(expr, expr.text)
+                ?: lookupInEnclosingNamespaces(expr, expr.text, SymbolFlags.Type or SymbolFlags.Value)
                 ?: lookupPerFileForNode(expr, expr.text)
             is PropertyAccessExpression -> {
                 val parent = resolveHeritageBaseHead(expr.expression) ?: return null

@@ -112562,7 +112562,15 @@ interface DataView {
             // parent chain, i.e. the PER-FILE namespace, which for `interface B extends
             // A` written in the SECOND file declaring `declare namespace ts` holds
             // that file's members only — `A` lives in the merged instance.
-            is Identifier -> lookupInEnclosingNamespaces(baseExpr, baseExpr.text, SymbolFlags.Type)
+            // (INV.0) step 10c: the SCOPE-SPACE consult goes FIRST, ahead of all three.
+            // This is the resolver that decides a base type's MEMBERS, and it is a
+            // SEPARATE one from `NameResolver.resolveHeritageBaseSymbol` — measured, an
+            // `interface J extends I` with a block-scoped `I` resolved `J` fine (10a) and
+            // inherited NOTHING, because only this arm feeds `resolveBaseTypesLazy`.
+            // Round 748's ordering rule applies unchanged: of the two B83.5 failure modes
+            // only one is a miss, so a fallback cannot fix the shadowing half.
+            is Identifier -> nameResolver.lexicalHeritageSymbolForNode(baseExpr, baseExpr.text)
+                ?: lookupInEnclosingNamespaces(baseExpr, baseExpr.text, SymbolFlags.Type)
                 ?: lookupTypeSymbolInInferenceNamespace(baseExpr.text)
                 ?: lookupPerFileForNode(baseExpr, baseExpr.text)
             // A namespace-qualified base `NS.Base` (`RefactorContext extends
@@ -138684,7 +138692,13 @@ interface DataView {
                     // INV.3(d)(ii): node-keyed — a module file's own implements-target
                     // left the retired merged globals (interfaceImplementation6's C2
                     // private-mismatch TS2420 died).
-                    is Identifier -> lookupPerFileForNode(tn, baseIfaceName)
+                    // (INV.0) step 10c: and the SCOPE-SPACE consult ahead of it, because
+                    // this walker decides the implements VERDICT from its own probe —
+                    // resolving the OUTER `I` for `class D implements I` with a
+                    // block-scoped `I` reported the whole-class TS2420 where both
+                    // references report the per-property TS2416 about the inner one.
+                    is Identifier -> nameResolver.lexicalHeritageSymbolForNode(tn, baseIfaceName)
+                        ?: lookupPerFileForNode(tn, baseIfaceName)
                     else -> globals[baseIfaceName]
                 } ?: continue
                 // 16.4l: Handle both interface (TS2420) and class (TS2720) targets.
