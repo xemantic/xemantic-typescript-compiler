@@ -2244,25 +2244,6 @@ where the order sends you.
   `BinderResult.scopeValueNames`, `SymbolFlags.ScopeValueDeclaration`, the `stopFlags`
   axis on `LexicalScopeResolver.symbolAt`, and `lexicalValueSymbolForNode`'s two gates.
 
-- [ ] **(INV.0) STEP 10b-ii — THE *UNIQUE* HALF OF THE VALUE SPACE, BLOCKED ON THE TWO
-  FAMILIES IT UNMASKS (measured 2026-09-10, (P18.63)).** Answering a UNIQUE scope-space
-  value name is correct and takes the matrix to **9 FIXED + 9 IMPROVED**; it also adds
-  **19-20 ours-only rows to every one of the eight profiles**, and each is a pre-existing
-  gap `any` was masking. **Family 1 — an object literal of SHORTHAND nested functions
-  against a declared interface** (9 sites: `factory/nodeConverters.ts:42`,
-  `factory/emitHelpers.ts:153`, `factory/parenthesizerRules.ts:62`, `utilities.ts:1219`,
-  `moduleNameResolver.ts:1085`, `emitter.ts:1284`, `checker.ts:6310`, `checker.ts:51381`,
-  `factory/nodeFactory.ts:513`); `utilities.ts:1219` is the cheapest repro and names its
-  own mechanism — our inferred `getUnusedExpectations: () => U[]` leaks an unsubstituted
-  type parameter out of `arrayFrom<T, U>`. **Family 2 — a `| undefined` read after an
-  assignment narrowing**, where the receiver's type only became real because a nested
-  function did (`checker.ts:11330` `return links.isVisible` after
-  `if (links.isVisible === undefined) links.isVisible = …`, plus `:16338`, `:30429`,
-  `:39381`, `:34614`, `:34621`, `builder.ts:2390`, `resolutionCache.ts:990`,
-  `emitter.ts:4444`, `nodeFactory.ts:7158`). The switch is ONE line — drop
-  `getTypeOfIdentifierCore`'s `conventional === anyType` early return — so the whole item
-  is the two families, and the grid is its gate.
-
 - [ ] **(INV.0) STEP 10b-iii — THE VALUE-POSITION *MEMBER-ACCESS RECEIVER*, WHICH IS A
   FIFTH FUNNEL AND NOT `getTypeOfIdentifierCore` (measured 2026-09-10, (P18.63)).** Two
   kinds are untouched by 10b because their receiver is resolved by a walker of its own
@@ -2285,6 +2266,27 @@ where the order sends you.
   `currentLocalTypes`' recording, i.e. the (CHK.71)(b) family, whose entry lists FOUR ways
   and does not list this one. 3 B83.5 cells plus 1 namespace-body cell of the step-10
   matrix.
+
+- [ ] **(INV.0) STEP 10b-ii — BLOCKED-ON: the two families named inside this item. THE *UNIQUE* HALF OF THE
+  VALUE SPACE (measured 2026-09-10, (P18.63)). MOVED BELOW ITS SMALLER, UNBLOCKED SIBLINGS
+  2026-09-10 ((P18.65)) — the switch is one line and the item IS the two families, so an
+  agent picking it up before they close will re-measure the same +19 rows per profile.** Answering a UNIQUE scope-space
+  value name is correct and takes the matrix to **9 FIXED + 9 IMPROVED**; it also adds
+  **19-20 ours-only rows to every one of the eight profiles**, and each is a pre-existing
+  gap `any` was masking. **Family 1 — an object literal of SHORTHAND nested functions
+  against a declared interface** (9 sites: `factory/nodeConverters.ts:42`,
+  `factory/emitHelpers.ts:153`, `factory/parenthesizerRules.ts:62`, `utilities.ts:1219`,
+  `moduleNameResolver.ts:1085`, `emitter.ts:1284`, `checker.ts:6310`, `checker.ts:51381`,
+  `factory/nodeFactory.ts:513`); `utilities.ts:1219` is the cheapest repro and names its
+  own mechanism — our inferred `getUnusedExpectations: () => U[]` leaks an unsubstituted
+  type parameter out of `arrayFrom<T, U>`. **Family 2 — a `| undefined` read after an
+  assignment narrowing**, where the receiver's type only became real because a nested
+  function did (`checker.ts:11330` `return links.isVisible` after
+  `if (links.isVisible === undefined) links.isVisible = …`, plus `:16338`, `:30429`,
+  `:39381`, `:34614`, `:34621`, `builder.ts:2390`, `resolutionCache.ts:990`,
+  `emitter.ts:4444`, `nodeFactory.ts:7158`). The switch is ONE line — drop
+  `getTypeOfIdentifierCore`'s `conventional === anyType` early return — so the whole item
+  is the two families, and the grid is its gate.
 
 - [x] **(INV.0) STEP 10c — HERITAGE AND QUALIFIED NAMES: LANDED 2026-09-10 ((P18.64) note).**
   The item named `NameResolver.resolveHeritageBaseSymbol`; that function was given the
