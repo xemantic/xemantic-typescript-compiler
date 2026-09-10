@@ -1843,6 +1843,34 @@ internal class NameResolver(
     }
 
     /**
+     * (INV.0) step 10d — the SCOPE-SPACE ascent for the POST-HOC oracle, meaning-split
+     * and deliberately UN-GATED.
+     *
+     * Every other consult here probes a program-wide NAME GATE first, because it sits on
+     * the hot resolution path and the gate is what keeps a file's INV.2(c) tables unbuilt
+     * ((INC.16)). The oracle has neither constraint — nothing here runs in a production
+     * compile ([TypeOracle]'s cost note) and the build that owns an oracle has already
+     * recorded every file — and the gate is an OVER-approximation of one projection and an
+     * UNDER-approximation of another: a named `ClassExpression` / `FunctionExpression`
+     * declares itself into its OWN scope and is deliberately not stamped, so a gated
+     * ascent would answer null for it. Reading the scopes directly makes the answer a
+     * function of the SCOPES rather than of the gate's completeness.
+     *
+     * `stopFlags` is applied for a VALUE meaning and not for a TYPE one, which is
+     * (INV.0) step 10b's measured rule: the two spaces are disjoint, so a wrong-KIND hit
+     * in type space is not a binding of the name, while in value space a `const` and a
+     * nested `function` compete for it and the INNER one wins whichever kind it is.
+     */
+    fun lexicalSymbolForOracle(node: Node, name: String, meaning: SymbolFlags): Symbol? {
+        val scopes = lexicalResolver.scopesOfOwningFile(node) ?: return null
+        return lexicalResolver.symbolAt(
+            node, name, scopes,
+            flags = meaning,
+            stopFlags = if (meaning.hasAny(SymbolFlags.Value)) VALUE_SPACE_BINDING else null,
+        )
+    }
+
+    /**
      * (INV.0) step 10c — the HERITAGE twin of [lexicalTypeSymbolForNode].
      *
      * [resolveHeritageBaseSymbol] is a THIRD name resolver

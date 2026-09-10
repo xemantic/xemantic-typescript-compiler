@@ -5991,6 +5991,39 @@ class Checker(
         override fun typeOfTypeNode(node: TypeNode): Type = getTypeFromTypeNode(node)
 
         override fun enumMemberValue(node: Node): ConstantValue? = getEnumMemberValue(node)
+
+        override fun resolveName(name: String, location: Node, meaning: SymbolFlags): Symbol? =
+            oracleResolveName(name, location, meaning)
+    }
+
+    /**
+     * (INV.0) step 10d — the COMPOSED resolver the oracle's `resolveName` row was waiting
+     * on: the INV.2(c) scope-space ascent joined to the conventional ladder, in the order
+     * the checker itself uses, with a `meaning` mask threaded through all three legs.
+     *
+     * **It is built out of the checker's OWN functions rather than beside them**, which is
+     * the property that keeps a post-hoc answer from drifting away from what the walk did:
+     * leg 2 is (CHK.76)'s position-derived namespace consult (it answers with no stack
+     * installed, which is why it works at rest at all) and leg 3 is INV.3(c)(iii)'s
+     * node-keyed per-file probe.
+     *
+     * The scope-space leg goes FIRST for round 748's reason, re-measured at every consult
+     * of this arc: of B83.5's two failure modes only one is a miss, so a fallback answers
+     * the OUTER declaration for every shadowing name.
+     *
+     * **STATED DIVERGENCE, and it is the one the refusal named that this does NOT close:**
+     * [LexicalScope.symbols] is ONE table, so two MEANINGS of a name declared in the SAME
+     * block collide there — `Binder.canMerge` has no Interface+Variable rule, so
+     * `interface X {}` beside `const X = 1` in one block keeps the later symbol and the
+     * `meaning` mask cannot recover the other. Across scopes the mask is exact (the ascent
+     * skips a wrong-kinded level and keeps walking); within one scope it is not, and
+     * fixing it is a change to what a `LexicalScope` HOLDS, not to this composition.
+     */
+    internal fun oracleResolveName(name: String, location: Node, meaning: SymbolFlags): Symbol? {
+        nameResolver.lexicalSymbolForOracle(location, name, meaning)?.let { return it }
+        lookupInEnclosingNamespaces(location, name, meaning)?.let { return it }
+        val symbol = lookupPerFileForNode(location, name) ?: return null
+        return symbol.takeIf { it.flags.hasAny(meaning) }
     }
 
     // -----------------------------------------------------------------------

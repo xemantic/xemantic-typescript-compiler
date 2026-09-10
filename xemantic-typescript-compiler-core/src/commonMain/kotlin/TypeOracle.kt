@@ -42,10 +42,17 @@ package com.xemantic.typescript.compiler
  *    question about a [Symbol], a [Type] or a [Signature] once one is in hand —
  *    the design's bin A, answerable post-hoc because the instantiation context
  *    is EMPTY at rest, which is exactly the round-778 cacheable case;
- *  - **a refusal, with the reason**, for the two questions neither can answer
- *    until Stage 3 dissolves B83.5: [resolveName] and [symbolsInScope] name no
- *    existing node, so nothing the walk recorded answers them, and the retained
- *    tables leave block-scoped declarations unbound.
+ *  - **a COMPOSED resolver** for [resolveName], which names no existing node and so
+ *    is answerable from neither of the two above. (INV.0) step 10d built it out of
+ *    the checker's own three legs — the INV.2(c) scope-space ascent, the
+ *    enclosing-namespace consult and the node-keyed per-file probe — with a
+ *    `meaning` mask threaded through all three. **The refusal it replaces had
+ *    blamed the retained tables for lacking the block-scoped population, and step 9
+ *    measured that they hold it**; what was missing was the composition;
+ *  - **a refusal, with the reason**, for [symbolsInScope], which is STRICTLY harder
+ *    than a lookup: an ENUMERATION must also offer every conventionally-bound name,
+ *    i.e. read `LexicalScope.existing` — the INV.3 question round 748's
+ *    `symbols`-only rule exists to keep out.
  *
  * ## Validity
  *
@@ -205,35 +212,58 @@ class TypeOracle internal constructor(
     }
 
     // ---------------------------------------------------------------------
-    // Bin B/L — refused until Stage 3, with the reason.
+    // Bin B/L — the composed resolver ((INV.0) step 10d), and the one row still
+    // refused, with the reason it opens LATER.
     // ---------------------------------------------------------------------
 
     /**
-     * `resolveName`: REFUSED. An arbitrary `(name, location)` lookup names no
-     * existing node, so nothing the walk recorded answers it.
+     * `resolveName`: ANSWERED since (INV.0) step 10d — the row this oracle refused from
+     * Stage 2 until the B83.5 arc built what it needed.
      *
-     * **CORRECTED 2026-09-10 ((INV.0) step 9): the reason this row states is not
-     * that the retained tables lack the declarations.** They have them —
-     * `BinderResult.lexicalScopes` is a full `forEachChild` walk and holds
-     * precisely the B83.5 population, which [LexicalScopeResolver] already
-     * answers for five checker consults. What is missing is three things, and
-     * naming them is what makes this row estimable: (1) a COMPOSED resolver, the
-     * lexical ascent joined to the conventional ladder (file locals → namespace
-     * exports → per-file scope → globals), which round 918 measured is not a
-     * transplant — the ascent's rules are properties of THAT chain; (2) a
-     * `meaning` parameter, because [LexicalScope.symbols] is one table while
-     * tsc's `resolveName` is meaning-split, so `interface X` and `const X` in one
-     * block collide here; (3) an [OracleLens] row, since the lens forwards
-     * nothing scope-shaped today. Stage 3 opens this.
+     * **The refusal it replaces was corrected before it was closed**, and that mattered:
+     * it had blamed the retained tables for lacking the block-scoped population, and
+     * (INV.0) step 9 measured that they hold it — `BinderResult.lexicalScopes` is a full
+     * `forEachChild` walk over exactly that population. What was missing was a
+     * COMPOSITION: the lexical ascent joined to the conventional ladder, plus a `meaning`
+     * split. `Checker.oracleResolveName` is that composition, built out of the checker's
+     * own three legs in the order the checker uses them, so a post-hoc answer cannot drift
+     * from what the walk did.
+     *
+     * @param meaning which declaration space to answer in — a [SymbolFlags] mask, tsc's
+     *   `resolveName(location, name, meaning, …)` parameter. The default is every space,
+     *   which is what a host asking "what does this name refer to here" wants; pass
+     *   [SymbolFlags.Type] or [SymbolFlags.Value] to split them.
+     *
+     * **What it answers that a naive post-hoc lookup does not**: a name declared in a
+     * function body or a block (B83.5) — a `class`, `interface`, `type`, `enum`,
+     * `function`, `namespace`, `const`, `let`, `var` or a PARAMETER — and, for a name that
+     * shadows an outer one, the INNER declaration rather than the outer.
+     *
+     * **STATED DIVERGENCE**: two MEANINGS of a name declared in the SAME block collide
+     * ([Checker.oracleResolveName] carries the mechanism). Across scopes the mask is
+     * exact; within one it is not.
+     *
+     * Returns null when the name is not visible at [location]; refuses only when the
+     * oracle is closed or [location] belongs to no file this oracle walked — an answer
+     * about another program would be a stale handle, which is what [generation] exists to
+     * stop.
      */
-    fun resolveName(name: String, location: Node): Symbol =
-        throw OracleRefusal(
-            "resolveName('$name') is not answerable until Stage 3 of the inversion: " +
-                "the retained tables DO hold the B83.5 population, but there is no resolver " +
-                "composing the lexical ascent with the conventional ladder and no meaning " +
-                "split, so a post-hoc lookup at ${describe(location)} could answer a " +
-                "shadowed outer binding or the wrong meaning",
-        )
+    fun resolveName(
+        name: String,
+        location: Node,
+        meaning: SymbolFlags = SymbolFlags.Value or SymbolFlags.Type or SymbolFlags.Module,
+    ): Symbol? {
+        open()
+        val owner = owningSourceFile(location)
+            ?: throw OracleRefusal("resolveName('$name'): ${describe(location)} belongs to no source file")
+        if (owner.fileName !in storesByFile) {
+            throw OracleRefusal(
+                "resolveName('$name'): ${describe(location)} is in '${owner.fileName}', " +
+                    "which this oracle did not walk",
+            )
+        }
+        return lens.resolveName(name, location, meaning)
+    }
 
     /**
      * `getSymbolsInScope`: REFUSED, and for a STRICTLY HARDER reason than
@@ -610,6 +640,7 @@ internal interface OracleLens {
     fun render(type: Type): String
     fun typeOfTypeNode(node: TypeNode): Type
     fun enumMemberValue(node: Node): ConstantValue?
+    fun resolveName(name: String, location: Node, meaning: SymbolFlags): Symbol?
 }
 
 /** (INV.2) One in-memory program checked for an oracle: the oracle and the check's diagnostics. */

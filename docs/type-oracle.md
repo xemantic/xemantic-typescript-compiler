@@ -73,12 +73,12 @@ Stage 3. "Divergence" names what a consumer expecting tsc's answer will see inst
 | `getContextualType` | `contextualTypeAt(node: Expression): Type?` | store: (API.10)'s syntactic walk — annotated initializer, call / `new` argument through the callee's signatures, `return`, arrow expression body, assertion, enclosing literal member, array element | `null` where the checker types a position by ARITY only ((CHK.30)/(CHK.39)); `null` for an inferred generic argument (tsc's answer too); no `satisfies`-through-contextual-return chains beyond the listed positions |
 | `getTypeOfSymbolAtLocation` | `typeOfSymbolAt(symbol, node): Type` | store where `node` resolves to `symbol` (the narrowed type); `typeOfSymbol` otherwise | as `typeAt` |
 
-### 3b. Refused (B/L — until Stage 3)
+### 3b. The composed resolver, and the one row still refused
 
-| proto.go | oracle | reason |
+| proto.go | oracle | note |
 |---|---|---|
-| `resolveName` | `resolveName(name, location)` throws `OracleRefusal` | names no existing node; the retained tables leave block-scoped declarations unbound (B83.5), so a post-hoc lookup could answer a shadowed OUTER binding — a wrong answer, not a coarse one |
-| `getSymbolsInScope` | `symbolsInScope(location)` throws `OracleRefusal` | same tables, same omission: an enumeration would miss every block-scoped declaration and offer a shadowed outer one |
+| `resolveName` | `resolveName(name, location, meaning): Symbol?` | **ANSWERED since (INV.0) step 10d.** Names no existing node, so neither the store nor the retained graph alone can serve it; `Checker.oracleResolveName` composes the checker's own three legs — the INV.2(c) scope-space ascent, `lookupInEnclosingNamespaces` and `lookupPerFileForNode` — in the order the checker uses them, with a `meaning` mask on all three. Reaches the whole B83.5 population (a `class`/`interface`/`type`/`enum`/`function`/`namespace`/`const`/`let`/`var` declared in a function body or a block, and a PARAMETER) and answers the INNER of two same-named declarations. **Divergence**: two MEANINGS of a name declared in the SAME block collide — `LexicalScope.symbols` is one table and `Binder.canMerge` has no Interface+Variable rule — so across scopes the mask is exact and within one it is not. **And the SYMBOL is the answer, never a type read off it at rest**: `typeOfSymbol` on an un-annotated local re-infers with no walk ambient, so an un-annotated `const`'s type is `typeAt`'s answer and not this row's (measured while pinning it: `const useLocal = collide` renders the file-level `collide`'s type at rest) |
+| `getSymbolsInScope` | `symbolsInScope(location)` throws `OracleRefusal` | **STRICTLY harder than the lookup and it does NOT open with it**: an ENUMERATION must also offer every conventionally-bound name, i.e. read `LexicalScope.existing`, which is the INV.3 question round 748's `symbols`-only rule exists to keep out |
 
 ### 3c. From the retained graph (A / A°)
 

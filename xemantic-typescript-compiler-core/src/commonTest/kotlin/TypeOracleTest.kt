@@ -371,19 +371,109 @@ class TypeOracleTest {
     // Refusals, closing, handles.
     // ---------------------------------------------------------------------
 
+    /**
+     * (INV.0) step 10d — `resolveName` is ANSWERED, and the fixture is the one shape a
+     * post-hoc lookup gets wrong by default: `main.ts` declares a file-level
+     * `declare const collide: string` AND a body-local `const collide: number`, so a
+     * resolver that reads the conventional tables alone answers the OUTER one at every
+     * location, including inside the body.
+     *
+     * The assertion reads the resolved symbol's TYPE rather than its identity, because
+     * that is what says WHICH declaration answered — both are named `collide`.
+     */
     @Test
-    fun `resolveName and symbolsInScope are refused with the Stage 3 reason`() {
+    fun `resolveName answers the INNER of two same named declarations`() {
+        val b = build()
+        val location = b.mainIdentifier("useLocal = collide", skip = "useLocal = ".length)
+        val inBody = b.oracle.resolveName("collide", location)
+        val atTop = b.oracle.resolveName("collide", b.mainFile)
+        assert(inBody != null)
+        assert(atTop != null)
+        assert(b.oracle.typeToString(b.oracle.typeOfSymbol(inBody)) == "number")
+        assert(b.oracle.typeToString(b.oracle.typeOfSymbol(atTop)) == "string")
+    }
+
+    /**
+     * The B83.5 population itself: a `function` PARAMETER and a body-local `const` are
+     * bound by nothing the main binder produced, so before step 10d's composition this
+     * lookup had no table to answer from at all. `p` is a parameter, `useLocal` a
+     * body-local `const`, and `f` a file-level function — the three legs of the ladder in
+     * one assertion.
+     *
+     * **The assertion reads the DECLARATION each symbol carries, not its type, and that
+     * is a finding rather than a convenience.** Written against the type first, it failed:
+     * `useLocal` (an un-annotated `const useLocal = collide`) rendered `string` and `f`'s
+     * inferred return rendered `any`. Both are correct for a question asked AT REST —
+     * `typeOfSymbol` re-infers an un-annotated initializer with no walk ambient installed,
+     * so the inner `collide` it saw during the walk is the file-level one now. That is
+     * exactly the bin-A / bin-R boundary [TypeOracle]'s KDoc states, and it is why an
+     * un-annotated local's TYPE is the STORE's answer ([TypeOracle.typeAt]) and never this
+     * row's. `resolveName` answers the SYMBOL, and the symbol is right in all three cases.
+     */
+    @Test
+    fun `resolveName reaches a parameter a body local and a file level declaration`() {
         val b = build()
         val location = b.mainIdentifier("useParam = p", skip = "useParam = ".length)
-        var refusal: OracleRefusal? = null
-        try {
-            b.oracle.resolveName("collide", location)
-        } catch (e: OracleRefusal) {
-            refusal = e
+        val rendered = listOf("p", "useLocal", "f").map { name ->
+            val sym = b.oracle.resolveName(name, location)
+            val decl = sym?.declarations?.firstOrNull()
+            "$name=" + when (decl) {
+                null -> "<null>"
+                is Parameter -> "Parameter"
+                is VariableDeclaration -> "VariableDeclaration"
+                is FunctionDeclaration -> "FunctionDeclaration"
+                else -> "other"
+            }
         }
-        assert(refusal != null)
-        val namesStage3 = refusal.message?.contains("Stage 3") == true
-        assert(namesStage3)
+        assert(rendered == listOf("p=Parameter", "useLocal=VariableDeclaration", "f=FunctionDeclaration"))
+    }
+
+    /**
+     * The `meaning` split, ACROSS scopes: `Shape` is an imported interface, so it answers
+     * in TYPE space and not in VALUE space, while `take` answers the other way round. The
+     * mask is threaded through all three legs of the composition.
+     *
+     * Within ONE block the split is NOT exact — `LexicalScope.symbols` is one table and
+     * `Binder.canMerge` has no Interface+Variable rule — which
+     * [Checker.oracleResolveName] states as a divergence rather than hiding.
+     */
+    @Test
+    fun `resolveName splits the declaration spaces across scopes`() {
+        val b = build()
+        val location = b.mainIdentifier("useParam = p", skip = "useParam = ".length)
+        val rendered = listOf("Shape", "take").flatMap { name ->
+            listOf(
+                "$name/type=" + (b.oracle.resolveName(name, location, SymbolFlags.Type) != null),
+                "$name/value=" + (b.oracle.resolveName(name, location, SymbolFlags.Value) != null),
+            )
+        }
+        assert(
+            rendered == listOf(
+                "Shape/type=true", "Shape/value=false",
+                "take/type=false", "take/value=true",
+            ),
+        )
+    }
+
+    /**
+     * A name nothing declares answers null rather than refusing — a refusal is reserved
+     * for a question this oracle cannot be ASKED (a closed oracle, or a location in a file
+     * it never walked), which is what [TypeOracle.generation] exists to keep apart from an
+     * ordinary "not visible here".
+     */
+    @Test
+    fun `resolveName answers null for a name that is not visible`() {
+        val b = build()
+        val location = b.mainIdentifier("useParam = p", skip = "useParam = ".length)
+        assert(b.oracle.resolveName("zzzNoSuchName", location) == null)
+        // A body-local of ANOTHER function is not visible here either.
+        assert(b.oracle.resolveName("useNarrow", b.mainFile) == null)
+    }
+
+    @Test
+    fun `symbolsInScope is still refused and says why it opens later than resolveName`() {
+        val b = build()
+        val location = b.mainIdentifier("useParam = p", skip = "useParam = ".length)
         var scopeRefusal: OracleRefusal? = null
         try {
             b.oracle.symbolsInScope(location)
@@ -391,6 +481,11 @@ class TypeOracleTest {
             scopeRefusal = e
         }
         assert(scopeRefusal != null)
+        // The reason is the one round 748's `symbols`-only rule keeps out, and it is
+        // STRICTLY harder than the lookup's: an enumeration must also offer every
+        // conventionally-bound name, i.e. read `LexicalScope.existing`.
+        val namesExisting = scopeRefusal.message?.contains("LexicalScope.existing") == true
+        assert(namesExisting)
     }
 
     @Test
