@@ -52,7 +52,15 @@ import kotlin.test.Test
  *
  *  1. `an inner declaration shadows a same named outer one` — make the ascent start at
  *     the SourceFile instead (`var cur: Node? = node` → `= owningSourceFile(node)`).
- *     Only this pin has two levels declaring one name.
+ *     **MEASURED 2026-09-10: this arm reddens ALL FIVE pins, so it is NOT a single-pin
+ *     arm and is recorded rather than claimed.** Starting from the root destroys the
+ *     ascent outright, and every pin here depends on the ascent. Pin 1's own
+ *     discrimination rests on a different fact: arms 2-5 each redden exactly one pin
+ *     and none of them reddens pin 1, and pin 1 is the ONLY fixture here that declares
+ *     one name at TWO levels — so it is the only pin that can see a shadowing-ORDER
+ *     defect at all. Every narrower arm tried (return the outermost match; consult the
+ *     parent's scope first; skip one level) reddens pin 2 or pin 3 as well, because
+ *     those two are positional by construction.
  *  2. `the flag filter does not stop the ascent at a wrong kinded hit` — change
  *     `if (sym != null && (flags == null || sym.flags.hasAny(flags))) return sym` to
  *     `if (sym != null) return if (flags == null || sym.flags.hasAny(flags)) sym else null`.
