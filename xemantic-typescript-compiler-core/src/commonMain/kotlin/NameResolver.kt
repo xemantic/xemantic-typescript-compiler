@@ -144,6 +144,8 @@ package com.xemantic.typescript.compiler
  */
 internal class NameResolver(
     private val checker: Checker,
+    /** (INV.0) step 9 — the INV.2(c) scope-space ascent; see `LexicalScopeResolver.kt`. */
+    private val lexicalResolver: LexicalScopeResolver,
     private val options: CompilerOptions,
     private val binderResults: List<BinderResult>,
     private val fileResults: Map<String, BinderResult>,
@@ -1775,21 +1777,8 @@ internal class NameResolver(
      */
     fun lexicalTypeSymbolForNode(node: Node, name: String): Symbol? {
         if (name !in checker.lexicalBlockScopedEnumNames) return null
-        val owner = owningSourceFile(node) ?: return null
-        val scopes = fileResults[owner.fileName]?.lexicalScopes ?: return null
-        if (scopes.isEmpty()) return null
-        var cur: Node? = node
-        var hops = 0
-        while (cur != null && hops++ < 4096) {
-            val id = (cur as NodeBase).nodeId
-            if (id >= 0) {
-                val sym = scopes[id]?.symbols?.get(name)
-                if (sym != null && sym.flags.hasAny(SymbolFlags.Enum)) return sym
-            }
-            if (cur is SourceFile) break
-            cur = cur.parent
-        }
-        return null
+        val scopes = lexicalResolver.scopesOfOwningFile(node) ?: return null
+        return lexicalResolver.symbolAt(node, name, scopes, flags = SymbolFlags.Enum)
     }
 
     /**

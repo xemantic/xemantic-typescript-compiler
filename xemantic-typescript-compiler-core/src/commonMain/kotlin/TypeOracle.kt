@@ -210,28 +210,46 @@ class TypeOracle internal constructor(
 
     /**
      * `resolveName`: REFUSED. An arbitrary `(name, location)` lookup names no
-     * existing node, so nothing the walk recorded answers it, and the retained
-     * tables cannot: B83.5 leaves block-scoped declarations unbound, so an
-     * answer from them would silently resolve a shadowed name to the OUTER
-     * binding. Stage 3 (tree-derived scope resolution) opens this row.
+     * existing node, so nothing the walk recorded answers it.
+     *
+     * **CORRECTED 2026-09-10 ((INV.0) step 9): the reason this row states is not
+     * that the retained tables lack the declarations.** They have them —
+     * `BinderResult.lexicalScopes` is a full `forEachChild` walk and holds
+     * precisely the B83.5 population, which [LexicalScopeResolver] already
+     * answers for five checker consults. What is missing is three things, and
+     * naming them is what makes this row estimable: (1) a COMPOSED resolver, the
+     * lexical ascent joined to the conventional ladder (file locals → namespace
+     * exports → per-file scope → globals), which round 918 measured is not a
+     * transplant — the ascent's rules are properties of THAT chain; (2) a
+     * `meaning` parameter, because [LexicalScope.symbols] is one table while
+     * tsc's `resolveName` is meaning-split, so `interface X` and `const X` in one
+     * block collide here; (3) an [OracleLens] row, since the lens forwards
+     * nothing scope-shaped today. Stage 3 opens this.
      */
     fun resolveName(name: String, location: Node): Symbol =
         throw OracleRefusal(
             "resolveName('$name') is not answerable until Stage 3 of the inversion: " +
-                "the retained scope tables leave block-scoped declarations unbound (B83.5), " +
-                "so a post-hoc lookup at ${describe(location)} could answer a shadowed outer binding",
+                "the retained tables DO hold the B83.5 population, but there is no resolver " +
+                "composing the lexical ascent with the conventional ladder and no meaning " +
+                "split, so a post-hoc lookup at ${describe(location)} could answer a " +
+                "shadowed outer binding or the wrong meaning",
         )
 
     /**
-     * `getSymbolsInScope`: REFUSED, for [resolveName]'s reason — an enumeration
-     * from the retained tables would omit every block-scoped declaration and
-     * offer a shadowed outer one in its place.
+     * `getSymbolsInScope`: REFUSED, and for a STRICTLY HARDER reason than
+     * [resolveName]'s. A lookup can be answered from [LexicalScope.symbols]
+     * alone; an ENUMERATION cannot — it must also offer everything the main
+     * binder bound, i.e. read `existing` and walk the parent chain, which is the
+     * INV.3 question round 748's `symbols`-only rule exists to keep out. So this
+     * row does not open when [resolveName]'s does.
      */
     fun symbolsInScope(location: Node): List<Symbol> =
         throw OracleRefusal(
-            "getSymbolsInScope is not answerable until Stage 3 of the inversion: " +
-                "the retained scope tables leave block-scoped declarations unbound (B83.5), " +
-                "so an enumeration at ${describe(location)} would be incomplete and misleading",
+            "getSymbolsInScope is not answerable until Stage 3 of the inversion, and " +
+                "later than resolveName: an enumeration must also offer every " +
+                "conventionally-bound name, which means reading LexicalScope.existing — " +
+                "the INV.3 question the symbols-only rule keeps out — so an enumeration at " +
+                "${describe(location)} would be incomplete and misleading",
         )
 
     // ---------------------------------------------------------------------

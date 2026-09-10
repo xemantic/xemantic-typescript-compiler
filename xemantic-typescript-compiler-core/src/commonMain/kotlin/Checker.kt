@@ -406,6 +406,11 @@ class Checker(
 
     private val state = CheckerState()
 
+    /** (INV.0) step 9 — the INV.2(c) scope-space ascent; see `LexicalScopeResolver.kt`.
+     *  Constructed FIRST: it reads nothing but its own input, and three later
+     *  collaborators plus `Checker` itself consult it. */
+    private val lexicalResolver = LexicalScopeResolver(fileResults)
+
     /** (INV.0) step 3 — the instantiation collaborator; see `TypeInstantiator.kt`. */
     private val instantiator = TypeInstantiator(this, state.symbolTypes, state.interner)
 
@@ -419,7 +424,7 @@ class Checker(
      *  collaborator; see `NameResolver.kt`. */
     private val nameResolver =
         NameResolver(
-            this, options, binderResults, fileResults, globals, moduleResolutions,
+            this, lexicalResolver, options, binderResults, fileResults, globals, moduleResolutions,
             moduleImportAliasNames, state.symbolTargets,
         )
 
@@ -12141,30 +12146,17 @@ class Checker(
      */
     private fun lexicalTypeAliasArity(node: Node, name: String): TypeParamInfo? {
         if (name !in lexicalBlockScopedTypeAliasNames) return null
-        val owner = owningSourceFile(node) ?: return null
-        val scopes = fileResults[owner.fileName]?.lexicalScopes ?: return null
-        if (scopes.isEmpty()) return null
-        var cur: Node? = node
-        var hops = 0
-        while (cur != null && hops++ < 4096) {
-            val id = (cur as NodeBase).nodeId
-            if (id >= 0) {
-                val sym = scopes[id]?.symbols?.get(name)
-                if (sym != null && sym.flags.hasAny(SymbolFlags.TypeAlias)) {
-                    val decl = sym.declarations.firstOrNull { it is TypeAliasDeclaration }
-                        as? TypeAliasDeclaration ?: return null
-                    val tps = decl.typeParameters.orEmpty()
-                    return TypeParamInfo(
-                        minRequired = tps.count { it.default == null },
-                        maxTotal = tps.size,
-                        displayName = name,
-                    )
-                }
-            }
-            if (cur is SourceFile) break
-            cur = cur.parent
-        }
-        return null
+        val scopes = lexicalResolver.scopesOfOwningFile(node) ?: return null
+        val sym = lexicalResolver.symbolAt(node, name, scopes, flags = SymbolFlags.TypeAlias)
+            ?: return null
+        val decl = sym.declarations.firstOrNull { it is TypeAliasDeclaration }
+            as? TypeAliasDeclaration ?: return null
+        val tps = decl.typeParameters.orEmpty()
+        return TypeParamInfo(
+            minRequired = tps.count { it.default == null },
+            maxTotal = tps.size,
+            displayName = name,
+        )
     }
 
     private fun computeAllEnumValues() {
@@ -115259,16 +115251,10 @@ interface DataView {
         // The INV.2(c) tables of the OWNING file, read without the cpa-only ambient
         // ([lexicalTypeSymbolForNode]'s consult) — every flow-narrowing reader reaches
         // this, most of them with `currentLexicalScopes` unset.
-        val symbol = run {
-            val owner = owningSourceFile(expr)
-            val scopes = owner?.let { fileResults[it.fileName]?.lexicalScopes }
-            var cur: Node? = (expr as NodeBase).parent
-            while (scopes != null && cur != null) {
-                scopes[(cur as NodeBase).nodeId]?.symbols?.get(name)?.let { return@run it }
-                cur = (cur as NodeBase).parent
-            }
-            lookupPerFileForNode(expr, name)
-        } ?: return null
+        val symbol = lexicalResolver.scopesOfOwningFile(expr)
+            ?.let { lexicalResolver.symbolAt(expr, name, it, startAtParent = true, hopCap = 0) }
+            ?: lookupPerFileForNode(expr, name)
+            ?: return null
         if (symbol.declarations.size != 1) return null
         val elem = symbol.valueDeclaration as? BindingElement ?: return null
         if (elem.initializer != null || elem.dotDotDotToken) return null
@@ -123252,21 +123238,8 @@ interface DataView {
      * [lexicalTypeSymbolForNode], for a VALUE symbol.
      */
     private fun owningFileLexicalScopeSymbol(node: Node, name: String): Symbol? {
-        val owner = owningSourceFile(node) ?: return null
-        val scopes = fileResults[owner.fileName]?.lexicalScopes ?: return null
-        if (scopes.isEmpty()) return null
-        var cur: Node? = node
-        var hops = 0
-        while (cur != null && hops++ < 4096) {
-            val nid = (cur as NodeBase).nodeId
-            if (nid >= 0) {
-                val sym = scopes[nid]?.symbols?.get(name)
-                if (sym != null && sym.flags.hasAny(SymbolFlags.Variable)) return sym
-            }
-            if (cur is SourceFile) break
-            cur = cur.parent
-        }
-        return null
+        val scopes = lexicalResolver.scopesOfOwningFile(node) ?: return null
+        return lexicalResolver.symbolAt(node, name, scopes, flags = SymbolFlags.Variable)
     }
 
     /**
@@ -143659,18 +143632,11 @@ interface DataView {
      * pre-existing paths, so consumers see lexical symbols exactly where they
      * previously synthesized transients (B83.5 shapes).
      */
-    private fun lexicalScopeSymbol(node: Node, name: String): Symbol? {
-        val scopes = currentLexicalScopes ?: return null
-        if (scopes.isEmpty()) return null
-        var cursor = (node as NodeBase).parent
-        while (cursor != null) {
-            val base = cursor as NodeBase
-            val symbol = scopes[base.nodeId]?.symbols?.get(name)
-            if (symbol != null) return symbol
-            cursor = base.parent
-        }
-        return null
-    }
+    private fun lexicalScopeSymbol(node: Node, name: String): Symbol? =
+        lexicalResolver.symbolAt(
+            node, name, currentLexicalScopes ?: return null,
+            startAtParent = true, hopCap = 0,
+        )
 
     private fun checkPropertyAccessInStatements(
         stmts: List<Statement>, source: String, fileName: String,

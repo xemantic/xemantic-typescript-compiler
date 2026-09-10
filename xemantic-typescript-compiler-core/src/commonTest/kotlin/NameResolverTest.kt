@@ -70,6 +70,7 @@ class NameResolverTest {
         return NameResolver(
             checker = checker,
             options = options,
+            lexicalResolver = LexicalScopeResolver(fileResults),
             binderResults = results,
             fileResults = fileResults,
             globals = mutableMapOf(),

@@ -296,17 +296,28 @@ internal class LayeredSymbolTable(
 /**
  * INV.2(c): one lexical scope, produced by the [Binder]'s additive
  * lexical-binding pass and keyed in [BinderResult.lexicalScopes] by the owner
- * node's `nodeId`. UNCONSUMED until INV.4 — nothing in the checker reads these
- * tables yet; they exist so the single-pass spine can resolve names through a
- * real scope chain instead of the per-pass scope re-derivation.
+ * node's `nodeId`. **CONSUMED since round 748** — the "UNCONSUMED until INV.4"
+ * this KDoc used to claim went stale and stood for ~200 rounds. Today
+ * [LexicalScopeResolver] is the one ascent over them and five checker consults
+ * go through it (the enum, type-alias, variable and discriminant-carry lookups
+ * and the INV.2(d) general one), each answering the B83.5 population — the
+ * declarations the main binder never bound, which is everything that is not a
+ * direct statement of a [SourceFile] or a `ModuleBlock`.
  *
  * Two-table design: [symbols] holds ONLY the bindings the lexical pass itself
  * made (from the separate negative id space, [Symbol.scopeSymbol]); [existing]
  * ALIASES the main binder's pre-existing table for container scopes (file
  * locals for the [SourceFile] root, the merged `exports` for a namespace) and
- * is never mutated. Resolution order for a future consumer: `symbols` →
- * `existing` → [parent]. This keeps the main binder's output byte-unchanged —
- * the queue item's load-bearing constraint.
+ * is never mutated. This keeps the main binder's output byte-unchanged — the
+ * queue item's load-bearing constraint.
+ *
+ * **A consumer reads [symbols] ONLY.** The "`symbols` → `existing` → [parent]"
+ * order this KDoc used to propose is exactly what round 748 refused: [existing]
+ * aliases the main binder's table, so reading it puts every INV.3 name back in
+ * play and destroys the property that makes a scope-space hit safe — that it can
+ * only ever be a name the main binder did NOT bind, since `declareLexical` skips
+ * any it did. `existing` remains for an enumeration that has taken that question
+ * on deliberately; there is no such consumer today.
  */
 class LexicalScope(
     /** The scope-owning node: SourceFile, ModuleDeclaration, or a function-like. */
