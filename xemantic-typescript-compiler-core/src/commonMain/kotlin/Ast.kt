@@ -155,34 +155,39 @@ data class SourceFile(
     var typeAliasesWithTpDefaults: List<TypeAliasDeclaration> = emptyList()
 
     /**
-     * (INC.16) The TYPE-SPACE declarations of this file — `class`, `interface`, `type`,
-     * `enum` — that are NOT a direct statement of the file itself, i.e. the only ones
-     * that could possibly land in a FRESH INV.2(c) lexical scope, which is the only
-     * place a scope-space census can ever find a row.
+     * (INC.16), widened by (INV.0) steps 10a/10b: the SCOPE-SPACE declarations of this
+     * file — `function`, `class`, `interface`, `type`, `enum`, `namespace` — that are
+     * NOT a direct statement of the file itself, i.e. the only ones that could possibly
+     * land in a FRESH INV.2(c) lexical scope, which is the only place a scope-space
+     * census can ever find a row.
      *
-     * **Those four kinds and no others**, because they are exactly the ones
+     * **Those six kinds and no others**, because they are exactly the ones
      * `Binder.bindLexicalScopes` declares into a fresh scope under a
-     * `scope.existing == null` gate AND that a TYPE reference can name. A
-     * `FunctionDeclaration` / `ModuleDeclaration` / import is declared there too but is
-     * a VALUE-space name, which `NameResolver.lexicalTypeSymbolForNode` never answers;
-     * a named `ClassExpression` / `FunctionExpression` declares itself into its OWN
-     * scope, which this stamp deliberately does not carry (a gate false-negative, so
-     * that population keeps exactly the resolution it had — see step 10a's note).
+     * `scope.existing == null` gate. An IMPORT is declared there too and is deliberately
+     * left out: a nested import is a TS1232 grammar error, so admitting it would put
+     * every import alias in the program into a gate whose whole job is to be a cheap
+     * miss. A named `ClassExpression` / `FunctionExpression` declares itself into its
+     * OWN scope, which this stamp deliberately does not carry (a gate false-negative, so
+     * that population keeps exactly the resolution it had — see step 10a's note). A
+     * `VariableDeclaration` is scope-bound too and is left out for the same reason
+     * `SymbolFlags.ScopeTypeDeclaration` leaves out `TypeParameter`: it would flood the
+     * gate, and the walk's `currentLocalTypes` already answers it ahead of every consult.
      *
      * Empty is the whole point: a file with no such declaration contributes nothing to
-     * `Checker.lexicalBlockScopedTypeNames`, so the census can skip it — and skipping it
-     * is what keeps [BinderResult.lexicalScopes] UNBUILT for that file, which is the
-     * entire (INC.16) prize. A declaration whose parent IS the SourceFile lands in the
-     * root scope, which always aliases file locals, so `declareLexical` can never bind
-     * it; everything else is decided per file by [BinderResult.declaresScopeEnum] /
-     * [BinderResult.scopeTypeNames], where the namespace case is settled against the
+     * `Checker.lexicalBlockScopedTypeNames` / `…ValueNames`, so the census can skip it —
+     * and skipping it is what keeps [BinderResult.lexicalScopes] UNBUILT for that file,
+     * which is the entire (INC.16) prize. A declaration whose parent IS the SourceFile
+     * lands in the root scope, which always aliases file locals, so `declareLexical` can
+     * never bind it; everything else is decided per file by
+     * [BinderResult.declaresScopeEnum] / [BinderResult.scopeTypeNames] /
+     * [BinderResult.scopeValueNames], where the namespace case is settled against the
      * bind's own symbols.
      *
      * Stamped by [indexSourceFile], i.e. once per PARSE — and a parse is content-cached
      * across compiles (`CrawlParseCache`), so a warm rebuild inherits it. Body property,
      * excluded from equals/copy like [nodeCount].
      */
-    var nestedScopeTypeDecls: List<Node> = emptyList()
+    var nestedScopeDecls: List<Node> = emptyList()
 }
 
 // ===========================================================================

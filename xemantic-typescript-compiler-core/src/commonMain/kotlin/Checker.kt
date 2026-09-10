@@ -12136,6 +12136,28 @@ class Checker(
     internal var lexicalBlockScopedTypeNames: Set<String> = emptySet()
 
     /**
+     * (INV.0) step 10b — the VALUE-space twin of [lexicalBlockScopedTypeNames]: the
+     * program-wide NAME GATE for the scope-space VALUE consult
+     * ([NameResolver.lexicalValueSymbolForNode], read from [getTypeOfIdentifierCore]).
+     * The simple names of the `function` / `class` / `enum` / `namespace` declarations
+     * the INV.2(c) lexical pass binds in SCOPE space (id <= -2), i.e. those the main
+     * binder never bound (B83.5).
+     *
+     * **Unlike the type one this set is NOT near-empty, and that is a property of
+     * ordinary style rather than a defect**: a helper `function` declared inside another
+     * function is scope-space, so tsc's own sources put thousands of names here. The
+     * consult stays one `HashSet` probe on the identifier path, and a HIT that resolves
+     * RETURNS — skipping the file type map, the file locals, the enclosing-namespace
+     * walk and the per-file probe below it.
+     *
+     * Read off [BinderResult.scopeValueNames], the binder's own PROJECTION, which is
+     * what keeps a file's INV.2(c) tables unbuilt ((INC.16)); it may therefore
+     * OVER-approximate, and the consult re-verifies every hit against the real scope
+     * symbol's flags.
+     */
+    internal var lexicalBlockScopedValueNames: Set<String> = emptySet()
+
+    /**
      * (CHK.19) round 945 — the arity of a BLOCK-SCOPED type alias that shadows an outer
      * (usually LIB) one, or null when no such declaration is visible from [node].
      *
@@ -12172,13 +12194,23 @@ class Checker(
 
     /**
      * (INV.0) step 10a — is [node] one of the four TYPE-space DECLARATION kinds
-     * `indexSourceFile` stamps into [SourceFile.nestedScopeTypeDecls], i.e. the exact
+     * `indexSourceFile` stamps into [SourceFile.nestedScopeDecls], i.e. the exact
      * domain [BinderResult.scopeTypeNames] claims to cover? A `ClassExpression` is
      * deliberately NOT one.
      */
     private fun isScopeTypeDeclarationNode(node: Node): Boolean =
         node is ClassDeclaration || node is InterfaceDeclaration ||
             node is TypeAliasDeclaration || node is EnumDeclaration
+
+    /**
+     * (INV.0) step 10b — the VALUE-space twin of [isScopeTypeDeclarationNode]: is [node]
+     * one of the four VALUE-space DECLARATION kinds `indexSourceFile` stamps into
+     * [SourceFile.nestedScopeDecls], i.e. the exact domain [BinderResult.scopeValueNames]
+     * claims to cover? A `ClassExpression` / `FunctionExpression` is deliberately NOT one.
+     */
+    private fun isScopeValueDeclarationNode(node: Node): Boolean =
+        node is FunctionDeclaration || node is ClassDeclaration ||
+            node is EnumDeclaration || node is ModuleDeclaration
 
     private fun computeAllEnumValues() {
         // (REL.1)(c) step 4: scope-space enums first — a function-body-scoped enum is
@@ -12195,6 +12227,9 @@ class Checker(
         // which costs nothing here and is what keeps every scope-space TYPE consult a single
         // probe on the hot type-reference path.
         val blockScopedTypeNames = HashSet<String>()
+        // (INV.0) step 10b: the VALUE-space gate rides the same fold, for the same
+        // reason and at the same cost — a union of per-file projections.
+        val blockScopedValueNames = HashSet<String>()
         for (result in binderResults) {
             // (INC.16) THE ONE READER THAT FORCED EVERY FILE'S INV.2(c) TABLES, served
             // by a PROJECTION instead. `declareLexical` mints a `TypeAlias`- or
@@ -12220,6 +12255,7 @@ class Checker(
             // that is not a syntactic fact. [LexDefer.verifySkip] is the positive control:
             // it keeps walking every file and counts what the skip would have missed.
             blockScopedTypeNames.addAll(result.scopeTypeNames)
+            blockScopedValueNames.addAll(result.scopeValueNames)
             val skippable = !result.declaresScopeEnum
             if (skippable) {
                 LexDefer.skippedFiles++
@@ -12250,6 +12286,18 @@ class Checker(
                             LexDefer.skipViolations++
                         }
                     }
+                    // (INV.0) step 10b: the same CONTROL for the VALUE projection, with
+                    // the same domain rule. Its declaration set is the FOUR value-space
+                    // declaration kinds `indexSourceFile` stamps — a named
+                    // `FunctionExpression` / `ClassExpression` is in `scope.symbols` and
+                    // deliberately NOT stamped, so comparing against it unqualified would
+                    // report a projection MISS forever.
+                    if (symbol.flags.hasAny(SymbolFlags.ScopeValueDeclaration) &&
+                        symbol.declarations.any { isScopeValueDeclarationNode(it) } &&
+                        symName !in result.scopeValueNames
+                    ) {
+                        LexDefer.skipViolations++
+                    }
                     if (!symbol.flags.hasAny(SymbolFlags.Enum)) continue
                     if (skippable) LexDefer.skipViolations++
                     blockScoped.add(symName)
@@ -12259,6 +12307,7 @@ class Checker(
         }
         lexicalBlockScopedEnumNames = blockScoped
         lexicalBlockScopedTypeNames = blockScopedTypeNames
+        lexicalBlockScopedValueNames = blockScopedValueNames
         // (INC.52) THE SECOND LOOP, and the expensive one: it visited every file's whole
         // symbol table — recursing through every namespace's `exports` — to find the
         // program's enums, which on tsc's own 78 sources made this the single dearest
@@ -114702,7 +114751,44 @@ interface DataView {
         return t
     }
 
+    /**
+     * (INV.0) step 10b — the SCOPE-SPACE VALUE consult (B83.5), applied as an
+     * OVERRIDE of [getTypeOfIdentifierConventional] rather than as a rung inside it.
+     *
+     * A `function` / `class` / `enum` / `namespace` declared inside a function body or a
+     * block is in NO conventional table, so without this every rung of the ladder below
+     * either answers `any` (a UNIQUE name) or answers the OUTER declaration of the same
+     * name (a SHADOWING one). Measured over the step-10 129-cell matrix against tsgo
+     * 7.0.2 and pristine 6.0.3, that is 19 ours-only and 46 lost rows.
+     *
+     * **THIS STEP CLOSES THE SHADOWING HALF ONLY, AND THAT IS A MEASUREMENT RATHER THAN
+     * A CHOICE.** Answering a UNIQUE scope-space name — making a read that was `any`
+     * into a real type — is correct and adds **19-20 ours-only rows to EVERY ONE of the
+     * eight dashboard profiles**: tsc's own sources are full of
+     * `return { <shorthand nested functions> }` against a declared interface, plus reads
+     * like `return links.isVisible` where `links` comes from a nested `getNodeLinks`. Each
+     * new row is a pre-existing inference or narrowing gap that `any` was masking —
+     * (CHK.50)'s law at scale — not a defect of this consult. The list is in the (P18.63)
+     * note and is what the unique half is blocked on.
+     *
+     * So the rule is: **override a conventional answer, never replace silence**. A
+     * shadowing name goes from the WRONG declaration to the right one (strictly better,
+     * and it cannot unmask anything the conventional answer was not already unmasking);
+     * a unique one keeps today's `any`.
+     *
+     * `declareLexical` refuses any name the main binder already bound in that container,
+     * so a hit is provably a declaration the conventional tables do not have. The gate is
+     * one `HashSet` probe on an interned name; the ascent runs only on a hit.
+     */
     private fun getTypeOfIdentifierCore(id: Identifier): Type {
+        val conventional = getTypeOfIdentifierConventional(id)
+        if (conventional === anyType || conventional === errorType) return conventional
+        if (id.text !in lexicalBlockScopedValueNames) return conventional
+        val scoped = nameResolver.lexicalValueSymbolForNode(id, id.text) ?: return conventional
+        return getTypeOfSymbol(scoped)
+    }
+
+    private fun getTypeOfIdentifierConventional(id: Identifier): Type {
         return when (id.text) {
             "undefined" -> undefinedType
             "null" -> nullType

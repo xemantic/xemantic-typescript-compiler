@@ -87,6 +87,14 @@ internal class LexicalScopeResolver(
      *   node itself opens.
      * @param flags when non-null, only a symbol carrying one of these is accepted, and
      *   a non-matching hit does NOT stop the ascent.
+     * @param stopFlags when non-null, a hit carrying one of these ENDS the ascent — it
+     *   is answered if it also matches [flags] and refused otherwise. This is the axis a
+     *   VALUE-space consult needs and a TYPE-space one does not: the two spaces are
+     *   disjoint, so a wrong-KIND hit in type space is genuinely not a binding of the
+     *   name, while in value space a `const` and a nested `function` compete for the
+     *   same name and the INNER one wins whichever kind it is. Without it an ascent
+     *   filtered to declarations would walk PAST an inner variable and answer an outer
+     *   function — a wrong answer, not a miss.
      * @param hopCap a fail-safe on a malformed parent chain; 0 means uncapped, which is
      *   what the two callers that predate the cap pass.
      */
@@ -96,6 +104,7 @@ internal class LexicalScopeResolver(
         scopes: Map<Int, LexicalScope>,
         startAtParent: Boolean = false,
         flags: SymbolFlags? = null,
+        stopFlags: SymbolFlags? = null,
         hopCap: Int = 4096,
     ): Symbol? {
         if (scopes.isEmpty()) return null
@@ -105,7 +114,10 @@ internal class LexicalScopeResolver(
             val id = (cur as NodeBase).nodeId
             if (id >= 0) {
                 val sym = scopes[id]?.symbols?.get(name)
-                if (sym != null && (flags == null || sym.flags.hasAny(flags))) return sym
+                if (sym != null) {
+                    if (flags == null || sym.flags.hasAny(flags)) return sym
+                    if (stopFlags != null && sym.flags.hasAny(stopFlags)) return null
+                }
             }
             if (cur is SourceFile) break
             cur = cur.parent
@@ -116,9 +128,23 @@ internal class LexicalScopeResolver(
     /**
      * The INV.2(c) table of the file that OWNS [node], or null when it has none — an
      * unindexed hand-built tree, or a node whose owning file is not in the program.
+     *
+     * **Reading it BUILDS it** ((INC.16): `BinderResult.lexicalScopes` is `lazy`), so a
+     * consult whose name gate is not near-empty must ask [resultOfOwningFile] first and
+     * consult that file's own PROJECTION before touching this.
      */
     fun scopesOfOwningFile(node: Node): Map<Int, LexicalScope>? {
         val owner = owningSourceFile(node) ?: return null
         return fileResults[owner.fileName]?.lexicalScopes
+    }
+
+    /**
+     * The `BinderResult` of the file that OWNS [node], or null when it is not in the
+     * program. Unlike [scopesOfOwningFile] this touches NO lazy member, which is what
+     * lets a caller test the file's own name projection before forcing its tables.
+     */
+    fun resultOfOwningFile(node: Node): BinderResult? {
+        val owner = owningSourceFile(node) ?: return null
+        return fileResults[owner.fileName]
     }
 }

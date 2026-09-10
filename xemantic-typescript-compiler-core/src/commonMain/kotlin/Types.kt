@@ -106,6 +106,25 @@ value class SymbolFlags(val value: Int) {
             Class.value or Interface.value or Enum.value or TypeAlias.value
         )
 
+        /**
+         * (INV.0) step 10b — the VALUE-space DECLARATION kinds an INV.2(c) lexical
+         * scope binds in scope space: the four that are DECLARATIONS rather than
+         * bindings.
+         *
+         * [Variable] is excluded for exactly the reason [ScopeTypeDeclaration] excludes
+         * [TypeParameter]: every `const` / `let` / `var` in the program is declared into
+         * a fresh scope too, so folding them in would make
+         * `Checker.lexicalBlockScopedValueNames` a set of every local name there is,
+         * where its whole job is to be a cheap probe on the hot identifier path — and
+         * the walk's `currentLocalTypes` already answers a local ahead of the consult.
+         * [Alias] is excluded because a nested import is a TS1232 grammar error, and
+         * [Property] / [Method] / the accessors because they are members, never
+         * scope-space names.
+         */
+        val ScopeValueDeclaration = SymbolFlags(
+            Function.value or Class.value or Enum.value or ValueModule.value
+        )
+
         val Module = ValueModule or NamespaceModule
     }
 }

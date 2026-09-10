@@ -49,7 +49,7 @@ class BinderResult(
      * type aliases is censused WITHOUT its tables ever being built.
      *
      * False for 76 of tsc's own 78 sources. Decided from
-     * [SourceFile.nestedScopeTypeDecls] (a fact about the tree, stamped once per
+     * [SourceFile.nestedScopeDecls] (a fact about the tree, stamped once per
      * parse) plus the bind's OWN namespace symbols, because the namespace case is not a
      * syntactic one: a `namespace` scope ALIASES the merged `exports`, so
      * `declareLexical` skips every name declared in it — but only when that `exports`
@@ -95,6 +95,26 @@ class BinderResult(
      * answer.
      */
     val scopeTypeNames: Set<String>,
+    /**
+     * (INV.0) step 10b — the VALUE-space twin of [scopeTypeNames]: the names of this
+     * file's `function` / `class` / `enum` / `namespace` declarations that reach a FRESH
+     * INV.2(c) scope, i.e. the NAME GATE for the scope-space VALUE consult
+     * (`Checker.lexicalBlockScopedValueNames`, read by
+     * `NameResolver.lexicalValueSymbolForNode`).
+     *
+     * **It is NOT small the way [scopeTypeNames] is, and that is the finding rather than
+     * a defect**: a nested `function` is ordinary style, so on tsc's own sources this set
+     * has thousands of members where the type one has two. What keeps the consult cheap
+     * is still the same single `HashSet` probe on the identifier path — a MISS costs one
+     * hash, and a HIT that resolves RETURNS, skipping the four conventional lookups
+     * below it.
+     *
+     * `class` and `enum` are in BOTH projections deliberately: they declare a name in
+     * both spaces, and the two consults ask about the same symbol with different flag
+     * masks. Over-approximation is allowed for the same reason it is there, and is
+     * re-verified against the real scope symbol's flags.
+     */
+    val scopeValueNames: Set<String>,
     /**
      * (INC.16) Builds the INV.2(c) tables. Invoked on FIRST ASK (the shipped
      * behaviour), or at the end of `Binder.bind` when [LexDefer.deferred] is false.
@@ -204,9 +224,20 @@ class BinderResult(
  */
 class Binder(private val options: CompilerOptions) {
 
+    /**
+     * (INC.16) / (INV.0) steps 10a-10b — what [scopeDeclarations] reads off a file's
+     * stamped declaration list, in one object rather than a `Triple` so the three
+     * members are named at every use.
+     */
+    private class ScopeDeclNames(
+        val hasEnum: Boolean,
+        val typeNames: Set<String>,
+        val valueNames: Set<String>,
+    )
+
     private companion object {
         /** (INC.16) the answer for the 76-of-78 case, allocated once. */
-        val NO_SCOPE_TYPE_DECLARATIONS: Pair<Boolean, Set<String>> = Pair(false, emptySet())
+        val NO_SCOPE_DECLARATIONS = ScopeDeclNames(false, emptySet(), emptySet())
     }
 
     /**
@@ -293,12 +324,13 @@ class Binder(private val options: CompilerOptions) {
         // builds it on first ask. A `recheckOnly` partition asks for one file's,
         // a full build asks for every checked file's, and nothing has ever asked
         // for a real-lib `.d.ts` file's.
-        val scopeTypes = scopeTypeDeclarations(sourceFile, lexOwners)
+        val scopeDecls = scopeDeclarations(sourceFile, lexOwners)
         val result = BinderResult(
             sourceFile, fileLocals, nodeToSymbol, moduleInstanceStates,
-            declaresScopeEnum = scopeTypes.first,
+            declaresScopeEnum = scopeDecls.hasEnum,
             bindsEnum = bindsEnum,
-            scopeTypeNames = scopeTypes.second,
+            scopeTypeNames = scopeDecls.typeNames,
+            scopeValueNames = scopeDecls.valueNames,
         ) {
             // The span stays [FrontEnd.BIND_LEX] wherever the build lands, so a
             // cross-round comparison of the scope walk still compares the same
@@ -315,7 +347,8 @@ class Binder(private val options: CompilerOptions) {
     }
 
     /**
-     * (INC.16) See [BinderResult.declaresScopeEnum] / [BinderResult.scopeTypeNames].
+     * (INC.16) See [BinderResult.declaresScopeEnum] / [BinderResult.scopeTypeNames] /
+     * [BinderResult.scopeValueNames].
      * Runs after [bindStatements], so [lexOwners] already holds every namespace/enum
      * symbol this file's conventional bind produced.
      *
@@ -327,36 +360,75 @@ class Binder(private val options: CompilerOptions) {
      * function, a class, a namespace the bind never gave an `exports` — is a fresh scope,
      * which is where and only where a scope-space symbol is minted.
      */
-    private fun scopeTypeDeclarations(
+    private fun scopeDeclarations(
         sourceFile: SourceFile,
         lexOwners: Map<Int, Symbol>,
-    ): Pair<Boolean, Set<String>> {
-        val decls = sourceFile.nestedScopeTypeDecls
-        if (decls.isEmpty()) return NO_SCOPE_TYPE_DECLARATIONS
+    ): ScopeDeclNames {
+        val decls = sourceFile.nestedScopeDecls
+        if (decls.isEmpty()) return NO_SCOPE_DECLARATIONS
         var hasEnum = false
-        var names: MutableSet<String>? = null
+        var typeNames: MutableSet<String>? = null
+        var valueNames: MutableSet<String>? = null
         for (decl in decls) {
             if (!reachesFreshLexicalScope(decl, lexOwners)) continue
-            // (INV.0) step 10a: the NAME half now covers all four TYPE-space kinds, so
-            // one projection serves `Checker.lexicalBlockScopedTypeNames`. The ENUM half
-            // stays a separate boolean because its consumer wants the scope-space SYMBOL
-            // (`computeEnumSymbolValues` is id-keyed) and that exists only inside the
-            // tables — which is exactly the (INC.16) asymmetry.
-            val name = when (decl) {
-                is EnumDeclaration -> { hasEnum = true; decl.name.text }
-                is TypeAliasDeclaration -> decl.name.text
-                is InterfaceDeclaration -> decl.name.text
-                is ClassDeclaration -> decl.name?.text ?: continue
-                else -> continue
+            // (INV.0) steps 10a/10b: the NAME halves cover the TYPE space and the VALUE
+            // space, so two projections serve `Checker.lexicalBlockScopedTypeNames` /
+            // `…ValueNames`. `class` and `enum` are in BOTH, because they declare a name
+            // in both spaces. The ENUM BOOLEAN stays separate because its consumer wants
+            // the scope-space SYMBOL (`computeEnumSymbolValues` is id-keyed) and that
+            // exists only inside the tables — which is exactly the (INC.16) asymmetry.
+            //
+            // A `ModuleDeclaration` is projected by the leftmost segment of a dotted name
+            // and never for `declare global`, mirroring `bindLexicalScopes` EXACTLY: a
+            // projection that claims a name the scope does not hold is a gate hit that
+            // costs an ascent and answers nothing, and one that misses a name the scope
+            // DOES hold is a silent lost resolution.
+            when (decl) {
+                is EnumDeclaration -> {
+                    hasEnum = true
+                    typeNames = addTo(typeNames, decl.name.text)
+                    valueNames = addTo(valueNames, decl.name.text)
+                }
+                is TypeAliasDeclaration -> typeNames = addTo(typeNames, decl.name.text)
+                is InterfaceDeclaration -> typeNames = addTo(typeNames, decl.name.text)
+                is ClassDeclaration -> decl.name?.text?.let {
+                    typeNames = addTo(typeNames, it)
+                    valueNames = addTo(valueNames, it)
+                }
+                is FunctionDeclaration -> decl.name?.text?.let {
+                    valueNames = addTo(valueNames, it)
+                }
+                is ModuleDeclaration -> moduleLexicalName(decl)?.let {
+                    valueNames = addTo(valueNames, it)
+                }
+                else -> {}
             }
-            val set = names ?: HashSet<String>(4).also { names = it }
-            set.add(name)
         }
-        return if (!hasEnum && names == null) NO_SCOPE_TYPE_DECLARATIONS
-        else Pair(hasEnum, names ?: emptySet())
+        return if (!hasEnum && typeNames == null && valueNames == null) NO_SCOPE_DECLARATIONS
+        else ScopeDeclNames(hasEnum, typeNames ?: emptySet(), valueNames ?: emptySet())
     }
 
-    /** See [scopeTypeDeclarations]. */
+    private fun addTo(set: MutableSet<String>?, name: String): MutableSet<String> =
+        (set ?: HashSet(4)).also { it.add(name) }
+
+    /**
+     * The name `bindLexicalScopes`' [ModuleDeclaration] arm declares for [decl], or null
+     * when it declares none. Kept next to [scopeDeclarations] and written to mirror that
+     * arm line for line — a `declare global` block is an AUGMENTATION and binds nothing
+     * (GH#42209), and a dotted name binds its LEFTMOST segment.
+     */
+    private fun moduleLexicalName(decl: ModuleDeclaration): String? = when (val n = decl.name) {
+        is Identifier ->
+            if (n.text == "global" && ModifierFlag.Declare in decl.modifiers) null else n.text
+        is PropertyAccessExpression -> {
+            var cur: Expression = n
+            while (cur is PropertyAccessExpression) cur = cur.expression
+            (cur as? Identifier)?.text
+        }
+        else -> null
+    }
+
+    /** See [scopeDeclarations]. */
     private fun reachesFreshLexicalScope(decl: Node, lexOwners: Map<Int, Symbol>): Boolean {
         var cur: Node? = (decl as NodeBase).parent
         var hops = 0

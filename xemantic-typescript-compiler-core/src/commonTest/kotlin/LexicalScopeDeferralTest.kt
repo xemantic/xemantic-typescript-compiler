@@ -161,7 +161,7 @@ class LexicalScopeDeferralTest {
             function f() { return 1; }
             """,
         )
-        assert(sf.nestedScopeTypeDecls.isEmpty())
+        assert(sf.nestedScopeDecls.isEmpty())
         val result = Binder(CompilerOptions()).bind(sf)
         assert(!result.declaresScopeEnum)
         assert(result.scopeTypeNames.isEmpty())
@@ -169,7 +169,7 @@ class LexicalScopeDeferralTest {
 
     @Test
     fun `an enum in a function body is the only thing that forces a scope build`() {
-        assert(parse("function f() { enum E { A } return E.A; }").nestedScopeTypeDecls.size == 1)
+        assert(parse("function f() { enum E { A } return E.A; }").nestedScopeDecls.size == 1)
         assert(bindOf("function f() { enum E { A } return E.A; }").declaresScopeEnum)
     }
 
@@ -182,18 +182,59 @@ class LexicalScopeDeferralTest {
 
     /**
      * (INV.0) step 10a widened the stamp and the projection from `type`/`enum` to the
-     * whole TYPE space, and this is the pin that says so — the SAME four kinds
-     * `Binder.bindLexicalScopes` mints a [SymbolFlags.ScopeTypeDeclaration] symbol for.
-     * A `function` nested there is deliberately NOT carried: it is a VALUE-space name
-     * and `NameResolver.lexicalTypeSymbolForNode` never answers one.
+     * whole TYPE space; **step 10b widened the STAMP again to the union of the TYPE and
+     * VALUE spaces and SPLIT the projection in two**, and this pin is where that is
+     * stated. The stamp's six kinds are exactly those `Binder.bindLexicalScopes` mints a
+     * scope symbol for under its `scope.existing == null` gate; the two projections then
+     * say which SPACE each name is in, and `class` / `enum` are in BOTH.
+     *
+     * Its previous form asserted the stamp carried TWO declarations and that a nested
+     * `function` was "deliberately NOT carried" — true of the TYPE consult and, once the
+     * value consult existed, false of the stamp. It is updated on purpose, which is what
+     * a countdown pin is for.
      */
     @Test
-    fun `a class and an interface in a function body are carried by the name projection`() {
+    fun `a class an interface and a function in a function body are carried by the name projections`() {
         val src = "function f() { class ZzzC {} interface ZzzI { p: number } function g() {} return 1; }"
-        assert(parse(src).nestedScopeTypeDecls.size == 2)
+        assert(parse(src).nestedScopeDecls.size == 3)
         val result = bindOf(src)
         assert(!result.declaresScopeEnum)
         assert(result.scopeTypeNames == setOf("ZzzC", "ZzzI"))
+        assert(result.scopeValueNames == setOf("ZzzC", "g"))
+    }
+
+    /**
+     * (INV.0) step 10b — the VALUE projection's own shapes, and the two the item's
+     * mirror of `bindLexicalScopes` has to get right or the gate lies in one of two
+     * silent directions: a `declare global` block declares NOTHING (GH#42209, so
+     * claiming `global` would be a hit that costs an ascent and answers nothing), and a
+     * DOTTED namespace name declares its LEFTMOST segment only.
+     *
+     * An `enum` is in both projections because it declares a name in both spaces, and a
+     * nested `namespace` is a TS1235 grammar error that tsc still BINDS — which is why
+     * the projection carries it rather than refusing it.
+     */
+    @Test
+    fun `the value projection mirrors what the lexical binder declares`() {
+        val result = bindOf(
+            """
+            function f() {
+                function zzzFn() { return 1; }
+                class ZzzC {}
+                enum ZzzE { A }
+                namespace ZzzNs.Inner { export const v = 1; }
+                declare global { interface ZzzG { p: number } }
+                const zzzLocal = 1;
+                return zzzLocal;
+            }
+            """,
+        )
+        assert(result.scopeValueNames == setOf("zzzFn", "ZzzC", "ZzzE", "ZzzNs"))
+        // `ZzzG` is the interface INSIDE the `declare global` block, and it belongs there:
+        // the CARRIER declares nothing (which is what `global` being absent above says),
+        // while the block's own body reaches a fresh scope like any other module block.
+        // This pin caught the round's own wrong expectation, which is what it is for.
+        assert(result.scopeTypeNames == setOf("ZzzC", "ZzzE", "ZzzG"))
     }
 
     @Test
@@ -201,8 +242,8 @@ class LexicalScopeDeferralTest {
         // It IS a syntactic candidate, and the binder is what refuses it: the namespace
         // scope aliases the merged `exports`, so `declareLexical` skips the name. That
         // refusal is a fact about the bind, not about the tree, which is why the decision
-        // lives in `Binder.scopeTypeDeclarations` and not in `indexSourceFile`.
-        assert(parse("namespace N { type Inner = number; }").nestedScopeTypeDecls.size == 1)
+        // lives in `Binder.scopeDeclarations` and not in `indexSourceFile`.
+        assert(parse("namespace N { type Inner = number; }").nestedScopeDecls.size == 1)
         val result = bindOf("namespace N { type Inner = number; }")
         assert(!result.declaresScopeEnum)
         assert(result.scopeTypeNames.isEmpty())

@@ -1788,6 +1788,61 @@ internal class NameResolver(
     }
 
     /**
+     * (INV.0) step 10b — the VALUE-space twin of [lexicalTypeSymbolForNode]: the
+     * position-aware consult for a `function` / `class` / `enum` / `namespace` the main
+     * binder never bound (B83.5). Walks the node's ancestor chain outward over the
+     * INV.2(c) `lexicalScopes` table of the node's OWNING file and returns the first
+     * SCOPE-SPACE value symbol named [name].
+     *
+     * **The soundness argument is 10a's, unchanged**: `declareLexical` refuses any name
+     * the main binder already bound in that container, so a hit here can only ever be a
+     * declaration the conventional tables do not have — the consult cannot change how a
+     * conventionally-bound name resolves, and the innermost-first walk gives the
+     * shadowing rule for free.
+     *
+     * **What is NOT 10a's, and is the reason this is its own method rather than a
+     * widened flag mask**: the VALUE gate is a large set (a nested helper `function` is
+     * ordinary style), so its hit rate is real where the type one's is near zero. The
+     * flag mask is [SymbolFlags.ScopeValueDeclaration] and NOT [SymbolFlags.Value] — a
+     * scope-space VARIABLE is deliberately not answered here, because
+     * `Checker.currentLocalTypes` is consulted ahead of this and carries exactly that
+     * population with the type the walk INFERRED, which this could only replace with a
+     * declared one.
+     *
+     * A consequence of that mask, stated because `symbolAt` does not stop at a
+     * non-matching hit: an inner `const foo` shadowing an outer scope-space
+     * `function foo` is answered by `currentLocalTypes` above, never by this ascent
+     * skipping past it.
+     */
+    private companion object {
+        /**
+         * (INV.0) step 10b — what ENDS [lexicalValueSymbolForNode]'s ascent: any
+         * scope-space binding that occupies the name in VALUE space, whether or not it
+         * is one of the four kinds the consult answers. [SymbolFlags.Alias] is in it
+         * because a nested import (TS1232) still binds, and no TYPE-space flag is,
+         * because the two spaces do not compete for a name.
+         */
+        val VALUE_SPACE_BINDING = SymbolFlags.Value or SymbolFlags.Alias
+    }
+
+    fun lexicalValueSymbolForNode(node: Node, name: String): Symbol? {
+        if (name !in checker.lexicalBlockScopedValueNames) return null
+        // TWO gates, and the second one is what keeps (INC.16): the program-wide set is a
+        // UNION, so a name declared in file A hits for an identifier in file B — and
+        // `scopesOfOwningFile` BUILDS the tables it reads. Testing the owning file's own
+        // projection first costs one map lookup and leaves a file that declares no
+        // scope-space value name with its tables UNBUILT, which is exactly the property
+        // the type consult gets for free from a near-empty gate.
+        val result = lexicalResolver.resultOfOwningFile(node) ?: return null
+        if (name !in result.scopeValueNames) return null
+        return lexicalResolver.symbolAt(
+            node, name, result.lexicalScopes,
+            flags = SymbolFlags.ScopeValueDeclaration,
+            stopFlags = VALUE_SPACE_BINDING,
+        )
+    }
+
+    /**
      * Round 748's ENUM-ONLY twin of [lexicalTypeSymbolForNode], kept separate because
      * its reader ([Checker.lexicalEnumSymbolForDiscriminant]) hands the answer to
      * `canonicalEnumSymbol` and to the enum-value tables, where a `class` or an

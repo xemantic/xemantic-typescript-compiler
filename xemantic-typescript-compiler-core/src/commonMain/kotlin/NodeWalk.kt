@@ -604,12 +604,15 @@ fun indexSourceFile(sourceFile: SourceFile) {
         // can never bind it — anything else might.
         //
         // (INV.0) step 10a widened this from `type`/`enum` to the whole TYPE-space
-        // set. [NodeKind.CLASS_DECLARATION] .. [NodeKind.ENUM_DECLARATION] are
-        // CONTIGUOUS (23..26 = class, interface, type, enum), so the widening is a
-        // RANGE compare and still costs exactly two int compares per node — see
-        // [SourceFile.nestedScopeTypeDecls] for why those four and no others.
+        // set, and step 10b to the union of the TYPE and VALUE spaces.
+        // [NodeKind.FUNCTION_DECLARATION] .. [NodeKind.MODULE_DECLARATION] are
+        // CONTIGUOUS (22..27 = function, class, interface, type, enum, module) and
+        // are EXACTLY the six declaration kinds `Binder.bindLexicalScopes` declares
+        // into a fresh scope under a `scope.existing == null` gate, so the widening
+        // is still a RANGE compare costing two int compares per node — see
+        // [SourceFile.nestedScopeDecls] for why those six and no others.
         val k = node.kindId
-        if (k >= NodeKind.CLASS_DECLARATION && k <= NodeKind.ENUM_DECLARATION &&
+        if (k >= NodeKind.FUNCTION_DECLARATION && k <= NodeKind.MODULE_DECLARATION &&
             node.parent !== sourceFile
         ) {
             val list = nested ?: ArrayList<Node>(4).also { nested = it }
@@ -626,7 +629,7 @@ fun indexSourceFile(sourceFile: SourceFile) {
         }
     }
     sourceFile.nodeCount = nextId
-    sourceFile.nestedScopeTypeDecls = nested ?: emptyList()
+    sourceFile.nestedScopeDecls = nested ?: emptyList()
 }
 
 /**
