@@ -25,6 +25,97 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.60) — (INV.0) step 8: the TYPE-CAPTURE family becomes `CaptureRecorder.kt`, and its ambient row is the design's own claim as a number (2026-09-10)
+
+**Suite 18,514 / 0 / 3** (18,506 + 8 new pins). `Checker.kt` **194,631 → 191,540**
+(−3,091, the arc's largest single move); `CaptureRecorder.kt` **3,214**. cost_gate exit 0,
+huge_methods exit 0 (**841** classes, `Checker.<init>` 5,697 → **5,621**), warning-clean,
+ledger row 11. Commit `d897942c9`. **Fifth extraction of the session.**
+
+**THE ITEM'S OWN "OBVIOUS CANDIDATE" WAS A SCATTER, AND THE CENSUS SAID SO IN ONE
+COMMAND.** Step 8 named the member-ACCESS family; it is `getPropertiesOfType` 116481,
+`getPropertyAcrossType` 117056, `getStaticMembersOfType` 117400, `getApparentType`
+132856, `collectInheritedPropertyNames` 143137, `getPropertyTypeForRelation` 166353,
+`collectTargetPropertyNames` 166608, `isOptionalProperty` 170841 — eight neighbourhoods,
+no span. **What the same census found instead was TYPE CAPTURE**: 103 `typeCapture*` /
+`captured*` declarations of which 94 sit in ONE block, 3,120 lines. Three rounds running,
+the census has overturned the queue's own guess; the instrument is
+`scripts/codemask.py` plus a contiguity scan, and it costs one command.
+
+**61 AMBIENT READS AND 9 WRITES — THE ARC'S LARGEST ROW, AND IT IS THE FINDING RATHER
+THAN A DEBT.** `docs/INVERSION-DESIGN.md` § 2 says this checker cannot serve a post-hoc
+type oracle because "its answers are functions of walk-scoped state". This row is that
+claim as a NUMBER: fourteen of the reads and ALL NINE writes are the WALK — `ctaFrames`,
+`currentFlowGraph`, `currentClassForThis`, `currentCheckFileName` (10 write sites),
+`spineCurrentScope`, `inAsyncFunctionBody`, `currentTypeParamScope` — and the writes are
+a save-and-restore sandwich reconstructing the ambient a node was reached under. Moving
+the family does not make any of that explicit; it COUNTS it. **The OUT surface is the
+arc's cleanest by the opposite measure: 98 declarations move and 15 keep a caller.**
+
+**THE RECEIPT FOR A CAPTURE FAMILY IS THE CAPTURE CHANNEL, AND A ROUND THAT TOOK ONLY
+`--passTiming` WOULD HAVE PROVED ALMOST NOTHING.** (INC.2)'s law — "do NOT infer a
+capture's correctness from a green diagnostics sweep, they are different resolvers" —
+decides which gate is the gate here. `scripts/capture-equivalence.sh` prints a per-arm
+DIGEST over every captured answer: **381,666 captured types and 360,917 captured
+definitions, `full=-1675305230568277215 narrow=-1216978524918639134` on BOTH arms**, with
+the full-vs-narrow divergence census identical row for row (961 spans in 43 of 76 files —
+the standing (INC.26) alias figure, not a regression). **A trap that cost one 10-minute
+run: the digest line is ABOVE the driver's summary tail, so a `| tail -4` keeps the
+summary and throws the receipt away.** Redirect the whole output. The 488 deterministic
+`--passTiming` lines are byte-identical too, so that receipt now spans SIX binaries.
+
+**VERBATIM proved twice** (`inverse(moved) == HEAD span` and `forward(HEAD span) ==
+moved`), 170 ambient rewrites over 61 members, 15 visibility rewrites.
+
+**FOUR THINGS THE COMPILER FORCED, EACH RECORDED RATHER THAN WORKED AROUND**: `CtaFrame`
+becomes `internal` (a widened `ctaFrames` exposes it, and `withCtaFrameLocals` is an
+`internal inline` touching its members); `nodeAnswerComputations`' `private set` becomes
+`internal set`; the three `TYPE_CAPTURE_*_MAX_DEPTH` constants MOVE into the
+collaborator's own companion, having no reader left; and 42 ambient members widen
+`private` → `internal`, which is what a 61-read row costs.
+
+**PrintInlining says something real for the first time since step 4b-ii**, because this
+family has exactly ONE hot entry point: `typeCaptureVisit` is called per node from
+`spineEnterNode`, was a 925-byte body refused six times as `too large`, and its hop reads
+**`inline ×6`** — `spineEnterNode`'s own refusals fall 4 → 3. Everything else in the
+family is cold by construction (the bench passes no `TypeCaptureRequest`).
+`getTypeOfExpression` moved 379 → 390 and is NOT quoted: row 4 proved it unstable across
+processes on one binary. ab-interleaved 6 pairs **+52 ms (+0.20%) B-wins-3/6
+NOISE-DOMINATED**, both arms 46 errors.
+
+**ALL EIGHT ABLATION ARMS REDDEN EXACTLY THEIR OWN PIN — the arc's first perfect
+8-for-8.** The pins assert VALUES throughout, which is what this family needs: an ABSENT
+capture renders nothing and reports no error anywhere ((INC.2b)), so a pin asserting "a
+capture exists" passes on a badly broken binary. Two of them are a PAIR that earns its
+keep — at a dangling-`.`-at-EOF span the type table stays FIRST-wins while the member
+table takes its descendant exception, so the same span answers from two different rules
+and one fixture pins both. **A fixture property a future reader will otherwise break:
+`dangle.ts` must end IMMEDIATELY after the `.`** — no newline, no `;`, no space — or the
+span collision does not happen and both pins go vacuous, which is why the file builds
+that string by concatenation and asserts `receiver == access` before measuring.
+
+**TWO CANDIDATES DROPPED FOR THE SAME REASON, WHICH IS WORTH MORE THAN A NINTH PIN**:
+`activeParameter`'s clamp onto a rest parameter is real and distinct, and **no instrument
+available here can give it ground truth** — the LSP maps `SignatureHelp.activeArgument`
+onto the protocol's top-level `activeParameter` and never surfaces the per-signature
+clamped value, so both servers read `3` where the internal answer is `1`. Likewise a
+scope pin asserting each offered name's KIND: for an imported name the symbol is the
+ALIAS, so the kind is `ImportSpecifier` rather than the target's, and nothing exposes the
+difference. A pin whose expected value can only be obtained by reading the function it
+tests is not a pin.
+
+**A MEASURED DIVERGENCE RECORDED AND NOT ASSERTED**: at the dangling-`.` span tsc hovers
+the RECEIVER (`const holder: { alpha: number; beta: string; }`) where our first-wins
+answers the property access's `any`. Pinning `"any"` would be the countdown CLAUDE.md
+forbids, so that pin asserts the winning node's KIND only.
+
+**NEXT**: after this the file is 191,540 and what is left in it is dominated by CHECK
+PASSES, which § 6 puts LAST — `spine*` (three blocks over 7,400 lines), `check*`,
+`cmam*`, `caas*`, `cae*`, `cvda*`. The remaining non-check families are SMALL. So step 9
+is a decision, not a census: either start on the check passes (which needs a rule for
+what a "pass" collaborator even is, since they read the whole checker) or stop Stage 0
+and open Stage 1. Say which, and why, before moving any line.
+
 ### Round (P18.59) — (INV.0) step 7: the ENUM family becomes `EnumSemantics.kt`, and the arc's ambient TOTAL falls for the first time (2026-09-09)
 
 **Suite 18,506 / 0 / 3** (18,498 + 8 new pins). `Checker.kt` **195,606 → 194,631** (−975);
@@ -643,62 +734,6 @@ built first and UNSOUND, being id-keyed and first-wins ((INC.27)), so one `type 
 makes every inline `string | undefined` read as aliased; and the (c) collapse INSIDE a union source,
 which needs `typeToString`'s union rendering and is exactly what (P18.48) forbids. Two out-of-scope
 residues recorded: the `OptAlias` SOURCE display, and a `Promise<string | undefined>` target.
-
-### Round (P18.50) — the class-member definite-assignment path exists ((CHK.112)(a)), and the missing plumbing was wrong in BOTH directions (2026-09-08)
-
-**Suite 18,375 → 18,413 / 0 / 3** — 38 pins in the new `Ts2454ClassMemberInitializerTest`, plus one
-countdown pin INVERTED with transcripts. Grid **8 × added=0 removed=0**, re-run INDEPENDENTLY;
-`spine_closure_audit.py` exit 0 (mandatory — two new `spineDaEnterNode` arms), `cost_gate.py` exit 0
-(largest delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean under `--rerun-tasks`.
-
-**(CHK.112)(a) CLOSED, and the strongest evidence is that the SAME missing plumbing was wrong in BOTH
-DIRECTIONS** — 11 missing rows (a bare identifier, an expression- and a block-bodied arrow, a
-function expression, an IIFE, an object literal, a computed member name and a `static { }` block, in
-a class DECLARATION and a class EXPRESSION alike) **and 6 ours-only FALSE POSITIVES** (a method, a
-property initializer, a static block, an arrow property, an accessor or a class-expression property
-that ASSIGNS the variable did not suppress a sibling closure's read). (CHK.110)(a) found its defect
-the same way; a shape that fails both ways is the cheapest attribution there is, and it is free to
-look for.
-
-**IT WAS TWO INDEPENDENT MECHANISMS, NOT ONE.** The reach classifier never gave a `PropertyDeclaration`
-under a class *declaration* a status — so (CHK.110)(b)'s handler, correct in itself, saw an empty leak
-there — **and** nothing anywhere walked a property initializer that is a plain expression
-(`checkUsesOfUninitialized`'s `ClassDeclaration` arm walks heritage clauses and nothing else, and
-`findUninitializedRefs` has no `ClassExpression` arm at all). Arms a1 and a6 separate them cleanly.
-
-**THE ITEM'S OWN HEADLINE FIXTURE IS SILENT FOR A SECOND, UNRELATED REASON, AND THAT WOULD HAVE READ
-AS AN INERT FIX.** `SpineDaFrame.enableLeak` is `false` at file level by design ("a file-level `let`
-may be assigned externally"), so a file-level `let` never leaks into ANY nested function — class or
-not — and both references do not share the conservatism. Taking the item's example literally measures
-no change on a correct fix. **Every fixture and pin in this round is function-scoped for that
-reason**, and it is now a CLAUDE.md entry: vary the scope before believing any TS2454 repro.
-
-**THE FOURTH COUNTDOWN PIN IN FIVE ROUNDS, AND THE PUREST ONE YET.** `Inv4SpineBatch25Test` carried
-`a class-expression property initializer arrow is reached with the leak` (row FIRES) directly beside
-`negative control - a class-DECLARATION property initializer arrow is unreached` (row does NOT) under
-a section header calling the difference a "reach quirk". Both references report BOTH spellings at the
-same position (transcripts in the pin's KDoc), so **the pair was a written record of our own
-asymmetry and the "negative control" was the defect**. Inverted to match its twin; the section header
-and the class KDoc's "reach quirks pinned as negative controls" list were fixed too — three places,
-which is the point: **a comment naming a quirk outlives the pin and misleads the next reader.**
-
-**THE SWEEP WAS DONE AGAINST THE ORACLE, NOT BY READING.** 49 `@Test` blocks mention TS2454 with a
-class-ish fixture; 11 are pre-existing and 4 could touch the new path. All four were run through both
-references — three are green FOR THE RIGHT REASON, one is unreachable (it asserts TS2347). Two extra
-fixtures were then BUILT to test the at-risk static-initializer suppression at function scope
-(`assumeInitialized`'s outer-variable rule): both references report TS2448 without TS2454 and we
-match, including the sharpest shape — a static initializer reading a `let` declared LATER.
-
-**ARMS — 11, ALL DISCRIMINATING, NONE BLIND OR REDUNDANT.** a3/a5 are a round-927 PAIR with identical
-2-test RED sets (two layers on one property: a3 stops the frame opening, a5 opens it with an empty
-leak). **a6/a7 are the mask/closure pair** and a7 changes only `SpineDispatch.kt`, so its
-`Checker.class` sha is UNCHANGED — the handler is present and unreachable — and
-`spine_closure_audit.py` correctly FAILS under it, a second independent instrument on that arm.
-
-**REFUSED ON MEASUREMENT, NOT TASTE**: using the frame's live set for the member walk (arm a8 is the
-receipt — it breaks three shapes both references are silent about), and adding a `ClassDeclaration`
-arm to `collectClosureAssignedNames` (it would silence two shapes both references report). Three
-residues measured and left open are queued as **(CHK.115)**.
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
 
@@ -1814,33 +1849,51 @@ where the order sends you.
   resolved both sides through one import, so the two symbols were identical) and was repaired
   to a shape that reads 1 row vs 2.**
 
-- [ ] **(INV.0) STEP 8 — the ambient row can now fall per round, but ONLY where a
-  collaborator's reads are a FAMILY someone else can own. Census, then take the largest
-  such family.** After step 7 the rows are: `Relater` 38, `NameResolver` 26,
-  `MemberResolver` 22, `EnumSemantics` 13, `MemberNames` 4 (uniform-script counts — see
-  the ledger's counting note, row 7's own column says 45 for a convention reason).
-  **The obvious candidate is the MEMBER-ACCESS / property family** — `getPropertiesOfType`,
-  `getPropertyOfType`, `getApparentType`, `primitiveApparentWrapper`, `isOptionalProperty`,
-  `getPropertyTypeForRelation`, `getStaticMembersOfType` — which `Relater` (8 of its 38) and
-  `MemberResolver` both point at, and which CLAUDE.md already records as a family with
-  known shape rules (a union arm that answers an assignability question, an
-  intersection-only `getPropertyAcrossType`, enum/namespace members living on `Symbol.exports`
-  rather than on a type). **Census it the way step 7 was censused before committing**:
-  contiguity first (a scatter is Stage-3 work, not a seam), then the ambient row of the
-  span, then how many of the reads it ABSORBS from other collaborators — that last number is
-  what step 7 showed is the point.
-  **SIGNATURES and FLOW stay unstarted and the reason is recorded**: both are scatters, and
-  no instrument in this arc extracts a scatter. Opening either needs a different move —
-  gathering the declarations first, as its own commit, with the corpus as the only gate.
-  **Inherit every constraint rows 4-10 established**, including: grep `Checker.kt` for a
-  LOCAL of a proposed collaborator-field name; sort the `--passTiming` pass rows and drop
-  ms-bearing lines for the receipt; **take the pristine capture with the SAME RECIPE**
-  (step 7 lost a bench run to `--listAll` in one arm only); grade against a REBUILT pristine
-  (each round's capture is the next round's pristine arm); grep BOTH the mangled and
-  unmangled JVM names on any round that widens visibility, **and on any per-site inlining
-  comparison at all** — step 7's first tally read a fake +137 refusals because the pristine
-  arm's names were mangled and the split arm's were not; and use `codemask` (not `spanmask`)
-  for any census or transform, because a `${…}` interpolation is code inside a string.
+- [x] **(INV.0) STEP 8 — THE TYPE-CAPTURE FAMILY: DONE 2026-09-10 ((P18.60), commit
+  `d897942c9`). `CaptureRecorder.kt` is **3,214 lines**; `Checker.kt` **194,631 → 191,540
+  (−3,091)**, the arc's largest single move; ledger row 11. **The item's own "obvious
+  candidate" — the member-ACCESS family — measured a SCATTER over eight neighbourhoods,
+  and the same census found TYPE CAPTURE instead**: 103 `typeCapture*`/`captured*`
+  declarations of which 94 sit in one 3,120-line block. **61 ambient reads and 9 WRITES,
+  the arc's largest row and the finding rather than a debt** — fourteen reads and all nine
+  writes are the WALK, i.e. `docs/INVERSION-DESIGN.md` § 2's "answers are functions of
+  walk-scoped state" as a number. **The OUT surface is the arc's cleanest: 98 declarations
+  move, 15 keep a caller.** Receipt is the CAPTURE CHANNEL, not the pass table: 381,666
+  types and 360,917 definitions, per-arm digest byte-identical. All 8 ablation arms redden
+  exactly their own pin — the arc's first perfect 8-for-8.**
+
+- [ ] **(INV.0) STEP 9 — A DECISION, NOT A CENSUS: after step 8 what is LEFT in
+  `Checker.kt` (191,540) is dominated by CHECK PASSES, which design § 6 puts LAST.** The
+  contiguous-family census (`scripts/codemask.py` + a contiguity scan; the command is in
+  the (P18.59) note) now returns, in size order: `spine*` 72464-76168 (3,704 lines),
+  `type*`/`init*` blocks that are pass REGISTRATION, `spine*` 61288-63294 (2,006),
+  `check*` 69970-71824 (1,854), `spine*` 28711-30415 (1,704), `cmam*` (1,668 + 986),
+  `caas*` (1,440), `cae*` (1,184), `cvda*` (1,063). Every one is a check pass or a walker
+  frame family. **So the round's first job is to SAY WHICH of two things it is doing, and
+  why, before moving a line:**
+  (a) **START ON THE CHECK PASSES.** This needs a rule that does not exist yet: what IS a
+  pass collaborator, given a pass reads the whole checker and writes `diagnostics`? Rows
+  4-11 all extracted things with a NOUN ("name resolution", "the relation", "enum
+  semantics"); "checkImplementsClauses and its neighbours" is a LIST, and a collaborator
+  per list is a file move, not a seam. A defensible first bite would be ONE walker FAMILY
+  with a shared frame (`cmam*`, `caas*`, `cvda*`, `cae*` each are that) — census its
+  ambient row FIRST, and expect it to look like row 11's, because a walker's ambient IS
+  the walk.
+  (b) **STOP STAGE 0 AND OPEN STAGE 1** (`docs/INVERSION-DESIGN.md` § 6: the per-file
+  `nodeTypeId` store behind a flag, with the pin that proves it captures what post-hoc
+  cannot). Row 11 is the argument FOR this: it measured, rather than argued, that the
+  capture answers are walk-scoped, which is the premise Stage 1 exists to act on.
+  **The owner metric is SHRINKAGE**, so (a) still pays in lines; but it stops paying in
+  AMBIENT, and rows 7-11 show the ambient total only falls when a family someone else owns
+  can be wired directly. Take the decision explicitly.
+  **Inherit every constraint rows 4-11 established**, including: census contiguity BEFORE
+  believing any candidate the queue names (three rounds running, the queue's guess was
+  wrong); grep `Checker.kt` for a LOCAL of a proposed collaborator-field name; use
+  `scripts/codemask.py`, never `spanmask`/`strip`; take the pristine capture with the SAME
+  RECIPE and redirect the WHOLE output (a `| tail` throws the digest away); grade against a
+  REBUILT pristine; grep BOTH mangled and unmangled JVM names in any inlining comparison;
+  **and pick the GATE for the family** — a capture-touching change is graded by
+  `scripts/capture-equivalence.sh`'s digest, a diagnostics-touching one by the corpus.
 
 - [ ] **(REL.1)(c) LEAD, measured 2026-09-09 by (P18.59) and NOT fixed: the same-string
   qualified-display retry is not reached by the VARIABLE-DECLARATION assignability reader.**

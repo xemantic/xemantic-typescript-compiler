@@ -1,19 +1,50 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194,631** lines (**−5,332 across (P18.53)-(P18.59)**, the first
+extraction):** `Checker.kt` **191,540** lines (**−8,423 across (P18.53)-(P18.60)**, the first
 sustained movement in the extraction direction since the metric was created; 191,070 when it was
 created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not
-extractions). EIGHT collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient
-surface none for both — `TypeInstantiator` (4 reads, 1 write), `NameResolver` (2,284 lines,
-26 reads, no writes — the seam COMPLETE over three steps), `Relater` (1,446 lines — the RELATION
-algorithm, the arc's largest row), `MemberResolver` (814 lines, 22 reads / 1 write),
-`MemberNames` (765 lines, 4 reads / ZERO writes) and **`EnumSemantics` (1,137 lines, 13 reads /
-ZERO writes)**, all stated in the ledger. **AND THE AMBIENT *TOTAL* FELL FOR THE FIRST TIME**:
-(P18.59) wired `Relater` and `MemberNames` to `EnumSemantics` DIRECTLY — the Stage-0-exit
-decision the ledger asked be taken deliberately — taking `Relater` 49 → 38 checker reads and
-`MemberNames` 5 → 4. Reference points: tsc ≈ 50k lines (one file), tsgo 60,479 across 25 files.
-Contract: `docs/INVERSION-DESIGN.md` § 10; ledger: `docs/inversion-ambient-ledger.md`.
+extractions — so the file is now BELOW where the metric started, with ~5,200 of real work added
+in between). NINE collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface
+none for both — `TypeInstantiator` (4 reads, 1 write), `NameResolver` (2,284 lines, 26 reads),
+`Relater` (1,446 lines), `MemberResolver` (834 lines, 22 reads), `MemberNames` (771 lines,
+4 reads / ZERO writes), `EnumSemantics` (1,138 lines, 13 reads / ZERO writes) and
+**`CaptureRecorder` (3,214 lines, 61 reads / 9 writes — the arc's largest MOVE and its largest
+ambient ROW, which is `docs/INVERSION-DESIGN.md` § 2's "the answers are functions of walk-scoped
+state" as a number rather than an argument)**, all stated in the ledger. The ambient TOTAL first
+fell at (P18.59), which wired `Relater` and `MemberNames` to `EnumSemantics` DIRECTLY — the
+Stage-0-exit decision the ledger asked be taken deliberately. Reference points: tsc ≈ 50k lines
+(one file), tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
+`docs/inversion-ambient-ledger.md`.
+
+**(P18.60) — (INV.0) STEP 8: THE TYPE-CAPTURE FAMILY IS `CaptureRecorder.kt`, AND ITS AMBIENT ROW IS THE DESIGN'S OWN CLAIM AS A NUMBER, 18,514 / 0 / 3 (2026-09-10).**
+`Checker.kt` **194,631 → 191,540** (−3,091, the arc's largest single move); `CaptureRecorder.kt`
+3,214; ledger row 11. **Fifth extraction of the session.** **THE QUEUE ITEM'S OWN "OBVIOUS
+CANDIDATE" WAS A SCATTER AND THE CENSUS SAID SO IN ONE COMMAND** — the member-ACCESS family is
+eight neighbourhoods with no span — **and the same census found TYPE CAPTURE instead**: 103
+`typeCapture*`/`captured*` declarations of which 94 sit in one 3,120-line block. Three rounds
+running, the census has overturned the queue's guess. **61 AMBIENT READS AND 9 WRITES, THE ARC'S
+LARGEST ROW, AND IT IS THE FINDING RATHER THAN A DEBT**: fourteen of the reads and all nine writes
+are the WALK (`ctaFrames`, `currentFlowGraph`, `currentClassForThis`, `currentCheckFileName`,
+`spineCurrentScope`, `inAsyncFunctionBody`, `currentTypeParamScope`), and the writes are a
+save-and-restore sandwich reconstructing the ambient a node was reached under — moving the family
+does not make that explicit, it COUNTS it. **The OUT surface is the arc's cleanest by the opposite
+measure: 98 declarations move and 15 keep a caller.** **THE RECEIPT MUST BE THE CAPTURE CHANNEL,
+NOT THE PASS TABLE** ((INC.2): they are different resolvers) — **381,666 captured types and 360,917
+captured definitions with a per-arm DIGEST byte-identical across the move**, and the full-vs-narrow
+divergence census identical row for row; a trap that cost one 10-minute run is that the digest line
+sits ABOVE the driver's summary, so a `| tail -4` keeps the summary and throws the receipt away.
+The 488 deterministic `--passTiming` lines are byte-identical too, so that receipt now spans SIX
+binaries. **ALL EIGHT ABLATION ARMS REDDEN EXACTLY THEIR OWN PIN — the arc's first perfect
+8-for-8**; two of them are a PAIR over one dangling-`.`-at-EOF span, where the type table stays
+FIRST-wins while the member table takes its descendant exception. **Two candidates were dropped
+for a reason worth more than a ninth pin**: neither `activeParameter`'s rest-clamp nor a scope
+name's KIND can be given ground truth by any instrument here, and a pin whose expected value can
+only be read off the function it tests is not a pin. **PrintInlining says something real for the
+first time since step 4b-ii**: `typeCaptureVisit`, called per node from `spineEnterNode`, was a
+925-byte body refused six times as `too large` and its hop reads `inline ×6`. ab-interleaved
++52 ms (+0.20%) B-wins-3/6 NOISE-DOMINATED; cost_gate exit 0, huge_methods exit 0 (841 classes,
+`Checker.<init>` 5,697 → **5,621**), warning-clean.
 
 **(P18.59) — (INV.0) STEP 7: THE ENUM FAMILY IS `EnumSemantics.kt`, AND THE ARC'S AMBIENT TOTAL FALLS FOR THE FIRST TIME, 18,506 / 0 / 3 (2026-09-09).**
 `Checker.kt` **195,606 → 194,631**; `EnumSemantics.kt` 1,137; ledger row 10. **Fourth extraction
@@ -128,23 +159,3 @@ leak detector cannot work, because the `Relation` cache is probed ABOVE the comp
 answers an identical pair before a stale key is consulted; and the `isDeeplyNested` bail is not the
 only bound — disabling it entirely still terminates, since `maxRelationDepth` is a second ceiling.
 cost_gate exit 0, huge_methods exit 0 (836 classes), warning-clean.
-
-**(P18.55) — (INV.0) STEP 4 IS COMPLETE: `NameResolver.kt` IS 2,284 LINES AND `Checker.kt` LOST 1,941, 18,484 / 0 / 3 (2026-09-09).**
-4b-ii moved the namespace / heritage / type-name group (19 functions, 2 fields) VERBATIM, closing
-the seam; ledger row 6. `Checker.kt` 198,781 → **198,022**; `Checker.<init>` 5,656 → 5,634.
-**THE AMBIENT ROW GETS BETTER AS A FAMILY COMPLETES, AND THIS ROUND MEASURED IT**: 4b-ii ABSORBS
-four of the reads rows 4 and 5 recorded, because those functions now live inside the collaborator
-— net **26 checker reads, NO writes, for 2,284 lines**. So an intermediate row's ambient count is
-the WORST that family will look, and the ledger should be read by FAMILY, not by row.
-**The constructor-input trap bit a third time and cost nothing**, because (P18.54) put the rule in
-the queue item: six more fields turned out to be declared below the construction site, where an
-input captures null, so all became ambient reads. **A third JVM-name-mangling mechanism turned up**
-— `SymbolFlags` is a VALUE class, so `lookupInEnclosingNamespaces` compiles as
-`lookupInEnclosingNamespaces-bd7vo6s`; like `internal`'s `$<module>` suffix it makes a receipt grep
-read zero rows and look like "never compiled". **RECEIPTS COVER THE WHOLE OF STEP 4**: all 420
-per-pass `--passTiming` rows and the 46 diagnostics byte-identical between PRE-4a pristine and the
-finished seam — one receipt for all 1,941 moved lines; PrintInlining ZERO refusals on every hop with
-both STABLE standing hot sites identical to pristine; ab-interleaved +0.15% B-wins-4/6
-NOISE-DOMINATED; cost_gate and huge_methods exit 0; warning-clean. Verbatim proved twice by two
-methods for the third round running. Next per the design's Stage-0 order: the RELATER out of
-`checkTypeRelatedTo` into the `TypeRelationCache.kt` seam row 2 already named.

@@ -62665,3 +62665,61 @@ TYPE-position `Mid.FAR.EK.Span` reads TS2694 there while the identical shape thr
 divergence forced one pin to take its annotation through the direct import, and is now a CLAUDE.md
 entry.
 
+
+<!-- archived 2026-09-10 by (P18.60) -->
+### Round (P18.50) — the class-member definite-assignment path exists ((CHK.112)(a)), and the missing plumbing was wrong in BOTH directions (2026-09-08)
+
+**Suite 18,375 → 18,413 / 0 / 3** — 38 pins in the new `Ts2454ClassMemberInitializerTest`, plus one
+countdown pin INVERTED with transcripts. Grid **8 × added=0 removed=0**, re-run INDEPENDENTLY;
+`spine_closure_audit.py` exit 0 (mandatory — two new `spineDaEnterNode` arms), `cost_gate.py` exit 0
+(largest delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean under `--rerun-tasks`.
+
+**(CHK.112)(a) CLOSED, and the strongest evidence is that the SAME missing plumbing was wrong in BOTH
+DIRECTIONS** — 11 missing rows (a bare identifier, an expression- and a block-bodied arrow, a
+function expression, an IIFE, an object literal, a computed member name and a `static { }` block, in
+a class DECLARATION and a class EXPRESSION alike) **and 6 ours-only FALSE POSITIVES** (a method, a
+property initializer, a static block, an arrow property, an accessor or a class-expression property
+that ASSIGNS the variable did not suppress a sibling closure's read). (CHK.110)(a) found its defect
+the same way; a shape that fails both ways is the cheapest attribution there is, and it is free to
+look for.
+
+**IT WAS TWO INDEPENDENT MECHANISMS, NOT ONE.** The reach classifier never gave a `PropertyDeclaration`
+under a class *declaration* a status — so (CHK.110)(b)'s handler, correct in itself, saw an empty leak
+there — **and** nothing anywhere walked a property initializer that is a plain expression
+(`checkUsesOfUninitialized`'s `ClassDeclaration` arm walks heritage clauses and nothing else, and
+`findUninitializedRefs` has no `ClassExpression` arm at all). Arms a1 and a6 separate them cleanly.
+
+**THE ITEM'S OWN HEADLINE FIXTURE IS SILENT FOR A SECOND, UNRELATED REASON, AND THAT WOULD HAVE READ
+AS AN INERT FIX.** `SpineDaFrame.enableLeak` is `false` at file level by design ("a file-level `let`
+may be assigned externally"), so a file-level `let` never leaks into ANY nested function — class or
+not — and both references do not share the conservatism. Taking the item's example literally measures
+no change on a correct fix. **Every fixture and pin in this round is function-scoped for that
+reason**, and it is now a CLAUDE.md entry: vary the scope before believing any TS2454 repro.
+
+**THE FOURTH COUNTDOWN PIN IN FIVE ROUNDS, AND THE PUREST ONE YET.** `Inv4SpineBatch25Test` carried
+`a class-expression property initializer arrow is reached with the leak` (row FIRES) directly beside
+`negative control - a class-DECLARATION property initializer arrow is unreached` (row does NOT) under
+a section header calling the difference a "reach quirk". Both references report BOTH spellings at the
+same position (transcripts in the pin's KDoc), so **the pair was a written record of our own
+asymmetry and the "negative control" was the defect**. Inverted to match its twin; the section header
+and the class KDoc's "reach quirks pinned as negative controls" list were fixed too — three places,
+which is the point: **a comment naming a quirk outlives the pin and misleads the next reader.**
+
+**THE SWEEP WAS DONE AGAINST THE ORACLE, NOT BY READING.** 49 `@Test` blocks mention TS2454 with a
+class-ish fixture; 11 are pre-existing and 4 could touch the new path. All four were run through both
+references — three are green FOR THE RIGHT REASON, one is unreachable (it asserts TS2347). Two extra
+fixtures were then BUILT to test the at-risk static-initializer suppression at function scope
+(`assumeInitialized`'s outer-variable rule): both references report TS2448 without TS2454 and we
+match, including the sharpest shape — a static initializer reading a `let` declared LATER.
+
+**ARMS — 11, ALL DISCRIMINATING, NONE BLIND OR REDUNDANT.** a3/a5 are a round-927 PAIR with identical
+2-test RED sets (two layers on one property: a3 stops the frame opening, a5 opens it with an empty
+leak). **a6/a7 are the mask/closure pair** and a7 changes only `SpineDispatch.kt`, so its
+`Checker.class` sha is UNCHANGED — the handler is present and unreachable — and
+`spine_closure_audit.py` correctly FAILS under it, a second independent instrument on that arm.
+
+**REFUSED ON MEASUREMENT, NOT TASTE**: using the frame's live set for the member walk (arm a8 is the
+receipt — it breaks three shapes both references are silent about), and adding a `ClassDeclaration`
+arm to `collectClosureAssignedNames` (it would silence two shapes both references report). Three
+residues measured and left open are queued as **(CHK.115)**.
+

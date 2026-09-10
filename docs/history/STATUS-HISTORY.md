@@ -2583,3 +2583,24 @@ patched the wrong layer; the landed fix is the spread contribution inside round 
 20-second probes settled what three readings had not. 12 pins, all read from pristine; grid
 **8 × added=0 removed=0**; `cost_gate.py` exit 0 (`typeOfExpr.calls` **+0.07%** = 445 spread
 expressions no longer skipped, rebaselined in this commit); `huge_methods.py --fail-over 0` exit 0.
+
+<!-- archived 2026-09-10 by (P18.60) -->
+**(P18.55) — (INV.0) STEP 4 IS COMPLETE: `NameResolver.kt` IS 2,284 LINES AND `Checker.kt` LOST 1,941, 18,484 / 0 / 3 (2026-09-09).**
+4b-ii moved the namespace / heritage / type-name group (19 functions, 2 fields) VERBATIM, closing
+the seam; ledger row 6. `Checker.kt` 198,781 → **198,022**; `Checker.<init>` 5,656 → 5,634.
+**THE AMBIENT ROW GETS BETTER AS A FAMILY COMPLETES, AND THIS ROUND MEASURED IT**: 4b-ii ABSORBS
+four of the reads rows 4 and 5 recorded, because those functions now live inside the collaborator
+— net **26 checker reads, NO writes, for 2,284 lines**. So an intermediate row's ambient count is
+the WORST that family will look, and the ledger should be read by FAMILY, not by row.
+**The constructor-input trap bit a third time and cost nothing**, because (P18.54) put the rule in
+the queue item: six more fields turned out to be declared below the construction site, where an
+input captures null, so all became ambient reads. **A third JVM-name-mangling mechanism turned up**
+— `SymbolFlags` is a VALUE class, so `lookupInEnclosingNamespaces` compiles as
+`lookupInEnclosingNamespaces-bd7vo6s`; like `internal`'s `$<module>` suffix it makes a receipt grep
+read zero rows and look like "never compiled". **RECEIPTS COVER THE WHOLE OF STEP 4**: all 420
+per-pass `--passTiming` rows and the 46 diagnostics byte-identical between PRE-4a pristine and the
+finished seam — one receipt for all 1,941 moved lines; PrintInlining ZERO refusals on every hop with
+both STABLE standing hot sites identical to pristine; ab-interleaved +0.15% B-wins-4/6
+NOISE-DOMINATED; cost_gate and huge_methods exit 0; warning-clean. Verbatim proved twice by two
+methods for the third round running. Next per the design's Stage-0 order: the RELATER out of
+`checkTypeRelatedTo` into the `TypeRelationCache.kt` seam row 2 already named.
