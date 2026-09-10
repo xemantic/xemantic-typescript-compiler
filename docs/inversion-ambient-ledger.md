@@ -625,6 +625,16 @@ row; and `symbolsInScope` opens LATER than `resolveName`, because an enumeration
 also read `existing`. A refusal that misstates its own blocker is worse than no refusal:
 it makes the row look like a binder problem when it is a composition problem.
 
+**AND THE ONE QUESTION STAGE 3 WAS UNSIZED ON IS ANSWERED HERE.** `getTypeOfSymbol` /
+`getDeclaredTypeOfSymbol` answer correctly for a scope-space `Interface`, `Class`,
+`Function` and `Variable` symbol — not only for the `Enum` round 748 built a
+transient-symbol route for, and the `TypeAlias` read from its declaration. Measured
+2026-09-10 and pinned. That is worth a row of its own because of what it REMOVES from the
+next arc's estimate: had the answer been no, every consumer of a scope-space symbol would
+have needed the transient route and that would be Stage 3's first commit. It does not, so
+a resolution-order change can hand these symbols straight to the type system and the only
+thing left to size is the ~357-reader blast radius.
+
 **THE DECISION THIS ROW RECORDS.** Step 9 asked which of two directions to take. Option
 (a), the check passes, is where the LINES are — 96,830 of 191,499 attributed lines,
 50.6% — and where the seams are not: `cmam*` 83 ambient reads, `caas*` 59, the type-node

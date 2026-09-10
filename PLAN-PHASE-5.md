@@ -1905,11 +1905,15 @@ where the order sends you.
   **The prize, measured 2026-09-10 against tsgo 7.0.2 on a function-body-top shape: 1
   ours-only TS2353 removed and 4 true rows gained for interface/class/type/function, plus
   the enum VALUE position's ours-only TS2339** (round 748 closed the TYPE half only).
-  **DO ONE PROBE FIRST, it is unverified and it sizes the rest**: does `getTypeOfSymbol`
-  answer correctly for a scope-space `Class`/`Interface`/`Function` symbol? Precedent
-  exists only for `Enum` (round 748's transient-symbol route) and, by declaration-read, for
-  `TypeAlias`. If it does not, every consumer of a scope-space symbol needs the transient
-  route and that is the arc's first commit rather than its last.
+  **THAT PROBE IS DONE — MEASURED 2026-09-10 AND THE ANSWER IS YES**, so the arc does NOT
+  have to start with a transient-symbol route. `getTypeOfSymbol` / `getDeclaredTypeOfSymbol`
+  answer correctly for a scope-space `Interface` (`Shape`/`Shape`), `Class` (`Cls`/`Cls`),
+  `Function` (`(a: number) => string` / `any`) and `Variable` (`1` / `any`) — the `any`
+  halves being right, since a value symbol has no declared TYPE. Pinned as
+  `a scope space symbol is a first class symbol to the type system` in
+  `LexicalScopeResolverTest`, whose arm is in `Checker.getDeclaredTypeOfSymbol` rather than
+  in the resolver. **So a resolution-order change can hand these symbols straight to the
+  type system**, and what remains to be sized is the ~357-reader blast radius alone.
   **And the two oracle rows are NOT unblocked by this alone** — `TypeOracle`'s corrected
   refusals name what each still needs: a composed resolver plus a `meaning` parameter for
   `resolveName`, and additionally an `existing`-reading enumeration for `symbolsInScope`,

@@ -71,6 +71,13 @@ import kotlin.test.Test
  *  4. `an uncapped walk reaches a deeply nested reference` — replace `hopCap == 0 ||`
  *     with `false ||`, i.e. honour the cap always, and pass a cap of 1 from the pin's
  *     own call. Only this pin varies the cap.
+ *  6. `a scope space symbol is a first class symbol to the type system` — **a
+ *     MEASUREMENT pin, and its arm is NOT in this class**: make
+ *     `Checker.getDeclaredTypeOfSymbol` refuse a negative-id symbol
+ *     (`if (symbolIn.id < 0) return anyType` at its head). It is the only pin here that
+ *     asks the type system anything, so no arm inside `symbolAt` can separate it and no
+ *     arm inside `getDeclaredTypeOfSymbol` touches the other five.
+ *
  *  5. `only the lexical bindings are visible and never the aliased existing table` —
  *     read `existing` as a fallback (`scopes[id]?.symbols?.get(name)` →
  *     `scopes[id]?.let { it.symbols[name] ?: it.existing?.get(name) }`). This is round
@@ -250,5 +257,55 @@ class LexicalScopeResolverTest {
         assert(memberNameOf(free) == "f")
         assert(bound == null)
         assert(boundIsInExisting)
+    }
+
+    /**
+     * (INV.0) step 9's one UNVERIFIED question, measured 2026-09-10 and answered YES:
+     * `getTypeOfSymbol` / `getDeclaredTypeOfSymbol` answer correctly for a scope-space
+     * `Class` / `Interface` / `Function` symbol, not only for the `Enum` round 748 had a
+     * transient-symbol route for and the `TypeAlias` that is read from its declaration.
+     *
+     * **This sizes Stage 3 and is why it is pinned rather than left in a note.** If the
+     * answer had been no, every consumer of a scope-space symbol would have needed the
+     * transient route and that would be the arc's FIRST commit; it does not, so a
+     * resolution-order change can hand these symbols straight to the type system.
+     *
+     * `declaredOf` is `any` for the function and the `const` and that is CORRECT, not a
+     * gap: a value symbol has no declared TYPE, which is what makes the pair worth
+     * asserting together — the type half must answer and the declared half must not.
+     */
+    @Test
+    fun `a scope space symbol is a first class symbol to the type system`() {
+        val fileName = "/p/t.ts"
+        val file = Parser(
+            """
+            function holder() {
+                interface Shape { s: number }
+                class Cls { c: string = "x" }
+                function fn(a: number): string { return "" }
+                const v = 1
+            }
+            """.trimIndent(),
+            fileName,
+        ).parse()
+        val result = Binder(CompilerOptions()).bind(file)
+        val resolver = LexicalScopeResolver(mapOf(fileName to result))
+        val scopes = resolver.scopesOfOwningFile(file)!!
+        val checker = Checker(CompilerOptions(), listOf(result))
+        val at = firstIdentifier(file, "v")
+        val rendered = listOf("Shape", "Cls", "fn", "v").map { name ->
+            val sym = resolver.symbolAt(at, name, scopes)
+            val declared = sym?.let { checker.typeToString(checker.getDeclaredTypeOfSymbol(it)) }
+            val of = sym?.let { checker.typeToString(checker.getTypeOfSymbol(it)) }
+            "$name typeOf=$of declaredOf=$declared"
+        }
+        assert(
+            rendered == listOf(
+                "Shape typeOf=Shape declaredOf=Shape",
+                "Cls typeOf=Cls declaredOf=Cls",
+                "fn typeOf=(a: number) => string declaredOf=any",
+                "v typeOf=1 declaredOf=any",
+            ),
+        )
     }
 }
