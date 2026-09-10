@@ -19,7 +19,7 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
-**(P18.62) — (INV.0) STEP 10a: THE B83.5 *TYPE* SPACE, AND THE ARC IS FUNNEL-SHAPED RATHER THAN RADIUS-SHAPED, 18,528 / 0 / 3 (2026-09-10).**
+**(P18.62) — (INV.0) STEP 10a: THE B83.5 *TYPE* SPACE, AND THE ARC IS FUNNEL-SHAPED RATHER THAN RADIUS-SHAPED, 18,529 / 0 / 3 (2026-09-10).**
 The round-748 scope-space consult widened from `enum`-only to the whole TYPE space —
 `class`/`interface`/`type`/`enum` — at BOTH sites that resolve a bare type name.
 **THE ITEM SIZED THE ARC BY THE WRONG QUANTITY**: "~357 `globals[` readers downstream" is a
@@ -47,7 +47,15 @@ DIAGNOSTIC (`println` is swallowed by `runCli`), after delta-debugging showed th
 three ingredients at once. **A COUNTDOWN PIN FIRED AS DESIGNED** (round 748 wrote it saying "a
 future widening has to change this pin on purpose") and **a vacuity guard caught its second
 blind pin**, revealing that `arrayElementUnionAlias`' B83.5 workaround is now unreachable for
-the shape it was written for. Grid 8×`added=0 removed=0`, cost_gate exit 0 (`globals.lookups`
+the shape it was written for. **THE BEFORE/AFTER RECEIPT IS THE SAME 129-CELL MATRIX
+RE-RUN AGAINST THE LANDED BINARY** (reference arms reused verbatim, snapshot sha256 asserted at
+both ends): **9 cells FIXED, 9 IMPROVED, 0 REGRESSED — −9 ours-only rows, −18 missing rows,
+every row of it inside the TYPE half**, both bound controls byte-identical and the VALUE half
+numerically untouched. The three nesting sites move IDENTICALLY, which is the signature of a
+fix at the resolution site rather than a syntactic special case; shadow resolution went 7/42 →
+16/42 agreeing with the references. **The one TYPE cell family it did NOT move is a QUALIFIED
+reference** (`ZzzE.ZInner`) — `resolveQualifiedName` is a fourth type-name path, now written
+into 10c. **ALL EIGHT ABLATION ARMS RUN, union 9 of 28 pins, and three predictions wrong**: the GATE and the FLAG-MASK arms redden IDENTICAL sets (round 927's PAIR — either alone disables the whole consult), round 748's ORDER arm is UNDISCRIMINATED because this step gave `getTypeFromTypeReference` its own hoist, and the `keyof (X & T)` arm read 0 RED until a pin was ADDED for it — without which that guard would have read as redundant and been deletable. Grid 8×`added=0 removed=0`, cost_gate exit 0 (`globals.lookups`
 −0.23%, `globals.misses` −0.24% — the consult answering before the miss), huge_methods exit 0
 (842 classes), warning-clean.
 

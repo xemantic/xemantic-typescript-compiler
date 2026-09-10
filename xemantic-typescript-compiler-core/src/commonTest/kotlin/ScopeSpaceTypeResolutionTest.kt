@@ -61,34 +61,43 @@ import kotlin.test.Test
  *
  * ## The ablations, one per pin, each measured
  *
- *  1. `an interface at the top of a function body types an annotation` — put the GATE
- *     back to the round-748 one: `if (name !in checker.lexicalBlockScopedTypeNames)` →
- *     `if (name !in checker.lexicalBlockScopedEnumNames)` in
- *     [NameResolver.lexicalTypeSymbolForNode]. Everything scope-space that is not an
- *     `enum` disappears from the gate.
- *  2. `a class at the top of a function body types an annotation` — put the FLAG MASK
- *     back: `flags = SymbolFlags.ScopeTypeDeclaration` → `flags = SymbolFlags.Enum` in
- *     the same function. The gate still admits the name and the ascent still finds the
- *     scope; only the kind test refuses it. This is the arm that separates the two
- *     halves of the widening, which one arm cannot.
- *  3. `an inner declaration wins over a same named outer one` — the only pin that
- *     declares one name at TWO levels, so the only one that can see a resolution-ORDER
- *     defect rather than a miss. Arm: make the consult a FALLBACK instead of first, by
- *     moving `lexicalTypeSymbolForNode(node, node.text)?.let { return it }` in
- *     [NameResolver.resolveTypeNameToSymbol] below the `lookupPerFileForNode` call.
- *  4. `an enclosing namespace does not displace a function body declaration` — the
- *     only pin with a namespace. Arm: drop the
- *     `lexicalTypeSymbolForNode(it, it.text) ?:` leg from
- *     [Checker.getTypeFromTypeReference], leaving `lookupInEnclosingNamespaces` first
- *     as it was before this step. Pin 3's arm does NOT redden this one, and this arm
- *     does not redden pin 3 — the two consults are at different sites.
- *  5. `a conventionally bound name is untouched by the scope space consult` — the
- *     CONTAINMENT control, and it is the reason this change cannot move an existing
- *     answer: `declareLexical` refuses any name the main binder already bound in that
- *     container, so `scope.symbols` never holds one. Arm: read
- *     [LexicalScope.existing] as a fallback inside `LexicalScopeResolver.symbolAt`
- *     (round 748's forbidden read) — only this pin has a file-level declaration whose
- *     name a function body re-uses in an INCOMPATIBLE way.
+ * All eight were RUN (`scripts/inv0s10-ablate.py`, one mistake at a time against a
+ * sha256-verified snapshot), and what they measured is recorded here rather than
+ * predicted — three of the predictions below were WRONG.
+ *
+ *  * **A1, the STAMP** (`indexSourceFile` back to `type`/`enum` only) — 5 RED, and the
+ *    only arm that reaches [LexicalScopeDeferralTest]'s projection pin. Note it does NOT
+ *    redden the `type alias` pin, which is the internal consistency check: `type` was
+ *    already stamped before this round.
+ *  * **A2, the GATE** (back to `lexicalBlockScopedEnumNames`) and **A3, the FLAG MASK**
+ *    (back to `SymbolFlags.Enum`) — 5 RED each, and the two red sets are IDENTICAL.
+ *    They were predicted to separate the two halves of the widening and they do not:
+ *    either one alone disables the whole thing, so no fixture can tell them apart. That
+ *    is round 927's PAIR, recorded rather than claimed — both are load-bearing, and
+ *    neither has a pin of its own.
+ *  * **A4, the ORDER at [NameResolver.resolveTypeNameToSymbol]** (consult moved below
+ *    `lookupPerFileForNode`) — **0 RED, UNDISCRIMINATED**, and the reason is A5: this
+ *    step gave [Checker.getTypeFromTypeReference] its own hoist, which serves every
+ *    TYPE REFERENCE before that function's arm is reached. Round 748's ordering is
+ *    therefore redundant *for type references* and is not redundant in general — that
+ *    function has four other callers this class does not reach. Recorded as an
+ *    undiscriminated arm, not as a passing pin.
+ *  * **A5, the ORDER at [Checker.getTypeFromTypeReference]** (drop the hoist) — 1 RED,
+ *    and it is exactly the namespace pin, because that is the one shape where the
+ *    enclosing-namespace consult has an answer to win with. A4 and A5 together are one
+ *    observable at two layers.
+ *  * **A6, round 748's forbidden [LexicalScope.existing] read** — 1 RED, uniquely
+ *    [LexicalScopeResolverTest]'s own pin. It does NOT redden this class's containment
+ *    control below: in that fixture the `existing` hit and the correct answer are the
+ *    SAME symbol, so no compile-level fixture can see the difference. The rule is pinned
+ *    at the resolver level, where it is a value.
+ *  * **A7, `keyof errorType` back to `stringType`** — 1 RED, unique. Its first fixture
+ *    was a hand-reduced one and read 0 RED while the corpus baseline went red; the pin
+ *    now carries the reproducing source verbatim.
+ *  * **A8, the `keyof (X & T)` arm disabled** — 1 RED, unique, and it had to be ADDED:
+ *    the arm read 0 RED against the original pin set, and a CLI probe on that very
+ *    binary showed the false row returning. Without its pin the guard would have read
+ *    as redundant and could have been deleted.
  */
 class ScopeSpaceTypeResolutionTest {
 
@@ -230,10 +239,15 @@ class ScopeSpaceTypeResolutionTest {
      * IS the correct open domain. Making the type real narrowed a correct superset into a
      * wrong subset.
      *
-     * The fixture is `keyRemappingKeyofResult`'s shape reduced to its three necessary
-     * ingredients (delta-debugged: removing ANY of them makes it silent on both binaries)
-     * — a cyclic mapped type that re-enters `keyof Orig` while `Orig` is in flight, which
-     * is what makes `Orig` answer `errorType`. Both references are silent here.
+     * **The fixture is `tests/cases/compiler/keyRemappingKeyofResult.ts` VERBATIM, and a
+     * reduced one was tried and was BLIND.** Delta-debugging says the two rows need three
+     * ingredients simultaneously — the file-level `Oops`/`x` block, the INNER `Remapped`
+     * mapped type and the inner `Oops`/`x` block — because what makes `Orig` answer
+     * `errorType` is a cyclic mapped type re-entering `keyof Orig` while `Orig` is in
+     * flight. A hand-reduced version carrying all three still did not reproduce under the
+     * corpus harness, and the ablation caught it: arm A7 (this fix reverted) left the
+     * reduced pin GREEN while the corpus baseline went RED. Keeping the source verbatim is
+     * what makes this pin an instrument rather than a decoration.
      */
     @Test
     fun `keyof over an unresolved type does not manufacture a closed key domain`() {
@@ -241,22 +255,116 @@ class ScopeSpaceTypeResolutionTest {
             """
             const sym = Symbol("")
             type Orig = { [k: string]: any, str: any, [sym]: any }
+
+            type Okay = Exclude<keyof Orig, never>
+            // type Okay = string | number | typeof sym
+
             type Remapped = { [K in keyof Orig as {} extends Record<K, any> ? never : K]: any }
+            /* type Remapped = {
+                str: any;
+                [sym]: any;
+            } */
+            // no string index signature, right?
+
             type Oops = Exclude<keyof Remapped, never>
             declare let x: Oops;
             x = sym;
+            x = "str";
+            // type Oops = typeof sym <-- what happened to "str"?
+
+            // equivalently, with an unresolved generic (no `exclude` shenanigans, since conditions won't execute):
+            function f<T>() {
+                type Orig = { [k: string]: any, str: any, [sym]: any } & T;
+    
+                type Okay = keyof Orig;
+                let a: Okay;
+                a = "str";
+                a = sym;
+                a = "whatever";
+                // type Okay = string | number | typeof sym
+    
+                type Remapped = { [K in keyof Orig as {} extends Record<K, any> ? never : K]: any }
+                /* type Remapped = {
+                    str: any;
+                    [sym]: any;
+                } */
+                // no string index signature, right?
+    
+                type Oops = keyof Remapped;
+                let x: Oops;
+                x = sym;
+                x = "str";
+            }
+
+            // and another generic case with a _distributive_ mapping, to trigger a different branch in `getIndexType`
+            function g<T>() {
+                type Orig = { [k: string]: any, str: any, [sym]: any } & T;
+    
+                type Okay = keyof Orig;
+                let a: Okay;
+                a = "str";
+                a = sym;
+                a = "whatever";
+                // type Okay = string | number | typeof sym
+
+                type NonIndex<T extends PropertyKey> = {} extends Record<T, any> ? never : T;
+                type DistributiveNonIndex<T extends PropertyKey> = T extends unknown ? NonIndex<T> : never;
+    
+                type Remapped = { [K in keyof Orig as DistributiveNonIndex<K>]: any }
+                /* type Remapped = {
+                    str: any;
+                    [sym]: any;
+                } */
+                // no string index signature, right?
+    
+                type Oops = keyof Remapped;
+                let x: Oops;
+                x = sym;
+                x = "str";
+                x = "whatever"; // error
+            }
+
+            export {};
+            """,
+            directives = "// @target: es6",
+        ).filter { it.code == 2322 }
+        // Both references report exactly ONE row here, at the LAST line of `g`
+        // (`x = "whatever"`). The two rows this pin exists for sat at `a = sym` inside
+        // `f` and `g`, where `Okay` is `keyof Orig` and `Orig` did not resolve — put
+        // `keyof errorType` back to `stringType` and they return.
+        assert(d.map { it.line } == listOf(69))
+    }
+
+    /**
+     * The SIBLING of the pin above, and a SECOND shape whose key domain is open: an
+     * INTERSECTION one of whose constituents is a bare type parameter. `keyof (X & T)`
+     * cannot be enumerated here — tsc defers it as an `Index` type and we cannot — so
+     * answering the closed domain of the half we CAN see is the same round-463 error,
+     * and it produces the same false TS2322 at `a = sym`.
+     *
+     * It needs its own pin because it is a genuinely different input: `Orig` RESOLVES
+     * here (to a `Type.Intersection`), where the fixture above makes it `errorType`. The
+     * ablation is what established that — arm A8 (this arm disabled, the `errorType` arm
+     * intact) leaves every other pin in this class GREEN while re-emitting the row, so
+     * without this pin the guard would read as redundant and could be deleted.
+     *
+     * `@useRealLibs` is load-bearing: `Symbol("")` must produce a real `unique symbol`,
+     * and the embedded lib does not declare `Symbol`.
+     */
+    @Test
+    fun `keyof over an intersection with a type parameter does not close the key domain`() {
+        val d = diagnose(
+            """
+            const sym = Symbol("")
             export function outerFn<T>(): void {
                 type Orig = { [k: string]: any, str: any, [sym]: any } & T;
                 type Okay = keyof Orig;
                 let a: Okay;
                 a = sym;
-                type Remapped = { [K in keyof Orig as {} extends Record<K, any> ? never : K]: any }
-                type Oops = keyof Remapped;
-                let y: Oops;
-                y = sym;
+                a = "str";
             }
             """,
-            directives = "// @strict: false\n// @target: es6",
+            directives = "// @strict: true\n// @target: es2020\n// @useRealLibs: true",
         ).filter { it.code == 2322 }
         assert(d.isEmpty())
     }
@@ -269,8 +377,13 @@ class ScopeSpaceTypeResolutionTest {
      * NOTHING named `ZzzShape`, so the file-level interface must still answer — and it
      * must answer with its OWN member, which is what the mis-assignment prints.
      *
-     * Without this pin the change looks indistinguishable from one that lets scope
-     * space shadow the world.
+     * **NO ARM OF ITS OWN, MEASURED: it is a NEGATIVE control and stays green under all
+     * eight.** A6 (the forbidden [LexicalScope.existing] read) was expected to redden it
+     * and does not, because in this fixture the `existing` hit IS the file-level symbol —
+     * the same answer by a wrong route, which no compile-level assertion can see. The
+     * `existing` rule is pinned where it is a VALUE, in [LexicalScopeResolverTest]. What
+     * this pin is for is the other direction: it fails if the widening ever starts letting
+     * scope space shadow a bound name.
      */
     @Test
     fun `a conventionally bound name is untouched by the scope space consult`() {

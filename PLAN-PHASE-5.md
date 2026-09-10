@@ -27,7 +27,7 @@ it is the live Phase 18 queue.
 
 ### Round (P18.62) — (INV.0) step 10a: the B83.5 TYPE space, and the arc is FUNNEL-shaped rather than RADIUS-shaped (2026-09-10)
 
-**Suite 18,520 → 18,528 / 0 / 3** (+8 pins). `Checker.kt` 191,506 → 191,591 (+85 — this
+**Suite 18,520 → 18,529 / 0 / 3** (+9 pins). `Checker.kt` 191,506 → 191,591 (+85 — this
 step is a semantic change, not an extraction; the shrinkage dashboard is unmoved in kind).
 **8-profile grid `added=0 removed=0` on all eight**, `cost_gate.py` exit 0, `huge_methods.py`
 exit 0 (842 classes), warning-clean.
@@ -121,6 +121,53 @@ survived a round — a `--rerun-tasks` is what sees them.
 names that used to fall through to a miss — against `mapped.keyed` **+1.18%** and
 `typeOfExpr.distinct` +0.06%, which are the real resolutions where there used to be `any`. All
 inside ±2%, so no rebaseline.
+
+**ALL EIGHT ABLATION ARMS WERE RUN, ONE MISTAKE AT A TIME AGAINST A sha256-VERIFIED SNAPSHOT
+(`scripts/inv0s10-ablate.py`), AND THREE OF THE ROUND'S OWN PREDICTIONS WERE WRONG.** Union
+**9 of the 28 pins** in the three classes. **A2 (the name GATE back to `lexicalBlockScopedEnumNames`)
+and A3 (the FLAG MASK back to `SymbolFlags.Enum`) redden IDENTICAL 5-pin sets** — they were
+predicted to separate the two halves of the widening and they cannot, because either one alone
+disables the whole consult; recorded as round 927's PAIR rather than smoothed into "one is
+redundant". **A4 (round 748's ORDER at `resolveTypeNameToSymbol`) is 0 RED, UNDISCRIMINATED**,
+and the reason is A5: this step gave `getTypeFromTypeReference` its own hoist, which serves
+every TYPE REFERENCE before that function's lexical-first arm is reached — so round 748's
+ordering is redundant *for type references* and is not redundant in general (four other callers
+this class does not reach). **A1 (the STAMP) is the only arm reaching `LexicalScopeDeferralTest`'s
+projection pin, and it does NOT redden the `type alias` pin** — the internal consistency check
+that `type` was stamped before this round. A5/A6/A7/A8 are 1 RED each and each is unique.
+**A8 had to be ADDED**: the `keyof (X & T)` arm read 0 RED against the original pin set while a
+CLI probe on that very binary showed the false row returning, so without its own pin that guard
+would have read as redundant and been deletable — the 9th pin, and the reason the suite is
+18,529 rather than 18,528. **The containment control (`a conventionally bound name is untouched`)
+stays GREEN under all eight, measured**: A6 (round 748's forbidden `LexicalScope.existing` read)
+was expected to redden it and does not, because in that fixture the `existing` hit IS the
+file-level symbol — the same answer by a wrong route, which no compile-level assertion can see.
+That rule is pinned where it is a VALUE, in `LexicalScopeResolverTest`.
+
+**THE BEFORE/AFTER RECEIPT IS THE SAME 129-CELL MATRIX RE-RUN AGAINST THE LANDED BINARY, WITH
+THE REFERENCE ARMS REUSED VERBATIM AND THE SNAPSHOT sha256 ASSERTED AT BOTH ENDS: 9 cells
+FIXED, 9 IMPROVED, **0 REGRESSED** — −9 ours-only rows and −18 missing rows, and EVERY ROW OF
+IT INSIDE THE TYPE HALF.** Both bound controls (file level 15/15, namespace body 28) are
+byte-identical, and the VALUE half is numerically untouched (19 ours-only / 46 missing before
+and after), which is what "VALUE position was not touched" predicts and is the arm that makes
+the improvement attributable. **The three nesting sites move IDENTICALLY** (−3 missing on each
+unique variant, −3/−3 on each shadowing one) — the signature of a fix at the RESOLUTION site
+rather than at a syntactic special case. Zero-regression was checked three ways rather than by
+the verdict tag: per-cell monotonicity, no new row absent from pristine, no pristine row
+dropped. **Shadow resolution went 7/42 → 16/42 agreeing with the references, INNER answers
+1 → 10, and no shadow cell flipped the wrong way.**
+
+**TWO RESIDUES THE RECEIPT NAMES PRECISELY, AND ONE THING IT DOES NOT COVER.** (i) The nine
+improved shadow cells each keep ONE missing row, and it is a different family: pristine adds
+`Property 'zzzOuter' does not exist on type 'X'` — the member-existence check on a
+block-scoped receiver, the `cmam` firewall. (ii) **An `enum` in TYPE position under the
+SHADOWING variant is UNCHANGED, because the probe is a QUALIFIED reference (`ZzzE.ZInner`)
+and `resolveQualifiedName` is a resolution path the widening never reaches** — ours resolves
+the OUTER enum where pristine resolves the INNER, an exact mirror image, and renders the
+namespace `'"a".ZzzE'` where pristine renders `'ZzzE'`. That is 10b/10c work and is now
+written into those items. (iii) **No fixture in the matrix uses `keyof`**, so neither the
+improvement nor the zero-regression result says anything about the `keyof errorType` fix —
+that one is carried by its own pin and the corpus.
 
 **RESIDUES STATED**: a named `ClassExpression`'s own name is not in the stamp (kind 63, outside
 the contiguous 23..26 range), so that population keeps exactly the resolution it had; heritage
@@ -1978,12 +2025,22 @@ where the order sends you.
   string = ZzzE.ZA` is silent at every B83.5 site, so round 748's closure is exactly half.
   **And a bound-site defect rides along and should be fixed with it: `typeof <a const>` is
   MISSING everywhere, including at file and namespace level.**
+  **MEASURED AFTER 10a (the same matrix re-run against the landed binary): the VALUE half is
+  numerically UNTOUCHED — 19 ours-only / 46 missing, before and after — so it is exactly this
+  item, and it is 32 of the 62 still-diverging B83.5 cells and 65 of the 122 residual rows.**
 
 - [ ] **(INV.0) STEP 10c — HERITAGE.** `NameResolver.resolveHeritageBaseSymbol` is a THIRD
   resolver (`lookupInEnclosingNamespaces ?: lookupPerFileForNode`, `NameResolver.kt:1955`)
   and reaches neither 10a's consult nor 10b's, so `class D extends ZzzBase` /
   `implements ZzzI` where the base is scope-space still answers the outer declaration or
   nothing. Small, and it is the last of the three TYPE-name funnels.
+  **AND A FOURTH TYPE-NAME PATH THE 10a RECEIPT FOUND, WHICH BELONGS HERE OR IN ITS OWN ITEM:
+  `NameResolver.resolveQualifiedName`.** A QUALIFIED reference to a scope-space declaration
+  (`ZzzE.ZInner`, an enum member) still answers the OUTER declaration where both references
+  answer the inner — an exact mirror image, ours reporting `has no exported member 'ZInner'`
+  where pristine reports `'ZOuter'`. It is the ONE TYPE-position cell family 10a did not move,
+  and it also carries a display divergence: we render the namespace `'"a".ZzzE'` where both
+  references render `'ZzzE'`.
 
 - [ ] **(INV.0) STEP 10d — THE TWO ORACLE ROWS**, which (P18.61) corrected and 10a does not
   unblock on its own: `TypeOracle.resolveName` needs a COMPOSED resolver plus a `meaning`
