@@ -1860,6 +1860,13 @@ internal class NameResolver(
      * (INV.0) step 10b's measured rule: the two spaces are disjoint, so a wrong-KIND hit
      * in type space is not a binding of the name, while in value space a `const` and a
      * nested `function` compete for it and the INNER one wins whichever kind it is.
+     *
+     * **And here it is a REDUNDANT GUARD for every mask this row documents, measured
+     * rather than argued**: 10b's consult filters to [SymbolFlags.ScopeValueDeclaration],
+     * which does not accept a variable, so the ascent had to be told to STOP at one; the
+     * oracle's mask is the SPACE, which accepts it, so the filter answers first. It is
+     * kept because the mask is a caller's parameter and a narrower one puts 10b's shape
+     * back — and recorded as redundant rather than pinned (round 808).
      */
     fun lexicalSymbolForOracle(node: Node, name: String, meaning: SymbolFlags): Symbol? {
         val scopes = lexicalResolver.scopesOfOwningFile(node) ?: return null

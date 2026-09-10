@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **191,691** lines (**−8,272 across (P18.53)-(P18.64)**; steps 10a-10c are SEMANTIC changes and ADD 85, 86 and 14, not extractions; 191,070 when
+extraction):** `Checker.kt` **191,724** lines (**−8,239 across (P18.53)-(P18.65)**; steps 10a-10d are SEMANTIC changes and ADD 85, 86, 14 and 33, not extractions; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -18,6 +18,38 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.65) — (INV.0) STEP 10d: THE ORACLE'S `resolveName` IS ANSWERED, AND THE ROW THAT OPENS LATER STAYS REFUSED, 18,546 / 0 / 3 (2026-09-10).**
+**THE REFUSAL WAS CORRECTED BEFORE IT WAS CLOSED, AND THAT IS WHY THIS WAS ONE ROUND AND NOT
+A STAGE**: until (P18.61) it blamed the retained tables for lacking the block-scoped
+population, and step 9 measured that they HOLD it — so what was missing was a COMPOSITION
+plus a `meaning` split, and 10a/10b/10c had already built every leg.
+`Checker.oracleResolveName` is three lines — the INV.2(c) ascent, `lookupInEnclosingNamespaces`,
+`lookupPerFileForNode`, each meaning-masked — **built out of the checker's OWN functions
+rather than beside them**, which is what keeps a post-hoc answer from drifting from what the
+walk did. It reaches the whole B83.5 population, a PARAMETER and a body-local `const`
+included, and answers the INNER of two same-named declarations. **THE ASCENT IS
+DELIBERATELY UN-GATED AND THE ABLATION PROVES IT MUST BE**: gating it on the program-wide
+name gate reddens exactly the pins that REMOVING the leg does, because that gate is a
+projection of six DECLARATION kinds and a parameter is not one. **A PIN WRITTEN AGAINST THE
+RESOLVED SYMBOL'S *TYPE* FAILED, AND THAT IS THE SECOND FINDING**: `const useLocal = collide`
+renders the FILE-LEVEL `collide`'s type at rest and an inferred return renders `any`, on a
+binary that resolves every symbol correctly — `typeOfSymbol` re-infers with no walk ambient
+installed, so **`resolveName` answers the SYMBOL and an un-annotated local's TYPE is
+`typeAt`'s answer**. **`symbolsInScope` STAYS REFUSED** because its reason is accurate: an
+ENUMERATION must also read `LexicalScope.existing`, the INV.3 question round 748's rule keeps
+out; its pin now asserts the refusal still NAMES that, so the two rows cannot be closed
+together by accident. **ABLATION: five arms, union 3 of 27, and THREE have no unique pin —
+recorded, not smoothed.** The leg-removed and leg-gated arms are a PAIR with an identical red
+set; the FALLBACK arm reddens a strict SUBSET whose survivor is the shadowing pin (round
+748's ordering law, a fourth time); and **`stopFlags` is 0 RED even after a pin was written
+FOR it** — 10b's consult filters to `ScopeValueDeclaration`, which does not accept a
+variable, so the ascent had to be told to STOP at one, while the oracle's mask is the SPACE,
+which accepts it: a REDUNDANT GUARD for every documented mask, kept because the mask is a
+caller's parameter. **TWO TEXTS CORRECTED BECAUSE THEY WERE FALSE** — `TypeOracle`'s class
+KDoc and `docs/type-oracle.md` § 3b both still said the retained tables leave block-scoped
+declarations unbound. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0
+(844 classes), warning-clean.
 
 **(P18.64) — (INV.0) STEP 10c: HERITAGE AND QUALIFIED NAMES, AND THE RESOLVER THE ITEM NAMED WAS NOT THE ONE THAT MATTERED, 18,541 / 0 / 3 (2026-09-10).**
 The item pointed at `NameResolver.resolveHeritageBaseSymbol`; **it was given the consult and
@@ -146,33 +178,4 @@ misstates its own blocker is worse than no refusal, because it sizes the next ro
 five ablation arms discriminate; **arm 1 reddens ALL FIVE and is recorded as not being a single-pin
 arm**. cost_gate exit 0, huge_methods exit 0 (842 classes), receipt now SEVEN binaries,
 warning-clean. **The one question Stage 3 was unsized on is also ANSWERED**: `getTypeOfSymbol`/`getDeclaredTypeOfSymbol` answer correctly for a scope-space `Interface`, `Class`, `Function` and `Variable` symbol, so that arc does NOT have to begin with a transient-symbol route (6th pin, arm in `Checker.getDeclaredTypeOfSymbol`).
-
-**(P18.60) — (INV.0) STEP 8: THE TYPE-CAPTURE FAMILY IS `CaptureRecorder.kt`, AND ITS AMBIENT ROW IS THE DESIGN'S OWN CLAIM AS A NUMBER, 18,514 / 0 / 3 (2026-09-10).**
-`Checker.kt` **194,631 → 191,540** (−3,091, the arc's largest single move); `CaptureRecorder.kt`
-3,214; ledger row 11. **Fifth extraction of the session.** **THE QUEUE ITEM'S OWN "OBVIOUS
-CANDIDATE" WAS A SCATTER AND THE CENSUS SAID SO IN ONE COMMAND** — the member-ACCESS family is
-eight neighbourhoods with no span — **and the same census found TYPE CAPTURE instead**: 103
-`typeCapture*`/`captured*` declarations of which 94 sit in one 3,120-line block. Three rounds
-running, the census has overturned the queue's guess. **61 AMBIENT READS AND 9 WRITES, THE ARC'S
-LARGEST ROW, AND IT IS THE FINDING RATHER THAN A DEBT**: fourteen of the reads and all nine writes
-are the WALK (`ctaFrames`, `currentFlowGraph`, `currentClassForThis`, `currentCheckFileName`,
-`spineCurrentScope`, `inAsyncFunctionBody`, `currentTypeParamScope`), and the writes are a
-save-and-restore sandwich reconstructing the ambient a node was reached under — moving the family
-does not make that explicit, it COUNTS it. **The OUT surface is the arc's cleanest by the opposite
-measure: 98 declarations move and 15 keep a caller.** **THE RECEIPT MUST BE THE CAPTURE CHANNEL,
-NOT THE PASS TABLE** ((INC.2): they are different resolvers) — **381,666 captured types and 360,917
-captured definitions with a per-arm DIGEST byte-identical across the move**, and the full-vs-narrow
-divergence census identical row for row; a trap that cost one 10-minute run is that the digest line
-sits ABOVE the driver's summary, so a `| tail -4` keeps the summary and throws the receipt away.
-The 488 deterministic `--passTiming` lines are byte-identical too, so that receipt now spans SIX
-binaries. **ALL EIGHT ABLATION ARMS REDDEN EXACTLY THEIR OWN PIN — the arc's first perfect
-8-for-8**; two of them are a PAIR over one dangling-`.`-at-EOF span, where the type table stays
-FIRST-wins while the member table takes its descendant exception. **Two candidates were dropped
-for a reason worth more than a ninth pin**: neither `activeParameter`'s rest-clamp nor a scope
-name's KIND can be given ground truth by any instrument here, and a pin whose expected value can
-only be read off the function it tests is not a pin. **PrintInlining says something real for the
-first time since step 4b-ii**: `typeCaptureVisit`, called per node from `spineEnterNode`, was a
-925-byte body refused six times as `too large` and its hop reads `inline ×6`. ab-interleaved
-+52 ms (+0.20%) B-wins-3/6 NOISE-DOMINATED; cost_gate exit 0, huge_methods exit 0 (841 classes,
-`Checker.<init>` 5,697 → **5,621**), warning-clean.
 

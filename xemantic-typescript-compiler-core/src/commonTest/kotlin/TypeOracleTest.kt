@@ -470,6 +470,59 @@ class TypeOracleTest {
         assert(b.oracle.resolveName("useNarrow", b.mainFile) == null)
     }
 
+    /**
+     * The INNERMOST value binding wins even when an OUTER one is a different KIND: an
+     * inner `const zzzX` shadowing an outer nested `function zzzX`, which is the shape
+     * (INV.0) step 10b needed its `stopFlags` axis for.
+     *
+     * **Measured: `stopFlags` is a REDUNDANT GUARD here and this pin does NOT
+     * discriminate it** — the arm dropping it reads 0 RED with this pin in place. The
+     * reason is the `meaning` mask: 10b's consult filters to
+     * [SymbolFlags.ScopeValueDeclaration], which does NOT accept a variable, so the ascent
+     * had to be told to STOP at one; the oracle's mask is the SPACE ([SymbolFlags.Value]),
+     * which accepts it, so the filter answers before the stop ever applies. The guard is
+     * kept because a host may pass a narrower mask — the parameter is a `SymbolFlags` —
+     * and it is recorded as redundant for the documented ones rather than claimed as
+     * pinned (round 808).
+     *
+     * What the pin DOES assert is the answer itself, which no other pin here covers: a
+     * value lookup in a nested block reaches the block's own `const` and not the enclosing
+     * function's same-named declaration.
+     */
+    @Test
+    fun `resolveName answers the innermost value binding across declaration kinds`() {
+        val built = typeOracleOf(
+            mapOf(
+                "/proj/stop.ts" to """
+                    export function zzzHost(): void {
+                        function zzzX(): number { return 1 }
+                        {
+                            const zzzX = "s"
+                            const zzzUse = zzzX
+                        }
+                    }
+                """.trimIndent(),
+            ),
+            CompilerOptions(),
+        )
+        val file = built.oracle.files.first { it.fileName == "/proj/stop.ts" }
+        val at = file.text.indexOf("zzzUse = zzzX") + "zzzUse = ".length
+        val location = nodeAt<Identifier>(file, at)
+        val sym = built.oracle.resolveName("zzzX", location, SymbolFlags.Value)
+        val decl = sym?.declarations?.firstOrNull()
+        assert(
+            (
+                when (decl) {
+                    null -> "<null>"
+                    is VariableDeclaration -> "VariableDeclaration"
+                    is FunctionDeclaration -> "FunctionDeclaration"
+                    else -> "other"
+                }
+                ) == "VariableDeclaration",
+        )
+        built.oracle.close()
+    }
+
     @Test
     fun `symbolsInScope is still refused and says why it opens later than resolveName`() {
         val b = build()

@@ -1,6 +1,36 @@
 **(P18.57) — (INV.0) STEP 6a: MEMBER RESOLUTION IS `MemberResolver.kt`, AND THE ITEM'S OPEN QUESTION IS ANSWERED, 18,493 / 0 / 3 (2026-09-09).**
 
 
+
+**(P18.60) — (INV.0) STEP 8: THE TYPE-CAPTURE FAMILY IS `CaptureRecorder.kt`, AND ITS AMBIENT ROW IS THE DESIGN'S OWN CLAIM AS A NUMBER, 18,514 / 0 / 3 (2026-09-10).**
+`Checker.kt` **194,631 → 191,540** (−3,091, the arc's largest single move); `CaptureRecorder.kt`
+3,214; ledger row 11. **Fifth extraction of the session.** **THE QUEUE ITEM'S OWN "OBVIOUS
+CANDIDATE" WAS A SCATTER AND THE CENSUS SAID SO IN ONE COMMAND** — the member-ACCESS family is
+eight neighbourhoods with no span — **and the same census found TYPE CAPTURE instead**: 103
+`typeCapture*`/`captured*` declarations of which 94 sit in one 3,120-line block. Three rounds
+running, the census has overturned the queue's guess. **61 AMBIENT READS AND 9 WRITES, THE ARC'S
+LARGEST ROW, AND IT IS THE FINDING RATHER THAN A DEBT**: fourteen of the reads and all nine writes
+are the WALK (`ctaFrames`, `currentFlowGraph`, `currentClassForThis`, `currentCheckFileName`,
+`spineCurrentScope`, `inAsyncFunctionBody`, `currentTypeParamScope`), and the writes are a
+save-and-restore sandwich reconstructing the ambient a node was reached under — moving the family
+does not make that explicit, it COUNTS it. **The OUT surface is the arc's cleanest by the opposite
+measure: 98 declarations move and 15 keep a caller.** **THE RECEIPT MUST BE THE CAPTURE CHANNEL,
+NOT THE PASS TABLE** ((INC.2): they are different resolvers) — **381,666 captured types and 360,917
+captured definitions with a per-arm DIGEST byte-identical across the move**, and the full-vs-narrow
+divergence census identical row for row; a trap that cost one 10-minute run is that the digest line
+sits ABOVE the driver's summary, so a `| tail -4` keeps the summary and throws the receipt away.
+The 488 deterministic `--passTiming` lines are byte-identical too, so that receipt now spans SIX
+binaries. **ALL EIGHT ABLATION ARMS REDDEN EXACTLY THEIR OWN PIN — the arc's first perfect
+8-for-8**; two of them are a PAIR over one dangling-`.`-at-EOF span, where the type table stays
+FIRST-wins while the member table takes its descendant exception. **Two candidates were dropped
+for a reason worth more than a ninth pin**: neither `activeParameter`'s rest-clamp nor a scope
+name's KIND can be given ground truth by any instrument here, and a pin whose expected value can
+only be read off the function it tests is not a pin. **PrintInlining says something real for the
+first time since step 4b-ii**: `typeCaptureVisit`, called per node from `spineEnterNode`, was a
+925-byte body refused six times as `too large` and its hop reads `inline ×6`. ab-interleaved
++52 ms (+0.20%) B-wins-3/6 NOISE-DOMINATED; cost_gate exit 0, huge_methods exit 0 (841 classes,
+`Checker.<init>` 5,697 → **5,621**), warning-clean.
+
 **(P18.59) — (INV.0) STEP 7: THE ENUM FAMILY IS `EnumSemantics.kt`, AND THE ARC'S AMBIENT TOTAL FALLS FOR THE FIRST TIME, 18,506 / 0 / 3 (2026-09-09).**
 `Checker.kt` **195,606 → 194,631**; `EnumSemantics.kt` 1,137; ledger row 10. **Fourth extraction
 of the session.** **THE CENSUS THE QUEUE ITEM DEMANDED DECIDED THE ROUND, AND TWO OF ITS THREE

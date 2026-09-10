@@ -25,6 +25,63 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.65) — (INV.0) step 10d: the oracle's `resolveName` is ANSWERED, and the row that opens later stays refused (2026-09-10)
+
+**Suite 18,541 → 18,546 / 0 / 3** (+5 pins, one refusal pin re-pointed). **8-profile grid
+`added=0 removed=0`**, `cost_gate.py` exit 0, `huge_methods.py` exit 0 (844 classes),
+warning-clean.
+
+**THE REFUSAL WAS CORRECTED BEFORE IT WAS CLOSED, AND THAT IS WHY THIS ROUND WAS ONE ROUND
+AND NOT A STAGE.** Until (P18.61) the row blamed the retained tables for lacking the
+block-scoped population; step 9 measured that they HOLD it — `BinderResult.lexicalScopes`
+is a full `forEachChild` walk over exactly it — so what was missing was a COMPOSITION plus
+a `meaning` split, and 10a/10b/10c had already built every leg. `Checker.oracleResolveName`
+is three lines: the INV.2(c) ascent, `lookupInEnclosingNamespaces`, `lookupPerFileForNode`,
+each meaning-masked, **built out of the checker's OWN functions rather than beside them** —
+which is what keeps a post-hoc answer from drifting from what the walk did, and is why leg
+2 works at rest at all ((CHK.76) made it position-derived).
+
+**THE ASCENT IS DELIBERATELY UN-GATED HERE, AND THE ABLATION SAYS SO**: gating it on the
+program-wide name gate (arm D5, which is what every other consult does) reddens exactly the
+same two pins as REMOVING the leg entirely (arm D1). The gate is derived from a projection
+of six DECLARATION kinds, so a PARAMETER and a `const` are not in it — and the oracle has
+neither of the two reasons the gate exists for (nothing here runs in a production compile,
+and the build that owns an oracle has recorded every file already).
+
+**A PIN WRITTEN AGAINST THE RESOLVED SYMBOL'S *TYPE* FAILED, AND THAT IS THE ROUND'S SECOND
+FINDING.** `const useLocal = collide` rendered `string` — the FILE-LEVEL `collide`'s type —
+and `f`'s inferred return rendered `any`, both against a binary that resolves every symbol
+correctly. `typeOfSymbol` re-infers an un-annotated initializer with NO walk ambient
+installed, which is round 911's shape and exactly the bin-A / bin-R boundary
+`TypeOracle`'s KDoc states: **`resolveName` answers the SYMBOL, and an un-annotated local's
+TYPE is `typeAt`'s answer, never this row's.** The pin reads declarations instead, and the
+divergence is now in `docs/type-oracle.md` § 3b rather than in a footnote of this note.
+
+**`symbolsInScope` STAYS REFUSED and its reason is unchanged because it is accurate**: an
+ENUMERATION must also offer every conventionally-bound name, i.e. read
+`LexicalScope.existing`, which is the INV.3 question round 748's `symbols`-only rule exists
+to keep out. Its pin now asserts that the refusal still NAMES that, so the two rows cannot
+be closed together by accident.
+
+**ABLATION: five arms, union 3 of 27, and three of the five have no unique pin — recorded,
+not smoothed.** D1 (the leg removed) and D5 (the leg gated) are a PAIR with an identical
+red set, which is the finding above. D2 (the leg as a FALLBACK) reddens a strict SUBSET,
+and the survivor is the SHADOWING pin — round 748's ordering law measured for the fourth
+time in this arc, now on the oracle. D3 (the meaning mask dropped from the per-file leg) is
+1 RED and unique. **D4 (`stopFlags`) is 0 RED even after a pin was written FOR it**, and the
+reason is worth more than the arm: 10b's consult filters to `ScopeValueDeclaration`, which
+does not accept a variable, so the ascent had to be told to STOP at one; the oracle's mask
+is the SPACE, which accepts it, so the filter answers before the stop applies. It is a
+REDUNDANT GUARD for every mask this row documents, kept because the mask is a caller's
+parameter, and recorded as redundant rather than claimed as pinned.
+
+**TWO TEXTS CORRECTED BECAUSE THEY WERE FALSE**, which is (P18.61)'s own law applied to its
+own arc: `TypeOracle`'s class KDoc and `docs/type-oracle.md` § 3b both still said the
+retained tables leave block-scoped declarations unbound.
+
+**NEXT**: 10b-ii once its two unmasked families close; (CHK.118) and 10b-iii are independent
+and smaller.
+
 ### Round (P18.64) — (INV.0) step 10c: heritage and qualified names, and the resolver the item named was not the one that mattered (2026-09-10)
 
 **Suite 18,536 → 18,541 / 0 / 3** (+5 pins). **8-profile grid `added=0 removed=0` on all
@@ -2245,13 +2302,18 @@ where the order sends you.
   missing TRUE rows, which are blocked on 10b-ii because the DERIVED class is scope-space
   too.
 
-- [ ] **(INV.0) STEP 10d — THE TWO ORACLE ROWS**, which (P18.61) corrected and 10a does not
-  unblock on its own: `TypeOracle.resolveName` needs a COMPOSED resolver plus a `meaning`
-  parameter, and `symbolsInScope` additionally an `existing`-reading ENUMERATION, so it
-  opens strictly later. The probe those two were waiting on is answered — a scope-space
-  `Interface`/`Class`/`Function`/`Variable` symbol is a first-class symbol to
-  `getTypeOfSymbol`/`getDeclaredTypeOfSymbol` (pinned in `LexicalScopeResolverTest`), so
-  neither row needs a transient-symbol route.
+- [x] **(INV.0) STEP 10d — `resolveName` ANSWERED 2026-09-10 ((P18.65) note); `symbolsInScope`
+  STAYS REFUSED, and the two do not open together.** `Checker.oracleResolveName` composes
+  the INV.2(c) ascent with `lookupInEnclosingNamespaces` and `lookupPerFileForNode`, each
+  masked by a `meaning` parameter, out of the checker's own functions. Reaches the whole
+  B83.5 population including a PARAMETER and a body-local `const`, and answers the INNER of
+  two same-named declarations. **The ascent is UN-GATED and the ablation proves it must be**:
+  gating it on the program-wide name gate reddens the same pins as removing the leg, because
+  that gate is a projection of six DECLARATION kinds and a parameter is not one.
+  **Divergence**: two MEANINGS of a name in ONE block collide (`LexicalScope.symbols` is one
+  table); and an un-annotated local's TYPE is `typeAt`'s answer, never this row's — measured
+  while pinning it. `symbolsInScope` needs `LexicalScope.existing`, which round 748's rule
+  keeps out, and its pin now asserts the refusal still names that.
 
 - [ ] **(CHK.117) THE BOUND-CONTAINER DEFECTS THE STEP-10 MATRIX FOUND — NOT B83.5, AND
   THEREFORE NOT FIXED BY ANY OF 10a-10d (measured 2026-09-10, three compilers).** A
