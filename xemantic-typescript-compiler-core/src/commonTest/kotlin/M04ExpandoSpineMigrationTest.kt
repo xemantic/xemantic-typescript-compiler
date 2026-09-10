@@ -447,6 +447,14 @@ class M04ExpandoSpineMigrationTest {
 
     // ── silent: shadowing ──────────────────────────────────────────────────
 
+    /**
+     * Only the three BINDING forms belong to this control. A nested `function`
+     * or `class` of the same name is a different mechanism and one of the two
+     * now reports — see the two tests below, which used to be the last two
+     * lines of this fixture and were a COUNTDOWN rather than a control (both
+     * reference compilers report the class case, so `none { … }` over it was
+     * asserting our own gap; (INV.0) step 10b-iii(b) closed it).
+     */
     @Test
     fun `negative control - params and top-level body locals shadow the candidate`() {
         diagnose(
@@ -455,8 +463,51 @@ class M04ExpandoSpineMigrationTest {
             function a(Foo: any) { Foo.viaParam; }
             function b() { var Foo: any; Foo.viaVar; }
             function c() { let Foo: any; Foo.viaLet; }
-            function d() { function Foo() {} Foo.viaFn; }
+            """
+        ) should {
+            have(none { it.code == 2339 && it.message.contains("typeof Foo") })
+        }
+    }
+
+    /**
+     * (INV.0) step 10b-iii(b) — a nested `class` SHADOWING a file-level
+     * `function` of the same name: the member-existence walker reads the
+     * INNER declaration, so an absent static is TS2339 with the class's own
+     * `typeof Foo` display. Byte-identical to tsgo 7.0.2 and pristine
+     * `typescript@6.0.3`, which agree on line, column and message.
+     */
+    @Test
+    fun `a nested class shadowing a top-level function reports its own missing static`() {
+        diagnose(
+            """
+            function Foo() {}
             function e() { class Foo {} Foo.viaClass; }
+            """
+        ) should {
+            have(any {
+                it.code == 2339 &&
+                    it.message == "Property 'viaClass' does not exist on type 'typeof Foo'."
+            })
+        }
+    }
+
+    /**
+     * RESIDUE, deliberately not pinned as silence: a nested `function`
+     * shadowing a file-level one is reported by both references as
+     * `Property 'viaFn' does not exist on type '() => void'.` and we are
+     * silent. That is the general FUNCTION-receiver gap, NOT B83.5's — its
+     * FILE-LEVEL spelling (`function Foo() {} Foo.viaFn;` at top level) is
+     * missing too, which is the control that separates the two — so
+     * (INV.0) step 10b-iii(b) does not close it and this test pins only what
+     * IS true today: the shadowing read does not draw the WRONG display, the
+     * one naming the outer function's `typeof Foo`.
+     */
+    @Test
+    fun `residue - a nested function shadowing a top-level function draws no typeof display`() {
+        diagnose(
+            """
+            function Foo() {}
+            function d() { function Foo() {} Foo.viaFn; }
             """
         ) should {
             have(none { it.code == 2339 && it.message.contains("typeof Foo") })

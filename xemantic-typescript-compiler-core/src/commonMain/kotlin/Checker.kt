@@ -149691,8 +149691,73 @@ interface DataView {
         } else null
         val lexicalShadow = enclosingNsShadow == null && perFileIdentSymbol != null &&
             cmamLexicalValueShadow(objectExpr, identName)
+        // (INV.0) step 10b-iii(d) — the SCOPE-SPACE VALUE consult, read through the
+        // SAME [NameResolver.lexicalValueSymbolForNode] that [getTypeOfIdentifierCore]
+        // reads. Using the one function is the whole point: two resolvers disagreeing
+        // about one receiver IS the defect this closes. Before it, a block-scoped
+        // `enum`/`class`/`namespace` receiver ([Binder] binds none of them, B83.5) was
+        // typed by 10b as the INNER declaration for the assignability walkers and by
+        // `perFileIdentSymbol` — keyed by the FILE, so it answers a file-level
+        // declaration however deeply the reference is nested — as the OUTER one here.
+        // On one line, `ZzzE2.ZInner` therefore produced the correct TS2322 *and* a
+        // false `Property 'ZInner' does not exist on type 'typeof ZzzE2'`.
+        //
+        // Placed ABOVE `perFileIdentSymbol` in the chain, which is round 748's
+        // innermost-first law: the ascent stops at any VALUE-space binding
+        // (`stopFlags`), so a hit is the innermost declaration of the name and the
+        // file-level one is strictly the wrong answer wherever it differs.
+        //
+        // UNCONDITIONAL — not gated on `perFileIdentSymbol != null` — and that is a
+        // MEASUREMENT, and the one place this diverges from 10b's own "override a
+        // conventional answer, never replace silence" rule. It can be, because the two
+        // consults answer different questions: 10b hands a TYPE to every assignability
+        // reader in the program (so replacing an `any` unmasks 19-20 pre-existing
+        // inference gaps per profile, (P18.63)), while this hands a SYMBOL to one
+        // member-existence walker whose only verdict is "does this member exist on this
+        // receiver". Silence here is not an `any` that suppresses something else, it is
+        // a TS2339 that never fires.
+        //
+        // ALL FOUR FORMS MEASURED on the 56-cell step-10b-iii(d) matrix (8 receiver
+        // kinds x file/fnTop/block/ifBlock x unique|shadowing; tsgo 7.0.2 and pristine
+        // 6.0.3 agree on all 56 cells), as ours-only / missing rows:
+        //
+        // | form                                     | ours-only | missing |
+        // |------------------------------------------|-----------|---------|
+        // | no consult (before)                      |        18 |      44 |
+        // | THIS ONE — unconditional, ns included    |         6 |      35 |
+        // | shadowing-only, ns included              |         6 |      41 |
+        // | unconditional, ns EXCLUDED               |        12 |      32 |
+        //
+        // So: every form kills the same 12 false rows, and the unconditional half is
+        // worth 6 more TRUE rows than the shadowing-only one (a UNIQUE block-scoped
+        // `enum` and `class` whose member genuinely does not exist — three sites each).
+        // If a profile or a corpus baseline ever reddens on the unique half, adding
+        // `perFileIdentSymbol != null &&` to the gate below is the whole fallback, and
+        // it costs exactly those 6.
+        //
+        // The NAMESPACE half is a RECORDED RESIDUE, and it is the one row of that table
+        // that is a TRADE rather than a gain: (P18.64) measured that
+        // `Binder.declareLexical`'s `ModuleDeclaration` arm publishes no members onto
+        // the scope symbol's `exports` where its `enum` arm does, and the namespace
+        // branch below is gated on `identSymbol.exports != null`. Substituting a
+        // scope-space namespace symbol therefore removes the 6 FALSE rows without
+        // producing the TRUE one — AND loses 3 rows that had been firing for the wrong
+        // reason (an absent member on a SHADOWING namespace is absent from the outer
+        // declaration too, so the wrong receiver answered it correctly by accident).
+        // Included anyway, on two grounds: 6 confident wrong messages traded for 3
+        // silences is the right direction, and keeping those 3 means deliberately
+        // consulting a declaration this round exists to stop consulting. Fixing it
+        // properly is a BINDER change with its own blast radius and is out of scope.
+        //
+        // Disjoint from `lexicalShadow` by construction rather than by ordering: that
+        // predicate answers only a VARIABLE / BindingElement / Parameter
+        // `valueDeclaration`, and this ascent's `stopFlags` END it at any such binding,
+        // so at most one of the two can be non-null for one name. `cmamLexicalValueShadow`
+        // is deliberately left alone — its population and its REFUSE semantics are a
+        // different, still-correct mechanism.
+        val lexicalValueSymbol: Symbol? = nameResolver.lexicalValueSymbolForNode(objectExpr, identName)
         val identSymbol = if (lexicalShadow) null
-        else enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow ?: nsClassSymbol
+        else enclosingNsShadow ?: lexicalValueSymbol ?: perFileIdentSymbol ?: nsEnumShadow ?: nsClassSymbol
 
         CpaSections.atR(CpaSections.R_OT_IDENT)
         val otT0 = CpaSections.t()
