@@ -66,6 +66,34 @@ import kotlin.test.Test
  * Both failure modes are silent, so "no error here" passes on a broken binary and "an
  * error here" cannot say WHICH declaration answered. Every pin below reads the resolved
  * type — or a member only one of the two candidates has — out of the diagnostic text.
+ *
+ * ## The ablations, RUN, one mistake at a time
+ *
+ * `scripts/inv0s10b-ablate.py`, against a sha256-verified snapshot, over the 35 pins of
+ * this class plus `LexicalScopeDeferralTest`, `ScopeSpaceTypeResolutionTest` and
+ * `LexicalScopeResolverTest`. Union 7 of 35.
+ *
+ *  * **A1, the STAMP** (`indexSourceFile` back to NodeKind 23..26, so `function` and
+ *    `namespace` leave it) — 4 RED, and the only arm reaching either projection pin or
+ *    the partition pin.
+ *  * **A2, the FLAG MASK** (`ScopeValueDeclaration` back to `ScopeTypeDeclaration`) —
+ *    **1 RED and NO UNIQUE PIN**, and the reason is worth more than the arm: that mask
+ *    still carries `Class` and `Enum`, so only the `function` and `namespace` kinds are
+ *    lost, and `namespace` has no pin because a namespace VALUE read does not work here
+ *    at all ((CHK.73): a module symbol has no type in this checker). Recorded as an arm
+ *    whose pinned contribution is a subset of A1's and A3's.
+ *  * **A3, OVERRIDE vs FALLBACK** (consult only when the conventional ladder answered
+ *    `any` — the shape this step was FIRST written in) — 3 RED, two of them unique. This
+ *    is the arm that says the POSITION is the fix: as a fallback the consult closes the
+ *    unique half and leaves every shadow cell exactly as it was.
+ *  * **A4, `stopFlags`** — 1 RED, unique, and it is the `const`-shadows-`function` pin.
+ *  * **A5, the PER-FILE gate** — **0 RED, UNDISCRIMINATED, and recorded rather than
+ *    claimed.** Its property is a COST one and its regime is the PARTITIONED build; in
+ *    that regime nothing types an identifier in an unassigned file, so no fixture
+ *    produces the shape the gate guards against. The guard is kept because it is exact
+ *    and one map lookup, and because reading `scopesOfOwningFile` BUILDS the tables
+ *    ((INC.16)) — not because a pin says so.
+ *  * **A6, `declare global` claiming its carrier name** — 1 RED, the projection pin.
  */
 class ScopeSpaceValueResolutionTest {
 

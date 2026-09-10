@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **191,591** lines (**−8,372 across (P18.53)-(P18.62)**; step 10a is a SEMANTIC change and ADDS 85, not an extraction; 191,070 when
+extraction):** `Checker.kt` **191,677** lines (**−8,286 across (P18.53)-(P18.63)**; steps 10a/10b are SEMANTIC changes and ADD 85 and 86, not extractions; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -18,6 +18,40 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
+`Checker.getTypeOfIdentifierCore` now OVERRIDES a conventional answer with the scope-space
+`function` / `class` / `enum` / `namespace` visible at the node — and never replaces
+silence. **THE UNIQUE HALF WAS BUILT, MEASURED AND REFUSED, WHICH IS THE ROUND**: a consult
+that answers a unique B83.5 value name is correct and takes the 129-cell matrix to **9
+FIXED + 9 IMPROVED**, and adds **19-20 ours-only rows to EVERY ONE of the eight profiles** —
+two families, both pre-existing gaps `any` was masking ((CHK.50)'s law at scale): an object
+literal of SHORTHAND nested functions against a declared interface (9 sites, and
+`utilities.ts:1219` names its own mechanism — an inferred `() => U[]` leaking an
+unsubstituted type parameter out of `arrayFrom`), and a `| undefined` read after an
+assignment narrowing whose receiver only became real because a nested function did (10
+sites). Both are now 10b-ii, whose switch is ONE line. **THE SHIPPED HALF'S RECEIPT** is the
+same matrix with the reference arms reused verbatim: **8 cells IMPROVED, 0 REGRESSED, 0 new
+rows absent from pristine, 0 pristine rows dropped**, all 8 shadow cells flipping OUTER →
+INNER in agreement with tsgo 7.0.2 and pristine 6.0.3 (B83.5 shadow agreement 16/42 →
+24/42), the TYPE half numerically untouched. **THE LADDER POSITION IS THE FIX AND THE FIRST
+CUT PROVED IT BY BEING WRONG** — written as a rung BELOW `currentLocalTypes` it measured 9
+cells fixed and moved no shadow cell at all, because that map is a flat COPY of the
+enclosing scope. **AND THE POSITION IS ONLY SOUND BECAUSE OF A NEW ASCENT AXIS**:
+`stopFlags` ends the walk at the innermost VALUE-space binding, so an inner `const` refuses
+instead of being filtered past — the two spaces differ, and a TYPE consult never needed it.
+**THE STAMP WIDENING IS AGAIN FREE** (NodeKind 22..27 are contiguous and are exactly the six
+kinds `bindLexicalScopes` declares into a fresh scope). **A SECOND, PER-FILE GATE** keeps
+(INC.16) — the value gate is not near-empty (~5,555 nested `function` names in tsc's
+sources) and reading `scopesOfOwningFile` BUILDS the tables — **and `LexDefer.census` then
+measured that the property is unobservable on a FULL build** (`forcedBy={checkSpine=2}`: the
+spine forces every checked file anyway), which is why its ablation arm is **UNDISCRIMINATED
+and recorded as such**. Six arms, union 7 of 35 pins; the flag-mask arm also has no unique
+pin, because that mask still carries `Class` and `Enum`. **TWO MORE OF THE ITEM'S OWN CLAIMS
+WERE WRONG** — `const` in VALUE position resolves only in the UNIQUE variant (the shadowing
+one answers the OUTER declaration, now (CHK.118)), and its `typeof` claim was an artefact of
+the v1 narrowing probe. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0
+(844 classes), warning-clean.
 
 **(P18.62) — (INV.0) STEP 10a: THE B83.5 *TYPE* SPACE, AND THE ARC IS FUNNEL-SHAPED RATHER THAN RADIUS-SHAPED, 18,529 / 0 / 3 (2026-09-10).**
 The round-748 scope-space consult widened from `enum`-only to the whole TYPE space —
@@ -141,33 +175,5 @@ two member symbols were identical and the ablation could not bite; two further s
 ON THE ABLATED BINARY and the pin is now the one that reads 1 row vs 2. Arm 3 reddens TWO pins and
 that is recorded, not smoothed. ab-interleaved −120 ms (−0.46%) B-wins-3/6 NOISE-DOMINATED;
 cost_gate exit 0, huge_methods exit 0 (839 classes, `Checker.<init>` 5,721 → **5,697**),
-warning-clean.
-
-**(P18.58) — (INV.0) STEP 6b: THE MEMBER-NAME / LATE-BINDING FAMILY IS `MemberNames.kt`, THE ARC'S CLEANEST SEAM, 18,498 / 0 / 3 (2026-09-09).**
-`Checker.kt` **196,176 → 195,606**; `MemberNames.kt` 765; ledger row 9. **Third extraction of the
-session.** **FIVE ambient reads, ZERO writes** — against the relater's 45/5 and member
-resolution's 21/1 — **and the reason generalises: this family owns NO STATE and answers a
-SYNTACTIC question.** Four of the five reads belong to seams of their own (three enum-value
-helpers, two AST helpers); rows 7 and 8 read the type system because they ARE the type system.
-`fileResults` is a CONSTRUCTOR INPUT rather than a read, which is what takes the row from 6 to 5 —
-rows 5/6's above-line-666 rule paying off. **`MemberResolver` was deliberately NOT rewired**: it
-keeps calling `checker.getMemberName` / `declaredMemberName`, which the delegations serve anyway,
-so the two collaborators carry no construction-ORDER dependency. **The split removed 61 `too
-large` inlining refusals and added none** — the fifth row running (`getMemberName` `16 inline +
-16 too large` → a hop reading `7 inline`, zero refusals; `computedLiteralKey` `20+20` → `6`).
-**THE RECEIPT NOW SPANS FOUR BINARIES** — the same 488 deterministic `--passTiming` lines are
-byte-identical for pre-step-5 pristine, step 5, step 6a and this: **one receipt over 2,509 moved
-lines**, at one extra build for the whole session, because each round's capture is the next
-round's pristine arm. **THE PINS ARE *AGREEMENT* PINS**, which is what this family needs: a
-member's name is asked at REGISTRATION and again at RESOLUTION, and both known failures (round
-935, (CHK.40)(c)) emit a CORRECT diagnostic beside a false one, so a pin asserting "it compiles"
-passes on a broken binary — each pin instead reads the member back through a wrong target type and
-asserts the TS2322 that names the resolved type AND the absence of TS2339 beside it. **Every one
-of the 5 pins discriminates, the session's first round where that is true**; the hop-limit PAIR
-brackets `LATE_BIND_ALIAS_HOPS` (a 2-hop alias chain late-binds, an 11-hop one does not) and
-neither pin alone is evidence. **A naming trap worth carrying: `Checker.kt` already declares
-EIGHT locals named `memberNames`**, so the collaborator field is `memberNamer` — a field of the
-shadowed name compiles and broke the round's own structural check. ab-interleaved −182 ms
-(−0.70%) B-wins-3/6 NOISE-DOMINATED; cost_gate exit 0, huge_methods exit 0 (838 classes),
 warning-clean.
 

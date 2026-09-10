@@ -1,4 +1,33 @@
 **(P18.57) — (INV.0) STEP 6a: MEMBER RESOLUTION IS `MemberResolver.kt`, AND THE ITEM'S OPEN QUESTION IS ANSWERED, 18,493 / 0 / 3 (2026-09-09).**
+
+**(P18.58) — (INV.0) STEP 6b: THE MEMBER-NAME / LATE-BINDING FAMILY IS `MemberNames.kt`, THE ARC'S CLEANEST SEAM, 18,498 / 0 / 3 (2026-09-09).**
+`Checker.kt` **196,176 → 195,606**; `MemberNames.kt` 765; ledger row 9. **Third extraction of the
+session.** **FIVE ambient reads, ZERO writes** — against the relater's 45/5 and member
+resolution's 21/1 — **and the reason generalises: this family owns NO STATE and answers a
+SYNTACTIC question.** Four of the five reads belong to seams of their own (three enum-value
+helpers, two AST helpers); rows 7 and 8 read the type system because they ARE the type system.
+`fileResults` is a CONSTRUCTOR INPUT rather than a read, which is what takes the row from 6 to 5 —
+rows 5/6's above-line-666 rule paying off. **`MemberResolver` was deliberately NOT rewired**: it
+keeps calling `checker.getMemberName` / `declaredMemberName`, which the delegations serve anyway,
+so the two collaborators carry no construction-ORDER dependency. **The split removed 61 `too
+large` inlining refusals and added none** — the fifth row running (`getMemberName` `16 inline +
+16 too large` → a hop reading `7 inline`, zero refusals; `computedLiteralKey` `20+20` → `6`).
+**THE RECEIPT NOW SPANS FOUR BINARIES** — the same 488 deterministic `--passTiming` lines are
+byte-identical for pre-step-5 pristine, step 5, step 6a and this: **one receipt over 2,509 moved
+lines**, at one extra build for the whole session, because each round's capture is the next
+round's pristine arm. **THE PINS ARE *AGREEMENT* PINS**, which is what this family needs: a
+member's name is asked at REGISTRATION and again at RESOLUTION, and both known failures (round
+935, (CHK.40)(c)) emit a CORRECT diagnostic beside a false one, so a pin asserting "it compiles"
+passes on a broken binary — each pin instead reads the member back through a wrong target type and
+asserts the TS2322 that names the resolved type AND the absence of TS2339 beside it. **Every one
+of the 5 pins discriminates, the session's first round where that is true**; the hop-limit PAIR
+brackets `LATE_BIND_ALIAS_HOPS` (a 2-hop alias chain late-binds, an 11-hop one does not) and
+neither pin alone is evidence. **A naming trap worth carrying: `Checker.kt` already declares
+EIGHT locals named `memberNames`**, so the collaborator field is `memberNamer` — a field of the
+shadowed name compiles and broke the round's own structural check. ab-interleaved −182 ms
+(−0.70%) B-wins-3/6 NOISE-DOMINATED; cost_gate exit 0, huge_methods exit 0 (838 classes),
+warning-clean.
+
 `Checker.kt` **196,797 → 196,172**; `MemberResolver.kt` 814; ledger row 8. **Second extraction of
 the session.** The queue item asked whether the seam is the table builders *without*
 `getTypeOfSymbol` — **it is**, and the census said so before any code moved: this family reads it
