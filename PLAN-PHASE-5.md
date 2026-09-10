@@ -25,6 +25,82 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.61) — (INV.0) step 9: the decision, taken on measurements, and the scope-space ascent gets one home (2026-09-10)
+
+**Suite 18,519 / 0 / 3** (18,514 + 5 new pins). `Checker.kt` **191,540 → 191,506**;
+`LexicalScopeResolver.kt` **124**, ledger row 12. **8-profile grid `added=0 removed=0` on
+all eight**, cost_gate exit 0, huge_methods exit 0 (**842** classes), warning-clean,
+receipt now SEVEN binaries. Two commits: `0b3d1f089` the consolidation + the two
+corrections, `d54f0ad52` the ablation record.
+
+**THE DECISION, WITH BOTH OPTIONS SIZED RATHER THAN ARGUED.** Option (a) — continue
+Stage 0 on the check passes — is where the LINES are: check-pass / walker-frame prefixes
+are **96,830 of 191,499 attributed lines (50.6%)**, `check*` alone 53,571. It is also
+where the SEAMS are not. The ambient census of the four largest candidates reads
+`cmam*` **83**, `caas*` **59**, the type-node builders **68**, and `cae*` **97 reads for
+EIGHT declarations** — against rows 1-11's 0/0/4/26/22/4/13/45/21/5/61. **A collaborator
+with twelve times as many inputs as members is a file move, not a seam**, which is
+exactly what the step-9 item predicted "a list of walkers" would be. Option (b) taken.
+
+**AND OPTION (b) HAD TO BE CORRECTED BEFORE IT COULD BE TAKEN: the item as first written
+offered "open Stage 1", and Stages 1 AND 2 landed on 2026-09-02** (§§ 9a/9b — the
+`NodeAnswerStore` and the `TypeOracle` facade). The open stage is 3. That correction
+changes what the alternative IS: not more plumbing behind a flag, but the semantic change
+that opens the two methods a Kotlin consumer of the embeddable checker needs. **A queue
+item's own factual claims are worth one command to check** — this one would have sent a
+round at work that already exists.
+
+**WHAT B83.5 ACTUALLY IS, MEASURED, AND NOT WHAT ITS NAME SAYS.** `Binder` recurses into
+statements from exactly two places — a `SourceFile`'s own list (`Binder.kt:283`) and a
+`ModuleBlock`'s (`:558`) — so it is not "declarations nested in a `Block`" that go unbound
+but *everything that is not a direct statement of one of those two*. **A `class` at the
+very TOP of a function body, with no block nesting at all, is equally unbound.** Measured
+against tsgo 7.0.2 on that shape: **1 ours-only TS2353 and 0 of 4 true rows** for
+interface/class/type/function, plus an ours-only TS2339 at the enum VALUE position (round
+748 closed the TYPE half only). CLAUDE.md's entry now says this.
+
+**THE SUB-STEP IS THE INERT ONE, AND IT IS ABOUT DUPLICATION RATHER THAN LINES**: the
+ascent over `BinderResult.lexicalScopes` had been **hand-copied five times** and the copies
+had drifted on four axes — which table (the owning file's, or the walk-scoped ambient
+`currentLexicalScopes`), start at the node or at its parent, which `SymbolFlags`, hop-capped
+or not. Every difference is deliberate, so they became PARAMETERS. `LexicalScopeResolver`
+has **ambient surface NONE — the first such row since step 3** — because the ascent is a
+pure function of the tables and the parent chain.
+
+**THE GATE IS THE GRID, NOT THE CORPUS.** Three of the five callers are name-GATED, so a
+wrong axis surfaces as a name resolving to an OUTER binding, which CLAUDE.md records as
+silent in every diagnostic channel here. All eight profiles read `added=0 removed=0`, with
+the harness profile's 94 rows and no truncated capture.
+
+**TWO TEXTS CORRECTED BECAUSE THEY WERE FALSE, NOT VAGUE.** `LexicalScope`'s KDoc claimed
+the tables are "UNCONSUMED until INV.4 — nothing in the checker reads these tables yet"
+(five consults have, since round 748) and proposed `symbols` → `existing` → parent as the
+future resolution order — **which is exactly the read round 748 REFUSED**. And
+`TypeOracle.resolveName` / `symbolsInScope` both refused with "the retained scope tables
+leave block-scoped declarations unbound (B83.5)"; **the retained tables HAVE that
+population**. What is missing is a COMPOSED resolver (round 918: this ascent's rules do not
+transplant onto another chain), a `meaning` parameter, and an `OracleLens` row — and
+`symbolsInScope` opens LATER than `resolveName`, because an enumeration must read
+`existing`. **A refusal that misstates its own blocker is worse than no refusal**: it makes
+a composition problem look like a binder problem, and it is what would have sized the next
+round wrong.
+
+**FOUR OF FIVE ARMS DISCRIMINATE; ARM 1 REDDENS ALL FIVE AND IS RECORDED AS SUCH.**
+Starting the ascent at the file root destroys the ascent, and every pin depends on it.
+Pin 1's discrimination rests on a different fact — none of arms 2-5 reddens it, and it is
+the only fixture declaring one name at TWO levels, so the only one that can see a
+shadowing-ORDER defect. Three narrower arms were tried and each reddens pin 2 or pin 3,
+because those two are positional by construction.
+
+**NEXT**: the inert path is spent — everything further on Stage 3 is the resolution-ORDER
+change (`NameResolver.kt:1760-1767` says a fallback is not enough), with ~357 `globals[`
+readers downstream, gated by the corpus AND the grid. That is a multi-round arc and should
+be opened as one, with its own item, not as a sub-step. **One thing left UNVERIFIED and
+worth a single probe first**: whether `getTypeOfSymbol` answers correctly for a scope-space
+`Class`/`Interface`/`Function` symbol. Precedent exists only for `Enum` (round 748's
+transient-symbol route) and by declaration-read for `TypeAlias`; that answer decides
+whether an oracle row can ship cheaply or needs a second sub-step.
+
 ### Round (P18.60) — (INV.0) step 8: the TYPE-CAPTURE family becomes `CaptureRecorder.kt`, and its ambient row is the design's own claim as a number (2026-09-10)
 
 **Suite 18,514 / 0 / 3** (18,506 + 8 new pins). `Checker.kt` **194,631 → 191,540**
@@ -678,66 +754,6 @@ making the change MORE aggressive can redden them — which a3/a12/a13 are, for 
 **THREE RESIDUES MEASURED AND LEFT OPEN**, queued as (CHK.116): static blocks are flow-ORDERED and one
 leak set per class cannot express a read silenced by a LATER block's assignment; and a static block
 inside a nested `function` does not suppress an outer read.
-
-### Round (P18.51) — the nullable-target rule reaches all five heads ((CHK.114)), (c)'s stated axis was wrong, and the references could not adjudicate the pin that broke (2026-09-08)
-
-**Suite 18,413 → 18,437 / 0 / 3** — `EnumAndNullableRelationDisplayTest` 35 → 59, plus one
-unrelated-family pin whose EXPECTATION was updated. Grid **8 × added=0 removed=0**, re-run
-INDEPENDENTLY; corpus 10,344/0, externals 290/0, `-project` 866/0, `cost_gate.py` exit 0 (largest
-delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean.
-
-**A PREREQUISITE THE ITEM DID NOT NAME HAD TO LAND FIRST.** tsc RESTORES the aliased target before
-reporting (`checker.ts:22825`, `:22878`); three already-wired heads were silently stripping aliases,
-so wiring (a) alone would have REGRESSED `function q(): OptAlias` from correct to wrong. The guard is
-`conceptual === targetType && targetSpelledByName(targetAnnotation)`, and it is deliberately NOT
-applied at the argument and object-literal heads — those render the target from the TYPE, so keeping
-the alias there buys one wrong string for another (measured; the strip stays).
-
-**(c)'s STATED AXIS IS WRONG, AND THE MEASUREMENT SAYS SO PLAINLY.** The item calls it a
-CROSS-FLAVOUR collapse. Both references KEEP the member spelling for `STwo = NTwo.A` and
-`NTwo = STwo.A` — cross-flavour — and for `SOne = NTwo.A`, which is cross-flavour AND cross-arity.
-**Every collapsing row has a ONE-MEMBER source enum**, so this is (CHK.92)(d)'s own fact appearing on
-the SOURCE side, not a new rule. Implemented as such in `relationErrorSourceRender`.
-
-**THE ITEM'S "ONE WIRING EACH" IS TRUE OF NEITHER (a) NOR (b).** (a) is 8 rows across arrow, method
-and plain returns at every nullish arity, and needs stage 0 first; (b) needed TWO changes — the
-target half (`optionalDeclaration`) and the SOURCE half, because once the target shows `| undefined`
-the written literal must survive to be comparable.
-
-**THE FAILING PIN COULD NOT BE ADJUDICATED BY ITS OWN FIXTURE, AND THAT IS THE ROUND'S REUSABLE
-LESSON.** `ThisMethodCallAssignmentNarrowTest`'s subject is that a `this`-method call does NOT narrow;
-it broke on the TARGET's rendering while the row still fired at the same code and span — a **full-text
-pin in an unrelated family silently depends on every display rule**, and only the full suite sees it.
-Asked about the target, both references answered a THIRD thing: they drill to the offending MEMBER and
-never print the outer target, because the source is a FRESH object literal. **A reference that answers
-a different question is not evidence either way.** A sibling fixture with a NON-FRESH source
-(`declare const s: {…}; return s`) forces them onto the whole-object form, where all three compilers
-are byte-identical at `'ZzzRes'` — confirming the strip and showing the pin had been capturing our own
-pre-existing divergence. Expectation updated, test name and assertions untouched. Both facts are now
-CLAUDE.md entries.
-
-**THE SWEEP FOUND FIVE FILES CARRYING A NULLISH TARGET IN A FULL-TEXT EXPECTATION AND ALL ARE CORRECT
-FOR THE RIGHT REASON** — 16 shapes run through both references, all byte-identical: the strip declines
-where the remainder is union-like (`boolean` is `true | false`; a ≥2-member enum), where the remainder
-is two-membered, or where the source is `null` and so fails `DefinitelyNonNullable`. **And the
-green-for-the-wrong-reason population is provably EMPTY here**: a pin asserting a STRIPPED target at a
-newly-wired head would have been RED before the change, so it cannot exist as a passing pin — an
-argument worth reusing whenever a change only ever makes an output MORE correct at a head that did not
-run.
-
-**ARMS — 7. a1 the return head's call 3 RED; a2 stage 0's alias guard 2 uniquely; a3 its
-`conceptual === targetType` half 1 uniquely; a4 the class-property optionality signal 3; a5 that
-head's shared source render 3 uniquely; a6 the one-member source collapse 6.** **a7 is REDUNDANT BY
-MEASUREMENT** — reversing the collapse/qualification order is byte-identical over ~120 rows of eight
-fixtures (round 813's method), because qualification only fires after the source is widened past
-`EnumMember`; **the pin was RENAMED** from "keeps its namespace path" to "still qualifies" so it no
-longer claims ordering coverage it does not have.
-
-**REFUSED, WITH MEASUREMENTS**: a type-side alias test (`aliasDisplayMap`/`unionAliasStructural`) —
-built first and UNSOUND, being id-keyed and first-wins ((INC.27)), so one `type Opt<T> = T | undefined`
-makes every inline `string | undefined` read as aliased; and the (c) collapse INSIDE a union source,
-which needs `typeToString`'s union rendering and is exactly what (P18.48) forbids. Two out-of-scope
-residues recorded: the `OptAlias` SOURCE display, and a `Promise<string | undefined>` target.
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
 
@@ -1866,46 +1882,38 @@ where the order sends you.
   types and 360,917 definitions, per-arm digest byte-identical. All 8 ablation arms redden
   exactly their own pin — the arc's first perfect 8-for-8.**
 
-- [ ] **(INV.0) STEP 9 — A DECISION, NOT A CENSUS: after step 8 what is LEFT in
-  `Checker.kt` (191,540) is dominated by CHECK PASSES, which design § 6 puts LAST.** The
-  contiguous-family census (`scripts/codemask.py` + a contiguity scan; the command is in
-  the (P18.59) note) now returns, in size order: `spine*` 72464-76168 (3,704 lines),
-  `type*`/`init*` blocks that are pass REGISTRATION, `spine*` 61288-63294 (2,006),
-  `check*` 69970-71824 (1,854), `spine*` 28711-30415 (1,704), `cmam*` (1,668 + 986),
-  `caas*` (1,440), `cae*` (1,184), `cvda*` (1,063). Every one is a check pass or a walker
-  frame family. **So the round's first job is to SAY WHICH of two things it is doing, and
-  why, before moving a line:**
-  (a) **START ON THE CHECK PASSES.** This needs a rule that does not exist yet: what IS a
-  pass collaborator, given a pass reads the whole checker and writes `diagnostics`? Rows
-  4-11 all extracted things with a NOUN ("name resolution", "the relation", "enum
-  semantics"); "checkImplementsClauses and its neighbours" is a LIST, and a collaborator
-  per list is a file move, not a seam. A defensible first bite would be ONE walker FAMILY
-  with a shared frame (`cmam*`, `caas*`, `cvda*`, `cae*` each are that) — census its
-  ambient row FIRST, and expect it to look like row 11's, because a walker's ambient IS
-  the walk.
-  (b) **STOP STAGE 0 AND OPEN STAGE 3.** **NOT Stage 1 or 2 — both LANDED on 2026-09-02**
-  (`docs/INVERSION-DESIGN.md` §§ 9a/9b: the `NodeAnswerStore` and the `TypeOracle` facade
-  over it, with its handle table and its per-row divergence table). Stage 3 is
-  `docs/INVERSION-DESIGN.md` § 6's "tree-derived scope resolution — dissolve B83.5", and
-  the oracle itself names it as the blocker: `TypeOracle.resolveName` and
-  `symbolsInScope` throw an `OracleRefusal` that says so in words. **Row 11 is the
-  argument FOR this**: it MEASURED, rather than argued, that the capture answers are
-  walk-scoped, which is the premise the store and the oracle were built on — and the two
-  methods the oracle still refuses are the ones a Kotlin consumer of the "embeddable
-  whole-program checker" actually needs. B83.5 is a BINDER change (block-scoped
-  declarations are never bound — CLAUDE.md's entry), so it is semantics, gated by the
-  corpus, and it is a bigger round than any extraction here.
-  **The owner metric is SHRINKAGE**, so (a) still pays in lines; but it stops paying in
-  AMBIENT, and rows 7-11 show the ambient total only falls when a family someone else owns
-  can be wired directly. Take the decision explicitly.
-  **Inherit every constraint rows 4-11 established**, including: census contiguity BEFORE
-  believing any candidate the queue names (three rounds running, the queue's guess was
-  wrong); grep `Checker.kt` for a LOCAL of a proposed collaborator-field name; use
-  `scripts/codemask.py`, never `spanmask`/`strip`; take the pristine capture with the SAME
-  RECIPE and redirect the WHOLE output (a `| tail` throws the digest away); grade against a
-  REBUILT pristine; grep BOTH mangled and unmangled JVM names in any inlining comparison;
-  **and pick the GATE for the family** — a capture-touching change is graded by
-  `scripts/capture-equivalence.sh`'s digest, a diagnostics-touching one by the corpus.
+- [x] **(INV.0) STEP 9 — THE DECISION IS TAKEN AND ITS INERT FIRST SUB-STEP LANDED
+  2026-09-10 ((P18.61), commits `0b3d1f089` + `d54f0ad52`).** Both options were SIZED, not
+  argued. **(a) the check passes**: 96,830 of 191,499 attributed lines (50.6%) — where the
+  lines are — and the ambient census of the four largest candidates reads `cmam*` 83,
+  `caas*` 59, type-node builders 68, **`cae*` 97 reads for EIGHT declarations**, against
+  rows 1-11's 0/0/4/26/22/4/13/45/21/5/61. A collaborator with twelve times as many inputs
+  as members is a file move. **(b) taken**, and its inert sub-step is
+  `LexicalScopeResolver` (124 lines, **ambient NONE — the first since row 3**), which gives
+  the five-times-hand-copied INV.2(c) ascent one home with its four drifted axes as
+  parameters; ledger row 12; 8-profile grid `added=0 removed=0`. Two texts corrected
+  because they were FALSE: `LexicalScope`'s "UNCONSUMED until INV.4" KDoc and both
+  `TypeOracle` refusals, which blamed the binder for what is a COMPOSITION problem.**
+
+- [ ] **(INV.0) STEP 10 / STAGE 3 PROPER — the resolution-ORDER change, to be opened as its
+  own ARC and not as a sub-step.** (P18.61) spent the inert path. What is left is what
+  `NameResolver.kt:1760-1767` states outright: a fallback is NOT enough, the B83.5
+  population has to be consulted BEFORE the conventional ladder, and that is a resolution
+  ORDER change with **~357 `globals[` readers** downstream (`Checker.kt` 328,
+  `NameResolver.kt` 24, rest of core 5; plus 69 `.locals[`). Gated by the corpus AND the
+  8-profile grid, because a wrong resolution is silent in every diagnostic channel here.
+  **The prize, measured 2026-09-10 against tsgo 7.0.2 on a function-body-top shape: 1
+  ours-only TS2353 removed and 4 true rows gained for interface/class/type/function, plus
+  the enum VALUE position's ours-only TS2339** (round 748 closed the TYPE half only).
+  **DO ONE PROBE FIRST, it is unverified and it sizes the rest**: does `getTypeOfSymbol`
+  answer correctly for a scope-space `Class`/`Interface`/`Function` symbol? Precedent
+  exists only for `Enum` (round 748's transient-symbol route) and, by declaration-read, for
+  `TypeAlias`. If it does not, every consumer of a scope-space symbol needs the transient
+  route and that is the arc's first commit rather than its last.
+  **And the two oracle rows are NOT unblocked by this alone** — `TypeOracle`'s corrected
+  refusals name what each still needs: a composed resolver plus a `meaning` parameter for
+  `resolveName`, and additionally an `existing`-reading enumeration for `symbolsInScope`,
+  which opens strictly later.
 
 - [ ] **(REL.1)(c) LEAD, measured 2026-09-09 by (P18.59) and NOT fixed: the same-string
   qualified-display retry is not reached by the VARIABLE-DECLARATION assignability reader.**

@@ -2604,3 +2604,33 @@ both STABLE standing hot sites identical to pristine; ab-interleaved +0.15% B-wi
 NOISE-DOMINATED; cost_gate and huge_methods exit 0; warning-clean. Verbatim proved twice by two
 methods for the third round running. Next per the design's Stage-0 order: the RELATER out of
 `checkTypeRelatedTo` into the `TypeRelationCache.kt` seam row 2 already named.
+
+<!-- archived 2026-09-10 by (P18.61) -->
+**(P18.56) — (INV.0) STEP 5: THE RELATER IS `Relater.kt`, AND THE 6,390-LINE REGION IS ONLY 1,256 LINES OF ALGORITHM, 18,489 / 0 / 3 (2026-09-09).**
+`Checker.kt` **198,022 → 196,797**; `Relater.kt` 1,446; ledger row 7. **The census the item asked
+for changed the shape of the work**: the seven named entry points span a ~6,390-line region and the
+relater is **1,256 lines in five contiguous spans** — the rest is ELABORATION
+(`getPropertyElaborationChain` 546, `getFunctionMismatchElaborationWorker` 407,
+`checkExcessProperties` 231), which answers *what do we SAY about the failure*, a different seam.
+**Deliberately NOT split** where 4b was: one mutually-recursive algorithm, so a mid-recursion cut
+puts a `Checker` hop inside the hottest recursion for no verification benefit. **Delegation surface
+SIX, not 363** — `checkTypeRelatedTo`'s 329 call sites are byte-unchanged behind a one-line hop, and
+eight moved functions have no caller left. **THE MOST REUSABLE FINDING IS A RECEIPT FIX: the
+`--passTiming` pass table is printed in DESCENDING WALL-TIME order**, so its row ORDER is a timing
+artefact and the first comparison read **804 diff lines between two identical binaries**; sorted, and
+with every ms-bearing or time-BUCKETED line dropped, **488 deterministic lines are byte-identical
+against a REBUILT pristine HEAD** (all 420 per-pass rows, the 46 diagnostics, the emissions census,
+the counters, globals lookups) with a same-binary control. **A second: `cost_gate.py`'s ±2% column is
+not a statement about the change** — six counters read non-zero and pristine HEAD reads exactly the
+same deltas, i.e. the recorded baseline is stale; grade a split against a rebuilt pristine and treat
+the gate as the control. **A third: `isTypeAssignableTo` joins `getTypeOfExpression` as a
+`PrintInlining` site that is NOT stable across processes** (proved by running arm A twice), leaving
+`checkArgumentsAgainstSignature` the only one of § 10's three that can separate arms. The split
+IMPROVED inlining for the third row running (`checkTypeRelatedTo`: 344 `too large` refusals → a hop
+with ZERO). ab-interleaved **−11 ms (−0.04%) B-wins-3/6 NOISE-DOMINATED**; `new Relater` appears at
+exactly ONE bytecode in the module. Verbatim proved twice by two methods for the fourth round
+running. **5 pins, 5 arms, and TWO PINS MEASURED UNDISCRIMINATED AND RENAMED rather than claimed**: a
+leak detector cannot work, because the `Relation` cache is probed ABOVE the comparison stack and
+answers an identical pair before a stale key is consulted; and the `isDeeplyNested` bail is not the
+only bound — disabling it entirely still terminates, since `maxRelationDepth` is a second ceiling.
+cost_gate exit 0, huge_methods exit 0 (836 classes), warning-clean.

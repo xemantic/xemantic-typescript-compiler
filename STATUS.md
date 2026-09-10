@@ -1,21 +1,47 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **191,540** lines (**−8,423 across (P18.53)-(P18.60)**, the first
-sustained movement in the extraction direction since the metric was created; 191,070 when it was
-created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200, which are fixes and pins, not
-extractions — so the file is now BELOW where the metric started, with ~5,200 of real work added
-in between). NINE collaborators extracted: `TypeInterner`, `Relation`+`Ternary` — ambient surface
-none for both — `TypeInstantiator` (4 reads, 1 write), `NameResolver` (2,284 lines, 26 reads),
-`Relater` (1,446 lines), `MemberResolver` (834 lines, 22 reads), `MemberNames` (771 lines,
-4 reads / ZERO writes), `EnumSemantics` (1,138 lines, 13 reads / ZERO writes) and
-**`CaptureRecorder` (3,214 lines, 61 reads / 9 writes — the arc's largest MOVE and its largest
-ambient ROW, which is `docs/INVERSION-DESIGN.md` § 2's "the answers are functions of walk-scoped
-state" as a number rather than an argument)**, all stated in the ledger. The ambient TOTAL first
-fell at (P18.59), which wired `Relater` and `MemberNames` to `EnumSemantics` DIRECTLY — the
-Stage-0-exit decision the ledger asked be taken deliberately. Reference points: tsc ≈ 50k lines
-(one file), tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
+extraction):** `Checker.kt` **191,506** lines (**−8,457 across (P18.53)-(P18.61)**; 191,070 when
+the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
+are fixes and pins rather than extractions — so the file is now BELOW where the metric started
+WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
+and **`LexicalScopeResolver`** — ambient surface NONE for all three — `TypeInstantiator`
+(4 reads, 1 write), `NameResolver` (2,284 lines, 26 reads), `Relater` (1,446 lines),
+`MemberResolver` (834 lines, 22 reads), `MemberNames` (771 lines, 4 reads / ZERO writes),
+`EnumSemantics` (1,138 lines, 13 reads / ZERO writes) and `CaptureRecorder` (3,214 lines,
+61 reads / 9 writes — the arc's largest MOVE and its largest ambient ROW, which is
+`docs/INVERSION-DESIGN.md` § 2's "the answers are functions of walk-scoped state" as a number
+rather than an argument), all stated in the ledger. The ambient TOTAL first fell at (P18.59),
+which wired `Relater` and `MemberNames` to `EnumSemantics` DIRECTLY. **STAGE 0 IS NOW
+DECIDED-DOWN rather than exhausted**: (P18.61) sized what is left — 50.6% of the file is check
+passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 reads for EIGHT
+declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
+tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.61) — (INV.0) STEP 9: THE DECISION, TAKEN ON MEASUREMENTS, AND THE SCOPE-SPACE ASCENT GETS ONE HOME, 18,519 / 0 / 3 (2026-09-10).**
+`Checker.kt` **191,540 → 191,506**; `LexicalScopeResolver.kt` 124, **ambient NONE — the first such
+row since step 3**; ledger row 12. **BOTH OPTIONS SIZED RATHER THAN ARGUED**: the check passes are
+where the LINES are (96,830 of 191,499 attributed, 50.6%) and where the SEAMS are not — `cmam*` 83
+ambient reads, `caas*` 59, type-node builders 68, **`cae*` 97 reads for EIGHT declarations**,
+against rows 1-11's 0/0/4/26/22/4/13/45/21/5/61. **AND THE ALTERNATIVE HAD TO BE CORRECTED BEFORE
+IT COULD BE TAKEN**: the queue item offered "open Stage 1" and Stages 1 AND 2 landed on 2026-09-02,
+so the open stage is 3 — a queue item's own factual claims are worth one command to check, this one
+would have sent a round at work that already exists. **WHAT B83.5 IS, MEASURED, AND NOT WHAT ITS
+NAME SAYS**: `Binder` recurses into statements from exactly two places, so a `class` at the very TOP
+of a function body — no block nesting at all — is as unbound as one inside an `if`; against
+tsgo 7.0.2 that shape is 1 ours-only TS2353 and 0 of 4 true rows. **The sub-step is the INERT one
+and it is about DUPLICATION**: the INV.2(c) ascent had been hand-copied FIVE times and the copies had
+drifted on four axes, all deliberately, so they became parameters. **THE GATE IS THE 8-PROFILE GRID,
+NOT THE CORPUS** — three of the five callers are name-GATED, so a wrong axis resolves a name to an
+OUTER binding, which is silent; all eight read `added=0 removed=0`. **TWO TEXTS CORRECTED BECAUSE
+THEY WERE FALSE**: `LexicalScope`'s "UNCONSUMED until INV.4" KDoc (five consults read those tables,
+since round 748) which also proposed the very `existing` read round 748 refused; and both
+`TypeOracle` refusals, which blamed the binder for what is a COMPOSITION problem — a refusal that
+misstates its own blocker is worse than no refusal, because it sizes the next round wrong. Four of
+five ablation arms discriminate; **arm 1 reddens ALL FIVE and is recorded as not being a single-pin
+arm**. cost_gate exit 0, huge_methods exit 0 (842 classes), receipt now SEVEN binaries,
+warning-clean.
 
 **(P18.60) — (INV.0) STEP 8: THE TYPE-CAPTURE FAMILY IS `CaptureRecorder.kt`, AND ITS AMBIENT ROW IS THE DESIGN'S OWN CLAIM AS A NUMBER, 18,514 / 0 / 3 (2026-09-10).**
 `Checker.kt` **194,631 → 191,540** (−3,091, the arc's largest single move); `CaptureRecorder.kt`
@@ -130,32 +156,3 @@ bytecode. **4 pins, 3 arms, one DEAD BY CONSTRUCTION and recorded as such** — 
 test enables; the arm that forces the B202.1 cycle break never to refuse reddens its pin with the
 mechanism verbatim in the message (`TS2589 … at (0,0)`, and the real circular-base row gone).
 cost_gate exit 0, huge_methods exit 0 (837 classes), warning-clean.
-
-**(P18.56) — (INV.0) STEP 5: THE RELATER IS `Relater.kt`, AND THE 6,390-LINE REGION IS ONLY 1,256 LINES OF ALGORITHM, 18,489 / 0 / 3 (2026-09-09).**
-`Checker.kt` **198,022 → 196,797**; `Relater.kt` 1,446; ledger row 7. **The census the item asked
-for changed the shape of the work**: the seven named entry points span a ~6,390-line region and the
-relater is **1,256 lines in five contiguous spans** — the rest is ELABORATION
-(`getPropertyElaborationChain` 546, `getFunctionMismatchElaborationWorker` 407,
-`checkExcessProperties` 231), which answers *what do we SAY about the failure*, a different seam.
-**Deliberately NOT split** where 4b was: one mutually-recursive algorithm, so a mid-recursion cut
-puts a `Checker` hop inside the hottest recursion for no verification benefit. **Delegation surface
-SIX, not 363** — `checkTypeRelatedTo`'s 329 call sites are byte-unchanged behind a one-line hop, and
-eight moved functions have no caller left. **THE MOST REUSABLE FINDING IS A RECEIPT FIX: the
-`--passTiming` pass table is printed in DESCENDING WALL-TIME order**, so its row ORDER is a timing
-artefact and the first comparison read **804 diff lines between two identical binaries**; sorted, and
-with every ms-bearing or time-BUCKETED line dropped, **488 deterministic lines are byte-identical
-against a REBUILT pristine HEAD** (all 420 per-pass rows, the 46 diagnostics, the emissions census,
-the counters, globals lookups) with a same-binary control. **A second: `cost_gate.py`'s ±2% column is
-not a statement about the change** — six counters read non-zero and pristine HEAD reads exactly the
-same deltas, i.e. the recorded baseline is stale; grade a split against a rebuilt pristine and treat
-the gate as the control. **A third: `isTypeAssignableTo` joins `getTypeOfExpression` as a
-`PrintInlining` site that is NOT stable across processes** (proved by running arm A twice), leaving
-`checkArgumentsAgainstSignature` the only one of § 10's three that can separate arms. The split
-IMPROVED inlining for the third row running (`checkTypeRelatedTo`: 344 `too large` refusals → a hop
-with ZERO). ab-interleaved **−11 ms (−0.04%) B-wins-3/6 NOISE-DOMINATED**; `new Relater` appears at
-exactly ONE bytecode in the module. Verbatim proved twice by two methods for the fourth round
-running. **5 pins, 5 arms, and TWO PINS MEASURED UNDISCRIMINATED AND RENAMED rather than claimed**: a
-leak detector cannot work, because the `Relation` cache is probed ABOVE the comparison stack and
-answers an identical pair before a stale key is consulted; and the `isDeeplyNested` bail is not the
-only bound — disabling it entirely still terminates, since `maxRelationDepth` is a second ceiling.
-cost_gate exit 0, huge_methods exit 0 (836 classes), warning-clean.
