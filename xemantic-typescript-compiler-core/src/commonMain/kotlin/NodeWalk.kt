@@ -602,8 +602,14 @@ fun indexSourceFile(sourceFile: SourceFile) {
         // parent link this test needs. A decl whose parent IS the SourceFile lands
         // in the root lexical scope, which ALIASES file locals, so `declareLexical`
         // can never bind it — anything else might.
+        //
+        // (INV.0) step 10a widened this from `type`/`enum` to the whole TYPE-space
+        // set. [NodeKind.CLASS_DECLARATION] .. [NodeKind.ENUM_DECLARATION] are
+        // CONTIGUOUS (23..26 = class, interface, type, enum), so the widening is a
+        // RANGE compare and still costs exactly two int compares per node — see
+        // [SourceFile.nestedScopeTypeDecls] for why those four and no others.
         val k = node.kindId
-        if ((k == NodeKind.TYPE_ALIAS_DECLARATION || k == NodeKind.ENUM_DECLARATION) &&
+        if (k >= NodeKind.CLASS_DECLARATION && k <= NodeKind.ENUM_DECLARATION &&
             node.parent !== sourceFile
         ) {
             val list = nested ?: ArrayList<Node>(4).also { nested = it }
@@ -620,7 +626,7 @@ fun indexSourceFile(sourceFile: SourceFile) {
         }
     }
     sourceFile.nodeCount = nextId
-    sourceFile.nestedEnumOrTypeAliasDecls = nested ?: emptyList()
+    sourceFile.nestedScopeTypeDecls = nested ?: emptyList()
 }
 
 /**

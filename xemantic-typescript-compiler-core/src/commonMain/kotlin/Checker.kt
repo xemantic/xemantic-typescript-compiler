@@ -5836,7 +5836,6 @@ class Checker(
      * the first-wins refusal runs BEFORE the computation.
      */
     internal var nodeAnswerComputations: Int = 0
-        internal set
 
     /**
      * (KIR) The forwarding lens handed to [checkedSink], allocated once and only
@@ -12121,8 +12120,20 @@ class Checker(
      */
     internal var lexicalBlockScopedEnumNames: Set<String> = emptySet()
 
-    /** (CHK.19) round 945 — the gate for [lexicalTypeAliasArity]; see [lexicalBlockScopedEnumNames]. */
-    private var lexicalBlockScopedTypeAliasNames: Set<String> = emptySet()
+    /**
+     * (CHK.19) round 945, WIDENED by (INV.0) step 10a — the program-wide NAME GATE for
+     * every scope-space TYPE consult: the simple names of the `class` / `interface` /
+     * `type` / `enum` declarations the INV.2(c) lexical pass binds in SCOPE space
+     * (id <= -2), i.e. those the main binder never bound (B83.5).
+     *
+     * Read off the binder's own [BinderResult.scopeTypeNames] PROJECTION rather than off
+     * the scopes, which is what keeps a file's INV.2(c) tables unbuilt ((INC.16)); it may
+     * therefore OVER-approximate, and every consumer re-verifies the hit against the real
+     * scope symbol's flags. Empty for almost every program, which is what keeps
+     * [lexicalTypeSymbolForNode] / [lexicalTypeAliasArity] free on the hot type-reference
+     * path: one HashSet probe before any ancestor walk.
+     */
+    internal var lexicalBlockScopedTypeNames: Set<String> = emptySet()
 
     /**
      * (CHK.19) round 945 — the arity of a BLOCK-SCOPED type alias that shadows an outer
@@ -12145,7 +12156,7 @@ class Checker(
      * conventional tables do NOT have — so this cannot change how any bound name resolves.
      */
     private fun lexicalTypeAliasArity(node: Node, name: String): TypeParamInfo? {
-        if (name !in lexicalBlockScopedTypeAliasNames) return null
+        if (name !in lexicalBlockScopedTypeNames) return null
         val scopes = lexicalResolver.scopesOfOwningFile(node) ?: return null
         val sym = lexicalResolver.symbolAt(node, name, scopes, flags = SymbolFlags.TypeAlias)
             ?: return null
@@ -12159,6 +12170,16 @@ class Checker(
         )
     }
 
+    /**
+     * (INV.0) step 10a — is [node] one of the four TYPE-space DECLARATION kinds
+     * `indexSourceFile` stamps into [SourceFile.nestedScopeTypeDecls], i.e. the exact
+     * domain [BinderResult.scopeTypeNames] claims to cover? A `ClassExpression` is
+     * deliberately NOT one.
+     */
+    private fun isScopeTypeDeclarationNode(node: Node): Boolean =
+        node is ClassDeclaration || node is InterfaceDeclaration ||
+            node is TypeAliasDeclaration || node is EnumDeclaration
+
     private fun computeAllEnumValues() {
         // (REL.1)(c) step 4: scope-space enums first — a function-body-scoped enum is
         // invisible to the `result.locals` + namespace-exports walk below, so its
@@ -12169,11 +12190,11 @@ class Checker(
         LexDefer.skippedFiles = 0
         LexDefer.skipViolations = 0
         val blockScoped = HashSet<String>()
-        // (CHK.19) round 945: the block-scoped TYPE-ALIAS census rides this SAME sweep — a
-        // second pass over every scope of every file would be the identical walk for one more
-        // flag test, and this set is what keeps [lexicalTypeAliasArity]'s consult a single
+        // (CHK.19) round 945, WIDENED by (INV.0) step 10a: the block-scoped TYPE-NAME census
+        // rides this SAME sweep — it is a pure fold of the binder's own per-file projection,
+        // which costs nothing here and is what keeps every scope-space TYPE consult a single
         // probe on the hot type-reference path.
-        val blockScopedAliases = HashSet<String>()
+        val blockScopedTypeNames = HashSet<String>()
         for (result in binderResults) {
             // (INC.16) THE ONE READER THAT FORCED EVERY FILE'S INV.2(c) TABLES, served
             // by a PROJECTION instead. `declareLexical` mints a `TypeAlias`- or
@@ -12183,7 +12204,7 @@ class Checker(
             // binder bound. So the binder can say, from the declarations alone, whether a
             // file can contribute at all — and skipping it leaves its tables UNBUILT.
             //
-            // The two halves are NOT symmetric: the alias half wants a NAME, which the
+            // The two halves are NOT symmetric: the NAME half wants a NAME, which the
             // binder hands over directly, while the enum half wants the scope-space SYMBOL
             // (`computeEnumSymbolValues` is id-keyed) and that exists only inside the
             // tables. Only an `enum` reaching a fresh scope therefore forces a build —
@@ -12198,7 +12219,7 @@ class Checker(
             // its own symbols, because a namespace scope ALIASES the merged `exports` and
             // that is not a syntactic fact. [LexDefer.verifySkip] is the positive control:
             // it keeps walking every file and counts what the skip would have missed.
-            blockScopedAliases.addAll(result.scopeTypeAliasNames)
+            blockScopedTypeNames.addAll(result.scopeTypeNames)
             val skippable = !result.declaresScopeEnum
             if (skippable) {
                 LexDefer.skippedFiles++
@@ -12206,11 +12227,28 @@ class Checker(
             }
             for ((_, scope) in result.lexicalScopes) {
                 for ((symName, symbol) in scope.symbols) {
-                    if (symbol.flags.hasAny(SymbolFlags.TypeAlias)) {
-                        // The alias half is served WITHOUT the tables; under the control
-                        // this is where a name the projection missed would show up.
-                        if (symName !in result.scopeTypeAliasNames) LexDefer.skipViolations++
-                        blockScopedAliases.add(symName)
+                    if (symbol.flags.hasAny(SymbolFlags.ScopeTypeDeclaration)) {
+                        // The NAME half is served WITHOUT the tables, ENTIRELY: this
+                        // branch is a CONTROL and contributes nothing to the gate. It
+                        // used to also `add` here, which was inert while the projection
+                        // covered the same declarations — and stopped being inert the
+                        // moment (INV.0) step 10a admitted `class`, because a named
+                        // `ClassExpression` puts its own name in `scope.symbols` and is
+                        // deliberately NOT stamped. Adding it here would make the gate a
+                        // function of whether the file happens to declare a scope-space
+                        // `enum` (the only thing that makes this walk run at all), i.e.
+                        // resolution would differ between two files for a reason neither
+                        // of them states.
+                        //
+                        // The control's DOMAIN is the projection's domain for the same
+                        // reason: an unqualified comparison would report every named
+                        // class expression as a projection MISS forever, which is a
+                        // broken instrument rather than a finding.
+                        if (symbol.declarations.any { isScopeTypeDeclarationNode(it) } &&
+                            symName !in result.scopeTypeNames
+                        ) {
+                            LexDefer.skipViolations++
+                        }
                     }
                     if (!symbol.flags.hasAny(SymbolFlags.Enum)) continue
                     if (skippable) LexDefer.skipViolations++
@@ -12220,7 +12258,7 @@ class Checker(
             }
         }
         lexicalBlockScopedEnumNames = blockScoped
-        lexicalBlockScopedTypeAliasNames = blockScopedAliases
+        lexicalBlockScopedTypeNames = blockScopedTypeNames
         // (INC.52) THE SECOND LOOP, and the expensive one: it visited every file's whole
         // symbol table — recursing through every namespace's `exports` — to find the
         // program's enums, which on tsc's own 78 sources made this the single dearest
@@ -14002,6 +14040,9 @@ class Checker(
 
     private fun lexicalTypeSymbolForNode(node: Node, name: String): Symbol? =
         nameResolver.lexicalTypeSymbolForNode(node, name)
+
+    private fun lexicalEnumSymbolForNode(node: Node, name: String): Symbol? =
+        nameResolver.lexicalEnumSymbolForNode(node, name)
 
     private fun augmentationContextSymbolForNode(node: Node, name: String): Symbol? =
         nameResolver.augmentationContextSymbolForNode(node, name)
@@ -111140,8 +111181,19 @@ interface DataView {
         // (CHK.76) the position-derived consult FIRST: the ambient stack knew only the
         // outermost namespace (the frame families resolved a nested one's name through
         // file locals / `globals`), so inside `N.M` a bare `Node` read as `N.Node`.
+        //
+        // (INV.0) step 10a: and the B83.5 SCOPE-SPACE consult before even that, because
+        // this site does NOT reach [NameResolver.resolveTypeNameToSymbol]'s own
+        // lexical-first arm — it passes `enclosingNamespacesDone = true` having already
+        // asked the namespace chain. A `namespace N { export interface Foo {…}
+        // export function f() { interface Foo {…}; … } }` would otherwise answer `N`'s
+        // `Foo` for a reference inside `f`, which is the wrong (outer) declaration and is
+        // silent. The order is INNERMOST-first in both directions: a scope-space binding
+        // exists only where the main binder bound nothing, so this can never displace a
+        // name the namespace chain legitimately owns.
         val symbol = (node.typeName as? Identifier)?.let {
-            lookupInEnclosingNamespaces(it, it.text, SymbolFlags.Type)
+            lexicalTypeSymbolForNode(it, it.text)
+                ?: lookupInEnclosingNamespaces(it, it.text, SymbolFlags.Type)
                 ?: lookupTypeSymbolInInferenceNamespace(it.text)
         }
             ?: resolveTypeNameToSymbol(node.typeName, enclosingNamespacesDone = true)
@@ -121905,14 +121957,14 @@ interface DataView {
      * failure mode this space cannot survive. Ordering both readers the same way makes them
      * agree by construction.
      *
-     * Containment comes from [lexicalTypeSymbolForNode] itself: it probes
+     * Containment comes from [lexicalEnumSymbolForNode] itself: it probes
      * [lexicalBlockScopedEnumNames] first (empty for almost every program → one HashSet miss)
      * and reads `scope.symbols` ONLY, which `declareLexical` fills exclusively with names the
      * main binder did NOT bind in that container — so no conventionally-bound name can move.
      */
     private fun lexicalEnumSymbolForDiscriminant(enumIdent: String, keyNode: Node): Symbol? {
         if (!R782_LEXICAL_ENUM_DISCRIMINANT) return null
-        val sym = lexicalTypeSymbolForNode(keyNode, enumIdent) ?: return null
+        val sym = lexicalEnumSymbolForNode(keyNode, enumIdent) ?: return null
         return canonicalEnumSymbol(sym)
     }
 
@@ -169286,10 +169338,27 @@ interface DataView {
     }
 
     private fun getKeyofType(type: Type): Type {
-        // keyof any = string | number | symbol (tsc keyofConstraintType). errorType
-        // stays conservative as `string` (its keyof is never displayed/checked meaningfully).
-        if (type === anyType) return getUnionType(listOf(stringType, numberType, esSymbolType))
-        if (type === errorType) return stringType
+        // keyof any = string | number | symbol (tsc keyofConstraintType).
+        //
+        // (INV.0) step 10a: **`errorType` ANSWERS THE SAME OPEN DOMAIN, AND THE COMMENT
+        // THAT USED TO SIT HERE — "its keyof is never displayed/checked meaningfully" —
+        // WAS MEASURABLY FALSE.** `errorType` means "this resolution did not succeed", so
+        // the one thing that cannot be said about its keys is that they are exactly
+        // `string`: that is a CLOSED domain for an UNKNOWN type, i.e. round 463's
+        // partial-key-domain error, and it emits a real false positive as soon as anything
+        // assigns to a binding annotated with it (`keyRemappingKeyofResult`, two false
+        // TS2322 at `a = sym`, where a cyclic mapped type makes `type Orig = {…} & T`
+        // resolve to `errorType` and `type Okay = keyof Orig` is then `string`).
+        //
+        // It was invisible until B83.5's TYPE space opened, for a reason worth keeping:
+        // such an alias used to resolve to NOTHING, so the annotation was `anyType` and
+        // this function was handed `any` — whose arm is the correct open domain. Making
+        // the type real is what narrowed the answer from a correct superset to a wrong
+        // subset. The two arms now agree, which is the invariant: `any` and `errorType`
+        // are both "unknown keys" here.
+        if (type === anyType || type === errorType) {
+            return getUnionType(listOf(stringType, numberType, esSymbolType))
+        }
         if (type is Type.Object) {
             // Only use already-resolved properties to avoid triggering member resolution
             // during init (which can cause test ordering sensitivity).
@@ -169322,6 +169391,22 @@ interface DataView {
             if (resolvedProps.isEmpty()) return stringType
             val literals = resolvedProps.map { Type.StringLiteral(it.name) }
             return getUnionType(literals)
+        }
+        if (type is Type.Intersection && type.types.any { it is Type.TypeParam }) {
+            // (INV.0) step 10a: `keyof (X & T)` where `T` is a bare type parameter has an
+            // OPEN key domain — tsc defers it as an `Index` type and we cannot — so the
+            // one thing that must not happen is answering the CLOSED domain of the part
+            // we can see. That is round 463's law (a partial key domain manufactured an
+            // excess-property TS2353 on a genuinely valid key) reached from a new
+            // direction, and it was invisible while B83.5 kept such an alias at `any`:
+            // `keyof any` is this same union, so making the alias REAL is what narrowed
+            // the answer from a correct superset to a wrong subset
+            // (`keyRemappingKeyofResult`, two false TS2322 at `a = sym`).
+            //
+            // Deliberately the ONLY intersection arm: every other intersection keeps
+            // falling through to `stringType` exactly as before, because widening those
+            // is a separate question with its own population.
+            return getUnionType(listOf(stringType, numberType, esSymbolType))
         }
         if (type is Type.Union) {
             // keyof (A | B) = keyof A & keyof B (intersection of keys)

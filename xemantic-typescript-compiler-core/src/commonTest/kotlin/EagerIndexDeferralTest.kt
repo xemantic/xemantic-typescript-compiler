@@ -87,15 +87,25 @@ class EagerIndexDeferralTest {
      */
     /**
      * Three files, each reaching [Checker.findLocalTypeAlias] — the ONE read site of
-     * the per-file index. The shape is the one that helper exists for: a FUNCTION-LOCAL
-     * (B83.5-unbound) discriminated-union alias used as the element type of an
-     * array-literal assignment, which is what makes the named reference resolve to
-     * `errorType` and fall through to the index.
+     * the per-file index — through a nested `function ha(p: KindA)`, i.e. through
+     * `discUnionParamMembers`, which looks the alias NAME up in this index for every
+     * TypeReference-annotated parameter it walks past.
      *
      * That the fixture REACHES it is the point: a first draft whose aliases were
      * ordinary local `type`s never called the helper at all, so the "fewer files than
      * the program" assertion below passed as 0 < 3 — a blind pin. The
      * `an unpartitioned build` test is the guard that caught it and is why it exists.
+     *
+     * **AND IT CAUGHT A SECOND ONE, 2026-09-10.** The original shape was
+     * `arrayElementUnionAlias`': a function-local discriminated-union alias used as the
+     * element type of an array-literal assignment. That helper consults the index ONLY
+     * after `getTypeFromTypeNode(ref)` fails to produce a union — which was the whole
+     * point of it, since a B83.5-unbound alias resolved to `errorType`. (INV.0) step
+     * 10a makes such an alias RESOLVE, so the reference is a union, the workaround
+     * branch is skipped, and this pin read 0 scans on a perfectly working build. The
+     * fixture moved to the other reader; the array-literal branch of
+     * `arrayElementUnionAlias` is now unreachable for the shape it was written for,
+     * which is a lead rather than a licence to delete it.
      */
     private val program = arrayOf(
         "/proj/a.ts" to """
@@ -104,7 +114,8 @@ class EagerIndexDeferralTest {
             export function fa() {
                 type KindA = { k: "a"; a: number } | { k: "b"; b: string };
                 const xs: KindA[] = [{ k: "a", a: 1 }, { k: "b", b: "s" }];
-                return xs;
+                function ha(p: KindA) { return p.k; }
+                return [xs, ha];
             }
         """,
         "/proj/b.ts" to """
@@ -114,7 +125,8 @@ class EagerIndexDeferralTest {
             export function fb() {
                 type KindB = { k: "a"; a: number } | { k: "b"; b: string };
                 const xs: KindB[] = [{ k: "a", a: 2 }, { k: "b", b: "t" }];
-                return xs;
+                function hb(p: KindB) { return p.k; }
+                return [xs, hb];
             }
         """,
         "/proj/c.ts" to """
@@ -124,7 +136,8 @@ class EagerIndexDeferralTest {
             export function fc() {
                 type KindC = { k: "a"; a: number } | { k: "b"; b: string };
                 const xs: KindC[] = [{ k: "a", a: 3 }, { k: "b", b: "u" }];
-                return xs;
+                function hc(p: KindC) { return p.k; }
+                return [xs, hc];
             }
         """,
     )

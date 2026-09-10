@@ -161,15 +161,15 @@ class LexicalScopeDeferralTest {
             function f() { return 1; }
             """,
         )
-        assert(sf.nestedEnumOrTypeAliasDecls.isEmpty())
+        assert(sf.nestedScopeTypeDecls.isEmpty())
         val result = Binder(CompilerOptions()).bind(sf)
         assert(!result.declaresScopeEnum)
-        assert(result.scopeTypeAliasNames.isEmpty())
+        assert(result.scopeTypeNames.isEmpty())
     }
 
     @Test
     fun `an enum in a function body is the only thing that forces a scope build`() {
-        assert(parse("function f() { enum E { A } return E.A; }").nestedEnumOrTypeAliasDecls.size == 1)
+        assert(parse("function f() { enum E { A } return E.A; }").nestedScopeTypeDecls.size == 1)
         assert(bindOf("function f() { enum E { A } return E.A; }").declaresScopeEnum)
     }
 
@@ -177,7 +177,23 @@ class LexicalScopeDeferralTest {
     fun `a type alias in a block is handed over by name and forces nothing`() {
         val result = bindOf("function f() { type T = number; let x: T = 1; return x; }")
         assert(!result.declaresScopeEnum)
-        assert(result.scopeTypeAliasNames == setOf("T"))
+        assert(result.scopeTypeNames == setOf("T"))
+    }
+
+    /**
+     * (INV.0) step 10a widened the stamp and the projection from `type`/`enum` to the
+     * whole TYPE space, and this is the pin that says so — the SAME four kinds
+     * `Binder.bindLexicalScopes` mints a [SymbolFlags.ScopeTypeDeclaration] symbol for.
+     * A `function` nested there is deliberately NOT carried: it is a VALUE-space name
+     * and `NameResolver.lexicalTypeSymbolForNode` never answers one.
+     */
+    @Test
+    fun `a class and an interface in a function body are carried by the name projection`() {
+        val src = "function f() { class ZzzC {} interface ZzzI { p: number } function g() {} return 1; }"
+        assert(parse(src).nestedScopeTypeDecls.size == 2)
+        val result = bindOf(src)
+        assert(!result.declaresScopeEnum)
+        assert(result.scopeTypeNames == setOf("ZzzC", "ZzzI"))
     }
 
     @Test
@@ -186,17 +202,17 @@ class LexicalScopeDeferralTest {
         // scope aliases the merged `exports`, so `declareLexical` skips the name. That
         // refusal is a fact about the bind, not about the tree, which is why the decision
         // lives in `Binder.scopeTypeDeclarations` and not in `indexSourceFile`.
-        assert(parse("namespace N { type Inner = number; }").nestedEnumOrTypeAliasDecls.size == 1)
+        assert(parse("namespace N { type Inner = number; }").nestedScopeTypeDecls.size == 1)
         val result = bindOf("namespace N { type Inner = number; }")
         assert(!result.declaresScopeEnum)
-        assert(result.scopeTypeAliasNames.isEmpty())
+        assert(result.scopeTypeNames.isEmpty())
     }
 
     @Test
     fun `a type alias inside a function inside a namespace does reach a fresh scope`() {
         val result =
             bindOf("namespace N { export function f() { type T = number; let x: T = 1; return x; } }")
-        assert(result.scopeTypeAliasNames == setOf("T"))
+        assert(result.scopeTypeNames == setOf("T"))
     }
 
     @Test

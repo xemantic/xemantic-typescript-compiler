@@ -25,6 +25,110 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.62) — (INV.0) step 10a: the B83.5 TYPE space, and the arc is FUNNEL-shaped rather than RADIUS-shaped (2026-09-10)
+
+**Suite 18,520 → 18,528 / 0 / 3** (+8 pins). `Checker.kt` 191,506 → 191,591 (+85 — this
+step is a semantic change, not an extraction; the shrinkage dashboard is unmoved in kind).
+**8-profile grid `added=0 removed=0` on all eight**, `cost_gate.py` exit 0, `huge_methods.py`
+exit 0 (842 classes), warning-clean.
+
+**THE ITEM SIZED THE ARC BY ITS BLAST RADIUS AND THAT IS THE WRONG INSTRUMENT FOR ITS FIRST
+SUB-STEPS.** "~357 `globals[` readers downstream" is a real count (`Checker.kt` 328,
+`NameResolver.kt` 24, rest of core 5, plus 69 `.locals[`) and it is a count of AD-HOC
+per-walker name probes — `globals["Record"]`, `globals[callee.text]` — not of the resolution
+LADDER. The ladder has exactly TWO funnels: TYPE space is
+`NameResolver.resolveTypeNameToSymbol` plus `Checker.getTypeFromTypeReference`, VALUE space is
+`Checker.getTypeOfIdentifierCore`. Heritage is a third, smaller one. So the arc decomposes
+10a/10b/10c/10d and none of them has to sweep 357 sites. **Read what a count is a count OF
+before letting it size a round.**
+
+**THE PRIZE, MEASURED OVER A 129-CELL MATRIX AGAINST BOTH REFERENCES** (7 kinds × 4 nesting
+sites × 2 positions × unique/shadowing; `scratchpad/b835/final_matrix.txt`): at the 86 B83.5
+cells, **106 lost true rows and 43 ours-only rows**, TYPE 24/60 and VALUE 19/46. The file-level
+control is 15/15 clean, so the probes are sound. **The variant split is the finding**: a UNIQUE
+scope-space name is **0 ours-only / 36 missing** — it degrades to `any` and every check under it
+goes quiet — while a SHADOWING one is **43 ours-only / 70 missing**, resolving the OUTER
+declaration in 40 of 42 cells. Nesting depth is irrelevant (34/36/36 across fnTop/block/if), so
+CLAUDE.md's B83.5 entry now says a function-body-TOP declaration is as unbound as one three
+blocks deep.
+
+**TWO OF THE ITEM'S OWN FACTUAL CLAIMS WERE WRONG, WHICH IS THE SECOND ROUND RUNNING.** It
+promised "1 ours-only TS2353 removed"; that shape is a MISSING row, not a false positive —
+same fixture, opposite direction. And "round 748 closed the enum half" is exactly half true:
+the enum VALUE position is still silent at every B83.5 site.
+
+**WHAT LANDED.** The stamp (`indexSourceFile`), the binder PROJECTION
+(`BinderResult.scopeTypeNames`), the name GATE (`Checker.lexicalBlockScopedTypeNames`) and the
+consult (`NameResolver.lexicalTypeSymbolForNode`) all widened from `type`/`enum` to the whole
+TYPE space. **The stamp widening is free**: `NodeKind` 23..26 are contiguous, so two int
+compares stayed two int compares. `SymbolFlags.ScopeTypeDeclaration` is `Type` minus
+`TypeParameter`, and that exclusion is the point — folding TPs in would put every `T`/`K`/`V`
+into a set whose whole job is to be empty.
+
+**`getTypeFromTypeReference` NEEDED ITS OWN HOIST, AND NOTHING WOULD HAVE SAID SO.** It asks
+the enclosing-NAMESPACE chain itself and then calls `resolveTypeNameToSymbol` with
+`enclosingNamespacesDone = true`, i.e. past that function's lexical-first arm. Without the
+hoist a namespace member displaces a declaration inside its own function — the outer
+declaration winning again, silently. Its pin is the only one with a namespace and its arm
+reddens nothing else.
+
+**A CONTROL THAT STOPPED BEING INERT, AND ONLY BECAUSE `class` WAS ADMITTED.** The (INC.16)
+verify walk also `add`ed to the name gate. Harmless while the projection covered the same
+declarations — and the moment `class` joined, a named `ClassExpression` (present in
+`scope.symbols`, deliberately NOT stamped) would have entered the gate ONLY for a file that
+also declares a scope-space `enum`, which is the one thing that makes that walk run. A type
+name's resolution would have depended on an unrelated property of its file. The walk is now a
+pure control and the projection is the sole source; its violation count is scoped to the four
+DECLARATION kinds for the same reason.
+
+**THE ONE REGRESSION WAS A PRE-EXISTING DEFECT THIS CHANGE EXPOSED, AND THE INSTRUMENT BEAT
+BOTH HYPOTHESES.** `keyRemappingKeyofResult` grew two false TS2322. Delta-debugging said the
+row needs THREE ingredients at once (the file-level `Oops`/`x` block, the inner `Remapped`
+mapped type, the inner `Oops`/`x` block) — remove any one and it is silent — which is the
+signature of order-dependent resolution, not a missing rule. A temporary marker DIAGNOSTIC
+inside `getKeyofType` (round 947's positive control; `println` is swallowed by `runCli`'s
+stdout capture) answered it in one run: **the input is `errorType`**, and
+`if (type === errorType) return stringType` sat under a comment saying its result "is never
+displayed/checked meaningfully". **That comment was measurably false.** `errorType` means the
+resolution did not succeed, so a CLOSED domain of exactly `string` is round 463's
+partial-key-domain error, and it emits a real false positive as soon as anything assigns to a
+binding annotated with it. **It was invisible because B83.5 kept such an alias at `any` — and
+`keyof any` IS the correct open domain, so making the type real narrowed a correct superset
+into a wrong subset.** The two arms now agree. A first, separate attempt (an intersection arm
+for `keyof (X & T)`) was correct on its own standalone shape, verified, and never fired here;
+it is kept with its own pin and its own ablation arm.
+
+**A COUNTDOWN PIN FIRED EXACTLY AS DESIGNED, WHICH IS THE FIRST TIME IN THIS FAMILY.**
+`negative control - a block scoped interface stays unresolved in type position` was written by
+round 748 as a deliberate marker, and its own KDoc said "it exists so that a future widening
+has to change this pin on purpose". Inverted, with both references confirming. It is kept in
+`FunctionScopedEnumTypePositionTest` rather than moved, because that is where a future
+NARROWING of the slice would be made.
+
+**AND A VACUITY GUARD CAUGHT ITS SECOND BLIND PIN — A B83.5 WORKAROUND WENT DEAD.**
+`EagerIndexDeferralTest`'s `an unpartitioned build still builds the indices it needs` read 0
+scans on a perfectly working build. Its fixture reached `findLocalTypeAlias` through
+`arrayElementUnionAlias`, which consults the index ONLY after `getTypeFromTypeNode(ref)` fails
+to produce a union — the very failure 10a fixes. **So the array-literal branch of that
+workaround is now unreachable for the shape it was written for.** The fixture moved to the
+other reader (`discUnionParamMembers`); the dead branch is recorded as a LEAD, not deleted.
+
+**A PRE-EXISTING WARNING FIXED**: `nodeAnswerComputations`' redundant `internal set` (added by
+step 8). Kotlin does not re-emit warnings on an up-to-date compile, which is how "warning-clean"
+survived a round — a `--rerun-tasks` is what sees them.
+
+**COST**: `globals.lookups` **−0.23%** and `globals.misses` **−0.24%** — the consult answering
+names that used to fall through to a miss — against `mapped.keyed` **+1.18%** and
+`typeOfExpr.distinct` +0.06%, which are the real resolutions where there used to be `any`. All
+inside ±2%, so no rebaseline.
+
+**RESIDUES STATED**: a named `ClassExpression`'s own name is not in the stamp (kind 63, outside
+the contiguous 23..26 range), so that population keeps exactly the resolution it had; heritage
+is untouched (10c); VALUE space is untouched (10b) and is where 46 of the 106 missing rows are.
+
+**NEXT**: 10b, the VALUE space — the bigger half of what is left, and its ladder order is
+load-bearing, so the consult goes INSIDE `getTypeOfIdentifierCore`'s rungs rather than on top.
+
 ### Round (P18.61) — (INV.0) step 9: the decision, taken on measurements, and the scope-space ascent gets one home (2026-09-10)
 
 **Suite 18,519 / 0 / 3** (18,514 + 5 new pins). `Checker.kt` **191,540 → 191,506**;
@@ -709,51 +813,6 @@ onward only**, which no single-ask pin can see.
 combined 4a+4b move is **1,870 lines**, and several of 4a's fourteen ambient reads DISAPPEAR once 4b
 lands, because the two halves call each other — which is why the item's two-commit order is right and
 why 4a's row is the worst it will look.
-
-### Round (P18.52) — static blocks escape, parameter defaults and decorators are reached ((CHK.115)), and the decorator family is TWO opposite mechanisms (2026-09-08)
-
-**Suite 18,437 → 18,477 / 0 / 3** — 40 pins in the new
-`Ts2454StaticBlockParamDefaultDecoratorTest`. Grid **8 × added=0 removed=0**, re-run INDEPENDENTLY;
-corpus 10,344/0, `spine_closure_audit.py` exit 0 (mandatory — a new `spineDaEnterNode` arm),
-`cost_gate.py` exit 0 (largest delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean.
-**43 fixtures, and pristine 6.0.3 and tsgo 7.0.2 agreed on every one** — no adjudication needed.
-
-**(a) REMOVES an ours-only FALSE POSITIVE, and its boundary is counter-intuitive.** A static block's
-assignments now escape into the enclosing flow — tsc's binder says so literally
-(`isImmediatelyInvoked = <IIFE> || node.kind === ClassStaticBlockDeclaration`, binder.ts:1010) — so
-`class A { static { e = "x" } } use(e)` is silent as in both references. **But a static PROPERTY
-INITIALIZER, which also runs at class-evaluation time, does NOT escape**, because tsc gives an
-initialized `PropertyDeclaration` its own control-flow container (binder.ts:3872). The item did not
-state that boundary; arm a13 exists for it. And the escape had to be the **full `markAssignments`
-lattice, not a scan** — a conditional and a `try` must not escape while a `while (true) { … break }`
-must (arms a3/a12).
-
-**(b) IS NINE ROWS, NOT ONE.** The item names the parameter-property case; measured, it is ALL FIVE
-parameter-default spellings (parameter property, constructor, function, arrow, method), plus an
-object-literal method, a binding-pattern element default, an arrow nested inside a default, and a
-class-expression static block inside a default.
-
-**(c) IS TWO OPPOSITE MECHANISMS WEARING ONE SYNTAX.** A MEMBER decorator answers to the LEAK (tsc's
-`isOuterVariable && !isNeverInitialized`); a CLASS decorator answers to the LIVE set, because a
-`ClassDeclaration` is **not a control-flow container** in tsc. A single rule is wrong for one of them,
-and both directions are pinned (arms a8 vs a10b). **A new ours-only row was manufactured and caught
-only by the final full reference sweep**: under STANDARD decorators a parameter decorator is TS1206
-and both references stop there, so the ungated walk added a TS2454 beside it — no profile carries the
-shape, so neither the grid nor the corpus could see it. Now gated on `experimentalDecorators` at two
-layers.
-
-**ARMS — 13, and three of the recorded outcomes are the instructive ones.** a1 4 RED, a2/a12/a13/a4/a5
-1 each uniquely, a3 2, a6 8, a7 2 uniquely, a8 2, a9 5, a10b/a11 1 each uniquely. **a6 is the
-mask/closure pair** — it edits `SpineDispatch.kt` only, so `Checker.class` is UNCHANGED and
-`spine_closure_audit.py` FAILS under it, a second independent instrument. **a10 and a14 were each DEAD
-ALONE** because a `leak.isEmpty()` early return and an `any` gate fire above them; a10b and the a11+a14
-pair are what discriminate — round-927 pairs found by measurement, not by reading. **11 pins are never
-RED and that is correct**: they are POSITIVE CONTROLS asserting today's conservatism, so only an arm
-making the change MORE aggressive can redden them — which a3/a12/a13 are, for the three sharpest.
-
-**THREE RESIDUES MEASURED AND LEFT OPEN**, queued as (CHK.116): static blocks are flow-ORDERED and one
-leak set per class cannot express a read silenced by a LATER block's assignment; and a static block
-inside a nested `function` does not suppress an outer read.
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
 
@@ -1895,29 +1954,57 @@ where the order sends you.
   because they were FALSE: `LexicalScope`'s "UNCONSUMED until INV.4" KDoc and both
   `TypeOracle` refusals, which blamed the binder for what is a COMPOSITION problem.**
 
-- [ ] **(INV.0) STEP 10 / STAGE 3 PROPER — the resolution-ORDER change, to be opened as its
-  own ARC and not as a sub-step.** (P18.61) spent the inert path. What is left is what
-  `NameResolver.kt:1760-1767` states outright: a fallback is NOT enough, the B83.5
-  population has to be consulted BEFORE the conventional ladder, and that is a resolution
-  ORDER change with **~357 `globals[` readers** downstream (`Checker.kt` 328,
-  `NameResolver.kt` 24, rest of core 5; plus 69 `.locals[`). Gated by the corpus AND the
-  8-profile grid, because a wrong resolution is silent in every diagnostic channel here.
-  **The prize, measured 2026-09-10 against tsgo 7.0.2 on a function-body-top shape: 1
-  ours-only TS2353 removed and 4 true rows gained for interface/class/type/function, plus
-  the enum VALUE position's ours-only TS2339** (round 748 closed the TYPE half only).
-  **THAT PROBE IS DONE — MEASURED 2026-09-10 AND THE ANSWER IS YES**, so the arc does NOT
-  have to start with a transient-symbol route. `getTypeOfSymbol` / `getDeclaredTypeOfSymbol`
-  answer correctly for a scope-space `Interface` (`Shape`/`Shape`), `Class` (`Cls`/`Cls`),
-  `Function` (`(a: number) => string` / `any`) and `Variable` (`1` / `any`) — the `any`
-  halves being right, since a value symbol has no declared TYPE. Pinned as
-  `a scope space symbol is a first class symbol to the type system` in
-  `LexicalScopeResolverTest`, whose arm is in `Checker.getDeclaredTypeOfSymbol` rather than
-  in the resolver. **So a resolution-order change can hand these symbols straight to the
-  type system**, and what remains to be sized is the ~357-reader blast radius alone.
-  **And the two oracle rows are NOT unblocked by this alone** — `TypeOracle`'s corrected
-  refusals name what each still needs: a composed resolver plus a `meaning` parameter for
-  `resolveName`, and additionally an `existing`-reading enumeration for `symbolsInScope`,
-  which opens strictly later.
+- [x] **(INV.0) STEP 10a — THE B83.5 *TYPE* SPACE. LANDED 2026-09-10 ((P18.62) note).** The
+  round-748 scope-space consult went from `enum`-only to the whole TYPE space
+  (`class`/`interface`/`type`/`enum`), and `getTypeFromTypeReference` got its OWN hoist
+  because it asks the enclosing-namespace chain itself and passes
+  `enclosingNamespacesDone = true`, i.e. never reaches `resolveTypeNameToSymbol`'s
+  lexical-first arm. Six fixtures byte-identical to tsgo 7.0.2 AND pristine 6.0.3 where
+  before they were silent or answered the OUTER declaration; grid 8×`added=0 removed=0`.
+
+- [ ] **(INV.0) STEP 10b — THE B83.5 *VALUE* SPACE, AND IT IS THE BIGGER HALF OF WHAT IS
+  LEFT.** `Checker.getTypeOfIdentifierCore` answers `anyType` for a scope-space `class`,
+  `function`, `namespace` or `enum` VALUE read. **MEASURED 2026-09-10 over a 129-cell
+  matrix** (7 kinds × 4 nesting sites × 2 positions × unique/shadowing, three compilers;
+  `scratchpad/b835/final_matrix.txt`): at the 86 B83.5 cells the whole population is **106
+  lost true rows and 43 ours-only rows**, split **TYPE 24/60** and **VALUE 19/46** — so
+  after 10a the VALUE half is what remains. Its ladder order is load-bearing and the
+  consult has to be placed INSIDE it, not on top: (CHK.49)'s lib-value-behind-a-type-only-
+  shadow rung and round 429's destructured-param rung both sit above the file-level
+  tables for stated reasons. **What already works and must not regress: `const` in VALUE
+  position resolves at all three nesting sites today** (the walk's `currentLocalTypes`
+  carries value bindings independently of the binder), and `enum` in TYPE position is
+  round 748's. **What is squarely in this step: the enum VALUE position** — `const p:
+  string = ZzzE.ZA` is silent at every B83.5 site, so round 748's closure is exactly half.
+  **And a bound-site defect rides along and should be fixed with it: `typeof <a const>` is
+  MISSING everywhere, including at file and namespace level.**
+
+- [ ] **(INV.0) STEP 10c — HERITAGE.** `NameResolver.resolveHeritageBaseSymbol` is a THIRD
+  resolver (`lookupInEnclosingNamespaces ?: lookupPerFileForNode`, `NameResolver.kt:1955`)
+  and reaches neither 10a's consult nor 10b's, so `class D extends ZzzBase` /
+  `implements ZzzI` where the base is scope-space still answers the outer declaration or
+  nothing. Small, and it is the last of the three TYPE-name funnels.
+
+- [ ] **(INV.0) STEP 10d — THE TWO ORACLE ROWS**, which (P18.61) corrected and 10a does not
+  unblock on its own: `TypeOracle.resolveName` needs a COMPOSED resolver plus a `meaning`
+  parameter, and `symbolsInScope` additionally an `existing`-reading ENUMERATION, so it
+  opens strictly later. The probe those two were waiting on is answered — a scope-space
+  `Interface`/`Class`/`Function`/`Variable` symbol is a first-class symbol to
+  `getTypeOfSymbol`/`getDeclaredTypeOfSymbol` (pinned in `LexicalScopeResolverTest`), so
+  neither row needs a transient-symbol route.
+
+- [ ] **(CHK.117) THE BOUND-CONTAINER DEFECTS THE STEP-10 MATRIX FOUND — NOT B83.5, AND
+  THEREFORE NOT FIXED BY ANY OF 10a-10d (measured 2026-09-10, three compilers).** A
+  `ModuleBlock` IS bound by the binder, and **15 of the 28 namespace-body cells still
+  diverge**: (1) `typeof <namespace-local const>` and `typeof <namespace-local function>`
+  are silent; (2) a nested `namespace`'s VALUE read is silent; (3) **five WRONG-display
+  rows** — we render `Type 'ZzzWrap.ZzzAl'` where both references render `'ZzzAl'` for a
+  NON-EXPORTED namespace member, which is (PARITY.3)'s qualification rule one container
+  over; (4) **a shadowing declaration inside a namespace body resolves the OUTER one in 9
+  of 14 cells**, so the shadow defect is strictly wider than B83.5; (5) an internal
+  INCONSISTENCY worth its own repro — `cls-VALUE-nsBlock-shadow` emits `TS2322: Type
+  'number' …` (the member exists) and `TS2339: Property 'zzzOuter' does not exist` on the
+  SAME line, i.e. two walkers disagreeing about one member.
 
 - [ ] **(REL.1)(c) LEAD, measured 2026-09-09 by (P18.59) and NOT fixed: the same-string
   qualified-display retry is not reached by the VARIABLE-DECLARATION assignability reader.**

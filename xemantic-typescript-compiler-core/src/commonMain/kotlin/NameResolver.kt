@@ -1754,10 +1754,11 @@ internal class NameResolver(
     }
 
     /**
-     * (REL.1)(c) step 4: the position-aware TYPE-space consult for a
-     * function-body-scoped `enum`. Walks the node's ancestor chain outward over the
-     * INV.2(c) `lexicalScopes` table of the node's OWNING file and returns the first
-     * SCOPE-SPACE enum symbol of [name].
+     * (REL.1)(c) step 4, WIDENED to the whole TYPE space by (INV.0) step 10a: the
+     * position-aware consult for a declaration the main binder never bound (B83.5).
+     * Walks the node's ancestor chain outward over the INV.2(c) `lexicalScopes` table
+     * of the node's OWNING file and returns the first SCOPE-SPACE `class` /
+     * `interface` / `type` / `enum` symbol named [name].
      *
      * **This is a resolution-ORDER change, not a fallback, and it cannot be written
      * as one** — of the two B83.5 failure modes only the first is a miss: a UNIQUE
@@ -1772,10 +1773,30 @@ internal class NameResolver(
      * that container, so a conventionally-bound name is absent from `symbols`
      * everywhere and keeps resolving exactly as before. That also gives the shadowing
      * rule for free — a scope-space binding exists only where the main binder had
-     * none, so the innermost-first walk reaches the inner `enum DC` before the file
+     * none, so the innermost-first walk reaches the inner declaration before the file
      * root's aliased locals ever offer the module-scoped one.
+     *
+     * The widening is a STRICT SUPERSET of round 748's enum-only answer — the gate set
+     * and the flag mask both grew — so every enum this answered before it answers still,
+     * which is what keeps [lexicalEnumSymbolForNode]'s readers agreeing with this one
+     * about a shadowing enum (the round-425 SPLIT-key-space failure).
      */
     fun lexicalTypeSymbolForNode(node: Node, name: String): Symbol? {
+        if (name !in checker.lexicalBlockScopedTypeNames) return null
+        val scopes = lexicalResolver.scopesOfOwningFile(node) ?: return null
+        return lexicalResolver.symbolAt(node, name, scopes, flags = SymbolFlags.ScopeTypeDeclaration)
+    }
+
+    /**
+     * Round 748's ENUM-ONLY twin of [lexicalTypeSymbolForNode], kept separate because
+     * its reader ([Checker.lexicalEnumSymbolForDiscriminant]) hands the answer to
+     * `canonicalEnumSymbol` and to the enum-value tables, where a `class` or an
+     * `interface` of the same name is not an answer at all.
+     *
+     * This is `LexicalScopeResolver`'s own rule one layer up (round 918): a consumer
+     * whose axes differ gets its own entry point rather than a widened existing one.
+     */
+    fun lexicalEnumSymbolForNode(node: Node, name: String): Symbol? {
         if (name !in checker.lexicalBlockScopedEnumNames) return null
         val scopes = lexicalResolver.scopesOfOwningFile(node) ?: return null
         return lexicalResolver.symbolAt(node, name, scopes, flags = SymbolFlags.Enum)

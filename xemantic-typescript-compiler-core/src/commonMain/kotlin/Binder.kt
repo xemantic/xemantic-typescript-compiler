@@ -45,11 +45,11 @@ class BinderResult(
      * The enum half is the only half that needs them: the census does not merely record
      * the name, it calls `computeEnumSymbolValues` on the scope-space SYMBOL, and that
      * symbol exists nowhere else. The type-alias half needs a name only, which
-     * [scopeTypeAliasNames] carries — so a file whose block-scoped declarations are all
+     * [scopeTypeNames] carries — so a file whose block-scoped declarations are all
      * type aliases is censused WITHOUT its tables ever being built.
      *
      * False for 76 of tsc's own 78 sources. Decided from
-     * [SourceFile.nestedEnumOrTypeAliasDecls] (a fact about the tree, stamped once per
+     * [SourceFile.nestedScopeTypeDecls] (a fact about the tree, stamped once per
      * parse) plus the bind's OWN namespace symbols, because the namespace case is not a
      * syntactic one: a `namespace` scope ALIASES the merged `exports`, so
      * `declareLexical` skips every name declared in it — but only when that `exports`
@@ -77,17 +77,24 @@ class BinderResult(
      */
     val bindsEnum: Boolean,
     /**
-     * (INC.16) The names of this file's `type` declarations that reach a FRESH INV.2(c)
-     * scope — exactly the names `declareLexical` will mint a `TypeAlias`-flagged scope
-     * symbol for, read off the declarations instead of off the scopes.
+     * (INC.16), widened by (INV.0) step 10a: the names of this file's TYPE-SPACE
+     * declarations — `class`, `interface`, `type`, `enum` — that reach a FRESH INV.2(c)
+     * scope, i.e. exactly the names `declareLexical` will mint a scope symbol for, read
+     * off the declarations instead of off the scopes.
+     *
+     * This is the NAME GATE for every scope-space TYPE consult
+     * (`Checker.lexicalBlockScopedTypeNames`), and reading it off the declarations is
+     * what keeps [lexicalScopes] UNBUILT for a file whose only scope-space declarations
+     * are types — the (INC.16) prize. The ENUM half cannot be served this way and is
+     * [declaresScopeEnum]'s business.
      *
      * Deliberately allowed to OVER-approximate in one shape: a same-named later
-     * declaration in the same fresh scope can overwrite the alias symbol and drop its
-     * `TypeAlias` flag. That only widens `Checker.lexicalBlockScopedTypeAliasNames`,
-     * which is a fast-path NAME GATE whose hit is re-verified against the real scope
-     * symbol's flags — so a widened gate costs a lookup and can change no answer.
+     * declaration in the same fresh scope can overwrite the symbol and drop the flag the
+     * consult asks for. That only widens the gate, whose hit is re-verified against the
+     * real scope symbol's flags — so a widened gate costs a lookup and can change no
+     * answer.
      */
-    val scopeTypeAliasNames: Set<String>,
+    val scopeTypeNames: Set<String>,
     /**
      * (INC.16) Builds the INV.2(c) tables. Invoked on FIRST ASK (the shipped
      * behaviour), or at the end of `Binder.bind` when [LexDefer.deferred] is false.
@@ -291,7 +298,7 @@ class Binder(private val options: CompilerOptions) {
             sourceFile, fileLocals, nodeToSymbol, moduleInstanceStates,
             declaresScopeEnum = scopeTypes.first,
             bindsEnum = bindsEnum,
-            scopeTypeAliasNames = scopeTypes.second,
+            scopeTypeNames = scopeTypes.second,
         ) {
             // The span stays [FrontEnd.BIND_LEX] wherever the build lands, so a
             // cross-round comparison of the scope walk still compares the same
@@ -308,7 +315,7 @@ class Binder(private val options: CompilerOptions) {
     }
 
     /**
-     * (INC.16) See [BinderResult.declaresScopeEnum] / [BinderResult.scopeTypeAliasNames].
+     * (INC.16) See [BinderResult.declaresScopeEnum] / [BinderResult.scopeTypeNames].
      * Runs after [bindStatements], so [lexOwners] already holds every namespace/enum
      * symbol this file's conventional bind produced.
      *
@@ -324,23 +331,29 @@ class Binder(private val options: CompilerOptions) {
         sourceFile: SourceFile,
         lexOwners: Map<Int, Symbol>,
     ): Pair<Boolean, Set<String>> {
-        val decls = sourceFile.nestedEnumOrTypeAliasDecls
+        val decls = sourceFile.nestedScopeTypeDecls
         if (decls.isEmpty()) return NO_SCOPE_TYPE_DECLARATIONS
         var hasEnum = false
-        var aliases: MutableSet<String>? = null
+        var names: MutableSet<String>? = null
         for (decl in decls) {
             if (!reachesFreshLexicalScope(decl, lexOwners)) continue
-            when (decl) {
-                is EnumDeclaration -> hasEnum = true
-                is TypeAliasDeclaration -> {
-                    val set = aliases ?: HashSet<String>(4).also { aliases = it }
-                    set.add(decl.name.text)
-                }
-                else -> {}
+            // (INV.0) step 10a: the NAME half now covers all four TYPE-space kinds, so
+            // one projection serves `Checker.lexicalBlockScopedTypeNames`. The ENUM half
+            // stays a separate boolean because its consumer wants the scope-space SYMBOL
+            // (`computeEnumSymbolValues` is id-keyed) and that exists only inside the
+            // tables — which is exactly the (INC.16) asymmetry.
+            val name = when (decl) {
+                is EnumDeclaration -> { hasEnum = true; decl.name.text }
+                is TypeAliasDeclaration -> decl.name.text
+                is InterfaceDeclaration -> decl.name.text
+                is ClassDeclaration -> decl.name?.text ?: continue
+                else -> continue
             }
+            val set = names ?: HashSet<String>(4).also { names = it }
+            set.add(name)
         }
-        return if (!hasEnum && aliases == null) NO_SCOPE_TYPE_DECLARATIONS
-        else Pair(hasEnum, aliases ?: emptySet())
+        return if (!hasEnum && names == null) NO_SCOPE_TYPE_DECLARATIONS
+        else Pair(hasEnum, names ?: emptySet())
     }
 
     /** See [scopeTypeDeclarations]. */

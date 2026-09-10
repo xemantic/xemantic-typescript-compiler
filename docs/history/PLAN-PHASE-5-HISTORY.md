@@ -1,3 +1,48 @@
+### Round (P18.52) — static blocks escape, parameter defaults and decorators are reached ((CHK.115)), and the decorator family is TWO opposite mechanisms (2026-09-08)
+
+**Suite 18,437 → 18,477 / 0 / 3** — 40 pins in the new
+`Ts2454StaticBlockParamDefaultDecoratorTest`. Grid **8 × added=0 removed=0**, re-run INDEPENDENTLY;
+corpus 10,344/0, `spine_closure_audit.py` exit 0 (mandatory — a new `spineDaEnterNode` arm),
+`cost_gate.py` exit 0 (largest delta **+0.03%**), `huge_methods.py` exit 0, build warning-clean.
+**43 fixtures, and pristine 6.0.3 and tsgo 7.0.2 agreed on every one** — no adjudication needed.
+
+**(a) REMOVES an ours-only FALSE POSITIVE, and its boundary is counter-intuitive.** A static block's
+assignments now escape into the enclosing flow — tsc's binder says so literally
+(`isImmediatelyInvoked = <IIFE> || node.kind === ClassStaticBlockDeclaration`, binder.ts:1010) — so
+`class A { static { e = "x" } } use(e)` is silent as in both references. **But a static PROPERTY
+INITIALIZER, which also runs at class-evaluation time, does NOT escape**, because tsc gives an
+initialized `PropertyDeclaration` its own control-flow container (binder.ts:3872). The item did not
+state that boundary; arm a13 exists for it. And the escape had to be the **full `markAssignments`
+lattice, not a scan** — a conditional and a `try` must not escape while a `while (true) { … break }`
+must (arms a3/a12).
+
+**(b) IS NINE ROWS, NOT ONE.** The item names the parameter-property case; measured, it is ALL FIVE
+parameter-default spellings (parameter property, constructor, function, arrow, method), plus an
+object-literal method, a binding-pattern element default, an arrow nested inside a default, and a
+class-expression static block inside a default.
+
+**(c) IS TWO OPPOSITE MECHANISMS WEARING ONE SYNTAX.** A MEMBER decorator answers to the LEAK (tsc's
+`isOuterVariable && !isNeverInitialized`); a CLASS decorator answers to the LIVE set, because a
+`ClassDeclaration` is **not a control-flow container** in tsc. A single rule is wrong for one of them,
+and both directions are pinned (arms a8 vs a10b). **A new ours-only row was manufactured and caught
+only by the final full reference sweep**: under STANDARD decorators a parameter decorator is TS1206
+and both references stop there, so the ungated walk added a TS2454 beside it — no profile carries the
+shape, so neither the grid nor the corpus could see it. Now gated on `experimentalDecorators` at two
+layers.
+
+**ARMS — 13, and three of the recorded outcomes are the instructive ones.** a1 4 RED, a2/a12/a13/a4/a5
+1 each uniquely, a3 2, a6 8, a7 2 uniquely, a8 2, a9 5, a10b/a11 1 each uniquely. **a6 is the
+mask/closure pair** — it edits `SpineDispatch.kt` only, so `Checker.class` is UNCHANGED and
+`spine_closure_audit.py` FAILS under it, a second independent instrument. **a10 and a14 were each DEAD
+ALONE** because a `leak.isEmpty()` early return and an `any` gate fire above them; a10b and the a11+a14
+pair are what discriminate — round-927 pairs found by measurement, not by reading. **11 pins are never
+RED and that is correct**: they are POSITIVE CONTROLS asserting today's conservatism, so only an arm
+making the change MORE aggressive can redden them — which a3/a12/a13 are, for the three sharpest.
+
+**THREE RESIDUES MEASURED AND LEFT OPEN**, queued as (CHK.116): static blocks are flow-ORDERED and one
+leak set per class cannot express a read silenced by a LATER block's assignment; and a static block
+inside a nested `function` does not suppress an outer read.
+
 ### Round (P18.33) — an exported destructuring IS an export ((CHK.99)), and FOUR of the item's six sites were wrong (2026-09-06)
 
 **Suite 17,981 → 18,021 / 0 / 3** — 40 pins across three files with three different harnesses; no

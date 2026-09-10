@@ -1,3 +1,28 @@
+**(P18.57) — (INV.0) STEP 6a: MEMBER RESOLUTION IS `MemberResolver.kt`, AND THE ITEM'S OPEN QUESTION IS ANSWERED, 18,493 / 0 / 3 (2026-09-09).**
+`Checker.kt` **196,797 → 196,172**; `MemberResolver.kt` 814; ledger row 8. **Second extraction of
+the session.** The queue item asked whether the seam is the table builders *without*
+`getTypeOfSymbol` — **it is**, and the census said so before any code moved: this family reads it
+at ONE site, so a seam that took it would have had to take the whole checker, which is exactly why
+§ 6 puts it in Stage 3. **A much better-shaped seam than the relater, which makes row 7 the arc's
+OUTLIER rather than its trend**: one contiguous span against five, 657 lines against 1,256, **21
+ambient reads against 45**, **1 write against 5** — and the columns are DISJOINT here, the single
+write being (INC.23)'s truncation flag, a pure OUT channel. **There is NO cheap absorption, the
+opposite of row 7 — ZERO of 22 members lack another caller in `Checker.kt`** (row 7 had seven), so
+this row shrinks only by extracting its NEIGHBOURS. **THE RECEIPT IS NOW TRANSITIVE ACROSS THREE
+BINARIES**: the same 488 deterministic `--passTiming` lines are byte-identical for pre-step-5
+pristine, step 5 and step 6a — one receipt over **1,882 moved lines**, at no extra build, because
+the step-5 capture taken earlier in the session IS this round's pristine arm. **A sharper form of
+the JVM-mangling trap, hit twice in one run: widening a member to `internal` AS PART OF THE SPLIT
+mangles a site a PREVIOUS round's receipt was reading** — `getTypeOfExpression` went private →
+internal here and the unmangled grep reads 574 rows before and **0** after, which looks exactly
+like a site that stopped being compiled. The split improved inlining for the fourth row running
+(`resolveStructuredTypeMembers`, 244 call sites: **189 `too large` refusals → ZERO** at the hop);
+ab-interleaved +38 ms (+0.15%) B-wins-3/6 NOISE-DOMINATED; `new MemberResolver` at exactly one
+bytecode. **4 pins, 3 arms, one DEAD BY CONSTRUCTION and recorded as such** — deleting the
+`mrProbeDepth--` changes nothing because that counter only moves under `--passTiming`, which no
+test enables; the arm that forces the B202.1 cycle break never to refuse reddens its pin with the
+mechanism verbatim in the message (`TS2589 … at (0,0)`, and the real circular-base row gone).
+cost_gate exit 0, huge_methods exit 0 (837 classes), warning-clean.
 **(P18.47) — THE REST-TUPLE MODEL IS FIXED ((CHK.111)), THE ITEM'S NAMED SEAM WAS *WRONG* RATHER THAN INCOMPLETE, AND THE REGRESSION IT CAUSED WAS IN ANOTHER MODULE, 18,271 → 18,302 / 0 / 3 (2026-09-08).**
 
 

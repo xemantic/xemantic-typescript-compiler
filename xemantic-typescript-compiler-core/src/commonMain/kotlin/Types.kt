@@ -90,6 +90,22 @@ value class SymbolFlags(val value: Int) {
         val Type = SymbolFlags(
             Class.value or Interface.value or Enum.value or TypeAlias.value or TypeParameter.value
         )
+
+        /**
+         * (INV.0) step 10a — the TYPE-space DECLARATION kinds an INV.2(c) lexical scope
+         * binds in scope space, i.e. [Type] minus [TypeParameter].
+         *
+         * The exclusion is the point rather than a detail: a type parameter is declared
+         * into a fresh lexical scope too, so folding it in would put every `T` / `K` / `V`
+         * in the program into `Checker.lexicalBlockScopedTypeNames`, whose whole job is to
+         * be a near-always-empty NAME GATE that costs one HashSet miss on the hot
+         * type-reference path. A type parameter is already served, ahead of that gate, by
+         * `currentTypeParamScope`.
+         */
+        val ScopeTypeDeclaration = SymbolFlags(
+            Class.value or Interface.value or Enum.value or TypeAlias.value
+        )
+
         val Module = ValueModule or NamespaceModule
     }
 }

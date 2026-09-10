@@ -155,25 +155,34 @@ data class SourceFile(
     var typeAliasesWithTpDefaults: List<TypeAliasDeclaration> = emptyList()
 
     /**
-     * (INC.16) The `enum` / `type` declarations of this file that are NOT a direct
-     * statement of the file itself — the only ones that could possibly land in a FRESH
-     * INV.2(c) lexical scope, which is the only place `init:computeAllEnumValues`'
-     * scope-space census can ever find a row.
+     * (INC.16) The TYPE-SPACE declarations of this file — `class`, `interface`, `type`,
+     * `enum` — that are NOT a direct statement of the file itself, i.e. the only ones
+     * that could possibly land in a FRESH INV.2(c) lexical scope, which is the only
+     * place a scope-space census can ever find a row.
+     *
+     * **Those four kinds and no others**, because they are exactly the ones
+     * `Binder.bindLexicalScopes` declares into a fresh scope under a
+     * `scope.existing == null` gate AND that a TYPE reference can name. A
+     * `FunctionDeclaration` / `ModuleDeclaration` / import is declared there too but is
+     * a VALUE-space name, which `NameResolver.lexicalTypeSymbolForNode` never answers;
+     * a named `ClassExpression` / `FunctionExpression` declares itself into its OWN
+     * scope, which this stamp deliberately does not carry (a gate false-negative, so
+     * that population keeps exactly the resolution it had — see step 10a's note).
      *
      * Empty is the whole point: a file with no such declaration contributes nothing to
-     * `Checker.lexicalBlockScopedEnumNames` / `…TypeAliasNames`, so the census can skip
-     * it — and skipping it is what keeps [BinderResult.lexicalScopes] UNBUILT for that
-     * file, which is the entire (INC.16) prize. A declaration whose parent IS the
-     * SourceFile lands in the root scope, which always aliases file locals, so
-     * `declareLexical` can never bind it; everything else is decided per file by
-     * [BinderResult.declaresScopeEnum] / [BinderResult.scopeTypeAliasNames], where the
-     * namespace case is settled against the bind's own symbols.
+     * `Checker.lexicalBlockScopedTypeNames`, so the census can skip it — and skipping it
+     * is what keeps [BinderResult.lexicalScopes] UNBUILT for that file, which is the
+     * entire (INC.16) prize. A declaration whose parent IS the SourceFile lands in the
+     * root scope, which always aliases file locals, so `declareLexical` can never bind
+     * it; everything else is decided per file by [BinderResult.declaresScopeEnum] /
+     * [BinderResult.scopeTypeNames], where the namespace case is settled against the
+     * bind's own symbols.
      *
      * Stamped by [indexSourceFile], i.e. once per PARSE — and a parse is content-cached
      * across compiles (`CrawlParseCache`), so a warm rebuild inherits it. Body property,
      * excluded from equals/copy like [nodeCount].
      */
-    var nestedEnumOrTypeAliasDecls: List<Node> = emptyList()
+    var nestedScopeTypeDecls: List<Node> = emptyList()
 }
 
 // ===========================================================================

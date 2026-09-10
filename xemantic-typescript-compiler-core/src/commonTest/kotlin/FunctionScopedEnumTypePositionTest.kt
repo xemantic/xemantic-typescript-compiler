@@ -126,16 +126,22 @@ class FunctionScopedEnumTypePositionTest {
     }
 
     /**
-     * Negative control - the slice is ENUM-ONLY by construction. A block-scoped
-     * `interface` is unbound for the same B83.5 reason and stays unresolved, so its
-     * annotation still degrades to `any` and the assignment is still unchecked.
-     * Generalising to the other B83.5 kinds is a much larger change (round 748's
-     * census: 51 corpus files for `interface` alone against 2 for `enum`) and is
-     * deliberately not part of this one. Passes on both builds; it exists so that a
-     * future widening has to change this pin on purpose.
+     * INVERTED 2026-09-10 by (INV.0) step 10a, which is exactly what round 748 wrote
+     * this pin FOR: it was a deliberate marker that the slice was ENUM-ONLY, saying in
+     * its own words that "a future widening has to change this pin on purpose".
+     *
+     * A block-scoped `interface` is unbound for the same B83.5 reason and used to stay
+     * unresolved, so its annotation degraded to `any` and the assignment went
+     * unchecked. It now resolves, and the row is byte-identical to tsgo 7.0.2 and
+     * pristine `typescript@6.0.3`, both measured on this fixture.
+     *
+     * The pin is kept here, rather than folded into `ScopeSpaceTypeResolutionTest`,
+     * precisely because THIS class is where a future narrowing of the slice would be
+     * made — the enum half and the rest of the TYPE space are now one mechanism, and a
+     * change that splits them again has to change this pin on purpose too.
      */
     @Test
-    fun `negative control - a block scoped interface stays unresolved in type position`() {
+    fun `a block scoped interface resolves in type position`() {
         val diagnostics = diagnose(
             """
             function f() {
@@ -144,6 +150,6 @@ class FunctionScopedEnumTypePositionTest {
             }
             """,
         ).filter { it.code == 2322 }
-        assert(diagnostics.isEmpty())
+        assert(diagnostics.map { it.message } == listOf("Type 'number' is not assignable to type 'I'."))
     }
 }
