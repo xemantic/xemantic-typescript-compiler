@@ -6354,20 +6354,27 @@ class Checker(
      * was spent establishing that nothing is wrong. On tsc's own sources that
      * is 99% of the identifiers this pass reaches (round 874's census).
      *
-     * The three sources of such names are exhaustive over [tavBuildLevel]:
+     * The four sources of such names are exhaustive over [tavBuildLevel]:
      *   - the file ROOT's typeOnly + nsOnly, built eagerly by [tavBuildFileRoot];
      *   - `tavFnLevel`'s typeOnly, which is exactly TYPE PARAMETER names;
      *   - `tavModuleLevel`'s typeOnly + nsOnly, which are exactly the
      *     interface / type-alias / namespace names declared DIRECTLY in a
-     *     module block (its filters are dropped here — a superset is sound).
+     *     module block (its filters are dropped here — a superset is sound);
+     *   - `tavListLevel`'s typeOnly + nsOnly, the same three declaration kinds
+     *     declared DIRECTLY in a statement `Block` (a function body, a nested
+     *     block, an `if` block), likewise unfiltered here.
      *
-     * The last two are collected INCREMENTALLY by [spineTavCandidateNode],
+     * The last three are collected INCREMENTALLY by [spineTavCandidateNode],
      * keyed on the node KIND rather than on a syntactic position, so
-     * completeness is structural: the spine enters every `TypeParameter` and
-     * every `ModuleBlock` in the file. It is sound in ORDER because every node
-     * this pass REACHES lies inside a body, a parameter, a heritage expression
-     * or an expression subtree — and `forEachChild` visits `typeParameters`
-     * before all of those, and a `ModuleBlock` before its own statements.
+     * completeness is structural: the spine enters every `TypeParameter`,
+     * every `ModuleBlock` and every `Block` in the file. It is sound in ORDER
+     * because every node this pass REACHES lies inside a body, a parameter, a
+     * heritage expression or an expression subtree — and `forEachChild` visits
+     * `typeParameters` before all of those, and a `ModuleBlock`/`Block` before
+     * its own statements. For a `Block` that ordering is also all that is
+     * needed: a block-scoped declaration is visible to nothing OUTSIDE its own
+     * block, so every identifier that could emit for it lies inside that
+     * block's own subtree, i.e. strictly after the block's enter.
      */
     private val spineTavCandidates = HashSet<String>()
 
@@ -26347,10 +26354,11 @@ class Checker(
     private fun spineEnterKindDispatch(node: Node) {
         when ((node as NodeBase).kindId) {
             NodeKind.IDENTIFIER -> { node as Identifier; spineTavIdentifier(node) }
-            // (WARM.21) — the two kinds that can add a name to the TAV
+            // (WARM.21) — the three kinds that can add a name to the TAV
             // emission-candidate set below the file root. Keyed on the KIND, so
             // completeness is structural: the spine enters every one of them.
-            NodeKind.TYPE_PARAMETER, NodeKind.MODULE_BLOCK -> spineTavCandidateNode(node)
+            NodeKind.TYPE_PARAMETER, NodeKind.MODULE_BLOCK, NodeKind.BLOCK ->
+                spineTavCandidateNode(node)
             NodeKind.PROPERTY_DECLARATION -> {
                 node as PropertyDeclaration
                 spineCheckAccessorModifier(node)
@@ -28561,10 +28569,63 @@ class Checker(
         }
     }
 
+    /**
+     * A statement-list level: the hoist survey of [tavCollectListValues] plus —
+     * since the block-scoped gap was closed — the same direct-child TYPE-ONLY /
+     * NAMESPACE-ONLY classification [tavModuleLevel] performs. Before that, a
+     * `Block` contributed `values` ONLY, so an `interface` / `type` alias /
+     * value-less `namespace` declared inside a function body, a nested block or
+     * an `if` block was in NO level's `typeOnly`/`nsOnly` set and TS2693/TS2708
+     * could not fire for it anywhere (both reference compilers do report it;
+     * the same declarations at file level and in a `ModuleBlock` were already
+     * byte-correct, which is what made this a level-construction gap rather
+     * than a missing emitter).
+     *
+     * The classification rules are [tavModuleLevel]'s VERBATIM so the two
+     * cannot drift, with ONE DELIBERATE DIVERGENCE: `tavModuleLevel` calls
+     * [tavCollectListValues] AFTER classifying, so its `n !in values` guard
+     * sees only the DIRECT-child value declarations (a documented bug-compat
+     * weakness). Here the FULL `values` set is computed FIRST and classified
+     * against, which is strictly STRICTER — it can only put FEWER names into
+     * `typeOnly`/`nsOnly` — and that is the safe direction for a family that
+     * EMITS errors: a merged `interface X` + `function X` in one block, or an
+     * `interface X` beside a hoisted `var X`, must never become type-only.
+     */
     private fun tavListLevel(statements: List<Statement>, parent: TavLevel?): TavLevel? {
         val values = HashSet<String>()
         tavCollectListValues(statements, values)
-        return if (values.isEmpty()) parent else TavLevel(values, null, null, parent)
+        val typeOnly = HashSet<String>()
+        val nsOnly = HashSet<String>()
+        for (s in statements) when (s) {
+            is InterfaceDeclaration -> {
+                val n = s.name.text
+                if (n !in values && !tavHasValue(parent, n) && n !in KNOWN_GLOBALS) typeOnly.add(n)
+            }
+            is TypeAliasDeclaration -> {
+                val n = s.name.text
+                if (n !in values && !tavHasValue(parent, n) && n !in KNOWN_GLOBALS) typeOnly.add(n)
+            }
+            is ModuleDeclaration -> {
+                val n = (s.name as? Identifier)?.text
+                if (n != null && n !in values && !tavHasValue(parent, n)) {
+                    val subBody = s.body
+                    val hasValues = subBody is ModuleBlock && subBody.statements.any { ss ->
+                        ss is FunctionDeclaration || ss is ClassDeclaration ||
+                            ss is VariableStatement || ss is EnumDeclaration ||
+                            ss is ModuleDeclaration
+                    }
+                    if (!hasValues) nsOnly.add(n)
+                }
+            }
+            else -> {}
+        }
+        return if (values.isEmpty() && typeOnly.isEmpty() && nsOnly.isEmpty()) parent
+        else TavLevel(
+            if (values.isEmpty()) null else values,
+            if (typeOnly.isEmpty()) null else typeOnly,
+            if (nsOnly.isEmpty()) null else nsOnly,
+            parent,
+        )
     }
 
     /** The deleted ModuleDeclaration arm's body survey (B86.8): the namespace's
@@ -28925,20 +28986,33 @@ class Checker(
      * (WARM.21) — extend [spineTavCandidates] with what a level built AT or
      * BELOW [node] could contribute to a `typeOnly`/`nsOnly` set.
      *
-     * Called from the spine's per-kind enter dispatch for exactly two kinds,
+     * Called from the spine's per-kind enter dispatch for exactly three kinds,
      * which is what makes it complete: `tavFnLevel` puts nothing but TYPE
-     * PARAMETER names into `typeOnly`, and `tavModuleLevel` nothing but the
-     * interface / type-alias / namespace names declared directly in a module
-     * block. Its filters (`n !in values`, `!tavHasValue(parent, n)`,
-     * `n !in KNOWN_GLOBALS`, the sub-module value survey) are deliberately NOT
-     * reproduced: dropping a filter widens the set, and a WIDER gate can only
-     * let more identifiers through to the unchanged pass.
+     * PARAMETER names into `typeOnly`, and `tavModuleLevel` / `tavListLevel`
+     * nothing but the interface / type-alias / namespace names declared
+     * directly in a module block or a statement BLOCK. Its filters
+     * (`n !in values`, `!tavHasValue(parent, n)`, `n !in KNOWN_GLOBALS`, the
+     * sub-module value survey) are deliberately NOT reproduced: dropping a
+     * filter widens the set, and a WIDER gate can only let more identifiers
+     * through to the unchanged pass.
+     *
+     * The `Block` arm is what makes the block-scoped half of `tavListLevel`
+     * OBSERVABLE — without it the (WARM.21) superset gate refuses the name
+     * before any level is consulted, and the level's `typeOnly`/`nsOnly` sets
+     * are built and never read.
      */
     private fun spineTavCandidateNode(node: Node) {
         if (!spineTavActive) return
         when (node) {
             is TypeParameter -> spineTavCandidates.add(node.name.text)
             is ModuleBlock -> for (st in node.statements) when (st) {
+                is InterfaceDeclaration -> spineTavCandidates.add(st.name.text)
+                is TypeAliasDeclaration -> spineTavCandidates.add(st.name.text)
+                is ModuleDeclaration ->
+                    (st.name as? Identifier)?.text?.let { spineTavCandidates.add(it) }
+                else -> {}
+            }
+            is Block -> for (st in node.statements) when (st) {
                 is InterfaceDeclaration -> spineTavCandidates.add(st.name.text)
                 is TypeAliasDeclaration -> spineTavCandidates.add(st.name.text)
                 is ModuleDeclaration ->

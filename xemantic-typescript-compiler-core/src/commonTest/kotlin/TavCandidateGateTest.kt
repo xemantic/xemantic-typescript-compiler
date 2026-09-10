@@ -54,6 +54,9 @@ import kotlin.test.Test
  *  - `tavFnLevel`'s `typeOnly`, which is exactly TYPE PARAMETER names;
  *  - `tavModuleLevel`'s `typeOnly`/`nsOnly`, which are exactly the interface /
  *    type-alias / namespace names declared directly in a module block;
+ *  - `tavListLevel`'s `typeOnly`/`nsOnly` — the same three declaration kinds
+ *    declared directly in a statement `Block` (pinned by
+ *    `BlockScopedTypeUsedAsValueTest`, which owns that source and its guards);
  *  - the static `TYPE_ONLY_KEYWORDS` set.
  *
  * A pin per source means a source dropped from the collector reddens exactly one
