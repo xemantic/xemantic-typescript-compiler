@@ -113,8 +113,12 @@ forbids, so that pin asserts the winning node's KIND only.
 PASSES, which § 6 puts LAST — `spine*` (three blocks over 7,400 lines), `check*`,
 `cmam*`, `caas*`, `cae*`, `cvda*`. The remaining non-check families are SMALL. So step 9
 is a decision, not a census: either start on the check passes (which needs a rule for
-what a "pass" collaborator even is, since they read the whole checker) or stop Stage 0
-and open Stage 1. Say which, and why, before moving any line.
+what a "pass" collaborator even IS, since they read the whole checker and write
+`diagnostics`) or stop Stage 0 and open **STAGE 3** — *not* Stage 1 or 2, both of which
+LANDED on 2026-09-02 (§§ 9a/9b), a correction made to the queue item in this same round
+after it was first written wrong. Stage 3 is "dissolve B83.5", which `TypeOracle`'s own
+`resolveName` / `symbolsInScope` refusal names in words as its blocker. Say which, and
+why, before moving any line.
 
 ### Round (P18.59) — (INV.0) step 7: the ENUM family becomes `EnumSemantics.kt`, and the arc's ambient TOTAL falls for the first time (2026-09-09)
 
@@ -1879,10 +1883,18 @@ where the order sends you.
   with a shared frame (`cmam*`, `caas*`, `cvda*`, `cae*` each are that) — census its
   ambient row FIRST, and expect it to look like row 11's, because a walker's ambient IS
   the walk.
-  (b) **STOP STAGE 0 AND OPEN STAGE 1** (`docs/INVERSION-DESIGN.md` § 6: the per-file
-  `nodeTypeId` store behind a flag, with the pin that proves it captures what post-hoc
-  cannot). Row 11 is the argument FOR this: it measured, rather than argued, that the
-  capture answers are walk-scoped, which is the premise Stage 1 exists to act on.
+  (b) **STOP STAGE 0 AND OPEN STAGE 3.** **NOT Stage 1 or 2 — both LANDED on 2026-09-02**
+  (`docs/INVERSION-DESIGN.md` §§ 9a/9b: the `NodeAnswerStore` and the `TypeOracle` facade
+  over it, with its handle table and its per-row divergence table). Stage 3 is
+  `docs/INVERSION-DESIGN.md` § 6's "tree-derived scope resolution — dissolve B83.5", and
+  the oracle itself names it as the blocker: `TypeOracle.resolveName` and
+  `symbolsInScope` throw an `OracleRefusal` that says so in words. **Row 11 is the
+  argument FOR this**: it MEASURED, rather than argued, that the capture answers are
+  walk-scoped, which is the premise the store and the oracle were built on — and the two
+  methods the oracle still refuses are the ones a Kotlin consumer of the "embeddable
+  whole-program checker" actually needs. B83.5 is a BINDER change (block-scoped
+  declarations are never bound — CLAUDE.md's entry), so it is semantics, gated by the
+  corpus, and it is a bigger round than any extraction here.
   **The owner metric is SHRINKAGE**, so (a) still pays in lines; but it stops paying in
   AMBIENT, and rows 7-11 show the ambient total only falls when a family someone else owns
   can be wired directly. Take the decision explicitly.
