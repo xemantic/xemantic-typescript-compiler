@@ -2879,3 +2879,35 @@ leak detector cannot work, because the `Relation` cache is probed ABOVE the comp
 answers an identical pair before a stale key is consulted; and the `isDeeplyNested` bail is not the
 only bound — disabling it entirely still terminates, since `maxRelationDepth` is a second ceiling.
 cost_gate exit 0, huge_methods exit 0 (836 classes), warning-clean.
+
+**(P18.65) — (INV.0) STEP 10d: THE ORACLE'S `resolveName` IS ANSWERED, AND THE ROW THAT OPENS LATER STAYS REFUSED, 18,546 / 0 / 3 (2026-09-10).**
+**THE REFUSAL WAS CORRECTED BEFORE IT WAS CLOSED, AND THAT IS WHY THIS WAS ONE ROUND AND NOT
+A STAGE**: until (P18.61) it blamed the retained tables for lacking the block-scoped
+population, and step 9 measured that they HOLD it — so what was missing was a COMPOSITION
+plus a `meaning` split, and 10a/10b/10c had already built every leg.
+`Checker.oracleResolveName` is three lines — the INV.2(c) ascent, `lookupInEnclosingNamespaces`,
+`lookupPerFileForNode`, each meaning-masked — **built out of the checker's OWN functions
+rather than beside them**, which is what keeps a post-hoc answer from drifting from what the
+walk did. It reaches the whole B83.5 population, a PARAMETER and a body-local `const`
+included, and answers the INNER of two same-named declarations. **THE ASCENT IS
+DELIBERATELY UN-GATED AND THE ABLATION PROVES IT MUST BE**: gating it on the program-wide
+name gate reddens exactly the pins that REMOVING the leg does, because that gate is a
+projection of six DECLARATION kinds and a parameter is not one. **A PIN WRITTEN AGAINST THE
+RESOLVED SYMBOL'S *TYPE* FAILED, AND THAT IS THE SECOND FINDING**: `const useLocal = collide`
+renders the FILE-LEVEL `collide`'s type at rest and an inferred return renders `any`, on a
+binary that resolves every symbol correctly — `typeOfSymbol` re-infers with no walk ambient
+installed, so **`resolveName` answers the SYMBOL and an un-annotated local's TYPE is
+`typeAt`'s answer**. **`symbolsInScope` STAYS REFUSED** because its reason is accurate: an
+ENUMERATION must also read `LexicalScope.existing`, the INV.3 question round 748's rule keeps
+out; its pin now asserts the refusal still NAMES that, so the two rows cannot be closed
+together by accident. **ABLATION: five arms, union 3 of 27, and THREE have no unique pin —
+recorded, not smoothed.** The leg-removed and leg-gated arms are a PAIR with an identical red
+set; the FALLBACK arm reddens a strict SUBSET whose survivor is the shadowing pin (round
+748's ordering law, a fourth time); and **`stopFlags` is 0 RED even after a pin was written
+FOR it** — 10b's consult filters to `ScopeValueDeclaration`, which does not accept a
+variable, so the ascent had to be told to STOP at one, while the oracle's mask is the SPACE,
+which accepts it: a REDUNDANT GUARD for every documented mask, kept because the mask is a
+caller's parameter. **TWO TEXTS CORRECTED BECAUSE THEY WERE FALSE** — `TypeOracle`'s class
+KDoc and `docs/type-oracle.md` § 3b both still said the retained tables leave block-scoped
+declarations unbound. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0
+(844 classes), warning-clean.

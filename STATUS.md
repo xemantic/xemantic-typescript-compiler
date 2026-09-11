@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **191,863** lines (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions; 191,070 when
+extraction):** `Checker.kt` **192,309** lines (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -18,6 +18,43 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.71) — (CHK.97) STAGE 3 D4: THE NULLISH-UNION CALLEE'S ARGUMENT CHECK, AND A SUPPRESSION WHOSE GATE WAS TWO MECHANISMS, 18,669 / 0 / 3 (2026-09-11).**
+One of (CHK.97)'s six stage-3 deliverables closed — **and all six were measured against
+tsgo 7.0.2 and pristine 6.0.3 BEFORE one was picked**, with zero REF-SPLIT rows anywhere.
+That ranking is most of the round's value: D4 had **11 MISSING rows and a real gate**,
+D2/D3 three each with only a control, D5 one, **D1 exactly ZERO** — and D6 is BLOCKED on a
+model change (`Signature.thisParameter`), named rather than attempted. **D1 IS REJECTED ON
+A MEASUREMENT, NOT DEFERRED**: its only visible readers are `ReturnType<U>`/`Parameters<U>`,
+and what the references print there is tsc's conditional-type DISTRIBUTION, not
+`getUnionSignatures` — combining would be wrong in a NEW way across 35 readers. **THE ITEM'S
+AXIS WAS WRONG AND A FIXTURE BUILT ON IT MEASURES NOTHING**: it says "`f?.(1)`'s argument
+check", but `?.` is innocent — `g?.(1)` on a plain `Fn` already reported, while the
+`?.`-free `if (zu) { zu(1) }` was silent. The population is a callee **TYPE**. **THE
+REUSABLE DEFECT IS ONE NEITHER THE ITEM NOR THE BRIEF NAMED: a suppression's gate was two
+mechanisms wearing one `if`** — the round-408 pre-pass conjoined "is this callee narrowable"
+with "strip nullish for an optional call", and the second is a property of the CALL, not the
+callee expression; for every other callee kind the nullish member survived into the
+not-callable verdict as an **OURS-ONLY TS2349 on legal code, four of them, one per callee
+kind**. Its sibling: **a `Boolean`-returning pre-pass can only spend a suppression by
+CONSUMING the call**, so the narrowed value it had just computed had nowhere to go —
+`ccetUnionCalleeChecks` now answers `Type?` (null = consumed), the argument-side mirror of
+the RESULT-side strip stage 2 put in `getReturnTypeOfCallExpression`. **RECEIPT: agree
+8 → 20, ours-only 4 → 0, missing 19 → 7**, both directions. **THE GRID IS A REAL GATE HERE
+AND IT IS GREEN, WHICH IS THE INTERESTING PART** — unlike last round's two items, a
+positive control counts **49-101 hand-offs per profile**, so hundreds of arguments never
+before checked on tsc's own sources were checked and all are correct; (CHK.50)'s law did not
+fire. **A LATENT PATH WAS PROBED RATHER THAN ARGUED**: `allCallable` answers true for
+`any`/`errorType`, so an unresolved union member now hands its union back — measured, zero
+ours-only rows. **THE SUITE XMLs HAD BEEN WIPED BY A LATER FILTERED `--tests` RUN** (the
+results dir held 1,524 tests, which reads exactly like a suite that never ran), so every
+gate was re-run or re-derived from the capture files rather than inherited — including a
+`javap | grep -v 'line N:'` control proving the grid's AFTER binary is bytecode-identical to
+the committed one. Ablation 6 arms / 17 pins with BOTH controls, no 0-RED arm; four residues
+recorded in the pin KDoc and **not pinned** (no countdown pins). Two findings queued:
+(CHK.129) an `as`-asserted callee loses its argument check entirely, and (CHK.128)
+`arr?.[0]` on a nullish array union types as `any`. Grid 8×`added=0 removed=0`, cost_gate
+exit 0 (no rebaseline, max `mapped.keyed` +1.18%), huge_methods exit 0 (844), warning-clean.
 
 **(P18.70) — SIX (CHK.*) ITEMS, AND THE INSTRUMENT THAT WAS DROPPING ROWS, 18,652 / 0 / 3 (2026-09-11).**
 Two (CHK.\*) items closed and **both queue items were wrong about their own size**, a
@@ -170,34 +207,3 @@ behaviourally the SAME mistake as the inverse gate (identical red set), and the
 namespaces-excluded arm is 0 RED and recorded UNDISCRIMINATED rather than smoothed. Grid
 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844 classes), warning-clean.
 
-**(P18.65) — (INV.0) STEP 10d: THE ORACLE'S `resolveName` IS ANSWERED, AND THE ROW THAT OPENS LATER STAYS REFUSED, 18,546 / 0 / 3 (2026-09-10).**
-**THE REFUSAL WAS CORRECTED BEFORE IT WAS CLOSED, AND THAT IS WHY THIS WAS ONE ROUND AND NOT
-A STAGE**: until (P18.61) it blamed the retained tables for lacking the block-scoped
-population, and step 9 measured that they HOLD it — so what was missing was a COMPOSITION
-plus a `meaning` split, and 10a/10b/10c had already built every leg.
-`Checker.oracleResolveName` is three lines — the INV.2(c) ascent, `lookupInEnclosingNamespaces`,
-`lookupPerFileForNode`, each meaning-masked — **built out of the checker's OWN functions
-rather than beside them**, which is what keeps a post-hoc answer from drifting from what the
-walk did. It reaches the whole B83.5 population, a PARAMETER and a body-local `const`
-included, and answers the INNER of two same-named declarations. **THE ASCENT IS
-DELIBERATELY UN-GATED AND THE ABLATION PROVES IT MUST BE**: gating it on the program-wide
-name gate reddens exactly the pins that REMOVING the leg does, because that gate is a
-projection of six DECLARATION kinds and a parameter is not one. **A PIN WRITTEN AGAINST THE
-RESOLVED SYMBOL'S *TYPE* FAILED, AND THAT IS THE SECOND FINDING**: `const useLocal = collide`
-renders the FILE-LEVEL `collide`'s type at rest and an inferred return renders `any`, on a
-binary that resolves every symbol correctly — `typeOfSymbol` re-infers with no walk ambient
-installed, so **`resolveName` answers the SYMBOL and an un-annotated local's TYPE is
-`typeAt`'s answer**. **`symbolsInScope` STAYS REFUSED** because its reason is accurate: an
-ENUMERATION must also read `LexicalScope.existing`, the INV.3 question round 748's rule keeps
-out; its pin now asserts the refusal still NAMES that, so the two rows cannot be closed
-together by accident. **ABLATION: five arms, union 3 of 27, and THREE have no unique pin —
-recorded, not smoothed.** The leg-removed and leg-gated arms are a PAIR with an identical red
-set; the FALLBACK arm reddens a strict SUBSET whose survivor is the shadowing pin (round
-748's ordering law, a fourth time); and **`stopFlags` is 0 RED even after a pin was written
-FOR it** — 10b's consult filters to `ScopeValueDeclaration`, which does not accept a
-variable, so the ascent had to be told to STOP at one, while the oracle's mask is the SPACE,
-which accepts it: a REDUNDANT GUARD for every documented mask, kept because the mask is a
-caller's parameter. **TWO TEXTS CORRECTED BECAUSE THEY WERE FALSE** — `TypeOracle`'s class
-KDoc and `docs/type-oracle.md` § 3b both still said the retained tables leave block-scoped
-declarations unbound. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0
-(844 classes), warning-clean.

@@ -25,6 +25,136 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.71) — (CHK.97) stage 3: the nullish-union callee's argument check, and a suppression whose gate was two mechanisms (2026-09-11)
+
+**Suite 18,652 → 18,669 / 0 / 3** (+17 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
+exit 0 with no rebaseline (largest delta `mapped.keyed` +1.18%, `output.errors` 46 and
+`spine.nodes` +0.00%); `huge_methods.py --fail-over 0` exit 0 (844 classes, 0 over);
+warning-clean. **(CHK.97) stays OPEN** — one of its six stage-3 deliverables closed.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item, so
+top-to-bottom order and the WORK ORDER's 2026-09-08 addendum agree; per that addendum
+this round names its successor — **(INV.0) step 10b-ii**, which the order points at the
+moment the parity arc stops paying in measured reference rows. It paid 11 rows here.
+
+**ALL SIX STAGE-3 DELIVERABLES WERE MEASURED BEFORE ONE WAS PICKED**, against tsgo 7.0.2
+and pristine 6.0.3, with **zero REF-SPLIT rows anywhere** — so every verdict below is
+adjudicable:
+
+| deliverable | measured prize | gate it would have |
+|---|---|---|
+| D4 nullish-union ARGUMENT check | **11 MISSING** | REAL (74-131 `?.(` sites × 8 profiles) |
+| D2 both-overloaded → TS2349 | 3 MISSING | control (tsc's sources have no such callee) |
+| D3 union contextual type | 3 MISSING, half unbounded | control |
+| D5 generic inference through a combined signature | 1 MISSING | — |
+| D1 `getCallSignaturesOfType`'s union arm | **0 MISSING** | blind (display-only, (PARITY.1)) |
+| D6 `this` / TS2684 | blocked | — |
+
+**D1 IS REJECTED ON A MEASUREMENT, NOT DEFERRED.** Its only visible readers are
+`ReturnType<U>` / `Parameters<U>`, and there is **no MISSING row** — the three diffs are
+TEXT-DIFFs, and what the references print there is tsc's conditional-type **distribution**,
+not `getUnionSignatures`: `Parameters<G1|G2>` is `[a: string] | [a: number]` where the
+combined list gives `[never]`. So combining there would be **wrong in a new way** for
+`Parameters` and right by coincidence for `ReturnType`, across 35 readers. **D6 is BLOCKED
+and the unblocker is named**: `Signature.thisParameter` (`Type.kt:318`) does not exist, and
+three separate consumers need it — do not attempt it as a diagnostic fix.
+
+**THE ITEM'S AXIS WAS WRONG: `?.` IS INNOCENT.** It states the deliverable as "`f?.(1)`'s
+ARGUMENT check (the round-408 pre-pass consumes the call)". Measured, `g?.(1)` on a plain
+`Fn` reports, and so does `arr[0]?.(1)` on a `Fn[]`. The population is a callee **TYPE** —
+a union carrying a nullish member — which is why the `?.`-free `if (zu) { zu(1) }` is in it
+(an Identifier callee is not flow-narrowed, so the DECLARED union reaches the pre-pass).
+A fixture built around the token measures the wrong thing.
+
+**THE DEFECT NEITHER THE ITEM NOR THE BRIEF NAMED — AND IT IS THE REUSABLE ONE: A
+SUPPRESSION'S GATE WAS TWO MECHANISMS WEARING ONE `if`.** The round-408 pre-pass's
+optional-call nullish strip sat INSIDE the narrowable-reference gate
+(`Identifier || PropertyAccessExpression`). But stripping nullish for an optional call is a
+property of the **call**, not of the callee expression — tsc drops nullish from the apparent
+callee type however the callee is written. For every other callee kind the nullish member
+survived into the case-(b) verdict and produced an **OURS-ONLY TS2349 on legal code**:
+**four of them, one per callee kind** (element access, call expression, parenthesized,
+chained optional call). Hoisting the strip above that gate is what fixed them; the flow
+re-narrow stays gated, because narrowABILITY really is a property of the expression.
+
+**AND THE MECHANISM BEHIND THE SILENCE: A `Boolean`-RETURNING PRE-PASS CAN ONLY SPEND A
+SUPPRESSION BY CONSUMING THE CALL.** `ccetUnionCalleeChecks` answered `true` = "caller
+returns", so the two FP suppressions it owns could be paid for only with the argument
+check — the narrowed value it had just computed had nowhere to go. It now answers `Type?`:
+null = consumed, otherwise the EFFECTIVE callee type the caller resolves signatures against.
+One caller, one definition, so the contract change is compiler-checked. It is the
+argument-side mirror of the RESULT-side strip stage 2 put in `getReturnTypeOfCallExpression`
+(`Checker.kt:125895`), which is why `b?.("s")`'s RESULT already agreed while its ARGUMENT
+was silent.
+
+**SITE B NEEDED NO STRIP OF ITS OWN, AND THAT WAS MEASURED RATHER THAN ARGUED.** Every path
+that hands off has already established `allCallable`, so the union arriving at the signature
+computation is nullish-free by construction — the element-access shape is fixed by the
+hoist alone. What Site B did need is to resolve against the EFFECTIVE type and never the
+original union: for `Fn1 | Fn2 | undefined` the references combine the stripped pair into a
+single `never` parameter, where the original union's `getCallSignaturesOfType` CONCATENATION
+reads as an overload set and prints TS2769 (ablation arm a3 reproduces that verbatim).
+
+**RECEIPT** (`scripts/ref_matrix.py`, 3 fixtures): **agree 8 → 20, ours-only 4 → 0,
+missing 19 → 7**; text-diff 0, span-diff 0, ref-split 0 throughout. Both directions moved —
+4 false positives removed AND 12 lost diagnostics recovered.
+
+**THE GRID IS A REAL GATE HERE, IT IS GREEN, AND THAT IS THE INTERESTING PART.** Unlike
+(CHK.119)/(CHK.124) last round, this family IS in tsc's own sources: a positive-control arm
+counted **49-101 hand-offs per profile** (~542 calls, every profile ≥49). So hundreds of
+arguments that had never been checked on tsc's own codebase were checked for the first time
+and **all of them are correct** — (CHK.50)'s "making a type real surfaces what `any` was
+hiding" did not fire, which is a statement about the combination being right, not about the
+grid being blind.
+
+**A LATENT PATH THE BRIEF MISSED WAS PROBED BEFORE GATING.** `allCallable` answers true for
+`anyType`/`errorType`, so a union carrying an unresolved member now hands that union back
+instead of consuming it. Measured directly: `((a: string) => void) | ZzzUnresolved` and
+`... | any` both produce **zero ours-only rows** on all three compilers. Refuted, not argued
+— and no guard was added for an unreachable case.
+
+**THE SUITE XMLs WERE WIPED BY A LATER FILTERED RUN, AND THE COUNT WAS RE-TAKEN.** A
+`--tests '*Name*'` invocation deletes the XMLs, so the results dir held **1,524** tests when
+the round went to gate — CLAUDE.md's documented trap, and it reads exactly like a suite that
+never ran. Every gate in this note was re-run or re-derived from the capture files by the
+orchestrator rather than inherited: the suite, the grid (recomputed from the per-profile
+`comm` diffs), `cost_gate.py`, `huge_methods.py`, warning-clean, and a
+`javap -c -p | grep -v 'line N:'` control proving the grid's AFTER binary is bytecode-
+identical to the committed one (their md5s differ, because a KDoc shifts every
+`LineNumberTable` entry).
+
+**ABLATION: 6 arms / 17 pins, BOTH controls, no 0-RED arm.** c0 comment-only = 0 RED
+(the control behaves); c1 consume every union callee = 15 RED (the 2 green are the
+deliberately non-union controls); a1 revert the hand-off = 11; a2 revert the widened strip =
+**exactly the 4** non-narrowable callee kinds; a3 resolve against the original union = 1,
+printing TS2769 verbatim; a4 drop the `allCallable` gate = 2, turning the case-(b) TS2349
+into a TS2345 about a non-callable callee. Every arm discriminating.
+
+**FOUR RESIDUES, MEASURED, RECORDED IN THE PIN CLASS'S KDoc AND *NOT* PINNED** — no
+countdown pins (the fifth and sixth fired last round): `arr?.[0]` on
+`(Fn|undefined)[] | undefined` types as `any` (a missing TS2322 with no call in sight, now
+(CHK.128)); a NON-optional nullish union is TS2721/2/3 and consumes, where both references
+also report the argument row (invariant 4 territory, deliberately out of scope); `ar?.("x","y")`
+loses the union arity path once one member survives; and two GENERIC members with
+non-identical type parameters beside `undefined` stay silent. **The last two read IDENTICALLY
+before and after** — not introduced.
+
+**REFUSED, WITH REASONS**: converting the `≥2`-overloaded and
+`!unionCalleeGenericSignaturesIncompatible` suppressions into hand-offs. They are silences
+owned by earlier rounds, outside this deliverable, and converting them widens blast radius
+for no measured row.
+
+**TWO FINDINGS OUTSIDE THE ITEM, QUEUED**: an `as`-asserted callee loses its argument check
+entirely, union or not — `(a as (x: string) => void)(1)` is silent while the parenthesized
+`(b)(1)` agrees — now **(CHK.129)**; and D3's *identical*-signature union also loses its
+contextual type at `callableSignaturesForCtx` (`Checker.kt:36192`), a strictly smaller and
+more tractable fix than the TS7006 half the item describes — recorded inside (CHK.97).
+
+**NEXT**: (CHK.97)'s D2 is the runner-up (3 rows, ~15 lines, and `d8` shows the `≥2`
+suppression it must narrow is guarding nothing measurable — stage 2's array fallback answers
+those receivers first). But per the WORK ORDER, **(INV.0) step 10b-ii** is where the order
+sends the arc.
+
 ### Round (P18.70) — two false-positive families, and the instrument that was dropping rows (2026-09-11)
 
 **Suite 18,604 → 18,635 / 0 / 3** (+31 pins). Grid 8×`added=0 removed=0` on both
@@ -885,101 +1015,6 @@ worth a single probe first**: whether `getTypeOfSymbol` answers correctly for a 
 transient-symbol route) and by declaration-read for `TypeAlias`; that answer decides
 whether an oracle row can ship cheaply or needs a second sub-step.
 
-### Round (P18.60) — (INV.0) step 8: the TYPE-CAPTURE family becomes `CaptureRecorder.kt`, and its ambient row is the design's own claim as a number (2026-09-10)
-
-**Suite 18,514 / 0 / 3** (18,506 + 8 new pins). `Checker.kt` **194,631 → 191,540**
-(−3,091, the arc's largest single move); `CaptureRecorder.kt` **3,214**. cost_gate exit 0,
-huge_methods exit 0 (**841** classes, `Checker.<init>` 5,697 → **5,621**), warning-clean,
-ledger row 11. Commit `d897942c9`. **Fifth extraction of the session.**
-
-**THE ITEM'S OWN "OBVIOUS CANDIDATE" WAS A SCATTER, AND THE CENSUS SAID SO IN ONE
-COMMAND.** Step 8 named the member-ACCESS family; it is `getPropertiesOfType` 116481,
-`getPropertyAcrossType` 117056, `getStaticMembersOfType` 117400, `getApparentType`
-132856, `collectInheritedPropertyNames` 143137, `getPropertyTypeForRelation` 166353,
-`collectTargetPropertyNames` 166608, `isOptionalProperty` 170841 — eight neighbourhoods,
-no span. **What the same census found instead was TYPE CAPTURE**: 103 `typeCapture*` /
-`captured*` declarations of which 94 sit in ONE block, 3,120 lines. Three rounds running,
-the census has overturned the queue's own guess; the instrument is
-`scripts/codemask.py` plus a contiguity scan, and it costs one command.
-
-**61 AMBIENT READS AND 9 WRITES — THE ARC'S LARGEST ROW, AND IT IS THE FINDING RATHER
-THAN A DEBT.** `docs/INVERSION-DESIGN.md` § 2 says this checker cannot serve a post-hoc
-type oracle because "its answers are functions of walk-scoped state". This row is that
-claim as a NUMBER: fourteen of the reads and ALL NINE writes are the WALK — `ctaFrames`,
-`currentFlowGraph`, `currentClassForThis`, `currentCheckFileName` (10 write sites),
-`spineCurrentScope`, `inAsyncFunctionBody`, `currentTypeParamScope` — and the writes are
-a save-and-restore sandwich reconstructing the ambient a node was reached under. Moving
-the family does not make any of that explicit; it COUNTS it. **The OUT surface is the
-arc's cleanest by the opposite measure: 98 declarations move and 15 keep a caller.**
-
-**THE RECEIPT FOR A CAPTURE FAMILY IS THE CAPTURE CHANNEL, AND A ROUND THAT TOOK ONLY
-`--passTiming` WOULD HAVE PROVED ALMOST NOTHING.** (INC.2)'s law — "do NOT infer a
-capture's correctness from a green diagnostics sweep, they are different resolvers" —
-decides which gate is the gate here. `scripts/capture-equivalence.sh` prints a per-arm
-DIGEST over every captured answer: **381,666 captured types and 360,917 captured
-definitions, `full=-1675305230568277215 narrow=-1216978524918639134` on BOTH arms**, with
-the full-vs-narrow divergence census identical row for row (961 spans in 43 of 76 files —
-the standing (INC.26) alias figure, not a regression). **A trap that cost one 10-minute
-run: the digest line is ABOVE the driver's summary tail, so a `| tail -4` keeps the
-summary and throws the receipt away.** Redirect the whole output. The 488 deterministic
-`--passTiming` lines are byte-identical too, so that receipt now spans SIX binaries.
-
-**VERBATIM proved twice** (`inverse(moved) == HEAD span` and `forward(HEAD span) ==
-moved`), 170 ambient rewrites over 61 members, 15 visibility rewrites.
-
-**FOUR THINGS THE COMPILER FORCED, EACH RECORDED RATHER THAN WORKED AROUND**: `CtaFrame`
-becomes `internal` (a widened `ctaFrames` exposes it, and `withCtaFrameLocals` is an
-`internal inline` touching its members); `nodeAnswerComputations`' `private set` becomes
-`internal set`; the three `TYPE_CAPTURE_*_MAX_DEPTH` constants MOVE into the
-collaborator's own companion, having no reader left; and 42 ambient members widen
-`private` → `internal`, which is what a 61-read row costs.
-
-**PrintInlining says something real for the first time since step 4b-ii**, because this
-family has exactly ONE hot entry point: `typeCaptureVisit` is called per node from
-`spineEnterNode`, was a 925-byte body refused six times as `too large`, and its hop reads
-**`inline ×6`** — `spineEnterNode`'s own refusals fall 4 → 3. Everything else in the
-family is cold by construction (the bench passes no `TypeCaptureRequest`).
-`getTypeOfExpression` moved 379 → 390 and is NOT quoted: row 4 proved it unstable across
-processes on one binary. ab-interleaved 6 pairs **+52 ms (+0.20%) B-wins-3/6
-NOISE-DOMINATED**, both arms 46 errors.
-
-**ALL EIGHT ABLATION ARMS REDDEN EXACTLY THEIR OWN PIN — the arc's first perfect
-8-for-8.** The pins assert VALUES throughout, which is what this family needs: an ABSENT
-capture renders nothing and reports no error anywhere ((INC.2b)), so a pin asserting "a
-capture exists" passes on a badly broken binary. Two of them are a PAIR that earns its
-keep — at a dangling-`.`-at-EOF span the type table stays FIRST-wins while the member
-table takes its descendant exception, so the same span answers from two different rules
-and one fixture pins both. **A fixture property a future reader will otherwise break:
-`dangle.ts` must end IMMEDIATELY after the `.`** — no newline, no `;`, no space — or the
-span collision does not happen and both pins go vacuous, which is why the file builds
-that string by concatenation and asserts `receiver == access` before measuring.
-
-**TWO CANDIDATES DROPPED FOR THE SAME REASON, WHICH IS WORTH MORE THAN A NINTH PIN**:
-`activeParameter`'s clamp onto a rest parameter is real and distinct, and **no instrument
-available here can give it ground truth** — the LSP maps `SignatureHelp.activeArgument`
-onto the protocol's top-level `activeParameter` and never surfaces the per-signature
-clamped value, so both servers read `3` where the internal answer is `1`. Likewise a
-scope pin asserting each offered name's KIND: for an imported name the symbol is the
-ALIAS, so the kind is `ImportSpecifier` rather than the target's, and nothing exposes the
-difference. A pin whose expected value can only be obtained by reading the function it
-tests is not a pin.
-
-**A MEASURED DIVERGENCE RECORDED AND NOT ASSERTED**: at the dangling-`.` span tsc hovers
-the RECEIVER (`const holder: { alpha: number; beta: string; }`) where our first-wins
-answers the property access's `any`. Pinning `"any"` would be the countdown CLAUDE.md
-forbids, so that pin asserts the winning node's KIND only.
-
-**NEXT**: after this the file is 191,540 and what is left in it is dominated by CHECK
-PASSES, which § 6 puts LAST — `spine*` (three blocks over 7,400 lines), `check*`,
-`cmam*`, `caas*`, `cae*`, `cvda*`. The remaining non-check families are SMALL. So step 9
-is a decision, not a census: either start on the check passes (which needs a rule for
-what a "pass" collaborator even IS, since they read the whole checker and write
-`diagnostics`) or stop Stage 0 and open **STAGE 3** — *not* Stage 1 or 2, both of which
-LANDED on 2026-09-02 (§§ 9a/9b), a correction made to the queue item in this same round
-after it was first written wrong. Stage 3 is "dissolve B83.5", which `TypeOracle`'s own
-`resolveName` / `symbolsInScope` refusal names in words as its blocker. Say which, and
-why, before moving any line.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1040,7 +1075,34 @@ to. The (P18.44) restore had placed it directly ABOVE the first queue item, wher
 ORDER, or the first queue item is missing — a doc invariant is only as good as the thing that
 notices it is gone.
 
-- [ ] **(CHK.97) STAGES 1 AND 2 LANDED 2026-09-06 ((P18.29)/(P18.30) notes). STAGE 2 closed THREE of its five
+- [ ] **(CHK.97) STAGE 3 DELIVERABLE 4 LANDED 2026-09-11 ((P18.71) note) — the nullish-union callee's
+  ARGUMENT check. ALL SIX stage-3 deliverables were MEASURED against tsgo 7.0.2 and pristine 6.0.3 first
+  (zero REF-SPLIT rows anywhere, so every verdict is adjudicable), and the item's own framing was wrong
+  twice. **(D4) CLOSED**: the axis is a callee **TYPE** that is a nullish union, NOT the `?.` token —
+  `g?.(1)` on a plain `Fn` already reported, while the `?.`-free `if (zu) { zu(1) }` was silent. Two edits:
+  `ccetUnionCalleeChecks` answers `Type?` (null = consumed, else the EFFECTIVE callee type) instead of a
+  `Boolean`, because a `Boolean` let its two FP suppressions be spent ONLY by consuming the call; and the
+  optional-call nullish strip was HOISTED above the narrowable-reference gate, which was two mechanisms
+  wearing one `if` and cost **four OURS-ONLY TS2349 rows on legal code**, one per non-narrowable callee kind.
+  Receipt `agree 8 → 20, ours-only 4 → 0, missing 19 → 7`; grid 8×0/0 with a positive control counting
+  **49-101 hand-offs per profile**, i.e. a REAL gate that is green. **(D1) REJECTED ON A MEASUREMENT, not
+  deferred**: `getCallSignaturesOfType`'s union arm has **ZERO MISSING rows** — its only visible readers are
+  `ReturnType<U>`/`Parameters<U>`, and what the references print there is tsc's conditional-type
+  DISTRIBUTION (`Parameters<G1|G2>` = `[a: string] | [a: number]`), not `getUnionSignatures`, which would
+  give `[never]`. Combining there is wrong in a NEW way, across 35 readers. **(D6) BLOCKED, unblocker
+  named**: `Signature.thisParameter` (`Type.kt:318`) does not exist and THREE separate consumers need it
+  (assignability, `.call`/`.apply`/`.bind`, and the union intersection that produces TS2684) — a model
+  change, not a diagnostic fix. **STILL OPEN, re-sized by measurement: (D2)** both-overloaded union → TS2349,
+  **3 rows**, ~15 lines — and the blocker the item records is already solved upstream (the refusal reason is
+  the local `multipleOverloadSets` at `Checker.kt:155700`), while the `≥2` suppression it must narrow is
+  **measured to be guarding nothing** (stage 2's array fallback answers those receivers before a union callee
+  is ever formed); its gate is the corpus + pins, not the grid. **(D3)** union contextual type, **3 rows**,
+  and the item's "DIFFERING signatures" framing is incomplete — the **IDENTICAL**-signature union ALSO loses
+  its contextual type, at `callableSignaturesForCtx`'s `if (single != null) return null` (`Checker.kt:36192`),
+  which is a strictly smaller and more tractable half than the TS7006 one; beware (CHK.50)'s law, a newly
+  non-null answer types parameters program-wide. **(D5)** generic inference through a combined signature,
+  **1 row** — the array fallback and contextual typing through it both already work; only inference of `U` in
+  `map<U>` fails. ORIGINAL: STAGES 1 AND 2 LANDED 2026-09-06 ((P18.29)/(P18.30) notes). STAGE 2 closed THREE of its five
   deliverables — tsc's ARRAY FALLBACK (checker.ts:15949, derived from the RECEIVER because a method type has
   no parent symbol here, which costs one extra CALLABLE gate a signature-list route would not need), tsc's
   `getIntersectedSignatures` (:33085 — `combineUnionParameters` + one `intersection` flag, wired through
@@ -2352,6 +2414,31 @@ notices it is gone.
   the immediate parent, and it is pinned as a pair. The array-literal arm is untouched.
   The six write-site rows still missing on the fixture are file-level and belong to
   (CHK.124).
+
+- [ ] **(CHK.129) AN `as`-ASSERTED CALLEE LOSES ITS ARGUMENT CHECK ENTIRELY — UNION OR NOT —
+  AND THE PARENTHESIZED CONTROL BESIDE IT REPORTS, WHICH IS WHAT MAKES IT A CALLEE-KIND
+  DEFECT RATHER THAN A TYPING ONE (measured 2026-09-11, (P18.71) recon; both references
+  agreeing, zero REF-SPLIT).** `(a as (x: string) => void)(1)` is MISSING TS2345, and so is
+  `(c as (x: string) => void)(1)` where `c` ALREADY has exactly that type — i.e. the
+  assertion is not changing the type, it is losing the check — while `(b)(1)` (parenthesized,
+  no assertion) AGREEs. So the callee's `AsExpression` wrapper is what drops it, independent
+  of (CHK.97)'s union work; the (CHK.97) item does not record this anywhere. **Pin it with a
+  WRONG-TYPED argument** and note the neighbours before sizing: the population is a callee
+  EXPRESSION kind, so census `AsExpression`, `SatisfiesExpression`, `NonNullExpression` and
+  `TypeAssertionExpression` (the `<T>x` form) in one fixture rather than assuming one arm.
+  **Do NOT reach for the (CHK.97) hand-off** — that is about a nullish union TYPE and this
+  shape need not be a union at all.
+
+- [ ] **(CHK.128) `arr?.[0]` ON A `(Fn | undefined)[] | undefined` TYPES AS `any`, SO THE
+  ELEMENT ACCESS IS A MISSING TS2322 *WITH NO CALL IN SIGHT* — MEASURED AND EXPLICITLY LEFT
+  ALONE BY (P18.71), WHICH FIRST MIS-READ IT AS PART OF THE NULLISH-UNION CALLEE FAMILY
+  (2026-09-11).** 2 rows. It looks like (CHK.97)'s D4 because the natural fixture is
+  `arr?.[0]?.(1)`, but the call is innocent: strip the call and the element access alone
+  already answers `any`. The receiver is an OPTIONAL element access over a nullish ARRAY
+  union, so the question is what `arr?.[0]` should be when `arr` is `T[] | undefined` — tsc
+  answers the element type `| undefined`. Related to, and should be measured beside, the
+  `getTypeOfElementAccess` narrowing gap CLAUDE.md records (round 942 gave it the RECEIVER
+  half; the RESULT half was measured INERT and deliberately not added).
 
 - [ ] **(INV.0) STEP 10b-ii — BLOCKED-ON: the two families named inside this item. THE *UNIQUE* HALF OF THE
   VALUE SPACE (measured 2026-09-10, (P18.63)). MOVED BELOW ITS SMALLER, UNBLOCKED SIBLINGS

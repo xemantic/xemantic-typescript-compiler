@@ -63393,3 +63393,97 @@ makes every inline `string | undefined` read as aliased; and the (c) collapse IN
 which needs `typeToString`'s union rendering and is exactly what (P18.48) forbids. Two out-of-scope
 residues recorded: the `OptAlias` SOURCE display, and a `Promise<string | undefined>` target.
 
+### Round (P18.60) — (INV.0) step 8: the TYPE-CAPTURE family becomes `CaptureRecorder.kt`, and its ambient row is the design's own claim as a number (2026-09-10)
+
+**Suite 18,514 / 0 / 3** (18,506 + 8 new pins). `Checker.kt` **194,631 → 191,540**
+(−3,091, the arc's largest single move); `CaptureRecorder.kt` **3,214**. cost_gate exit 0,
+huge_methods exit 0 (**841** classes, `Checker.<init>` 5,697 → **5,621**), warning-clean,
+ledger row 11. Commit `d897942c9`. **Fifth extraction of the session.**
+
+**THE ITEM'S OWN "OBVIOUS CANDIDATE" WAS A SCATTER, AND THE CENSUS SAID SO IN ONE
+COMMAND.** Step 8 named the member-ACCESS family; it is `getPropertiesOfType` 116481,
+`getPropertyAcrossType` 117056, `getStaticMembersOfType` 117400, `getApparentType`
+132856, `collectInheritedPropertyNames` 143137, `getPropertyTypeForRelation` 166353,
+`collectTargetPropertyNames` 166608, `isOptionalProperty` 170841 — eight neighbourhoods,
+no span. **What the same census found instead was TYPE CAPTURE**: 103 `typeCapture*` /
+`captured*` declarations of which 94 sit in ONE block, 3,120 lines. Three rounds running,
+the census has overturned the queue's own guess; the instrument is
+`scripts/codemask.py` plus a contiguity scan, and it costs one command.
+
+**61 AMBIENT READS AND 9 WRITES — THE ARC'S LARGEST ROW, AND IT IS THE FINDING RATHER
+THAN A DEBT.** `docs/INVERSION-DESIGN.md` § 2 says this checker cannot serve a post-hoc
+type oracle because "its answers are functions of walk-scoped state". This row is that
+claim as a NUMBER: fourteen of the reads and ALL NINE writes are the WALK — `ctaFrames`,
+`currentFlowGraph`, `currentClassForThis`, `currentCheckFileName` (10 write sites),
+`spineCurrentScope`, `inAsyncFunctionBody`, `currentTypeParamScope` — and the writes are
+a save-and-restore sandwich reconstructing the ambient a node was reached under. Moving
+the family does not make any of that explicit; it COUNTS it. **The OUT surface is the
+arc's cleanest by the opposite measure: 98 declarations move and 15 keep a caller.**
+
+**THE RECEIPT FOR A CAPTURE FAMILY IS THE CAPTURE CHANNEL, AND A ROUND THAT TOOK ONLY
+`--passTiming` WOULD HAVE PROVED ALMOST NOTHING.** (INC.2)'s law — "do NOT infer a
+capture's correctness from a green diagnostics sweep, they are different resolvers" —
+decides which gate is the gate here. `scripts/capture-equivalence.sh` prints a per-arm
+DIGEST over every captured answer: **381,666 captured types and 360,917 captured
+definitions, `full=-1675305230568277215 narrow=-1216978524918639134` on BOTH arms**, with
+the full-vs-narrow divergence census identical row for row (961 spans in 43 of 76 files —
+the standing (INC.26) alias figure, not a regression). **A trap that cost one 10-minute
+run: the digest line is ABOVE the driver's summary tail, so a `| tail -4` keeps the
+summary and throws the receipt away.** Redirect the whole output. The 488 deterministic
+`--passTiming` lines are byte-identical too, so that receipt now spans SIX binaries.
+
+**VERBATIM proved twice** (`inverse(moved) == HEAD span` and `forward(HEAD span) ==
+moved`), 170 ambient rewrites over 61 members, 15 visibility rewrites.
+
+**FOUR THINGS THE COMPILER FORCED, EACH RECORDED RATHER THAN WORKED AROUND**: `CtaFrame`
+becomes `internal` (a widened `ctaFrames` exposes it, and `withCtaFrameLocals` is an
+`internal inline` touching its members); `nodeAnswerComputations`' `private set` becomes
+`internal set`; the three `TYPE_CAPTURE_*_MAX_DEPTH` constants MOVE into the
+collaborator's own companion, having no reader left; and 42 ambient members widen
+`private` → `internal`, which is what a 61-read row costs.
+
+**PrintInlining says something real for the first time since step 4b-ii**, because this
+family has exactly ONE hot entry point: `typeCaptureVisit` is called per node from
+`spineEnterNode`, was a 925-byte body refused six times as `too large`, and its hop reads
+**`inline ×6`** — `spineEnterNode`'s own refusals fall 4 → 3. Everything else in the
+family is cold by construction (the bench passes no `TypeCaptureRequest`).
+`getTypeOfExpression` moved 379 → 390 and is NOT quoted: row 4 proved it unstable across
+processes on one binary. ab-interleaved 6 pairs **+52 ms (+0.20%) B-wins-3/6
+NOISE-DOMINATED**, both arms 46 errors.
+
+**ALL EIGHT ABLATION ARMS REDDEN EXACTLY THEIR OWN PIN — the arc's first perfect
+8-for-8.** The pins assert VALUES throughout, which is what this family needs: an ABSENT
+capture renders nothing and reports no error anywhere ((INC.2b)), so a pin asserting "a
+capture exists" passes on a badly broken binary. Two of them are a PAIR that earns its
+keep — at a dangling-`.`-at-EOF span the type table stays FIRST-wins while the member
+table takes its descendant exception, so the same span answers from two different rules
+and one fixture pins both. **A fixture property a future reader will otherwise break:
+`dangle.ts` must end IMMEDIATELY after the `.`** — no newline, no `;`, no space — or the
+span collision does not happen and both pins go vacuous, which is why the file builds
+that string by concatenation and asserts `receiver == access` before measuring.
+
+**TWO CANDIDATES DROPPED FOR THE SAME REASON, WHICH IS WORTH MORE THAN A NINTH PIN**:
+`activeParameter`'s clamp onto a rest parameter is real and distinct, and **no instrument
+available here can give it ground truth** — the LSP maps `SignatureHelp.activeArgument`
+onto the protocol's top-level `activeParameter` and never surfaces the per-signature
+clamped value, so both servers read `3` where the internal answer is `1`. Likewise a
+scope pin asserting each offered name's KIND: for an imported name the symbol is the
+ALIAS, so the kind is `ImportSpecifier` rather than the target's, and nothing exposes the
+difference. A pin whose expected value can only be obtained by reading the function it
+tests is not a pin.
+
+**A MEASURED DIVERGENCE RECORDED AND NOT ASSERTED**: at the dangling-`.` span tsc hovers
+the RECEIVER (`const holder: { alpha: number; beta: string; }`) where our first-wins
+answers the property access's `any`. Pinning `"any"` would be the countdown CLAUDE.md
+forbids, so that pin asserts the winning node's KIND only.
+
+**NEXT**: after this the file is 191,540 and what is left in it is dominated by CHECK
+PASSES, which § 6 puts LAST — `spine*` (three blocks over 7,400 lines), `check*`,
+`cmam*`, `caas*`, `cae*`, `cvda*`. The remaining non-check families are SMALL. So step 9
+is a decision, not a census: either start on the check passes (which needs a rule for
+what a "pass" collaborator even IS, since they read the whole checker and write
+`diagnostics`) or stop Stage 0 and open **STAGE 3** — *not* Stage 1 or 2, both of which
+LANDED on 2026-09-02 (§§ 9a/9b), a correction made to the queue item in this same round
+after it was first written wrong. Stage 3 is "dissolve B83.5", which `TypeOracle`'s own
+`resolveName` / `symbolsInScope` refusal names in words as its blocker. Say which, and
+why, before moving any line.
