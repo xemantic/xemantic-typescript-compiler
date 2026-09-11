@@ -2258,13 +2258,31 @@ notices it is gone.
   on tsc's own sources was blind. Residue pinned as a residue: a guard separated from
   its read by ~130+ branching statements still reports.
 
-- [ ] **(CHK.123) A CLASS-TYPED ANNOTATED LOCAL RENDERS `typeof ZzzK` WHERE BOTH REFERENCES
-  RENDER `ZzzK` (measured 2026-09-11, (P18.68)).** `const v: ZzzK = zzzKV; v.zzzNope` — the
-  receiver is an INSTANCE and the display names the static side. Display-only, so per
-  (PARITY.1) the 8-profile grid is structurally blind to it (all 46/94 rows are
-  `Cannot find name …`) and the ~2,881 ACTIVE `.errors.txt` corpus subtests are the only
-  gate — and since the corpus is green, a change here can only turn a green baseline red, so
-  enumerate the baselines rendering `typeof ` before touching it. PRE-EXISTING.
+- [ ] **(CHK.123) RE-MEASURED 2026-09-11 ((P18.70)) AND THE ITEM'S OWN CLASSIFICATION IS
+  WRONG: IT IS **NOT DISPLAY-ONLY**, IT IS A WRONG RECEIVER *TYPE* THAT ALSO COSTS A
+  MISSING TS2576.** `const v: ZzzK = zzzKV; v.zzzNope` renders `typeof ZzzK` where both
+  references render `ZzzK` — and on the SAME receiver `v.stat` (a STATIC member) is
+  SILENT here where both references report `Property 'stat' does not exist on type
+  'ZzzK'. Did you mean to access the static member 'ZzzK.stat'?`, which is only
+  explicable if the receiver really is the class's static side. So (PARITY.1)'s "the
+  corpus is the sole gate" does NOT apply: there is a diagnostic to gate on.
+  **EXACTLY ONE CELL, measured over six sites** (references agreeing on all): the
+  file-level `const` and the PARAMETER are byte-correct at `ZzzK`; the un-annotated
+  local, a CALL initializer and a `new` initializer are all silent (the (CHK.121)
+  class-instance refusal); only ANNOTATED + IDENTIFIER-INITIALIZED reaches a type, via
+  `cmamNarrowedAnyReceiverType`'s flow route — and that route hands back the static side.
+  **AND THE TWO READERS DISAGREE ABOUT THE SAME RECEIVER** ((P18.66)'s pattern again):
+  the ASSIGNABILITY reader answers `ZzzK` correctly on the identical binding
+  (`const bad: string = v` prints `Type 'ZzzK' is not assignable…`), so the defect is
+  confined to the member-access family's receiver.
+  **THE EMISSION SITE IS IDENTIFIED**: `cmamCheckResolvedObjectType`'s constructor-side
+  branch (`Checker.kt` ~:151288, `ctorClassSym.flags.hasAny(SymbolFlags.Class)` under
+  `objectType.properties.isNullOrEmpty()`), whose `isStaticMemberOfClass` early-return
+  explains the missing TS2576 and whose `objectType !is Type.Interface` arm explains the
+  `typeof` display. **WHAT IS NOT YET KNOWN is why the flow narrow produces the static
+  side at all** — it is class-specific (an interface-annotated local renders correctly)
+  and annotation-specific. Start there, not at the display: a fix at the emission site
+  would leave the wrong type in place and merely rename it.
 
 - [ ] **(CHK.124) PARTLY CLOSED 2026-09-11 ((P18.70) note) — THE **FILE-LEVEL** HALF IS
   DONE; THE RECEIVER-KIND HALF IS NOT.** B431 now admits `EX_TOP` as well as

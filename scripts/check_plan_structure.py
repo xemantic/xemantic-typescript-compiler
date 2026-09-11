@@ -9,7 +9,15 @@ unchanged, and an agent that cannot find the section simply picks by its own
 judgement.  This script is the thing that notices.
 
 Run it after any scripted edit of PLAN-PHASE-5.md; exit 0 = intact.
+
+It also counts the queue items, and `--expect-open N --expect-done M` turns that
+into an assertion.  Use it around any scripted slice: a slice bounded by a
+hand-picked later item silently eats every item in between, which is how (P18.66)
+lost the WORK ORDER and how one edit in (P18.70) ate four queue items before the
+counts were read.  The structural checks above cannot see that — the file still
+has a QUEUE, a WORK ORDER and items; there are simply fewer of them.
 """
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -28,6 +36,11 @@ CHECKS = [
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--expect-open", type=int, help="fail unless exactly N open items remain")
+    ap.add_argument("--expect-done", type=int, help="fail unless exactly M done items remain")
+    args = ap.parse_args()
+
     text = PLAN.read_text()
     missing = [name for name, ok in CHECKS if not ok(text)]
 
@@ -54,6 +67,17 @@ def main() -> int:
 
     items = len(re.findall(r"^- \[ \] ", text, re.M))
     done = len(re.findall(r"^- \[x\] ", text, re.M))
+
+    for label, got, want in (("open", items, args.expect_open), ("done", done, args.expect_done)):
+        if want is not None and got != want:
+            print(
+                f"QUEUE ITEM COUNT CHANGED — {label}: expected {want}, found {got}.\n"
+                "A scripted slice bounded by a hand-picked later item eats everything\n"
+                "between the two. Check `git diff PLAN-PHASE-5.md | grep '^-- \\['`.",
+                file=sys.stderr,
+            )
+            return 1
+
     print(f"PLAN STRUCTURE OK — QUEUE + WORK ORDER present, {items} open / {done} done")
     return 0
 
