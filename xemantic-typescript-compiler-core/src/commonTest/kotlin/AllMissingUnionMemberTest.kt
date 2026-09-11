@@ -92,12 +92,20 @@ class AllMissingUnionMemberTest {
      * all-missing case exactly as for partial coverage — measured on
      * `tools/tsgo-7.0.2/lib/tsc`. A count-only pin cannot see the chain, and the
      * chain is what says the receiver was resolved rather than guessed.
+     *
+     * (CHK.130) corrected the union rendering this pin incidentally carried: it read
+     * `Alfa | (Fn)`, which was OUR OWN defect transcribed into an expectation — a
+     * union member that prints as a NAME was parenthesized on its resolved shape.
+     * `Alfa | Fn` is what tsgo 7.0.2 and pristine `typescript@6.0.3` both print,
+     * re-adjudicated over `build/bench/chk130/fixtures/pin1`. The pin's own subject
+     * — that the message names the union and chains the first missing constituent —
+     * is unmoved, so only the expectation changed.
      */
     @Test
     fun `the message names the union and chains the first missing constituent`() {
         val d = diagnose(prelude + "export function f(c: Alfa | Fn) { c.zzznope; }")
         val diag = d.single { it.code == 2339 }
-        assert(diag.message == "Property 'zzznope' does not exist on type 'Alfa | (Fn)'.")
+        assert(diag.message == "Property 'zzznope' does not exist on type 'Alfa | Fn'.")
         assert(diag.messageChain == listOf("  Property 'zzznope' does not exist on type 'Alfa'."))
     }
 

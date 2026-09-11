@@ -154,11 +154,18 @@ class GuardedReassignmentNarrowingTest {
      * union is a PRE-EXISTING display divergence (tsc writes `A | F`) that this
      * item does not touch — it is present with and without the fix.
      */
+    /**
+     * (CHK.130) corrected the union rendering this control incidentally carried: it read
+     * `A | (F)`, our own parenthesization of a union member that prints as a NAME.
+     * `A | F` is what tsgo 7.0.2 and pristine `typescript@6.0.3` both print, adjudicated
+     * over `build/bench/chk130/fixtures/pin2`; the control's subject — that an UNGUARDED
+     * self-call refuses to reduce and keeps both errors — is unmoved.
+     */
     @Test
     fun `negative control - an UNGUARDED self-call refuses to reduce and keeps both errors`() {
         val d = diagnose(prelude + "export function f(c: A | F) { c = c(); return c.files; }")
         assert(d.count { it.code == 2349 } == 1)
         val messages = d.filter { it.code == 2339 }.map { it.message }
-        assert(messages == listOf("Property 'files' does not exist on type 'A | (F)'."))
+        assert(messages == listOf("Property 'files' does not exist on type 'A | F'."))
     }
 }

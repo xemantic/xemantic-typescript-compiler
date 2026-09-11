@@ -130898,16 +130898,62 @@ interface DataView {
                 val ordered = type.types.sortedBy { nullishRank(it) }
                 ordered.joinToString(" | ") { m ->
                     val s = typeToString(m)
-                    val needsParen = m is Type.Object &&
-                        m.tupleElementTypes == null &&
-                        m.properties.isNullOrEmpty() &&
-                        ((m.callSignatures?.size ?: 0) + (m.constructSignatures?.size ?: 0)) == 1
-                    if (needsParen) "($s)" else s
+                    if (unionMemberRendersAsFunctionType(m)) "($s)" else s
                 }
             }
             is Type.Intersection -> type.types.joinToString(" & ") { typeToString(it) }
             is Type.TypeParam -> type.symbol?.name ?: "T"
         }
+    }
+
+    /**
+     * (CHK.130): does rendering [m] as a union member produce a bare function/constructor
+     * ARROW form — `(a: string) => void`, `new () => object` — which needs parentheses to
+     * reparse inside a `|`?
+     *
+     * **The question is about what [typeToString] PRINTS, never about the member's resolved
+     * SHAPE, and the two come apart for every member that prints as a NAME.** The predicate
+     * this replaced asked the shape ("exactly one call-or-construct signature and no other
+     * member"), which is true of an `interface ZzzS { (a: string): void }`, of a
+     * `type ZzzG = (a: string) => void` alias and of a generic instantiation of either — all
+     * three print as their own name, so `ZzzA | (ZzzS)` where tsgo 7.0.2 and pristine
+     * `typescript@6.0.3` both print `ZzzA | ZzzS` (measured, the two references agreeing on
+     * every row of `build/bench/chk130/fixtures/mix`).
+     *
+     * It additionally made the parentheses ORDER-DEPENDENT for the interface case, because a
+     * `Type.Interface`'s member tables are LAZY (round 833): the same interface renders bare
+     * in a plain TS2322 and parenthesized in a union-callee TS2349, whose own resolution has
+     * just filled `callSignatures` in.
+     *
+     * So this MIRRORS [typeToString]'s own dispatch, arm by arm, and must be updated with it:
+     *  - not a [Type.Object] — an intrinsic, a literal, a type parameter, an intersection;
+     *  - [Type.Interface] / [Type.Reference], matched ABOVE `Type.Object` in that `when`,
+     *    printing `ZzzS`, `ZzzGi<string>`, `T[]`, `readonly T[]`;
+     *  - a B50.2 alias display, printing `ZzzG` — guarded by [typeToStringInProgress]
+     *    exactly as the renderer guards it, and readable here because the render restores
+     *    that set in a `finally`, so it holds the same members before and after;
+     *  - a tuple, printing `[A, B]`;
+     *  - B198's self-recursion cut for a function symbol, printing `typeof fn`;
+     *  - signatures BESIDE properties, or two or more signatures, printing `{ (): void; }`.
+     *
+     * What is left is the single-signature arrow form, from either the `hasSignatures` arm or
+     * [typeToStringObjectBody]. Two neighbouring divergences are deliberately NOT touched here
+     * and are recorded in the round note: a [Type.Intersection] member is printed bare where
+     * both references parenthesize it (`number | ZzzP & ZzzQ` for `number | (ZzzP & ZzzQ)`),
+     * and an ARRAY whose element is a function type loses the element's parentheses in the
+     * [Type.Reference] arm (`(a: string) => void[]`, which names a different type).
+     */
+    private fun unionMemberRendersAsFunctionType(m: Type): Boolean {
+        if (m !is Type.Object) return false
+        if (m is Type.Interface || m is Type.Reference) return false
+        if (m.id !in typeToStringInProgress && aliasDisplayMap[m.id] != null) return false
+        if (m.tupleElementTypes != null) return false
+        val fnSym = m.symbol
+        if (fnSym != null && fnSym.flags.hasAny(SymbolFlags.Function) &&
+            !fnSym.flags.hasAny(SymbolFlags.Class) && m.id in typeToStringInProgress
+        ) return false
+        if (!m.properties.isNullOrEmpty()) return false
+        return ((m.callSignatures?.size ?: 0) + (m.constructSignatures?.size ?: 0)) == 1
     }
 
     /**
