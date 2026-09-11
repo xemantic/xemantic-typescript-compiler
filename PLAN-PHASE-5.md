@@ -125,10 +125,35 @@ with its three candidate routes and two measured FP hazards; (CHK.125) an ours-o
 TS2394 on an ordinary `unknown`-implementation overload set, found incidentally in a
 fixture and reproducing on the parent binary; (CHK.126) above.
 
-**NEXT**: (CHK.120) is (P18.66)'s untouched residue and is a BINDER change with its
-own blast radius; (CHK.123) is display-only with the corpus as its sole gate;
-(CHK.124)/(CHK.125) are this round's. Per the WORK ORDER, the order's tail is still
-(INV.0), and this round is (CHK.\*) lane work that pays in measured reference rows.
+**(CHK.125) AND (CHK.126) ALSO LANDED IN THIS ROUND.** (CHK.125): TS2394's
+compatibility predicate special-cased `any` in both directions and both positions and
+knew nothing about `unknown`/`never`, so an entirely ordinary
+`f(x: string) / f(x: number) / f(x: unknown)` overload set was an ours-only false
+positive. tsc's rule is TWO rules — RETURN types assignable in EITHER direction,
+PARAMETERS requiring the overload's type assignable to the impl's — and since `unknown`
+is the TOP type and `never` the BOTTOM one, each is assignable in exactly one direction,
+so the two positions disagree about four of eight combinations. Ten cells measured, both
+references agreeing on all ten, three of them NEGATIVE CONTROLS that still report. The
+change is strictly permissive by construction, so it can only remove a row.
+
+**(CHK.126) — TEN COUNTDOWN PINS, NOT EIGHT, AND THREE THIS SESSION BROKE ITSELF.**
+Every silence-asserting test in `M04ExpandoSpineMigrationTest` was re-measured against
+both references. Ten assert a silence neither reference shares and are renamed
+`residue - ` with the exact reference row in their KDoc; six are genuine controls; one
+is named STRUCTURALLY VACUOUS. **And three were made unfalsifiable by this round's own
+(CHK.119) display change** — they keyed on `contains("typeof Foo")`, which an
+expando-free function can no longer produce, so a binary with the whole shadow chain
+deleted would have passed them. Fixed in the same session that broke them, and verified
+falsifiable rather than assumed. The audit also found **(CHK.127)**: the collector
+OVER-declares in the opposite direction from (CHK.119) — an objlit-property-value and a
+spread write declare here and not in tsc, costing four reference rows — which nothing
+had named.
+
+**NEXT**: (CHK.120) is (P18.66)'s untouched residue and is a BINDER change with its own
+blast radius; (CHK.123) is display-only with the corpus as its sole gate; (CHK.124) and
+(CHK.127) are this round's, and (CHK.127) is the smaller. Per the WORK ORDER, the
+order's tail is still (INV.0), and this round is (CHK.\*) lane work that pays in
+measured reference rows.
 
 ### Round (P18.68) — (CHK.121): the axis is the INITIALIZER, and BOTH sizings of the item were wrong (2026-09-11)
 
@@ -2247,31 +2272,42 @@ notices it is gone.
   assumed. The 8-profile grid reports ZERO function-receiver TS2339 rows, so it is a
   pure false-positive detector for this work and a good one.
 
-- [ ] **(CHK.125) AN OURS-ONLY TS2394 ON AN ORDINARY OVERLOAD SET (measured
-  2026-09-11, (P18.70), three compilers; PRE-EXISTING — identical on the parent
-  binary).** `export function ZzzO(zzzX: string): void; export function ZzzO(zzzX:
-  number): void; export function ZzzO(zzzX: unknown): void {}` is legal in tsgo 7.0.2
-  and pristine 6.0.3 and we report `This overload signature is not compatible with its
-  implementation signature.` A false positive on a completely ordinary shape — an
-  `unknown` implementation parameter accepting `string` and `number` overloads — so it
-  is likely to hit any real library. Found incidentally while building a (CHK.119)
-  fixture, which is the usual way this class surfaces.
+- [x] **(CHK.125) CLOSED 2026-09-11 ((P18.70) note) — THE PREDICATE KNEW ONLY `any`.**
+  `function f(x: string): void; function f(x: number): void; function f(x: unknown): void {}`
+  was an ours-only TS2394 on an entirely ordinary shape. tsc's
+  `isImplementationCompatibleWithOverload` is TWO rules: RETURN types assignable in
+  EITHER direction, PARAMETERS through `isSignatureAssignableTo(impl, overload)` so the
+  impl must be the wider one — and `unknown`/`never` are assignable in exactly one
+  direction each, so the two positions disagree about four of eight combinations.
+  `isTypeNodeCompatible` now takes `returnPosition`. Ten cells measured, references
+  agreeing on all ten; the three TS2394 rows are negative controls. Strictly permissive
+  by construction, so it can only remove a row.
 
-- [ ] **(CHK.126) `M04ExpandoSpineMigrationTest` CARRIES ~6 MORE COUNTDOWN PINS
-  (recon-measured 2026-09-11, (P18.70); two of its eight were closed by (CHK.119)).**
-  A "negative control" there that asserts `none { it.code == 2339 }` for a shape BOTH
-  references report is a pin waiting to fire on whichever round fixes it, not
-  coverage. Measured as reporting in both references: `class bodies and namespace
-  bodies are never walked`, `template spans and typeof operands … not walked`, `a
-  for-of loop-head destructuring INITIALIZER is not walked`, `top-level reads never
-  fire` (this one IS (CHK.124)), `a function merged with another declaration kind is
-  not a candidate`, `duplicate top-level function names are not candidates`, `a NESTED
-  function is not a candidate`, `a function expression's own name shadows`. Three
-  others are GENUINE controls (both references silent) and must stay: `params and
-  top-level body locals shadow the candidate`, `an outer function's shadow reaches
-  nested functions`, `runtime function-object properties never fire`. Re-derive each
-  against both references before touching it — the point of the item is that the
-  class's own names do not distinguish the two kinds.
+- [x] **(CHK.126) CLOSED 2026-09-11 ((P18.70) note) — TEN COUNTDOWNS, NOT EIGHT, AND
+  THREE PINS THIS SESSION'S OWN (CHK.119) HAD MADE UNFALSIFIABLE.** Every
+  silence-asserting test in `M04ExpandoSpineMigrationTest` re-measured against both
+  references (`ref-split=0` throughout): ten assert a silence neither reference shares
+  and are now named `residue - ` with the exact reference row and owning item in their
+  KDoc; six are genuine controls; one is named STRUCTURALLY VACUOUS (a `.d.ts` cannot
+  contain a read in an expando position, so the only fixture that exercises it is
+  already a syntax error). The three tightened pins keyed on `contains("typeof Foo")`,
+  which (CHK.119) made impossible for an expando-free function — verified falsifiable
+  after the change rather than assumed. **The audit also found (CHK.127), which nothing
+  had named.**
+
+- [ ] **(CHK.127) THE EXPANDO COLLECTOR *OVER*-DECLARES — THE OPPOSITE DIRECTION FROM
+  (CHK.119) (measured 2026-09-11, (P18.70), both references agreeing on all four
+  rows).** A write in an ARRAY-LITERAL element (`Foo.g = 5`) DOES declare an expando
+  member; one as an OBJECT-LITERAL PROPERTY VALUE (`{ p: Foo.h = 6 }`) and one inside a
+  SPREAD (`...(Foo.i = 7 as any)`) do NOT. We collect all three, so the reference
+  display is `{ (): void; a: number; b: number; d: number; e: number; f: number;
+  g: number; }` with `h` and `i` ABSENT while ours carries them, and both references
+  report **four rows we do not** — two on the WRITE's own LHS and two on the later read.
+  Pinned today as `residue - an objlit-property-value and a spread write OVER-declare`.
+  `collectExpandoDeclsExpr`'s `ObjectLiteralExpression` and `SpreadElement` arms are the
+  sites. **Note the asymmetry is real and must be preserved, not smoothed**: the
+  array-literal arm is CORRECT and the other two are not, so this is a narrowing of two
+  specific arms rather than a rule about expression position.
 
 - [ ] **(INV.0) STEP 10b-ii — BLOCKED-ON: the two families named inside this item. THE *UNIQUE* HALF OF THE
   VALUE SPACE (measured 2026-09-10, (P18.63)). MOVED BELOW ITS SMALLER, UNBLOCKED SIBLINGS

@@ -19,7 +19,7 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
-**(P18.70) — TWO FALSE-POSITIVE FAMILIES, AND THE INSTRUMENT THAT WAS DROPPING ROWS, 18,635 / 0 / 3 (2026-09-11).**
+**(P18.70) — FOUR (CHK.*) ITEMS, AND THE INSTRUMENT THAT WAS DROPPING ROWS, 18,647 / 0 / 3 (2026-09-11).**
 Two (CHK.\*) items closed and **both queue items were wrong about their own size**, a
 sixth round running. **(CHK.122)**: the item named ONE route for a missing `in`-guard
 consult; measured against both references it is FOUR — flow, destructured, FILE-LEVEL
@@ -44,8 +44,19 @@ COLLAPSED. Both now refuse/resolve, plus TEXT-DIFF for a message divergence, whi
 (PARITY.1) says nothing else in the repo could see. Every conclusion drawn with the
 broken key was re-run. **The Phase-18 WORK ORDER note was trimmed away a SECOND time**
 by (P18.66) — restored, re-anchored under a `## QUEUE` heading, and
-`scripts/check_plan_structure.py` now fails when it is gone. Two countdown pins fired
-(6 more queued as (CHK.126)); three finds queued and none claimed.
+`scripts/check_plan_structure.py` now fails when it is gone. **(CHK.125)**: TS2394's predicate knew only `any`, so an ordinary
+`f(string)/f(number)/f(unknown)` overload set was an ours-only FP — tsc's rule is TWO
+rules (RETURN assignable in EITHER direction, PARAMETERS requiring the impl be wider),
+and `unknown`/`never` are assignable in exactly one direction each, so the positions
+disagree about four of eight combinations; ten cells measured, three of them negative
+controls that still report. **(CHK.126)**: every silence-asserting pin in
+`M04ExpandoSpineMigrationTest` re-measured — **ten countdowns, not the eight queued**,
+renamed `residue - ` with their reference rows; **and three were made UNFALSIFIABLE by
+this round's own (CHK.119) display change** (they keyed on `typeof Foo`, which an
+expando-free function can no longer produce), fixed in the same session that broke them
+and verified falsifiable rather than assumed. The audit found **(CHK.127)**: the
+collector OVER-declares in the opposite direction from (CHK.119), costing four
+reference rows. Four finds queued, none claimed.
 
 **(P18.68) — (CHK.121): THE AXIS IS THE *INITIALIZER*, AND BOTH SIZINGS OF THE ITEM WERE WRONG, 18,604 / 0 / 3 (2026-09-11).**
 An ANNOTATED function-body local now reaches the member-existence check.
