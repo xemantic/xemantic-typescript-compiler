@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **191,724** lines (**−8,239 across (P18.53)-(P18.65)**; steps 10a-10d are SEMANTIC changes and ADD 85, 86, 14 and 33, not extractions; 191,070 when
+extraction):** `Checker.kt` **191,863** lines (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -18,6 +18,45 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.66) — (INV.0) STEP 10b-iii: THE TS2693 THE ITEM SAYS WE NEVER EMIT, AND TWO RESOLVERS DISAGREEING ABOUT ONE RECEIVER, 18,573 / 0 / 3 (2026-09-10).**
+**TWO OF THE ITEM'S OWN FACTUAL CLAIMS WERE WRONG AND ONE OF THEM CHANGED THE SIZE OF THE
+WORK**: we DO emit TS2693 — byte-identically to pristine — for a FILE-LEVEL `interface`/
+`type` read as a value, so **(c)** was a LEVEL-CONSTRUCTION gap in one function rather than
+a missing diagnostic (`tavListLevel`, what a statement `Block` contributes, surveyed
+`values` ONLY where `tavModuleLevel` surveys all three); and the namespace half's SHADOWING
+variants read the OUTER declaration rather than "nothing at all", with its (CHK.73)
+attribution wrong too, since a FILE-LEVEL namespace value member read works. Fifth round
+running that an item's facts were worth one command. **A THIRD POPULATION IT NEVER NAMED** —
+a UNIQUE block-scoped `enum`/`class`/`namespace` receiver whose member is genuinely absent,
+TS2339 in both references and silent here — is what decided **(b)** to replace silence as
+well as override. **(b) IS TWO RESOLVERS DISAGREEING ABOUT ONE RECEIVER, WITH THE WORST
+SYMPTOM**: a correct TS2322 and a false `Property 'ZInner' does not exist on type
+'typeof ZzzE2'` on the SAME line, because the `cmam*` family composed its receiver from the
+FILE-keyed `lookupPerFileForNode`. Two functional lines route it through
+`nameResolver.lexicalValueSymbolForNode`, **the same consult step 10b uses** — the DRIFT is
+the defect, so the two can no longer drift. **RECEIPT, 56-cell matrix against tsgo 7.0.2 AND
+pristine 6.0.3 (agreeing on all 56): 18 ours-only / 44 missing → 6 / 35**, AGREE cells
+18 → 27, `absentEnum`/`absentClass` closing completely; the (c) matrix's `ifaceAsValue` and
+`aliasAsValue` 0/3 → 0/0 with every other kind byte-identical. **THE CONTROL THAT KEEPS THE
+NUMBER HONEST**: `absentFn` is missing at FILE LEVEL TOO, so a nested-`function` receiver is
+a general gap and NOT B83.5's — 5 rows deliberately unclaimed, now (CHK.119). **THE NAMESPACE
+HALF IS A MEASURED TRADE, NOT A GAIN**: 6 confident false rows removed, the true row not
+produced (`declareLexical`'s `ModuleDeclaration` arm publishes no `exports` where its `enum`
+arm does), and 3 rows LOST that the wrong receiver had been answering correctly by accident
+— shipped anyway, because keeping them means deliberately consulting the declaration this
+step exists to stop consulting; now (CHK.120). **PER-FILTER VERDICTS FOR (c), MEASURED BY
+DROPPING ALL FOUR AT ONCE**: `KNOWN_GLOBALS` is LOAD-BEARING (a block-scoped
+`interface Event` shadows the global TYPE and not `declare var Event`, so `new Event(…)`
+stays legal) and so is the namespace `hasValues` survey; the two `values` guards are
+REDUNDANT (`spineTavIdentifierCore` returns above both probes) and kept, recorded as a
+round-927 pair. **A COUNTDOWN PIN FIRED AS DESIGNED, THE FOURTH IN SIX ROUNDS** — an expando
+"negative control" asserted silence for a nested `class Foo` shadowing a `function Foo`,
+which both references report; split, with the residue renamed `residue - …`. **ABLATION: 5
+arms / 13 pins, two brief predictions wrong** — the below-`perFileIdentSymbol` arm is
+behaviourally the SAME mistake as the inverse gate (identical red set), and the
+namespaces-excluded arm is 0 RED and recorded UNDISCRIMINATED rather than smoothed. Grid
+8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844 classes), warning-clean.
 
 **(P18.65) — (INV.0) STEP 10d: THE ORACLE'S `resolveName` IS ANSWERED, AND THE ROW THAT OPENS LATER STAYS REFUSED, 18,546 / 0 / 3 (2026-09-10).**
 **THE REFUSAL WAS CORRECTED BEFORE IT WAS CLOSED, AND THAT IS WHY THIS WAS ONE ROUND AND NOT
@@ -154,28 +193,3 @@ reference** (`ZzzE.ZInner`) — `resolveQualifiedName` is a fourth type-name pat
 into 10c. **ALL EIGHT ABLATION ARMS RUN, union 9 of 28 pins, and three predictions wrong**: the GATE and the FLAG-MASK arms redden IDENTICAL sets (round 927's PAIR — either alone disables the whole consult), round 748's ORDER arm is UNDISCRIMINATED because this step gave `getTypeFromTypeReference` its own hoist, and the `keyof (X & T)` arm read 0 RED until a pin was ADDED for it — without which that guard would have read as redundant and been deletable. Grid 8×`added=0 removed=0`, cost_gate exit 0 (`globals.lookups`
 −0.23%, `globals.misses` −0.24% — the consult answering before the miss), huge_methods exit 0
 (842 classes), warning-clean.
-
-**(P18.61) — (INV.0) STEP 9: THE DECISION, TAKEN ON MEASUREMENTS, AND THE SCOPE-SPACE ASCENT GETS ONE HOME, 18,520 / 0 / 3 (2026-09-10).**
-`Checker.kt` **191,540 → 191,506**; `LexicalScopeResolver.kt` 124, **ambient NONE — the first such
-row since step 3**; ledger row 12. **BOTH OPTIONS SIZED RATHER THAN ARGUED**: the check passes are
-where the LINES are (96,830 of 191,499 attributed, 50.6%) and where the SEAMS are not — `cmam*` 83
-ambient reads, `caas*` 59, type-node builders 68, **`cae*` 97 reads for EIGHT declarations**,
-against rows 1-11's 0/0/4/26/22/4/13/45/21/5/61. **AND THE ALTERNATIVE HAD TO BE CORRECTED BEFORE
-IT COULD BE TAKEN**: the queue item offered "open Stage 1" and Stages 1 AND 2 landed on 2026-09-02,
-so the open stage is 3 — a queue item's own factual claims are worth one command to check, this one
-would have sent a round at work that already exists. **WHAT B83.5 IS, MEASURED, AND NOT WHAT ITS
-NAME SAYS**: `Binder` recurses into statements from exactly two places, so a `class` at the very TOP
-of a function body — no block nesting at all — is as unbound as one inside an `if`; against
-tsgo 7.0.2 that shape is 1 ours-only TS2353 and 0 of 4 true rows. **The sub-step is the INERT one
-and it is about DUPLICATION**: the INV.2(c) ascent had been hand-copied FIVE times and the copies had
-drifted on four axes, all deliberately, so they became parameters. **THE GATE IS THE 8-PROFILE GRID,
-NOT THE CORPUS** — three of the five callers are name-GATED, so a wrong axis resolves a name to an
-OUTER binding, which is silent; all eight read `added=0 removed=0`. **TWO TEXTS CORRECTED BECAUSE
-THEY WERE FALSE**: `LexicalScope`'s "UNCONSUMED until INV.4" KDoc (five consults read those tables,
-since round 748) which also proposed the very `existing` read round 748 refused; and both
-`TypeOracle` refusals, which blamed the binder for what is a COMPOSITION problem — a refusal that
-misstates its own blocker is worse than no refusal, because it sizes the next round wrong. Four of
-five ablation arms discriminate; **arm 1 reddens ALL FIVE and is recorded as not being a single-pin
-arm**. cost_gate exit 0, huge_methods exit 0 (842 classes), receipt now SEVEN binaries,
-warning-clean. **The one question Stage 3 was unsized on is also ANSWERED**: `getTypeOfSymbol`/`getDeclaredTypeOfSymbol` answer correctly for a scope-space `Interface`, `Class`, `Function` and `Variable` symbol, so that arc does NOT have to begin with a transient-symbol route (6th pin, arm in `Checker.getDeclaredTypeOfSymbol`).
-

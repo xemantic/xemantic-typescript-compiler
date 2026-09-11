@@ -43,6 +43,341 @@ making the change MORE aggressive can redden them — which a3/a12/a13 are, for 
 leak set per class cannot express a read silenced by a LATER block's assignment; and a static block
 inside a nested `function` does not suppress an outer read.
 
+
+### Round (P18.56) — (INV.0) step 5: the RELATER becomes `Relater.kt`, and the region's ~6,390 lines are only 1,256 of algorithm (2026-09-09)
+
+**Suite 18,489 / 0 / 3** (18,484 + 5 new pins). `Checker.kt` **198,022 → 196,797** (−1,225);
+`Relater.kt` **1,446**. cost_gate exit 0, huge_methods exit 0 (**836** classes, `Checker.<init>`
+5,634 → 5,675), build warning-clean, ledger row 7. Two commits: `579092d93` the split,
+`03d455241` the ablation record.
+
+**THE CENSUS THE QUEUE ITEM ASKED FOR CHANGED THE SHAPE OF THE WORK.** The item named seven
+entry points spanning 925 lines inside a ~6,390-line region and said the round's first job was
+to find out which of the ~5,400 intervening lines are the relater. **They are not**: the
+algorithm is **1,256 lines in five contiguous spans**, and the remainder is ELABORATION —
+`getPropertyElaborationChain` (546), `getFunctionMismatchElaborationWorker` (407),
+`checkExcessProperties` (231), the no-overlap family, the array/object-literal checks. Those
+answer *what do we SAY about the failure*, a different seam from *does it relate*.
+
+**AND IT WAS DELIBERATELY NOT SPLIT, WHERE 4b WAS.** 4b had two independent families and a
+natural seam; this is ONE mutually-recursive algorithm (`checkTypeRelatedTo` →
+`structuredTypeRelatedTo` → `objectTypeRelatedTo` → `signaturesRelatedTo` →
+`signatureRelatedTo` → back), so any mid-recursion cut puts a `Checker` hop inside the
+compiler's hottest recursion and inflates the ambient row for no verification benefit — the
+verification cost is identical at 600 lines and at 1,256.
+
+**THE DELEGATION SURFACE IS SIX, NOT 363.** `checkTypeRelatedTo` has 329 surviving call sites
+and every one is byte-unchanged behind a one-line private hop; eight of the fourteen moved
+functions have zero callers left and get none. Public surface 6 = `relater.` references 6 by
+construction (7 = 7 with the test seam).
+
+**THE RECEIPT PROTOCOL NEEDED A FIX, AND IT IS THE ROUND'S MOST REUSABLE FINDING. The
+`--passTiming` pass table is printed in DESCENDING WALL-TIME order, so its row ORDER is a
+timing artefact even though every column the receipt keeps is deterministic** — the first
+comparison read **804 diff lines between two binaries that are in fact identical**, all of it
+equal-count rows shuffled by ms. Sorting the pass rows and dropping every line carrying a
+millisecond figure or a TIME-BUCKETED count (`narrowWalk cost distribution`, `huge(>=1ms)`,
+the per-kind ns/node table) leaves **488 deterministic lines byte-identical between rebuilt
+pristine HEAD and the split** — all 420 per-pass rows, the 46 diagnostics, the emissions
+census, the counter block, the globals-lookup line — with a SAME-BINARY control confirming
+the normalisation is not merely hiding everything. `scratchpad/pt_norm.py`.
+
+**A SECOND MEASUREMENT LESSON: cost_gate's ±2% column is NOT a statement about the change.**
+Six counters read non-zero deltas (`typeOfExpr.calls` +13, `narrow.walks` −4, …) and
+**pristine HEAD reads exactly the same deltas** — `docs/perf/cost-counters.txt` is simply
+stale by a few rounds. A pure split must be graded against a REBUILT pristine, never against
+a recorded baseline; the gate is the control.
+
+**A THIRD STANDING HOT SITE IS UNSTABLE ACROSS PROCESSES.** Row 4 showed
+`getTypeOfExpression`'s `PrintInlining` row is not stable; running arm A TWICE this round
+shows `isTypeAssignableTo` is not either (`4 inline + 4 inline (hot)` vs `4 inline + 2 inline
+(hot)` on ONE binary), so only `checkArgumentsAgainstSignature` — byte-identical across A's
+two runs — can separate arms here. It moved by one row in each direction with the refusal
+COUNT unchanged. **And the split IMPROVED inlining for the third row running**: as a monolith
+`checkTypeRelatedTo` was refused `too large` at **344** sites and its hop now reads `294
+inline + 38 inline (hot)` with ZERO refusals; `isSimpleTypeRelatedTo` went from `24 inline +
+9 too large + 13 hot-method-too-big` to a hop with no refusal at all. ab-interleaved 6 pairs
+**−11 ms (−0.04%) B-wins-3/6 NOISE-DOMINATED**, both arms 46 errors. The § 10 allocation
+receipt was taken STATICALLY and is sharper than JFR for the claim it makes: **`new Relater`
+appears at exactly ONE bytecode in the whole module**, in `Checker.<init>`.
+
+**ONE PRODUCTION MEMBER WAS ADDED ON PURPOSE — a named test seam.**
+`Relater.recursionResidue` sums the three comparison stacks, `relProbeDepth` and
+`checker.relationDepth`; `RelaterTest` asserts it is 0 after a whole-program check.
+B202.3's finally-hygiene is otherwise unpinnable: a stale `(source.id, target.id)` key does
+not fail, it makes every LATER comparison of that pair answer `true` through the cycle break,
+i.e. it deletes diagnostics in whatever file is checked next — invisible to the corpus, to
+`cost_gate.py` and to a `--listAll` diff alike. **`relationDepth` is in that sum because it
+is the ONE counter this class must not own**: `resolveGenericPropertyType` gates INV.5(d1)'s
+2,000-computation budget on `relationDepth > 0`, so tidying it into a private `Relater` field
+— the obvious refactor, since the other four counters ARE owned — silently re-opens the
+deep-generic blowup.
+
+**5 pins; 5 arms; TWO PINS MEASURED UNDISCRIMINATED AND RENAMED RATHER THAN CLAIMED.**
+Dropping the comparison-stack pop (a1), the `relationDepth--` (a2) or the two target-stack
+pops (a3) from the `finally` each redden the residue pin and nothing else; flipping
+`REL2_ENUM_TO_MEMBER` (a5) reddens its own control. **A leak DETECTOR cannot work** — the
+`Relation` cache is probed ABOVE the comparison stack, so for an identical pair it answers
+before a stale key is consulted, and a1 leaves that pin green. **And the `isDeeplyNested`
+bail is not the only bound** — arm a4 disables it entirely and the expanding generic pair
+still terminates, because `maxRelationDepth` at 100 is a second sufficient ceiling; the two
+are a round-927 pair.
+
+**THE AMBIENT ROW IS THE LARGEST OF THE ARC — 45 reads, 5 writes — AND THAT IS THE DESIGN'S
+OWN PREDICTION, not a regression**: § 6 puts `getTypeOfSymbol`/`getTypeOfExpression` in Stage
+3 because "their ambient IS the checker", and the relater sits one step below. **The cheap
+next step was measured and the measurement REFUTED the plan the round began with**: the brief
+asserted the 16-member enum group had no callers outside the moved region, and a caller
+census says only **seven** of the 48 members do — absorbing those takes the reads 45 → 38,
+while `enumTypesRelation` (3 other callers) and `enumOfMemberTypeSymbol` (8) belong to an
+ENUM seam of their own. The three elaboration WRITES are the opposite kind of debt: a RETURN
+CHANNEL that paying means giving the relation a result richer than `Boolean` (tsc's
+`errorInfo`), which is a semantic change and not Stage 0.
+
+**NEXT**, per `docs/INVERSION-DESIGN.md` § 6 Stage 0's order: **member resolution** — the
+8-member group this row names is a seam of its own and is what most improves row 7. Then
+signatures and flow; `getTypeOfSymbol`/`getTypeOfExpression` stay Stage-3-shaped.
+
+
+### Round (P18.55) — (INV.0) step 4 is COMPLETE: `NameResolver.kt` is 2,284 lines and `Checker.kt` lost 1,941 (2026-09-09)
+
+**Suite 18,484 / 0 / 3** (a pure move adds no pins). `Checker.kt` 198,781 → **198,022**;
+`NameResolver.kt` 1,418 → **2,284**. **STEP 4 TOTAL: 199,963 → 198,022, −1,941 lines.** cost_gate
+exit 0, huge_methods exit 0 (835 classes, `Checker.<init>` 5,656 → **5,634**), build
+warning-clean, ledger row 6. Three commits (`da92e5bd3` 4a, `84dd8ad5d` 4b-i, `b353278a1` 4b-ii)
+plus `2db1c14ca`, the diffability fix.
+
+**THE AMBIENT ROW GETS *BETTER* AS A FAMILY COMPLETES, AND THIS ROUND MEASURED IT.** 4b-ii
+ABSORBS four of the reads the earlier rows recorded — `resolveQualifiedName` and
+`ambientModuleSurfaceMember` (row 4), `augmentationContextSymbol` and
+`moduleLocalContributesGlobally` (row 5) — because those functions now live inside the
+collaborator, so the calls stop crossing the boundary. Net: **26 distinct checker reads, NO
+writes, for 2,284 lines.** The reusable form: **an intermediate row's ambient count is the WORST
+that family will ever look**, so the ledger should be read by FAMILY, not by row — and splitting
+a seam across commits temporarily inflates it, which is a cost of decomposition worth stating
+rather than hiding.
+
+**THE CONSTRUCTOR-INPUT TRAP BIT A THIRD TIME AND COST NOTHING, BECAUSE THE PREVIOUS ROUND WROTE
+THE RULE DOWN.** Six fields this step reads (`umdGlobalNames`, `moduleFiles`,
+`mergeSharedKeepNames`, `lexicalBlockScopedEnumNames`, `QUALIFIED_LEFT_MEANING`, `isDtsFile`) are
+declared BELOW the construction site at `Checker.kt:666`, where a constructor input captures
+**null**. All became ambient reads. That is the difference between a rule recorded in the queue
+item and a rule re-derived per round.
+
+**A THIRD JVM-NAME-MANGLING MECHANISM.** Beside `internal`'s `$<module>` suffix (found last
+round), **`SymbolFlags` is a VALUE class**, so `lookupInEnclosingNamespaces` compiles as
+`lookupInEnclosingNamespaces-bd7vo6s` and a `PrintInlining`/`javap` grep for the source name reads
+ZERO rows. Both mechanisms fail in the direction that reads as "this hop was never compiled";
+both are now CLAUDE.md entries.
+
+**RECEIPTS FOR THE WHOLE OF STEP 4, NOT JUST THIS COMMIT.** **All 420 per-pass `--passTiming`
+rows and the 46 diagnostics are byte-identical between PRE-4a pristine and the completed step 4** —
+one receipt covering all 1,941 moved lines, and a far stronger statement than the gate's 20
+aggregates. PrintInlining: **ZERO refusals on every hop** of 4b-ii, and both STABLE standing hot
+sites (`checkArgumentsAgainstSignature`, `isTypeAssignableTo`) identical to pristine —
+`getTypeOfExpression` is deliberately NOT quoted, since (P18.53) proved it unstable across
+processes on one binary. ab-interleaved 6 pairs +39 ms (+0.15%) B-wins-4/6 NOISE-DOMINATED, both
+arms at 46 errors. Verbatim proved twice by two methods for the third time running: the agent's
+reverse-transform diff, and the orchestrator's independent multiset check whose only unaccounted
+lines were 13 signature lines and 75 lines of new class KDoc.
+
+**THE DIFFABILITY FIX PAID OFF IMMEDIATELY**: this commit renders a real text diff (871
+insertions / 5 deletions) for `NameResolver.kt` where 4a and 4b-i showed only `Bin … bytes`.
+
+**A STRUCTURAL CHECK WORTH REPEATING FOR ROW 7**: the public surface reconciles EXACTLY — 40
+non-private `NameResolver` members against 40 `nameResolver.` references in `Checker.kt` (38
+delegations + the two classifier taxonomy reads); the apparent extras in `javap` are the JVM
+property accessors and the value-class mangled name.
+
+**NEXT.** Step 4 is done, so the order's tail moves on: `docs/INVERSION-DESIGN.md` § 6 Stage 0
+names `getTypeOfSymbol`/`getTypeOfExpression` (Stage-3-shaped — their ambient IS the checker),
+the RELATER's algorithm out of `checkTypeRelatedTo` into the `TypeRelationCache.kt` seam row 2
+already named, signatures, and flow. The relater is the natural row 7: row 2 put its cache type
+in a named file precisely so its extraction would not start from a 198k-line neighbourhood.
+
+### Round (P18.54) — (INV.0) step 4b-i: the PER-FILE LOOKUP core joins `NameResolver.kt`, the item's own hoist is UNSAFE, and the file the arc grows into was UNREVIEWABLE BY DIFF (2026-09-09)
+
+**Suite 18,484 / 0 / 3** (unchanged — a pure move adds no pins). `Checker.kt`
+**199,405 → 198,781** (−624; **−1,182 across 4a+4b-i**); `NameResolver.kt` 669 → 1,418.
+cost_gate exit 0, huge_methods exit 0 (835 classes, `Checker.<init>` 5,701 → **5,656**),
+build warning-clean, ledger row 5. **The full 4b censused at 1,363 lines over 39 functions, so
+it was SPLIT** per the protocol's decompose rule; the namespace / qualified-name / heritage
+group (~780 lines) is 4b-ii and is what remains of step 4.
+
+**THE ITEM'S OWN INSTRUCTION IS UNSAFE, AND FINDING THAT OUT WAS THE ROUND'S FIRST REAL WORK.**
+Step 4 says to hoist `libGlobals`'s declaration above the collaborator's construction site so it
+can be a constructor input. `libGlobals` is initialized by `parseBuiltinLib()`, whose SIDE EFFECT
+fills `realLibUnknownNames` — a field whose own KDoc records that it is "DECLARED BEFORE
+[libGlobals] on purpose — the Kotlin field-init order gotcha". Hoisting that chain reorders lib
+parsing against ~9,300 lines of field initialization. `libGlobals` and
+`globalAugmentationAddedSymbols` became ambient READS instead (both are declared BELOW line 705,
+where a constructor input would have captured **null**). **General rule for the rest of the arc: a
+constructor input must be declared above 705, and a field whose initializer has a side effect on
+another field cannot be moved at all.**
+
+**THE SPLIT IMPROVED INLINING AT THE COMPILER'S HOTTEST LOOKUP — row 1's finding, on a much
+bigger population.** `lookupPerFileForNode` has ~67 callers and ~2M calls per self-compile. As a
+monolithic `Checker` method C2 refused it at 57 sites (`4 inline (hot) + 57 too large`); the
+9-byte delegation hop now reads **`57 inline + 41 inline (hot)` with ZERO refusals**, with the
+body's own rows unchanged. `globalsForFile` is the same shape. **A receipt-reading trap came with
+it: Kotlin mangles an `internal` member's JVM name with a `$<module>` suffix**, so a
+`PrintInlining` grep for the source name reads ZERO rows for exactly the three hot hops that
+matter — which reads as "the hop was never compiled" rather than as a bad grep.
+
+**THE FILE THIS WHOLE ARC GROWS INTO WAS UNREVIEWABLE BY DIFF, AND NOBODY HAD NOTICED.**
+`UNRESOLVED_MODULE_SPEC` holds a literal NUL byte (deliberate and load-bearing — no filename can
+contain one). After 4a it sat at byte offset **7,910**, inside the 8,000-byte window git's binary
+heuristic scans, so `NameResolver.kt` rendered as `Bin 41763 -> 83630 bytes` with **no line diff**
+in `git show` / `git diff` — i.e. commits `da92e5bd3` (4a) and `84dd8ad5d` (4b-i) cannot be
+reviewed by diff for that file. `Checker.kt` escapes only by accident, its own NULs sitting at
+byte 4.6M. Fixed separately in `2db1c14ca` by escaping both to `\u0000`, and **the receipt is
+that the compiled `NameResolver.class` is BYTE-IDENTICAL across the edit** (`cmp` clean, md5
+`ac116f49…`), with a diffability probe afterwards confirming the file now renders as text. The two
+earlier commits are left alone rather than rewritten: their content was verified by other means (a
+reverse-transform diff and an independent multiset check of the moved region).
+
+**RECEIPTS.** Suite 18,484/0/3 with all **17** named invariant gate classes confirmed green;
+**all 420 per-pass `--passTiming` rows and the 46 diagnostics byte-identical against PRE-4a
+pristine**, so one receipt covers rows 4 and 5 together; cost_gate's counter column identical to
+pristine (the ±0.03% shown against `cost-counters.txt` is HEAD's own drift, last rebaselined at
+`1917f1ca3`); ab-interleaved 6 pairs −120 ms (−0.45%) B-wins-3/6 NOISE-DOMINATED with both arms at
+46 errors. Verbatim proved twice by two methods again — the agent's reverse-transform diff and the
+orchestrator's independent multiset check, whose only unaccounted lines were the 15 signatures
+whose visibility changed and the new class KDoc.
+
+**AMBIENT ROW: SEVEN reads, NO writes.** Two of the seven are BIDIRECTIONAL pairs and are recorded
+as intended rather than as defects: `installGlobalsLookupClassifier` stays in `Checker` (it reads
+the walk-scoped `currentFileLocals`) while the taxonomies it classifies against live in the
+resolver, and `augmentationContextSymbol` calls `lookupPerFile`/`nodeSymbolOf` back.
+
+### Round (P18.53) — (INV.0) step 4a: the NAME/MODULE RESOLUTION leaf becomes `NameResolver.kt`, and TWO OF THE FOUR § 10 INSTRUMENTS NEED A SAME-BINARY CONTROL (2026-09-09)
+
+**Suite 18,477 → 18,484 / 0 / 3** — 7 pins in the new `NameResolverTest`. `Checker.kt`
+**199,963 → 199,405** (−558); `NameResolver.kt` 669. cost_gate exit 0, huge_methods exit 0
+(0 over limit, 835 classes, `Checker.<init>` 5,701/8,000), build warning-clean, ledger row 4.
+**The owner chose (INV.0) for this session**, which is the WORK ORDER's tail; the (CHK.\*) lane
+is parked, and the shrinkage dashboard moves in the right direction for the first time in ~26
+rounds.
+
+**THE ITEM'S CENSUS HELD AT HEAD, WHICH IS WORTH SAYING BECAUSE IT WAS TAKEN 8 ROUNDS AND ~5,200
+ADDED LINES AGO.** All 17 named leaf functions are single-declaration and intact, no cross-file
+caller exists (`CompilerOptions.kt` and `MapCensus.kt` only NAME them in comments), and all six
+constructor inputs are declared above the `:702` anchor — so the collaborator can be built before
+`init`, which Kotlin's declaration-order initialisation requires.
+
+**TWO DEVIATIONS, BOTH MEASURED RATHER THAN ARGUED.** `resolveExportedSymbolThroughStars` and
+`moduleNamedExportsOf` stay in `Checker.kt`: they are 7- and 3-line MEMO WRAPPERS whose computers
+are large checker-resident star walks with ~20 call sites outside the moving set, so moving the
+wrapper alone buys ~31 lines and costs ~20 delegation hops plus 4 ambient entries.
+`ambientModuleFilelessCache` belongs to a 4b function. **The brief predicted "nothing in the
+moving set calls either" and was HALF WRONG** — `computeImportedSymbolGeneral` calls
+`resolveExportedSymbolThroughStars`, so it became a 14th ambient read rather than a free deferral.
+
+**A THIRD DEVIATION IS FORCED BY THE WARNING-CLEAN RULE, NOT CHOSEN, AND IT IMPROVES THE SEAM.**
+`getSymbolTarget` / `setSymbolTarget` / `computeModuleSpecifier` / `computeImportedSymbolGeneral`
+have ZERO callers left in `Checker.kt` once the family moves (their 2/16/1/2 sites are all inside
+the moved spans), so a `private` delegation would be an unused-member warning. They get no hop —
+the LinkStore moved wholesale and **`Checker` no longer names `state.symbolTargets` at all** — and
+their visibility was then narrowed to `private`, so the collaborator's public surface (11) and the
+delegation count (11) are the same number by construction.
+
+**THE VERBATIM CLAIM IS PROVED TWICE, BY TWO METHODS.** The implementation agent reversed the three
+documented transformations and `diff`ed byte-identical against the original 593 lines; the
+orchestrator ran an independent MULTISET check whose only unaccounted lines are the 15 signatures
+whose visibility changed and the new file's header and KDoc. Neither is an argument.
+
+**THE ROUND'S REUSABLE FINDING: TWO OF THE FOUR § 10 INSTRUMENTS CANNOT BE READ AT ONE RUN PER ARM,
+AND LEDGER ROWS 1 AND 3 QUOTE ONE OF THEM WITHOUT A CONTROL.**
+(i) The counter receipt is *stronger* than `cost_gate.py` and should be the standard for a split:
+**all 420 per-pass `--passTiming` rows and the 46 diagnostics are byte-identical against a rebuilt
+pristine HEAD** — a claim about every registered pass, where the gate speaks for 20 aggregates.
+(ii) The ONLY section of that output which moves is the **node-kind histogram**, and the SAME BINARY
+run twice moves it MORE — 70 differing lines A-vs-A against 64 A-vs-B, `Identifier` reading
+375,438 / 373,363 on one binary against 378,748 on the other. That is the `+=`-from-the-crawl-workers
+race CLAUDE.md already documents, arriving in a channel nobody had diffed before; read as a treatment
+effect it is a fabricated regression.
+(iii) **`getTypeOfExpression`'s PrintInlining row is NOT stable across processes.** Arm A read
+`1 inline (hot) + 372 too large` and arm B `382 too large` — a plausible-looking regression at a
+standing hot site — and arm A's SECOND run read `382 too large`, i.e. exactly arm B. Rows 1 and 3
+record that site as "row-for-row identical across arms"; that claim was made without this control.
+The other two standing sites ARE row-identical here.
+(iv) Every delegation hop C2 compiles reads `inline` or `inline (hot)` with **zero** refusals
+(`resolveAlias` 28/4, `resolveModuleSpecifier` 20/5, `resolveAliasTarget` 6/4,
+`resolveImportedSymbolGeneral` 3/4); ab-interleaved 6 pairs −152 ms (−0.57%) B-wins-2/6
+NOISE-DOMINATED with both arms at 46 errors; JFR shows `NameResolver` is never an allocated TYPE
+(constructed once per `Checker`, as § 10 requires) with symmetric sampler tails (37 types only-in-A,
+43 only-in-B) and counts that do not separate the arms (A 2,527/2,626 vs B 2,737/2,534).
+
+**THE TEST IS NOT THE ONE THE ITEM ASKED FOR, BECAUSE THE FUNCTIONS ARE NOT PURE.** Row 3's
+`createTypeMapper` precedent (a file-level pure function pinned without a checker) does not transfer:
+the specifier ladder closes over `fileResults` and `options`. What DOES transfer is the intent, so
+`NameResolverTest` builds a `NameResolver` with an **EMPTY** `globals`, empty `moduleResolutions` and
+an empty symbol-target store — an edit that reaches for checker scope state from the specifier ladder
+fails there rather than silently deepening the ambient row. All eleven named invariant gate classes
+were additionally confirmed GREEN in the gating run rather than assumed.
+
+**ARMS — 3, all discriminating uniquely.** a1 (drop the `UNRESOLVED_MODULE_SPEC` mapping) 2 RED,
+the sentinel pin uniquely plus the js-aware pin as collateral once the memo is poisoned; a2 (drop the
+`.js` strip) 1 RED uniquely; a3 (drop `normalizePath`) 1 RED uniquely. **The remaining four pins are
+positive controls and are recorded as such, not claimed as coverage** — plain relative resolution, the
+two-rung division of labour, memo stability on a HIT, and the absent-file negative control. The
+sentinel pin is the one worth keeping: a miss is memoized as a sentinel and mapped back to null on
+READ, so "simplifying" it returns the sentinel STRING as a resolved file name **from the second ask
+onward only**, which no single-ask pin can see.
+
+**NEXT: step 4b**, the scope side (~1,270 lines). Censused in the same session against HEAD: the
+combined 4a+4b move is **1,870 lines**, and several of 4a's fourteen ambient reads DISAPPEAR once 4b
+lands, because the two halves call each other — which is why the item's two-commit order is right and
+why 4a's row is the worst it will look.
+
+### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
+
+**RESTORED 2026-09-08 ((P18.44)).** This section was added by `cc09770a3` and was archived out of
+the file with the four COMPLETED items that sat under it ((LIC.1), (DOC.1), (EXT.1), (LSP.1)),
+leaving CLAUDE.md § "Execution protocol" pointing at a heading that did not exist for ~25 rounds.
+Text below is verbatim from `cc09770a3` minus those items; the dated addendum at the end records
+where the arc actually stands. **A completed item may not be archived without checking whether a
+load-bearing note travels with it.**
+
+**THE PROJECT IS RE-POINTED.** The JetBrains WebStorm evaluation paused: their need was a
+post-hoc TYPE ORACLE with the query shape of tsgo's `tsc/internal/api/proto.go` (142 methods),
+and this checker cannot serve one — its answers are functions of walk-scoped state, which
+`CheckedProgram.kt` and `TypeCapture.kt` already document. tsgo is the free, official default;
+competing with it on "a TypeScript compiler" is not the mission. **The mission is TypeScript
+for the JVM and Kotlin**: no Node and no Go in the toolchain, an embeddable whole-program
+checker, a Kotlin-externals generator with resolved types, a JVM bytecode backend (KIR), and an
+LSP anyone can try in five minutes. See CLAUDE.md § "AI agent mission" for the full directive
+and the pre-approved Guardrails (two new modules, no new dependencies, `docs/reposition` branch
+for README positioning text).
+
+**THE (INC.\*) FAMILY IS CLOSED (closing note).** It ran ~93 rounds and took the incremental
+floor from ~1,219 ms ((INC.3)) to **94-110 ms** ((INC.72b)/(INC.89)) at 2,401 files, with the
+plugin's own `diagnosticsOf` query at **93-217 ms** independent of edit shape ((INC.90)).
+Nothing above — externals generation, the LSP, the inversion — changes outcome at that scale,
+and the one real remaining gap ((INC.90)'s signature-edit cliff, 12.8x) was refused on
+SOUNDNESS by (INC.91)'s own census. **REFUSE a further (INC.\*) round unless a plugin-facing
+query is measured > 300 ms warm**, and do not touch `Checker.kt` for latency without that
+measurement in hand. The remaining unchecked (INC.\*) items below stay as a RECORD, except
+(INC.92)/(INC.93), which remain live as CORRECTNESS items (process-global state under the
+plugin's N-thread shape), not latency ones.
+
+**Work order for this arc, top to bottom:** (LIC.1) → (DOC.1) → (DOC.2, on `docs/reposition`)
+→ (EXT.1…n) → (LSP.1…n) → (INV.D) → (INV.0).
+
+**ADDENDUM 2026-09-08 ((P18.44)) — WHERE THE ARC ACTUALLY STANDS, AND THE STANDING QUESTION.**
+(LIC.1), (DOC.1), (DOC.2), the whole (EXT.\*) ladder, the whole (LSP.\*) ladder and (INV.D) are
+CHECKED OFF; `docs/INVERSION-DESIGN.md` exists. **So the order's tail — (INV.0) — is what it
+points at next**, and it is unchecked (steps 1 and 4 both below). What has actually happened for
+~25 rounds instead is the **(CHK.\*) checker-parity arc**, which the order never names: it was
+surfaced by the externals and library-readiness probes, it serves the "embeddable whole-program
+checker" leg, and every round of it is measured against both references — but STATUS.md's own
+shrinkage dashboard records that it **ADDED ~5,200 lines to `Checker.kt` and made zero
+extractions**, which is the metric (INV.0) exists to move. **The owner was asked on 2026-09-08
+and chose to CONTINUE the (CHK.\*) lane**; that decision is scoped to that session. A round that
+picks a (CHK.\*) item over (INV.0) is not violating the order, but it SHOULD say so and name its
+successor — and the moment the parity arc stops paying in measured reference rows, (INV.0) is
+where the order sends you.
+
 ### Round (P18.33) — an exported destructuring IS an export ((CHK.99)), and FOUR of the item's six sites were wrong (2026-09-06)
 
 **Suite 17,981 → 18,021 / 0 / 3** — 40 pins across three files with three different harnesses; no

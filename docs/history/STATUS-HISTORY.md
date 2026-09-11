@@ -1,3 +1,27 @@
+**(P18.61) — (INV.0) STEP 9: THE DECISION, TAKEN ON MEASUREMENTS, AND THE SCOPE-SPACE ASCENT GETS ONE HOME, 18,520 / 0 / 3 (2026-09-10).**
+`Checker.kt` **191,540 → 191,506**; `LexicalScopeResolver.kt` 124, **ambient NONE — the first such
+row since step 3**; ledger row 12. **BOTH OPTIONS SIZED RATHER THAN ARGUED**: the check passes are
+where the LINES are (96,830 of 191,499 attributed, 50.6%) and where the SEAMS are not — `cmam*` 83
+ambient reads, `caas*` 59, type-node builders 68, **`cae*` 97 reads for EIGHT declarations**,
+against rows 1-11's 0/0/4/26/22/4/13/45/21/5/61. **AND THE ALTERNATIVE HAD TO BE CORRECTED BEFORE
+IT COULD BE TAKEN**: the queue item offered "open Stage 1" and Stages 1 AND 2 landed on 2026-09-02,
+so the open stage is 3 — a queue item's own factual claims are worth one command to check, this one
+would have sent a round at work that already exists. **WHAT B83.5 IS, MEASURED, AND NOT WHAT ITS
+NAME SAYS**: `Binder` recurses into statements from exactly two places, so a `class` at the very TOP
+of a function body — no block nesting at all — is as unbound as one inside an `if`; against
+tsgo 7.0.2 that shape is 1 ours-only TS2353 and 0 of 4 true rows. **The sub-step is the INERT one
+and it is about DUPLICATION**: the INV.2(c) ascent had been hand-copied FIVE times and the copies had
+drifted on four axes, all deliberately, so they became parameters. **THE GATE IS THE 8-PROFILE GRID,
+NOT THE CORPUS** — three of the five callers are name-GATED, so a wrong axis resolves a name to an
+OUTER binding, which is silent; all eight read `added=0 removed=0`. **TWO TEXTS CORRECTED BECAUSE
+THEY WERE FALSE**: `LexicalScope`'s "UNCONSUMED until INV.4" KDoc (five consults read those tables,
+since round 748) which also proposed the very `existing` read round 748 refused; and both
+`TypeOracle` refusals, which blamed the binder for what is a COMPOSITION problem — a refusal that
+misstates its own blocker is worse than no refusal, because it sizes the next round wrong. Four of
+five ablation arms discriminate; **arm 1 reddens ALL FIVE and is recorded as not being a single-pin
+arm**. cost_gate exit 0, huge_methods exit 0 (842 classes), receipt now SEVEN binaries,
+warning-clean. **The one question Stage 3 was unsized on is also ANSWERED**: `getTypeOfSymbol`/`getDeclaredTypeOfSymbol` answer correctly for a scope-space `Interface`, `Class`, `Function` and `Variable` symbol, so that arc does NOT have to begin with a transient-symbol route (6th pin, arm in `Checker.getDeclaredTypeOfSymbol`).
+
 **(P18.57) — (INV.0) STEP 6a: MEMBER RESOLUTION IS `MemberResolver.kt`, AND THE ITEM'S OPEN QUESTION IS ANSWERED, 18,493 / 0 / 3 (2026-09-09).**
 
 
