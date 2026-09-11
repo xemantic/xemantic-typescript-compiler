@@ -13,10 +13,11 @@ the first.  A column that differs between compilers for the same logical row is
 reported as SPAN-DIFF rather than as an ours-only/missing pair.
 
 Verdicts, per row:
-  AGREE        both references report it and so do we
+  AGREE        both references report it, with the same message, and so do we
   OURS-ONLY    we report it and NEITHER reference does   (a false positive)
   MISSING      both references report it and we do not   (a lost diagnostic)
-  REF-SPLIT    the two references disagree -> NOT adjudicable, reported separately
+  REF-SPLIT    the two references do not report the same ROW -> NOT adjudicable
+  REF-SPLIT-MSG  both report the row and their MESSAGES differ -> NOT adjudicable
   TEXT-DIFF    we report it at the right place with a DIFFERENT MESSAGE
   SPAN-DIFF    same file/line/code on both sides, different COLUMN
 
@@ -43,6 +44,17 @@ REF-SPLIT is the load-bearing one: CLAUDE.md records that tsgo and pristine
 diverge in whole families (overload elaborations, duplicate-member spans), so a
 row on which they disagree is evidence about nothing and must never be counted
 into a prize.
+
+REF-SPLIT-MSG is the same law one level down, and it was a FOURTH blindness
+((P18.74)): the references can report the identical ROW and disagree about its
+MESSAGE, and such a row used to be folded into AGREE — "not adjudicable, so leave
+it alone" is the right *treatment* and the wrong *label*, because it inflates the
+count a round quotes as its prize and hides a real divergence family completely.
+It bit immediately: CLAUDE.md's (CHK.83) records that for `"a" | 1` against
+`number[]` tsgo's chain names the FIRST constituent and pristine's the LAST, and
+this script scored that row AGREE — a (CHK.130) recon then reported the law as
+contradicted when it is exactly reproducible.  A row here is still never counted
+into a prize; it is now counted, and named, separately.
 
 REFUSES (exit 2) rather than skipping when an arm is unavailable — a reference
 sweep that silently drops to one compiler reads exactly like a clean measurement
@@ -212,10 +224,14 @@ def main() -> int:
 
     # Same place, same code — now ask whether we said the same THING.  A message the
     # two references do not themselves agree on is not adjudicable and stays in AGREE.
-    agree, text_diff = [], []
+    agree, text_diff, ref_split_msg = [], [], []
     for k in sorted(both & ours):
         ref_t, ref_p = tsgo_msg.get(k, ""), pris_msg.get(k, "")
-        if ref_t == ref_p and ours_msg.get(k, "") != ref_t:
+        if ref_t != ref_p:
+            # The references report the same row and disagree about what it SAYS.
+            # Not adjudicable — and not AGREE either, which is what it used to be.
+            ref_split_msg.append(k)
+        elif ours_msg.get(k, "") != ref_t:
             text_diff.append(k)
         else:
             agree.append(k)
@@ -236,6 +252,14 @@ def main() -> int:
         show("MISSING (both references report)", missing, tsgo_msg)
         show("REF-SPLIT (references disagree — NOT adjudicable)", sorted(ref_split),
              {**tsgo_msg, **pris_msg})
+        if ref_split_msg:
+            print(f"\nREF-SPLIT-MSG (same row, references disagree on the MESSAGE "
+                  f"— NOT adjudicable) ({len(ref_split_msg)}):")
+            for k in ref_split_msg:
+                print(f"  {k[0]}:{k[1]}  TS{k[3]}")
+                print(f"      tsgo:     {tsgo_msg.get(k, '')}")
+                print(f"      pristine: {pris_msg.get(k, '')}")
+                print(f"      ours:     {ours_msg.get(k, '')}")
         if text_diff:
             print(f"\nTEXT-DIFF (right row, wrong message) ({len(text_diff)}):")
             for k in text_diff:
@@ -245,8 +269,9 @@ def main() -> int:
 
     print(f"\nfixture={fixture.name} agree={len(agree)} ours-only={len(ours_only)} "
           f"missing={len(missing)} text-diff={len(text_diff)} "
-          f"span-diff={len(span_diff)} ref-split={len(ref_split)}")
-    if ref_split:
+          f"span-diff={len(span_diff)} ref-split={len(ref_split)} "
+          f"ref-split-msg={len(ref_split_msg)}")
+    if ref_split or ref_split_msg:
         print("NOTE: ref-split rows are evidence about NOTHING — keep them out of any prize.")
 
     if args.json:
@@ -258,6 +283,8 @@ def main() -> int:
             "text_diff": [[*k, ours_msg.get(k, ""), tsgo_msg.get(k, "")] for k in text_diff],
             "span_diff": [[list(a), list(b)] for a, b in span_diff],
             "ref_split": [list(k) for k in sorted(ref_split)],
+            "ref_split_msg": [[*k, ours_msg.get(k, ""), tsgo_msg.get(k, ""),
+                               pris_msg.get(k, "")] for k in ref_split_msg],
         }, indent=2))
     return 0
 
