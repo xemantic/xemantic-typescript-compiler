@@ -155208,30 +155208,60 @@ interface DataView {
                     if (unionCalleeArityDiagnostic(expr, combinedSigs, calleeExpr, source, fileName)) return null
                     return calleeType
                 }
-                // (CHK.97) D2. WHY the combination above refused decides whether this is a
-                // SUPPRESSION or a DIAGNOSTIC, and the answer is already a local in
-                // [computeCombinedUnionSignatures]: `multipleOverloadSets`, i.e. TWO OR MORE
-                // constituents carrying an overload set. tsc's PASS 2 is skipped exactly
-                // there (checker.ts `indexWithLengthOverOne === -1`), `getUnionSignatures`
-                // answers the EMPTY list, and `resolveCallExpression`'s `!callSignatures
-                // .length` branch reports TS2349 with the "Each member … has signatures"
-                // chain — the same chain the GENERIC refusal below emits, byte-identical on
-                // tsgo 7.0.2 and pristine 6.0.3 (span included). Recomputed here rather than
-                // threaded out: the `count` makes exactly the `getCallSignaturesOfType` calls
-                // the old `any` made, and the memo below stores only the ANSWER.
+                // (CHK.97) D2/D2b. The combination above refused; WHY it refused is what
+                // says whether tsc reports here, and only TWO of the five reasons in
+                // [computeCombinedUnionSignatures] are reachable at this point — a
+                // constituent with no call signatures and a union of fewer than two members
+                // are both excluded above, and a non-null PASS-2 fold is never EMPTY (it
+                // maps a non-empty master list). The two that remain are:
                 //
-                // ONE overloaded constituent is a different fact and stays SILENT: it is the
-                // `unionOfArraysFilterCall` shape (`(Fizz[] | readonly Buzz[]).filter`, where
-                // `Array.filter` has 2 overloads and `ReadonlyArray.filter` has 1), where tsc
-                // RUNS pass 2 over the parallel overload sets and reports nothing, while the
-                // `differ` check below compares only the FIRST signature of each member and
-                // would print a spurious TS2349.
+                //   * TWO OR MORE constituents carry an overload set (`multipleOverloadSets`),
+                //     where tsc SKIPS pass 2 outright (checker.ts
+                //     `indexWithLengthOverOne === -1`); and
+                //   * PASS 2 RAN and refused on GENERIC incompatibility
+                //     ([unionCalleeGenericSignaturesIncompatible], tsc's
+                //     `compareTypeParametersIdentical`).
+                //
+                // In BOTH, tsc's `getUnionSignatures` answers the EMPTY list and
+                // `resolveCallExpression`'s `!callSignatures.length` branch reports TS2349
+                // with the "Each member … has signatures" chain — byte-identical on tsgo
+                // 7.0.2 and pristine 6.0.3, span included, for either reason. So the verdict
+                // does not depend on telling them apart, which is why the reason is
+                // RECOMPUTED as a count here rather than threaded out of the combination:
+                // `overloadedMembers >= 2` IS `multipleOverloadSets` (the same count over the
+                // same `getCallSignaturesOfType`), and a threaded reason would need a second
+                // union-id-keyed cache beside [unionSignatureCache] to survive a memo HIT.
+                // MEASURED rather than argued ((P18.73)): an instrumented build that threaded
+                // and printed the reason agreed with this count on 8 of 8 reachable refusals
+                // and produced no third reason.
+                //
+                // D2b — ONE overloaded constituent used to be SILENT here, justified as the
+                // `unionOfArraysFilterCall` shape. That justification is MEASURED FALSE: a
+                // union of arrays is answered by stage 2's ARRAY FALLBACK before a union
+                // callee is formed (the census reads ZERO refusals for it), and a libs-free
+                // `overloaded | plain` pair COMBINES in pass 1 — so the silence suppressed
+                // only true positives. The shape both references report and we did not:
+                // `interface ZzzA { <T extends string>(a: T): void; <T extends string>(a: T,
+                // b: number): void }` beside `interface ZzzG { <T extends number>(a: T):
+                // void }`, where pass 2 runs and bails on the CONSTRAINT.
+                //
+                // `overloadedMembers == 0` is the SAME generic refusal and is still decided
+                // below by `differ` plus a recomputed
+                // [unionCalleeGenericSignaturesIncompatible] — a strictly more conservative
+                // approximation of the identical verdict. Left alone deliberately, and the
+                // refusal is on SCOPE rather than on evidence: an ablation collapsing the
+                // whole tail (emit for EVERY refused combination, `overloadedMembers >= 0`)
+                // is **0 RED** over the entire 18,688-test suite, so the conservatism is a
+                // REDUNDANT GUARD on every reachable shape — which is (P18.72)'s a3 finding
+                // one layer out, and makes the collapse a live (CHK.94) candidate rather
+                // than this deliverable's business. What the count DOES buy is pinned:
+                // mis-calibrating it (counting an overload set at three signatures rather
+                // than two) reddens the six D2 positives.
                 val overloadedMembers = constituents.count { getCallSignaturesOfType(it).size >= 2 }
-                if (overloadedMembers >= 2) {
+                if (overloadedMembers >= 1) {
                     emitUnionCalleeNoCompatibleSignatures(unionDisplay, computeSpan(), source, fileName)
                     return null
                 }
-                if (overloadedMembers >= 1) return null
                 val differ = run {
                     for (i in sigs.indices) for (j in i + 1 until sigs.size) {
                         val s1 = sigs[i]; val s2 = sigs[j]
@@ -155266,17 +155296,25 @@ interface DataView {
     }
 
     /**
-     * (CHK.97) D2 — tsc's TS2349 for a union callee whose members ALL have call
+     * (CHK.97) D2/D2b — tsc's TS2349 for a union callee whose members ALL have call
      * signatures and whose COMBINATION is empty (`getUnionSignatures` answers
      * `emptyArray`, reported by `resolveCallExpression`'s `!callSignatures.length`
      * branch).
      *
-     * TWO refusal reasons reach it and both print this chain byte-identically on tsgo
-     * 7.0.2 and pristine 6.0.3: two GENERIC members whose type parameters are not
-     * identical ([unionCalleeGenericSignaturesIncompatible], `betterErrorForUnionCall`)
-     * and TWO OR MORE OVERLOADED members (tsc's skipped PASS 2). ONE home, so the two
-     * cannot drift — a chain sentence is the whole observable here, and the
+     * THREE call sites reach it and all three print this chain byte-identically on tsgo
+     * 7.0.2 and pristine 6.0.3, span and column included: the `≥1`-overloaded branch of
+     * [ccetUnionCalleeChecks] (D2 for two or more, tsc's SKIPPED pass 2; D2b for exactly
+     * one, where pass 2 RAN and refused), and the `differ` branch below it for two
+     * single-signature GENERIC members whose type parameters are not identical
+     * ([unionCalleeGenericSignaturesIncompatible], `betterErrorForUnionCall`). ONE home,
+     * so they cannot drift — a chain sentence is the whole observable here, and the
      * 8-profile grid is structurally blind to a display divergence ((PARITY.1)).
+     *
+     * A UNION MEMBER WHOSE ONLY MEMBER IS A CALL SIGNATURE RENDERS WRONG in
+     * [unionDisplay] — `ZzzA | (ZzzG)` where both references print `ZzzA | ZzzG`. That is
+     * **(CHK.130)**, a [typeToString] defect that predates this family and is owned by
+     * nobody; giving such a member one PROPERTY makes all three compilers agree, which is
+     * how `UnionCalleeOneOverloadedMemberTest` pins a display rather than the one it wants.
      */
     private fun emitUnionCalleeNoCompatibleSignatures(
         unionDisplay: String,
@@ -155690,8 +155728,10 @@ interface DataView {
      * NOT modelled, recorded rather than silently approximated: `this` parameters (tsc
      * INTERSECTS them and reports TS2684; [Signature] has no `thisParameter`), and tsc's
      * ARRAY FALLBACK (checker.ts:15949) for a union of `Array`/`ReadonlyArray` members
-     * with no combined signature — the `≥2`-overloaded suppression in
-     * [ccetUnionCalleeChecks] still owns `unionOfArraysFilterCall`.
+     * with no combined signature — [Checker] models that one rung up, at the RECEIVER,
+     * which is what keeps `unionOfArraysFilterCall` out of [ccetUnionCalleeChecks]
+     * entirely (measured (P18.73): ZERO combination refusals reach it for that shape,
+     * on the eight profiles and on `cronstrue`/`marked` alike).
      */
     private fun combineUnionSignatures(union: Type.Union, construct: Boolean = false): List<Signature>? {
         val cache = if (construct) unionConstructSignatureCache else unionSignatureCache
