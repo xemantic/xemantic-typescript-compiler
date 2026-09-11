@@ -28,6 +28,17 @@ clean bill of health on a wrong answer.  A display defect is invisible to the
 8-profile grid too ((PARITY.1)), so without this there is no cheap instrument that
 can see one at all.
 
+A diagnostic's message CHAIN is part of that comparison, and it did not used to be
+((P18.72)): the row regexes match a diagnostic's FIRST LINE only, so a chain-only
+divergence scored AGREE — on the one family whose whole content is its chain (a
+union callee's TS2349 says nothing but "not callable" on its first line).  It had
+already passed a real one.  The three compilers do not agree on how to PRINT a
+chain — ours writes `      |  <text>` and the references indent by two — so the
+continuation lines are normalised (leading whitespace and our `|` marker removed)
+and appended to the message.  The deliberate limitation that leaves: normalising
+away the indentation also normalises away a chain's NESTING DEPTH, so a divergence
+purely in how deeply a sub-line is nested is not visible here.
+
 REF-SPLIT is the load-bearing one: CLAUDE.md records that tsgo and pristine
 diverge in whole families (overload elaborations, duplicate-member spans), so a
 row on which they disagree is evidence about nothing and must never be counted
@@ -68,6 +79,9 @@ DEFAULT_CLASSES = ROOT / "xemantic-typescript-compiler-core/build/classes/kotlin
 REF_ROW = re.compile(r"^(?P<file>[^(]+)\((?P<line>\d+),(?P<col>\d+)\): error TS(?P<code>\d+): (?P<msg>.*)$")
 OURS_ROW = re.compile(r"^(?P<file>.+?):(?P<line>\d+):(?P<col>\d+) - error TS(?P<code>\d+): (?P<msg>.*)$")
 TRUNCATED = re.compile(r"and \d+ more error")
+# Our chain continuation lines are written `      |  <text>`; the references just
+# indent.  Strip the marker so the three arms are comparable.
+CHAIN_MARK = re.compile(r"^\|\s*")
 
 
 class Refusal(Exception):
@@ -90,10 +104,21 @@ def parse(out: str, fixture: Path, arm: str):
     if "Could not find or load main class" in out or "DEAD CLASSPATH" in out:
         raise Refusal(f"{arm}: dead classpath — the compiler is not on it")
     rows, detail = set(), {}
+    last = None
     for line in out.splitlines():
         s = line.strip()
         m = REF_ROW.match(s) or OURS_ROW.match(s)
         if not m:
+            # A CONTINUATION line carries the diagnostic's message chain, which for a
+            # union callee is the entire content of the diagnostic.  It is indented in
+            # every arm; anything starting at column 0 (our `time:` footer, a reference's
+            # summary) ends the current row rather than extending it.
+            if last is not None and s and line[:1].isspace():
+                chain = CHAIN_MARK.sub("", s).strip()
+                if chain:
+                    detail[last] = f"{detail[last]} / {chain}"
+            elif s and not line[:1].isspace():
+                last = None
             continue
         f = m.group("file")
         # Normalise to a fixture-relative path so the three arms are comparable.
@@ -104,6 +129,7 @@ def parse(out: str, fixture: Path, arm: str):
         key = (f, int(m.group("line")), int(m.group("col")), int(m.group("code")))
         rows.add(key)
         detail.setdefault(key, m.group("msg"))
+        last = key
     assert_parsed(out, rows, arm)
     return rows, detail
 
