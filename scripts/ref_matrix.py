@@ -10,6 +10,15 @@ Verdicts, per (file, line, code) row:
   OURS-ONLY    we report it and NEITHER reference does   (a false positive)
   MISSING      both references report it and we do not   (a lost diagnostic)
   REF-SPLIT    the two references disagree -> NOT adjudicable, reported separately
+  TEXT-DIFF    we report it at the right place with a DIFFERENT MESSAGE
+
+TEXT-DIFF exists because the first version of this script did not have it, and a
+(CHK.119) recon then found six rows where we emit at exactly the right position
+with the wrong display (`typeof Foo` where both references say `() => void`).
+Keyed on (file, line, code) alone those score as AGREE — the instrument reports a
+clean bill of health on a wrong answer.  A display defect is invisible to the
+8-profile grid too ((PARITY.1)), so without this there is no cheap instrument that
+can see one at all.
 
 REF-SPLIT is the load-bearing one: CLAUDE.md records that tsgo and pristine
 diverge in whole families (overload elaborations, duplicate-member spans), so a
@@ -152,9 +161,18 @@ def main() -> int:
 
     ref_split = tsgo ^ pris          # the two references disagree: not adjudicable
     both = tsgo & pris               # the adjudicable reference answer
-    agree = sorted(both & ours)
     missing = sorted(both - ours)
     ours_only = sorted(ours - tsgo - pris)
+
+    # Same place, same code — now ask whether we said the same THING.  A message the
+    # two references do not themselves agree on is not adjudicable and stays in AGREE.
+    agree, text_diff = [], []
+    for k in sorted(both & ours):
+        ref_t, ref_p = tsgo_msg.get(k, ""), pris_msg.get(k, "")
+        if ref_t == ref_p and ours_msg.get(k, "") != ref_t:
+            text_diff.append(k)
+        else:
+            agree.append(k)
 
     if not args.quiet:
         def show(title, keys, msgs):
@@ -168,9 +186,15 @@ def main() -> int:
         show("MISSING (both references report)", missing, tsgo_msg)
         show("REF-SPLIT (references disagree — NOT adjudicable)", sorted(ref_split),
              {**tsgo_msg, **pris_msg})
+        if text_diff:
+            print(f"\nTEXT-DIFF (right row, wrong message) ({len(text_diff)}):")
+            for k in text_diff:
+                print(f"  {k[0]}:{k[1]}  TS{k[2]}")
+                print(f"      ours: {ours_msg.get(k, '')}")
+                print(f"      refs: {tsgo_msg.get(k, '')}")
 
     print(f"\nfixture={fixture.name} agree={len(agree)} ours-only={len(ours_only)} "
-          f"missing={len(missing)} ref-split={len(ref_split)}")
+          f"missing={len(missing)} text-diff={len(text_diff)} ref-split={len(ref_split)}")
     if ref_split:
         print("NOTE: ref-split rows are evidence about NOTHING — keep them out of any prize.")
 
@@ -180,6 +204,7 @@ def main() -> int:
             "agree": [list(k) for k in agree],
             "ours_only": [[*k, ours_msg.get(k, "")] for k in ours_only],
             "missing": [[*k, tsgo_msg.get(k, "")] for k in missing],
+            "text_diff": [[*k, ours_msg.get(k, ""), tsgo_msg.get(k, "")] for k in text_diff],
             "ref_split": [list(k) for k in sorted(ref_split)],
         }, indent=2))
     return 0
