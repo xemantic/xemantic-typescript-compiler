@@ -2179,17 +2179,28 @@ improves row 8's DECLARATION-READING group.
   structurally unable to see the cost. Refused patch, its 15 pins and its 8-arm ablation are
   kept out of the tree in `scratchpad/agent3/REFUSED-*.kt`.
 
-- [ ] **(CHK.121) AN *ANNOTATED* FUNCTION-BODY LOCAL MISSES TS2339 WITH NO SHADOWING AND NO
-  NESTING, AND IT IS EXACTLY ONE CELL OF FOUR (measured 2026-09-11, (P18.67), three
-  compilers).** `export function h(){ const ann: { a: number } = { a: 1 }; const p = ann.zzzNope }`
-  is `Property 'zzzNope' does not exist on type '{ a: number; }'.` in tsgo 7.0.2 AND pristine
-  6.0.3 and silent here — while the UN-ANNOTATED body-local, the ANNOTATED file-level and the
-  UN-ANNOTATED file-level all report it correctly, which is the control set that says this is
-  neither a block-scoping nor a file-vs-body gap but specifically the annotated body-local
-  recording. Found while measuring (CHK.118) and independent of it. Likely the same
-  `checkVarDeclAssignabilityCore` recorder / (CHK.46)-(CHK.47) receiver-helper seam, so read
-  `cmamUnannotatedLocalReceiverType` (which serves the un-annotated case) before anything
-  else — the asymmetry is that the annotated case has no equivalent.
+- [ ] **(CHK.121) AN *ANNOTATED* FUNCTION-BODY LOCAL NEVER REACHES THE MEMBER-EXISTENCE
+  CHECK — **SIX OF SEVEN RECEIVER SHAPES**, NOT THE "one cell of four" THIS ITEM FIRST SAID
+  (re-measured 2026-09-11, (P18.67) recon, three compilers; `scratchpad/probe7`).** Inside one
+  function body, every one of these is SILENT here and TS2339 in BOTH tsgo 7.0.2 and pristine
+  6.0.3, which agree on all seven rows: an anonymous object annotation (`{ a: number }` →
+  `'{ a: number; }'`), an `interface` (`'ZzzCfg'`), a `type` alias (`'ZzzAl'`), a `class`
+  instance (`'ZzzK'`), an ARRAY (`number[]` → `'number[]'`), and the same anonymous annotation
+  on a `let`. The ONLY shape we report is an arrow PARAMETER. **The control set is what makes
+  it diagnosable** (`scratchpad/probe6`): the UN-ANNOTATED body-local reports, and so do BOTH
+  file-level spellings — so this is neither a file-vs-body nor a block-scoping gap but
+  specifically the ANNOTATED body-local, i.e. the case whose type is written down.
+  **Lead**: `cmamUnannotatedLocalReceiverType` serves the un-annotated case and has no
+  annotated equivalent; read it and its caller (the `identSymbol == null` branch of the
+  member-access family) first. **THIS IS THE FP-DANGEROUS FAMILY** — `cmamAllMissingTrustedMember`
+  is the knip-calibrated firewall and it deliberately refuses a heritage-carrying interface, a
+  `Type.Reference` (so `number[]`), a class instance, an intersection, a type parameter, an
+  enum-flavoured object and anything an index signature supplies, so **a subset of the seven is
+  the expected outcome** and the shapes refused must be recorded as refusals rather than as
+  controls. `cmamInGuardMayAddProperty` is load-bearing here (`if ('p' in x) { x.p }` is
+  LEGAL). tsc's own sources are full of annotated body-locals, so the 8-profile grid is a REAL
+  gate for this one and not a control, and any receipt needs a member that EXISTS beside every
+  member that does not — a fixture of absent members alone cannot show a false positive.
 
 - [ ] **(INV.0) STEP 10b-ii — BLOCKED-ON: the two families named inside this item. THE *UNIQUE* HALF OF THE
   VALUE SPACE (measured 2026-09-10, (P18.63)). MOVED BELOW ITS SMALLER, UNBLOCKED SIBLINGS
