@@ -25,6 +25,76 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.68) — (CHK.121): the axis is the INITIALIZER, and BOTH sizings of the item were wrong (2026-09-11)
+
+**Suite 18,573 → 18,604 / 0 / 3** (+31 pins). **8-profile grid `added=0 removed=0` on all
+eight** against the pushed (P18.66) binary; `cost_gate.py` exit 0; `huge_methods.py
+--fail-over 0` exit 0 (844 classes); warning-clean. Commit `9f04b125`.
+
+**THE ROUND'S FINDING IS A CORRECTION TO ITS OWN QUEUE ITEM, TWICE.** (P18.67) queued this as
+"exactly one cell of four" from a single measured cell; the coordinator re-sized it to "six of
+seven shapes" from `scratchpad/probe7` and committed that correction; **both were wrong, and
+the second was wrong for an instructive reason** — it varied the annotation TYPE while holding
+the INITIALIZER fixed, which is precisely the axis that had to move. Measured:
+`const v: ZzzCfg = zzzCfgV` in a function body **already reported before this change** (the
+flow-recovery helper `cmamNarrowedAnyReceiverType` serves it), and so did `let`, `var`, a
+nested block and an arrow. What was silent is an OBJECT-LITERAL, `new`, CALL, `as` or
+scalar-literal initializer. And of the shapes the coordinator had counted, `number[]`, a
+heritage-carrying interface, an intersection, a function type, a numeric index signature, an
+enum and an optional are silent **at FILE LEVEL too** — i.e. pre-existing firewall refusals
+that were never this defect at all. CLAUDE.md's "run the identical source at all three sites"
+law again, on a third axis: the site was held right and the initializer was not.
+
+**THE FIX IS 24 FUNCTIONAL LINES AND DELIBERATELY THE LEAST POWERFUL SHAPE THAT WORKS.**
+`cmamAnnotatedLocalReceiverType` is wired LAST, at the `anyType` bail of
+`cmamGeneralReceiverType` and BELOW the flow-recovery helper, so it can only turn a SILENCE
+into a report and never change an answer something else already gave. It reuses
+`cmamAllMissingTrustedMember` (the knip-calibrated trust predicate) and
+`cmamInGuardMayAddProperty` rather than re-deriving either — which is what keeps this out of
+the B153 false-positive class the firewall exists for.
+
+**RECEIPT**: the original fixture is byte-identical to pristine 6.0.3 and tsgo 7.0.2 (4 of 4
+rows where we reported 1), and a **207-cell** matrix — 19 receiver shapes × 4 declaration
+kinds × 3 sites plus present-member / in-guard / narrowed groups, the two references agreeing
+on **all 207** — goes **111 → 107 missing with ours-only unchanged at 2** (both pre-existing).
+The small row delta against a large fixed population is the honest shape of a change gated by
+a firewall: most of that 107 is refusals the firewall owns, not this seam.
+
+**CLOSED**: an anonymous object annotation, an `interface`, a `type` alias, and the CALL / `as`
+initializer forms, in function-body, nested-block, arrow and method scopes. **REFUSED, each
+PINNED AS A REFUSAL rather than as a control** so a future reader meets a recorded decision
+instead of a guarantee: a CLASS instance (the trust predicate takes `as? InterfaceDeclaration`),
+an ARRAY (`Type.Reference` plus a numeric index signature), and `let`/`var` (const-only, on
+(CHK.44)'s reassignable-binding measurement) — plus tuple, intersection, heritage interface,
+enum, primitive, nullish and `typeof ns`, which the firewall already refused.
+
+**THE GRID IS A REAL GATE HERE AND IT IS NOT VACUOUS.** tsc's own sources are full of
+annotated body-locals, so `added=0 removed=0` could have meant "the path never fires"; a
+positive-control build announcing every accept counts **78 / 152 / 116 accepts** on the
+compiler / harness / services profiles (`ExtendsResult`, `ErrorOutputContainer`, `TypeChecker`,
+`TextRange`, anonymous literals), so the path fires hundreds of times and the downstream gates
+absorb all of it. Round 853's law satisfied by construction rather than by assertion.
+
+**TWO PRE-EXISTING DIVERGENCES FOUND AND DELIBERATELY LEFT ALONE**: an `in`-guarded read on an
+IDENTIFIER-initialized annotated local is an ours-only FALSE POSITIVE, because the flow route
+that serves that shape has no `in`-guard consult where this seam does; and
+`const v: ZzzK = zzzKV; v.zzzNope` renders `typeof ZzzK` where both references render `ZzzK`.
+Neither is this round's population and neither is pinned as correct.
+
+**ABLATION: 10 arms over 31 pins, with BOTH controls.** The `in`-guard consult, the trust
+predicate, the const-only gate and the array-like refusal each redden their own pins; a
+comment-only arm is the both-GREEN control and a refuse-everything arm reddens all 8 positives
+as the both-RED control — which is what makes the 0-RED arms interpretable. **Four arms are
+0 RED and recorded UNDISCRIMINATED with reasons**: the non-Object guard is redundant against
+the caller's own tail, and the single-declaration and shadow guards are unreachable because a
+two-declarations shape is refused ABOVE this bail. One pin was RENAMED to say it is blind
+rather than left implying coverage, and **one pin the implementer first wrote as a refusal was
+measured WRONG and converted to a positive** — a shadowing body-local reports against its
+INNER declaration, byte-identical to both references.
+
+**NEXT**: (CHK.119) and (CHK.120) are (P18.66)'s residues and untouched. The two divergences
+above are new, small and independent; (CHK.118) stays BLOCKED with its unblocker named.
+
 ### Round (P18.67) — (CHK.118) REFUSED with measurements, and the receipt matrix was the thing that was wrong (2026-09-11)
 
 **No code landed and that is the finding.** Suite unchanged at 18,573 / 0 / 3, tree clean, the
@@ -2179,28 +2249,40 @@ improves row 8's DECLARATION-READING group.
   structurally unable to see the cost. Refused patch, its 15 pins and its 8-arm ablation are
   kept out of the tree in `scratchpad/agent3/REFUSED-*.kt`.
 
-- [ ] **(CHK.121) AN *ANNOTATED* FUNCTION-BODY LOCAL NEVER REACHES THE MEMBER-EXISTENCE
-  CHECK — **SIX OF SEVEN RECEIVER SHAPES**, NOT THE "one cell of four" THIS ITEM FIRST SAID
-  (re-measured 2026-09-11, (P18.67) recon, three compilers; `scratchpad/probe7`).** Inside one
-  function body, every one of these is SILENT here and TS2339 in BOTH tsgo 7.0.2 and pristine
-  6.0.3, which agree on all seven rows: an anonymous object annotation (`{ a: number }` →
-  `'{ a: number; }'`), an `interface` (`'ZzzCfg'`), a `type` alias (`'ZzzAl'`), a `class`
-  instance (`'ZzzK'`), an ARRAY (`number[]` → `'number[]'`), and the same anonymous annotation
-  on a `let`. The ONLY shape we report is an arrow PARAMETER. **The control set is what makes
-  it diagnosable** (`scratchpad/probe6`): the UN-ANNOTATED body-local reports, and so do BOTH
-  file-level spellings — so this is neither a file-vs-body nor a block-scoping gap but
-  specifically the ANNOTATED body-local, i.e. the case whose type is written down.
-  **Lead**: `cmamUnannotatedLocalReceiverType` serves the un-annotated case and has no
-  annotated equivalent; read it and its caller (the `identSymbol == null` branch of the
-  member-access family) first. **THIS IS THE FP-DANGEROUS FAMILY** — `cmamAllMissingTrustedMember`
-  is the knip-calibrated firewall and it deliberately refuses a heritage-carrying interface, a
-  `Type.Reference` (so `number[]`), a class instance, an intersection, a type parameter, an
-  enum-flavoured object and anything an index signature supplies, so **a subset of the seven is
-  the expected outcome** and the shapes refused must be recorded as refusals rather than as
-  controls. `cmamInGuardMayAddProperty` is load-bearing here (`if ('p' in x) { x.p }` is
-  LEGAL). tsc's own sources are full of annotated body-locals, so the 8-profile grid is a REAL
-  gate for this one and not a control, and any receipt needs a member that EXISTS beside every
-  member that does not — a fixture of absent members alone cannot show a false positive.
+- [x] **(CHK.121) CLOSED 2026-09-11 ((P18.68) note) — AND THE AXIS IS THE *INITIALIZER*,
+  WHICH MAKES BOTH EARLIER SIZINGS OF THIS ITEM WRONG.** It was queued as "one cell of four"
+  and re-sized to "six of seven shapes"; measured, `const v: ZzzCfg = zzzCfgV` in a body
+  ALREADY reported (the flow-recovery helper serves an IDENTIFIER initializer) and so did
+  `let`/`var`/nested-block/arrow, while `number[]`, a heritage interface, an intersection, a
+  function type, a numeric index signature, an enum and an optional are silent at FILE LEVEL
+  too, i.e. pre-existing firewall refusals that were never this defect. What was silent is an
+  OBJECT-LITERAL, `new`, CALL, `as` or scalar-literal initializer.
+  `cmamAnnotatedLocalReceiverType` (24 functional lines) is wired LAST at the `anyType` bail
+  of `cmamGeneralReceiverType`, reusing `cmamAllMissingTrustedMember` and
+  `cmamInGuardMayAddProperty` so it can only turn a SILENCE into a report. Receipt: the
+  original fixture byte-identical to both references (4/4 where we had 1) and a 207-cell
+  matrix (references agreeing on all 207) 111 → 107 missing, ours-only unchanged at 2.
+  **Refused and PINNED AS REFUSALS**: a class instance, an array, `let`/`var` (const-only),
+  plus the shapes the firewall already refused. The grid is a real gate here and a
+  positive-control build counts 78/152/116 accepts on three profiles, so it is not vacuous.
+
+- [ ] **(CHK.122) AN `in`-GUARDED READ ON AN *IDENTIFIER-INITIALIZED* ANNOTATED LOCAL IS AN
+  OURS-ONLY FALSE POSITIVE (measured 2026-09-11, (P18.68), three compilers).**
+  `if ('zzzNope' in v) { v.zzzNope }` is LEGAL — tsc narrows an object type by `in` to
+  `T & Record<'zzzNope', unknown>` — and we report TS2339 when `v` is an annotated body-local
+  whose initializer is an IDENTIFIER, because that shape is served by
+  `cmamNarrowedAnyReceiverType`'s flow route, which has no `in`-guard consult where
+  (CHK.121)'s seam has one. So the fix is to give the flow route the same
+  `cmamInGuardMayAddProperty` consult, and the pin that proves it is the OTHER initializer
+  forms staying silent — they already are. PRE-EXISTING: it reproduces on the (P18.66) binary.
+
+- [ ] **(CHK.123) A CLASS-TYPED ANNOTATED LOCAL RENDERS `typeof ZzzK` WHERE BOTH REFERENCES
+  RENDER `ZzzK` (measured 2026-09-11, (P18.68)).** `const v: ZzzK = zzzKV; v.zzzNope` — the
+  receiver is an INSTANCE and the display names the static side. Display-only, so per
+  (PARITY.1) the 8-profile grid is structurally blind to it (all 46/94 rows are
+  `Cannot find name …`) and the ~2,881 ACTIVE `.errors.txt` corpus subtests are the only
+  gate — and since the corpus is green, a change here can only turn a green baseline red, so
+  enumerate the baselines rendering `typeof ` before touching it. PRE-EXISTING.
 
 - [ ] **(INV.0) STEP 10b-ii — BLOCKED-ON: the two families named inside this item. THE *UNIQUE* HALF OF THE
   VALUE SPACE (measured 2026-09-10, (P18.63)). MOVED BELOW ITS SMALLER, UNBLOCKED SIBLINGS

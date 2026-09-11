@@ -19,6 +19,36 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.68) — (CHK.121): THE AXIS IS THE *INITIALIZER*, AND BOTH SIZINGS OF THE ITEM WERE WRONG, 18,604 / 0 / 3 (2026-09-11).**
+An ANNOTATED function-body local now reaches the member-existence check.
+**THE ROUND'S FINDING IS A CORRECTION TO ITS OWN ITEM, TWICE**: queued as "one cell of four",
+re-sized by the coordinator to "six of seven shapes", and **both wrong** — the second because
+it varied the annotation TYPE while holding the INITIALIZER fixed, which is the axis that had
+to move. `const v: ZzzCfg = zzzCfgV` in a body ALREADY reported (the flow-recovery helper
+serves an identifier initializer), as did `let`/`var`/nested-block/arrow; what was silent is an
+OBJECT-LITERAL, `new`, CALL, `as` or scalar-literal initializer. And `number[]`, a heritage
+interface, an intersection, a function type, a numeric index signature, an enum and an optional
+are silent at **FILE LEVEL too**, i.e. pre-existing firewall refusals that were never this
+defect — CLAUDE.md's "run the identical source at all three sites" law on a third axis.
+**THE FIX IS THE LEAST POWERFUL SHAPE THAT WORKS**: `cmamAnnotatedLocalReceiverType`, 24
+functional lines, wired LAST at the `anyType` bail and BELOW the flow-recovery helper, reusing
+the knip-calibrated `cmamAllMissingTrustedMember` and `cmamInGuardMayAddProperty` rather than
+re-deriving either — so it can only turn a SILENCE into a report. **RECEIPT**: the original
+fixture byte-identical to pristine 6.0.3 and tsgo 7.0.2 (4/4 rows where we reported 1), and a
+**207-cell** matrix on which the two references agree on all 207 goes **111 → 107 missing with
+ours-only unchanged at 2**. **REFUSED AND PINNED AS REFUSALS** (not as controls): a class
+instance, an array, `let`/`var`, plus the shapes the firewall already refused. **THE GRID IS A
+REAL GATE HERE AND IS NOT VACUOUS** — a positive-control build counts **78 / 152 / 116
+accepts** on compiler/harness/services, so the path fires hundreds of times on tsc's own
+sources and the downstream gates absorb all of it. **TWO PRE-EXISTING DIVERGENCES FOUND AND
+LEFT ALONE**, now (CHK.122) and (CHK.123): an `in`-guarded read on an identifier-initialized
+annotated local is an ours-only FP (the flow route lacks the `in` consult), and a class-typed
+local renders `typeof ZzzK` for `ZzzK`. **ABLATION: 10 arms / 31 pins WITH BOTH CONTROLS** — a
+comment-only both-green arm and a refuse-everything both-red arm, which is what makes the four
+0-RED arms interpretable as redundant-or-unreachable rather than as blind; one pin renamed to
+say it is blind, and one the implementer wrote as a refusal was measured WRONG and converted
+to a positive. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844).
+
 **(P18.67) — (CHK.118) REFUSED WITH MEASUREMENTS, AND THE RECEIPT MATRIX WAS THE THING THAT WAS WRONG, 18,573 / 0 / 3 (2026-09-11).**
 **NO CODE LANDED AND THAT IS THE FINDING.** The defect is real and was reproduced — a
 variable in a nested `{ }` / `if` block / `namespace` body SHADOWING a file-level one is read
@@ -151,37 +181,3 @@ whole population is the `namespace` kind, whose qualified reads are wrong both w
 to the 10b run to the last digit, because tsc's own sources carry no scope-space heritage
 base — the grid is a control here and the reference matrix is the measurement. Grid
 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844 classes), warning-clean.
-
-**(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
-`Checker.getTypeOfIdentifierCore` now OVERRIDES a conventional answer with the scope-space
-`function` / `class` / `enum` / `namespace` visible at the node — and never replaces
-silence. **THE UNIQUE HALF WAS BUILT, MEASURED AND REFUSED, WHICH IS THE ROUND**: a consult
-that answers a unique B83.5 value name is correct and takes the 129-cell matrix to **9
-FIXED + 9 IMPROVED**, and adds **19-20 ours-only rows to EVERY ONE of the eight profiles** —
-two families, both pre-existing gaps `any` was masking ((CHK.50)'s law at scale): an object
-literal of SHORTHAND nested functions against a declared interface (9 sites, and
-`utilities.ts:1219` names its own mechanism — an inferred `() => U[]` leaking an
-unsubstituted type parameter out of `arrayFrom`), and a `| undefined` read after an
-assignment narrowing whose receiver only became real because a nested function did (10
-sites). Both are now 10b-ii, whose switch is ONE line. **THE SHIPPED HALF'S RECEIPT** is the
-same matrix with the reference arms reused verbatim: **8 cells IMPROVED, 0 REGRESSED, 0 new
-rows absent from pristine, 0 pristine rows dropped**, all 8 shadow cells flipping OUTER →
-INNER in agreement with tsgo 7.0.2 and pristine 6.0.3 (B83.5 shadow agreement 16/42 →
-24/42), the TYPE half numerically untouched. **THE LADDER POSITION IS THE FIX AND THE FIRST
-CUT PROVED IT BY BEING WRONG** — written as a rung BELOW `currentLocalTypes` it measured 9
-cells fixed and moved no shadow cell at all, because that map is a flat COPY of the
-enclosing scope. **AND THE POSITION IS ONLY SOUND BECAUSE OF A NEW ASCENT AXIS**:
-`stopFlags` ends the walk at the innermost VALUE-space binding, so an inner `const` refuses
-instead of being filtered past — the two spaces differ, and a TYPE consult never needed it.
-**THE STAMP WIDENING IS AGAIN FREE** (NodeKind 22..27 are contiguous and are exactly the six
-kinds `bindLexicalScopes` declares into a fresh scope). **A SECOND, PER-FILE GATE** keeps
-(INC.16) — the value gate is not near-empty (~5,555 nested `function` names in tsc's
-sources) and reading `scopesOfOwningFile` BUILDS the tables — **and `LexDefer.census` then
-measured that the property is unobservable on a FULL build** (`forcedBy={checkSpine=2}`: the
-spine forces every checked file anyway), which is why its ablation arm is **UNDISCRIMINATED
-and recorded as such**. Six arms, union 7 of 35 pins; the flag-mask arm also has no unique
-pin, because that mask still carries `Class` and `Enum`. **TWO MORE OF THE ITEM'S OWN CLAIMS
-WERE WRONG** — `const` in VALUE position resolves only in the UNIQUE variant (the shadowing
-one answers the OUTER declaration, now (CHK.118)), and its `typeof` claim was an artefact of
-the v1 narrowing probe. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0
-(844 classes), warning-clean.
