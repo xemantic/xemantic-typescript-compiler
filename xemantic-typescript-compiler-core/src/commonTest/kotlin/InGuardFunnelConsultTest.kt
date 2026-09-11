@@ -89,6 +89,27 @@ import kotlin.test.Test
  * row still fires, so the pair discriminates a consult from a deletion. A pin
  * asserting only the silence would be green on a binary that had simply stopped
  * checking member existence.
+ *
+ * ### WHAT THESE 16 PINS DISCRIMINATE, MEASURED
+ *
+ * One mistake at a time (`scripts/chk122-ablate.sh`), with BOTH controls — which is
+ * what makes the two 0-RED pins interpretable rather than merely unexplained:
+ *
+ *  - `a1` drop the funnel consult ............ 5 RED (all four routes + the shallow pair)
+ *  - `a2` restore `refuseOnExhaustion = true`  1 RED (the residue pin, and only it)
+ *  - `a3` ignore the property NAME ........... 1 RED
+ *  - `a4` ignore the reference PATH .......... 2 RED
+ *  - `c-green` comment-only control .......... 0 RED
+ *  - `c-red` always suppress ................. 8 RED (every twin + the three exactness pins)
+ *
+ * **TWO PINS DISCRIMINATE NO ARM, AND THAT IS BY DESIGN RATHER THAN A GAP** — both
+ * are served by a PRE-EXISTING route consult that no arm here ablates, so they pin
+ * that this round left those contracts alone:
+ * `a guard on the NESTED path does suppress the nested read`
+ * (`Checker.cmamCheckNestedObjectReceiver`'s own consult) and
+ * `the UN-ANNOTATED route consult still suppresses`
+ * (`Checker.cmamUnannotatedLocalReceiverType`'s). Neither is evidence about the
+ * funnel; `NestedAccessReceiverTest` and `UnannotatedLocalReceiverTest` own them.
  */
 class InGuardFunnelConsultTest {
 
@@ -220,7 +241,14 @@ class InGuardFunnelConsultTest {
         )
     }
 
-    /** …and a guard on the nested path itself does suppress, which is the pair. */
+    /**
+     * …and a guard on the nested path itself does suppress, which is the pair.
+     *
+     * **UNDISCRIMINATED for this round**: the row is suppressed by
+     * `Checker.cmamCheckNestedObjectReceiver`'s own pre-existing consult, above the
+     * funnel, so every arm of `scripts/chk122-ablate.sh` leaves it green. It is here
+     * as the pair of the container pin above, not as coverage of the funnel.
+     */
     @Test
     fun `a guard on the NESTED path does suppress the nested read`() {
         assert(
