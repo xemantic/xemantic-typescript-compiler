@@ -19,7 +19,7 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
-**(P18.70) — FIVE (CHK.*) ITEMS, AND THE INSTRUMENT THAT WAS DROPPING ROWS, 18,652 / 0 / 3 (2026-09-11).**
+**(P18.70) — SIX (CHK.*) ITEMS, AND THE INSTRUMENT THAT WAS DROPPING ROWS, 18,652 / 0 / 3 (2026-09-11).**
 Two (CHK.\*) items closed and **both queue items were wrong about their own size**, a
 sixth round running. **(CHK.122)**: the item named ONE route for a missing `in`-guard
 consult; measured against both references it is FOUR — flow, destructured, FILE-LEVEL
@@ -59,8 +59,15 @@ collector OVER-declares in the opposite direction from (CHK.119) — **and it wa
 in the same round**: twelve positions measured against both references, an object
 literal is a HARD STOP (an array nested in an objlit value and an objlit nested in an
 array are both refused, which rules out a rule about the immediate parent), and its own
-residue pin from one commit earlier fired as designed. Three finds queued, none
-claimed; (CHK.124) is the largest and is sized in its item.
+residue pin from one commit earlier fired as designed. **(CHK.124) PARTLY CLOSED, AND ITS GATE IS THE FINDING**: B431 required a NESTED
+read, so the item's headline shape — a FILE-LEVEL read, no nesting — was silent;
+EX_TOP is now admitted. **The 8-profile grid is VACUOUS for this family, measured**
+— a positive control reads **0 admissions on all eight profiles and 0 on cronstrue,
+marked and a 600-file project** — so the CORPUS was the gate, and it caught a real
+defect first try (a dangling dot's zero-width identifier grew a `Property ''…` row;
+B431 was missing the empty-name guard its sibling has always had). Two residue pins
+written earlier in the same session fired as designed and were converted. The
+receiver-KIND half of (CHK.124) stays open and pinned as refusals.
 
 **(P18.68) — (CHK.121): THE AXIS IS THE *INITIALIZER*, AND BOTH SIZINGS OF THE ITEM WERE WRONG, 18,604 / 0 / 3 (2026-09-11).**
 An ANNOTATED function-body local now reaches the member-existence check.

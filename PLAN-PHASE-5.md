@@ -152,10 +152,26 @@ are both refused, which is what rules out a rule about the immediate parent), th
 array-literal arm untouched. **Its own residue pin from one commit earlier fired as
 designed**, and was converted to pin the corrected split with BOTH halves asserted.
 
-**NEXT**: (CHK.124) — the general function-receiver gap — is this round's largest
-residue and is sized in its item with three candidate routes and two measured FP
-hazards; (CHK.120) is (P18.66)'s untouched residue and is a BINDER change with its own
-blast radius; (CHK.123) is display-only with the corpus as its sole gate. Per the WORK ORDER, the
+**(CHK.124) PARTLY CLOSED TOO, AND ITS GATE IS THE FINDING.** B431 required
+`spineExStatus(node) == EX_NESTED`, so the item's own headline shape — a FILE-LEVEL
+read, no nesting at all — was silent where both references report. EX_TOP is now
+admitted and EX_NONE still is not (those are (CHK.126)'s read-walk positions).
+**The 8-profile grid is VACUOUS for this family and that was measured rather than
+assumed**: a positive control counting EX_TOP admissions reads **0 on all eight
+profiles AND 0 on cronstrue, marked and the 600-file generated project** — the shape
+does not occur in any corpus available here — so `added=0 removed=0` says nothing.
+**The CORPUS was the gate and it caught a real defect on the first run**:
+`genericCallWithoutArgs` is `f<number,string>.`, whose dangling dot the parser gives a
+zero-width `Identifier("")`, and admitting EX_TOP grew a `Property '' does not
+exist…` row beside pristine's TS1477 + TS1003. B431 never needed an empty-name guard
+while it fired only inside nested functions; it has one now. Two residue pins written
+earlier in this same session fired as designed and were converted.
+
+**NEXT**: (CHK.124)'s receiver-KIND half (a function-typed parameter, a
+`const f = () => {}` receiver, an overload set — all still pinned as refusals), which
+needs either a type-level arm or expando members modelled on the function type;
+(CHK.120) is (P18.66)'s untouched residue and is a BINDER change with its own blast
+radius; (CHK.123) is display-only with the corpus as its sole gate. Per the WORK ORDER, the
 order's tail is still (INV.0), and this round is (CHK.\*) lane work that pays in
 measured reference rows.
 
@@ -2250,8 +2266,17 @@ notices it is gone.
   gate — and since the corpus is green, a change here can only turn a green baseline red, so
   enumerate the baselines rendering `typeof ` before touching it. PRE-EXISTING.
 
-- [ ] **(CHK.124) THE GENERAL FUNCTION-RECEIVER TS2339 GAP — (CHK.119)'s RESIDUE,
-  MEASURED 2026-09-11 ((P18.70)) AGAINST BOTH REFERENCES.** Silent here, reported by
+- [ ] **(CHK.124) PARTLY CLOSED 2026-09-11 ((P18.70) note) — THE **FILE-LEVEL** HALF IS
+  DONE; THE RECEIVER-KIND HALF IS NOT.** B431 now admits `EX_TOP` as well as
+  `EX_NESTED`, so a file-level read of a top-level function's own member reports
+  byte-identically to both references. **`EX_NONE` stays refused on purpose** — those
+  are the read-walk positions owned by (CHK.126). **AND THE USUAL GATE IS VACUOUS
+  HERE, MEASURED**: a positive control counting EX_TOP admissions reads **0 on all
+  eight profiles and 0 on cronstrue, marked and the 600-file generated project**, so
+  the grid says nothing about this family; the CORPUS is the gate, and it caught a real
+  defect first try (a dangling dot's zero-width `Identifier("")` grew a
+  `Property '' does not exist…` row — an empty-name guard was missing from B431 and is
+  now there). **STILL OPEN — the receiver KINDS below.** ORIGINAL: Silent here, reported by
   tsgo 7.0.2 AND pristine 6.0.3: a function receiver read at **FILE LEVEL**
   (`function ZzzF(){} const p = ZzzF.zzzNope;` -> `'() => void'`), a `const f = () => {}`
   or `const f = function(){}` receiver at ANY read site, a function-typed **PARAMETER**
