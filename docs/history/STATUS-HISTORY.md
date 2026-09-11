@@ -2911,3 +2911,42 @@ caller's parameter. **TWO TEXTS CORRECTED BECAUSE THEY WERE FALSE** — `TypeOra
 KDoc and `docs/type-oracle.md` § 3b both still said the retained tables leave block-scoped
 declarations unbound. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0
 (844 classes), warning-clean.
+
+**(P18.66) — (INV.0) STEP 10b-iii: THE TS2693 THE ITEM SAYS WE NEVER EMIT, AND TWO RESOLVERS DISAGREEING ABOUT ONE RECEIVER, 18,573 / 0 / 3 (2026-09-10).**
+**TWO OF THE ITEM'S OWN FACTUAL CLAIMS WERE WRONG AND ONE OF THEM CHANGED THE SIZE OF THE
+WORK**: we DO emit TS2693 — byte-identically to pristine — for a FILE-LEVEL `interface`/
+`type` read as a value, so **(c)** was a LEVEL-CONSTRUCTION gap in one function rather than
+a missing diagnostic (`tavListLevel`, what a statement `Block` contributes, surveyed
+`values` ONLY where `tavModuleLevel` surveys all three); and the namespace half's SHADOWING
+variants read the OUTER declaration rather than "nothing at all", with its (CHK.73)
+attribution wrong too, since a FILE-LEVEL namespace value member read works. Fifth round
+running that an item's facts were worth one command. **A THIRD POPULATION IT NEVER NAMED** —
+a UNIQUE block-scoped `enum`/`class`/`namespace` receiver whose member is genuinely absent,
+TS2339 in both references and silent here — is what decided **(b)** to replace silence as
+well as override. **(b) IS TWO RESOLVERS DISAGREEING ABOUT ONE RECEIVER, WITH THE WORST
+SYMPTOM**: a correct TS2322 and a false `Property 'ZInner' does not exist on type
+'typeof ZzzE2'` on the SAME line, because the `cmam*` family composed its receiver from the
+FILE-keyed `lookupPerFileForNode`. Two functional lines route it through
+`nameResolver.lexicalValueSymbolForNode`, **the same consult step 10b uses** — the DRIFT is
+the defect, so the two can no longer drift. **RECEIPT, 56-cell matrix against tsgo 7.0.2 AND
+pristine 6.0.3 (agreeing on all 56): 18 ours-only / 44 missing → 6 / 35**, AGREE cells
+18 → 27, `absentEnum`/`absentClass` closing completely; the (c) matrix's `ifaceAsValue` and
+`aliasAsValue` 0/3 → 0/0 with every other kind byte-identical. **THE CONTROL THAT KEEPS THE
+NUMBER HONEST**: `absentFn` is missing at FILE LEVEL TOO, so a nested-`function` receiver is
+a general gap and NOT B83.5's — 5 rows deliberately unclaimed, now (CHK.119). **THE NAMESPACE
+HALF IS A MEASURED TRADE, NOT A GAIN**: 6 confident false rows removed, the true row not
+produced (`declareLexical`'s `ModuleDeclaration` arm publishes no `exports` where its `enum`
+arm does), and 3 rows LOST that the wrong receiver had been answering correctly by accident
+— shipped anyway, because keeping them means deliberately consulting the declaration this
+step exists to stop consulting; now (CHK.120). **PER-FILTER VERDICTS FOR (c), MEASURED BY
+DROPPING ALL FOUR AT ONCE**: `KNOWN_GLOBALS` is LOAD-BEARING (a block-scoped
+`interface Event` shadows the global TYPE and not `declare var Event`, so `new Event(…)`
+stays legal) and so is the namespace `hasValues` survey; the two `values` guards are
+REDUNDANT (`spineTavIdentifierCore` returns above both probes) and kept, recorded as a
+round-927 pair. **A COUNTDOWN PIN FIRED AS DESIGNED, THE FOURTH IN SIX ROUNDS** — an expando
+"negative control" asserted silence for a nested `class Foo` shadowing a `function Foo`,
+which both references report; split, with the residue renamed `residue - …`. **ABLATION: 5
+arms / 13 pins, two brief predictions wrong** — the below-`perFileIdentSymbol` arm is
+behaviourally the SAME mistake as the inverse gate (identical red set), and the
+namespaces-excluded arm is 0 RED and recorded UNDISCRIMINATED rather than smoothed. Grid
+8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844 classes), warning-clean.

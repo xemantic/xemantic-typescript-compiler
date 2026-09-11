@@ -63487,3 +63487,79 @@ LANDED on 2026-09-02 (§§ 9a/9b), a correction made to the queue item in this s
 after it was first written wrong. Stage 3 is "dissolve B83.5", which `TypeOracle`'s own
 `resolveName` / `symbolsInScope` refusal names in words as its blocker. Say which, and
 why, before moving any line.
+
+### Round (P18.61) — (INV.0) step 9: the decision, taken on measurements, and the scope-space ascent gets one home (2026-09-10)
+
+**Suite 18,519 / 0 / 3** (18,514 + 5 new pins). `Checker.kt` **191,540 → 191,506**;
+`LexicalScopeResolver.kt` **124**, ledger row 12. **8-profile grid `added=0 removed=0` on
+all eight**, cost_gate exit 0, huge_methods exit 0 (**842** classes), warning-clean,
+receipt now SEVEN binaries. Two commits: `0b3d1f089` the consolidation + the two
+corrections, `d54f0ad52` the ablation record.
+
+**THE DECISION, WITH BOTH OPTIONS SIZED RATHER THAN ARGUED.** Option (a) — continue
+Stage 0 on the check passes — is where the LINES are: check-pass / walker-frame prefixes
+are **96,830 of 191,499 attributed lines (50.6%)**, `check*` alone 53,571. It is also
+where the SEAMS are not. The ambient census of the four largest candidates reads
+`cmam*` **83**, `caas*` **59**, the type-node builders **68**, and `cae*` **97 reads for
+EIGHT declarations** — against rows 1-11's 0/0/4/26/22/4/13/45/21/5/61. **A collaborator
+with twelve times as many inputs as members is a file move, not a seam**, which is
+exactly what the step-9 item predicted "a list of walkers" would be. Option (b) taken.
+
+**AND OPTION (b) HAD TO BE CORRECTED BEFORE IT COULD BE TAKEN: the item as first written
+offered "open Stage 1", and Stages 1 AND 2 landed on 2026-09-02** (§§ 9a/9b — the
+`NodeAnswerStore` and the `TypeOracle` facade). The open stage is 3. That correction
+changes what the alternative IS: not more plumbing behind a flag, but the semantic change
+that opens the two methods a Kotlin consumer of the embeddable checker needs. **A queue
+item's own factual claims are worth one command to check** — this one would have sent a
+round at work that already exists.
+
+**WHAT B83.5 ACTUALLY IS, MEASURED, AND NOT WHAT ITS NAME SAYS.** `Binder` recurses into
+statements from exactly two places — a `SourceFile`'s own list (`Binder.kt:283`) and a
+`ModuleBlock`'s (`:558`) — so it is not "declarations nested in a `Block`" that go unbound
+but *everything that is not a direct statement of one of those two*. **A `class` at the
+very TOP of a function body, with no block nesting at all, is equally unbound.** Measured
+against tsgo 7.0.2 on that shape: **1 ours-only TS2353 and 0 of 4 true rows** for
+interface/class/type/function, plus an ours-only TS2339 at the enum VALUE position (round
+748 closed the TYPE half only). CLAUDE.md's entry now says this.
+
+**THE SUB-STEP IS THE INERT ONE, AND IT IS ABOUT DUPLICATION RATHER THAN LINES**: the
+ascent over `BinderResult.lexicalScopes` had been **hand-copied five times** and the copies
+had drifted on four axes — which table (the owning file's, or the walk-scoped ambient
+`currentLexicalScopes`), start at the node or at its parent, which `SymbolFlags`, hop-capped
+or not. Every difference is deliberate, so they became PARAMETERS. `LexicalScopeResolver`
+has **ambient surface NONE — the first such row since step 3** — because the ascent is a
+pure function of the tables and the parent chain.
+
+**THE GATE IS THE GRID, NOT THE CORPUS.** Three of the five callers are name-GATED, so a
+wrong axis surfaces as a name resolving to an OUTER binding, which CLAUDE.md records as
+silent in every diagnostic channel here. All eight profiles read `added=0 removed=0`, with
+the harness profile's 94 rows and no truncated capture.
+
+**TWO TEXTS CORRECTED BECAUSE THEY WERE FALSE, NOT VAGUE.** `LexicalScope`'s KDoc claimed
+the tables are "UNCONSUMED until INV.4 — nothing in the checker reads these tables yet"
+(five consults have, since round 748) and proposed `symbols` → `existing` → parent as the
+future resolution order — **which is exactly the read round 748 REFUSED**. And
+`TypeOracle.resolveName` / `symbolsInScope` both refused with "the retained scope tables
+leave block-scoped declarations unbound (B83.5)"; **the retained tables HAVE that
+population**. What is missing is a COMPOSED resolver (round 918: this ascent's rules do not
+transplant onto another chain), a `meaning` parameter, and an `OracleLens` row — and
+`symbolsInScope` opens LATER than `resolveName`, because an enumeration must read
+`existing`. **A refusal that misstates its own blocker is worse than no refusal**: it makes
+a composition problem look like a binder problem, and it is what would have sized the next
+round wrong.
+
+**FOUR OF FIVE ARMS DISCRIMINATE; ARM 1 REDDENS ALL FIVE AND IS RECORDED AS SUCH.**
+Starting the ascent at the file root destroys the ascent, and every pin depends on it.
+Pin 1's discrimination rests on a different fact — none of arms 2-5 reddens it, and it is
+the only fixture declaring one name at TWO levels, so the only one that can see a
+shadowing-ORDER defect. Three narrower arms were tried and each reddens pin 2 or pin 3,
+because those two are positional by construction.
+
+**NEXT**: the inert path is spent — everything further on Stage 3 is the resolution-ORDER
+change (`NameResolver.kt:1760-1767` says a fallback is not enough), with ~357 `globals[`
+readers downstream, gated by the corpus AND the grid. That is a multi-round arc and should
+be opened as one, with its own item, not as a sub-step. **One thing left UNVERIFIED and
+worth a single probe first**: whether `getTypeOfSymbol` answers correctly for a scope-space
+`Class`/`Interface`/`Function` symbol. Precedent exists only for `Enum` (round 748's
+transient-symbol route) and by declaration-read for `TypeAlias`; that answer decides
+whether an oracle row can ship cheaply or needs a second sub-step.

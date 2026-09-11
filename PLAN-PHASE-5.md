@@ -25,6 +25,110 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.72) — (CHK.97) D2: a both-overloaded union callee reports, and the suppression that is still hiding a second row (2026-09-11)
+
+**Suite 18,669 → 18,679 / 0 / 3** (+10 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
+exit 0 with no rebaseline; `huge_methods.py --fail-over 0` exit 0 (844 classes);
+warning-clean. **(CHK.97) still OPEN** — D3 and D5 remain, plus the new D2b below.
+
+**THE FIX IS A SPLIT BY *REASON*, NOT A RETIREMENT.** The `≥2`-overloaded suppression was
+one `if` answering two different facts. TWO OR MORE overloaded constituents is exactly where
+tsc SKIPS pass 2 (`indexWithLengthOverOne === -1`), `getUnionSignatures` answers the EMPTY
+list, and `resolveCallExpression` reports TS2349 with the "Each member … has signatures"
+chain — so that half is a DIAGNOSTIC. Exactly ONE overloaded constituent is the
+`unionOfArraysFilterCall` shape (`(Fizz[] | readonly Buzz[]).filter`, where `Array.filter`
+has 2 overloads and `ReadonlyArray.filter` has 1), where tsc RUNS pass 2 over the parallel
+overload sets and reports nothing — so that half stays SILENT. A `count` replaces the `any`
+and makes exactly the same `getCallSignaturesOfType` calls.
+
+**THE CHAIN SENTENCE NOW HAS ONE HOME**, shared with the pre-existing generic refusal
+(`emitUnionCalleeNoCompatibleSignatures`). Two refusal reasons print it byte-identically on
+both references, span included; a chain sentence is the WHOLE observable here and
+(PARITY.1) says the 8-profile grid is structurally blind to a display divergence — so two
+copies would drift with nothing to notice. Ablation a5 confirms both callers reach it.
+
+**RECEIPT** (`scripts/ref_matrix.py`, 7 fixtures, BEFORE arm taken against a real HEAD build
+rather than reasoned): **agree 3 → 11, missing 8 → 0, ours-only 0 → 0**; zero SPAN-DIFF,
+zero REF-SPLIT. **CORRECTED an hour later by the sub-step below, and the correction is the
+point: that reading was taken with a CHAIN-BLIND instrument, and one of its eleven AGREE
+rows is really a TEXT-DIFF** — re-taken chain-aware the seven D2 fixtures read
+**agree 10, text-diff 1, missing 0, ours-only 0**. The row is `p3:7`, and it is the
+`typeToString` parenthesization defect described below, not a D2 defect; the pins had
+already caught it, which is why the fixture's third member carries a property. The verdict
+does not move, the number does — and a receipt quoted from an instrument that cannot see the
+family's whole content is exactly what this repo's round-853 law is about.
+
+**A COUNTDOWN PIN FIRED — THE SEVENTH IN EIGHT ROUNDS, AND ONLY THE *FULL* SUITE SAW IT.**
+`UnionCalleeSignatureTest :: a union whose members are both overloaded refuses the
+combination` asserted the SILENCE this round removes, and its own KDoc said "SILENT where
+tsc reports TS2349" — a wrong answer recorded as a pin. It was found by running ablation arm
+a2 against the **full** suite; the four corpus letters the round was gating on (B/F/S/U)
+miss it entirely. Inverted to the correct code + chain and renamed. **Corollary for the
+ablation protocol: a guard-letter corpus subset is not a substitute for the suite when the
+arm WIDENS an emission** — a widening's victims are pins, not baselines.
+
+**THE GRID IS A CONTROL HERE AND THE ROUND SAYS SO, WITH A COUNT.** A counting arm
+(positive control: 3 hits on the round's own fixture) reads **0 hits on all eight profiles**
+— zero even for the one-overloaded sibling. So `added=0 removed=0` proves INERTNESS and
+nothing about coverage ((CHK.124)'s lesson, one round later). The real gate is the corpus
+(1,425 baselines over the guard letters, all green — `betterErrorForUnionCall`,
+`unionOfArraysFilterCall`, `functionCallOnConstrainedTypeVariable`,
+`signatureCombiningRestParameters1/3/4/5`) plus the pins.
+
+**THE INSTRUMENT IS BLIND TO THE THING THIS ROUND CHANGES: `scripts/ref_matrix.py` CANNOT
+SEE A `messageChain`.** Its row regexes match a diagnostic's FIRST LINE only, so a
+chain-only divergence scores **AGREE**. That is the third distinct blindness found in this
+script in two rounds, and this one matters most for exactly the family it was built to
+adjudicate — a union-callee TS2349's whole content is its chain. It passed a real
+divergence the pins then caught: **`typeToString` parenthesizes a union member that has
+exactly one call signature and no other member**, so we print `ZzzA | ZzzB | (ZzzS)` and
+`(ZzzS) | (ZzzT)` where both references print them bare. **Pre-existing** (shipped HEAD
+prints it in a plain TS2322), unowned, unrelated to D2 — recorded in the pin KDoc, and the
+pin's third member carries a property to dodge it honestly rather than pinning the wrong
+display. **CLOSED AS ITS OWN SUB-STEP THIS ROUND**: continuation lines are now normalised
+(leading whitespace and our `|` marker removed) and appended to the message, so the existing
+TEXT-DIFF machinery covers a chain — no new verdict. Verified in BOTH directions, which is
+what separates it from a change that merely compiles: a fixture where all three arms agree
+on the chain still reads AGREE (so the arms' differing PRINT formats do not false-positive),
+and the parenthesization row is now reported. **It immediately re-graded one of this round's
+own fixtures** — see the corrected receipt above. Stated limitation, in the docstring:
+normalising the indentation away also normalises away a chain's NESTING DEPTH, so a
+divergence purely in how deeply a sub-line is nested is still invisible. Left open as
+**(CHK.130)**: the parenthesization defect itself.
+
+**THE ROUND'S LOAD-BEARING CLAIM IS TRUE OF THE PROFILES AND FALSE OF THE LANGUAGE.** The
+brief asserted the `≥2` suppression guards nothing reachable, and that holds for the eight
+profiles and the corpus — stage 2's array fallback answers those receivers before a union
+callee is ever formed. It does NOT hold in general: the ONE-overloaded suppression D2 KEPT
+is reachable and **hides a true positive**, because PASS 2 also refuses on GENERIC
+INCOMPATIBILITY. There both references print the identical chain and we stay silent. The
+implementer STOPPED at the scope line rather than pushing through, which is the right call
+and the reason the finding is trustworthy — it is now **(D2b)**, measured and ready: the
+one-character change is 0 RED on 1,425 baselines and reddens exactly the countdown pin this
+round already inverted. **It was deliberately NOT taken: an ablation arm is not an
+implemented fix with pins**, and a widening whose only gate is the corpus deserves its own
+round.
+
+**ABLATION: 5 arms / 1,435 pins-and-baselines, BOTH controls.** a4 comment-only = 0 RED;
+a5 break the shared chain = 7 RED (all 5 D2 chain pins + the generic-chain pin + the corpus
+`betterErrorForUnionCall`, which is what proves the two callers really share one emitter);
+a1 restore the suppression = exactly the 5 D2 positives with the generic pin untouched, i.e.
+attributable; a2 emit at `>= 1` too = **0 RED on the guard letters and 1 RED on the full
+suite** (the countdown above) — a DEAD ARM for the round's own pin set, recorded as such;
+a3 drop the generic guard before the shared emitter = **0 RED, recorded as a REDUNDANT GUARD
+and structurally so** — `differ` is reachable only with `combinedSigs == null` and
+`overloadedMembers == 0`, in which configuration the only refusal PASS 2 can make IS generic
+incompatibility. Kept in place: it is tsc's own rule, a round-927 pair.
+
+**FOUR MORE RESIDUES, RECORDED AND NOT PINNED**: the CONSTRUCT twin (`new` on a
+both-overloaded union — separate branch, own sentence); a both-overloaded union beside
+`undefined` (reaches (P18.71)'s nullish strip first); and a TS2769 elaboration on which
+tsgo and pristine genuinely diverge (round 938), so it is not adjudicable.
+
+**NEXT**: (D2b) is the cheapest measured row left in (CHK.97); then (D3)'s
+IDENTICAL-signature half. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order
+sends the arc.
+
 ### Round (P18.71) — (CHK.97) stage 3: the nullish-union callee's argument check, and a suppression whose gate was two mechanisms (2026-09-11)
 
 **Suite 18,652 → 18,669 / 0 / 3** (+17 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
@@ -939,82 +1043,6 @@ is untouched (10c); VALUE space is untouched (10b) and is where 46 of the 106 mi
 **NEXT**: 10b, the VALUE space — the bigger half of what is left, and its ladder order is
 load-bearing, so the consult goes INSIDE `getTypeOfIdentifierCore`'s rungs rather than on top.
 
-### Round (P18.61) — (INV.0) step 9: the decision, taken on measurements, and the scope-space ascent gets one home (2026-09-10)
-
-**Suite 18,519 / 0 / 3** (18,514 + 5 new pins). `Checker.kt` **191,540 → 191,506**;
-`LexicalScopeResolver.kt` **124**, ledger row 12. **8-profile grid `added=0 removed=0` on
-all eight**, cost_gate exit 0, huge_methods exit 0 (**842** classes), warning-clean,
-receipt now SEVEN binaries. Two commits: `0b3d1f089` the consolidation + the two
-corrections, `d54f0ad52` the ablation record.
-
-**THE DECISION, WITH BOTH OPTIONS SIZED RATHER THAN ARGUED.** Option (a) — continue
-Stage 0 on the check passes — is where the LINES are: check-pass / walker-frame prefixes
-are **96,830 of 191,499 attributed lines (50.6%)**, `check*` alone 53,571. It is also
-where the SEAMS are not. The ambient census of the four largest candidates reads
-`cmam*` **83**, `caas*` **59**, the type-node builders **68**, and `cae*` **97 reads for
-EIGHT declarations** — against rows 1-11's 0/0/4/26/22/4/13/45/21/5/61. **A collaborator
-with twelve times as many inputs as members is a file move, not a seam**, which is
-exactly what the step-9 item predicted "a list of walkers" would be. Option (b) taken.
-
-**AND OPTION (b) HAD TO BE CORRECTED BEFORE IT COULD BE TAKEN: the item as first written
-offered "open Stage 1", and Stages 1 AND 2 landed on 2026-09-02** (§§ 9a/9b — the
-`NodeAnswerStore` and the `TypeOracle` facade). The open stage is 3. That correction
-changes what the alternative IS: not more plumbing behind a flag, but the semantic change
-that opens the two methods a Kotlin consumer of the embeddable checker needs. **A queue
-item's own factual claims are worth one command to check** — this one would have sent a
-round at work that already exists.
-
-**WHAT B83.5 ACTUALLY IS, MEASURED, AND NOT WHAT ITS NAME SAYS.** `Binder` recurses into
-statements from exactly two places — a `SourceFile`'s own list (`Binder.kt:283`) and a
-`ModuleBlock`'s (`:558`) — so it is not "declarations nested in a `Block`" that go unbound
-but *everything that is not a direct statement of one of those two*. **A `class` at the
-very TOP of a function body, with no block nesting at all, is equally unbound.** Measured
-against tsgo 7.0.2 on that shape: **1 ours-only TS2353 and 0 of 4 true rows** for
-interface/class/type/function, plus an ours-only TS2339 at the enum VALUE position (round
-748 closed the TYPE half only). CLAUDE.md's entry now says this.
-
-**THE SUB-STEP IS THE INERT ONE, AND IT IS ABOUT DUPLICATION RATHER THAN LINES**: the
-ascent over `BinderResult.lexicalScopes` had been **hand-copied five times** and the copies
-had drifted on four axes — which table (the owning file's, or the walk-scoped ambient
-`currentLexicalScopes`), start at the node or at its parent, which `SymbolFlags`, hop-capped
-or not. Every difference is deliberate, so they became PARAMETERS. `LexicalScopeResolver`
-has **ambient surface NONE — the first such row since step 3** — because the ascent is a
-pure function of the tables and the parent chain.
-
-**THE GATE IS THE GRID, NOT THE CORPUS.** Three of the five callers are name-GATED, so a
-wrong axis surfaces as a name resolving to an OUTER binding, which CLAUDE.md records as
-silent in every diagnostic channel here. All eight profiles read `added=0 removed=0`, with
-the harness profile's 94 rows and no truncated capture.
-
-**TWO TEXTS CORRECTED BECAUSE THEY WERE FALSE, NOT VAGUE.** `LexicalScope`'s KDoc claimed
-the tables are "UNCONSUMED until INV.4 — nothing in the checker reads these tables yet"
-(five consults have, since round 748) and proposed `symbols` → `existing` → parent as the
-future resolution order — **which is exactly the read round 748 REFUSED**. And
-`TypeOracle.resolveName` / `symbolsInScope` both refused with "the retained scope tables
-leave block-scoped declarations unbound (B83.5)"; **the retained tables HAVE that
-population**. What is missing is a COMPOSED resolver (round 918: this ascent's rules do not
-transplant onto another chain), a `meaning` parameter, and an `OracleLens` row — and
-`symbolsInScope` opens LATER than `resolveName`, because an enumeration must read
-`existing`. **A refusal that misstates its own blocker is worse than no refusal**: it makes
-a composition problem look like a binder problem, and it is what would have sized the next
-round wrong.
-
-**FOUR OF FIVE ARMS DISCRIMINATE; ARM 1 REDDENS ALL FIVE AND IS RECORDED AS SUCH.**
-Starting the ascent at the file root destroys the ascent, and every pin depends on it.
-Pin 1's discrimination rests on a different fact — none of arms 2-5 reddens it, and it is
-the only fixture declaring one name at TWO levels, so the only one that can see a
-shadowing-ORDER defect. Three narrower arms were tried and each reddens pin 2 or pin 3,
-because those two are positional by construction.
-
-**NEXT**: the inert path is spent — everything further on Stage 3 is the resolution-ORDER
-change (`NameResolver.kt:1760-1767` says a fallback is not enough), with ~357 `globals[`
-readers downstream, gated by the corpus AND the grid. That is a multi-round arc and should
-be opened as one, with its own item, not as a sub-step. **One thing left UNVERIFIED and
-worth a single probe first**: whether `getTypeOfSymbol` answers correctly for a scope-space
-`Class`/`Interface`/`Function` symbol. Precedent exists only for `Enum` (round 748's
-transient-symbol route) and by declaration-read for `TypeAlias`; that answer decides
-whether an oracle row can ship cheaply or needs a second sub-step.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1092,11 +1120,22 @@ notices it is gone.
   give `[never]`. Combining there is wrong in a NEW way, across 35 readers. **(D6) BLOCKED, unblocker
   named**: `Signature.thisParameter` (`Type.kt:318`) does not exist and THREE separate consumers need it
   (assignability, `.call`/`.apply`/`.bind`, and the union intersection that produces TS2684) — a model
-  change, not a diagnostic fix. **STILL OPEN, re-sized by measurement: (D2)** both-overloaded union → TS2349,
-  **3 rows**, ~15 lines — and the blocker the item records is already solved upstream (the refusal reason is
-  the local `multipleOverloadSets` at `Checker.kt:155700`), while the `≥2` suppression it must narrow is
-  **measured to be guarding nothing** (stage 2's array fallback answers those receivers before a union callee
-  is ever formed); its gate is the corpus + pins, not the grid. **(D3)** union contextual type, **3 rows**,
+  change, not a diagnostic fix. **(D2) CLOSED 2026-09-11 ((P18.72) note)** — the `≥2`-overloaded suppression is
+  split by its REASON: TWO OR MORE overloaded constituents is tsc's skipped PASS 2
+  (`indexWithLengthOverOne === -1`), so `getUnionSignatures` answers the EMPTY list and TS2349 reports with the
+  "Each member … has signatures" chain; exactly ONE stays SILENT (the `unionOfArraysFilterCall` shape, where tsc
+  RUNS pass 2). The chain now has ONE home shared with the generic refusal, so the two cannot drift. Receipt
+  `agree 3 → 11, missing 8 → 0, ours-only 0`. **(D2b) OPEN, MEASURED AND READY — the ONE-overloaded suppression
+  D2 KEPT is reachable and hides a true positive**: PASS 2 also refuses on GENERIC INCOMPATIBILITY, and there
+  both references print the identical chain while we stay silent (`interface ZzzA { <T extends string>(a: T):
+  void; <T extends string>(a: T, b: number): void }` beside `type ZzzG = <T extends number>(a: T) => void`).
+  The change is `>= 2` → `>= 1` at the `overloadedMembers` branch, and it was measured AS AN ABLATION ARM:
+  **0 RED on 1,425 corpus baselines, and exactly ONE full-suite pin red — the r09 countdown (P18.72) had
+  already inverted.** Justification: with an overloaded member the `differ` check below compares only FIRST
+  signatures and cannot decide, so the combination's own refusal is the verdict. **An ablation arm is not an
+  implemented fix** — it needs its own value pins (the fixture above), its own ablation and a corpus run before
+  it lands. The clean long-term shape is to thread the refusal REASON out of `computeCombinedUnionSignatures`
+  rather than recompute it. **(D3)** union contextual type, **3 rows**,
   and the item's "DIFFERING signatures" framing is incomplete — the **IDENTICAL**-signature union ALSO loses
   its contextual type, at `callableSignaturesForCtx`'s `if (single != null) return null` (`Checker.kt:36192`),
   which is a strictly smaller and more tractable half than the TS7006 one; beware (CHK.50)'s law, a newly
@@ -2414,6 +2453,21 @@ notices it is gone.
   the immediate parent, and it is pinned as a pair. The array-literal arm is untouched.
   The six write-site rows still missing on the fixture are file-level and belong to
   (CHK.124).
+
+- [ ] **(CHK.130) `typeToString` PARENTHESIZES A UNION MEMBER THAT HAS EXACTLY ONE CALL
+  SIGNATURE AND NO OTHER MEMBER, WHERE BOTH REFERENCES PRINT IT BARE — `ZzzA | ZzzB | (ZzzS)`
+  FOR `ZzzA | ZzzB | ZzzS` (measured 2026-09-11, (P18.72); PRE-EXISTING, shipped HEAD prints
+  it in a plain TS2322 too, so it is NOT a union-callee defect).** It is a DISPLAY defect, so
+  per (PARITY.1) the 8-profile grid is structurally blind to it and the corpus is the only
+  gate — enumerate the at-risk `.errors.txt` baselines by grepping the reference set for the
+  rendering before landing anything. **The instrument that can see it is `scripts/ref_matrix.py`'s
+  TEXT-DIFF**, which became chain-aware in the same round; a fixture is
+  `interface ZzzS { (a: string): void }` as the third member of a union whose other two
+  members are overloaded (that shape now reports TS2349, so the chain carries the display).
+  Check first whether the parenthesization is CORRECT in some positions — a function type
+  genuinely needs parentheses inside a union (`((a: string) => void) | number`), so the rule
+  is probably "parenthesize a FUNCTION TYPE NODE, not a named type that resolves to one",
+  and the defect is that the test is on the resolved SHAPE rather than on what was written.
 
 - [ ] **(CHK.129) AN `as`-ASSERTED CALLEE LOSES ITS ARGUMENT CHECK ENTIRELY — UNION OR NOT —
   AND THE PARENTHESIZED CONTROL BESIDE IT REPORTS, WHICH IS WHAT MAKES IT A CALLEE-KIND

@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **192,309** lines (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **192,347** lines (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -18,6 +18,42 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.72) — (CHK.97) D2: A BOTH-OVERLOADED UNION CALLEE REPORTS, AND THE SUPPRESSION STILL HIDING A SECOND ROW, 18,679 / 0 / 3 (2026-09-11).**
+**THE FIX IS A SPLIT BY *REASON*, NOT A RETIREMENT.** One `if` was answering two different
+facts: TWO OR MORE overloaded constituents is exactly where tsc SKIPS pass 2, so
+`getUnionSignatures` answers the EMPTY list and TS2349 reports with the "Each member … has
+signatures" chain — a DIAGNOSTIC; exactly ONE is the `unionOfArraysFilterCall` shape, where
+tsc RUNS pass 2 — SILENT. **The chain sentence now has ONE home** shared with the generic
+refusal, because a chain is the whole observable here and (PARITY.1) says the grid is blind
+to a display divergence, so two copies would drift with nothing to notice. Receipt
+**agree 3 → 11, missing 8 → 0, ours-only 0** — **and that number was CORRECTED within the
+round by the sub-step below**: it was taken with a chain-blind instrument, and one of its
+eleven AGREE rows is really a TEXT-DIFF, so re-taken chain-aware the seven fixtures read
+**agree 10, text-diff 1, missing 0**. The verdict does not move; the receipt does.
+**A COUNTDOWN PIN FIRED — THE SEVENTH IN EIGHT ROUNDS — AND ONLY THE *FULL* SUITE SAW IT**:
+a pin asserting the silence this round removes, with its own KDoc saying "SILENT where tsc
+reports TS2349". It surfaced from an ablation arm run against the full suite; the four
+corpus guard letters the round was gating on miss it. **Corollary: a guard-letter subset is
+not a substitute for the suite when an arm WIDENS an emission — a widening's victims are
+pins, not baselines.** **THE GRID IS A CONTROL AND THE ROUND PROVES IT WITH A COUNT**: a
+counting arm reads 0 hits on all eight profiles against 3 on the round's own fixture, so
+`added=0` is inertness, not coverage. **THE INSTRUMENT IS BLIND TO WHAT THIS ROUND CHANGES**:
+`scripts/ref_matrix.py` matched a diagnostic's FIRST LINE only, so a chain-only divergence
+scored AGREE — the third distinct blindness found in that script in two rounds, and it had
+passed a real one (`typeToString` parenthesizes a union member with exactly one call
+signature, where both references print it bare; pre-existing and unowned, now (CHK.130)).
+Closed as its own sub-step, verified in BOTH directions — a fixture on which all three arms
+agree on the chain still reads AGREE, so the arms' differing print formats do not
+false-positive — and it immediately re-graded one of this round's own fixtures. **THE ROUND'S LOAD-BEARING CLAIM IS TRUE OF THE PROFILES AND FALSE OF THE
+LANGUAGE**: the ONE-overloaded suppression D2 KEPT is reachable and hides a true positive,
+because PASS 2 also refuses on GENERIC INCOMPATIBILITY. The implementer STOPPED at the scope
+line rather than pushing through — now **(D2b)**, measured and ready (0 RED on 1,425
+baselines, reddening exactly the countdown pin already inverted) and **deliberately not
+taken: an ablation arm is not an implemented fix with pins.** Ablation 5 arms with both
+controls; a3 recorded as a REDUNDANT GUARD and structurally so; a2 recorded as a DEAD ARM
+for the round's own pin set. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit
+0 (844), warning-clean.
 
 **(P18.71) — (CHK.97) STAGE 3 D4: THE NULLISH-UNION CALLEE'S ARGUMENT CHECK, AND A SUPPRESSION WHOSE GATE WAS TWO MECHANISMS, 18,669 / 0 / 3 (2026-09-11).**
 One of (CHK.97)'s six stage-3 deliverables closed — **and all six were measured against
@@ -167,43 +203,4 @@ un-annotated body-local and both file-level spellings report correctly) — now 
 the after-block leak ALREADY EXISTS for the un-annotated spelling on the unchanged binary.
 Tree clean, binary byte-identical to (P18.66)'s; the refused patch, its 15 pins and its 8-arm
 ablation are kept OUT of the tree.
-
-**(P18.66) — (INV.0) STEP 10b-iii: THE TS2693 THE ITEM SAYS WE NEVER EMIT, AND TWO RESOLVERS DISAGREEING ABOUT ONE RECEIVER, 18,573 / 0 / 3 (2026-09-10).**
-**TWO OF THE ITEM'S OWN FACTUAL CLAIMS WERE WRONG AND ONE OF THEM CHANGED THE SIZE OF THE
-WORK**: we DO emit TS2693 — byte-identically to pristine — for a FILE-LEVEL `interface`/
-`type` read as a value, so **(c)** was a LEVEL-CONSTRUCTION gap in one function rather than
-a missing diagnostic (`tavListLevel`, what a statement `Block` contributes, surveyed
-`values` ONLY where `tavModuleLevel` surveys all three); and the namespace half's SHADOWING
-variants read the OUTER declaration rather than "nothing at all", with its (CHK.73)
-attribution wrong too, since a FILE-LEVEL namespace value member read works. Fifth round
-running that an item's facts were worth one command. **A THIRD POPULATION IT NEVER NAMED** —
-a UNIQUE block-scoped `enum`/`class`/`namespace` receiver whose member is genuinely absent,
-TS2339 in both references and silent here — is what decided **(b)** to replace silence as
-well as override. **(b) IS TWO RESOLVERS DISAGREEING ABOUT ONE RECEIVER, WITH THE WORST
-SYMPTOM**: a correct TS2322 and a false `Property 'ZInner' does not exist on type
-'typeof ZzzE2'` on the SAME line, because the `cmam*` family composed its receiver from the
-FILE-keyed `lookupPerFileForNode`. Two functional lines route it through
-`nameResolver.lexicalValueSymbolForNode`, **the same consult step 10b uses** — the DRIFT is
-the defect, so the two can no longer drift. **RECEIPT, 56-cell matrix against tsgo 7.0.2 AND
-pristine 6.0.3 (agreeing on all 56): 18 ours-only / 44 missing → 6 / 35**, AGREE cells
-18 → 27, `absentEnum`/`absentClass` closing completely; the (c) matrix's `ifaceAsValue` and
-`aliasAsValue` 0/3 → 0/0 with every other kind byte-identical. **THE CONTROL THAT KEEPS THE
-NUMBER HONEST**: `absentFn` is missing at FILE LEVEL TOO, so a nested-`function` receiver is
-a general gap and NOT B83.5's — 5 rows deliberately unclaimed, now (CHK.119). **THE NAMESPACE
-HALF IS A MEASURED TRADE, NOT A GAIN**: 6 confident false rows removed, the true row not
-produced (`declareLexical`'s `ModuleDeclaration` arm publishes no `exports` where its `enum`
-arm does), and 3 rows LOST that the wrong receiver had been answering correctly by accident
-— shipped anyway, because keeping them means deliberately consulting the declaration this
-step exists to stop consulting; now (CHK.120). **PER-FILTER VERDICTS FOR (c), MEASURED BY
-DROPPING ALL FOUR AT ONCE**: `KNOWN_GLOBALS` is LOAD-BEARING (a block-scoped
-`interface Event` shadows the global TYPE and not `declare var Event`, so `new Event(…)`
-stays legal) and so is the namespace `hasValues` survey; the two `values` guards are
-REDUNDANT (`spineTavIdentifierCore` returns above both probes) and kept, recorded as a
-round-927 pair. **A COUNTDOWN PIN FIRED AS DESIGNED, THE FOURTH IN SIX ROUNDS** — an expando
-"negative control" asserted silence for a nested `class Foo` shadowing a `function Foo`,
-which both references report; split, with the residue renamed `residue - …`. **ABLATION: 5
-arms / 13 pins, two brief predictions wrong** — the below-`perFileIdentSymbol` arm is
-behaviourally the SAME mistake as the inverse gate (identical red set), and the
-namespaces-excluded arm is 0 RED and recorded UNDISCRIMINATED rather than smoothed. Grid
-8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844 classes), warning-clean.
 
