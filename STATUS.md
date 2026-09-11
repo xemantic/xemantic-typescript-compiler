@@ -19,7 +19,7 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
-**(P18.70) — FOUR (CHK.*) ITEMS, AND THE INSTRUMENT THAT WAS DROPPING ROWS, 18,647 / 0 / 3 (2026-09-11).**
+**(P18.70) — FIVE (CHK.*) ITEMS, AND THE INSTRUMENT THAT WAS DROPPING ROWS, 18,652 / 0 / 3 (2026-09-11).**
 Two (CHK.\*) items closed and **both queue items were wrong about their own size**, a
 sixth round running. **(CHK.122)**: the item named ONE route for a missing `in`-guard
 consult; measured against both references it is FOUR — flow, destructured, FILE-LEVEL
@@ -54,9 +54,13 @@ controls that still report. **(CHK.126)**: every silence-asserting pin in
 renamed `residue - ` with their reference rows; **and three were made UNFALSIFIABLE by
 this round's own (CHK.119) display change** (they keyed on `typeof Foo`, which an
 expando-free function can no longer produce), fixed in the same session that broke them
-and verified falsifiable rather than assumed. The audit found **(CHK.127)**: the
-collector OVER-declares in the opposite direction from (CHK.119), costing four
-reference rows. Four finds queued, none claimed.
+and verified falsifiable rather than assumed. The audit found **(CHK.127)** — the
+collector OVER-declares in the opposite direction from (CHK.119) — **and it was closed
+in the same round**: twelve positions measured against both references, an object
+literal is a HARD STOP (an array nested in an objlit value and an objlit nested in an
+array are both refused, which rules out a rule about the immediate parent), and its own
+residue pin from one commit earlier fired as designed. Three finds queued, none
+claimed; (CHK.124) is the largest and is sized in its item.
 
 **(P18.68) — (CHK.121): THE AXIS IS THE *INITIALIZER*, AND BOTH SIZINGS OF THE ITEM WERE WRONG, 18,604 / 0 / 3 (2026-09-11).**
 An ANNOTATED function-body local now reaches the member-existence check.

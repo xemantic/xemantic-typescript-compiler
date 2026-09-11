@@ -144,14 +144,18 @@ is named STRUCTURALLY VACUOUS. **And three were made unfalsifiable by this round
 (CHK.119) display change** — they keyed on `contains("typeof Foo")`, which an
 expando-free function can no longer produce, so a binary with the whole shadow chain
 deleted would have passed them. Fixed in the same session that broke them, and verified
-falsifiable rather than assumed. The audit also found **(CHK.127)**: the collector
-OVER-declares in the opposite direction from (CHK.119) — an objlit-property-value and a
-spread write declare here and not in tsc, costing four reference rows — which nothing
-had named.
+falsifiable rather than assumed. The audit also found **(CHK.127)**, which nothing had
+named — the collector OVER-declares in the opposite direction from (CHK.119) — **and
+that was fixed in the same round**: twelve positions measured, an object literal is a
+HARD STOP (an array nested inside an objlit value and an objlit nested inside an array
+are both refused, which is what rules out a rule about the immediate parent), the
+array-literal arm untouched. **Its own residue pin from one commit earlier fired as
+designed**, and was converted to pin the corrected split with BOTH halves asserted.
 
-**NEXT**: (CHK.120) is (P18.66)'s untouched residue and is a BINDER change with its own
-blast radius; (CHK.123) is display-only with the corpus as its sole gate; (CHK.124) and
-(CHK.127) are this round's, and (CHK.127) is the smaller. Per the WORK ORDER, the
+**NEXT**: (CHK.124) — the general function-receiver gap — is this round's largest
+residue and is sized in its item with three candidate routes and two measured FP
+hazards; (CHK.120) is (P18.66)'s untouched residue and is a BINDER change with its own
+blast radius; (CHK.123) is display-only with the corpus as its sole gate. Per the WORK ORDER, the
 order's tail is still (INV.0), and this round is (CHK.\*) lane work that pays in
 measured reference rows.
 
@@ -2295,19 +2299,16 @@ notices it is gone.
   after the change rather than assumed. **The audit also found (CHK.127), which nothing
   had named.**
 
-- [ ] **(CHK.127) THE EXPANDO COLLECTOR *OVER*-DECLARES — THE OPPOSITE DIRECTION FROM
-  (CHK.119) (measured 2026-09-11, (P18.70), both references agreeing on all four
-  rows).** A write in an ARRAY-LITERAL element (`Foo.g = 5`) DOES declare an expando
-  member; one as an OBJECT-LITERAL PROPERTY VALUE (`{ p: Foo.h = 6 }`) and one inside a
-  SPREAD (`...(Foo.i = 7 as any)`) do NOT. We collect all three, so the reference
-  display is `{ (): void; a: number; b: number; d: number; e: number; f: number;
-  g: number; }` with `h` and `i` ABSENT while ours carries them, and both references
-  report **four rows we do not** — two on the WRITE's own LHS and two on the later read.
-  Pinned today as `residue - an objlit-property-value and a spread write OVER-declare`.
-  `collectExpandoDeclsExpr`'s `ObjectLiteralExpression` and `SpreadElement` arms are the
-  sites. **Note the asymmetry is real and must be preserved, not smoothed**: the
-  array-literal arm is CORRECT and the other two are not, so this is a narrowing of two
-  specific arms rather than a rule about expression position.
+- [x] **(CHK.127) CLOSED 2026-09-11 ((P18.70) note) — AN OBJECT LITERAL IS A HARD STOP.**
+  Twelve positions measured against both references, agreeing on every cell: an
+  expression statement, a comma operand, a ternary branch, a chained assignment, an
+  ARRAY-LITERAL element, a CALL argument, a parenthesized expression and a unary operand
+  all DECLARE; an object-literal property value, a spread, a computed-key value — **and
+  an array literal nested inside any of those, or an object literal nested inside an
+  array** — do not. That last pair is what forces a HARD STOP rather than a rule about
+  the immediate parent, and it is pinned as a pair. The array-literal arm is untouched.
+  The six write-site rows still missing on the fixture are file-level and belong to
+  (CHK.124).
 
 - [ ] **(INV.0) STEP 10b-ii — BLOCKED-ON: the two families named inside this item. THE *UNIQUE* HALF OF THE
   VALUE SPACE (measured 2026-09-10, (P18.63)). MOVED BELOW ITS SMALLER, UNBLOCKED SIBLINGS
