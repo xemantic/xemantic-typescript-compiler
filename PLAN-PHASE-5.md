@@ -1058,6 +1058,66 @@ enables, so that term of the residue is unpinned by any test and is carried by t
 improves row 8's DECLARATION-READING group.
 
 
+## QUEUE
+
+### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
+
+**RESTORED 2026-09-08 ((P18.44)).** This section was added by `cc09770a3` and was archived out of
+the file with the four COMPLETED items that sat under it ((LIC.1), (DOC.1), (EXT.1), (LSP.1)),
+leaving CLAUDE.md § "Execution protocol" pointing at a heading that did not exist for ~25 rounds.
+Text below is verbatim from `cc09770a3` minus those items; the dated addendum at the end records
+where the arc actually stands. **A completed item may not be archived without checking whether a
+load-bearing note travels with it.**
+
+**THE PROJECT IS RE-POINTED.** The JetBrains WebStorm evaluation paused: their need was a
+post-hoc TYPE ORACLE with the query shape of tsgo's `tsc/internal/api/proto.go` (142 methods),
+and this checker cannot serve one — its answers are functions of walk-scoped state, which
+`CheckedProgram.kt` and `TypeCapture.kt` already document. tsgo is the free, official default;
+competing with it on "a TypeScript compiler" is not the mission. **The mission is TypeScript
+for the JVM and Kotlin**: no Node and no Go in the toolchain, an embeddable whole-program
+checker, a Kotlin-externals generator with resolved types, a JVM bytecode backend (KIR), and an
+LSP anyone can try in five minutes. See CLAUDE.md § "AI agent mission" for the full directive
+and the pre-approved Guardrails (two new modules, no new dependencies, `docs/reposition` branch
+for README positioning text).
+
+**THE (INC.\*) FAMILY IS CLOSED (closing note).** It ran ~93 rounds and took the incremental
+floor from ~1,219 ms ((INC.3)) to **94-110 ms** ((INC.72b)/(INC.89)) at 2,401 files, with the
+plugin's own `diagnosticsOf` query at **93-217 ms** independent of edit shape ((INC.90)).
+Nothing above — externals generation, the LSP, the inversion — changes outcome at that scale,
+and the one real remaining gap ((INC.90)'s signature-edit cliff, 12.8x) was refused on
+SOUNDNESS by (INC.91)'s own census. **REFUSE a further (INC.\*) round unless a plugin-facing
+query is measured > 300 ms warm**, and do not touch `Checker.kt` for latency without that
+measurement in hand. The remaining unchecked (INC.\*) items below stay as a RECORD, except
+(INC.92)/(INC.93), which remain live as CORRECTNESS items (process-global state under the
+plugin's N-thread shape), not latency ones.
+
+**Work order for this arc, top to bottom:** (LIC.1) → (DOC.1) → (DOC.2, on `docs/reposition`)
+→ (EXT.1…n) → (LSP.1…n) → (INV.D) → (INV.0).
+
+**ADDENDUM 2026-09-08 ((P18.44)) — WHERE THE ARC ACTUALLY STANDS, AND THE STANDING QUESTION.**
+(LIC.1), (DOC.1), (DOC.2), the whole (EXT.\*) ladder, the whole (LSP.\*) ladder and (INV.D) are
+CHECKED OFF; `docs/INVERSION-DESIGN.md` exists. **So the order's tail — (INV.0) — is what it
+points at next**, and it is unchecked (steps 1 and 4 both below). What has actually happened for
+~25 rounds instead is the **(CHK.\*) checker-parity arc**, which the order never names: it was
+surfaced by the externals and library-readiness probes, it serves the "embeddable whole-program
+checker" leg, and every round of it is measured against both references — but STATUS.md's own
+shrinkage dashboard records that it **ADDED ~5,200 lines to `Checker.kt` and made zero
+extractions**, which is the metric (INV.0) exists to move. **The owner was asked on 2026-09-08
+and chose to CONTINUE the (CHK.\*) lane**; that decision is scoped to that session. A round that
+picks a (CHK.\*) item over (INV.0) is not violating the order, but it SHOULD say so and name its
+successor — and the moment the parity arc stops paying in measured reference rows, (INV.0) is
+where the order sends you.
+
+**ADDENDUM 2026-09-11 ((P18.69)) — LOST AND RESTORED A *SECOND* TIME.** (P18.66)'s
+trim-on-write retired four completed round notes and carried this whole section out with them
+again, ~3 rounds after (P18.44) restored it and after CLAUDE.md had gained an entry saying not
+to. The (P18.44) restore had placed it directly ABOVE the first queue item, where a
+"retire the oldest notes" slice that bounds itself by the last `### ` heading swallows it.
+**It is now anchored below an explicit `## QUEUE` heading** so a note-trimming slice bounded by
+`### ` cannot reach it, and `scripts/check_plan_structure.py` FAILS when the heading, the WORK
+ORDER, or the first queue item is missing — a doc invariant is only as good as the thing that
+notices it is gone.
+
 - [ ] **(CHK.97) STAGES 1 AND 2 LANDED 2026-09-06 ((P18.29)/(P18.30) notes). STAGE 2 closed THREE of its five
   deliverables — tsc's ARRAY FALLBACK (checker.ts:15949, derived from the RECEIVER because a method type has
   no parent symbol here, which costs one extra CALLABLE gate a signature-list route would not need), tsc's
