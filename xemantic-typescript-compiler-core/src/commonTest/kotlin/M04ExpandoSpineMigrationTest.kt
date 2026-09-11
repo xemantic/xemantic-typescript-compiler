@@ -141,8 +141,17 @@ class M04ExpandoSpineMigrationTest {
         d should { have(expando(d, "deep", "Foo")) }
     }
 
+    /**
+     * The `viaValue` half AGREES with both references.
+     *
+     * **The `viaMethod` half is a RESIDUE, not a control.** tsgo 7.0.2 and pristine
+     * `typescript@6.0.3` both report
+     * `t.ts(2,23): error TS2339: Property 'viaMethod' does not exist on type
+     * '() => void'.` — B431's read walk never descends into an object-literal
+     * METHOD. Owned by (CHK.126).
+     */
     @Test
-    fun `TS2339 - objlit property VALUE function expression fires while an objlit METHOD is silent`() {
+    fun `TS2339 - objlit property VALUE fires - residue - an objlit METHOD body is not walked`() {
         val d = diagnose(
             """
             function Foo() {}
@@ -358,8 +367,19 @@ class M04ExpandoSpineMigrationTest {
         }
     }
 
+    /**
+     * **RESIDUE, and the direction is the OPPOSITE of (CHK.119)'s: this collector
+     * declares MORE than tsc does.** Measured 2026-09-11, tsgo 7.0.2 and pristine
+     * 6.0.3 agreeing on all four rows — a write in an ARRAY-LITERAL element
+     * (`Foo.g = 5`) declares, while one as an OBJECT-LITERAL PROPERTY VALUE
+     * (`{ p: Foo.h = 6 }`) and one inside a SPREAD do NOT. The reference display is
+     * `{ (): void; a: number; b: number; d: number; e: number; f: number; g: number; }`,
+     * with `h` and `i` ABSENT, so both references report four rows we do not:
+     * TS2339 at (5,32) and (5,47) on the WRITE's own LHS, and at (6,62) and (6,69)
+     * on the read. Owned by (CHK.126).
+     */
     @Test
-    fun `negative control - writes nested in expressions declare - chains comma ternary literals spread`() {
+    fun `residue - an objlit-property-value and a spread write OVER-declare`() {
         diagnose(
             """
             function Foo() {}
@@ -389,8 +409,16 @@ class M04ExpandoSpineMigrationTest {
 
     // ── silent: unreached read positions (frozen walker gaps) ──────────────
 
+    /**
+     * **RESIDUE, not a control** — both references report and we are silent:
+     *
+     * `t.ts(2,21)` TS2339 `Property 'viaClass' does not exist on type '() => void'.`
+     * `t.ts(3,41)` TS2339 `Property 'viaNs' does not exist on type '() => void'.`
+     *
+     * Owned by (CHK.126).
+     */
     @Test
-    fun `negative control - class bodies and namespace bodies are never walked`() {
+    fun `residue - class bodies and namespace bodies are never walked`() {
         diagnose(
             """
             function Foo() {}
@@ -402,8 +430,16 @@ class M04ExpandoSpineMigrationTest {
         }
     }
 
+    /**
+     * **RESIDUE, not a control** — both references report and we are silent:
+     *
+     * `t.ts(2,23)` TS2339 on `tpl`, `t.ts(2,41)` TS2339 on `tof`, both `'() => void'`.
+     * (CHK.119) fixed the template-span WRITE half, so the two halves are now split.)
+     *
+     * Owned by (CHK.126).
+     */
     @Test
-    fun `negative control - template spans and typeof operands inside nested functions are not walked`() {
+    fun `residue - template spans and typeof operands inside nested functions are not walked`() {
         diagnose(
             """
             function Foo() {}
@@ -414,8 +450,15 @@ class M04ExpandoSpineMigrationTest {
         }
     }
 
+    /**
+     * **RESIDUE, not a control** — both references report and we are silent:
+     *
+     * `t.ts(2,26)` TS2339 `Property 'q' does not exist on type '() => void'.`
+     *
+     * Owned by (CHK.126).
+     */
     @Test
-    fun `negative control - a for-of loop-head destructuring INITIALIZER is not walked`() {
+    fun `residue - a for-of loop-head destructuring INITIALIZER is not walked`() {
         diagnose(
             """
             function Foo() {}
@@ -426,8 +469,16 @@ class M04ExpandoSpineMigrationTest {
         }
     }
 
+    /**
+     * **RESIDUE, not a control — and this is (CHK.124) in its purest spelling**, with
+     * no nesting involved at all. Both references report and we are silent:
+     *
+     * `t.ts(2,5)` TS2339 on `top` and `t.ts(3,15)` on `topInit`, both `'() => void'`.
+     *
+     * B431 cannot reach either: its emission requires `spineExStatus(node) == EX_NESTED`.
+     */
     @Test
-    fun `negative control - top-level reads never fire`() {
+    fun `residue - top-level reads never fire`() {
         diagnose(
             """
             function Foo() {}
@@ -441,8 +492,18 @@ class M04ExpandoSpineMigrationTest {
 
     // ── silent: candidate gating ───────────────────────────────────────────
 
+    /**
+     * **RESIDUE, not a control.**
+     *
+     * Merging does not stop tsc reporting — the function declaration wins the type in
+     * every case, `var C: any` included, and both references report all three reads at
+     * `'() => void'`: `t.ts(7,18)`, `(7,23)`, `(7,28)`. The two TS2300 rows in this
+     * fixture we DO emit and agree on.
+     *
+     * Owned by (CHK.124) — widening B431's candidate scan.
+     */
     @Test
-    fun `negative control - a function merged with another declaration kind is not a candidate`() {
+    fun `residue - a function merged with another declaration kind is not a candidate`() {
         diagnose(
             """
             function A() {}
@@ -458,8 +519,16 @@ class M04ExpandoSpineMigrationTest {
         }
     }
 
+    /**
+     * **RESIDUE, not a control.**
+     *
+     * Both references report `t.ts(3,18)` TS2339 on `x` at `'() => void'`, beside the
+     * two TS2393 rows we already agree on.
+     *
+     * Owned by (CHK.124) — widening B431's candidate scan.
+     */
     @Test
-    fun `negative control - duplicate top-level function names are not candidates`() {
+    fun `residue - duplicate top-level function names are not candidates`() {
         val d = diagnose(
             """
             function D() {}
@@ -470,8 +539,15 @@ class M04ExpandoSpineMigrationTest {
         d should { have(none { it.code == 2339 }) }
     }
 
+    /**
+     * **RESIDUE, not a control.**
+     *
+     * Both references report `t.ts(3,26)` TS2339 on `x` at `'() => void'`.
+     *
+     * Owned by (CHK.124) — widening B431's candidate scan.
+     */
     @Test
-    fun `negative control - a NESTED function is not a candidate`() {
+    fun `residue - a NESTED function is not a candidate`() {
         diagnose(
             """
             function outer() {
@@ -493,6 +569,17 @@ class M04ExpandoSpineMigrationTest {
      * lines of this fixture and were a COUNTDOWN rather than a control (both
      * reference compilers report the class case, so `none { … }` over it was
      * asserting our own gap; (INV.0) step 10b-iii(b) closed it).
+     *
+     * A GENUINE control: both references are silent on this fixture.
+     *
+     * **The assertion was `none { … contains("typeof Foo") }` and (CHK.119) made that
+     * UNFALSIFIABLE** — an expando-free function is now named by its SIGNATURE, so the
+     * string `typeof Foo` cannot appear in any diagnostic about this fixture and a
+     * binary with the whole shadow chain deleted would still pass. Measured positive
+     * control: removing the shadow gives
+     * `Property 'viaParam' does not exist on type '() => void'.` in all three
+     * compilers. Tightened to `none { it.code == 2339 }`, which is both stronger and
+     * still true.
      */
     @Test
     fun `negative control - params and top-level body locals shadow the candidate`() {
@@ -504,7 +591,7 @@ class M04ExpandoSpineMigrationTest {
             function c() { let Foo: any; Foo.viaLet; }
             """
         ) should {
-            have(none { it.code == 2339 && it.message.contains("typeof Foo") })
+            have(none { it.code == 2339 })
         }
     }
 
@@ -540,16 +627,23 @@ class M04ExpandoSpineMigrationTest {
      * (INV.0) step 10b-iii(b) does not close it and this test pins only what
      * IS true today: the shadowing read does not draw the WRONG display, the
      * one naming the outer function's `typeof Foo`.
+     *
+     * Already named a residue, and now says what the divergence IS: both references
+     * report `t.ts(2,38)` TS2339 on `viaFn` at `'() => void'` and we are silent.
+     *
+     * Its assertion keyed on `"typeof Foo"`, which (CHK.119) made unfalsifiable —
+     * an expando-free function is named by its signature, so that string can no
+     * longer appear. Tightened to the code alone. Owned by (CHK.124).
      */
     @Test
-    fun `residue - a nested function shadowing a top-level function draws no typeof display`() {
+    fun `residue - a nested function shadowing a top-level function is silent`() {
         diagnose(
             """
             function Foo() {}
             function d() { function Foo() {} Foo.viaFn; }
             """
         ) should {
-            have(none { it.code == 2339 && it.message.contains("typeof Foo") })
+            have(none { it.code == 2339 })
         }
     }
 
@@ -565,8 +659,18 @@ class M04ExpandoSpineMigrationTest {
         }
     }
 
+    /**
+     * **RESIDUE, not a control.**
+     *
+     * The SHADOW is right — the inner `Foo` IS the function expression — but the read is
+     * still an error, and both references report `t.ts(2,32)` TS2339 on `own` at
+     * `'() => void'` while we are silent. This is (CHK.124)'s `const f = function(){}`
+     * receiver.
+     *
+     * Owned by (CHK.124) — widening B431's candidate scan.
+     */
     @Test
-    fun `negative control - a function expression's own name shadows`() {
+    fun `residue - a function expression's own name shadows but the read still errors`() {
         diagnose(
             """
             function Foo() {}
@@ -581,22 +685,35 @@ class M04ExpandoSpineMigrationTest {
 
     @Test
     fun `negative control - runtime function-object properties never fire`() {
-        // `Foo.name` additionally draws a TS2339 from the general
-        // property-access checker (display `'() => void'`) — the expando
-        // pass's own emissions all display `'typeof Foo'`, so the pin keys
-        // on that message shape.
+        // (CHK.126) THE COMMENT THAT USED TO SIT HERE WAS STALE and claimed `Foo.name`
+        // draws a further TS2339 from the general property-access checker. Measured on
+        // the project path, this whole fixture is ZERO diagnostics in all three
+        // compilers, and the embedded lib's `interface Function` declares `name`
+        // exactly as `lib.es2020` does. The pin also keyed on `"typeof Foo"`, which
+        // (CHK.119) made unfalsifiable for an expando-free function — tightened to the
+        // code alone, which both references agree with.
         diagnose(
             """
             function Foo() {}
             function g() { Foo.toString; Foo.call; Foo.apply; Foo.prototype; Foo.length; Foo.name; }
             """
         ) should {
-            have(none { it.code == 2339 && it.message.contains("typeof Foo") })
+            have(none { it.code == 2339 })
         }
     }
 
+    /**
+     * **This pin cannot fail on any binary and the name now says so.** Its fixture is
+     * two bare `declare function` lines and contains no READ at all — and a `.d.ts`
+     * *cannot* contain one in an expando position, because a statement is illegal in
+     * an ambient context. Measured: adding `Foo.top;` makes it `TS1036 Statements are
+     * not allowed in ambient contexts.` (all three compilers) plus a TS2339 both
+     * references emit and we do not. So the only fixture that would exercise
+     * "dts files are skipped" is already a syntax error. Kept as a record of the
+     * intent; it is not coverage.
+     */
     @Test
-    fun `negative control - dts files are skipped`() {
+    fun `negative control - dts files are skipped - STRUCTURALLY VACUOUS`() {
         diagnose(
             """
             declare function Foo(): void;
