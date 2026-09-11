@@ -7538,6 +7538,17 @@ class Checker(
     /** (CHK.46) expression-nesting budget for [cmamConditionMentionsIn]; exhaustion REFUSES. */
     private val CMAM_IN_GUARD_MAX_DEPTH = 16
 
+    /**
+     * (CHK.122) Did [cmamInGuardMayAddProperty]'s last verdict come from BUDGET
+     * EXHAUSTION rather than from finding an `in` condition?
+     *
+     * The two are the same answer — refuse — and they are not the same fact: a
+     * found guard is a diagnostic we were right to drop, an exhausted budget is one
+     * we dropped blind. Only the funnel consult reads it, and only to count, so it
+     * is deliberately NOT part of the helper's contract.
+     */
+    private var cmamInGuardExhausted = false
+
     private var cmamFlowBase = -1
 
     /** `--verifyDeferSuppression`: the predicate's verdict evaluated EAGERLY, at
@@ -149005,7 +149016,12 @@ interface DataView {
      * negative and reading it wrong costs a false positive. Budget exhaustion also
      * answers TRUE, so an unwalkable graph refuses rather than guesses.
      */
-    private fun cmamInGuardMayAddProperty(objectExpr: Expression, propName: String): Boolean {
+    private fun cmamInGuardMayAddProperty(
+        objectExpr: Expression,
+        propName: String,
+        refuseOnExhaustion: Boolean = true,
+    ): Boolean {
+        cmamInGuardExhausted = false
         if (currentFlowGraph == null) return false
         val path = getReferencePath(objectExpr) ?: return false
         val start = getFlowAt(objectExpr) ?: return false
@@ -149014,12 +149030,15 @@ interface DataView {
         queue.add(start)
         var steps = 0
         while (queue.isNotEmpty()) {
-            if (steps++ > CMAM_IN_GUARD_MAX_STEPS) return true
+            if (steps++ > CMAM_IN_GUARD_MAX_STEPS) {
+                cmamInGuardExhausted = true
+                return refuseOnExhaustion
+            }
             val n = queue.removeFirst()
             if (!seen.add(n.id)) continue
             when (n) {
                 is FlowCondition -> {
-                    if (cmamConditionMentionsIn(n.expression, path, propName, 0)) return true
+                    if (cmamConditionMentionsIn(n.expression, path, propName, 0, refuseOnExhaustion)) return true
                     queue.add(n.antecedent)
                 }
                 is FlowAssignment -> queue.add(n.antecedent)
@@ -149037,11 +149056,16 @@ interface DataView {
     /** (CHK.46) `<propName-literal> in <path>` anywhere inside a condition expression. */
     private fun cmamConditionMentionsIn(
         expr: Expression, path: String, propName: String, depth: Int,
+        refuseOnExhaustion: Boolean = true,
     ): Boolean {
-        if (depth > CMAM_IN_GUARD_MAX_DEPTH) return true
+        if (depth > CMAM_IN_GUARD_MAX_DEPTH) {
+            cmamInGuardExhausted = true
+            return refuseOnExhaustion
+        }
         var e: Expression = expr
         while (e is ParenthesizedExpression) e = e.expression
-        if (e is PrefixUnaryExpression) return cmamConditionMentionsIn(e.operand, path, propName, depth + 1)
+        if (e is PrefixUnaryExpression)
+            return cmamConditionMentionsIn(e.operand, path, propName, depth + 1, refuseOnExhaustion)
         if (e !is BinaryExpression) return false
         if (e.operator == SyntaxKind.InKeyword) {
             val left = unwrapParensExpr(e.left)
@@ -149049,12 +149073,14 @@ interface DataView {
                 is StringLiteralNode -> left.text
                 is NoSubstitutionTemplateLiteralNode -> left.text
                 is NumericLiteralNode -> left.text
-                else -> return true
+                // An operand we cannot read as a name: the same "cannot determine"
+                // as an exhausted budget, and answered the same way.
+                else -> { cmamInGuardExhausted = true; return refuseOnExhaustion }
             }
             return name == propName && getReferencePath(e.right) == path
         }
-        return cmamConditionMentionsIn(e.left, path, propName, depth + 1) ||
-            cmamConditionMentionsIn(e.right, path, propName, depth + 1)
+        return cmamConditionMentionsIn(e.left, path, propName, depth + 1, refuseOnExhaustion) ||
+            cmamConditionMentionsIn(e.right, path, propName, depth + 1, refuseOnExhaustion)
     }
 
     /**
@@ -151263,6 +151289,63 @@ interface DataView {
         // Check if property exists in type members
         CpaSections.atR(CpaSections.R_PROP)
         val prop = getPropertyOfType(objectType, propName)
+        // (CHK.122) THE `in`-GUARD CONSULT, AT THE **FUNNEL** RATHER THAN PER ROUTE.
+        //
+        // `if ('zzzNope' in v) { v.zzzNope }` is LEGAL — tsc narrows an object type
+        // by `in` to `T & Record<'zzzNope', unknown>` — and until now only THREE of
+        // the receiver-typing routes asked ([cmamCheckNestedObjectReceiver],
+        // [cmamUnannotatedLocalReceiverType], [cmamAnnotatedLocalReceiverType]).
+        // The queue item named one missing route; measured against tsgo 7.0.2 AND
+        // pristine 6.0.3 (which agree on every cell) it is FOUR, and two of them —
+        // a FILE-LEVEL `const` and a PARAMETER — never touch the `any` bail those
+        // helpers live on at all, because their receiver is genuinely typed. So the
+        // consult does not belong on the routes; it belongs where they all arrive.
+        //
+        // Placed under `prop == null`, i.e. only for an access whose property is
+        // genuinely absent from the resolved member table, which is what keeps a
+        // bounded flow walk off the hot path: every access that resolves its member
+        // — the overwhelming majority — pays one null test. It sits ABOVE the two
+        // `prop == null` siblings below because an `in` guard makes their emission
+        // ([readonlyArrayLikeLacksArrayMember]'s) equally illegal.
+        //
+        // **AND EXHAUSTION DOES *NOT* REFUSE HERE, WHICH IS THE OPPOSITE OF THE
+        // OTHER THREE SITES — A MEASURED DECISION, NOT AN OVERSIGHT.** Those three
+        // gate whether a narrow helper population gets a type at all, so a blind
+        // refusal there costs one silent row in a shape nobody else would have
+        // typed. This gates EVERY absent-member emission in the program, and a flow
+        // graph deeper than the 512-antecedent budget is ordinary in real code and
+        // has nothing whatever to do with `in` guards: measured on the dashboard
+        // profiles with the refusing form, `refused=5 exhausted=5` on BOTH services
+        // and harness — i.e. every refusal it made there was blind, and not one was
+        // a guard it had actually found.
+        //
+        // So the funnel asks with `refuseOnExhaustion = false`, which buys the
+        // property that makes this change defensible: **it can suppress an emission
+        // only when it has positively found an `in` condition naming this property
+        // on this reference path.** It cannot delete a diagnostic by running out of
+        // budget, by meeting an operand it cannot read, or by nesting too deep.
+        // The residue is stated rather than hidden: an `in`-guarded access whose
+        // backward flow exceeds the budget stays a false positive. That needs the
+        // conjunction of both conditions, where the refusing form needed only one.
+        //
+        // [PassTiming.cmamInGuardFunnelExhausted] keeps the measurement live — it is
+        // now the count of accesses this consult DECLINED to judge, so a rise means
+        // the residue is growing, not that rows are being lost.
+        if (prop == null) {
+            val inGuarded = cmamInGuardMayAddProperty(objectExpr, propName, refuseOnExhaustion = false)
+            // The decline count is read OUTSIDE the refusal branch on purpose. Nested
+            // inside it, it can only ever count accesses that were suppressed — so
+            // the moment the funnel stopped refusing on exhaustion it read 0 on every
+            // profile, while the declines it is supposed to measure were unchanged at
+            // 5. A counter that reports zero because the branch it lives in is no
+            // longer taken is the shape of a gate that has gone quiet without going
+            // green (CLAUDE.md round 853).
+            if (PassTiming.detailed && cmamInGuardExhausted) PassTiming.cmamInGuardFunnelExhausted++
+            if (inGuarded) {
+                if (PassTiming.detailed) PassTiming.cmamInGuardFunnelRefused++
+                return
+            }
+        }
         // (CHK.93): a tuple has every `Array<T>` member (existence only, see the helper).
         if (prop == null && tupleInheritsArrayMember(objectType, propName)) return
         // (CHK.93) stage 2: a readonly array-like has no `push` — reported on its own display.

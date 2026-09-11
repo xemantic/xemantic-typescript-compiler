@@ -524,6 +524,8 @@ object PassTiming {
         cmamAnyPreRefusedAccepted = 0
         cmamAnyPreRefusedNanos = 0
         cmamAnyPreRefusedWalkNanos = 0
+        cmamInGuardFunnelRefused = 0
+        cmamInGuardFunnelExhausted = 0
         cmamAnyPreNanos = 0
         diagnosticsSize = null
         diagsByPass.clear()
@@ -659,6 +661,22 @@ object PassTiming {
     /** Calls to `cmamNarrowedAnyReceiverType` that reached the flow read — i.e.
      *  an `any`-typed receiver in a file with a flow graph. The population the
      *  opening pays for. */
+    /** (CHK.122) TS2339 emissions the FUNNEL `in`-guard consult refused.
+     *
+     *  Non-zero is the control that the consult is reached at all: it lives under
+     *  `prop == null` in [Checker.cmamEmitMissingProperty], so a fixture whose
+     *  member resolves never exercises it and a green run proves nothing. */
+    var cmamInGuardFunnelRefused: Long = 0
+
+    /** (CHK.122) Of [cmamInGuardFunnelRefused], those refused by BUDGET EXHAUSTION
+     *  rather than by an `in` condition actually found.
+     *
+     *  **This must stay 0 on the dashboard profiles.** A non-zero reading means the
+     *  512-antecedent budget is deleting true positives on a real codebase, which no
+     *  other instrument here reports — the 8-profile grid would show it only as a
+     *  `removed=` count with no explanation attached. */
+    var cmamInGuardFunnelExhausted: Long = 0
+
     var cmamAnyOpenings: Long = 0
 
     /** Nanos spent inside those `getNarrowedTypeForReference` calls, INCLUSIVE
@@ -1279,6 +1297,8 @@ object PassTiming {
                 "refusedSpan=${cmamAnyPreRefusedNanos / 1_000_000}ms " +
                 "refusedWalkOnly=${cmamAnyPreRefusedWalkNanos / 1_000_000}ms " +
                 "preTestCost=${cmamAnyPreNanos / 1_000_000}ms\n" +
+            "cmamInGuardFunnel (CHK.122): refused=$cmamInGuardFunnelRefused " +
+                "exhausted=$cmamInGuardFunnelExhausted\n" +
             "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
                 "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +
             "exprMemo would-save: ${exprSavableNanos / 1_000_000}ms over $exprSavableCalls outermost served calls\n" +
