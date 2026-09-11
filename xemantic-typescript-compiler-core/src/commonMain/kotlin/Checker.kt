@@ -154693,8 +154693,14 @@ interface DataView {
         //   (b) some constituents non-callable → "Not all constituents ... are callable." + missing display
         //   (c) all constituents callable but sigs differ structurally → "Each member ... has signatures, but none ... compatible..."
         CallSections.at(CallSections.UNION_CALLEE)
+        // (CHK.97) stage 3: the pre-pass answers the EFFECTIVE callee type (null =
+        // consumed), so an optional call over a nullish union is resolved against the
+        // STRIPPED type rather than being silently dropped. `effCalleeType` is used for
+        // the signatures ONLY — every display below keeps the original `calleeType`,
+        // which is what a user wrote and what tsc names in its no-signature messages.
+        var effCalleeType: Type = calleeType
         if (calleeType is Type.Union) {
-            if (ccetUnionCalleeChecks(expr, calleeExpr, calleeType, source, fileName)) return
+            effCalleeType = ccetUnionCalleeChecks(expr, calleeExpr, calleeType, source, fileName) ?: return
         }
         // Get call signatures
         CallSections.at(CallSections.CALL_SIGS)
@@ -154703,8 +154709,8 @@ interface DataView {
         // an overload set printed TS2769 where tsc prints the combined signature's own
         // TS2345/TS2554. Scoped to THIS call site in stage 1; `getCallSignaturesOfType`
         // itself is unchanged, so every "does this have call signatures" reader is too.
-        val signatures = (calleeType as? Type.Union)?.let { combineUnionSignatures(it) }
-            ?: getCallSignaturesOfType(calleeType)
+        val signatures = (effCalleeType as? Type.Union)?.let { combineUnionSignatures(it) }
+            ?: getCallSignaturesOfType(effCalleeType)
         CallSections.at(CallSections.NO_SIGS)
         if (signatures.isEmpty()) {
             ccetNoCallSignatureDiagnostics(expr, calleeExpr, calleeType, source, fileName)
@@ -154979,8 +154985,15 @@ interface DataView {
      * ([CallSections.UNION_CALLEE]) of [checkSingleCallExpressionTypesCore].
      *
      * 31 of 52,413 invocations leave the function here on the compiler profile,
-     * so the whole branch is cold; `true` means "emitted or decided — the caller
-     * must return".
+     * so the whole branch is cold.
+     *
+     * (CHK.97) stage 3 changed the CONTRACT: it answers **null** when the call is
+     * CONSUMED (a diagnostic was emitted, or a measured false positive is being
+     * suppressed — the old `true`), and otherwise the EFFECTIVE callee type the caller
+     * must resolve signatures against, which is the original union unless the
+     * optional-call nullish strip or the flow re-narrow below produced a narrower one.
+     * While it answered a `Boolean` the only way to spend either suppression was to
+     * CONSUME the call, so the argument check never ran for a nullish-union callee.
      */
     private fun ccetUnionCalleeChecks(
         expr: CallExpression,
@@ -154988,7 +155001,7 @@ interface DataView {
         calleeType: Type.Union,
         source: String,
         fileName: String,
-    ): Boolean {
+    ): Type? {
         // (M3.4 slice, round 408) Two FP suppressions before the "not callable"
         // verdict — BOTH only REMOVE constituents, so they can suppress a false
         // positive but never add one (the corpus suite is the regression gate):
@@ -155003,8 +155016,21 @@ interface DataView {
         //      the flow-narrowing gotcha). Re-narrow the callee reference here.
         // Gated to the case that WOULD have errored (a non-callable constituent), so
         // the case-(c) all-callable structural-mismatch path below is untouched.
-        if ((calleeExpr is Identifier || calleeExpr is PropertyAccessExpression) &&
-            calleeType.types.any { getCallSignaturesOfType(it).isEmpty() }) {
+        //
+        // (CHK.97) stage 3: the OPTIONAL-call nullish strip is NOT a property of the
+        // callee EXPRESSION — tsc drops the nullish constituents from the apparent
+        // callee type for every optional call, whatever the callee is written as — so it
+        // is hoisted ABOVE the narrowable-reference gate, which is about narrowABILITY
+        // and belongs to suppression 2 alone. Measured: with the strip gated on
+        // Identifier/PropertyAccess, an ElementAccess callee (`arr[0]?.(x)` over a
+        // `(Fn | undefined)[]`) fell straight to the case-(b) verdict and reported an
+        // OURS-ONLY TS2349 that neither reference produces.
+        fun allCallable(t: Type): Boolean = when {
+            t === anyType || t === errorType -> true
+            t is Type.Union -> t.types.all { allCallable(it) }
+            else -> getCallSignaturesOfType(t).isNotEmpty()
+        }
+        if (calleeType.types.any { getCallSignaturesOfType(it).isEmpty() }) {
             var eff: Type = calleeType
             if (expr.questionDotToken) {
                 // `calleeType` is smart-cast to Type.Union above (its `.types` was read).
@@ -155015,13 +155041,21 @@ interface DataView {
                     else -> getUnionType(kept)
                 }
             }
-            if (eff is Type.Union) eff = getNarrowedTypeForReference(eff, calleeExpr)
-            fun allCallable(t: Type): Boolean = when {
-                t === anyType || t === errorType -> true
-                t is Type.Union -> t.types.all { allCallable(it) }
-                else -> getCallSignaturesOfType(t).isNotEmpty()
+            if ((calleeExpr is Identifier || calleeExpr is PropertyAccessExpression) &&
+                eff is Type.Union
+            ) {
+                eff = getNarrowedTypeForReference(eff, calleeExpr)
             }
-            if (allCallable(eff)) return true
+            // (CHK.97) stage 3: HAND THE EFFECTIVE TYPE BACK instead of consuming the
+            // call. `return true` here meant the caller returned, so the ARGUMENT check
+            // never ran and `f?.(1)` on a `Fn | undefined` was silent where both
+            // references report TS2345 — the argument-side mirror of the RESULT-side
+            // strip in [getReturnTypeOfCallExpression]. The caller resolves signatures
+            // against THIS type, never against the original union: for `Fn1 | Fn2 |
+            // undefined` the references combine the stripped pair into one `never`
+            // parameter, where the original union's `getCallSignaturesOfType`
+            // CONCATENATION reads as an overload set and prints TS2769 instead.
+            if (allCallable(eff)) return eff
         }
         val constituents = calleeType.types
         val nonCallable = constituents.filter { getCallSignaturesOfType(it).isEmpty() }
@@ -155065,7 +155099,7 @@ interface DataView {
                         fileName = fileName, line = line, character = character,
                         start = start, length = length,
                     ))
-                    return true
+                    return null
                 }
             }
         }
@@ -155087,7 +155121,7 @@ interface DataView {
                     ),
                 ))
             }
-            return true
+            return null
         }
         if (nonCallable.isEmpty() && constituents.size >= 2) {
             // Case (c): all callable; check if sigs differ structurally (different
@@ -155133,7 +155167,7 @@ interface DataView {
                     if (len == 0 || tuples.any { it.size != len }) return@run
                     val args = expr.arguments
                     if (args.size > len) {
-                        emitTS2554TooMany(len, len, args.size, args, len, source, fileName); return true
+                        emitTS2554TooMany(len, len, args.size, args, len, source, fileName); return null
                     }
                     for (i in 0 until minOf(args.size, len)) {
                         val combined = reduceIntersectionForWriteType(tuples.map { it[i] })
@@ -155155,7 +155189,7 @@ interface DataView {
                             }
                         }
                     }
-                    return true
+                    return null
                 }
                 // (CHK.97) tsc's `getUnionSignatures`. A non-null answer means the union
                 // HAS call signatures; hand them to the ordinary resolution by declining
@@ -155171,8 +155205,8 @@ interface DataView {
                     // Retired B516 emitted the too-MANY half for its own subset;
                     // `functionCallOnConstrainedTypeVariable` is the corpus baseline and
                     // `unionTypeCallSignatures4` the (inactive) pristine one.
-                    if (unionCalleeArityDiagnostic(expr, combinedSigs, calleeExpr, source, fileName)) return true
-                    return false
+                    if (unionCalleeArityDiagnostic(expr, combinedSigs, calleeExpr, source, fileName)) return null
+                    return calleeType
                 }
                 // unionOfArraysFilterCall: a union with an OVERLOADED member — at least one
                 // constituent has ≥2 call signatures (e.g. `(Fizz[] | readonly Buzz[]).filter`,
@@ -155180,7 +155214,7 @@ interface DataView {
                 // the parallel overload sets and reports nothing; our `differ` check below compares
                 // only the FIRST sig of each member → spurious TS2349. Suppress. FP-safe: the only
                 // corpus TS2349 baselines use all-single-sig members (`any{≥2}` is false for them).
-                if (constituents.any { getCallSignaturesOfType(it).size >= 2 }) return true
+                if (constituents.any { getCallSignaturesOfType(it).size >= 2 }) return null
                 val differ = run {
                     for (i in sigs.indices) for (j in i + 1 until sigs.size) {
                         val s1 = sigs[i]; val s2 = sigs[j]
@@ -155205,7 +155239,7 @@ interface DataView {
                     // was silent on a tuple union only because its members were `any`).
                     // The combination itself is not modelled beyond the `combinable` case
                     // above, so a combinable union is answered by SILENCE, not by a check.
-                    if (!unionCalleeGenericSignaturesIncompatible(sigs)) return true
+                    if (!unionCalleeGenericSignaturesIncompatible(sigs)) return null
                     val (start, length) = computeSpan()
                     if (length > 0) {
                         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -155219,11 +155253,11 @@ interface DataView {
                             ),
                         ))
                     }
-                    return true
+                    return null
                 }
             }
         }
-        return false
+        return calleeType
     }
 
     /**
