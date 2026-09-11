@@ -260,20 +260,41 @@ class ExpandoReceiverDisplayTest {
     // --- 3. the residue, pinned as refusals ---------------------------------
 
     /**
-     * **residue - a FILE-LEVEL read of a function receiver still reports nothing.**
-     * Both references say `Property 'zzzProbe' does not exist on type '() => void'.`
-     * B431's emission requires the read to sit inside a nested function, and this
-     * class does not change that. Named `residue` per CLAUDE.md's countdown rule.
+     * (CHK.124) CLOSED — this pin shipped for one round as
+     * `residue - a file-level read of a function receiver is silent` and fired on the
+     * round that fixed it, which is the convention working.
+     *
+     * B431's emission used to require `spineExStatus(node) == EX_NESTED`, so the
+     * item's own headline shape — a FILE-LEVEL read, with no nesting at all — was
+     * silent where both references report. EX_TOP is now admitted; EX_NONE still is
+     * not, which is what keeps the read-walk residues ((CHK.126)) out.
      */
     @Test
-    fun `residue - a file-level read of a function receiver is silent`() {
+    fun `a file-level read of a function receiver reports`() {
         val d = diagnose(
             """
             function ZzzA() {}
             const zzzP = ZzzA.zzzProbe;
             """
         )
+        assert(
+            t2339(d).single().message ==
+                "Property 'zzzProbe' does not exist on type '() => void'."
+        )
+    }
+
+    /**
+     * (CHK.124) A DANGLING DOT MUST STAY SILENT HERE. The parser gives
+     * `f<number,string>.` a zero-width synthesized `Identifier("")` and reports
+     * TS1003; admitting EX_TOP without an empty-name guard made that grow a
+     * `Property '' does not exist on type …` row beside it, which broke the
+     * `genericCallWithoutArgs` corpus baseline. This is the pin for that guard.
+     */
+    @Test
+    fun `negative control - a dangling dot draws no member diagnostic`() {
+        val d = diagnose("function ZzzD2() {}\nZzzD2.")
         assert(t2339(d).isEmpty())
+        assert(d.any { it.code == 1003 })
     }
 
     /** **residue - an arrow/`const` receiver is not a B431 candidate at all.** */

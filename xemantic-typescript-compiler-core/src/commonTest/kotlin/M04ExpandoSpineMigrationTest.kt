@@ -481,15 +481,15 @@ class M04ExpandoSpineMigrationTest {
     }
 
     /**
-     * **RESIDUE, not a control — and this is (CHK.124) in its purest spelling**, with
-     * no nesting involved at all. Both references report and we are silent:
+     * (CHK.124) CLOSED — this shipped for one round as
+     * `residue - top-level reads never fire` and fired on the round that fixed it.
      *
-     * `t.ts(2,5)` TS2339 on `top` and `t.ts(3,15)` on `topInit`, both `'() => void'`.
-     *
-     * B431 cannot reach either: its emission requires `spineExStatus(node) == EX_NESTED`.
+     * B431's emission required `spineExStatus(node) == EX_NESTED`; a FILE-LEVEL read
+     * of an expando candidate is EX_TOP and is now admitted, so both rows fire as
+     * tsgo 7.0.2 and pristine 6.0.3 do. EX_NONE stays refused, which is why the
+     * class/namespace-body and template-span residues below are unchanged.
      */
-    @Test
-    fun `residue - top-level reads never fire`() {
+fun `top-level reads fire`() {
         diagnose(
             """
             function Foo() {}
@@ -497,7 +497,8 @@ class M04ExpandoSpineMigrationTest {
             const t = Foo.topInit;
             """
         ) should {
-            have(none { it.code == 2339 })
+            have(any { it.code == 2339 && it.message.contains("'top'") })
+            have(any { it.code == 2339 && it.message.contains("'topInit'") })
         }
     }
 

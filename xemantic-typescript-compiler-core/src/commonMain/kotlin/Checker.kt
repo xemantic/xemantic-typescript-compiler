@@ -34885,11 +34885,35 @@ class Checker(
         val name = recv.text
         if (name !in spineExCands) return
         val prop = node.name.text
+        // (CHK.124) A DANGLING DOT PARSES AS A ZERO-WIDTH SYNTHESIZED `Identifier("")`
+        // (round 917 / TS1003), so an EMPTY property name is a syntax error already
+        // reported as TS1003 — not a missing member. Without this, admitting EX_TOP
+        // made `f<number,string>.` grow `Property '' does not exist on type
+        // '<X, Y>(x: X, y: Y) => void'.` beside pristine's TS1477 + TS1003.
+        // `cmamCheckResolvedObjectType`'s B63.33 gate has carried the same
+        // `propName.isNotEmpty()` test all along; B431 never needed it because it
+        // only fired inside nested functions.
+        if (prop.isEmpty()) return
         if (prop in (spineExDeclared[name] ?: emptySet<String>())) return
         if (prop in RUNTIME_PROPERTIES) return
         val pos = node.name.pos
         if (pos < 0) return
-        if (spineExStatus(node) != EX_NESTED) return
+        // (CHK.124) EX_TOP IS ADMITTED, EX_NONE IS NOT. B431 used to require
+        // `== EX_NESTED`, so a FILE-LEVEL read of an expando candidate reported
+        // nothing where tsgo 7.0.2 and pristine 6.0.3 both report — the item's own
+        // headline shape, with no nesting involved at all. EX_NONE stays refused:
+        // those are the read-walk positions (class and namespace bodies, template
+        // spans, `typeof` operands, for-of loop heads) whose residues are pinned in
+        // `M04ExpandoSpineMigrationTest` and belong to (CHK.126).
+        //
+        // **THE EIGHT DASHBOARD PROFILES AND THE REAL-LIBRARY FIXTURES CANNOT GATE
+        // THIS**: a positive control counting EX_TOP admissions reads **0** on all
+        // eight profiles AND on cronstrue, marked and the 600-file generated project.
+        // A file-level read of a top-level function's own member is a shape none of
+        // them contains, so `added=0 removed=0` there is a statement about the
+        // corpora, not about the change. The corpus baselines and the hand-written
+        // pins are the gate.
+        if (spineExStatus(node) == EX_NONE) return
         if (spineExShadowed(node, name)) return
         val (line, character) = getLineAndCharacterOfPosition(spineSource, pos)
         diagnostics.add(Diagnostic(
