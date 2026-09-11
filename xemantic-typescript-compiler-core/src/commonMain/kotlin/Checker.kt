@@ -149232,6 +149232,137 @@ interface DataView {
     }
 
     /**
+     * (CHK.121) THE **ANNOTATION** OF A BODY-LOCAL RECEIVER, WHICH NOTHING READ
+     * UNLESS IT WAS A UNION OR THE FLOW HAPPENED TO RECOVER IT.
+     *
+     * Measured against `tools/tsgo-7.0.2/lib/tsc` and pristine `typescript@6.0.3`
+     * (which AGREE on all 207 cells of the round's matrix): an annotated
+     * function-body `const` reports NOTHING for a missing member where both
+     * references report TS2339, and — the part that makes the defect hard to see —
+     * **it depends on the INITIALIZER, not on the annotation**. `const v: ZzzCfg =
+     * zzzCfgV` reports and `const v: ZzzCfg = { a: 1 }` does not; so do
+     * `= zzzMk()`, `= x as T` and `= "s"`. The queue item reads the axis as
+     * "annotated vs un-annotated" and the site as "body vs file"; both are wrong.
+     *
+     * The mechanism, instrumented rather than read: `getTypeOfIdentifier` answers
+     * `anyType` for EVERY annotated body-local (B83.5 leaves the declaration
+     * unbound and `currentLocalTypes` does not carry it in this pass — measured
+     * `inCLT=false` on every shape), and the `any` bail's three existing helpers
+     * then decide. [cmamNarrowedAnyReceiverType] is the one that answers: an
+     * assignment of a REFERENCE narrows `any` to that reference's type, which is
+     * why the identifier-initialized form limped through. An object literal, a
+     * call, an assertion and a scalar literal narrow to nothing, and
+     * [cmamUnannotatedLocalReceiverType] refuses them at `decl.type != null` while
+     * [cmamBlockScopedReceiverType] refuses them at `t !is Type.Union`.
+     *
+     * ### Why this can be read as a DECLARED type where (CHK.44) could not
+     *
+     * (CHK.44) measured a non-union declared type at `rawForNarrowing` as 3 rows on
+     * services/server/harness (`let next: Symbol = symbol` narrowed by a type guard
+     * in a `while` condition) — because that site substitutes the type ABOVE the
+     * narrowing consultation. This helper sits at the `any` bail BELOW
+     * [cmamNarrowedAnyReceiverType], so wherever the flow can say anything at all
+     * about the reference the flow still wins and this is never consulted; and
+     * everything it supplies stays under [checkMemberAccessMissing]'s deferred flow
+     * suppression. `const` only ([varDeclIsImmutableBinding]) for the sibling
+     * helper's reason as well: a reassignable binding is the shape that measurement
+     * was about, and immutability removes the reaching-definition question.
+     *
+     * ### The refusals, and which of the round's shapes each one costs
+     *
+     * Every gate is [cmamUnannotatedLocalReceiverType]'s, verbatim, with the
+     * ANNOTATION read where that helper reads the initializer — i.e. (CHK.45)'s
+     * knip-calibrated firewall decides, and this adds no trust of its own. What
+     * that REFUSES, each a TS2339 both references report and we do not:
+     *  - a CLASS instance (`const v: ZzzK = new ZzzK()`) — the Interface arm's
+     *    `as? InterfaceDeclaration` ((CHK.45)'s arm a9);
+     *  - a `Type.Reference`, so `number[]` and `ZzzBox<number>` alike;
+     *  - an INTERSECTION, an ENUM type, a heritage-carrying interface;
+     *  - a PRIMITIVE annotation (`const v: string = "s"`): trusted, but the
+     *    apparent-type/display-override conversion lives in the caller's tail below
+     *    this bail, so returning `string` here reaches
+     *    [cmamCheckResolvedObjectType] as a non-`Type.Object` and is silently
+     *    dropped. Admitting it is a display change, not a receiver-typing one;
+     *  - a NULLISH union, refused twice over ((CHK.44)'s measured guard and the
+     *    `Type.Object` test), which is what keeps `T | undefined` out;
+     *  - an ARRAY-LIKE (`numberIndexInfo`), for
+     *    [cmamCheckNestedObjectReceiver]'s measured reason.
+     *
+     * What is left, and what this closes: an anonymous object type literal, a type
+     * ALIAS to one, and a heritage-free single-declaration user interface.
+     *
+     * ### THE 8-PROFILE GRID IS A REAL TEST HERE AND IT IS GREEN — WITH A CONTROL
+     *
+     * `added=0 removed=0` on all eight profiles (46/94/46/46/46/46/46/46, two
+     * distinct `Checker.class` sha256), and that is NOT the vacuous reading: a
+     * positive-control build announcing every ACCEPT counts **78 on the compiler
+     * profile, 152 on harness and 116 on services** — `ExtendsResult`,
+     * `ErrorOutputContainer`, `ModuleResolutionState`, `TypeChecker`, `TextRange`
+     * and anonymous type literals, i.e. tsc's own annotated body-locals. So the
+     * helper fires hundreds of times on real code and the gates BELOW it (the
+     * member lookup, `RUNTIME_PROPERTIES`, the heritage firewall, the deferred flow
+     * suppression) absorb every one.
+     *
+     * ### ABLATION RECORD — FOUR OF THE SEVEN GUARDS DISCRIMINATE, THREE DO NOT
+     *
+     * One mistake per arm, each `cmp`-diffed against the arm's own snapshot with a
+     * distinct class md5, against `AnnotatedBodyLocalReceiverTest` (31 pins);
+     * controls a8 (comment-only, 0 RED) and a9 (refuse everything, 8 RED = every
+     * positive) are what make the rest attributable:
+     *
+     *  * a1 drop the `in`-guard consult — **2 RED**, both in-guard pins;
+     *  * a2 drop [cmamAllMissingTrustedMember], i.e. admit every receiver type —
+     *    **2 RED**, the CLASS instance and the GENERIC instantiation. Nothing else,
+     *    because the array/tuple refusals belong to `numberIndexInfo` and the
+     *    intersection / nullish ones are refused downstream as well;
+     *  * a3 drop the `const`-only gate — **2 RED**, the `let` and `var` pins;
+     *  * a6 drop the array-like `numberIndexInfo` refusal — **1 RED**, the tuple.
+     *
+     * UNDISCRIMINATED, recorded rather than claimed as coverage:
+     *
+     *  * a4 drop `t !is Type.Object` — 0 RED. A non-`Type.Object` answer is dropped
+     *    by the CALLER's tail ([cmamCheckResolvedObjectType] returns on
+     *    `objectType !is Type.Object`), so the primitive and nullish shapes stay
+     *    silent either way. The test is kept because it is what makes the primitive
+     *    case a DISPLAY decision rather than an accident of that tail;
+     *  * a5 drop `declarations.size != 1`, a7 drop the
+     *    `currentLocalTypes`/`currentParamBindingNames`/`currentShadowedNames`
+     *    guards, and **a10 the two together** — 0 RED in all three. So the
+     *    two-declarations shape is refused by neither, at any combination: it is
+     *    owned somewhere above this bail. They stay for the two sibling helpers'
+     *    reason (a merged symbol cannot say which declaration a reference means)
+     *    and are recorded as unpinned.
+     */
+    private fun cmamAnnotatedLocalReceiverType(
+        objectExpr: Identifier,
+        propName: String,
+    ): Type? {
+        val name = objectExpr.text
+        if (currentLocalTypes.containsKey(name)) return null
+        if (name in currentParamBindingNames) return null
+        if (name in currentShadowedNames) return null
+        val sym = lexicalScopeSymbol(objectExpr, name) ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.Variable)) return null
+        if (sym.declarations.size != 1) return null
+        val decl = sym.valueDeclaration as? VariableDeclaration ?: return null
+        val ann = decl.type ?: return null
+        if (!varDeclIsImmutableBinding(decl)) return null
+        val t = getTypeFromTypeNode(ann)
+        if (t === anyType || t === errorType || t === unknownType) return null
+        if (typeContainsUnresolvedTypeParam(t)) return null
+        // The Object test decides every nullish reading on its own (a nullish type
+        // is a union, or an intrinsic), exactly as in the sibling helper — and a
+        // UNION annotation is [cmamBlockScopedReceiverType]'s, which substitutes it
+        // ABOVE the union-narrowing block that consults the flow.
+        if (t !is Type.Object) return null
+        if (isGlobalObjectOrFunctionType(t)) return null
+        if (t.numberIndexInfo != null) return null
+        if (!cmamAllMissingTrustedMember(t, propName)) return null
+        if (cmamInGuardMayAddProperty(objectExpr, propName)) return null
+        return t
+    }
+
+    /**
      * (CHK.46) THE DECLARED TYPE OF A **DESTRUCTURED** RECEIVER — the one shape the
      * property-access family types NOWHERE.
      *
@@ -149934,6 +150065,13 @@ interface DataView {
                 // (CHK.46) …and so does an UN-ANNOTATED body-local `const`, which
                 // B83.5 leaves unbound. See [cmamUnannotatedLocalReceiverType].
                 cmamUnannotatedLocalReceiverType(objectExpr, propName)?.let { return Pair(it, null) }
+                // (CHK.121) …and so does an ANNOTATED one whose initializer the flow
+                // cannot narrow `any` to — an object literal, a call, an assertion.
+                // LAST on purpose: [cmamNarrowedAnyReceiverType] above is the flow
+                // consultation, so wherever the flow can say anything about this
+                // reference the DECLARED type is never substituted.
+                // See [cmamAnnotatedLocalReceiverType].
+                cmamAnnotatedLocalReceiverType(objectExpr, propName)?.let { return Pair(it, null) }
                 return null
             }
             // 16.0: For primitive types, use the apparent (wrapper) type so that
