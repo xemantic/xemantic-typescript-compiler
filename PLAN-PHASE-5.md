@@ -2382,6 +2382,24 @@ notices it is gone.
   The six write-site rows still missing on the fixture are file-level and belong to
   (CHK.124).
 
+- [ ] **(CHK.131) THE UNION-CALLEE `differ` TAIL IS A REDUNDANT GUARD ON EVERY REACHABLE SHAPE —
+  MEASURED 0 RED ON THE FULL SUITE, i.e. THE EVIDENCE IS *FOR* COLLAPSING IT, AND (P18.73)
+  REFUSED IT ON SCOPE RATHER THAN ON EVIDENCE (2026-09-11, ablation arm b4).** After (CHK.97)
+  D2/D2b, `ccetUnionCalleeChecks`' `overloadedMembers` branch emits for every combination
+  refusal with an overloaded member, and the `differ` tail below it — (CHK.94)'s rule, which
+  compares only the FIRST signature of each member and answers SILENCE for any non-generic
+  differing pair — is reached only with `combinedSigs == null` and `overloadedMembers == 0`.
+  Arm b4 collapsed it (`>= 0`, tail dead) and read **0 RED across the whole suite**, so on
+  today's inputs it decides nothing. **That is a lead, not a licence**: 0 RED also means no pin
+  and no baseline can currently SEE the difference, so a round taking this must first build the
+  shape that separates "the tail was load-bearing" from "the tail is dead" — a two-member
+  NON-generic union with differing signatures and no overloaded member — and adjudicate it
+  against both references. Note the honest possibility that the right answer is to DELETE the
+  tail and let the combination's own refusal be the verdict everywhere. **(CHK.94) has no queue
+  item of its own** — it is referenced from three places in this file and nowhere owned, which
+  is how this finding came to live only in a code comment; the number and the argument are in
+  the branch comment and `UnionCalleeOneOverloadedMemberTest`'s KDoc.
+
 - [ ] **(CHK.130) `typeToString` PARENTHESIZES A UNION MEMBER THAT HAS EXACTLY ONE CALL
   SIGNATURE AND NO OTHER MEMBER, WHERE BOTH REFERENCES PRINT IT BARE — `ZzzA | ZzzB | (ZzzS)`
   FOR `ZzzA | ZzzB | ZzzS` (measured 2026-09-11, (P18.72); PRE-EXISTING, shipped HEAD prints
