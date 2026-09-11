@@ -2982,3 +2982,33 @@ un-annotated body-local and both file-level spellings report correctly) — now 
 the after-block leak ALREADY EXISTS for the un-annotated spelling on the unchanged binary.
 Tree clean, binary byte-identical to (P18.66)'s; the refused patch, its 15 pins and its 8-arm
 ablation are kept OUT of the tree.
+
+**(P18.68) — (CHK.121): THE AXIS IS THE *INITIALIZER*, AND BOTH SIZINGS OF THE ITEM WERE WRONG, 18,604 / 0 / 3 (2026-09-11).**
+An ANNOTATED function-body local now reaches the member-existence check.
+**THE ROUND'S FINDING IS A CORRECTION TO ITS OWN ITEM, TWICE**: queued as "one cell of four",
+re-sized by the coordinator to "six of seven shapes", and **both wrong** — the second because
+it varied the annotation TYPE while holding the INITIALIZER fixed, which is the axis that had
+to move. `const v: ZzzCfg = zzzCfgV` in a body ALREADY reported (the flow-recovery helper
+serves an identifier initializer), as did `let`/`var`/nested-block/arrow; what was silent is an
+OBJECT-LITERAL, `new`, CALL, `as` or scalar-literal initializer. And `number[]`, a heritage
+interface, an intersection, a function type, a numeric index signature, an enum and an optional
+are silent at **FILE LEVEL too**, i.e. pre-existing firewall refusals that were never this
+defect — CLAUDE.md's "run the identical source at all three sites" law on a third axis.
+**THE FIX IS THE LEAST POWERFUL SHAPE THAT WORKS**: `cmamAnnotatedLocalReceiverType`, 24
+functional lines, wired LAST at the `anyType` bail and BELOW the flow-recovery helper, reusing
+the knip-calibrated `cmamAllMissingTrustedMember` and `cmamInGuardMayAddProperty` rather than
+re-deriving either — so it can only turn a SILENCE into a report. **RECEIPT**: the original
+fixture byte-identical to pristine 6.0.3 and tsgo 7.0.2 (4/4 rows where we reported 1), and a
+**207-cell** matrix on which the two references agree on all 207 goes **111 → 107 missing with
+ours-only unchanged at 2**. **REFUSED AND PINNED AS REFUSALS** (not as controls): a class
+instance, an array, `let`/`var`, plus the shapes the firewall already refused. **THE GRID IS A
+REAL GATE HERE AND IS NOT VACUOUS** — a positive-control build counts **78 / 152 / 116
+accepts** on compiler/harness/services, so the path fires hundreds of times on tsc's own
+sources and the downstream gates absorb all of it. **TWO PRE-EXISTING DIVERGENCES FOUND AND
+LEFT ALONE**, now (CHK.122) and (CHK.123): an `in`-guarded read on an identifier-initialized
+annotated local is an ours-only FP (the flow route lacks the `in` consult), and a class-typed
+local renders `typeof ZzzK` for `ZzzK`. **ABLATION: 10 arms / 31 pins WITH BOTH CONTROLS** — a
+comment-only both-green arm and a refuse-everything both-red arm, which is what makes the four
+0-RED arms interpretable as redundant-or-unreachable rather than as blind; one pin renamed to
+say it is blind, and one the implementer wrote as a refusal was measured WRONG and converted
+to a positive. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844).

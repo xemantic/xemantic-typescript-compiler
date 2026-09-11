@@ -63714,3 +63714,107 @@ is untouched (10c); VALUE space is untouched (10b) and is where 46 of the 106 mi
 
 **NEXT**: 10b, the VALUE space — the bigger half of what is left, and its ladder order is
 load-bearing, so the consult goes INSIDE `getTypeOfIdentifierCore`'s rungs rather than on top.
+
+### Round (P18.63) — (INV.0) step 10b: the VALUE space, and the half that had to be REFUSED (2026-09-10)
+
+**Suite 18,529 → 18,536 / 0 / 3** (+7 pins). **8-profile grid `added=0 removed=0` on all
+eight**, `cost_gate.py` exit 0, `huge_methods.py` exit 0 (844 classes), warning-clean under
+`--rerun-tasks`.
+
+**THE UNIQUE HALF WAS BUILT, MEASURED AND REFUSED, AND THAT IS THE ROUND.** The obvious
+10b — a scope-space VALUE consult that answers a `function` / `class` / `enum` /
+`namespace` the main binder never bound — was implemented, and it is correct: the same
+129-cell matrix re-run against it reads **9 cells FIXED, 9 IMPROVED, 0 REGRESSED**, VALUE
+half 19 ours-only / 46 missing → 11/28, shadow agreement 16/42 → 25/42. **It also adds
+19-20 ours-only rows to EVERY ONE of the eight profiles.** They are two families and
+neither is a defect of the consult: `return { <shorthand nested functions> }` against a
+declared interface (`nodeConverters.ts:42`, `emitHelpers.ts:153`, `parenthesizerRules.ts:62`,
+`utilities.ts:1219`, `moduleNameResolver.ts:1085`, `emitter.ts:1284`, `checker.ts:6310`,
+`checker.ts:51381`, `nodeFactory.ts:513`), and reads like `return links.isVisible` where
+`links` comes from a nested `getNodeLinks` (`checker.ts:11330`, `:16338`, `:30429`,
+`:39381`, `:34614`, `:34621`, `builder.ts:2390`, `resolutionCache.ts:990`,
+`emitter.ts:4444`, `nodeFactory.ts:7158`). **Every one is a pre-existing inference or
+narrowing gap that `any` had been masking** — (CHK.50)'s "making a type REAL surfaces every
+defect `any` was hiding", at scale, on a change whose whole point is to make types real.
+
+**SO THE SHIPPED RULE IS OVERRIDE-ONLY: it replaces a conventional answer, never
+silence.** A SHADOWING name goes from the wrong declaration to the right one — strictly
+better, and it cannot unmask anything the conventional answer was not already unmasking; a
+UNIQUE one keeps today's `any`. Receipt on the same matrix with the reference arms reused
+verbatim and the snapshot sha256 asserted at both ends: **8 cells IMPROVED, 0 REGRESSED,
+0 new rows absent from pristine, 0 pristine rows dropped**, all 8 shadow cells flipping
+OUTER → INNER and agreeing with both references (B83.5 shadow agreement **16/42 → 24/42**),
+the TYPE half numerically untouched (15 ours-only / 42 missing before and after) and both
+bound controls byte-identical.
+
+**THE LADDER POSITION IS THE FIX, AND THE FIRST CUT PROVED IT BY BEING WRONG.** The consult
+was first written as a rung BELOW `currentLocalTypes`, where it measured 9 cells fixed and
+left every shadow cell exactly as it was — a fix that reads as working because the unique
+half is the visible half. `currentLocalTypes` is a flat COPY of the enclosing scope, so
+with a file-level `zzzFn` it already holds the OUTER signature when the body is walked.
+
+**AND THE POSITION IS ONLY SOUND BECAUSE OF A NEW AXIS ON THE ASCENT.**
+`LexicalScopeResolver.symbolAt` gained `stopFlags`: the walk ENDS at the innermost
+scope-space binding of the name in VALUE space and answers only when that binding is one of
+the four DECLARATION kinds. The two spaces differ here and the KDoc now says so — a
+wrong-KIND hit in TYPE space is genuinely not a binding of the name, while in VALUE space a
+`const` and a nested `function` compete for the same name and the INNER one wins whichever
+kind it is. Without it the ascent walks PAST an inner `const` and answers an outer
+`function`, which is a wrong answer rather than a miss.
+
+**THE STAMP WIDENING IS AGAIN FREE**: `NodeKind` **22..27** are contiguous and are EXACTLY
+the six kinds `bindLexicalScopes` declares into a fresh scope under its
+`scope.existing == null` gate, so `indexSourceFile` still costs two int compares per node.
+`SymbolFlags.ScopeValueDeclaration` excludes `Variable` for the reason
+`ScopeTypeDeclaration` excludes `TypeParameter` — every local in the program would enter a
+gate whose job is to be a cheap probe, and `currentLocalTypes` answers a local ahead of it
+anyway.
+
+**A SECOND GATE THAT THE TYPE CONSULT DID NOT NEED, AND MEASURING WHY IT DOES NOT PAY WHERE
+IT LOOKS LIKE IT SHOULD.** The value gate is NOT near-empty — tsc's own sources hold ~5,555
+distinct indented `function` names — so the program-wide union hits often, and
+`scopesOfOwningFile` BUILDS the tables it reads ((INC.16)'s `lazy`). The consult therefore
+tests the OWNING FILE's own projection first. **Then `LexDefer.census` said the property is
+unobservable on a FULL build**: `forcedBy={checkSpine=2}` for a two-file program, i.e. the
+SPINE forces every checked file's tables anyway, with or without the gate. So (INC.16)'s
+prize and this gate's live entirely in the PARTITIONED regime — and in that regime nothing
+types an identifier in an unassigned file, which is why arm A5 is **UNDISCRIMINATED** and
+recorded as such rather than claimed.
+
+**THE ITEM'S OWN CLAIMS, TWO MORE CORRECTIONS — the third round running.** (i) "`const` in
+VALUE position resolves at all three nesting sites today" is true of the UNIQUE variant and
+false of the SHADOWING one: a block-nested `const` shadowing a file-level one answers the
+OUTER declaration at `block` and `ifBlock` (and inside a namespace body), and only `fnTop`
+is right. That is a different mechanism — `currentLocalTypes` recording, the (CHK.71)(b)
+shadow family — and is written into its own item. (ii) "`typeof <a const>` is MISSING
+everywhere, including at file and namespace level" is an artefact of the v1 NARROWING probe
+(`let h: typeof v = null!`), which the v2 non-narrowing probe replaced before 10a landed:
+the file-level control is 15/15 clean and `typeof` reads correctly there.
+
+**ABLATION: six arms, union 7 of 35 pins, and two of them are honest negatives.** A1 (the
+stamp) 4 RED with two unique; A3 (override vs fallback) 3 RED with two unique; A4
+(`stopFlags`) 1 RED unique; A6 (`declare global` claiming its carrier) 1 RED. **A2 (the flag
+mask) reddens 1 with NO unique pin** — that mask still carries `Class` and `Enum`, so only
+`function` and `namespace` are lost by it, and `namespace` has no pin because a namespace
+VALUE read does not work here at all ((CHK.73)). **A5 (the per-file gate) is 0 RED.** Both
+are recorded rather than smoothed, and the A5 guard is kept on its measured cost argument,
+not on a pin.
+
+**A PIN CAUGHT THE ROUND'S OWN WRONG EXPECTATION**, which is what the new projection pin is
+for: the `interface` inside a `declare global` block IS in `scopeTypeNames`, because the
+CARRIER declares nothing (GH#42209) while the block's own body reaches a fresh scope like
+any other module block. And step 10a's stamp pin was a countdown that fired exactly as
+designed — it asserted a nested `function` was "deliberately NOT carried", true of the TYPE
+consult and false of the stamp the moment a value consult existed.
+
+**RESIDUE, MEASURED AND SPLIT.** Of the 42 B83.5 VALUE cells, 32 still diverge (11 ours-only
+/ 38 missing): the UNIQUE half (10b-ii, blocked on the 19-20 rows above); the NAMESPACE kind
+entirely (6 cells — `ZzzNs.zzzNv`'s receiver is resolved by a walker of its own and a module
+symbol has no type here, (CHK.73)); the ENUM member-access receiver (3 ours-only rows —
+a SECOND resolver still answers the OUTER enum, so the two disagree inside one compile);
+`TS2693` for a type-only scope-space name used as a value (6 cells, never emitted here); the
+`cmam` member-existence firewall on a block-scoped receiver (1 missing row in each improved
+shadow cell — 10a's residue, unchanged); and the `const` shadow above.
+
+**NEXT**: 10c (heritage + `resolveQualifiedName`), which is small and is the last TYPE-name
+funnel, then 10b-ii once the two unmasked families are closed.

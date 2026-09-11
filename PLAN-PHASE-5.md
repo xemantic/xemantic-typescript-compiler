@@ -25,6 +25,96 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.74) — (CHK.130): the parentheses were asking about the SHAPE, not about what is printed — and the instrument's FOURTH blindness (2026-09-11)
+
+**Suite 18,688 → 18,699 / 0 / 3** (+11 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
+exit 0, no rebaseline; `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean.
+**The (CHK.97) union-callee family is now BYTE-IDENTICAL to both references across all 11 of
+its fixtures** — `agree 19, ours-only 0, missing 0, text-diff 0` (plus 2 rows on which the
+two references disagree with each other, see below). (P18.73)'s six form residues are gone.
+
+**THE DEFECT WAS A QUESTION ABOUT THE WRONG THING.** `typeToString`'s union arm parenthesized
+a member whose RESOLVED SHAPE is "exactly one call-or-construct signature and nothing else".
+`Type.Interface` and `Type.Reference` both EXTEND `Type.Object`, so an
+`interface ZzzS { (a: string): void }`, a `type ZzzG = (a: string) => void` alias and a
+generic instantiation of either all satisfied it — while PRINTING AS THEIR NAME. Parentheses
+exist so a rendering can be reparsed inside a `|`; a name never needs them. The predicate is
+now `unionMemberRendersAsFunctionType`, which mirrors `typeToString`'s own dispatch arm by arm
+and asks *is what we are about to print a bare arrow form*. Its KDoc lists the correspondence
+and states the maintenance obligation, because a mirror can drift.
+
+**AND THE SECOND HALF WAS NOT IN THE ITEM: THE INTERFACE CASE IS ORDER-DEPENDENT.** A
+`Type.Interface`'s member tables are LAZY (round 833), so the same interface renders BARE in a
+plain TS2322 and PARENTHESIZED in a union-callee TS2349 whose own resolution has just filled
+`callSignatures` in. That is why all six failing rows were TS2349, and why a first fixture
+written as a TS2322 showed the interface case as already correct — a repro that fails to
+reproduce, for the reason round 833 records.
+
+**THE AT-RISK ENUMERATION IS WHAT DECIDED THE ITEM, AND IT WAS DONE BEFORE ANY CODE.** Over
+all **2,910 ACTIVE `.errors.txt` baselines**, scanning every quoted type string on every
+`error TS` line: **7 baselines carry a parenthesised group adjacent to a `|`, and ZERO of
+those groups is a bare NAME** — they are conditionals (`TResult | (TResult extends … ? … : …)`)
+and intersections (`Common | (Common & A)`), neither of which reaches this predicate. So the
+remove-parens direction cannot move a baseline, which the ablation then confirmed
+independently (arm a2: **0 corpus red**). **No `LogicalParityDivergence` was needed or used** —
+the owner-guarded mechanism stayed untouched, which is the outcome an enumeration is for.
+
+**THE ABLATION FOUND THE ASYMMETRY THAT MAKES THE FIX SAFE.** a3 (parenthesize NOTHING) is
+**16 RED — the 4 must-parenthesize pins plus 4 CORPUS baselines plus 2 externals**. So the
+corpus DOES gate over-REMOVAL and does NOT gate over-ADDITION, exactly as the enumeration
+predicted from the other side. a2 and a3 partition perfectly, no pin red in both. Controls:
+a0 comment-only 0 RED, a1 parenthesize-everything **345 RED**. All four arms run against the
+FULL suite.
+
+**TWO MORE COUNTDOWN PINS — THE EIGHTH AND NINTH IN NINE ROUNDS — AND THEY ARE TWO MORE
+RECOVERED ROWS.** `AllMissingUnionMemberTest` expected `'Alfa | (Fn)'` and
+`GuardedReassignmentNarrowingTest` `'A | (F)'`: our own defect transcribed into an
+expectation. Both re-adjudicated as project fixtures and now AGREE with both references
+byte-for-byte. Per the (CHK.114) law **only the expectations changed, never the names** —
+both pins' own subjects (chaining the first missing constituent; an unguarded self-call
+refusing to reduce) are unmoved — and each KDoc records the adjudication. A tree-wide sweep
+for other `| (` expectations found only correct ones.
+
+**AND THE ROUND'S OWN INSTRUMENT WAS WRONG AGAIN — A *FOURTH* BLINDNESS, AND THIS ONE MADE A
+SUBAGENT REPORT A DOCUMENTED LAW AS CONTRADICTED.** `scripts/ref_matrix.py` folded "the two
+references report the same ROW and disagree about its MESSAGE" into **AGREE**. Not adjudicable
+is the right TREATMENT and the wrong LABEL: it inflates the number a round quotes as its prize
+and hides a whole divergence family. It bit at once — CLAUDE.md's (CHK.83) records that for
+`"a" | 1` against `number[]` tsgo's chain names the FIRST constituent and pristine's the LAST,
+and the script scored that AGREE, so the (CHK.130) recon reported the law as contradicted when
+it is **exactly reproducible** (verified here from raw bytes, all three compilers). New
+`REF-SPLIT-MSG` verdict, counted and named separately; re-deriving this round's own receipt
+with it moves `agree 21 → 19` with the two rows becoming REF-SPLIT-MSG. **A receipt is only as
+honest as the instrument, and this is the third round running in which re-taking one moved a
+number the round had already written down.**
+
+**SO (CHK.83) IS NOT CONTRADICTED — IT IS POPULATION-SPECIFIC, AND BOTH MEASUREMENTS
+REPRODUCE.** Where the source is GENERALIZED for display the references disagree with each
+other and we match pristine (the corpus oracle); where it is NOT, **both references name the
+FIRST constituent and we are alone in naming the last — 15 of 15 rows on the mix fixture,
+with the OUTER line byte-identical in every one**. That is a real ours-only family, now
+**(CHK.132)**, and the CLAUDE.md entry has gained the clause that stops the next agent making
+the same report.
+
+**THREE OUTER-LINE RESIDUES REMAIN ON THAT FIXTURE, EACH MEASURED AND REFUSED WITH A REASON**:
+an INTERSECTION member is printed bare where both references parenthesize it (**refused on
+scope — it is an ADD-parens change, the direction a3 proves the corpus gates, and
+`Common | (Common & A)` already comes out right through a DIFFERENT, AST-based renderer at
+`Checker.kt:100876`, so the two paths must be reconciled first**); an array whose element is a
+function type loses the element's parentheses, which names a DIFFERENT TYPE
+(`(a: string) => void[]`), in the `Type.Reference` arm; and a union ALIAS is not preserved
+(B416's `unionAliasStructural` does not fire for an alias whose members are function types).
+Also recorded: `typeToStringWithMapper`'s union branch parenthesizes nothing at all
+(`Checker.kt:168858`), a second and weaker renderer that emitted none of the measured rows.
+
+**THE GRID IS A CONTROL AND WAS MEASURED AS ONE**, not assumed: its 416 rows are 410
+`Cannot find name/namespace` + 3 TS7006 + 2 TS2339 + 1 TS2593, and **not one names a union** —
+(PARITY.1) in numbers for this profile set.
+
+**NEXT**: (CHK.132) and (CHK.131) are both measured and characterised; (CHK.97)'s (D3)
+IDENTICAL-signature half remains. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the
+order sends the arc.
+
 ### Round (P18.73) — (CHK.97) D2b: the silence that hid a true positive, and a design decided by BUILDING the alternative (2026-09-11)
 
 **Suite 18,679 → 18,688 / 0 / 3** (+9 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
@@ -862,110 +952,6 @@ own 78 sources carry no scope-space heritage base and no scope-space qualified r
 grid is likewise a CONTROL here; the reference matrix is the measurement.
 
 **NEXT**: 10d (the two `TypeOracle` rows), then 10b-ii once its two unmasked families close.
-
-### Round (P18.63) — (INV.0) step 10b: the VALUE space, and the half that had to be REFUSED (2026-09-10)
-
-**Suite 18,529 → 18,536 / 0 / 3** (+7 pins). **8-profile grid `added=0 removed=0` on all
-eight**, `cost_gate.py` exit 0, `huge_methods.py` exit 0 (844 classes), warning-clean under
-`--rerun-tasks`.
-
-**THE UNIQUE HALF WAS BUILT, MEASURED AND REFUSED, AND THAT IS THE ROUND.** The obvious
-10b — a scope-space VALUE consult that answers a `function` / `class` / `enum` /
-`namespace` the main binder never bound — was implemented, and it is correct: the same
-129-cell matrix re-run against it reads **9 cells FIXED, 9 IMPROVED, 0 REGRESSED**, VALUE
-half 19 ours-only / 46 missing → 11/28, shadow agreement 16/42 → 25/42. **It also adds
-19-20 ours-only rows to EVERY ONE of the eight profiles.** They are two families and
-neither is a defect of the consult: `return { <shorthand nested functions> }` against a
-declared interface (`nodeConverters.ts:42`, `emitHelpers.ts:153`, `parenthesizerRules.ts:62`,
-`utilities.ts:1219`, `moduleNameResolver.ts:1085`, `emitter.ts:1284`, `checker.ts:6310`,
-`checker.ts:51381`, `nodeFactory.ts:513`), and reads like `return links.isVisible` where
-`links` comes from a nested `getNodeLinks` (`checker.ts:11330`, `:16338`, `:30429`,
-`:39381`, `:34614`, `:34621`, `builder.ts:2390`, `resolutionCache.ts:990`,
-`emitter.ts:4444`, `nodeFactory.ts:7158`). **Every one is a pre-existing inference or
-narrowing gap that `any` had been masking** — (CHK.50)'s "making a type REAL surfaces every
-defect `any` was hiding", at scale, on a change whose whole point is to make types real.
-
-**SO THE SHIPPED RULE IS OVERRIDE-ONLY: it replaces a conventional answer, never
-silence.** A SHADOWING name goes from the wrong declaration to the right one — strictly
-better, and it cannot unmask anything the conventional answer was not already unmasking; a
-UNIQUE one keeps today's `any`. Receipt on the same matrix with the reference arms reused
-verbatim and the snapshot sha256 asserted at both ends: **8 cells IMPROVED, 0 REGRESSED,
-0 new rows absent from pristine, 0 pristine rows dropped**, all 8 shadow cells flipping
-OUTER → INNER and agreeing with both references (B83.5 shadow agreement **16/42 → 24/42**),
-the TYPE half numerically untouched (15 ours-only / 42 missing before and after) and both
-bound controls byte-identical.
-
-**THE LADDER POSITION IS THE FIX, AND THE FIRST CUT PROVED IT BY BEING WRONG.** The consult
-was first written as a rung BELOW `currentLocalTypes`, where it measured 9 cells fixed and
-left every shadow cell exactly as it was — a fix that reads as working because the unique
-half is the visible half. `currentLocalTypes` is a flat COPY of the enclosing scope, so
-with a file-level `zzzFn` it already holds the OUTER signature when the body is walked.
-
-**AND THE POSITION IS ONLY SOUND BECAUSE OF A NEW AXIS ON THE ASCENT.**
-`LexicalScopeResolver.symbolAt` gained `stopFlags`: the walk ENDS at the innermost
-scope-space binding of the name in VALUE space and answers only when that binding is one of
-the four DECLARATION kinds. The two spaces differ here and the KDoc now says so — a
-wrong-KIND hit in TYPE space is genuinely not a binding of the name, while in VALUE space a
-`const` and a nested `function` compete for the same name and the INNER one wins whichever
-kind it is. Without it the ascent walks PAST an inner `const` and answers an outer
-`function`, which is a wrong answer rather than a miss.
-
-**THE STAMP WIDENING IS AGAIN FREE**: `NodeKind` **22..27** are contiguous and are EXACTLY
-the six kinds `bindLexicalScopes` declares into a fresh scope under its
-`scope.existing == null` gate, so `indexSourceFile` still costs two int compares per node.
-`SymbolFlags.ScopeValueDeclaration` excludes `Variable` for the reason
-`ScopeTypeDeclaration` excludes `TypeParameter` — every local in the program would enter a
-gate whose job is to be a cheap probe, and `currentLocalTypes` answers a local ahead of it
-anyway.
-
-**A SECOND GATE THAT THE TYPE CONSULT DID NOT NEED, AND MEASURING WHY IT DOES NOT PAY WHERE
-IT LOOKS LIKE IT SHOULD.** The value gate is NOT near-empty — tsc's own sources hold ~5,555
-distinct indented `function` names — so the program-wide union hits often, and
-`scopesOfOwningFile` BUILDS the tables it reads ((INC.16)'s `lazy`). The consult therefore
-tests the OWNING FILE's own projection first. **Then `LexDefer.census` said the property is
-unobservable on a FULL build**: `forcedBy={checkSpine=2}` for a two-file program, i.e. the
-SPINE forces every checked file's tables anyway, with or without the gate. So (INC.16)'s
-prize and this gate's live entirely in the PARTITIONED regime — and in that regime nothing
-types an identifier in an unassigned file, which is why arm A5 is **UNDISCRIMINATED** and
-recorded as such rather than claimed.
-
-**THE ITEM'S OWN CLAIMS, TWO MORE CORRECTIONS — the third round running.** (i) "`const` in
-VALUE position resolves at all three nesting sites today" is true of the UNIQUE variant and
-false of the SHADOWING one: a block-nested `const` shadowing a file-level one answers the
-OUTER declaration at `block` and `ifBlock` (and inside a namespace body), and only `fnTop`
-is right. That is a different mechanism — `currentLocalTypes` recording, the (CHK.71)(b)
-shadow family — and is written into its own item. (ii) "`typeof <a const>` is MISSING
-everywhere, including at file and namespace level" is an artefact of the v1 NARROWING probe
-(`let h: typeof v = null!`), which the v2 non-narrowing probe replaced before 10a landed:
-the file-level control is 15/15 clean and `typeof` reads correctly there.
-
-**ABLATION: six arms, union 7 of 35 pins, and two of them are honest negatives.** A1 (the
-stamp) 4 RED with two unique; A3 (override vs fallback) 3 RED with two unique; A4
-(`stopFlags`) 1 RED unique; A6 (`declare global` claiming its carrier) 1 RED. **A2 (the flag
-mask) reddens 1 with NO unique pin** — that mask still carries `Class` and `Enum`, so only
-`function` and `namespace` are lost by it, and `namespace` has no pin because a namespace
-VALUE read does not work here at all ((CHK.73)). **A5 (the per-file gate) is 0 RED.** Both
-are recorded rather than smoothed, and the A5 guard is kept on its measured cost argument,
-not on a pin.
-
-**A PIN CAUGHT THE ROUND'S OWN WRONG EXPECTATION**, which is what the new projection pin is
-for: the `interface` inside a `declare global` block IS in `scopeTypeNames`, because the
-CARRIER declares nothing (GH#42209) while the block's own body reaches a fresh scope like
-any other module block. And step 10a's stamp pin was a countdown that fired exactly as
-designed — it asserted a nested `function` was "deliberately NOT carried", true of the TYPE
-consult and false of the stamp the moment a value consult existed.
-
-**RESIDUE, MEASURED AND SPLIT.** Of the 42 B83.5 VALUE cells, 32 still diverge (11 ours-only
-/ 38 missing): the UNIQUE half (10b-ii, blocked on the 19-20 rows above); the NAMESPACE kind
-entirely (6 cells — `ZzzNs.zzzNv`'s receiver is resolved by a walker of its own and a module
-symbol has no type here, (CHK.73)); the ENUM member-access receiver (3 ours-only rows —
-a SECOND resolver still answers the OUTER enum, so the two disagree inside one compile);
-`TS2693` for a type-only scope-space name used as a value (6 cells, never emitted here); the
-`cmam` member-existence firewall on a block-scoped receiver (1 missing row in each improved
-shadow cell — 10a's residue, unchanged); and the `const` shadow above.
-
-**NEXT**: 10c (heritage + `resolveQualifiedName`), which is small and is the last TYPE-name
-funnel, then 10b-ii once the two unmasked families are closed.
 
 ## QUEUE
 
@@ -2381,6 +2367,23 @@ notices it is gone.
   the immediate parent, and it is pinned as a pair. The array-literal arm is untouched.
   The six write-site rows still missing on the fixture are file-level and belong to
   (CHK.124).
+
+- [ ] **(CHK.132) THE UNION-SOURCE CHAIN SUB-LINE PICKER NAMES THE **LAST** CONSTITUENT WHERE BOTH
+  REFERENCES NAME THE **FIRST** — 15 of 15 rows on one fixture, outer line byte-identical in every
+  one (measured 2026-09-11, (P18.74)).** `Type 'number | ZzzG' is not assignable to type 'boolean'.`
+  is exact on all three compilers; the sub-line is `Type 'ZzzG'` here and `Type 'number'` on both
+  tsgo 7.0.2 and pristine 6.0.3. **THIS DOES *NOT* CONTRADICT CLAUDE.md's (CHK.83) ENTRY, AND A
+  (CHK.130) RECON REPORTED THAT IT DID** — they are two different populations and both measurements
+  are reproducible today: for `"a" | 1` against `number[]` (where the source is GENERALIZED to
+  `string | number` for display) tsgo names the FIRST and pristine the LAST, so that row is
+  REF-SPLIT-MSG and unadjudicable, and we match pristine, the corpus oracle; for a union with no
+  generalization the two references AGREE on the first and we are alone. **So the picker is right in
+  one population and wrong in the other, and any fix must keep the (CHK.83) rows matching pristine
+  — the corpus gates those.** Before designing anything, census which constituent each reference
+  names across: all-fail vs some-fail unions, generalized vs not, and member ORDER (both data points
+  happen to name `number`, so "first" and "last" may both be the wrong description of the rule).
+  Five union-source chain sub-line sites exist ((CHK.83) names them); the outer-line generalization
+  landed in (PARITY.1) and the picker was deliberately left alone then.
 
 - [ ] **(CHK.131) THE UNION-CALLEE `differ` TAIL IS A REDUNDANT GUARD ON EVERY REACHABLE SHAPE —
   MEASURED 0 RED ON THE FULL SUITE, i.e. THE EVIDENCE IS *FOR* COLLAPSING IT, AND (P18.73)

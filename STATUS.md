@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **192,387** lines (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **192,433** lines (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -18,6 +18,42 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.74) — (CHK.130): THE PARENTHESES WERE ASKING ABOUT THE *SHAPE*, NOT ABOUT WHAT IS PRINTED — AND THE INSTRUMENT'S FOURTH BLINDNESS, 18,699 / 0 / 3 (2026-09-11).**
+`typeToString` parenthesized a union member whose RESOLVED SHAPE is "one call-or-construct
+signature and nothing else" — but `Type.Interface` and `Type.Reference` both EXTEND
+`Type.Object`, so an interface with a call signature, an alias to a function type and a
+generic instantiation all matched while PRINTING AS THEIR NAME. Parentheses exist so a
+rendering can be reparsed inside a `|`; a name never needs them. The predicate now mirrors
+`typeToString`'s own dispatch arm by arm and asks *is what we are about to print a bare arrow
+form*. **A SECOND HALF WAS NOT IN THE ITEM: the interface case is ORDER-DEPENDENT**, because
+a `Type.Interface`'s member tables are LAZY (round 833) — the same interface renders bare in
+a plain TS2322 and parenthesized in a union-callee TS2349 whose own resolution has just
+filled `callSignatures` in, which is why all six failing rows were TS2349 and why a TS2322
+fixture showed the case as already correct. **THE AT-RISK ENUMERATION DECIDED THE ITEM AND
+WAS DONE BEFORE ANY CODE**: over all 2,910 ACTIVE `.errors.txt` baselines, **7 carry a
+parenthesised group next to a `|` and ZERO of those is a bare NAME** — so the remove direction
+cannot move a baseline, and **no `LogicalParityDivergence` was needed or used.** **THE
+ABLATION FOUND THE ASYMMETRY THAT MAKES IT SAFE**: parenthesize-nothing is 16 RED including
+**4 corpus baselines**, so the corpus gates over-REMOVAL and not over-ADDITION — exactly what
+the enumeration predicted from the other side; the two discriminating arms partition perfectly.
+**TWO MORE COUNTDOWN PINS, THE EIGHTH AND NINTH IN NINE ROUNDS**, both our own defect
+transcribed into an expectation, both now byte-identical to both references — per (CHK.114)
+only the expectations changed, never the names. **AND THE INSTRUMENT WAS WRONG AGAIN, A
+FOURTH TIME, IN THE WAY THAT MATTERS MOST**: `ref_matrix.py` folded "the references report
+the same ROW and disagree about its MESSAGE" into AGREE — not adjudicable is the right
+treatment and the wrong LABEL, since it inflates the prize and hides a divergence family. It
+made a subagent report CLAUDE.md's (CHK.83) as CONTRADICTED when that law is exactly
+reproducible (verified from raw bytes). New REF-SPLIT-MSG verdict; re-deriving this round's
+own receipt with it moves `agree 21 → 19`. **Third round running in which re-taking a receipt
+moved a number already written down.** (CHK.83) is not contradicted but POPULATION-SPECIFIC —
+where the source is not generalized, both references name the FIRST constituent and we alone
+name the last, 15 of 15 rows with the outer line byte-identical: now (CHK.132), and the
+CLAUDE.md entry gained the clause that stops the next agent repeating the report. **The
+(CHK.97) union-callee family is now byte-identical to both references across all 11 fixtures.**
+Three outer-line residues remain, each measured and refused with a reason. Grid 8×`added=0
+removed=0` and measured to be a control (416 rows, not one names a union). cost_gate exit 0,
+huge_methods exit 0 (844), warning-clean.
 
 **(P18.73) — (CHK.97) D2b: THE SILENCE THAT HID A TRUE POSITIVE, AND A DESIGN DECIDED BY *BUILDING* THE ALTERNATIVE, 18,688 / 0 / 3 (2026-09-11).**
 **THREE LINES OF CODE**: the `>= 2` emit and the separate `>= 1` silence collapse into one
@@ -173,34 +209,4 @@ defect first try (a dangling dot's zero-width identifier grew a `Property ''…`
 B431 was missing the empty-name guard its sibling has always had). Two residue pins
 written earlier in the same session fired as designed and were converted. The
 receiver-KIND half of (CHK.124) stays open and pinned as refusals.
-
-**(P18.68) — (CHK.121): THE AXIS IS THE *INITIALIZER*, AND BOTH SIZINGS OF THE ITEM WERE WRONG, 18,604 / 0 / 3 (2026-09-11).**
-An ANNOTATED function-body local now reaches the member-existence check.
-**THE ROUND'S FINDING IS A CORRECTION TO ITS OWN ITEM, TWICE**: queued as "one cell of four",
-re-sized by the coordinator to "six of seven shapes", and **both wrong** — the second because
-it varied the annotation TYPE while holding the INITIALIZER fixed, which is the axis that had
-to move. `const v: ZzzCfg = zzzCfgV` in a body ALREADY reported (the flow-recovery helper
-serves an identifier initializer), as did `let`/`var`/nested-block/arrow; what was silent is an
-OBJECT-LITERAL, `new`, CALL, `as` or scalar-literal initializer. And `number[]`, a heritage
-interface, an intersection, a function type, a numeric index signature, an enum and an optional
-are silent at **FILE LEVEL too**, i.e. pre-existing firewall refusals that were never this
-defect — CLAUDE.md's "run the identical source at all three sites" law on a third axis.
-**THE FIX IS THE LEAST POWERFUL SHAPE THAT WORKS**: `cmamAnnotatedLocalReceiverType`, 24
-functional lines, wired LAST at the `anyType` bail and BELOW the flow-recovery helper, reusing
-the knip-calibrated `cmamAllMissingTrustedMember` and `cmamInGuardMayAddProperty` rather than
-re-deriving either — so it can only turn a SILENCE into a report. **RECEIPT**: the original
-fixture byte-identical to pristine 6.0.3 and tsgo 7.0.2 (4/4 rows where we reported 1), and a
-**207-cell** matrix on which the two references agree on all 207 goes **111 → 107 missing with
-ours-only unchanged at 2**. **REFUSED AND PINNED AS REFUSALS** (not as controls): a class
-instance, an array, `let`/`var`, plus the shapes the firewall already refused. **THE GRID IS A
-REAL GATE HERE AND IS NOT VACUOUS** — a positive-control build counts **78 / 152 / 116
-accepts** on compiler/harness/services, so the path fires hundreds of times on tsc's own
-sources and the downstream gates absorb all of it. **TWO PRE-EXISTING DIVERGENCES FOUND AND
-LEFT ALONE**, now (CHK.122) and (CHK.123): an `in`-guarded read on an identifier-initialized
-annotated local is an ours-only FP (the flow route lacks the `in` consult), and a class-typed
-local renders `typeof ZzzK` for `ZzzK`. **ABLATION: 10 arms / 31 pins WITH BOTH CONTROLS** — a
-comment-only both-green arm and a refuse-everything both-red arm, which is what makes the four
-0-RED arms interpretable as redundant-or-unreachable rather than as blind; one pin renamed to
-say it is blind, and one the implementer wrote as a refusal was measured WRONG and converted
-to a positive. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844).
 
