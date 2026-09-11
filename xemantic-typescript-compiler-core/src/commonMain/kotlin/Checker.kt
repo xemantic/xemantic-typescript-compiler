@@ -34825,6 +34825,48 @@ class Checker(
         spineExReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
     }
 
+    /**
+     * (CHK.119) HOW TO NAME AN EXPANDO CANDIDATE IN ITS OWN TS2339, WHICH DEPENDS ON
+     * WHETHER IT HAS ANY EXPANDO MEMBERS AT ALL.
+     *
+     * B431 rendered `typeof $name` unconditionally. Measured against
+     * `tools/tsgo-7.0.2/lib/tsc` AND pristine `typescript@6.0.3`, which agree on
+     * every cell:
+     *
+     *  - a function with NO expando declaration is named by its **signature**
+     *    (`() => void`, `<T>(zzzX: T) => T`, `{ (zzzX: string): void; … }` for an
+     *    overload set) — so every row B431 emitted for such a function carried the
+     *    wrong display;
+     *  - a function that DOES carry expando members is named `typeof $name`, which
+     *    is what B431 was already producing.
+     *
+     * **This is only sound because the collector is now complete for the forms both
+     * references recognise.** Before the same round widened `collectExpandoDecls`,
+     * `F["tag"] = 1` and `` `${F.tag = 1}` `` left `declared` EMPTY for a function
+     * that plainly has expandos — so this rule would have renamed exactly those to
+     * their signature and turned two AGREE rows into wrong ones. The collector fix
+     * is a precondition, not a companion.
+     *
+     * **The fallback is load-bearing**: where the symbol or its type cannot be
+     * reached from the spine, this answers the OLD display rather than a guess, so
+     * the change can only ever improve a row and never manufacture a broken one.
+     * That also bounds the first-touch risk of resolving a type from a spine
+     * handler (B420): the resolution happens only on the rare emission path, which
+     * is never taken on any of the eight dashboard profiles.
+     */
+    private fun spineExReceiverDisplay(recv: Identifier, name: String): String {
+        val fallback = "typeof $name"
+        if (spineExDeclared[name]?.isNotEmpty() != false) return fallback
+        val sym = lookupPerFileForNode(recv, name) ?: return fallback
+        if (!sym.flags.hasAny(SymbolFlags.Function)) return fallback
+        val t = getTypeOfSymbol(sym)
+        if (t === anyType || t === errorType || t === unknownType) return fallback
+        val rendered = typeToString(t)
+        // A rendering that came back as the name itself says nothing the fallback
+        // does not, and `any` would be actively misleading.
+        return if (rendered.isEmpty() || rendered == name || rendered == "any") fallback else rendered
+    }
+
     private fun spineExTeardown() {
         spineExActive = false
         spineExCands = emptySet()
@@ -34851,7 +34893,7 @@ class Checker(
         if (spineExShadowed(node, name)) return
         val (line, character) = getLineAndCharacterOfPosition(spineSource, pos)
         diagnostics.add(Diagnostic(
-            message = "Property '$prop' does not exist on type 'typeof $name'.",
+            message = "Property '$prop' does not exist on type '${spineExReceiverDisplay(recv, name)}'.",
             category = DiagnosticCategory.Error, code = 2339,
             fileName = spineFileName, line = line, character = character,
             start = pos, length = prop.length,
@@ -35083,6 +35125,48 @@ class Checker(
         }
     }
 
+    /**
+     * (CHK.119) The `(candidate, member)` an expando ASSIGNMENT target declares, or
+     * null.
+     *
+     * Measured against `tools/tsgo-7.0.2/lib/tsc` AND pristine `typescript@6.0.3`,
+     * which agree on every cell of the round's fixture:
+     *
+     * | target             | declares | why |
+     * |--------------------|----------|-----|
+     * | `F.tag = 1`        | yes      | the form B431 already had |
+     * | `F["tag"] = 1`     | yes      | a statically-known name |
+     * | `` F[`tag`] = 1 `` | yes      | likewise — a no-substitution template |
+     * | `F[0] = 1`         | **no**   | both references report the later read |
+     * | `F[k] = 1`         | **no**   | not a statically-known name |
+     *
+     * The last two are NEGATIVE CONTROLS rather than conservatism: we already agree
+     * with both references on them, so admitting either would turn an AGREE row into
+     * a lost diagnostic. A substituting template (`` F[`a${x}`] `` ) is a
+     * `TemplateExpression`, not a `NoSubstitutionTemplateLiteralNode`, and so falls
+     * into the computed case by construction.
+     */
+    private fun expandoAssignedMemberName(target: Expression, cands: Set<String>): Pair<String, String>? {
+        val recvName: String
+        val member: String
+        when (target) {
+            is PropertyAccessExpression -> {
+                recvName = (target.expression as? Identifier)?.text ?: return null
+                member = target.name.text
+            }
+            is ElementAccessExpression -> {
+                recvName = (target.expression as? Identifier)?.text ?: return null
+                member = when (val a = target.argumentExpression) {
+                    is StringLiteralNode -> a.text
+                    is NoSubstitutionTemplateLiteralNode -> a.text
+                    else -> return null
+                }
+            }
+            else -> return null
+        }
+        return if (recvName in cands) recvName to member else null
+    }
+
     private fun collectExpandoDeclsExpr(e: Expression?, cands: Set<String>, declared: MutableMap<String, HashSet<String>>) {
         when (e) {
             null -> {}
@@ -35097,9 +35181,16 @@ class Checker(
                     var c: Expression = cur
                     while (c is BinaryExpression) {
                         if (c.operator == SyntaxKind.Equals) {
-                            val pa = c.left as? PropertyAccessExpression
-                            val recv = pa?.expression as? Identifier
-                            if (pa != null && recv != null && recv.text in cands) declared[recv.text]?.add(pa.name.text)
+                            // (CHK.119) `F.tag = 1` AND `F["tag"] = 1` both declare an
+                            // expando member. Measured against tsgo 7.0.2 and pristine
+                            // 6.0.3, which agree on every cell: a STRING-literal and a
+                            // NO-SUBSTITUTION-TEMPLATE index declare the member, while a
+                            // NUMERIC (`F[0] = 1`) and a COMPUTED (`F[k] = 1`) index do
+                            // NOT — both references report the later read in those two
+                            // cases, and we already agree with them there. So the two
+                            // exclusions are the negative controls, not conservatism.
+                            val name = expandoAssignedMemberName(c.left, cands)
+                            if (name != null) declared[name.first]?.add(name.second)
                         }
                         work.addLast(c.right); c = c.left
                     }
@@ -35118,6 +35209,17 @@ class Checker(
             is ArrayLiteralExpression -> e.elements.forEach { collectExpandoDeclsExpr(it, cands, declared) }
             is ObjectLiteralExpression -> e.properties.forEach { p -> when (p) { is PropertyAssignment -> collectExpandoDeclsExpr(p.initializer, cands, declared); is SpreadAssignment -> collectExpandoDeclsExpr(p.expression, cands, declared); else -> {} } }
             is SpreadElement -> collectExpandoDeclsExpr(e.expression, cands, declared)
+            // (CHK.119) A TEMPLATE SPAN IS AN EXPRESSION POSITION AND WAS NOT WALKED
+            // AT ALL, so `` `${F.tag = 1}` `` declared nothing and the later read of
+            // `F.tag` was an ours-only false positive — measured, both references
+            // treat it as an ordinary expando declaration. The tagged form is the
+            // same position one node up.
+            is TemplateExpression -> e.templateSpans.forEach { collectExpandoDeclsExpr(it.expression, cands, declared) }
+            is TaggedTemplateExpression -> {
+                collectExpandoDeclsExpr(e.tag, cands, declared)
+                (e.template as? TemplateExpression)?.templateSpans
+                    ?.forEach { collectExpandoDeclsExpr(it.expression, cands, declared) }
+            }
             is AsExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
             is TypeAssertionExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
             is NonNullExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)

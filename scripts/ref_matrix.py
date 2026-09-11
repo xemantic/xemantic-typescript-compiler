@@ -5,12 +5,20 @@ Every (CHK.*) round needs the same instrument — our binary, tsgo 7.0.2 and
 pristine `typescript@6.0.3` over one fixture, compared as `(file, line, code)` —
 and every round so far has rebuilt it in a scratchpad.  This is that instrument.
 
-Verdicts, per (file, line, code) row:
+Rows are keyed `(file, line, column, code)`.  The COLUMN is in the key because
+without it two diagnostics of the same code on one line collapse into one and the
+instrument silently drops a row — measured: a fixture emitting TS2339 twice on
+line 3 reported `agree=1`, losing both the second row and a message divergence on
+the first.  A column that differs between compilers for the same logical row is
+reported as SPAN-DIFF rather than as an ours-only/missing pair.
+
+Verdicts, per row:
   AGREE        both references report it and so do we
   OURS-ONLY    we report it and NEITHER reference does   (a false positive)
   MISSING      both references report it and we do not   (a lost diagnostic)
   REF-SPLIT    the two references disagree -> NOT adjudicable, reported separately
   TEXT-DIFF    we report it at the right place with a DIFFERENT MESSAGE
+  SPAN-DIFF    same file/line/code on both sides, different COLUMN
 
 TEXT-DIFF exists because the first version of this script did not have it, and a
 (CHK.119) recon then found six rows where we emit at exactly the right position
@@ -93,7 +101,7 @@ def parse(out: str, fixture: Path, arm: str):
             f = str(Path(f).resolve().relative_to(fixture.resolve()))
         except (ValueError, OSError):
             f = os.path.basename(f)
-        key = (f, int(m.group("line")), int(m.group("code")))
+        key = (f, int(m.group("line")), int(m.group("col")), int(m.group("code")))
         rows.add(key)
         detail.setdefault(key, m.group("msg"))
     assert_parsed(out, rows, arm)
@@ -161,8 +169,20 @@ def main() -> int:
 
     ref_split = tsgo ^ pris          # the two references disagree: not adjudicable
     both = tsgo & pris               # the adjudicable reference answer
-    missing = sorted(both - ours)
-    ours_only = sorted(ours - tsgo - pris)
+    missing = set(both - ours)
+    ours_only = set(ours - tsgo - pris)
+
+    # A row both sides report at the same (file, line, code) but a different column
+    # is ONE row with a span divergence, not a lost row plus an invented one.
+    span_diff = []
+    by_place = {(k[0], k[1], k[3]): k for k in missing}
+    for k in sorted(ours_only):
+        place = (k[0], k[1], k[3])
+        if place in by_place:
+            span_diff.append((k, by_place[place]))
+            ours_only.discard(k)
+            missing.discard(by_place.pop(place))
+    missing, ours_only = sorted(missing), sorted(ours_only)
 
     # Same place, same code — now ask whether we said the same THING.  A message the
     # two references do not themselves agree on is not adjudicable and stays in AGREE.
@@ -180,8 +200,12 @@ def main() -> int:
                 return
             print(f"\n{title} ({len(keys)}):")
             for k in keys:
-                print(f"  {k[0]}:{k[1]}  TS{k[2]}  {msgs.get(k, '')[:100]}")
+                print(f"  {k[0]}:{k[1]}  TS{k[3]}  {msgs.get(k, '')[:100]}")
         show("AGREE", agree, ours_msg)
+        if span_diff:
+            print(f"\nSPAN-DIFF (same row, different column) ({len(span_diff)}):")
+            for ok, rk in span_diff:
+                print(f"  {ok[0]}:{ok[1]}  TS{ok[3]}   ours col {ok[2]}, refs col {rk[2]}")
         show("OURS-ONLY (false positive)", ours_only, ours_msg)
         show("MISSING (both references report)", missing, tsgo_msg)
         show("REF-SPLIT (references disagree — NOT adjudicable)", sorted(ref_split),
@@ -189,12 +213,13 @@ def main() -> int:
         if text_diff:
             print(f"\nTEXT-DIFF (right row, wrong message) ({len(text_diff)}):")
             for k in text_diff:
-                print(f"  {k[0]}:{k[1]}  TS{k[2]}")
+                print(f"  {k[0]}:{k[1]}  TS{k[3]}")
                 print(f"      ours: {ours_msg.get(k, '')}")
                 print(f"      refs: {tsgo_msg.get(k, '')}")
 
     print(f"\nfixture={fixture.name} agree={len(agree)} ours-only={len(ours_only)} "
-          f"missing={len(missing)} text-diff={len(text_diff)} ref-split={len(ref_split)}")
+          f"missing={len(missing)} text-diff={len(text_diff)} "
+          f"span-diff={len(span_diff)} ref-split={len(ref_split)}")
     if ref_split:
         print("NOTE: ref-split rows are evidence about NOTHING — keep them out of any prize.")
 
@@ -205,6 +230,7 @@ def main() -> int:
             "ours_only": [[*k, ours_msg.get(k, "")] for k in ours_only],
             "missing": [[*k, tsgo_msg.get(k, "")] for k in missing],
             "text_diff": [[*k, ours_msg.get(k, ""), tsgo_msg.get(k, "")] for k in text_diff],
+            "span_diff": [[list(a), list(b)] for a, b in span_diff],
             "ref_split": [list(k) for k in sorted(ref_split)],
         }, indent=2))
     return 0

@@ -49,8 +49,30 @@ import kotlin.test.Test
  */
 class M04ExpandoSpineMigrationTest {
 
-    private fun expando(d: List<Diagnostic>, prop: String, fn: String) =
-        d.any { it.code == 2339 && it.message == "Property '$prop' does not exist on type 'typeof $fn'." }
+    /**
+     * (CHK.119) The display DEPENDS ON WHETHER THE FUNCTION HAS EXPANDO MEMBERS, so
+     * this helper no longer hard-codes one.
+     *
+     * Measured against tsgo 7.0.2 and pristine 6.0.3, which agree on every cell: a
+     * function with NO expando declaration is named by its SIGNATURE, and one that
+     * carries expandos is named `typeof $fn`. B431 rendered `typeof $fn`
+     * unconditionally, so every pin in this class that uses the default below was
+     * asserting a display neither reference produces.
+     *
+     * `fn` is still taken, and is still used by the `typeof` callers — it is not
+     * vestigial.
+     */
+    private fun expando(
+        d: List<Diagnostic>,
+        prop: String,
+        fn: String,
+        display: String = "() => void",
+    ) = d.any { it.code == 2339 && it.message == "Property '$prop' does not exist on type '$display'." }
+
+    /** The expando-carrying form: `typeof <fn>`, which is what both references print
+     *  once the function has at least one expando member. */
+    private fun expandoTypeof(d: List<Diagnostic>, prop: String, fn: String) =
+        expando(d, prop, fn, "typeof $fn")
 
     // ── fires: nested-fn reads of undeclared expando props ────────────────
 
@@ -70,7 +92,7 @@ class M04ExpandoSpineMigrationTest {
         val src = "function Foo() {}\nfunction g() { Foo.bar; }"
         val d = diagnose(src, directives = "")
         val hit = d.first { it.code == 2339 }
-        assert(hit.message == "Property 'bar' does not exist on type 'typeof Foo'.")
+        assert(hit.message == "Property 'bar' does not exist on type '() => void'.")
         assert(hit.start == src.indexOf("bar;"))
         assert(hit.length == 3)
     }
@@ -221,7 +243,17 @@ class M04ExpandoSpineMigrationTest {
     }
 
     @Test
-    fun `TS2339 - compound assignment and element-access writes do not declare`() {
+    fun `TS2339 - an element-access write DOES declare where a compound one does not`() {
+        // (CHK.119) THE SECOND COUNTDOWN PIN IN THIS CLASS. It asserted all three
+        // rows fire; measured, the three compilers agree exactly on this fixture:
+        //   `Foo["ele"] = 1`  declares `ele`     -> the read is LEGAL
+        //   `Foo.cmp += 1`    declares nothing   -> TS2339
+        //   `Foo.inc++`       declares nothing   -> TS2339
+        // and since `Foo` now HAS an expando, both displays are `typeof Foo`.
+        //
+        // The two references disagree on that display — tsgo prints the object form
+        // `{ (): void; ele: number; }` — so it is not adjudicable, and we follow
+        // pristine, which is the corpus's oracle.
         val d = diagnose(
             """
             function Foo() {}
@@ -230,14 +262,21 @@ class M04ExpandoSpineMigrationTest {
             """
         )
         d should {
-            have(expando(d, "ele", "Foo"))
-            have(expando(d, "cmp", "Foo"))
-            have(expando(d, "inc", "Foo"))
+            have(expandoTypeof(d, "cmp", "Foo"))
+            have(expandoTypeof(d, "inc", "Foo"))
         }
+        assert(d.none { it.code == 2339 && it.message.contains("'ele'") })
     }
 
     @Test
-    fun `TS2339 - a template-span write at file scope is not collected`() {
+    fun `TS2339 - a template-span write at file scope DOES declare`() {
+        // (CHK.119) THIS PIN USED TO ASSERT THE ROW FIRES, i.e. our own wrong
+        // answer: tsgo 7.0.2 and pristine 6.0.3 both accept `Foo.tpl` here, because
+        // a write in a template SPAN is an ordinary expando declaration. The
+        // collector did not descend into template spans at all, so `declared` stayed
+        // empty and the read was an ours-only false positive. CLAUDE.md's countdown
+        // rule: a "negative control" that records a divergence is a pin waiting to
+        // fire on the round that fixes it.
         val d = diagnose(
             """
             function Foo() {}
@@ -245,7 +284,7 @@ class M04ExpandoSpineMigrationTest {
             function g() { Foo.tpl; }
             """
         )
-        d should { have(expando(d, "tpl", "Foo")) }
+        assert(d.none { it.code == 2339 })
     }
 
     @Test
