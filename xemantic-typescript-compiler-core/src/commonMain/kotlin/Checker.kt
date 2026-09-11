@@ -155208,13 +155208,30 @@ interface DataView {
                     if (unionCalleeArityDiagnostic(expr, combinedSigs, calleeExpr, source, fileName)) return null
                     return calleeType
                 }
-                // unionOfArraysFilterCall: a union with an OVERLOADED member — at least one
-                // constituent has ≥2 call signatures (e.g. `(Fizz[] | readonly Buzz[]).filter`,
-                // where Array.filter has 2 overloads but ReadonlyArray.filter has 1). tsc combines
-                // the parallel overload sets and reports nothing; our `differ` check below compares
-                // only the FIRST sig of each member → spurious TS2349. Suppress. FP-safe: the only
-                // corpus TS2349 baselines use all-single-sig members (`any{≥2}` is false for them).
-                if (constituents.any { getCallSignaturesOfType(it).size >= 2 }) return null
+                // (CHK.97) D2. WHY the combination above refused decides whether this is a
+                // SUPPRESSION or a DIAGNOSTIC, and the answer is already a local in
+                // [computeCombinedUnionSignatures]: `multipleOverloadSets`, i.e. TWO OR MORE
+                // constituents carrying an overload set. tsc's PASS 2 is skipped exactly
+                // there (checker.ts `indexWithLengthOverOne === -1`), `getUnionSignatures`
+                // answers the EMPTY list, and `resolveCallExpression`'s `!callSignatures
+                // .length` branch reports TS2349 with the "Each member … has signatures"
+                // chain — the same chain the GENERIC refusal below emits, byte-identical on
+                // tsgo 7.0.2 and pristine 6.0.3 (span included). Recomputed here rather than
+                // threaded out: the `count` makes exactly the `getCallSignaturesOfType` calls
+                // the old `any` made, and the memo below stores only the ANSWER.
+                //
+                // ONE overloaded constituent is a different fact and stays SILENT: it is the
+                // `unionOfArraysFilterCall` shape (`(Fizz[] | readonly Buzz[]).filter`, where
+                // `Array.filter` has 2 overloads and `ReadonlyArray.filter` has 1), where tsc
+                // RUNS pass 2 over the parallel overload sets and reports nothing, while the
+                // `differ` check below compares only the FIRST signature of each member and
+                // would print a spurious TS2349.
+                val overloadedMembers = constituents.count { getCallSignaturesOfType(it).size >= 2 }
+                if (overloadedMembers >= 2) {
+                    emitUnionCalleeNoCompatibleSignatures(unionDisplay, computeSpan(), source, fileName)
+                    return null
+                }
+                if (overloadedMembers >= 1) return null
                 val differ = run {
                     for (i in sigs.indices) for (j in i + 1 until sigs.size) {
                         val s1 = sigs[i]; val s2 = sigs[j]
@@ -155240,24 +155257,45 @@ interface DataView {
                     // The combination itself is not modelled beyond the `combinable` case
                     // above, so a combinable union is answered by SILENCE, not by a check.
                     if (!unionCalleeGenericSignaturesIncompatible(sigs)) return null
-                    val (start, length) = computeSpan()
-                    if (length > 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "This expression is not callable.",
-                            category = DiagnosticCategory.Error, code = 2349,
-                            fileName = fileName, line = line, character = character,
-                            start = start, length = length,
-                            messageChain = listOf(
-                                "  Each member of the union type '$unionDisplay' has signatures, but none of those signatures are compatible with each other.",
-                            ),
-                        ))
-                    }
+                    emitUnionCalleeNoCompatibleSignatures(unionDisplay, computeSpan(), source, fileName)
                     return null
                 }
             }
         }
         return calleeType
+    }
+
+    /**
+     * (CHK.97) D2 — tsc's TS2349 for a union callee whose members ALL have call
+     * signatures and whose COMBINATION is empty (`getUnionSignatures` answers
+     * `emptyArray`, reported by `resolveCallExpression`'s `!callSignatures.length`
+     * branch).
+     *
+     * TWO refusal reasons reach it and both print this chain byte-identically on tsgo
+     * 7.0.2 and pristine 6.0.3: two GENERIC members whose type parameters are not
+     * identical ([unionCalleeGenericSignaturesIncompatible], `betterErrorForUnionCall`)
+     * and TWO OR MORE OVERLOADED members (tsc's skipped PASS 2). ONE home, so the two
+     * cannot drift — a chain sentence is the whole observable here, and the
+     * 8-profile grid is structurally blind to a display divergence ((PARITY.1)).
+     */
+    private fun emitUnionCalleeNoCompatibleSignatures(
+        unionDisplay: String,
+        span: Pair<Int, Int>,
+        source: String,
+        fileName: String,
+    ) {
+        val (start, length) = span
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "This expression is not callable.",
+            category = DiagnosticCategory.Error, code = 2349,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+            messageChain = listOf(
+                "  Each member of the union type '$unionDisplay' has signatures, but none of those signatures are compatible with each other.",
+            ),
+        ))
     }
 
     /**

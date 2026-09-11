@@ -525,22 +525,36 @@ class UnionCalleeSignatureTest {
     }
 
     /**
-     * r09: BOTH members overloaded — tsc's `indexWithLengthOverOne === -1` bail. The
-     * combination is refused and the `≥2`-overloaded suppression answers, so this is
-     * SILENT where tsc reports TS2349; before this family it was a WRONG TS2345 off
-     * the first signature of each member.
+     * r09: BOTH members overloaded — tsc's `indexWithLengthOverOne === -1` bail, so the
+     * union has NO call signatures and TS2349 reports with the "none of those signatures
+     * are compatible" chain.
+     *
+     * CLOSED by (CHK.97) D2. This pin previously asserted the SILENCE — a countdown pin
+     * in CLAUDE.md's sense, recording the `≥2`-overloaded suppression's answer as if it
+     * were the compiler's verdict; before the (CHK.97) family it was a WRONG TS2345 off
+     * the first signature of each member. The whole population and its negative controls
+     * live in [UnionCalleeOverloadedMembersTest]; this one stays because r09 is where the
+     * row was first measured.
      */
     @Test
-    fun `a union whose members are both overloaded refuses the combination`() =
-        assert(rows(
+    fun `a union whose members are both overloaded reports that no signatures are compatible`() {
+        val d = diagnose(
             """
             interface A { (a: string): number; (a: number): number }
             interface B { (a: boolean): string; (a: object): string }
             declare const u: A | B;
             u("x");
             export {}
-            """.trimIndent()
-        ).isEmpty())
+            """.trimIndent(),
+            directives = "// @strict: true",
+        )
+        assert(d.map { it.code to it.message } == listOf(
+            2349 to "This expression is not callable."
+        ))
+        assert(d[0].messageChain == listOf(
+            "  Each member of the union type 'A | B' has signatures, but none of those signatures are compatible with each other."
+        ))
+    }
 
     // ------------------------------------------------------------------
     // A nullish callee — tsc checks nullability BEFORE it asks for signatures
