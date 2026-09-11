@@ -133775,7 +133775,7 @@ interface DataView {
         val overloadReturnsVoid = overloadReturnType is KeywordTypeNode &&
             overloadReturnType.kind == SyntaxKind.VoidKeyword
         if (overloadReturnType != null && implReturnType != null && !overloadReturnsVoid) {
-            if (!isTypeNodeCompatible(overloadReturnType, implReturnType)) {
+            if (!isTypeNodeCompatible(overloadReturnType, implReturnType, returnPosition = true)) {
                 return false
             }
             // overloadingOnConstants2: tsc requires the IMPL return to be assignable to the
@@ -133843,7 +133843,46 @@ interface DataView {
      *   - KeywordType→LiteralType (e.g. `string` is NOT assignable to `"hi"`)
      *   - FunctionType↔FunctionType (recursive: contravariant params + covariant return)
      */
-    private fun isTypeNodeCompatible(overloadType: TypeNode, implType: TypeNode): Boolean {
+    /**
+     * (CHK.125) `overloadType` vs `implType` for TS2394 — **and the two POSITIONS do
+     * not ask the same question**, which is why `returnPosition` exists.
+     *
+     * tsc's `isImplementationCompatibleWithOverload` is two rules, not one:
+     *  - the RETURN types must be assignable **in EITHER direction** ("first see if
+     *    the return types are compatible in either direction"), on top of the
+     *    `void`-overload escape this function's caller already implements;
+     *  - the PARAMETERS go through `isSignatureAssignableTo(impl, overload,
+     *    ignoreReturnTypes = true)`, i.e. the OVERLOAD's parameter must be assignable
+     *    to the IMPLEMENTATION's — the impl must be the wider one.
+     *
+     * Measured against tsgo 7.0.2 AND pristine 6.0.3, which agree on all ten cells:
+     *
+     * | position | overload   | impl       | legal |
+     * |----------|------------|------------|-------|
+     * | param    | `string`   | `unknown`  | yes   |
+     * | param    | `unknown`  | `string`   | **no**|
+     * | param    | `string`   | `never`    | **no**|
+     * | param    | `never`    | `string`   | yes   |
+     * | param    | `string`   | `object`   | **no**|
+     * | return   | `string`   | `unknown`  | yes   |
+     * | return   | `unknown`  | `string`   | yes   |
+     * | return   | `string`   | `never`    | yes   |
+     * | return   | `never`    | `string`   | yes   |
+     *
+     * Before this, only `any` escaped, in both directions and both positions — so
+     * `function f(x: string): void; function f(x: unknown): void {}`, an entirely
+     * ordinary shape, was an ours-only TS2394. The three `no` rows are the negative
+     * controls: we already agreed with both references on them and still do.
+     *
+     * The change is strictly PERMISSIVE — every added rule turns a `false` into a
+     * `true`, and none turns a `true` into a `false` — so it can only remove a
+     * TS2394, never invent one.
+     */
+    private fun isTypeNodeCompatible(
+        overloadType: TypeNode,
+        implType: TypeNode,
+        returnPosition: Boolean = false,
+    ): Boolean {
         // LiteralType vs LiteralType: compare wrapped literal values.
         if (overloadType is LiteralType && implType is LiteralType) {
             return literalExpressionEquals(overloadType.literal, implType.literal)
@@ -133868,7 +133907,7 @@ interface DataView {
                 // Contravariance: impl's inner param must be assignable to overload's inner.
                 if (!isTypeNodeCompatible(implInner, overloadInner)) return false
             }
-            if (!isTypeNodeCompatible(overloadType.type, implType.type)) return false
+            if (!isTypeNodeCompatible(overloadType.type, implType.type, returnPosition = true)) return false
             return true
         }
         // 17.186: TypeLiteral↔TypeLiteral — structurally compare PropertyDeclaration
@@ -133903,6 +133942,18 @@ interface DataView {
         if (implKind == SyntaxKind.AnyKeyword) return true
         // 'any' overload is compatible with any implementation
         if (overloadKind == SyntaxKind.AnyKeyword) return true
+        // (CHK.125) `unknown` is the TOP type and `never` the BOTTOM one, so each is
+        // assignable in exactly one direction — and the RETURN check accepts either
+        // direction while the PARAMETER check does not. See this function's KDoc for
+        // the ten measured cells.
+        if (returnPosition) {
+            if (implKind == SyntaxKind.UnknownKeyword || overloadKind == SyntaxKind.UnknownKeyword) return true
+            if (implKind == SyntaxKind.NeverKeyword || overloadKind == SyntaxKind.NeverKeyword) return true
+        } else {
+            // The impl must be the WIDER one: `overload -> impl` must be assignable.
+            if (implKind == SyntaxKind.UnknownKeyword) return true
+            if (overloadKind == SyntaxKind.NeverKeyword) return true
+        }
         // 'void' and 'undefined' are interchangeable
         if ((overloadKind == SyntaxKind.VoidKeyword && implKind == SyntaxKind.UndefinedKeyword) ||
             (overloadKind == SyntaxKind.UndefinedKeyword && implKind == SyntaxKind.VoidKeyword)) return true
