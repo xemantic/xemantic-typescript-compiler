@@ -25,6 +25,87 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.67) — (CHK.118) REFUSED with measurements, and the receipt matrix was the thing that was wrong (2026-09-11)
+
+**No code landed and that is the finding.** Suite unchanged at 18,573 / 0 / 3, tree clean, the
+binary byte-identical to (P18.66)'s pushed `Checker.class`. Artifacts kept OUT of the tree in
+`scratchpad/agent3/REFUSED-*.kt` plus the two matrices in `scratchpad/g/` and `scratchpad/h/`.
+
+**THE DEFECT IS REAL AND WAS REPRODUCED**: a variable declared in a nested `{ }`, an `if`
+block or a `namespace` body, SHADOWING a file-level one, is read as the OUTER declaration —
+9 ours-only / 19 missing over 36 cells, `file` and `fnTop` both 0/0, both references agreeing
+on all 36. **Two of the queue item's claims were wrong**: it is `const`, `let` AND `var`
+alike (identical rows, so not a const-ness question), and the UN-ANNOTATED spelling is
+already nearly correct — which localises the axis to the ANNOTATION and was the lead that
+found the recorder. **And the item's own probe shape was load-bearing in a way it did not
+say**: a PRIMITIVE-target probe reads all 36 cells CLEAN, so only an object-typed MEMBER read
+reproduces it at all. A first pass with the obvious probe would have closed the item as
+already-fixed.
+
+**THE MECHANISM, WHICH IS A ONE-LINE GUARD**: `checkVarDeclAssignabilityCore`'s annotated
+recorder is FIRST-DECL-WINS (`if (currentLocalTypes[name.text] == null)`), so a nested
+shadowing declaration always loses the race to the file-level entry. None of the four shadow
+mechanisms CLAUDE.md enumerates covers it — a file-level declaration makes round 455's
+`outerBound` AND `currentLocalTypes.containsKey` both true, so neither of its arms admits it;
+round 351 covers a function body's TOP level only; round 460 covers a name declared twice in
+ONE body — and the shadow family is not dispatched for a `ModuleBlock` at all, which is why
+3 of the 9 cells are unreachable from it.
+
+**WHY IT IS REFUSED, AND THE RECEIPT IS THE PART THAT WAS WRONG.** Relaxing the guard fixes
+every IN-BLOCK read and MOVES the wrong answer OUTSIDE the block, where it can be a
+**confident false positive on legal code**: with the shadowed member present on BOTH types,
+`const pAfter: number = zzzV.shared` after the block is legal and the patched binary reports
+`Type 'string' is not assignable to type 'number'`, while losing a true row pristine does
+report. **The 36-cell matrix cannot see any of that, because every one of its probes is
+INSIDE the block.** Re-measured with an after-block read added to all 18 cells
+(`scratchpad/h/`): parent **2 ours-only / 22 missing** against the patch's **0 / 20** — i.e.
++2/+2, a LATERAL move on `const`/`let` annotated (missing stays 3; the in-block row gained,
+the after-block row lost) with the whole net gain in `var`. Not worth a leak.
+
+**THE IMPLEMENTER'S CORRECTION TO THE COORDINATOR, ACCEPTED AND VERIFIED**: the PARENT also
+false-positives on legal code — probe5's lines 5 and 12 are legal and the parent reports both
+where pristine reports only line 14 — so the FP class **MOVES** rather than appearing from a
+clean baseline (2 FP + 1 TP becomes 1 FP + 1 missing). The coordinator's "the fix introduces
+a new false positive" was true and unfair; and the 18-cell matrix weights one in-block read
+against one after-block read, which over-weights the after-block case relative to real code,
+since a shadowing declaration exists to be read inside its block. The verdict is unchanged
+and the framing is fairer.
+
+**SCOPING IT WAS ATTEMPTED AND IS MEASURED INERT — THIS IS THE ROUND'S MOST REUSABLE
+FINDING.** A purpose-built undo log (only the names the predicate admits; NOT `AnnScopeStack`
+and NOT `MapScopeStack`, which CLAUDE.md refuses for `currentLocalTypes`), pushed and popped
+per `checkTypeAssignabilityInStatements`, reads **identical to the parent on both matrices**
+— and its positive control FIRED (the after-block read went back to pristine's exact answer),
+so the instrument was live and the scoping genuinely works. It deletes the fix along with the
+leak, because **`(cta-m3a)` (`Checker.kt:3127`) splits the WRITER from the EMITTER**: the
+legacy statement-list walk writes `currentLocalTypes` and the SPINE anchor emits later, so a
+statement-list boundary closes before BOTH reads and there is no in-between to scope. The
+unblocker is therefore a boundary in the SPINE's cta traversal — `ctaSpineEnter`/`ctaSpineLeave`
+arms at a statement-position `Block` (spine mask + `scripts/spine_closure_audit.py`), or a
+`localScoped` `CtaFrame` per block, which is a program-wide change to every narrowing and
+every recorded local. `ctaSpineLeave`'s own (CHK.64)(ii) comment already refuses a narrowing
+write there for the same reason.
+
+**TWO INDEPENDENT RESIDUES FOUND ON THE WAY, BOTH MEASURED AGAINST THREE COMPILERS.** (i) An
+**ANNOTATED function-body local** misses TS2339 with NO shadowing and NO nesting at all —
+`function h(){ const ann: { a: number } = { a: 1 }; ann.zzzNope }` — and it is exactly ONE
+cell of four: the un-annotated body-local, the annotated FILE-LEVEL and the un-annotated
+file-level all report correctly. Now (CHK.121). (ii) The after-block leak ALREADY EXISTS for
+the un-annotated spelling on the unchanged binary, so the patch would have extended an
+existing wrong answer rather than opening a class — which is what makes (i) and the leak two
+facts about the same recorder rather than one.
+
+**ABLATION of the refused patch, kept for whoever unblocks it**: 8 arms over 15 pins — the
+fix OFF reddens exactly the 10 defect pins with all 5 controls green; two arms redden only
+their own pin (and one of those, the enclosing-parameter refusal, read 0 RED until a fixture
+was built FOR it — a round-927 pair masked by another gate); and the arm that WIDENS the gate
+to every nested declaration is **0 RED / UNDISCRIMINATED**, because with no outer declaration
+the entry is null and the first-wins branch already handles it — its real risk is off-fixture
+and the 8-profile grid is its only instrument.
+
+**NEXT**: (CHK.121) is new, small and independent. (CHK.119) and (CHK.120) are (P18.66)'s
+residues. (CHK.118) is now BLOCKED with its unblocker named, and the queue item says so.
+
 ### Round (P18.66) — (INV.0) step 10b-iii: the TS2693 the item says we never emit, and TWO resolvers disagreeing about ONE receiver (2026-09-10)
 
 **Suite 18,546 → 18,573 / 0 / 3** (+12 and +13 pins, +2 from splitting a countdown
@@ -2071,15 +2152,44 @@ improves row 8's DECLARATION-READING group.
   it, and note that the alternative (teaching each consumer to read the namespace's own
   `LexicalScope`) is a per-consumer cost paid at least three times.
 
-- [ ] **(CHK.118) A BLOCK-NESTED `const` SHADOWING A FILE-LEVEL ONE RESOLVES THE OUTER
-  DECLARATION — THE FIFTH SHADOW MECHANISM, AND NOT B83.5's (measured 2026-09-10,
-  (P18.63)).** `function f() { { const v = …; use(v) } }` with a file-level `v` answers the
-  OUTER `v` at `block` and `ifBlock` (and inside a namespace body) and the INNER one at
-  `fnTop`, against both references. It is not the scope-space consult's population —
-  `SymbolFlags.ScopeValueDeclaration` excludes `Variable` deliberately — but
-  `currentLocalTypes`' recording, i.e. the (CHK.71)(b) family, whose entry lists FOUR ways
-  and does not list this one. 3 B83.5 cells plus 1 namespace-body cell of the step-10
-  matrix.
+- [ ] **(CHK.118) BLOCKED ON A SPINE-SIDE BLOCK SCOPE — DO NOT RE-ATTEMPT THE RECORDER FIX
+  (measured and REFUSED 2026-09-11, (P18.67) note).** A variable declared in a nested `{ }`,
+  an `if` block or a `namespace` body and SHADOWING a file-level one is read as the OUTER
+  declaration: 9 ours-only / 19 missing over 36 cells with `file` and `fnTop` both 0/0 and
+  both references agreeing on all 36. **It is `const`, `let` AND `var` alike** (not a
+  const-ness question, as the original item said) and the UN-ANNOTATED spelling is already
+  nearly correct, so the axis is the ANNOTATION. **The probe shape is load-bearing: a
+  PRIMITIVE-target probe reads all 36 cells CLEAN** — only an object-typed MEMBER read
+  reproduces it, so an implementer using the obvious probe will close this as already-fixed.
+  **Mechanism**: `checkVarDeclAssignabilityCore`'s annotated recorder is FIRST-DECL-WINS, so
+  the nested declaration loses to the file-level entry; none of CLAUDE.md's four shadow
+  mechanisms covers it (round 455 needs `!containsKey`, (CHK.71) needs `!outerBound`, round
+  351 is a body's TOP level, round 460 is one body — and the family is not dispatched for a
+  `ModuleBlock` at all, which is 3 of the 9 cells). **WHY REFUSED**: relaxing the guard fixes
+  every in-block read and MOVES the wrong answer outside the block, where it is a CONFIDENT
+  FALSE POSITIVE on legal code; net over an after-block matrix is 2/22 → 0/20, a LATERAL move
+  on `const`/`let` with all gain in `var`. **Scoping the write to the statement list is
+  measured INERT** — identical to parent on both matrices WITH a live positive control —
+  because `(cta-m3a)` (`Checker.kt:3127`) splits the WRITER (the legacy statement-list walk)
+  from the EMITTER (the spine anchor), so that boundary closes before both reads.
+  **Unblocker**: an undo boundary at a statement-position `Block` in
+  `ctaSpineEnter`/`ctaSpineLeave` (spine mask + `scripts/spine_closure_audit.py`), or a
+  `localScoped` `CtaFrame` per block (program-wide: every narrowing and every recorded local).
+  **Any receipt here MUST include an after-block read** — an in-block-only matrix is
+  structurally unable to see the cost. Refused patch, its 15 pins and its 8-arm ablation are
+  kept out of the tree in `scratchpad/agent3/REFUSED-*.kt`.
+
+- [ ] **(CHK.121) AN *ANNOTATED* FUNCTION-BODY LOCAL MISSES TS2339 WITH NO SHADOWING AND NO
+  NESTING, AND IT IS EXACTLY ONE CELL OF FOUR (measured 2026-09-11, (P18.67), three
+  compilers).** `export function h(){ const ann: { a: number } = { a: 1 }; const p = ann.zzzNope }`
+  is `Property 'zzzNope' does not exist on type '{ a: number; }'.` in tsgo 7.0.2 AND pristine
+  6.0.3 and silent here — while the UN-ANNOTATED body-local, the ANNOTATED file-level and the
+  UN-ANNOTATED file-level all report it correctly, which is the control set that says this is
+  neither a block-scoping nor a file-vs-body gap but specifically the annotated body-local
+  recording. Found while measuring (CHK.118) and independent of it. Likely the same
+  `checkVarDeclAssignabilityCore` recorder / (CHK.46)-(CHK.47) receiver-helper seam, so read
+  `cmamUnannotatedLocalReceiverType` (which serves the un-annotated case) before anything
+  else — the asymmetry is that the annotated case has no equivalent.
 
 - [ ] **(INV.0) STEP 10b-ii — BLOCKED-ON: the two families named inside this item. THE *UNIQUE* HALF OF THE
   VALUE SPACE (measured 2026-09-10, (P18.63)). MOVED BELOW ITS SMALLER, UNBLOCKED SIBLINGS

@@ -1,3 +1,43 @@
+**(P18.62) — (INV.0) STEP 10a: THE B83.5 *TYPE* SPACE, AND THE ARC IS FUNNEL-SHAPED RATHER THAN RADIUS-SHAPED, 18,529 / 0 / 3 (2026-09-10).**
+The round-748 scope-space consult widened from `enum`-only to the whole TYPE space —
+`class`/`interface`/`type`/`enum` — at BOTH sites that resolve a bare type name.
+**THE ITEM SIZED THE ARC BY THE WRONG QUANTITY**: "~357 `globals[` readers downstream" is a
+real count of AD-HOC per-walker name probes, not of the resolution LADDER, which has two
+funnels plus a small third — so step 10 decomposes 10a/10b/10c/10d and none of them sweeps 357
+sites. **THE PRIZE, MEASURED OVER A 129-CELL MATRIX AGAINST BOTH REFERENCES**: at the 86 B83.5
+cells, **106 lost true rows and 43 ours-only rows** (TYPE 24/60, VALUE 19/46), file-level
+control 15/15 clean. **The variant split is the finding** — a UNIQUE scope-space name is 0
+ours-only / 36 missing (it degrades to `any` and goes quiet), a SHADOWING one is 43/70,
+resolving the OUTER declaration in 40 of 42 cells; nesting depth is irrelevant, so a
+function-body-TOP declaration is as unbound as one three blocks deep. **TWO OF THE ITEM'S OWN
+CLAIMS WERE WRONG** (its "1 ours-only TS2353" is a MISSING row, and round 748 closed the enum
+half only in TYPE position) — the second round running that a queue item's facts needed one
+command. **THE STAMP WIDENING IS FREE** (NodeKind 23..26 are contiguous, so two int compares
+stayed two), and `SymbolFlags.ScopeTypeDeclaration` excludes `TypeParameter` deliberately —
+folding TPs in would flood a gate whose whole job is to be empty. **A CONTROL STOPPED BEING
+INERT**: the (INC.16) verify walk also fed the gate, which mattered the moment `class` was
+admitted, because a named `ClassExpression` would then have entered it ONLY for a file that
+also declares a scope-space enum. **THE ONE REGRESSION WAS A PRE-EXISTING DEFECT THIS EXPOSED**
+— `keyof errorType` answered the CLOSED domain `string` under a comment saying its result "is
+never displayed/checked meaningfully", which was measurably false; it was invisible only
+because B83.5 kept such an alias at `any`, and `keyof any` IS the correct open domain, so
+making the type real narrowed a correct superset into a wrong subset. Found by a marker
+DIAGNOSTIC (`println` is swallowed by `runCli`), after delta-debugging showed the row needs
+three ingredients at once. **A COUNTDOWN PIN FIRED AS DESIGNED** (round 748 wrote it saying "a
+future widening has to change this pin on purpose") and **a vacuity guard caught its second
+blind pin**, revealing that `arrayElementUnionAlias`' B83.5 workaround is now unreachable for
+the shape it was written for. **THE BEFORE/AFTER RECEIPT IS THE SAME 129-CELL MATRIX
+RE-RUN AGAINST THE LANDED BINARY** (reference arms reused verbatim, snapshot sha256 asserted at
+both ends): **9 cells FIXED, 9 IMPROVED, 0 REGRESSED — −9 ours-only rows, −18 missing rows,
+every row of it inside the TYPE half**, both bound controls byte-identical and the VALUE half
+numerically untouched. The three nesting sites move IDENTICALLY, which is the signature of a
+fix at the resolution site rather than a syntactic special case; shadow resolution went 7/42 →
+16/42 agreeing with the references. **The one TYPE cell family it did NOT move is a QUALIFIED
+reference** (`ZzzE.ZInner`) — `resolveQualifiedName` is a fourth type-name path, now written
+into 10c. **ALL EIGHT ABLATION ARMS RUN, union 9 of 28 pins, and three predictions wrong**: the GATE and the FLAG-MASK arms redden IDENTICAL sets (round 927's PAIR — either alone disables the whole consult), round 748's ORDER arm is UNDISCRIMINATED because this step gave `getTypeFromTypeReference` its own hoist, and the `keyof (X & T)` arm read 0 RED until a pin was ADDED for it — without which that guard would have read as redundant and been deletable. Grid 8×`added=0 removed=0`, cost_gate exit 0 (`globals.lookups`
+−0.23%, `globals.misses` −0.24% — the consult answering before the miss), huge_methods exit 0
+(842 classes), warning-clean.
+
 **(P18.61) — (INV.0) STEP 9: THE DECISION, TAKEN ON MEASUREMENTS, AND THE SCOPE-SPACE ASCENT GETS ONE HOME, 18,520 / 0 / 3 (2026-09-10).**
 `Checker.kt` **191,540 → 191,506**; `LexicalScopeResolver.kt` 124, **ambient NONE — the first such
 row since step 3**; ledger row 12. **BOTH OPTIONS SIZED RATHER THAN ARGUED**: the check passes are

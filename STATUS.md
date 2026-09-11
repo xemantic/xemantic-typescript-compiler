@@ -19,6 +19,38 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.67) — (CHK.118) REFUSED WITH MEASUREMENTS, AND THE RECEIPT MATRIX WAS THE THING THAT WAS WRONG, 18,573 / 0 / 3 (2026-09-11).**
+**NO CODE LANDED AND THAT IS THE FINDING.** The defect is real and was reproduced — a
+variable in a nested `{ }` / `if` block / `namespace` body SHADOWING a file-level one is read
+as the OUTER declaration, 9 ours-only / 19 missing over 36 cells, `file` and `fnTop` both
+0/0, both references agreeing on all 36 — and the mechanism is one guard:
+`checkVarDeclAssignabilityCore`'s annotated recorder is FIRST-DECL-WINS, so the nested
+declaration loses to the file-level entry. **THREE OF THE ITEM'S CLAIMS NEEDED CORRECTING**:
+it is `const`, `let` AND `var` alike (not a const-ness question), the UN-ANNOTATED spelling
+is already nearly correct (so the axis is the ANNOTATION), and **its probe shape is
+load-bearing — a PRIMITIVE-target probe reads all 36 cells CLEAN**, so an implementer using
+the obvious probe closes this as already-fixed. **WHY IT IS REFUSED**: relaxing the guard
+fixes every IN-BLOCK read and MOVES the wrong answer OUTSIDE the block, where with the
+shadowed member present on BOTH types it is a **confident FALSE POSITIVE on legal code** plus
+a lost true row. **AND THE RECEIPT IS THE PART THAT WAS WRONG — THE REUSABLE LESSON**: the
+36-cell matrix reports 9/19 → 0/10 and is structurally unable to see any of that, because
+every one of its probes is INSIDE the block; re-measured with an after-block read in all 18
+cells it is **2/22 → 0/20**, i.e. +2/+2, a LATERAL move on `const`/`let` annotated with the
+whole gain in `var`. **SCOPING WAS ATTEMPTED AND IS MEASURED INERT, WITH A LIVE POSITIVE
+CONTROL** — identical to the parent on both matrices — because `(cta-m3a)`
+(`Checker.kt:3127`) splits the WRITER (the legacy statement-list walk) from the EMITTER (the
+spine anchor), so a statement-list boundary closes before BOTH reads and there is no
+in-between; the unblocker is a boundary in the SPINE's cta traversal, now named in the queue
+item. **THE IMPLEMENTER CORRECTED THE COORDINATOR AND WAS RIGHT**: the PARENT also
+false-positives on legal code, so the FP class MOVES rather than appearing from a clean
+baseline (2 FP + 1 TP → 1 FP + 1 missing) — verdict unchanged, framing fairer. **TWO
+INDEPENDENT RESIDUES**, both measured against three compilers: an ANNOTATED function-body
+local misses TS2339 with NO shadowing and NO nesting and is **exactly one cell of four** (the
+un-annotated body-local and both file-level spellings report correctly) — now (CHK.121); and
+the after-block leak ALREADY EXISTS for the un-annotated spelling on the unchanged binary.
+Tree clean, binary byte-identical to (P18.66)'s; the refused patch, its 15 pins and its 8-arm
+ablation are kept OUT of the tree.
+
 **(P18.66) — (INV.0) STEP 10b-iii: THE TS2693 THE ITEM SAYS WE NEVER EMIT, AND TWO RESOLVERS DISAGREEING ABOUT ONE RECEIVER, 18,573 / 0 / 3 (2026-09-10).**
 **TWO OF THE ITEM'S OWN FACTUAL CLAIMS WERE WRONG AND ONE OF THEM CHANGED THE SIZE OF THE
 WORK**: we DO emit TS2693 — byte-identically to pristine — for a FILE-LEVEL `interface`/
@@ -153,43 +185,3 @@ WERE WRONG** — `const` in VALUE position resolves only in the UNIQUE variant (
 one answers the OUTER declaration, now (CHK.118)), and its `typeof` claim was an artefact of
 the v1 narrowing probe. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0
 (844 classes), warning-clean.
-
-**(P18.62) — (INV.0) STEP 10a: THE B83.5 *TYPE* SPACE, AND THE ARC IS FUNNEL-SHAPED RATHER THAN RADIUS-SHAPED, 18,529 / 0 / 3 (2026-09-10).**
-The round-748 scope-space consult widened from `enum`-only to the whole TYPE space —
-`class`/`interface`/`type`/`enum` — at BOTH sites that resolve a bare type name.
-**THE ITEM SIZED THE ARC BY THE WRONG QUANTITY**: "~357 `globals[` readers downstream" is a
-real count of AD-HOC per-walker name probes, not of the resolution LADDER, which has two
-funnels plus a small third — so step 10 decomposes 10a/10b/10c/10d and none of them sweeps 357
-sites. **THE PRIZE, MEASURED OVER A 129-CELL MATRIX AGAINST BOTH REFERENCES**: at the 86 B83.5
-cells, **106 lost true rows and 43 ours-only rows** (TYPE 24/60, VALUE 19/46), file-level
-control 15/15 clean. **The variant split is the finding** — a UNIQUE scope-space name is 0
-ours-only / 36 missing (it degrades to `any` and goes quiet), a SHADOWING one is 43/70,
-resolving the OUTER declaration in 40 of 42 cells; nesting depth is irrelevant, so a
-function-body-TOP declaration is as unbound as one three blocks deep. **TWO OF THE ITEM'S OWN
-CLAIMS WERE WRONG** (its "1 ours-only TS2353" is a MISSING row, and round 748 closed the enum
-half only in TYPE position) — the second round running that a queue item's facts needed one
-command. **THE STAMP WIDENING IS FREE** (NodeKind 23..26 are contiguous, so two int compares
-stayed two), and `SymbolFlags.ScopeTypeDeclaration` excludes `TypeParameter` deliberately —
-folding TPs in would flood a gate whose whole job is to be empty. **A CONTROL STOPPED BEING
-INERT**: the (INC.16) verify walk also fed the gate, which mattered the moment `class` was
-admitted, because a named `ClassExpression` would then have entered it ONLY for a file that
-also declares a scope-space enum. **THE ONE REGRESSION WAS A PRE-EXISTING DEFECT THIS EXPOSED**
-— `keyof errorType` answered the CLOSED domain `string` under a comment saying its result "is
-never displayed/checked meaningfully", which was measurably false; it was invisible only
-because B83.5 kept such an alias at `any`, and `keyof any` IS the correct open domain, so
-making the type real narrowed a correct superset into a wrong subset. Found by a marker
-DIAGNOSTIC (`println` is swallowed by `runCli`), after delta-debugging showed the row needs
-three ingredients at once. **A COUNTDOWN PIN FIRED AS DESIGNED** (round 748 wrote it saying "a
-future widening has to change this pin on purpose") and **a vacuity guard caught its second
-blind pin**, revealing that `arrayElementUnionAlias`' B83.5 workaround is now unreachable for
-the shape it was written for. **THE BEFORE/AFTER RECEIPT IS THE SAME 129-CELL MATRIX
-RE-RUN AGAINST THE LANDED BINARY** (reference arms reused verbatim, snapshot sha256 asserted at
-both ends): **9 cells FIXED, 9 IMPROVED, 0 REGRESSED — −9 ours-only rows, −18 missing rows,
-every row of it inside the TYPE half**, both bound controls byte-identical and the VALUE half
-numerically untouched. The three nesting sites move IDENTICALLY, which is the signature of a
-fix at the resolution site rather than a syntactic special case; shadow resolution went 7/42 →
-16/42 agreeing with the references. **The one TYPE cell family it did NOT move is a QUALIFIED
-reference** (`ZzzE.ZInner`) — `resolveQualifiedName` is a fourth type-name path, now written
-into 10c. **ALL EIGHT ABLATION ARMS RUN, union 9 of 28 pins, and three predictions wrong**: the GATE and the FLAG-MASK arms redden IDENTICAL sets (round 927's PAIR — either alone disables the whole consult), round 748's ORDER arm is UNDISCRIMINATED because this step gave `getTypeFromTypeReference` its own hoist, and the `keyof (X & T)` arm read 0 RED until a pin was ADDED for it — without which that guard would have read as redundant and been deletable. Grid 8×`added=0 removed=0`, cost_gate exit 0 (`globals.lookups`
-−0.23%, `globals.misses` −0.24% — the consult answering before the miss), huge_methods exit 0
-(842 classes), warning-clean.
