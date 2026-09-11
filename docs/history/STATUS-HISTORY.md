@@ -2950,3 +2950,35 @@ arms / 13 pins, two brief predictions wrong** — the below-`perFileIdentSymbol`
 behaviourally the SAME mistake as the inverse gate (identical red set), and the
 namespaces-excluded arm is 0 RED and recorded UNDISCRIMINATED rather than smoothed. Grid
 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844 classes), warning-clean.
+
+**(P18.67) — (CHK.118) REFUSED WITH MEASUREMENTS, AND THE RECEIPT MATRIX WAS THE THING THAT WAS WRONG, 18,573 / 0 / 3 (2026-09-11).**
+**NO CODE LANDED AND THAT IS THE FINDING.** The defect is real and was reproduced — a
+variable in a nested `{ }` / `if` block / `namespace` body SHADOWING a file-level one is read
+as the OUTER declaration, 9 ours-only / 19 missing over 36 cells, `file` and `fnTop` both
+0/0, both references agreeing on all 36 — and the mechanism is one guard:
+`checkVarDeclAssignabilityCore`'s annotated recorder is FIRST-DECL-WINS, so the nested
+declaration loses to the file-level entry. **THREE OF THE ITEM'S CLAIMS NEEDED CORRECTING**:
+it is `const`, `let` AND `var` alike (not a const-ness question), the UN-ANNOTATED spelling
+is already nearly correct (so the axis is the ANNOTATION), and **its probe shape is
+load-bearing — a PRIMITIVE-target probe reads all 36 cells CLEAN**, so an implementer using
+the obvious probe closes this as already-fixed. **WHY IT IS REFUSED**: relaxing the guard
+fixes every IN-BLOCK read and MOVES the wrong answer OUTSIDE the block, where with the
+shadowed member present on BOTH types it is a **confident FALSE POSITIVE on legal code** plus
+a lost true row. **AND THE RECEIPT IS THE PART THAT WAS WRONG — THE REUSABLE LESSON**: the
+36-cell matrix reports 9/19 → 0/10 and is structurally unable to see any of that, because
+every one of its probes is INSIDE the block; re-measured with an after-block read in all 18
+cells it is **2/22 → 0/20**, i.e. +2/+2, a LATERAL move on `const`/`let` annotated with the
+whole gain in `var`. **SCOPING WAS ATTEMPTED AND IS MEASURED INERT, WITH A LIVE POSITIVE
+CONTROL** — identical to the parent on both matrices — because `(cta-m3a)`
+(`Checker.kt:3127`) splits the WRITER (the legacy statement-list walk) from the EMITTER (the
+spine anchor), so a statement-list boundary closes before BOTH reads and there is no
+in-between; the unblocker is a boundary in the SPINE's cta traversal, now named in the queue
+item. **THE IMPLEMENTER CORRECTED THE COORDINATOR AND WAS RIGHT**: the PARENT also
+false-positives on legal code, so the FP class MOVES rather than appearing from a clean
+baseline (2 FP + 1 TP → 1 FP + 1 missing) — verdict unchanged, framing fairer. **TWO
+INDEPENDENT RESIDUES**, both measured against three compilers: an ANNOTATED function-body
+local misses TS2339 with NO shadowing and NO nesting and is **exactly one cell of four** (the
+un-annotated body-local and both file-level spellings report correctly) — now (CHK.121); and
+the after-block leak ALREADY EXISTS for the un-annotated spelling on the unchanged binary.
+Tree clean, binary byte-identical to (P18.66)'s; the refused patch, its 15 pins and its 8-arm
+ablation are kept OUT of the tree.

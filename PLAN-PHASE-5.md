@@ -25,6 +25,81 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.73) — (CHK.97) D2b: the silence that hid a true positive, and a design decided by BUILDING the alternative (2026-09-11)
+
+**Suite 18,679 → 18,688 / 0 / 3** (+9 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
+exit 0, no rebaseline; `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean.
+**THREE LINES OF CODE** — the `>= 2` emit and the separate `>= 1` silence collapse into one
+`if (overloadedMembers >= 1) { emit; return null }`; the other 64 changed lines are comment.
+
+**THE DESIGN QUESTION WAS SETTLED BY BUILDING THE REJECTED ALTERNATIVE, NOT BY ARGUING
+ABOUT IT.** The item offered two shapes — recompute the refusal reason as a `count` at the
+call site, or thread it out of `computeCombinedUnionSignatures`. An instrumented binary that
+ACTUALLY threads it, printing the reason at the suppression site, measures the two agreeing
+on **21 of 21 reachable refusals**, and they must: `overloadedMembers >= 2` *is*
+`multipleOverloadSets` (same count, same calls), and the only other null-producing path with
+pass 2 running is the generic check. So the count is kept and **the thread is recorded as a
+refusal with its number** — it would need a second union-id-keyed cache to survive a memo hit,
+for a decision that never differs. The census build was behaviour-neutral (18,679/0/3, exactly
+the baseline), which is what makes its count trustworthy.
+
+**TWO OF THE BRIEF'S CLAIMS WERE WRONG, BOTH IN THE SAME DIRECTION — TOWARD THE CHANGE BEING
+RISKIER THAN IT IS.** (a) The `>= 1` silence's stated justification is **false**: the
+`unionOfArraysFilterCall` shape NEVER REACHES the branch (0 refusals) — stage 2's array
+fallback answers that receiver first, and in the embedded lib BOTH `Array.filter` and
+`ReadonlyArray.filter` carry 2 signatures, so without the fallback it would be D2's `>= 2`
+case and not D2b's at all. The stale KDoc line in `combineUnionSignatures` claiming that
+suppression "still owns `unionOfArraysFilterCall`" is corrected. (b) `overloadedMembers == 1`
+is reached **ZERO times** by the whole suite, all eight profiles, cronstrue AND marked — so
+the widening **cannot move a baseline**, and the pins are its only gate. Both facts were
+measured with the census build; neither is inferable from reading.
+
+**RECEIPT** (`scripts/ref_matrix.py`, chain-aware, 11 fixtures): **missing 8 → 0,
+ours-only 0 → 0, agree 12 → 15**, zero SPAN-DIFF, zero REF-SPLIT. **AND `text-diff` MOVES,
+1 → 6, WHICH THE ROUND IS FLAGGING RATHER THAN BURYING.** Of the eight formerly-missing rows,
+three land as AGREE and **five land at the right file, line, COLUMN and code with a different
+display** — every one of them the SAME pre-existing defect, (CHK.130): a union member whose
+only member is a call signature renders `ZzzA | (ZzzG)` where both references print it bare.
+**Proof it is not a D2b defect**: fixture `q4`'s four rows differ only in whether that member
+carries a property, and the three that do are byte-identical AGREE. So the honest summary is
+that **eight SILENT rows become three exact ones and five that differ only in parentheses** —
+a meaning gain with a form residue, and the residue is now six instances louder because a
+diagnostic that never fired could not display anything wrong.
+
+**THE GRID IS A CONTROL AND THE CENSUS SAYS SO IN THE STRONGEST FORM YET**: not merely zero
+hits for this branch, but **zero union-callee combination refusals OF ANY KIND** on all eight
+profiles, and on cronstrue and marked too. `added=0 removed=0` is inertness. The real gate is
+the corpus (all 8,837 baselines green) plus the pins — and a (CHK.57) `javap -c -p | grep -v
+line` control confirms the grid's AFTER binary is bytecode-identical to the landed one despite
+later KDoc edits.
+
+**ABLATION: 5 arms, EACH RUN AGAINST THE FULL SUITE, both controls.** b1 comment-only = 0 RED;
+b2 break the shared chain = **13 RED** across all three call sites plus the corpus
+`betterErrorForUnionCall`, which is what proves one shared emitter; b3 restore the `>= 1`
+silence = exactly the 3 D2b positives and nothing else, i.e. fully attributable; b5
+mis-calibrate the count (`size >= 3`) = exactly the 6 D2 positives, so **last round's `>= 2`
+threshold is load-bearing and now has a pin that says so**. Running every arm against the FULL
+suite rather than the guard letters is (P18.72)'s own lesson applied.
+
+**b4 IS THE INTERESTING ARM AND IT IS A REFUSAL ON *SCOPE*, NOT ON EVIDENCE.** Collapsing the
+whole `differ` tail (`>= 0`, making the tail dead) is **0 RED on the full suite** — i.e. the
+tail's conservatism is a redundant guard on every reachable shape, which is (P18.72)'s a3
+finding one layer out. That is evidence FOR the collapse, not against it; it was still refused,
+because the tail is (CHK.94) territory and deserves its own round with its own pins. **The
+number is recorded in the branch comment and the test KDoc so the next round starts from a
+measurement rather than an opinion** — which is the whole point of writing a refusal down.
+
+**RESIDUES, RECORDED AND NOT PINNED**: the `differ`-tail collapse above; the threaded reason
+(a measured 21/21 no-op, refused rather than forgotten); (CHK.130), now characterised exactly
+— a union member whose ONLY member is a call signature, where adding one property makes all
+three compilers agree; and the CONSTRUCT twin (`new` on such a union), a separate branch with
+its own sentence.
+
+**NEXT**: **(CHK.130)** is now the cheapest and best-characterised item in this area, and
+closing it would turn all six of this round's TEXT-DIFFs into AGREE. Then (CHK.97)'s (D3)
+IDENTICAL-signature half. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order sends
+the arc.
+
 ### Round (P18.72) — (CHK.97) D2: a both-overloaded union callee reports, and the suppression that is still hiding a second row (2026-09-11)
 
 **Suite 18,669 → 18,679 / 0 / 3** (+10 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
@@ -892,157 +967,6 @@ shadow cell — 10a's residue, unchanged); and the `const` shadow above.
 **NEXT**: 10c (heritage + `resolveQualifiedName`), which is small and is the last TYPE-name
 funnel, then 10b-ii once the two unmasked families are closed.
 
-### Round (P18.62) — (INV.0) step 10a: the B83.5 TYPE space, and the arc is FUNNEL-shaped rather than RADIUS-shaped (2026-09-10)
-
-**Suite 18,520 → 18,529 / 0 / 3** (+9 pins). `Checker.kt` 191,506 → 191,591 (+85 — this
-step is a semantic change, not an extraction; the shrinkage dashboard is unmoved in kind).
-**8-profile grid `added=0 removed=0` on all eight**, `cost_gate.py` exit 0, `huge_methods.py`
-exit 0 (842 classes), warning-clean.
-
-**THE ITEM SIZED THE ARC BY ITS BLAST RADIUS AND THAT IS THE WRONG INSTRUMENT FOR ITS FIRST
-SUB-STEPS.** "~357 `globals[` readers downstream" is a real count (`Checker.kt` 328,
-`NameResolver.kt` 24, rest of core 5, plus 69 `.locals[`) and it is a count of AD-HOC
-per-walker name probes — `globals["Record"]`, `globals[callee.text]` — not of the resolution
-LADDER. The ladder has exactly TWO funnels: TYPE space is
-`NameResolver.resolveTypeNameToSymbol` plus `Checker.getTypeFromTypeReference`, VALUE space is
-`Checker.getTypeOfIdentifierCore`. Heritage is a third, smaller one. So the arc decomposes
-10a/10b/10c/10d and none of them has to sweep 357 sites. **Read what a count is a count OF
-before letting it size a round.**
-
-**THE PRIZE, MEASURED OVER A 129-CELL MATRIX AGAINST BOTH REFERENCES** (7 kinds × 4 nesting
-sites × 2 positions × unique/shadowing; `scratchpad/b835/final_matrix.txt`): at the 86 B83.5
-cells, **106 lost true rows and 43 ours-only rows**, TYPE 24/60 and VALUE 19/46. The file-level
-control is 15/15 clean, so the probes are sound. **The variant split is the finding**: a UNIQUE
-scope-space name is **0 ours-only / 36 missing** — it degrades to `any` and every check under it
-goes quiet — while a SHADOWING one is **43 ours-only / 70 missing**, resolving the OUTER
-declaration in 40 of 42 cells. Nesting depth is irrelevant (34/36/36 across fnTop/block/if), so
-CLAUDE.md's B83.5 entry now says a function-body-TOP declaration is as unbound as one three
-blocks deep.
-
-**TWO OF THE ITEM'S OWN FACTUAL CLAIMS WERE WRONG, WHICH IS THE SECOND ROUND RUNNING.** It
-promised "1 ours-only TS2353 removed"; that shape is a MISSING row, not a false positive —
-same fixture, opposite direction. And "round 748 closed the enum half" is exactly half true:
-the enum VALUE position is still silent at every B83.5 site.
-
-**WHAT LANDED.** The stamp (`indexSourceFile`), the binder PROJECTION
-(`BinderResult.scopeTypeNames`), the name GATE (`Checker.lexicalBlockScopedTypeNames`) and the
-consult (`NameResolver.lexicalTypeSymbolForNode`) all widened from `type`/`enum` to the whole
-TYPE space. **The stamp widening is free**: `NodeKind` 23..26 are contiguous, so two int
-compares stayed two int compares. `SymbolFlags.ScopeTypeDeclaration` is `Type` minus
-`TypeParameter`, and that exclusion is the point — folding TPs in would put every `T`/`K`/`V`
-into a set whose whole job is to be empty.
-
-**`getTypeFromTypeReference` NEEDED ITS OWN HOIST, AND NOTHING WOULD HAVE SAID SO.** It asks
-the enclosing-NAMESPACE chain itself and then calls `resolveTypeNameToSymbol` with
-`enclosingNamespacesDone = true`, i.e. past that function's lexical-first arm. Without the
-hoist a namespace member displaces a declaration inside its own function — the outer
-declaration winning again, silently. Its pin is the only one with a namespace and its arm
-reddens nothing else.
-
-**A CONTROL THAT STOPPED BEING INERT, AND ONLY BECAUSE `class` WAS ADMITTED.** The (INC.16)
-verify walk also `add`ed to the name gate. Harmless while the projection covered the same
-declarations — and the moment `class` joined, a named `ClassExpression` (present in
-`scope.symbols`, deliberately NOT stamped) would have entered the gate ONLY for a file that
-also declares a scope-space `enum`, which is the one thing that makes that walk run. A type
-name's resolution would have depended on an unrelated property of its file. The walk is now a
-pure control and the projection is the sole source; its violation count is scoped to the four
-DECLARATION kinds for the same reason.
-
-**THE ONE REGRESSION WAS A PRE-EXISTING DEFECT THIS CHANGE EXPOSED, AND THE INSTRUMENT BEAT
-BOTH HYPOTHESES.** `keyRemappingKeyofResult` grew two false TS2322. Delta-debugging said the
-row needs THREE ingredients at once (the file-level `Oops`/`x` block, the inner `Remapped`
-mapped type, the inner `Oops`/`x` block) — remove any one and it is silent — which is the
-signature of order-dependent resolution, not a missing rule. A temporary marker DIAGNOSTIC
-inside `getKeyofType` (round 947's positive control; `println` is swallowed by `runCli`'s
-stdout capture) answered it in one run: **the input is `errorType`**, and
-`if (type === errorType) return stringType` sat under a comment saying its result "is never
-displayed/checked meaningfully". **That comment was measurably false.** `errorType` means the
-resolution did not succeed, so a CLOSED domain of exactly `string` is round 463's
-partial-key-domain error, and it emits a real false positive as soon as anything assigns to a
-binding annotated with it. **It was invisible because B83.5 kept such an alias at `any` — and
-`keyof any` IS the correct open domain, so making the type real narrowed a correct superset
-into a wrong subset.** The two arms now agree. A first, separate attempt (an intersection arm
-for `keyof (X & T)`) was correct on its own standalone shape, verified, and never fired here;
-it is kept with its own pin and its own ablation arm.
-
-**A COUNTDOWN PIN FIRED EXACTLY AS DESIGNED, WHICH IS THE FIRST TIME IN THIS FAMILY.**
-`negative control - a block scoped interface stays unresolved in type position` was written by
-round 748 as a deliberate marker, and its own KDoc said "it exists so that a future widening
-has to change this pin on purpose". Inverted, with both references confirming. It is kept in
-`FunctionScopedEnumTypePositionTest` rather than moved, because that is where a future
-NARROWING of the slice would be made.
-
-**AND A VACUITY GUARD CAUGHT ITS SECOND BLIND PIN — A B83.5 WORKAROUND WENT DEAD.**
-`EagerIndexDeferralTest`'s `an unpartitioned build still builds the indices it needs` read 0
-scans on a perfectly working build. Its fixture reached `findLocalTypeAlias` through
-`arrayElementUnionAlias`, which consults the index ONLY after `getTypeFromTypeNode(ref)` fails
-to produce a union — the very failure 10a fixes. **So the array-literal branch of that
-workaround is now unreachable for the shape it was written for.** The fixture moved to the
-other reader (`discUnionParamMembers`); the dead branch is recorded as a LEAD, not deleted.
-
-**A PRE-EXISTING WARNING FIXED**: `nodeAnswerComputations`' redundant `internal set` (added by
-step 8). Kotlin does not re-emit warnings on an up-to-date compile, which is how "warning-clean"
-survived a round — a `--rerun-tasks` is what sees them.
-
-**COST**: `globals.lookups` **−0.23%** and `globals.misses` **−0.24%** — the consult answering
-names that used to fall through to a miss — against `mapped.keyed` **+1.18%** and
-`typeOfExpr.distinct` +0.06%, which are the real resolutions where there used to be `any`. All
-inside ±2%, so no rebaseline.
-
-**ALL EIGHT ABLATION ARMS WERE RUN, ONE MISTAKE AT A TIME AGAINST A sha256-VERIFIED SNAPSHOT
-(`scripts/inv0s10-ablate.py`), AND THREE OF THE ROUND'S OWN PREDICTIONS WERE WRONG.** Union
-**9 of the 28 pins** in the three classes. **A2 (the name GATE back to `lexicalBlockScopedEnumNames`)
-and A3 (the FLAG MASK back to `SymbolFlags.Enum`) redden IDENTICAL 5-pin sets** — they were
-predicted to separate the two halves of the widening and they cannot, because either one alone
-disables the whole consult; recorded as round 927's PAIR rather than smoothed into "one is
-redundant". **A4 (round 748's ORDER at `resolveTypeNameToSymbol`) is 0 RED, UNDISCRIMINATED**,
-and the reason is A5: this step gave `getTypeFromTypeReference` its own hoist, which serves
-every TYPE REFERENCE before that function's lexical-first arm is reached — so round 748's
-ordering is redundant *for type references* and is not redundant in general (four other callers
-this class does not reach). **A1 (the STAMP) is the only arm reaching `LexicalScopeDeferralTest`'s
-projection pin, and it does NOT redden the `type alias` pin** — the internal consistency check
-that `type` was stamped before this round. A5/A6/A7/A8 are 1 RED each and each is unique.
-**A8 had to be ADDED**: the `keyof (X & T)` arm read 0 RED against the original pin set while a
-CLI probe on that very binary showed the false row returning, so without its own pin that guard
-would have read as redundant and been deletable — the 9th pin, and the reason the suite is
-18,529 rather than 18,528. **The containment control (`a conventionally bound name is untouched`)
-stays GREEN under all eight, measured**: A6 (round 748's forbidden `LexicalScope.existing` read)
-was expected to redden it and does not, because in that fixture the `existing` hit IS the
-file-level symbol — the same answer by a wrong route, which no compile-level assertion can see.
-That rule is pinned where it is a VALUE, in `LexicalScopeResolverTest`.
-
-**THE BEFORE/AFTER RECEIPT IS THE SAME 129-CELL MATRIX RE-RUN AGAINST THE LANDED BINARY, WITH
-THE REFERENCE ARMS REUSED VERBATIM AND THE SNAPSHOT sha256 ASSERTED AT BOTH ENDS: 9 cells
-FIXED, 9 IMPROVED, **0 REGRESSED** — −9 ours-only rows and −18 missing rows, and EVERY ROW OF
-IT INSIDE THE TYPE HALF.** Both bound controls (file level 15/15, namespace body 28) are
-byte-identical, and the VALUE half is numerically untouched (19 ours-only / 46 missing before
-and after), which is what "VALUE position was not touched" predicts and is the arm that makes
-the improvement attributable. **The three nesting sites move IDENTICALLY** (−3 missing on each
-unique variant, −3/−3 on each shadowing one) — the signature of a fix at the RESOLUTION site
-rather than at a syntactic special case. Zero-regression was checked three ways rather than by
-the verdict tag: per-cell monotonicity, no new row absent from pristine, no pristine row
-dropped. **Shadow resolution went 7/42 → 16/42 agreeing with the references, INNER answers
-1 → 10, and no shadow cell flipped the wrong way.**
-
-**TWO RESIDUES THE RECEIPT NAMES PRECISELY, AND ONE THING IT DOES NOT COVER.** (i) The nine
-improved shadow cells each keep ONE missing row, and it is a different family: pristine adds
-`Property 'zzzOuter' does not exist on type 'X'` — the member-existence check on a
-block-scoped receiver, the `cmam` firewall. (ii) **An `enum` in TYPE position under the
-SHADOWING variant is UNCHANGED, because the probe is a QUALIFIED reference (`ZzzE.ZInner`)
-and `resolveQualifiedName` is a resolution path the widening never reaches** — ours resolves
-the OUTER enum where pristine resolves the INNER, an exact mirror image, and renders the
-namespace `'"a".ZzzE'` where pristine renders `'ZzzE'`. That is 10b/10c work and is now
-written into those items. (iii) **No fixture in the matrix uses `keyof`**, so neither the
-improvement nor the zero-regression result says anything about the `keyof errorType` fix —
-that one is carried by its own pin and the corpus.
-
-**RESIDUES STATED**: a named `ClassExpression`'s own name is not in the stamp (kind 63, outside
-the contiguous 23..26 range), so that population keeps exactly the resolution it had; heritage
-is untouched (10c); VALUE space is untouched (10b) and is where 46 of the 106 missing rows are.
-
-**NEXT**: 10b, the VALUE space — the bigger half of what is left, and its ladder order is
-load-bearing, so the consult goes INSIDE `getTypeOfIdentifierCore`'s rungs rather than on top.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1125,17 +1049,21 @@ notices it is gone.
   (`indexWithLengthOverOne === -1`), so `getUnionSignatures` answers the EMPTY list and TS2349 reports with the
   "Each member … has signatures" chain; exactly ONE stays SILENT (the `unionOfArraysFilterCall` shape, where tsc
   RUNS pass 2). The chain now has ONE home shared with the generic refusal, so the two cannot drift. Receipt
-  `agree 3 → 11, missing 8 → 0, ours-only 0`. **(D2b) OPEN, MEASURED AND READY — the ONE-overloaded suppression
-  D2 KEPT is reachable and hides a true positive**: PASS 2 also refuses on GENERIC INCOMPATIBILITY, and there
+  `agree 3 → 11, missing 8 → 0, ours-only 0`. **(D2b) CLOSED 2026-09-11 ((P18.73) note)** — the ONE-overloaded suppression
+  D2 KEPT was reachable and hid a true positive: PASS 2 also refuses on GENERIC INCOMPATIBILITY, and there
   both references print the identical chain while we stay silent (`interface ZzzA { <T extends string>(a: T):
   void; <T extends string>(a: T, b: number): void }` beside `type ZzzG = <T extends number>(a: T) => void`).
-  The change is `>= 2` → `>= 1` at the `overloadedMembers` branch, and it was measured AS AN ABLATION ARM:
-  **0 RED on 1,425 corpus baselines, and exactly ONE full-suite pin red — the r09 countdown (P18.72) had
-  already inverted.** Justification: with an overloaded member the `differ` check below compares only FIRST
-  signatures and cannot decide, so the combination's own refusal is the verdict. **An ablation arm is not an
-  implemented fix** — it needs its own value pins (the fixture above), its own ablation and a corpus run before
-  it lands. The clean long-term shape is to thread the refusal REASON out of `computeCombinedUnionSignatures`
-  rather than recompute it. **(D3)** union contextual type, **3 rows**,
+  The `>= 2` emit and the `>= 1` silence are now ONE branch. Receipt `missing 8 → 0, ours-only 0`. **The
+  design was settled by BUILDING the rejected alternative**: an instrumented binary threading the refusal
+  reason out of `computeCombinedUnionSignatures` agrees with the recomputed `count` on **21 of 21** reachable
+  refusals and structurally must, so the thread is refused as a measured no-op. **Two facts the item had
+  wrong, both measured with that census build**: the `>= 1` silence's stated justification
+  (`unionOfArraysFilterCall`) is FALSE — that shape never reaches the branch, stage 2's array fallback answers
+  it first — and `overloadedMembers == 1` is reached ZERO times by the whole suite, all 8 profiles, cronstrue
+  and marked, so the widening cannot move a baseline and the pins are its only gate. **Five of the eight
+  recovered rows land as (CHK.130) TEXT-DIFFs** (right file/line/column/code, `ZzzA | (ZzzG)` for
+  `ZzzA | ZzzG`) — a meaning gain with a form residue, and the reason (CHK.130) is now the best-characterised
+  item in this area. **(D3)** union contextual type, **3 rows**,
   and the item's "DIFFERING signatures" framing is incomplete — the **IDENTICAL**-signature union ALSO loses
   its contextual type, at `callableSignaturesForCtx`'s `if (single != null) return null` (`Checker.kt:36192`),
   which is a strictly smaller and more tractable half than the TS7006 one; beware (CHK.50)'s law, a newly

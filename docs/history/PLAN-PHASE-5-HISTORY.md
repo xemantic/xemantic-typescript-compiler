@@ -63563,3 +63563,154 @@ worth a single probe first**: whether `getTypeOfSymbol` answers correctly for a 
 `Class`/`Interface`/`Function` symbol. Precedent exists only for `Enum` (round 748's
 transient-symbol route) and by declaration-read for `TypeAlias`; that answer decides
 whether an oracle row can ship cheaply or needs a second sub-step.
+
+### Round (P18.62) — (INV.0) step 10a: the B83.5 TYPE space, and the arc is FUNNEL-shaped rather than RADIUS-shaped (2026-09-10)
+
+**Suite 18,520 → 18,529 / 0 / 3** (+9 pins). `Checker.kt` 191,506 → 191,591 (+85 — this
+step is a semantic change, not an extraction; the shrinkage dashboard is unmoved in kind).
+**8-profile grid `added=0 removed=0` on all eight**, `cost_gate.py` exit 0, `huge_methods.py`
+exit 0 (842 classes), warning-clean.
+
+**THE ITEM SIZED THE ARC BY ITS BLAST RADIUS AND THAT IS THE WRONG INSTRUMENT FOR ITS FIRST
+SUB-STEPS.** "~357 `globals[` readers downstream" is a real count (`Checker.kt` 328,
+`NameResolver.kt` 24, rest of core 5, plus 69 `.locals[`) and it is a count of AD-HOC
+per-walker name probes — `globals["Record"]`, `globals[callee.text]` — not of the resolution
+LADDER. The ladder has exactly TWO funnels: TYPE space is
+`NameResolver.resolveTypeNameToSymbol` plus `Checker.getTypeFromTypeReference`, VALUE space is
+`Checker.getTypeOfIdentifierCore`. Heritage is a third, smaller one. So the arc decomposes
+10a/10b/10c/10d and none of them has to sweep 357 sites. **Read what a count is a count OF
+before letting it size a round.**
+
+**THE PRIZE, MEASURED OVER A 129-CELL MATRIX AGAINST BOTH REFERENCES** (7 kinds × 4 nesting
+sites × 2 positions × unique/shadowing; `scratchpad/b835/final_matrix.txt`): at the 86 B83.5
+cells, **106 lost true rows and 43 ours-only rows**, TYPE 24/60 and VALUE 19/46. The file-level
+control is 15/15 clean, so the probes are sound. **The variant split is the finding**: a UNIQUE
+scope-space name is **0 ours-only / 36 missing** — it degrades to `any` and every check under it
+goes quiet — while a SHADOWING one is **43 ours-only / 70 missing**, resolving the OUTER
+declaration in 40 of 42 cells. Nesting depth is irrelevant (34/36/36 across fnTop/block/if), so
+CLAUDE.md's B83.5 entry now says a function-body-TOP declaration is as unbound as one three
+blocks deep.
+
+**TWO OF THE ITEM'S OWN FACTUAL CLAIMS WERE WRONG, WHICH IS THE SECOND ROUND RUNNING.** It
+promised "1 ours-only TS2353 removed"; that shape is a MISSING row, not a false positive —
+same fixture, opposite direction. And "round 748 closed the enum half" is exactly half true:
+the enum VALUE position is still silent at every B83.5 site.
+
+**WHAT LANDED.** The stamp (`indexSourceFile`), the binder PROJECTION
+(`BinderResult.scopeTypeNames`), the name GATE (`Checker.lexicalBlockScopedTypeNames`) and the
+consult (`NameResolver.lexicalTypeSymbolForNode`) all widened from `type`/`enum` to the whole
+TYPE space. **The stamp widening is free**: `NodeKind` 23..26 are contiguous, so two int
+compares stayed two int compares. `SymbolFlags.ScopeTypeDeclaration` is `Type` minus
+`TypeParameter`, and that exclusion is the point — folding TPs in would put every `T`/`K`/`V`
+into a set whose whole job is to be empty.
+
+**`getTypeFromTypeReference` NEEDED ITS OWN HOIST, AND NOTHING WOULD HAVE SAID SO.** It asks
+the enclosing-NAMESPACE chain itself and then calls `resolveTypeNameToSymbol` with
+`enclosingNamespacesDone = true`, i.e. past that function's lexical-first arm. Without the
+hoist a namespace member displaces a declaration inside its own function — the outer
+declaration winning again, silently. Its pin is the only one with a namespace and its arm
+reddens nothing else.
+
+**A CONTROL THAT STOPPED BEING INERT, AND ONLY BECAUSE `class` WAS ADMITTED.** The (INC.16)
+verify walk also `add`ed to the name gate. Harmless while the projection covered the same
+declarations — and the moment `class` joined, a named `ClassExpression` (present in
+`scope.symbols`, deliberately NOT stamped) would have entered the gate ONLY for a file that
+also declares a scope-space `enum`, which is the one thing that makes that walk run. A type
+name's resolution would have depended on an unrelated property of its file. The walk is now a
+pure control and the projection is the sole source; its violation count is scoped to the four
+DECLARATION kinds for the same reason.
+
+**THE ONE REGRESSION WAS A PRE-EXISTING DEFECT THIS CHANGE EXPOSED, AND THE INSTRUMENT BEAT
+BOTH HYPOTHESES.** `keyRemappingKeyofResult` grew two false TS2322. Delta-debugging said the
+row needs THREE ingredients at once (the file-level `Oops`/`x` block, the inner `Remapped`
+mapped type, the inner `Oops`/`x` block) — remove any one and it is silent — which is the
+signature of order-dependent resolution, not a missing rule. A temporary marker DIAGNOSTIC
+inside `getKeyofType` (round 947's positive control; `println` is swallowed by `runCli`'s
+stdout capture) answered it in one run: **the input is `errorType`**, and
+`if (type === errorType) return stringType` sat under a comment saying its result "is never
+displayed/checked meaningfully". **That comment was measurably false.** `errorType` means the
+resolution did not succeed, so a CLOSED domain of exactly `string` is round 463's
+partial-key-domain error, and it emits a real false positive as soon as anything assigns to a
+binding annotated with it. **It was invisible because B83.5 kept such an alias at `any` — and
+`keyof any` IS the correct open domain, so making the type real narrowed a correct superset
+into a wrong subset.** The two arms now agree. A first, separate attempt (an intersection arm
+for `keyof (X & T)`) was correct on its own standalone shape, verified, and never fired here;
+it is kept with its own pin and its own ablation arm.
+
+**A COUNTDOWN PIN FIRED EXACTLY AS DESIGNED, WHICH IS THE FIRST TIME IN THIS FAMILY.**
+`negative control - a block scoped interface stays unresolved in type position` was written by
+round 748 as a deliberate marker, and its own KDoc said "it exists so that a future widening
+has to change this pin on purpose". Inverted, with both references confirming. It is kept in
+`FunctionScopedEnumTypePositionTest` rather than moved, because that is where a future
+NARROWING of the slice would be made.
+
+**AND A VACUITY GUARD CAUGHT ITS SECOND BLIND PIN — A B83.5 WORKAROUND WENT DEAD.**
+`EagerIndexDeferralTest`'s `an unpartitioned build still builds the indices it needs` read 0
+scans on a perfectly working build. Its fixture reached `findLocalTypeAlias` through
+`arrayElementUnionAlias`, which consults the index ONLY after `getTypeFromTypeNode(ref)` fails
+to produce a union — the very failure 10a fixes. **So the array-literal branch of that
+workaround is now unreachable for the shape it was written for.** The fixture moved to the
+other reader (`discUnionParamMembers`); the dead branch is recorded as a LEAD, not deleted.
+
+**A PRE-EXISTING WARNING FIXED**: `nodeAnswerComputations`' redundant `internal set` (added by
+step 8). Kotlin does not re-emit warnings on an up-to-date compile, which is how "warning-clean"
+survived a round — a `--rerun-tasks` is what sees them.
+
+**COST**: `globals.lookups` **−0.23%** and `globals.misses` **−0.24%** — the consult answering
+names that used to fall through to a miss — against `mapped.keyed` **+1.18%** and
+`typeOfExpr.distinct` +0.06%, which are the real resolutions where there used to be `any`. All
+inside ±2%, so no rebaseline.
+
+**ALL EIGHT ABLATION ARMS WERE RUN, ONE MISTAKE AT A TIME AGAINST A sha256-VERIFIED SNAPSHOT
+(`scripts/inv0s10-ablate.py`), AND THREE OF THE ROUND'S OWN PREDICTIONS WERE WRONG.** Union
+**9 of the 28 pins** in the three classes. **A2 (the name GATE back to `lexicalBlockScopedEnumNames`)
+and A3 (the FLAG MASK back to `SymbolFlags.Enum`) redden IDENTICAL 5-pin sets** — they were
+predicted to separate the two halves of the widening and they cannot, because either one alone
+disables the whole consult; recorded as round 927's PAIR rather than smoothed into "one is
+redundant". **A4 (round 748's ORDER at `resolveTypeNameToSymbol`) is 0 RED, UNDISCRIMINATED**,
+and the reason is A5: this step gave `getTypeFromTypeReference` its own hoist, which serves
+every TYPE REFERENCE before that function's lexical-first arm is reached — so round 748's
+ordering is redundant *for type references* and is not redundant in general (four other callers
+this class does not reach). **A1 (the STAMP) is the only arm reaching `LexicalScopeDeferralTest`'s
+projection pin, and it does NOT redden the `type alias` pin** — the internal consistency check
+that `type` was stamped before this round. A5/A6/A7/A8 are 1 RED each and each is unique.
+**A8 had to be ADDED**: the `keyof (X & T)` arm read 0 RED against the original pin set while a
+CLI probe on that very binary showed the false row returning, so without its own pin that guard
+would have read as redundant and been deletable — the 9th pin, and the reason the suite is
+18,529 rather than 18,528. **The containment control (`a conventionally bound name is untouched`)
+stays GREEN under all eight, measured**: A6 (round 748's forbidden `LexicalScope.existing` read)
+was expected to redden it and does not, because in that fixture the `existing` hit IS the
+file-level symbol — the same answer by a wrong route, which no compile-level assertion can see.
+That rule is pinned where it is a VALUE, in `LexicalScopeResolverTest`.
+
+**THE BEFORE/AFTER RECEIPT IS THE SAME 129-CELL MATRIX RE-RUN AGAINST THE LANDED BINARY, WITH
+THE REFERENCE ARMS REUSED VERBATIM AND THE SNAPSHOT sha256 ASSERTED AT BOTH ENDS: 9 cells
+FIXED, 9 IMPROVED, **0 REGRESSED** — −9 ours-only rows and −18 missing rows, and EVERY ROW OF
+IT INSIDE THE TYPE HALF.** Both bound controls (file level 15/15, namespace body 28) are
+byte-identical, and the VALUE half is numerically untouched (19 ours-only / 46 missing before
+and after), which is what "VALUE position was not touched" predicts and is the arm that makes
+the improvement attributable. **The three nesting sites move IDENTICALLY** (−3 missing on each
+unique variant, −3/−3 on each shadowing one) — the signature of a fix at the RESOLUTION site
+rather than at a syntactic special case. Zero-regression was checked three ways rather than by
+the verdict tag: per-cell monotonicity, no new row absent from pristine, no pristine row
+dropped. **Shadow resolution went 7/42 → 16/42 agreeing with the references, INNER answers
+1 → 10, and no shadow cell flipped the wrong way.**
+
+**TWO RESIDUES THE RECEIPT NAMES PRECISELY, AND ONE THING IT DOES NOT COVER.** (i) The nine
+improved shadow cells each keep ONE missing row, and it is a different family: pristine adds
+`Property 'zzzOuter' does not exist on type 'X'` — the member-existence check on a
+block-scoped receiver, the `cmam` firewall. (ii) **An `enum` in TYPE position under the
+SHADOWING variant is UNCHANGED, because the probe is a QUALIFIED reference (`ZzzE.ZInner`)
+and `resolveQualifiedName` is a resolution path the widening never reaches** — ours resolves
+the OUTER enum where pristine resolves the INNER, an exact mirror image, and renders the
+namespace `'"a".ZzzE'` where pristine renders `'ZzzE'`. That is 10b/10c work and is now
+written into those items. (iii) **No fixture in the matrix uses `keyof`**, so neither the
+improvement nor the zero-regression result says anything about the `keyof errorType` fix —
+that one is carried by its own pin and the corpus.
+
+**RESIDUES STATED**: a named `ClassExpression`'s own name is not in the stamp (kind 63, outside
+the contiguous 23..26 range), so that population keeps exactly the resolution it had; heritage
+is untouched (10c); VALUE space is untouched (10b) and is where 46 of the 106 missing rows are.
+
+**NEXT**: 10b, the VALUE space — the bigger half of what is left, and its ladder order is
+load-bearing, so the consult goes INSIDE `getTypeOfIdentifierCore`'s rungs rather than on top.
