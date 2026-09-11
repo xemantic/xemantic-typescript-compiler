@@ -1,5 +1,233 @@
 ### Round (P18.52) — static blocks escape, parameter defaults and decorators are reached ((CHK.115)), and the decorator family is TWO opposite mechanisms (2026-09-08)
 
+
+### Round (P18.59) — (INV.0) step 7: the ENUM family becomes `EnumSemantics.kt`, and the arc's ambient TOTAL falls for the first time (2026-09-09)
+
+**Suite 18,506 / 0 / 3** (18,498 + 8 new pins). `Checker.kt` **195,606 → 194,631** (−975);
+`EnumSemantics.kt` **1,137**. cost_gate exit 0, huge_methods exit 0 (**839** classes,
+`Checker.<init>` 5,721 → **5,697**), warning-clean, ledger row 10. Two commits: `1c520fc19`
+the split, `b62d9d376` the ablation record. **Fourth extraction of the session.**
+
+**THE CENSUS THE QUEUE ITEM DEMANDED DECIDED THE ROUND, AND TWO OF ITS THREE CANDIDATES
+ARE NOT SEAMS.** (a) SIGNATURES is a SCATTER — `requiredParameterCount`/`getParameterSymbols`
+at 117338, the call/construct readers at 161778, `instantiateSignature` at 172002, ~50 more
+over six unrelated neighbourhoods. (b) FLOW is a SCATTER — 64 declarations, 22 of them
+singletons or pairs, from line 1091 to 125482. (c) ENUM is ONE contiguous span, 1,013 lines,
+40 declarations, 17 ambient references of which 5 are the family's own state. Taken.
+
+**THE STAGE-0-EXIT DECISION ROW 9's CORRECTION ASKED FOR IS TAKEN, AND IT COST ONE LINE.**
+That correction predicted this extraction would cut ~790 lines and reduce NO ambient row,
+because `Relater`'s enum calls would still route through `Checker` — and that paying row 7
+down needs the collaborators wired to EACH OTHER through "an explicit construction graph in
+`Checker.<init>` … rather than drifted into". **`Checker`'s construction block already IS
+that graph**, so the decision was placing `EnumSemantics` before its two consumers.
+Measured with ONE uniform script across both arms: **`Relater` 49 → 38 checker reads (−11
+over 20 sites), `MemberNames` 5 → 4**, new row 13 reads / ZERO writes. **First fall in the
+arc's ambient total.** (Counting note: row 7 records 45 because it assigns four
+read-modify-write members to the WRITES column; both conventions give −11.)
+
+**A MASKING DEFECT EVERY EARLIER ROUND OF THIS ARC SHARED, and only the compiler saw it.**
+`spanmask`/`strip` blank whole string literals, so a `${ … }` INTERPOLATION — which is code
+— is invisible to the ambient census and unrewritten by the forward transform. One site
+existed (`"import(\"${moduleFileBaseNoExt(f)}\")"`). It failed LOUDLY here, because a
+`Checker` member is not accessible from a collaborator — but that makes the compiler a
+complete detector only for the AMBIENT case: a TOP-LEVEL function called from inside a
+template resolves fine and would simply be absent from a ledger row. `codemask.py` keeps
+interpolations visible and comments blanked; both verbatim proofs are taken with it.
+
+**VERBATIM PROVED TWICE, over CODE positions only**: `inverse(moved region)` is
+byte-identical to `HEAD:Checker.kt[115064..116076]`, and `forward(HEAD span)` is
+byte-identical to the moved region. 50 ambient rewrites over 13 members, 29 visibility
+rewrites, 24 delegations.
+
+**THE RECEIPT NOW SPANS FIVE BINARIES** — the same 488 deterministic `--passTiming` lines
+byte-identical for pre-step-5 pristine, steps 5, 6a, 6b and this: **one receipt over 3,522
+moved lines**, at one extra build for the whole session. **A recipe trap cost one bench run:
+the first capture was taken with `--listAll` where the pristine arm was not, so the
+diagnostics block truncated at 30 in one arm and listed all 46 in the other** — 22 diff
+lines that look like a regression and are a `sed`. A capture is a property of (OUTPUT ×
+RECIPE); re-run the recipe, do not reconcile the diff.
+
+**PrintInlining is FLAT, and that is the honest reading**: 182 → 191 `too large` over the
+20 tracked sites. Rows 4-9 each removed dozens because each moved ONE large body out of a
+caller's inline tree; this family is 40 SMALL functions (largest 1,033 bytecodes), so there
+was no monolith to remove. The one real gain is `isEnumFlavoredObjectType` — **zero** inlines
+at 21 call sites before, 37 after. **A trap that manufactured a fake +137 first**: the twelve
+members that were `internal` on `Checker` are JVM-name-MANGLED there and are plain members of
+an `internal class` afterwards, so a matcher requiring a space after the name reads ZERO rows
+in the PRISTINE arm and every row in the split one. Match `::NAME($suffix|-hash)?\s` on BOTH
+arms. ab-interleaved 6 pairs **−120 ms (−0.46%) B-wins-3/6 NOISE-DOMINATED**, both arms 46.
+
+**SEVEN OF EIGHT PINS DISCRIMINATE EXACTLY; THE EIGHTH WAS BLIND AND THE ARM SAID SO.**
+Arm 8 read `0 RED`, and the pin — not the guard — was the blind half: its fixture (`export
+enum` in one file, imported into another) resolves BOTH the value and the annotation through
+ONE import, so the two member symbols are IDENTICAL and reducing
+`enumMemberTypesAreSameMember` to `sourceMember === targetMember` changes nothing. Two
+further shapes were probed ON THE ABLATED BINARY before concluding — a three-file variant
+(no difference) and two same-NAMED enums with equal values (**1 row vs 2**). Repaired to the
+latter; arm 8 now reddens it and nothing else. **Arm 3 reddens TWO pins (3 and 8) and that
+is recorded rather than smoothed**: pin 8's ACCEPTANCE runs through the very member loop
+arm 3 inverts. Neither is redundant — arm 8 separates them — arm 3 simply is not a
+single-pin arm.
+
+**A DIVERGENCE THE REPAIR SURFACED, RECORDED AND NOT PINNED AS RIGHT.** At a variable
+declaration both references print `Type 'Z.Foo.A' is not assignable to type 'X.Foo.A'.`
+where we print `Type 'Foo.A' is not assignable to type 'Foo.A'.` — the (REL.1)(c)
+rounds-745-749 same-string retry (`enumCollisionQualifiedDisplays`) is not reached by that
+reader, in `diagnose()` and through the project CLI alike, for a namespace-nested AND a
+module-scoped collision. **PRE-EXISTING** (the family moved verbatim; HEAD~1 prints the
+same) and orthogonal to what the pin gates, which is the VERDICT. Queued below as a lead.
+
+**A PROCESS FINDING FROM RUNNING A SUBAGENT BESIDE THE BUILD**: the pin-design agent was
+probing with `java` while this session ran `compileKotlinJvm`; the class dir emptied
+mid-probe and **five shapes read as "our compiler is silent where both references report"**
+— a convincing false divergence family. `grep 'error TS'` hides `Could not find or load
+main class`. CLAUDE.md's "one gradle invocation per BOX, not per agent" has a second half:
+a **`java` probe is a victim too**, and any probe script must grep for the dead-classpath
+line first.
+
+**NEXT**: the ambient TOTAL can now fall per round, but only where a collaborator's reads
+are a FAMILY someone else owns. Census `getPropertiesOfType` / `getPropertyOfType` and the
+member-ACCESS family, which `MemberResolver`'s 22 reads and `Relater`'s remaining 38 both
+point at; SIGNATURES and FLOW stay Stage-3-shaped until an instrument for a scatter exists.
+
+### Round (P18.58) — (INV.0) step 6b: the MEMBER-NAME / late-binding family becomes `MemberNames.kt`, the arc's cleanest seam (2026-09-09)
+
+**Suite 18,498 / 0 / 3** (18,493 + 5 new pins). `Checker.kt` **196,176 → 195,606** (−570);
+`MemberNames.kt` **765**. cost_gate exit 0, huge_methods exit 0 (**838** classes,
+`Checker.<init>` 5,705 → 5,721), warning-clean, ledger row 9. Two commits: `ecd6c0491` the
+split, `95dff28a1` the ablation record. **Third extraction of the session.**
+
+**FIVE AMBIENT READS, ZERO WRITES — the smallest row of the arc, against the relater's 45/5
+and member resolution's 21/1 — AND THE REASON GENERALISES: the family owns NO STATE and
+answers a SYNTACTIC question.** It is handed a name node and returns a string; everything it
+needs beyond the AST is an enum's constant value (3 reads) plus two AST helpers (2), i.e.
+four of the five belong to seams of their own. Rows 7 and 8 read the type system because they
+ARE the type system; this one does not. **`fileResults` as a CONSTRUCTOR INPUT is what took
+the row from 6 to 5** — it is declared at `Checker.kt:265`, above the 666 boundary — which is
+rows 5/6's rule paying off rather than a judgement call.
+
+**`MemberResolver` WAS DELIBERATELY NOT REWIRED.** Step 6a's collaborator calls
+`getMemberName` ×4 and `declaredMemberName` ×4 and now does so one hop further, through
+`Checker`. That is the right answer and not a shortcut: the delegations exist anyway for the
+other 30 call sites, and routing through `Checker` keeps the two collaborators free of a
+construction-ORDER dependency on a class whose field initializers run ~9,300 lines deep.
+
+**THE SPLIT REMOVED 61 `too large` REFUSALS AND ADDED NONE — the fifth row running.**
+`getMemberName` `16 inline + 16 too large` → a hop reading `7 inline` with zero refusals;
+`computedLiteralKey` `20 + 20` → `6`; `lateBoundComputedKeyName` `17 + 17` → `3`;
+`computedSymbolKey` `6 + 6` → `2`; `objLitElementMemberName` `2 + 2` → `2`. ab-interleaved
+6 pairs **−182 ms (−0.70%) B-wins-3/6 NOISE-DOMINATED**, both arms 46 errors. Recorded
+honestly: `checkArgumentsAgainstSignature` — the only standing site (P18.56) proved stable —
+moved again (`5 hot-too-big + 6 inline + 1 too large` → `4 + 5 + 1`), which is what widening
+members to `internal` does to a caller's inline tree.
+
+**THE RECEIPT NOW SPANS FOUR BINARIES**: the same 488 deterministic `--passTiming` lines are
+byte-identical for pre-step-5 pristine, step 5, step 6a and step 6b — **one receipt over
+2,509 moved lines**, and it has cost one extra build in the whole session, because each
+round's capture is the next round's pristine arm.
+
+**THE PINS ARE *AGREEMENT* PINS, AND THAT IS WHAT THIS FAMILY NEEDS.** A member's name is
+asked at REGISTRATION and again at RESOLUTION, and BOTH known failures of this code produce a
+correct diagnostic beside a false one — round 935's drift emitted a correct TS2322 and a
+false TS2339 for the same member in ONE compile, and (CHK.40)(c) registered a string-named
+METHOD correctly and typed it `any`. **A pin asserting "it compiles" passes on both.** So
+each pin reads the member back through a deliberately WRONG target type and asserts the
+TS2322 that names the resolved type AND the absence of TS2339 beside it.
+
+**EVERY PIN DISCRIMINATES — the first of the session's three extraction rounds where that is
+true.** Disabling late binding reddens the three late-binding pins and nothing else; raising
+`LATE_BIND_ALIAS_HOPS` 8 → 100 reddens ONLY the past-the-limit pin (and since that arm edits
+`Checker.kt`, `MemberNames.kt` is byte-unchanged under it — the arm's own control); dropping
+the `StringLiteralNode` arm reddens ONLY the string-named-method pin. **The hop-limit PAIR is
+the interesting one**: a 2-hop alias chain late-binds and an 11-hop one does not, so the two
+pins bracket the limit and neither alone is evidence.
+
+**Absorption census ZERO again** (row 8's answer, not row 7's): the scarcest ambient member
+still has 3 other callers and `expressionTrueEnd` has 274.
+
+**A DEVIATION WORTH CARRYING: the collaborator's FIELD is `memberNamer`, not `memberNames`.**
+`Checker.kt` already declares EIGHT locals named `memberNames`, five used in the same scope. A
+field of that name compiles — locals shadow it — and it broke the round's own 12-vs-12
+structural check (read 18). **Before naming a new collaborator field, grep `Checker.kt` for a
+local of that name**; the class is large enough that the collision is likely and silent.
+
+**NEXT**: `getPropertiesOfType` / `getPropertyOfType` and the member-ACCESS family just below
+this span — or, per § 6's order, SIGNATURES and FLOW. Row 7's seven absorbable members
+(`enumLiteralApparentPrimitive`, `enumMemberValueEqualsLiteral`, `enumTargetAdmitsNumericSource`,
+`numericLiteralFitsEnum`, `intersectionMergedSatisfiesTarget`, `intersectionMergedContradictsTarget`,
+`targetIsMemberShaped`) remain the arc's one cheap win, taking row 7 from 45 reads to 38.
+
+
+### Round (P18.57) — (INV.0) step 6a: MEMBER RESOLUTION becomes `MemberResolver.kt`, and the queue item's open question is answered (2026-09-09)
+
+**Suite 18,493 / 0 / 3** (18,489 + 4 new pins). `Checker.kt` **196,797 → 196,172** (−625);
+`MemberResolver.kt` **814**. cost_gate exit 0, huge_methods exit 0 (**837** classes,
+`Checker.<init>` 5,675 → 5,705), warning-clean, ledger row 8. Two commits: `c26520a8e` the
+split, `c8b2349e4` the ablation record. **Second extraction of the session.**
+
+**THE QUEUE ITEM ASKED WHETHER THE SEAM IS THE TABLE BUILDERS *WITHOUT* `getTypeOfSymbol`.
+IT IS**, and the census said so before any code moved: this family reads `getTypeOfSymbol`
+at ONE site and `getTypeOfExpression` at one, so a seam that took them would have had to
+take the whole checker — which is exactly why `docs/INVERSION-DESIGN.md` § 6 puts them in
+Stage 3 ("their ambient IS the checker"). The answer is written into the class KDoc rather
+than left in a round note.
+
+**AND IT IS A MUCH BETTER-SHAPED SEAM THAN THE RELATER, WHICH MAKES ROW 7 THE OUTLIER OF
+THIS ARC RATHER THAN THE TREND**: one contiguous span against five, 657 lines against
+1,256, **21 ambient reads against 45**, **1 write against 5**, three surviving entry points
+against six. The single write (`memberResolutionTruncated`, (INC.23)'s truncation flag) is
+never read back here — a pure OUT channel, so the columns are DISJOINT, which row 7's are
+not.
+
+**THERE IS NO CHEAP ABSORPTION HERE, AND THAT IS THE OPPOSITE OF ROW 7 — MEASURED.** Row 7
+had seven members with no other caller in `Checker.kt`, so absorbing them was mechanical.
+Here it is **ZERO of 22**: the scarcest are `isLibSymbolForCensus` (2 other callers),
+`memberResolutionTruncated` (4), `resolveBaseTypesLazy` (5); the densest are
+`getTypeOfExpression` (372), `getTypeFromTypeNode` (347), `getTypeOfSymbol` (243). Shrinking
+this row means extracting the NEIGHBOURS — the member-NAME family at `Checker.getMemberName`
+and Stage 3's symbol typing — not tidying it.
+
+**THE RECEIPT IS NOW TRANSITIVE ACROSS THREE BINARIES.** The same **488 deterministic
+`--passTiming` lines** — all 420 per-pass rows, the 46 diagnostics, the emissions census,
+the counter block, globals lookups — are byte-identical for pre-step-5 pristine, step 5 AND
+step 6a, i.e. **one receipt now covers 1,882 moved lines**. It cost no extra build: the
+step-5 capture taken earlier in the session IS this round's pristine arm.
+
+**A NEW AND SHARPER FORM OF THE JVM-NAME-MANGLING TRAP, HIT TWICE IN ONE RUN.** Rows 5/6
+record that `internal` adds a `$<module>` suffix so a receipt grep for the SOURCE name reads
+zero rows. This round shows the worse case: **widening a member to `internal` AS PART OF THE
+SPLIT mangles a site a PREVIOUS round's receipt was reading**. `getTypeOfExpression` — one
+of § 10's three standing hot sites — went `private` → `internal` here, so the unmangled grep
+reads **574 rows in the before-arm and 0 in the after-arm**, which reads exactly like a site
+that stopped being compiled. Grep BOTH forms across any round that widens visibility, and
+say which one you used.
+
+**THE SPLIT IMPROVED INLINING AT THE HOT LOOKUP FOR THE FOURTH ROW RUNNING**:
+`resolveStructuredTypeMembers` (244 call-site lines) was refused `too large` at **189**
+sites as a `Checker` method (`239 inline + 61 inline (hot) + 189 too large`); the hop reads
+`233 inline + 55 inline (hot)` with **ZERO refusals**. ab-interleaved 6 pairs **+38 ms
+(+0.15%) B-wins-3/6 NOISE-DOMINATED**, both arms 46 errors; `new MemberResolver` at exactly
+ONE bytecode in the module. Recorded honestly: **`checkArgumentsAgainstSignature` — the only
+standing site (P18.56) proved stable — DID move** (`4 inline + 1 too large + 3 hot-too-big`
+→ `6 + 1 + 5`), which is what 19 visibility widenings in one commit do to a caller's inline
+tree.
+
+**4 pins, 3 arms, and ONE ARM IS DEAD BY CONSTRUCTION — recorded, not counted as coverage.**
+`MemberResolver.resolutionResidue` is row 7's `recursionResidue` one seam over. Arm b1
+(delete the `finally`'s `memberResolutionInProgress.remove`) reddens both residue pins; arm
+b3 (make the B202.1 break never refuse) reddens the heritage pin and **its failure message
+is the mechanism verbatim** — the compile answers ONE diagnostic, `TS2589 … at (0,0)`, i.e.
+`reportCheckerStackOverflow`'s signature, and the real circular-base row is gone. **Arm b2
+changes nothing**: `mrProbeDepth` only moves under `PassTiming.detailed`, which no test
+enables, so that term of the residue is unpinned by any test and is carried by the
+`--passTiming` receipt instead.
+
+**NEXT**: step 6b, the member-NAME / late-binding family (`getMemberName`,
+`declaredMemberName`, the computed/late-bound key machinery from `Checker.kt` ~118017 to
+~118657, ~640 lines) — the seam this round deliberately left whole, and the one that most
+improves row 8's DECLARATION-READING group.
+
 **Suite 18,437 → 18,477 / 0 / 3** — 40 pins in the new
 `Ts2454StaticBlockParamDefaultDecoratorTest`. Grid **8 × added=0 removed=0**, re-run INDEPENDENTLY;
 corpus 10,344/0, `spine_closure_audit.py` exit 0 (mandatory — a new `spineDaEnterNode` arm),

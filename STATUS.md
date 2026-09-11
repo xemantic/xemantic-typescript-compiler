@@ -19,6 +19,34 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.70) — TWO FALSE-POSITIVE FAMILIES, AND THE INSTRUMENT THAT WAS DROPPING ROWS, 18,635 / 0 / 3 (2026-09-11).**
+Two (CHK.\*) items closed and **both queue items were wrong about their own size**, a
+sixth round running. **(CHK.122)**: the item named ONE route for a missing `in`-guard
+consult; measured against both references it is FOUR — flow, destructured, FILE-LEVEL
+`const`, PARAMETER — and the last two never touch the `any` bail the route helpers
+live on, so a per-route fix could not reach them. The consult went to the emission
+FUNNEL. **The round's real decision was found by measuring**: with exhaustion
+REFUSING, the profiles read `refused=5 exhausted=5` on services/server/harness, i.e.
+every refusal on tsc's own sources was BLIND. It now DECLINES on exhaustion, so it
+can suppress only on a POSITIVE finding — all eight profiles read `refused=0`, and
+the residue is pinned AS a residue. **(CHK.119)**: the item says a `function` receiver
+NEVER reports TS2339; it does, and **every row it emitted carried a display neither
+reference produces**. Four expando WRITE forms were uncollected (element-access,
+no-substitution-template, template-span, tagged) — each an ours-only FALSE POSITIVE —
+and the display is now the SIGNATURE for a function with no expando. **The order of
+those two fixes is load-bearing and is pinned.** **THE GRID IS A CONTROL FOR (CHK.119),
+NOT A GATE, AND THE ROUND SAYS SO**: B431 emits ZERO rows on all eight profiles.
+**THE INSTRUMENT FAILED TWICE, BOTH TIMES PLAUSIBLY** — `scripts/ref_matrix.py`
+(new: the three-compiler adjudication every round rebuilds and discards) first parsed
+only the REFERENCE row format and read our row set as empty (`missing=8` where we
+emit all 8), then keyed on `(file, line, code)` so two rows of one code on one line
+COLLAPSED. Both now refuse/resolve, plus TEXT-DIFF for a message divergence, which
+(PARITY.1) says nothing else in the repo could see. Every conclusion drawn with the
+broken key was re-run. **The Phase-18 WORK ORDER note was trimmed away a SECOND time**
+by (P18.66) — restored, re-anchored under a `## QUEUE` heading, and
+`scripts/check_plan_structure.py` now fails when it is gone. Two countdown pins fired
+(6 more queued as (CHK.126)); three finds queued and none claimed.
+
 **(P18.68) — (CHK.121): THE AXIS IS THE *INITIALIZER*, AND BOTH SIZINGS OF THE ITEM WERE WRONG, 18,604 / 0 / 3 (2026-09-11).**
 An ANNOTATED function-body local now reaches the member-existence check.
 **THE ROUND'S FINDING IS A CORRECTION TO ITS OWN ITEM, TWICE**: queued as "one cell of four",
@@ -151,33 +179,3 @@ caller's parameter. **TWO TEXTS CORRECTED BECAUSE THEY WERE FALSE** — `TypeOra
 KDoc and `docs/type-oracle.md` § 3b both still said the retained tables leave block-scoped
 declarations unbound. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0
 (844 classes), warning-clean.
-
-**(P18.64) — (INV.0) STEP 10c: HERITAGE AND QUALIFIED NAMES, AND THE RESOLVER THE ITEM NAMED WAS NOT THE ONE THAT MATTERED, 18,541 / 0 / 3 (2026-09-10).**
-The item pointed at `NameResolver.resolveHeritageBaseSymbol`; **it was given the consult and
-NOTHING MOVED.** A base type's MEMBERS come from `Checker.getTypeFromBaseTypeExpression` — a
-FOURTH resolver, the one `resolveBaseTypesLazy` calls — so `interface J extends I` with a
-block-scoped `I` had been resolving `J` perfectly since 10a and inheriting nothing; and the
-`implements` VERDICT comes from a FIFTH probe of its own, which is why a class with a
-block-scoped `implements` target reported the whole-class **TS2420 about the OUTER
-interface** where both references report the per-property **TS2416** about the inner one.
-Three resolvers where the item named one, each found by landing a patch and measuring it
-INERT. **PRIZE over a 25-cell matrix** against tsgo 7.0.2 and pristine 6.0.3, which agree on
-all 25, file control 5/5 clean: **10 ours-only / 28 missing → 4 / 20**; `interface extends`
-2/6 → 0/2, `implements` 2/4 → 0/4, qualified enum root 4/6 → 2/2. **THE QUALIFIED ROOT IS
-ADOPTED ONLY ON EVIDENCE**, and the asymmetry is `declareLexical`'s rather than the
-consult's: its enum arm publishes members onto the scope symbol's `exports` and its
-`ModuleDeclaration` arm does not, so a memberless root is deliberately left alone — adopting
-it turns a wrong answer into NO answer and loses every member that did resolve, the one
-place in this arc where resolving correctly is measurably worse. **NOT CLOSED, AND THE BASE
-IS NOT THE REASON**: `class D extends B` needs `new D()`, i.e. 10b's VALUE half, because the
-DERIVED class is scope-space too. **ABLATION: five arms, union 5 of 5 — every pin
-discriminates.** The FALLBACK arm reddens a strict SUBSET of the removal arm's set and the
-survivor is the UNIQUE pin, i.e. round 748's ordering law re-measured one resolver over; the
-`implements` arm reddens BOTH its pins including the negative control (without the consult a
-unique target resolves to nothing and the walker `continue`s, so the row that must fire
-disappears too); the evidence-gate arm is 0 RED and recorded as UNDISCRIMINATED, because its
-whole population is the `namespace` kind, whose qualified reads are wrong both ways today.
-**COST IS EXACTLY ZERO AND THAT IS EXPECTED, NOT A GREEN LIGHT**: all 20 counters identical
-to the 10b run to the last digit, because tsc's own sources carry no scope-space heritage
-base — the grid is a control here and the reference matrix is the measurement. Grid
-8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844 classes), warning-clean.

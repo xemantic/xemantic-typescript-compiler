@@ -1,4 +1,35 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
+
+**(P18.64) — (INV.0) STEP 10c: HERITAGE AND QUALIFIED NAMES, AND THE RESOLVER THE ITEM NAMED WAS NOT THE ONE THAT MATTERED, 18,541 / 0 / 3 (2026-09-10).**
+The item pointed at `NameResolver.resolveHeritageBaseSymbol`; **it was given the consult and
+NOTHING MOVED.** A base type's MEMBERS come from `Checker.getTypeFromBaseTypeExpression` — a
+FOURTH resolver, the one `resolveBaseTypesLazy` calls — so `interface J extends I` with a
+block-scoped `I` had been resolving `J` perfectly since 10a and inheriting nothing; and the
+`implements` VERDICT comes from a FIFTH probe of its own, which is why a class with a
+block-scoped `implements` target reported the whole-class **TS2420 about the OUTER
+interface** where both references report the per-property **TS2416** about the inner one.
+Three resolvers where the item named one, each found by landing a patch and measuring it
+INERT. **PRIZE over a 25-cell matrix** against tsgo 7.0.2 and pristine 6.0.3, which agree on
+all 25, file control 5/5 clean: **10 ours-only / 28 missing → 4 / 20**; `interface extends`
+2/6 → 0/2, `implements` 2/4 → 0/4, qualified enum root 4/6 → 2/2. **THE QUALIFIED ROOT IS
+ADOPTED ONLY ON EVIDENCE**, and the asymmetry is `declareLexical`'s rather than the
+consult's: its enum arm publishes members onto the scope symbol's `exports` and its
+`ModuleDeclaration` arm does not, so a memberless root is deliberately left alone — adopting
+it turns a wrong answer into NO answer and loses every member that did resolve, the one
+place in this arc where resolving correctly is measurably worse. **NOT CLOSED, AND THE BASE
+IS NOT THE REASON**: `class D extends B` needs `new D()`, i.e. 10b's VALUE half, because the
+DERIVED class is scope-space too. **ABLATION: five arms, union 5 of 5 — every pin
+discriminates.** The FALLBACK arm reddens a strict SUBSET of the removal arm's set and the
+survivor is the UNIQUE pin, i.e. round 748's ordering law re-measured one resolver over; the
+`implements` arm reddens BOTH its pins including the negative control (without the consult a
+unique target resolves to nothing and the walker `continue`s, so the row that must fire
+disappears too); the evidence-gate arm is 0 RED and recorded as UNDISCRIMINATED, because its
+whole population is the `namespace` kind, whose qualified reads are wrong both ways today.
+**COST IS EXACTLY ZERO AND THAT IS EXPECTED, NOT A GREEN LIGHT**: all 20 counters identical
+to the 10b run to the last digit, because tsc's own sources carry no scope-space heritage
+base — the grid is a control here and the reference matrix is the measurement. Grid
+8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit 0 (844 classes), warning-clean.
+
 `Checker.getTypeOfIdentifierCore` now OVERRIDES a conventional answer with the scope-space
 `function` / `class` / `enum` / `namespace` visible at the node — and never replaces
 silence. **THE UNIQUE HALF WAS BUILT, MEASURED AND REFUSED, WHICH IS THE ROUND**: a consult

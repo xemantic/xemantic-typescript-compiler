@@ -25,6 +25,111 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.70) — two false-positive families, and the instrument that was dropping rows (2026-09-11)
+
+**Suite 18,604 → 18,635 / 0 / 3** (+31 pins). Grid 8×`added=0 removed=0` on both
+landed items; `cost_gate.py` exit 0 (no rebaseline); `huge_methods.py --fail-over 0`
+exit 0 (844 classes); warning-clean. Commits `c13fd948`, `ae921ce3`, `7950883e`,
+`833aecff`, `d5cc6267`, `f8ae2eaa`.
+
+**THE WORK ORDER NOTE WAS GONE AGAIN, AND ADVICE WAS NOT ENOUGH.** (P18.66)'s
+trim-on-write carried the whole `### WORK ORDER` section out with four retired round
+notes — ~3 rounds after (P18.44) restored it, and with a CLAUDE.md entry already in
+the file saying not to. The mechanism is structural: the restore had placed it
+directly above the first queue item, inside the span a "retire the oldest notes"
+slice bounded by the last `### ` heading covers. It is now anchored under an explicit
+`## QUEUE` heading, and **`scripts/check_plan_structure.py` fails when the heading,
+the WORK ORDER or the first queue item is missing, and checks their ORDER** — ablated
+both ways. A doc invariant is only as good as the thing that notices it is gone.
+
+**(CHK.122) — THE POPULATION WAS FOUR, NOT ONE, AND THAT CHANGED WHERE THE FIX
+GOES.** The item named the flow route and gave the fix as "give that route the same
+`in`-guard consult". Measured against tsgo 7.0.2 and pristine 6.0.3 (agreeing on
+every cell), the ours-only false positives are the flow route, a DESTRUCTURED
+receiver, a FILE-LEVEL `const` and a PARAMETER — **and the last two never touch the
+`any` bail those helpers live on at all**, because their receiver is genuinely typed.
+Fixing routes one at a time could not have reached them. So the consult went where
+every route ARRIVES: `cmamEmitMissingProperty`, under `prop == null`, which also
+keeps a bounded flow walk off the hot path.
+
+**AND THE ROUND'S REAL DECISION WAS FOUND BY MEASURING, NOT BY READING.**
+`cmamInGuardMayAddProperty` refuses on budget exhaustion, on the argument that
+silence costs a false negative and a guess costs a false positive. Right for three
+routes gating a narrow helper population; at the funnel the first build read
+**`refused=5 exhausted=5` on services, server AND harness** — every refusal it made
+on tsc's own sources was BLIND, and not one was a guard it had found. The funnel now
+asks with `refuseOnExhaustion = false`, which buys the property that makes the change
+defensible: **it can suppress only when it has POSITIVELY found an `in` condition
+naming this property on this reference path.** All eight profiles then read
+`refused=0` — it suppresses nothing there, so no row can move — with `exhausted=5`
+recording the declines the refusing form would have deleted silently. Residue pinned
+AS a residue: a guard separated from its read by ~130+ branching statements still
+reports. Ablation 6 arms / 16 pins with both controls; **two pins discriminate
+nothing and say so** (both are served by a pre-existing route consult no arm ablates).
+
+**A COUNTER READ INSIDE THE BRANCH IT MEASURES GOES QUIET WITHOUT GOING GREEN.** The
+decline counter was first written inside the refusal block; the moment the funnel
+stopped refusing it read 0 on every profile while the declines it exists to measure
+were unchanged at 5. It is now read outside the branch.
+
+**(CHK.119) — THE ITEM'S HEADLINE CLAIM WAS FALSE, AND THE TWO DEFECTS IT DID NOT
+NAME ARE THE ONES THAT LANDED.** It says a `function` receiver NEVER reports TS2339.
+B431 does report, for a top-level uniquely-named `FunctionDeclaration` read inside a
+nested function — and **every row it emitted carried a display neither reference
+produces**. Closed: four expando WRITE forms were uncollected (`F["tag"] = 1`,
+`` F[`tag`] = 1 ``, `` `${F.tag = 1}` `` and the tagged form), each an ours-only FALSE
+POSITIVE on legal code, because an `ElementAccessExpression` LHS was not recognised
+as an assignment target and a `TemplateExpression` was not descended into at all;
+and the display is now the SIGNATURE for a function with no expando member,
+`typeof $name` for one with. `F[0] = 1` and `F[k] = 1` declare nothing and are the
+NEGATIVE CONTROLS — we already agreed with both references there.
+
+**THE ORDER OF THOSE TWO FIXES IS LOAD-BEARING AND IS PINNED.** Before the collector
+was widened, an element-access write left `declared` EMPTY for a function that
+plainly has expandos, so the display rule alone would have renamed exactly those to
+their signature and turned two AGREE rows into wrong ones. Collector first.
+
+**THE GRID IS A CONTROL FOR (CHK.119), NOT A GATE, AND THE ROUND SAYS SO.** It reads
+8×`added=0 removed=0` and **B431 emits ZERO rows across all eight profiles** — their
+only two TS2339 rows are `ErrorConstructor.captureStackTrace`. The measurement is the
+reference matrix; the grid says the change is inert on tsc's own sources.
+
+**THE INSTRUMENT WAS DROPPING ROWS, AND IT TOOK TWO SEPARATE FAILURES TO FIND IT.**
+`scripts/ref_matrix.py` — the three-compiler adjudication this round built because
+every (CHK.\*) round rebuilds one in a scratchpad and throws it away — failed twice
+in ways that both produced *plausible* tables:
+ 1. it matched only the REFERENCE row format, so OUR rows parsed as zero and it
+    reported `missing=8` on a fixture where we emit all 8. `assert_parsed` now
+    REFUSES an arm whose raw output contains `error TS` while zero rows parsed.
+ 2. it keyed rows on `(file, line, code)`, so **two diagnostics of the same code on
+    one line collapsed into one** — a fixture emitting TS2339 twice on line 3 read
+    `agree=1`, losing the second row AND a message divergence on the first. Now keyed
+    on the COLUMN too, with a SPAN-DIFF verdict so a column divergence reads as one
+    row rather than a lost row plus an invented one.
+ 3. it was MESSAGE-BLIND, scoring six wrong-display rows as AGREE. TEXT-DIFF closes
+    that, and it matters beyond one item: (PARITY.1) records that the 8-profile grid
+    is structurally blind to every display change, so there was no cheap instrument
+    in the repo that could see one.
+**Every conclusion drawn with the broken key was re-run against the fixed one**; one
+cell moved (`Foo.inc++`) and its pin was corrected before landing.
+
+**TWO COUNTDOWN PINS FIRED, THE FIFTH AND SIXTH IN SEVEN ROUNDS.**
+`M04ExpandoSpineMigrationTest`'s `a template-span write at file scope is not
+collected` and `compound assignment and element-access writes do not declare` both
+asserted our own wrong answer as a "negative control". Recon measured **six more** in
+the same class and three GENUINE controls beside them — queued as (CHK.126), because
+the class's own names do not distinguish the two kinds.
+
+**THREE FINDS QUEUED, NONE CLAIMED**: (CHK.124) the general function-receiver gap
+with its three candidate routes and two measured FP hazards; (CHK.125) an ours-only
+TS2394 on an ordinary `unknown`-implementation overload set, found incidentally in a
+fixture and reproducing on the parent binary; (CHK.126) above.
+
+**NEXT**: (CHK.120) is (P18.66)'s untouched residue and is a BINDER change with its
+own blast radius; (CHK.123) is display-only with the corpus as its sole gate;
+(CHK.124)/(CHK.125) are this round's. Per the WORK ORDER, the order's tail is still
+(INV.0), and this round is (CHK.\*) lane work that pays in measured reference rows.
+
 ### Round (P18.68) — (CHK.121): the axis is the INITIALIZER, and BOTH sizings of the item were wrong (2026-09-11)
 
 **Suite 18,573 → 18,604 / 0 / 3** (+31 pins). **8-profile grid `added=0 removed=0` on all
@@ -829,234 +934,6 @@ LANDED on 2026-09-02 (§§ 9a/9b), a correction made to the queue item in this s
 after it was first written wrong. Stage 3 is "dissolve B83.5", which `TypeOracle`'s own
 `resolveName` / `symbolsInScope` refusal names in words as its blocker. Say which, and
 why, before moving any line.
-
-### Round (P18.59) — (INV.0) step 7: the ENUM family becomes `EnumSemantics.kt`, and the arc's ambient TOTAL falls for the first time (2026-09-09)
-
-**Suite 18,506 / 0 / 3** (18,498 + 8 new pins). `Checker.kt` **195,606 → 194,631** (−975);
-`EnumSemantics.kt` **1,137**. cost_gate exit 0, huge_methods exit 0 (**839** classes,
-`Checker.<init>` 5,721 → **5,697**), warning-clean, ledger row 10. Two commits: `1c520fc19`
-the split, `b62d9d376` the ablation record. **Fourth extraction of the session.**
-
-**THE CENSUS THE QUEUE ITEM DEMANDED DECIDED THE ROUND, AND TWO OF ITS THREE CANDIDATES
-ARE NOT SEAMS.** (a) SIGNATURES is a SCATTER — `requiredParameterCount`/`getParameterSymbols`
-at 117338, the call/construct readers at 161778, `instantiateSignature` at 172002, ~50 more
-over six unrelated neighbourhoods. (b) FLOW is a SCATTER — 64 declarations, 22 of them
-singletons or pairs, from line 1091 to 125482. (c) ENUM is ONE contiguous span, 1,013 lines,
-40 declarations, 17 ambient references of which 5 are the family's own state. Taken.
-
-**THE STAGE-0-EXIT DECISION ROW 9's CORRECTION ASKED FOR IS TAKEN, AND IT COST ONE LINE.**
-That correction predicted this extraction would cut ~790 lines and reduce NO ambient row,
-because `Relater`'s enum calls would still route through `Checker` — and that paying row 7
-down needs the collaborators wired to EACH OTHER through "an explicit construction graph in
-`Checker.<init>` … rather than drifted into". **`Checker`'s construction block already IS
-that graph**, so the decision was placing `EnumSemantics` before its two consumers.
-Measured with ONE uniform script across both arms: **`Relater` 49 → 38 checker reads (−11
-over 20 sites), `MemberNames` 5 → 4**, new row 13 reads / ZERO writes. **First fall in the
-arc's ambient total.** (Counting note: row 7 records 45 because it assigns four
-read-modify-write members to the WRITES column; both conventions give −11.)
-
-**A MASKING DEFECT EVERY EARLIER ROUND OF THIS ARC SHARED, and only the compiler saw it.**
-`spanmask`/`strip` blank whole string literals, so a `${ … }` INTERPOLATION — which is code
-— is invisible to the ambient census and unrewritten by the forward transform. One site
-existed (`"import(\"${moduleFileBaseNoExt(f)}\")"`). It failed LOUDLY here, because a
-`Checker` member is not accessible from a collaborator — but that makes the compiler a
-complete detector only for the AMBIENT case: a TOP-LEVEL function called from inside a
-template resolves fine and would simply be absent from a ledger row. `codemask.py` keeps
-interpolations visible and comments blanked; both verbatim proofs are taken with it.
-
-**VERBATIM PROVED TWICE, over CODE positions only**: `inverse(moved region)` is
-byte-identical to `HEAD:Checker.kt[115064..116076]`, and `forward(HEAD span)` is
-byte-identical to the moved region. 50 ambient rewrites over 13 members, 29 visibility
-rewrites, 24 delegations.
-
-**THE RECEIPT NOW SPANS FIVE BINARIES** — the same 488 deterministic `--passTiming` lines
-byte-identical for pre-step-5 pristine, steps 5, 6a, 6b and this: **one receipt over 3,522
-moved lines**, at one extra build for the whole session. **A recipe trap cost one bench run:
-the first capture was taken with `--listAll` where the pristine arm was not, so the
-diagnostics block truncated at 30 in one arm and listed all 46 in the other** — 22 diff
-lines that look like a regression and are a `sed`. A capture is a property of (OUTPUT ×
-RECIPE); re-run the recipe, do not reconcile the diff.
-
-**PrintInlining is FLAT, and that is the honest reading**: 182 → 191 `too large` over the
-20 tracked sites. Rows 4-9 each removed dozens because each moved ONE large body out of a
-caller's inline tree; this family is 40 SMALL functions (largest 1,033 bytecodes), so there
-was no monolith to remove. The one real gain is `isEnumFlavoredObjectType` — **zero** inlines
-at 21 call sites before, 37 after. **A trap that manufactured a fake +137 first**: the twelve
-members that were `internal` on `Checker` are JVM-name-MANGLED there and are plain members of
-an `internal class` afterwards, so a matcher requiring a space after the name reads ZERO rows
-in the PRISTINE arm and every row in the split one. Match `::NAME($suffix|-hash)?\s` on BOTH
-arms. ab-interleaved 6 pairs **−120 ms (−0.46%) B-wins-3/6 NOISE-DOMINATED**, both arms 46.
-
-**SEVEN OF EIGHT PINS DISCRIMINATE EXACTLY; THE EIGHTH WAS BLIND AND THE ARM SAID SO.**
-Arm 8 read `0 RED`, and the pin — not the guard — was the blind half: its fixture (`export
-enum` in one file, imported into another) resolves BOTH the value and the annotation through
-ONE import, so the two member symbols are IDENTICAL and reducing
-`enumMemberTypesAreSameMember` to `sourceMember === targetMember` changes nothing. Two
-further shapes were probed ON THE ABLATED BINARY before concluding — a three-file variant
-(no difference) and two same-NAMED enums with equal values (**1 row vs 2**). Repaired to the
-latter; arm 8 now reddens it and nothing else. **Arm 3 reddens TWO pins (3 and 8) and that
-is recorded rather than smoothed**: pin 8's ACCEPTANCE runs through the very member loop
-arm 3 inverts. Neither is redundant — arm 8 separates them — arm 3 simply is not a
-single-pin arm.
-
-**A DIVERGENCE THE REPAIR SURFACED, RECORDED AND NOT PINNED AS RIGHT.** At a variable
-declaration both references print `Type 'Z.Foo.A' is not assignable to type 'X.Foo.A'.`
-where we print `Type 'Foo.A' is not assignable to type 'Foo.A'.` — the (REL.1)(c)
-rounds-745-749 same-string retry (`enumCollisionQualifiedDisplays`) is not reached by that
-reader, in `diagnose()` and through the project CLI alike, for a namespace-nested AND a
-module-scoped collision. **PRE-EXISTING** (the family moved verbatim; HEAD~1 prints the
-same) and orthogonal to what the pin gates, which is the VERDICT. Queued below as a lead.
-
-**A PROCESS FINDING FROM RUNNING A SUBAGENT BESIDE THE BUILD**: the pin-design agent was
-probing with `java` while this session ran `compileKotlinJvm`; the class dir emptied
-mid-probe and **five shapes read as "our compiler is silent where both references report"**
-— a convincing false divergence family. `grep 'error TS'` hides `Could not find or load
-main class`. CLAUDE.md's "one gradle invocation per BOX, not per agent" has a second half:
-a **`java` probe is a victim too**, and any probe script must grep for the dead-classpath
-line first.
-
-**NEXT**: the ambient TOTAL can now fall per round, but only where a collaborator's reads
-are a FAMILY someone else owns. Census `getPropertiesOfType` / `getPropertyOfType` and the
-member-ACCESS family, which `MemberResolver`'s 22 reads and `Relater`'s remaining 38 both
-point at; SIGNATURES and FLOW stay Stage-3-shaped until an instrument for a scatter exists.
-
-### Round (P18.58) — (INV.0) step 6b: the MEMBER-NAME / late-binding family becomes `MemberNames.kt`, the arc's cleanest seam (2026-09-09)
-
-**Suite 18,498 / 0 / 3** (18,493 + 5 new pins). `Checker.kt` **196,176 → 195,606** (−570);
-`MemberNames.kt` **765**. cost_gate exit 0, huge_methods exit 0 (**838** classes,
-`Checker.<init>` 5,705 → 5,721), warning-clean, ledger row 9. Two commits: `ecd6c0491` the
-split, `95dff28a1` the ablation record. **Third extraction of the session.**
-
-**FIVE AMBIENT READS, ZERO WRITES — the smallest row of the arc, against the relater's 45/5
-and member resolution's 21/1 — AND THE REASON GENERALISES: the family owns NO STATE and
-answers a SYNTACTIC question.** It is handed a name node and returns a string; everything it
-needs beyond the AST is an enum's constant value (3 reads) plus two AST helpers (2), i.e.
-four of the five belong to seams of their own. Rows 7 and 8 read the type system because they
-ARE the type system; this one does not. **`fileResults` as a CONSTRUCTOR INPUT is what took
-the row from 6 to 5** — it is declared at `Checker.kt:265`, above the 666 boundary — which is
-rows 5/6's rule paying off rather than a judgement call.
-
-**`MemberResolver` WAS DELIBERATELY NOT REWIRED.** Step 6a's collaborator calls
-`getMemberName` ×4 and `declaredMemberName` ×4 and now does so one hop further, through
-`Checker`. That is the right answer and not a shortcut: the delegations exist anyway for the
-other 30 call sites, and routing through `Checker` keeps the two collaborators free of a
-construction-ORDER dependency on a class whose field initializers run ~9,300 lines deep.
-
-**THE SPLIT REMOVED 61 `too large` REFUSALS AND ADDED NONE — the fifth row running.**
-`getMemberName` `16 inline + 16 too large` → a hop reading `7 inline` with zero refusals;
-`computedLiteralKey` `20 + 20` → `6`; `lateBoundComputedKeyName` `17 + 17` → `3`;
-`computedSymbolKey` `6 + 6` → `2`; `objLitElementMemberName` `2 + 2` → `2`. ab-interleaved
-6 pairs **−182 ms (−0.70%) B-wins-3/6 NOISE-DOMINATED**, both arms 46 errors. Recorded
-honestly: `checkArgumentsAgainstSignature` — the only standing site (P18.56) proved stable —
-moved again (`5 hot-too-big + 6 inline + 1 too large` → `4 + 5 + 1`), which is what widening
-members to `internal` does to a caller's inline tree.
-
-**THE RECEIPT NOW SPANS FOUR BINARIES**: the same 488 deterministic `--passTiming` lines are
-byte-identical for pre-step-5 pristine, step 5, step 6a and step 6b — **one receipt over
-2,509 moved lines**, and it has cost one extra build in the whole session, because each
-round's capture is the next round's pristine arm.
-
-**THE PINS ARE *AGREEMENT* PINS, AND THAT IS WHAT THIS FAMILY NEEDS.** A member's name is
-asked at REGISTRATION and again at RESOLUTION, and BOTH known failures of this code produce a
-correct diagnostic beside a false one — round 935's drift emitted a correct TS2322 and a
-false TS2339 for the same member in ONE compile, and (CHK.40)(c) registered a string-named
-METHOD correctly and typed it `any`. **A pin asserting "it compiles" passes on both.** So
-each pin reads the member back through a deliberately WRONG target type and asserts the
-TS2322 that names the resolved type AND the absence of TS2339 beside it.
-
-**EVERY PIN DISCRIMINATES — the first of the session's three extraction rounds where that is
-true.** Disabling late binding reddens the three late-binding pins and nothing else; raising
-`LATE_BIND_ALIAS_HOPS` 8 → 100 reddens ONLY the past-the-limit pin (and since that arm edits
-`Checker.kt`, `MemberNames.kt` is byte-unchanged under it — the arm's own control); dropping
-the `StringLiteralNode` arm reddens ONLY the string-named-method pin. **The hop-limit PAIR is
-the interesting one**: a 2-hop alias chain late-binds and an 11-hop one does not, so the two
-pins bracket the limit and neither alone is evidence.
-
-**Absorption census ZERO again** (row 8's answer, not row 7's): the scarcest ambient member
-still has 3 other callers and `expressionTrueEnd` has 274.
-
-**A DEVIATION WORTH CARRYING: the collaborator's FIELD is `memberNamer`, not `memberNames`.**
-`Checker.kt` already declares EIGHT locals named `memberNames`, five used in the same scope. A
-field of that name compiles — locals shadow it — and it broke the round's own 12-vs-12
-structural check (read 18). **Before naming a new collaborator field, grep `Checker.kt` for a
-local of that name**; the class is large enough that the collision is likely and silent.
-
-**NEXT**: `getPropertiesOfType` / `getPropertyOfType` and the member-ACCESS family just below
-this span — or, per § 6's order, SIGNATURES and FLOW. Row 7's seven absorbable members
-(`enumLiteralApparentPrimitive`, `enumMemberValueEqualsLiteral`, `enumTargetAdmitsNumericSource`,
-`numericLiteralFitsEnum`, `intersectionMergedSatisfiesTarget`, `intersectionMergedContradictsTarget`,
-`targetIsMemberShaped`) remain the arc's one cheap win, taking row 7 from 45 reads to 38.
-
-
-### Round (P18.57) — (INV.0) step 6a: MEMBER RESOLUTION becomes `MemberResolver.kt`, and the queue item's open question is answered (2026-09-09)
-
-**Suite 18,493 / 0 / 3** (18,489 + 4 new pins). `Checker.kt` **196,797 → 196,172** (−625);
-`MemberResolver.kt` **814**. cost_gate exit 0, huge_methods exit 0 (**837** classes,
-`Checker.<init>` 5,675 → 5,705), warning-clean, ledger row 8. Two commits: `c26520a8e` the
-split, `c8b2349e4` the ablation record. **Second extraction of the session.**
-
-**THE QUEUE ITEM ASKED WHETHER THE SEAM IS THE TABLE BUILDERS *WITHOUT* `getTypeOfSymbol`.
-IT IS**, and the census said so before any code moved: this family reads `getTypeOfSymbol`
-at ONE site and `getTypeOfExpression` at one, so a seam that took them would have had to
-take the whole checker — which is exactly why `docs/INVERSION-DESIGN.md` § 6 puts them in
-Stage 3 ("their ambient IS the checker"). The answer is written into the class KDoc rather
-than left in a round note.
-
-**AND IT IS A MUCH BETTER-SHAPED SEAM THAN THE RELATER, WHICH MAKES ROW 7 THE OUTLIER OF
-THIS ARC RATHER THAN THE TREND**: one contiguous span against five, 657 lines against
-1,256, **21 ambient reads against 45**, **1 write against 5**, three surviving entry points
-against six. The single write (`memberResolutionTruncated`, (INC.23)'s truncation flag) is
-never read back here — a pure OUT channel, so the columns are DISJOINT, which row 7's are
-not.
-
-**THERE IS NO CHEAP ABSORPTION HERE, AND THAT IS THE OPPOSITE OF ROW 7 — MEASURED.** Row 7
-had seven members with no other caller in `Checker.kt`, so absorbing them was mechanical.
-Here it is **ZERO of 22**: the scarcest are `isLibSymbolForCensus` (2 other callers),
-`memberResolutionTruncated` (4), `resolveBaseTypesLazy` (5); the densest are
-`getTypeOfExpression` (372), `getTypeFromTypeNode` (347), `getTypeOfSymbol` (243). Shrinking
-this row means extracting the NEIGHBOURS — the member-NAME family at `Checker.getMemberName`
-and Stage 3's symbol typing — not tidying it.
-
-**THE RECEIPT IS NOW TRANSITIVE ACROSS THREE BINARIES.** The same **488 deterministic
-`--passTiming` lines** — all 420 per-pass rows, the 46 diagnostics, the emissions census,
-the counter block, globals lookups — are byte-identical for pre-step-5 pristine, step 5 AND
-step 6a, i.e. **one receipt now covers 1,882 moved lines**. It cost no extra build: the
-step-5 capture taken earlier in the session IS this round's pristine arm.
-
-**A NEW AND SHARPER FORM OF THE JVM-NAME-MANGLING TRAP, HIT TWICE IN ONE RUN.** Rows 5/6
-record that `internal` adds a `$<module>` suffix so a receipt grep for the SOURCE name reads
-zero rows. This round shows the worse case: **widening a member to `internal` AS PART OF THE
-SPLIT mangles a site a PREVIOUS round's receipt was reading**. `getTypeOfExpression` — one
-of § 10's three standing hot sites — went `private` → `internal` here, so the unmangled grep
-reads **574 rows in the before-arm and 0 in the after-arm**, which reads exactly like a site
-that stopped being compiled. Grep BOTH forms across any round that widens visibility, and
-say which one you used.
-
-**THE SPLIT IMPROVED INLINING AT THE HOT LOOKUP FOR THE FOURTH ROW RUNNING**:
-`resolveStructuredTypeMembers` (244 call-site lines) was refused `too large` at **189**
-sites as a `Checker` method (`239 inline + 61 inline (hot) + 189 too large`); the hop reads
-`233 inline + 55 inline (hot)` with **ZERO refusals**. ab-interleaved 6 pairs **+38 ms
-(+0.15%) B-wins-3/6 NOISE-DOMINATED**, both arms 46 errors; `new MemberResolver` at exactly
-ONE bytecode in the module. Recorded honestly: **`checkArgumentsAgainstSignature` — the only
-standing site (P18.56) proved stable — DID move** (`4 inline + 1 too large + 3 hot-too-big`
-→ `6 + 1 + 5`), which is what 19 visibility widenings in one commit do to a caller's inline
-tree.
-
-**4 pins, 3 arms, and ONE ARM IS DEAD BY CONSTRUCTION — recorded, not counted as coverage.**
-`MemberResolver.resolutionResidue` is row 7's `recursionResidue` one seam over. Arm b1
-(delete the `finally`'s `memberResolutionInProgress.remove`) reddens both residue pins; arm
-b3 (make the B202.1 break never refuse) reddens the heritage pin and **its failure message
-is the mechanism verbatim** — the compile answers ONE diagnostic, `TS2589 … at (0,0)`, i.e.
-`reportCheckerStackOverflow`'s signature, and the real circular-base row is gone. **Arm b2
-changes nothing**: `mrProbeDepth` only moves under `PassTiming.detailed`, which no test
-enables, so that term of the residue is unpinned by any test and is carried by the
-`--passTiming` receipt instead.
-
-**NEXT**: step 6b, the member-NAME / late-binding family (`getMemberName`,
-`declaredMemberName`, the computed/late-bound key machinery from `Checker.kt` ~118017 to
-~118657, ~640 lines) — the seam this round deliberately left whole, and the one that most
-improves row 8's DECLARATION-READING group.
-
 
 ## QUEUE
 
@@ -2254,18 +2131,16 @@ notices it is gone.
   own namespace type-side residue; the `extends`/`implements` and unique-TS2322 rows stay
   blocked on 10b-ii.
 
-- [ ] **(CHK.119) A `function` USED AS A MEMBER-ACCESS RECEIVER NEVER REPORTS TS2339, AT
-  ANY NESTING SITE INCLUDING FILE LEVEL (measured 2026-09-10, (P18.66), three
-  compilers).** `function ZzzF(): void {} const p = ZzzF.zzzNope;` is
-  `Property 'zzzNope' does not exist on type '() => void'.` in tsgo 7.0.2 AND pristine
-  6.0.3, and silent here — 5 of the 7 cells of the step-10b-iii matrix's `absentFn` kind,
-  **the FILE-LEVEL one included**, which is the control that proves it is NOT B83.5's
-  population and is why (P18.66) deliberately did not claim it. The `cmam*` family has a
-  function-receiver gate only for B240 (`fn.name` under a pre-ES2015 lib, display
-  `'() => void'`), so the display already exists; what is missing is the general
-  absent-member arm. Check `RUNTIME_PROPERTIES` and the expando family
-  (`M04ExpandoSpineMigrationTest` pins a whole silent population) before widening
-  anything — a function object legitimately carries `call`/`apply`/`bind`/`length`/`name`.
+- [x] **(CHK.119) PARTLY CLOSED 2026-09-11 ((P18.70) note) — AND THE ITEM'S HEADLINE
+  CLAIM WAS FALSE.** It said a `function` receiver NEVER reports TS2339; B431
+  (`spineExEnterNode`) reports for a top-level, uniquely-named `FunctionDeclaration`
+  read from inside a nested function, and **every row it emitted carried a display
+  neither reference produces**. Both of those are now fixed: four expando WRITE forms
+  were uncollected (`F["tag"] = 1`, `` F[`tag`] = 1 ``, `` `${F.tag = 1}` `` and the
+  tagged form — each an ours-only FALSE POSITIVE), and the display is now the
+  SIGNATURE for a function with no expando and `typeof $name` for one with. The
+  numeric and computed index forms declare nothing and are the negative controls.
+  **The general gap is NOT closed and is now (CHK.124).**
 
 - [ ] **(CHK.120) `Binder.declareLexical`'s `ModuleDeclaration` ARM PUBLISHES NO `exports`
   ONTO THE SCOPE SYMBOL WHERE ITS `enum` ARM DOES, AND THAT ONE ASYMMETRY BLOCKS EVERY
@@ -2326,15 +2201,17 @@ notices it is gone.
   plus the shapes the firewall already refused. The grid is a real gate here and a
   positive-control build counts 78/152/116 accepts on three profiles, so it is not vacuous.
 
-- [ ] **(CHK.122) AN `in`-GUARDED READ ON AN *IDENTIFIER-INITIALIZED* ANNOTATED LOCAL IS AN
-  OURS-ONLY FALSE POSITIVE (measured 2026-09-11, (P18.68), three compilers).**
-  `if ('zzzNope' in v) { v.zzzNope }` is LEGAL — tsc narrows an object type by `in` to
-  `T & Record<'zzzNope', unknown>` — and we report TS2339 when `v` is an annotated body-local
-  whose initializer is an IDENTIFIER, because that shape is served by
-  `cmamNarrowedAnyReceiverType`'s flow route, which has no `in`-guard consult where
-  (CHK.121)'s seam has one. So the fix is to give the flow route the same
-  `cmamInGuardMayAddProperty` consult, and the pin that proves it is the OTHER initializer
-  forms staying silent — they already are. PRE-EXISTING: it reproduces on the (P18.66) binary.
+- [x] **(CHK.122) CLOSED 2026-09-11 ((P18.70) note) — AND THE POPULATION WAS FOUR, NOT
+  ONE, WHICH CHANGED WHERE THE FIX GOES.** The item named the flow route and gave the
+  fix as "give that route the same consult". Measured against both references, the
+  ours-only false positives were the flow route, a DESTRUCTURED receiver, a FILE-LEVEL
+  `const` and a PARAMETER — and the last two never touch the `any` bail the route
+  helpers live on, so a per-route fix could not reach them. The consult went to the
+  emission FUNNEL (`cmamEmitMissingProperty`, under `prop == null`). **Exhaustion
+  DECLINES there where it REFUSES on the three routes**: with the refusing form the
+  profiles read `refused=5 exhausted=5` on services/server/harness, i.e. every refusal
+  on tsc's own sources was blind. Residue pinned as a residue: a guard separated from
+  its read by ~130+ branching statements still reports.
 
 - [ ] **(CHK.123) A CLASS-TYPED ANNOTATED LOCAL RENDERS `typeof ZzzK` WHERE BOTH REFERENCES
   RENDER `ZzzK` (measured 2026-09-11, (P18.68)).** `const v: ZzzK = zzzKV; v.zzzNope` — the
@@ -2343,6 +2220,58 @@ notices it is gone.
   `Cannot find name …`) and the ~2,881 ACTIVE `.errors.txt` corpus subtests are the only
   gate — and since the corpus is green, a change here can only turn a green baseline red, so
   enumerate the baselines rendering `typeof ` before touching it. PRE-EXISTING.
+
+- [ ] **(CHK.124) THE GENERAL FUNCTION-RECEIVER TS2339 GAP — (CHK.119)'s RESIDUE,
+  MEASURED 2026-09-11 ((P18.70)) AGAINST BOTH REFERENCES.** Silent here, reported by
+  tsgo 7.0.2 AND pristine 6.0.3: a function receiver read at **FILE LEVEL**
+  (`function ZzzF(){} const p = ZzzF.zzzNope;` -> `'() => void'`), a `const f = () => {}`
+  or `const f = function(){}` receiver at ANY read site, a function-typed **PARAMETER**
+  (`function h(cb: () => void) { cb.zzzNope }`), and an OVERLOAD SET (display
+  `{ (zzzX: string): void; (zzzX: number): void; }`). B431 cannot reach any of them:
+  its candidate set is top-level uniquely-named `FunctionDeclaration`s and its emission
+  requires `spineExStatus(node) == EX_NESTED`. **Three routes, pick deliberately**:
+  widen B431's candidate scan and drop its nested-read restriction (cheapest, but it
+  then needs the expando collector to be complete for EVERY form, which (CHK.119) only
+  made true for the file-scope ones); a type-level arm at `cmamCheckResolvedObjectType`
+  (`Checker.kt:151046`, where a function type exits silently because the B63.33
+  empty-`{}` gate requires `callSignatures.isNullOrEmpty()`); or modelling expando
+  members on the function TYPE, which is what the other two are standing in for.
+  **`cmamAllMissingTrustedMember` ALREADY TRUSTS an anonymous call-signature-bearing
+  object** (`Checker.kt:149656`) — i.e. exactly the parameter/`declare const` shape —
+  and refuses a function DECLARATION's type only because it carries a symbol. **Two
+  measured FP hazards**: every legitimate expando read (we model no expando members on
+  the type at all, so `F.tag` types as `any`), and an
+  `declare global { interface Function { … } }` augmentation, which both references
+  honour and a type-level arm must consult. `RUNTIME_PROPERTIES` (16 entries) already
+  covers every member both references accept on a bare function — measured, not
+  assumed. The 8-profile grid reports ZERO function-receiver TS2339 rows, so it is a
+  pure false-positive detector for this work and a good one.
+
+- [ ] **(CHK.125) AN OURS-ONLY TS2394 ON AN ORDINARY OVERLOAD SET (measured
+  2026-09-11, (P18.70), three compilers; PRE-EXISTING — identical on the parent
+  binary).** `export function ZzzO(zzzX: string): void; export function ZzzO(zzzX:
+  number): void; export function ZzzO(zzzX: unknown): void {}` is legal in tsgo 7.0.2
+  and pristine 6.0.3 and we report `This overload signature is not compatible with its
+  implementation signature.` A false positive on a completely ordinary shape — an
+  `unknown` implementation parameter accepting `string` and `number` overloads — so it
+  is likely to hit any real library. Found incidentally while building a (CHK.119)
+  fixture, which is the usual way this class surfaces.
+
+- [ ] **(CHK.126) `M04ExpandoSpineMigrationTest` CARRIES ~6 MORE COUNTDOWN PINS
+  (recon-measured 2026-09-11, (P18.70); two of its eight were closed by (CHK.119)).**
+  A "negative control" there that asserts `none { it.code == 2339 }` for a shape BOTH
+  references report is a pin waiting to fire on whichever round fixes it, not
+  coverage. Measured as reporting in both references: `class bodies and namespace
+  bodies are never walked`, `template spans and typeof operands … not walked`, `a
+  for-of loop-head destructuring INITIALIZER is not walked`, `top-level reads never
+  fire` (this one IS (CHK.124)), `a function merged with another declaration kind is
+  not a candidate`, `duplicate top-level function names are not candidates`, `a NESTED
+  function is not a candidate`, `a function expression's own name shadows`. Three
+  others are GENUINE controls (both references silent) and must stay: `params and
+  top-level body locals shadow the candidate`, `an outer function's shadow reaches
+  nested functions`, `runtime function-object properties never fire`. Re-derive each
+  against both references before touching it — the point of the item is that the
+  class's own names do not distinguish the two kinds.
 
 - [ ] **(INV.0) STEP 10b-ii — BLOCKED-ON: the two families named inside this item. THE *UNIQUE* HALF OF THE
   VALUE SPACE (measured 2026-09-10, (P18.63)). MOVED BELOW ITS SMALLER, UNBLOCKED SIBLINGS
