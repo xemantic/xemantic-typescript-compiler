@@ -35207,7 +35207,21 @@ class Checker(
             is PrefixUnaryExpression -> collectExpandoDeclsExpr(e.operand, cands, declared)
             is PostfixUnaryExpression -> collectExpandoDeclsExpr(e.operand, cands, declared)
             is ArrayLiteralExpression -> e.elements.forEach { collectExpandoDeclsExpr(it, cands, declared) }
-            is ObjectLiteralExpression -> e.properties.forEach { p -> when (p) { is PropertyAssignment -> collectExpandoDeclsExpr(p.initializer, cands, declared); is SpreadAssignment -> collectExpandoDeclsExpr(p.expression, cands, declared); else -> {} } }
+            // (CHK.127) AN OBJECT LITERAL IS A HARD STOP: nothing written inside one
+            // declares an expando member, at any depth. This arm used to descend into
+            // property initializers and spread expressions, which OVER-declared — the
+            // opposite direction from (CHK.119)'s under-collection, and it costs a
+            // diagnostic at the write's own LHS *and* at every later read.
+            //
+            // Measured over twelve positions against tsgo 7.0.2 AND pristine 6.0.3,
+            // which agree on every cell. DECLARES: an expression statement, a comma
+            // operand, a ternary branch, a chained assignment, an ARRAY-LITERAL
+            // element, a CALL argument, a parenthesized expression, a unary operand.
+            // DOES NOT: an object-literal property value, a spread, a computed-key
+            // property value — **and an array literal nested inside any of those, or
+            // an object literal nested inside an array**, which is what makes this a
+            // hard stop rather than a rule about the immediate parent.
+            is ObjectLiteralExpression -> {}
             is SpreadElement -> collectExpandoDeclsExpr(e.expression, cands, declared)
             // (CHK.119) A TEMPLATE SPAN IS AN EXPRESSION POSITION AND WAS NOT WALKED
             // AT ALL, so `` `${F.tag = 1}` `` declared nothing and the later read of

@@ -297,6 +297,93 @@ class ExpandoReceiverDisplayTest {
         assert(t2339(d).isEmpty())
     }
 
+    // --- 1b. (CHK.127) an object literal is a HARD STOP for the collector ----
+
+    /**
+     * (CHK.127) THE COLLECTOR ALSO OVER-DECLARED, WHICH IS THE OPPOSITE DIRECTION
+     * FROM THE FOUR FORMS ABOVE.
+     *
+     * Measured over twelve positions against tsgo 7.0.2 AND pristine 6.0.3, which
+     * agree on every cell. DECLARES: an expression statement, a comma operand, a
+     * ternary branch, a chained assignment, an ARRAY-LITERAL element, a CALL
+     * argument, a parenthesized expression, a unary operand. DOES NOT: an
+     * object-literal property value, a spread, a computed-key property value — and
+     * an array literal nested inside any of those, or an object literal nested
+     * inside an array. That last pair is why this is a HARD STOP and not a rule
+     * about the immediate parent, and it is what the two nesting pins below hold.
+     */
+    @Test
+    fun `an objlit property-value write does NOT declare`() {
+        val d = diagnose(
+            """
+            function ZzzO() {}
+            const zzzH = { p: ZzzO.tag = 1 };
+            function zzzG() { ZzzO.tag; }
+            """
+        )
+        assert(t2339(d).any { it.message.contains("'tag'") })
+    }
+
+    @Test
+    fun `a spread write does NOT declare`() {
+        val d = diagnose(
+            """
+            function ZzzS2() {}
+            const zzzH = { ...(ZzzS2.tag = 1 as any) };
+            function zzzG() { ZzzS2.tag; }
+            """
+        )
+        assert(t2339(d).any { it.message.contains("'tag'") })
+    }
+
+    /** An ARRAY element DOES declare — the control that the stop is not blanket. */
+    @Test
+    fun `negative control - an array-literal element write DOES declare`() {
+        val d = diagnose(
+            """
+            function ZzzA2() {}
+            const zzzH = [ZzzA2.tag = 1];
+            function zzzG() { ZzzA2.tag; }
+            """
+        )
+        assert(t2339(d).none { it.message.contains("'tag'") })
+    }
+
+    /** …and so do a CALL argument, a parenthesized expression and a unary operand. */
+    @Test
+    fun `negative control - call argument parenthesized and unary writes DO declare`() {
+        val d = diagnose(
+            """
+            declare function zzzF(x: unknown): void;
+            function ZzzC2() {}
+            zzzF(ZzzC2.a = 1);
+            const zzzP = (ZzzC2.b = 2);
+            const zzzU = !(ZzzC2.c = 3);
+            function zzzG() { ZzzC2.a; ZzzC2.b; ZzzC2.c; }
+            """
+        )
+        assert(t2339(d).isEmpty())
+    }
+
+    /**
+     * THE PAIR THAT MAKES IT A HARD STOP: an array literal INSIDE an objlit value
+     * does not declare, and an objlit INSIDE an array does not either. A rule
+     * written about the immediate parent gets both of these wrong.
+     */
+    @Test
+    fun `the stop is transitive in both nesting directions`() {
+        val d = diagnose(
+            """
+            function ZzzN2() {}
+            const zzzH1 = { p: [ZzzN2.inArr = 1] };
+            const zzzH2 = [{ p: ZzzN2.inObj = 2 }];
+            function zzzG() { ZzzN2.inArr; ZzzN2.inObj; }
+            """
+        )
+        assert(t2339(d).any { it.message.contains("'inArr'") })
+        assert(t2339(d).any { it.message.contains("'inObj'") })
+    }
+
     // --- the real Function surface must stay legal ---------------------------
 
     /**

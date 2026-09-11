@@ -368,19 +368,25 @@ class M04ExpandoSpineMigrationTest {
     }
 
     /**
-     * **RESIDUE, and the direction is the OPPOSITE of (CHK.119)'s: this collector
-     * declares MORE than tsc does.** Measured 2026-09-11, tsgo 7.0.2 and pristine
-     * 6.0.3 agreeing on all four rows — a write in an ARRAY-LITERAL element
-     * (`Foo.g = 5`) declares, while one as an OBJECT-LITERAL PROPERTY VALUE
-     * (`{ p: Foo.h = 6 }`) and one inside a SPREAD do NOT. The reference display is
-     * `{ (): void; a: number; b: number; d: number; e: number; f: number; g: number; }`,
-     * with `h` and `i` ABSENT, so both references report four rows we do not:
-     * TS2339 at (5,32) and (5,47) on the WRITE's own LHS, and at (6,62) and (6,69)
-     * on the read. Owned by (CHK.126).
+     * (CHK.127) CLOSED — **and this pin is why it was found.** It shipped for one
+     * round as `residue - an objlit-property-value and a spread write OVER-declare`,
+     * recording that the collector declared MORE than tsc does, and it fired on the
+     * round that fixed that. Now it pins the corrected split.
+     *
+     * Measured over twelve positions against tsgo 7.0.2 AND pristine 6.0.3, which
+     * agree on every cell: a chained assignment, a comma operand, a ternary branch
+     * and an ARRAY-LITERAL element all DECLARE, while an OBJECT-LITERAL PROPERTY
+     * VALUE and a SPREAD do not — at any depth, which is why
+     * `collectExpandoDeclsExpr`'s objlit arm is a HARD STOP rather than a rule about
+     * the immediate parent.
+     *
+     * The reads of `h` and `i` therefore REPORT, and both halves are asserted: a pin
+     * that only checked the silence would be satisfied by a collector that declares
+     * everything, which is exactly the state this test used to record.
      */
     @Test
-    fun `residue - an objlit-property-value and a spread write OVER-declare`() {
-        diagnose(
+    fun `writes in chains comma ternary and array elements declare - objlit and spread do not`() {
+        val d = diagnose(
             """
             function Foo() {}
             declare let y: any;
@@ -389,9 +395,14 @@ class M04ExpandoSpineMigrationTest {
             const l = [Foo.g = 5, { p: Foo.h = 6, ...(Foo.i = 7 as any) }];
             function g() { Foo.a; Foo.b; Foo.d; Foo.e; Foo.f; Foo.g; Foo.h; Foo.i; }
             """
-        ) should {
-            have(none { it.code == 2339 })
+        )
+        // the six that DO declare stay silent
+        for (declared in listOf("'a'", "'b'", "'d'", "'e'", "'f'", "'g'")) {
+            assert(d.none { it.code == 2339 && it.message.contains(declared) })
         }
+        // and the two that do NOT now report, as both references do
+        assert(d.any { it.code == 2339 && it.message.contains("'h'") })
+        assert(d.any { it.code == 2339 && it.message.contains("'i'") })
     }
 
     @Test
