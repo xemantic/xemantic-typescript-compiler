@@ -9528,12 +9528,16 @@ class Parser(
         // nodes, so record them here for `getTupleType` (an all-optional tuple target must
         // not count its elements as required — TS2739 on `[] : [a?, b?]`).
         val optional = mutableListOf<Boolean>()
+        // (CHK.134) the labels, consumed below, are recorded beside the optionality so
+        // the tuple TYPE can display them.
+        val names = mutableListOf<String?>()
         inTupleTypeDepth++
         try {
             while (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
                 // Labeled tuple elements: `name: Type` or `name?: Type` or `...name: Type`
                 val isRest = parseOptional(SyntaxKind.DotDotDot)
                 var isOptional = false
+                var label: String? = null
                 val isLabeledElement = isIdentifier() && lookAhead {
                     nextToken()
                     when {
@@ -9544,6 +9548,7 @@ class Parser(
                 }
                 if (isLabeledElement) {
                     // Skip label (identifier) and optional `?`
+                    label = scanner.getTokenValue()
                     nextToken() // consume identifier (label)
                     if (parseOptional(SyntaxKind.Question)) isOptional = true // optional `?`
                     parseExpected(SyntaxKind.Colon) // consume `:`
@@ -9558,6 +9563,7 @@ class Parser(
                 tupleElementConsumedOptionalMarker = false
                 elements.add(if (isRest) RestType(type = elementType, pos = pos, end = getEnd()) else elementType)
                 optional.add(isOptional)
+                names.add(label)
                 if (!parseOptional(SyntaxKind.Comma)) break
             }
         } finally {
@@ -9567,6 +9573,7 @@ class Parser(
         return TupleType(
             elements = elements,
             elementOptional = if (optional.any { it }) optional else null,
+            elementNames = if (names.any { it != null }) names else null,
             pos = pos, end = getEnd(),
         )
     }

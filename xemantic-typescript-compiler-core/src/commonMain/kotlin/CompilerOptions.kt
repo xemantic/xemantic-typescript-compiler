@@ -144,6 +144,14 @@ data class CompilerOptions(
      *  `unknown` instead of `any`. Effective value = this flag if explicitly set, else `strict`. */
     val useUnknownInCatchVariables: Boolean = false,
     val useUnknownInCatchVariablesExplicitlySet: Boolean = false,
+    /** (CHK.134) `strictBindCallApply`: when effective, a function value's `call`/`apply`
+     *  are the lib's `CallableFunction` members — typed from the receiver's own signature —
+     *  instead of `Function`'s loose `any`-typed ones. Effective value = this flag if
+     *  explicitly set, else `strict` (tsc's `getStrictOptionValue`). tsc's own sources set
+     *  it `false` explicitly in an otherwise-`strict` project, which is why the profiles
+     *  exercise the loose half. */
+    val strictBindCallApply: Boolean = false,
+    val strictBindCallApplyExplicitlySet: Boolean = false,
     /** True when `// @strictPropertyInitialization: false` was explicitly set. */
     val strictPropertyInitializationExplicitlyFalse: Boolean = false,
     val noUnusedLocals: Boolean = false,
@@ -332,6 +340,10 @@ data class CompilerOptions(
      * fixture sets `@target: es3` — and keeping it raw is consistent with the
      * `target <= ES5` gates beside it.
      */
+    /** (CHK.134) tsc's `getStrictOptionValue(options, "strictBindCallApply")`. */
+    val effectiveStrictBindCallApply: Boolean
+        get() = if (strictBindCallApplyExplicitlySet) strictBindCallApply else strict
+
     val defaultedTarget: ScriptTarget
         get() = if (targetExplicitlySet) target else ScriptTarget.ES2024
 
@@ -831,6 +843,10 @@ private fun applyDirectiveArms2(
         "useunknownincatchvariables" -> options.copy(
             useUnknownInCatchVariables = boolValue,
             useUnknownInCatchVariablesExplicitlySet = true,
+        )
+        "strictbindcallapply" -> options.copy(
+            strictBindCallApply = boolValue,
+            strictBindCallApplyExplicitlySet = true,
         )
         "exactoptionalpropertytypes" -> options.copy(exactOptionalPropertyTypes = boolValue)
         "nouncheckedindexedaccess" -> options.copy(noUncheckedIndexedAccess = boolValue)

@@ -1575,6 +1575,11 @@ data class TupleType(
      *  `getTupleType` consults it so an all-optional tuple target does not count its
      *  elements as required (TS2739). Same length as [elements]; null = all-required. */
     val elementOptional: List<Boolean>? = null,
+    /** (CHK.134) Per-element LABELS (`[x: string, ...rest: number[]]`), recorded the same way
+     *  optionality is — the parser consumes the label and its colon — so `getTupleType` can
+     *  carry them into the type's display (`[x: string]`, as both references print). Same
+     *  length as [elements]; null = no element is labeled. */
+    val elementNames: List<String?>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

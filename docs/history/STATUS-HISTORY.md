@@ -3203,3 +3203,21 @@ CLAUDE.md entry gained the clause that stops the next agent repeating the report
 Three outer-line residues remain, each measured and refused with a reason. Grid 8×`added=0
 removed=0` and measured to be a control (416 rows, not one names a union). cost_gate exit 0,
 huge_methods exit 0 (844), warning-clean.
+
+**(P18.75) — (CHK.97) D3, THE IDENTICAL HALF: A UNION CONTEXTUAL SIGNATURE IS ANSWERED, AND THE BRIEF'S OWN FIXTURE NEVER REACHED THE ARM, 18,718 / 0 / 3 (2026-09-12).**
+`callableSignaturesForCtx` refused a union contextual type at its SECOND callable member;
+it now runs tsc's union arm of `getContextualSignature` — every member's one signature must
+be `compareSignaturesIdentical` to the first with returns ignored, and the answer is the
+first's parameters with the RETURNS unioned (`unionContextualSignature`, ~50 lines). Six
+fixture families go `missing → agree` and the TWO ours-only TS7006 rows the refusal
+manufactured are gone; the DIFFERING half (tsc's TS7006) stays silent and is recorded, as
+are an OVERLOADED member (the helper has no arrow, so it cannot arity-filter as tsc does)
+and a `Type.Reference` with lazy own signatures (the target fallback would read
+`Cb<string> | Cb<number>` as identical). **The obvious fixture, `declare const zf: A | B;
+zf((p) => …)`, never reaches the arm** — the argument gets the COMBINED callee signature's
+parameter — so the whole matrix was re-cut through `take(cb: A | B)` and annotations. The
+arm answers ZERO times on all eight profiles, `marked` and the 2,400-file project (14 on the
+fixture), so the 8×`added=0 removed=0` grid is a measured CONTROL. Ablation 12/3/1 RED over 19
+pins, a3 discriminated only by a NESTED differing pair. cost_gate exit 0 (all 20 counters
+digit-identical to the pristine binary — the +1.18% is baseline staleness), huge_methods exit
+0 (844), warning-clean. (CHK.97) stays open: D3-differing, D5, D6.

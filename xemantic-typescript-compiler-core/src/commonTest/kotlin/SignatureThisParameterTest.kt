@@ -462,11 +462,15 @@ class SignatureThisParameterTest {
     }
 
     @Test
-    fun `residue - call apply and bind are silent because a function value's apparent members are any`() {
-        // Both references: TS2353 at `zzzF.call({ m: "s" }, "x")` through the lib
-        // `CallableFunction` overloads; here `zzzF.call` itself types `any`.
+    fun `call and apply check the thisArg through the receiver-built member and bind is still any`() {
+        // (CHK.134)(1) closed the `call`/`apply` half of this residue: both references print
+        // TS2353 at each object-literal `thisArg` through the lib `CallableFunction`
+        // overloads, and so does `FunctionCallApplyTest`'s mechanism here. `bind` is
+        // sub-step 2 (the lib's `ThisParameterType`/`OmitThisParameter`) and stays `any`.
         val d = diagnose(prelude + "\nzzzF.call({ m: \"s\" }, \"x\");\nzzzF.apply({ m: \"s\" }, [\"x\"]);\nconst zzzB2 = zzzF.bind({ m: \"s\" });\nexport {};")
-        assert(d.none { it.code == 2684 || it.code == 2353 || it.code == 2769 })
+        assert(d.count { it.code == 2353 && it.message == "Object literal may only specify known properties, and 'm' does not exist in type 'ZzzA'." } == 2)
+        assert(d.none { it.code == 2684 || it.code == 2769 })
+        assert(d.size == 2)
     }
 
     @Test

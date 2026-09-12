@@ -55866,6 +55866,15 @@ class Checker(
          *  interface's required non-method properties. */
         internal val FUNCTION_RUNTIME_PROPERTIES = setOf("prototype", "arguments", "caller")
 
+        /**
+         * (CHK.134) The declaration a synthesized REST parameter carries so the arity
+         * readers (`dotDotDotToken` off `valueDeclaration`) see it as a rest — the
+         * uninstantiated `...args: A` of `f.call()` with no arguments. Positionless by
+         * construction: nothing anchors a diagnostic on it (the too-few emitter reads
+         * the parameter at the ARGUMENT count, which is the declaration-less `thisArg`).
+         */
+        private val SYNTHETIC_REST_PARAMETER = Parameter(name = Identifier("args"), dotDotDotToken = true)
+
         /** Deprecated HTML-helper methods on String.prototype (sub, sup, big, small,
          *  bold, italics, fixed, blink, strike, anchor, link, fontcolor, fontsize).
          *  TypeScript declares these in `lib.es5.d.ts.deprecated.d.ts` (or formerly
@@ -129961,6 +129970,10 @@ interface DataView {
             // `Array<union>` / `ReadonlyArray<union>` base — the MISS path only, so the
             // tuple's own slots and `length` above are untouched.
             tupleArrayMemberType(apparentType, propName)?.let { return it }
+            // (CHK.134): a FUNCTION-shaped receiver reads `call`/`apply` and the lib
+            // `Function` members on the MISS path only — tsc's `getPropertyOfType`
+            // augmentation (checker.ts ~15907), which never widens the apparent type.
+            functionObjectMemberType(expr, apparentType, propName)?.let { return it }
         }
         // Fallback: try namespace/module lookup for property access
         val objExpr = expr.expression
@@ -130000,6 +130013,200 @@ interface DataView {
         }
         // For resolved non-anyType objects, the property wasn't found — return anyType
         return anyType
+    }
+
+    // -----------------------------------------------------------------------
+    // (CHK.134) `f.call` / `f.apply` on a function value, and the `Function` members
+    // -----------------------------------------------------------------------
+
+    /**
+     * (CHK.134) tsc's `getPropertyOfType` augmentation on a MISS (checker.ts ~15907):
+     * a resolved object type whose member table lacks [name] falls back to
+     * `globalCallableFunctionType` when it has call signatures — the lib's
+     * `CallableFunction` under `strictBindCallApply`, `Function` otherwise — before
+     * `Object`. Here it serves exactly two things, in this order:
+     *
+     *  1. `call` / `apply` under `strictBindCallApply` (`CompilerOptions.
+     *     effectiveStrictBindCallApply`: the flag when set, else `strict` — tsc's
+     *     `getStrictOptionValue`; tsc's own sources set it `false` explicitly, so every
+     *     dashboard profile takes the loose half): the lib's
+     *     `CallableFunction.call<T, A extends any[], R>(this: (this: T,
+     *     ...args: A) => R, thisArg: T, ...args: A): R` is INFERENCE through a `this`-typed
+     *     signature whose candidate for every type parameter is the RECEIVER itself — `T`
+     *     its `this` type, `A` its parameter list, `R` its return — so the instantiated
+     *     member is a function of the receiver alone and is BUILT ([bindCallApplyType])
+     *     rather than inferred: the single-type-parameter inference has no `this` argument
+     *     leg and cannot produce a rest `A` as a tuple. The lib's declaration text is not
+     *     consulted, which is what makes the corpus half (the EMBEDDED lib, whose
+     *     `Function` has no `this:` and no `CallableFunction`) type exactly like the real
+     *     one — every corpus baseline was produced by pristine with `CallableFunction`.
+     *  2. every other name: the lib `Function` interface's own member (`length`, `name`,
+     *     `toString`, `prototype`, `arguments`, `caller`), which both libs declare.
+     *
+     * Answers null — today's `anyType` — for `bind` (sub-step 2, the lib's two
+     * conditional types), where `strictBindCallApply` is off (tsc: the loose
+     * `Function.call`, whose result and arguments are `any` — the same silence), for a
+     * receiver that is
+     * not a plain callable object (a union, a generic REFERENCE whose signatures are
+     * uninstantiated, a construct-only type — `NewableFunction` is not modelled) and for
+     * anything the synthesis cannot decide, so the miss keeps its conservative answer.
+     */
+    private fun functionObjectMemberType(expr: PropertyAccessExpression, apparent: Type, name: String): Type? {
+        if (apparent !is Type.Object || apparent is Type.Reference) return null
+        val sigs = getCallSignaturesOfType(apparent)
+        if (sigs.isEmpty()) return null
+        if (name == "bind") return null
+        if (name == "call" || name == "apply") {
+            if (!options.effectiveStrictBindCallApply) return null
+            return bindCallApplyType(expr, sigs.last(), name == "apply")
+        }
+        val fnSym = globals["Function"] ?: return null
+        if (!fnSym.flags.hasAny(SymbolFlags.Interface)) return null
+        val fnType = getDeclaredTypeOfClassOrInterface(fnSym)
+        resolveStructuredTypeMembers(fnType)
+        val prop = getPropertyOfType(fnType, name) ?: return null
+        return optionalMemberAccessType(prop, getTypeOfSymbol(prop))
+    }
+
+    /**
+     * (CHK.134) The instantiated `call` / `apply` member for a receiver whose LAST call
+     * signature is [recvIn] — tsc's `inferFromSignatures` infers from the last source
+     * signature, so an overloaded receiver calls through its last overload; a GENERIC one
+     * is erased to its constraints first (tsc's `getBaseSignature`: `zzzGen<T>(x: T): T`
+     * calls through `(x: unknown) => unknown`, and both references print `unknown`).
+     *
+     * `call` is `(thisArg: T, <the receiver's parameters>) => R` — tsc's
+     * `getExpandedParameters` over the inferred rest tuple, which is what its arity
+     * messages count (`Expected 2 arguments, but got 1.` for `f.call(o)`). With NO
+     * arguments tsc reports the UNINSTANTIATED candidate (`hasCorrectArity` runs before
+     * inference, and `A extends any[]` is an array rest there): `Expected at least 1
+     * arguments, but got 0.` — so that one shape keeps a rest parameter.
+     *
+     * `apply` is an OVERLOAD SET — `apply<T, R>(this: (this: T) => R, thisArg: T): R` and
+     * `apply<T, A extends any[], R>(this: (this: T, ...args: A) => R, thisArg: T, args: A):
+     * R` — and tsc keeps only the arity-matching candidates before it reports, so the
+     * member is built PER CALL from the argument count: one argument → the first
+     * overload alone, whose `this` type `(this: T) => R` is what
+     * [checkThisArgumentOfCall] refuses for a receiver that needs arguments (TS2684 with
+     * the too-few-arguments chain, tsc's row for `f.apply(o)`); two → the second alone,
+     * whose `args` is the receiver's parameter list as a TUPLE ([restTypeOfParameters]);
+     * any other count → both, so the overload arity emitter prints tsc's `Expected 1-2
+     * arguments, but got N.`.
+     *
+     * [thisArgParamType] decides `T`; `R` is the receiver's return type. Everything else
+     * about the call — argument assignability, arity, a spread, the result at every
+     * reader — is the ordinary single-signature machinery over the built signature.
+     * A bare `f.call` read outside a call gets the expanded `call` form (tsc renders the
+     * generic method there; a recorded display residue).
+     */
+    private fun bindCallApplyType(expr: PropertyAccessExpression, recvIn: Signature, apply: Boolean): Type? {
+        val recv = erasedReceiverSignature(recvIn) ?: return null
+        val call = (expr.parent as? CallExpression)?.takeIf { it.expression === expr }
+        val args = call?.arguments ?: emptyList()
+        val ret = recv.resolvedReturnType ?: anyType
+        val thisArgType = thisArgParamType(recv, args.firstOrNull())
+        val obj = Type.Object()
+        if (!apply) {
+            val sig = if (call != null && args.isEmpty()) {
+                Signature(
+                    parameters = listOf(
+                        mintCombinedParam("thisArg", thisArgType, null),
+                        mintCombinedParam("args", getOrInternReference(globalArrayType, listOf(anyType)), SYNTHETIC_REST_PARAMETER),
+                    ),
+                    resolvedReturnType = ret, minArgumentCount = 1,
+                )
+            } else {
+                Signature(
+                    parameters = listOf(mintCombinedParam("thisArg", thisArgType, null)) + recv.parameters,
+                    resolvedReturnType = ret, minArgumentCount = 1 + recv.minArgumentCount,
+                )
+            }
+            obj.callSignatures = listOf(sig)
+            return obj
+        }
+        val thisFn = Type.Object()
+        thisFn.callSignatures = listOf(Signature(resolvedReturnType = ret, thisType = thisArgType))
+        val one = Signature(
+            parameters = listOf(mintCombinedParam("thisArg", thisArgType, null)),
+            resolvedReturnType = ret, minArgumentCount = 1, thisType = thisFn,
+        )
+        val two = Signature(
+            parameters = listOf(
+                mintCombinedParam("thisArg", thisArgType, null),
+                mintCombinedParam("args", restTypeOfParameters(recv), null),
+            ),
+            resolvedReturnType = ret, minArgumentCount = 2,
+        )
+        obj.callSignatures = when (args.size) {
+            1 -> listOf(one)
+            2 -> listOf(two)
+            else -> listOf(one, two)
+        }
+        return obj
+    }
+
+    /**
+     * (CHK.134) tsc's `getBaseSignature` for the receiver: a generic signature's own type
+     * parameters replaced by their constraints (`unknown` when unconstrained) and the
+     * type-parameter list dropped, so the synthesized member is never generic. A
+     * signature that still mentions a type parameter afterwards — an outer one, or a
+     * constraint naming a sibling — is refused (null), and the miss keeps `any`.
+     */
+    private fun erasedReceiverSignature(sig: Signature): Signature? {
+        val tps = sig.typeParameters
+        val erased = if (tps.isNullOrEmpty()) sig else {
+            val mapper = TypeMapper { tp -> if (tp in tps) (tp.constraint ?: unknownType) else null }
+            instantiateSignature(sig, mapper)
+        }
+        val ret = erased.resolvedReturnType
+        if (ret != null && typeMentionsAnyTypeParam(ret)) return null
+        if (erased.thisType?.let { typeMentionsAnyTypeParam(it) } == true) return null
+        for (p in erased.parameters) if (typeMentionsAnyTypeParam(getTypeOfSymbol(p))) return null
+        return erased
+    }
+
+    /**
+     * (CHK.134) The `thisArg` parameter's type — tsc's inferred `T`, which has TWO
+     * candidates: a CONTRAVARIANT one from the receiver's own `this` type (through the
+     * lib member's `this: (this: T, …) => R`) and a COVARIANT one from the argument.
+     * `getInferredType` takes the covariant candidate when it is a subtype of the
+     * contravariant one and the contravariant one otherwise — so a `thisArg` assignable
+     * to the receiver's `this` becomes the parameter's OWN type and passes trivially
+     * (measured: `f.call({ m: "s", extra: 1 }, "x")` is silent on both references — no
+     * excess-property row, because `T` is the widened literal), while an unassignable
+     * one is checked against the receiver's declared `this` and reported against it
+     * (`Argument of type 'undefined' is not assignable to parameter of type 'ZzzT'.`).
+     * A receiver with no `this` type has only the covariant candidate: `unknown` when
+     * there is no argument to read (anything is assignable), otherwise the argument's
+     * type. An `any` `this` stays `any`; a spread first argument reads as none.
+     */
+    private fun thisArgParamType(recv: Signature, firstArg: Expression?): Type {
+        val declared = recv.thisType
+        if (declared === anyType) return anyType
+        val argType = firstArg?.takeIf { it !is SpreadElement }?.let { getTypeOfExpression(it) }
+            ?.takeIf { it !== errorType }
+        if (declared == null || declared === errorType) return argType ?: unknownType
+        if (argType != null && argType !== anyType && checkTypeRelatedTo(argType, declared, assignableRelation)) return argType
+        return declared
+    }
+
+    /**
+     * (CHK.134) tsc's `getRestTypeAtPosition(recv, 0)`: the receiver's whole parameter list
+     * as ONE type — a lone rest parameter answers its own array type, anything else a
+     * TUPLE whose slots carry the parameters' names, optionality and a trailing rest
+     * (`[x: string, y?: number, ...rest: boolean[]]`). `f.apply(o, args)` checks `args`
+     * against it, and an array literal elaborates element-wise through it.
+     */
+    private fun restTypeOfParameters(recv: Signature): Type {
+        val params = recv.parameters
+        val decls = params.map { it.valueDeclaration as? Parameter }
+        if (params.size == 1 && decls[0]?.dotDotDotToken == true) return getTypeOfSymbol(params[0])
+        val types = params.map { getTypeOfSymbol(it) }
+        val optional = decls.map { it != null && (it.questionToken || it.initializer != null) && !it.dotDotDotToken }
+            .takeIf { fl -> fl.any { it } }
+        val restIndex = decls.indexOfFirst { it?.dotDotDotToken == true }
+        val names = params.map { p -> (decls[params.indexOf(p)]?.name as? Identifier)?.text ?: p.name }
+        return buildTupleFromTypes(types, optional, readonly = false, restIndex = restIndex, names = names)
     }
 
     /** Resolve a property access expression to its symbol (for namespace chaining).
@@ -131087,8 +131294,26 @@ interface DataView {
                     // `[number, ...string[]]` where the bare join printed `[number, string[]]`,
                     // a type no TypeScript source can spell.
                     val rest = type.tupleRestIndex
+                    // (CHK.134) tsc's `typeToTypeNode` tuple rendering: a LABEL prints as
+                    // `name: T` / `name?: T` / `...name: T[]`, an unlabeled OPTIONAL slot as
+                    // `T?` — parenthesized when `T` is a union — and under `strictNullChecks`
+                    // an optional slot's type carries the `| undefined` tsc adds at creation
+                    // (`addOptionality`), which this model keeps in the member's optional bit
+                    // instead: `[string, (number | undefined)?]`, `[a: string, b?: number |
+                    // undefined, ...c: boolean[]]`, measured against both references.
+                    val names = type.tupleElementNames
                     return "$ro[" + tupleElems.mapIndexed { i, e ->
-                        (if (i == rest) "..." else "") + typeToString(e)
+                        val name = names?.getOrNull(i)
+                        val optional = i != rest && tupleSlotIsOptional(type, i)
+                        val disp = typeToString(e)
+                        val optDisp = if (optional && strictNullChecks && !typeIncludesUndefined(e) && e !== anyType) "$disp | undefined" else disp
+                        when {
+                            i == rest -> if (name != null) "...$name: $disp" else "...$disp"
+                            optional -> if (name != null) "$name?: $optDisp"
+                                else if (optDisp.contains(" | ")) "($optDisp)?" else "$optDisp?"
+                            name != null -> "$name: $disp"
+                            else -> disp
+                        }
                     }.joinToString(", ") + "]"
                 }
                 // B198: self-recursion cut for function-symbol types — a function whose
@@ -155345,6 +155570,18 @@ interface DataView {
             ?: return emptyList()
         val sourceDisplay = typeToString(sourceType)
         val failingDisplay = typeToString(failing)
+        // (CHK.134) a CALLABLE pair — `f.apply(o)` against the lib's `apply<T, R>(this:
+        // (this: T) => R, thisArg: T)`: tsc's `compareSignaturesRelated` refuses a target
+        // that provides fewer parameters than the source requires with `Target signature
+        // provides too few arguments. Expected N or more, but got M.` (the source's minimum
+        // against the target's count), measured against both references.
+        val srcSig = (sourceType as? Type.Object)?.let { getCallSignaturesOfType(it).singleOrNull() }
+        val tgtSig = (failing as? Type.Object)?.let { getCallSignaturesOfType(it).singleOrNull() }
+        if (srcSig != null && tgtSig != null && !sigHasRestParameter(tgtSig) &&
+            srcSig.minArgumentCount > tgtSig.parameters.size
+        ) {
+            return listOf("  Target signature provides too few arguments. Expected ${srcSig.minArgumentCount} or more, but got ${tgtSig.parameters.size}.")
+        }
         val sourceMembers = thisArgumentSourceMembers(sourceType)
         if (failing is Type.Object && sourceMembers != null) {
             resolveStructuredTypeMembers(failing)
@@ -156975,6 +157212,25 @@ interface DataView {
                     length = pname.text.length,
                 ))
             }
+        }
+        // (CHK.134) tsc's `getArgumentArityError`: a signature with an effective REST
+        // parameter reports too few arguments as TS2555 `Expected at least N arguments,
+        // but got M.` — measured on `o.m()` against `m(x: string, ...r: number[])` and on
+        // `f.call()` (the uninstantiated `...args: A`); this emitter printed TS2554
+        // `Expected 1 arguments, but got 0.` for the first before.
+        if (hasRest) {
+            diagnostics.add(Diagnostic(
+                message = "Expected at least $minParams arguments, but got $argCount.",
+                category = DiagnosticCategory.Error,
+                code = 2555,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+                relatedInformation = relatedInfo.ifEmpty { emptyList() },
+            ))
+            return
         }
         diagnostics.add(Diagnostic(
             message = "Expected ${formatExpectedArgs(minParams, maxParams)} arguments, but got $argCount.",
@@ -169593,7 +169849,9 @@ interface DataView {
         // the rest's ARRAY type, so its `length` is `number` (tsc `createTupleTargetType`) and
         // [tupleArrayBase] indexes that slot rather than unioning the array type in.
         val restIndex = node.elements.indexOfFirst { it is RestType || (it is NamedTupleMember && it.dotDotDotToken) }
-        return buildTupleFromTypes(elementTypes, node.elementOptional, readonly, restIndex)
+        // (CHK.134) `[x: string]` carries its label into the display — both references
+        // print `[x: string]` where the bare join printed `[string]`.
+        return buildTupleFromTypes(elementTypes, node.elementOptional, readonly, restIndex, node.elementNames)
     }
 
     /**
@@ -169605,7 +169863,7 @@ interface DataView {
      */
     internal fun instantiateTupleElements(t: Type.Object, elements: List<Type>): Type {
         val flags = elements.indices.map { tupleSlotIsOptional(t, it) }.takeIf { fl -> fl.any { it } }
-        return buildTupleFromTypes(elements, flags, t.readonlyTuple, t.tupleRestIndex)
+        return buildTupleFromTypes(elements, flags, t.readonlyTuple, t.tupleRestIndex, t.tupleElementNames)
     }
 
     /** Build a tuple `Type.Object` (with `tupleElementTypes`, numbered props, length, number index sig).
@@ -169613,11 +169871,13 @@ interface DataView {
      *  (recorded in [optionalTupleMemberIds] so [isOptionalProperty] can see it). */
     private fun buildTupleFromTypes(
         elementTypes: List<Type>, optionalFlags: List<Boolean>? = null, readonly: Boolean = false,
-        restIndex: Int = -1,
+        restIndex: Int = -1, names: List<String?>? = null,
     ): Type {
         val tupleObj = Type.Object()
         tupleObj.tupleElementTypes = elementTypes
         tupleObj.tupleRestIndex = restIndex
+        // (CHK.134) element labels, display only; an all-unnamed list is stored as null.
+        tupleObj.tupleElementNames = names?.takeIf { ns -> ns.any { it != null } }
         // (CHK.93) stage 2: a readonly tuple's slots and `length` are read-only members
         // (tsc `createTupleType`: `CheckFlags.Readonly` on every element symbol and on
         // `length`), so `rt[0] = 1` is TS2540 through the same side-channel `Readonly<T>`

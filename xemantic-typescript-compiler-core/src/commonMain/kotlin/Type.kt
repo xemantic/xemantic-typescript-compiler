@@ -199,6 +199,17 @@ sealed class Type {
          */
         var tupleRestIndex: Int = -1
         val tupleHasRest: Boolean get() = tupleRestIndex >= 0
+        /**
+         * (CHK.134) The tuple's ELEMENT NAMES — `[x: string, y?: number]`'s `x`/`y` (tsc's
+         * `TupleType.labeledElementDeclarations`) — one entry per slot, null for an unnamed
+         * slot, or null as a whole for an unlabeled tuple. DISPLAY ONLY: the relation, the
+         * member table and the element reads never consult it (tsc: labels "have no effect
+         * on type checking"). Carried by the instantiator and read by `Checker.typeToString`,
+         * which printed `[string]` for `[x: string]` before this field existed. Set from a
+         * `NamedTupleMember` and by the `.call`/`.apply` synthesis, whose `args` parameter is
+         * the receiver's parameter list as a tuple (tsc's `getRestTypeAtPosition`).
+         */
+        var tupleElementNames: List<kotlin.String?>? = null
         override fun toString(): kotlin.String = symbol?.name ?: "Object#$id"
     }
 

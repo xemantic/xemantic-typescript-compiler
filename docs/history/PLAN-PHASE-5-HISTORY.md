@@ -1,3 +1,153 @@
+### Round (P18.70) — two false-positive families, and the instrument that was dropping rows (2026-09-11)
+
+**Suite 18,604 → 18,635 / 0 / 3** (+31 pins). Grid 8×`added=0 removed=0` on both
+landed items; `cost_gate.py` exit 0 (no rebaseline); `huge_methods.py --fail-over 0`
+exit 0 (844 classes); warning-clean. Commits `c13fd948`, `ae921ce3`, `7950883e`,
+`833aecff`, `d5cc6267`, `f8ae2eaa`.
+
+**THE WORK ORDER NOTE WAS GONE AGAIN, AND ADVICE WAS NOT ENOUGH.** (P18.66)'s
+trim-on-write carried the whole `### WORK ORDER` section out with four retired round
+notes — ~3 rounds after (P18.44) restored it, and with a CLAUDE.md entry already in
+the file saying not to. The mechanism is structural: the restore had placed it
+directly above the first queue item, inside the span a "retire the oldest notes"
+slice bounded by the last `### ` heading covers. It is now anchored under an explicit
+`## QUEUE` heading, and **`scripts/check_plan_structure.py` fails when the heading,
+the WORK ORDER or the first queue item is missing, and checks their ORDER** — ablated
+both ways. A doc invariant is only as good as the thing that notices it is gone.
+
+**(CHK.122) — THE POPULATION WAS FOUR, NOT ONE, AND THAT CHANGED WHERE THE FIX
+GOES.** The item named the flow route and gave the fix as "give that route the same
+`in`-guard consult". Measured against tsgo 7.0.2 and pristine 6.0.3 (agreeing on
+every cell), the ours-only false positives are the flow route, a DESTRUCTURED
+receiver, a FILE-LEVEL `const` and a PARAMETER — **and the last two never touch the
+`any` bail those helpers live on at all**, because their receiver is genuinely typed.
+Fixing routes one at a time could not have reached them. So the consult went where
+every route ARRIVES: `cmamEmitMissingProperty`, under `prop == null`, which also
+keeps a bounded flow walk off the hot path.
+
+**AND THE ROUND'S REAL DECISION WAS FOUND BY MEASURING, NOT BY READING.**
+`cmamInGuardMayAddProperty` refuses on budget exhaustion, on the argument that
+silence costs a false negative and a guess costs a false positive. Right for three
+routes gating a narrow helper population; at the funnel the first build read
+**`refused=5 exhausted=5` on services, server AND harness** — every refusal it made
+on tsc's own sources was BLIND, and not one was a guard it had found. The funnel now
+asks with `refuseOnExhaustion = false`, which buys the property that makes the change
+defensible: **it can suppress only when it has POSITIVELY found an `in` condition
+naming this property on this reference path.** All eight profiles then read
+`refused=0` — it suppresses nothing there, so no row can move — with `exhausted=5`
+recording the declines the refusing form would have deleted silently. Residue pinned
+AS a residue: a guard separated from its read by ~130+ branching statements still
+reports. Ablation 6 arms / 16 pins with both controls; **two pins discriminate
+nothing and say so** (both are served by a pre-existing route consult no arm ablates).
+
+**A COUNTER READ INSIDE THE BRANCH IT MEASURES GOES QUIET WITHOUT GOING GREEN.** The
+decline counter was first written inside the refusal block; the moment the funnel
+stopped refusing it read 0 on every profile while the declines it exists to measure
+were unchanged at 5. It is now read outside the branch.
+
+**(CHK.119) — THE ITEM'S HEADLINE CLAIM WAS FALSE, AND THE TWO DEFECTS IT DID NOT
+NAME ARE THE ONES THAT LANDED.** It says a `function` receiver NEVER reports TS2339.
+B431 does report, for a top-level uniquely-named `FunctionDeclaration` read inside a
+nested function — and **every row it emitted carried a display neither reference
+produces**. Closed: four expando WRITE forms were uncollected (`F["tag"] = 1`,
+`` F[`tag`] = 1 ``, `` `${F.tag = 1}` `` and the tagged form), each an ours-only FALSE
+POSITIVE on legal code, because an `ElementAccessExpression` LHS was not recognised
+as an assignment target and a `TemplateExpression` was not descended into at all;
+and the display is now the SIGNATURE for a function with no expando member,
+`typeof $name` for one with. `F[0] = 1` and `F[k] = 1` declare nothing and are the
+NEGATIVE CONTROLS — we already agreed with both references there.
+
+**THE ORDER OF THOSE TWO FIXES IS LOAD-BEARING AND IS PINNED.** Before the collector
+was widened, an element-access write left `declared` EMPTY for a function that
+plainly has expandos, so the display rule alone would have renamed exactly those to
+their signature and turned two AGREE rows into wrong ones. Collector first.
+
+**THE GRID IS A CONTROL FOR (CHK.119), NOT A GATE, AND THE ROUND SAYS SO.** It reads
+8×`added=0 removed=0` and **B431 emits ZERO rows across all eight profiles** — their
+only two TS2339 rows are `ErrorConstructor.captureStackTrace`. The measurement is the
+reference matrix; the grid says the change is inert on tsc's own sources.
+
+**THE INSTRUMENT WAS DROPPING ROWS, AND IT TOOK TWO SEPARATE FAILURES TO FIND IT.**
+`scripts/ref_matrix.py` — the three-compiler adjudication this round built because
+every (CHK.\*) round rebuilds one in a scratchpad and throws it away — failed twice
+in ways that both produced *plausible* tables:
+ 1. it matched only the REFERENCE row format, so OUR rows parsed as zero and it
+    reported `missing=8` on a fixture where we emit all 8. `assert_parsed` now
+    REFUSES an arm whose raw output contains `error TS` while zero rows parsed.
+ 2. it keyed rows on `(file, line, code)`, so **two diagnostics of the same code on
+    one line collapsed into one** — a fixture emitting TS2339 twice on line 3 read
+    `agree=1`, losing the second row AND a message divergence on the first. Now keyed
+    on the COLUMN too, with a SPAN-DIFF verdict so a column divergence reads as one
+    row rather than a lost row plus an invented one.
+ 3. it was MESSAGE-BLIND, scoring six wrong-display rows as AGREE. TEXT-DIFF closes
+    that, and it matters beyond one item: (PARITY.1) records that the 8-profile grid
+    is structurally blind to every display change, so there was no cheap instrument
+    in the repo that could see one.
+**Every conclusion drawn with the broken key was re-run against the fixed one**; one
+cell moved (`Foo.inc++`) and its pin was corrected before landing.
+
+**TWO COUNTDOWN PINS FIRED, THE FIFTH AND SIXTH IN SEVEN ROUNDS.**
+`M04ExpandoSpineMigrationTest`'s `a template-span write at file scope is not
+collected` and `compound assignment and element-access writes do not declare` both
+asserted our own wrong answer as a "negative control". Recon measured **six more** in
+the same class and three GENUINE controls beside them — queued as (CHK.126), because
+the class's own names do not distinguish the two kinds.
+
+**THREE FINDS QUEUED, NONE CLAIMED**: (CHK.124) the general function-receiver gap
+with its three candidate routes and two measured FP hazards; (CHK.125) an ours-only
+TS2394 on an ordinary `unknown`-implementation overload set, found incidentally in a
+fixture and reproducing on the parent binary; (CHK.126) above.
+
+**(CHK.125) AND (CHK.126) ALSO LANDED IN THIS ROUND.** (CHK.125): TS2394's
+compatibility predicate special-cased `any` in both directions and both positions and
+knew nothing about `unknown`/`never`, so an entirely ordinary
+`f(x: string) / f(x: number) / f(x: unknown)` overload set was an ours-only false
+positive. tsc's rule is TWO rules — RETURN types assignable in EITHER direction,
+PARAMETERS requiring the overload's type assignable to the impl's — and since `unknown`
+is the TOP type and `never` the BOTTOM one, each is assignable in exactly one direction,
+so the two positions disagree about four of eight combinations. Ten cells measured, both
+references agreeing on all ten, three of them NEGATIVE CONTROLS that still report. The
+change is strictly permissive by construction, so it can only remove a row.
+
+**(CHK.126) — TEN COUNTDOWN PINS, NOT EIGHT, AND THREE THIS SESSION BROKE ITSELF.**
+Every silence-asserting test in `M04ExpandoSpineMigrationTest` was re-measured against
+both references. Ten assert a silence neither reference shares and are renamed
+`residue - ` with the exact reference row in their KDoc; six are genuine controls; one
+is named STRUCTURALLY VACUOUS. **And three were made unfalsifiable by this round's own
+(CHK.119) display change** — they keyed on `contains("typeof Foo")`, which an
+expando-free function can no longer produce, so a binary with the whole shadow chain
+deleted would have passed them. Fixed in the same session that broke them, and verified
+falsifiable rather than assumed. The audit also found **(CHK.127)**, which nothing had
+named — the collector OVER-declares in the opposite direction from (CHK.119) — **and
+that was fixed in the same round**: twelve positions measured, an object literal is a
+HARD STOP (an array nested inside an objlit value and an objlit nested inside an array
+are both refused, which is what rules out a rule about the immediate parent), the
+array-literal arm untouched. **Its own residue pin from one commit earlier fired as
+designed**, and was converted to pin the corrected split with BOTH halves asserted.
+
+**(CHK.124) PARTLY CLOSED TOO, AND ITS GATE IS THE FINDING.** B431 required
+`spineExStatus(node) == EX_NESTED`, so the item's own headline shape — a FILE-LEVEL
+read, no nesting at all — was silent where both references report. EX_TOP is now
+admitted and EX_NONE still is not (those are (CHK.126)'s read-walk positions).
+**The 8-profile grid is VACUOUS for this family and that was measured rather than
+assumed**: a positive control counting EX_TOP admissions reads **0 on all eight
+profiles AND 0 on cronstrue, marked and the 600-file generated project** — the shape
+does not occur in any corpus available here — so `added=0 removed=0` says nothing.
+**The CORPUS was the gate and it caught a real defect on the first run**:
+`genericCallWithoutArgs` is `f<number,string>.`, whose dangling dot the parser gives a
+zero-width `Identifier("")`, and admitting EX_TOP grew a `Property '' does not
+exist…` row beside pristine's TS1477 + TS1003. B431 never needed an empty-name guard
+while it fired only inside nested functions; it has one now. Two residue pins written
+earlier in this same session fired as designed and were converted.
+
+**NEXT**: (CHK.124)'s receiver-KIND half (a function-typed parameter, a
+`const f = () => {}` receiver, an overload set — all still pinned as refusals), which
+needs either a type-level arm or expando members modelled on the function type;
+(CHK.120) is (P18.66)'s untouched residue and is a BINDER change with its own blast
+radius; (CHK.123) is display-only with the corpus as its sole gate. Per the WORK ORDER, the
+order's tail is still (INV.0), and this round is (CHK.\*) lane work that pays in
+measured reference rows.
+
 ### Round (P18.68) — (CHK.121): the axis is the INITIALIZER, and BOTH sizings of the item were wrong (2026-09-11)
 
 **Suite 18,573 → 18,604 / 0 / 3** (+31 pins). **8-profile grid `added=0 removed=0` on all

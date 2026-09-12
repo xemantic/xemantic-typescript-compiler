@@ -19,6 +19,23 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.80) — (CHK.134)(1): `f.call` / `f.apply` TYPED FROM THE RECEIVER'S OWN SIGNATURE — NO INFERENCE WAS NEEDED, AND THE GRID'S ONE ROW PER PROFILE WAS A MISSING OPTION, 18,854 / 0 / 3 (2026-09-12).**
+tsc's `getPropertyOfType` miss augmentation now serves a function-shaped receiver: `call`
+and `apply` are BUILT from the receiver's last signature (`CallableFunction`'s `T`/`A`/`R`
+each have exactly one candidate, so nothing is inferred; `call` expands the parameters as
+tsc's messages count them, `apply` is built per call from the argument count), plus the
+`Function` members. **The grid read +1 row on every profile and the cause was an option this
+compiler did not have**: tsc's own sources set `"strictBindCallApply": false` explicitly,
+and `utilities.ts:11201`'s `stringReplace.call(s, "*", replacement)` is exactly tsc's
+strict answer; `strictBindCallApply` now exists (flag if set, else `strict`) and the grid is
+8×`added=0 removed=0` — it gates the OPTION, marked (strict, 14 sites resolved, 18 → 18)
+exercised the synthesis. Every `call`/`apply` shape across 55 fixtures `missing → agree`,
+zero ours-only; the parser had been DROPPING tuple labels (`TupleType.elementNames`) and
+tsc's optional-tuple display landed with it. Ablation 31/4/15/9/2 RED over 45 pins, a5
+reddening the compiler profile to 47 rows. cost_gate exit 0 (18/20 digit-identical;
+`globals.lookups` +19 is the `Function` consult), huge_methods exit 0, warning-clean.
+(CHK.134) stays open on `bind`.
+
 **(P18.79) — (CHK.133)(b): THE RELATION'S `this` LEG — ONE PREDICATE, THREE ELABORATION SITES, AND A BIVARIANCE RULE THAT WAS AN UNDER-APPROXIMATION, 18,809 / 0 / 3 (2026-09-12).**
 `Relater.signatureThisTypesRelated` is tsc's `compareSignaturesRelated` `this` leg (a source
 `this` other than `void` must relate to the target's; contravariant, or either direction
@@ -90,21 +107,3 @@ COUNTDOWNS and now assert the row. Ablation 16/3/15 RED over 39 pins; a `sig!!` 
 unresolvable callee passed every D3 fixture and was caught only by the 63-class neighbour
 sweep (24 RED). cost_gate exit 0 (counters digit-identical to the pristine binary),
 huge_methods exit 0, warning-clean. (CHK.97) stays open: D5, D6.
-
-**(P18.75) — (CHK.97) D3, THE IDENTICAL HALF: A UNION CONTEXTUAL SIGNATURE IS ANSWERED, AND THE BRIEF'S OWN FIXTURE NEVER REACHED THE ARM, 18,718 / 0 / 3 (2026-09-12).**
-`callableSignaturesForCtx` refused a union contextual type at its SECOND callable member;
-it now runs tsc's union arm of `getContextualSignature` — every member's one signature must
-be `compareSignaturesIdentical` to the first with returns ignored, and the answer is the
-first's parameters with the RETURNS unioned (`unionContextualSignature`, ~50 lines). Six
-fixture families go `missing → agree` and the TWO ours-only TS7006 rows the refusal
-manufactured are gone; the DIFFERING half (tsc's TS7006) stays silent and is recorded, as
-are an OVERLOADED member (the helper has no arrow, so it cannot arity-filter as tsc does)
-and a `Type.Reference` with lazy own signatures (the target fallback would read
-`Cb<string> | Cb<number>` as identical). **The obvious fixture, `declare const zf: A | B;
-zf((p) => …)`, never reaches the arm** — the argument gets the COMBINED callee signature's
-parameter — so the whole matrix was re-cut through `take(cb: A | B)` and annotations. The
-arm answers ZERO times on all eight profiles, `marked` and the 2,400-file project (14 on the
-fixture), so the 8×`added=0 removed=0` grid is a measured CONTROL. Ablation 12/3/1 RED over 19
-pins, a3 discriminated only by a NESTED differing pair. cost_gate exit 0 (all 20 counters
-digit-identical to the pristine binary — the +1.18% is baseline staleness), huge_methods exit
-0 (844), warning-clean. (CHK.97) stays open: D3-differing, D5, D6.
