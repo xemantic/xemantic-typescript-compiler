@@ -1204,8 +1204,8 @@ CLAUDE.md § "AI agent mission".
   parser change; (0b) tsgo's ACTUAL output = `typescript-go-repo/testdata/baselines/reference/{submodule,
   submoduleAccepted,submoduleTriaged}/*.diff` layered over the submodule baselines — **378 active subtests** (244
   `.errors.txt` + 134 `.js`, only 2 overlapping 0a), the pin that closes TS2300-at-both / TS2717 / `The last
-  overload…`, and it needs the generator to apply `.diff` layers (a real parser change) — BLOCKED-PENDING-USER: is
-  0b wanted? Land 0a first regardless (it is a strict subset of tsgo's ordering).** Today
+  overload…`, and it needs the generator to apply `.diff` layers (a real parser change) — **OWNER 2026-09-12: "Both, in order"** — land 0a first (a strict subset of tsgo's
+  ordering), then 0b as its own round(s); a read-only design study of tsgo's layered layout precedes 0b.** Today
   `typeScriptCommit` (`xemantic-typescript-compiler-core/build.gradle.kts:257`) is `637d5746`, the PRISTINE main-side
   parent of tsgo 7.0.2's `_submodules/TypeScript` sha `4d4f005c8541e0255a9d8791205fdce326e462bc` (the `tsgo-port`
   branch, whose `tests/baselines/reference` were regenerated to tsgo's output). The re-pin moves the corpus's
