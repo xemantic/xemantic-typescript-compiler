@@ -58,9 +58,10 @@ import kotlin.test.Test
  * identical ones, differing `this` parameters, differing parameter NAMES, two
  * instantiations of one generic alias) and the two OURS-ONLY TS7006 rows vanish.
  *
- * Residues, MEASURED and OUT OF SCOPE (see each `residue - …` / `negative control - …`
- * pin's KDoc): the DIFFERING half (tsc's TS7006 on the parameter) stays silent; an
- * OVERLOADED member refuses the union (tsc filters its signatures by the arrow's arity);
+ * The DIFFERING half (tsc's TS7006 on the parameter) and the arity-filtered OVERLOADED
+ * member landed in the same item's next sub-step ([UnionContextualSignatureDifferingTest]);
+ * the `negative control - … not identical` pins below now assert the TS7006 row both
+ * references print. Residues, MEASURED and OUT OF SCOPE (see each pin's KDoc):
  * a generic-identical pair (`<T>(x: T) => void | <T>(x: T) => number`) types nothing
  * where both references type `p: T`; a REST contextual parameter types a plain arrow
  * parameter as the ARRAY (`string[]` for `string`, pre-existing on a single member too);
@@ -257,10 +258,8 @@ class UnionContextualSignatureIdenticalTest {
 
     /**
      * The DIFFERING half of D3 (ablation arm a2 — an arity-only comparison would type `p:
-     * string` and report a false TS2322 here).
-     *
-     * residue - both references report `Parameter 'p' implicitly has an 'any' type.`; the
-     * refusal answers null and today's silence stands, NOT emitted by this round.
+     * string` and report a false TS2322 here). The refusal is tsc's "signatures aren't
+     * identical": no contextual signature, `p` implicitly `any`, TS7006 — both references.
      */
     @Test
     fun `negative control - differing parameter types provide no contextual signature`() =
@@ -272,9 +271,10 @@ class UnionContextualSignatureIdenticalTest {
             take((p) => { const bad: boolean = p });
             export {}
             """
-        ).isEmpty())
+        ) == listOf(7006 to "Parameter 'p' implicitly has an 'any' type."))
 
-    /** residue - both references report TS7006 on `p`. */
+    /** Both members apply to a one-parameter arrow (neither is arity-smaller), so the
+     *  comparison runs and refuses; both references report TS7006 on `p`. */
     @Test
     fun `negative control - differing arity provides no contextual signature`() =
         assert(rows(
@@ -285,10 +285,10 @@ class UnionContextualSignatureIdenticalTest {
             take((p) => { const bad: boolean = p });
             export {}
             """
-        ).isEmpty())
+        ) == listOf(7006 to "Parameter 'p' implicitly has an 'any' type."))
 
     /** `(x?: string)` against `(x: string)` differs in `minArgumentCount`, so it is not
-     *  identical. residue - both references report TS7006 on `p`. */
+     *  identical; both references report TS7006 on `p`. */
     @Test
     fun `negative control - an optional against a required parameter is not identical`() =
         assert(rows(
@@ -299,11 +299,11 @@ class UnionContextualSignatureIdenticalTest {
             take((p) => { const bad: boolean = p; return 1 });
             export {}
             """
-        ).isEmpty())
+        ) == listOf(7006 to "Parameter 'p' implicitly has an 'any' type."))
 
     /** The members' OWN instantiated signatures are compared, never the target's
      *  unsubstituted `(x: T) => void` — which would read these two as identical and hand
-     *  the arrow a bare `T`. residue - both references report TS7006 on `p`. */
+     *  the arrow a bare `T`; both references report TS7006 on `p`. */
     @Test
     fun `negative control - two instantiations with different arguments are not identical`() =
         assert(rows(
@@ -313,10 +313,10 @@ class UnionContextualSignatureIdenticalTest {
             take((p) => { const bad: boolean = p });
             export {}
             """
-        ).isEmpty())
+        ) == listOf(7006 to "Parameter 'p' implicitly has an 'any' type."))
 
-    /** A generic beside a non-generic member differs in type-parameter count.
-     *  residue - both references report TS7006 on `p`. */
+    /** A generic beside a non-generic member differs in type-parameter count; both
+     *  references report TS7006 on `p`. */
     @Test
     fun `negative control - a generic member beside a non-generic one is not identical`() =
         assert(rows(
@@ -327,17 +327,16 @@ class UnionContextualSignatureIdenticalTest {
             take((p) => { const bad: boolean = p; return 1 });
             export {}
             """
-        ).isEmpty())
+        ) == listOf(7006 to "Parameter 'p' implicitly has an 'any' type."))
 
     /**
-     * residue - an OVERLOADED member is refused: tsc's `getContextualCallSignature` filters
-     * the member's signatures by the ARROW's arity (`(p, q)` leaves only `(x: string, y:
-     * number): void`), and this checker's helper has no node in hand. Both references
-     * report `Type 'string' is not assignable to type 'number'` and `Type 'number' is not
-     * assignable to type 'string'`; this pin records today's silence, not a rule.
+     * An OVERLOADED member contributes the ONE signature that applies to the arrow's arity:
+     * tsc's `getContextualCallSignature` filters by `isAritySmaller` (`(p, q)` leaves only
+     * `(x: string, y: number): void`), which is identical to the other member, so both
+     * parameters are typed. Both references report the two TS2322 rows.
      */
     @Test
-    fun `residue - an overloaded member refuses the union contextual signature`() =
+    fun `an overloaded member contributes its one arity-applicable signature`() =
         assert(rows(
             """
             interface ZzzOv { (x: string): void; (x: string, y: number): void }
@@ -346,5 +345,5 @@ class UnionContextualSignatureIdenticalTest {
             take((p, q) => { const bad: number = p; const bad2: string = q; return 1 });
             export {}
             """
-        ).isEmpty())
+        ) == listOf(stringToNumber, 2322 to "Type 'number' is not assignable to type 'string'."))
 }

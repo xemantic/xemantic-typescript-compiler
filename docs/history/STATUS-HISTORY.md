@@ -3062,3 +3062,40 @@ defect first try (a dangling dot's zero-width identifier grew a `Property ''…`
 B431 was missing the empty-name guard its sibling has always had). Two residue pins
 written earlier in the same session fired as designed and were converted. The
 receiver-KIND half of (CHK.124) stays open and pinned as refusals.
+
+**(P18.71) — (CHK.97) STAGE 3 D4: THE NULLISH-UNION CALLEE'S ARGUMENT CHECK, AND A SUPPRESSION WHOSE GATE WAS TWO MECHANISMS, 18,669 / 0 / 3 (2026-09-11).**
+One of (CHK.97)'s six stage-3 deliverables closed — **and all six were measured against
+tsgo 7.0.2 and pristine 6.0.3 BEFORE one was picked**, with zero REF-SPLIT rows anywhere.
+That ranking is most of the round's value: D4 had **11 MISSING rows and a real gate**,
+D2/D3 three each with only a control, D5 one, **D1 exactly ZERO** — and D6 is BLOCKED on a
+model change (`Signature.thisParameter`), named rather than attempted. **D1 IS REJECTED ON
+A MEASUREMENT, NOT DEFERRED**: its only visible readers are `ReturnType<U>`/`Parameters<U>`,
+and what the references print there is tsc's conditional-type DISTRIBUTION, not
+`getUnionSignatures` — combining would be wrong in a NEW way across 35 readers. **THE ITEM'S
+AXIS WAS WRONG AND A FIXTURE BUILT ON IT MEASURES NOTHING**: it says "`f?.(1)`'s argument
+check", but `?.` is innocent — `g?.(1)` on a plain `Fn` already reported, while the
+`?.`-free `if (zu) { zu(1) }` was silent. The population is a callee **TYPE**. **THE
+REUSABLE DEFECT IS ONE NEITHER THE ITEM NOR THE BRIEF NAMED: a suppression's gate was two
+mechanisms wearing one `if`** — the round-408 pre-pass conjoined "is this callee narrowable"
+with "strip nullish for an optional call", and the second is a property of the CALL, not the
+callee expression; for every other callee kind the nullish member survived into the
+not-callable verdict as an **OURS-ONLY TS2349 on legal code, four of them, one per callee
+kind**. Its sibling: **a `Boolean`-returning pre-pass can only spend a suppression by
+CONSUMING the call**, so the narrowed value it had just computed had nowhere to go —
+`ccetUnionCalleeChecks` now answers `Type?` (null = consumed), the argument-side mirror of
+the RESULT-side strip stage 2 put in `getReturnTypeOfCallExpression`. **RECEIPT: agree
+8 → 20, ours-only 4 → 0, missing 19 → 7**, both directions. **THE GRID IS A REAL GATE HERE
+AND IT IS GREEN, WHICH IS THE INTERESTING PART** — unlike last round's two items, a
+positive control counts **49-101 hand-offs per profile**, so hundreds of arguments never
+before checked on tsc's own sources were checked and all are correct; (CHK.50)'s law did not
+fire. **A LATENT PATH WAS PROBED RATHER THAN ARGUED**: `allCallable` answers true for
+`any`/`errorType`, so an unresolved union member now hands its union back — measured, zero
+ours-only rows. **THE SUITE XMLs HAD BEEN WIPED BY A LATER FILTERED `--tests` RUN** (the
+results dir held 1,524 tests, which reads exactly like a suite that never ran), so every
+gate was re-run or re-derived from the capture files rather than inherited — including a
+`javap | grep -v 'line N:'` control proving the grid's AFTER binary is bytecode-identical to
+the committed one. Ablation 6 arms / 17 pins with BOTH controls, no 0-RED arm; four residues
+recorded in the pin KDoc and **not pinned** (no countdown pins). Two findings queued:
+(CHK.129) an `as`-asserted callee loses its argument check entirely, and (CHK.128)
+`arr?.[0]` on a nullish array union types as `any`. Grid 8×`added=0 removed=0`, cost_gate
+exit 0 (no rebaseline, max `mapped.keyed` +1.18%), huge_methods exit 0 (844), warning-clean.

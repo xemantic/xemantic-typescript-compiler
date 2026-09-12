@@ -25,6 +25,83 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.76) — (CHK.97) D3, the DIFFERING half: TS7006 through a union contextual type, and the arity filter the identical half had left out (2026-09-12)
+
+**Suite 18,718 → 18,738 / 0 / 3** (+20 pins, `UnionContextualSignatureDifferingTest`; 39 pins
+across the two D3 classes). Grid 8×`added=0 removed=0`; library arm marked 18 → 18 and cronstrue
+1 → 1 with TS7006/TS7031 at 0 on ours and on tsgo; `cost_gate.py` exit 0, no rebaseline (the
+pristine before-binary through `--from-log` reads all 20 counters digit-identical — the standing
++1.18% is baseline staleness); `huge_methods.py --fail-over 0` exit 0; warning-clean.
+**(CHK.97) stays OPEN** — D5 and D6 remain; D3 is CLOSED in both halves.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item and (P18.75) named
+this half as its cheapest measured residue. Per the WORK ORDER's 2026-09-08 addendum the
+successor is **(INV.0) step 10b-ii**.
+
+**THE REACH CENSUS DECIDED THE DESIGN, AND IT READ ZERO.** A temporary counter splitting
+`unionContextualSignature`'s outcomes (answered / not identical / overloaded member / lazy
+reference / no signature) was run over all eight dashboard profiles, marked, cronstrue and the
+2,400-file generated project BEFORE any emission was written: **0 reached everywhere**, with the
+positive control live at 3-22 per fixture. So the grid and both library arms are CONTROLS for
+this half, and the pins plus the corpus are the gate. Two things the census said that reading
+had not: the "refused-lazy-reference" outcome NEVER fires (a `Type.Reference`'s own signatures
+are instantiated by the time a contextual type reaches here), and the overloaded-member
+refusal that (P18.75) recorded as a residue fires **6 times on one fixture** — i.e. without an
+arity filter the emission is UNSOUND (`(p, q) =>` against `A | B` where only `B` fits would
+report TS7006 on a parameter tsc types), and it had to be closed in the same sub-step.
+
+**THE FIX IS tsc's `getContextualCallSignature` PLUS THE VERDICT IT ALREADY HAD.**
+`callableSignaturesForCtx` now takes an optional `requiredParamCount`; with it each union member
+contributes tsc's per-member answer — the member's signatures filtered by `signatureArityBelow`
+(tsc's `isAritySmaller`), ONE applicable contributes it, several fold through
+`getIntersectedSignatures`, none skips the member — and `unionContextualSignature` returns
+`UnionCtxSignature(signature, differing)`, where a failed `compareSignaturesIdentical` is the
+DIFFERING verdict. `SpineIanyCtx` carries the callee parameter from a split
+`calleeArgSignature` / `calleeArgParam` / `calleeParamGivesNoContext(param)` (still one callee
+resolution per edge), and `spineIanyFnExprEnter` asks `spineIanyUnionCtxDiffers` on the `typed`
+short-circuit, emitting through the EXISTING owner `checkParamsForImplicitAny` (TS7006 at the
+parameter, TS7031 for a binding pattern) — no second emitter. The instantiated callee type is
+pulled only for a GENERIC callee, after the declared read, which is why the counters did not
+move.
+
+**BEFORE → AFTER (`agree/ours-only/missing`, zero REF-SPLIT, zero NEW ours-only anywhere)**:
+differing parameter types 0/0/1 → 1/0/0; differing arity 0/0/1 → 1/0/0; `(x?: string)` vs
+`(x: string)` 0/0/1 → 1/0/0; the overloaded family 0/0/3 → **3/0/0** (the (P18.75) residue
+closed); generic member 0/0/2 → 1/0/1; the new 16-file family (intersection member,
+one-applicable overload, two overloaded members, rest vs fixed, nested pair, function
+expression, object-literal method, generic-alias instantiations) 2/0/18 → **17/0/3**; the
+extras 5/2/4 → 6/2/3 with both ours-only rows pre-existing. **Five of (P18.75)'s `negative
+control - … not identical` pins were COUNTDOWNS** — they asserted today's silence on shapes
+both references report — and now assert the TS7006 row; the `residue - overloaded member` pin
+flipped to its two TS2322 rows. Per (CHK.114) only expectations changed.
+
+**ABLATION over 39 pins**: a1 the emission removed — **16 RED**; a2 the arity filter collapsed
+— **3 RED**, exactly the three negative controls (the one-applicable-overload shapes), which is
+the filter's whole job; a3 the parameter typed from the FIRST member despite the refusal —
+**15 RED**. Final rebuild md5 = the gated build; `javap -c -p` minus line numbers identical
+after the census removal.
+
+**A DEFECT THE FIXTURE MATRIX COULD NOT SEE.** The first cut carried a `sig!!` on an
+unresolvable callee and passed every D3 fixture; the at-risk sweep of the neighbouring classes
+(634 tests / 63 classes) read 24 RED on it. A matrix drawn from the shape the fix targets is
+round 902's dead-arm law one instrument over — the neighbours are the control.
+
+**RESIDUES, MEASURED AND NOT FIXED**: a `new` argument against a differing union stays silent
+(pinned as `residue - …`, with the reference row in its KDoc); a generic callee's parameter and
+a both-generic identical pair type nothing (pre-existing); an INITIALISED parameter
+(`(p = "d") =>`) against a differing union; a typed context with no readable type (an overloaded
+CALLEE, an `=` whose left side is unknowable, a call-argument object-literal method); and the
+pre-existing x5/x6/x8/y3/y7 rows recorded at (P18.75).
+
+**PREDICTIONS REFUTED**: "the arity walker records `typed = true`" was half the story —
+object-literal-property, return and `=` positions already emitted, only the call-argument
+position was silent; the feared fourth contextual pull was unnecessary; the intersection
+member is not a union member here and needed no residue.
+
+**NEXT**: (CHK.97)'s remaining rows are D5 (one row, generic inference through a combined
+signature) and D6 (blocked on `Signature.thisParameter`). Per the WORK ORDER, **(INV.0) step
+10b-ii** is where the order sends the arc.
+
 ### Round (P18.75) — (CHK.97) D3, the IDENTICAL half: a union contextual signature is answered, and the brief's own fixture never reached the arm (2026-09-12)
 
 **Suite 18,699 → 18,718 / 0 / 3** (+19 pins, `UnionContextualSignatureIdenticalTest`). Grid
@@ -914,63 +991,6 @@ Both argue for one snapshot per arm rather than for reading the shared class dir
 **NEXT**: (CHK.119) and (CHK.120) are the two newly-measured residues and are independent;
 (CHK.118) and (CHK.117) are unchanged; 10b-ii is still blocked on its own two families.
 
-### Round (P18.65) — (INV.0) step 10d: the oracle's `resolveName` is ANSWERED, and the row that opens later stays refused (2026-09-10)
-
-**Suite 18,541 → 18,546 / 0 / 3** (+5 pins, one refusal pin re-pointed). **8-profile grid
-`added=0 removed=0`**, `cost_gate.py` exit 0, `huge_methods.py` exit 0 (844 classes),
-warning-clean.
-
-**THE REFUSAL WAS CORRECTED BEFORE IT WAS CLOSED, AND THAT IS WHY THIS ROUND WAS ONE ROUND
-AND NOT A STAGE.** Until (P18.61) the row blamed the retained tables for lacking the
-block-scoped population; step 9 measured that they HOLD it — `BinderResult.lexicalScopes`
-is a full `forEachChild` walk over exactly it — so what was missing was a COMPOSITION plus
-a `meaning` split, and 10a/10b/10c had already built every leg. `Checker.oracleResolveName`
-is three lines: the INV.2(c) ascent, `lookupInEnclosingNamespaces`, `lookupPerFileForNode`,
-each meaning-masked, **built out of the checker's OWN functions rather than beside them** —
-which is what keeps a post-hoc answer from drifting from what the walk did, and is why leg
-2 works at rest at all ((CHK.76) made it position-derived).
-
-**THE ASCENT IS DELIBERATELY UN-GATED HERE, AND THE ABLATION SAYS SO**: gating it on the
-program-wide name gate (arm D5, which is what every other consult does) reddens exactly the
-same two pins as REMOVING the leg entirely (arm D1). The gate is derived from a projection
-of six DECLARATION kinds, so a PARAMETER and a `const` are not in it — and the oracle has
-neither of the two reasons the gate exists for (nothing here runs in a production compile,
-and the build that owns an oracle has recorded every file already).
-
-**A PIN WRITTEN AGAINST THE RESOLVED SYMBOL'S *TYPE* FAILED, AND THAT IS THE ROUND'S SECOND
-FINDING.** `const useLocal = collide` rendered `string` — the FILE-LEVEL `collide`'s type —
-and `f`'s inferred return rendered `any`, both against a binary that resolves every symbol
-correctly. `typeOfSymbol` re-infers an un-annotated initializer with NO walk ambient
-installed, which is round 911's shape and exactly the bin-A / bin-R boundary
-`TypeOracle`'s KDoc states: **`resolveName` answers the SYMBOL, and an un-annotated local's
-TYPE is `typeAt`'s answer, never this row's.** The pin reads declarations instead, and the
-divergence is now in `docs/type-oracle.md` § 3b rather than in a footnote of this note.
-
-**`symbolsInScope` STAYS REFUSED and its reason is unchanged because it is accurate**: an
-ENUMERATION must also offer every conventionally-bound name, i.e. read
-`LexicalScope.existing`, which is the INV.3 question round 748's `symbols`-only rule exists
-to keep out. Its pin now asserts that the refusal still NAMES that, so the two rows cannot
-be closed together by accident.
-
-**ABLATION: five arms, union 3 of 27, and three of the five have no unique pin — recorded,
-not smoothed.** D1 (the leg removed) and D5 (the leg gated) are a PAIR with an identical
-red set, which is the finding above. D2 (the leg as a FALLBACK) reddens a strict SUBSET,
-and the survivor is the SHADOWING pin — round 748's ordering law measured for the fourth
-time in this arc, now on the oracle. D3 (the meaning mask dropped from the per-file leg) is
-1 RED and unique. **D4 (`stopFlags`) is 0 RED even after a pin was written FOR it**, and the
-reason is worth more than the arm: 10b's consult filters to `ScopeValueDeclaration`, which
-does not accept a variable, so the ascent had to be told to STOP at one; the oracle's mask
-is the SPACE, which accepts it, so the filter answers before the stop applies. It is a
-REDUNDANT GUARD for every mask this row documents, kept because the mask is a caller's
-parameter, and recorded as redundant rather than claimed as pinned.
-
-**TWO TEXTS CORRECTED BECAUSE THEY WERE FALSE**, which is (P18.61)'s own law applied to its
-own arc: `TypeOracle`'s class KDoc and `docs/type-oracle.md` § 3b both still said the
-retained tables leave block-scoped declarations unbound.
-
-**NEXT**: 10b-ii once its two unmasked families close; (CHK.118) and 10b-iii are independent
-and smaller.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1031,7 +1051,14 @@ to. The (P18.44) restore had placed it directly ABOVE the first queue item, wher
 ORDER, or the first queue item is missing — a doc invariant is only as good as the thing that
 notices it is gone.
 
-- [ ] **(CHK.97) D3 IDENTICAL HALF LANDED 2026-09-12 ((P18.75) note) — `callableSignaturesForCtx`'s union
+- [ ] **(CHK.97) D3 CLOSED IN BOTH HALVES 2026-09-12 ((P18.75)/(P18.76) notes) — the DIFFERING half reports
+  TS7006/TS7031 through `checkParamsForImplicitAny` (`spineIanyUnionCtxDiffers`), and the union arm now runs tsc's
+  `getContextualCallSignature` per member (`callableSignaturesForCtx(requiredParamCount)`, arity filter
+  `signatureArityBelow`, several applicable overloads through `getIntersectedSignatures`), which closed the
+  overloaded-member residue; reach census 0 on all 8 profiles + marked + cronstrue + many-small, so the grid is a
+  CONTROL. **REMAINING: D5** (one row) **and D6** (blocked on `Signature.thisParameter`); residues: a `new`
+  argument against a differing union is silent, a generic callee / both-generic identical pair types nothing, an
+  initialised parameter against a differing union. PREVIOUS HEAD: D3 IDENTICAL HALF LANDED 2026-09-12 ((P18.75) note) — `callableSignaturesForCtx`'s union
   arm runs tsc's `getContextualSignature` union rule (`unionContextualSignature`: one own signature per member,
   `compareSignaturesIdentical` with returns ignored, `createUnionSignature`); six fixture families `missing → agree`,
   two ours-only TS7006 rows gone; an OVERLOADED member and a lazy `Type.Reference` member refuse (no arrow in hand);

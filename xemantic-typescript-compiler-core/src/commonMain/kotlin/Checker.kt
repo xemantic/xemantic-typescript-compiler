@@ -4558,6 +4558,15 @@ class Checker(
         val ann: TypeNode? = null,
         val viaAssign: Boolean = false,
         val names: Set<String>? = null,
+        /** (CHK.97) D3: for a CALL-ARGUMENT context (`typed` with no `type`), the callee's
+         *  parameter the argument is handed to — its DECLARED type is read only by
+         *  [spineIanyUnionCtxDiffers], so the round-799 rule (no callee type resolution at
+         *  the 31,575 argument edges) stands: the edge already resolved the callee to
+         *  decide `typed`, and this is that resolution's parameter, not a second one. */
+        val ctxParam: Symbol? = null,
+        /** …and whether that callee's signature is GENERIC, so the declared type names
+         *  the callee's own type parameters and the INSTANTIATED one must be pulled. */
+        val ctxParamGeneric: Boolean = false,
     ) {
         var arity: Int? = null
         var arityComputed: Boolean = false
@@ -36165,7 +36174,7 @@ class Checker(
      * are lazy (falls back to the target's — arity survives missing substitution).
      * Null when the type provides no signatures.
      */
-    private fun callableSignaturesForCtx(type: Type?): List<Signature>? {
+    private fun callableSignaturesForCtx(type: Type?, requiredParamCount: Int? = null): List<Signature>? {
         // (CHK.97) stage 2: an INTERSECTION contextual type — tsc's
         // `getContextualCallSignature` concatenates its constituents' signatures and folds
         // them through [getIntersectedSignatures]. This is the contextual type a callback
@@ -36180,26 +36189,14 @@ class Checker(
         }
         val obj: Type.Object = when (type) {
             is Type.Union -> {
-                var single: Type.Object? = null
-                var several: MutableList<Type.Object>? = null
-                for (m in type.types) {
-                    if (m !is Type.Object) continue
-                    resolveStructuredTypeMembers(m)
-                    val callable = !m.callSignatures.isNullOrEmpty() ||
-                        (m is Type.Reference && run {
-                            resolveStructuredTypeMembers(m.target)
-                            !m.target.callSignatures.isNullOrEmpty()
-                        })
-                    if (callable) {
-                        val first = single
-                        if (first == null) single = m
-                        else (several ?: mutableListOf(first).also { several = it }).add(m)
-                    }
+                val callable = unionCallableMembers(type)
+                when (callable.size) {
+                    0 -> return null
+                    1 -> callable[0]
+                    // (CHK.97) D3: ≥2 callable members — tsc's union arm of `getContextualSignature`.
+                    else -> return unionContextualSignature(callable, requiredParamCount)
+                        .signature?.let { listOf(it) }
                 }
-                // (CHK.97) D3: ≥2 callable members — tsc's union arm of `getContextualSignature`,
-                // the IDENTICAL-signature half only.
-                several?.let { return unionContextualSignature(it) }
-                single ?: return null
             }
             is Type.Object -> type
             else -> return null
@@ -36214,46 +36211,105 @@ class Checker(
     }
 
     /**
-     * (CHK.97) D3, the IDENTICAL half of tsc's `getContextualSignature` (checker.ts:33224)
-     * for a UNION contextual type with SEVERAL callable [members]: each member contributes
-     * its call signature, every later one must be `compareSignaturesIdentical` to the
-     * first with `partialMatch = false` and return types IGNORED (`this` types are ignored
-     * by construction — [getParameterSymbols] drops the `this` pseudo-parameter), and the
-     * answer is [createUnionSignature] — the FIRST member's parameters with the members'
-     * RETURN types unioned. Any member that fails the comparison refuses the whole union
-     * (tsc: the callback parameter is then implicitly `any`, i.e. TS7006 — the DIFFERING
-     * half, NOT emitted here: the refusal answers null and today's silence stands).
-     *
-     * tsc hands each member through `getContextualCallSignature`, which filters the
-     * member's signatures by the ARROW's arity and folds several applicable ones through
-     * `getIntersectedSignatures`. This helper has no node in hand, so a member contributes
-     * ONLY when it has exactly ONE call signature of its OWN — an OVERLOADED member is
-     * refused (measured residue: `interface Ov { (x: string): void; (x: string, y: number):
-     * void }` beside `(x: string, y: number) => number` types nothing where both references
-     * type `p`/`q`), and so is a `Type.Reference` whose own signatures are still lazy
-     * (comparing the TARGET's unsubstituted signatures would read `Cb<string>` and
-     * `Cb<number>` as identical and hand the arrow a bare `T`).
-     *
-     * A newly non-null answer here types the arrow's parameters PROGRAM-WIDE through
-     * [applyPulledContextualParamTypes] and threads a UNION return into a concise body
-     * through [contextualSigReturnTypeForCtx] — (CHK.50)'s law. MEASURED: the arm answers
-     * ZERO times on all eight dashboard profiles, on `marked` and on the 2,400-file
-     * generated project (14 times on the round's own fixture, so the instrument is live),
-     * i.e. the `added=0 removed=0` grid is a CONTROL and the pins plus the corpus are the
-     * gate ([UnionContextualSignatureIdenticalTest]).
+     * The callable members of a UNION contextual type — the population tsc's union arm of
+     * `getContextualSignature` iterates. A nullish or non-callable member contributes
+     * nothing (`WriteFileCallback | undefined` provides WriteFileCallback's signature); a
+     * `Type.Reference` counts as callable through its TARGET when its own signatures are
+     * still lazy.
      */
-    private fun unionContextualSignature(members: List<Type.Object>): List<Signature>? {
+    private fun unionCallableMembers(type: Type.Union): List<Type.Object> {
+        var out: ArrayList<Type.Object>? = null
+        for (m in type.types) {
+            if (m !is Type.Object) continue
+            resolveStructuredTypeMembers(m)
+            val callable = !m.callSignatures.isNullOrEmpty() ||
+                (m is Type.Reference && run {
+                    resolveStructuredTypeMembers(m.target)
+                    !m.target.callSignatures.isNullOrEmpty()
+                })
+            if (callable) (out ?: ArrayList<Type.Object>(2).also { out = it }).add(m)
+        }
+        return out ?: emptyList()
+    }
+
+    /**
+     * The verdict of [unionContextualSignature]: [signature] is the union signature or
+     * null, and [differing] says that null is tsc's "signatures aren't identical" refusal
+     * — the ONE outcome that makes an un-annotated parameter implicitly `any` (TS7006)
+     * rather than merely un-contextualised (a lazy member, an overloaded member with no
+     * node to arity-filter by, no member contributing at all).
+     */
+    private class UnionCtxSignature(val signature: Signature?, val differing: Boolean)
+
+    /**
+     * (CHK.97) D3 — tsc's union arm of `getContextualSignature` (checker.ts:33224) for a
+     * UNION contextual type with SEVERAL callable [members]: each member contributes ONE
+     * call signature, every later one must be `compareSignaturesIdentical` to the first
+     * with `partialMatch = false` and return types IGNORED (`this` types are ignored by
+     * construction — [getParameterSymbols] drops the `this` pseudo-parameter), and the
+     * answer is [createUnionSignature] — the FIRST member's parameters with the members'
+     * RETURN types unioned. A member that fails the comparison is the DIFFERING verdict:
+     * tsc answers no contextual signature at all, the arrow's parameters are implicitly
+     * `any` and, under `noImplicitAny`, TS7006 — emitted by [spineIanyFnExprEnter]
+     * through [spineIanyUnionCtxDiffers], the walker that owns TS7006; the pull sites
+     * read only the null and leave the parameter untyped, so nothing types it from the
+     * FIRST member.
+     *
+     * WHAT A MEMBER CONTRIBUTES is tsc's `getContextualCallSignature` when the caller has
+     * the arrow's [requiredParamCount] in hand: the member's signatures filtered by the
+     * arrow's arity (`isAritySmaller`, [signatureArityBelow]), exactly one applicable
+     * contributes it, several fold through [getIntersectedSignatures], and none — or an
+     * unfoldable several — contributes NOTHING, so the member is SKIPPED, not refused
+     * (`(x: string) => void | (x: string, y: number) => void` against `(p, q) =>` is
+     * typed by the second member alone). A caller with NO node — the return-type and
+     * arity readers — keeps the conservative rule: only a member with exactly ONE
+     * signature contributes, an overloaded one refuses the union.
+     *
+     * A `Type.Reference` whose OWN signatures are still lazy refuses rather than reading
+     * its TARGET's: the unsubstituted signatures would read `Cb<string>` and `Cb<number>`
+     * as identical and hand the arrow a bare `T` (its own signatures, once instantiated,
+     * separate the two — the DIFFERING verdict both references report).
+     *
+     * MEASURED, both halves: the arm is reached ZERO times on all eight dashboard
+     * profiles, on `marked`, `cronstrue` and the 2,400-file generated project (the
+     * three pull sites ask it for every function-like with an un-annotated parameter,
+     * so that census is the TS7006 population itself), and 3-22 times per fixture of
+     * the round's own matrix — the `added=0 removed=0` grid is a CONTROL and the pins
+     * plus the corpus are the gate ([UnionContextualSignatureIdenticalTest],
+     * [UnionContextualSignatureDifferingTest]).
+     */
+    private fun unionContextualSignature(members: List<Type.Object>, requiredParamCount: Int?): UnionCtxSignature {
         var first: Signature? = null
         val list = ArrayList<Signature>(members.size)
         for (m in members) {
-            val sig = m.callSignatures?.singleOrNull() ?: return null
+            val own = m.callSignatures
+            if (own.isNullOrEmpty()) return UnionCtxSignature(null, false)
+            val sig: Signature = if (requiredParamCount == null) {
+                own.singleOrNull() ?: return UnionCtxSignature(null, false)
+            } else {
+                val applicable = own.filter { !signatureArityBelow(it, requiredParamCount) }
+                when (applicable.size) {
+                    0 -> continue
+                    1 -> applicable[0]
+                    else -> getIntersectedSignatures(applicable) ?: continue
+                }
+            }
             val head = first
             if (head == null) first = sig
-            else if (!compareSignaturesIdentical(head, sig, partialMatch = false, ignoreReturnTypes = true)) return null
+            else if (!compareSignaturesIdentical(head, sig, partialMatch = false, ignoreReturnTypes = true)) {
+                return UnionCtxSignature(null, true)
+            }
             list.add(sig)
         }
-        val head = first ?: return null
-        return listOf(createUnionSignature(head, list))
+        val head = first ?: return UnionCtxSignature(null, false)
+        return UnionCtxSignature(if (list.size == 1) head else createUnionSignature(head, list), false)
+    }
+
+    /** tsc's `isAritySmaller`: a signature with fewer parameters than the arrow REQUIRES
+     *  and no rest parameter does not apply to it. */
+    private fun signatureArityBelow(s: Signature, requiredParamCount: Int): Boolean {
+        val hasRest = (s.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        return !hasRest && s.parameters.size < requiredParamCount
     }
 
     /**
@@ -36266,7 +36322,7 @@ class Checker(
      * FIRE; tsc only intersects overloads under strictFunctionTypes, unmodeled).
      */
     private fun singleApplicableSigArity(type: Type?, requiredParamCount: Int): Int? {
-        val sigs = callableSignaturesForCtx(type) ?: return null
+        val sigs = callableSignaturesForCtx(type, requiredParamCount) ?: return null
         var single: Signature? = null
         for (s in sigs) {
             val hasRest = (s.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
@@ -36363,24 +36419,30 @@ class Checker(
      *    (`String.replace`'s replacer, `JSON.stringify`'s), so their `any`s are
      *    placeholders for signatures tsc states precisely.
      */
-    private fun calleeParamGivesNoContext(call: CallExpression, argIndex: Int): Boolean {
-        if (argIndex < 0) return false
-        val calleeType = getTypeOfExpression(call.expression)
-        if (calleeType === errorType || calleeType === anyType) return false
-        val sig = (calleeType as? Type.Object)?.callSignatures?.singleOrNull() ?: return false
-        val sigDecl = sig.declaration
-        if (sigDecl != null && (sigDecl in builtinLibMemberDecls || sigDecl in builtinLibDecls)) {
-            return false
-        }
-        val params = sig.parameters
-        val param = params.getOrNull(argIndex)
-            ?: params.lastOrNull()
-                ?.takeIf { (it.valueDeclaration as? Parameter)?.dotDotDotToken == true }
-            ?: return false
-        val paramDecl = param.valueDeclaration as? Parameter
-        val annotation = paramDecl?.type
+    private fun calleeParamGivesNoContext(param: Symbol): Boolean {
+        val annotation = (param.valueDeclaration as? Parameter)?.type
         return annotation == null ||
             (annotation as? KeywordTypeNode)?.kind == SyntaxKind.AnyKeyword
+    }
+
+    /** The SINGLE, non-embedded-lib call signature of a call's callee, for
+     *  [calleeParamGivesNoContext] and (CHK.97) D3's [SpineIanyCtx.ctxParam]; null where
+     *  the callee is unresolvable, `any`, overloaded or a simplified embedded-lib member. */
+    private fun calleeArgSignature(call: CallExpression): Signature? {
+        val calleeType = getTypeOfExpression(call.expression)
+        if (calleeType === errorType || calleeType === anyType) return null
+        val sig = (calleeType as? Type.Object)?.callSignatures?.singleOrNull() ?: return null
+        val sigDecl = sig.declaration
+        if (sigDecl != null && (sigDecl in builtinLibMemberDecls || sigDecl in builtinLibDecls)) return null
+        return sig
+    }
+
+    /** The parameter of [sig] an argument at [argIndex] is handed to — its rest parameter
+     *  past the fixed ones. */
+    private fun calleeArgParam(sig: Signature, argIndex: Int): Symbol? {
+        val params = sig.parameters
+        return params.getOrNull(argIndex)
+            ?: params.lastOrNull()?.takeIf { (it.valueDeclaration as? Parameter)?.dotDotDotToken == true }
     }
 
     private fun isCalleeResolvable(callee: Expression): Boolean {
@@ -59733,13 +59795,13 @@ interface DataView {
             NodeKind.ARROW_FUNCTION -> {
                 node as ArrowFunction
                 if (spineIanyReached(node)) {
-                    spineIanyFnExprEnter(node.parameters)
+                    spineIanyFnExprEnter(node, node.parameters)
                 }
             }
             NodeKind.FUNCTION_EXPRESSION -> {
                 node as FunctionExpression
                 if (spineIanyReached(node)) {
-                    spineIanyFnExprEnter(node.parameters)
+                    spineIanyFnExprEnter(node, node.parameters)
                 }
             }
             NodeKind.OBJECT_LITERAL_EXPRESSION -> {
@@ -60042,6 +60104,8 @@ interface DataView {
         }
         val callCtx = spineIanyCtx
         var argHasCtx = callCtx != null && callCtx.kind == 1 && callCtx.typed
+        var ctxParam: Symbol? = null
+        var ctxParamGeneric = false
         if (probe && !argHasCtx) IanySections.armTypedFalse++
         if (argHasCtx) {
             val t = if (probe) PassTiming.nowNanos() else 0L
@@ -60054,10 +60118,21 @@ interface DataView {
                     seen[id] = 1
                 }
             }
-            argHasCtx = !calleeParamGivesNoContext(p, p.arguments.indexOfFirst { it === node })
+            val argIndex = p.arguments.indexOfFirst { it === node }
+            val sig = if (argIndex < 0) null else calleeArgSignature(p)
+            val param = sig?.let { calleeArgParam(it, argIndex) }
+            argHasCtx = param == null || !calleeParamGivesNoContext(param)
+            // (CHK.97) D3: an arrow / function-expression argument keeps the callee's
+            // parameter, so its own arm can ask whether the DECLARED type is a union of
+            // DIFFERING callables — tsc's TS7006 — without resolving the callee again.
+            if (argHasCtx && sig != null && param != null && (node is ArrowFunction || node is FunctionExpression)) {
+                ctxParam = param
+                ctxParamGeneric = !sig.typeParameters.isNullOrEmpty()
+            }
             if (probe) IanySections.record(IanySections.A_CPGNC, PassTiming.nowNanos() - t)
         }
-        spineIanyDefineCtx(node, if (argHasCtx) SpineIanyCtx(kind = 0, typed = true) else null)
+        spineIanyDefineCtx(node, if (argHasCtx)
+            SpineIanyCtx(kind = 0, typed = true, ctxParam = ctxParam, ctxParamGeneric = ctxParamGeneric) else null)
     }
 
     /**
@@ -60323,9 +60398,18 @@ interface DataView {
 
     /** The legacy arrow/function-expression parameter emission (uses the
      *  node's incoming contextual-typing state). */
-    private fun spineIanyFnExprEnter(params: List<Parameter>) {
+    private fun spineIanyFnExprEnter(node: Node, params: List<Parameter>) {
         val cur = spineIanyCtx?.takeIf { it.kind == 0 }
-        if (cur?.typed == true) return
+        if (cur?.typed == true) {
+            // (CHK.97) D3, the DIFFERING half: a contextual type that IS a union of two or
+            // more callables whose signatures are not identical provides NO contextual
+            // signature in tsc, so the parameters are implicitly `any` — the same
+            // emission the un-contextualised branch below makes.
+            if (spineIanyUnionCtxDiffers(node, params, cur)) {
+                checkParamsForImplicitAny(params, spineSource, spineFileName)
+            }
+            return
+        }
         val ctxType = cur?.type
         val unionSuppress = ctxType != null && unionHasFunctionAndPrimitive(ctxType)
         if (unionSuppress) return
@@ -60341,6 +60425,45 @@ interface DataView {
         } else {
             checkParamsForImplicitAny(params, spineSource, spineFileName)
         }
+    }
+
+    /**
+     * (CHK.97) D3, the DIFFERING half — is the contextual type of an arrow / function
+     * expression that the walk marked `typed` a UNION of two or more callables whose
+     * contextual signatures are NOT identical? Then tsc's `getContextualSignature`
+     * answers undefined, no parameter is contextually typed, and every un-annotated one
+     * is implicitly `any` (TS7006; TS7031 for a binding element).
+     *
+     * THE TYPE IS READ, NEVER PULLED, EXCEPT FOR A GENERIC CALLEE: a variable /
+     * property-declaration annotation is already on the context ([SpineIanyCtx.type]),
+     * and a call argument reads the callee parameter's DECLARED type
+     * ([SpineIanyCtx.ctxParam], a `symbolTypes` hit — the three
+     * [applyPulledContextualParamTypes] sites resolved it earlier for the same arrow).
+     * Only when that declared union names the callee's OWN type parameters is the
+     * INSTANTIATED contextual type pulled, because tsc compares the instantiated
+     * signatures — and only after the cheap declared read has said "a union of two or
+     * more callables", which is a population measured at ZERO on every corpus this repo
+     * has. A typed context with no readable type (an overloaded callee, an
+     * `implicitAnyCtxUnknowable` assignment, a `new` argument) keeps today's silence.
+     *
+     * Gated on the emission's own population — an un-annotated, un-initialised parameter
+     * — so an arrow whose every parameter is annotated never asks.
+     */
+    private fun spineIanyUnionCtxDiffers(node: Node, params: List<Parameter>, cur: SpineIanyCtx): Boolean {
+        if (params.none {
+                it.type == null && it.initializer == null && !it.isCommentPlaceholder &&
+                    (it.name as? Identifier)?.text != "this"
+            }) return false
+        val declared = cur.type ?: cur.ctxParam?.let { getTypeOfSymbol(it) } ?: return false
+        if (declared !is Type.Union) return false
+        var members = unionCallableMembers(declared)
+        if (members.size < 2) return false
+        if (cur.ctxParamGeneric) {
+            val pulled = pullContextualTypeAt(node) as? Type.Union ?: return false
+            members = unionCallableMembers(pulled)
+            if (members.size < 2) return false
+        }
+        return unionContextualSignature(members, requiredParamPrefixCount(params)).differing
     }
 
     /** The legacy object-literal METHOD member emission (contextually typed by
@@ -146167,7 +146290,7 @@ interface DataView {
                         (it.dotDotDotToken && it.name is Identifier && !patternsOnly))
             }) return
         val ctx = pullContextualTypeAt(fn) ?: return
-        val sig = callableSignaturesForCtx(ctx)?.singleOrNull() ?: return
+        val sig = callableSignaturesForCtx(ctx, requiredParamPrefixCount(parameters))?.singleOrNull() ?: return
         // (CHK.98)(c) tsc's `getContextualThisParameterType` (checker.ts:31884): the
         // contextual signature's own `this` parameter types `this` inside the body.
         // An ARROW has no `this` of its own (it inherits the enclosing one), so only a
