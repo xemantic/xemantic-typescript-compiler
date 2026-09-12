@@ -1,3 +1,133 @@
+### Round (P18.71) — (CHK.97) stage 3: the nullish-union callee's argument check, and a suppression whose gate was two mechanisms (2026-09-11)
+
+**Suite 18,652 → 18,669 / 0 / 3** (+17 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
+exit 0 with no rebaseline (largest delta `mapped.keyed` +1.18%, `output.errors` 46 and
+`spine.nodes` +0.00%); `huge_methods.py --fail-over 0` exit 0 (844 classes, 0 over);
+warning-clean. **(CHK.97) stays OPEN** — one of its six stage-3 deliverables closed.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item, so
+top-to-bottom order and the WORK ORDER's 2026-09-08 addendum agree; per that addendum
+this round names its successor — **(INV.0) step 10b-ii**, which the order points at the
+moment the parity arc stops paying in measured reference rows. It paid 11 rows here.
+
+**ALL SIX STAGE-3 DELIVERABLES WERE MEASURED BEFORE ONE WAS PICKED**, against tsgo 7.0.2
+and pristine 6.0.3, with **zero REF-SPLIT rows anywhere** — so every verdict below is
+adjudicable:
+
+| deliverable | measured prize | gate it would have |
+|---|---|---|
+| D4 nullish-union ARGUMENT check | **11 MISSING** | REAL (74-131 `?.(` sites × 8 profiles) |
+| D2 both-overloaded → TS2349 | 3 MISSING | control (tsc's sources have no such callee) |
+| D3 union contextual type | 3 MISSING, half unbounded | control |
+| D5 generic inference through a combined signature | 1 MISSING | — |
+| D1 `getCallSignaturesOfType`'s union arm | **0 MISSING** | blind (display-only, (PARITY.1)) |
+| D6 `this` / TS2684 | blocked | — |
+
+**D1 IS REJECTED ON A MEASUREMENT, NOT DEFERRED.** Its only visible readers are
+`ReturnType<U>` / `Parameters<U>`, and there is **no MISSING row** — the three diffs are
+TEXT-DIFFs, and what the references print there is tsc's conditional-type **distribution**,
+not `getUnionSignatures`: `Parameters<G1|G2>` is `[a: string] | [a: number]` where the
+combined list gives `[never]`. So combining there would be **wrong in a new way** for
+`Parameters` and right by coincidence for `ReturnType`, across 35 readers. **D6 is BLOCKED
+and the unblocker is named**: `Signature.thisParameter` (`Type.kt:318`) does not exist, and
+three separate consumers need it — do not attempt it as a diagnostic fix.
+
+**THE ITEM'S AXIS WAS WRONG: `?.` IS INNOCENT.** It states the deliverable as "`f?.(1)`'s
+ARGUMENT check (the round-408 pre-pass consumes the call)". Measured, `g?.(1)` on a plain
+`Fn` reports, and so does `arr[0]?.(1)` on a `Fn[]`. The population is a callee **TYPE** —
+a union carrying a nullish member — which is why the `?.`-free `if (zu) { zu(1) }` is in it
+(an Identifier callee is not flow-narrowed, so the DECLARED union reaches the pre-pass).
+A fixture built around the token measures the wrong thing.
+
+**THE DEFECT NEITHER THE ITEM NOR THE BRIEF NAMED — AND IT IS THE REUSABLE ONE: A
+SUPPRESSION'S GATE WAS TWO MECHANISMS WEARING ONE `if`.** The round-408 pre-pass's
+optional-call nullish strip sat INSIDE the narrowable-reference gate
+(`Identifier || PropertyAccessExpression`). But stripping nullish for an optional call is a
+property of the **call**, not of the callee expression — tsc drops nullish from the apparent
+callee type however the callee is written. For every other callee kind the nullish member
+survived into the case-(b) verdict and produced an **OURS-ONLY TS2349 on legal code**:
+**four of them, one per callee kind** (element access, call expression, parenthesized,
+chained optional call). Hoisting the strip above that gate is what fixed them; the flow
+re-narrow stays gated, because narrowABILITY really is a property of the expression.
+
+**AND THE MECHANISM BEHIND THE SILENCE: A `Boolean`-RETURNING PRE-PASS CAN ONLY SPEND A
+SUPPRESSION BY CONSUMING THE CALL.** `ccetUnionCalleeChecks` answered `true` = "caller
+returns", so the two FP suppressions it owns could be paid for only with the argument
+check — the narrowed value it had just computed had nowhere to go. It now answers `Type?`:
+null = consumed, otherwise the EFFECTIVE callee type the caller resolves signatures against.
+One caller, one definition, so the contract change is compiler-checked. It is the
+argument-side mirror of the RESULT-side strip stage 2 put in `getReturnTypeOfCallExpression`
+(`Checker.kt:125895`), which is why `b?.("s")`'s RESULT already agreed while its ARGUMENT
+was silent.
+
+**SITE B NEEDED NO STRIP OF ITS OWN, AND THAT WAS MEASURED RATHER THAN ARGUED.** Every path
+that hands off has already established `allCallable`, so the union arriving at the signature
+computation is nullish-free by construction — the element-access shape is fixed by the
+hoist alone. What Site B did need is to resolve against the EFFECTIVE type and never the
+original union: for `Fn1 | Fn2 | undefined` the references combine the stripped pair into a
+single `never` parameter, where the original union's `getCallSignaturesOfType` CONCATENATION
+reads as an overload set and prints TS2769 (ablation arm a3 reproduces that verbatim).
+
+**RECEIPT** (`scripts/ref_matrix.py`, 3 fixtures): **agree 8 → 20, ours-only 4 → 0,
+missing 19 → 7**; text-diff 0, span-diff 0, ref-split 0 throughout. Both directions moved —
+4 false positives removed AND 12 lost diagnostics recovered.
+
+**THE GRID IS A REAL GATE HERE, IT IS GREEN, AND THAT IS THE INTERESTING PART.** Unlike
+(CHK.119)/(CHK.124) last round, this family IS in tsc's own sources: a positive-control arm
+counted **49-101 hand-offs per profile** (~542 calls, every profile ≥49). So hundreds of
+arguments that had never been checked on tsc's own codebase were checked for the first time
+and **all of them are correct** — (CHK.50)'s "making a type real surfaces what `any` was
+hiding" did not fire, which is a statement about the combination being right, not about the
+grid being blind.
+
+**A LATENT PATH THE BRIEF MISSED WAS PROBED BEFORE GATING.** `allCallable` answers true for
+`anyType`/`errorType`, so a union carrying an unresolved member now hands that union back
+instead of consuming it. Measured directly: `((a: string) => void) | ZzzUnresolved` and
+`... | any` both produce **zero ours-only rows** on all three compilers. Refuted, not argued
+— and no guard was added for an unreachable case.
+
+**THE SUITE XMLs WERE WIPED BY A LATER FILTERED RUN, AND THE COUNT WAS RE-TAKEN.** A
+`--tests '*Name*'` invocation deletes the XMLs, so the results dir held **1,524** tests when
+the round went to gate — CLAUDE.md's documented trap, and it reads exactly like a suite that
+never ran. Every gate in this note was re-run or re-derived from the capture files by the
+orchestrator rather than inherited: the suite, the grid (recomputed from the per-profile
+`comm` diffs), `cost_gate.py`, `huge_methods.py`, warning-clean, and a
+`javap -c -p | grep -v 'line N:'` control proving the grid's AFTER binary is bytecode-
+identical to the committed one (their md5s differ, because a KDoc shifts every
+`LineNumberTable` entry).
+
+**ABLATION: 6 arms / 17 pins, BOTH controls, no 0-RED arm.** c0 comment-only = 0 RED
+(the control behaves); c1 consume every union callee = 15 RED (the 2 green are the
+deliberately non-union controls); a1 revert the hand-off = 11; a2 revert the widened strip =
+**exactly the 4** non-narrowable callee kinds; a3 resolve against the original union = 1,
+printing TS2769 verbatim; a4 drop the `allCallable` gate = 2, turning the case-(b) TS2349
+into a TS2345 about a non-callable callee. Every arm discriminating.
+
+**FOUR RESIDUES, MEASURED, RECORDED IN THE PIN CLASS'S KDoc AND *NOT* PINNED** — no
+countdown pins (the fifth and sixth fired last round): `arr?.[0]` on
+`(Fn|undefined)[] | undefined` types as `any` (a missing TS2322 with no call in sight, now
+(CHK.128)); a NON-optional nullish union is TS2721/2/3 and consumes, where both references
+also report the argument row (invariant 4 territory, deliberately out of scope); `ar?.("x","y")`
+loses the union arity path once one member survives; and two GENERIC members with
+non-identical type parameters beside `undefined` stay silent. **The last two read IDENTICALLY
+before and after** — not introduced.
+
+**REFUSED, WITH REASONS**: converting the `≥2`-overloaded and
+`!unionCalleeGenericSignaturesIncompatible` suppressions into hand-offs. They are silences
+owned by earlier rounds, outside this deliverable, and converting them widens blast radius
+for no measured row.
+
+**TWO FINDINGS OUTSIDE THE ITEM, QUEUED**: an `as`-asserted callee loses its argument check
+entirely, union or not — `(a as (x: string) => void)(1)` is silent while the parenthesized
+`(b)(1)` agrees — now **(CHK.129)**; and D3's *identical*-signature union also loses its
+contextual type at `callableSignaturesForCtx` (`Checker.kt:36192`), a strictly smaller and
+more tractable fix than the TS7006 half the item describes — recorded inside (CHK.97).
+
+**NEXT**: (CHK.97)'s D2 is the runner-up (3 rows, ~15 lines, and `d8` shows the `≥2`
+suppression it must narrow is guarding nothing measurable — stage 2's array fallback answers
+those receivers first). But per the WORK ORDER, **(INV.0) step 10b-ii** is where the order
+sends the arc.
+
 ### Round (P18.70) — two false-positive families, and the instrument that was dropping rows (2026-09-11)
 
 **Suite 18,604 → 18,635 / 0 / 3** (+31 pins). Grid 8×`added=0 removed=0` on both

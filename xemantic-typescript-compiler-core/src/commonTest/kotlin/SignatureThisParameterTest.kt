@@ -463,14 +463,28 @@ class SignatureThisParameterTest {
 
     @Test
     fun `call and apply check the thisArg through the receiver-built member and bind is still any`() {
-        // (CHK.134)(1) closed the `call`/`apply` half of this residue: both references print
-        // TS2353 at each object-literal `thisArg` through the lib `CallableFunction`
-        // overloads, and so does `FunctionCallApplyTest`'s mechanism here. `bind` is
-        // sub-step 2 (the lib's `ThisParameterType`/`OmitThisParameter`) and stays `any`.
+        // (CHK.134)(1) closed the `call`/`apply` half of this residue and (CHK.134)(2) the
+        // `bind` half; the name is kept ((CHK.114)). Both references print TS2353 at each
+        // object-literal `thisArg` through the lib `CallableFunction` overloads, and for
+        // `bind` — whose two overloads are both arity-eligible and both refuse — pristine's
+        // per-candidate TS2769 chain carrying the same excess-property line (tsgo prints the
+        // *last overload* form; the corpus's oracle is pristine). `FunctionBindTest`
+        // carries the family.
         val d = diagnose(prelude + "\nzzzF.call({ m: \"s\" }, \"x\");\nzzzF.apply({ m: \"s\" }, [\"x\"]);\nconst zzzB2 = zzzF.bind({ m: \"s\" });\nexport {};")
         assert(d.count { it.code == 2353 && it.message == "Object literal may only specify known properties, and 'm' does not exist in type 'ZzzA'." } == 2)
-        assert(d.none { it.code == 2684 || it.code == 2769 })
-        assert(d.size == 2)
+        val overload = "'(this: (this: ZzzA, x: string) => number, thisArg: ZzzA): (x: string) => number'"
+        d should {
+            have(any {
+                it.code == 2769 && it.message == "No overload matches this call." && it.messageChain == listOf(
+                    "  Overload 1 of 2, $overload, gave the following error.",
+                    "    Object literal may only specify known properties, and 'm' does not exist in type 'ZzzA'.",
+                    "  Overload 2 of 2, $overload, gave the following error.",
+                    "    Object literal may only specify known properties, and 'm' does not exist in type 'ZzzA'.",
+                )
+            })
+        }
+        assert(d.none { it.code == 2684 })
+        assert(d.size == 3)
     }
 
     @Test

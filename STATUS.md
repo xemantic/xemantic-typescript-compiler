@@ -19,6 +19,23 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.81) — (CHK.134)(2): `f.bind` — THE BUILD SHAPE SUFFICED, THE LIB HAS TWO OVERLOADS NOT FIVE, AND A RE-BOUND FUNCTION'S `any` WAS THE ARITH RECORDER'S FIRST-TOUCH HAZARD, 18,907 / 0 / 3 (2026-09-12).**
+`Checker.bindType` builds `bind`'s member per call from the receiver alone — `OmitThisParameter`
+is the receiver itself when its `this` is absent/`unknown`/`any` (overloads and type
+parameters KEPT, measured) else the erased last signature minus `this`; the variadic overload
+splits the parameter list at the partial count — with no conditional type touched, and
+`NewableFunction.bind` came free. The queue item's `A0..A3` quartet does not exist in any of
+the three libs. **One signature wherever one decides the call**: handing the lib's PAIR over
+typed a re-bound function `any`, so the pair is built only when overload 1 refuses — which
+is exactly pristine's per-candidate TS2769 chain. Census: 5-24 `bind` sites per profile, ALL
+refused as non-strict, 0 on every library, so the grid and libraries are controls. 52
+fixtures: 60 agree / 1 ours-only / 14 missing, every missing row attributed to a
+pre-existing general gap reproduced WITHOUT `bind` (a variable callee's TS2554, and
+`spineArithRecordVarDecl`'s first-touch under an `any`-reading ambient — now a CLAUDE.md
+gotcha). Ablation 43/26/6/8 RED over 127 pins. cost_gate exit 0 with 20/20 counters
+digit-identical to the rebuilt HEAD, huge_methods exit 0, warning-clean. **(CHK.134) is
+CHECKED OFF**; next is (CHK.98).
+
 **(P18.80) — (CHK.134)(1): `f.call` / `f.apply` TYPED FROM THE RECEIVER'S OWN SIGNATURE — NO INFERENCE WAS NEEDED, AND THE GRID'S ONE ROW PER PROFILE WAS A MISSING OPTION, 18,854 / 0 / 3 (2026-09-12).**
 tsc's `getPropertyOfType` miss augmentation now serves a function-shaped receiver: `call`
 and `apply` are BUILT from the receiver's last signature (`CallableFunction`'s `T`/`A`/`R`
@@ -90,20 +107,3 @@ on exactly this silence** and a `reduce` control was written wrong; all three fo
 measured CONTROLS (census `bound=0` everywhere real). cost_gate exit 0 (digit-identical to
 pristine), huge_methods exit 0, warning-clean. (CHK.97) is open on D6 ALONE; its unblocker
 `Signature.thisParameter` is now **(CHK.133)** at the top of the queue.
-
-**(P18.76) — (CHK.97) D3, THE DIFFERING HALF: TS7006 THROUGH A UNION CONTEXTUAL TYPE, AND THE ARITY FILTER THE IDENTICAL HALF HAD LEFT OUT, 18,738 / 0 / 3 (2026-09-12).**
-A union contextual type whose member signatures are NOT identical now leaves the arrow's
-parameter implicitly `any` and reports TS7006/TS7031 through the EXISTING owner
-(`checkParamsForImplicitAny`), as both references do. **The reach census ran BEFORE any
-emission and read ZERO on all eight profiles, marked, cronstrue and the 2,400-file project**,
-so the grid and library arms are measured CONTROLS — and it also showed (P18.75)'s
-overloaded-member refusal firing 6× on one fixture, i.e. the emission was UNSOUND without
-tsc's `getContextualCallSignature` arity filter, which was closed in the same sub-step
-(`callableSignaturesForCtx(requiredParamCount)`, `signatureArityBelow`, several applicable
-overloads folded through `getIntersectedSignatures`). Before → after: differing types/arity/
-optionality `missing → agree`, the overloaded family 0/0/3 → 3/0/0, a new 16-file family
-2/0/18 → 17/0/3, zero NEW ours-only rows. Five of (P18.75)'s own negative controls were
-COUNTDOWNS and now assert the row. Ablation 16/3/15 RED over 39 pins; a `sig!!` on an
-unresolvable callee passed every D3 fixture and was caught only by the 63-class neighbour
-sweep (24 RED). cost_gate exit 0 (counters digit-identical to the pristine binary),
-huge_methods exit 0, warning-clean. (CHK.97) stays open: D5, D6.

@@ -129973,7 +129973,7 @@ interface DataView {
             // (CHK.134): a FUNCTION-shaped receiver reads `call`/`apply` and the lib
             // `Function` members on the MISS path only — tsc's `getPropertyOfType`
             // augmentation (checker.ts ~15907), which never widens the apparent type.
-            functionObjectMemberType(expr, apparentType, propName)?.let { return it }
+            functionObjectMemberType(expr, objectType, apparentType, propName)?.let { return it }
         }
         // Fallback: try namespace/module lookup for property access
         val objExpr = expr.expression
@@ -130043,19 +130043,33 @@ interface DataView {
      *  2. every other name: the lib `Function` interface's own member (`length`, `name`,
      *     `toString`, `prototype`, `arguments`, `caller`), which both libs declare.
      *
-     * Answers null — today's `anyType` — for `bind` (sub-step 2, the lib's two
-     * conditional types), where `strictBindCallApply` is off (tsc: the loose
-     * `Function.call`, whose result and arguments are `any` — the same silence), for a
-     * receiver that is
-     * not a plain callable object (a union, a generic REFERENCE whose signatures are
-     * uninstantiated, a construct-only type — `NewableFunction` is not modelled) and for
-     * anything the synthesis cannot decide, so the miss keeps its conservative answer.
+     * `bind` is the third member and is BUILT the same way ([bindType]): the lib's two
+     * conditional types, `ThisParameterType<T>` / `OmitThisParameter<T>`, are functions of
+     * the receiver alone, and so is the variadic partial-application overload once the
+     * partial count is read off the call. It is the one member that also serves a
+     * CONSTRUCT-only receiver (`NewableFunction.bind`, the receiver itself or the last
+     * construct signature minus its leading parameters); `call`/`apply` on a class value
+     * stay unmodelled.
+     *
+     * Answers null — today's `anyType` — where `strictBindCallApply` is off (tsc: the
+     * loose `Function.call`/`bind`, whose result and arguments are `any` — the same
+     * silence), for a receiver that is not a plain callable object (a union, a generic
+     * REFERENCE whose signatures are uninstantiated, a construct-only type outside `bind`),
+     * for a bare `f.bind` read outside a call (tsc renders the generic lib method; a
+     * display residue kept at `any`) and for anything the synthesis cannot decide, so the
+     * miss keeps its conservative answer.
      */
-    private fun functionObjectMemberType(expr: PropertyAccessExpression, apparent: Type, name: String): Type? {
+    private fun functionObjectMemberType(expr: PropertyAccessExpression, self: Type, apparent: Type, name: String): Type? {
         if (apparent !is Type.Object || apparent is Type.Reference) return null
         val sigs = getCallSignaturesOfType(apparent)
+        if (name == "bind") {
+            if (!options.effectiveStrictBindCallApply) return null
+            if (sigs.isNotEmpty()) return bindType(expr, self, sigs.last(), construct = false)
+            val ctorSigs = getConstructSignaturesOfType(apparent)
+            if (ctorSigs.isEmpty()) return null
+            return bindType(expr, self, ctorSigs.last(), construct = true)
+        }
         if (sigs.isEmpty()) return null
-        if (name == "bind") return null
         if (name == "call" || name == "apply") {
             if (!options.effectiveStrictBindCallApply) return null
             return bindCallApplyType(expr, sigs.last(), name == "apply")
@@ -130143,6 +130157,169 @@ interface DataView {
             else -> listOf(one, two)
         }
         return obj
+    }
+
+    /**
+     * (CHK.134)(2) The instantiated `bind` member for a receiver whose LAST signature is
+     * [recvIn] — the lib's two overloads, both functions of the receiver alone and so
+     * BUILT rather than inferred, exactly as [bindCallApplyType] builds `call`/`apply`:
+     *
+     *  1. `bind<T>(this: T, thisArg: ThisParameterType<T>): OmitThisParameter<T>`.
+     *     `ThisParameterType<T>` (`T extends (this: infer U, ...args: never) => any ? U :
+     *     unknown`) is the receiver's declared `this` type, `unknown` where it declares
+     *     none — so `f.bind(anything)` is legal for such a receiver, measured on both
+     *     references. `OmitThisParameter<T>` (`unknown extends ThisParameterType<T> ? T : T
+     *     extends (...args: infer A) => infer R ? (...args: A) => R : T`) is the RECEIVER
+     *     ITSELF when that `this` is absent, `unknown` or `any` — overloads and type
+     *     parameters kept, which is why a bound overload set still selects per call and a
+     *     bound generic still infers — and otherwise the receiver's last signature with its
+     *     `this` dropped and its type parameters erased (`infer` runs `inferFromSignatures`
+     *     over the last source signature through `getBaseSignature`; measured: a generic
+     *     receiver with a `this` binds to `(x: unknown) => unknown`, an overloaded one to
+     *     its last overload).
+     *  2. `bind<T, A extends any[], B extends any[], R>(this: (this: T, ...args: [...A,
+     *     ...B]) => R, thisArg: T, ...args: A): (...args: B) => R`. tsc splits the
+     *     receiver's parameter tuple at the call's REST-ARGUMENT COUNT (`impliedArity`,
+     *     defined only when no partial is a spread), so the member is built per call from
+     *     the argument count: `A` is the leading `args.size - 1` parameters and `B` the
+     *     rest ([splitBoundParameters] — a trailing rest parameter absorbs the surplus on
+     *     both sides, and more partials than a rest-less receiver has parameters leaves the
+     *     surplus for the ordinary arity emitter: `Expected 4 arguments, but got 5.`). `T`
+     *     is [thisArgParamType]'s covariant-or-contravariant candidate, as for `call`.
+     *
+     * The member is ONE signature wherever one decides the call — the call-return path
+     * answers `any` for a multi-signature member behind an INFERRED variable receiver (the
+     * documented multi-call-signature bail), so a bound function re-bound (`zzzB.bind(u)`)
+     * typed `any` while the pair was handed over unconditionally. With ONE argument that
+     * overload 1 accepts (its `thisArg` relates, or `ThisParameterType` is `unknown`) the
+     * signature takes tsc's inferred `T` for `thisArg` ([thisArgParamType]: a fresh literal
+     * is checked against its own type, so no excess-property row, as on both references)
+     * and `OmitThisParameter`'s result. Only when overload 1 REFUSES the `thisArg` are both
+     * candidates handed to the overload machinery in the lib's order, because both are
+     * arity-eligible there (the second's `A` is empty) and both fail: that is what prints
+     * pristine's per-candidate TS2769 chain, in which overload 1 displays the receiver
+     * TYPE as its `this` and overload 2 the erased signature (`(this: ZzzFn, thisArg:
+     * ZzzT)` against `(this: (this: ZzzT, x: string) => number, thisArg: ZzzT)`; tsgo
+     * prints the *last overload* form there, and the corpus's oracle is pristine). With no
+     * arguments the member is the uninstantiated rest overload alone, so the arity emitter
+     * answers tsc's `Expected at least 1 arguments, but got 0.`; with two or more, overload
+     * 2 alone. A signature's `this` pseudo-parameter relates to the receiver by identity or
+     * structure and exists for the chain's display.
+     *
+     * A CONSTRUCT-only receiver takes `NewableFunction`'s pair — `bind<T>(this: T,
+     * thisArg: any): T` and `bind<A, B, R>(this: new (...args: [...A, ...B]) => R,
+     * thisArg: any, ...args: A): new (...args: B) => R` — the same build over the last
+     * construct signature with an `any` `thisArg` and a construct-signature result.
+     *
+     * Refused (null, the miss keeps `any`): a spread partial (`impliedArity` is undefined
+     * and tsc infers `A` from the spread, a shape this checker does not model), a receiver
+     * [erasedReceiverSignature] cannot erase, and a bare `f.bind` read outside a call.
+     */
+    private fun bindType(expr: PropertyAccessExpression, self: Type, recvIn: Signature, construct: Boolean): Type? {
+        val recv = erasedReceiverSignature(recvIn) ?: return null
+        val call = (expr.parent as? CallExpression)?.takeIf { it.expression === expr } ?: return null
+        val args = call.arguments
+        if (args.any { it is SpreadElement }) return null
+        val ret = recv.resolvedReturnType ?: anyType
+        val declaredThis = recv.thisType?.takeIf { it !== errorType }
+        // Overload 1's `ThisParameterType<T>` and `OmitThisParameter<T>`.
+        val oneThisArg = if (construct) anyType else declaredThis ?: unknownType
+        val oneResult: Type =
+            if (construct || declaredThis == null || declaredThis === anyType || declaredThis === unknownType) self
+            else boundFunctionType(recv.parameters, recv.minArgumentCount, ret, construct = false)
+        val obj = Type.Object()
+        if (args.isEmpty()) {
+            // `f.bind()`: the uninstantiated rest overload, whose arity the emitter counts.
+            obj.callSignatures = listOf(Signature(
+                parameters = listOf(
+                    mintCombinedParam("thisArg", oneThisArg, null),
+                    mintCombinedParam("args", getOrInternReference(globalArrayType, listOf(anyType)), SYNTHETIC_REST_PARAMETER),
+                ),
+                resolvedReturnType = oneResult, minArgumentCount = 1, thisType = self,
+            ))
+            return obj
+        }
+        val partials = args.size - 1
+        val twoThisArg = if (construct) anyType else thisArgParamType(recv, args[0])
+        if (partials == 0) {
+            val argType = getTypeOfExpression(args[0])
+            val oneAccepts = oneThisArg === unknownType || oneThisArg === anyType ||
+                argType === anyType || argType === errorType ||
+                checkTypeRelatedTo(argType, oneThisArg, assignableRelation)
+            if (oneAccepts) {
+                // Overload 1 selects: one signature, `thisArg` the inferred `T` (a
+                // fresh literal is checked against its own widened type — no excess
+                // property row, as on both references), the `OmitThisParameter` result.
+                obj.callSignatures = listOf(Signature(
+                    parameters = listOf(mintCombinedParam("thisArg", twoThisArg, null)),
+                    resolvedReturnType = oneResult, minArgumentCount = 1, thisType = self,
+                ))
+                return obj
+            }
+            // Both overloads refuse the `thisArg`; the pair is what prints the chain.
+            val one = Signature(
+                parameters = listOf(mintCombinedParam("thisArg", oneThisArg, null)),
+                resolvedReturnType = oneResult, minArgumentCount = 1, thisType = self,
+            )
+            val two = Signature(
+                parameters = listOf(mintCombinedParam("thisArg", twoThisArg, null)),
+                resolvedReturnType = boundFunctionType(recv.parameters, recv.minArgumentCount, ret, construct),
+                minArgumentCount = 1, thisType = boundFunctionType(recv, construct),
+            )
+            obj.callSignatures = listOf(one, two)
+            return obj
+        }
+        // Overload 2 alone: the receiver's parameters split at the partial count.
+        val split = splitBoundParameters(recv, partials)
+        obj.callSignatures = listOf(Signature(
+            parameters = listOf(mintCombinedParam("thisArg", twoThisArg, null)) + split.leading,
+            resolvedReturnType = boundFunctionType(split.remaining, split.remainingMinArgumentCount, ret, construct),
+            minArgumentCount = 1 + minOf(partials, recv.minArgumentCount), thisType = boundFunctionType(recv, construct),
+        ))
+        return obj
+    }
+
+    /** (CHK.134)(2) [splitBoundParameters]'s answer: tsc's `A` / `B` over the receiver's parameter list. */
+    private class BoundParameterSplit(val leading: List<Symbol>, val remaining: List<Symbol>, val remainingMinArgumentCount: Int)
+
+    /**
+     * (CHK.134)(2) tsc's inference of `[...A, ...B]` from the receiver's parameter tuple at
+     * an implied arity of [partials]: `A` is the first [partials] parameters and `B` the
+     * rest. A trailing REST parameter is a variadic slot of the source tuple, so a partial
+     * count past the fixed parameters keeps it on BOTH sides (every surplus partial is
+     * checked against its element type, and the bound function still takes it); a
+     * rest-less receiver with fewer parameters than partials hands its whole list to `A`,
+     * and the arity emitter reports the surplus.
+     */
+    private fun splitBoundParameters(recv: Signature, partials: Int): BoundParameterSplit {
+        val params = recv.parameters
+        val rest = if (sigHasRestParameter(recv)) params.last() else null
+        val fixed = if (rest != null) params.dropLast(1) else params
+        return if (partials < fixed.size || (rest == null && partials == fixed.size)) {
+            BoundParameterSplit(
+                leading = fixed.take(partials),
+                remaining = fixed.drop(partials) + listOfNotNull(rest),
+                remainingMinArgumentCount = (recv.minArgumentCount - partials).coerceAtLeast(0),
+            )
+        } else {
+            // Every fixed parameter is bound: `B` is the rest's ARRAY type (not a tuple), so
+            // the bound function's one parameter is the lib's own `...args: B` — measured,
+            // both references print `(...args: number[]) => number` for a receiver whose
+            // rest is spelled `...xs`.
+            val remaining = rest?.let { listOf(mintCombinedParam("args", getTypeOfSymbol(it), SYNTHETIC_REST_PARAMETER)) } ?: emptyList()
+            BoundParameterSplit(leading = fixed + listOfNotNull(rest), remaining = remaining, remainingMinArgumentCount = 0)
+        }
+    }
+
+    /** (CHK.134)(2) A function (or, for [construct], constructor) type of exactly one signature. */
+    private fun boundFunctionType(params: List<Symbol>, minArgumentCount: Int, ret: Type, construct: Boolean): Type.Object =
+        boundFunctionType(Signature(parameters = params, resolvedReturnType = ret, minArgumentCount = minArgumentCount), construct)
+
+    /** (CHK.134)(2) The function (or constructor) type whose one signature is [sig] — the erased receiver as tsc displays it. */
+    private fun boundFunctionType(sig: Signature, construct: Boolean): Type.Object {
+        val fn = Type.Object()
+        if (construct) fn.constructSignatures = listOf(sig) else fn.callSignatures = listOf(sig)
+        return fn
     }
 
     /**

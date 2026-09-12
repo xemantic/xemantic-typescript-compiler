@@ -3221,3 +3221,20 @@ fixture), so the 8×`added=0 removed=0` grid is a measured CONTROL. Ablation 12/
 pins, a3 discriminated only by a NESTED differing pair. cost_gate exit 0 (all 20 counters
 digit-identical to the pristine binary — the +1.18% is baseline staleness), huge_methods exit
 0 (844), warning-clean. (CHK.97) stays open: D3-differing, D5, D6.
+
+**(P18.76) — (CHK.97) D3, THE DIFFERING HALF: TS7006 THROUGH A UNION CONTEXTUAL TYPE, AND THE ARITY FILTER THE IDENTICAL HALF HAD LEFT OUT, 18,738 / 0 / 3 (2026-09-12).**
+A union contextual type whose member signatures are NOT identical now leaves the arrow's
+parameter implicitly `any` and reports TS7006/TS7031 through the EXISTING owner
+(`checkParamsForImplicitAny`), as both references do. **The reach census ran BEFORE any
+emission and read ZERO on all eight profiles, marked, cronstrue and the 2,400-file project**,
+so the grid and library arms are measured CONTROLS — and it also showed (P18.75)'s
+overloaded-member refusal firing 6× on one fixture, i.e. the emission was UNSOUND without
+tsc's `getContextualCallSignature` arity filter, which was closed in the same sub-step
+(`callableSignaturesForCtx(requiredParamCount)`, `signatureArityBelow`, several applicable
+overloads folded through `getIntersectedSignatures`). Before → after: differing types/arity/
+optionality `missing → agree`, the overloaded family 0/0/3 → 3/0/0, a new 16-file family
+2/0/18 → 17/0/3, zero NEW ours-only rows. Five of (P18.75)'s own negative controls were
+COUNTDOWNS and now assert the row. Ablation 16/3/15 RED over 39 pins; a `sig!!` on an
+unresolvable callee passed every D3 fixture and was caught only by the 63-class neighbour
+sweep (24 RED). cost_gate exit 0 (counters digit-identical to the pristine binary),
+huge_methods exit 0, warning-clean. (CHK.97) stays open: D5, D6.

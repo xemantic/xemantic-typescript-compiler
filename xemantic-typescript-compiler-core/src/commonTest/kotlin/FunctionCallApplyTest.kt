@@ -65,8 +65,8 @@ import kotlin.test.Test
  * reach none. So the grid is a CONTROL for the synthesis and `marked` plus these pins
  * are its gate.
  *
- * RECORDED residues, each measured and pinned `residue -` below: `bind` (sub-step 2,
- * the lib's two conditional types); an optional-chain receiver (`f?.call`, the
+ * RECORDED residues, each measured and pinned `residue -` below (`bind` was sub-step 2's
+ * residue and is closed — `FunctionBindTest`): an optional-chain receiver (`f?.call`, the
  * (CHK.133)(c) residue — the receiver types `any`); an anonymous-object IDENTIFIER or a
  * class `this` as `thisArg` against an interface `this` type (the argument firewall's
  * pre-existing silence, `ctl1`/`ctl11` in the round's matrix, identical for an ordinary
@@ -464,10 +464,15 @@ class FunctionCallApplyTest {
 
     @Test
     fun `residue - bind is still any`() {
-        // Both references: TS2345 at `zzzB(1)` and TS2322 at `zzzBad` through the lib's
-        // `bind<T>(this: T, thisArg: ThisParameterType<T>): OmitThisParameter<T>` — sub-step 2.
+        // (CHK.134)(2) closed the residue this pin was named for; the name is kept
+        // ((CHK.114)) and the expectation is both references': TS2345 at `zzzB(1)` and
+        // TS2322 at `zzzBad` — `FunctionBindTest` carries the family.
         val d = d("const zzzB = zzzF.bind(zzzO);\nzzzB(\"x\");\nzzzB(1);\nconst zzzBad: string = zzzB(\"x\");")
-        assert(d.isEmpty())
+        d should {
+            have(any { it.code == 2345 && it.message == "Argument of type 'number' is not assignable to parameter of type 'string'." })
+            have(any { it.code == 2322 && it.message == "Type 'number' is not assignable to type 'string'." })
+        }
+        assert(d.size == 2)
     }
 
     @Test
