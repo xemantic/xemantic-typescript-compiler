@@ -1196,7 +1196,16 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 CLAUDE.md § "AI agent mission".
 
 - [ ] **(LEGACY.0) RE-PIN THE CORPUS TO tsgo's REGENERATED BASELINES (owner approval 2026-09-12: "Green light to
-  tsgo regenerated baseline"; a test-generation-pipeline change, pre-approved by that sentence).** Today
+  tsgo regenerated baseline"; a test-generation-pipeline change, pre-approved by that sentence). SIZED READ-ONLY THE
+  SAME DAY, AND THE TARGET IS TWO THINGS: (0a) the `tsgo-port` sha `4d4f005c` is pristine + `stableTypeOrdering` ON —
+  791 baselines, zero deleted, zero cases changed, ONE family (display ORDER), **29 active subtests max RED** (22 files
+  are one mechanical union/property-order change, 2 reorder+text, 2 chain-length, 2 single-line text, 1 NEW test
+  `coAndContraVariantInferences5` with a genuinely new TS2322), `stripDtsSection` absorbs 100% of the `.js` churn, no
+  parser change; (0b) tsgo's ACTUAL output = `typescript-go-repo/testdata/baselines/reference/{submodule,
+  submoduleAccepted,submoduleTriaged}/*.diff` layered over the submodule baselines — **378 active subtests** (244
+  `.errors.txt` + 134 `.js`, only 2 overlapping 0a), the pin that closes TS2300-at-both / TS2717 / `The last
+  overload…`, and it needs the generator to apply `.diff` layers (a real parser change) — BLOCKED-PENDING-USER: is
+  0b wanted? Land 0a first regardless (it is a strict subset of tsgo's ordering).** Today
   `typeScriptCommit` (`xemantic-typescript-compiler-core/build.gradle.kts:257`) is `637d5746`, the PRISTINE main-side
   parent of tsgo 7.0.2's `_submodules/TypeScript` sha `4d4f005c8541e0255a9d8791205fdce326e462bc` (the `tsgo-port`
   branch, whose `tests/baselines/reference` were regenerated to tsgo's output). The re-pin moves the corpus's
