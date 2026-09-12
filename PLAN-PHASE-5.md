@@ -1194,24 +1194,83 @@ features tsgo 7 REMOVES (`program.go` "Removed in TS7") may be deleted — queue
 the in-flight (CHK.98) sub-step. The corpus stays pinned to pristine mainline baselines as the regression gate
 (re-pinning is a pipeline change needing explicit approval). Full text in CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.1) REMOVE THE CODE SUPPORTING TS7-REMOVED FEATURES (owner directive 2026-09-12; census by a
-  read-only recon the same day, its sub-items to be filled from `scratchpad/legacy1/REPORT.md`).** The authoritative
-  list is tsgo's `createRemovedOptionDiagnostic` (`typescript-go-repo/internal/compiler/program.go`): `baseUrl`,
-  `outFile`, `target ES5` and below (ES3), `module AMD`/`System`/`UMD`, `moduleResolution Classic`/`node10`,
-  `alwaysStrict false`, `esModuleInterop false`, `allowSyntheticDefaultImports false`, `downlevelIteration`.
-  Method: ONE family per commit — (a) census the code, tests and corpus cases each family owns (the 23 `target <
-  ES2015` downlevel gates and `effectiveTarget`'s ES5→ES2015 map, the AMD/UMD/System arms of `Transformer`/`Emitter`,
-  classic/node10 in `ModuleResolver`, `outFile` concatenation, `baseUrl` in path mapping, `downlevelIteration`
-  helpers, the three `false`-valued interop flags); (b) replace acceptance of the option with tsgo's TS5102/TS5108
-  *Option 'X' has been removed. Please remove it from your configuration.* (with the `Use 'X' instead.` chain for
-  `baseUrl`), measured against tsgo on a fixture per option; (c) delete the supporting code and the hand-written
-  pins that pinned it (name each in the note), keeping `CompilerOptions` parsing tolerant enough to REPORT the
-  option. Gates: the corpus (every such configuration is already skipped by `usesUnsupportedOption` /
-  `tsconfigInTestUsesRemovedFeature`, so it must stay 100% green with NO new divergence entry), the 8-profile grid,
-  `cost_gate.py`, `huge_methods.py` (a large removal can only shrink methods), and `Checker.kt`'s line count in the
-  STATUS.md shrinkage dashboard — this arc MOVES the (INV.0) metric. Read CLAUDE.md's `defaultedTarget` /
-  `effectiveTarget` / raw `options.target` entry before touching a target gate: an explicit ES5 today maps UP for emit
-  and DOWN for checker questions, and both halves become a TS5108 refusal.
+- [ ] **(LEGACY.1) REMOVE THE CODE SUPPORTING TS7-REMOVED FEATURES (owner directive 2026-09-12; censused the same day,
+  read-only, against tsgo's `program.go:803-877` "Removed in TS7" block and OUR sources — receipts in
+  `docs/legacy-removal-census.md`).** THREE FACTS THAT SHAPE THE ARC: (1) tsgo REPORTS the option and then IGNORES it
+  — `target: ES5` transforms maximally (no ES5 downlevel transformer exists in tsgo at all; ES3 is not even parseable),
+  AMD/UMD/System fall to the CommonJS transformer, Classic/node10 fold into Bundler/Node16, `alwaysStrict`/
+  `esModuleInterop`/`allowSyntheticDefaultImports` `false` and `downlevelIteration` have ZERO consumers; tsgo's
+  TS1250 emitter is dead code and TS18028 has zero references. (2) OUR TS5101/TS5102/TS5107/TS5108 machinery already
+  exists (`TypeScriptCompiler.kt:437-526`, `cpcCheckDeprecatedOptions`) gated on `simulatedVersion`, default `"6.0"`
+  — the arc deletes BEHAVIOUR only and leaves the diagnostics as they are; the 7.0 wording is reachable through
+  `// @typeScriptVersion: 7.0`, which is where the tsgo-parity fixture belongs. **DO NOT move the default**: four
+  ACTIVE corpus subtests (`blockScopedBindingsInDownlevelGenerator`, `sourceMapValidationVarInDownLevelGenerator`,
+  `target=es2015`) pin the 6.0 TS5101 line for `downlevelIteration`, the ONLY family with live corpus coverage —
+  whether a real PROJECT build should default to 7.0 is an owner decision, BLOCKED-PENDING-USER. (3) All eight
+  profiles use NO removed option (`alwaysStrict: true`; `strictBindCallApply: false` is NOT removed) — the grid is
+  immune; `build/bench/inc50-scratch*` (`target: ES5`) and `many-small-2400-cjs*` (`moduleResolution: node`) are
+  non-gating bench fixtures to bump alongside. NO CLI flag or usage-text entry exists for any of the nine, so
+  `CliModeRestoreTest` is not a hazard. `export as namespace` (the UMD GLOBAL) is NOT `module: UMD` and feeds the
+  whole externals module — do not touch it. Every step: corpus 100% green with NO new divergence entry (every
+  configuration is already dropped by `usesUnsupportedOption`/`tsconfigInTestUsesRemovedFeature`, active count 0 —
+  verified over the 8,837 generated tests), grid 8×0/0, cost_gate, huge_methods, `Checker.kt` line count in
+  STATUS.md. ONE FAMILY PER COMMIT, in this order:
+  - [ ] (a) DEAD System dynamic-import rewriter `Transformer.kt:5964-6070` (`buildSystemDynamicImport`/
+    `rewriteSystemDyn*`, 107 lines, zero callers) — risk nil.
+  - [ ] (b) DEAD System var-hoist helpers `Transformer.kt:16315-16461` (`stripVarDeclsFromStatement`,
+    `collectVarNamesFromStmt(s)`, ~147 lines, zero callers; `collectBoundNames` at 16463 STAYS) — risk nil.
+  - [ ] (c) `alwaysStrict: false` — `Emitter.kt:229-231` (`"use strict"` suppression; tsgo's `usestrict.go` never
+    reads the flag), `Checker.kt:29451`, `:25470-25472` `spineWithStrictActive` (always active), `:25600-25605`
+    `explicitNonStrict`'s disjunct; keep every `== true` read and the parse/report; delete the two negative controls
+    `Inv4SpineBatch11Test.kt:131`, `Inv4SpineBatch9Test.kt:256`; watch TS1101 (`with`) now always firing.
+  - [ ] (d) `esModuleInterop: false` + `allowSyntheticDefaultImports: false` — the no-interop `else` arms in
+    `Transformer.kt:3082-3397` (12 sites), `NameResolver.kt:446`, `Checker.kt:51353-51356, 51438-51442, 52216-52217`,
+    the `…ExplicitlyFalse` fields; **a BEHAVIOUR change at the default**: `allowSyntheticDefaultImports` defaults
+    `false` today (`CompilerOptions.kt:199`) and must become interop-derived as tsgo's — land the flip and the arm
+    deletion as one commit, measured on a 7.0 fixture.
+  - [ ] (e) `moduleResolution: classic/node10` — `ModuleResolver.kt` has NO such arm; the family is `Checker.kt:49308`
+    `isClassicResolution` + 5 consults (49468, 49672, 49687, 49712, 49774), `TypeScriptCompiler.kt:745-762`
+    (TS5070 + the `None/AMD/UMD/System → "classic"` derivation), ~40 lines; fold to tsgo's Bundler/Node16 answer.
+    Do (e) BEFORE (g): the ten `options.baseUrl == null` guards interact.
+  - [ ] (f) `module: AMD/UMD/System` — `CompilerOptions.kt:51-63` enum + `fromString` (parse to the CommonJS-equivalent
+    behaviour, `emitter.go:98-99`), 14 `Checker.kt` module-kind arms (49304, 49464, 50389, 51357, 52216, 74575,
+    80400-80401, 93224, 93268-93269, 93473, 93569, 187545, 188800-188802), `TypeScriptCompiler.kt:513-515, 750, 769,
+    933-934`; `RemovedModuleKindsTest` keeps its 5107 pin and gains a 7.0 sibling asserting 5108; `Checker.kt`'s 38
+    `UMD` hits are mostly `export as namespace` — leave them.
+  - [ ] (g) `baseUrl` — `TypeScriptCompiler.kt:3259-3270` (bare lookup), the anchoring parameter through `:3061,
+    3145-3155, 3335-3360` (`paths` SURVIVES and keeps anchoring on the tsconfig dir), `NameResolver.kt:604-609`; the
+    ten `&& options.baseUrl == null` guards simplify to true; TS5090 (`CompilerOptions.kt:1319-1350`) goes only if
+    tsgo has no such path (verify); the 7.0 diagnostic needs tsgo's COMPUTED chain `Use '"paths": {"*":
+    ["./<rel>/*"]}' instead.` (`program.go:824-833`) — the one option needing new computation.
+  - [ ] (h) `outFile` — `TypeScriptCompiler.kt:1615-1620` `transformOrder` + `:3075-3120` (reference-directive
+    ordering, "only used when outFile is set"; `ReferenceDirectiveCrawlTest` may be its single pin — convert), `:1227`,
+    `:2468-2473`, the `outFile == null` conjuncts at `:876-877, 1601-1602, 1908-1923`; keep parse and keep `out`
+    (a 5.5 removal, `ApplyDirectiveSplitTest.kt:181` pins it).
+  - [ ] (i) `downlevelIteration` — `Checker.kt:9861-9863`, `:161374`, the whole TS2802 block `187638-187866` (229
+    lines, seven single-caller functions); KEEP `TypeScriptCompiler.kt:457-458`'s TS5101 at the 6.0 default; run the
+    four active subtests by name. Must precede or accompany (j).
+  - [ ] (j) `target: ES5`/ES3, split: (j1) the two dead diagnostics TS1250 (`Checker.kt:9149-9151` + `80735-80875`,
+    141 lines) and TS18028 (`:9152-9163` + `80496-80514, 80616-80733`, 137 lines), deleting
+    `PrivateIdentifierTargetGateTest` and `DownlevelGateDefaultTargetTest:120`; (j2) the remaining `< ES2015` checker
+    gates — `:25445` (TS18045, `spineCheckAccessorModifier` 29307-29328), `:25513`, `:27416` + the `es5HoistBody`
+    threading, `:38551`, `:64685/:64809` (drop the TS2461 arms), `:79083/:79119-79129` (TS2659 arms), `:89620`,
+    `:148248` + `checkSuperPropertyAccessES5` (107 lines), `:177479`; convert `Inv4SpineAccessorModifier*Test`,
+    `Inv4SpineBatch16Test`, `Inv4c2LexicalStateSwapTest`, `Inv4UnresolvedSpineScopeTest` to an ES2015+ vehicle,
+    delete the seven `an explicit es5 target still refuses …` pins — HIGH risk, land alone; (j3) the tslib ES5 arms —
+    `:93271` `needsExtendsHelper`, `:93502` `isEs5Target` + 17 threaded refs (`__extends`/`__generator`/
+    `__makeTemplateObject`/`__assign`), keeping `needsAwaiterHelper` (< ES2017, tsgo keeps async lowering) and
+    `needsEsmHelpers`; (j4) the option surface — `ScriptTarget.ES3/ES5` (`CompilerOptions.kt:29-34`), the
+    `effectiveTarget` ES5→ES2015 map (`:284`), the ES3 default (`:98`), COLLAPSE `effectiveTarget`/`defaultedTarget`
+    (their whole reason was the explicit-ES5 split; the UNSET-target ⇒ ES2024 half must survive verbatim — round 941's
+    26 rows), `effectiveModule`'s dead `else` (`:353`); convert `LibAvailabilityDefaultTargetTest` (6 of 14),
+    `RealLibResolverTest`, `RealLibSnapshotTest`; bump `inc50-scratch*` to es2020; keep `usesUnsupportedOption`
+    dropping es3/es5 (a readmitted case would need a pristine baseline this compiler can no longer produce).
+  - [ ] (k) housekeeping — leave `usesUnsupportedOption`/`tsconfigInTestUsesRemovedFeature` as they are; NOT in scope:
+    `target=ES3` (unparseable in tsgo, TS5023-shaped), `module=None`, `out`, the 5.0/5.5 removals (`charset`,
+    `keyofStringsOnly`, `noImplicitUseStrict`, `noStrictGenericChecks`, `suppress*`, `importsNotUsedAsValues`,
+    `preserveValueImports`), `strictBindCallApply: false`, `export as namespace`.
+  Family totals: ~730 lines of `Checker.kt` + ~90 of `CompilerOptions.kt` for `target`, ~254 dead lines in
+  `Transformer.kt`, ~40 (resolution), ~80 (`baseUrl`), ~50 (`outFile`), 229 (`downlevelIteration`).
 
 - [ ] **(CHK.98) (i) THE `NewExpression` ARGUMENT ARM LANDED 2026-09-12 ((P18.83) note) — `newExprArgCtxTypes` through
   the call arm's shared core (`ctxArgTypesFromSignatures`): own constructors first, explicit type arguments, overloads
