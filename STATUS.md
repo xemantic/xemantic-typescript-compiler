@@ -19,6 +19,24 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.78) — (CHK.133)(a)+(c): `Signature.thisType` AND THE CALL-SITE TS2684 — "A PURE MODEL CHANGE" MOVED FIVE ROWS BEFORE ANY CONSUMER EXISTED, AND (CHK.97) CLOSES, 18,781 / 0 / 3 (2026-09-12).**
+`Signature` now carries its `this:` pseudo-parameter (`thisType`), threaded through all 28
+`Signature(` constructions, all four instantiators and `MemberResolver`; the model ALONE
+closed a false TS2345 on every call of an interface/class method declared with `this` (the
+parameter zip) and made `unionTypeCallSignatures5/6` byte-identical to pristine (the union
+arm INTERSECTS members' `this` types, deduped by identity because `getIntersectionType`'s
+anonymous-object exemption printed `B & B`). The call-site consumer (tsc's
+`getSignatureApplicabilityError` `this` leg → TS2684 with a one-level chain) landed in the
+same commit: **387-533 declared `this` parameters per profile and ZERO call sites reaching
+the check** on every profile and library, so the grid is a GATE for the model and a CONTROL
+for the emission. A display defect the sizing missed (`ZzzBox<T>` for `ZzzBox<number>`) is
+fixed and gated by the 18 active `this:` baselines. Ablation over 29 pins: 19/1/1/2/15/8/1/2/
+1/1 RED across nine arms. cost_gate exit 0 with `typeNode.bypassed` +0.49% (the declared
+`this` resolutions, bounded by the census; not rebaselined), huge_methods exit 0 (845),
+warning-clean. **(CHK.97) is CHECKED OFF** — every deliverable closed or rejected on a
+measurement across (P18.71)-(P18.78). (CHK.133) stays open on (b) the relation's `this`
+leg and the `.call/.apply/.bind` consumer.
+
 **(P18.77) — (CHK.97) D5: INFERENCE THROUGH A UNION-COMBINED SIGNATURE WAS BAILING ON AN INTERSECTION IT COULD NOT SEE, AND THE "ONE ROW" WAS SEVEN FAMILIES, 18,752 / 0 / 3 (2026-09-12).**
 PASS 2 combines `(number[] | string[]).map` into `<U>(cb: ((v: number…) => U) & ((v: string…)
 => U)): U[]`, and every callback arm of the single-type-parameter inference demanded an
@@ -106,36 +124,4 @@ CLAUDE.md entry gained the clause that stops the next agent repeating the report
 (CHK.97) union-callee family is now byte-identical to both references across all 11 fixtures.**
 Three outer-line residues remain, each measured and refused with a reason. Grid 8×`added=0
 removed=0` and measured to be a control (416 rows, not one names a union). cost_gate exit 0,
-huge_methods exit 0 (844), warning-clean.
-
-**(P18.73) — (CHK.97) D2b: THE SILENCE THAT HID A TRUE POSITIVE, AND A DESIGN DECIDED BY *BUILDING* THE ALTERNATIVE, 18,688 / 0 / 3 (2026-09-11).**
-**THREE LINES OF CODE**: the `>= 2` emit and the separate `>= 1` silence collapse into one
-branch, because tsc's PASS 2 refuses for TWO reasons and only one of them is "more than one
-overload set" — it also refuses on GENERIC INCOMPATIBILITY, where both references print the
-identical TS2349 + chain and we were silent. **THE DESIGN QUESTION WAS SETTLED BY BUILDING
-THE REJECTED ALTERNATIVE.** An instrumented binary that actually threads the refusal reason
-out of `computeCombinedUnionSignatures` agrees with the recomputed `count` on **21 of 21**
-reachable refusals, and structurally must; the thread is recorded as a refusal WITH ITS
-NUMBER rather than as a preference. That census build was behaviour-neutral (18,679/0/3,
-exactly the baseline), which is what makes its counts trustworthy. **TWO OF THE ITEM'S
-CLAIMS WERE WRONG, BOTH TOWARD THE CHANGE LOOKING RISKIER THAN IT IS**: the surviving
-silence's stated justification (`unionOfArraysFilterCall`) is FALSE — that shape never
-reaches the branch at all, stage 2's array fallback answers it first — and
-`overloadedMembers == 1` is reached **ZERO times** by the whole suite, all eight profiles,
-cronstrue AND marked, so the widening cannot move a baseline and the pins are its only gate.
-**RECEIPT: missing 8 → 0, ours-only 0, agree 12 → 15 — AND `text-diff` MOVES 1 → 6, WHICH
-THE ROUND FLAGS RATHER THAN BURIES.** Five of the eight recovered rows land at the right
-file, line, COLUMN and code with the wrong display, every one of them the same pre-existing
-(CHK.130) defect (`ZzzA | (ZzzG)` for `ZzzA | ZzzG`); a fixture whose four rows differ only
-in whether the member carries a property proves it is not a D2b defect, since the three that
-do are byte-identical AGREE. So eight SILENT rows become three exact and five differing only
-in parentheses — a meaning gain with a form residue, six instances louder because a
-diagnostic that never fired could not display anything wrong. **THE GRID IS A CONTROL AND
-THE CENSUS SAYS SO IN THE STRONGEST FORM YET**: zero union-callee combination refusals OF
-ANY KIND on all eight profiles, cronstrue and marked. **ABLATION: 5 arms, EACH against the
-FULL SUITE** (P18.72's own lesson), both controls; b5 proves last round's `>= 2` threshold
-is load-bearing. **b4 is the interesting arm and is a refusal on SCOPE, not evidence**:
-collapsing the whole `differ` tail is 0 RED on the full suite — evidence FOR it — and it was
-still refused as (CHK.94) territory, with the number written into the branch comment so the
-next round starts from a measurement. Grid 8×`added=0 removed=0`, cost_gate exit 0,
 huge_methods exit 0 (844), warning-clean.

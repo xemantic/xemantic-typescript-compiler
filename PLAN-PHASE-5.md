@@ -25,6 +25,99 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.78) — (CHK.133)(a)+(c): `Signature.thisType` and the call-site TS2684 — "a pure model change" moved five rows before any consumer existed, and (CHK.97) closes (2026-09-12)
+
+**Suite 18,752 → 18,781 / 0 / 3** (+29 pins, `SignatureThisParameterTest`: 19 diagnostic
+pins, 5 negative controls, 3 `residue -`, 7 MODEL pins by direct `Checker` construction).
+Grid 8×`added=0 removed=0`; marked 18 → 18, cronstrue 1 → 1; `cost_gate.py` exit 0, not
+rebaselined (`typeNode.bypassed` +718 = +0.49%, `typeNode.cacheable` +15, `mapped.keyed` +26,
+`mapped.hits` +20, `globals.lookups` +1 against the pristine before-binary via `--from-log`,
+everything else digit-identical — the `declaredThisType` resolutions, bounded by the census
+below); `huge_methods.py --fail-over 0` exit 0 (845 classes); warning-clean. **(CHK.97) IS
+CHECKED OFF**: D1 rejected on a measurement, D2/D2b/D3/D4/D5 closed in (P18.71)-(P18.77), and
+D6 — the union intersection of `this` types that produces `unionTypeCallSignatures5/6`'s rows —
+closed here (its fixture 0/0/5 → 5/0/0, both baselines byte-identical to pristine).
+**(CHK.133) stays OPEN** on (b), the relation's `this` leg, and the `.call/.apply/.bind`
+consumer.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.133) was promoted to the top by (P18.77) as (CHK.97)
+D6's unblocker; (INV.0) step 10b-ii, the WORK ORDER's successor, is itself blocked on two
+named families, so the promote-unblocker rule applies at both ends.
+
+**"(a) IS A PURE MODEL CHANGE" WAS REFUTED BEFORE ANY CONSUMER WAS WRITTEN.** Carrying the
+`this:` pseudo-parameter on `Signature` (`thisType`, built by `declaredThisType`, threaded
+through every one of the **28** `Signature(` constructions — function declaration, method
+arm, the property-access member rebuild with the receiver's mapper, object-literal method,
+function expression, `buildMethodType`, implementation signature, `FunctionType`/
+`ConstructorType` nodes, type-literal members, the decorator builder, `MemberResolver`'s
+interface/class signatures, and all four instantiators in `TypeInstantiator`) moved five
+rows toward pristine on its own: the `this`-aware parameter ZIP closes a pre-existing false
+TS2345 on every call of an interface or class method declared with a `this` parameter (two
+ours-only rows each on two fixtures → 0), and `compareSignaturesIdentical`'s new `this` arm
+makes `unionTypeCallSignatures6:38`'s TS2349 fire and removes `…5`'s ours-only `'0' … 'never'`
+TS2345. Constructor signatures deliberately carry none (TS2681 territory).
+
+**(c) IS CONTAINED AND LANDED WITH (a)**: one ~50-line `checkThisArgumentOfCall` on the
+single-signature branch of `checkSingleCallExpressionTypesCore` — tsc's
+`getSignatureApplicabilityError` `this` leg with `getThisArgumentOfCall`/`getThisArgumentType`
+— emitting TS2684 *The 'this' context of type 'X' is not assignable to method's 'this' of type
+'Y'.* with a one-level elaboration matching pristine's chains. Reach census: **387-533
+declared `this` parameters per profile and ZERO call sites reaching the check** on all 8
+profiles, marked (149 / 0), cronstrue (0 / 0) and the 2,400-file project (4 / 0), positive
+control live on the fixtures (reached 1-7 each). So the grid is a CONTROL for (c) and a GATE
+for (a) — a `this`-declaring method call is on every profile, and the zip change is what
+those 46/94 rows exercise.
+
+**TWO THINGS THE MATRIX FOUND THAT THE SIZING DID NOT PREDICT.** (1) Once `this` is
+instantiated, `extractThisParam` was still rendering the DECLARATION's text — `ZzzBox<T>`
+where pristine prints `ZzzBox<number>` — so it now renders `sig.thisType`, gated by all 18
+ACTIVE `.errors.txt` baselines carrying a `this:` rendering (run by name, green). (2)
+`getIntersectionType`'s anonymous-object exemption ((CHK.106)(b)) meets ALIAS-declared `this`
+types and printed `B & B` / `A & A & B` / `A & B & A & B & C`; the `this` combiners
+(`combineSignatureThisTypes`/`intersectThisTypes`) flatten and dedupe by IDENTITY, and since
+our `identityRelation` accepts `A & B & C` ≡ `A & B`, the `this` arm compares composites by
+constituent identity on the exact attempt.
+
+**BEFORE → AFTER (`agree/ours-only/missing`; the REF-SPLIT rows were hand-adjudicated against
+pristine, chains included, and are byte-identical on every one)**: bare call 0/0/1 → 1/0/0;
+interface method 0/2/0 → 0/0/0; union-combined 0/0/1 → 1/0/0; union with an ours-only
+0/1/1 → 1/0/0; `unionTypeCallSignatures5/6` 0/0/5 → 5/0/0; class method 0/2/0 → 0/0/0;
+generic receiver 0/0/1 → 1/0/0; `this: void`, an arrow, a method signature, the display
+fixture (`ZzzBox<number>`) all match pristine; the `.call`/optional-chain/type-parameter
+fixtures unchanged (residues).
+
+**ABLATION over 29 pins per arm (nine arms, per-arm `cmp` snapshot, rebuilt after every
+restore)**: a1 the builders drop `this` — **19 RED**; a2 `instantiateSignature` leaves a raw
+`this` — 1; a2b `substituteOuterTypeArgsInSignature` raw — 1; a3 the union arm takes the
+FIRST member's `this` instead of the intersection — 2; a4 the emission removed — **15**; a5
+the relation direction reversed — 8; a6 no `this` arm in `compareSignaturesIdentical` — 1;
+a7 the zip reverted — 2; a8 the identity dedupe dropped — 1; a9 the display keeps the
+declaration text — 1. Final rebuild md5 = the gated build, `javap -c -p` minus line numbers
+identical after the census removal. At-risk sweep: the named patterns + 27 source-grep classes
++ 18 `this:` baselines = **1,222 tests / 91 classes / 0 RED**, every intended class present.
+
+**RESIDUES, MEASURED AND NOT FIXED**: `.call/.apply/.bind` (references TS2353/TS2769 through
+lib `CallableFunction`; `zzzF.call` itself types `any` here — a separate consumer, pinned
+`residue -`); an optional-chain receiver `o?.f()` (references TS2684; `o?.f` types `any`, so
+the check's nullish strip is unreachable, pinned `residue -`); a `this` type mentioning a
+TYPE PARAMETER (references name the instantiated `ZzzBox<2>`; skipped, no inference at the
+check, pinned `residue -`); overload SETS are not `this`-checked; the elaboration is one
+level deep; (b) the relation's `this` leg is untouched; `buildMethodType` resolves `this`
+without a method-TP scope (the property-access path every call uses is correct); TS7006 for an
+un-annotated `this` and TS2681 for a constructor `this` are pre-existing.
+
+**PREDICTIONS REFUTED**: (a) as a pure model change; the grid as a real gate for (c); "the
+union intersection falls out of the field" (it needed the identity dedupe and the composite
+identity compare); the `.call` and optional-chain shapes reaching the check (both die at an
+`any` callee); and the agent's own first XML reader read RED=0 over 5 failures (`Element`
+truthiness) — fixed before any arm was recorded.
+
+**NEXT**: (CHK.133)(b), the relation's `this` leg (tsc's `compareSignaturesRelated`: a source
+`this` other than `void` must relate to the target's — bivariant unless `strictFunctionTypes`
+and a non-method — with TS2684 *The 'this' types of each signature are incompatible.* as the
+chain line), then the `.call/.apply/.bind` consumer. Per the WORK ORDER, (INV.0) step 10b-ii's
+own unblockers follow.
+
 ### Round (P18.77) — (CHK.97) D5: inference through a union-combined signature was bailing on an INTERSECTION it could not see, and the "one row" was seven families (2026-09-12)
 
 **Suite 18,738 → 18,752 / 0 / 3** (+14 pins, `UnionCalleeGenericInferenceTest`; two countdown
@@ -874,87 +967,6 @@ INNER declaration, byte-identical to both references.
 **NEXT**: (CHK.119) and (CHK.120) are (P18.66)'s residues and untouched. The two divergences
 above are new, small and independent; (CHK.118) stays BLOCKED with its unblocker named.
 
-### Round (P18.67) — (CHK.118) REFUSED with measurements, and the receipt matrix was the thing that was wrong (2026-09-11)
-
-**No code landed and that is the finding.** Suite unchanged at 18,573 / 0 / 3, tree clean, the
-binary byte-identical to (P18.66)'s pushed `Checker.class`. Artifacts kept OUT of the tree in
-`scratchpad/agent3/REFUSED-*.kt` plus the two matrices in `scratchpad/g/` and `scratchpad/h/`.
-
-**THE DEFECT IS REAL AND WAS REPRODUCED**: a variable declared in a nested `{ }`, an `if`
-block or a `namespace` body, SHADOWING a file-level one, is read as the OUTER declaration —
-9 ours-only / 19 missing over 36 cells, `file` and `fnTop` both 0/0, both references agreeing
-on all 36. **Two of the queue item's claims were wrong**: it is `const`, `let` AND `var`
-alike (identical rows, so not a const-ness question), and the UN-ANNOTATED spelling is
-already nearly correct — which localises the axis to the ANNOTATION and was the lead that
-found the recorder. **And the item's own probe shape was load-bearing in a way it did not
-say**: a PRIMITIVE-target probe reads all 36 cells CLEAN, so only an object-typed MEMBER read
-reproduces it at all. A first pass with the obvious probe would have closed the item as
-already-fixed.
-
-**THE MECHANISM, WHICH IS A ONE-LINE GUARD**: `checkVarDeclAssignabilityCore`'s annotated
-recorder is FIRST-DECL-WINS (`if (currentLocalTypes[name.text] == null)`), so a nested
-shadowing declaration always loses the race to the file-level entry. None of the four shadow
-mechanisms CLAUDE.md enumerates covers it — a file-level declaration makes round 455's
-`outerBound` AND `currentLocalTypes.containsKey` both true, so neither of its arms admits it;
-round 351 covers a function body's TOP level only; round 460 covers a name declared twice in
-ONE body — and the shadow family is not dispatched for a `ModuleBlock` at all, which is why
-3 of the 9 cells are unreachable from it.
-
-**WHY IT IS REFUSED, AND THE RECEIPT IS THE PART THAT WAS WRONG.** Relaxing the guard fixes
-every IN-BLOCK read and MOVES the wrong answer OUTSIDE the block, where it can be a
-**confident false positive on legal code**: with the shadowed member present on BOTH types,
-`const pAfter: number = zzzV.shared` after the block is legal and the patched binary reports
-`Type 'string' is not assignable to type 'number'`, while losing a true row pristine does
-report. **The 36-cell matrix cannot see any of that, because every one of its probes is
-INSIDE the block.** Re-measured with an after-block read added to all 18 cells
-(`scratchpad/h/`): parent **2 ours-only / 22 missing** against the patch's **0 / 20** — i.e.
-+2/+2, a LATERAL move on `const`/`let` annotated (missing stays 3; the in-block row gained,
-the after-block row lost) with the whole net gain in `var`. Not worth a leak.
-
-**THE IMPLEMENTER'S CORRECTION TO THE COORDINATOR, ACCEPTED AND VERIFIED**: the PARENT also
-false-positives on legal code — probe5's lines 5 and 12 are legal and the parent reports both
-where pristine reports only line 14 — so the FP class **MOVES** rather than appearing from a
-clean baseline (2 FP + 1 TP becomes 1 FP + 1 missing). The coordinator's "the fix introduces
-a new false positive" was true and unfair; and the 18-cell matrix weights one in-block read
-against one after-block read, which over-weights the after-block case relative to real code,
-since a shadowing declaration exists to be read inside its block. The verdict is unchanged
-and the framing is fairer.
-
-**SCOPING IT WAS ATTEMPTED AND IS MEASURED INERT — THIS IS THE ROUND'S MOST REUSABLE
-FINDING.** A purpose-built undo log (only the names the predicate admits; NOT `AnnScopeStack`
-and NOT `MapScopeStack`, which CLAUDE.md refuses for `currentLocalTypes`), pushed and popped
-per `checkTypeAssignabilityInStatements`, reads **identical to the parent on both matrices**
-— and its positive control FIRED (the after-block read went back to pristine's exact answer),
-so the instrument was live and the scoping genuinely works. It deletes the fix along with the
-leak, because **`(cta-m3a)` (`Checker.kt:3127`) splits the WRITER from the EMITTER**: the
-legacy statement-list walk writes `currentLocalTypes` and the SPINE anchor emits later, so a
-statement-list boundary closes before BOTH reads and there is no in-between to scope. The
-unblocker is therefore a boundary in the SPINE's cta traversal — `ctaSpineEnter`/`ctaSpineLeave`
-arms at a statement-position `Block` (spine mask + `scripts/spine_closure_audit.py`), or a
-`localScoped` `CtaFrame` per block, which is a program-wide change to every narrowing and
-every recorded local. `ctaSpineLeave`'s own (CHK.64)(ii) comment already refuses a narrowing
-write there for the same reason.
-
-**TWO INDEPENDENT RESIDUES FOUND ON THE WAY, BOTH MEASURED AGAINST THREE COMPILERS.** (i) An
-**ANNOTATED function-body local** misses TS2339 with NO shadowing and NO nesting at all —
-`function h(){ const ann: { a: number } = { a: 1 }; ann.zzzNope }` — and it is exactly ONE
-cell of four: the un-annotated body-local, the annotated FILE-LEVEL and the un-annotated
-file-level all report correctly. Now (CHK.121). (ii) The after-block leak ALREADY EXISTS for
-the un-annotated spelling on the unchanged binary, so the patch would have extended an
-existing wrong answer rather than opening a class — which is what makes (i) and the leak two
-facts about the same recorder rather than one.
-
-**ABLATION of the refused patch, kept for whoever unblocks it**: 8 arms over 15 pins — the
-fix OFF reddens exactly the 10 defect pins with all 5 controls green; two arms redden only
-their own pin (and one of those, the enclosing-parameter refusal, read 0 RED until a fixture
-was built FOR it — a round-927 pair masked by another gate); and the arm that WIDENS the gate
-to every nested declaration is **0 RED / UNDISCRIMINATED**, because with no outer declaration
-the entry is null and the first-wins branch already handles it — its real risk is off-fixture
-and the 8-profile grid is its only instrument.
-
-**NEXT**: (CHK.121) is new, small and independent. (CHK.119) and (CHK.120) are (P18.66)'s
-residues. (CHK.118) is now BLOCKED with its unblocker named, and the queue item says so.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1015,8 +1027,16 @@ to. The (P18.44) restore had placed it directly ABOVE the first queue item, wher
 ORDER, or the first queue item is missing — a doc invariant is only as good as the thing that
 notices it is gone.
 
-- [ ] **(CHK.133) `Signature.thisParameter` — THE MODEL CHANGE (CHK.97) D6 IS BLOCKED ON (promoted 2026-09-12,
-  (P18.77)).** `Signature` (`Type.kt:318`) has no `thisParameter`, so a `this:` pseudo-parameter is dropped by
+- [ ] **(CHK.133) (a) MODEL + (c) CALL SITE LANDED 2026-09-12 ((P18.78) note) — `Signature.thisType` carried
+  through all 28 `Signature(` constructions, the four instantiators and `MemberResolver`; the union arm intersects
+  members' `this` types (identity-deduped); `checkThisArgumentOfCall` emits TS2684 at a single-signature call
+  (reach 0 on every profile and library — a CONTROL); `extractThisParam` renders the RESOLVED `this`. **REMAINING:
+  (b)** the relation's `this` leg (tsc `compareSignaturesRelated`: a source `this` other than `void` must relate to the
+  target's, bivariant unless `strictFunctionTypes` and a non-method; chain line *The 'this' types of each signature
+  are incompatible.*), and the **`.call/.apply/.bind` consumer** (lib `CallableFunction` under `strictBindCallApply`;
+  today `f.call` types `any`). Residues: an optional-chain receiver (`o?.f` types `any`), a `this` type mentioning a
+  type parameter (no inference at the check), overload sets not `this`-checked, one-level elaboration. ORIGINAL:
+  `Signature.thisParameter` — THE MODEL CHANGE (CHK.97) D6 IS BLOCKED ON (promoted 2026-09-12, (P18.77)).** `Signature` (`Type.kt:318`) has no `thisParameter`, so a `this:` pseudo-parameter is dropped by
   `getParameterSymbols` and invisible to every consumer; `code = 2684` has 0 sites. THREE consumers need it, each a
   separate deliverable, sized against tsc (checker.ts `getThisTypeOfSignature`, `compareSignaturesRelated`'s
   `this` leg, `getUnionSignatures` intersecting `this` types, `checkCallExpression`'s TS2684 *The 'this' context of
@@ -1033,7 +1053,7 @@ notices it is gone.
   parameters — the grid is likely a REAL gate here) and both libraries; pins per consumer; ablation per deliverable.
   Back-pointer: (CHK.97) D6 (`unionTypeCallSignatures5/6`, the union intersection that produces TS2684).
 
-- [ ] **(CHK.97) D5 CLOSED 2026-09-12 ((P18.77) note) — inference through a union-combined signature: PASS 2's
+- [x] **(CHK.97) CLOSED 2026-09-12 ((P18.78) note: D6 landed through (CHK.133)(a) — `unionTypeCallSignatures5/6` byte-identical to pristine; D1 rejected on a measurement; D2/D2b/D3/D4/D5 in (P18.71)-(P18.77)). D5 CLOSED 2026-09-12 ((P18.77) note) — inference through a union-combined signature: PASS 2's
   callback parameter is an INTERSECTION of function types and the single-TP inference's candidate gatherer demanded
   an anonymous `Type.Object`; `inferenceParamType` now presents it as one anonymous function type carrying the
   `getIntersectedSignatures` fold (memoized per intersection id). Four families `missing → agree`, the PASS-2 pair

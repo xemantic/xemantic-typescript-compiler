@@ -539,7 +539,7 @@ internal class MemberResolver(
                                 }
                                 scope
                             } else checker.currentTypeParamScope
-                            val (returnType, paramSymbols) = checker.withInstantiationContext(checker.scopeMapper(sigScope)) {
+                            val (returnType, paramSymbols, sigThisType) = checker.withInstantiationContext(checker.scopeMapper(sigScope)) {
                                 // Resolve sig-own TP constraints/defaults under combined scope
                                 sigOwnTps?.forEachIndexed { i, tp ->
                                     member.typeParameters[i].constraint?.let { tp.constraint = checker.getTypeFromTypeNode(it) }
@@ -547,14 +547,8 @@ internal class MemberResolver(
                                 }
                                 val rt = member.type?.let { checker.getTypeFromTypeNode(it) } ?: anyType
                                 val ps = checker.getParameterSymbols(member.parameters)
-                                for ((pi, param) in ps.withIndex()) {
-                                    if (pi < member.parameters.size) {
-                                        member.parameters[pi].type?.let { typeNode ->
-                                            symbolTypes[param.id] = checker.getTypeFromTypeNode(typeNode)
-                                        }
-                                    }
-                                }
-                                rt to ps
+                                checker.resolveParameterTypesInScope(ps, member.parameters)
+                                Triple(rt, ps, checker.declaredThisType(member.parameters))
                             }
                             val newSig = Signature(
                                 declaration = member,
@@ -562,6 +556,7 @@ internal class MemberResolver(
                                 parameters = paramSymbols,
                                 resolvedReturnType = returnType,
                                 minArgumentCount = checker.requiredParameterCount(member.parameters),
+                                thisType = sigThisType,
                             )
                             if (name.isEmpty()) ownCallSignatures.add(newSig)
                             else ownConstructSignatures.add(newSig)

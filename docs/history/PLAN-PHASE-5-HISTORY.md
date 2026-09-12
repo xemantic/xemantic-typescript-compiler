@@ -1,3 +1,84 @@
+### Round (P18.67) — (CHK.118) REFUSED with measurements, and the receipt matrix was the thing that was wrong (2026-09-11)
+
+**No code landed and that is the finding.** Suite unchanged at 18,573 / 0 / 3, tree clean, the
+binary byte-identical to (P18.66)'s pushed `Checker.class`. Artifacts kept OUT of the tree in
+`scratchpad/agent3/REFUSED-*.kt` plus the two matrices in `scratchpad/g/` and `scratchpad/h/`.
+
+**THE DEFECT IS REAL AND WAS REPRODUCED**: a variable declared in a nested `{ }`, an `if`
+block or a `namespace` body, SHADOWING a file-level one, is read as the OUTER declaration —
+9 ours-only / 19 missing over 36 cells, `file` and `fnTop` both 0/0, both references agreeing
+on all 36. **Two of the queue item's claims were wrong**: it is `const`, `let` AND `var`
+alike (identical rows, so not a const-ness question), and the UN-ANNOTATED spelling is
+already nearly correct — which localises the axis to the ANNOTATION and was the lead that
+found the recorder. **And the item's own probe shape was load-bearing in a way it did not
+say**: a PRIMITIVE-target probe reads all 36 cells CLEAN, so only an object-typed MEMBER read
+reproduces it at all. A first pass with the obvious probe would have closed the item as
+already-fixed.
+
+**THE MECHANISM, WHICH IS A ONE-LINE GUARD**: `checkVarDeclAssignabilityCore`'s annotated
+recorder is FIRST-DECL-WINS (`if (currentLocalTypes[name.text] == null)`), so a nested
+shadowing declaration always loses the race to the file-level entry. None of the four shadow
+mechanisms CLAUDE.md enumerates covers it — a file-level declaration makes round 455's
+`outerBound` AND `currentLocalTypes.containsKey` both true, so neither of its arms admits it;
+round 351 covers a function body's TOP level only; round 460 covers a name declared twice in
+ONE body — and the shadow family is not dispatched for a `ModuleBlock` at all, which is why
+3 of the 9 cells are unreachable from it.
+
+**WHY IT IS REFUSED, AND THE RECEIPT IS THE PART THAT WAS WRONG.** Relaxing the guard fixes
+every IN-BLOCK read and MOVES the wrong answer OUTSIDE the block, where it can be a
+**confident false positive on legal code**: with the shadowed member present on BOTH types,
+`const pAfter: number = zzzV.shared` after the block is legal and the patched binary reports
+`Type 'string' is not assignable to type 'number'`, while losing a true row pristine does
+report. **The 36-cell matrix cannot see any of that, because every one of its probes is
+INSIDE the block.** Re-measured with an after-block read added to all 18 cells
+(`scratchpad/h/`): parent **2 ours-only / 22 missing** against the patch's **0 / 20** — i.e.
++2/+2, a LATERAL move on `const`/`let` annotated (missing stays 3; the in-block row gained,
+the after-block row lost) with the whole net gain in `var`. Not worth a leak.
+
+**THE IMPLEMENTER'S CORRECTION TO THE COORDINATOR, ACCEPTED AND VERIFIED**: the PARENT also
+false-positives on legal code — probe5's lines 5 and 12 are legal and the parent reports both
+where pristine reports only line 14 — so the FP class **MOVES** rather than appearing from a
+clean baseline (2 FP + 1 TP becomes 1 FP + 1 missing). The coordinator's "the fix introduces
+a new false positive" was true and unfair; and the 18-cell matrix weights one in-block read
+against one after-block read, which over-weights the after-block case relative to real code,
+since a shadowing declaration exists to be read inside its block. The verdict is unchanged
+and the framing is fairer.
+
+**SCOPING IT WAS ATTEMPTED AND IS MEASURED INERT — THIS IS THE ROUND'S MOST REUSABLE
+FINDING.** A purpose-built undo log (only the names the predicate admits; NOT `AnnScopeStack`
+and NOT `MapScopeStack`, which CLAUDE.md refuses for `currentLocalTypes`), pushed and popped
+per `checkTypeAssignabilityInStatements`, reads **identical to the parent on both matrices**
+— and its positive control FIRED (the after-block read went back to pristine's exact answer),
+so the instrument was live and the scoping genuinely works. It deletes the fix along with the
+leak, because **`(cta-m3a)` (`Checker.kt:3127`) splits the WRITER from the EMITTER**: the
+legacy statement-list walk writes `currentLocalTypes` and the SPINE anchor emits later, so a
+statement-list boundary closes before BOTH reads and there is no in-between to scope. The
+unblocker is therefore a boundary in the SPINE's cta traversal — `ctaSpineEnter`/`ctaSpineLeave`
+arms at a statement-position `Block` (spine mask + `scripts/spine_closure_audit.py`), or a
+`localScoped` `CtaFrame` per block, which is a program-wide change to every narrowing and
+every recorded local. `ctaSpineLeave`'s own (CHK.64)(ii) comment already refuses a narrowing
+write there for the same reason.
+
+**TWO INDEPENDENT RESIDUES FOUND ON THE WAY, BOTH MEASURED AGAINST THREE COMPILERS.** (i) An
+**ANNOTATED function-body local** misses TS2339 with NO shadowing and NO nesting at all —
+`function h(){ const ann: { a: number } = { a: 1 }; ann.zzzNope }` — and it is exactly ONE
+cell of four: the un-annotated body-local, the annotated FILE-LEVEL and the un-annotated
+file-level all report correctly. Now (CHK.121). (ii) The after-block leak ALREADY EXISTS for
+the un-annotated spelling on the unchanged binary, so the patch would have extended an
+existing wrong answer rather than opening a class — which is what makes (i) and the leak two
+facts about the same recorder rather than one.
+
+**ABLATION of the refused patch, kept for whoever unblocks it**: 8 arms over 15 pins — the
+fix OFF reddens exactly the 10 defect pins with all 5 controls green; two arms redden only
+their own pin (and one of those, the enclosing-parameter refusal, read 0 RED until a fixture
+was built FOR it — a round-927 pair masked by another gate); and the arm that WIDENS the gate
+to every nested declaration is **0 RED / UNDISCRIMINATED**, because with no outer declaration
+the entry is null and the first-wins branch already handles it — its real risk is off-fixture
+and the 8-profile grid is its only instrument.
+
+**NEXT**: (CHK.121) is new, small and independent. (CHK.119) and (CHK.120) are (P18.66)'s
+residues. (CHK.118) is now BLOCKED with its unblocker named, and the queue item says so.
+
 ### Round (P18.66) — (INV.0) step 10b-iii: the TS2693 the item says we never emit, and TWO resolvers disagreeing about ONE receiver (2026-09-10)
 
 **Suite 18,546 → 18,573 / 0 / 3** (+12 and +13 pins, +2 from splitting a countdown

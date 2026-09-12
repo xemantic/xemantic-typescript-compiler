@@ -3135,3 +3135,35 @@ taken: an ablation arm is not an implemented fix with pins.** Ablation 5 arms wi
 controls; a3 recorded as a REDUNDANT GUARD and structurally so; a2 recorded as a DEAD ARM
 for the round's own pin set. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit
 0 (844), warning-clean.
+
+**(P18.73) — (CHK.97) D2b: THE SILENCE THAT HID A TRUE POSITIVE, AND A DESIGN DECIDED BY *BUILDING* THE ALTERNATIVE, 18,688 / 0 / 3 (2026-09-11).**
+**THREE LINES OF CODE**: the `>= 2` emit and the separate `>= 1` silence collapse into one
+branch, because tsc's PASS 2 refuses for TWO reasons and only one of them is "more than one
+overload set" — it also refuses on GENERIC INCOMPATIBILITY, where both references print the
+identical TS2349 + chain and we were silent. **THE DESIGN QUESTION WAS SETTLED BY BUILDING
+THE REJECTED ALTERNATIVE.** An instrumented binary that actually threads the refusal reason
+out of `computeCombinedUnionSignatures` agrees with the recomputed `count` on **21 of 21**
+reachable refusals, and structurally must; the thread is recorded as a refusal WITH ITS
+NUMBER rather than as a preference. That census build was behaviour-neutral (18,679/0/3,
+exactly the baseline), which is what makes its counts trustworthy. **TWO OF THE ITEM'S
+CLAIMS WERE WRONG, BOTH TOWARD THE CHANGE LOOKING RISKIER THAN IT IS**: the surviving
+silence's stated justification (`unionOfArraysFilterCall`) is FALSE — that shape never
+reaches the branch at all, stage 2's array fallback answers it first — and
+`overloadedMembers == 1` is reached **ZERO times** by the whole suite, all eight profiles,
+cronstrue AND marked, so the widening cannot move a baseline and the pins are its only gate.
+**RECEIPT: missing 8 → 0, ours-only 0, agree 12 → 15 — AND `text-diff` MOVES 1 → 6, WHICH
+THE ROUND FLAGS RATHER THAN BURIES.** Five of the eight recovered rows land at the right
+file, line, COLUMN and code with the wrong display, every one of them the same pre-existing
+(CHK.130) defect (`ZzzA | (ZzzG)` for `ZzzA | ZzzG`); a fixture whose four rows differ only
+in whether the member carries a property proves it is not a D2b defect, since the three that
+do are byte-identical AGREE. So eight SILENT rows become three exact and five differing only
+in parentheses — a meaning gain with a form residue, six instances louder because a
+diagnostic that never fired could not display anything wrong. **THE GRID IS A CONTROL AND
+THE CENSUS SAYS SO IN THE STRONGEST FORM YET**: zero union-callee combination refusals OF
+ANY KIND on all eight profiles, cronstrue and marked. **ABLATION: 5 arms, EACH against the
+FULL SUITE** (P18.72's own lesson), both controls; b5 proves last round's `>= 2` threshold
+is load-bearing. **b4 is the interesting arm and is a refusal on SCOPE, not evidence**:
+collapsing the whole `differ` tail is 0 RED on the full suite — evidence FOR it — and it was
+still refused as (CHK.94) territory, with the number written into the branch comment so the
+next round starts from a measurement. Grid 8×`added=0 removed=0`, cost_gate exit 0,
+huge_methods exit 0 (844), warning-clean.

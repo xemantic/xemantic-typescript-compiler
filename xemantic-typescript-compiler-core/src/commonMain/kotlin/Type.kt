@@ -322,6 +322,21 @@ class Signature(
     var resolvedReturnType: Type? = null,
     val minArgumentCount: Int = 0,
     val isAbstract: Boolean = false,
+    /**
+     * (CHK.133)(a) The declared `this` PSEUDO-PARAMETER's type — tsc's
+     * `Signature.thisParameter` read through `getThisTypeOfSignature` — or null where
+     * the declaration spells none. It is NOT a call argument, so [parameters] keeps
+     * EXCLUDING it (every builder drops it, `Checker.getParameterSymbols`) and
+     * [minArgumentCount] never counts it. An un-annotated `this` parameter is `any`.
+     * Built by every declaration-reading builder from the parameter named `this`
+     * (`Checker.declaredThisType`), instantiated with the rest by `TypeInstantiator`,
+     * INTERSECTED across the members of a union-combined signature and UNIONED across
+     * an intersection-combined one (tsc's `combineUnionThisParam` /
+     * `combineIntersectionThisParam`). Readers: the call-site TS2684 check
+     * (`Checker.checkThisArgumentOfCall`) and `compareSignaturesIdentical`'s `this`
+     * arm; the signature RELATION does not read it yet ((CHK.133)(b)).
+     */
+    val thisType: Type? = null,
 ) {
     /**
      * (CHK.97) Was this signature SYNTHESIZED by `Checker.combineUnionSignatures`

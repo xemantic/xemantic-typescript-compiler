@@ -10384,6 +10384,7 @@ class Checker(
             parameters = sigParams,
             resolvedReturnType = returnType,
             minArgumentCount = requiredParameterCount(fnDecl.parameters),
+            thisType = declaredThisType(fnDecl.parameters),
         )
         val obj = Type.Object()
         obj.callSignatures = listOf(sig)
@@ -36301,13 +36302,15 @@ class Checker(
             }
             val head = first
             if (head == null) first = sig
-            else if (!compareSignaturesIdentical(head, sig, partialMatch = false, ignoreReturnTypes = true)) {
+            else if (!compareSignaturesIdentical(head, sig, partialMatch = false, ignoreReturnTypes = true, ignoreThisTypes = true)) {
                 return UnionCtxSignature(null, true)
             }
             list.add(sig)
         }
         val head = first ?: return UnionCtxSignature(null, false)
-        return UnionCtxSignature(if (list.size == 1) head else createUnionSignature(head, list), false)
+        // tsc's `createUnionSignature` keeps the HEAD's own `this` parameter here (the
+        // contextual union ignores `this` types by construction).
+        return UnionCtxSignature(if (list.size == 1) head else createUnionSignature(head, list, head.thisType), false)
     }
 
     /** tsc's `isAritySmaller`: a signature with fewer parameters than the arrow REQUIRES
@@ -109520,12 +109523,20 @@ interface DataView {
                                 symbolTypes[sym.id] = paramType
                                 sym
                             }
+                            // (CHK.133)(a) the `this` pseudo-parameter follows the receiver's
+                            // type arguments like every other annotation here — this is the
+                            // path a `zzzBoxN.m` access resolves through, so it is where
+                            // `this: ZzzBox<T>` becomes `ZzzBox<number>`.
+                            val rawThis = declaredThisType(md.parameters)
+                            val thisType = if (rawThis == null || rawThis === errorType) rawThis
+                                           else instantiateType(rawThis, mapper)
                             Signature(
                                 declaration = md,
                                 typeParameters = methodTypeParams,
                                 parameters = params,
                                 resolvedReturnType = returnType,
                                 minArgumentCount = requiredParameterCount(md.parameters),
+                                thisType = thisType,
                             )
                         }
                     }
@@ -111300,6 +111311,7 @@ interface DataView {
                     val sig = Signature(
                         declaration = prop, parameters = params, resolvedReturnType = returnType,
                         minArgumentCount = requiredParameterCount(prop.parameters),
+                        thisType = declaredThisType(prop.parameters),
                     )
                     val ft = Type.Object()
                     ft.callSignatures = listOf(sig)
@@ -113563,7 +113575,7 @@ interface DataView {
                             }
                             scope
                         } else currentTypeParamScope
-                        val (returnType, paramSymbols) = withInstantiationContext(scopeMapper(mdScope)) {
+                        val (returnType, paramSymbols, mdThisType) = withInstantiationContext(scopeMapper(mdScope)) {
                             // Resolve constraints/defaults AFTER scope is set
                             typeParams?.forEachIndexed { i, tp ->
                                 md.typeParameters[i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
@@ -113580,14 +113592,8 @@ interface DataView {
                                     md.body?.let { b -> if (bodyHasReturnValue(b)) inferReturnTypeFromBody(b) else null }
                                         ?: anyType)
                             val ps = getParameterSymbols(md.parameters)
-                            for ((pi, param) in ps.withIndex()) {
-                                if (pi < md.parameters.size) {
-                                    md.parameters[pi].type?.let { typeNode ->
-                                        symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
-                                    }
-                                }
-                            }
-                            rt to ps
+                            resolveParameterTypesInScope(ps, md.parameters)
+                            Triple(rt, ps, declaredThisType(md.parameters))
                         }
                         Signature(
                             declaration = md,
@@ -113595,6 +113601,7 @@ interface DataView {
                             parameters = paramSymbols,
                             resolvedReturnType = returnType,
                             minArgumentCount = requiredParameterCount(md.parameters),
+                            thisType = mdThisType,
                         )
                     }
                 } else {
@@ -113604,6 +113611,7 @@ interface DataView {
                         parameters = getParameterSymbols(decl.parameters),
                         resolvedReturnType = returnType,
                         minArgumentCount = requiredParameterCount(decl.parameters),
+                        thisType = declaredThisType(decl.parameters),
                     ))
                 }
                 fnType
@@ -113709,7 +113717,7 @@ interface DataView {
             // (number from arithmetic, string from string literal, etc.), use that inferred
             // type. Lets `function f() { return x * 2 }` infer `() => number` so a caller's
             // `f().length` fires TS2339 against the primitive `number`.
-            val (returnType, paramSymbols) = withInstantiationContext(scopeMapper(fnScope)) {
+            val (returnType, paramSymbols, declThisType) = withInstantiationContext(scopeMapper(fnScope)) {
                 // Resolve constraints AFTER scope is set (constraints may reference other type params)
                 // Guard against clobbering already-set constraint/default from another interning site.
                 typeParams?.forEachIndexed { i, tp ->
@@ -113758,7 +113766,7 @@ interface DataView {
                         }
                     }
                 }
-                rt to ps
+                Triple(rt, ps, declaredThisType(decl.parameters))
             }
             Signature(
                 declaration = decl,
@@ -113768,6 +113776,7 @@ interface DataView {
                 // Round 460: a `this` pseudo-parameter is not a call argument — do not
                 // count it toward the required arity.
                 minArgumentCount = requiredParameterCount(decl.parameters),
+                thisType = declThisType,
             )
         } } finally {
             if (fnNsPushed) inferenceNamespaceStack.removeLast()
@@ -113828,6 +113837,54 @@ interface DataView {
             sym.declarations.add(param)
             sym.valueDeclaration = param
             sym
+        }
+    }
+
+    /**
+     * (CHK.133)(a) The type of [params]'s `this` PSEUDO-PARAMETER (tsc's
+     * `getSignatureFromDeclaration`: `i === 0 && paramSymbol.escapedName ===
+     * InternalSymbolName.This`), resolved in the CURRENT type-parameter scope — so a
+     * builder must call it INSIDE the same `withInstantiationContext` its parameter
+     * types are resolved in, or a `this: Box<T>` annotation resolves `T` to nothing.
+     * Null where no `this` parameter is declared; an un-annotated one is `any` (tsc:
+     * the parameter symbol's implicit-any type). This is the ONE reader of the `this`
+     * parameter's annotation — [getParameterSymbols] drops the parameter and every
+     * positional zip skips it ([resolveParameterTypesInScope]).
+     */
+    internal fun declaredThisType(params: List<Parameter>): Type? {
+        val first = params.firstOrNull() ?: return null
+        if ((first.name as? Identifier)?.text != "this") return null
+        return first.type?.let { getTypeFromTypeNode(it) } ?: anyType
+    }
+
+    /**
+     * (CHK.133)(a) Resolve the parameter symbols' annotated types into `symbolTypes`
+     * in the current scope — the positional zip every signature builder carried
+     * inline, with the round-460/730 `this` rule applied UNIFORMLY: a parameter list
+     * headed by a `this` pseudo-parameter resolves each symbol from its OWN
+     * declaration, because [getParameterSymbols] dropped that parameter and the
+     * positional zip would otherwise hand `this`'s annotation to the first real
+     * parameter (measured before this round on an INTERFACE method and a CLASS
+     * method: `m(this: { k: number }, x: string)` read `x: { k: number }` and reported
+     * a false TS2345 on every call). The no-`this` branch is the legacy zip VERBATIM —
+     * a binding-pattern parameter is dropped from [ps] too, and the positional shift
+     * is what the call-site alignment relies on for leading destructured parameters.
+     */
+    internal fun resolveParameterTypesInScope(ps: List<Symbol>, params: List<Parameter>) {
+        if ((params.firstOrNull()?.name as? Identifier)?.text == "this") {
+            for (param in ps) {
+                (param.valueDeclaration as? Parameter)?.type?.let { typeNode ->
+                    symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                }
+            }
+        } else {
+            for ((pi, param) in ps.withIndex()) {
+                if (pi < params.size) {
+                    params[pi].type?.let { typeNode ->
+                        symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                    }
+                }
+            }
         }
     }
 
@@ -124427,6 +124484,7 @@ interface DataView {
                         parameters = params,
                         resolvedReturnType = returnType,
                         minArgumentCount = requiredParameterCount(prop.parameters),
+                        thisType = declaredThisType(prop.parameters),
                     )
                     val methodType = Type.Object()
                     methodType.callSignatures = listOf(sig)
@@ -125621,7 +125679,7 @@ interface DataView {
             }
             scope
         } else currentTypeParamScope
-        val (returnType, params) = withInstantiationContext(scopeMapper(exprScope)) {
+        val (returnType, params, exprThisType) = withInstantiationContext(scopeMapper(exprScope)) {
             val ps = getParameterSymbols(expr.parameters, forSignatureDisplay = true)
             sigTypeParams?.forEachIndexed { i, tp ->
                 expr.typeParameters[i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
@@ -125644,7 +125702,7 @@ interface DataView {
                     !hasReturnWithExpression(expr.body) -> voidType
                     else -> inferReturnTypeFromFunctionExpressionBody(expr, ps) ?: anyType
                 })
-            rt to ps
+            Triple(rt, ps, declaredThisType(expr.parameters))
         }
         // Apply contextual typing: infer parameter types from contextual call signature
         applyContextualParameterTypes(params, expr.parameters)
@@ -125654,6 +125712,7 @@ interface DataView {
             parameters = params,
             resolvedReturnType = returnType,
             minArgumentCount = requiredParameterCount(expr.parameters),
+            thisType = exprThisType,
         )
         val fnType = Type.Object()
         fnType.callSignatures = listOf(sig)
@@ -130866,6 +130925,12 @@ interface DataView {
         }
         val first = astParams.firstOrNull() ?: return null
         if ((first.name as? Identifier)?.text != "this") return null
+        // (CHK.133)(a) an INSTANTIATED signature renders its instantiated `this` — the
+        // receiver of `zzzBoxN.m` displays `(this: ZzzBox<number>, x: number) => void` in
+        // both references, and the declaration's own text would print `ZzzBox<T>`. A
+        // signature that carries no resolved `this` type keeps the annotation's text.
+        val resolved = sig.thisType
+        if (resolved != null && resolved !== errorType) return "this: ${typeToString(resolved)}"
         val typeStr = first.type?.let { formatTypeForDisplay(it) } ?: "any"
         return "this: $typeStr"
     }
@@ -142562,6 +142627,7 @@ interface DataView {
             parameters = paramSymbols,
             resolvedReturnType = returnType,
             minArgumentCount = requiredParameterCount(params),
+            thisType = declaredThisType(params),
         )
         fnType.callSignatures = listOf(sig)
         return fnType
@@ -155028,6 +155094,9 @@ interface DataView {
         }
         if (signatures.size == 1) {
             CallSections.at(CallSections.SINGLE_SIG)
+            // (CHK.133)(c) tsc's `getSignatureApplicabilityError` checks the `this`
+            // argument BEFORE any parameter, and a failure consumes the call.
+            if (checkThisArgumentOfCall(expr, calleeExpr, signatures[0], source, fileName)) return
             // B98.r125: TS2345 for a call whose callee's last parameter is a rest
             // parameter typed exactly `never` (the bottom type — NOT `never[]`).
             // Such a signature is uncallable: the supplied argument tuple is never
@@ -155129,6 +155198,180 @@ interface DataView {
             val ovlT = CallSections.t()
             checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName, expr.expression)
             CallSections.close(CallSections.N_OVERLOAD_ARGS, ovlT)
+        }
+    }
+
+    /**
+     * (CHK.133)(c) tsc's `this`-argument check (checker.ts `getSignatureApplicabilityError`,
+     * `getThisArgumentOfCall`, `getThisArgumentType`): a call whose ONE signature declares
+     * a `this` type must supply a receiver assignable to it — the `x` of `x.f(…)` /
+     * `x["f"](…)` (parentheses skipped), or `void` for a bare `f(…)`. Emits TS2684 *The
+     * 'this' context of type 'S' is not assignable to method's 'this' of type 'T'.* at the
+     * RECEIVER (at the whole call when there is none) and answers true, which CONSUMES
+     * the call: tsc reports nothing per argument for a signature whose `this` failed.
+     *
+     * Skipped, exactly as tsc skips: a `void` `this` (anything is compatible), a `new`
+     * expression (not this funnel) and a `super.m(…)` receiver. Skipped CONSERVATIVELY,
+     * beyond tsc: an `any`/error receiver, and a `this` type that MENTIONS a type
+     * parameter — tsc checks the INSTANTIATED candidate, and this funnel has not
+     * inferred the signature's type arguments at this point (`zzzBoxN.g("s")` against
+     * `<T>(this: ZzzBox<T>, x: T)` is a recorded residue). An OVERLOAD SET is not
+     * checked here at all (tsc checks each candidate's applicability; recorded residue).
+     *
+     * The head line is tsc's own; the chain is the relation's FIRST failing
+     * constituent elaborated one level ([thisArgumentMismatchChain]).
+     *
+     * MEASURED on pristine `typescript@6.0.3`, which is honoured over tsgo 7.0.2 here:
+     * tsgo prints the elaboration's LEAF as its own row (TS2741/TS2739) for the
+     * receiver-shaped case — round 938's divergence law, `unionTypeCallSignatures6:39`.
+     */
+    private fun checkThisArgumentOfCall(
+        expr: CallExpression,
+        calleeExpr: Expression,
+        sig: Signature,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        val thisType = sig.thisType ?: return false
+        if (thisType === voidType || thisType === anyType || thisType === errorType) return false
+        if (typeMentionsAnyTypeParam(thisType)) return false
+        var callee = calleeExpr
+        while (callee is ParenthesizedExpression) callee = callee.expression
+        val receiver: Expression? = when (callee) {
+            is PropertyAccessExpression -> callee.expression
+            is ElementAccessExpression -> callee.expression
+            else -> null
+        }
+        if (receiver is Identifier && receiver.text == "super") return false
+        val receiverType: Type
+        if (receiver == null) {
+            receiverType = voidType
+        } else {
+            var t = getTypeOfExpression(receiver)
+            if (t === anyType || t === errorType) return false
+            // tsc: an OPTIONAL chain reads the receiver's non-nullable type.
+            if (t is Type.Union && calleeChainIsOptional(callee)) {
+                val kept = t.types.filter { !isNullishConstituent(it) }
+                t = when {
+                    kept.isEmpty() -> t
+                    kept.size == 1 -> kept[0]
+                    else -> getUnionType(kept)
+                }
+            }
+            receiverType = t
+        }
+        if (checkTypeRelatedTo(receiverType, thisType, assignableRelation)) return false
+        val start = receiver?.pos ?: expr.pos
+        val length = (if (receiver != null) expressionTrueEnd(receiver) else expressionTrueEnd(expr)) - start
+        if (length <= 0) return false
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val srcDisplay = typeToString(receiverType)
+        val tgtDisplay = typeToString(thisType)
+        diagnostics.add(Diagnostic(
+            message = "The 'this' context of type '$srcDisplay' is not assignable to method's 'this' of type '$tgtDisplay'.",
+            category = DiagnosticCategory.Error, code = 2684,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+            messageChain = thisArgumentMismatchChain(receiverType, thisType),
+        ))
+        return true
+    }
+
+    /** (CHK.133)(c) Is any link of [callee]'s access chain an optional (`?.`) one? */
+    private fun calleeChainIsOptional(callee: Expression): Boolean {
+        var e: Expression? = callee
+        while (e != null) {
+            e = when (e) {
+                is PropertyAccessExpression -> { if (e.questionDotToken) return true; e.expression }
+                is ElementAccessExpression -> { if (e.questionDotToken) return true; e.expression }
+                is CallExpression -> { if (e.questionDotToken) return true; e.expression }
+                is ParenthesizedExpression -> e.expression
+                else -> null
+            }
+        }
+        return false
+    }
+
+    /** (CHK.133)(c) Does [type] mention a type parameter anywhere a relation would read it? */
+    private fun typeMentionsAnyTypeParam(type: Type, depth: Int = 0): Boolean {
+        if (depth > 8) return false
+        return when (type) {
+            is Type.TypeParam -> true
+            is Type.Reference -> type.resolvedTypeArguments?.any { typeMentionsAnyTypeParam(it, depth + 1) } == true
+            is Type.Union -> type.types.any { typeMentionsAnyTypeParam(it, depth + 1) }
+            is Type.Intersection -> type.types.any { typeMentionsAnyTypeParam(it, depth + 1) }
+            else -> false
+        }
+    }
+
+    /**
+     * (CHK.133)(c) The TS2684 elaboration, one level deep and measured against pristine
+     * `typescript@6.0.3`: the FIRST constituent of an intersection target the source fails
+     * (tsc's `eachTypeRelatedToType` reports the first failure), elaborated as the
+     * missing-property line where the source lacks a required member of it (one member
+     * `Property 'p' is missing in type 'S' but required in type 'C'.`, several the
+     * TS2740 wording), as the two-line `Types of property 'p' are incompatible.` where
+     * the member is present with an unrelated type, and otherwise — for a NON-trivial
+     * intersection only — as `Type 'S' is not assignable to type 'C'.`. A plain target
+     * with no property story (`void` against an interface, anything against `never`)
+     * gets no chain, which is what pristine prints. Deeper elaborations (a nested
+     * member's own mismatch) are not reproduced.
+     */
+    private fun thisArgumentMismatchChain(sourceType: Type, targetType: Type): List<String> {
+        val constituents = if (targetType is Type.Intersection) targetType.types else listOf(targetType)
+        val failing = constituents.firstOrNull { !checkTypeRelatedTo(sourceType, it, assignableRelation) }
+            ?: return emptyList()
+        val sourceDisplay = typeToString(sourceType)
+        val failingDisplay = typeToString(failing)
+        val sourceMembers = thisArgumentSourceMembers(sourceType)
+        if (failing is Type.Object && sourceMembers != null) {
+            resolveStructuredTypeMembers(failing)
+            val required = (failing.properties ?: emptyList()).filter {
+                !isOptionalProperty(it) && it.name !in OBJECT_PROTOTYPE_PROPERTIES
+            }
+            val missing = required.filter { it.name !in sourceMembers }
+            if (missing.size == 1) {
+                return listOf("  Property '${missing[0].name}' is missing in type '$sourceDisplay' but required in type '$failingDisplay'.")
+            }
+            if (missing.size > 1) {
+                return listOf("  " + formatTs2740Message(sourceDisplay, failingDisplay, missing.map { it.name }))
+            }
+            for (tp in failing.properties ?: emptyList()) {
+                val sp = sourceMembers[tp.name] ?: continue
+                val st = getTypeOfSymbol(sp)
+                val tt = getTypeOfSymbol(tp)
+                if (st === anyType || tt === anyType || st === errorType || tt === errorType) continue
+                if (!checkTypeRelatedTo(st, tt, assignableRelation)) {
+                    return listOf(
+                        "  Types of property '${tp.name}' are incompatible.",
+                        "    Type '${typeToString(st)}' is not assignable to type '${typeToString(tt)}'.",
+                    )
+                }
+            }
+        }
+        if (constituents.size > 1 && failing !== neverType) {
+            return listOf("  Type '$sourceDisplay' is not assignable to type '$failingDisplay'.")
+        }
+        return emptyList()
+    }
+
+    /** (CHK.133)(c) The source's own members by name — an object's, or an intersection's
+     *  constituents' merged; null where the source has no member table to speak of. */
+    private fun thisArgumentSourceMembers(sourceType: Type): Map<String, Symbol>? {
+        return when (sourceType) {
+            is Type.Object -> {
+                resolveStructuredTypeMembers(sourceType)
+                (sourceType.properties ?: emptyList()).associateBy { it.name }
+            }
+            is Type.Intersection -> {
+                val merged = HashMap<String, Symbol>()
+                for (c in sourceType.types) {
+                    val cm = thisArgumentSourceMembers(c) ?: return null
+                    for ((k, v) in cm) if (k !in merged) merged[k] = v
+                }
+                merged
+            }
+            else -> null
         }
     }
 
@@ -155727,15 +155970,21 @@ interface DataView {
     }
 
     /**
-     * (CHK.97) tsc's `compareSignaturesIdentical` (checker.ts:25397), minus the
-     * `this`-parameter arm — [Signature] has no `thisParameter` here, which is the
-     * one modelling gap this family records as OUT OF SCOPE (`unionTypeCallSignatures5/6`).
+     * (CHK.97) tsc's `compareSignaturesIdentical` (checker.ts:25397). (CHK.133)(a)
+     * added the `this`-parameter arm: unless [ignoreThisTypes], a source that declares a
+     * `this` type must have it related to the target's, WHERE THE TARGET DECLARES ONE —
+     * a `this`-less side matches anything (tsc: `if (sourceThisType) { if
+     * (targetThisType) … }`). `getUnionSignatures` compares with the arm ON, so two
+     * members whose `this` types differ are NOT one signature and fall to pass 2, where
+     * their `this` types are intersected; `getContextualSignature` compares with it OFF
+     * (`unionContextualSignature`), exactly as tsc passes `ignoreThisTypes = true` there.
      */
     private fun compareSignaturesIdentical(
         source: Signature,
         target: Signature,
         partialMatch: Boolean,
         ignoreReturnTypes: Boolean,
+        ignoreThisTypes: Boolean = false,
     ): Boolean {
         if (source === target) return true
         if (!isMatchingSignature(source, target, partialMatch)) return false
@@ -155757,6 +156006,13 @@ interface DataView {
             // parameter and return types, so `<T>(a: T) => T` and `<U>(a: U) => U` match.
             src = instantiateSignature(source, mapper)
         }
+        if (!ignoreThisTypes) {
+            val sourceThisType = src.thisType
+            if (sourceThisType != null) {
+                val targetThisType = target.thisType
+                if (targetThisType != null && !thisTypesIdentical(sourceThisType, targetThisType, partialMatch)) return false
+            }
+        }
         for (i in 0 until target.parameters.size) {
             val s = sigTypeAtPosition(src, i)
             val t = sigTypeAtPosition(target, i)
@@ -155768,6 +156024,27 @@ interface DataView {
             if (!sigCompareTypes(sr, tr, partialMatch)) return false
         }
         return true
+    }
+
+    /**
+     * (CHK.133)(a) The `this`-arm comparison of [compareSignaturesIdentical]. For the EXACT
+     * attempt a COMPOSITE `this` type (an intersection or a union) is identical only to a
+     * composite with the SAME constituents by identity — tsc's `identityRelation` says
+     * `A & B & C` and `A & B` are different types, and ours answers them related (its
+     * identity leg is structural over intersections), which made `(this: A & B & C)` the
+     * pass-1 match of `(this: A & B)` and printed `A & B & C` where pristine prints `A & B`
+     * (`unionTypeCallSignatures6:55`). Every other case keeps [sigCompareTypes]: the
+     * partial attempt compares by subtype exactly as tsc's `compareTypesSubtypeOf` does.
+     */
+    private fun thisTypesIdentical(a: Type, b: Type, partialMatch: Boolean): Boolean {
+        if (a === b) return true
+        if (!partialMatch && (a is Type.Intersection || a is Type.Union || b is Type.Intersection || b is Type.Union)) {
+            val am = when (a) { is Type.Intersection -> a.types; is Type.Union -> a.types; else -> listOf(a) }
+            val bm = when (b) { is Type.Intersection -> b.types; is Type.Union -> b.types; else -> listOf(b) }
+            if ((a is Type.Union) != (b is Type.Union)) return false
+            return am.size == bm.size && am.all { x -> bm.any { it === x } }
+        }
+        return sigCompareTypes(a, b, partialMatch)
     }
 
     /** (CHK.97) tsc's `findMatchingSignature` (checker.ts:14271). */
@@ -155816,14 +156093,62 @@ interface DataView {
      * drops `never` (so `never | void` is `void`, the `assertNever`-beside-a-void-member
      * shape) which is what tsc's `UnionReduction.Subtype` does for that pair.
      */
-    private fun createUnionSignature(signature: Signature, unionSignatures: List<Signature>): Signature =
+    private fun createUnionSignature(signature: Signature, unionSignatures: List<Signature>, thisType: Type?): Signature =
         Signature(
             declaration = signature.declaration,
             typeParameters = signature.typeParameters,
             parameters = signature.parameters,
             resolvedReturnType = getUnionType(unionSignatures.map { it.resolvedReturnType ?: anyType }),
             minArgumentCount = signature.minArgumentCount,
+            thisType = thisType,
         ).also { it.fromUnionCombination = true }
+
+    /**
+     * (CHK.133)(a) tsc's `getUnionSignatures` `this` rule for a PASS-1 match: where ANY
+     * matched member declares a `this` type, the combined signature's is the
+     * INTERSECTION of the members' declared ones (a member without one contributes
+     * nothing); where none does, [signature]'s own (null). Permissive when calling, as
+     * tsc's own comment says — the receiver must satisfy every member's `this`.
+     */
+    private fun unionSignaturesThisType(signature: Signature, unionSignatures: List<Signature>): Type? {
+        val declared = unionSignatures.mapNotNull { it.thisType }
+        if (declared.isEmpty()) return signature.thisType
+        return intersectThisTypes(declared)
+    }
+
+    /**
+     * (CHK.133)(a) [getIntersectionType] over `this` types with the constituents first
+     * FLATTENED and deduplicated by IDENTITY. tsc's `addTypeToIntersection` keys by type
+     * id, so `(this: A) | (this: A)` gives `A` and `(this: A & B) | (this: A & B & C)`
+     * gives `A & B & C`; ours exempts an ANONYMOUS object constituent from its id dedupe
+     * ((CHK.106)(b) — two `{ p: number }` NODES are one interned type here), and a `type
+     * A = { a: string }` alias IS such a constituent, so without this step the union of
+     * two members declaring `this: A` displayed `A & A` and `unionTypeCallSignatures6`
+     * read `A & A & B` / `A & B & A & B & C` where pristine prints `A & B`. Identity is
+     * the right key: the SAME declared alias reaches both members as one instance, and
+     * two distinct declarations of one shape are still kept apart, as tsc keeps them.
+     */
+    private fun intersectThisTypes(types: List<Type>): Type {
+        val flat = ArrayList<Type>(types.size)
+        for (t in types) {
+            val parts = if (t is Type.Intersection) t.types else listOf(t)
+            for (p in parts) if (flat.none { it === p }) flat.add(p)
+        }
+        return if (flat.size == 1) flat[0] else getIntersectionType(flat)
+    }
+
+    /**
+     * (CHK.133)(a) tsc's `combineUnionThisParam` / `combineIntersectionThisParam`: a
+     * side without a `this` type yields to the other; both declared, a UNION callee's
+     * are INTERSECTED (the receiver must satisfy both) and an INTERSECTION contextual
+     * type's are UNIONED (the callback may be called with either), the right one
+     * instantiated onto the left's type parameters exactly as its parameters are.
+     */
+    private fun combineSignatureThisTypes(left: Type?, right: Type?, mapper: TypeMapper?, intersection: Boolean): Type? {
+        if (left == null || right == null) return left ?: right
+        val r = if (mapper != null) instantiateType(right, mapper) else right
+        return if (intersection) getUnionType(listOf(left, r)) else intersectThisTypes(listOf(left, r))
+    }
 
     /**
      * (CHK.97) A synthesized parameter symbol carrying [type]. The type is written into
@@ -155943,6 +156268,7 @@ interface DataView {
             parameters = params,
             resolvedReturnType = getUnionType(listOf(left.resolvedReturnType ?: anyType, rightReturn)),
             minArgumentCount = maxOf(left.minArgumentCount, right.minArgumentCount),
+            thisType = combineSignatureThisTypes(left.thisType, right.thisType, paramMapper, intersection = false),
         ).also { it.fromUnionCombination = true }
     }
 
@@ -155970,6 +156296,7 @@ interface DataView {
             // kept verbatim rather than approximated.
             resolvedReturnType = left.resolvedReturnType,
             minArgumentCount = maxOf(left.minArgumentCount, right.minArgumentCount),
+            thisType = combineSignatureThisTypes(left.thisType, right.thisType, paramMapper, intersection = true),
         ).also { it.fromUnionCombination = true }
     }
 
@@ -155986,7 +156313,7 @@ interface DataView {
      * where two members' type parameters are not identical
      * ([unionCalleeGenericSignaturesIncompatible], tsc's `compareTypeParametersIdentical`).
      */
-    private fun getIntersectedSignatures(sigs: List<Signature>): Signature? {
+    internal fun getIntersectedSignatures(sigs: List<Signature>): Signature? {
         // `noImplicitAny` is not implied by `strict` on [CompilerOptions] — the repo-wide
         // spelling of tsc's `getStrictOptionValue(compilerOptions, "noImplicitAny")` is the
         // disjunction, and reading the bare field made this fold inert on every `strict`
@@ -156037,7 +156364,7 @@ interface DataView {
      * entirely (measured (P18.73): ZERO combination refusals reach it for that shape,
      * on the eight profiles and on `cronstrue`/`marked` alike).
      */
-    private fun combineUnionSignatures(union: Type.Union, construct: Boolean = false): List<Signature>? {
+    internal fun combineUnionSignatures(union: Type.Union, construct: Boolean = false): List<Signature>? {
         val cache = if (construct) unionConstructSignatureCache else unionSignatureCache
         cache[union.id]?.let { return it }
         if (cache.containsKey(union.id)) return null
@@ -156102,7 +156429,8 @@ interface DataView {
                     val unionSignatures = findMatchingSignatures(signatureLists, signature, i)
                     if (unionSignatures != null) {
                         result.add(
-                            if (unionSignatures.size > 1) createUnionSignature(signature, unionSignatures)
+                            if (unionSignatures.size > 1)
+                                createUnionSignature(signature, unionSignatures, unionSignaturesThisType(signature, unionSignatures))
                             else signature
                         )
                     }
@@ -157009,6 +157337,7 @@ interface DataView {
                 parameters = getParameterSymbols(implDecl.parameters),
                 resolvedReturnType = returnType,
                 minArgumentCount = requiredParameterCount(implDecl.parameters),
+                thisType = declaredThisType(implDecl.parameters),
             )
         }
         // 17.137a: Method overloads — find the impl among sibling methods of the
@@ -157607,6 +157936,7 @@ interface DataView {
                 parameters = freshParams,
                 resolvedReturnType = sig.resolvedReturnType,
                 minArgumentCount = sig.minArgumentCount,
+                thisType = sig.thisType,
             )
         }
     }
@@ -169693,7 +170023,7 @@ interface DataView {
             }
             scope
         } else currentTypeParamScope
-        val (returnType, paramSyms) = withInstantiationContext(scopeMapper(sigScope)) {
+        val (returnType, paramSyms, nodeThisType) = withInstantiationContext(scopeMapper(sigScope)) {
             val ps = getParameterSymbols(params)
             sigTypeParams?.forEachIndexed { i, tp ->
                 typeParamDecls[i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
@@ -169725,7 +170055,7 @@ interface DataView {
                     }
                 }
             }
-            (returnTypeNode?.let { getTypeFromTypeNode(it) } ?: anyType) to ps
+            Triple(returnTypeNode?.let { getTypeFromTypeNode(it) } ?: anyType, ps, declaredThisType(params))
         }
         return Signature(
             declaration = decl,
@@ -169733,6 +170063,7 @@ interface DataView {
             parameters = paramSyms,
             resolvedReturnType = returnType,
             minArgumentCount = requiredParameterCount(params),
+            thisType = nodeThisType,
         )
     }
 
@@ -169821,20 +170152,14 @@ interface DataView {
                         }
                         scope
                     } else currentTypeParamScope
-                    val (returnType, params) = withInstantiationContext(scopeMapper(memberScope)) {
+                    val (returnType, params, memberThisType) = withInstantiationContext(scopeMapper(memberScope)) {
                         val ps = getParameterSymbols(member.parameters)
                         sigTypeParams?.forEachIndexed { i, tp ->
                             member.typeParameters[i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
                             member.typeParameters[i].default?.let { tp.default = getTypeFromTypeNode(it) }
                         }
-                        for ((pi, param) in ps.withIndex()) {
-                            if (pi < member.parameters.size) {
-                                member.parameters[pi].type?.let { typeNode ->
-                                    symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
-                                }
-                            }
-                        }
-                        (member.type?.let { getTypeFromTypeNode(it) } ?: anyType) to ps
+                        resolveParameterTypesInScope(ps, member.parameters)
+                        Triple(member.type?.let { getTypeFromTypeNode(it) } ?: anyType, ps, declaredThisType(member.parameters))
                     }
                     val sig = Signature(
                         declaration = member,
@@ -169842,6 +170167,7 @@ interface DataView {
                         parameters = params,
                         resolvedReturnType = returnType,
                         minArgumentCount = requiredParameterCount(member.parameters),
+                        thisType = memberThisType,
                     )
                     if (name.isEmpty()) {
                         // Call signature: MethodDeclaration with empty name

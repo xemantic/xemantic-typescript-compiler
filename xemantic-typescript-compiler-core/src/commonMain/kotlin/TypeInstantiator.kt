@@ -223,6 +223,7 @@ internal class TypeInstantiator(
             parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
+            thisType = sig.thisType?.let { instantiateContextualParamType(it, mapper) },
         )
     }
 
@@ -250,6 +251,8 @@ internal class TypeInstantiator(
             parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
+            // (CHK.133)(a) the `this` pseudo-parameter follows the mapper like a parameter.
+            thisType = sig.thisType?.let { instantiateType(it, mapper) },
         )
     }
 
@@ -368,13 +371,15 @@ internal class TypeInstantiator(
             } else param
         }
         val paramsChanged = newParams.zip(sig.parameters).any { (a, b) -> a !== b }
-        if (!paramsChanged && newReturnType === sig.resolvedReturnType) return sig
+        val newThisType = sig.thisType?.let { instantiateTypeFnAware(it, mapper) }
+        if (!paramsChanged && newReturnType === sig.resolvedReturnType && newThisType === sig.thisType) return sig
         return Signature(
             declaration = sig.declaration,
             typeParameters = sig.typeParameters,
             parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
+            thisType = newThisType,
         )
     }
 
@@ -441,13 +446,16 @@ internal class TypeInstantiator(
         val paramsChanged = newParams.zip(sig.parameters).any { (a, b) -> a !== b }
         val returnChanged = newReturnType !== sig.resolvedReturnType
         val tpsChanged = clones != null
-        if (!paramsChanged && !returnChanged && !tpsChanged) return sig
+        val newThisType = sig.thisType?.let { instantiateTypeFnAware(it, effective) }
+        val thisChanged = newThisType !== sig.thisType
+        if (!paramsChanged && !returnChanged && !tpsChanged && !thisChanged) return sig
         return Signature(
             declaration = sig.declaration,
             typeParameters = newTps ?: sig.typeParameters, // preserve — still generic at call site
             parameters = newParams,
             resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
             minArgumentCount = sig.minArgumentCount,
+            thisType = newThisType,
         )
     }
 
