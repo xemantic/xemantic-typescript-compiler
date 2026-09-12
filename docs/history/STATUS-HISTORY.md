@@ -3274,3 +3274,22 @@ fixed and gated by the 18 active `this:` baselines. Ablation over 29 pins: 19/1/
 warning-clean. **(CHK.97) is CHECKED OFF** — every deliverable closed or rejected on a
 measurement across (P18.71)-(P18.78). (CHK.133) stays open on (b) the relation's `this`
 leg and the `.call/.apply/.bind` consumer.
+
+**(P18.79) — (CHK.133)(b): THE RELATION'S `this` LEG — ONE PREDICATE, THREE ELABORATION SITES, AND A BIVARIANCE RULE THAT WAS AN UNDER-APPROXIMATION, 18,809 / 0 / 3 (2026-09-12).**
+`Relater.signatureThisTypesRelated` is tsc's `compareSignaturesRelated` `this` leg (a source
+`this` other than `void` must relate to the target's; contravariant, or either direction
+where `strictVariance` is off), consulted by the verdict AND by all three elaboration sites
+so the chain line cannot contradict it — and `checkPropertyAccessAssignment` had no callable
+elaboration at all. **The existing `bivariantParams` ("both sides MethodDeclaration") is an
+under-approximation of tsc's TARGET-kind rule and reused verbatim was a false positive** on
+a function value into a method-signature member; the `this` leg takes the target's kind, the
+parameter leg is untouched. Census: 2,639-3,110 reached per profile, ALL a signature related
+to ITSELF (the lib's type-parameter `this`), zero refusals, zero real comparisons of two
+different concrete `this` types anywhere — the queue's "likely a REAL gate" refuted, grid a
+CONTROL. Fourteen fixture families `missing → agree`, zero REF-SPLIT, every emitting row
+byte-identical to pristine including chain nesting; `looseThisTypeInFunctions:21` byte-
+identical. Ablation 17/5/1/16 RED over 28 pins. cost_gate exit 0 with all 20 counters
+digit-identical to the rebuilt HEAD, huge_methods exit 0, warning-clean. **(CHK.133) is
+CHECKED OFF**; `.call/.apply/.bind` sized read-only as a NEW mechanism (member-miss
+augmentation with `CallableFunction` + inference through a `this`-typed lib signature;
+81/18/12 sites on the compiler profile, so a REAL gate) and queued as **(CHK.134)**.

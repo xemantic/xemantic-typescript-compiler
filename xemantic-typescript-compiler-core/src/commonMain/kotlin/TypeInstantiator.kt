@@ -179,6 +179,17 @@ internal class TypeInstantiator(
      * so the existing instantiateType no-op behavior (relied on elsewhere) is untouched.
      */
     fun instantiateContextualParamType(type: Type, mapper: TypeMapper): Type {
+        // (CHK.98) stage 2: a UNION is instantiated constituent by constituent THROUGH
+        // this function, so a function-shaped constituent is descended into. Falling to
+        // [instantiateType] mapped the union's members with the no-op rule, and the
+        // optional-callback shape `((value: number) => TResult1 | …) | undefined | null`
+        // — every `Promise.then` parameter — kept the method's own `TResult1` where
+        // the free-type-parameter mapper had its default in hand.
+        if (type is Type.Union) {
+            val mapped = type.types.map { instantiateContextualParamType(it, mapper) }
+            if (mapped.zip(type.types).all { (a, b) -> a === b }) return type
+            return checker.getUnionType(mapped)
+        }
         if (type is Type.Object && type !is Type.Interface && type !is Type.Reference &&
             type.symbol == null && !type.callSignatures.isNullOrEmpty() &&
             type.constructSignatures.isNullOrEmpty()

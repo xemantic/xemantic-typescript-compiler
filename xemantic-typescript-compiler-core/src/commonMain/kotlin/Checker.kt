@@ -109374,6 +109374,37 @@ interface DataView {
         return computed
     }
 
+    /**
+     * (CHK.98) stage 2 — the receiver's type arguments substituted into ONE declared
+     * parameter type of a generic interface's method.
+     *
+     * A function-shaped anonymous object is what B81.1d has always sent through
+     * [substituteOuterTypeArgsInGenericFnObject]; a UNION carrying one went through
+     * plain [instantiateType], which deliberately no-ops a function-shaped constituent —
+     * and `onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined |
+     * null` is exactly that shape, on EVERY parameter of `Promise.then`, `Promise.catch`
+     * and `PromiseLike.then`. Measured: `zp.then((v) => …)` with `zp: Promise<number>`
+     * handed the pull `(value: T)` with the receiver's RAW `T`, whose unresolved-type-
+     * parameter gate then left `v` as `any`, in both references a TS2322 (12 rows over
+     * the promise fixture family, all missing). Each constituent takes the rule the
+     * whole parameter took before; the union is rebuilt only when a constituent moved,
+     * and a nullish constituent is untouched. (CHK.102): the helper MINTS, never
+     * mutates — the same shared-annotation freeze applies here.
+     */
+    private fun instantiateMethodParamType(raw: Type, mapper: TypeMapper): Type = when {
+        raw is Type.Object && raw !is Type.Reference && raw !is Type.Interface &&
+            (!raw.callSignatures.isNullOrEmpty() || !raw.constructSignatures.isNullOrEmpty()) ->
+            substituteOuterTypeArgsInGenericFnObject(raw, mapper)
+        raw is Type.Union && raw.types.any { m ->
+            m is Type.Object && m !is Type.Reference && m !is Type.Interface &&
+                (!m.callSignatures.isNullOrEmpty() || !m.constructSignatures.isNullOrEmpty())
+        } -> {
+            val mapped = raw.types.map { instantiateMethodParamType(it, mapper) }
+            if (mapped.indices.all { mapped[it] === raw.types[it] }) raw else getUnionType(mapped)
+        }
+        else -> instantiateType(raw, mapper)
+    }
+
     private fun resolveGenericPropertyTypeWorker(ref: Type.Reference, propSym: Symbol): Type? {
         val target = ref.target
         val typeParams = target.typeParameters ?: return null
@@ -109516,26 +109547,13 @@ interface DataView {
                                 sym.declarations.add(p)
                                 sym.valueDeclaration = p
                                 val rawParamType = p.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                                // B81.1d: a function-typed parameter (`compareFn?: (a: T, b: T)
+                                // => number`) goes through the fn-aware walker, because plain
+                                // instantiateType is a no-op for a function-shaped Type.Object
+                                // (the CLAUDE.md instantiateType gotcha) — and since (CHK.98)
+                                // stage 2 so does a UNION carrying one ([instantiateMethodParamType]).
                                 val paramType = if (rawParamType === errorType) anyType
-                                                else if (rawParamType is Type.Object
-                                                    && rawParamType !is Type.Reference
-                                                    && rawParamType !is Type.Interface
-                                                    && (!rawParamType.callSignatures.isNullOrEmpty()
-                                                        || !rawParamType.constructSignatures.isNullOrEmpty())) {
-                                                    // B81.1d: function-typed parameter (e.g.
-                                                    // `compareFn?: (a: T, b: T) => number`). Plain
-                                                    // instantiateType is a no-op for function-shaped
-                                                    // Type.Object (see CLAUDE.md instantiateType
-                                                    // gotcha). Use the in-place sig walker so callers
-                                                    // resolving the method's param type for contextual
-                                                    // inference (B81.1b FunctionExpression branch) see
-                                                    // the substituted inner sig. (CHK.102): the helper
-                                                    // MINTS — the same shared-annotation freeze applies
-                                                    // to a method's fn-typed PARAMETER, measured as a
-                                                    // false TS2322 inside every callback passed to the
-                                                    // second instantiation of `Cb<T>.m(cb: (x: T) => T)`.
-                                                    substituteOuterTypeArgsInGenericFnObject(rawParamType, mapper)
-                                                } else instantiateType(rawParamType, mapper)
+                                                else instantiateMethodParamType(rawParamType, mapper)
                                 symbolTypes[sym.id] = paramType
                                 sym
                             }
@@ -119777,6 +119795,25 @@ interface DataView {
                 else -> break
             }
         }
+        // (CHK.98) stage 2: an INLINE guard — `zs.filter((x): x is string => …)`. The
+        // predicate is on the function-like's own return annotation, so there is no
+        // declaration to resolve; before this the shape fell to the `else` below and the
+        // guard overload never bound its `S`: `filter<S extends T>(…): S[]` answered the
+        // un-instantiated `S[]` (and, one arm over, `filter(…, isFoo)`'s single-parameter
+        // inference skipped an inline guard as "predicate-less"). Both references type
+        // the call `string[]`. A function carrying its OWN type parameters is refused —
+        // its predicate would resolve under the ambient scope, not its own.
+        if (e is ArrowFunction || e is FunctionExpression) {
+            val (ret, ownTps) = when (e) {
+                is ArrowFunction -> e.type to e.typeParameters
+                is FunctionExpression -> e.type to e.typeParameters
+            }
+            val pred = ret as? TypePredicate ?: return null
+            if (pred.assertsModifier || !ownTps.isNullOrEmpty()) return null
+            val tt = pred.type ?: return null
+            val resolved = getTypeFromTypeNode(tt)
+            return if (resolved !== errorType && resolved !== anyType) resolved else null
+        }
         val decl: Node? = when (e) {
             is Identifier -> {
                 val symbol = currentFileLocals?.get(e.text) ?: globals[e.text]
@@ -126541,6 +126578,14 @@ interface DataView {
         if (arrow.parameters.size != 1) return null
         val paramName = (arrow.parameters[0].name as? Identifier)?.text ?: return null
         val body = arrow.body as? Expression ?: return null
+        // (CHK.98) stage 2: the `typeof` shape — `x => typeof x === "string"` (and
+        // `!==` / `==` / `!=`), the other inferred predicate tsc 5.5 reads off a
+        // one-expression body ([inferTypeofArrowPredicateTarget]).
+        inferTypeofArrowPredicateShape(body, paramName)?.let { (guard, negated) ->
+            val element = arrowPredicateElementType(arg, call) ?: return null
+            val members = (element as? Type.Union)?.types ?: listOf(element)
+            return inferTypeofArrowPredicateTarget(members, guard, negated)
+        }
         var wantFalse = false
         val access: PropertyAccessExpression = when {
             body is PrefixUnaryExpression && body.operator == SyntaxKind.Exclamation &&
@@ -126554,23 +126599,7 @@ interface DataView {
         if ((access.expression as? Identifier)?.text != paramName) return null
         if (access.questionDotToken) return null
         val propName = access.name.text
-        // The iterated element union: the first other argument typing as an array
-        // (possibly a nullish-union member — `readonly T[] | undefined`).
-        var elementUnion: Type.Union? = null
-        for (a in call.arguments) {
-            if (a === arg) continue
-            val t = getTypeOfExpression(a)
-            val arrayT = when {
-                t is Type.Reference && (t.target.symbol?.name == "Array" || t.target.symbol?.name == "ReadonlyArray") -> t
-                t is Type.Union -> t.types.firstOrNull { m ->
-                    m is Type.Reference && (m.target.symbol?.name == "Array" || m.target.symbol?.name == "ReadonlyArray")
-                } as? Type.Reference
-                else -> null
-            } ?: continue
-            elementUnion = arrayT.resolvedTypeArguments?.firstOrNull() as? Type.Union ?: return null
-            break
-        }
-        val members = elementUnion?.types ?: return null
+        val members = arrowPredicateElementUnion(arg, call)?.types ?: return null
         val kept = mutableListOf<Type>()
         for (m in members) {
             val propSym = getPropertyOfType(m, propName) ?: return null
@@ -126590,6 +126619,116 @@ interface DataView {
         }
         if (kept.isEmpty() || kept.size == members.size) return null
         return if (kept.size == 1) kept[0] else getUnionType(kept)
+    }
+
+    /** The `(guard, negated)` of a one-expression `typeof <param> === "<guard>"` body
+     *  (either operand order, `===`/`==`/`!==`/`!=`), else null. */
+    private fun inferTypeofArrowPredicateShape(body: Expression, paramName: String): Pair<String, Boolean>? {
+        val bin = body as? BinaryExpression ?: return null
+        val negated = when (bin.operator) {
+            SyntaxKind.EqualsEqualsEquals, SyntaxKind.EqualsEquals -> false
+            SyntaxKind.ExclamationEqualsEquals, SyntaxKind.ExclamationEquals -> true
+            else -> return null
+        }
+        fun typeofOfParam(e: Expression): Boolean =
+            e is TypeOfExpression && (e.expression as? Identifier)?.text == paramName
+        val guard = when {
+            typeofOfParam(bin.left) -> (bin.right as? StringLiteralNode)?.text
+            typeofOfParam(bin.right) -> (bin.left as? StringLiteralNode)?.text
+            else -> null
+        } ?: return null
+        return guard to negated
+    }
+
+    /**
+     * (CHK.98) stage 2 — tsc 5.5's inferred predicate for `x => typeof x === "string"`
+     * over an element union, bounded to a union whose every member `typeof` decides:
+     * a primitive or literal member by its flags ([typeofTypeGuardFlags]), and a
+     * NON-EMPTY object type — an interface, a reference, an anonymous object with a
+     * member or a signature — never matches a primitive guard (tsc's `ObjectFacts`),
+     * so it falls to the false branch. There `typeof` PARTITIONS the union exactly,
+     * and the true and false branches union back to the declared type — the condition
+     * `getTypePredicateFromBody` checks before it infers. A member that decides nothing
+     * (`any`, `unknown`, a type parameter, an EMPTY object type, which a string
+     * satisfies structurally), an `object`/`function` guard ([typeofTypeGuardFlags]
+     * answers `None`), a filter that keeps nothing, or one that keeps everything,
+     * answers null: the call then types through its non-guard overload exactly as
+     * before. tsgo types `zs.filter(x => typeof x === "string")` over
+     * `(string | number)[]` and over `(string | ZO)[]` as `string[]`.
+     *
+     * A filter that keeps NOTHING is the predicate `x is never` (tsgo: `never[]`, which
+     * a `nums.filter(x => typeof x === "string")` on a `number[]` then assigns anywhere
+     * — before this the non-guard overload's `number[]` was a false TS2322 at a
+     * `boolean[]` target); a filter that keeps EVERYTHING is the element type itself,
+     * which is what the non-guard overload already answers, so it stays null. A
+     * NON-union element is a one-member population.
+     */
+    private fun inferTypeofArrowPredicateTarget(members: List<Type>, guard: String, negated: Boolean): Type? {
+        val flags = typeofTypeGuardFlags(guard) ?: return null
+        if (flags == TypeFlags.None) return null
+        val primitiveLike = TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt or
+            TypeFlags.ESSymbol or TypeFlags.UniqueESSymbol or TypeFlags.Undefined or TypeFlags.Null or
+            TypeFlags.StringLiteral or TypeFlags.NumberLiteral or TypeFlags.BooleanLiteral or
+            TypeFlags.BigIntLiteral
+        val kept = mutableListOf<Type>()
+        for (m in members) {
+            if (m === anyType || m === errorType) return null
+            val matches = when {
+                m.flags.hasAny(primitiveLike) -> m.flags.hasAny(flags)
+                m is Type.Object && typeofDecidesObjectMember(m) -> false
+                else -> return null
+            }
+            if (if (negated) !matches else matches) kept.add(m)
+        }
+        if (kept.size == members.size) return null
+        if (kept.isEmpty()) return neverType
+        return if (kept.size == 1) kept[0] else getUnionType(kept)
+    }
+
+    /** Does a primitive `typeof` guard DECIDE object-typed [m] — i.e. does it declare
+     *  something, so that no primitive is assignable to it? An empty object type is what a
+     *  string satisfies structurally, and answers `false`. */
+    private fun typeofDecidesObjectMember(m: Type.Object): Boolean {
+        resolveStructuredTypeMembers(m)
+        return !m.properties.isNullOrEmpty() || !m.callSignatures.isNullOrEmpty() ||
+            !m.constructSignatures.isNullOrEmpty() || m.stringIndexInfo != null ||
+            m.numberIndexInfo != null || m.tupleElementTypes != null
+    }
+
+    /** The iterated element UNION an inferred-predicate arrow [arg] of [call] filters
+     *  ([arrowPredicateElementType] narrowed to the discriminant shape's population). */
+    private fun arrowPredicateElementUnion(arg: Expression, call: CallExpression): Type.Union? =
+        arrowPredicateElementType(arg, call) as? Type.Union
+
+    /** The iterated ELEMENT type an inferred-predicate arrow [arg] of [call] filters —
+     *  the first OTHER argument typing as an array (possibly through a nullish union),
+     *  else the method receiver; null where neither is an array. */
+    private fun arrowPredicateElementType(arg: Expression, call: CallExpression): Type? {
+        var element: Type? = null
+        for (a in call.arguments) {
+            if (a === arg) continue
+            val t = getTypeOfExpression(a)
+            val arrayT = when {
+                t is Type.Reference && (t.target.symbol?.name == "Array" || t.target.symbol?.name == "ReadonlyArray") -> t
+                t is Type.Union -> t.types.firstOrNull { m ->
+                    m is Type.Reference && (m.target.symbol?.name == "Array" || m.target.symbol?.name == "ReadonlyArray")
+                } as? Type.Reference
+                else -> null
+            } ?: continue
+            element = arrayT.resolvedTypeArguments?.firstOrNull() ?: return null
+            break
+        }
+        // (CHK.98) stage 2: the METHOD form — `zs.filter(x => …)` iterates its
+        // RECEIVER, which is no argument at all; before this only tsc's own free
+        // `filter(array, f)` reached the rule.
+        if (element == null) {
+            val recv = (call.expression as? PropertyAccessExpression)?.expression ?: return null
+            val t = getTypeOfExpression(recv)
+            val arrayT = t as? Type.Reference ?: return null
+            if (arrayT.target.symbol?.name != "Array" && arrayT.target.symbol?.name != "ReadonlyArray") return null
+            element = arrayT.resolvedTypeArguments?.firstOrNull() ?: return null
+        }
+        return element
     }
 
     /** If [t] is a callback type `(…) => x is <TP>` whose predicate targets a type
@@ -145545,6 +145684,112 @@ interface DataView {
         return false
     }
 
+    /**
+     * (CHK.98) stage 2 — the type of a callee spelled through a NAMESPACE-IMPORT alias,
+     * `zns.f` or `zns.obj.m`, read from the alias's target module rather than from the
+     * alias's own (absent) type: [resolveNamespaceQualifiedSymbol] resolves the dotted
+     * chain through the import's target and its `export *` barrels to the MEMBER's
+     * symbol, whose declared type is the callee's; when the chain's last hop is not a
+     * namespace member (`zns.obj.m`, `obj` a value), the value's type is resolved and
+     * the member is read off it. Null wherever a hop does not resolve, where the
+     * member types `any`, or where the alias name is SHADOWED in the walked scope — a
+     * parameter or local of the same name is what the access was about, and
+     * [getCalleeType] refuses that root the same way.
+     *
+     * Read only where [getTypeOfPropertyAccess] has already answered nothing; a class
+     * member resolves to its INSTANCE type ((CHK.73)), which carries no call signature,
+     * so a `zns.C(…)` call is refused one step later exactly as before.
+     */
+    private fun namespaceQualifiedCalleeType(pa: PropertyAccessExpression): Type? {
+        var root: Expression = pa
+        while (root is PropertyAccessExpression) root = root.expression
+        val rootName = (root as? Identifier)?.text ?: return null
+        // The walk-scoped tables refuse a typed local; an `any`-ANNOTATED parameter is
+        // registered in neither ([populateParameterLocalTypes] skips `any`), so the
+        // lexical test is SYNTACTIC as well — measured: `function f(zns: any) {
+        // zns.take((p) => …) }` resolved the FILE's import through the parameter and
+        // reported a TS2322 where both references say TS7006.
+        if (currentLocalTypes[rootName] != null || rootName in currentParamBindingNames) return null
+        if (nameBoundByEnclosingScope(pa, rootName)) return null
+        resolveNamespaceQualifiedSymbol(pa)?.let { sym ->
+            return getTypeOfSymbol(sym).takeIf { it !== anyType && it !== errorType }
+        }
+        val recv = pa.expression as? PropertyAccessExpression ?: return null
+        val recvSym = resolveNamespaceQualifiedSymbol(recv) ?: return null
+        val recvType = getTypeOfSymbol(recvSym)
+        if (recvType === anyType || recvType === errorType) return null
+        return resolveMemberPropertyType(recvType, pa.name.text)?.takeIf { it !== anyType && it !== errorType }
+    }
+
+    /**
+     * Is [name] bound by a declaration BETWEEN [node] and its file — a parameter (or a
+     * named function/class expression's own name) of an enclosing function-like, a
+     * `catch` variable, a `for` head's binding, or a `var`/`let`/`const`, `function` or
+     * `class` statement of an enclosing BLOCK? Purely syntactic, ancestors only, bounded;
+     * a file-level declaration is deliberately NOT one (a file-level import of the same
+     * name would be the duplicate the binder reports). Conservative in the `true`
+     * direction: a shape the walk cannot read answers nothing, i.e. `false`, so the
+     * caller falls back to what it did before.
+     */
+    private fun nameBoundByEnclosingScope(node: Node, name: String): Boolean {
+        val names = HashSet<String>(4)
+        fun declares(params: List<Parameter>): Boolean {
+            names.clear()
+            for (p in params) collectBindingIdentifierNames(p.name, names)
+            return name in names
+        }
+        fun blockDeclares(statements: List<Statement>): Boolean {
+            for (st in statements) {
+                when (st) {
+                    is VariableStatement -> {
+                        names.clear()
+                        for (d in st.declarationList.declarations) collectBindingIdentifierNames(d.name, names)
+                        if (name in names) return true
+                    }
+                    is FunctionDeclaration -> if (st.name?.text == name) return true
+                    is ClassDeclaration -> if (st.name?.text == name) return true
+                    else -> {}
+                }
+            }
+            return false
+        }
+        fun forHeadDeclares(init: Node?): Boolean {
+            val list = init as? VariableDeclarationList ?: return false
+            names.clear()
+            for (d in list.declarations) collectBindingIdentifierNames(d.name, names)
+            return name in names
+        }
+        var cur: Node? = (node as NodeBase).parent
+        var hops = 0
+        while (cur != null && cur !is SourceFile && hops++ < 256) {
+            val bound = when (cur) {
+                is FunctionDeclaration -> declares(cur.parameters)
+                is FunctionExpression -> cur.name?.text == name || declares(cur.parameters)
+                is ArrowFunction -> declares(cur.parameters)
+                is MethodDeclaration -> declares(cur.parameters)
+                is Constructor -> declares(cur.parameters)
+                is GetAccessor -> declares(cur.parameters)
+                is SetAccessor -> declares(cur.parameters)
+                is ClassExpression -> cur.name?.text == name
+                is CatchClause -> cur.variableDeclaration?.let { d ->
+                    names.clear(); collectBindingIdentifierNames(d.name, names); name in names
+                } == true
+                is ForStatement -> forHeadDeclares(cur.initializer)
+                is ForInStatement -> forHeadDeclares(cur.initializer)
+                is ForOfStatement -> forHeadDeclares(cur.initializer)
+                is Block -> {
+                    // A function BODY block is one scope with its parameters; a
+                    // file-level statement list is the SourceFile, which ends the walk.
+                    blockDeclares(cur.statements)
+                }
+                else -> false
+            }
+            if (bound) return true
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
     private fun cpaComputeArgCtxTypes(expr: CallExpression, enclosingClassType: Type?): List<Type?>? {
         return run {
             if (expr.arguments.isNullOrEmpty()) return@run null
@@ -145562,7 +145807,18 @@ interface DataView {
                     // resolveUncalledOperandType. Narrow gate: head=`this`,
                     // enclosingClassType != null, all segments resolve.
                     resolveCalleeChainWithThis(callee, enclosingClassType)
-                        ?: getTypeOfPropertyAccess(callee)
+                        ?: getTypeOfPropertyAccess(callee).let { t ->
+                            // (CHK.98) stage 2: a NAMESPACE-IMPORT member callee
+                            // (`import * as zns from "./m"; zns.take((p) => …)`) — the alias
+                            // itself has no type ((CHK.73)), so the access answers `any`
+                            // and the callback got no context, while the ARGUMENT and RETURN
+                            // walkers resolve the same callee through the symbol tables
+                            // ([resolveNamespaceMemberFnDecl]): `zns.take(1)` reported
+                            // TS2345 and `zns.take((p) => { p.nope })` nothing. Same
+                            // tables, read only where the access has already answered
+                            // nothing, so an ordinary receiver pays no probe.
+                            if (t === anyType || t === errorType) namespaceQualifiedCalleeType(callee) ?: t else t
+                        }
                 }
                 else -> return@run null
             }
@@ -146123,6 +146379,26 @@ interface DataView {
      * and restores are entirely its own, and the whole function contains no
      * `return`, so the extraction cannot change control flow.
      */
+    /**
+     * (CHK.98) stage 2 — the function object a contextual type contributes to the
+     * two property-access reader arms ([cpaExprArrowFunction],
+     * [cpaExprFunctionExpression]). tsc's `getContextualSignature` collects the
+     * CALLABLE members of a union contextual type and a nullish or non-callable member
+     * contributes nothing — the rule [callableSignaturesForCtx] already applies for the
+     * assignability readers. The two arms here tested `contextualType is Type.Object`
+     * outright, so under `onfulfilled?: ((value: T) => …) | undefined | null` — every
+     * `Promise.then` callback — the assignability reader typed `v` and the
+     * member-existence reader did not: `zp.then((v) => { const bad: string = v })`
+     * reported and `zp.then((v) => { v.nope })` was silent (measured, p14). A union
+     * with SEVERAL callable members stays refused here — the arms take one signature
+     * and the union fold ([unionContextualSignature]) belongs to the pull.
+     */
+    private fun cpaCtxCallableObject(ctx: Type?): Type.Object? = when (ctx) {
+        is Type.Object -> ctx
+        is Type.Union -> unionCallableMembers(ctx).singleOrNull()
+        else -> null
+    }
+
     private fun cpaExprArrowFunction(
         expr: ArrowFunction, source: String, fileName: String,
         enclosingClassType: Type?,
@@ -146149,7 +146425,7 @@ interface DataView {
         }
         // 16.0: contextual param inference for un-annotated arrow parameters
         CpaSections.atP(CpaSections.P_FNCTX)
-        val ctxType = contextualType
+        val ctxType = cpaCtxCallableObject(contextualType)
         // B83.4d: when this arrow's body is an EXPRESSION (concise body) and its
         // contextual type is a single-call-sig function, the body is contextually
         // typed by that signature's RETURN type. Propagate it so a callback-
@@ -146435,7 +146711,7 @@ interface DataView {
         // type into `currentLocalTypes` so property access checks can find
         // optional members and emit TS18048 etc.
         CpaSections.atP(CpaSections.P_FNCTX)
-        val ctxType = contextualType
+        val ctxType = cpaCtxCallableObject(contextualType)
         if (ctxType is Type.Object) {
             resolveStructuredTypeMembers(ctxType)
             val sigs = ctxType.callSignatures

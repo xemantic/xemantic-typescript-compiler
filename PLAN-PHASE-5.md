@@ -25,6 +25,83 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.84) — (CHK.98) stage 2: `Promise.then`, a namespace-import callee and predicate `filter` — two instantiations that no-op'd a union-wrapped function type, and the item closes (2026-09-12)
+
+**Suite 18,986 → 19,028 / 0 / 3** (+42 pins, `ContextualCallbackStage2Test`: 34 value, 4
+controls, 3 negative controls, 5 `residue -` with the tsgo row in the KDoc). Grid 8×`added=0
+removed=0` across three builds; marked 18 → 18, cronstrue 1 → 1, the 2,400-file project 1 → 1;
+`cost_gate.py` exit 0 with every counter within +0.05% of the rebuilt HEAD (the +0.85/+1.31/
++1.35 rows are the stale baseline, identical on HEAD; not rebaselined); `huge_methods.py
+--fail-over 0` exit 0; warning-clean (main + test). **(CHK.98) IS CHECKED OFF** — (a)/(b)/(c)
+in (P18.31), (d) in (P18.82), (i) in (P18.83), stage 2 here; its one real residue is queued
+as (CHK.135). **This is the first round measured against tsgo 7.0.2 ALONE** under the
+2026-09-12 directive; pristine happened to agree on every adjudicated row (the one
+REF-SPLIT-MSG is union member order, where ours already prints tsgo's).
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.98) was the first unchecked item. The queue's head is
+now (LEGACY.0) — the owner's corpus re-pin — and that is where the next round goes.
+
+**THE MECHANISMS, INSTRUMENTED RATHER THAN READ.** (a) `Promise.then`/`PromiseLike.then`/
+`catch`: the lib parameter is the union `((value: T) => …) | undefined | null`, and TWO
+instantiations no-op'd a union-WRAPPED function type — the generic-member resolver's
+parameter branch (the receiver's `T`) and `instantiateContextualParamType` (the method's own
+`TResult1`) — while the property-access reader arms tested `contextualType is Type.Object`
+outright. The nullish strip, the brief's suspect, was never the loss: a marker showed the
+pull receiving `params=[T]`. (b) A namespace-import callee: `getTypeOfPropertyAccess`
+answers `any` for the alias while the ARGUMENT/RETURN walkers already resolved it
+(`zns.take(1)` reported on HEAD); the pull now falls to `resolveNamespaceQualifiedSymbol`
+only where the access answered nothing, refusing a root shadowed lexically — by a
+SYNTACTIC `nameBoundByEnclosingScope`, because an `any`-annotated parameter is registered
+nowhere and a `currentLocalTypes` guard produced a false TS2322. (c) Predicate `filter`:
+(P18.77)'s "lib `filter` is a `MethodSignature`" claim is REFUTED (it arrives as a
+`MethodDeclaration`); the loss was `predicateTargetTypeOfGuardExpr` having no inline-arrow
+leg. With it landed tsc 5.5's INFERRED `typeof` predicate — object members fall to the false
+branch, keep-nothing answers `never` — which closes a PRE-EXISTING false positive on
+`nums.filter(x => typeof x === "string")`. (d) `reduce(cb, {} as Record<…>)` is not
+contextual typing at all: `Record<K, V>` resolves to bare `any` (3 missing rows at a plain
+declaration), so the `initialValue: T` overload is selected; `{ n: 0 } as { n: number }`
+selects `U` correctly — recorded as `residue -` and queued as (CHK.135). (e) `NonNullable<…>`
+is `T & {}` un-distributed (round 777's architecture), display-only and (PARITY.1)-blind.
+
+**BEFORE → AFTER (`agree/ours-only/missing/text-diff`, zero REF-SPLIT)**: promise family
+(14) 0/0/12/0 → **9/0/3/0**; namespace import (5) 1/0/4/0 → **5/0/0/0**; predicate `filter`
+(8) 1/0/5/2 → **6/0/1/1**; `reduce` (9) 6/1/2/0 unchanged (mechanism recorded); the item's
+own stage-2 set (14) 4/1/4/4 → **9/1/0/3**. (P18.83)'s free-type-parameter rule had moved
+NONE of these — re-measuring on the fresh binary was not optional.
+
+**THE CENSUS GRADED THREE MECHANISMS AS GATES AND THREE AS CONTROLS.** The instantiator's
+union arm fires 1,159-2,455 times per profile, the namespace callee 26-642 (harness), the
+inline guard 41-122 and the reader-through-union 16-33 — with the grid at 8×0/0 those are
+GATES that stayed green. The member-union branch, the `typeof` inference and the receiver
+source read 0 on every corpus (tsc's `.then(` spellings are all in emit-helper strings and
+comments) — controls. Libraries 0 for everything.
+
+**ABLATION, eleven arms, per-arm `cmp`, @Test asserted**: both union arms **11 RED**; the
+member branch alone 10; the instantiator arm alone 1; the reader strip 1; the namespace
+callee 4; the shadow test 1; the inline guard 4; `S` from the parameter — **0, a DEAD ARM on
+un-annotated guards** until an annotated-guard pin was added, then 1; the `typeof` rule 6;
+the receiver source 7; the `never` answer 1. Every red set is exactly its pins. Core module
+17,520 / 0 with all 74 ACTIVE `.errors.txt` cases carrying the shapes and all 40 grepped
+classes present; the embedded-lib `then` is a plain function parameter, so (a) is
+unreachable in the corpus by construction and pinned as a control.
+
+**RESIDUES, MEASURED AND NOT FIXED**: `then`'s RETURN type (the single-TP callback-return
+inference exists but `then` fails three of its gates — two type parameters, a union-wrapped
+parameter, a `U | PromiseLike<U>` return — three `residue -` pins); `Record<K, V>` → `any`
+((CHK.135)); an element-access receiver's member gap (`zf[0].b`, pre-existing); chain-depth
+display rows; `(string | "a")` under INV.5(a)'s interning; an inline guard with its own type
+parameter (refused by design); TS7006 under a shadowed-`any` callee (pre-existing);
+`typeof "object"/"function"` guards refused.
+
+**PREDICTIONS REFUTED**: the `MethodSignature` claim; "find where `getCalleeType` refuses"
+(it was not the losing reader); the nullish strip; (d) as an overload-selection defect; the
+agent's own primitive-only `typeof` rule (tsgo infers over `(string | ZO)[]` and answers
+`never`); its first shadow guard; a dead ablation arm on the first pin set; and the
+member-union branch as a gate on tsc's sources.
+
+**NEXT**: (LEGACY.0a), the `tsgo-port` pin — 29 subtests at most, one display-order family.
+Then (LEGACY.0b) per `docs/tsgo-baselines.md`, then (LEGACY.1).
+
 ### Round (P18.83) — (CHK.98)(i): the `NewExpression` argument arm — the construct side was the CONTROL and the call side's free-type-parameter rule was the GATE (2026-09-12)
 
 **Suite 18,941 → 18,986 / 0 / 3** (+45 pins, `NewExpressionContextualArgumentTest`: 32 value
@@ -775,96 +852,6 @@ the arrow's VALUE type ignores the contextual signature.
 (CHK.50)) and D5 (one row). Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order
 sends the arc.
 
-### Round (P18.74) — (CHK.130): the parentheses were asking about the SHAPE, not about what is printed — and the instrument's FOURTH blindness (2026-09-11)
-
-**Suite 18,688 → 18,699 / 0 / 3** (+11 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
-exit 0, no rebaseline; `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean.
-**The (CHK.97) union-callee family is now BYTE-IDENTICAL to both references across all 11 of
-its fixtures** — `agree 19, ours-only 0, missing 0, text-diff 0` (plus 2 rows on which the
-two references disagree with each other, see below). (P18.73)'s six form residues are gone.
-
-**THE DEFECT WAS A QUESTION ABOUT THE WRONG THING.** `typeToString`'s union arm parenthesized
-a member whose RESOLVED SHAPE is "exactly one call-or-construct signature and nothing else".
-`Type.Interface` and `Type.Reference` both EXTEND `Type.Object`, so an
-`interface ZzzS { (a: string): void }`, a `type ZzzG = (a: string) => void` alias and a
-generic instantiation of either all satisfied it — while PRINTING AS THEIR NAME. Parentheses
-exist so a rendering can be reparsed inside a `|`; a name never needs them. The predicate is
-now `unionMemberRendersAsFunctionType`, which mirrors `typeToString`'s own dispatch arm by arm
-and asks *is what we are about to print a bare arrow form*. Its KDoc lists the correspondence
-and states the maintenance obligation, because a mirror can drift.
-
-**AND THE SECOND HALF WAS NOT IN THE ITEM: THE INTERFACE CASE IS ORDER-DEPENDENT.** A
-`Type.Interface`'s member tables are LAZY (round 833), so the same interface renders BARE in a
-plain TS2322 and PARENTHESIZED in a union-callee TS2349 whose own resolution has just filled
-`callSignatures` in. That is why all six failing rows were TS2349, and why a first fixture
-written as a TS2322 showed the interface case as already correct — a repro that fails to
-reproduce, for the reason round 833 records.
-
-**THE AT-RISK ENUMERATION IS WHAT DECIDED THE ITEM, AND IT WAS DONE BEFORE ANY CODE.** Over
-all **2,910 ACTIVE `.errors.txt` baselines**, scanning every quoted type string on every
-`error TS` line: **7 baselines carry a parenthesised group adjacent to a `|`, and ZERO of
-those groups is a bare NAME** — they are conditionals (`TResult | (TResult extends … ? … : …)`)
-and intersections (`Common | (Common & A)`), neither of which reaches this predicate. So the
-remove-parens direction cannot move a baseline, which the ablation then confirmed
-independently (arm a2: **0 corpus red**). **No `LogicalParityDivergence` was needed or used** —
-the owner-guarded mechanism stayed untouched, which is the outcome an enumeration is for.
-
-**THE ABLATION FOUND THE ASYMMETRY THAT MAKES THE FIX SAFE.** a3 (parenthesize NOTHING) is
-**16 RED — the 4 must-parenthesize pins plus 4 CORPUS baselines plus 2 externals**. So the
-corpus DOES gate over-REMOVAL and does NOT gate over-ADDITION, exactly as the enumeration
-predicted from the other side. a2 and a3 partition perfectly, no pin red in both. Controls:
-a0 comment-only 0 RED, a1 parenthesize-everything **345 RED**. All four arms run against the
-FULL suite.
-
-**TWO MORE COUNTDOWN PINS — THE EIGHTH AND NINTH IN NINE ROUNDS — AND THEY ARE TWO MORE
-RECOVERED ROWS.** `AllMissingUnionMemberTest` expected `'Alfa | (Fn)'` and
-`GuardedReassignmentNarrowingTest` `'A | (F)'`: our own defect transcribed into an
-expectation. Both re-adjudicated as project fixtures and now AGREE with both references
-byte-for-byte. Per the (CHK.114) law **only the expectations changed, never the names** —
-both pins' own subjects (chaining the first missing constituent; an unguarded self-call
-refusing to reduce) are unmoved — and each KDoc records the adjudication. A tree-wide sweep
-for other `| (` expectations found only correct ones.
-
-**AND THE ROUND'S OWN INSTRUMENT WAS WRONG AGAIN — A *FOURTH* BLINDNESS, AND THIS ONE MADE A
-SUBAGENT REPORT A DOCUMENTED LAW AS CONTRADICTED.** `scripts/ref_matrix.py` folded "the two
-references report the same ROW and disagree about its MESSAGE" into **AGREE**. Not adjudicable
-is the right TREATMENT and the wrong LABEL: it inflates the number a round quotes as its prize
-and hides a whole divergence family. It bit at once — CLAUDE.md's (CHK.83) records that for
-`"a" | 1` against `number[]` tsgo's chain names the FIRST constituent and pristine's the LAST,
-and the script scored that AGREE, so the (CHK.130) recon reported the law as contradicted when
-it is **exactly reproducible** (verified here from raw bytes, all three compilers). New
-`REF-SPLIT-MSG` verdict, counted and named separately; re-deriving this round's own receipt
-with it moves `agree 21 → 19` with the two rows becoming REF-SPLIT-MSG. **A receipt is only as
-honest as the instrument, and this is the third round running in which re-taking one moved a
-number the round had already written down.**
-
-**SO (CHK.83) IS NOT CONTRADICTED — IT IS POPULATION-SPECIFIC, AND BOTH MEASUREMENTS
-REPRODUCE.** Where the source is GENERALIZED for display the references disagree with each
-other and we match pristine (the corpus oracle); where it is NOT, **both references name the
-FIRST constituent and we are alone in naming the last — 15 of 15 rows on the mix fixture,
-with the OUTER line byte-identical in every one**. That is a real ours-only family, now
-**(CHK.132)**, and the CLAUDE.md entry has gained the clause that stops the next agent making
-the same report.
-
-**THREE OUTER-LINE RESIDUES REMAIN ON THAT FIXTURE, EACH MEASURED AND REFUSED WITH A REASON**:
-an INTERSECTION member is printed bare where both references parenthesize it (**refused on
-scope — it is an ADD-parens change, the direction a3 proves the corpus gates, and
-`Common | (Common & A)` already comes out right through a DIFFERENT, AST-based renderer at
-`Checker.kt:100876`, so the two paths must be reconciled first**); an array whose element is a
-function type loses the element's parentheses, which names a DIFFERENT TYPE
-(`(a: string) => void[]`), in the `Type.Reference` arm; and a union ALIAS is not preserved
-(B416's `unionAliasStructural` does not fire for an alias whose members are function types).
-Also recorded: `typeToStringWithMapper`'s union branch parenthesizes nothing at all
-(`Checker.kt:168858`), a second and weaker renderer that emitted none of the measured rows.
-
-**THE GRID IS A CONTROL AND WAS MEASURED AS ONE**, not assumed: its 416 rows are 410
-`Cannot find name/namespace` + 3 TS7006 + 2 TS2339 + 1 TS2593, and **not one names a union** —
-(PARITY.1) in numbers for this profile set.
-
-**NEXT**: (CHK.132) and (CHK.131) are both measured and characterised; (CHK.97)'s (D3)
-IDENTICAL-signature half remains. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the
-order sends the arc.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1321,7 +1308,21 @@ CLAUDE.md § "AI agent mission".
   Family totals: ~730 lines of `Checker.kt` + ~90 of `CompilerOptions.kt` for `target`, ~254 dead lines in
   `Transformer.kt`, ~40 (resolution), ~80 (`baseUrl`), ~50 (`outFile`), 229 (`downlevelIteration`).
 
-- [ ] **(CHK.98) (i) THE `NewExpression` ARGUMENT ARM LANDED 2026-09-12 ((P18.83) note) — `newExprArgCtxTypes` through
+- [ ] **(CHK.135) `Record<K, V>` AND OTHER LIB MAPPED ALIASES RESOLVE TO BARE `any` (found by (P18.84): three MISSING
+  rows at a plain `const r: Record<string, number> = …` declaration, and it is why `reduce(cb, {} as Record<…>)`
+  selects the `initialValue: T` overload — not a contextual-typing defect).** CLAUDE.md's (EXT.11b) entry records
+  the same fact from the externals side. Measure against tsgo: `Record`, `Partial`, `Pick`, `Readonly`, `Required`,
+  `Omit`, `Exclude`/`Extract` (conditionals), a user-declared mapped alias, in declaration/argument/return/member
+  positions, graded by a wrong-typed USE; find which resolver arm answers `anyType` for a lib `type` alias whose body
+  is a mapped type (the `@useRealLibs` snapshot vs the embedded lib may differ — pin both); expect (CHK.50)'s law
+  (a newly real type surfaces every gap `any` hid) and grade on the grid, where `Record<` is everywhere in tsc's
+  sources — a REAL gate.
+
+- [x] **(CHK.98) CLOSED 2026-09-12 ((P18.84) note: stage 2 — `Promise.then`/`catch` through two union-wrapped
+  instantiations, a namespace-import callee, predicate `filter` with tsc 5.5's inferred `typeof` predicate;
+  residues: `then`'s return type through the single-TP inference's three gates, an element-access receiver's
+  member gap, `NonNullable<…>` un-distributed in display, (CHK.135)). (i) THE `NewExpression` ARGUMENT ARM LANDED
+  2026-09-12 ((P18.83) note) — `newExprArgCtxTypes` through
   the call arm's shared core (`ctxArgTypesFromSignatures`): own constructors first, explicit type arguments, overloads
   by arity, and tsc's first-pass free-TP rule (`default ?: constraint ?: unknown`) for BOTH call-likes — which is the
   real gate (1,031-2,169 substitutions per profile on the CALL side, grid unmoved); class constructor parameter

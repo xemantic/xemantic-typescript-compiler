@@ -1,3 +1,93 @@
+### Round (P18.74) — (CHK.130): the parentheses were asking about the SHAPE, not about what is printed — and the instrument's FOURTH blindness (2026-09-11)
+
+**Suite 18,688 → 18,699 / 0 / 3** (+11 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
+exit 0, no rebaseline; `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean.
+**The (CHK.97) union-callee family is now BYTE-IDENTICAL to both references across all 11 of
+its fixtures** — `agree 19, ours-only 0, missing 0, text-diff 0` (plus 2 rows on which the
+two references disagree with each other, see below). (P18.73)'s six form residues are gone.
+
+**THE DEFECT WAS A QUESTION ABOUT THE WRONG THING.** `typeToString`'s union arm parenthesized
+a member whose RESOLVED SHAPE is "exactly one call-or-construct signature and nothing else".
+`Type.Interface` and `Type.Reference` both EXTEND `Type.Object`, so an
+`interface ZzzS { (a: string): void }`, a `type ZzzG = (a: string) => void` alias and a
+generic instantiation of either all satisfied it — while PRINTING AS THEIR NAME. Parentheses
+exist so a rendering can be reparsed inside a `|`; a name never needs them. The predicate is
+now `unionMemberRendersAsFunctionType`, which mirrors `typeToString`'s own dispatch arm by arm
+and asks *is what we are about to print a bare arrow form*. Its KDoc lists the correspondence
+and states the maintenance obligation, because a mirror can drift.
+
+**AND THE SECOND HALF WAS NOT IN THE ITEM: THE INTERFACE CASE IS ORDER-DEPENDENT.** A
+`Type.Interface`'s member tables are LAZY (round 833), so the same interface renders BARE in a
+plain TS2322 and PARENTHESIZED in a union-callee TS2349 whose own resolution has just filled
+`callSignatures` in. That is why all six failing rows were TS2349, and why a first fixture
+written as a TS2322 showed the interface case as already correct — a repro that fails to
+reproduce, for the reason round 833 records.
+
+**THE AT-RISK ENUMERATION IS WHAT DECIDED THE ITEM, AND IT WAS DONE BEFORE ANY CODE.** Over
+all **2,910 ACTIVE `.errors.txt` baselines**, scanning every quoted type string on every
+`error TS` line: **7 baselines carry a parenthesised group adjacent to a `|`, and ZERO of
+those groups is a bare NAME** — they are conditionals (`TResult | (TResult extends … ? … : …)`)
+and intersections (`Common | (Common & A)`), neither of which reaches this predicate. So the
+remove-parens direction cannot move a baseline, which the ablation then confirmed
+independently (arm a2: **0 corpus red**). **No `LogicalParityDivergence` was needed or used** —
+the owner-guarded mechanism stayed untouched, which is the outcome an enumeration is for.
+
+**THE ABLATION FOUND THE ASYMMETRY THAT MAKES THE FIX SAFE.** a3 (parenthesize NOTHING) is
+**16 RED — the 4 must-parenthesize pins plus 4 CORPUS baselines plus 2 externals**. So the
+corpus DOES gate over-REMOVAL and does NOT gate over-ADDITION, exactly as the enumeration
+predicted from the other side. a2 and a3 partition perfectly, no pin red in both. Controls:
+a0 comment-only 0 RED, a1 parenthesize-everything **345 RED**. All four arms run against the
+FULL suite.
+
+**TWO MORE COUNTDOWN PINS — THE EIGHTH AND NINTH IN NINE ROUNDS — AND THEY ARE TWO MORE
+RECOVERED ROWS.** `AllMissingUnionMemberTest` expected `'Alfa | (Fn)'` and
+`GuardedReassignmentNarrowingTest` `'A | (F)'`: our own defect transcribed into an
+expectation. Both re-adjudicated as project fixtures and now AGREE with both references
+byte-for-byte. Per the (CHK.114) law **only the expectations changed, never the names** —
+both pins' own subjects (chaining the first missing constituent; an unguarded self-call
+refusing to reduce) are unmoved — and each KDoc records the adjudication. A tree-wide sweep
+for other `| (` expectations found only correct ones.
+
+**AND THE ROUND'S OWN INSTRUMENT WAS WRONG AGAIN — A *FOURTH* BLINDNESS, AND THIS ONE MADE A
+SUBAGENT REPORT A DOCUMENTED LAW AS CONTRADICTED.** `scripts/ref_matrix.py` folded "the two
+references report the same ROW and disagree about its MESSAGE" into **AGREE**. Not adjudicable
+is the right TREATMENT and the wrong LABEL: it inflates the number a round quotes as its prize
+and hides a whole divergence family. It bit at once — CLAUDE.md's (CHK.83) records that for
+`"a" | 1` against `number[]` tsgo's chain names the FIRST constituent and pristine's the LAST,
+and the script scored that AGREE, so the (CHK.130) recon reported the law as contradicted when
+it is **exactly reproducible** (verified here from raw bytes, all three compilers). New
+`REF-SPLIT-MSG` verdict, counted and named separately; re-deriving this round's own receipt
+with it moves `agree 21 → 19` with the two rows becoming REF-SPLIT-MSG. **A receipt is only as
+honest as the instrument, and this is the third round running in which re-taking one moved a
+number the round had already written down.**
+
+**SO (CHK.83) IS NOT CONTRADICTED — IT IS POPULATION-SPECIFIC, AND BOTH MEASUREMENTS
+REPRODUCE.** Where the source is GENERALIZED for display the references disagree with each
+other and we match pristine (the corpus oracle); where it is NOT, **both references name the
+FIRST constituent and we are alone in naming the last — 15 of 15 rows on the mix fixture,
+with the OUTER line byte-identical in every one**. That is a real ours-only family, now
+**(CHK.132)**, and the CLAUDE.md entry has gained the clause that stops the next agent making
+the same report.
+
+**THREE OUTER-LINE RESIDUES REMAIN ON THAT FIXTURE, EACH MEASURED AND REFUSED WITH A REASON**:
+an INTERSECTION member is printed bare where both references parenthesize it (**refused on
+scope — it is an ADD-parens change, the direction a3 proves the corpus gates, and
+`Common | (Common & A)` already comes out right through a DIFFERENT, AST-based renderer at
+`Checker.kt:100876`, so the two paths must be reconciled first**); an array whose element is a
+function type loses the element's parentheses, which names a DIFFERENT TYPE
+(`(a: string) => void[]`), in the `Type.Reference` arm; and a union ALIAS is not preserved
+(B416's `unionAliasStructural` does not fire for an alias whose members are function types).
+Also recorded: `typeToStringWithMapper`'s union branch parenthesizes nothing at all
+(`Checker.kt:168858`), a second and weaker renderer that emitted none of the measured rows.
+
+**THE GRID IS A CONTROL AND WAS MEASURED AS ONE**, not assumed: its 416 rows are 410
+`Cannot find name/namespace` + 3 TS7006 + 2 TS2339 + 1 TS2593, and **not one names a union** —
+(PARITY.1) in numbers for this profile set.
+
+**NEXT**: (CHK.132) and (CHK.131) are both measured and characterised; (CHK.97)'s (D3)
+IDENTICAL-signature half remains. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the
+order sends the arc.
+
 ### Round (P18.73) — (CHK.97) D2b: the silence that hid a true positive, and a design decided by BUILDING the alternative (2026-09-11)
 
 **Suite 18,679 → 18,688 / 0 / 3** (+9 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`

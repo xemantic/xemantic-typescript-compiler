@@ -19,6 +19,25 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.84) — (CHK.98) STAGE 2: `Promise.then`, A NAMESPACE-IMPORT CALLEE AND PREDICATE `filter` — TWO INSTANTIATIONS THAT NO-OP'D A UNION-WRAPPED FUNCTION TYPE, AND THE ITEM CLOSES, 19,028 / 0 / 3 (2026-09-12).**
+The first round measured against tsgo 7.0.2 ALONE (owner directive the same day). A
+callback passed to `then`/`catch` was untyped because the lib parameter is
+`((value: T) => …) | undefined | null` and BOTH the generic-member resolver's parameter
+branch and `instantiateContextualParamType` no-op'd a union-wrapped function type — the
+nullish strip everyone suspected was never the loss (a marker showed the pull receiving
+`params=[T]`). A namespace-import callee's pull now falls to `resolveNamespaceQualifiedSymbol`
+where the access answered `any`, refusing a lexically shadowed root SYNTACTICALLY (an
+`any`-annotated parameter is registered nowhere). Predicate `filter`'s loss was an
+inline-arrow leg missing from `predicateTargetTypeOfGuardExpr` — (P18.77)'s "lib `filter`
+is a `MethodSignature`" claim refuted — and tsc 5.5's inferred `typeof` predicate landed
+with it, closing a pre-existing false positive. `reduce(cb, {} as Record<…>)` is not
+contextual typing: `Record<K, V>` resolves to bare `any`, now (CHK.135). Promise family
+0/0/12 → 9/0/3, namespace 1/0/4 → 5/0/0, filter 1/0/5 → 6/0/1; the instantiator arm fires
+1,159-2,455 times per profile with the grid at 8×0/0 (a GATE, green). Eleven ablation arms,
+one found dead on the first pin set and repaired. cost_gate exit 0 (within +0.05% of
+rebuilt HEAD), huge_methods exit 0, warning-clean. **(CHK.98) is CHECKED OFF**; the queue's
+head is now (LEGACY.0), the owner's corpus re-pin.
+
 **(P18.83) — (CHK.98)(i): THE `NewExpression` ARGUMENT ARM — THE CONSTRUCT SIDE WAS THE CONTROL AND THE CALL SIDE'S FREE-TYPE-PARAMETER RULE WAS THE GATE, 18,986 / 0 / 3 (2026-09-12).**
 A callback passed to a constructor now gets its parameter types through the call arm's own
 core (`ctxArgTypesFromSignatures`), with tsc's rules for a `new`: a class callee's OWN
@@ -87,22 +106,3 @@ tsc's optional-tuple display landed with it. Ablation 31/4/15/9/2 RED over 45 pi
 reddening the compiler profile to 47 rows. cost_gate exit 0 (18/20 digit-identical;
 `globals.lookups` +19 is the `Function` consult), huge_methods exit 0, warning-clean.
 (CHK.134) stays open on `bind`.
-
-**(P18.79) — (CHK.133)(b): THE RELATION'S `this` LEG — ONE PREDICATE, THREE ELABORATION SITES, AND A BIVARIANCE RULE THAT WAS AN UNDER-APPROXIMATION, 18,809 / 0 / 3 (2026-09-12).**
-`Relater.signatureThisTypesRelated` is tsc's `compareSignaturesRelated` `this` leg (a source
-`this` other than `void` must relate to the target's; contravariant, or either direction
-where `strictVariance` is off), consulted by the verdict AND by all three elaboration sites
-so the chain line cannot contradict it — and `checkPropertyAccessAssignment` had no callable
-elaboration at all. **The existing `bivariantParams` ("both sides MethodDeclaration") is an
-under-approximation of tsc's TARGET-kind rule and reused verbatim was a false positive** on
-a function value into a method-signature member; the `this` leg takes the target's kind, the
-parameter leg is untouched. Census: 2,639-3,110 reached per profile, ALL a signature related
-to ITSELF (the lib's type-parameter `this`), zero refusals, zero real comparisons of two
-different concrete `this` types anywhere — the queue's "likely a REAL gate" refuted, grid a
-CONTROL. Fourteen fixture families `missing → agree`, zero REF-SPLIT, every emitting row
-byte-identical to pristine including chain nesting; `looseThisTypeInFunctions:21` byte-
-identical. Ablation 17/5/1/16 RED over 28 pins. cost_gate exit 0 with all 20 counters
-digit-identical to the rebuilt HEAD, huge_methods exit 0, warning-clean. **(CHK.133) is
-CHECKED OFF**; `.call/.apply/.bind` sized read-only as a NEW mechanism (member-miss
-augmentation with `CallableFunction` + inference through a `this`-typed lib signature;
-81/18/12 sites on the compiler profile, so a REAL gate) and queued as **(CHK.134)**.
