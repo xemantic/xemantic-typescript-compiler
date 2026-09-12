@@ -25,6 +25,84 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.75) — (CHK.97) D3, the IDENTICAL half: a union contextual signature is answered, and the brief's own fixture never reached the arm (2026-09-12)
+
+**Suite 18,699 → 18,718 / 0 / 3** (+19 pins, `UnionContextualSignatureIdenticalTest`). Grid
+8×`added=0 removed=0`; `cost_gate.py` exit 0, no rebaseline (`mapped.keyed` +1.18% and
+`mapped.hits` +1.03% are BASELINE STALENESS — the pristine before-binary through `--from-log`
+reads every one of the 20 counters digit-identical to the fixed one, so the fix moves zero
+counters); `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean. **(CHK.97) stays
+OPEN** — D3's DIFFERING half, D5 and D6 remain.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item and the last three
+round notes each named D3's identical half as the next tractable sub-step. Per the WORK ORDER's
+2026-09-08 addendum the successor is **(INV.0) step 10b-ii**.
+
+**THE FIX IS tsc's OWN RULE, ~50 LINES.** `callableSignaturesForCtx`'s union arm refused at the
+SECOND callable member (`if (single != null) return null`). It now collects every callable member
+and hands ≥2 to `unionContextualSignature` — the union arm of tsc's `getContextualSignature`
+(checker.ts:33224): each member contributes its ONE own call signature, every later one must be
+`compareSignaturesIdentical(first, sig, partialMatch = false, ignoreReturnTypes = true)` (`this`
+ignored by construction — `getParameterSymbols` never lists it), and the answer is
+`createUnionSignature` — the first member's parameters with the members' RETURNS unioned. A
+failing comparison answers null, which is today's silence: the DIFFERING half (tsc's TS7006 on
+the parameter) is NOT emitted and is recorded below. The single-callable-member path is
+byte-for-byte the old code.
+
+**THE BRIEF'S FIXTURE SHAPE WAS THE WRONG INSTRUMENT.** The obvious repro —
+`declare const zf: A | B; zf((p) => …)` — never reaches the union arm at all: the argument is
+handed the COMBINED signature's parameter (stage 1's `combineUnionSignatures`), so both
+references print TS7006 + TS2345 there and the shape measures the union CALLEE, not the union
+CONTEXTUAL TYPE. The whole matrix was re-cut through `declare function take(cb: A | B)` and
+through annotations (variable, object-literal property, return position). Before → after per
+fixture (`agree/ours-only/missing`, zero REF-SPLIT anywhere): identical params with differing
+returns 0/0/1 → 1/0/0; identical params and returns 0/0/1 → 1/0/0; three members 0/0/1 → 1/0/0;
+a nullish member beside two identical ones 0/0/1 → 1/0/0; differing `this` 0/0/1 → 1/0/0; the
+four positions (call argument, variable annotation, object-literal property, return) 0/2/4 →
+4/0/0 — the TWO ours-only TS7006 rows that the old refusal manufactured are gone. Unchanged and
+correctly so: differing parameter TYPES, differing ARITY, `(x?: string)` vs `(x: string)`
+(not identical, refused on both sides).
+
+**TWO CONSERVATISMS THE HELPER NEEDS BECAUSE IT HAS NO NODE.** tsc filters each member's
+signatures by the ARROW's arity (`getContextualCallSignature`) before comparing; this helper is
+called without the arrow, so an OVERLOADED member refuses the whole union (measured residue, 2
+missing TS2322 rows, pinned as `residue - …`). And a `Type.Reference` whose OWN signatures are
+still lazy refuses rather than reading its TARGET's — the single-member path's target-fallback
+would have read `Cb<string> | Cb<number>` as identical and handed the arrow a bare `T`; that
+control is one of the three pins arm a2 reddens.
+
+**THE ARM ANSWERS ZERO TIMES ON EVERY PROFILE, SO THE GRID IS A CONTROL AND WAS MEASURED AS
+ONE.** A temporary counter read 0 on all eight dashboard profiles, 0 on `marked`, 0 on the
+2,400-file generated project and 14 on the round's own fixture — the KDoc first asserted the
+opposite and was corrected. The marker was removed and the shipped class proven
+bytecode-identical to the gated build (`javap -c -p` minus line numbers).
+
+**ABLATION (per-arm `cmp` snapshot, rebuilt after every restore, 19 pins per arm)**: a1 the
+arm restored to `return null` — **12 RED**; a2 an arity-only comparison — **3 RED** (the
+differing-types control, the `Cb<string> | Cb<number>` control, a nested differing pair); a3
+the FIRST member's return instead of the union — **1 RED**, and the obvious discriminator does
+not exist: the arrow's own return checked against the declared union never sees it (residue 7
+below); what does is the unioned return reaching a NESTED concise-body arrow whose inner
+contextual type is then a DIFFERING pair, so the inner parameter must be TS7006 — first-return-
+only types it and silences the row both references print.
+
+**RESIDUES, MEASURED AND NOT FIXED**: (1) the DIFFERING half — differing types, arity, an
+overloaded-vs-plain pair, a generic member, `(x?:)` vs `(x:)` — references TS7006, ours silent
+(the (CHK.98) territory the item already names; the arity walker records `typed = true` with no
+type); (2) the overloaded member above; (3) a BOTH-generic identical pair (references type
+`p: T`, ours nothing); (4) a REST contextual parameter against a plain arrow parameter types
+`string[]` for `string` — pre-existing on a SINGLE member too; (5) reads inside a NESTED arrow
+body of a contextually typed parameter report nothing — pre-existing single-member control; (6)
+TS2683 beside a union contextual `this`: `this` IS typed from the first member (its TS2322
+agrees with both references) but the TS2683 emitter's `typeIsFunctionWithThisParam` wants a
+`Type.Object`, so the ours-only TS2683 stays; (7) a concise-body object literal against a union
+of object-returning members is a pre-existing ours-only TS2322 (`(p: any) => { k: string; }`) —
+the arrow's VALUE type ignores the contextual signature.
+
+**NEXT**: (CHK.97)'s remaining rows are D3's DIFFERING half (TS7006 emission, unbounded per
+(CHK.50)) and D5 (one row). Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order
+sends the arc.
+
 ### Round (P18.74) — (CHK.130): the parentheses were asking about the SHAPE, not about what is printed — and the instrument's FOURTH blindness (2026-09-11)
 
 **Suite 18,688 → 18,699 / 0 / 3** (+11 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
@@ -893,66 +971,6 @@ retained tables leave block-scoped declarations unbound.
 **NEXT**: 10b-ii once its two unmasked families close; (CHK.118) and 10b-iii are independent
 and smaller.
 
-### Round (P18.64) — (INV.0) step 10c: heritage and qualified names, and the resolver the item named was not the one that mattered (2026-09-10)
-
-**Suite 18,536 → 18,541 / 0 / 3** (+5 pins). **8-profile grid `added=0 removed=0` on all
-eight** (cumulative with 10b, against the pre-10b binary), `cost_gate.py` exit 0 with
-counters IDENTICAL to the 10b run, `huge_methods.py` exit 0 (844 classes), warning-clean.
-
-**THE ITEM POINTED AT `NameResolver.resolveHeritageBaseSymbol`. IT WAS GIVEN THE CONSULT AND
-NOTHING MOVED.** A base type's MEMBERS come from `Checker.getTypeFromBaseTypeExpression` —
-a FOURTH resolver, the one `resolveBaseTypesLazy` calls — so `interface J extends I` with a
-block-scoped `I` had been resolving `J` perfectly since 10a and inheriting NOTHING. And the
-`implements` VERDICT comes from a FIFTH probe, `checkImplementsClauses`' own
-`lookupPerFileForNode`, which is why a class with a block-scoped `implements` target
-reported the whole-class **TS2420 about the OUTER interface** where both references report
-the per-property **TS2416** about the inner one. **Three resolvers were needed where the
-item named one, and each was found by measuring rather than by reading** — the first patch
-was landed, measured, and read as INERT before the second was looked for.
-
-**THE PRIZE, OVER A 25-CELL MATRIX** (5 shapes × 3 nesting sites × unique/shadowing;
-`scratchpad/c/`), against tsgo 7.0.2 AND pristine 6.0.3, **which agree on all 25**, with the
-file-level control **5/5 clean**: **10 ours-only and 28 lost rows → 4 and 20**.
-`interface extends` 2/6 → **0/2**, `implements` 2/4 → **0/4** (the false TS2420 gone), the
-qualified enum root 4/6 → **2/2**. Every remaining row at a B83.5 site, none at the control.
-
-**THE QUALIFIED ROOT IS ADOPTED ONLY ON EVIDENCE, AND THE ASYMMETRY IS IN `declareLexical`
-RATHER THAN IN THE CONSULT.** Its enum arm publishes the members onto the scope symbol's
-`exports`; its `ModuleDeclaration` arm does not, because a scope-space namespace's members
-live in the module's own `LexicalScope`. So the root is taken only when it HAS an `exports`
-table — adopting a memberless one turns a wrong answer into NO answer, degrading the
-annotation to `any` and losing every member that did resolve. That is the one place in this
-arc where "resolve it correctly" is measurably worse than "leave it alone".
-
-**WHAT IS NOT CLOSED, AND THE BASE IS NOT THE REASON.** `class D extends B` with a
-block-scoped `B` is untouched because the DERIVED class is scope-space too, so `new D()`
-needs 10b's VALUE half — refused until 10b-ii. Every pin here therefore reads its answer
-through an `interface` or through a class used only as an `implements` target. Residue: the
-`namespace` qualified root above (2 ours-only), a second TS2694 walker that still answers
-the OUTER enum for a shadowing qualified reference and renders its namespace `'"a".ZzzE'`
-where both references render `'ZzzE'` (2 ours-only), and `extends`/`implements`' missing
-true rows (10 of the 20), all behind 10b-ii.
-
-**ABLATION: five arms, union 5 of 5 — every pin discriminates, the arc's first perfect
-sweep since step 8.** C1 (base-type consult) 2 RED with one unique; **C2 (the same consult
-as a FALLBACK) 1 RED and no unique pin, which is the finding rather than a redundancy** —
-its red set is a strict SUBSET of C1's, and the pin that survives is the UNIQUE one, i.e.
-round 748's ordering law re-measured one resolver over: a fallback closes the unique half
-and leaves the shadowing one untouched. **C3 (the `implements` probe) reddens BOTH its pins
-including the negative control**, because without the consult a unique block-scoped target
-resolves to nothing and the walker `continue`s, so the TS2420 that must fire disappears too
-— one arm, two directions. C4 (the qualified root) 1 RED unique. **C5 (the root's evidence
-gate) 0 RED, UNDISCRIMINATED and recorded**: its whole population is the `namespace` kind,
-whose qualified reads are wrong BOTH ways today, so a pin either way would assert a
-known-wrong value — the countdown CLAUDE.md forbids.
-
-**COST IS EXACTLY ZERO ON THE PROFILES AND THAT IS THE EXPECTED ANSWER, NOT A GREEN LIGHT**:
-all 20 `cost_gate.py` counters are identical to the 10b run to the last digit, because tsc's
-own 78 sources carry no scope-space heritage base and no scope-space qualified root. The
-grid is likewise a CONTROL here; the reference matrix is the measurement.
-
-**NEXT**: 10d (the two `TypeOracle` rows), then 10b-ii once its two unmasked families close.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1013,7 +1031,16 @@ to. The (P18.44) restore had placed it directly ABOVE the first queue item, wher
 ORDER, or the first queue item is missing — a doc invariant is only as good as the thing that
 notices it is gone.
 
-- [ ] **(CHK.97) STAGE 3 DELIVERABLE 4 LANDED 2026-09-11 ((P18.71) note) — the nullish-union callee's
+- [ ] **(CHK.97) D3 IDENTICAL HALF LANDED 2026-09-12 ((P18.75) note) — `callableSignaturesForCtx`'s union
+  arm runs tsc's `getContextualSignature` union rule (`unionContextualSignature`: one own signature per member,
+  `compareSignaturesIdentical` with returns ignored, `createUnionSignature`); six fixture families `missing → agree`,
+  two ours-only TS7006 rows gone; an OVERLOADED member and a lazy `Type.Reference` member refuse (no arrow in hand);
+  the arm answers 0× on every profile so the grid is a CONTROL. **STILL OPEN: D3's DIFFERING half** (references
+  TS7006 on the parameter, ours silent — the arity walker records `typed = true` with no type, (CHK.98) territory,
+  unbounded per (CHK.50)), the overloaded-member residue, a both-generic identical pair, **D5** and **D6**. The
+  brief's fixture `declare const zf: A | B; zf((p) => …)` NEVER reaches the arm (the argument gets the combined
+  callee signature's parameter) — probe through `take(cb: A | B)` or an annotation. PREVIOUS HEAD: STAGE 3
+  DELIVERABLE 4 LANDED 2026-09-11 ((P18.71) note) — the nullish-union callee's
   ARGUMENT check. ALL SIX stage-3 deliverables were MEASURED against tsgo 7.0.2 and pristine 6.0.3 first
   (zero REF-SPLIT rows anywhere, so every verdict is adjudicable), and the item's own framing was wrong
   twice. **(D4) CLOSED**: the axis is a callee **TYPE** that is a nullish union, NOT the `?.` token —

@@ -36181,6 +36181,7 @@ class Checker(
         val obj: Type.Object = when (type) {
             is Type.Union -> {
                 var single: Type.Object? = null
+                var several: MutableList<Type.Object>? = null
                 for (m in type.types) {
                     if (m !is Type.Object) continue
                     resolveStructuredTypeMembers(m)
@@ -36190,10 +36191,14 @@ class Checker(
                             !m.target.callSignatures.isNullOrEmpty()
                         })
                     if (callable) {
-                        if (single != null) return null // ≥2 callable members: no single ctx sig
-                        single = m
+                        val first = single
+                        if (first == null) single = m
+                        else (several ?: mutableListOf(first).also { several = it }).add(m)
                     }
                 }
+                // (CHK.97) D3: ≥2 callable members — tsc's union arm of `getContextualSignature`,
+                // the IDENTICAL-signature half only.
+                several?.let { return unionContextualSignature(it) }
                 single ?: return null
             }
             is Type.Object -> type
@@ -36206,6 +36211,49 @@ class Checker(
             sigs = obj.target.callSignatures
         }
         return if (sigs.isNullOrEmpty()) null else sigs
+    }
+
+    /**
+     * (CHK.97) D3, the IDENTICAL half of tsc's `getContextualSignature` (checker.ts:33224)
+     * for a UNION contextual type with SEVERAL callable [members]: each member contributes
+     * its call signature, every later one must be `compareSignaturesIdentical` to the
+     * first with `partialMatch = false` and return types IGNORED (`this` types are ignored
+     * by construction — [getParameterSymbols] drops the `this` pseudo-parameter), and the
+     * answer is [createUnionSignature] — the FIRST member's parameters with the members'
+     * RETURN types unioned. Any member that fails the comparison refuses the whole union
+     * (tsc: the callback parameter is then implicitly `any`, i.e. TS7006 — the DIFFERING
+     * half, NOT emitted here: the refusal answers null and today's silence stands).
+     *
+     * tsc hands each member through `getContextualCallSignature`, which filters the
+     * member's signatures by the ARROW's arity and folds several applicable ones through
+     * `getIntersectedSignatures`. This helper has no node in hand, so a member contributes
+     * ONLY when it has exactly ONE call signature of its OWN — an OVERLOADED member is
+     * refused (measured residue: `interface Ov { (x: string): void; (x: string, y: number):
+     * void }` beside `(x: string, y: number) => number` types nothing where both references
+     * type `p`/`q`), and so is a `Type.Reference` whose own signatures are still lazy
+     * (comparing the TARGET's unsubstituted signatures would read `Cb<string>` and
+     * `Cb<number>` as identical and hand the arrow a bare `T`).
+     *
+     * A newly non-null answer here types the arrow's parameters PROGRAM-WIDE through
+     * [applyPulledContextualParamTypes] and threads a UNION return into a concise body
+     * through [contextualSigReturnTypeForCtx] — (CHK.50)'s law. MEASURED: the arm answers
+     * ZERO times on all eight dashboard profiles, on `marked` and on the 2,400-file
+     * generated project (14 times on the round's own fixture, so the instrument is live),
+     * i.e. the `added=0 removed=0` grid is a CONTROL and the pins plus the corpus are the
+     * gate ([UnionContextualSignatureIdenticalTest]).
+     */
+    private fun unionContextualSignature(members: List<Type.Object>): List<Signature>? {
+        var first: Signature? = null
+        val list = ArrayList<Signature>(members.size)
+        for (m in members) {
+            val sig = m.callSignatures?.singleOrNull() ?: return null
+            val head = first
+            if (head == null) first = sig
+            else if (!compareSignaturesIdentical(head, sig, partialMatch = false, ignoreReturnTypes = true)) return null
+            list.add(sig)
+        }
+        val head = first ?: return null
+        return listOf(createUnionSignature(head, list))
     }
 
     /**

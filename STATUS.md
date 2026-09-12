@@ -19,6 +19,24 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.75) — (CHK.97) D3, THE IDENTICAL HALF: A UNION CONTEXTUAL SIGNATURE IS ANSWERED, AND THE BRIEF'S OWN FIXTURE NEVER REACHED THE ARM, 18,718 / 0 / 3 (2026-09-12).**
+`callableSignaturesForCtx` refused a union contextual type at its SECOND callable member;
+it now runs tsc's union arm of `getContextualSignature` — every member's one signature must
+be `compareSignaturesIdentical` to the first with returns ignored, and the answer is the
+first's parameters with the RETURNS unioned (`unionContextualSignature`, ~50 lines). Six
+fixture families go `missing → agree` and the TWO ours-only TS7006 rows the refusal
+manufactured are gone; the DIFFERING half (tsc's TS7006) stays silent and is recorded, as
+are an OVERLOADED member (the helper has no arrow, so it cannot arity-filter as tsc does)
+and a `Type.Reference` with lazy own signatures (the target fallback would read
+`Cb<string> | Cb<number>` as identical). **The obvious fixture, `declare const zf: A | B;
+zf((p) => …)`, never reaches the arm** — the argument gets the COMBINED callee signature's
+parameter — so the whole matrix was re-cut through `take(cb: A | B)` and annotations. The
+arm answers ZERO times on all eight profiles, `marked` and the 2,400-file project (14 on the
+fixture), so the 8×`added=0 removed=0` grid is a measured CONTROL. Ablation 12/3/1 RED over 19
+pins, a3 discriminated only by a NESTED differing pair. cost_gate exit 0 (all 20 counters
+digit-identical to the pristine binary — the +1.18% is baseline staleness), huge_methods exit
+0 (844), warning-clean. (CHK.97) stays open: D3-differing, D5, D6.
+
 **(P18.74) — (CHK.130): THE PARENTHESES WERE ASKING ABOUT THE *SHAPE*, NOT ABOUT WHAT IS PRINTED — AND THE INSTRUMENT'S FOURTH BLINDNESS, 18,699 / 0 / 3 (2026-09-11).**
 `typeToString` parenthesized a union member whose RESOLVED SHAPE is "one call-or-construct
 signature and nothing else" — but `Type.Interface` and `Type.Reference` both EXTEND
@@ -159,54 +177,3 @@ recorded in the pin KDoc and **not pinned** (no countdown pins). Two findings qu
 (CHK.129) an `as`-asserted callee loses its argument check entirely, and (CHK.128)
 `arr?.[0]` on a nullish array union types as `any`. Grid 8×`added=0 removed=0`, cost_gate
 exit 0 (no rebaseline, max `mapped.keyed` +1.18%), huge_methods exit 0 (844), warning-clean.
-
-**(P18.70) — SIX (CHK.*) ITEMS, AND THE INSTRUMENT THAT WAS DROPPING ROWS, 18,652 / 0 / 3 (2026-09-11).**
-Two (CHK.\*) items closed and **both queue items were wrong about their own size**, a
-sixth round running. **(CHK.122)**: the item named ONE route for a missing `in`-guard
-consult; measured against both references it is FOUR — flow, destructured, FILE-LEVEL
-`const`, PARAMETER — and the last two never touch the `any` bail the route helpers
-live on, so a per-route fix could not reach them. The consult went to the emission
-FUNNEL. **The round's real decision was found by measuring**: with exhaustion
-REFUSING, the profiles read `refused=5 exhausted=5` on services/server/harness, i.e.
-every refusal on tsc's own sources was BLIND. It now DECLINES on exhaustion, so it
-can suppress only on a POSITIVE finding — all eight profiles read `refused=0`, and
-the residue is pinned AS a residue. **(CHK.119)**: the item says a `function` receiver
-NEVER reports TS2339; it does, and **every row it emitted carried a display neither
-reference produces**. Four expando WRITE forms were uncollected (element-access,
-no-substitution-template, template-span, tagged) — each an ours-only FALSE POSITIVE —
-and the display is now the SIGNATURE for a function with no expando. **The order of
-those two fixes is load-bearing and is pinned.** **THE GRID IS A CONTROL FOR (CHK.119),
-NOT A GATE, AND THE ROUND SAYS SO**: B431 emits ZERO rows on all eight profiles.
-**THE INSTRUMENT FAILED TWICE, BOTH TIMES PLAUSIBLY** — `scripts/ref_matrix.py`
-(new: the three-compiler adjudication every round rebuilds and discards) first parsed
-only the REFERENCE row format and read our row set as empty (`missing=8` where we
-emit all 8), then keyed on `(file, line, code)` so two rows of one code on one line
-COLLAPSED. Both now refuse/resolve, plus TEXT-DIFF for a message divergence, which
-(PARITY.1) says nothing else in the repo could see. Every conclusion drawn with the
-broken key was re-run. **The Phase-18 WORK ORDER note was trimmed away a SECOND time**
-by (P18.66) — restored, re-anchored under a `## QUEUE` heading, and
-`scripts/check_plan_structure.py` now fails when it is gone. **(CHK.125)**: TS2394's predicate knew only `any`, so an ordinary
-`f(string)/f(number)/f(unknown)` overload set was an ours-only FP — tsc's rule is TWO
-rules (RETURN assignable in EITHER direction, PARAMETERS requiring the impl be wider),
-and `unknown`/`never` are assignable in exactly one direction each, so the positions
-disagree about four of eight combinations; ten cells measured, three of them negative
-controls that still report. **(CHK.126)**: every silence-asserting pin in
-`M04ExpandoSpineMigrationTest` re-measured — **ten countdowns, not the eight queued**,
-renamed `residue - ` with their reference rows; **and three were made UNFALSIFIABLE by
-this round's own (CHK.119) display change** (they keyed on `typeof Foo`, which an
-expando-free function can no longer produce), fixed in the same session that broke them
-and verified falsifiable rather than assumed. The audit found **(CHK.127)** — the
-collector OVER-declares in the opposite direction from (CHK.119) — **and it was closed
-in the same round**: twelve positions measured against both references, an object
-literal is a HARD STOP (an array nested in an objlit value and an objlit nested in an
-array are both refused, which rules out a rule about the immediate parent), and its own
-residue pin from one commit earlier fired as designed. **(CHK.124) PARTLY CLOSED, AND ITS GATE IS THE FINDING**: B431 required a NESTED
-read, so the item's headline shape — a FILE-LEVEL read, no nesting — was silent;
-EX_TOP is now admitted. **The 8-profile grid is VACUOUS for this family, measured**
-— a positive control reads **0 admissions on all eight profiles and 0 on cronstrue,
-marked and a 600-file project** — so the CORPUS was the gate, and it caught a real
-defect first try (a dangling dot's zero-width identifier grew a `Property ''…` row;
-B431 was missing the empty-name guard its sibling has always had). Two residue pins
-written earlier in the same session fired as designed and were converted. The
-receiver-KIND half of (CHK.124) stays open and pinned as refusals.
-

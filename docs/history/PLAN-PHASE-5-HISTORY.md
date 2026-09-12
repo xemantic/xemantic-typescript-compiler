@@ -1,3 +1,63 @@
+### Round (P18.64) — (INV.0) step 10c: heritage and qualified names, and the resolver the item named was not the one that mattered (2026-09-10)
+
+**Suite 18,536 → 18,541 / 0 / 3** (+5 pins). **8-profile grid `added=0 removed=0` on all
+eight** (cumulative with 10b, against the pre-10b binary), `cost_gate.py` exit 0 with
+counters IDENTICAL to the 10b run, `huge_methods.py` exit 0 (844 classes), warning-clean.
+
+**THE ITEM POINTED AT `NameResolver.resolveHeritageBaseSymbol`. IT WAS GIVEN THE CONSULT AND
+NOTHING MOVED.** A base type's MEMBERS come from `Checker.getTypeFromBaseTypeExpression` —
+a FOURTH resolver, the one `resolveBaseTypesLazy` calls — so `interface J extends I` with a
+block-scoped `I` had been resolving `J` perfectly since 10a and inheriting NOTHING. And the
+`implements` VERDICT comes from a FIFTH probe, `checkImplementsClauses`' own
+`lookupPerFileForNode`, which is why a class with a block-scoped `implements` target
+reported the whole-class **TS2420 about the OUTER interface** where both references report
+the per-property **TS2416** about the inner one. **Three resolvers were needed where the
+item named one, and each was found by measuring rather than by reading** — the first patch
+was landed, measured, and read as INERT before the second was looked for.
+
+**THE PRIZE, OVER A 25-CELL MATRIX** (5 shapes × 3 nesting sites × unique/shadowing;
+`scratchpad/c/`), against tsgo 7.0.2 AND pristine 6.0.3, **which agree on all 25**, with the
+file-level control **5/5 clean**: **10 ours-only and 28 lost rows → 4 and 20**.
+`interface extends` 2/6 → **0/2**, `implements` 2/4 → **0/4** (the false TS2420 gone), the
+qualified enum root 4/6 → **2/2**. Every remaining row at a B83.5 site, none at the control.
+
+**THE QUALIFIED ROOT IS ADOPTED ONLY ON EVIDENCE, AND THE ASYMMETRY IS IN `declareLexical`
+RATHER THAN IN THE CONSULT.** Its enum arm publishes the members onto the scope symbol's
+`exports`; its `ModuleDeclaration` arm does not, because a scope-space namespace's members
+live in the module's own `LexicalScope`. So the root is taken only when it HAS an `exports`
+table — adopting a memberless one turns a wrong answer into NO answer, degrading the
+annotation to `any` and losing every member that did resolve. That is the one place in this
+arc where "resolve it correctly" is measurably worse than "leave it alone".
+
+**WHAT IS NOT CLOSED, AND THE BASE IS NOT THE REASON.** `class D extends B` with a
+block-scoped `B` is untouched because the DERIVED class is scope-space too, so `new D()`
+needs 10b's VALUE half — refused until 10b-ii. Every pin here therefore reads its answer
+through an `interface` or through a class used only as an `implements` target. Residue: the
+`namespace` qualified root above (2 ours-only), a second TS2694 walker that still answers
+the OUTER enum for a shadowing qualified reference and renders its namespace `'"a".ZzzE'`
+where both references render `'ZzzE'` (2 ours-only), and `extends`/`implements`' missing
+true rows (10 of the 20), all behind 10b-ii.
+
+**ABLATION: five arms, union 5 of 5 — every pin discriminates, the arc's first perfect
+sweep since step 8.** C1 (base-type consult) 2 RED with one unique; **C2 (the same consult
+as a FALLBACK) 1 RED and no unique pin, which is the finding rather than a redundancy** —
+its red set is a strict SUBSET of C1's, and the pin that survives is the UNIQUE one, i.e.
+round 748's ordering law re-measured one resolver over: a fallback closes the unique half
+and leaves the shadowing one untouched. **C3 (the `implements` probe) reddens BOTH its pins
+including the negative control**, because without the consult a unique block-scoped target
+resolves to nothing and the walker `continue`s, so the TS2420 that must fire disappears too
+— one arm, two directions. C4 (the qualified root) 1 RED unique. **C5 (the root's evidence
+gate) 0 RED, UNDISCRIMINATED and recorded**: its whole population is the `namespace` kind,
+whose qualified reads are wrong BOTH ways today, so a pin either way would assert a
+known-wrong value — the countdown CLAUDE.md forbids.
+
+**COST IS EXACTLY ZERO ON THE PROFILES AND THAT IS THE EXPECTED ANSWER, NOT A GREEN LIGHT**:
+all 20 `cost_gate.py` counters are identical to the 10b run to the last digit, because tsc's
+own 78 sources carry no scope-space heritage base and no scope-space qualified root. The
+grid is likewise a CONTROL here; the reference matrix is the measurement.
+
+**NEXT**: 10d (the two `TypeOracle` rows), then 10b-ii once its two unmasked families close.
+
 ### Round (P18.52) — static blocks escape, parameter defaults and decorators are reached ((CHK.115)), and the decorator family is TWO opposite mechanisms (2026-09-08)
 
 
