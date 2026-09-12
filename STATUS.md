@@ -19,6 +19,25 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.83) — (CHK.98)(i): THE `NewExpression` ARGUMENT ARM — THE CONSTRUCT SIDE WAS THE CONTROL AND THE CALL SIDE'S FREE-TYPE-PARAMETER RULE WAS THE GATE, 18,986 / 0 / 3 (2026-09-12).**
+A callback passed to a constructor now gets its parameter types through the call arm's own
+core (`ctxArgTypesFromSignatures`), with tsc's rules for a `new`: a class callee's OWN
+constructors first (`MemberResolver` stores construct signatures inherited-FIRST, so an
+unfiltered `sigs[0]` was the base's), explicit type arguments as a positional mapper,
+overloads adopted by arity, and — for BOTH call-likes — tsc's first-pass answer for a
+type parameter no other argument mentions: `default ?: constraint ?: unknown`. "Refuse an
+uninferable `T`" was the wrong shape for that case and measurement said so; refusal stays
+right only where an argument MENTIONS the parameter and inference fails (the hazard,
+pinned twice). **Found and fixed inside the arm**: class constructor parameter symbols are
+typed LAZILY under the first asker's scope, so `seed: T` read `any` until the annotations
+were resolved under the class's own scope. Census: the `new` arm resolves 4 sites across all
+eight profiles (a control); the shared free-TP rule fires 1,031-2,169 times per profile on
+the CALL side (the gate) and moved the grid by nothing. `new` set 11/2/45/2 → 41/2/13/4, the
+call twins 7/1/7/1 → 10/1/4/1, zero REF-SPLIT. Ablation 28/2/6/2 RED over 45 pins. Grid
+8×0/0, libraries byte-identical, cost_gate exit 0 (`typeOfExpr.calls` +0.83% vs rebuilt
+HEAD, the (P18.31) cache-hit pattern, not rebaselined), huge_methods exit 0, warning-clean.
+(CHK.98) stays open on its stage-2 rows.
+
 **(P18.82) — (CHK.98)(d): TS2556 FOR A NON-TUPLE SPREAD WAS WRONG IN BOTH DIRECTIONS, NOT MISSING — AND EVERY REMAINING (CHK.98) DELIVERABLE IS NOW MEASURED, 18,941 / 0 / 3 (2026-09-12).**
 All four remaining deliverables were measured against both references before one was
 picked: the `NewExpression` argument arm (21 missing, a control grid), TS2556 for a
@@ -87,21 +106,3 @@ digit-identical to the rebuilt HEAD, huge_methods exit 0, warning-clean. **(CHK.
 CHECKED OFF**; `.call/.apply/.bind` sized read-only as a NEW mechanism (member-miss
 augmentation with `CallableFunction` + inference through a `this`-typed lib signature;
 81/18/12 sites on the compiler profile, so a REAL gate) and queued as **(CHK.134)**.
-
-**(P18.78) — (CHK.133)(a)+(c): `Signature.thisType` AND THE CALL-SITE TS2684 — "A PURE MODEL CHANGE" MOVED FIVE ROWS BEFORE ANY CONSUMER EXISTED, AND (CHK.97) CLOSES, 18,781 / 0 / 3 (2026-09-12).**
-`Signature` now carries its `this:` pseudo-parameter (`thisType`), threaded through all 28
-`Signature(` constructions, all four instantiators and `MemberResolver`; the model ALONE
-closed a false TS2345 on every call of an interface/class method declared with `this` (the
-parameter zip) and made `unionTypeCallSignatures5/6` byte-identical to pristine (the union
-arm INTERSECTS members' `this` types, deduped by identity because `getIntersectionType`'s
-anonymous-object exemption printed `B & B`). The call-site consumer (tsc's
-`getSignatureApplicabilityError` `this` leg → TS2684 with a one-level chain) landed in the
-same commit: **387-533 declared `this` parameters per profile and ZERO call sites reaching
-the check** on every profile and library, so the grid is a GATE for the model and a CONTROL
-for the emission. A display defect the sizing missed (`ZzzBox<T>` for `ZzzBox<number>`) is
-fixed and gated by the 18 active `this:` baselines. Ablation over 29 pins: 19/1/1/2/15/8/1/2/
-1/1 RED across nine arms. cost_gate exit 0 with `typeNode.bypassed` +0.49% (the declared
-`this` resolutions, bounded by the census; not rebaselined), huge_methods exit 0 (845),
-warning-clean. **(CHK.97) is CHECKED OFF** — every deliverable closed or rejected on a
-measurement across (P18.71)-(P18.78). (CHK.133) stays open on (b) the relation's `this`
-leg and the `.call/.apply/.bind` consumer.

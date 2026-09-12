@@ -25,6 +25,96 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.83) — (CHK.98)(i): the `NewExpression` argument arm — the construct side was the CONTROL and the call side's free-type-parameter rule was the GATE (2026-09-12)
+
+**Suite 18,941 → 18,986 / 0 / 3** (+45 pins, `NewExpressionContextualArgumentTest`: 32 value
+pins, 2 negative controls, 11 `residue -` each with the reference row in its KDoc). Grid
+8×`added=0 removed=0`; marked 18 → 18, cronstrue 1 → 1, the 2,400-file project 1 → 1,
+byte-identical; `cost_gate.py` exit 0, not rebaselined (against the REBUILT HEAD:
+`typeOfExpr.calls` +0.83%, `typeNode.bypassed` +0.48%, `narrow.memoServed` +0.42%, all others
+within ±0.12%, `output.errors` 46 = 46 — the (P18.31) pattern, cache-HIT counters rising as
+parameters become narrowable references; the baseline's +1.3% `mapped.*` rows are (P18.78)
+staleness); `huge_methods.py --fail-over 0` exit 0; warning-clean (main + test — one redundant
+cast of the agent's own was removed and every receipt re-taken on the rebuilt binary).
+**(CHK.98) stays OPEN** on its stage-2 rows.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.98) is the first unchecked item; (i) was its largest
+measured prize (21 missing) after (P18.82) measured all four. (INV.0) step 10b-ii stays
+blocked on its two named families.
+
+**THE DESIGN IS tsc's `getContextualTypeForArgumentAtIndex` FOR A `new`, THROUGH THE CALL
+ARM'S OWN CORE.** `cpaComputeArgCtxTypes`'s tail became the shared `ctxArgTypesFromSignatures`;
+`newExprArgCtxTypes` resolves the callee — a CLASS callee ((CHK.73): this checker types a class
+value as its instance) yields the instance's `constructSignatures` filtered to its OWN
+constructors when it declares any, else the inherited list (`MemberResolver` stores them
+inherited-FIRST, so an unfiltered `sigs[0]` is the BASE's — a defect found by the matrix), and
+every other callee goes through `getConstructSignaturesOfType`; a spread argument refuses the
+list; an overloaded constructor is adopted by ARITY even when `sigs[0]` wins (`new` only — the
+call side keeps its legacy heuristic byte-identical, its own divergence recorded). Three
+wiring sites — the pull's `is NewExpression` arm, `cpaCtxAt`'s New arm (per argument instead
+of inherited) and `checkPropertyAccessInExpr`'s New arm behind the call arm's pre-gate — all
+through the one helper.
+
+**"REFUSE AN UNINFERABLE `T`" WAS THE WRONG SHAPE FOR THE FREE CASE, AND MEASUREMENT SAID
+SO.** tsc's FIRST pass answers a type parameter that NO non-context-sensitive argument
+mentions with `default ?: constraint ?: unknown` — that rule, added to the shared core for
+BOTH call-likes, closes six rows exactly (`unknown`, a default, a constraint, the
+`new Promise(…)` executor, and two call-side twins). Refusal is right ONLY where an argument's
+parameter MENTIONS the type parameter and our inference fails: then the callback parameter
+stays `any` — never `unknown`, never `T` — and the mention test descends into function-shaped
+objects and answers `true` for anything it cannot read (the hazard, pinned twice, and arm a2
+reddens exactly those two).
+
+**A DEFECT FOUND AND FIXED INSIDE THE ARM.** Class constructor parameter symbols are typed
+LAZILY under the FIRST ASKER's scope: measured, `seed: T` read `any` and the callback's `T`
+was a by-name interned parameter rather than the class's own, so no mapper could reach it.
+`ctxParamTypesOf` resolves them under the class's own scope. This is (CHK.102)'s frozen-first-
+touch family on a SYMBOL rather than a node.
+
+**THE CENSUS INVERTED THE GATE.** The `new` arm RESOLVES **4 sites across all eight profiles**
+(harness 3, server 1 — the rest of the `new Promise` grep hits are helper strings and
+comments) and 0 on every library, so the construct side is a CONTROL; the shared core's
+free-type-parameter substitution fires **1,031-2,169 times per profile** on the CALL side,
+with 27-100 explicit-type-argument mappers — THAT is the gate, and it moved the grid by
+nothing.
+
+**BEFORE → AFTER (zero REF-SPLIT)**: the `new` set (47 files) 11/2/45/2 → **41/2/13/4**;
+the call-side twins (9) 7/1/7/1 → **10/1/4/1**. Thirty-two MISSING rows closed: explicit type
+arguments ×5, seed inference ×2, overloads by arity ×4, an interface `new (…)` signature, free
+TP → `unknown`/default/constraint ×3, the `Promise<number>` executor ×2, an untyped
+`new Promise(…)`, member/argument/expression-body readers ×3, qualified/`typeof`/parenthesized
+callees, abstract and derived classes, an object-literal method, a generic construct signature
+×2, a union callee, a nested generic `new`. Both ours-only rows and the two original
+text-diffs are PRE-EXISTING on HEAD (B210's syntactic path, reproducing for a CALL too); the
+two NEW text-diffs are rows that went from missing to right-row-wrong-display
+(`reason?: any | undefined`; an unreduced `unknown | PromiseLike<unknown>`).
+
+**ABLATION over 45 pins**: a1 the arm removed — **28 RED**, exactly the arm's pins; a2 the
+hazard (the free rule binding an evidence-bound TP) — **2 RED**, exactly the two hazard
+residue pins; a3 explicit type arguments ignored — 6 RED; a4 the first overload regardless of
+arity — 2 RED. Two pins recorded UNDISCRIMINATED: the own-over-base derived pin (B210 serves
+it) and the `Map … forEach` real-lib control. At-risk run: the new class + 102 grepped
+classes + the 20 ACTIVE corpus cases passing a callback to `new` = **1,565 tests / 109
+classes / 0 RED**, every one present.
+
+**RESIDUES, MEASURED AND NOT FIXED (eleven pinned)**: `seed: T[]` and named-function evidence
+(refusals by design); a class EXPRESSION callee (`getTypeOfExpressionCore` types it `any` —
+never a contextual-typing gap); a callback carrying its own type parameter; TS18046 on
+`unknown` (this checker never reports a member read on `unknown`); a spread before a generic
+constructor's callback; a rest of callbacks (positional read); the two pre-existing B210 rows;
+`new Map([...])` return inference; the two display rows; on the call side the legacy
+first-overload heuristic, kept deliberately.
+
+**PREDICTIONS REFUTED**: construct-signature plumbing plus explicit instantiation was NOT
+sufficient (the lazy parameter symbols); "refuse an uninferable `T`" was wrong for the free
+case; the arm resolves 4 sites, not 6-10 per profile, and the real gate is the call side;
+`getConstructSignaturesOfType(instance)` is inherited-first; the "class expression" family
+of the 21 rows was never a contextual-typing gap.
+
+**NEXT**: (CHK.98)'s stage-2 rows — `Promise.then`/`PromiseLike.then` and a namespace-import
+callee (missing), predicate `filter` (missing and text-diff), the `reduce(cb, {} as
+Record<…>)` false positive. Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
+
 ### Round (P18.82) — (CHK.98)(d): TS2556 for a non-tuple spread was WRONG IN BOTH DIRECTIONS, not missing — and every remaining (CHK.98) deliverable is now measured (2026-09-12)
 
 **Suite 18,907 → 18,941 / 0 / 3** (+34 pins, `SpreadArgumentTupleTest`: 23 diagnostic, 8
@@ -775,81 +865,6 @@ Also recorded: `typeToStringWithMapper`'s union branch parenthesizes nothing at 
 IDENTICAL-signature half remains. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the
 order sends the arc.
 
-### Round (P18.73) — (CHK.97) D2b: the silence that hid a true positive, and a design decided by BUILDING the alternative (2026-09-11)
-
-**Suite 18,679 → 18,688 / 0 / 3** (+9 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
-exit 0, no rebaseline; `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean.
-**THREE LINES OF CODE** — the `>= 2` emit and the separate `>= 1` silence collapse into one
-`if (overloadedMembers >= 1) { emit; return null }`; the other 64 changed lines are comment.
-
-**THE DESIGN QUESTION WAS SETTLED BY BUILDING THE REJECTED ALTERNATIVE, NOT BY ARGUING
-ABOUT IT.** The item offered two shapes — recompute the refusal reason as a `count` at the
-call site, or thread it out of `computeCombinedUnionSignatures`. An instrumented binary that
-ACTUALLY threads it, printing the reason at the suppression site, measures the two agreeing
-on **21 of 21 reachable refusals**, and they must: `overloadedMembers >= 2` *is*
-`multipleOverloadSets` (same count, same calls), and the only other null-producing path with
-pass 2 running is the generic check. So the count is kept and **the thread is recorded as a
-refusal with its number** — it would need a second union-id-keyed cache to survive a memo hit,
-for a decision that never differs. The census build was behaviour-neutral (18,679/0/3, exactly
-the baseline), which is what makes its count trustworthy.
-
-**TWO OF THE BRIEF'S CLAIMS WERE WRONG, BOTH IN THE SAME DIRECTION — TOWARD THE CHANGE BEING
-RISKIER THAN IT IS.** (a) The `>= 1` silence's stated justification is **false**: the
-`unionOfArraysFilterCall` shape NEVER REACHES the branch (0 refusals) — stage 2's array
-fallback answers that receiver first, and in the embedded lib BOTH `Array.filter` and
-`ReadonlyArray.filter` carry 2 signatures, so without the fallback it would be D2's `>= 2`
-case and not D2b's at all. The stale KDoc line in `combineUnionSignatures` claiming that
-suppression "still owns `unionOfArraysFilterCall`" is corrected. (b) `overloadedMembers == 1`
-is reached **ZERO times** by the whole suite, all eight profiles, cronstrue AND marked — so
-the widening **cannot move a baseline**, and the pins are its only gate. Both facts were
-measured with the census build; neither is inferable from reading.
-
-**RECEIPT** (`scripts/ref_matrix.py`, chain-aware, 11 fixtures): **missing 8 → 0,
-ours-only 0 → 0, agree 12 → 15**, zero SPAN-DIFF, zero REF-SPLIT. **AND `text-diff` MOVES,
-1 → 6, WHICH THE ROUND IS FLAGGING RATHER THAN BURYING.** Of the eight formerly-missing rows,
-three land as AGREE and **five land at the right file, line, COLUMN and code with a different
-display** — every one of them the SAME pre-existing defect, (CHK.130): a union member whose
-only member is a call signature renders `ZzzA | (ZzzG)` where both references print it bare.
-**Proof it is not a D2b defect**: fixture `q4`'s four rows differ only in whether that member
-carries a property, and the three that do are byte-identical AGREE. So the honest summary is
-that **eight SILENT rows become three exact ones and five that differ only in parentheses** —
-a meaning gain with a form residue, and the residue is now six instances louder because a
-diagnostic that never fired could not display anything wrong.
-
-**THE GRID IS A CONTROL AND THE CENSUS SAYS SO IN THE STRONGEST FORM YET**: not merely zero
-hits for this branch, but **zero union-callee combination refusals OF ANY KIND** on all eight
-profiles, and on cronstrue and marked too. `added=0 removed=0` is inertness. The real gate is
-the corpus (all 8,837 baselines green) plus the pins — and a (CHK.57) `javap -c -p | grep -v
-line` control confirms the grid's AFTER binary is bytecode-identical to the landed one despite
-later KDoc edits.
-
-**ABLATION: 5 arms, EACH RUN AGAINST THE FULL SUITE, both controls.** b1 comment-only = 0 RED;
-b2 break the shared chain = **13 RED** across all three call sites plus the corpus
-`betterErrorForUnionCall`, which is what proves one shared emitter; b3 restore the `>= 1`
-silence = exactly the 3 D2b positives and nothing else, i.e. fully attributable; b5
-mis-calibrate the count (`size >= 3`) = exactly the 6 D2 positives, so **last round's `>= 2`
-threshold is load-bearing and now has a pin that says so**. Running every arm against the FULL
-suite rather than the guard letters is (P18.72)'s own lesson applied.
-
-**b4 IS THE INTERESTING ARM AND IT IS A REFUSAL ON *SCOPE*, NOT ON EVIDENCE.** Collapsing the
-whole `differ` tail (`>= 0`, making the tail dead) is **0 RED on the full suite** — i.e. the
-tail's conservatism is a redundant guard on every reachable shape, which is (P18.72)'s a3
-finding one layer out. That is evidence FOR the collapse, not against it; it was still refused,
-because the tail is (CHK.94) territory and deserves its own round with its own pins. **The
-number is recorded in the branch comment and the test KDoc so the next round starts from a
-measurement rather than an opinion** — which is the whole point of writing a refusal down.
-
-**RESIDUES, RECORDED AND NOT PINNED**: the `differ`-tail collapse above; the threaded reason
-(a measured 21/21 no-op, refused rather than forgotten); (CHK.130), now characterised exactly
-— a union member whose ONLY member is a call signature, where adding one property makes all
-three compilers agree; and the CONSTRUCT twin (`new` on such a union), a separate branch with
-its own sentence.
-
-**NEXT**: **(CHK.130)** is now the cheapest and best-characterised item in this area, and
-closing it would turn all six of this round's TEXT-DIFFs into AGREE. Then (CHK.97)'s (D3)
-IDENTICAL-signature half. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order sends
-the arc.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1172,7 +1187,20 @@ notices it is gone.
   is TS2741 in tsgo and TS2684 in pristine. All 23 of ours on the matrix come from `checkSpine`
   (one owner, no tail-walker double-emit on these shapes).
 
-- [ ] **(CHK.98) (d) TS2556 LANDED 2026-09-12 ((P18.82) note) — tsc's tuple expansion + `hasCorrectArity` spread
+- [ ] **(CHK.98) (i) THE `NewExpression` ARGUMENT ARM LANDED 2026-09-12 ((P18.83) note) — `newExprArgCtxTypes` through
+  the call arm's shared core (`ctxArgTypesFromSignatures`): own constructors first, explicit type arguments, overloads
+  by arity, and tsc's first-pass free-TP rule (`default ?: constraint ?: unknown`) for BOTH call-likes — which is the
+  real gate (1,031-2,169 substitutions per profile on the CALL side, grid unmoved); class constructor parameter
+  symbols were typed lazily under the first asker's scope and are now resolved under the class's own. `new` set
+  11/2/45/2 → 41/2/13/4. **REMAINING — STAGE 2 rows, each measured (P18.82)**: `Promise.then`/`PromiseLike.then`
+  callback typing and a NAMESPACE-IMPORT callee (MISSING), predicate `filter` (missing + text-diff — and
+  `tryInferPredicateOverloadReturn` reads only `FunctionDeclaration`/`MethodDeclaration`, lib `filter` is a
+  `MethodSignature`, per (P18.77)), `reduce(cb, {} as Record<…>)` (ours-only `acc.nope`), the union-of-arrays
+  chain naming the LAST constituent ((CHK.132)), an unreduced `NonNullable<…>` display. Residues of (i): a class
+  EXPRESSION callee types `any` at the callee (`getTypeOfExpressionCore`), a callback with its own TP, TS18046 on
+  `unknown` (never reported here), a spread before a generic constructor's callback, a rest of callbacks,
+  `new Map([...])` return inference, the call side's legacy first-overload heuristic (kept), B210's two pre-existing
+  rows. PREVIOUS HEAD: (d) TS2556 LANDED 2026-09-12 ((P18.82) note) — tsc's tuple expansion + `hasCorrectArity` spread
   clause at all three arity walkers; it was WRONG IN BOTH DIRECTIONS (4 false positives + 2 wrong codes, 20 missing →
   22/0/4); operands classified DECLARATION-first because the walkers run under the file-level ambient. **EVERY
   REMAINING DELIVERABLE MEASURED**: (i) the `NewExpression` ARGUMENT arm — **21 MISSING** over 24 fixtures (explicit

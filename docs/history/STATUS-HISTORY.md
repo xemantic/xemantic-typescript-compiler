@@ -3256,3 +3256,21 @@ on exactly this silence** and a `reduce` control was written wrong; all three fo
 measured CONTROLS (census `bound=0` everywhere real). cost_gate exit 0 (digit-identical to
 pristine), huge_methods exit 0, warning-clean. (CHK.97) is open on D6 ALONE; its unblocker
 `Signature.thisParameter` is now **(CHK.133)** at the top of the queue.
+
+**(P18.78) — (CHK.133)(a)+(c): `Signature.thisType` AND THE CALL-SITE TS2684 — "A PURE MODEL CHANGE" MOVED FIVE ROWS BEFORE ANY CONSUMER EXISTED, AND (CHK.97) CLOSES, 18,781 / 0 / 3 (2026-09-12).**
+`Signature` now carries its `this:` pseudo-parameter (`thisType`), threaded through all 28
+`Signature(` constructions, all four instantiators and `MemberResolver`; the model ALONE
+closed a false TS2345 on every call of an interface/class method declared with `this` (the
+parameter zip) and made `unionTypeCallSignatures5/6` byte-identical to pristine (the union
+arm INTERSECTS members' `this` types, deduped by identity because `getIntersectionType`'s
+anonymous-object exemption printed `B & B`). The call-site consumer (tsc's
+`getSignatureApplicabilityError` `this` leg → TS2684 with a one-level chain) landed in the
+same commit: **387-533 declared `this` parameters per profile and ZERO call sites reaching
+the check** on every profile and library, so the grid is a GATE for the model and a CONTROL
+for the emission. A display defect the sizing missed (`ZzzBox<T>` for `ZzzBox<number>`) is
+fixed and gated by the 18 active `this:` baselines. Ablation over 29 pins: 19/1/1/2/15/8/1/2/
+1/1 RED across nine arms. cost_gate exit 0 with `typeNode.bypassed` +0.49% (the declared
+`this` resolutions, bounded by the census; not rebaselined), huge_methods exit 0 (845),
+warning-clean. **(CHK.97) is CHECKED OFF** — every deliverable closed or rejected on a
+measurement across (P18.71)-(P18.78). (CHK.133) stays open on (b) the relation's `this`
+leg and the `.call/.apply/.bind` consumer.

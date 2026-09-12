@@ -2441,8 +2441,18 @@ class Checker(
             is AsExpression, is NonNullExpression, is TypeAssertionExpression,
             is SpreadElement, is AwaitExpression, is DeleteExpression,
             is VoidExpression, is TypeOfExpression, is SatisfiesExpression,
-            is PrefixUnaryExpression, is PostfixUnaryExpression, is YieldExpression,
-            is NewExpression -> cpaCtxAt(parent)
+            is PrefixUnaryExpression, is PostfixUnaryExpression, is YieldExpression -> cpaCtxAt(parent)
+            // (CHK.98)(i) a `new`'s ARGUMENTS used to INHERIT the enclosing context (the
+            // legacy quirk); they are now DEFINED per argument exactly as a call's, through
+            // the shared [newExprArgCtxTypes]. The callee edge keeps inheriting.
+            is NewExpression -> {
+                val idx = parent.arguments?.indexOfFirst { it === node } ?: -1
+                when {
+                    idx >= 0 -> newExprArgCtxTypes(parent)?.getOrNull(idx)
+                    node === parent.expression -> cpaCtxAt(parent)
+                    else -> null
+                }
+            }
             else -> null
         }
     }
@@ -126837,23 +126847,32 @@ interface DataView {
         val result = mutableListOf<Type>()
         for (tp in typeParams) {
             val tpName = tp.symbol?.name ?: return null
-            var inferredType: Type? = null
-            for (i in ctorParams.indices) {
-                if (i >= args.size) break
-                val paramTypeNode = ctorParams[i].type ?: continue
-                if (paramTypeNode is TypeReference) {
-                    val tn = paramTypeNode.typeName
-                    if (tn is Identifier && tn.text == tpName &&
-                        paramTypeNode.typeArguments.isNullOrEmpty()) {
-                        inferredType = widenType(getTypeOfExpression(args[i]))
-                        break
-                    }
-                }
-            }
+            val inferredType = inferClassTypeParamFromBareCtorParam(ctorParams, tpName, args)
             if (inferredType == null || inferredType === errorType) return null
             result.add(inferredType)
         }
         return result
+    }
+
+    /** 17.14b's rule for ONE class type parameter: the widened type of the argument at
+     *  the first constructor parameter annotated with the bare `T`, or null when no
+     *  parameter is. Shared by [inferTypeArgsFromConstructorCall] (all-or-nothing, for
+     *  the new-expression's own type) and (CHK.98)(i)'s [classTypeArgumentMapper]
+     *  (per parameter, for the contextual types). */
+    private fun inferClassTypeParamFromBareCtorParam(
+        ctorParams: List<Parameter>,
+        tpName: String,
+        args: List<Expression>,
+    ): Type? {
+        for (i in ctorParams.indices) {
+            if (i >= args.size) break
+            val paramTypeNode = ctorParams[i].type as? TypeReference ?: continue
+            val tn = paramTypeNode.typeName
+            if (tn is Identifier && tn.text == tpName && paramTypeNode.typeArguments.isNullOrEmpty()) {
+                return widenType(getTypeOfExpression(args[i]))
+            }
+        }
+        return null
     }
 
     /**
@@ -145560,104 +145579,347 @@ interface DataView {
                 else -> return@run null
             }
             if (sigs.isNullOrEmpty()) return@run null
-            // Single signature: use its parameter types directly.
-            // Multiple overloads: per-arg-position, only adopt the first
-            // overload's param type if EVERY overload has a callable
-            // function type at that position (matches TS's contextual
-            // signature behavior for callback overloads — used by
-            // `callb((a) => {...})` patterns).
-            if (sigs.size == 1) {
-                val sig = sigs[0]
-                // B86.1b (activation, 2026-05-28): for a single-signature
-                // GENERIC callee with no explicit type args (e.g.
-                // `map<T,U>(arr: T[], cb: (x: T) => U)` called as
-                // `map([1,""], x => x.foo())`), infer the type-arg mapper
-                // from the arguments and substitute it into each arg's
-                // contextual param type. This turns a bare-TP contextual
-                // type `(x: T) => U` into the concrete `(x: number|string)
-                // => U`, so the un-annotated lambda param `x` resolves to
-                // the concrete type during the diagnostic walk (TS2339 etc.)
-                // rather than staying an opaque TypeParam. Closes the
-                // temporal-inversion gap: the inference mapper produced inside
-                // tryInferSingleTypeParamFromArgs (a return-type-only helper,
-                // torn down in finally) was never visible to this diagnostic
-                // pass. We re-run the inference here, in-pass, and apply it
-                // directly to the propagated contextual types. Gate: only when
-                // the sig has type params AND no explicit type args (explicit
-                // args are handled by their own checking path).
-                val inferMapper: TypeMapper? =
-                    if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty()) {
-                        val full = tryInferSingleTypeParamFromArgs(sig, expr.arguments, forReturnType = true)
-                        // B86.1b-4 fallback: when the full mapper is null (e.g. a
-                        // callback-return-position TP `U` is uninferable because the
-                        // lambda body errors), use the partial anchor-only mapper so
-                        // the lambda's PARAM `(x:T)` still resolves to its concrete
-                        // anchor type during the diagnostic walk (TS2339 in the body).
-                        full ?: tryInferAnchorTypeParamsForContext(sig, expr.arguments)
-                    } else null
-                // B83.4d: literal-preserving OVERRIDE for fixed-type-parameter
-                // conflict TPs (e.g. `f<T>(x:T, b:()=>(a:T)=>void, y:T)` called
-                // with conflicting `''`/`1`). TypeScript fixes T to the unwidened
-                // first literal `""`, so the callback param `a` is contextually
-                // typed `""` and `a.foo` reports TS2339 on `""` (not `string`).
-                // Composed over inferMapper: literal wins for conflict TPs, the
-                // widened mapper covers the rest. Confined to contextual-param
-                // typing for THIS call (restored after the arg walk) so the literal
-                // never leaks into return-type inference / JS-emit per the gotcha.
-                val litMapper: TypeMapper? =
-                    if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty())
-                        computeFixedConflictLiteralMapper(sig, expr.arguments)
-                    else null
-                val ctxMapper: TypeMapper? = when {
-                    litMapper == null -> inferMapper
-                    inferMapper == null -> litMapper
-                    else -> TypeMapper { tp -> litMapper.map(tp) ?: inferMapper.map(tp) }
-                }
-                expr.arguments.mapIndexed { i, _ ->
-                    if (i < sig.parameters.size) {
-                        val ptRaw = getTypeOfSymbol(sig.parameters[i])
-                        val pt = if (ctxMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
-                            instantiateContextualParamType(ptRaw, ctxMapper)
-                        } else ptRaw
-                        if (pt === anyType || pt === errorType) null else pt
-                    } else null
-                }
-            } else {
-                // Round 481: tsc contextually types a callback arg by the overload
-                // that arg-matching SELECTS, not blindly by the first — Array.reduce's
-                // `(cb, initialValue: T)` overload must lose to `<U>(cb, initialValue:
-                // U)` when the initial value is not a T (documentsUtil's
-                // `.reduce((meta, key) => meta.set(…), new Map())` typed `meta` as
-                // string). strictSelect yields only a DEFINITIVE type-based winner;
-                // ambiguity (or a first-overload win) keeps the legacy
-                // every-overload-callable heuristic byte-identical.
-                val chosen = resolveCallOverload(sigs, expr.arguments, strictSelect = true)
-                if (chosen != null && chosen !== sigs[0]) {
-                    val inferMapper: TypeMapper? =
-                        if (expr.typeArguments.isNullOrEmpty() && !chosen.typeParameters.isNullOrEmpty()) {
-                            tryInferSingleTypeParamFromArgs(chosen, expr.arguments, forReturnType = true)
-                                ?: tryInferAnchorTypeParamsForContext(chosen, expr.arguments)
-                        } else null
-                    expr.arguments.mapIndexed { i, _ ->
-                        if (i < chosen.parameters.size) {
-                            val ptRaw = getTypeOfSymbol(chosen.parameters[i])
-                            val pt = if (inferMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
-                                instantiateContextualParamType(ptRaw, inferMapper)
-                            } else ptRaw
-                            if (pt === anyType || pt === errorType) null else pt
-                        } else null
+            ctxArgTypesFromSignatures(sigs, expr.arguments, expr.typeArguments, null, construct = false)
+        }
+    }
+
+    /**
+     * (CHK.98)(i) The per-argument contextual types a `new` expression's CONSTRUCT
+     * signatures supply — tsc's `getContextualTypeForArgumentAtIndex` for a
+     * `NewExpression`, which hands the construct signatures of the callee's static
+     * side to the very `resolveCall` a call goes through. It therefore shares
+     * [ctxArgTypesFromSignatures] with the CallExpression arm: explicit type
+     * arguments, inference from the other arguments, the free-type-parameter rule and
+     * overload selection are ONE code path, with `construct` as its only axis.
+     *
+     * A SPREAD argument makes the positional zip a lower bound ((CHK.98)(d)), so the
+     * whole list is refused rather than shifted; the call arm does not refuse there and
+     * that asymmetry is deliberately not touched here.
+     */
+    private fun newExprArgCtxTypes(expr: NewExpression): List<Type?>? {
+        val args = expr.arguments
+        if (args.isNullOrEmpty()) return null
+        if (args.any { it is SpreadElement }) return null
+        val (sigs, classTps) = constructSignaturesForNewCtx(expr) ?: return null
+        return ctxArgTypesFromSignatures(sigs, args, expr.typeArguments, classTps, construct = true)
+    }
+
+    /**
+     * (CHK.98)(i) The construct signatures `new <callee>(…)` selects among, and — for a
+     * CLASS callee — the class's own type parameters, which its explicit type arguments
+     * bind and which an un-inferable position substitutes.
+     *
+     * (CHK.73): this checker types a class VALUE as its INSTANCE type, whose
+     * `constructSignatures` carry the class's own constructor(s) AFTER the inherited
+     * ones (`MemberResolver`, inherited-first). tsc's static side has only the OWN
+     * declarations when the class declares a constructor and the base's otherwise, so
+     * the list is filtered that way: own where any, else the whole list. Every other
+     * callee — a constructor interface (`declare var Promise: PromiseConstructor`), a
+     * `typeof C` object, an interface with a `new (…)` member, a union — answers through
+     * [getConstructSignaturesOfType], whose signatures carry their OWN type parameters.
+     *
+     * [getCalleeType] is what already unwraps `new (C)(…)` / `new C!(…)` and resolves a
+     * namespace-qualified or file-local class; a callee it cannot type is `any` there
+     * and answers nothing here.
+     */
+    private fun constructSignaturesForNewCtx(expr: NewExpression): Pair<List<Signature>, List<Type.TypeParam>?>? {
+        val calleeType = getCalleeType(expr.expression)
+        if (calleeType === anyType || calleeType === errorType) return null
+        val classSym = (calleeType as? Type.Interface)?.symbol?.takeIf { it.flags.hasAny(SymbolFlags.Class) }
+        if (classSym != null) {
+            resolveStructuredTypeMembers(calleeType)
+            val all = calleeType.constructSignatures ?: return null
+            val own = all.filter { sig ->
+                val ctor = sig.declaration as? Constructor ?: return@filter false
+                val owner = (ctor as NodeBase).parent
+                classSym.declarations.any { it === owner }
+            }
+            return Pair(own.ifEmpty { all }, calleeType.typeParameters)
+        }
+        val sigs = getConstructSignaturesOfType(calleeType)
+        if (sigs.isEmpty()) return null
+        return Pair(sigs, null)
+    }
+
+    /**
+     * The per-argument contextual types a signature LIST supplies — the core the call
+     * arm ([cpaComputeArgCtxTypes]) and the `new` arm ([newExprArgCtxTypes]) share.
+     *
+     * Single signature: its parameter types, instantiated by [ctxArgTypeMapper].
+     * Several: round 481's rule — tsc contextually types a callback argument by the
+     * overload arg-matching SELECTS, never blindly by the first, so `resolveCallOverload`
+     * with `strictSelect` yields only a DEFINITIVE winner (Array.reduce's `(cb,
+     * initialValue: T)` overload must lose to `<U>(cb, initialValue: U)` when the initial
+     * value is not a T — documentsUtil's `.reduce((meta, key) => meta.set(…), new Map())`
+     * typed `meta` as string). On the CALL side a first-overload win keeps the legacy
+     * every-overload-callable heuristic byte-identical; the CONSTRUCT side has no legacy
+     * to keep and adopts any definitive winner — `new O((p) => …)` against
+     * `constructor(cb)` / `constructor(n, cb)` is decided by arity alone, exactly as tsc's
+     * `hasCorrectArity` filter decides it before any type is compared.
+     */
+    private fun ctxArgTypesFromSignatures(
+        sigs: List<Signature>,
+        args: List<Expression>,
+        typeArguments: List<TypeNode>?,
+        classTypeParams: List<Type.TypeParam>?,
+        construct: Boolean,
+    ): List<Type?> {
+        val classScope = classTypeParams?.takeIf { it.isNotEmpty() }?.let { tps ->
+            val scope = HashMap<String, Type.TypeParam>(tps.size * 2)
+            for (tp in tps) tp.symbol?.name?.let { scope[it] = tp }
+            scope
+        }
+        if (sigs.size == 1) {
+            val sig = sigs[0]
+            val raw = ctxParamTypesOf(sig, classScope)
+            val mapper = ctxArgTypeMapper(sig, raw, args, typeArguments, classTypeParams, literalOverride = true)
+            return args.mapIndexed { i, _ -> ctxArgTypeAt(raw, i, mapper) }
+        }
+        val chosen = resolveCallOverload(sigs, args, strictSelect = true)
+        if (chosen != null && (construct || chosen !== sigs[0])) {
+            val raw = ctxParamTypesOf(chosen, classScope)
+            val mapper = ctxArgTypeMapper(chosen, raw, args, typeArguments, classTypeParams, literalOverride = false)
+            return args.mapIndexed { i, _ -> ctxArgTypeAt(raw, i, mapper) }
+        }
+        return args.mapIndexed { i, _ ->
+            val candidates = sigs.mapNotNull { sig ->
+                if (i < sig.parameters.size) {
+                    val pt = ctxParamTypesOf(sig, classScope)[i]
+                    if (pt === anyType || pt === errorType) null else pt
+                } else null
+            }
+            if (candidates.size != sigs.size) null
+            else if (candidates.all { it is Type.Object && !it.callSignatures.isNullOrEmpty() }) candidates[0]
+            else null
+        }
+    }
+
+    /**
+     * The DECLARED types of [sig]'s parameters, positionally — `getTypeOfSymbol` for
+     * every callee but a CLASS constructor, whose parameter symbols are typed LAZILY
+     * on first ask under whatever type-parameter scope that asker happens to hold
+     * (measured: `constructor(seed: T, cb: (p: T) => void)` read `seed` as `any` and
+     * `cb`'s `T` as a by-name interned parameter that is NOT the class's own, so no
+     * mapper over the class's type parameters could reach it). With [classScope] —
+     * the class's own `Type.TypeParam`s by name — each annotation is resolved under
+     * that scope, which is what makes the explicit-type-argument and free-parameter
+     * mappers land on the very instances the types carry. Under a non-empty context
+     * INV.5(c) bypasses the node cache, so nothing is persisted for the wrong scope.
+     */
+    private fun ctxParamTypesOf(sig: Signature, classScope: Map<String, Type.TypeParam>?): List<Type> {
+        if (classScope == null) return sig.parameters.map { getTypeOfSymbol(it) }
+        return withInstantiationContext(scopeMapper(classScope)) {
+            sig.parameters.map { p ->
+                (p.valueDeclaration as? Parameter)?.type?.let { getTypeFromTypeNode(it) } ?: anyType
+            }
+        }
+    }
+
+    /** The contextual type of argument [i] — its parameter's declared type from [raw],
+     *  instantiated through [mapper] where there is one; null where the position has no
+     *  parameter or the type says nothing (`any` / error). */
+    private fun ctxArgTypeAt(raw: List<Type>, i: Int, mapper: TypeMapper?): Type? {
+        if (i >= raw.size) return null
+        val ptRaw = raw[i]
+        val pt = if (mapper != null && ptRaw !== anyType && ptRaw !== errorType) {
+            instantiateContextualParamType(ptRaw, mapper)
+        } else ptRaw
+        return if (pt === anyType || pt === errorType) null else pt
+    }
+
+    /**
+     * The type-parameter mapper a call-like's contextual parameter types are
+     * instantiated with, or null when there is nothing to substitute.
+     *
+     * The type parameters are the signature's own, else — for a CLASS callee, whose
+     * constructor signature carries none of its own — the class's ([classTypeParams]).
+     *
+     * EXPLICIT type arguments bind them positionally ([explicitTypeArgumentMapper]);
+     * before (CHK.98)(i) a call with type arguments computed no mapper at all, so
+     * `f<string>((p) => …)` handed the raw `(p: T) => void` to the pull, whose
+     * unresolved-type-parameter gate then left `p` as `any`.
+     *
+     * Otherwise INFERENCE from the arguments — B86.1b's single-signature generic
+     * activation: `map<T,U>(arr: T[], cb: (x: T) => U)` called as `map([1,""], x =>
+     * x.foo())` turns the bare-TP contextual type `(x: T) => U` into the concrete `(x:
+     * number|string) => U`, so the un-annotated lambda parameter resolves to the concrete
+     * type during the diagnostic walk rather than staying an opaque TypeParam. The
+     * inference mapper produced inside `tryInferSingleTypeParamFromArgs` (a return-type-
+     * only helper, torn down in finally) was never visible to this diagnostic pass, so it
+     * is re-run here, in-pass; B86.1b-4's anchor-only fallback keeps the lambda's PARAM
+     * `(x: T)` concrete when a callback-return-position TP is uninferable. For a class
+     * callee the inference is the constructor's bare-`T` rule ([classTypeArgumentMapper],
+     * 17.14b's rule per type parameter). B83.4d's literal-preserving OVERRIDE for
+     * fixed-type-parameter conflicts (`f<T>(x:T, b:()=>(a:T)=>void, y:T)` called with
+     * conflicting `''`/`1`: TypeScript fixes T to the unwidened first literal, so the
+     * callback param `a` is contextually `""`) composes over it, literal first — on the
+     * single-signature path only, as before.
+     *
+     * Last, [freeTypeParamMapper]: a type parameter no argument can bind is what tsc's
+     * first inference pass has NO candidates for, and its contextual answer is the
+     * declared default, else `unknown`.
+     */
+    private fun ctxArgTypeMapper(
+        sig: Signature,
+        raw: List<Type>,
+        args: List<Expression>,
+        typeArguments: List<TypeNode>?,
+        classTypeParams: List<Type.TypeParam>?,
+        literalOverride: Boolean,
+    ): TypeMapper? {
+        val sigTps = sig.typeParameters?.takeIf { it.isNotEmpty() }
+        val tps = sigTps ?: classTypeParams?.takeIf { it.isNotEmpty() } ?: return null
+        if (!typeArguments.isNullOrEmpty()) return explicitTypeArgumentMapper(tps, typeArguments)
+        val inferMapper: TypeMapper? = if (sigTps != null) {
+            tryInferSingleTypeParamFromArgs(sig, args, forReturnType = true)
+                ?: tryInferAnchorTypeParamsForContext(sig, args)
+        } else classTypeArgumentMapper(sig, tps, args)
+        val litMapper: TypeMapper? =
+            if (literalOverride && sigTps != null) computeFixedConflictLiteralMapper(sig, args) else null
+        val bound: TypeMapper? = when {
+            litMapper == null -> inferMapper
+            inferMapper == null -> litMapper
+            else -> TypeMapper { tp -> litMapper.map(tp) ?: inferMapper.map(tp) }
+        }
+        val free = freeTypeParamMapper(sig, raw, tps, args, bound) ?: return bound
+        return if (bound == null) free else TypeMapper { tp -> bound.map(tp) ?: free.map(tp) }
+    }
+
+    /**
+     * (CHK.98)(i) Explicit type arguments, bound positionally; a trailing type parameter
+     * the list leaves out takes its declared default. Null — i.e. no substitution at all,
+     * today's behaviour — for too many arguments, an unresolvable one, or a missing one
+     * with no default: a wrong binding is a false positive at every parameter use, an
+     * absent one is the old `any`.
+     */
+    private fun explicitTypeArgumentMapper(tps: List<Type.TypeParam>, typeArguments: List<TypeNode>): TypeMapper? {
+        if (typeArguments.size > tps.size) return null
+        val resolved = ArrayList<Type>(tps.size)
+        for (node in typeArguments) {
+            resolved.add(getTypeFromTypeNodeSafeNsAware(node)?.takeIf { it !== errorType } ?: return null)
+        }
+        for (i in typeArguments.size until tps.size) {
+            resolved.add(tps[i].default?.takeIf { it !== errorType } ?: return null)
+        }
+        return createTypeMapper(tps, resolved)
+    }
+
+    /**
+     * (CHK.98)(i) 17.14b's constructor-argument inference, per class type parameter:
+     * the first constructor parameter annotated with the bare `T` binds it to the
+     * widened type of the corresponding argument ([inferClassTypeParamFromBareCtorParam],
+     * the rule [inferTypeArgsFromConstructorCall] applies all-or-nothing for the
+     * new-expression's own type). Partial by design — an unbound parameter is left to the
+     * free rule or, where an argument mentions it, to the pull's refusal.
+     */
+    private fun classTypeArgumentMapper(sig: Signature, tps: List<Type.TypeParam>, args: List<Expression>): TypeMapper? {
+        val ctorParams = (sig.declaration as? Constructor)?.parameters ?: return null
+        var bound: HashMap<Type.TypeParam, Type>? = null
+        for (tp in tps) {
+            val tpName = tp.symbol?.name ?: continue
+            val t = inferClassTypeParamFromBareCtorParam(ctorParams, tpName, args) ?: continue
+            if (t === errorType) continue
+            (bound ?: HashMap<Type.TypeParam, Type>().also { bound = it })[tp] = t
+        }
+        val m = bound ?: return null
+        return TypeMapper { tp -> m[tp] }
+    }
+
+    /**
+     * (CHK.98)(i) tsc's `getInferredType` for a type parameter with NO inference
+     * candidates: the declared DEFAULT, else `unknown` — checked against the constraint,
+     * which `unknown` fails exactly when the constraint is narrower, so the constraint
+     * stands in for it. This is the contextual type tsc hands a context-sensitive
+     * argument in the first pass, and it is why `new U((p) => …)` against
+     * `class U<T> { constructor(cb: (p: T) => void) }` types `p` as `unknown` in both
+     * references, and `class G<T = string>` types it `string`.
+     *
+     * THE HAZARD THE RULE IS BUILT AROUND: a type parameter that SOME non-context-
+     * sensitive argument's parameter mentions is one the first pass DOES have candidates
+     * for — the argument's type — and substituting `unknown` there would be a wrong type
+     * where our inference merely failed to bind it (`constructor(seed: T[], cb: (p: T) =>
+     * void)` called with `[1]`: tsc says `number`). Such a parameter is left UNBOUND, and
+     * the pull's unresolved-type-parameter gate then keeps the parameter `any` — the
+     * refusal, never a guess. A function-like argument is context-sensitive and is
+     * deferred to tsc's second pass, so it is not evidence here; an object or array
+     * literal IS first-pass evidence and counts as a mention.
+     */
+    private fun freeTypeParamMapper(
+        sig: Signature,
+        raw: List<Type>,
+        tps: List<Type.TypeParam>,
+        args: List<Expression>,
+        bound: TypeMapper?,
+    ): TypeMapper? {
+        var free: HashMap<Type.TypeParam, Type>? = null
+        for (tp in tps) {
+            if (bound?.map(tp) != null) continue
+            if (typeParamBoundByArguments(sig, raw, args, tp)) continue
+            val t = tp.default?.takeIf { it !== errorType }
+                ?: tp.constraint?.takeIf { it !== errorType }
+                ?: unknownType
+            (free ?: HashMap<Type.TypeParam, Type>().also { free = it })[tp] = t
+        }
+        val m = free ?: return null
+        return TypeMapper { tp -> m[tp] }
+    }
+
+    /** Does a NON-context-sensitive argument of [args] sit at a parameter of [sig]
+     *  whose type mentions [tp]? Then the first inference pass has a candidate for it
+     *  and the free rule must not guess. */
+    private fun typeParamBoundByArguments(
+        sig: Signature,
+        raw: List<Type>,
+        args: List<Expression>,
+        tp: Type.TypeParam,
+    ): Boolean {
+        for ((i, arg) in args.withIndex()) {
+            var a: Expression = arg
+            while (a is ParenthesizedExpression) a = a.expression
+            if (a is ArrowFunction || a is FunctionExpression) continue
+            // [calleeArgParam]'s rule over the raw list: the parameter at the position,
+            // else the trailing REST parameter.
+            val paramType = raw.getOrNull(i)
+                ?: raw.lastOrNull()?.takeIf {
+                    (sig.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+                } ?: continue
+            if (typeMayMentionTypeParam(paramType, tp, 0)) return true
+        }
+        return false
+    }
+
+    /**
+     * May [type] mention [tp] anywhere — through a reference's arguments, a union or
+     * intersection, a tuple's elements, an anonymous object's members, signatures and
+     * index infos? DELIBERATELY CONSERVATIVE in the `true` direction: a shape it cannot
+     * read (or one deeper than its budget) answers `true`, which only ever REFUSES a
+     * substitution. The shallow siblings ([sourceContainsTypeParam],
+     * [typeContainsUnresolvedTypeParam]) stop at a function-shaped object, which is
+     * exactly where a callback-typed parameter hides its mention.
+     */
+    private fun typeMayMentionTypeParam(type: Type, tp: Type.TypeParam, depth: Int): Boolean {
+        if (depth > 5) return true
+        return when (type) {
+            is Type.TypeParam -> type === tp
+            is Type.Intrinsic, is Type.StringLiteral, is Type.NumberLiteral, is Type.BigIntLiteral -> false
+            is Type.Union -> type.types.any { typeMayMentionTypeParam(it, tp, depth + 1) }
+            is Type.Intersection -> type.types.any { typeMayMentionTypeParam(it, tp, depth + 1) }
+            is Type.Reference ->
+                type.resolvedTypeArguments?.any { typeMayMentionTypeParam(it, tp, depth + 1) } ?: false
+            is Type.Interface -> false
+            is Type.Object -> {
+                resolveStructuredTypeMembers(type)
+                if (type.tupleElementTypes?.any { typeMayMentionTypeParam(it, tp, depth + 1) } == true) return true
+                for (sigs in arrayOf(type.callSignatures, type.constructSignatures)) {
+                    for (s in sigs.orEmpty()) {
+                        if (s.resolvedReturnType?.let { typeMayMentionTypeParam(it, tp, depth + 1) } == true) return true
+                        if (s.parameters.any { typeMayMentionTypeParam(getTypeOfSymbol(it), tp, depth + 1) }) return true
                     }
-                } else expr.arguments.mapIndexed { i, _ ->
-                    val candidates = sigs.mapNotNull { sig ->
-                        if (i < sig.parameters.size) {
-                            val pt = getTypeOfSymbol(sig.parameters[i])
-                            if (pt === anyType || pt === errorType) null else pt
-                        } else null
-                    }
-                    if (candidates.size != sigs.size) null
-                    else if (candidates.all { it is Type.Object && !it.callSignatures.isNullOrEmpty() }) candidates[0]
-                    else null
                 }
+                if (type.properties.orEmpty().any { typeMayMentionTypeParam(getTypeOfSymbol(it), tp, depth + 1) }) return true
+                if (type.stringIndexInfo?.type?.let { typeMayMentionTypeParam(it, tp, depth + 1) } == true) return true
+                if (type.numberIndexInfo?.type?.let { typeMayMentionTypeParam(it, tp, depth + 1) } == true) return true
+                false
             }
         }
     }
@@ -145752,7 +146014,23 @@ interface DataView {
             is NewExpression -> {
                 CpaSections.armP(CpaSections.PA_NEW)
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-                expr.arguments?.forEach { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+                // (CHK.98)(i) the CallExpression arm's per-argument contextual install,
+                // behind the same pre-gate — an argument subtree that cannot read the
+                // context is not worth resolving the callee for.
+                val newArgs = expr.arguments
+                if (!newArgs.isNullOrEmpty()) {
+                    val argCtxTypes: List<Type?>? =
+                        if (cpaArgsMayConsumeContext(newArgs)) newExprArgCtxTypes(expr) else null
+                    newArgs.forEachIndexed { i, arg ->
+                        val savedCtx = contextualType
+                        contextualType = argCtxTypes?.getOrNull(i)
+                        try {
+                            checkPropertyAccessInExpr(arg, source, fileName, enclosingClassType)
+                        } finally {
+                            contextualType = savedCtx
+                        }
+                    }
+                }
             }
             is ElementAccessExpression -> {
                 CpaSections.armP(CpaSections.PA_ELEMACCESS)
@@ -146840,6 +147118,18 @@ interface DataView {
                 val idx = parent.arguments.indexOfFirst { it === node }
                 if (idx < 0) null
                 else cpaComputeArgCtxTypes(parent, null)?.getOrNull(idx)
+            }
+            // (CHK.98)(i) tsc's `getContextualTypeForArgument` covers every
+            // `CallLikeExpression`; a `new` was the one it did not reach here, so a
+            // callback passed to a constructor got its parameters typed only through
+            // B210's syntactic path (a non-generic class, one bodied constructor, no
+            // type arguments) — explicit type arguments, an overloaded constructor, an
+            // interface `new (…)` signature, a class expression and a generic class
+            // inferred from another argument were all `any`.
+            is NewExpression -> {
+                val idx = parent.arguments?.indexOfFirst { it === node } ?: -1
+                if (idx < 0) null
+                else newExprArgCtxTypes(parent)?.getOrNull(idx)
             }
             // (CHK.40)(a) an ELEMENT of an array literal is contextually typed by
             // the literal's own contextual ELEMENT type.

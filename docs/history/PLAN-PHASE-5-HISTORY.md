@@ -1,3 +1,78 @@
+### Round (P18.73) — (CHK.97) D2b: the silence that hid a true positive, and a design decided by BUILDING the alternative (2026-09-11)
+
+**Suite 18,679 → 18,688 / 0 / 3** (+9 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
+exit 0, no rebaseline; `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean.
+**THREE LINES OF CODE** — the `>= 2` emit and the separate `>= 1` silence collapse into one
+`if (overloadedMembers >= 1) { emit; return null }`; the other 64 changed lines are comment.
+
+**THE DESIGN QUESTION WAS SETTLED BY BUILDING THE REJECTED ALTERNATIVE, NOT BY ARGUING
+ABOUT IT.** The item offered two shapes — recompute the refusal reason as a `count` at the
+call site, or thread it out of `computeCombinedUnionSignatures`. An instrumented binary that
+ACTUALLY threads it, printing the reason at the suppression site, measures the two agreeing
+on **21 of 21 reachable refusals**, and they must: `overloadedMembers >= 2` *is*
+`multipleOverloadSets` (same count, same calls), and the only other null-producing path with
+pass 2 running is the generic check. So the count is kept and **the thread is recorded as a
+refusal with its number** — it would need a second union-id-keyed cache to survive a memo hit,
+for a decision that never differs. The census build was behaviour-neutral (18,679/0/3, exactly
+the baseline), which is what makes its count trustworthy.
+
+**TWO OF THE BRIEF'S CLAIMS WERE WRONG, BOTH IN THE SAME DIRECTION — TOWARD THE CHANGE BEING
+RISKIER THAN IT IS.** (a) The `>= 1` silence's stated justification is **false**: the
+`unionOfArraysFilterCall` shape NEVER REACHES the branch (0 refusals) — stage 2's array
+fallback answers that receiver first, and in the embedded lib BOTH `Array.filter` and
+`ReadonlyArray.filter` carry 2 signatures, so without the fallback it would be D2's `>= 2`
+case and not D2b's at all. The stale KDoc line in `combineUnionSignatures` claiming that
+suppression "still owns `unionOfArraysFilterCall`" is corrected. (b) `overloadedMembers == 1`
+is reached **ZERO times** by the whole suite, all eight profiles, cronstrue AND marked — so
+the widening **cannot move a baseline**, and the pins are its only gate. Both facts were
+measured with the census build; neither is inferable from reading.
+
+**RECEIPT** (`scripts/ref_matrix.py`, chain-aware, 11 fixtures): **missing 8 → 0,
+ours-only 0 → 0, agree 12 → 15**, zero SPAN-DIFF, zero REF-SPLIT. **AND `text-diff` MOVES,
+1 → 6, WHICH THE ROUND IS FLAGGING RATHER THAN BURYING.** Of the eight formerly-missing rows,
+three land as AGREE and **five land at the right file, line, COLUMN and code with a different
+display** — every one of them the SAME pre-existing defect, (CHK.130): a union member whose
+only member is a call signature renders `ZzzA | (ZzzG)` where both references print it bare.
+**Proof it is not a D2b defect**: fixture `q4`'s four rows differ only in whether that member
+carries a property, and the three that do are byte-identical AGREE. So the honest summary is
+that **eight SILENT rows become three exact ones and five that differ only in parentheses** —
+a meaning gain with a form residue, and the residue is now six instances louder because a
+diagnostic that never fired could not display anything wrong.
+
+**THE GRID IS A CONTROL AND THE CENSUS SAYS SO IN THE STRONGEST FORM YET**: not merely zero
+hits for this branch, but **zero union-callee combination refusals OF ANY KIND** on all eight
+profiles, and on cronstrue and marked too. `added=0 removed=0` is inertness. The real gate is
+the corpus (all 8,837 baselines green) plus the pins — and a (CHK.57) `javap -c -p | grep -v
+line` control confirms the grid's AFTER binary is bytecode-identical to the landed one despite
+later KDoc edits.
+
+**ABLATION: 5 arms, EACH RUN AGAINST THE FULL SUITE, both controls.** b1 comment-only = 0 RED;
+b2 break the shared chain = **13 RED** across all three call sites plus the corpus
+`betterErrorForUnionCall`, which is what proves one shared emitter; b3 restore the `>= 1`
+silence = exactly the 3 D2b positives and nothing else, i.e. fully attributable; b5
+mis-calibrate the count (`size >= 3`) = exactly the 6 D2 positives, so **last round's `>= 2`
+threshold is load-bearing and now has a pin that says so**. Running every arm against the FULL
+suite rather than the guard letters is (P18.72)'s own lesson applied.
+
+**b4 IS THE INTERESTING ARM AND IT IS A REFUSAL ON *SCOPE*, NOT ON EVIDENCE.** Collapsing the
+whole `differ` tail (`>= 0`, making the tail dead) is **0 RED on the full suite** — i.e. the
+tail's conservatism is a redundant guard on every reachable shape, which is (P18.72)'s a3
+finding one layer out. That is evidence FOR the collapse, not against it; it was still refused,
+because the tail is (CHK.94) territory and deserves its own round with its own pins. **The
+number is recorded in the branch comment and the test KDoc so the next round starts from a
+measurement rather than an opinion** — which is the whole point of writing a refusal down.
+
+**RESIDUES, RECORDED AND NOT PINNED**: the `differ`-tail collapse above; the threaded reason
+(a measured 21/21 no-op, refused rather than forgotten); (CHK.130), now characterised exactly
+— a union member whose ONLY member is a call signature, where adding one property makes all
+three compilers agree; and the CONSTRUCT twin (`new` on such a union), a separate branch with
+its own sentence.
+
+**NEXT**: **(CHK.130)** is now the cheapest and best-characterised item in this area, and
+closing it would turn all six of this round's TEXT-DIFFs into AGREE. Then (CHK.97)'s (D3)
+IDENTICAL-signature half. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order sends
+the arc.
+
 ### Round (P18.72) — (CHK.97) D2: a both-overloaded union callee reports, and the suppression that is still hiding a second row (2026-09-11)
 
 **Suite 18,669 → 18,679 / 0 / 3** (+10 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
