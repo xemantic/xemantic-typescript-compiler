@@ -67,9 +67,9 @@ import kotlin.test.Test
  * (retiring the `≥2` suppression alone does NOT change that — the `differ` branch's
  * non-generic silence, (CHK.94), is a SECOND suppression above it); `f?.(1)`'s ARGUMENT is
  * still unchecked (the round-408 pre-pass consumes the call); `this` parameters are not
- * modelled ([Signature] has no `thisParameter`, tsc reports TS2684); and a GENERIC combined
- * signature does not infer its type argument from the call, so `(number[] | string[]).map`
- * answers `any` where tsc answers `(string | number)[]`.
+ * modelled ([Signature] has no `thisParameter`, tsc reports TS2684). A GENERIC combined
+ * signature's type argument is inferred since (CHK.97) D5 — `(number[] | string[]).map(x => x)`
+ * answers `(string | number)[]` ([UnionCalleeGenericInferenceTest]).
  *
  * MEASURED DIVERGENCES this stage does not close, both FORM: our union member ORDER
  * (`.slice` on `number[] | string[]` prints `number[] | string[]` where BOTH references

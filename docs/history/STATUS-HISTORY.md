@@ -3099,3 +3099,39 @@ recorded in the pin KDoc and **not pinned** (no countdown pins). Two findings qu
 (CHK.129) an `as`-asserted callee loses its argument check entirely, and (CHK.128)
 `arr?.[0]` on a nullish array union types as `any`. Grid 8×`added=0 removed=0`, cost_gate
 exit 0 (no rebaseline, max `mapped.keyed` +1.18%), huge_methods exit 0 (844), warning-clean.
+
+**(P18.72) — (CHK.97) D2: A BOTH-OVERLOADED UNION CALLEE REPORTS, AND THE SUPPRESSION STILL HIDING A SECOND ROW, 18,679 / 0 / 3 (2026-09-11).**
+**THE FIX IS A SPLIT BY *REASON*, NOT A RETIREMENT.** One `if` was answering two different
+facts: TWO OR MORE overloaded constituents is exactly where tsc SKIPS pass 2, so
+`getUnionSignatures` answers the EMPTY list and TS2349 reports with the "Each member … has
+signatures" chain — a DIAGNOSTIC; exactly ONE is the `unionOfArraysFilterCall` shape, where
+tsc RUNS pass 2 — SILENT. **The chain sentence now has ONE home** shared with the generic
+refusal, because a chain is the whole observable here and (PARITY.1) says the grid is blind
+to a display divergence, so two copies would drift with nothing to notice. Receipt
+**agree 3 → 11, missing 8 → 0, ours-only 0** — **and that number was CORRECTED within the
+round by the sub-step below**: it was taken with a chain-blind instrument, and one of its
+eleven AGREE rows is really a TEXT-DIFF, so re-taken chain-aware the seven fixtures read
+**agree 10, text-diff 1, missing 0**. The verdict does not move; the receipt does.
+**A COUNTDOWN PIN FIRED — THE SEVENTH IN EIGHT ROUNDS — AND ONLY THE *FULL* SUITE SAW IT**:
+a pin asserting the silence this round removes, with its own KDoc saying "SILENT where tsc
+reports TS2349". It surfaced from an ablation arm run against the full suite; the four
+corpus guard letters the round was gating on miss it. **Corollary: a guard-letter subset is
+not a substitute for the suite when an arm WIDENS an emission — a widening's victims are
+pins, not baselines.** **THE GRID IS A CONTROL AND THE ROUND PROVES IT WITH A COUNT**: a
+counting arm reads 0 hits on all eight profiles against 3 on the round's own fixture, so
+`added=0` is inertness, not coverage. **THE INSTRUMENT IS BLIND TO WHAT THIS ROUND CHANGES**:
+`scripts/ref_matrix.py` matched a diagnostic's FIRST LINE only, so a chain-only divergence
+scored AGREE — the third distinct blindness found in that script in two rounds, and it had
+passed a real one (`typeToString` parenthesizes a union member with exactly one call
+signature, where both references print it bare; pre-existing and unowned, now (CHK.130)).
+Closed as its own sub-step, verified in BOTH directions — a fixture on which all three arms
+agree on the chain still reads AGREE, so the arms' differing print formats do not
+false-positive — and it immediately re-graded one of this round's own fixtures. **THE ROUND'S LOAD-BEARING CLAIM IS TRUE OF THE PROFILES AND FALSE OF THE
+LANGUAGE**: the ONE-overloaded suppression D2 KEPT is reachable and hides a true positive,
+because PASS 2 also refuses on GENERIC INCOMPATIBILITY. The implementer STOPPED at the scope
+line rather than pushing through — now **(D2b)**, measured and ready (0 RED on 1,425
+baselines, reddening exactly the countdown pin already inverted) and **deliberately not
+taken: an ablation arm is not an implemented fix with pins.** Ablation 5 arms with both
+controls; a3 recorded as a REDUNDANT GUARD and structurally so; a2 recorded as a DEAD ARM
+for the round's own pin set. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit
+0 (844), warning-clean.

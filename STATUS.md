@@ -19,6 +19,24 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.77) — (CHK.97) D5: INFERENCE THROUGH A UNION-COMBINED SIGNATURE WAS BAILING ON AN INTERSECTION IT COULD NOT SEE, AND THE "ONE ROW" WAS SEVEN FAMILIES, 18,752 / 0 / 3 (2026-09-12).**
+PASS 2 combines `(number[] | string[]).map` into `<U>(cb: ((v: number…) => U) & ((v: string…)
+=> U)): U[]`, and every callback arm of the single-type-parameter inference demanded an
+anonymous `Type.Object` — so the inference bailed whole and the call answered a raw `U[]`
+that every reader silently refused as a foreign type parameter. **The first reading of the
+mechanism was wrong and a stderr line settled it** (the gate PASSES, because a function
+object's signatures are invisible to `typeMentionsTypeParam`; the candidate gatherer is what
+finds nothing). Fix is a VIEW, not machinery: `inferenceParamType` presents such an
+intersection as one anonymous function type carrying the existing `getIntersectedSignatures`
+fold, memoized per intersection id. Four fixture families `missing → agree`, the PASS-2
+pair fires (with a (CHK.132) sub-line), zero new ours-only rows. Ablation 12/4/1/0 RED over
+67 pins — a4 a recorded redundant guard. **Two `TupleArrayMembersTest` pins were countdowns
+on exactly this silence** and a `reduce` control was written wrong; all three found by the
+68-class neighbour sweep, none by the fixtures. Grid 8×0/0 and both library arms are
+measured CONTROLS (census `bound=0` everywhere real). cost_gate exit 0 (digit-identical to
+pristine), huge_methods exit 0, warning-clean. (CHK.97) is open on D6 ALONE; its unblocker
+`Signature.thisParameter` is now **(CHK.133)** at the top of the queue.
+
 **(P18.76) — (CHK.97) D3, THE DIFFERING HALF: TS7006 THROUGH A UNION CONTEXTUAL TYPE, AND THE ARITY FILTER THE IDENTICAL HALF HAD LEFT OUT, 18,738 / 0 / 3 (2026-09-12).**
 A union contextual type whose member signatures are NOT identical now leaves the arrow's
 parameter implicitly `any` and reports TS7006/TS7031 through the EXISTING owner
@@ -121,39 +139,3 @@ collapsing the whole `differ` tail is 0 RED on the full suite — evidence FOR i
 still refused as (CHK.94) territory, with the number written into the branch comment so the
 next round starts from a measurement. Grid 8×`added=0 removed=0`, cost_gate exit 0,
 huge_methods exit 0 (844), warning-clean.
-
-**(P18.72) — (CHK.97) D2: A BOTH-OVERLOADED UNION CALLEE REPORTS, AND THE SUPPRESSION STILL HIDING A SECOND ROW, 18,679 / 0 / 3 (2026-09-11).**
-**THE FIX IS A SPLIT BY *REASON*, NOT A RETIREMENT.** One `if` was answering two different
-facts: TWO OR MORE overloaded constituents is exactly where tsc SKIPS pass 2, so
-`getUnionSignatures` answers the EMPTY list and TS2349 reports with the "Each member … has
-signatures" chain — a DIAGNOSTIC; exactly ONE is the `unionOfArraysFilterCall` shape, where
-tsc RUNS pass 2 — SILENT. **The chain sentence now has ONE home** shared with the generic
-refusal, because a chain is the whole observable here and (PARITY.1) says the grid is blind
-to a display divergence, so two copies would drift with nothing to notice. Receipt
-**agree 3 → 11, missing 8 → 0, ours-only 0** — **and that number was CORRECTED within the
-round by the sub-step below**: it was taken with a chain-blind instrument, and one of its
-eleven AGREE rows is really a TEXT-DIFF, so re-taken chain-aware the seven fixtures read
-**agree 10, text-diff 1, missing 0**. The verdict does not move; the receipt does.
-**A COUNTDOWN PIN FIRED — THE SEVENTH IN EIGHT ROUNDS — AND ONLY THE *FULL* SUITE SAW IT**:
-a pin asserting the silence this round removes, with its own KDoc saying "SILENT where tsc
-reports TS2349". It surfaced from an ablation arm run against the full suite; the four
-corpus guard letters the round was gating on miss it. **Corollary: a guard-letter subset is
-not a substitute for the suite when an arm WIDENS an emission — a widening's victims are
-pins, not baselines.** **THE GRID IS A CONTROL AND THE ROUND PROVES IT WITH A COUNT**: a
-counting arm reads 0 hits on all eight profiles against 3 on the round's own fixture, so
-`added=0` is inertness, not coverage. **THE INSTRUMENT IS BLIND TO WHAT THIS ROUND CHANGES**:
-`scripts/ref_matrix.py` matched a diagnostic's FIRST LINE only, so a chain-only divergence
-scored AGREE — the third distinct blindness found in that script in two rounds, and it had
-passed a real one (`typeToString` parenthesizes a union member with exactly one call
-signature, where both references print it bare; pre-existing and unowned, now (CHK.130)).
-Closed as its own sub-step, verified in BOTH directions — a fixture on which all three arms
-agree on the chain still reads AGREE, so the arms' differing print formats do not
-false-positive — and it immediately re-graded one of this round's own fixtures. **THE ROUND'S LOAD-BEARING CLAIM IS TRUE OF THE PROFILES AND FALSE OF THE
-LANGUAGE**: the ONE-overloaded suppression D2 KEPT is reachable and hides a true positive,
-because PASS 2 also refuses on GENERIC INCOMPATIBILITY. The implementer STOPPED at the scope
-line rather than pushing through — now **(D2b)**, measured and ready (0 RED on 1,425
-baselines, reddening exactly the countdown pin already inverted) and **deliberately not
-taken: an ablation arm is not an implemented fix with pins.** Ablation 5 arms with both
-controls; a3 recorded as a REDUNDANT GUARD and structurally so; a2 recorded as a DEAD ARM
-for the round's own pin set. Grid 8×`added=0 removed=0`, cost_gate exit 0, huge_methods exit
-0 (844), warning-clean.

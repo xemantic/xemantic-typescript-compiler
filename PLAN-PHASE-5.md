@@ -25,6 +25,81 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.77) — (CHK.97) D5: inference through a union-combined signature was bailing on an INTERSECTION it could not see, and the "one row" was seven families (2026-09-12)
+
+**Suite 18,738 → 18,752 / 0 / 3** (+14 pins, `UnionCalleeGenericInferenceTest`; two countdown
+pins in `TupleArrayMembersTest` flipped to their subject). Grid 8×`added=0 removed=0`; library
+arm marked 18 → 18, cronstrue 1 → 1; `cost_gate.py` exit 0, no rebaseline (pristine
+before-binary through `--from-log` digit-identical on all 20 counters); `huge_methods.py
+--fail-over 0` exit 0; warning-clean. **(CHK.97) stays OPEN on D6 ALONE**, which is blocked on
+a model change — its unblocker is promoted to the top of the queue as **(CHK.133)**.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item and D5 was its
+last unblocked deliverable. Per the WORK ORDER's 2026-09-08 addendum the successor is
+**(INV.0) step 10b-ii**, which is itself BLOCKED on two named families, so the protocol's
+promote-unblocker rule applies at both ends and (CHK.133) is what it names.
+
+**THE SIZING SAID "ONE ROW"; THE MATRIX SAID SEVEN FAMILIES.** `map` with an annotated
+return, an un-annotated literal-returning arrow, the (CHK.30) wrong-typed use reading the
+parameter, a tuple-union receiver, a `readonly` member, the user-declared PASS-2 pair, plus
+the identity / block-body / function-expression variants all read `missing`. `reduce` with a
+seed and the PASS-1 identical generic pair already agreed. The predicate-`filter` shape is
+NOT this defect: its plain-`number[]` control is MISSING too, because
+`tryInferPredicateOverloadReturn` reads only `FunctionDeclaration`/`MethodDeclaration` and lib
+`filter` is a `MethodSignature` (pre-existing, recorded).
+
+**THE MECHANISM WAS INSTRUMENTED, AND THE FIRST READING WAS WRONG.** PASS 2 combines
+`zxs.map` into `<U>(callbackfn: ((value: number, …) => U) & ((value: string, …) => U), …): U[]`.
+The prediction was that gate (c) of `tryInferSingleTypeParamFromArgs` bails on the
+intersection; the stderr line printed `gate-passed tps=1` — a function object's signatures
+are INVISIBLE to `typeMentionsTypeParam` — and then `candidates tp=U n=0`: every callback arm
+of the candidate gatherer demands an anonymous `Type.Object`, an intersection is none, the
+inference bails whole and the result is the RAW `U[]`, which every reader then silently
+refuses as a foreign type parameter. **Verdict: CONTAINED** — a VIEW, not machinery.
+`inferenceParamType(p)` presents an intersection of anonymous function objects to the two
+classifying sites as ONE anonymous function type carrying the existing
+`getIntersectedSignatures` fold (tsc's `getContextualCallSignature` fold; tsc infers to each
+constituent and lands in the same place). Memoized per intersection id, null memoized too,
+in a cache declared BEFORE `init`.
+
+**BEFORE → AFTER (`agree/ours-only/missing`, zero new ours-only, zero REF-SPLIT)**: annotated
+return, literal arrow, wrong-typed use, tuple-union receiver all 0/0/1 → 1/0/0; the
+user-declared PASS-2 pair fires, with a TEXT-DIFF chain sub-line (`number[]` where the
+references print `number` — (CHK.132)'s population, recorded there); the seven-variant family
+5 AGREE; the differing/overloaded/`this` fixtures unchanged.
+
+**ABLATION over 67 pins per arm**: a1 the view removed — **12 RED**; a2 the FIRST constituent
+instead of the fold — **4 RED** (the three identity pins and the non-strict residue pin); a3
+the memo keyed by constituent COUNT — **1 RED** (two same-sized intersections in one file);
+a4 the GATE site reading the raw type while the gatherer reads the view — **0 RED, a
+REDUNDANT GUARD** (the gate already passes on the raw type because a function object's
+signatures are invisible to it), recorded and kept as the symmetric read.
+
+**THE AT-RISK SWEEP FOUND THREE THINGS THE FIXTURES COULD NOT** (793 tests / 68 classes): a
+`reduce` control I had written expecting `string` where both references print
+`string | number`, and two `TupleArrayMembersTest` pins asserting an EMPTY diagnostic list for
+`const r: boolean = u.map(x => x)` — countdowns on exactly this silence (their own comment said
+"the RESULT is `any`"); they now assert their subject (no TS2349) plus `codes == [2322]`,
+names unchanged per (CHK.114).
+
+**THE GRID IS A CONTROL AND WAS MEASURED AS ONE**: a census of combined generic calls reads
+`bound=0 unbound=0` on all 8 profiles, marked, cronstrue and the 2,400-file project, with the
+positive control live on the fixtures (built=1/bound=3; built=4/bound=12 on the seven-variant
+family). tsgo's cronstrue "1 row" is its TS5108 refusal of the `target=ES5` tsconfig, as in
+(P18.76).
+
+**RESIDUES, MEASURED AND NOT FIXED**: NON-STRICT projects — the fold is gated on
+`noImplicitAny` as the contextual one is, while tsc's inference is not, and ungating it would
+type the arrow parameter as the union where tsc has `any` (a (CHK.94)-class decision, pinned as
+`residue - …`); the (CHK.132) sub-line on the PASS-2 shape; `getUnionType` not deduping a
+NESTED union's literal (`1 | (1 | 2)` prints `1 | 1 | 2` on the BEFORE binary — proved with a
+`never` target after a `boolean` target was blinded by (PARITY.1)'s generalization); and the
+pre-existing B83.4i inference gaps identical on a plain array (predicate `filter`, `x => [x]`,
+`x => ({ v: x })`, `x => x + 1`).
+
+**NEXT**: **(CHK.133)** — `Signature.thisParameter`, the model change D6 is blocked on, queued
+at the top with its three consumers. Then (INV.0) step 10b-ii's own unblockers.
+
 ### Round (P18.76) — (CHK.97) D3, the DIFFERING half: TS7006 through a union contextual type, and the arity filter the identical half had left out (2026-09-12)
 
 **Suite 18,718 → 18,738 / 0 / 3** (+20 pins, `UnionContextualSignatureDifferingTest`; 39 pins
@@ -880,117 +955,6 @@ and the 8-profile grid is its only instrument.
 **NEXT**: (CHK.121) is new, small and independent. (CHK.119) and (CHK.120) are (P18.66)'s
 residues. (CHK.118) is now BLOCKED with its unblocker named, and the queue item says so.
 
-### Round (P18.66) — (INV.0) step 10b-iii: the TS2693 the item says we never emit, and TWO resolvers disagreeing about ONE receiver (2026-09-10)
-
-**Suite 18,546 → 18,573 / 0 / 3** (+12 and +13 pins, +2 from splitting a countdown
-control). **8-profile grid `added=0 removed=0` on all eight**, cumulative against the
-round-start binary; `cost_gate.py` exit 0 (`globals.lookups` −0.24%, the consult answering
-before the miss); `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean. Two
-commits, `4cee796f3` (c) and `47ceef127` (b).
-
-**TWO OF THE ITEM'S OWN FACTUAL CLAIMS WERE WRONG, EACH REFUTED BY ONE COMMAND, AND ONE OF
-THEM CHANGED THE SIZE OF THE WORK.** (i) *"TS2693 … and this checker never emits that
-code"* — it does, byte-identically to pristine `typescript@6.0.3`, for a **FILE-LEVEL**
-`interface`/`type` alias read as a value. So (c) was never "add a diagnostic": it is a
-LEVEL-CONSTRUCTION gap in one function, because `tavListLevel` (what a statement `Block`
-contributes) surveys `values` ONLY where `tavModuleLevel` (a namespace body) surveys
-`values` + `typeOnly` + `nsOnly`. (ii) *"`namespace`, 6 of 6 cells — `ZzzNs.zzzNv` reads
-nothing at all, … additionally blocked by (CHK.73)"* — the SHADOWING variants read the
-**OUTER** namespace and emit a confident false row; only the unique ones are silent. And
-the (CHK.73) attribution is wrong: a FILE-LEVEL namespace's value member read works
-perfectly, so the blocker is not "a module symbol has no type" but `declareLexical` (below).
-Fifth round running that a queue item's facts were worth one command.
-
-**AND A THIRD POPULATION THE ITEM DOES NOT MENTION AT ALL**: a **UNIQUE** block-scoped
-`enum` / `class` / `namespace` receiver whose member is *genuinely absent* is TS2339 in both
-references and was silent here. That is what decided (b)'s design — see below.
-
-**THE CONTROL THAT KEEPS THE NUMBER HONEST.** `absentFn` — a nested `function` receiver,
-`Property 'x' does not exist on type '() => void'` — is missing at **FILE LEVEL TOO**, so it
-is a general FUNCTION-receiver gap and NOT B83.5's, and this round deliberately does not
-claim it (now (CHK.119)). CLAUDE.md's "run the identical source at all three sites before
-attributing a receiver-shaped gap" earned its keep again: without the file cell in the
-matrix, five rows would have been counted as this round's residue.
-
-**(c) — THE FIX IS TWO HALVES THAT ARE INDIVIDUALLY INERT.** The level must survey the
-block, AND `spineTavCandidateNode` must admit the block's names to the (WARM.21) per-file
-SUPERSET gate, which otherwise refuses the name before any level is consulted. Ablating the
-gate half reddens exactly the six positive pins. Classification is `tavModuleLevel`'s four
-filters verbatim, with one deliberate divergence stated in the KDoc: the full `values` set
-is computed FIRST and classified against, which is strictly STRICTER (fewer names in
-`typeOnly`) — the safe direction for a family that emits errors. **Per-filter verdicts,
-measured by dropping all four at once rather than argued**: `n !in KNOWN_GLOBALS` is
-LOAD-BEARING (a block-scoped `interface Event` shadows the global TYPE and **not** the
-global `declare var Event`, so `new Event(…)` stays legal — both references report only an
-arity error there) and so is the namespace `hasValues` sub-body survey; `n !in values` and
-`!tavHasValue(parent, n)` are REDUNDANT, because `spineTavIdentifierCore` returns on
-`tavHasValue(level, name)` above both probes — kept anyway, recorded as a round-927 pair
-rather than claimed as pinned, because the redundancy is a property of a caller this
-function does not control.
-
-**(b) — TWO RESOLVERS DISAGREEING ABOUT ONE RECEIVER, WITH THE WORST POSSIBLE SYMPTOM.**
-With a file-level `enum ZzzE2 { ZOuter }` and a block-scoped `enum ZzzE2 { ZInner }`,
-`ZzzE2.ZInner` produced the CORRECT TS2322 (step 10b typed the receiver as the inner enum)
-**and, on the same line, a false `Property 'ZInner' does not exist on type 'typeof ZzzE2'`**
-— because the `cmam*` family composes its own receiver from `lookupPerFileForNode`, which is
-keyed by the FILE. Two functional lines fix it: the `identSymbol` chain now consults
-`nameResolver.lexicalValueSymbolForNode` — **the same function step 10b uses** — above
-`perFileIdentSymbol`. Using the same function is the point; the DRIFT is the defect.
-`cmamLexicalValueShadow` is untouched, and its KDoc's stated reason for excluding
-block-scoped enums/classes ("refusing … would delete a working emission rather than correct
-it") was right when written and is obsolete post-10b: the answer is to SUBSTITUTE.
-
-**RECEIPT over a 56-cell matrix** (8 receiver kinds × 4 nesting sites × unique|shadowing;
-`scratchpad/f/`), tsgo 7.0.2 and pristine 6.0.3 agreeing on **all 56**: **18 ours-only / 44
-missing → 6 / 35**, AGREE cells 18 → 27. `absentEnum` and `absentClass` close COMPLETELY
-(7/7); `shadowEnum`/`shadowClass` lose every false row (3/6 → 0/3, the survivors being step
-10b-ii's TS2322); `shadowNs`/`shadowNsFn` 6/9 → 3/9. The (c) half's own 42-cell matrix went
-`ifaceAsValue` and `aliasAsValue` 0/3 → **0/0** with every other kind byte-identical, which
-is the receipt that it is the level and not the receiver.
-
-**THE UNCONDITIONAL FORM SHIPPED AND THAT IS A MEASUREMENT.** Step 10b's rule is "override a
-conventional answer, never replace silence"; HERE replacing silence is what buys the true
-rows. Shadowing-only measures 6/41 — the same 12 false rows killed, 6 true rows lost.
-Fallback is one added `perFileIdentSymbol != null &&`.
-
-**THE NAMESPACE HALF IS A TRADE, NOT A PURE GAIN, AND THE BRIEF PREDICTED IT WRONG.** Its 6
-false rows go and the true row is NOT produced, because `Binder.declareLexical`'s
-`ModuleDeclaration` arm publishes no `exports` onto the scope symbol where its `enum` arm
-does ((P18.64)'s asymmetry) and the namespace branch is gated on that table. **It also LOSES
-3 rows nobody predicted**: an absent member on a *shadowing* namespace is absent from the
-OUTER declaration too, so the wrong receiver had been answering those correctly by accident.
-Excluding namespaces measures 12/32. Inclusion shipped — 6 confident wrong messages for 3
-silences, and keeping them would mean deliberately consulting the declaration this step
-exists to stop consulting. Both numbers are in the KDoc; the `exports` asymmetry is now
-(CHK.120), which also unblocks 10c's qualified-namespace root.
-
-**A COUNTDOWN PIN FIRED AS DESIGNED — THE FOURTH IN SIX ROUNDS.**
-`M04ExpandoSpineMigrationTest`'s `negative control - params and top-level body locals shadow
-the candidate` carried two lines that are not its subject, and one of them — a nested
-`class Foo` shadowing a file-level `function Foo` — is reported by BOTH references at the
-line, column and message we now emit. Split: the three BINDING forms keep the control, the
-class case pins the TRUE row, and the nested-FUNCTION case is renamed `residue - …` so the
-next round sees a countdown rather than a guard.
-
-**ABLATION: 5 arms over 13 pins, and TWO of the brief's predictions were wrong.** Removal 8
-RED; inverse gate 5; the chain placed BELOW `perFileIdentSymbol` 5 with an **IDENTICAL** red
-set — the two are behaviourally the same mistake, since a `?:` below it only evaluates when
-it is null, so that arm adds no discrimination; shadowing-only 3; **namespaces-excluded
-0 RED, UNDISCRIMINATED and recorded as such**, because pinning the namespace residue would
-itself be a countdown. (c)'s arms: gate half removed reddens exactly its six positives.
-
-**TWO PROCESS NOTES, both about reading a tree you do not own.** (i) The coordinator read
-`Checker.kt` mid-flight, caught an **ablation arm**, and sent a correction whose first point
-was wrong; the implementer said so plainly and showed the restored tree. `git status` cannot
-tell an ablation arm from landed code — both read "modified" — so a concurrent reader must
-ask before diagnosing. Its other two points were right and were already gated. (ii) A
-verification probe against the live class dir read `DEAD CLASSPATH` because a compile was in
-flight; the guard CLAUDE.md mandates caught it and the receipt came from a staged snapshot.
-Both argue for one snapshot per arm rather than for reading the shared class dir.
-
-**NEXT**: (CHK.119) and (CHK.120) are the two newly-measured residues and are independent;
-(CHK.118) and (CHK.117) are unchanged; 10b-ii is still blocked on its own two families.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1051,7 +1015,33 @@ to. The (P18.44) restore had placed it directly ABOVE the first queue item, wher
 ORDER, or the first queue item is missing — a doc invariant is only as good as the thing that
 notices it is gone.
 
-- [ ] **(CHK.97) D3 CLOSED IN BOTH HALVES 2026-09-12 ((P18.75)/(P18.76) notes) — the DIFFERING half reports
+- [ ] **(CHK.133) `Signature.thisParameter` — THE MODEL CHANGE (CHK.97) D6 IS BLOCKED ON (promoted 2026-09-12,
+  (P18.77)).** `Signature` (`Type.kt:318`) has no `thisParameter`, so a `this:` pseudo-parameter is dropped by
+  `getParameterSymbols` and invisible to every consumer; `code = 2684` has 0 sites. THREE consumers need it, each a
+  separate deliverable, sized against tsc (checker.ts `getThisTypeOfSignature`, `compareSignaturesRelated`'s
+  `this` leg, `getUnionSignatures` intersecting `this` types, `checkCallExpression`'s TS2684 *The 'this' context of
+  type 'X' is not assignable to method's 'this' of type 'Y'*) and both references first: (a) MODEL — carry the
+  declared `this` type on `Signature` (built from the `Parameter` whose name is `this`, instantiated with the rest,
+  cloned by `createUnionSignature`/`combineUnionSignatures` — the union arm INTERSECTS members' `this` types as tsc
+  does), with every existing reader unchanged (`parameters` keeps excluding it); (b) ASSIGNABILITY — `this`
+  parameter compared bivariantly/contravariantly per tsc in `compareSignaturesRelated`; (c) CALL SITE — TS2684 at a
+  method call whose receiver type is not assignable to the signature's `this`, plus `.call`/`.apply`/`.bind` through
+  the lib `CallableFunction` overloads under `strictBindCallApply`. Reference fixtures: pristine
+  `unionTypeCallSignatures5/6` (`…6.ts:39` is TS2741 in tsgo and TS2684 in pristine — honour pristine), the
+  `thisParameter*`/`thisTypeInFunctions*` conformance baselines (grep the `.errors.txt` set for `TS2684`, and run
+  every ACTIVE one by name before landing). Gate: reach census on the 8 profiles (tsc's own sources declare `this:`
+  parameters — the grid is likely a REAL gate here) and both libraries; pins per consumer; ablation per deliverable.
+  Back-pointer: (CHK.97) D6 (`unionTypeCallSignatures5/6`, the union intersection that produces TS2684).
+
+- [ ] **(CHK.97) D5 CLOSED 2026-09-12 ((P18.77) note) — inference through a union-combined signature: PASS 2's
+  callback parameter is an INTERSECTION of function types and the single-TP inference's candidate gatherer demanded
+  an anonymous `Type.Object`; `inferenceParamType` now presents it as one anonymous function type carrying the
+  `getIntersectedSignatures` fold (memoized per intersection id). Four families `missing → agree`, the PASS-2 pair
+  fires with a (CHK.132) sub-line; grid a measured CONTROL (census `bound=0` everywhere real). **ONLY D6 REMAINS,
+  BLOCKED — its unblocker is (CHK.133) above.** Residues: non-strict projects (the fold is gated on `noImplicitAny`
+  where tsc's inference is not — a (CHK.94)-class decision), `getUnionType` not deduping a nested union's literal
+  (`1 | (1 | 2)` prints `1 | 1 | 2`), predicate `filter` on a plain array (`tryInferPredicateOverloadReturn` reads only
+  `FunctionDeclaration`/`MethodDeclaration`; lib `filter` is a `MethodSignature`). PREVIOUS HEAD: D3 CLOSED IN BOTH HALVES 2026-09-12 ((P18.75)/(P18.76) notes) — the DIFFERING half reports
   TS7006/TS7031 through `checkParamsForImplicitAny` (`spineIanyUnionCtxDiffers`), and the union arm now runs tsc's
   `getContextualCallSignature` per member (`callableSignaturesForCtx(requiredParamCount)`, arity filter
   `signatureArityBelow`, several applicable overloads through `getIntersectedSignatures`), which closed the

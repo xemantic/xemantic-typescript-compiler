@@ -7341,6 +7341,11 @@ class Checker(
      *  `new (typeof A | typeof B)(…)` was a false TS2351. */
     private val unionConstructSignatureCache = HashMap<Int, List<Signature>?>()
 
+    /** (CHK.97) D5: memo for [intersectedCallbackView], keyed by the INTERSECTION's
+     *  `Type.id`; a null answer (not a foldable callback intersection) is memoized too,
+     *  so `containsKey` is the hit test. Declared before `init` per the init-order trap. */
+    private val intersectedCallbackViewCache = HashMap<Int, Type?>()
+
     /**
      * (INC.69) The program's files grouped by the LAST PATH SEGMENT of their file
      * name, built on first ask and never again.
@@ -126666,7 +126671,7 @@ interface DataView {
         // containing TPs) — those need richer inference.
         val tpsSet = tps.toSet()
         for ((idx, p) in params.withIndex()) {
-            val pt = getTypeOfSymbol(p)
+            val pt = inferenceParamType(p)
             if (pt === errorType) return null
             val isRest = (p.valueDeclaration as? Parameter)?.dotDotDotToken == true
             // (a) bare-some-tp_i
@@ -127226,6 +127231,88 @@ interface DataView {
     }
 
     /**
+     * (CHK.97) D5 — the type of a parameter AS THE INFERENCE FAMILY CLASSIFIES IT:
+     * [getTypeOfSymbol], except that an INTERSECTION of anonymous function types is
+     * answered as ONE anonymous function type carrying their intersected signature
+     * ([intersectedCallbackView]).
+     *
+     * That shape is the callback parameter of a PASS-2 union-combined signature
+     * ([combineSignaturesOfUnionMembers], tsc's `combineUnionParameters`): calling
+     * `(number[] | string[]).map(x => 1)` hands the arrow the parameter
+     * `((value: number, …) => U) & ((value: string, …) => U)`. tsc infers `U` from it
+     * by inferring the arrow's type to EACH constituent (`inferToMultipleTypes`), and
+     * the arrow itself is typed by `getContextualCallSignature` folding the
+     * constituents through `getIntersectedSignatures`. This family classifies a
+     * callback by the SHAPE of `pt` — every callback arm ([fnTypedParamBareTpMatch],
+     * [fnTypedParamMultiBareTpMatch], the B83.4i body re-typing in
+     * [tispGatherCallbackCandidates]) demands an anonymous `Type.Object`, which an
+     * intersection never is — so before this the gate PASSED (a function object's
+     * signatures are invisible to [typeMentionsTypeParam], so the intersection read as
+     * "concrete") and the callback pass gathered NOTHING: `candidates.isEmpty()`, the
+     * whole inference bailed, and the call's result was the raw `U[]`, which every
+     * assignability reader refuses as a foreign type parameter — silently. MEASURED
+     * with a stderr line, not read: `gate-passed tps=1` then `candidates tp=U n=0` on
+     * every fixture of the family.
+     *
+     * Read at the two sites that CLASSIFY a callback (the acceptance gate and the
+     * callback pass); the anchor pass and the anchor ORDERING keep the raw type, which
+     * an intersection of function objects matches at no arm either way.
+     */
+    private fun inferenceParamType(p: Symbol): Type {
+        val pt = getTypeOfSymbol(p)
+        if (pt !is Type.Intersection) return pt
+        return intersectedCallbackView(pt) ?: pt
+    }
+
+    /**
+     * (CHK.97) D5 — an anonymous function type whose one call signature is
+     * [getIntersectedSignatures] over the call signatures of [pt]'s constituents, or
+     * null where [pt] is not an intersection of anonymous one-or-more-signature
+     * function objects (a named member, a construct signature, a property or an index
+     * signature on any constituent refuses — the same exclusions the callback arms
+     * apply to a single function object) or where the fold itself refuses (two
+     * constituents with non-identical type parameters, or `noImplicitAny` off — the
+     * fold is gated exactly as tsc gates its contextual one, so under a non-strict
+     * project today's silence stays; a recorded residue, not an approximation).
+     *
+     * The fold is the intersection twin of [combineSignaturesOfUnionMembers]: the
+     * constituents' parameters UNIONED (`value: string | number`) and the FIRST
+     * constituent's return kept — for a union-combined signature that return IS the
+     * combined signature's own type parameter (the second member's was mapped onto it
+     * by [combineSignaturesOfUnionMembers]), which is what lets the B83.4i branch
+     * re-type the arrow body and bind it. Memoized per intersection id; the view is a
+     * fresh, unpublished object reachable only through this helper, so the
+     * `symbolTypes` writes its minted parameters make are sound for the
+     * [mintCombinedParam] reason.
+     */
+    private fun intersectedCallbackView(pt: Type.Intersection): Type? {
+        if (intersectedCallbackViewCache.containsKey(pt.id)) return intersectedCallbackViewCache[pt.id]
+        val view = computeIntersectedCallbackView(pt)
+        intersectedCallbackViewCache[pt.id] = view
+        return view
+    }
+
+    private fun computeIntersectedCallbackView(pt: Type.Intersection): Type? {
+        val sigs = ArrayList<Signature>(pt.types.size)
+        for (m in pt.types) {
+            if (m !is Type.Object || m is Type.Interface || m is Type.Reference || m.symbol != null) return null
+            resolveStructuredTypeMembers(m)
+            if (!m.constructSignatures.isNullOrEmpty()) return null
+            if (!m.members.isNullOrEmpty()) return null
+            if (m.stringIndexInfo != null || m.numberIndexInfo != null) return null
+            val own = m.callSignatures
+            if (own.isNullOrEmpty()) return null
+            sigs.addAll(own)
+        }
+        if (sigs.size < 2) return null
+        val folded = getIntersectedSignatures(sigs) ?: return null
+        val fn = Type.Object()
+        fn.callSignatures = listOf(folded)
+        fn.properties = emptyList()
+        return fn
+    }
+
+    /**
      * (JIT.1)(e) round 821 — pass 2 of [tryInferSingleTypeParamFromArgs]'s
      * per-type-parameter candidate gathering: the CALLBACK positions (B83.1
      * gate (f) single- and multi-param shapes, and the B83.4b/c/d/i
@@ -127267,7 +127354,7 @@ interface DataView {
                 isBrandedNamedLikeIntersection(t)
         for (i in params.indices) {
             if (i >= args.size) break
-            val pt = getTypeOfSymbol(params[i])
+            val pt = inferenceParamType(params[i])
             val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
             if (isRest) continue
             if (pt === tp) continue

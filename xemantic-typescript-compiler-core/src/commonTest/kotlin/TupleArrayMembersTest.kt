@@ -390,15 +390,23 @@ class TupleArrayMembersTest {
 
     @Test
     fun `a union of tuples resolves a generic member without TS2349`() {
-        // The RESULT of the call is `any` (recorded residue: a union of callables is not
-        // combined) — what is pinned is that the base gives the union a member and the
-        // refinement keeps tsc's combination from reading as "not callable".
-        assert(diags("declare const u: [1] | [1, 2]; const r: boolean = u.map(x => x)").isEmpty())
+        // What is pinned is that the base gives the union a member and the refinement
+        // keeps tsc's combination from reading as "not callable". The RESULT of the call
+        // was `any` until (CHK.97) D5 inferred `U` through the combined signature's
+        // intersected callback; the row it now reports is a TS2322 whose display is the
+        // pre-existing `(1 | 1 | 2)[]` (two `1` literal instances are not interned into one
+        // union member — measured on the pre-D5 binary through the contextual `forEach`
+        // parameter), so the pin asserts the CODE it is about and not that message.
+        val d = diags("declare const u: [1] | [1, 2]; const r: boolean = u.map(x => x)")
+        assert(d.none { it.code == 2349 })
+        assert(d.map { it.code } == listOf(2322))
     }
 
     @Test
     fun `a union of arrays with identical generic members is not TS2349`() {
-        assert(diags("declare const u: 1[] | (1 | 2)[]; const r: boolean = u.map(x => x)").isEmpty())
+        val d = diags("declare const u: 1[] | (1 | 2)[]; const r: boolean = u.map(x => x)")
+        assert(d.none { it.code == 2349 })
+        assert(d.map { it.code } == listOf(2322))
     }
 
     /**

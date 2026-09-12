@@ -1,3 +1,114 @@
+### Round (P18.66) — (INV.0) step 10b-iii: the TS2693 the item says we never emit, and TWO resolvers disagreeing about ONE receiver (2026-09-10)
+
+**Suite 18,546 → 18,573 / 0 / 3** (+12 and +13 pins, +2 from splitting a countdown
+control). **8-profile grid `added=0 removed=0` on all eight**, cumulative against the
+round-start binary; `cost_gate.py` exit 0 (`globals.lookups` −0.24%, the consult answering
+before the miss); `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean. Two
+commits, `4cee796f3` (c) and `47ceef127` (b).
+
+**TWO OF THE ITEM'S OWN FACTUAL CLAIMS WERE WRONG, EACH REFUTED BY ONE COMMAND, AND ONE OF
+THEM CHANGED THE SIZE OF THE WORK.** (i) *"TS2693 … and this checker never emits that
+code"* — it does, byte-identically to pristine `typescript@6.0.3`, for a **FILE-LEVEL**
+`interface`/`type` alias read as a value. So (c) was never "add a diagnostic": it is a
+LEVEL-CONSTRUCTION gap in one function, because `tavListLevel` (what a statement `Block`
+contributes) surveys `values` ONLY where `tavModuleLevel` (a namespace body) surveys
+`values` + `typeOnly` + `nsOnly`. (ii) *"`namespace`, 6 of 6 cells — `ZzzNs.zzzNv` reads
+nothing at all, … additionally blocked by (CHK.73)"* — the SHADOWING variants read the
+**OUTER** namespace and emit a confident false row; only the unique ones are silent. And
+the (CHK.73) attribution is wrong: a FILE-LEVEL namespace's value member read works
+perfectly, so the blocker is not "a module symbol has no type" but `declareLexical` (below).
+Fifth round running that a queue item's facts were worth one command.
+
+**AND A THIRD POPULATION THE ITEM DOES NOT MENTION AT ALL**: a **UNIQUE** block-scoped
+`enum` / `class` / `namespace` receiver whose member is *genuinely absent* is TS2339 in both
+references and was silent here. That is what decided (b)'s design — see below.
+
+**THE CONTROL THAT KEEPS THE NUMBER HONEST.** `absentFn` — a nested `function` receiver,
+`Property 'x' does not exist on type '() => void'` — is missing at **FILE LEVEL TOO**, so it
+is a general FUNCTION-receiver gap and NOT B83.5's, and this round deliberately does not
+claim it (now (CHK.119)). CLAUDE.md's "run the identical source at all three sites before
+attributing a receiver-shaped gap" earned its keep again: without the file cell in the
+matrix, five rows would have been counted as this round's residue.
+
+**(c) — THE FIX IS TWO HALVES THAT ARE INDIVIDUALLY INERT.** The level must survey the
+block, AND `spineTavCandidateNode` must admit the block's names to the (WARM.21) per-file
+SUPERSET gate, which otherwise refuses the name before any level is consulted. Ablating the
+gate half reddens exactly the six positive pins. Classification is `tavModuleLevel`'s four
+filters verbatim, with one deliberate divergence stated in the KDoc: the full `values` set
+is computed FIRST and classified against, which is strictly STRICTER (fewer names in
+`typeOnly`) — the safe direction for a family that emits errors. **Per-filter verdicts,
+measured by dropping all four at once rather than argued**: `n !in KNOWN_GLOBALS` is
+LOAD-BEARING (a block-scoped `interface Event` shadows the global TYPE and **not** the
+global `declare var Event`, so `new Event(…)` stays legal — both references report only an
+arity error there) and so is the namespace `hasValues` sub-body survey; `n !in values` and
+`!tavHasValue(parent, n)` are REDUNDANT, because `spineTavIdentifierCore` returns on
+`tavHasValue(level, name)` above both probes — kept anyway, recorded as a round-927 pair
+rather than claimed as pinned, because the redundancy is a property of a caller this
+function does not control.
+
+**(b) — TWO RESOLVERS DISAGREEING ABOUT ONE RECEIVER, WITH THE WORST POSSIBLE SYMPTOM.**
+With a file-level `enum ZzzE2 { ZOuter }` and a block-scoped `enum ZzzE2 { ZInner }`,
+`ZzzE2.ZInner` produced the CORRECT TS2322 (step 10b typed the receiver as the inner enum)
+**and, on the same line, a false `Property 'ZInner' does not exist on type 'typeof ZzzE2'`**
+— because the `cmam*` family composes its own receiver from `lookupPerFileForNode`, which is
+keyed by the FILE. Two functional lines fix it: the `identSymbol` chain now consults
+`nameResolver.lexicalValueSymbolForNode` — **the same function step 10b uses** — above
+`perFileIdentSymbol`. Using the same function is the point; the DRIFT is the defect.
+`cmamLexicalValueShadow` is untouched, and its KDoc's stated reason for excluding
+block-scoped enums/classes ("refusing … would delete a working emission rather than correct
+it") was right when written and is obsolete post-10b: the answer is to SUBSTITUTE.
+
+**RECEIPT over a 56-cell matrix** (8 receiver kinds × 4 nesting sites × unique|shadowing;
+`scratchpad/f/`), tsgo 7.0.2 and pristine 6.0.3 agreeing on **all 56**: **18 ours-only / 44
+missing → 6 / 35**, AGREE cells 18 → 27. `absentEnum` and `absentClass` close COMPLETELY
+(7/7); `shadowEnum`/`shadowClass` lose every false row (3/6 → 0/3, the survivors being step
+10b-ii's TS2322); `shadowNs`/`shadowNsFn` 6/9 → 3/9. The (c) half's own 42-cell matrix went
+`ifaceAsValue` and `aliasAsValue` 0/3 → **0/0** with every other kind byte-identical, which
+is the receipt that it is the level and not the receiver.
+
+**THE UNCONDITIONAL FORM SHIPPED AND THAT IS A MEASUREMENT.** Step 10b's rule is "override a
+conventional answer, never replace silence"; HERE replacing silence is what buys the true
+rows. Shadowing-only measures 6/41 — the same 12 false rows killed, 6 true rows lost.
+Fallback is one added `perFileIdentSymbol != null &&`.
+
+**THE NAMESPACE HALF IS A TRADE, NOT A PURE GAIN, AND THE BRIEF PREDICTED IT WRONG.** Its 6
+false rows go and the true row is NOT produced, because `Binder.declareLexical`'s
+`ModuleDeclaration` arm publishes no `exports` onto the scope symbol where its `enum` arm
+does ((P18.64)'s asymmetry) and the namespace branch is gated on that table. **It also LOSES
+3 rows nobody predicted**: an absent member on a *shadowing* namespace is absent from the
+OUTER declaration too, so the wrong receiver had been answering those correctly by accident.
+Excluding namespaces measures 12/32. Inclusion shipped — 6 confident wrong messages for 3
+silences, and keeping them would mean deliberately consulting the declaration this step
+exists to stop consulting. Both numbers are in the KDoc; the `exports` asymmetry is now
+(CHK.120), which also unblocks 10c's qualified-namespace root.
+
+**A COUNTDOWN PIN FIRED AS DESIGNED — THE FOURTH IN SIX ROUNDS.**
+`M04ExpandoSpineMigrationTest`'s `negative control - params and top-level body locals shadow
+the candidate` carried two lines that are not its subject, and one of them — a nested
+`class Foo` shadowing a file-level `function Foo` — is reported by BOTH references at the
+line, column and message we now emit. Split: the three BINDING forms keep the control, the
+class case pins the TRUE row, and the nested-FUNCTION case is renamed `residue - …` so the
+next round sees a countdown rather than a guard.
+
+**ABLATION: 5 arms over 13 pins, and TWO of the brief's predictions were wrong.** Removal 8
+RED; inverse gate 5; the chain placed BELOW `perFileIdentSymbol` 5 with an **IDENTICAL** red
+set — the two are behaviourally the same mistake, since a `?:` below it only evaluates when
+it is null, so that arm adds no discrimination; shadowing-only 3; **namespaces-excluded
+0 RED, UNDISCRIMINATED and recorded as such**, because pinning the namespace residue would
+itself be a countdown. (c)'s arms: gate half removed reddens exactly its six positives.
+
+**TWO PROCESS NOTES, both about reading a tree you do not own.** (i) The coordinator read
+`Checker.kt` mid-flight, caught an **ablation arm**, and sent a correction whose first point
+was wrong; the implementer said so plainly and showed the restored tree. `git status` cannot
+tell an ablation arm from landed code — both read "modified" — so a concurrent reader must
+ask before diagnosing. Its other two points were right and were already gated. (ii) A
+verification probe against the live class dir read `DEAD CLASSPATH` because a compile was in
+flight; the guard CLAUDE.md mandates caught it and the receipt came from a staged snapshot.
+Both argue for one snapshot per arm rather than for reading the shared class dir.
+
+**NEXT**: (CHK.119) and (CHK.120) are the two newly-measured residues and are independent;
+(CHK.118) and (CHK.117) are unchanged; 10b-ii is still blocked on its own two families.
+
 ### Round (P18.65) — (INV.0) step 10d: the oracle's `resolveName` is ANSWERED, and the row that opens later stays refused (2026-09-10)
 
 **Suite 18,541 → 18,546 / 0 / 3** (+5 pins, one refusal pin re-pointed). **8-profile grid
