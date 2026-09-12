@@ -110043,6 +110043,16 @@ interface DataView {
         if (chain.isEmpty()) {
             getCallableMismatchElaboration(valueType, pt)?.let { chain.addAll(it) }
         }
+        // (CHK.133)(b) Two CALLABLE types — the member-assignment twin of the var-decl
+        // reader's `tgtIsFunc` branch, which this site never had: `c.explicitVoid =
+        // c.explicitThis` printed the TS2322 with NO chain where pristine's
+        // `thisTypeInFunctionsNegative` baseline nests the `this` line (and a parameter
+        // mismatch its `Types of parameters` line) under it.
+        if (chain.isEmpty() && valueType is Type.Object && ptForRel is Type.Object &&
+            !valueType.callSignatures.isNullOrEmpty() && !ptForRel.callSignatures.isNullOrEmpty()
+        ) {
+            chain.addAll(getFunctionMismatchElaboration(valueType, ptForRel))
+        }
         // Squiggle spans the whole property access `obj.prop`
         val start = target.expression.pos
         val length = target.name.pos + target.name.text.length - start
@@ -130913,6 +130923,12 @@ interface DataView {
      * for function types declared with a `this`-typed pseudo-parameter.
      */
     private fun extractThisParam(sig: Signature): String? {
+        // (CHK.133)(b) A signature CARRYING a resolved `this` renders it whatever its
+        // declaration is — a class or interface method's member type reaches the TS2416
+        // chain through a builder that records no declaration, and printed
+        // `(x: number) => void` for `m(this: ZzzB, x: number)` where both references print
+        // the `this`. The declaration-text fallback below serves the rest.
+        sig.thisType?.let { resolved -> if (resolved !== errorType) return "this: ${typeToString(resolved)}" }
         val decl = sig.declaration ?: return null
         val astParams: List<Parameter> = when (decl) {
             is FunctionExpression -> decl.parameters
@@ -142970,6 +142986,12 @@ interface DataView {
         // Check parameter count mismatch
         if (derivedSig.minArgumentCount > baseSig.parameters.size) {
             chain.add("    Target signature provides too few arguments. Expected ${derivedSig.parameters.size} or more, but got ${baseSig.parameters.size}.")
+            return
+        }
+        // (CHK.133)(b) The `this` leg first, as tsc; an override is a METHOD pair, so the
+        // `this` types compare bivariantly (the verdict site's `methodSignaturesBivariantlyRelated`).
+        signatureThisMismatchChain(derivedSig, baseSig, bivariant = true)?.let { lines ->
+            chain.addAll(lines.map { "  $it" })
             return
         }
         // Check parameter type mismatches (contravariant: base.param must be assignable
@@ -155293,7 +155315,7 @@ interface DataView {
     }
 
     /** (CHK.133)(c) Does [type] mention a type parameter anywhere a relation would read it? */
-    private fun typeMentionsAnyTypeParam(type: Type, depth: Int = 0): Boolean {
+    internal fun typeMentionsAnyTypeParam(type: Type, depth: Int = 0): Boolean {
         if (depth > 8) return false
         return when (type) {
             is Type.TypeParam -> true
@@ -167438,6 +167460,78 @@ interface DataView {
     }
 
     /**
+     * (CHK.133)(b) The chain a failing `this` leg prints — *The 'this' types of each
+     * signature are incompatible.* followed by the elaboration of the TARGET's `this`
+     * against the SOURCE's (the contravariant direction the leg tests) — or null where the
+     * leg relates. The verdict is [Relater.signatureThisTypesRelated], the ONE predicate the
+     * relation uses, so this line can never contradict it. Lines carry the 2-space base
+     * indent of [getFunctionMismatchElaboration]'s output.
+     *
+     * The leaf shapes were measured against pristine `typescript@6.0.3`: a plain object
+     * target prints the missing-property / TS2740 / `Types of property` line directly
+     * ([thisArgumentMismatchChain]); an INTERSECTION prints `Type 'S' is not assignable to
+     * type 'A & C'.` and nests the constituent's story; a UNION prints its own line and
+     * nests the first failing constituent; anything else the bare `Type 'S' is not
+     * assignable to type 'T'.`.
+     */
+    private fun signatureThisMismatchChain(
+        sourceSig: Signature,
+        targetSig: Signature,
+        bivariant: Boolean,
+        pinMapper: TypeMapper? = null,
+    ): List<String>? {
+        if (relater.signatureThisTypesRelated(sourceSig, targetSig, assignableRelation, bivariant, pinMapper)) return null
+        val rawSourceThis = sourceSig.thisType ?: return null
+        val targetThis = targetSig.thisType ?: return null
+        val sourceThis = if (pinMapper != null) instantiateType(rawSourceThis, pinMapper) else rawSourceThis
+        val lines = mutableListOf("  The 'this' types of each signature are incompatible.")
+        val leaf = thisArgumentMismatchChain(targetThis, sourceThis)
+        val targetDisplay = typeToString(targetThis)
+        val sourceDisplay = typeToString(sourceThis)
+        when {
+            sourceThis is Type.Intersection && leaf.isNotEmpty() -> {
+                lines += "    Type '$targetDisplay' is not assignable to type '$sourceDisplay'."
+                lines += leaf.map { "    $it" }
+            }
+            leaf.isNotEmpty() -> lines += leaf.map { "  $it" }
+            else -> {
+                lines += "    Type '$targetDisplay' is not assignable to type '$sourceDisplay'."
+                if (targetThis is Type.Union) {
+                    val failing = targetThis.types.firstOrNull { !checkTypeRelatedTo(it, sourceThis, assignableRelation) }
+                    if (failing != null) {
+                        lines += "      Type '${typeToString(failing)}' is not assignable to type '$sourceDisplay'."
+                    }
+                }
+            }
+        }
+        return lines
+    }
+
+    /**
+     * (CHK.133)(b) The type-parameter pins [getFunctionMismatchElaborationWorker]'s parameter
+     * loop would make (17.10e's mirror of `Relater.signatureRelatedTo`'s 17.10d inference),
+     * taken as a mapper BEFORE the loop so the `this` leg of a source-generic signature can
+     * read them — `<T>(this: ZzzBox<T>, x: T)` against `(this: ZzzB, x: number)` must
+     * elaborate `ZzzBox<number>`, as both references print. Null where nothing pins.
+     */
+    private fun elaborationPinMapper(sourceSig: Signature, targetSig: Signature): TypeMapper? {
+        if (sourceSig.typeParameters.isNullOrEmpty() || !targetSig.typeParameters.isNullOrEmpty()) return null
+        val sourceParams = sourceSig.parameters
+        val targetParams = targetSig.parameters
+        val byId = HashMap<Int, Type>()
+        val byName = HashMap<String, Type>()
+        for (i in 0 until minOf(sourceParams.size, targetParams.size)) {
+            val sp = getTypeOfSymbol(sourceParams[i]) as? Type.TypeParam ?: continue
+            if (byId.containsKey(sp.id)) continue
+            val tp = getTypeOfSymbol(targetParams[i])
+            byId[sp.id] = tp
+            sp.symbol?.name?.let { byName[it] = tp }
+        }
+        if (byId.isEmpty()) return null
+        return TypeMapper { tp -> byId[tp.id] ?: tp.symbol?.name?.let { byName[it] } }
+    }
+
+    /**
      * intTypeCheck: multi-signature targets — [getFunctionMismatchElaboration] compares
      * source.first() vs target.first() only, but tsc elaborates the FIRST FAILING target
      * signature (`() => void` vs `i6`'s inherited `(): number` → "Type 'void' is not
@@ -167460,7 +167554,11 @@ interface DataView {
     }
 
     private fun getFunctionMismatchElaboration(
-        source: Type.Object, target: Type.Object
+        source: Type.Object, target: Type.Object,
+        // (CHK.133)(b) The pair is two CALLBACK parameters (tsc's `SignatureCheckMode.Callback`
+        // — the 17.15a recursion below), where the callbacks' own `this` types compare
+        // bivariantly; the relation's `Relater.callbackParamsRelated` is the verdict side.
+        callbackThis: Boolean = false,
     ): List<String> {
         // Cycle guard: a recursive function type (`interface I { (x: I): void }`)
         // recurses below with swapped operands (contravariance) into an alternating
@@ -167469,14 +167567,14 @@ interface DataView {
         val pairKey = packRelationKey(source.id, target.id)
         if (!state.functionElaborationStack.add(pairKey)) return emptyList()
         try {
-            return getFunctionMismatchElaborationWorker(source, target)
+            return getFunctionMismatchElaborationWorker(source, target, callbackThis)
         } finally {
             state.functionElaborationStack.remove(pairKey)
         }
     }
 
     private fun getFunctionMismatchElaborationWorker(
-        source: Type.Object, target: Type.Object
+        source: Type.Object, target: Type.Object, callbackThis: Boolean,
     ): List<String> {
         val sourceSigs = source.callSignatures
         val targetSigs = target.callSignatures
@@ -167497,6 +167595,12 @@ interface DataView {
                 "  Target signature provides too few arguments. Expected ${sourceSig.parameters.size} or more, but got ${targetSig.parameters.size}."
             )
         }
+        // (CHK.133)(b) tsc's `compareSignaturesRelated` compares the `this` types BEFORE the
+        // parameters, so a signature failing both prints the `this` line (measured: pristine
+        // on `(this: ZzzA, x: ZzzA)` against `(this: { b: string }, x: { b: string })`).
+        signatureThisMismatchChain(
+            sourceSig, targetSig, bivariant = callbackThis, elaborationPinMapper(sourceSig, targetSig),
+        )?.let { return it }
         // 16.4dw: Check parameter type mismatch FIRST (contravariant) — TypeScript reports
         // the parameter mismatch before the return-type mismatch when both fail, because
         // params are contravariant and the failure is more fundamental.
@@ -167603,7 +167707,10 @@ interface DataView {
                     !targetParamType.callSignatures.isNullOrEmpty() &&
                     !sourceParamType.callSignatures.isNullOrEmpty()
                 ) {
-                    val nested = getFunctionMismatchElaboration(targetParamType, sourceParamType)
+                    val nested = getFunctionMismatchElaboration(
+                        targetParamType, sourceParamType,
+                        callbackThis = targetParamType.callSignatures?.size == 1 && sourceParamType.callSignatures?.size == 1,
+                    )
                     if (nested.isNotEmpty()) {
                         return listOf(
                             "  Types of parameters '${sourceParams[i].name}' and '${targetParams[i].name}' are incompatible.",

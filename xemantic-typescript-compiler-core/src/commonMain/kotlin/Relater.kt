@@ -1263,6 +1263,11 @@ internal class Relater(
         // strictFunctionTypes). Used by the class-property-override check for
         // method members. Default false — every other caller keeps strict variance.
         bivariantParams: Boolean = false,
+        // (CHK.133)(b) tsc's `SignatureCheckMode.Callback`: this signature is a CALLBACK
+        // parameter of the signature being related, so its `this` types compare
+        // bivariantly whatever the target's declaration kind. Set only by
+        // [callbackParamsRelated]; it affects the `this` leg and nothing else.
+        callbackThis: Boolean = false,
     ): Boolean {
         // Source requires more args than target provides → incompatible.
         // Round 475: a REST-param target provides UNBOUNDED args (`(...args: any[]) =>
@@ -1405,7 +1410,8 @@ internal class Relater(
                     !checker.typeIncludesUndefined(sourceParamType)
                 ) checker.getUnionType(listOf(sourceParamType, undefinedType)) else sourceParamType
             if (!checkTypeRelatedTo(targetParamType, sourceParamCmp, relation) &&
-                !(bivariantParams && checkTypeRelatedTo(sourceParamType, targetParamType, relation))) return false
+                !(bivariantParams && checkTypeRelatedTo(sourceParamType, targetParamType, relation)) &&
+                !(!callbackThis && callbackParamsRelated(sourceParamType, targetParamType, relation))) return false
         }
         // B63.29 continuation: Source has MORE params than target.size — target's rest
         // covers them. For each excess source position, check target rest element type
@@ -1422,25 +1428,123 @@ internal class Relater(
                 if (!checkTypeRelatedTo(targetRestElement, srcCmp, relation)) return false
             }
         }
-        // Check return types (covariant)
-        // Void target return accepts any source return type (void means "don't care about return")
-        var sourceReturn = source.resolvedReturnType ?: anyType
-        val targetReturn = target.resolvedReturnType ?: anyType
         // Round 455: substitute the pinned source type params into the source RETURN
         // type before the covariant check. `identity<T>(x: T): T` (source-generic,
         // target-non-generic) pins T := <target param type> from the param loop above,
         // so the return `T` becomes e.g. `string` and relates to a
         // `(fileName: string) => string` target (`GetCanonicalFileName`). Without this
         // the raw TypeParam return FP-rejects against the concrete target return.
-        if (tpAssignments != null && tpAssignments.isNotEmpty()) {
-            val pinMapper = TypeMapper { tp ->
+        // (CHK.133)(b): the same pins substitute into the source's `this` type below.
+        val pinMapper = if (tpAssignments != null && tpAssignments.isNotEmpty()) {
+            TypeMapper { tp ->
                 tpAssignments[tp.id] ?: tp.symbol?.name?.let { tpAssignByName?.get(it) }
             }
+        } else null
+        // (CHK.133)(b) The `this` leg — tsc's `compareSignaturesRelated` compares the two
+        // signatures' `this` types before the parameters; it sits AFTER our parameter loop
+        // only so that a source-generic `this` (`<T>(this: Box<T>, x: T)`) can read the
+        // type parameters the loop above pinned. The VERDICT is order-independent; the
+        // elaboration (`Checker.getFunctionMismatchElaborationWorker`) prints the `this`
+        // line first, as tsc does.
+        if (!signatureThisTypesRelated(source, target, relation, bivariantParams || callbackThis, pinMapper)) {
+            return false
+        }
+        // Check return types (covariant)
+        // Void target return accepts any source return type (void means "don't care about return")
+        var sourceReturn = source.resolvedReturnType ?: anyType
+        val targetReturn = target.resolvedReturnType ?: anyType
+        if (pinMapper != null) {
             sourceReturn = checker.instantiateType(sourceReturn, pinMapper)
         }
         if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
             !checkTypeRelatedTo(sourceReturn, targetReturn, relation)) return false
         return true
+    }
+
+    /**
+     * (CHK.133)(b) tsc's `compareSignaturesRelated` `this` leg, the ONE predicate both the
+     * relation ([signatureRelatedTo]) and the elaborations
+     * (`Checker.getFunctionMismatchElaborationWorker`, `Checker.addSignatureElaboration`)
+     * consult, so the chain line *The 'this' types of each signature are incompatible.*
+     * can never disagree with the verdict.
+     *
+     * A source `this` of `void` — or none — is never checked ("void sources are
+     * assignable to anything"), and neither is a target that declares none. Otherwise the
+     * TARGET's `this` must be assignable to the SOURCE's (the contravariant direction the
+     * parameters take), and — where tsc's `strictVariance` is off — either direction
+     * suffices: the caller's bivariance ([bivariant], `bivariantParams` at the two method
+     * sites and `callbackThis` for a callback parameter, tsc's `SignatureCheckMode.Callback`)
+     * or, exactly tsc's `kind !== MethodDeclaration && kind !== MethodSignature` test on the
+     * TARGET's declaration (an interface method signature and a class method are both a
+     * [MethodDeclaration] node in this parser). `strictFunctionTypes: false` is not
+     * modelled by this checker's parameter leg either (`CompilerOptions` carries no such
+     * field), so the `this` leg inherits that divergence rather than adding a second one.
+     *
+     * A `this` type that still mentions a type parameter after [pinMapper] (a
+     * source-generic signature whose `T` occurs only in `this`, or a generic target) is
+     * NOT compared — tsc instantiates the source in the target's context first and this
+     * checker has no inference at the relation — so such a pair relates, which can only
+     * lose a diagnostic, never invent one.
+     */
+    fun signatureThisTypesRelated(
+        source: Signature,
+        target: Signature,
+        relation: Relation,
+        bivariant: Boolean,
+        pinMapper: TypeMapper? = null,
+    ): Boolean {
+        val rawSourceThis = source.thisType ?: return true
+        if (rawSourceThis === voidType) return true
+        val targetThis = target.thisType ?: return true
+        val sourceThis = if (pinMapper != null) checker.instantiateType(rawSourceThis, pinMapper) else rawSourceThis
+        if (checker.typeMentionsAnyTypeParam(sourceThis) || checker.typeMentionsAnyTypeParam(targetThis)) return true
+        val bivariantThis = bivariant || target.declaration is MethodDeclaration
+        return checkTypeRelatedTo(targetThis, sourceThis, relation) ||
+            (bivariantThis && checkTypeRelatedTo(sourceThis, targetThis, relation))
+    }
+
+    /**
+     * (CHK.133)(b) tsc's callback rule in `compareSignaturesRelated`: when the source and
+     * target PARAMETER types are both single-call-signature function types (its
+     * `getSingleCallSignature`, nullish-stripped), the two callbacks are related under
+     * `SignatureCheckMode.Callback`, in which the callback's own `this` types compare
+     * bivariantly. Everything else that mode decides — covariant parameters, no nested
+     * callback detection — is what the ordinary contravariant comparison of the two
+     * parameter types already does here, so this is a SECOND CHANCE on the rejecting
+     * path (round 784's shape): it can only turn a refusal that came from the `this` leg's
+     * strictness into an acceptance, and it goes straight to the signatures so no
+     * mode-dependent verdict ever reaches the type-pair relation cache.
+     */
+    private fun callbackParamsRelated(sourceParam: Type, targetParam: Type, relation: Relation): Boolean {
+        val (sourceSig, sourceNullish) = singleCallSignatureOf(sourceParam) ?: return false
+        val (targetSig, targetNullish) = singleCallSignatureOf(targetParam) ?: return false
+        if (sourceNullish != targetNullish) return false
+        if (sourceSig.thisType == null && targetSig.thisType == null) return false
+        return signatureRelatedTo(targetSig, sourceSig, relation, callbackThis = true)
+    }
+
+    /**
+     * tsc's `getSingleCallSignature(getNonNullableType(type))`: the one call signature of a
+     * function type carrying nothing else, or null. The second component says whether a
+     * `null`/`undefined` constituent was stripped (tsc compares the two sides' nullishness).
+     */
+    private fun singleCallSignatureOf(type: Type): Pair<Signature, Boolean>? {
+        var nullish = false
+        val obj: Type.Object = when (type) {
+            is Type.Object -> type
+            is Type.Union -> {
+                val rest = type.types.filter { it !== undefinedType && it !== nullType }
+                nullish = rest.size != type.types.size
+                rest.singleOrNull() as? Type.Object ?: return null
+            }
+            else -> return null
+        }
+        val sigs = obj.callSignatures ?: return null
+        if (sigs.size != 1 || !obj.constructSignatures.isNullOrEmpty()) return null
+        if (obj.stringIndexInfo != null || obj.numberIndexInfo != null) return null
+        checker.resolveStructuredTypeMembers(obj)
+        if (!obj.properties.isNullOrEmpty()) return null
+        return sigs[0] to nullish
     }
 
     /**

@@ -19,6 +19,25 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.79) — (CHK.133)(b): THE RELATION'S `this` LEG — ONE PREDICATE, THREE ELABORATION SITES, AND A BIVARIANCE RULE THAT WAS AN UNDER-APPROXIMATION, 18,809 / 0 / 3 (2026-09-12).**
+`Relater.signatureThisTypesRelated` is tsc's `compareSignaturesRelated` `this` leg (a source
+`this` other than `void` must relate to the target's; contravariant, or either direction
+where `strictVariance` is off), consulted by the verdict AND by all three elaboration sites
+so the chain line cannot contradict it — and `checkPropertyAccessAssignment` had no callable
+elaboration at all. **The existing `bivariantParams` ("both sides MethodDeclaration") is an
+under-approximation of tsc's TARGET-kind rule and reused verbatim was a false positive** on
+a function value into a method-signature member; the `this` leg takes the target's kind, the
+parameter leg is untouched. Census: 2,639-3,110 reached per profile, ALL a signature related
+to ITSELF (the lib's type-parameter `this`), zero refusals, zero real comparisons of two
+different concrete `this` types anywhere — the queue's "likely a REAL gate" refuted, grid a
+CONTROL. Fourteen fixture families `missing → agree`, zero REF-SPLIT, every emitting row
+byte-identical to pristine including chain nesting; `looseThisTypeInFunctions:21` byte-
+identical. Ablation 17/5/1/16 RED over 28 pins. cost_gate exit 0 with all 20 counters
+digit-identical to the rebuilt HEAD, huge_methods exit 0, warning-clean. **(CHK.133) is
+CHECKED OFF**; `.call/.apply/.bind` sized read-only as a NEW mechanism (member-miss
+augmentation with `CallableFunction` + inference through a `this`-typed lib signature;
+81/18/12 sites on the compiler profile, so a REAL gate) and queued as **(CHK.134)**.
+
 **(P18.78) — (CHK.133)(a)+(c): `Signature.thisType` AND THE CALL-SITE TS2684 — "A PURE MODEL CHANGE" MOVED FIVE ROWS BEFORE ANY CONSUMER EXISTED, AND (CHK.97) CLOSES, 18,781 / 0 / 3 (2026-09-12).**
 `Signature` now carries its `this:` pseudo-parameter (`thisType`), threaded through all 28
 `Signature(` constructions, all four instantiators and `MemberResolver`; the model ALONE
@@ -89,39 +108,3 @@ fixture), so the 8×`added=0 removed=0` grid is a measured CONTROL. Ablation 12/
 pins, a3 discriminated only by a NESTED differing pair. cost_gate exit 0 (all 20 counters
 digit-identical to the pristine binary — the +1.18% is baseline staleness), huge_methods exit
 0 (844), warning-clean. (CHK.97) stays open: D3-differing, D5, D6.
-
-**(P18.74) — (CHK.130): THE PARENTHESES WERE ASKING ABOUT THE *SHAPE*, NOT ABOUT WHAT IS PRINTED — AND THE INSTRUMENT'S FOURTH BLINDNESS, 18,699 / 0 / 3 (2026-09-11).**
-`typeToString` parenthesized a union member whose RESOLVED SHAPE is "one call-or-construct
-signature and nothing else" — but `Type.Interface` and `Type.Reference` both EXTEND
-`Type.Object`, so an interface with a call signature, an alias to a function type and a
-generic instantiation all matched while PRINTING AS THEIR NAME. Parentheses exist so a
-rendering can be reparsed inside a `|`; a name never needs them. The predicate now mirrors
-`typeToString`'s own dispatch arm by arm and asks *is what we are about to print a bare arrow
-form*. **A SECOND HALF WAS NOT IN THE ITEM: the interface case is ORDER-DEPENDENT**, because
-a `Type.Interface`'s member tables are LAZY (round 833) — the same interface renders bare in
-a plain TS2322 and parenthesized in a union-callee TS2349 whose own resolution has just
-filled `callSignatures` in, which is why all six failing rows were TS2349 and why a TS2322
-fixture showed the case as already correct. **THE AT-RISK ENUMERATION DECIDED THE ITEM AND
-WAS DONE BEFORE ANY CODE**: over all 2,910 ACTIVE `.errors.txt` baselines, **7 carry a
-parenthesised group next to a `|` and ZERO of those is a bare NAME** — so the remove direction
-cannot move a baseline, and **no `LogicalParityDivergence` was needed or used.** **THE
-ABLATION FOUND THE ASYMMETRY THAT MAKES IT SAFE**: parenthesize-nothing is 16 RED including
-**4 corpus baselines**, so the corpus gates over-REMOVAL and not over-ADDITION — exactly what
-the enumeration predicted from the other side; the two discriminating arms partition perfectly.
-**TWO MORE COUNTDOWN PINS, THE EIGHTH AND NINTH IN NINE ROUNDS**, both our own defect
-transcribed into an expectation, both now byte-identical to both references — per (CHK.114)
-only the expectations changed, never the names. **AND THE INSTRUMENT WAS WRONG AGAIN, A
-FOURTH TIME, IN THE WAY THAT MATTERS MOST**: `ref_matrix.py` folded "the references report
-the same ROW and disagree about its MESSAGE" into AGREE — not adjudicable is the right
-treatment and the wrong LABEL, since it inflates the prize and hides a divergence family. It
-made a subagent report CLAUDE.md's (CHK.83) as CONTRADICTED when that law is exactly
-reproducible (verified from raw bytes). New REF-SPLIT-MSG verdict; re-deriving this round's
-own receipt with it moves `agree 21 → 19`. **Third round running in which re-taking a receipt
-moved a number already written down.** (CHK.83) is not contradicted but POPULATION-SPECIFIC —
-where the source is not generalized, both references name the FIRST constituent and we alone
-name the last, 15 of 15 rows with the outer line byte-identical: now (CHK.132), and the
-CLAUDE.md entry gained the clause that stops the next agent repeating the report. **The
-(CHK.97) union-callee family is now byte-identical to both references across all 11 fixtures.**
-Three outer-line residues remain, each measured and refused with a reason. Grid 8×`added=0
-removed=0` and measured to be a control (416 rows, not one names a union). cost_gate exit 0,
-huge_methods exit 0 (844), warning-clean.

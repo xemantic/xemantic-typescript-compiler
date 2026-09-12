@@ -25,6 +25,102 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.79) — (CHK.133)(b): the relation's `this` leg — one predicate, three elaboration sites, and a bivariance rule that was an under-approximation (2026-09-12)
+
+**Suite 18,781 → 18,809 / 0 / 3** (+28 pins, `SignatureThisRelationTest`: 15 diagnostic pins,
+10 negative controls, 3 `residue -`). Grid 8×`added=0 removed=0`; marked 18 → 18, cronstrue
+1 → 1; `cost_gate.py` exit 0 — **all 20 counters digit-identical against the rebuilt HEAD
+before-binary** through `--from-log` (the printed +0.79/+1.28/+1.32 are (P18.78)'s
+un-rebaselined `this` resolutions, not this round's); `huge_methods.py --fail-over 0` exit 0;
+warning-clean. **(CHK.133) IS CHECKED OFF** — (a), (b) and (c) landed across (P18.78)/(P18.79);
+the `.call/.apply/.bind` consumer it listed is a NEW mechanism and is queued at the top as
+**(CHK.134)** with its price.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.133) is the top item, promoted by (P18.77) as (CHK.97)
+D6's unblocker; (INV.0) step 10b-ii, the WORK ORDER's successor, stays blocked on its two named
+families.
+
+**ONE PREDICATE, CONSULTED BY THE VERDICT AND BY EVERY ELABORATION.**
+`Relater.signatureThisTypesRelated` is tsc's `compareSignaturesRelated` `this` leg: a source
+`this` other than `void`/absent must relate to the target's — contravariant, or either
+direction where `strictVariance` is off. `signatureRelatedTo` asks it, and so do all three
+elaboration sites, so the chain line *The 'this' types of each signature are incompatible.*
+can never contradict the verdict. It sits after the parameter loop only to read the 17.10d
+pins for a source-generic `this`; the verdict is order-independent and the elaboration prints
+the `this` line FIRST (tsc's order, measured).
+
+**THE EXISTING BIVARIANCE PREDICATE WAS AN UNDER-APPROXIMATION, AND REUSING IT VERBATIM WAS
+A FALSE POSITIVE.** `bivariantParams` answers "both sides are `MethodDeclaration`s"; tsc's
+`strictVariance` is a rule about the TARGET's kind (`MethodDeclaration`/`MethodSignature`/
+`Constructor`, or callback mode). Used as-is, a function VALUE assigned into a
+method-SIGNATURE member refused where both references accept. The `this` leg takes the
+caller's flag OR `target.declaration is MethodDeclaration`; the parameter leg is deliberately
+untouched (its own divergence is pre-existing and recorded). tsc's `SignatureCheckMode.Callback`
+— a callback's own `this` is bivariant — is a second chance on the rejecting path
+(`callbackParamsRelated`), straight to the signatures so nothing mode-dependent reaches the
+relation cache.
+
+**THREE ELABORATION SITES, NOT ONE.** The function-type worker, `addSignatureElaboration`
+(the TS2416 `implements` path) and `checkPropertyAccessAssignment` — which had NO callable
+elaboration at all: pristine's own `c.explicitVoid = c.explicitThis` printed a bare TS2322
+here. Plus a display fix the matrix found: `extractThisParam` rendered nothing for a carried
+`thisType` whose builder records no declaration, so a TS2416 chain printed
+`(x: number) => void` for `m(this: ZzzB, x: number)`.
+
+**THE CENSUS REFUTED THE QUEUE'S "LIKELY A REAL GATE".** Reached / skipped (mentions a type
+parameter) / refused: compiler and its four twins 2,639 / 2,639 / 0; harness, server, services
+3,110 / 3,110 / 0; marked, cronstrue, the 2,400-file project 0 / 0 / 0; fixture controls
+1 / 0 / 1, 5 / 0 / 3. **Every profile entry is a signature related to ITSELF** — `This`/`This`
+2,301 and `A`/`A` 338 on the compiler profile, the lib's type-parameter `this` — and there
+is not one comparison of two different concrete `this` types anywhere real. The grid is a
+CONTROL; the pins are the gate.
+
+**BEFORE → AFTER (`agree/ours-only/missing`; ZERO REF-SPLIT rows; every emitting row
+byte-identical to pristine, chain nesting checked on the raw output)**: unrelated `this` on a
+function type 0/0/1 → 1/0/0; `ZzzA & ZzzC` → `ZzzA` with its four-line chain 0/0/1 → 1/0/0;
+a method-signature property chain 0/0/1 → 1/0/0; TS2416 0/0/1 → 1/0/0; argument (TS2345)
+0/0/1 → 1/0/0; return 0/0/1 → 1/0/0; an overloaded target 0/0/1 → 1/0/0; a generic `this`
+pinned at `ZzzBox<number>` 0/0/1 → 1/0/0; callback mode 0/0/1 → 1/0/0; two more single-row
+shapes and a four-row primitive/anonymous/nullable/both-fail family all → agree; `void`
+TARGET 3 AGREE; the silent-on-both-sides controls (a `void` source, no source `this`, a
+method into a method, callback bivariance) silent. Ungated pristine
+`looseThisTypeInFunctions:21` is now byte-identical, and `thisTypeInFunctionsNegative` has
+6 of its 14 TS2322 rows byte-identical against the baseline text — the other 8 are the
+polymorphic `this: this` residue. (P18.78)'s 21 fixtures unchanged.
+
+**ABLATION over 28 pins per arm**: a1 the leg removed — **17 RED**; a2 contravariant-only —
+**5 RED**, exactly the method and callback controls; a3 `void` not exempted — 1 RED; a4 the
+chain text — **16 RED**. At-risk sweep: 9 patterns + 28 source-grep classes + all 18 active
+`this:` baselines = **1,295 tests / 95 classes / 0 RED**, every class and baseline asserted
+present (no ACTIVE baseline carries the `this' types` line — the family is gated by pins).
+
+**RESIDUES, MEASURED AND NOT FIXED**: a union-of-function-types SOURCE (`canUseTypeEngine`
+refuses it, pre-existing); `strictFunctionTypes: false` (not an option here; the parameter
+leg diverges identically); an object-literal method / property anchored at the NAME with the
+whole-object chain (tsc's `elaborateObjectLiteral`; the parent does the same for parameters);
+polymorphic `this: this` unresolved on both sides — the (CHK.133)(a) model residue; `this`
+types still mentioning a type parameter skipped; a `=> any` return display at
+`thisTypeInFunctionsNegative:107`, pre-existing.
+
+**`.call/.apply/.bind` SIZED READ-ONLY, AND IT IS A NEW MECHANISM WITH A REAL GATE.** `f.call`
+is `any` because `getApparentType` has no function-object arm and the member miss answers
+`anyType` silently (`call`/`apply`/`bind` are in `RUNTIME_PROPERTIES`); there is no
+`globalFunctionType`/`CallableFunction` cell, the embedded lib's `Function` has no `this:`
+parameter and no `CallableFunction` (the real-lib snapshot has it), and `strictBindCallApply`
+is not an option. tsc augments the property lookup ON A MISS with
+`globalCallableFunctionType`; `call<T, A, R>(this: (this: T, ...args: A) => R, …)` is
+INFERENCE through a `this`-typed lib signature, and `bind` needs `ThisParameterType`/
+`OmitThisParameter` (`infer` in `this:` position of a conditional). No consumer infers
+through `Signature.thisType` today. Reach: 81/18/12 `.call/.apply/.bind` on the compiler
+profile (harness 89/27/33), 15/10/0 on marked — receivers are function values, method
+references (`maybeBind`'s `fn?.bind(obj)` at core.ts:1523 makes the `any` visible through
+its declared return) and `Object.prototype.hasOwnProperty.call` (12 sites). Queued as
+(CHK.134).
+
+**NEXT**: (CHK.134), decomposed — `call`/`apply` first (member-miss augmentation with the real
+lib's `CallableFunction` + inference through the `this`-typed signature), `bind` after (the
+two lib conditionals). Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
+
 ### Round (P18.78) — (CHK.133)(a)+(c): `Signature.thisType` and the call-site TS2684 — "a pure model change" moved five rows before any consumer existed, and (CHK.97) closes (2026-09-12)
 
 **Suite 18,752 → 18,781 / 0 / 3** (+29 pins, `SignatureThisParameterTest`: 19 diagnostic
@@ -897,76 +993,6 @@ radius; (CHK.123) is display-only with the corpus as its sole gate. Per the WORK
 order's tail is still (INV.0), and this round is (CHK.\*) lane work that pays in
 measured reference rows.
 
-### Round (P18.68) — (CHK.121): the axis is the INITIALIZER, and BOTH sizings of the item were wrong (2026-09-11)
-
-**Suite 18,573 → 18,604 / 0 / 3** (+31 pins). **8-profile grid `added=0 removed=0` on all
-eight** against the pushed (P18.66) binary; `cost_gate.py` exit 0; `huge_methods.py
---fail-over 0` exit 0 (844 classes); warning-clean. Commit `9f04b125`.
-
-**THE ROUND'S FINDING IS A CORRECTION TO ITS OWN QUEUE ITEM, TWICE.** (P18.67) queued this as
-"exactly one cell of four" from a single measured cell; the coordinator re-sized it to "six of
-seven shapes" from `scratchpad/probe7` and committed that correction; **both were wrong, and
-the second was wrong for an instructive reason** — it varied the annotation TYPE while holding
-the INITIALIZER fixed, which is precisely the axis that had to move. Measured:
-`const v: ZzzCfg = zzzCfgV` in a function body **already reported before this change** (the
-flow-recovery helper `cmamNarrowedAnyReceiverType` serves it), and so did `let`, `var`, a
-nested block and an arrow. What was silent is an OBJECT-LITERAL, `new`, CALL, `as` or
-scalar-literal initializer. And of the shapes the coordinator had counted, `number[]`, a
-heritage-carrying interface, an intersection, a function type, a numeric index signature, an
-enum and an optional are silent **at FILE LEVEL too** — i.e. pre-existing firewall refusals
-that were never this defect at all. CLAUDE.md's "run the identical source at all three sites"
-law again, on a third axis: the site was held right and the initializer was not.
-
-**THE FIX IS 24 FUNCTIONAL LINES AND DELIBERATELY THE LEAST POWERFUL SHAPE THAT WORKS.**
-`cmamAnnotatedLocalReceiverType` is wired LAST, at the `anyType` bail of
-`cmamGeneralReceiverType` and BELOW the flow-recovery helper, so it can only turn a SILENCE
-into a report and never change an answer something else already gave. It reuses
-`cmamAllMissingTrustedMember` (the knip-calibrated trust predicate) and
-`cmamInGuardMayAddProperty` rather than re-deriving either — which is what keeps this out of
-the B153 false-positive class the firewall exists for.
-
-**RECEIPT**: the original fixture is byte-identical to pristine 6.0.3 and tsgo 7.0.2 (4 of 4
-rows where we reported 1), and a **207-cell** matrix — 19 receiver shapes × 4 declaration
-kinds × 3 sites plus present-member / in-guard / narrowed groups, the two references agreeing
-on **all 207** — goes **111 → 107 missing with ours-only unchanged at 2** (both pre-existing).
-The small row delta against a large fixed population is the honest shape of a change gated by
-a firewall: most of that 107 is refusals the firewall owns, not this seam.
-
-**CLOSED**: an anonymous object annotation, an `interface`, a `type` alias, and the CALL / `as`
-initializer forms, in function-body, nested-block, arrow and method scopes. **REFUSED, each
-PINNED AS A REFUSAL rather than as a control** so a future reader meets a recorded decision
-instead of a guarantee: a CLASS instance (the trust predicate takes `as? InterfaceDeclaration`),
-an ARRAY (`Type.Reference` plus a numeric index signature), and `let`/`var` (const-only, on
-(CHK.44)'s reassignable-binding measurement) — plus tuple, intersection, heritage interface,
-enum, primitive, nullish and `typeof ns`, which the firewall already refused.
-
-**THE GRID IS A REAL GATE HERE AND IT IS NOT VACUOUS.** tsc's own sources are full of
-annotated body-locals, so `added=0 removed=0` could have meant "the path never fires"; a
-positive-control build announcing every accept counts **78 / 152 / 116 accepts** on the
-compiler / harness / services profiles (`ExtendsResult`, `ErrorOutputContainer`, `TypeChecker`,
-`TextRange`, anonymous literals), so the path fires hundreds of times and the downstream gates
-absorb all of it. Round 853's law satisfied by construction rather than by assertion.
-
-**TWO PRE-EXISTING DIVERGENCES FOUND AND DELIBERATELY LEFT ALONE**: an `in`-guarded read on an
-IDENTIFIER-initialized annotated local is an ours-only FALSE POSITIVE, because the flow route
-that serves that shape has no `in`-guard consult where this seam does; and
-`const v: ZzzK = zzzKV; v.zzzNope` renders `typeof ZzzK` where both references render `ZzzK`.
-Neither is this round's population and neither is pinned as correct.
-
-**ABLATION: 10 arms over 31 pins, with BOTH controls.** The `in`-guard consult, the trust
-predicate, the const-only gate and the array-like refusal each redden their own pins; a
-comment-only arm is the both-GREEN control and a refuse-everything arm reddens all 8 positives
-as the both-RED control — which is what makes the 0-RED arms interpretable. **Four arms are
-0 RED and recorded UNDISCRIMINATED with reasons**: the non-Object guard is redundant against
-the caller's own tail, and the single-declaration and shadow guards are unreachable because a
-two-declarations shape is refused ABOVE this bail. One pin was RENAMED to say it is blind
-rather than left implying coverage, and **one pin the implementer first wrote as a refusal was
-measured WRONG and converted to a positive** — a shadowing body-local reports against its
-INNER declaration, byte-identical to both references.
-
-**NEXT**: (CHK.119) and (CHK.120) are (P18.66)'s residues and untouched. The two divergences
-above are new, small and independent; (CHK.118) stays BLOCKED with its unblocker named.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1027,7 +1053,30 @@ to. The (P18.44) restore had placed it directly ABOVE the first queue item, wher
 ORDER, or the first queue item is missing — a doc invariant is only as good as the thing that
 notices it is gone.
 
-- [ ] **(CHK.133) (a) MODEL + (c) CALL SITE LANDED 2026-09-12 ((P18.78) note) — `Signature.thisType` carried
+- [ ] **(CHK.134) `.call` / `.apply` / `.bind` ON A FUNCTION VALUE — A NEW MECHANISM, sized read-only 2026-09-12
+  ((P18.79) note; split out of (CHK.133)).** Today `f.call(...)` types `any`: `getApparentType` has no function-object
+  arm and the member miss answers `anyType` silently (`call`/`apply`/`bind` sit in `RUNTIME_PROPERTIES`); there is no
+  `globalFunctionType`/`CallableFunction` cell, the EMBEDDED lib's `Function` has no `this:` parameter and no
+  `CallableFunction` (the real-lib snapshot has it — so the corpus half is `@useRealLibs` territory), and
+  `strictBindCallApply` is not an option. tsc augments the property lookup ON A MISS with `globalCallableFunctionType`
+  (checker.ts ~15907-15916, ~51626-51628); `call<T, A extends any[], R>(this: (this: T, ...args: A) => R, thisArg: T,
+  ...args: A): R` is INFERENCE through a `this`-typed lib signature — `Signature.thisType` ((CHK.133)(a)) is available
+  and no consumer infers through it yet — and `bind` needs `ThisParameterType`/`OmitThisParameter` (`infer` in `this:`
+  position of a conditional type). DECOMPOSE: (1) `call`/`apply` — the member-miss augmentation (real lib's
+  `CallableFunction`/`NewableFunction`, keyed on whether the receiver has call/construct signatures) plus inference of
+  `T`/`A`/`R` from the RECEIVER's signature through the lib overload's `this:` parameter; (2) `bind` — the two lib
+  conditionals. Reach (the grid is a REAL gate here): 81/18/12 `.call/.apply/.bind` on the compiler profile, harness
+  89/27/33, marked 15/10/0, cronstrue 0 — receivers are function values, METHOD references (`maybeBind`'s
+  `fn?.bind(obj)` at core.ts:1523 makes the `any` visible through its declared return) and
+  `Object.prototype.hasOwnProperty.call` (12 sites). Every added row on a profile is a false positive by definition;
+  measure against tsgo 7.0.2 + pristine 6.0.3 first (`scripts/ref_matrix.py`), pin per overload, ablate per
+  deliverable, and expect `(CHK.50)`'s law — a newly typed `.call` result reaches every downstream reader.
+
+- [x] **(CHK.133) CLOSED 2026-09-12 ((P18.79) note: (b) the relation's `this` leg — `Relater.signatureThisTypesRelated`,
+  consulted by the verdict and three elaboration sites, callback-mode second chance, the `bivariantParams`
+  under-approximation NOT reused; `.call/.apply/.bind` split out as (CHK.134); residues: polymorphic `this: this`,
+  an optional-chain receiver, a `this` mentioning a type parameter, overload sets not `this`-checked, one-level
+  elaboration). (a) MODEL + (c) CALL SITE LANDED 2026-09-12 ((P18.78) note) — `Signature.thisType` carried
   through all 28 `Signature(` constructions, the four instantiators and `MemberResolver`; the union arm intersects
   members' `this` types (identity-deduped); `checkThisArgumentOfCall` emits TS2684 at a single-signature call
   (reach 0 on every profile and library — a CONTROL); `extractThisParam` renders the RESOLVED `this`. **REMAINING:
