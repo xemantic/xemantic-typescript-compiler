@@ -1,3 +1,107 @@
+### Round (P18.72) — (CHK.97) D2: a both-overloaded union callee reports, and the suppression that is still hiding a second row (2026-09-11)
+
+**Suite 18,669 → 18,679 / 0 / 3** (+10 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
+exit 0 with no rebaseline; `huge_methods.py --fail-over 0` exit 0 (844 classes);
+warning-clean. **(CHK.97) still OPEN** — D3 and D5 remain, plus the new D2b below.
+
+**THE FIX IS A SPLIT BY *REASON*, NOT A RETIREMENT.** The `≥2`-overloaded suppression was
+one `if` answering two different facts. TWO OR MORE overloaded constituents is exactly where
+tsc SKIPS pass 2 (`indexWithLengthOverOne === -1`), `getUnionSignatures` answers the EMPTY
+list, and `resolveCallExpression` reports TS2349 with the "Each member … has signatures"
+chain — so that half is a DIAGNOSTIC. Exactly ONE overloaded constituent is the
+`unionOfArraysFilterCall` shape (`(Fizz[] | readonly Buzz[]).filter`, where `Array.filter`
+has 2 overloads and `ReadonlyArray.filter` has 1), where tsc RUNS pass 2 over the parallel
+overload sets and reports nothing — so that half stays SILENT. A `count` replaces the `any`
+and makes exactly the same `getCallSignaturesOfType` calls.
+
+**THE CHAIN SENTENCE NOW HAS ONE HOME**, shared with the pre-existing generic refusal
+(`emitUnionCalleeNoCompatibleSignatures`). Two refusal reasons print it byte-identically on
+both references, span included; a chain sentence is the WHOLE observable here and
+(PARITY.1) says the 8-profile grid is structurally blind to a display divergence — so two
+copies would drift with nothing to notice. Ablation a5 confirms both callers reach it.
+
+**RECEIPT** (`scripts/ref_matrix.py`, 7 fixtures, BEFORE arm taken against a real HEAD build
+rather than reasoned): **agree 3 → 11, missing 8 → 0, ours-only 0 → 0**; zero SPAN-DIFF,
+zero REF-SPLIT. **CORRECTED an hour later by the sub-step below, and the correction is the
+point: that reading was taken with a CHAIN-BLIND instrument, and one of its eleven AGREE
+rows is really a TEXT-DIFF** — re-taken chain-aware the seven D2 fixtures read
+**agree 10, text-diff 1, missing 0, ours-only 0**. The row is `p3:7`, and it is the
+`typeToString` parenthesization defect described below, not a D2 defect; the pins had
+already caught it, which is why the fixture's third member carries a property. The verdict
+does not move, the number does — and a receipt quoted from an instrument that cannot see the
+family's whole content is exactly what this repo's round-853 law is about.
+
+**A COUNTDOWN PIN FIRED — THE SEVENTH IN EIGHT ROUNDS, AND ONLY THE *FULL* SUITE SAW IT.**
+`UnionCalleeSignatureTest :: a union whose members are both overloaded refuses the
+combination` asserted the SILENCE this round removes, and its own KDoc said "SILENT where
+tsc reports TS2349" — a wrong answer recorded as a pin. It was found by running ablation arm
+a2 against the **full** suite; the four corpus letters the round was gating on (B/F/S/U)
+miss it entirely. Inverted to the correct code + chain and renamed. **Corollary for the
+ablation protocol: a guard-letter corpus subset is not a substitute for the suite when the
+arm WIDENS an emission** — a widening's victims are pins, not baselines.
+
+**THE GRID IS A CONTROL HERE AND THE ROUND SAYS SO, WITH A COUNT.** A counting arm
+(positive control: 3 hits on the round's own fixture) reads **0 hits on all eight profiles**
+— zero even for the one-overloaded sibling. So `added=0 removed=0` proves INERTNESS and
+nothing about coverage ((CHK.124)'s lesson, one round later). The real gate is the corpus
+(1,425 baselines over the guard letters, all green — `betterErrorForUnionCall`,
+`unionOfArraysFilterCall`, `functionCallOnConstrainedTypeVariable`,
+`signatureCombiningRestParameters1/3/4/5`) plus the pins.
+
+**THE INSTRUMENT IS BLIND TO THE THING THIS ROUND CHANGES: `scripts/ref_matrix.py` CANNOT
+SEE A `messageChain`.** Its row regexes match a diagnostic's FIRST LINE only, so a
+chain-only divergence scores **AGREE**. That is the third distinct blindness found in this
+script in two rounds, and this one matters most for exactly the family it was built to
+adjudicate — a union-callee TS2349's whole content is its chain. It passed a real
+divergence the pins then caught: **`typeToString` parenthesizes a union member that has
+exactly one call signature and no other member**, so we print `ZzzA | ZzzB | (ZzzS)` and
+`(ZzzS) | (ZzzT)` where both references print them bare. **Pre-existing** (shipped HEAD
+prints it in a plain TS2322), unowned, unrelated to D2 — recorded in the pin KDoc, and the
+pin's third member carries a property to dodge it honestly rather than pinning the wrong
+display. **CLOSED AS ITS OWN SUB-STEP THIS ROUND**: continuation lines are now normalised
+(leading whitespace and our `|` marker removed) and appended to the message, so the existing
+TEXT-DIFF machinery covers a chain — no new verdict. Verified in BOTH directions, which is
+what separates it from a change that merely compiles: a fixture where all three arms agree
+on the chain still reads AGREE (so the arms' differing PRINT formats do not false-positive),
+and the parenthesization row is now reported. **It immediately re-graded one of this round's
+own fixtures** — see the corrected receipt above. Stated limitation, in the docstring:
+normalising the indentation away also normalises away a chain's NESTING DEPTH, so a
+divergence purely in how deeply a sub-line is nested is still invisible. Left open as
+**(CHK.130)**: the parenthesization defect itself.
+
+**THE ROUND'S LOAD-BEARING CLAIM IS TRUE OF THE PROFILES AND FALSE OF THE LANGUAGE.** The
+brief asserted the `≥2` suppression guards nothing reachable, and that holds for the eight
+profiles and the corpus — stage 2's array fallback answers those receivers before a union
+callee is ever formed. It does NOT hold in general: the ONE-overloaded suppression D2 KEPT
+is reachable and **hides a true positive**, because PASS 2 also refuses on GENERIC
+INCOMPATIBILITY. There both references print the identical chain and we stay silent. The
+implementer STOPPED at the scope line rather than pushing through, which is the right call
+and the reason the finding is trustworthy — it is now **(D2b)**, measured and ready: the
+one-character change is 0 RED on 1,425 baselines and reddens exactly the countdown pin this
+round already inverted. **It was deliberately NOT taken: an ablation arm is not an
+implemented fix with pins**, and a widening whose only gate is the corpus deserves its own
+round.
+
+**ABLATION: 5 arms / 1,435 pins-and-baselines, BOTH controls.** a4 comment-only = 0 RED;
+a5 break the shared chain = 7 RED (all 5 D2 chain pins + the generic-chain pin + the corpus
+`betterErrorForUnionCall`, which is what proves the two callers really share one emitter);
+a1 restore the suppression = exactly the 5 D2 positives with the generic pin untouched, i.e.
+attributable; a2 emit at `>= 1` too = **0 RED on the guard letters and 1 RED on the full
+suite** (the countdown above) — a DEAD ARM for the round's own pin set, recorded as such;
+a3 drop the generic guard before the shared emitter = **0 RED, recorded as a REDUNDANT GUARD
+and structurally so** — `differ` is reachable only with `combinedSigs == null` and
+`overloadedMembers == 0`, in which configuration the only refusal PASS 2 can make IS generic
+incompatibility. Kept in place: it is tsc's own rule, a round-927 pair.
+
+**FOUR MORE RESIDUES, RECORDED AND NOT PINNED**: the CONSTRUCT twin (`new` on a
+both-overloaded union — separate branch, own sentence); a both-overloaded union beside
+`undefined` (reaches (P18.71)'s nullish strip first); and a TS2769 elaboration on which
+tsgo and pristine genuinely diverge (round 938), so it is not adjudicable.
+
+**NEXT**: (D2b) is the cheapest measured row left in (CHK.97); then (D3)'s
+IDENTICAL-signature half. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order
+sends the arc.
+
 ### Round (P18.71) — (CHK.97) stage 3: the nullish-union callee's argument check, and a suppression whose gate was two mechanisms (2026-09-11)
 
 **Suite 18,652 → 18,669 / 0 / 3** (+17 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`

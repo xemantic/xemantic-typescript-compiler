@@ -19,6 +19,22 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.82) — (CHK.98)(d): TS2556 FOR A NON-TUPLE SPREAD WAS WRONG IN BOTH DIRECTIONS, NOT MISSING — AND EVERY REMAINING (CHK.98) DELIVERABLE IS NOW MEASURED, 18,941 / 0 / 3 (2026-09-12).**
+All four remaining deliverables were measured against both references before one was
+picked: the `NewExpression` argument arm (21 missing, a control grid), TS2556 for a
+non-tuple spread (**6 ours-only — four false positives on legal code and two wrong codes —
+plus 20 missing**, a REAL gate at 45-46 arity verdicts per profile), the item's stage 2 (≥5
+mechanisms) and (CHK.98b) (already closed). The spread one landed: tsc's tuple expansion and
+`hasCorrectArity` spread clause at all three arity walkers, 6/6/20 → 22/0/4 with every
+remaining row attributed to a pre-existing gap reproduced without a spread; 8 of 9 inactive
+pristine TS2556 baselines match exactly. **The hazard the item did not name: the arity
+walkers run under the FILE-LEVEL ambient**, so a resolver-classified operand produced a
+false TS2556 on a body-local tuple shadowing a file-level array — operands are now
+classified declaration-first, and that shape is the hazard pin. Ablation 21/2/7/6/5 RED over
+134 pins; three countdown pins inverted. Grid 8×`added=0 removed=0` as a measured GATE,
+marked/cronstrue byte-identical, cost_gate exit 0 (20/20 within +0.05% of rebuilt HEAD),
+huge_methods exit 0, warning-clean. (CHK.98) stays open on the `new` arm and stage 2.
+
 **(P18.81) — (CHK.134)(2): `f.bind` — THE BUILD SHAPE SUFFICED, THE LIB HAS TWO OVERLOADS NOT FIVE, AND A RE-BOUND FUNCTION'S `any` WAS THE ARITH RECORDER'S FIRST-TOUCH HAZARD, 18,907 / 0 / 3 (2026-09-12).**
 `Checker.bindType` builds `bind`'s member per call from the receiver alone — `OmitThisParameter`
 is the receiver itself when its `this` is absent/`unknown`/`any` (overloads and type
@@ -89,21 +105,3 @@ fixed and gated by the 18 active `this:` baselines. Ablation over 29 pins: 19/1/
 warning-clean. **(CHK.97) is CHECKED OFF** — every deliverable closed or rejected on a
 measurement across (P18.71)-(P18.78). (CHK.133) stays open on (b) the relation's `this`
 leg and the `.call/.apply/.bind` consumer.
-
-**(P18.77) — (CHK.97) D5: INFERENCE THROUGH A UNION-COMBINED SIGNATURE WAS BAILING ON AN INTERSECTION IT COULD NOT SEE, AND THE "ONE ROW" WAS SEVEN FAMILIES, 18,752 / 0 / 3 (2026-09-12).**
-PASS 2 combines `(number[] | string[]).map` into `<U>(cb: ((v: number…) => U) & ((v: string…)
-=> U)): U[]`, and every callback arm of the single-type-parameter inference demanded an
-anonymous `Type.Object` — so the inference bailed whole and the call answered a raw `U[]`
-that every reader silently refused as a foreign type parameter. **The first reading of the
-mechanism was wrong and a stderr line settled it** (the gate PASSES, because a function
-object's signatures are invisible to `typeMentionsTypeParam`; the candidate gatherer is what
-finds nothing). Fix is a VIEW, not machinery: `inferenceParamType` presents such an
-intersection as one anonymous function type carrying the existing `getIntersectedSignatures`
-fold, memoized per intersection id. Four fixture families `missing → agree`, the PASS-2
-pair fires (with a (CHK.132) sub-line), zero new ours-only rows. Ablation 12/4/1/0 RED over
-67 pins — a4 a recorded redundant guard. **Two `TupleArrayMembersTest` pins were countdowns
-on exactly this silence** and a `reduce` control was written wrong; all three found by the
-68-class neighbour sweep, none by the fixtures. Grid 8×0/0 and both library arms are
-measured CONTROLS (census `bound=0` everywhere real). cost_gate exit 0 (digit-identical to
-pristine), huge_methods exit 0, warning-clean. (CHK.97) is open on D6 ALONE; its unblocker
-`Signature.thisParameter` is now **(CHK.133)** at the top of the queue.

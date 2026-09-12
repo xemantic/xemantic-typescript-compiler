@@ -25,6 +25,82 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.82) — (CHK.98)(d): TS2556 for a non-tuple spread was WRONG IN BOTH DIRECTIONS, not missing — and every remaining (CHK.98) deliverable is now measured (2026-09-12)
+
+**Suite 18,907 → 18,941 / 0 / 3** (+34 pins, `SpreadArgumentTupleTest`: 23 diagnostic, 8
+negative controls including the hazard, 3 `residue -`; three countdown pins in
+`SpreadIntoFixedAritySpreadTest`, `Inv4SpineBatch26Test` and `FunctionCallApplyTest` inverted).
+Grid 8×`added=0 removed=0` — **a REAL GATE this time**: a temporary counter read 45-46 arity
+verdicts on known signatures per profile, every one `ok`; marked 18 → 18 and cronstrue 1 → 1
+byte-identical; `cost_gate.py` exit 0, 20/20 counters within +0.05% of the rebuilt HEAD (not
+rebaselined — the +1.3% `mapped.*` rows are the stale baseline, identical on HEAD);
+`huge_methods.py --fail-over 0` exit 0; warning-clean (main + test). **(CHK.98) stays OPEN** on
+(i) the `NewExpression` argument arm and the open half of its STAGE 2.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.98) is the first unchecked item after (CHK.134) closed;
+(INV.0) step 10b-ii stays blocked on its two named families.
+
+**ALL FOUR REMAINING DELIVERABLES WERE MEASURED BEFORE ONE WAS PICKED** (ours + tsgo 7.0.2 +
+pristine 6.0.3, zero REF-SPLIT):
+
+| deliverable | fixtures | agree / ours-only / missing / text-diff | gate it would have |
+|---|---|---|---|
+| (i) `NewExpression` argument arm | 24 | 5 / 0 / **21** / 0 | 6-10 `new X(callback)` per profile, libraries 0 — likely a control |
+| (ii) TS2556 non-tuple spread | 24 → 33 | 6 / **6** / 20 / 0 | 45-46 arity verdicts per profile — a GATE |
+| (iii) STAGE 2 (the item's own list) | 14 | 4 / 1 / 4 / 4 | ≥ 5 mechanisms |
+| (iv) (CHK.98b) | 3 | 0 / 0 / 1 / 0 | **already CLOSED 2026-09-06** — the one row is (P18.32)'s recorded known gap |
+
+(ii) was picked because its ours-only column is not zero: four FALSE POSITIVES on legal code
+and two WRONG CODES — the queue had it as "missing", and it was wrong in both directions.
+Stage 2 decomposes into `Promise.then`/`PromiseLike.then` and a namespace-import callee
+(missing), predicate `filter` (missing and text-diff), a `reduce` with a `Record` initial
+value (ours-only `acc.nope`), the union-of-arrays chain naming the LAST constituent where the
+references name the FIRST ((CHK.132)'s population) and an unreduced `NonNullable<…>`; three of
+its bullets (`q<R = T>`, a union-with-null class-TP callback, a destructured parameter) already
+agree.
+
+**THE FIX IS tsc's TUPLE EXPANSION AT ALL THREE ARITY WALKERS.** `getEffectiveCallArguments`'s
+tuple expansion plus `hasCorrectArity`'s spread clause plus `getArgumentArityError`'s first
+line, at the identifier-callee walker (overloads included), the `new` walker and the
+method-callee walker; the old `spreadOperandIsNonTupleArray` is gone. An UNDECIDABLE operand
+makes the index a lower bound, so only the "already past a rest-less list" verdict survives
+it — that is the hazard arm, and the two `residue -` pins are exactly what it reddens.
+
+**THE HAZARD THE ITEM DID NOT NAME: THE ARITY WALKERS RUN UNDER THE FILE-LEVEL AMBIENT.** A
+spread operand classified through the name resolver produced a FALSE TS2556 on a body-local
+TUPLE shadowing a file-level ARRAY — the resolver answered the file-level binding. Operands
+are therefore classified DECLARATION-first (the enclosing parameter, or the enclosing block's
+`VariableStatement`), and that shape is the hazard pin (arm a3 reddens it as a false
+positive). Two more measured facts: optional tuple slots COUNT (tsc pushes one synthetic
+argument each), and "too-many stands with a trailing spread" was wrong on both references.
+
+**BEFORE → AFTER**: the spread family 6/6/20 → **22/0/4**, the four remaining rows each
+attributed to a pre-existing gap reproduced without a spread — a VARIABLE callee ×2
+((CHK.97)'s recorded arity gap), a `...any` operand (a deliberate refusal) and the element
+type through a rest parameter. Nine INACTIVE pristine TS2556 baselines extracted with
+`pristine_oracle.py`: **8 of 9 match pristine's rows exactly**; `callWithSpread4` line 18 is
+the variable-callee gap. `readonlyRestParameters`, the only ACTIVE TS2556 baseline, green.
+
+**ABLATION over 134 pins per arm**: a1 the mechanism removed — **21 RED**; a2 an undecided
+operand treated as decided — **2 RED**, exactly the two residue pins; a3 the declaration
+route removed — **7 RED** including the hazard pin as a false positive; a4 the count printed
+beside TS2556 — 6; a5 the excess anchor — 5. At-risk run: 2,316 tests / 140 classes, all 82
+grepped classes present, the one failure the (P18.80) countdown whose own KDoc recorded both
+references at TS2556.
+
+**RESIDUES, MEASURED AND NOT FIXED**: the variable-callee arity gap; `...any`; an
+array-literal spread with an inner spread; a type-parameter operand; element typing through
+a rest parameter; all of (i); the open stage-2 rows above.
+
+**PREDICTIONS REFUTED**: (CHK.98b) was not open; a plain `new C(cb)` already works (B210's
+syntactic path — (i)'s 21 rows are the explicit-type-argument, overloaded and interface-
+construct shapes); TS2556 was not missing but wrong both ways; `lexicalValueSymbolForNode`
+does not resolve a function-body local from the walker's ambient; optional tuple slots count.
+
+**NEXT**: (CHK.98)(i), the `NewExpression` argument arm — 21 measured missing rows, a control
+grid, and the item's own hazard (an un-substituted `T` reaching the argument relation) to pin
+as a refusal. Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
+
 ### Round (P18.81) — (CHK.134)(2): `f.bind` — the BUILD shape sufficed, the lib has TWO overloads not five, and a re-bound function's `any` was the arith recorder's first-touch hazard (2026-09-12)
 
 **Suite 18,854 → 18,907 / 0 / 3** (+53 pins, `FunctionBindTest`: 40 diagnostic, 4 negative
@@ -774,110 +850,6 @@ closing it would turn all six of this round's TEXT-DIFFs into AGREE. Then (CHK.9
 IDENTICAL-signature half. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order sends
 the arc.
 
-### Round (P18.72) — (CHK.97) D2: a both-overloaded union callee reports, and the suppression that is still hiding a second row (2026-09-11)
-
-**Suite 18,669 → 18,679 / 0 / 3** (+10 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`
-exit 0 with no rebaseline; `huge_methods.py --fail-over 0` exit 0 (844 classes);
-warning-clean. **(CHK.97) still OPEN** — D3 and D5 remain, plus the new D2b below.
-
-**THE FIX IS A SPLIT BY *REASON*, NOT A RETIREMENT.** The `≥2`-overloaded suppression was
-one `if` answering two different facts. TWO OR MORE overloaded constituents is exactly where
-tsc SKIPS pass 2 (`indexWithLengthOverOne === -1`), `getUnionSignatures` answers the EMPTY
-list, and `resolveCallExpression` reports TS2349 with the "Each member … has signatures"
-chain — so that half is a DIAGNOSTIC. Exactly ONE overloaded constituent is the
-`unionOfArraysFilterCall` shape (`(Fizz[] | readonly Buzz[]).filter`, where `Array.filter`
-has 2 overloads and `ReadonlyArray.filter` has 1), where tsc RUNS pass 2 over the parallel
-overload sets and reports nothing — so that half stays SILENT. A `count` replaces the `any`
-and makes exactly the same `getCallSignaturesOfType` calls.
-
-**THE CHAIN SENTENCE NOW HAS ONE HOME**, shared with the pre-existing generic refusal
-(`emitUnionCalleeNoCompatibleSignatures`). Two refusal reasons print it byte-identically on
-both references, span included; a chain sentence is the WHOLE observable here and
-(PARITY.1) says the 8-profile grid is structurally blind to a display divergence — so two
-copies would drift with nothing to notice. Ablation a5 confirms both callers reach it.
-
-**RECEIPT** (`scripts/ref_matrix.py`, 7 fixtures, BEFORE arm taken against a real HEAD build
-rather than reasoned): **agree 3 → 11, missing 8 → 0, ours-only 0 → 0**; zero SPAN-DIFF,
-zero REF-SPLIT. **CORRECTED an hour later by the sub-step below, and the correction is the
-point: that reading was taken with a CHAIN-BLIND instrument, and one of its eleven AGREE
-rows is really a TEXT-DIFF** — re-taken chain-aware the seven D2 fixtures read
-**agree 10, text-diff 1, missing 0, ours-only 0**. The row is `p3:7`, and it is the
-`typeToString` parenthesization defect described below, not a D2 defect; the pins had
-already caught it, which is why the fixture's third member carries a property. The verdict
-does not move, the number does — and a receipt quoted from an instrument that cannot see the
-family's whole content is exactly what this repo's round-853 law is about.
-
-**A COUNTDOWN PIN FIRED — THE SEVENTH IN EIGHT ROUNDS, AND ONLY THE *FULL* SUITE SAW IT.**
-`UnionCalleeSignatureTest :: a union whose members are both overloaded refuses the
-combination` asserted the SILENCE this round removes, and its own KDoc said "SILENT where
-tsc reports TS2349" — a wrong answer recorded as a pin. It was found by running ablation arm
-a2 against the **full** suite; the four corpus letters the round was gating on (B/F/S/U)
-miss it entirely. Inverted to the correct code + chain and renamed. **Corollary for the
-ablation protocol: a guard-letter corpus subset is not a substitute for the suite when the
-arm WIDENS an emission** — a widening's victims are pins, not baselines.
-
-**THE GRID IS A CONTROL HERE AND THE ROUND SAYS SO, WITH A COUNT.** A counting arm
-(positive control: 3 hits on the round's own fixture) reads **0 hits on all eight profiles**
-— zero even for the one-overloaded sibling. So `added=0 removed=0` proves INERTNESS and
-nothing about coverage ((CHK.124)'s lesson, one round later). The real gate is the corpus
-(1,425 baselines over the guard letters, all green — `betterErrorForUnionCall`,
-`unionOfArraysFilterCall`, `functionCallOnConstrainedTypeVariable`,
-`signatureCombiningRestParameters1/3/4/5`) plus the pins.
-
-**THE INSTRUMENT IS BLIND TO THE THING THIS ROUND CHANGES: `scripts/ref_matrix.py` CANNOT
-SEE A `messageChain`.** Its row regexes match a diagnostic's FIRST LINE only, so a
-chain-only divergence scores **AGREE**. That is the third distinct blindness found in this
-script in two rounds, and this one matters most for exactly the family it was built to
-adjudicate — a union-callee TS2349's whole content is its chain. It passed a real
-divergence the pins then caught: **`typeToString` parenthesizes a union member that has
-exactly one call signature and no other member**, so we print `ZzzA | ZzzB | (ZzzS)` and
-`(ZzzS) | (ZzzT)` where both references print them bare. **Pre-existing** (shipped HEAD
-prints it in a plain TS2322), unowned, unrelated to D2 — recorded in the pin KDoc, and the
-pin's third member carries a property to dodge it honestly rather than pinning the wrong
-display. **CLOSED AS ITS OWN SUB-STEP THIS ROUND**: continuation lines are now normalised
-(leading whitespace and our `|` marker removed) and appended to the message, so the existing
-TEXT-DIFF machinery covers a chain — no new verdict. Verified in BOTH directions, which is
-what separates it from a change that merely compiles: a fixture where all three arms agree
-on the chain still reads AGREE (so the arms' differing PRINT formats do not false-positive),
-and the parenthesization row is now reported. **It immediately re-graded one of this round's
-own fixtures** — see the corrected receipt above. Stated limitation, in the docstring:
-normalising the indentation away also normalises away a chain's NESTING DEPTH, so a
-divergence purely in how deeply a sub-line is nested is still invisible. Left open as
-**(CHK.130)**: the parenthesization defect itself.
-
-**THE ROUND'S LOAD-BEARING CLAIM IS TRUE OF THE PROFILES AND FALSE OF THE LANGUAGE.** The
-brief asserted the `≥2` suppression guards nothing reachable, and that holds for the eight
-profiles and the corpus — stage 2's array fallback answers those receivers before a union
-callee is ever formed. It does NOT hold in general: the ONE-overloaded suppression D2 KEPT
-is reachable and **hides a true positive**, because PASS 2 also refuses on GENERIC
-INCOMPATIBILITY. There both references print the identical chain and we stay silent. The
-implementer STOPPED at the scope line rather than pushing through, which is the right call
-and the reason the finding is trustworthy — it is now **(D2b)**, measured and ready: the
-one-character change is 0 RED on 1,425 baselines and reddens exactly the countdown pin this
-round already inverted. **It was deliberately NOT taken: an ablation arm is not an
-implemented fix with pins**, and a widening whose only gate is the corpus deserves its own
-round.
-
-**ABLATION: 5 arms / 1,435 pins-and-baselines, BOTH controls.** a4 comment-only = 0 RED;
-a5 break the shared chain = 7 RED (all 5 D2 chain pins + the generic-chain pin + the corpus
-`betterErrorForUnionCall`, which is what proves the two callers really share one emitter);
-a1 restore the suppression = exactly the 5 D2 positives with the generic pin untouched, i.e.
-attributable; a2 emit at `>= 1` too = **0 RED on the guard letters and 1 RED on the full
-suite** (the countdown above) — a DEAD ARM for the round's own pin set, recorded as such;
-a3 drop the generic guard before the shared emitter = **0 RED, recorded as a REDUNDANT GUARD
-and structurally so** — `differ` is reachable only with `combinedSigs == null` and
-`overloadedMembers == 0`, in which configuration the only refusal PASS 2 can make IS generic
-incompatibility. Kept in place: it is tsc's own rule, a round-927 pair.
-
-**FOUR MORE RESIDUES, RECORDED AND NOT PINNED**: the CONSTRUCT twin (`new` on a
-both-overloaded union — separate branch, own sentence); a both-overloaded union beside
-`undefined` (reaches (P18.71)'s nullish strip first); and a TS2769 elaboration on which
-tsgo and pristine genuinely diverge (round 938), so it is not adjudicable.
-
-**NEXT**: (D2b) is the cheapest measured row left in (CHK.97); then (D3)'s
-IDENTICAL-signature half. Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order
-sends the arc.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1200,7 +1172,19 @@ notices it is gone.
   is TS2741 in tsgo and TS2684 in pristine. All 23 of ours on the matrix come from `checkSpine`
   (one owner, no tail-walker double-emit on these shapes).
 
-- [ ] **(CHK.98) (a)/(b)/(c) LANDED 2026-09-06 ((P18.31) note) — the ccet ARGUMENT reader (TWO `anyType`
+- [ ] **(CHK.98) (d) TS2556 LANDED 2026-09-12 ((P18.82) note) — tsc's tuple expansion + `hasCorrectArity` spread
+  clause at all three arity walkers; it was WRONG IN BOTH DIRECTIONS (4 false positives + 2 wrong codes, 20 missing →
+  22/0/4); operands classified DECLARATION-first because the walkers run under the file-level ambient. **EVERY
+  REMAINING DELIVERABLE MEASURED**: (i) the `NewExpression` ARGUMENT arm — **21 MISSING** over 24 fixtures (explicit
+  type arguments `new ZzzG<string>(cb)`, an overloaded constructor, an interface `new (...)` signature, a class
+  expression, a generic class inferred from another argument; the plain `new C(cb)` already works through B210), grid
+  ≈ control (6-10 `new X(callback)` per profile, libraries 0), hazard: an un-substituted `T` must REFUSE rather than
+  reach the argument relation; (iii) STAGE 2 decomposed — `Promise.then`/`PromiseLike.then` and a namespace-import
+  callee MISSING, predicate `filter` missing + text-diff, `reduce(cb, {} as Record<…>)` ours-only `acc.nope`, the
+  union-of-arrays chain naming the LAST constituent ((CHK.132)), `NonNullable<…>` unreduced in a display; three
+  bullets already agree; (iv) (CHK.98b) was already CLOSED 2026-09-06 (its one row is (P18.32)'s recorded gap).
+  Residues of (d): the variable-callee arity gap ((CHK.97)), `...any`, an array-literal spread with an inner spread, a
+  type-parameter operand, element typing through a rest parameter. PREVIOUS HEAD: (a)/(b)/(c) LANDED 2026-09-06 ((P18.31) note) — the ccet ARGUMENT reader (TWO `anyType`
   sites, not the one the item named: `ccetEnterFunctionLike`'s `else` AND `ccetObjlitMemberFrame`, which
   additionally had to COPY its shared `localTypes` map), the PROPERTY-ACCESS readers (`cpaAnnotationCtx` /
   `cpaWithAnnotationCtx` at four sites + `cpaExprObjlitMethod`, gated to a NON-union contextual parameter

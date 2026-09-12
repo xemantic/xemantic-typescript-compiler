@@ -65647,44 +65647,33 @@ interface DataView {
         val fileName = spineFileName
         val info = if (calleeName == "super") ctx.superCtor else
             funcParams[calleeName].also { FrontEnd.noteArgLookup(it != null) }
-        // M1.11 (Shape C): a SPREAD argument's expansion length is unknown, so a
-        // too-FEW conclusion from counting it as 1 is unsound (`createDiagnostic(
-        // ...diag)` / `reportRelationError(undefined, ...info)` — tsc accepts a
-        // tuple-typed spread covering the remaining params). Too-many stands
-        // (a spread expands to ≥0, so fixed args alone exceeding max still errors).
+        // (CHK.98)(d) tsc's spread arity — [spreadArityView]. A surviving spread makes
+        // the argument count unknown, so the ONLY verdict left is TS2556 or nothing
+        // (never a count); an argument list whose spreads all EXPAND (fixed tuples, array
+        // literals) is arity-checked on its effective count below, exactly as tsc checks
+        // its synthetic arguments. The noImplicitAnyLoopCrash walker owns its own
+        // corpus-unique TS2556 (+ the not-iterable row), so a call it has reported is
+        // left alone rather than reported twice.
         val hasSpreadArg = expr.arguments.any { it is SpreadElement }
-        // (M3.0-gap-4) A spread argument must have a TUPLE type unless it is passed to a
-        // REST parameter: `f0(...args)` with `args: readonly string[]` and
-        // `f0(a: string, b: string)` cannot be checked for arity at all, and tsc reports
-        // TS2556 at the spread. Only fires when the operand's type is POSITIVELY an
-        // array-that-is-not-a-tuple, so an unresolved or `any` operand stays silent; a
-        // tuple spread (`readonly [string, string]`) is legal here and must not fire.
-        // ... but ONLY when the count is not already wrong: tsc checks arity first, so
-        // `f(1, 2, ...xs)` against a one-parameter `f` is "Expected 1 arguments, but got
-        // 3", not TS2556. The spread's unknown length only matters when the call would
-        // otherwise be arity-clean.
-        if (info != null && !info.hasRest && hasSpreadArg &&
-            expr.arguments.size <= info.maxParams
-        ) {
-            for (arg in expr.arguments) {
-                val spread = arg as? SpreadElement ?: continue
-                // An ARRAY LITERAL spread has a syntactically known length, so tsc treats
-                // it as a tuple: `f(1, 2, 3, 4, 5, ...[6, 7])` is counted as seven
-                // arguments and reported as too many, never as TS2556.
-                if (spread.expression is ArrayLiteralExpression) continue
-                if (!spreadOperandIsNonTupleArray(spread.expression)) continue
-                val spreadStart = spread.pos
-                val (sl, sc) = getLineAndCharacterOfPosition(source, spreadStart)
-                diagnostics.add(Diagnostic(
-                    message = "A spread argument must either have a tuple type or be " +
-                        "passed to a rest parameter.",
-                    category = DiagnosticCategory.Error, code = 2556, fileName = fileName,
-                    line = sl, character = sc, start = spreadStart,
-                    length = expressionTrueEnd(spread.expression) - spreadStart,
-                ))
-                return
+        if (hasSpreadArg && "$fileName|${expr.pos}" in spreadNonIterableHandledCalls) return
+        val spreadView = if (hasSpreadArg) spreadArityView(expr.arguments) else null
+        if (spreadView is SpreadArityView.Spread) {
+            if (info != null) {
+                // An overload set is TS2556 only when NO candidate has correct arity —
+                // tsc reaches `getArgumentArityError` only then; explicit type
+                // arguments narrow the candidate set (B95b) and are left alone here.
+                val fails = when {
+                    !info.isOverloaded ->
+                        spreadArityFails(spreadView, info.minParams, info.maxParams, info.hasRest)
+                    expr.typeArguments.isNullOrEmpty() && info.overloadSigs.isNotEmpty() ->
+                        info.overloadSigs.all { spreadArityFails(spreadView, it.minParams, it.maxParams, it.hasRest) }
+                    else -> false
+                }
+                if (fails) emitTS2556(spreadView.arg, source, fileName)
             }
+            return
         }
+        val expanded = spreadView as SpreadArityView.Expanded?
         // (M3.0-gap-4) A rest parameter annotated with a fixed TUPLE has fixed arity, so
         // the usual "a rest parameter accepts anything" exemption does not apply:
         // `f2(...args: readonly [string, string])` takes exactly two, and a tuple-typed
@@ -65713,13 +65702,11 @@ interface DataView {
             }
         }
         if (info != null && !info.isOverloaded) {
-            val argCount = expr.arguments.size
+            val argCount = expanded?.count ?: expr.arguments.size
             if (!info.hasRest && argCount > info.maxParams) {
-                // noImplicitAnyLoopCrash: a non-tuple spread arg into a no-rest fn is a
-                // TS2556 (owned by checkSpreadNonIterableIntoFixedArity), NOT a TS2554.
-                if ("$fileName|${expr.pos}" in spreadNonIterableHandledCalls) return
-                emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
-            } else if (argCount < info.minParams && !hasSpreadArg) {
+                val excessIdx = if (expanded != null) firstExcessArgIndex(expanded, info.maxParams) else info.maxParams
+                emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, excessIdx, source, fileName)
+            } else if (argCount < info.minParams) {
                 if (info.hasRest) {
                     emitTS2555TooFew(info.minParams, argCount, expr.expression, source, fileName, info.parameters)
                 } else {
@@ -65787,13 +65774,13 @@ interface DataView {
             // generic ones, changing the applicable arity — out of scope here).
             val argCount = expr.arguments.size
             val spreads = expr.arguments.filterIsInstance<SpreadElement>()
-            if (spreads.isNotEmpty() && spreads.all { it.expression is ArrayLiteralExpression }) {
+            if (expanded != null) {
                 // B270: spread-of-array-literal args have a knowable effective count;
                 // overflow inside the spread squiggles the spread argument itself.
+                // (CHK.98)(d): every spread that EXPANDS (a fixed tuple too) counts the
+                // same way — [expanded] is non-null exactly when all of them do.
                 if (!info.hasRest) {
-                    val effective = expr.arguments.sumOf { a ->
-                        if (a is SpreadElement) (a.expression as ArrayLiteralExpression).elements.size else 1
-                    }
+                    val effective = expanded.count
                     if (effective > info.maxParams) {
                         val sp = spreads.first()
                         val start = sp.pos
@@ -65900,13 +65887,23 @@ interface DataView {
         }
         val info = classCtorParams[className].also { FrontEnd.noteArgLookup(it != null) }
         if (info != null && !info.isOverloaded) {
-            val argCount = expr.arguments?.size ?: 0
+            val args = expr.arguments ?: emptyList()
+            // (CHK.98)(d) the same spread arity as [spineArgCallEnter]: tsc's
+            // `resolveNewExpression` hands the construct signatures to the very
+            // `resolveCall` a call goes through, so `new C(...xs)` is TS2556 there too.
+            val spreadView = if (args.any { it is SpreadElement }) spreadArityView(args) else null
+            if (spreadView is SpreadArityView.Spread) {
+                if (spreadArityFails(spreadView, info.minParams, info.maxParams, info.hasRest)) {
+                    emitTS2556(spreadView.arg, source, fileName)
+                }
+                return
+            }
+            val expanded = spreadView as SpreadArityView.Expanded?
+            val argCount = expanded?.count ?: args.size
             if (!info.hasRest && argCount > info.maxParams) {
-                val args = expr.arguments ?: emptyList()
-                emitTS2554TooMany(info.minParams, info.maxParams, argCount, args, info.maxParams, source, fileName)
-            } else if (argCount < info.minParams &&
-                expr.arguments?.any { it is SpreadElement } != true
-            ) {
+                val excessIdx = if (expanded != null) firstExcessArgIndex(expanded, info.maxParams) else info.maxParams
+                emitTS2554TooMany(info.minParams, info.maxParams, argCount, args, excessIdx, source, fileName)
+            } else if (argCount < info.minParams) {
                 // B95c (round 82): squiggle the WHOLE `new X(...)` (expr.pos .. after `)`),
                 // not just the class identifier — matches TypeScript. Pass info.parameters
                 // so the TS6210 "argument for 'x' not provided" related info fires (it points
@@ -123371,47 +123368,210 @@ interface DataView {
     }
 
     /**
-     * (M3.0-gap-4) Is this spread operand POSITIVELY an array that is not a tuple — the
-     * condition under which tsc reports TS2556 for a spread into a non-rest parameter?
+     * (CHK.98)(d) tsc's ARITY view of an argument list carrying a spread —
+     * `getEffectiveCallArguments` (checker.ts:36260) followed by the spread clause of
+     * `hasCorrectArity` (:35672), and `getArgumentArityError`'s first line (:36411).
      *
-     * Two routes, because neither alone covers the shapes that matter. The resolved type
-     * handles an ordinary value (`declare const arr: string[]`). A rest PARAMETER's type
-     * does not resolve in the arg-count pass — its enclosing signature's parameters are
-     * not in scope there — so its ANNOTATION is read syntactically instead, which also
-     * makes `readonly string[]` (a TypeOperator wrapping an ArrayType) fall out for free.
-     * Anything unrecognised answers false, leaving the call unreported.
+     * A spread whose operand is a FIXED-length tuple (or an array literal, which tsc
+     * types as a tuple in that position) expands into that many ordinary arguments; a
+     * spread whose operand is anything else SURVIVES, and from then on the argument
+     * count is unknown, so the only arity question left is tsc's: the surviving
+     * spread's index must be at or past the signature's minimum, and either the
+     * signature has a rest parameter or the index is inside its parameter list.
+     * Otherwise the call is `A spread argument must either have a tuple type or be
+     * passed to a rest parameter.` (TS2556) — and NEVER a count (TS2554): measured on
+     * both references, `f(1, 2, ...xs)` against `f(a: number)` prints TS2556 alone,
+     * where this checker printed `Expected 1 arguments, but got 3.`, and `f(...xs)`
+     * against `f(a?: number, b?: number)` is legal (index 0 is at the minimum and
+     * inside the list), where this checker reported it.
+     *
+     * [Spread.decided] is what keeps the rule from inventing a row: an operand this
+     * checker cannot classify (an `any`, an unresolved name, a type parameter, an
+     * un-annotated body-local) makes [Spread.index] a LOWER BOUND, and the only
+     * verdict a lower bound licenses is "already past the parameter list of a
+     * signature with no rest parameter", which no expansion can undo. Everything else
+     * stays silent, in the direction every gate here can see.
      */
-    private fun spreadOperandIsNonTupleArray(operand: Expression): Boolean {
-        val resolved = getTypeOfExpression(operand)
-        if (isArrayLikeReference(resolved)) {
-            return (resolved as? Type.Object)?.tupleElementTypes == null
-        }
-        val id = operand as? Identifier ?: return false
-        var owner: Node? = (id as NodeBase).parent
-        var hops = 0
-        while (owner != null && hops++ < 64) {
-            val ownerParams = when (owner) {
-                is FunctionDeclaration -> owner.parameters
-                is FunctionExpression -> owner.parameters
-                is ArrowFunction -> owner.parameters
-                is MethodDeclaration -> owner.parameters
-                is Constructor -> owner.parameters
-                else -> null
+    private sealed class SpreadArityView {
+        /** No spread survives: [count] is the effective argument count and [expansion]
+         *  the per-ORIGINAL-argument expansion, so a too-many report can anchor on the
+         *  original argument whose expansion crosses the maximum. */
+        class Expanded(val count: Int, val expansion: List<Int>) : SpreadArityView()
+        /** A spread survives at effective [index], living in the original argument [arg]. */
+        class Spread(val index: Int, val arg: SpreadElement, val decided: Boolean) : SpreadArityView()
+    }
+
+    /** How one spread operand expands: a fixed number of elements, a fixed prefix
+     *  followed by a rest slot, positively not a tuple, or nothing this checker can say. */
+    private sealed class SpreadOperandShape {
+        class Fixed(val count: Int) : SpreadOperandShape()
+        class RestTail(val fixedBefore: Int) : SpreadOperandShape()
+        object NonTuple : SpreadOperandShape()
+        object Unknown : SpreadOperandShape()
+    }
+
+    private fun spreadArityView(args: List<Expression>): SpreadArityView {
+        var effective = 0
+        val expansion = ArrayList<Int>(args.size)
+        for (arg in args) {
+            if (arg !is SpreadElement) { effective++; expansion.add(1); continue }
+            when (val shape = classifySpreadOperand(arg.expression)) {
+                is SpreadOperandShape.Fixed -> { effective += shape.count; expansion.add(shape.count) }
+                is SpreadOperandShape.RestTail ->
+                    return SpreadArityView.Spread(effective + shape.fixedBefore, arg, decided = true)
+                SpreadOperandShape.NonTuple -> return SpreadArityView.Spread(effective, arg, decided = true)
+                SpreadOperandShape.Unknown -> return SpreadArityView.Spread(effective, arg, decided = false)
             }
-            val match = ownerParams?.firstOrNull { (it.name as? Identifier)?.text == id.text }
-            if (match != null) {
-                var annotation: TypeNode? = match.type
-                while (annotation is TypeOperator || annotation is ParenthesizedType) {
-                    annotation = when (annotation) {
-                        is TypeOperator -> annotation.type
-                        is ParenthesizedType -> annotation.type
+        }
+        return SpreadArityView.Expanded(effective, expansion)
+    }
+
+    /** The spread clause of tsc's `hasCorrectArity`, inverted: true when the call MUST be
+     *  reported as TS2556 against a signature with [minParams] required parameters,
+     *  [paramCount] parameters in all and, when [hasRest], a rest parameter. */
+    private fun spreadArityFails(
+        view: SpreadArityView.Spread, minParams: Int, paramCount: Int, hasRest: Boolean,
+    ): Boolean =
+        if (view.decided) !(view.index >= minParams && (hasRest || view.index < paramCount))
+        else !hasRest && view.index >= paramCount
+
+    /** The ORIGINAL argument index at which an expanded count first exceeds [maxParams]
+     *  — where tsc's too-many report anchors (a synthetic argument carries its spread's
+     *  span). */
+    private fun firstExcessArgIndex(view: SpreadArityView.Expanded, maxParams: Int): Int {
+        var running = 0
+        for ((i, n) in view.expansion.withIndex()) {
+            running += n
+            if (running > maxParams) return i
+        }
+        return view.expansion.size
+    }
+
+    private fun emitTS2556(spread: SpreadElement, source: String, fileName: String) {
+        val start = spread.pos
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "A spread argument must either have a tuple type or be passed to a rest parameter.",
+            category = DiagnosticCategory.Error, code = 2556, fileName = fileName,
+            line = line, character = character, start = start,
+            length = (expressionTrueEnd(spread.expression) - start).coerceAtLeast(1),
+        ))
+    }
+
+    /**
+     * What a spread operand expands to. THREE routes, in an order that is load-bearing:
+     * an array literal is syntactic (tsc types it as a tuple in this position); an
+     * IDENTIFIER that names an enclosing parameter or a scope-space local is classified
+     * by that DECLARATION's annotation — the arity walkers run at the spine hook, under
+     * the FILE-LEVEL ambient (round 911), where `getTypeOfExpression` answers a rest
+     * parameter `any` and a body-local by whatever same-named file-level binding exists,
+     * i.e. the one way this rule could invent a row (a file-level `number[]` shadowed
+     * by a body-local tuple); only a name with no such binding is read from its type.
+     */
+    private fun classifySpreadOperand(operand: Expression): SpreadOperandShape {
+        if (operand is ArrayLiteralExpression) {
+            return if (operand.elements.any { it is SpreadElement }) SpreadOperandShape.Unknown
+            else SpreadOperandShape.Fixed(operand.elements.size)
+        }
+        if (operand is Identifier) {
+            spreadOperandDeclaration(operand)?.let { decl ->
+                val annotation = when (decl) {
+                    is Parameter -> decl.type
+                    is VariableDeclaration -> decl.type
+                    else -> null
+                }
+                if (annotation != null) return classifySpreadAnnotation(annotation)
+                // An un-annotated local whose initializer is a plain array literal is an
+                // ARRAY in tsc (no contextual type, so no tuple), never a tuple.
+                val init = (decl as? VariableDeclaration)?.initializer
+                return if (init is ArrayLiteralExpression && init.elements.none { it is SpreadElement })
+                    SpreadOperandShape.NonTuple else SpreadOperandShape.Unknown
+            }
+        }
+        return spreadShapeOfType(getTypeOfExpression(operand))
+    }
+
+    /**
+     * The enclosing-function PARAMETER or enclosing-block LOCAL an operand identifier
+     * names — the declarations the file-level ambient cannot see — or null for neither.
+     * A SYNTACTIC innermost-first walk of the enclosing statement lists (round 935's
+     * shape), because (INV.0)'s scope-space consult is override-only and gated, and what
+     * this needs is the DECLARATION's annotation, not a resolved type: measured, a
+     * body-local `const t: [number, number]` shadowing a file-level `number[]` read the
+     * file-level array through the resolver route and reported a false TS2556.
+     */
+    private fun spreadOperandDeclaration(id: Identifier): Node? {
+        var cur: Node? = (id as NodeBase).parent
+        var hops = 0
+        while (cur != null && hops++ < 64) {
+            when (cur) {
+                is Block -> for (st in cur.statements) {
+                    val vs = st as? VariableStatement ?: continue
+                    vs.declarationList.declarations.firstOrNull { (it.name as? Identifier)?.text == id.text }
+                        ?.let { return it }
+                }
+                is FunctionDeclaration -> cur.parameters.firstOrNull { (it.name as? Identifier)?.text == id.text }?.let { return it }
+                is FunctionExpression -> cur.parameters.firstOrNull { (it.name as? Identifier)?.text == id.text }?.let { return it }
+                is ArrowFunction -> cur.parameters.firstOrNull { (it.name as? Identifier)?.text == id.text }?.let { return it }
+                is MethodDeclaration -> cur.parameters.firstOrNull { (it.name as? Identifier)?.text == id.text }?.let { return it }
+                is Constructor -> cur.parameters.firstOrNull { (it.name as? Identifier)?.text == id.text }?.let { return it }
+                else -> {}
+            }
+            cur = (cur as? NodeBase)?.parent
+        }
+        return null
+    }
+
+    /** [classifySpreadOperand] for an ANNOTATION: a tuple type node is read element by
+     *  element (a `readonly` operator and parentheses are transparent, an optional
+     *  element COUNTS — tsc pushes one synthetic argument per element), an array type
+     *  node is positively not a tuple, and anything else is resolved and classified as
+     *  a type. */
+    private fun classifySpreadAnnotation(node: TypeNode): SpreadOperandShape {
+        var annotation: TypeNode = node
+        while (true) {
+            annotation = when {
+                annotation is TypeOperator && annotation.operator == SyntaxKind.ReadonlyKeyword -> annotation.type
+                annotation is ParenthesizedType -> annotation.type
+                else -> break
+            }
+        }
+        return when (annotation) {
+            is ArrayType -> SpreadOperandShape.NonTuple
+            is TupleType -> {
+                for ((i, e) in annotation.elements.withIndex()) {
+                    val rest = e is RestType || (e is NamedTupleMember && e.dotDotDotToken)
+                    if (rest) {
+                        val inner = if (e is RestType) e.type else (e as NamedTupleMember).type
+                        return if (inner is TupleType) SpreadOperandShape.Unknown
+                        else SpreadOperandShape.RestTail(i)
                     }
                 }
-                return annotation is ArrayType
+                SpreadOperandShape.Fixed(annotation.elements.size)
             }
-            owner = (owner as? NodeBase)?.parent
+            else -> getTypeFromTypeNodeSafe(annotation)?.let { spreadShapeOfType(it) }
+                ?: SpreadOperandShape.Unknown
         }
-        return false
+    }
+
+    /** [classifySpreadOperand] for a resolved TYPE. A union is not a tuple in tsc even
+     *  when every constituent is one (`isTupleType` is false for it), but one carrying a
+     *  type parameter or an `any` may be a resolution failure of ours, so it is refused. */
+    private fun spreadShapeOfType(t: Type): SpreadOperandShape {
+        if (t === anyType || t === errorType || t is Type.TypeParam) return SpreadOperandShape.Unknown
+        if (t is Type.Union || t is Type.Intersection) {
+            val parts = if (t is Type.Union) t.types else (t as Type.Intersection).types
+            return if (parts.any { it === anyType || it === errorType || it is Type.TypeParam })
+                SpreadOperandShape.Unknown else SpreadOperandShape.NonTuple
+        }
+        if (t is Type.Object && t !is Type.Interface) {
+            val elems = t.tupleElementTypes
+            if (elems != null) {
+                return if (t.tupleHasRest) SpreadOperandShape.RestTail(t.tupleRestIndex)
+                else SpreadOperandShape.Fixed(elems.size)
+            }
+        }
+        return SpreadOperandShape.NonTuple
     }
 
     internal fun isArrayLikeReference(t: Type): Boolean =
@@ -157317,13 +157477,13 @@ interface DataView {
         val callee = expr.expression as? PropertyAccessExpression ?: return
         // (CHK.98)(a) A SPREAD argument carries an UNKNOWN number of arguments unless
         // its type is a fixed-length tuple, and `expr.arguments.size` counts it as ONE
-        // — so `d(f.funcB(...p))` read "Expected 2 arguments, but got 1". tsc bails for
-        // exactly this (`getSpreadArgumentIndex` / `hasEffectiveRestParameter`), and
-        // bailing is the safe direction here: a missed arity row, never an invented one.
-        // Unreachable before (CHK.98)(a) — the receiver `f` was `any` at this reader, so
-        // no signature resolved and the check never ran (the corpus's
-        // `bindingPatternCannotBeOnlyInferenceSource`).
-        if (expr.arguments.any { it is SpreadElement }) return
+        // — so `d(f.funcB(...p))` read "Expected 2 arguments, but got 1" before (a) bailed
+        // on every spread. (CHK.98)(d) replaces the bail with tsc's own rule
+        // ([spreadArityView]): a surviving spread is TS2556 or nothing, an expanding one
+        // contributes its element count. Unreachable before (CHK.98)(a) — the receiver
+        // `f` was `any` at this reader, so no signature resolved and the check never ran
+        // (the corpus's `bindingPatternCannotBeOnlyInferenceSource`).
+        val spreadView = if (expr.arguments.any { it is SpreadElement }) spreadArityView(expr.arguments) else null
         // B241: a SOFT later-lib member (Array.flat/flatMap under a pre-es2019 lib)
         // errors TS2550 at the property access instead — suppress the arity check.
         run {
@@ -157352,9 +157512,20 @@ interface DataView {
         val declInfo = declParams?.let { paramInfo(it) }
         val hasRest = declInfo?.hasRest
             ?: ((params.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true)
-        val argCount = expr.arguments.size
         val minParams = declInfo?.minParams ?: sig.minArgumentCount
         val maxParams = declInfo?.maxParams ?: params.size
+        if (spreadView is SpreadArityView.Spread) {
+            // The same embedded-lib guard as B279 below: a simplified lib member's
+            // parameter COUNT is not tsc's, so its arity verdict cannot be either.
+            val sigDecl = sig.declaration
+            if (sigDecl != null && sigDecl in builtinLibMemberDecls) return
+            if (spreadArityFails(spreadView, minParams, maxParams, hasRest)) {
+                emitTS2556(spreadView.arg, source, fileName)
+            }
+            return
+        }
+        val expanded = spreadView as SpreadArityView.Expanded?
+        val argCount = expanded?.count ?: expr.arguments.size
         if (argCount >= minParams && (hasRest || argCount <= maxParams)) return
         if (argCount >= minParams) {
             // B279: too-many args for a method call — same squiggle convention as the
@@ -157363,7 +157534,8 @@ interface DataView {
             // (toLocaleString(locales?, options?), forEach(cb, thisArg?)) → FP surface.
             val sigDecl = sig.declaration
             if (sigDecl != null && sigDecl in builtinLibMemberDecls) return
-            emitTS2554TooMany(minParams, maxParams, argCount, expr.arguments, maxParams, source, fileName)
+            val excessIdx = if (expanded != null) firstExcessArgIndex(expanded, maxParams) else maxParams
+            emitTS2554TooMany(minParams, maxParams, argCount, expr.arguments, excessIdx, source, fileName)
             return
         }
         val nameNode = callee.name

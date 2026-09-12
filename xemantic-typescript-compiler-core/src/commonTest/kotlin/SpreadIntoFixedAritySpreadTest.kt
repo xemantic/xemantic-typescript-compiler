@@ -41,9 +41,12 @@ import kotlin.test.Test
  *    two arguments, so this must not preempt a too-many report;
  *  - spreading INTO a rest parameter is the other half of the message and always legal.
  *
- * Precedence also matters: when the fixed arguments already exceed the maximum, tsc
- * reports the count, not TS2556 (pinned in Inv4SpineBatch26Test's trailing-spread case,
- * and by the `functionParameterArityMismatch` corpus baseline).
+ * Precedence: when every spread EXPANDS (an array literal, a fixed tuple) the call is
+ * arity-checked on the effective count and a too-many report is a count (the
+ * `functionParameterArityMismatch` corpus baseline, `f2(1, 2, 3, 4, 5, ...[6, 7])`);
+ * when a spread SURVIVES, tsc's arity error is TS2556 and never a count — even with the
+ * fixed arguments already past the list ((CHK.98)(d), measured on both references; the
+ * pin below used to assert the opposite).
  */
 class SpreadIntoFixedAritySpreadTest {
 
@@ -144,8 +147,10 @@ class SpreadIntoFixedAritySpreadTest {
         assert(diags.isEmpty())
     }
 
+    /** Both references print TS2556 alone here (`t.ts(3,24)`); this pin asserted the
+     *  count until (CHK.98)(d) — a countdown, inverted. */
     @Test
-    fun `negative control - an already-too-many call reports the COUNT and not TS2556`() {
+    fun `an already-too-many call with a surviving spread is TS2556 and not the count`() {
         val diags = diagnose(
             """
             function f(a: number) { }
@@ -153,7 +158,7 @@ class SpreadIntoFixedAritySpreadTest {
             function g() { f(1, 2, ...xs); }
             """
         )
-        assert(diags.none { it.code == 2556 })
-        assert(diags.count { it.code == 2554 } == 1)
+        assert(diags.count { it.code == 2556 } == 1)
+        assert(diags.none { it.code == 2554 })
     }
 }

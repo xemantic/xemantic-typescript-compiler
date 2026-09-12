@@ -493,11 +493,13 @@ class FunctionCallApplyTest {
     }
 
     @Test
-    fun `residue - a spread array into the expanded parameters is not TS2556`() {
+    fun `a spread array into the expanded parameters is TS2556 and a tuple spread is not`() {
         // Both references: TS2556 at `...zzzArr2` (a plain array spread into fixed
-        // parameters); the emitter reads a DECLARATION's parameter info.
+        // parameters) and nothing for the exact tuple. A (P18.80) residue until
+        // (CHK.98)(d) gave the method-callee arity walker tsc's spread rule.
         val d = d("declare const zzzArr2: string[];\nzzzF.call(zzzO, ...zzzArr2);\ndeclare const zzzArgs: [string];\nzzzF.call(zzzO, ...zzzArgs);")
-        assert(d.isEmpty())
+        assert(d.count { it.code == 2556 } == 1)
+        assert(d.none { it.code == 2554 })
     }
 
     @Test

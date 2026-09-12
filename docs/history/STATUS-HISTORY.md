@@ -3238,3 +3238,21 @@ COUNTDOWNS and now assert the row. Ablation 16/3/15 RED over 39 pins; a `sig!!` 
 unresolvable callee passed every D3 fixture and was caught only by the 63-class neighbour
 sweep (24 RED). cost_gate exit 0 (counters digit-identical to the pristine binary),
 huge_methods exit 0, warning-clean. (CHK.97) stays open: D5, D6.
+
+**(P18.77) — (CHK.97) D5: INFERENCE THROUGH A UNION-COMBINED SIGNATURE WAS BAILING ON AN INTERSECTION IT COULD NOT SEE, AND THE "ONE ROW" WAS SEVEN FAMILIES, 18,752 / 0 / 3 (2026-09-12).**
+PASS 2 combines `(number[] | string[]).map` into `<U>(cb: ((v: number…) => U) & ((v: string…)
+=> U)): U[]`, and every callback arm of the single-type-parameter inference demanded an
+anonymous `Type.Object` — so the inference bailed whole and the call answered a raw `U[]`
+that every reader silently refused as a foreign type parameter. **The first reading of the
+mechanism was wrong and a stderr line settled it** (the gate PASSES, because a function
+object's signatures are invisible to `typeMentionsTypeParam`; the candidate gatherer is what
+finds nothing). Fix is a VIEW, not machinery: `inferenceParamType` presents such an
+intersection as one anonymous function type carrying the existing `getIntersectedSignatures`
+fold, memoized per intersection id. Four fixture families `missing → agree`, the PASS-2
+pair fires (with a (CHK.132) sub-line), zero new ours-only rows. Ablation 12/4/1/0 RED over
+67 pins — a4 a recorded redundant guard. **Two `TupleArrayMembersTest` pins were countdowns
+on exactly this silence** and a `reduce` control was written wrong; all three found by the
+68-class neighbour sweep, none by the fixtures. Grid 8×0/0 and both library arms are
+measured CONTROLS (census `bound=0` everywhere real). cost_gate exit 0 (digit-identical to
+pristine), huge_methods exit 0, warning-clean. (CHK.97) is open on D6 ALONE; its unblocker
+`Signature.thisParameter` is now **(CHK.133)** at the top of the queue.

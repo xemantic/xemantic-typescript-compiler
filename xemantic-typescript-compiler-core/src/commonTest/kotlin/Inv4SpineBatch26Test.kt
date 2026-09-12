@@ -298,14 +298,17 @@ class Inv4SpineBatch26Test {
         }
     }
 
+    /** (CHK.98)(d): both references print TS2556 alone for a surviving spread past the
+     *  parameter list; this pin asserted the count — a countdown, inverted. */
     @Test
-    fun `too-many stands with a trailing spread argument`() {
+    fun `a trailing surviving spread past the parameter list is TS2556 and not a count`() {
         val d = diagnose("""
             function f(a: number) {}
             declare const xs: number[];
             f(1, 2, ...xs);
         """)
-        assert(d.count { it.code == 2554 } == 1)
+        assert(d.count { it.code == 2556 } == 1)
+        assert(d.none { it.code == 2554 })
     }
 
     @Test
