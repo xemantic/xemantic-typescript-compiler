@@ -1205,7 +1205,22 @@ CLAUDE.md § "AI agent mission".
   submoduleAccepted,submoduleTriaged}/*.diff` layered over the submodule baselines — **378 active subtests** (244
   `.errors.txt` + 134 `.js`, only 2 overlapping 0a), the pin that closes TS2300-at-both / TS2717 / `The last
   overload…`, and it needs the generator to apply `.diff` layers (a real parser change) — **OWNER 2026-09-12: "Both, in order"** — land 0a first (a strict subset of tsgo's
-  ordering), then 0b as its own round(s); a read-only design study of tsgo's layered layout precedes 0b.** Today
+  ordering), then 0b as its own round(s). **0b DESIGNED 2026-09-12 (`docs/tsgo-baselines.md`): tsgo checks in
+  its FULL output under `typescript-go-repo/testdata/baselines/reference/submodule/<suite>/` — the `.diff` files are
+  unappliable RECORDS (hunk headers rewritten to `@@= skipped =@@`), so 0b is "read baselines from another root", not a
+  diff applier; compiler-suite-only (the four adopted conformance dirs contribute zero); 378 active subtests move
+  (244 errors, 134 js of which 100 vanish under `stripDtsSection`), 9 deleted, 24 new (6 TS-1 bugs), 87 keep the tsc
+  baseline because tsgo never ran them; projected corpus 8,852 with ≈315 first-run reds.** Sub-steps: (0b-1)
+  `cloneTypeScriptGoRepo` (tag `typescript/v7.0.2` sha, sparse ≈29 MB) + the per-subtest baseline root with the
+  THREE-WAY fallback (present / absent-with-diff = delete / absent-no-diff = keep tsc) and its ASSERTED bucket
+  constants, the layer name emitted into each generated test, a `/.src/` generation-time guard, a
+  `tsgoPendingBaselines` `@Ignore` list (visible, counted, stale-checked) holding the first-run reds so the corpus
+  stays a green gate; (0b-2) the free wins — `==== ./` prefix (13), F9 wording (11), F5 removed-option wording (4:
+  tsgo says **TS5023 `Unknown compiler option`**, which ANSWERS (LEGACY.1)'s wording question), F4 TS6133→TS6196
+  (26); (0b-3) ledger the 21 TS-1 and 5 `/.src/` rows as `LogicalParityDivergence` (never follow a tsgo bug —
+  `submoduleTriaged` is the marker); (0b-4) family rounds by count, each measured against tsgo: F10 chain
+  shortening 45, F7+F2 report-at-both 43+11, F6 leaf promotion 42, F3 last-overload 25, F8 spans 13, F0/F1 checker
+  gaps 9+18, JS emit 29.** Today
   `typeScriptCommit` (`xemantic-typescript-compiler-core/build.gradle.kts:257`) is `637d5746`, the PRISTINE main-side
   parent of tsgo 7.0.2's `_submodules/TypeScript` sha `4d4f005c8541e0255a9d8791205fdce326e462bc` (the `tsgo-port`
   branch, whose `tests/baselines/reference` were regenerated to tsgo's output). The re-pin moves the corpus's
