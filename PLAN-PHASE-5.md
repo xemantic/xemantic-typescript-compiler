@@ -1187,6 +1187,32 @@ notices it is gone.
   is TS2741 in tsgo and TS2684 in pristine. All 23 of ours on the matrix come from `checkSpine`
   (one owner, no tail-walker double-emit on these shapes).
 
+**ADDENDUM 2026-09-12 (owner) — TYPESCRIPT 7.0 IS THE ONLY COMPATIBILITY TARGET.** Pristine 6.0.3 is no
+longer a reference: adjudicate against tsgo 7.0.2 alone, implement tsgo's answer where the two split, and route a
+pristine-shaped corpus baseline that differs only in form through `LogicalParityDivergence`. Legacy code for the
+features tsgo 7 REMOVES (`program.go` "Removed in TS7") may be deleted — queued as (LEGACY.1) below, directly after
+the in-flight (CHK.98) sub-step. The corpus stays pinned to pristine mainline baselines as the regression gate
+(re-pinning is a pipeline change needing explicit approval). Full text in CLAUDE.md § "AI agent mission".
+
+- [ ] **(LEGACY.1) REMOVE THE CODE SUPPORTING TS7-REMOVED FEATURES (owner directive 2026-09-12; census by a
+  read-only recon the same day, its sub-items to be filled from `scratchpad/legacy1/REPORT.md`).** The authoritative
+  list is tsgo's `createRemovedOptionDiagnostic` (`typescript-go-repo/internal/compiler/program.go`): `baseUrl`,
+  `outFile`, `target ES5` and below (ES3), `module AMD`/`System`/`UMD`, `moduleResolution Classic`/`node10`,
+  `alwaysStrict false`, `esModuleInterop false`, `allowSyntheticDefaultImports false`, `downlevelIteration`.
+  Method: ONE family per commit — (a) census the code, tests and corpus cases each family owns (the 23 `target <
+  ES2015` downlevel gates and `effectiveTarget`'s ES5→ES2015 map, the AMD/UMD/System arms of `Transformer`/`Emitter`,
+  classic/node10 in `ModuleResolver`, `outFile` concatenation, `baseUrl` in path mapping, `downlevelIteration`
+  helpers, the three `false`-valued interop flags); (b) replace acceptance of the option with tsgo's TS5102/TS5108
+  *Option 'X' has been removed. Please remove it from your configuration.* (with the `Use 'X' instead.` chain for
+  `baseUrl`), measured against tsgo on a fixture per option; (c) delete the supporting code and the hand-written
+  pins that pinned it (name each in the note), keeping `CompilerOptions` parsing tolerant enough to REPORT the
+  option. Gates: the corpus (every such configuration is already skipped by `usesUnsupportedOption` /
+  `tsconfigInTestUsesRemovedFeature`, so it must stay 100% green with NO new divergence entry), the 8-profile grid,
+  `cost_gate.py`, `huge_methods.py` (a large removal can only shrink methods), and `Checker.kt`'s line count in the
+  STATUS.md shrinkage dashboard — this arc MOVES the (INV.0) metric. Read CLAUDE.md's `defaultedTarget` /
+  `effectiveTarget` / raw `options.target` entry before touching a target gate: an explicit ES5 today maps UP for emit
+  and DOWN for checker questions, and both halves become a TS5108 refusal.
+
 - [ ] **(CHK.98) (i) THE `NewExpression` ARGUMENT ARM LANDED 2026-09-12 ((P18.83) note) — `newExprArgCtxTypes` through
   the call arm's shared core (`ctxArgTypesFromSignatures`): own constructors first, explicit type arguments, overloads
   by arity, and tsc's first-pass free-TP rule (`default ?: constraint ?: unknown`) for BOTH call-likes — which is the
