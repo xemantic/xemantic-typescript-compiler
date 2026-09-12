@@ -1191,8 +1191,33 @@ notices it is gone.
 longer a reference: adjudicate against tsgo 7.0.2 alone, implement tsgo's answer where the two split, and route a
 pristine-shaped corpus baseline that differs only in form through `LogicalParityDivergence`. Legacy code for the
 features tsgo 7 REMOVES (`program.go` "Removed in TS7") may be deleted — queued as (LEGACY.1) below, directly after
-the in-flight (CHK.98) sub-step. The corpus stays pinned to pristine mainline baselines as the regression gate
-(re-pinning is a pipeline change needing explicit approval). Full text in CLAUDE.md § "AI agent mission".
+the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinning the CORPUS to tsgo's regenerated baselines
+("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
+CLAUDE.md § "AI agent mission".
+
+- [ ] **(LEGACY.0) RE-PIN THE CORPUS TO tsgo's REGENERATED BASELINES (owner approval 2026-09-12: "Green light to
+  tsgo regenerated baseline"; a test-generation-pipeline change, pre-approved by that sentence).** Today
+  `typeScriptCommit` (`xemantic-typescript-compiler-core/build.gradle.kts:257`) is `637d5746`, the PRISTINE main-side
+  parent of tsgo 7.0.2's `_submodules/TypeScript` sha `4d4f005c8541e0255a9d8791205fdce326e462bc` (the `tsgo-port`
+  branch, whose `tests/baselines/reference` were regenerated to tsgo's output). The re-pin moves the corpus's
+  definition of FORM from pristine to tsgo: union member order, `The last overload gave the following error.`,
+  TS2300 at both duplicate declarations, and whatever else the diff shows. Method: (a) SIZE read-only first —
+  `git -C typescript-repo diff --stat 637d5746 4d4f005c -- tests/baselines/reference tests/cases` (fetch the sha into
+  the object DB if absent; NEVER check it out — the generator reads the working tree), classify the changed
+  `.js`/`.errors.txt` baselines by family, and check whether `tsgo-port` DELETES baselines for tsgo-skipped tests
+  (which would silently shrink the corpus) and whether the harness directives/defaults moved; (b) flip the pin, run
+  `generateTypeScriptTests` + the full suite, and read the RED set with an XML parser — every red is either (i) a form
+  divergence our compiler must now FOLLOW (a (CHK.\*)-style fix measured against tsgo, or a `LogicalParityDivergence`
+  entry if tsgo's own form is the one we cannot cheaply produce yet — the ledger is RE-DERIVED: every existing entry
+  whose reason was "pristine differs from tsgo" is now stale and must be dropped, the build fails on a stale one),
+  or (ii) a tsgo emit nondeterminism (`skippedEmitTests`, deliberately not mirrored — revisit: with tsgo baselines
+  those tests' `.js` may be a nondeterministic capture and the skip may now be needed); (c) land the pin with the
+  red set resolved or ledgered, STATUS.md's corpus count re-baselined and the `LogicalParityDivergence` ledger
+  regenerated; (d) THEN (LEGACY.1) — with tsgo baselines the removed-option wording question (6.0 TS5101 vs 7.0
+  TS5102/TS5108) is answered by what the regenerated `.errors.txt` files pin; the `simulatedVersion` default
+  follows them. Gates: the corpus itself (its new count is the baseline), the 8-profile grid (unaffected by
+  construction), `cost_gate.py`. Guard: `cloneTypeScriptRepo`'s KDoc (`build.gradle.kts:240-256`) still says
+  "never pin to the tsgo submodule sha" — rewrite it to the new policy in the same commit.
 
 - [ ] **(LEGACY.1) REMOVE THE CODE SUPPORTING TS7-REMOVED FEATURES (owner directive 2026-09-12; censused the same day,
   read-only, against tsgo's `program.go:803-877` "Removed in TS7" block and OUR sources — receipts in
