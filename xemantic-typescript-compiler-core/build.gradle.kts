@@ -876,7 +876,7 @@ val tsgoPendingBaselines = listOf(
     // -------------------------------------------------------------------- (LEGACY.0b)
     TsgoPendingBaseline(
         "argumentsReferenceInFunction1_Js.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
         "index.js(13,29): error TS2345: Argument of type 'IArguments' is not assignable to " +
         "parameter of type '[f?: any]'. | ours: index.js(13,29): error TS2345: Argument of type " +
         "'IArguments' is not assignable to parameter of type '[f?: any, ...any[]]'."
@@ -982,14 +982,14 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "awaitInNonAsyncFunction.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: !!! related " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: !!! related " +
         "TS1356 awaitInNonAsyncFunction.ts:13:7: Did you mean to mark this function as 'async'? " +
         "| ours: !!! related TS1356 awaitInNonAsyncFunction.ts:13:28: Did you mean to mark this " +
         "function as 'async'?"
     ),
     TsgoPendingBaseline(
         "baseClassImprovedMismatchErrors.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type '() => " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> ORDER ((LEGACY.0a) residue): the union's member order, not the wording; layer `submoduleAccepted`. tsgo: Type '() => " +
         "string | number' is not assignable to type '() => number'. | ours: Type '() => number " +
         "| string' is not assignable to type '() => number'."
     ),
@@ -1006,7 +1006,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "bitwiseCompoundAssignmentOperators.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "bitwiseCompoundAssignmentOperators.ts(3,3): error TS2447: The '^=' operator is not " +
         "allowed for boolean types. Consider using '!==' instead. | ours: " +
         "bitwiseCompoundAssignmentOperators.ts(3,1): error TS2447: The '^=' operator is not " +
@@ -1068,7 +1068,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "complexRecursiveCollections.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: The types " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> chain CONTENT: a different chain message is chosen, not a different spelling of the same one; layer `submoduleAccepted`. tsgo: The types " +
         "returned by 'map(...).size' are incompatible between these types. | ours: The types of " +
         "'map(...).size' are incompatible between these types."
     ),
@@ -1132,7 +1132,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "declarationEmitExpandoPropertyPrivateName.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~~~~~~~~~~~ | " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ~~~~~~~~~~~ | " +
         "ours: ~~~~~"
     ),
     TsgoPendingBaseline(
@@ -1165,44 +1165,6 @@ val tsgoPendingBaselines = listOf(
     TsgoPendingBaseline(
         "declareModifierOnImport1.js",
         "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var a = b;"
-    ),
-    TsgoPendingBaseline(
-        "deeplyNestedAssignabilityIssue.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
-        "?[96mdeeplyNestedAssignabilityIssue.ts?[0m:?[93m2?[0m:?[93m5?[0m - 'a' is declared " +
-        "here. | ours: ?[96mdeeplyNestedAssignabilityIssue.ts?[0m:?[93m2?[0m:?[93m5?[0m"
-    ),
-    TsgoPendingBaseline(
-        "deprecatedCompilerOptions1.errors.txt",
-        "F5 removed-option wording; layer `submoduleAccepted`. tsgo: /foo/tsconfig.json(3,19): " +
-        "error TS6046: Argument for '--target' option must be: 'es6', 'es2015', 'es2016', " +
-        "'es2017', 'es2018', 'es2019', 'es2020', 'es | ours: /foo/tsconfig.json(3,19): error " +
-        "TS5107: Option 'target=ES3' is deprecated and will stop functioning in TypeScript 5.5. " +
-        "Specify compilerOption '\"ignore"
-    ),
-    TsgoPendingBaseline(
-        "deprecatedCompilerOptions3.errors.txt",
-        "F5 removed-option wording; layer `submoduleAccepted`. tsgo: /foo/tsconfig.json(3,19): " +
-        "error TS6046: Argument for '--target' option must be: 'es6', 'es2015', 'es2016', " +
-        "'es2017', 'es2018', 'es2019', 'es2020', 'es | ours: /foo/tsconfig.json(3,19): error " +
-        "TS5108: Option 'target=ES3' has been removed. Please remove it from your " +
-        "configuration."
-    ),
-    TsgoPendingBaseline(
-        "deprecatedCompilerOptions4.errors.txt",
-        "F5 removed-option wording; layer `submoduleAccepted`. tsgo: /foo/tsconfig.json(3,19): " +
-        "error TS6046: Argument for '--target' option must be: 'es6', 'es2015', 'es2016', " +
-        "'es2017', 'es2018', 'es2019', 'es2020', 'es | ours: /foo/tsconfig.json(3,19): error " +
-        "TS5108: Option 'target=ES3' has been removed. Please remove it from your " +
-        "configuration."
-    ),
-    TsgoPendingBaseline(
-        "deprecatedCompilerOptions5.errors.txt",
-        "F5 removed-option wording; layer `submoduleAccepted`. tsgo: /foo/tsconfig.json(3,19): " +
-        "error TS6046: Argument for '--target' option must be: 'es6', 'es2015', 'es2016', " +
-        "'es2017', 'es2018', 'es2019', 'es2020', 'es | ours: /foo/tsconfig.json(3,19): error " +
-        "TS5108: Option 'target=ES3' has been removed. Please remove it from your " +
-        "configuration."
     ),
     TsgoPendingBaseline(
         "destructuringInVariableDeclarations1.js",
@@ -1256,47 +1218,29 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "duplicateIdentifierRelatedSpans1.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: " +
         "?[96mfile2.ts?[0m:?[93m1?[0m:?[93m6?[0m - 'Foo' was also declared here. | ours: " +
         "?[96mfile2.ts?[0m:?[93m1?[0m:?[93m6?[0m"
     ),
     TsgoPendingBaseline(
         "duplicateIdentifierRelatedSpans2.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: " +
         "?[96mfile1.ts?[0m:?[93m1?[0m:?[93m7?[0m - ?[91merror?[0m?[90m TS2300: ?[0mDuplicate " +
         "identifier 'A'. | ours: ?[96mfile1.ts?[0m:?[93m1?[0m:?[93m1?[0m - ?[91merror?[0m?[90m " +
         "TS6200: ?[0mDefinitions of the following identifiers conflict with those in another " +
         "file"
     ),
     TsgoPendingBaseline(
-        "duplicateIdentifierRelatedSpans3.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
-        "?[96mfile2.ts?[0m:?[93m2?[0m:?[93m5?[0m - 'duplicate1' was also declared here. | ours: " +
-        "?[96mfile2.ts?[0m:?[93m2?[0m:?[93m5?[0m"
-    ),
-    TsgoPendingBaseline(
         "duplicateIdentifierRelatedSpans4.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: " +
         "?[96mfile1.ts?[0m:?[93m2?[0m:?[93m5?[0m - ?[91merror?[0m?[90m TS2300: ?[0mDuplicate " +
         "identifier 'duplicate1'. | ours: ?[96mfile1.ts?[0m:?[93m1?[0m:?[93m1?[0m - " +
         "?[91merror?[0m?[90m TS6200: ?[0mDefinitions of the following identifiers conflict with " +
         "those in another file"
     ),
     TsgoPendingBaseline(
-        "duplicateIdentifierRelatedSpans5.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
-        "?[96mfile2.ts?[0m:?[93m4?[0m:?[93m9?[0m - 'duplicate1' was also declared here. | ours: " +
-        "?[96mfile2.ts?[0m:?[93m4?[0m:?[93m9?[0m"
-    ),
-    TsgoPendingBaseline(
-        "duplicateIdentifierRelatedSpans6.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
-        "?[96mfile2.ts?[0m:?[93m5?[0m:?[93m9?[0m - 'duplicate1' was also declared here. | ours: " +
-        "?[96mfile2.ts?[0m:?[93m5?[0m:?[93m9?[0m"
-    ),
-    TsgoPendingBaseline(
         "duplicateIdentifierRelatedSpans7.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: " +
         "?[96mfile1.ts?[0m:?[93m3?[0m:?[93m9?[0m - ?[91merror?[0m?[90m TS2300: ?[0mDuplicate " +
         "identifier 'duplicate1'. | ours: ?[96mfile1.ts?[0m:?[93m1?[0m:?[93m1?[0m - " +
         "?[91merror?[0m?[90m TS6200: ?[0mDefinitions of the following identifiers conflict with " +
@@ -1304,13 +1248,13 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "duplicateIdentifierRelatedSpans_moduleAugmentation.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: !!! related " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: !!! related " +
         "TS6203 /dir/b.ts:8:18: 'x' was also declared here. | ours: !!! related TS6204 " +
         "/dir/b.ts:8:18: and here."
     ),
     TsgoPendingBaseline(
         "duplicateStringNamedProperty1.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
         "duplicateStringNamedProperty1.ts(2,5): error TS2300: Duplicate identifier " +
         "'\"artist\"'. | ours: duplicateStringNamedProperty1.ts(2,5): error TS2300: Duplicate " +
         "identifier 'artist'."
@@ -1323,7 +1267,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "elidedJSImport1.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
         "caller.js(2,8): error TS18042: 'TruffleContract' is a type and cannot be imported in " +
         "JavaScript files. Use 'import(\"@truffle/contract\")' in a JSDoc ty | ours: " +
         "caller.js(2,8): error TS18042: 'TruffleContract' is a type and cannot be imported in " +
@@ -1349,13 +1293,6 @@ val tsgoPendingBaselines = listOf(
         "'allowSyntheticDefaultImports' flag "
     ),
     TsgoPendingBaseline(
-        "esModuleInteropPrettyErrorRelatedInformation.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
-        "?[96mindex.ts?[0m:?[93m1?[0m:?[93m1?[0m - Type originates at this import. A " +
-        "namespace-style import cannot be called or constructed, and will cause a f | ours: " +
-        "?[96mindex.ts?[0m:?[93m1?[0m:?[93m1?[0m"
-    ),
-    TsgoPendingBaseline(
         "esModuleInteropTslibHelpers.errors.txt",
         "F6 top code differs (tsgo TS2354 / ours -); layer `submoduleAccepted`. tsgo: " +
         "file.ts(1,1): error TS2354: This syntax requires an imported helper but module 'tslib' " +
@@ -1377,7 +1314,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "expandoFunctionNestedAssigments.errors.txt",
-        "F9 message wording, same code and span; layer `submodule`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submodule`. tsgo: " +
         "expandoFunctionNestedAssigments.ts(7,23): error TS2339: Property 'inNestedFunction' " +
         "does not exist on type '{ (): void; inVariableInit: number; bla: { | ours: " +
         "expandoFunctionNestedAssigments.ts(7,23): error TS2339: Property 'inNestedFunction' " +
@@ -1391,7 +1328,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "exportAsNamespace_augment.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: !!! related " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: !!! related " +
         "TS6203 /b.ts:12:18: 'conflict' was also declared here. | ours: !!! related TS6204 " +
         "/b.ts:12:18: and here."
     ),
@@ -1436,7 +1373,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "extendsUntypedModule.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: /a.ts(2,8): " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: /a.ts(2,8): " +
         "error TS6133: 'Bar' is declared but its value is never read. | ours: /a.ts(2,1): error " +
         "TS6133: 'Bar' is declared but its value is never read."
     ),
@@ -1462,13 +1399,6 @@ val tsgoPendingBaselines = listOf(
         "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
         "following error. | ours: Overload 1 of 2, '(bar: { a: number; }[]): string', gave the " +
         "following error."
-    ),
-    TsgoPendingBaseline(
-        "genericCallAtYieldExpressionInGenericCall1.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type " +
-        "'Generator<number, void, any>' is not assignable to type 'Generator<never, unknown, " +
-        "unknown>'. | ours: Call signature return types 'Generator<number, void, any>' and " +
-        "'Generator<never, unknown, unknown>' are incompatible."
     ),
     TsgoPendingBaseline(
         "genericConstraint2.errors.txt",
@@ -1570,7 +1500,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "importTypeAssertionDeprecation.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "/main.ts(1,30): error TS2880: Import assertions have been replaced by import " +
         "attributes. Use 'with' instead of 'assert'. | ours: /main.ts(1,38): error TS2880: " +
         "Import assertions have been replaced by import attributes. Use 'with' instead of " +
@@ -1578,7 +1508,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "importTypeAssertionDeprecationIgnored.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "/main.ts(2,30): error TS2880: Import assertions have been replaced by import " +
         "attributes. Use 'with' instead of 'assert'. | ours: /main.ts(2,38): error TS2880: " +
         "Import assertions have been replaced by import attributes. Use 'with' instead of " +
@@ -1605,14 +1535,6 @@ val tsgoPendingBaselines = listOf(
         "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
         "TS2751 incorrectRecursiveMappedTypeConstraint.ts:3:10: Circularity originates in type " +
         "at this location. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "incrementalInvalid.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: error TS5074: " +
-        "Option '--incremental' is only valid with a known configuration file (like " +
-        "'tsconfig.json') or when '--tsBuildInfoFile' is explicitly pr | ours: error TS5074: " +
-        "Option '--incremental' can only be specified using tsconfig, emitting to single file " +
-        "or when option '--tsBuildInfoFile' is specified."
     ),
     TsgoPendingBaseline(
         "inexistentPropertyInsideToStringType.errors.txt",
@@ -1717,7 +1639,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "jsDeclarationEmitExportedClassWithExtends.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ==== " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> source-echo PATH: the annotated-source header spells a doubled separator; layer `submoduleAccepted`. tsgo: ==== " +
         "node_modules/lit-element/development/lit-element.d.ts (0 errors) ==== | ours: ==== " +
         "node_modules/lit-element/development//lit-element.d.ts (0 errors) ===="
     ),
@@ -1789,18 +1711,18 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "jsFileCompilationConstructorOverloadSyntax.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "~~~~~~~~~~~~~~ | ours: ~~~~~~~~~~~"
     ),
     TsgoPendingBaseline(
         "jsFileCompilationFunctionOverloadSyntax.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: a.js(1,1): " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: a.js(1,1): " +
         "error TS8017: Signature declarations can only be used in TypeScript files. | ours: " +
         "a.js(1,10): error TS8017: Signature declarations can only be used in TypeScript files."
     ),
     TsgoPendingBaseline(
         "jsFileCompilationMethodOverloadSyntax.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~~~~~~ | " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ~~~~~~ | " +
         "ours: ~~~"
     ),
     TsgoPendingBaseline(
@@ -1820,7 +1742,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "jsdocIllegalTags.errors.txt",
-        "F9 message wording, same code and span; layer `submodule`. tsgo: /a.js(2,9): error " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submodule`. tsgo: /a.js(2,9): error " +
         "TS1092: Type parameters cannot appear on a constructor declaration. | ours: " +
         "/a.js(2,19): error TS1092: Type parameters cannot appear on a constructor declaration."
     ),
@@ -1891,7 +1813,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "mixinPrivateAndProtected.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: The " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: The " +
         "intersection 'mixB.(Anonymous class) & A' was reduced to 'never' because property " +
         "'pvt' exists in multiple constituents and is private in some. | ours: The intersection " +
         "'mixB<typeof A>.(Anonymous class) & A' was reduced to 'never' because property 'pvt' " +
@@ -1926,13 +1848,6 @@ val tsgoPendingBaselines = listOf(
         "the following error."
     ),
     TsgoPendingBaseline(
-        "nestedCallbackErrorNotFlattened.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type '() => " +
-        "() => () => number' is not assignable to type '() => () => () => string'. | ours: Call " +
-        "signature return types '() => () => () => number' and '() => () => () => string' are " +
-        "incompatible."
-    ),
-    TsgoPendingBaseline(
         "nestedGlobalNamespaceInClass.js",
         "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var global;"
     ),
@@ -1956,14 +1871,6 @@ val tsgoPendingBaselines = listOf(
         "from type 'string[]': pop, push, concat, join, and 23 more. | ours: index.js(3,42): " +
         "error TS2345: Argument of type 'IArguments' is not assignable to parameter of type " +
         "'string[]'."
-    ),
-    TsgoPendingBaseline(
-        "noUnusedLocals_typeParameterMergedWithParameter.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "noUnusedLocals_typeParameterMergedWithParameter.ts(1,18): error TS6196: 'T' is " +
-        "declared but never used. | ours: " +
-        "noUnusedLocals_typeParameterMergedWithParameter.ts(1,17): error TS6133: 'T' is " +
-        "declared but its value is never read."
     ),
     TsgoPendingBaseline(
         "nodeNextPackageSelfNameWithOutDir.errors.txt",
@@ -2036,7 +1943,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "overloadOnConstNoAnyImplementation2.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
         "overloadOnConstNoAnyImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
         "'bye') => number' is not assignable to parameter of type '(x: \"hi\")  | ours: " +
         "overloadOnConstNoAnyImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
@@ -2044,7 +1951,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "overloadOnConstNoStringImplementation2.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
         "overloadOnConstNoStringImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
         "'bye') => number' is not assignable to parameter of type '(x: \"hi | ours: " +
         "overloadOnConstNoStringImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
@@ -2083,46 +1990,20 @@ val tsgoPendingBaselines = listOf(
         "| ours: ==== parameterPropertyInConstructor2.ts (3 errors) ===="
     ),
     TsgoPendingBaseline(
-        "pathMappingBasedModuleResolution1_node.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
-        "c:/root/tsconfig.json(5,17): error TS5090: Non-relative paths are not allowed. Did you " +
-        "forget a leading './'? | ours: c:/root/tsconfig.json(5,17): error TS5090: Non-relative " +
-        "paths are not allowed when 'baseUrl' is not set. Did you forget a leading './'?"
-    ),
-    TsgoPendingBaseline(
         "pathsValidation5.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
-        "tsconfig.json(5,26): error TS5090: Non-relative paths are not allowed. Did you forget " +
-        "a leading './'? | ours: tsconfig.json(5,26): error TS5090: Non-relative paths are not " +
-        "allowed when 'baseUrl' is not set. Did you forget a leading './'?"
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> summary ORDER: the TS5090 wording now " +
+        "matches, and what is left is where a tsconfig.json row sorts against a source " +
+        "file's — tsgo lists `src/main.ts(1,8): TS2882` FIRST and we list it last."
     ),
     TsgoPendingBaseline(
         "prettyContextNotDebugAssertion.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ?[7m ?[0m " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ?[7m ?[0m " +
         "?[91m~?[0m | ours: ?[7m ?[0m ?[91m?[0m"
     ),
     TsgoPendingBaseline(
         "prettyFileWithErrorsAndTabs.errors.txt",
         "ours emits EXTRA rows tsgo does not; layer `submoduleAccepted`. tsgo: !!! error " +
         "TS2322: Type 'number' is not assignable to type 'string'. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "promisePermutations.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type " +
-        "'Promise<number>' is not assignable to type 'IPromise<string>'. | ours: Call signature " +
-        "return types 'Promise<number>' and 'IPromise<string>' are incompatible."
-    ),
-    TsgoPendingBaseline(
-        "promisePermutations2.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type " +
-        "'Promise<number>' is not assignable to type 'IPromise<string>'. | ours: Call signature " +
-        "return types 'Promise<number>' and 'IPromise<string>' are incompatible."
-    ),
-    TsgoPendingBaseline(
-        "promisePermutations3.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type " +
-        "'Promise<number>' is not assignable to type 'IPromise<string>'. | ours: Call signature " +
-        "return types 'Promise<number>' and 'IPromise<string>' are incompatible."
     ),
     TsgoPendingBaseline(
         "pushTypeGetTypeOfAlias.errors.txt",
@@ -2216,14 +2097,14 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "regularExpressionCharacterClassRangeOrder.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "regularExpressionCharacterClassRangeOrder.ts(7,4): error TS1517: Range out of order in " +
         "character class. | ours: regularExpressionCharacterClassRangeOrder.ts(7,5): error " +
         "TS1517: Range out of order in character class."
     ),
     TsgoPendingBaseline(
         "regularExpressionWithNonBMPFlags.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~ | ours: ~~"
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ~ | ours: ~~"
     ),
     TsgoPendingBaseline(
         "setMethods.errors.txt",
@@ -2316,12 +2197,6 @@ val tsgoPendingBaselines = listOf(
         "satisfy the constraint '{ a: string; }'."
     ),
     TsgoPendingBaseline(
-        "typeParameterArgumentEquivalence5.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type '(item: " +
-        "any) => T' is not assignable to type '(item: any) => U'. | ours: Call signature return " +
-        "types '(item: any) => T' and '(item: any) => U' are incompatible."
-    ),
-    TsgoPendingBaseline(
         "typeParameterWithInvalidConstraintType.errors.txt",
         "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
         "TS2751 typeParameterWithInvalidConstraintType.ts:4:17: Circularity originates in type " +
@@ -2336,7 +2211,7 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "unicodeEscapesInNames02(target=es2015).errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~ | ours: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ~ | ours: " +
         "~~~~~"
     ),
     TsgoPendingBaseline(
@@ -2349,233 +2224,58 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "unusedDestructuring.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "unusedDestructuring.ts(6,9): error TS6133: 'e' is declared but its value is never " +
         "read. | ours: unusedDestructuring.ts(6,7): error TS6133: 'e' is declared but its value " +
         "is never read."
     ),
     TsgoPendingBaseline(
         "unusedDestructuringParameters.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "unusedDestructuringParameters.ts(1,13): error TS6133: 'a' is declared but its value is " +
         "never read. | ours: unusedDestructuringParameters.ts(1,12): error TS6133: 'a' is " +
         "declared but its value is never read."
     ),
     TsgoPendingBaseline(
-        "unusedIdentifiersConsolidated1.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedIdentifiersConsolidated1.ts(5,32): error TS6196: 'unusedtypeparameter' is " +
-        "declared but never used. | ours: unusedIdentifiersConsolidated1.ts(5,32): error " +
-        "TS6133: 'unusedtypeparameter' is declared but its value is never read."
-    ),
-    TsgoPendingBaseline(
         "unusedImports1.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "file2.ts(1,9): error TS6133: 'Calculator' is declared but its value is never read. | " +
         "ours: file2.ts(1,1): error TS6133: 'Calculator' is declared but its value is never " +
         "read."
     ),
     TsgoPendingBaseline(
         "unusedImports12.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: a.ts(1,10): " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: a.ts(1,10): " +
         "error TS6133: 'Member' is declared but its value is never read. | ours: a.ts(1,1): " +
         "error TS6133: 'Member' is declared but its value is never read."
     ),
     TsgoPendingBaseline(
         "unusedImports2.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "file2.ts(2,9): error TS6133: 'test' is declared but its value is never read. | ours: " +
         "file2.ts(2,1): error TS6133: 'test' is declared but its value is never read."
     ),
     TsgoPendingBaseline(
         "unusedImports6.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "file2.ts(1,8): error TS6133: 'd' is declared but its value is never read. | ours: " +
         "file2.ts(1,1): error TS6133: 'd' is declared but its value is never read."
     ),
     TsgoPendingBaseline(
         "unusedImports7.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "file2.ts(1,13): error TS6133: 'n' is declared but its value is never read. | ours: " +
         "file2.ts(1,1): error TS6133: 'n' is declared but its value is never read."
     ),
     TsgoPendingBaseline(
         "unusedLocalsInMethod2.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~~~~~~~~~~~~~ " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ~~~~~~~~~~~~~ " +
         "| ours: ~~~~~~~~~~~~~~"
     ),
     TsgoPendingBaseline(
         "unusedLocalsInMethod3.errors.txt",
-        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~~~~~~~~ | " +
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ~~~~~~~~ | " +
         "ours: ~~~~~~~~~"
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInFunction1.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInFunction1.ts(1,13): error TS6196: 'T' is declared but never used. " +
-        "| ours: unusedTypeParameterInFunction1.ts(1,12): error TS6133: 'T' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInFunction2.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInFunction2.ts(1,16): error TS6196: 'Y' is declared but never used. " +
-        "| ours: unusedTypeParameterInFunction2.ts(1,16): error TS6133: 'Y' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInFunction3.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInFunction3.ts(1,16): error TS6196: 'Y' is declared but never used. " +
-        "| ours: unusedTypeParameterInFunction3.ts(1,16): error TS6133: 'Y' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInFunction4.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInFunction4.ts(1,13): error TS6196: 'X' is declared but never used. " +
-        "| ours: unusedTypeParameterInFunction4.ts(1,13): error TS6133: 'X' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInInterface1.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInInterface1.ts(1,15): error TS6196: 'T' is declared but never " +
-        "used. | ours: unusedTypeParameterInInterface1.ts(1,14): error TS6133: 'T' is declared " +
-        "but its value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInInterface2.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInInterface2.ts(1,18): error TS6196: 'U' is declared but never " +
-        "used. | ours: unusedTypeParameterInInterface2.ts(1,18): error TS6133: 'U' is declared " +
-        "but its value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInLambda1.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInLambda1.ts(3,17): error TS6196: 'T' is declared but never used. | " +
-        "ours: unusedTypeParameterInLambda1.ts(3,16): error TS6133: 'T' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInLambda2.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInLambda2.ts(3,17): error TS6196: 'T' is declared but never used. | " +
-        "ours: unusedTypeParameterInLambda2.ts(3,17): error TS6133: 'T' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInLambda3.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInLambda3.ts(5,15): error TS6196: 'U' is declared but never used. | " +
-        "ours: unusedTypeParameterInLambda3.ts(5,15): error TS6133: 'U' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInMethod1.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInMethod1.ts(2,15): error TS6196: 'X' is declared but never used. | " +
-        "ours: unusedTypeParameterInMethod1.ts(2,15): error TS6133: 'X' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInMethod2.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInMethod2.ts(2,18): error TS6196: 'Y' is declared but never used. | " +
-        "ours: unusedTypeParameterInMethod2.ts(2,18): error TS6133: 'Y' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInMethod3.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInMethod3.ts(2,21): error TS6196: 'Z' is declared but never used. | " +
-        "ours: unusedTypeParameterInMethod3.ts(2,21): error TS6133: 'Z' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInMethod4.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInMethod4.ts(2,15): error TS6196: 'X' is declared but never used. | " +
-        "ours: unusedTypeParameterInMethod4.ts(2,14): error TS6133: 'X' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameterInMethod5.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameterInMethod5.ts(2,26): error TS6196: 'X' is declared but never used. | " +
-        "ours: unusedTypeParameterInMethod5.ts(2,25): error TS6133: 'X' is declared but its " +
-        "value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameters1.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameters1.ts(1,15): error TS6196: 'typeparameter1' is declared but never " +
-        "used. | ours: unusedTypeParameters1.ts(1,14): error TS6133: 'typeparameter1' is " +
-        "declared but its value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameters10.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameters10.ts(1,12): error TS6196: 'T' is declared but never used. | ours: " +
-        "unusedTypeParameters10.ts(1,11): error TS6133: 'T' is declared but its value is never " +
-        "read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameters2.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameters2.ts(1,15): error TS6196: 'typeparameter1' is declared but never " +
-        "used. | ours: unusedTypeParameters2.ts(1,15): error TS6133: 'typeparameter1' is " +
-        "declared but its value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameters3.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameters3.ts(1,15): error TS6196: 'typeparameter1' is declared but never " +
-        "used. | ours: unusedTypeParameters3.ts(1,15): error TS6133: 'typeparameter1' is " +
-        "declared but its value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameters4.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameters4.ts(2,13): error TS6196: 'U' is declared but never used. | ours: " +
-        "unusedTypeParameters4.ts(2,13): error TS6133: 'U' is declared but its value is never " +
-        "read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameters5.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameters5.ts(6,16): error TS6196: 'K' is declared but never used. | ours: " +
-        "unusedTypeParameters5.ts(6,16): error TS6133: 'K' is declared but its value is never " +
-        "read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParametersCheckedByNoUnusedParameters.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParametersCheckedByNoUnusedParameters.ts(1,12): error TS6196: 'T' is " +
-        "declared but never used. | ours: " +
-        "unusedTypeParametersCheckedByNoUnusedParameters.ts(1,11): error TS6133: 'T' is " +
-        "declared but its value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParametersWithUnderscore.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParametersWithUnderscore.ts(1,16): error TS6196: 'U' is declared but never " +
-        "used. | ours: unusedTypeParametersWithUnderscore.ts(1,16): error TS6133: 'U' is " +
-        "declared but its value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameters_infer.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "unusedTypeParameters_infer.ts(1,44): error TS6196: 'U' is declared but never used. | " +
-        "ours: unusedTypeParameters_infer.ts(1,38): error TS6133: 'U' is declared but its value " +
-        "is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedTypeParameters_templateTag.errors.txt",
-        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
-        "/a.js(1,15): error TS6196: 'T' is declared but never used. | ours: /a.js(1,5): error " +
-        "TS6133: 'T' is declared but its value is never read."
     ),
     TsgoPendingBaseline(
         "unusedTypeParameters_templateTag2.errors.txt",

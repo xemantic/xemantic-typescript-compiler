@@ -25,6 +25,107 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.87) — (LEGACY.0b) step 2: the "free wins", and F9 was a first-differing-LINE label rather than a family (2026-09-13)
+
+**Suite 19,082 → 19,100 / 0 / 267** — skipped 310 → 267 and `tsgoPendingBaselines`
+285 → 242, **both −43, which is the receipt**: an entry deleted from that list re-arms its
+subtest, and the build fails on a stale entry, so a green suite after removing 43 entries
+IS the proof that 43 tsgo rows now pass. +18 pins. Grid 8×`added=0 removed=0` (arms
+verified distinct, AFTER byte-identical to the shipped classes); `cost_gate.py` exit 0 with
+all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (858 classes);
+warning-clean. **(LEGACY.0) stays OPEN** on (0b-3) onwards.
+
+**(a) F9 — 53 ATTEMPTED, 13 LANDED, 40 RECLASSIFIED, AND THE LABEL IS THE LESSON.** "F9
+wording" was assigned by the FIRST DIFFERING LINE of each row, which is not a family: only
+13 of the 53 are wording at all, in four unrelated mechanisms — the TS5090 sentence (TS7
+removed `baseUrl`, so the clause naming it went with it, 2 rows), TS5074 (1), a
+`Call signature return types 'X' and 'Y' are incompatible.` elaboration that **TypeScript 7
+does not have at all — 0 tsgo baselines against 12 tsc ones** (6), and the `--pretty`
+related-info LAYOUT (5). The other 40 were reclassified IN PLACE with their reasons
+rewritten so a family round can still grep them: **23 → F8 span/width**, 7 → type DISPLAY,
+6 → duplicate-identifier, 1 → union ORDER ((0a)'s residue), 1 → chain CONTENT (TS2200 vs
+TS2201), 1 → a source-echo PATH. Two findings inside that reclassification are worth more
+than the 13: **seven of the F8 rows are the same mechanism as F4's anchor half** (tsgo's
+`reportUnusedLocal` anchors on `node.Name()` where tsc anchored on the statement), so one
+more step in F4's emitter closes them together; and two of the six duplicate-identifier rows
+are NOT a wording swap — tsgo keeps both TS6203 and TS6204 and picks the leading one from
+the error's EXISTING related list (`addDuplicateDeclarationError`) where we pick by index.
+
+**(b) F4 — 26 of 26, and the sizing was wrong about where the code lives.** The design
+called this "one emitter choosing between two codes by type-space"; the whole population is
+**type PARAMETERS**, served by two dedicated emitters (`reportUnusedTypeParams` and the
+`infer` walker), neither of which is the `isTypeDecl` site. Three changes, all tsgo's
+`checkUnusedTypeParameters`: the code and message; the span is the type-parameter **NODE**,
+so `in T` / `T extends string` / `T = number` fall inside it (`typeParamNodeSpan`, trimming
+exactly one `,` or `>` off `Node.end`'s documented overshoot); and the one grouping TS7
+keeps — TS6205 over the whole `<…>` list when there is more than one parameter and ALL are
+unreferenced, with a `_`-prefixed parameter counting as used. **A code-only change closes
+14 of the 26**, so the anchor and the grouping are the other twelve.
+
+**(c) F5 — 4 of 4, and it settles (LEGACY.1)'s open question in the OPPOSITE direction to
+the one this session predicted.** There are TWO DISJOINT populations and a third case. An
+option TypeScript 7 **deleted from its table** (`charset`, `out`, `keyofStringsOnly`,
+`noImplicitUseStrict`, `noStrictGenericChecks`, `suppress*`, `importsNotUsedAsValues`,
+`preserveValueImports`) is simply **unknown** — TS5023 at the NAME, with no ladder, so
+neither `ignoreDeprecations` nor `@typeScriptVersion` silences it, which is why four
+`deprecatedCompilerOptions` cases declared at 5.0/6.0/5.5/6.0 produce IDENTICAL tsgo
+output. `target: "ES3"` is the third thing: `es3` is not in TS7's target enum map at all, so
+it is an invalid **argument** — TS6046 at the VALUE.
+
+**SO (LEGACY.1) STEP (k)'s TS5102/TS5108 PLAN IS CONFIRMED, NOT REPLACED.** tsgo's
+`createRemovedOptionDiagnostic` emits exactly our sentences for every option TS7 KEEPS but
+refuses; TS5023 never touches them. Three further facts the round measured: **TS5101 and
+TS5107 appear in ZERO tsgo baselines**, so the "is deprecated and will stop functioning"
+rung is unreachable under a TS7 target; **(LEGACY.1)'s own stated blocker for moving
+`simulatedVersion`'s default to `"7.0"` is GONE** — its "four ACTIVE corpus subtests pin the
+6.0 TS5101 line for `downlevelIteration`" are now tsgo baselines saying TS5102, both already
+pending, and they are the ONLY tsgo baselines carrying TS5102, so moving the default would
+CLOSE two more pending rows rather than redden anything (still an owner decision about
+PROJECT behaviour, but the corpus no longer opposes it); and if it moves, the `baseUrl`
+chain must be re-derived, because tsgo appends `Use '"paths": {"*": […]}' instead.`
+(**TS5106**, computed from the config path) where we append a `Visit https://aka.ms/ts6…`
+line.
+
+**ABLATION**, one mistake per arm, `cmp` against the arm's own snapshot, rebuilt after every
+restore, `@Test` identical (4,701) in all three: a1 the F9 elaboration template reverted —
+**2 RED**; b1 the type-space predicate INVERTED at both emitters — **98 RED**, of which 5 of
+7 pins fail **in opposite directions** plus 93 corpus baselines; c1 the deleted names put
+back on the version-gated ladder — **6 RED** (2 pins + the four `deprecatedCompilerOptions`
+cases). Two `TsgoUnusedTypeParameterTest` pins do NOT redden under b1 — the TS6205 grouping
+and the `infer` emitter are different code paths from the inverted predicate — recorded
+rather than claimed as coverage.
+
+**THE GRID'S VERDICT IS SPLIT, AND SAYING SO IS THE POINT.** It is a CONTROL for the F9
+display half ((PARITY.1): every row on all eight profiles is `Cannot find name …`) and a
+SECOND, independent control for F4, because **not one of the eight tsconfigs sets
+`noUnusedLocals` or `noUnusedParameters`**. It is a real GATE for F5 — every profile has a
+tsconfig, so a wrongly-widened "unknown option" rule adds a row per profile — and for the F9
+elaboration, which runs in the assignability path the profiles exercise constantly.
+
+**ONE MIRROR TEST CHANGED SHAPE, WITH ITS REASON IN ITS KDoc.**
+`TsgoHarnessSelfCheckBaselinesTest.manyCompilerErrorsInTheTwoFiles` was converted from a
+verbatim tsc mirror to an ANNOTATED-SOURCE comparison: it is the one `--pretty` case among
+(0b)'s sixteen mirrors, so any TS7 pretty-layout change makes a verbatim tsc-6 comparison
+impossible by construction. Its 20 diagnostics across two files are still compared; only the
+header rendering moved, and that is pinned by `TsgoMessageWordingTest`.
+
+**SIX REFUTED PREDICTIONS**, four of them this session's own: F9 is not 53 wording rows in a
+handful of templates; F4 is not one emitter and the code is only half the change; the design's
+"tsgo says TS5023 where we say TS5101/5102/5107/5108" is half right, since TS5102/TS5108 stay
+correct for every option TS7 keeps; "fixing the wording closes the row" is false
+(`pathsValidation5` is now byte-correct on TS5090 and still fails, on where a `tsconfig.json`
+row sorts against a source file's in the summary); and the round's own first two readings of
+the TS7 pretty layout were both wrong before the third stuck. **The most interesting one is
+about tsgo itself**: the predicted "an import used only in type position is the interesting
+case" is real but tsgo is INCONSISTENT there — an unused `import type { P }` is TS6196 while
+an unused `import { type Q }` is TS6133, because its `IsTypeOnly()` reads `PhaseModifier` on
+the clause but a separate bool on the specifier. No pending row demands either, so it was
+left alone rather than copied.
+
+**NEXT**: (0b-3) — the ranked family rounds from the RED SET: F6 code-differs 88, F8
+span/width (now ~25 with F9's reclassification, and seven of those share F4's anchor
+mechanism), JS 33, F3 last-overload 25, F1 11, F2 9, F0 7, F10 4, F7 4. The 21 TS-1 rows
+stay ledgered — they are tsgo's own `submoduleTriaged` known bugs.
 ### Round (P18.86) — (LEGACY.0b) step 1: the corpus reads tsgo's OWN baselines, and a `.diff` classifies a FILE where a failure classifies what WE got wrong (2026-09-13)
 
 **Suite 19,045 → 19,082 / 0 / 310** — skipped 20 → 310 = 3 pre-existing + **285 pending**
@@ -805,81 +906,6 @@ and a non-method — with TS2684 *The 'this' types of each signature are incompa
 chain line), then the `.call/.apply/.bind` consumer. Per the WORK ORDER, (INV.0) step 10b-ii's
 own unblockers follow.
 
-### Round (P18.77) — (CHK.97) D5: inference through a union-combined signature was bailing on an INTERSECTION it could not see, and the "one row" was seven families (2026-09-12)
-
-**Suite 18,738 → 18,752 / 0 / 3** (+14 pins, `UnionCalleeGenericInferenceTest`; two countdown
-pins in `TupleArrayMembersTest` flipped to their subject). Grid 8×`added=0 removed=0`; library
-arm marked 18 → 18, cronstrue 1 → 1; `cost_gate.py` exit 0, no rebaseline (pristine
-before-binary through `--from-log` digit-identical on all 20 counters); `huge_methods.py
---fail-over 0` exit 0; warning-clean. **(CHK.97) stays OPEN on D6 ALONE**, which is blocked on
-a model change — its unblocker is promoted to the top of the queue as **(CHK.133)**.
-
-**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item and D5 was its
-last unblocked deliverable. Per the WORK ORDER's 2026-09-08 addendum the successor is
-**(INV.0) step 10b-ii**, which is itself BLOCKED on two named families, so the protocol's
-promote-unblocker rule applies at both ends and (CHK.133) is what it names.
-
-**THE SIZING SAID "ONE ROW"; THE MATRIX SAID SEVEN FAMILIES.** `map` with an annotated
-return, an un-annotated literal-returning arrow, the (CHK.30) wrong-typed use reading the
-parameter, a tuple-union receiver, a `readonly` member, the user-declared PASS-2 pair, plus
-the identity / block-body / function-expression variants all read `missing`. `reduce` with a
-seed and the PASS-1 identical generic pair already agreed. The predicate-`filter` shape is
-NOT this defect: its plain-`number[]` control is MISSING too, because
-`tryInferPredicateOverloadReturn` reads only `FunctionDeclaration`/`MethodDeclaration` and lib
-`filter` is a `MethodSignature` (pre-existing, recorded).
-
-**THE MECHANISM WAS INSTRUMENTED, AND THE FIRST READING WAS WRONG.** PASS 2 combines
-`zxs.map` into `<U>(callbackfn: ((value: number, …) => U) & ((value: string, …) => U), …): U[]`.
-The prediction was that gate (c) of `tryInferSingleTypeParamFromArgs` bails on the
-intersection; the stderr line printed `gate-passed tps=1` — a function object's signatures
-are INVISIBLE to `typeMentionsTypeParam` — and then `candidates tp=U n=0`: every callback arm
-of the candidate gatherer demands an anonymous `Type.Object`, an intersection is none, the
-inference bails whole and the result is the RAW `U[]`, which every reader then silently
-refuses as a foreign type parameter. **Verdict: CONTAINED** — a VIEW, not machinery.
-`inferenceParamType(p)` presents an intersection of anonymous function objects to the two
-classifying sites as ONE anonymous function type carrying the existing
-`getIntersectedSignatures` fold (tsc's `getContextualCallSignature` fold; tsc infers to each
-constituent and lands in the same place). Memoized per intersection id, null memoized too,
-in a cache declared BEFORE `init`.
-
-**BEFORE → AFTER (`agree/ours-only/missing`, zero new ours-only, zero REF-SPLIT)**: annotated
-return, literal arrow, wrong-typed use, tuple-union receiver all 0/0/1 → 1/0/0; the
-user-declared PASS-2 pair fires, with a TEXT-DIFF chain sub-line (`number[]` where the
-references print `number` — (CHK.132)'s population, recorded there); the seven-variant family
-5 AGREE; the differing/overloaded/`this` fixtures unchanged.
-
-**ABLATION over 67 pins per arm**: a1 the view removed — **12 RED**; a2 the FIRST constituent
-instead of the fold — **4 RED** (the three identity pins and the non-strict residue pin); a3
-the memo keyed by constituent COUNT — **1 RED** (two same-sized intersections in one file);
-a4 the GATE site reading the raw type while the gatherer reads the view — **0 RED, a
-REDUNDANT GUARD** (the gate already passes on the raw type because a function object's
-signatures are invisible to it), recorded and kept as the symmetric read.
-
-**THE AT-RISK SWEEP FOUND THREE THINGS THE FIXTURES COULD NOT** (793 tests / 68 classes): a
-`reduce` control I had written expecting `string` where both references print
-`string | number`, and two `TupleArrayMembersTest` pins asserting an EMPTY diagnostic list for
-`const r: boolean = u.map(x => x)` — countdowns on exactly this silence (their own comment said
-"the RESULT is `any`"); they now assert their subject (no TS2349) plus `codes == [2322]`,
-names unchanged per (CHK.114).
-
-**THE GRID IS A CONTROL AND WAS MEASURED AS ONE**: a census of combined generic calls reads
-`bound=0 unbound=0` on all 8 profiles, marked, cronstrue and the 2,400-file project, with the
-positive control live on the fixtures (built=1/bound=3; built=4/bound=12 on the seven-variant
-family). tsgo's cronstrue "1 row" is its TS5108 refusal of the `target=ES5` tsconfig, as in
-(P18.76).
-
-**RESIDUES, MEASURED AND NOT FIXED**: NON-STRICT projects — the fold is gated on
-`noImplicitAny` as the contextual one is, while tsc's inference is not, and ungating it would
-type the arrow parameter as the union where tsc has `any` (a (CHK.94)-class decision, pinned as
-`residue - …`); the (CHK.132) sub-line on the PASS-2 shape; `getUnionType` not deduping a
-NESTED union's literal (`1 | (1 | 2)` prints `1 | 1 | 2` on the BEFORE binary — proved with a
-`never` target after a `boolean` target was blinded by (PARITY.1)'s generalization); and the
-pre-existing B83.4i inference gaps identical on a plain array (predicate `filter`, `x => [x]`,
-`x => ({ v: x })`, `x => x + 1`).
-
-**NEXT**: **(CHK.133)** — `Signature.thisParameter`, the model change D6 is blocked on, queued
-at the top with its three consumers. Then (INV.0) step 10b-ii's own unblockers.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1210,7 +1236,15 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEP 1 LANDED 2026-09-13 ((P18.85)/(P18.86) notes) — the corpus now reads tsgo's OWN
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-2 LANDED 2026-09-13 ((P18.85)/(P18.86)/(P18.87) notes) — pending 242,
+  skipped 267, suite 19,100/0. **REMAINING: (0b-3), the ranked family rounds, ordered from the RED SET**: F6
+  code-differs 88, F8 span/width ~25 (SEVEN of which share F4's anchor mechanism — tsgo's `reportUnusedLocal`
+  anchors on `node.Name()`, tsc on the statement — so one step in that emitter closes them together), JS 33,
+  F3 last-overload 25, F1 11, F2 9 (two of which are NOT a wording swap: tsgo picks the leading duplicate-identifier
+  message from the error's EXISTING related list via `addDuplicateDeclarationError`, we pick by index), F0 7,
+  F10 4, F7 4, plus 7 type-DISPLAY and 1 chain-CONTENT (TS2200 vs TS2201). The 21 TS-1 rows stay LEDGERED (tsgo's
+  own `submoduleTriaged` known bugs). **BLOCKED-PENDING-USER before (0b-3)**: the fourth "harness artifact ⇒ fall
+  back to tsc" fallback arm (see (P18.86)). PREVIOUS HEAD: (0a) + (0b) STEP 1 LANDED 2026-09-13 ((P18.85)/(P18.86) notes) — the corpus now reads tsgo's OWN
   baselines (`cloneTypeScriptGoRepo` at tag `typescript/v7.0.2`, a three-way fallback with all four bucket counts
   ASSERTED, corpus 8,852, red set 289 disposed as 285 pending + 22 divergences, suite 0 failed / 310 skipped).
   **REMAINING: (0b-2) the free wins** — F9 wording (53), F4 `TS6133`→`TS6196` (26), F5 removed-option wording (4,
@@ -1274,7 +1308,18 @@ CLAUDE.md § "AI agent mission".
   construction), `cost_gate.py`. Guard: `cloneTypeScriptRepo`'s KDoc (`build.gradle.kts:240-256`) still says
   "never pin to the tsgo submodule sha" — rewrite it to the new policy in the same commit.
 
-- [ ] **(LEGACY.1) REMOVE THE CODE SUPPORTING TS7-REMOVED FEATURES (owner directive 2026-09-12; censused the same day,
+- [ ] **(LEGACY.1) — STEP (k)'s WORDING PLAN IS CONFIRMED BY MEASUREMENT 2026-09-13 ((P18.87)): tsgo's
+  `createRemovedOptionDiagnostic` emits TS5102/TS5108 with exactly our sentences for every option TS7 KEEPS but
+  refuses, and TS5023 is a DISJOINT population (an option DELETED from tsgo's table is merely *unknown*, reported at
+  the NAME with no ladder, so neither `ignoreDeprecations` nor `@typeScriptVersion` silences it); `target: "ES3"` is a
+  third case, an invalid ARGUMENT reported TS6046 at the VALUE. **AND THIS ITEM'S STATED BLOCKER FOR MOVING
+  `simulatedVersion` TO `"7.0"` IS GONE**: the four active subtests it cites as pinning the 6.0 TS5101 line for
+  `downlevelIteration` are now tsgo baselines saying TS5102 (both already in `tsgoPendingBaselines`, and the only
+  tsgo baselines carrying TS5102 at all), so moving the default would CLOSE two pending rows rather than redden
+  anything — still an owner decision about PROJECT behaviour. TS5101 and TS5107 appear in ZERO tsgo baselines. If the
+  default moves, re-derive the `baseUrl` chain: tsgo appends `Use '"paths": {"*": […]}' instead.` (**TS5106**,
+  computed from the config path), not our `Visit https://aka.ms/ts6…` line. ORIGINAL: REMOVE THE CODE SUPPORTING
+  TS7-REMOVED FEATURES (owner directive 2026-09-12; censused the same day,
   read-only, against tsgo's `program.go:803-877` "Removed in TS7" block and OUR sources — receipts in
   `docs/legacy-removal-census.md`).** THREE FACTS THAT SHAPE THE ARC: (1) tsgo REPORTS the option and then IGNORES it
   — `target: ES5` transforms maximally (no ES5 downlevel transformer exists in tsgo at all; ES3 is not even parseable),

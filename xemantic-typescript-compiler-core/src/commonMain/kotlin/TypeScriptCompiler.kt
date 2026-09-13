@@ -411,27 +411,37 @@ class TypeScriptCompiler {
                 messageChain = chain,
             ))
         }
-        // TS5102: Removed options — point to KEY position in tsconfig.
-        // Removed options are NOT suppressible by ignoreDeprecations — once removed, the
-        // option no longer functions and the diagnostic fires unconditionally. Only
-        // currently-deprecated options (TS5101 path in addDeprecation5101) honor
-        // ignoreDeprecations.
-        fun addRemoved5102(
-            optionDesc: String,
-            tsconfigKey: String? = null,
-            messageChain: List<String> = emptyList(),
-        ) {
-            val pos = tsconfigKey?.let { tsconfigPos[it] }
+        // (LEGACY.0b) the TS5102 KEY-position emitter that used to live here served only
+        // `importsNotUsedAsValues` and `preserveValueImports`, which TypeScript 7 deleted from
+        // its option table outright; both now go through `addUnknownOption` below. The
+        // TS5102/TS5108 `has been removed` wording is still correct for the options
+        // TypeScript 7 KEEPS and no longer honours — `addDeprecation5101`/`addDeprecation`
+        // reach it through `simulatedVersion`, which (LEGACY.1) owns.
+        /**
+         * (LEGACY.0b) TS5023 — TypeScript 7 DELETED these option names from its table
+         * (`typescript-go-repo/internal/tsoptions/declscompiler.go` has no entry for any of
+         * them), so it does not report a deprecation ladder for them at all: an unknown key
+         * is an unknown key, at the KEY position, and neither `ignoreDeprecations` nor the
+         * harness's `@typeScriptVersion` can silence it. Measured on
+         * `deprecatedCompilerOptions1/3/4/5`, whose four different `@typeScriptVersion`
+         * values produce byte-identical tsgo output.
+         *
+         * This is deliberately NOT the same rule as [addDeprecation5101] / [addDeprecation]:
+         * those serve options TypeScript 7 still HAS and merely stopped honouring
+         * (`baseUrl`, `outFile`, `downlevelIteration`, `target=ES5`, `module=AMD`, …), which
+         * tsgo reports as TS5102/TS5108 `has been removed`.
+         */
+        fun addUnknownOption(optionName: String, tsconfigKey: String) {
+            val pos = tsconfigPos[tsconfigKey]
             diagnostics.add(Diagnostic(
-                message = "Option '$optionDesc' has been removed. Please remove it from your configuration.",
+                message = "Unknown compiler option '$optionName'.",
                 category = DiagnosticCategory.Error,
-                code = 5102,
+                code = 5023,
                 fileName = pos?.fileName,
                 line = pos?.keyLine,
                 character = pos?.keyCharacter,
                 start = pos?.keyStart,
                 length = pos?.keyLength,
-                messageChain = messageChain,
             ))
         }
         // baseUrl deprecation (TS5101 with migration URL)
@@ -440,32 +450,19 @@ class TypeScriptCompiler {
         // Options deprecated in TypeScript 5.0 (TS5101 with "will stop functioning in 5.5")
         // These use deprecationVersion="5.0" and stopFunctioningVersion="5.5"
         // Note: no migration URL chain for these options
-        if (options.charset != null) addDeprecation5101("charset", tsconfigKey = "charset",
-            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
-        if (options.keyofStringsOnly) addDeprecation5101("keyofStringsOnly", tsconfigKey = "keyofstringsonly",
-            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
-        if (options.noImplicitUseStrict) addDeprecation5101("noImplicitUseStrict", tsconfigKey = "noimplicitusestrict",
-            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
-        if (options.noStrictGenericChecks) addDeprecation5101("noStrictGenericChecks", tsconfigKey = "nostrictgenericchecks",
-            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
-        if (options.out != null) addDeprecation5101("out", tsconfigKey = "out",
-            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
-        if (options.suppressExcessPropertyErrors) addDeprecation5101("suppressExcessPropertyErrors", tsconfigKey = "suppressexcesspropertyerrors",
-            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
-        if (options.suppressImplicitAnyIndexErrors) addDeprecation5101("suppressImplicitAnyIndexErrors", tsconfigKey = "suppressimplicitanyindexerrors",
-            deprecationVersion = "5.0", stopFunctioningVersion = "5.5", withMigrationUrl = false)
+        if (options.charset != null) addUnknownOption("charset", "charset")
+        if (options.keyofStringsOnly) addUnknownOption("keyofStringsOnly", "keyofstringsonly")
+        if (options.noImplicitUseStrict) addUnknownOption("noImplicitUseStrict", "noimplicitusestrict")
+        if (options.noStrictGenericChecks) addUnknownOption("noStrictGenericChecks", "nostrictgenericchecks")
+        if (options.out != null) addUnknownOption("out", "out")
+        if (options.suppressExcessPropertyErrors) addUnknownOption("suppressExcessPropertyErrors", "suppressexcesspropertyerrors")
+        if (options.suppressImplicitAnyIndexErrors) addUnknownOption("suppressImplicitAnyIndexErrors", "suppressimplicitanyindexerrors")
         // downlevelIteration (TS5101 - deprecated in 6.0, will stop functioning in 7.0)
         if (options.downlevelIterationExplicitlySet) addDeprecation5101("downlevelIteration", tsconfigKey = "downleveliteration")
         // outFile deprecation (TS5101 - only when explicitly set, not via 'out')
         if (options.outFile != null && options.out == null) addDeprecation5101("outFile", tsconfigKey = "outfile")
-        if (options.importsNotUsedAsValues != null) addRemoved5102(
-            "importsNotUsedAsValues", tsconfigKey = "importsnotusedasvalues",
-            messageChain = listOf("  Use 'verbatimModuleSyntax' instead."),
-        )
-        if (options.preserveValueImports) addRemoved5102(
-            "preserveValueImports", tsconfigKey = "preservevalueimports",
-            messageChain = listOf("  Use 'verbatimModuleSyntax' instead."),
-        )
+        if (options.importsNotUsedAsValues != null) addUnknownOption("importsNotUsedAsValues", "importsnotusedasvalues")
+        if (options.preserveValueImports) addUnknownOption("preserveValueImports", "preservevalueimports")
 
         // TS5107/TS5108: Deprecated/removed options — point to VALUE position in tsconfig.
         // Only moduleResolution=node10 gets the migration URL chain from tsconfig.
@@ -507,7 +504,25 @@ class TypeScriptCompiler {
         }
         // Target deprecations — only when target is explicitly set
         // ES3 was deprecated in 5.0 (TS5107), will stop functioning in 5.5
-        if (options.targetExplicitlySet && options.target == ScriptTarget.ES3) addDeprecation("target=ES3", tsconfigKey = "target", version = "5.5", deprecationVersion = "5.0")
+        // (LEGACY.0b) `es3` is no longer a `target` VALUE in TypeScript 7 — tsgo's
+        // `targetOptionMap` has no entry for it — so it is an invalid ARGUMENT (TS6046 at the
+        // value) rather than a removed option. `es5` IS still in the map (flagged deprecated,
+        // which is why it is filtered out of the message) and keeps the TS5107/TS5108 ladder.
+        if (options.targetExplicitlySet && options.target == ScriptTarget.ES3) {
+            val pos = tsconfigPos["target"]
+            diagnostics.add(Diagnostic(
+                message = "Argument for '--target' option must be: 'es6', 'es2015', 'es2016', " +
+                    "'es2017', 'es2018', 'es2019', 'es2020', 'es2021', 'es2022', 'es2023', " +
+                    "'es2024', 'es2025', 'esnext'.",
+                category = DiagnosticCategory.Error,
+                code = 6046,
+                fileName = pos?.fileName,
+                line = pos?.valueLine,
+                character = pos?.valueCharacter,
+                start = pos?.valueStart,
+                length = pos?.valueLength,
+            ))
+        }
         if (options.targetExplicitlySet && options.target == ScriptTarget.ES5) addDeprecation("target=ES5", tsconfigKey = "target")
         // Module deprecations
         if (options.module == ModuleKind.AMD) addDeprecation("module=AMD", tsconfigKey = "module")
@@ -876,7 +891,7 @@ class TypeScriptCompiler {
         // TS5074: incremental without outFile/tsBuildInfoFile (in non-tsconfig context)
         if (options.incremental == true && options.outFile == null && !options.composite) {
             diagnostics.add(Diagnostic(
-                message = "Option '--incremental' can only be specified using tsconfig, emitting to single file or when option '--tsBuildInfoFile' is specified.",
+                message = "Option '--incremental' is only valid with a known configuration file (like 'tsconfig.json') or when '--tsBuildInfoFile' is explicitly provided.",
                 category = DiagnosticCategory.Error,
                 code = 5074,
             ))

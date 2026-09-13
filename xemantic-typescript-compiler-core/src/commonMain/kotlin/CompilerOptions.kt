@@ -1340,7 +1340,7 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
                         val absPos = pathsBlockOffset + arrayStartInBlock + itemMatch.range.first
                         val lineCol = computeLineAndColumn(json, absPos)
                         pathsDiagnostics.add(Diagnostic(
-                            message = "Non-relative paths are not allowed when 'baseUrl' is not set. Did you forget a leading './'?",
+                            message = "Non-relative paths are not allowed. Did you forget a leading './'?",
                             category = DiagnosticCategory.Error,
                             code = 5090,
                             fileName = tsconfigFileName,

@@ -19,6 +19,28 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.87) — (LEGACY.0b) STEP 2: THE "FREE WINS", AND F9 WAS A FIRST-DIFFERING-*LINE* LABEL RATHER THAN A FAMILY, 19,100 / 0 / 267 (2026-09-13).**
+Pending 285 → **242** and skipped 310 → **267**, both −43 — and that agreement IS the
+receipt, since the build fails on a stale ledger entry, so a green suite after deleting 43
+entries proves 43 tsgo rows now pass. **F9 "wording" was assigned by each row's FIRST
+DIFFERING LINE, which is not a family**: 13 of 53 are wording (in four unrelated mechanisms,
+one of them an elaboration TypeScript 7 does not have at all — 0 tsgo baselines against 12
+tsc ones), and 40 were reclassified in place, 23 of them into span/width. Two findings beat
+the 13: seven of those span rows share F4's anchor mechanism (tsgo anchors unused-local on
+the NAME, tsc on the statement), and two duplicate-identifier rows are not a wording swap at
+all — tsgo picks the leading message from the error's existing related list where we pick by
+index. **F4 landed 26/26** and the sizing was wrong about where it lives: the population is
+type PARAMETERS served by two dedicated emitters, and a code-only change closes just 14 —
+the span moves to the type-parameter NODE and TS7 keeps one grouping (TS6205 over the whole
+list). **F5 landed 4/4 and settles (LEGACY.1)'s wording question**: an option TS7 DELETED
+from its table is simply unknown (TS5023, no ladder, so no directive silences it) while
+every option it KEEPS but refuses still says TS5102/TS5108 — so (LEGACY.1) step (k)'s plan
+is CONFIRMED, and its stated blocker for moving `simulatedVersion` to `"7.0"` is gone (the
+four rows it cited are now tsgo baselines saying TS5102, and moving would close two pending
+rows rather than redden anything). Ablation 2 / 98 / 6 RED, the 98 including 5 pins failing
+in OPPOSITE directions. Grid 8×`added=0 removed=0` with a split verdict — a control for the
+display half and for F4 (no profile sets `noUnusedLocals`), a real gate for F5 and the
+elaboration. cost_gate all 20 counters +0.00%, huge_methods exit 0, warning-clean.
 **(P18.86) — (LEGACY.0b) STEP 1: THE CORPUS READS tsgo's OWN BASELINES, AND A `.diff` CLASSIFIES A *FILE* WHERE A FAILURE CLASSIFIES WHAT *WE* GOT WRONG, 19,082 / 0 / 310 (2026-09-13).**
 `cloneTypeScriptGoRepo` pins tsgo at tag `typescript/v7.0.2` and the four baseline lookups
 now choose per subtest between tsgo's checked-in output and tsc's, through a three-way
@@ -97,19 +119,3 @@ call twins 7/1/7/1 → 10/1/4/1, zero REF-SPLIT. Ablation 28/2/6/2 RED over 45 p
 8×0/0, libraries byte-identical, cost_gate exit 0 (`typeOfExpr.calls` +0.83% vs rebuilt
 HEAD, the (P18.31) cache-hit pattern, not rebaselined), huge_methods exit 0, warning-clean.
 (CHK.98) stays open on its stage-2 rows.
-
-**(P18.82) — (CHK.98)(d): TS2556 FOR A NON-TUPLE SPREAD WAS WRONG IN BOTH DIRECTIONS, NOT MISSING — AND EVERY REMAINING (CHK.98) DELIVERABLE IS NOW MEASURED, 18,941 / 0 / 3 (2026-09-12).**
-All four remaining deliverables were measured against both references before one was
-picked: the `NewExpression` argument arm (21 missing, a control grid), TS2556 for a
-non-tuple spread (**6 ours-only — four false positives on legal code and two wrong codes —
-plus 20 missing**, a REAL gate at 45-46 arity verdicts per profile), the item's stage 2 (≥5
-mechanisms) and (CHK.98b) (already closed). The spread one landed: tsc's tuple expansion and
-`hasCorrectArity` spread clause at all three arity walkers, 6/6/20 → 22/0/4 with every
-remaining row attributed to a pre-existing gap reproduced without a spread; 8 of 9 inactive
-pristine TS2556 baselines match exactly. **The hazard the item did not name: the arity
-walkers run under the FILE-LEVEL ambient**, so a resolver-classified operand produced a
-false TS2556 on a body-local tuple shadowing a file-level array — operands are now
-classified declaration-first, and that shape is the hazard pin. Ablation 21/2/7/6/5 RED over
-134 pins; three countdown pins inverted. Grid 8×`added=0 removed=0` as a measured GATE,
-marked/cronstrue byte-identical, cost_gate exit 0 (20/20 within +0.05% of rebuilt HEAD),
-huge_methods exit 0, warning-clean. (CHK.98) stays open on the `new` arm and stage 2.

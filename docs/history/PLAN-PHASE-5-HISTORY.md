@@ -1,3 +1,78 @@
+### Round (P18.77) — (CHK.97) D5: inference through a union-combined signature was bailing on an INTERSECTION it could not see, and the "one row" was seven families (2026-09-12)
+
+**Suite 18,738 → 18,752 / 0 / 3** (+14 pins, `UnionCalleeGenericInferenceTest`; two countdown
+pins in `TupleArrayMembersTest` flipped to their subject). Grid 8×`added=0 removed=0`; library
+arm marked 18 → 18, cronstrue 1 → 1; `cost_gate.py` exit 0, no rebaseline (pristine
+before-binary through `--from-log` digit-identical on all 20 counters); `huge_methods.py
+--fail-over 0` exit 0; warning-clean. **(CHK.97) stays OPEN on D6 ALONE**, which is blocked on
+a model change — its unblocker is promoted to the top of the queue as **(CHK.133)**.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item and D5 was its
+last unblocked deliverable. Per the WORK ORDER's 2026-09-08 addendum the successor is
+**(INV.0) step 10b-ii**, which is itself BLOCKED on two named families, so the protocol's
+promote-unblocker rule applies at both ends and (CHK.133) is what it names.
+
+**THE SIZING SAID "ONE ROW"; THE MATRIX SAID SEVEN FAMILIES.** `map` with an annotated
+return, an un-annotated literal-returning arrow, the (CHK.30) wrong-typed use reading the
+parameter, a tuple-union receiver, a `readonly` member, the user-declared PASS-2 pair, plus
+the identity / block-body / function-expression variants all read `missing`. `reduce` with a
+seed and the PASS-1 identical generic pair already agreed. The predicate-`filter` shape is
+NOT this defect: its plain-`number[]` control is MISSING too, because
+`tryInferPredicateOverloadReturn` reads only `FunctionDeclaration`/`MethodDeclaration` and lib
+`filter` is a `MethodSignature` (pre-existing, recorded).
+
+**THE MECHANISM WAS INSTRUMENTED, AND THE FIRST READING WAS WRONG.** PASS 2 combines
+`zxs.map` into `<U>(callbackfn: ((value: number, …) => U) & ((value: string, …) => U), …): U[]`.
+The prediction was that gate (c) of `tryInferSingleTypeParamFromArgs` bails on the
+intersection; the stderr line printed `gate-passed tps=1` — a function object's signatures
+are INVISIBLE to `typeMentionsTypeParam` — and then `candidates tp=U n=0`: every callback arm
+of the candidate gatherer demands an anonymous `Type.Object`, an intersection is none, the
+inference bails whole and the result is the RAW `U[]`, which every reader then silently
+refuses as a foreign type parameter. **Verdict: CONTAINED** — a VIEW, not machinery.
+`inferenceParamType(p)` presents an intersection of anonymous function objects to the two
+classifying sites as ONE anonymous function type carrying the existing
+`getIntersectedSignatures` fold (tsc's `getContextualCallSignature` fold; tsc infers to each
+constituent and lands in the same place). Memoized per intersection id, null memoized too,
+in a cache declared BEFORE `init`.
+
+**BEFORE → AFTER (`agree/ours-only/missing`, zero new ours-only, zero REF-SPLIT)**: annotated
+return, literal arrow, wrong-typed use, tuple-union receiver all 0/0/1 → 1/0/0; the
+user-declared PASS-2 pair fires, with a TEXT-DIFF chain sub-line (`number[]` where the
+references print `number` — (CHK.132)'s population, recorded there); the seven-variant family
+5 AGREE; the differing/overloaded/`this` fixtures unchanged.
+
+**ABLATION over 67 pins per arm**: a1 the view removed — **12 RED**; a2 the FIRST constituent
+instead of the fold — **4 RED** (the three identity pins and the non-strict residue pin); a3
+the memo keyed by constituent COUNT — **1 RED** (two same-sized intersections in one file);
+a4 the GATE site reading the raw type while the gatherer reads the view — **0 RED, a
+REDUNDANT GUARD** (the gate already passes on the raw type because a function object's
+signatures are invisible to it), recorded and kept as the symmetric read.
+
+**THE AT-RISK SWEEP FOUND THREE THINGS THE FIXTURES COULD NOT** (793 tests / 68 classes): a
+`reduce` control I had written expecting `string` where both references print
+`string | number`, and two `TupleArrayMembersTest` pins asserting an EMPTY diagnostic list for
+`const r: boolean = u.map(x => x)` — countdowns on exactly this silence (their own comment said
+"the RESULT is `any`"); they now assert their subject (no TS2349) plus `codes == [2322]`,
+names unchanged per (CHK.114).
+
+**THE GRID IS A CONTROL AND WAS MEASURED AS ONE**: a census of combined generic calls reads
+`bound=0 unbound=0` on all 8 profiles, marked, cronstrue and the 2,400-file project, with the
+positive control live on the fixtures (built=1/bound=3; built=4/bound=12 on the seven-variant
+family). tsgo's cronstrue "1 row" is its TS5108 refusal of the `target=ES5` tsconfig, as in
+(P18.76).
+
+**RESIDUES, MEASURED AND NOT FIXED**: NON-STRICT projects — the fold is gated on
+`noImplicitAny` as the contextual one is, while tsc's inference is not, and ungating it would
+type the arrow parameter as the union where tsc has `any` (a (CHK.94)-class decision, pinned as
+`residue - …`); the (CHK.132) sub-line on the PASS-2 shape; `getUnionType` not deduping a
+NESTED union's literal (`1 | (1 | 2)` prints `1 | 1 | 2` on the BEFORE binary — proved with a
+`never` target after a `boolean` target was blinded by (PARITY.1)'s generalization); and the
+pre-existing B83.4i inference gaps identical on a plain array (predicate `filter`, `x => [x]`,
+`x => ({ v: x })`, `x => x + 1`).
+
+**NEXT**: **(CHK.133)** — `Signature.thisParameter`, the model change D6 is blocked on, queued
+at the top with its three consumers. Then (INV.0) step 10b-ii's own unblockers.
+
 ### Round (P18.76) — (CHK.97) D3, the DIFFERING half: TS7006 through a union contextual type, and the arity filter the identical half had left out (2026-09-12)
 
 **Suite 18,718 → 18,738 / 0 / 3** (+20 pins, `UnionContextualSignatureDifferingTest`; 39 pins

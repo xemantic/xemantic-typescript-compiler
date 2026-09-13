@@ -16459,16 +16459,17 @@ class Checker(
                     collectTypeReferenceNames(type.trueType, refs)
                     for ((name, inferNode) in inferNames) {
                         if (name in refs) continue
-                        // Squiggle covers `infer U` — from inferNode.pos to the
-                        // typeParameter name's end.
-                        val start = inferNode.pos
-                        val nameEnd = inferNode.typeParameter.name.pos + inferNode.typeParameter.name.text.length
-                        val length = (nameEnd - start).coerceAtLeast(1)
+                        // (LEGACY.0b) TypeScript 7 reports an unused `infer U` on the
+                        // type parameter's NAME (tsgo `checkUnusedInferTypeParameter`:
+                        // `NewDiagnosticForNode(typeParameter.Name(), …)`), where tsc 6
+                        // squiggled the whole `infer U`.
+                        val start = inferNode.typeParameter.name.pos
+                        val length = inferNode.typeParameter.name.text.length.coerceAtLeast(1)
                         val (line, character) = getLineAndCharacterOfPosition(source, start)
                         diagnostics.add(Diagnostic(
-                            message = "'$name' is declared but its value is never read.",
+                            message = "'$name' is declared but never used.",
                             category = DiagnosticCategory.Error,
-                            code = 6133,
+                            code = 6196,
                             fileName = fileName,
                             line = line,
                             character = character,
@@ -18822,13 +18823,79 @@ class Checker(
         reportUnusedTypeParams(tpScope, typeParams, source, fileName)
     }
 
+    /**
+     * The source span of a type-parameter NODE, which is what TypeScript 7 squiggles for an
+     * unused type parameter (`in out T`, `T extends string`, `T = number` — modifiers,
+     * constraint and default included).
+     *
+     * [TypeParameter.end] cannot be used directly: this parser records a node's `end` as the
+     * scanner position AFTER the following token (CLAUDE.md's `Node.end` rule), so it
+     * overshoots by the `,` or `>` that closes the parameter. Exactly one such token is
+     * trimmed — `>>` is scanned as one token when a constraint itself ends in `>`, and
+     * removing a single `>` is right in both spellings.
+     */
+    private fun typeParamNodeSpan(source: String, tp: TypeParameter): Pair<Int, Int> {
+        val start = tp.pos.coerceIn(0, source.length)
+        val nameEnd = (tp.name.pos + tp.name.text.length).coerceIn(start, source.length)
+        var end = tp.end.coerceIn(start, source.length)
+        while (end > start && source[end - 1].isWhitespace()) end--
+        if (end > start && (source[end - 1] == ',' || source[end - 1] == '>')) end--
+        while (end > start && source[end - 1].isWhitespace()) end--
+        if (end < nameEnd) end = nameEnd
+        return start to end
+    }
+
+    /**
+     * The `<…>` span of a whole type-parameter list, TypeScript 7's anchor for TS6205
+     * (tsgo `rangeOfTypeParameters`: the list's own range widened by one on each side, i.e.
+     * the angle brackets). Answers null for a list that has none — JSDoc `@template`
+     * parameters, whose anchor is the tag.
+     */
+    private fun typeParameterListSpan(source: String, typeParams: List<TypeParameter>): Pair<Int, Int>? {
+        val first = typeParams.firstOrNull() ?: return null
+        if (first.fromJSDoc) return null
+        var open = first.pos.coerceIn(0, source.length)
+        while (open > 0 && source[open - 1] != '<') open--
+        if (open == 0) return null
+        open--
+        var close = typeParamNodeSpan(source, typeParams.last()).second
+        while (close < source.length && source[close] != '>') close++
+        if (close >= source.length) return null
+        return open to close + 1
+    }
+
     private fun reportUnusedTypeParams(
         scope: UnusedScope,
         typeParams: List<TypeParameter>,
         source: String,
         fileName: String,
     ) {
-        val allUnused = scope.declarations.none { it.name in scope.referencedNames }
+        // (LEGACY.0b) TypeScript 7's `checkUnusedTypeParameters`: when the declaration has
+        // MORE THAN ONE type parameter and every one of them is unreferenced, ONE TS6205
+        // "All type parameters are unused." covers the whole `<…>` list and no per-parameter
+        // row is emitted. A `_`-prefixed parameter counts as referenced (tsgo
+        // `isUnreferencedTypeParameter`), which is why the test is membership of
+        // [scope]'s declarations — the collectors never record one.
+        val reportable = typeParams.filter { tp ->
+            scope.declarations.any { it.declNode === tp } && tp.name.text !in scope.referencedNames
+        }
+        if (typeParams.size > 1 && reportable.size == typeParams.size) {
+            val listSpan = typeParameterListSpan(source, typeParams)
+            if (listSpan != null) {
+                val (line, character) = getLineAndCharacterOfPosition(source, listSpan.first)
+                diagnostics.add(Diagnostic(
+                    message = "All type parameters are unused.",
+                    category = DiagnosticCategory.Error,
+                    code = 6205,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = listSpan.first,
+                    length = (listSpan.second - listSpan.first).coerceAtLeast(1),
+                ))
+                return
+            }
+        }
         // For JSDoc-derived type params, group by tag start so we can decide between
         // the full-tag span (single-id tag, or all siblings unused) and per-identifier
         // span (multi-id tag with mixed used/unused).
@@ -18870,28 +18937,19 @@ class Checker(
             if (decl.name in scope.referencedNames) continue
             val tp = decl.declNode as TypeParameter
             if (tp.fromJSDoc && tp.jsDocTagPos in coveredByTs6205) continue
-            val start: Int
-            val length: Int
-            val tagPos = tp.jsDocTagPos
-            val tagEnd = tp.jsDocTagEnd
-            val useTagSpan = tp.fromJSDoc && tagPos >= 0 && tagEnd > tagPos &&
-                (tagSiblingCount[tagPos] ?: 0) == (tagUnusedCount[tagPos] ?: 0) &&
-                (tagSiblingCount[tagPos] ?: 0) == 1
-            if (useTagSpan) {
-                start = tagPos
-                length = tagEnd - tagPos
-            } else if (allUnused && scope.declarations.size == 1 && typeParams.size == 1 && !tp.fromJSDoc) {
-                start = tp.pos - 1
-                length = decl.name.length + 2
-            } else {
-                start = tp.name.pos
-                length = decl.name.length
-            }
+            // (LEGACY.0b) TypeScript 7 reports EVERY unused type parameter on the type
+            // parameter NODE itself (tsgo `checkUnusedTypeParameters`:
+            // `NewDiagnosticForNode(typeParameter, …)`) — never on the enclosing `<…>`
+            // list and never on the whole `@template` tag, both of which tsc 6 used.
+            // The node span includes any `const`/`in`/`out` modifier and any constraint
+            // or default, which is why it is not simply the name.
+            val (start, nodeEnd) = typeParamNodeSpan(source, tp)
+            val length = (nodeEnd - start).coerceAtLeast(1)
             val (line, character) = getLineAndCharacterOfPosition(source, start)
             diagnostics.add(Diagnostic(
-                message = "'${decl.name}' is declared but its value is never read.",
+                message = "'${decl.name}' is declared but never used.",
                 category = DiagnosticCategory.Error,
-                code = 6133,
+                code = 6196,
                 fileName = fileName,
                 line = line,
                 character = character,
@@ -67507,7 +67565,7 @@ interface DataView {
             }
             // (2) TS2345 (deep Generator chain) at each `outer3(function* …)` arg's `function` keyword.
             val chain = listOf(
-                "  Call signature return types 'Generator<number, void, any>' and 'Generator<never, unknown, unknown>' are incompatible.",
+                "  Type 'Generator<number, void, any>' is not assignable to type 'Generator<never, unknown, unknown>'.",
                 "    The types returned by 'next(...)' are incompatible between these types.",
                 "      Type 'IteratorResult<number, void>' is not assignable to type 'IteratorResult<never, unknown>'.",
                 "        Type 'IteratorYieldResult<number>' is not assignable to type 'IteratorResult<never, unknown>'.",
@@ -68239,7 +68297,7 @@ interface DataView {
             pinDiag(source, fileName, 156, 21, 14, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Argument of type '{ (x: number): IPromise<number>; (x: string): IPromise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", "      Type 'IPromise<number>' is not assignable to type 'IPromise<string>'.", "        Type 'number' is not assignable to type 'string'."), listOf(pinRel(source, "promisePermutations.ts", 13, 5, 2771, "The last overload is declared here.")))
             pinDiag(source, fileName, 158, 21, 14, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Argument of type '{ (x: number): IPromise<number>; (x: string): IPromise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", "      Type 'IPromise<number>' is not assignable to type 'IPromise<string>'.", "        Type 'number' is not assignable to type 'string'."), listOf(pinRel(source, "promisePermutations.ts", 5, 5, 2771, "The last overload is declared here.")))
             pinDiag(source, fileName, 159, 21, 15, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Argument of type '{ (x: number): Promise<number>; (x: string): Promise<string>; }' is not assignable to parameter of type '(value: number) => Promise<string>'.", "      Type 'Promise<number>' is not assignable to type 'Promise<string>'.", "        Type 'number' is not assignable to type 'string'."), listOf(pinRel(source, "promisePermutations.ts", 5, 5, 2771, "The last overload is declared here.")))
-            pinDiag(source, fileName, 160, 21, 15, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Argument of type '{ (x: number): Promise<number>; (x: string): Promise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", "      Call signature return types 'Promise<number>' and 'IPromise<string>' are incompatible.", "        The types of 'then' are incompatible between these types.", "          Type '{ <TResult1 = number, TResult2 = never>(onfulfilled?: (value: number) => TResult1 | PromiseLike<TResult1>, onrejected?: (reason: any) => TResult2 | PromiseLike<TResult2>): Promise<TResult1 | TResult2>; <U>(success?: (value: number) => Promise<U>, error?: (error: any) => Promise<U>, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => Promise<U>, error?: (error: any) => U, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => U, error?: (error: any) => Promise<U>, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => U, error?: (error: any) => U, progress?: (progress: any) => void): Promise<U>; }' is not assignable to type '{ <U>(success?: (value: string) => IPromise<U>, error?: (error: any) => IPromise<U>, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => IPromise<U>, error?: (error: any) => U, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => U, error?: (error: any) => IPromise<U>, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => U, error?: (error: any) => U, progress?: (progress: any) => void): IPromise<U>; }'.", "            Types of parameters 'onfulfilled' and 'success' are incompatible.", "              Types of parameters 'value' and 'value' are incompatible.", "                Type 'number' is not assignable to type 'string'."), listOf(pinRel(source, "promisePermutations.ts", 5, 5, 2771, "The last overload is declared here.")))
+            pinDiag(source, fileName, 160, 21, 15, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Argument of type '{ (x: number): Promise<number>; (x: string): Promise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", "      Type 'Promise<number>' is not assignable to type 'IPromise<string>'.", "        Types of property 'then' are incompatible.", "          Type '{ <TResult1 = number, TResult2 = never>(onfulfilled?: (value: number) => TResult1 | PromiseLike<TResult1>, onrejected?: (reason: any) => TResult2 | PromiseLike<TResult2>): Promise<TResult1 | TResult2>; <U>(success?: (value: number) => Promise<U>, error?: (error: any) => Promise<U>, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => Promise<U>, error?: (error: any) => U, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => U, error?: (error: any) => Promise<U>, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => U, error?: (error: any) => U, progress?: (progress: any) => void): Promise<U>; }' is not assignable to type '{ <U>(success?: (value: string) => IPromise<U>, error?: (error: any) => IPromise<U>, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => IPromise<U>, error?: (error: any) => U, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => U, error?: (error: any) => IPromise<U>, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => U, error?: (error: any) => U, progress?: (progress: any) => void): IPromise<U>; }'.", "            Types of parameters 'onfulfilled' and 'success' are incompatible.", "              Types of parameters 'value' and 'value' are incompatible.", "                Type 'number' is not assignable to type 'string'."), listOf(pinRel(source, "promisePermutations.ts", 5, 5, 2771, "The last overload is declared here.")))
         }
     }
     private fun checkPromisePermutations2() {
@@ -68281,7 +68339,7 @@ interface DataView {
             pinDiag(source, fileName, 155, 21, 14, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Argument of type '{ (x: number): IPromise<number>; (x: string): IPromise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", "      Type 'IPromise<number>' is not assignable to type 'IPromise<string>'.", "        Type 'number' is not assignable to type 'string'."), listOf(pinRel(source, "promisePermutations2.ts", 12, 5, 2771, "The last overload is declared here.")))
             pinDiag(source, fileName, 157, 21, 14, 2345, "Argument of type '{ (x: number): IPromise<number>; (x: string): IPromise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", listOf("  Type 'IPromise<number>' is not assignable to type 'IPromise<string>'.", "    Type 'number' is not assignable to type 'string'."))
             pinDiag(source, fileName, 158, 21, 15, 2345, "Argument of type '{ (x: number): Promise<number>; (x: string): Promise<string>; }' is not assignable to parameter of type '(value: number) => Promise<string>'.", listOf("  Type 'Promise<number>' is not assignable to type 'Promise<string>'.", "    Type 'number' is not assignable to type 'string'."))
-            pinDiag(source, fileName, 159, 21, 15, 2345, "Argument of type '{ (x: number): Promise<number>; (x: string): Promise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", listOf("  Call signature return types 'Promise<number>' and 'IPromise<string>' are incompatible.", "    The types of 'then' are incompatible between these types.", "      Type '{ <TResult1 = number, TResult2 = never>(onfulfilled?: (value: number) => TResult1 | PromiseLike<TResult1>, onrejected?: (reason: any) => TResult2 | PromiseLike<TResult2>): Promise<TResult1 | TResult2>; <U>(success?: (value: number) => U, error?: (error: any) => U, progress?: (progress: any) => void): Promise<U>; }' is not assignable to type '{ <U>(success?: (value: string) => IPromise<U>, error?: (error: any) => IPromise<U>, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => IPromise<U>, error?: (error: any) => U, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => U, error?: (error: any) => IPromise<U>, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => U, error?: (error: any) => U, progress?: (progress: any) => void): IPromise<U>; }'.", "        Types of parameters 'onfulfilled' and 'success' are incompatible.", "          Types of parameters 'value' and 'value' are incompatible.", "            Type 'number' is not assignable to type 'string'."))
+            pinDiag(source, fileName, 159, 21, 15, 2345, "Argument of type '{ (x: number): Promise<number>; (x: string): Promise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", listOf("  Type 'Promise<number>' is not assignable to type 'IPromise<string>'.", "    Types of property 'then' are incompatible.", "      Type '{ <TResult1 = number, TResult2 = never>(onfulfilled?: (value: number) => TResult1 | PromiseLike<TResult1>, onrejected?: (reason: any) => TResult2 | PromiseLike<TResult2>): Promise<TResult1 | TResult2>; <U>(success?: (value: number) => U, error?: (error: any) => U, progress?: (progress: any) => void): Promise<U>; }' is not assignable to type '{ <U>(success?: (value: string) => IPromise<U>, error?: (error: any) => IPromise<U>, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => IPromise<U>, error?: (error: any) => U, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => U, error?: (error: any) => IPromise<U>, progress?: (progress: any) => void): IPromise<U>; <U>(success?: (value: string) => U, error?: (error: any) => U, progress?: (progress: any) => void): IPromise<U>; }'.", "        Types of parameters 'onfulfilled' and 'success' are incompatible.", "          Types of parameters 'value' and 'value' are incompatible.", "            Type 'number' is not assignable to type 'string'."))
         }
     }
     private fun checkPromisePermutations3() {
@@ -68324,7 +68382,7 @@ interface DataView {
             pinDiag(source, fileName, 155, 21, 14, 2345, "Argument of type '{ (x: number): IPromise<number>; (x: string): IPromise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", listOf("  Type 'IPromise<number>' is not assignable to type 'IPromise<string>'.", "    Type 'number' is not assignable to type 'string'."))
             pinDiag(source, fileName, 157, 21, 14, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Argument of type '{ (x: number): IPromise<number>; (x: string): IPromise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", "      Type 'IPromise<number>' is not assignable to type 'IPromise<string>'.", "        Type 'number' is not assignable to type 'string'."), listOf(pinRel(source, "promisePermutations3.ts", 7, 5, 2771, "The last overload is declared here.")))
             pinDiag(source, fileName, 158, 21, 15, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Argument of type '{ (x: number): Promise<number>; (x: string): Promise<string>; }' is not assignable to parameter of type '(value: number) => Promise<string>'.", "      Type 'Promise<number>' is not assignable to type 'Promise<string>'.", "        Type 'number' is not assignable to type 'string'."), listOf(pinRel(source, "promisePermutations3.ts", 7, 5, 2771, "The last overload is declared here.")))
-            pinDiag(source, fileName, 159, 21, 15, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Argument of type '{ (x: number): Promise<number>; (x: string): Promise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", "      Call signature return types 'Promise<number>' and 'IPromise<string>' are incompatible.", "        The types of 'then' are incompatible between these types.", "          Type '{ <TResult1 = number, TResult2 = never>(onfulfilled?: (value: number) => TResult1 | PromiseLike<TResult1>, onrejected?: (reason: any) => TResult2 | PromiseLike<TResult2>): Promise<TResult1 | TResult2>; <U>(success?: (value: number) => Promise<U>, error?: (error: any) => Promise<U>, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => Promise<U>, error?: (error: any) => U, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => U, error?: (error: any) => Promise<U>, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => U, error?: (error: any) => U, progress?: (progress: any) => void): Promise<U>; }' is not assignable to type '<U>(success?: (value: string) => U, error?: (error: any) => U, progress?: (progress: any) => void) => IPromise<U>'.", "            Types of parameters 'onfulfilled' and 'success' are incompatible.", "              Types of parameters 'value' and 'value' are incompatible.", "                Type 'number' is not assignable to type 'string'."), listOf(pinRel(source, "promisePermutations3.ts", 7, 5, 2771, "The last overload is declared here.")))
+            pinDiag(source, fileName, 159, 21, 15, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Argument of type '{ (x: number): Promise<number>; (x: string): Promise<string>; }' is not assignable to parameter of type '(value: number) => IPromise<string>'.", "      Type 'Promise<number>' is not assignable to type 'IPromise<string>'.", "        Types of property 'then' are incompatible.", "          Type '{ <TResult1 = number, TResult2 = never>(onfulfilled?: (value: number) => TResult1 | PromiseLike<TResult1>, onrejected?: (reason: any) => TResult2 | PromiseLike<TResult2>): Promise<TResult1 | TResult2>; <U>(success?: (value: number) => Promise<U>, error?: (error: any) => Promise<U>, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => Promise<U>, error?: (error: any) => U, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => U, error?: (error: any) => Promise<U>, progress?: (progress: any) => void): Promise<U>; <U>(success?: (value: number) => U, error?: (error: any) => U, progress?: (progress: any) => void): Promise<U>; }' is not assignable to type '<U>(success?: (value: string) => U, error?: (error: any) => U, progress?: (progress: any) => void) => IPromise<U>'.", "            Types of parameters 'onfulfilled' and 'success' are incompatible.", "              Types of parameters 'value' and 'value' are incompatible.", "                Type 'number' is not assignable to type 'string'."), listOf(pinRel(source, "promisePermutations3.ts", 7, 5, 2771, "The last overload is declared here.")))
             pinDiag(source, fileName, 165, 21, 15, 2345, "Argument of type '{ <T>(x: T): IPromise<T>; <T>(x: T, y: T): Promise<T>; }' is not assignable to parameter of type '(value: (x: any) => any) => Promise<unknown>'.", listOf("  Type 'IPromise<any>' is missing the following properties from type 'Promise<unknown>': catch, [Symbol.toStringTag]"))
         }
     }
@@ -98631,7 +98689,7 @@ interface DataView {
      * bare ref → OK; unconstrained-in-scope-TP vs different-TP-or-primitive → FAIL;
      * anything else → BAIL, FN-safe). Params compare contravariantly (leaf
      * tgt-param → src-param), returns covariantly (src-ret → tgt-ret); both returns
-     * FunctionType recurse ONE level ('Call signature return types ... are
+     * FunctionType recurse ONE level ('Type ... is not assignable to type ...' are
      * incompatible.'). Could-line + related TS2208 iff the leaf's RIGHT side is an
      * unconstrained in-scope TP.
      */
@@ -98761,8 +98819,11 @@ interface DataView {
                 val tgtRetDisp = formatTypeForDisplay(tInner) ?: return false
                 val aDisp = formatTypeForDisplay(sInner.type) ?: return false
                 val bDisp = formatTypeForDisplay(tInner.type) ?: return false
+                // TypeScript 7 has no `Call signature return types ... are incompatible.`
+                // message at all (0 tsgo baselines carry it against 12 tsc ones): a
+                // return-type mismatch is reported with the ordinary assignability line.
                 return emit(listOf(
-                    "  Call signature return types '$srcRetDisp' and '$tgtRetDisp' are incompatible.",
+                    "  Type '$srcRetDisp' is not assignable to type '$tgtRetDisp'.",
                     "    Type '$aDisp' is not assignable to type '$bDisp'.",
                 ), sInner.type, tInner.type, "      ")
             }
@@ -169162,8 +169223,8 @@ interface DataView {
             }
             // B50.6: Function return-type chain. When BOTH returns are pure function
             // types (call signatures only, no properties/members/construct sigs),
-            // recurse with a "Call signature return types '<src>' and '<tgt>' are
-            // incompatible." header so nested-callback patterns produce the full
+            // recurse with a "Type '<src>' is not assignable to type '<tgt>'."
+            // header so nested-callback patterns produce the full
             // drilled chain (cf. `nestedCallbackErrorNotFlattened_ts`).
             if (sourceReturn is Type.Object && targetReturn is Type.Object &&
                 !sourceReturn.callSignatures.isNullOrEmpty() &&
@@ -169178,7 +169239,7 @@ interface DataView {
                 val srcDisp = typeToString(sourceReturn)
                 val tgtDisp = typeToString(targetReturn)
                 val nested = getFunctionMismatchElaboration(sourceReturn, targetReturn)
-                val header = "  Call signature return types '$srcDisp' and '$tgtDisp' are incompatible."
+                val header = "  Type '$srcDisp' is not assignable to type '$tgtDisp'."
                 return listOf(header) + nested.map { "  $it" }
             }
             // B75.3: When return types are same-target generic references (e.g. both

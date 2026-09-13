@@ -488,8 +488,14 @@ fun formatErrorBaseline(
     return text {
         // Pretty header section (ANSI-colored diagnostics with source context)
         if (pretty) {
+            // TypeScript 7 separates consecutive pretty diagnostics with a blank line
+            // (`FormatDiagnosticsWithColorAndContext`'s `if i > 0 { NewLine }`); tsc 6's
+            // writer left none, because its related block did not end in a newline.
+            var renderedAnyPretty = false
             for (diag in sorted) {
                 if (diag.fileName != null && diag.line != null && diag.character != null) {
+                    if (renderedAnyPretty) +"\r\n"
+                    renderedAnyPretty = true
                     // Colored: [96mfile[0m:[93mline[0m:[93mcol[0m - [91merror[0m[90m TScode: [0mmessage
                     +"\u001b[96m${diag.fileName}\u001b[0m:\u001b[93m${diag.line}\u001b[0m:\u001b[93m${diag.character}\u001b[0m"
                     +" - \u001b[91m${diag.category.name.lowercase()}\u001b[0m\u001b[90m TS${diag.code}: \u001b[0m${diag.message}"
@@ -516,13 +522,15 @@ fun formatErrorBaseline(
                         val squiggle = "~".repeat(squiggleLen)
                         +"\u001b[7m$gutterSpaces\u001b[0m \u001b[91m$indent$squiggle\u001b[0m\r\n"
                     }
-                    // Related info in pretty section — blank line before related info block
-                    if (diag.relatedInformation.isNotEmpty()) {
-                        +"\r\n"
-                    }
                     for (related in diag.relatedInformation) {
                         if (related.fileName != null && related.line != null && related.character != null) {
-                            +"  \u001b[96m${related.fileName}\u001b[0m:\u001b[93m${related.line}\u001b[0m:\u001b[93m${related.character}\u001b[0m\r\n"
+                            // Blank line before EACH related block (TypeScript 7); tsc 6 emitted
+                            // one blank before the first block only, because it closed each
+                            // block with the message line instead.
+                            +"\r\n"
+                            // TypeScript 7 (tsgo) puts the related MESSAGE on the location
+                            // line; tsc 6 put it BELOW the code frame.
+                            +"  \u001b[96m${related.fileName}\u001b[0m:\u001b[93m${related.line}\u001b[0m:\u001b[93m${related.character}\u001b[0m - ${related.message}\r\n"
                             val relLines = sourceLinesByFile[related.fileName]
                             if (relLines != null && related.line >= 1 && related.line <= relLines.size) {
                                 val relLine = relLines[related.line - 1].trimEnd('\r')
@@ -537,7 +545,6 @@ fun formatErrorBaseline(
                                 }
                                 +"    \u001b[7m$relGutter\u001b[0m \u001b[96m${relIndent}${"~".repeat(relLen)}\u001b[0m\r\n"
                             }
-                            +"    ${related.message}\r\n"
                         }
                     }
                 }

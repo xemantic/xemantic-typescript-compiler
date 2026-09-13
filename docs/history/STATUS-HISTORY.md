@@ -3327,3 +3327,19 @@ pre-existing general gap reproduced WITHOUT `bind` (a variable callee's TS2554, 
 gotcha). Ablation 43/26/6/8 RED over 127 pins. cost_gate exit 0 with 20/20 counters
 digit-identical to the rebuilt HEAD, huge_methods exit 0, warning-clean. **(CHK.134) is
 CHECKED OFF**; next is (CHK.98).
+
+**(P18.82) — (CHK.98)(d): TS2556 FOR A NON-TUPLE SPREAD WAS WRONG IN BOTH DIRECTIONS, NOT MISSING — AND EVERY REMAINING (CHK.98) DELIVERABLE IS NOW MEASURED, 18,941 / 0 / 3 (2026-09-12).**
+All four remaining deliverables were measured against both references before one was
+picked: the `NewExpression` argument arm (21 missing, a control grid), TS2556 for a
+non-tuple spread (**6 ours-only — four false positives on legal code and two wrong codes —
+plus 20 missing**, a REAL gate at 45-46 arity verdicts per profile), the item's stage 2 (≥5
+mechanisms) and (CHK.98b) (already closed). The spread one landed: tsc's tuple expansion and
+`hasCorrectArity` spread clause at all three arity walkers, 6/6/20 → 22/0/4 with every
+remaining row attributed to a pre-existing gap reproduced without a spread; 8 of 9 inactive
+pristine TS2556 baselines match exactly. **The hazard the item did not name: the arity
+walkers run under the FILE-LEVEL ambient**, so a resolver-classified operand produced a
+false TS2556 on a body-local tuple shadowing a file-level array — operands are now
+classified declaration-first, and that shape is the hazard pin. Ablation 21/2/7/6/5 RED over
+134 pins; three countdown pins inverted. Grid 8×`added=0 removed=0` as a measured GATE,
+marked/cronstrue byte-identical, cost_gate exit 0 (20/20 within +0.05% of rebuilt HEAD),
+huge_methods exit 0, warning-clean. (CHK.98) stays open on the `new` arm and stage 2.

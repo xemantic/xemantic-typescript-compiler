@@ -55,9 +55,11 @@ import kotlin.test.Test
  * disagreement with tsgo is about WHICH cases destabilize, not about the shape of the row.
  *
  * **What is pinned here instead.** Sixteen of the twenty-one cases had a tsc baseline before
- * the re-pin, and those comparisons are reproduced below verbatim against
- * [typeScriptBaselineDir] — so switching the tsgo files off costs this corpus NO coverage,
- * and a regression in any of those cases still reddens. The other five had no tsc baseline at
+ * the re-pin, and those comparisons are reproduced below against [typeScriptBaselineDir] —
+ * fifteen verbatim, and `manyCompilerErrorsInTheTwoFiles` over its annotated-source section
+ * alone, because it is a `--pretty` case and (LEGACY.0b) step 2 moved the pretty HEADER to
+ * TypeScript 7's layout (see that test's KDoc). So switching the tsgo files off costs this
+ * corpus no diagnostic coverage, and a regression in any of those cases still reddens. The other five had no tsc baseline at
  * all (tsgo's TS-1 file is the only one that ever existed for them), so there is nothing to
  * reproduce; the invariant pin below is what covers them.
  *
@@ -177,12 +179,33 @@ class TsgoHarnessSelfCheckBaselinesTest {
             .errorsMatchBaseline(Path("$typeScriptBaselineDir/isolatedModulesExportImportUninstantiatedNamespace.errors.txt"))
     }
 
-    /** Reproduces the switched-off `manyCompilerErrorsInTheTwoFiles.errors.txt` against tsc's own baseline. */
+    /**
+     * Reproduces the switched-off `manyCompilerErrorsInTheTwoFiles.errors.txt` against tsc's
+     * own baseline — but only its ANNOTATED-SOURCE section.
+     *
+     * This is the one `--pretty` case among the sixteen, and (LEGACY.0b) step 2 moved the
+     * pretty HEADER to TypeScript 7's layout (the related message on the location line, a
+     * blank opening every related block, a blank between consecutive diagnostics). That
+     * layout is pinned by [TsgoMessageWordingTest]; comparing it against a tsc 6 baseline
+     * would pin the layout TypeScript 7 replaced. The `==== file (N errors) ====` section
+     * below the header is UNCHANGED by that move and carries every diagnostic's code,
+     * message and squiggle, so it is what is compared here — the case keeps its coverage of
+     * twenty diagnostics across two files and loses only the header rendering.
+     */
     @Test
-    fun `manyCompilerErrorsInTheTwoFiles_ts has expected errors matching manyCompilerErrorsInTheTwoFiles_errors_txt`() {
+    fun `manyCompilerErrorsInTheTwoFiles_ts has expected annotated source matching manyCompilerErrorsInTheTwoFiles_errors_txt`() {
         val source = Path("$typeScriptCasesDir/manyCompilerErrorsInTheTwoFiles.ts").readText()
-        TypeScriptCompiler().compile(source, "manyCompilerErrorsInTheTwoFiles.ts")
-            .errorsMatchBaseline(Path("$typeScriptBaselineDir/manyCompilerErrorsInTheTwoFiles.errors.txt"))
+        val actual = TypeScriptCompiler()
+            .compile(source, "manyCompilerErrorsInTheTwoFiles.ts")
+            .toErrorBaseline()
+        val expected = Path("$typeScriptBaselineDir/manyCompilerErrorsInTheTwoFiles.errors.txt").readText()
+        fun annotatedSource(text: String): String {
+            val normalized = text.replace("\r\n", "\n").replace("\r", "\n").trimEnd()
+            val start = normalized.indexOf("==== ")
+            assert(start >= 0)
+            return normalized.substring(start)
+        }
+        assert(annotatedSource(actual ?: "") == annotatedSource(expected))
     }
 
     /** Reproduces the switched-off `missingCloseParenStatements(alwaysstrict=true).errors.txt` against tsc's own baseline. */
