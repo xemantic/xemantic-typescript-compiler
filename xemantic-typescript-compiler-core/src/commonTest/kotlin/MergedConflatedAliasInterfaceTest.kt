@@ -87,9 +87,13 @@ class MergedConflatedAliasInterfaceTest {
             """,
             directives = "// @strict: true\n// @module: commonjs",
         ) should {
-            // `getPos` is required by the augmentation — genuinely missing (tsc errors
-            // too; our standard path reports the shape mismatch as 2322 or 2353).
-            have(any { it.code == 2322 || it.code == 2353 })
+            // `getPos` is required by the augmentation — genuinely missing. Since
+            // (LEGACY.0b) F6a the outer head is suppressed, so the row IS the leaf.
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'getPos' is missing in type '{ text: string; }' but " +
+                    "required in type 'SourceFileLike'."
+            })
         }
     }
 

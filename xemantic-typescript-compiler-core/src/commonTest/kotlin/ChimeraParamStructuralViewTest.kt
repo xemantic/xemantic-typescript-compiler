@@ -104,7 +104,10 @@ class ChimeraParamStructuralViewTest {
             """,
             directives = "// @strict: true\n// @module: commonjs",
         ) should {
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'fileExists' is missing in type 'Cached' but required in type 'Host'."
+            })
         }
     }
 }

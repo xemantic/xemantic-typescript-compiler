@@ -191,10 +191,12 @@ class CaasSplitTest {
             g({ name: "hello" }, { name: "x" })
             """
         )
-        assert(d.count { it.code == 2345 } == 1)
+        // (LEGACY.0b) F6a: the head and the missing-property sentence name the same
+        // two types, so TypeScript 7 reports the sentence alone.
+        assert(d.count { it.code == 2741 } == 1)
         assert(d.any {
-            it.code == 2345 &&
-                it.message == "Argument of type '{ name: string; }' is not assignable to parameter of type 'Q'."
+            it.code == 2741 &&
+                it.message == "Property 'id' is missing in type '{ name: string; }' but required in type 'Q'."
         })
     }
 
@@ -303,10 +305,11 @@ class CaasSplitTest {
             p(foo, foo)
             """
         )
-        assert(d.count { it.code == 2345 } == 1)
+        // (LEGACY.0b) F6a: as above — the TS2345 head is suppressed.
+        assert(d.count { it.code == 2741 } == 1)
         assert(d.any {
-            it.code == 2345 &&
-                it.message == "Argument of type 'Foo' is not assignable to parameter of type 'Bar'."
+            it.code == 2741 &&
+                it.message == "Property 'b' is missing in type 'Foo' but required in type 'Bar'."
         })
     }
 

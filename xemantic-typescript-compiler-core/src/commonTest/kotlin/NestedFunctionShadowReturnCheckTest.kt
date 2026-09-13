@@ -84,7 +84,10 @@ class NestedFunctionShadowReturnCheckTest {
             }
             """
         ) should {
-            have(any { it.code == 2740 || it.code == 2322 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'keys' is missing in type 'State' but required in type 'PathMap'."
+            })
         }
     }
 }

@@ -118,6 +118,9 @@ class GenericSelfAssignabilityTest {
         )
         // If this goes quiet the cases above prove nothing — the probe would simply
         // be unable to see TS2322 in a return position.
-        assert(diagnostics.any { it.code == 2322 })
+        assert(diagnostics.any {
+            it.code == 2739 && it.message ==
+                "Type 'Other<T>' is missing the following properties from type 'Box<T>': value, all"
+        })
     }
 }

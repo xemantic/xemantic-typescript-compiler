@@ -195,7 +195,10 @@ class OptionalParamUnionArgTest {
             }
             """
         ) should {
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'fileName' is missing in type 'Nd' but required in type 'SrcFile'."
+            })
         }
     }
 

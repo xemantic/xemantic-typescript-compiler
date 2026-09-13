@@ -102,7 +102,10 @@ class NegativeGuardKindDomainTest {
             }
             """.trimIndent()
         ) should {
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'text' is missing in type 'Node2' but required in type 'Identifier2'."
+            })
         }
     }
 }

@@ -98,7 +98,10 @@ class CallArgPropertyAccessGuardNarrowTest {
             }
             """
         ) should {
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property '_id' is missing in type 'Expression' but required in type 'Identifier'."
+            })
         }
     }
 }

@@ -102,14 +102,15 @@ class EnumComparisonDisplayTest {
     @Test
     fun `negative control - a namespaced INTERFACE return annotation stays BARE`() {
         // Both references print 'I', never 'M.I' — the qualifier is an ENUM-MEMBER rule,
-        // not a qualified-name rule. The diagnostic CODE at this position is a separate
-        // pre-existing divergence (tsc reports TS2741 here) and is deliberately not
-        // asserted; what this control owns is the NAME.
+        // not a qualified-name rule. The CODE divergence this control used to record as
+        // deliberately-unasserted is CLOSED by (LEGACY.0b) F6a — TypeScript 7 drops the
+        // outer head here, so the row IS the TS2741 tsc reports. What this control owns
+        // is still the NAME: the target renders bare 'I', never 'M.I'.
         val messages = diagnose(
             enums + "function f(): M.I { return { b: 1 } as any as { b: number } }",
         ).map { it.message }
         assert(messages.size == 1)
-        assert(messages[0].endsWith("is not assignable to type 'I'."))
+        assert(messages[0] == "Property 'a' is missing in type '{ b: number; }' but required in type 'I'.")
     }
 
     @Test

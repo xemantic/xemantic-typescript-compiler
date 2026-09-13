@@ -84,7 +84,10 @@ class ModuleVarLeakAssignReturnTest {
             }
             """,
         ) should {
-            have(any { it.code == 2322 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'bbb' is missing in type '{ aaa: number; }' but required in type 'Target'."
+            })
         }
     }
 

@@ -81,7 +81,10 @@ class ConflatedInterfaceArgTest {
             directives = "// @strict: true\n// @module: commonjs",
         ) should {
             // `{}` misses `x` in a.ts's version AND `y` in b.ts's — genuinely wrong.
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'x' is missing in type '{}' but required in type 'ExportInfo'."
+            })
         }
     }
 }

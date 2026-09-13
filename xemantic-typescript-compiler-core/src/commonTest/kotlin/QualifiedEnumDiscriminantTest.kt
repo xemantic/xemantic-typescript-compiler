@@ -440,6 +440,11 @@ class QualifiedEnumDiscriminantTest {
             declare const h: { sig?: VM };
             export function f() { h.sig = e.node.parent }
             """.trimIndent()
-        ) should { have(any { it.code == 2322 }) }
+        ) should {
+            have(any {
+                it.code == 2739 && it.message ==
+                    "Type 'Nd' is missing the following properties from type 'VM': vm, ms"
+            })
+        }
     }
 }

@@ -10441,7 +10441,9 @@ class Checker(
         val visible =
             if (assigned == null) diagnostics.toList()
             else diagnostics.filter { it.fileName == null || it.fileName in assigned }
-        return applyTsCommentDirectives(visible)
+        // (LEGACY.0b) F6a: TypeScript 7's missing-property head suppression is decided
+        // once, here, over the finished diagnostics — see [RelationHeadSuppression].
+        return applyTsCommentDirectives(RelationHeadSuppression.apply(visible))
     }
 
     /**
@@ -52044,7 +52046,7 @@ class Checker(
                 val vs = stmt as? VariableStatement ?: continue
                 for (decl in vs.declarationList.declarations) {
                     val cname = (decl.name as? Identifier)?.text ?: continue
-                    val spec = nsImports[cname] ?: continue
+                    if (cname !in nsImports) continue
                     val arrow = decl.initializer as? ArrowFunction ?: continue
                     val call = arrow.body as? CallExpression ?: continue
                     if ((call.expression as? Identifier)?.text != cname) continue
@@ -68306,7 +68308,10 @@ interface DataView {
             pinDiag(source, fileName, 90, 8, 2, 2345, "Argument of type 'number' is not assignable to parameter of type 'string'.", emptyList())
             pinDiag(source, fileName, 113, 7, 1, 2322, "Type 'string | number' is not assignable to type 'string'.", listOf("  Type 'number' is not assignable to type 'string'."))
             pinDiag(source, fileName, 115, 7, 1, 2322, "Type 'string | number' is not assignable to type 'number'.", listOf("  Type 'string' is not assignable to type 'number'."))
-            pinDiag(source, fileName, 133, 7, 1, 2740, "Type '{}' is missing the following properties from type 'Date': toDateString, toTimeString, toLocaleDateString, toLocaleTimeString, and 38 more.", emptyList())
+            // (LEGACY.0b) F6a: TypeScript 7 KEEPS the head here, because the narrowed
+            // source renders `object` at the head and `{}` in the leaf, so
+            // `chainArgsMatch` fails — see [RelationHeadSuppression].
+            pinDiag(source, fileName, 133, 7, 1, 2322, "Type 'object' is not assignable to type 'Date'.", listOf("  Type '{}' is missing the following properties from type 'Date': toDateString, toTimeString, toLocaleDateString, toLocaleTimeString, and 38 more."))
             pinDiag(source, fileName, 205, 7, 2, 2741, "Property 'z' is missing in type 'C1' but required in type 'C2'.", emptyList(), listOf(pinRel(source, "inferTypePredicates.ts", 201, 3, 2728, "'z' is declared here.")))
         }
     }
@@ -101985,19 +101990,23 @@ interface DataView {
             val related = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
             sftEmit2322(left, "Type '$srcDisp' is not assignable to type '$tgtDisp'.", chain, listOfNotNull(related), source, fileName)
         } else {
-            // Inner-return mismatch → TS2328 head (no outer "Type X not assignable to Y").
+            // Inner-return mismatch. tsc 6 PROMOTED the *Types of parameters …* chain
+            // entry to the head here (TS2328, the `!message` arm of its own
+            // `reportRelationError`); TypeScript 7 does not — **TS2328 appears in ZERO
+            // tsgo baselines and in exactly one tsc-6 baseline** — so the outer
+            // *not assignable* head stays and the sentence is the first chain entry.
+            // (LEGACY.0b) F6a's mirror: a head promoted out of a chain, not a head
+            // suppressed by one.
             lastChainMissingPropSymbol = null
             val inner = getPropertyElaborationChain(tR, sR)
                 ?: listOf("  Type '${typeToString(tR)}' is not assignable to type '${typeToString(sR)}'.")
             val related = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
-            val (line, character) = getLineAndCharacterOfPosition(source, left.pos)
-            diagnostics.add(Diagnostic(
-                message = "Types of parameters '$outerP' and '$outerP' are incompatible.",
-                category = DiagnosticCategory.Error, code = 2328,
-                fileName = fileName, line = line, character = character,
-                start = left.pos, length = left.text.length,
-                messageChain = inner, relatedInformation = listOfNotNull(related),
-            ))
+            val chain = listOf("  Types of parameters '$outerP' and '$outerP' are incompatible.") +
+                inner.map { "  $it" }
+            sftEmit2322(
+                left, "Type '$srcDisp' is not assignable to type '$tgtDisp'.", chain,
+                listOfNotNull(related), source, fileName,
+            )
         }
         return true
     }
@@ -108029,11 +108038,25 @@ interface DataView {
                 val displayTarget = if (typeAnnotation != null)
                     formatTypeForDisplay(typeAnnotation) ?: typeToString(tt) else typeToString(tt)
                 val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                // (LEGACY.0b) F6a: this walker used to PRE-SUPPRESS — it emitted the
+                // missing-property sentence as its own head, so the outer
+                // *not assignable* one was gone before anything could decide whether
+                // TypeScript 7 keeps it. It does keep it whenever the two renderings
+                // disagree, which here is exactly the two shapes that make them
+                // disagree: the missing member is declared on a BASE of the target
+                // (`getDeclaringTypeDisplay`, `classImplementsClass4`) or the source is
+                // an empty subclass displayed as its base (`emptySubclassBaseName`,
+                // `inheritance1`). Emit the un-suppressed pair and let
+                // [RelationHeadSuppression] apply tsgo's own `chainArgsMatch`.
+                val caeHead = "Type '${typeToString(sourceType)}' is not assignable to type '$displayTarget'."
                 if (missing.size >= 2) {
                     diagnostics.add(Diagnostic(
-                        message = formatTs2740Message(displaySource, displayTarget, missing),
+                        message = caeHead,
+                        messageChain = listOf(
+                            "  " + formatTs2740Message(displaySource, displayTarget, missing),
+                        ),
                         category = DiagnosticCategory.Error,
-                        code = if (missing.size <= 4) 2739 else 2740,
+                        code = 2322,
                         fileName = fileName, line = line, character = character,
                         start = target.pos, length = target.text.length,
                     ))
@@ -108060,8 +108083,12 @@ interface DataView {
                         }
                     }
                     diagnostics.add(Diagnostic(
-                        message = "Property '$mpName' is missing in type '$qualSource' but required in type '$qualDeclaring'.",
-                        category = DiagnosticCategory.Error, code = 2741,
+                        message = caeHead,
+                        messageChain = listOf(
+                            "  Property '$mpName' is missing in type '$qualSource' but " +
+                                "required in type '$qualDeclaring'.",
+                        ),
+                        category = DiagnosticCategory.Error, code = 2322,
                         fileName = fileName, line = line, character = character,
                         start = target.pos, length = target.text.length,
                         relatedInformation = listOfNotNull(relatedInfo),

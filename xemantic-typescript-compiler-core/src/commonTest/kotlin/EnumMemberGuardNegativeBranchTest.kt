@@ -147,7 +147,12 @@ class EnumMemberGuardNegativeBranchTest {
                 return 0;
             }
             """.trimIndent(),
-        ) should { have(any { it.code == 2345 }) }
+        ) should {
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'name' is missing in type 'Mod' but required in type 'Ident'."
+            })
+        }
     }
 
     @Test

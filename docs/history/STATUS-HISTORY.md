@@ -3362,3 +3362,22 @@ call twins 7/1/7/1 → 10/1/4/1, zero REF-SPLIT. Ablation 28/2/6/2 RED over 45 p
 8×0/0, libraries byte-identical, cost_gate exit 0 (`typeOfExpr.calls` +0.83% vs rebuilt
 HEAD, the (P18.31) cache-hit pattern, not rebaselined), huge_methods exit 0, warning-clean.
 (CHK.98) stays open on its stage-2 rows.
+
+**(P18.84) — (CHK.98) STAGE 2: `Promise.then`, A NAMESPACE-IMPORT CALLEE AND PREDICATE `filter` — TWO INSTANTIATIONS THAT NO-OP'D A UNION-WRAPPED FUNCTION TYPE, AND THE ITEM CLOSES, 19,028 / 0 / 3 (2026-09-12).**
+The first round measured against tsgo 7.0.2 ALONE (owner directive the same day). A
+callback passed to `then`/`catch` was untyped because the lib parameter is
+`((value: T) => …) | undefined | null` and BOTH the generic-member resolver's parameter
+branch and `instantiateContextualParamType` no-op'd a union-wrapped function type — the
+nullish strip everyone suspected was never the loss (a marker showed the pull receiving
+`params=[T]`). A namespace-import callee's pull now falls to `resolveNamespaceQualifiedSymbol`
+where the access answered `any`, refusing a lexically shadowed root SYNTACTICALLY (an
+`any`-annotated parameter is registered nowhere). Predicate `filter`'s loss was an
+inline-arrow leg missing from `predicateTargetTypeOfGuardExpr` — (P18.77)'s "lib `filter`
+is a `MethodSignature`" claim refuted — and tsc 5.5's inferred `typeof` predicate landed
+with it, closing a pre-existing false positive. `reduce(cb, {} as Record<…>)` is not
+contextual typing: `Record<K, V>` resolves to bare `any`, now (CHK.135). Promise family
+0/0/12 → 9/0/3, namespace 1/0/4 → 5/0/0, filter 1/0/5 → 6/0/1; the instantiator arm fires
+1,159-2,455 times per profile with the grid at 8×0/0 (a GATE, green). Eleven ablation arms,
+one found dead on the first pin set and repaired. cost_gate exit 0 (within +0.05% of
+rebuilt HEAD), huge_methods exit 0, warning-clean. **(CHK.98) is CHECKED OFF**; the queue's
+head is now (LEGACY.0), the owner's corpus re-pin.

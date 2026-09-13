@@ -111,7 +111,11 @@ class IntersectionMergedSourceTest {
                 "declare function zzzMk3(): ZzzBase & { zzzEndLine: number };\n" +
                 "const zzzC2: ZzzMiss = zzzMk3();",
         ) should {
-            have(any { it.code == 2322 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'zzzGone' is missing in type 'ZzzBase & { zzzEndLine: number; }' " +
+                    "but required in type 'ZzzMiss'."
+            })
         }
     }
 

@@ -922,18 +922,6 @@ val tsgoPendingBaselines = listOf(
         "the 'any' type i"
     ),
     TsgoPendingBaseline(
-        "assignmentCompatFunctionsWithOptionalArgs.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "assignmentCompatFunctionsWithOptionalArgs.ts(5,5): error TS2741: Property 'id' is " +
-        "missing in type '{ name: string; }' but required in type '{ id: numb | ours: " +
-        "assignmentCompatFunctionsWithOptionalArgs.ts(5,5): error TS2345: Argument of type '{ " +
-        "name: string; }' is not assignable to parameter of type '{ id: nu"
-    ),
-    TsgoPendingBaseline(
         "assignmentCompatWithOverloads.errors.txt",
         "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Types of " +
         "parameters 'x' and 'x' are incompatible. | ours: Types of construct signatures are " +
@@ -950,30 +938,6 @@ val tsgoPendingBaselines = listOf(
         "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Target " +
         "signature provides too few arguments. Expected 1 or more, but got 0. | ours: Types of " +
         "construct signatures are incompatible."
-    ),
-    TsgoPendingBaseline(
-        "assignmentCompatability_checking-apply-member-off-of-function-interface.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "assignmentCompatability_checking-apply-member-off-of-function-interface.ts(23,4): " +
-        "error TS2741: Property 'apply' is missing in type 'string[]' but req | ours: " +
-        "assignmentCompatability_checking-apply-member-off-of-function-interface.ts(23,4): " +
-        "error TS2345: Argument of type 'string[]' is not assignable to param"
-    ),
-    TsgoPendingBaseline(
-        "assignmentCompatability_checking-call-member-off-of-function-interface.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "assignmentCompatability_checking-call-member-off-of-function-interface.ts(23,4): error " +
-        "TS2741: Property 'call' is missing in type 'string[]' but requi | ours: " +
-        "assignmentCompatability_checking-call-member-off-of-function-interface.ts(23,4): error " +
-        "TS2345: Argument of type 'string[]' is not assignable to parame"
     ),
     TsgoPendingBaseline(
         "assignmentToInstantiationExpression.js",
@@ -1046,17 +1010,6 @@ val tsgoPendingBaselines = listOf(
         "the parent class is not accessible in the child class via super."
     ),
     TsgoPendingBaseline(
-        "classImplementsClass4.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2322 / ours TS2741); layer `submoduleAccepted`. tsgo: " +
-        "classImplementsClass4.ts(16,1): error TS2322: Type 'C' is not assignable to type 'C2'. " +
-        "| ours: classImplementsClass4.ts(16,1): error TS2741: Property 'x' is missing in type " +
-        "'C' but required in type 'A'."
-    ),
-    TsgoPendingBaseline(
         "classSideInheritance3.errors.txt",
         "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Target " +
         "signature provides too few arguments. Expected 2 or more, but got 1. | ours: Types of " +
@@ -1089,33 +1042,10 @@ val tsgoPendingBaselines = listOf(
         "'map(...).size' are incompatible between these types."
     ),
     TsgoPendingBaseline(
-        "computedPropertyBindingElementDeclarationNoCrash1.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2739 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "computedPropertyBindingElementDeclarationNoCrash1.ts(12,21): error TS2739: Type '{ [x: " +
-        "string]: unknown; }' is missing the following properties from t | ours: " +
-        "computedPropertyBindingElementDeclarationNoCrash1.ts(12,21): error TS2345: Argument of " +
-        "type '{ [x: string]: unknown; }' is not assignable to parameter"
-    ),
-    TsgoPendingBaseline(
         "conditionalTypeDoesntSpinForever.errors.txt",
         "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
         "following error. | ours: Overload 1 of 2, '(o: {}): string[]', gave the following " +
         "error."
-    ),
-    TsgoPendingBaseline(
-        "constraints0.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
-        "constraints0.ts(14,19): error TS2741: Property 'a' is missing in type 'B' but required " +
-        "in type 'A'. | ours: constraints0.ts(14,19): error TS2344: Type 'B' does not satisfy " +
-        "the constraint 'A'."
     ),
     TsgoPendingBaseline(
         "constructorOverloads1.errors.txt",
@@ -1187,18 +1117,6 @@ val tsgoPendingBaselines = listOf(
         "following error. | ours: Overload 1 of 3, '(callbackfn: (previousValue: number, " +
         "currentValue: number, currentIndex: number, array: number[]) => number, initialValue: " +
         "number): "
-    ),
-    TsgoPendingBaseline(
-        "differentTypesWithSameName.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "differentTypesWithSameName.ts(16,15): error TS2741: Property 's' is missing in type " +
-        "'variable' but required in type 'm.variable'. | ours: " +
-        "differentTypesWithSameName.ts(16,15): error TS2345: Argument of type 'variable' is not " +
-        "assignable to parameter of type 'm.variable'."
     ),
     TsgoPendingBaseline(
         "dissallowSymbolAsWeakType.errors.txt",
@@ -1351,17 +1269,6 @@ val tsgoPendingBaselines = listOf(
         "augmentation, module 'foo' cannot be found."
     ),
     TsgoPendingBaseline(
-        "exportDefaultStripsFreshness.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "index.ts(10,6): error TS2741: Property 'foo' is missing in type '{ foob: string; }' " +
-        "but required in type 'IFoo'. | ours: index.ts(10,6): error TS2345: Argument of type '{ " +
-        "foob: string; }' is not assignable to parameter of type 'IFoo'."
-    ),
-    TsgoPendingBaseline(
         "exportEmptyArrayBindingPattern(module=commonjs,target=esnext).js",
         "JS emit; layer `submoduleAccepted`. tsgo: [] = []; | ours: var _a;"
     ),
@@ -1408,62 +1315,6 @@ val tsgoPendingBaselines = listOf(
         "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
         "following error. | ours: Overload 1 of 2, '(bar: { a: number; }[]): string', gave the " +
         "following error."
-    ),
-    TsgoPendingBaseline(
-        "genericConstraint2.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
-        "genericConstraint2.ts(21,17): error TS2741: Property 'comparer' is missing in type " +
-        "'ComparableString' but required in type 'Comparable<ComparableStrin | ours: " +
-        "genericConstraint2.ts(21,17): error TS2344: Type 'ComparableString' does not satisfy " +
-        "the constraint 'Comparable<ComparableString>'."
-    ),
-    TsgoPendingBaseline(
-        "genericTypeConstraints.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
-        "genericTypeConstraints.ts(9,31): error TS2741: Property 'fooMethod' is missing in type " +
-        "'FooExtended' but required in type 'Foo'. | ours: genericTypeConstraints.ts(9,31): " +
-        "error TS2344: Type 'FooExtended' does not satisfy the constraint 'Foo'."
-    ),
-    TsgoPendingBaseline(
-        "generics1.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
-        "generics1.ts(10,14): error TS2741: Property 'b' is missing in type 'A' but required in " +
-        "type 'B'. | ours: generics1.ts(10,14): error TS2344: Type 'A' does not satisfy the " +
-        "constraint 'B'."
-    ),
-    TsgoPendingBaseline(
-        "generics2.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
-        "generics2.ts(17,14): error TS2741: Property 'b' is missing in type 'A' but required in " +
-        "type 'B'. | ours: generics2.ts(17,14): error TS2344: Type 'A' does not satisfy the " +
-        "constraint 'B'."
-    ),
-    TsgoPendingBaseline(
-        "generics5.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
-        "generics5.ts(10,14): error TS2741: Property 'b' is missing in type 'A' but required in " +
-        "type 'B'. | ours: generics5.ts(10,14): error TS2344: Type 'A' does not satisfy the " +
-        "constraint 'B'."
     ),
     TsgoPendingBaseline(
         "gettersAndSettersErrors.errors.txt",
@@ -1545,44 +1396,10 @@ val tsgoPendingBaselines = listOf(
         "exist on type 'toString'."
     ),
     TsgoPendingBaseline(
-        "inferTypePredicates.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2322 / ours TS2740); layer `submoduleAccepted`. tsgo: " +
-        "inferTypePredicates.ts(133,7): error TS2322: Type 'object' is not assignable to type " +
-        "'Date'. | ours: inferTypePredicates.ts(133,7): error TS2740: Type '{}' is missing the " +
-        "following properties from type 'Date': toDateString, toTimeString, toLocaleDateS"
-    ),
-    TsgoPendingBaseline(
-        "inferenceFromIncompleteSource.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "inferenceFromIncompleteSource.ts(11,11): error TS2741: Property 'prop' is missing in " +
-        "type '{ items: { name: string; }[]; itemKey: \"name\"; }' but requi | ours: " +
-        "inferenceFromIncompleteSource.ts(11,11): error TS2345: Argument of type '{ items: { " +
-        "name: string; }[]; itemKey: \"name\"; }' is not assignable to parame"
-    ),
-    TsgoPendingBaseline(
         "inferenceOuterResultNotIncorrectlyInstantiatedWithInnerResult.errors.txt",
         "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
         "following error. | ours: Overload 1 of 4, '(target: {}, source: { x: number; }): { x: " +
         "number; }', gave the following error."
-    ),
-    TsgoPendingBaseline(
-        "inheritance1.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2322 / ours TS2741); layer `submoduleAccepted`. tsgo: " +
-        "inheritance1.ts(40,1): error TS2322: Type 'ImageBase' is not assignable to type " +
-        "'SelectableControl'. | ours: inheritance1.ts(40,1): error TS2741: Property 'select' is " +
-        "missing in type 'Control' but required in type 'SelectableControl'."
     ),
     TsgoPendingBaseline(
         "inheritedConstructorWithRestParams2.errors.txt",
@@ -1761,18 +1578,6 @@ val tsgoPendingBaselines = listOf(
         "TS2451: Cannot redeclare block-scoped variable 'foo'."
     ),
     TsgoPendingBaseline(
-        "mappedTypeAsStringTemplate.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "mappedTypeAsStringTemplate.ts(7,5): error TS2741: Property 'xy' is missing in type '{ " +
-        "x: number; }' but required in type '{ xy: number; }'. | ours: " +
-        "mappedTypeAsStringTemplate.ts(7,5): error TS2345: Argument of type '{ x: number; }' is " +
-        "not assignable to parameter of type '{ xy: number; }'."
-    ),
-    TsgoPendingBaseline(
         "maximum10SpellingSuggestions.errors.txt",
         "F6 top code differs (tsgo TS2552 / ours TS2304); layer `submoduleAccepted`. tsgo: " +
         "maximum10SpellingSuggestions.ts(5,1): error TS2552: Cannot find name 'bob'. Did you " +
@@ -1839,27 +1644,15 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "noParameterReassignmentIIFEAnnotated.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2740 / ours TS2345,TS8029); layer `submoduleAccepted`. " +
-        "tsgo: index.js(6,42): error TS2740: Type 'IArguments' is missing the following " +
-        "properties from type 'string[]': pop, push, concat, join, and 23 more. | ours: " +
-        "index.js(3,28): error TS8029: JSDoc '@param' tag has name 'rest', but there is no " +
-        "parameter with that name. It would match 'arguments' if it had an ar"
-    ),
-    TsgoPendingBaseline(
-        "noParameterReassignmentJSIIFE.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2740 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "index.js(3,42): error TS2740: Type 'IArguments' is missing the following properties " +
-        "from type 'string[]': pop, push, concat, join, and 23 more. | ours: index.js(3,42): " +
-        "error TS2345: Argument of type 'IArguments' is not assignable to parameter of type " +
-        "'string[]'."
+        "JSDoc: an OURS-ONLY TS8029. (LEGACY.0b) F6a is CLOSED for this row -- its " +
+            "TS2740 leaf now matches tsgo byte for byte -- and what is left is a " +
+            "different family: `@param {...unknown} rest` on a zero-parameter function " +
+            "that reads `arguments`. A VARIADIC JSDoc param IS an array type, so tsc's " +
+            "`It would match 'arguments' if it had an array type` rung must not fire; " +
+            "our emitter does not test the tag's variadic-ness. tsgo reports nothing " +
+            "here. Layer `submoduleAccepted`. tsgo: index.js(6,42): error TS2740 (which " +
+            "we now match) | ours: that row PLUS index.js(3,28): error TS8029: JSDoc " +
+            "'@param' tag has name 'rest', but there is no parameter with that name.",
     ),
     TsgoPendingBaseline(
         "nodeNextPackageSelfNameWithOutDir.errors.txt",
@@ -1878,42 +1671,6 @@ val tsgoPendingBaselines = listOf(
         "F7 diagnostic COUNT changed; layer `submoduleAccepted`. tsgo: " +
         "numericClassMembers1.ts(2,3): error TS2300: Duplicate identifier '0'. | ours: " +
         "numericClassMembers1.ts(3,3): error TS2300: Duplicate identifier '0.0'."
-    ),
-    TsgoPendingBaseline(
-        "objectLiteralFunctionArgContextualTyping.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "objectLiteralFunctionArgContextualTyping.ts(11,4): error TS2741: Property 'value' is " +
-        "missing in type '{ toString: (s: string) => string; }' but requir | ours: " +
-        "objectLiteralFunctionArgContextualTyping.ts(11,4): error TS2345: Argument of type '{ " +
-        "toString: (s: string) => string; }' is not assignable to paramete"
-    ),
-    TsgoPendingBaseline(
-        "objectLiteralFunctionArgContextualTyping2.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "objectLiteralFunctionArgContextualTyping2.ts(9,4): error TS2741: Property 'doStuff' is " +
-        "missing in type '{ value: string; }' but required in type 'I2'. | ours: " +
-        "objectLiteralFunctionArgContextualTyping2.ts(9,4): error TS2345: Argument of type '{ " +
-        "value: string; }' is not assignable to parameter of type 'I2'."
-    ),
-    TsgoPendingBaseline(
-        "objectLiteralThisWidenedOnUse.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "objectLiteralThisWidenedOnUse.ts(8,21): error TS2741: Property 'bar' is missing in " +
-        "type '{ prop1: number; prop2: number; prop3: number; test(): void;  | ours: " +
-        "objectLiteralThisWidenedOnUse.ts(8,21): error TS2345: Argument of type '{ prop1: " +
-        "number; prop2: number; prop3: number; test(): void; accept_foo(foo: F"
     ),
     TsgoPendingBaseline(
         "objectLiteralWithSemicolons3.js",
@@ -2033,18 +1790,6 @@ val tsgoPendingBaselines = listOf(
         "reassignStaticProp.ts (2 errors) ===="
     ),
     TsgoPendingBaseline(
-        "recursiveClassReferenceTest.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "recursiveClassReferenceTest.ts(95,21): error TS2741: Property 'getInitialState' is " +
-        "missing in type 'Window' but required in type 'IMode'. | ours: " +
-        "recursiveClassReferenceTest.ts(95,21): error TS2345: Argument of type 'Window' is not " +
-        "assignable to parameter of type 'IMode'."
-    ),
-    TsgoPendingBaseline(
         "recursiveExportAssignmentAndFindAliasedType1.errors.txt",
         "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
         "recursiveExportAssignmentAndFindAliasedType1_moduleDef.d.ts(3,5): error TS2303: " +
@@ -2112,18 +1857,6 @@ val tsgoPendingBaselines = listOf(
         "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ~ | ours: ~~"
     ),
     TsgoPendingBaseline(
-        "setMethods.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2739 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "setMethods.ts(13,17): error TS2739: Type 'undefined[]' is missing the following " +
-        "properties from type 'ReadonlySetLike<unknown>': has, size | ours: " +
-        "setMethods.ts(13,17): error TS2345: Argument of type 'undefined[]' is not assignable " +
-        "to parameter of type 'ReadonlySetLike<unknown>'."
-    ),
-    TsgoPendingBaseline(
         "signatureLengthMismatchInOverload.errors.txt",
         "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
         "following error. | ours: Overload 1 of 2, '(callback: (arg: string, arg2: string) => " +
@@ -2151,30 +1884,6 @@ val tsgoPendingBaselines = listOf(
         "ours: ==== staticModifierAlreadySeen.ts (3 errors) ===="
     ),
     TsgoPendingBaseline(
-        "strictFunctionTypesErrors.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2322 / ours TS2328); layer `submoduleAccepted`. tsgo: " +
-        "strictFunctionTypesErrors.ts(133,1): error TS2322: Type '(f: (x: Dog) => Dog) => void' " +
-        "is not assignable to type '(f: (x: Animal) => Animal) => void'. | ours: " +
-        "strictFunctionTypesErrors.ts(133,1): error TS2328: Types of parameters 'f' and 'f' are " +
-        "incompatible."
-    ),
-    TsgoPendingBaseline(
-        "templateStringsArrayTypeRedefinedInES6Mode.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2740 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "templateStringsArrayTypeRedefinedInES6Mode.ts(7,3): error TS2740: Type '{}' is missing " +
-        "the following properties from type 'TemplateStringsArray': raw, | ours: " +
-        "templateStringsArrayTypeRedefinedInES6Mode.ts(7,3): error TS2345: Argument of type " +
-        "'{}' is not assignable to parameter of type 'TemplateStringsArray'."
-    ),
-    TsgoPendingBaseline(
         "thisInObjectJs.js",
         "JS emit; layer `submoduleAccepted`. tsgo: export {}; | ours: export {};"
     ),
@@ -2191,30 +1900,6 @@ val tsgoPendingBaselines = listOf(
         "/package1/other.ts(2,23): error TS2343: This syntax requires an imported helper named " +
         "'__awaiter' which does not exist in 'tslib'. Consider upgrading  | ours: ==== " +
         "/package1/other.ts (1 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "typeArgumentInferenceWithConstraintAsCommonRoot.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "typeArgumentInferenceWithConstraintAsCommonRoot.ts(7,6): error TS2741: Property 'y' is " +
-        "missing in type 'Elephant' but required in type 'Giraffe'. | ours: " +
-        "typeArgumentInferenceWithConstraintAsCommonRoot.ts(7,6): error TS2345: Argument of " +
-        "type 'Elephant' is not assignable to parameter of type 'Giraffe'."
-    ),
-    TsgoPendingBaseline(
-        "typeParamExtendsOtherTypeParam.errors.txt",
-        "F6a missing-property HEAD SUPPRESSION (28 rows, ONE rule: TypeScript 7 drops the " +
-        "outer not-assignable head when the chain's innermost message is the missing-property " +
-        "one and its type arguments match the head's -- relater.go ~4809 `reportRelationError` " +
-        "/ `chainArgsMatch`; 4 of the 28 go the OTHER way, so it is not a direction flip). " +
-        "Top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
-        "typeParamExtendsOtherTypeParam.ts(12,26): error TS2741: Property 'a' is missing in " +
-        "type '{ b: string; }' but required in type '{ a: string; }'. | ours: " +
-        "typeParamExtendsOtherTypeParam.ts(12,26): error TS2344: Type '{ b: string; }' does not " +
-        "satisfy the constraint '{ a: string; }'."
     ),
     TsgoPendingBaseline(
         "typeParameterWithInvalidConstraintType.errors.txt",

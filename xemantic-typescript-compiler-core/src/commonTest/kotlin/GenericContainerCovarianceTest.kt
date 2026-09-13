@@ -130,7 +130,10 @@ class GenericContainerCovarianceTest {
             x = new Right();
             """
         ) should {
-            have(any { it.code == 2322 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'l' is missing in type 'Right<unknown>' but required in type 'Left<number>'."
+            })
         }
     }
 }

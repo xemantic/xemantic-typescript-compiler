@@ -81,7 +81,11 @@ class NestedAliasPredicateTargetTest {
                 return last;
             }
         """.trimIndent()) should {
-            have(any { it.code == 2322 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property '_declarationBrand' is missing in type 'PlainNode' but " +
+                    "required in type 'Declaration'."
+            })
         }
     }
 }

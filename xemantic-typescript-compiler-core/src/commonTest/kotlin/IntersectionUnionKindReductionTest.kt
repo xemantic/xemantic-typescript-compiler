@@ -82,7 +82,10 @@ class IntersectionUnionKindReductionTest {
         ) should {
             // the surviving BinaryExpression member's `left` is the wide Expression —
             // the reduction must NOT manufacture a narrowing that isn't declared.
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'text' is missing in type 'Expression' but required in type 'Identifier'."
+            })
         }
     }
 

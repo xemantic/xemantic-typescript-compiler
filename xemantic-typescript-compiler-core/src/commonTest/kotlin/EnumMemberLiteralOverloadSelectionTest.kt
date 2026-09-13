@@ -78,7 +78,10 @@ class EnumMemberLiteralOverloadSelectionTest {
                 return b;
             }
         """.trimIndent()) should {
-            have(any { it.code == 2322 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'bOnly' is missing in type 'AShape' but required in type 'BShape'."
+            })
         }
     }
 
@@ -142,7 +145,11 @@ class EnumMemberLiteralOverloadSelectionTest {
             declare function createToken<TKind extends ModifierSK>(token: TKind): ModifierTok<TKind>;
             takeSuper(createToken(SK.ReadonlyKeyword));
         """.trimIndent()) should {
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'sup' is missing in type 'ModifierTok<SK.ReadonlyKeyword>' " +
+                    "but required in type 'SuperExpr'."
+            })
         }
     }
 
@@ -214,7 +221,10 @@ class EnumMemberLiteralOverloadSelectionTest {
         diagnose(bothGenericPrelude + """
             wantSuper(make(SK.ReadonlyKeyword));
         """.trimIndent()) should {
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'sup' is missing in type 'ModTok' but required in type 'SuperTok'."
+            })
         }
     }
 
@@ -223,7 +233,10 @@ class EnumMemberLiteralOverloadSelectionTest {
         diagnose(bothGenericPrelude + """
             wantMod(make(SK.SuperKeyword));
         """.trimIndent()) should {
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'mod' is missing in type 'SuperTok' but required in type 'ModTok'."
+            })
         }
     }
 }

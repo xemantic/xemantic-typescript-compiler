@@ -19,6 +19,28 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.89) — F6a: THE "UNBLOCKER" WAS NOT NEEDED, BECAUSE tsgo's CONDITION IS OVER *RENDERED STRINGS* — 27 OF 28 ROWS, BOTH DIRECTIONS, 19,139 / 0 / 215 (2026-09-13).**
+Pending 217 → **190**, skipped 242 → **215**, both −27. (P18.88) refused this family for
+want of a relation-error funnel across "~30 sites"; the re-taken census says **61 sites and
+119 baselines** (not 73), and the funnel was never needed: **tsgo's `chainArgsMatch` compares
+RENDERED STRINGS**, so deciding it from a finished `Diagnostic` at the single
+`Checker.getDiagnostics()` exit is not an approximation of its rule but the rule itself — one
+call site routing all 61, fail-closed on a head that does not parse. Stage 1 landed as an
+identity function with a byte-identical receipt; stage 2 is the four-conjunct condition, with
+conjunct 3 parsed and then EXCLUDED exactly as tsgo does. **Both directions are one rule** —
+23 of 24 leaf-reporting plus 4 of 4 head-keeping close together, and the 4 turned out to be
+three mechanisms. **The pre-measurement is what made it safe**: of 2,955 active baselines not
+one has a head whose displays match its chain entry, and the 25 where ours did were all
+already ignored — so the rule provably could not move a green baseline, and the first
+post-change suite had 32 failures of which zero were corpus subtests. Ablation 98 / 771 / 14
+/ 49 RED, no conjunct redundant, one arm recorded as having no local pin and then given one.
+32 existing pins in 27 classes strengthened from code-only to full text. Grid a MEASURED
+control (the rule fires zero times on the profiles). One cost refused on arithmetic: three
+hand-written pins now differ in code rather than text, and avoiding them would cost 7 of the
+27 rows. **An instrument failure was also found and fixed**: this session's warning check
+carried a `-q` that suppresses the warnings it greps for — a positive-control probe read
+zero — so four rounds' "warning-clean" claims were worthless and HEAD was in fact dirty; the
+current tree is clean against a gate proven live.
 **(P18.88) — (LEGACY.0b) STEP 3: F6 DECOMPOSED INTO EIGHT MECHANISMS, FOUR SUB-FAMILIES LANDED, THE LARGEST REFUSED ON A MEASURED BLOCKER, 19,130 / 0 / 242 (2026-09-13).**
 Pending 242 → **217** and skipped 267 → **242**, both −25. **"F6 code-differs" was a
 first-differing-LINE label for the second round running**: its 88 rows are EIGHT mechanisms,
@@ -101,21 +123,3 @@ reverted) / 5 RED (name key dropped). Grid 8×`added=0 removed=0`, marked 18→1
 +2.13% printed against the stale baseline is +1.31% on a rebuilt pristine parent, so this
 change's own effect is `typeNode.bypassed` +0.81% — the interning-order change means
 `Foo | Bar` and `Bar | Foo` now intern to ONE union. (LEGACY.0) stays open on (0b).
-**(P18.84) — (CHK.98) STAGE 2: `Promise.then`, A NAMESPACE-IMPORT CALLEE AND PREDICATE `filter` — TWO INSTANTIATIONS THAT NO-OP'D A UNION-WRAPPED FUNCTION TYPE, AND THE ITEM CLOSES, 19,028 / 0 / 3 (2026-09-12).**
-The first round measured against tsgo 7.0.2 ALONE (owner directive the same day). A
-callback passed to `then`/`catch` was untyped because the lib parameter is
-`((value: T) => …) | undefined | null` and BOTH the generic-member resolver's parameter
-branch and `instantiateContextualParamType` no-op'd a union-wrapped function type — the
-nullish strip everyone suspected was never the loss (a marker showed the pull receiving
-`params=[T]`). A namespace-import callee's pull now falls to `resolveNamespaceQualifiedSymbol`
-where the access answered `any`, refusing a lexically shadowed root SYNTACTICALLY (an
-`any`-annotated parameter is registered nowhere). Predicate `filter`'s loss was an
-inline-arrow leg missing from `predicateTargetTypeOfGuardExpr` — (P18.77)'s "lib `filter`
-is a `MethodSignature`" claim refuted — and tsc 5.5's inferred `typeof` predicate landed
-with it, closing a pre-existing false positive. `reduce(cb, {} as Record<…>)` is not
-contextual typing: `Record<K, V>` resolves to bare `any`, now (CHK.135). Promise family
-0/0/12 → 9/0/3, namespace 1/0/4 → 5/0/0, filter 1/0/5 → 6/0/1; the instantiator arm fires
-1,159-2,455 times per profile with the grid at 8×0/0 (a GATE, green). Eleven ablation arms,
-one found dead on the first pin set and repaired. cost_gate exit 0 (within +0.05% of
-rebuilt HEAD), huge_methods exit 0, warning-clean. **(CHK.98) is CHECKED OFF**; the queue's
-head is now (LEGACY.0), the owner's corpus re-pin.

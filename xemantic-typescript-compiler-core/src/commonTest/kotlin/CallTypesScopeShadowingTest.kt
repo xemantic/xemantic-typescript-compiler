@@ -162,7 +162,10 @@ class CallTypesScopeShadowingTest {
             }
             """
         ) should {
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'parent' is missing in type 'TypeCheckerHost' but required in type 'Nd'."
+            })
         }
     }
 
@@ -181,7 +184,10 @@ class CallTypesScopeShadowingTest {
             }
             """
         ) should {
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'parent' is missing in type 'TypeCheckerHost' but required in type 'Nd'."
+            })
         }
     }
 

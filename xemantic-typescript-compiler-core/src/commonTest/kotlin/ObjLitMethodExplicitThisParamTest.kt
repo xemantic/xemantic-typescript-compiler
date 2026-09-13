@@ -77,7 +77,10 @@ class ObjLitMethodExplicitThisParamTest {
             };
             """
         ) should {
-            have(any { it.code == 2345 })
+            have(any {
+                it.code == 2741 && it.message ==
+                    "Property 'kind' is missing in type '{ value(): boolean; }' but required in type 'Node2'."
+            })
         }
     }
 

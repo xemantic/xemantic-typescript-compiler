@@ -168,6 +168,10 @@ class SymbolKeyedMemberTest {
             """,
             directives = realLibs,
         )
-        assert(diagnostics.any { it.code == 2322 })
+        assert(diagnostics.any {
+            it.code == 2740 && it.message ==
+                "Type 'NotAChunk<T>' is missing the following properties from type " +
+                "'Chunk<T>': length, concat, join, slice, and 17 more."
+        })
     }
 }

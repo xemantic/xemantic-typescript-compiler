@@ -148,7 +148,13 @@ class BindingPatternParamAndSpreadArgTest {
             }
             """
         ) should {
-            have(any { it.code == 2345 })
+            // (LEGACY.0b) F6a: two members are missing, so TypeScript 7's leaf is the
+            // TS2739 list and the TS2345 head it used to sit under is gone.
+            have(any {
+                it.code == 2739 && it.message ==
+                    "Type '{ file: string; }' is missing the following properties from " +
+                    "type 'FileRangeRequestArgs': startLine, endLine"
+            })
         }
     }
 }
