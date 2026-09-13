@@ -19,6 +19,27 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.86) — (LEGACY.0b) STEP 1: THE CORPUS READS tsgo's OWN BASELINES, AND A `.diff` CLASSIFIES A *FILE* WHERE A FAILURE CLASSIFIES WHAT *WE* GOT WRONG, 19,082 / 0 / 310 (2026-09-13).**
+`cloneTypeScriptGoRepo` pins tsgo at tag `typescript/v7.0.2` and the four baseline lookups
+now choose per subtest between tsgo's checked-in output and tsc's, through a three-way
+fallback whose four bucket counts are **asserted together** (`adopted=8,765` / `new=23` /
+`deleted=9` / `kept-tsc=87`) because a wrong fallback is SILENT — it removes a subtest
+rather than failing one. **The guard fired twice and caught an off-by-one**: `new` is 23,
+not the design's 24, because (0a)'s pin move already carried
+`coAndContraVariantInferences5` a round early. Corpus 8,838 → **8,852**; the red set is
+**289** with two controls that make it attributable (all 289 from the tsgo root, all 289
+carrying a `.diff` layer), disposed as 268 pending (285 with (0a)'s) + 22 divergences (21
+TS-1 + 1 `/.src/`), so the suite is 0 failed with 310 visible skips. **The per-family
+ranking moved materially from the design's** (F10 45→4, F9 11→53, F7 43→4) for a reason
+worth carrying: a `.diff` classifies a FILE, a failure classifies what WE got wrong. Seven
+predictions refuted, the sharpest being that a NEGATIVE diagnostic code is not impossible
+here — `checkPreEmitCountMismatchPins` synthesizes `TS-1` deliberately, so the round's first
+invariant pin went red against the real binary. Ledgering the 21 TS-1 rows cost 16 real tsc
+comparisons, which were **paid back verbatim** in `TsgoHarnessSelfCheckBaselinesTest` (net
+coverage change zero). cost_gate all 20 counters +0.00% (no `commonMain` touched, so the
+grid is unaffected by construction), huge_methods exit 0, warning-clean. **Left open for a
+decision before (0b-3)**: a fourth "harness artifact ⇒ fall back to tsc" arm would preserve
+those 17 subtests with no ledger at all.
 **(P18.85) — (LEGACY.0a): THE CORPUS IS PINNED TO tsgo's `tsgo-port` SHA, AND tsc's STABLE TYPE ORDERING IS AN *INTERNING* ORDER RATHER THAN A DISPLAY ONE, 19,045 / 0 / 20 (2026-09-13).**
 `typeScriptCommit` moves to `4d4f005c` (tsgo 7.0.2's `_submodules/TypeScript`); the corpus
 generates 8,838 subtests and the first run read **29 red, exactly the sizing's
@@ -92,20 +113,3 @@ classified declaration-first, and that shape is the hazard pin. Ablation 21/2/7/
 134 pins; three countdown pins inverted. Grid 8×`added=0 removed=0` as a measured GATE,
 marked/cronstrue byte-identical, cost_gate exit 0 (20/20 within +0.05% of rebuilt HEAD),
 huge_methods exit 0, warning-clean. (CHK.98) stays open on the `new` arm and stage 2.
-
-**(P18.81) — (CHK.134)(2): `f.bind` — THE BUILD SHAPE SUFFICED, THE LIB HAS TWO OVERLOADS NOT FIVE, AND A RE-BOUND FUNCTION'S `any` WAS THE ARITH RECORDER'S FIRST-TOUCH HAZARD, 18,907 / 0 / 3 (2026-09-12).**
-`Checker.bindType` builds `bind`'s member per call from the receiver alone — `OmitThisParameter`
-is the receiver itself when its `this` is absent/`unknown`/`any` (overloads and type
-parameters KEPT, measured) else the erased last signature minus `this`; the variadic overload
-splits the parameter list at the partial count — with no conditional type touched, and
-`NewableFunction.bind` came free. The queue item's `A0..A3` quartet does not exist in any of
-the three libs. **One signature wherever one decides the call**: handing the lib's PAIR over
-typed a re-bound function `any`, so the pair is built only when overload 1 refuses — which
-is exactly pristine's per-candidate TS2769 chain. Census: 5-24 `bind` sites per profile, ALL
-refused as non-strict, 0 on every library, so the grid and libraries are controls. 52
-fixtures: 60 agree / 1 ours-only / 14 missing, every missing row attributed to a
-pre-existing general gap reproduced WITHOUT `bind` (a variable callee's TS2554, and
-`spineArithRecordVarDecl`'s first-touch under an `any`-reading ambient — now a CLAUDE.md
-gotcha). Ablation 43/26/6/8 RED over 127 pins. cost_gate exit 0 with 20/20 counters
-digit-identical to the rebuilt HEAD, huge_methods exit 0, warning-clean. **(CHK.134) is
-CHECKED OFF**; next is (CHK.98).

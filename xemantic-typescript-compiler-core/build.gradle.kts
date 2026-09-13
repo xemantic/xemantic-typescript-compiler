@@ -260,6 +260,85 @@ val typeScriptRepoDir = rootProject.projectDir.resolve("typescript-repo")
  */
 val typeScriptCommit = "4d4f005c8541e0255a9d8791205fdce326e462bc" // tsgo 7.0.2 `_submodules/TypeScript` (tsgo-port tip; 2nd parent = pristine 637d5746)
 
+// (LEGACY.0b) Deliberately the ROOT directory, like [typeScriptRepoDir] above and for a
+// STRONGER reason: this checkout is shared tooling that is NOT only a baseline source —
+// CLAUDE.md points every agent at `typescript-go-repo/internal/checker/checker.go` as the
+// reference implementation, and `tools/tsgo-7.0.2/lib/tsc` is its shipped binary. Narrowing
+// or relocating it would silently delete the sources those references name.
+val typeScriptGoRepoDir = rootProject.projectDir.resolve("typescript-go-repo")
+
+/**
+ * The exact `microsoft/typescript-go` commit whose CHECKED-IN BASELINES the corpus reads:
+ * tag `typescript/v7.0.2`, i.e. the released tsgo this project adjudicates against
+ * (`tools/tsgo-7.0.2/lib/tsc`).
+ *
+ * (LEGACY.0b), 2026-09-13. tsgo does not store a patch over tsc's baselines — it checks in
+ * its OWN full output under `testdata/baselines/reference/submodule/<suite>/`, and the
+ * `.diff` files beside it are RECORDS of tsgo-vs-tsc whose hunk headers are rewritten to
+ * `@@= skipped =@@` (neither `patch` nor `git apply` accepts them). So this pin selects a
+ * baseline ROOT; see `docs/tsgo-baselines.md` § 1.
+ *
+ * The "old side" of every one of those `.diff` files is TypeScript [typeScriptCommit]
+ * `4d4f005c` — the same sha this corpus's case files and fallback baselines come from.
+ * The two pins are therefore a PAIR: bumping one without the other makes every diff-derived
+ * bucket count below meaningless, which is what the asserted constants exist to catch.
+ */
+val typeScriptGoCommit = "2bd066d87f5bafd315be9f40889d0a60b9e58e0b" // tag typescript/v7.0.2 (submodule side: 4d4f005c)
+
+/**
+ * (LEGACY.0b): the three-way fallback's ASSERTED bucket sizes for the [typeScriptGoCommit] /
+ * [typeScriptCommit] pin.
+ *
+ * A silent shift between baseline ROOTS is the exact failure this corpus exists to prevent
+ * — it would shrink the gate with a green build — so the generator counts every subtest it
+ * resolves and fails when a count moves. Bumping either pin means re-measuring all four and
+ * saying, in the round note, which cases moved and why.
+ *
+ *  - [tsgoExpectedDeleted]: tsc has the baseline, tsgo RAN the case (a `.diff` records it)
+ *    and emitted nothing — the subtest is DELETED.
+ *  - [tsgoExpectedKeptTsc]: tsgo has no baseline AND no `.diff`, i.e. it never ran that
+ *    configuration at all (`baseUrl`/`paths` monorepo cases, its own `skippedEmitTests`) —
+ *    the tsc baseline is KEPT so the subtest survives.
+ *  - [tsgoExpectedNew]: tsgo emits a baseline where tsc had none — a NEW subtest.
+ *  - [tsgoExpectedAdopted]: every subtest served from the tsgo root (the other two buckets'
+ *    complement); a control, so that "adopted collapsed to zero" cannot read as green.
+ *
+ * MEASURED 2026-09-13. `docs/tsgo-baselines.md` predicted 9 / 87 / **24**, and the third is
+ * 23: its sizing was taken against the PRISTINE pin `637d5746`, where
+ * `coAndContraVariantInferences5.errors.txt` did not exist — (LEGACY.0a) moved to
+ * `4d4f005c`, which already carries it, so one of the 24 landed a round early. The
+ * projected corpus size is unaffected (the base moved by the same one).
+ */
+val tsgoExpectedDeleted = 9
+val tsgoExpectedKeptTsc = 87
+val tsgoExpectedNew = 23
+val tsgoExpectedAdopted = 8765
+
+/**
+ * (LEGACY.0b): which baseline file a generated subtest compares against, and what we know
+ * about it.
+ *
+ * [layer] is tsgo's own classification of the divergence and is the guard against following
+ * a tsgo BUG — it is emitted into the generated test as a comment:
+ *  - `submoduleAccepted` — listed in tsgo's `testdata/submoduleAccepted.txt`: an INTENDED
+ *    divergence from tsc, i.e. a row to implement.
+ *  - `submoduleTriaged` — listed in `testdata/submoduleTriaged.txt`, whose header reads
+ *    "known diffs that we intend to fix": a tsgo DEFECT. **No round may target such a
+ *    family**; if its baseline is red, ledger it, do not chase it.
+ *  - `submodule` — in neither list: an UNTRIAGED delta, i.e. unclassified by tsgo itself.
+ *  - `null` — tsgo's output is byte-identical to tsc's (or the baseline is the tsc one).
+ */
+data class TsgoBaselineChoice(
+    /** The baseline file the generated subtest reads. */
+    val file: File,
+    /** The generated Kotlin path expression naming it. */
+    val pathExpr: String,
+    /** tsgo's layer for this baseline, or null when tsgo and tsc agree. */
+    val layer: String?,
+    /** False only for the [tsgoExpectedKeptTsc] bucket. */
+    val fromTsgo: Boolean,
+)
+
 /**
  * Performs a sparse, PINNED, partial clone of the Microsoft TypeScript repository,
  * fetching only the compiler test cases and their expected baselines.
@@ -357,7 +436,317 @@ data class LogicalParityDivergence(
  * The live set. Empty is the healthy state — an entry is a deliberate, argued
  * divergence, added only via the procedure in `docs/logical-parity.md`.
  */
-val logicalParityDivergences = listOf<LogicalParityDivergence>()
+val logicalParityDivergences = listOf(
+    LogicalParityDivergence(
+        baseline = "acceptableAlias1.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; tsc had no baseline for this case at all, so nothing was switched off " +
+            "that ever ran.",
+    ),
+    LogicalParityDivergence(
+        baseline = "accessorInferredReturnTypeErrorInReturnStatement.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "aliasInaccessibleModule.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; tsc had no baseline for this case at all, so nothing was switched off " +
+            "that ever ran.",
+    ),
+    LogicalParityDivergence(
+        baseline = "checkingObjectWithThisInNamePositionNoCrash.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "classExpressionWithDecorator1.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "constructorWithIncompleteTypeAnnotation.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "declarationEmitNameConflictsWithAlias.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; tsc had no baseline for this case at all, so nothing was switched off " +
+            "that ever ran.",
+    ),
+    LogicalParityDivergence(
+        baseline = "declarationEmitTypeofThisInClass.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; tsc had no baseline for this case at all, so nothing was switched off " +
+            "that ever ran.",
+    ),
+    LogicalParityDivergence(
+        baseline = "exportImportNonInstantiatedModule.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; tsc had no baseline for this case at all, so nothing was switched off " +
+            "that ever ran.",
+    ),
+    LogicalParityDivergence(
+        baseline = "interfaceMayNotBeExtendedWitACall.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "isolatedModulesExportImportUninstantiatedNamespace.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "manyCompilerErrorsInTheTwoFiles.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "missingCloseParenStatements(alwaysstrict=true).errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "noUnusedLocals_selfReference.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "reachabilityChecksNoCrash1.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "reverseMappedPartiallyInferableTypes.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "shorthandPropertyAssignmentsInDestructuring(target=es2015).errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "shorthandPropertyAssignmentsInDestructuring_ES6.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "superCallsInConstructor.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "withStatement.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "withStatementErrors.errors.txt",
+        round = 86,
+        pinnedBy = "TsgoHarnessSelfCheckBaselinesTest",
+        reason =
+            "tsgo answers this case with its harness SELF-CHECK, not with an answer: `error TS-1: " +
+            "Pre-emit (N) and post-emit (M) diagnostic counts do not match!`. `TS-1` is no " +
+            "TypeScript code, and tsgo files the family under `submoduleTriaged` -- \"known diffs " +
+            "that we intend to fix\", group \"checker order dependence creating diagnostic " +
+            "instability in API scenarios\", whose own note reads \"ANY test with a TS-1 " +
+            "indicates a problem\". MEANING is preserved because there is no meaning in the file " +
+            "to follow; the tsc comparison this baseline used to make is reproduced verbatim in " +
+            "the pinning class, so no coverage is lost.",
+    ),
+    LogicalParityDivergence(
+        baseline = "jsxRuntimePragma(jsx=react-jsxdev).js",
+        round = 86,
+        pinnedBy = "JsxDevRuntimeFileNameTest",
+        reason = "tsgo's HARNESS mounts a test's files on a virtual filesystem rooted at " +
+            "`/.src/`, so its baseline hoists `const _jsxFileName = \"/.src/two.tsx\"` " +
+            "where ours (and tsc 6's, byte-for-byte on this case) hoists `\"two.tsx\"`. " +
+            "The prefix is a property of where someone else's runner put the file, not of " +
+            "TypeScript 7 — no tsconfig, directive or source text produces it here — so it " +
+            "is not an implementable row. Everything the baseline tested about the dev " +
+            "runtime (the hoist, its per-file name, every jsxDEV call going through the " +
+            "binding, the fileName/lineNumber/columnNumber debug argument, and the classic " +
+            "pragma override) is pinned instead, with a negative control that no emitted " +
+            "path carries `/.src/`. See docs/tsgo-baselines.md § 3 and § 7 risk 2.",
+    ),
+)
 
 /**
  * (LEGACY.0a): a corpus baseline the pinned TypeScript 7 reference produces and this
@@ -380,7 +769,13 @@ data class TsgoPendingBaseline(
     val reason: String,
 )
 
-/** The live set; every entry is a red the (LEGACY.0a) re-pin left, by family. */
+/**
+ * The live set. Two groups, in landing order: first the 17 ORDER rows (LEGACY.0a) left
+ * behind (the `tsgo-port` sha's stable type ordering), then the 268 (LEGACY.0b) rows the
+ * baseline-ROOT switch left — every one of which carries its FAMILY and tsgo's own LAYER
+ * for the divergence, so a family round can select its work with a grep. The full first-run
+ * classification is in the (LEGACY.0b) round note.
+ */
 val tsgoPendingBaselines = listOf(
     TsgoPendingBaseline(
         "coAndContraVariantInferences5.errors.txt",
@@ -478,6 +873,1731 @@ val tsgoPendingBaselines = listOf(
         "ORDER: B169's `(Foo | Bar)['foo']` TS2339 prints the receiver from the written " +
             "union; tsc prints `Bar | Foo` (by name).",
     ),
+    // -------------------------------------------------------------------- (LEGACY.0b)
+    TsgoPendingBaseline(
+        "argumentsReferenceInFunction1_Js.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "index.js(13,29): error TS2345: Argument of type 'IArguments' is not assignable to " +
+        "parameter of type '[f?: any]'. | ours: index.js(13,29): error TS2345: Argument of type " +
+        "'IArguments' is not assignable to parameter of type '[f?: any, ...any[]]'."
+    ),
+    TsgoPendingBaseline(
+        "arrayBestCommonTypes.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 3, '(x: boolean, y?: boolean | undefined): " +
+        "number', gave the following error."
+    ),
+    TsgoPendingBaseline(
+        "arrayCast.errors.txt",
+        "F6 top code differs (tsgo TS2353 / ours TS2352); layer `submoduleAccepted`. tsgo: " +
+        "arrayCast.ts(3,23): error TS2353: Object literal may only specify known properties, " +
+        "and 'foo' does not exist in type '{ id: number; }'. | ours: arrayCast.ts(3,23): error " +
+        "TS2352: Conversion of type '{ foo: string; }[]' to type '{ id: number; }[]' may be a " +
+        "mistake because neither type sufficient"
+    ),
+    TsgoPendingBaseline(
+        "arrayConcatMap.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(...items: ConcatArray<never>[]): never[]', " +
+        "gave the following error."
+    ),
+    TsgoPendingBaseline(
+        "arrayIterationLibES5TargetDifferent(nolib=true,target=es2015).errors.txt",
+        "F8 span/column only; layer `submoduleAccepted`. tsgo: error TS5053: Option 'lib' " +
+        "cannot be specified with option 'noLib'. | ours: error TS5053: Option 'lib' cannot be " +
+        "specified with option 'noLib'."
+    ),
+    TsgoPendingBaseline(
+        "arrayIterationLibES5TargetDifferent(nolib=true,target=esnext).errors.txt",
+        "F8 span/column only; layer `submoduleAccepted`. tsgo: error TS5053: Option 'lib' " +
+        "cannot be specified with option 'noLib'. | ours: error TS5053: Option 'lib' cannot be " +
+        "specified with option 'noLib'."
+    ),
+    TsgoPendingBaseline(
+        "assigningFromObjectToAnythingElse.errors.txt",
+        "F6 top code differs (tsgo TS2322 / ours TS2696); layer `submoduleAccepted`. tsgo: " +
+        "assigningFromObjectToAnythingElse.ts(3,1): error TS2322: Type 'Object' is not " +
+        "assignable to type 'RegExp'. | ours: assigningFromObjectToAnythingElse.ts(3,1): error " +
+        "TS2696: The 'Object' type is assignable to very few other types. Did you mean to use " +
+        "the 'any' type i"
+    ),
+    TsgoPendingBaseline(
+        "assignmentCompatFunctionsWithOptionalArgs.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "assignmentCompatFunctionsWithOptionalArgs.ts(5,5): error TS2741: Property 'id' is " +
+        "missing in type '{ name: string; }' but required in type '{ id: numb | ours: " +
+        "assignmentCompatFunctionsWithOptionalArgs.ts(5,5): error TS2345: Argument of type '{ " +
+        "name: string; }' is not assignable to parameter of type '{ id: nu"
+    ),
+    TsgoPendingBaseline(
+        "assignmentCompatWithOverloads.errors.txt",
+        "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Types of " +
+        "parameters 'x' and 'x' are incompatible. | ours: Types of construct signatures are " +
+        "incompatible."
+    ),
+    TsgoPendingBaseline(
+        "assignmentCompatability44.errors.txt",
+        "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Target " +
+        "signature provides too few arguments. Expected 1 or more, but got 0. | ours: Types of " +
+        "construct signatures are incompatible."
+    ),
+    TsgoPendingBaseline(
+        "assignmentCompatability45.errors.txt",
+        "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Target " +
+        "signature provides too few arguments. Expected 1 or more, but got 0. | ours: Types of " +
+        "construct signatures are incompatible."
+    ),
+    TsgoPendingBaseline(
+        "assignmentCompatability_checking-apply-member-off-of-function-interface.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "assignmentCompatability_checking-apply-member-off-of-function-interface.ts(23,4): " +
+        "error TS2741: Property 'apply' is missing in type 'string[]' but req | ours: " +
+        "assignmentCompatability_checking-apply-member-off-of-function-interface.ts(23,4): " +
+        "error TS2345: Argument of type 'string[]' is not assignable to param"
+    ),
+    TsgoPendingBaseline(
+        "assignmentCompatability_checking-call-member-off-of-function-interface.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "assignmentCompatability_checking-call-member-off-of-function-interface.ts(23,4): error " +
+        "TS2741: Property 'call' is missing in type 'string[]' but requi | ours: " +
+        "assignmentCompatability_checking-call-member-off-of-function-interface.ts(23,4): error " +
+        "TS2345: Argument of type 'string[]' is not assignable to parame"
+    ),
+    TsgoPendingBaseline(
+        "assignmentToInstantiationExpression.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: obj.fn = () => 1234; | ours: (obj.fn) = () " +
+        "=> 1234;"
+    ),
+    TsgoPendingBaseline(
+        "asyncArrowInClassES5(target=es2015).js",
+        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var _a;"
+    ),
+    TsgoPendingBaseline(
+        "augmentExportEquals2.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: //// [file3.ts] | ours: //// [file1.js]"
+    ),
+    TsgoPendingBaseline(
+        "augmentedTypesVar.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var x5;"
+    ),
+    TsgoPendingBaseline(
+        "awaitInNonAsyncFunction.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: !!! related " +
+        "TS1356 awaitInNonAsyncFunction.ts:13:7: Did you mean to mark this function as 'async'? " +
+        "| ours: !!! related TS1356 awaitInNonAsyncFunction.ts:13:28: Did you mean to mark this " +
+        "function as 'async'?"
+    ),
+    TsgoPendingBaseline(
+        "baseClassImprovedMismatchErrors.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type '() => " +
+        "string | number' is not assignable to type '() => number'. | ours: Type '() => number " +
+        "| string' is not assignable to type '() => number'."
+    ),
+    TsgoPendingBaseline(
+        "bigintWithLib.errors.txt",
+        "ours emits EXTRA rows tsgo does not; layer `submoduleAccepted`. tsgo: " +
+        "bigintWithLib.ts(4,1): error TS2350: Only a void function can be called with the 'new' " +
+        "keyword. | ours: Type 'number' is not assignable to type 'bigint'."
+    ),
+    TsgoPendingBaseline(
+        "bindingPatternOmittedExpressionNesting.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: [, , [, [], , []]] = undefined; | ours: var " +
+        "_a, _b, _c, _d;"
+    ),
+    TsgoPendingBaseline(
+        "bitwiseCompoundAssignmentOperators.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "bitwiseCompoundAssignmentOperators.ts(3,3): error TS2447: The '^=' operator is not " +
+        "allowed for boolean types. Consider using '!==' instead. | ours: " +
+        "bitwiseCompoundAssignmentOperators.ts(3,1): error TS2447: The '^=' operator is not " +
+        "allowed for boolean types. Consider using '!==' instead."
+    ),
+    TsgoPendingBaseline(
+        "blockScopedBindingsInDownlevelGenerator(target=es2015).errors.txt",
+        "F6 top code differs (tsgo TS5102 / ours TS5101); layer `submoduleAccepted`. tsgo: " +
+        "error TS5102: Option 'downlevelIteration' has been removed. Please remove it from your " +
+        "configuration. | ours: error TS5101: Option 'downlevelIteration' is deprecated and " +
+        "will stop functioning in TypeScript 7.0. Specify compilerOption " +
+        "'\"ignoreDeprecations\": \"6."
+    ),
+    TsgoPendingBaseline(
+        "circularModuleImports.errors.txt",
+        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "circularModuleImports.ts(7,5): error TS2303: Circular definition of import alias 'B'. " +
+        "| ours: ==== circularModuleImports.ts (1 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "classFieldSuperNotAccessibleJs.errors.txt",
+        "F6 top code differs (tsgo TS2339,TS7053 / ours TS2855); layer `submoduleAccepted`. " +
+        "tsgo: index.js(7,14): error TS2339: Property 'justProp' does not exist on type " +
+        "'YaddaBase'. | ours: index.js(26,22): error TS2855: Class field 'justProp' defined by " +
+        "the parent class is not accessible in the child class via super."
+    ),
+    TsgoPendingBaseline(
+        "classImplementsClass4.errors.txt",
+        "F6 top code differs (tsgo TS2322 / ours TS2741); layer `submoduleAccepted`. tsgo: " +
+        "classImplementsClass4.ts(16,1): error TS2322: Type 'C' is not assignable to type 'C2'. " +
+        "| ours: classImplementsClass4.ts(16,1): error TS2741: Property 'x' is missing in type " +
+        "'C' but required in type 'A'."
+    ),
+    TsgoPendingBaseline(
+        "classSideInheritance3.errors.txt",
+        "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Target " +
+        "signature provides too few arguments. Expected 2 or more, but got 1. | ours: Types of " +
+        "construct signatures are incompatible."
+    ),
+    TsgoPendingBaseline(
+        "classWithDuplicateIdentifier.errors.txt",
+        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
+        "classWithDuplicateIdentifier.ts(2,5): error TS2300: Duplicate identifier 'a'. | ours: " +
+        "classWithDuplicateIdentifier.ts(3,5): error TS2717: Subsequent property declarations " +
+        "must have the same type. Property 'a' must be of type '() => numb"
+    ),
+    TsgoPendingBaseline(
+        "commonMissingSemicolons.errors.txt",
+        "F6 top code differs (tsgo TS2552 / ours TS2304); layer `submoduleAccepted`. tsgo: " +
+        "commonMissingSemicolons.ts(16,8): error TS2552: Cannot find name 'myConst3'. Did you " +
+        "mean 'myConst1'? | ours: commonMissingSemicolons.ts(16,8): error TS2304: Cannot find " +
+        "name 'myConst3'."
+    ),
+    TsgoPendingBaseline(
+        "commonjsAccessExports.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer " +
+        "`submoduleAccepted`. tsgo: /a.js(8,9): error TS2683: 'this' implicitly has type 'any' " +
+        "because it does not have a type annotation. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "complexRecursiveCollections.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: The types " +
+        "returned by 'map(...).size' are incompatible between these types. | ours: The types of " +
+        "'map(...).size' are incompatible between these types."
+    ),
+    TsgoPendingBaseline(
+        "computedPropertyBindingElementDeclarationNoCrash1.errors.txt",
+        "F6 top code differs (tsgo TS2739 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "computedPropertyBindingElementDeclarationNoCrash1.ts(12,21): error TS2739: Type '{ [x: " +
+        "string]: unknown; }' is missing the following properties from t | ours: " +
+        "computedPropertyBindingElementDeclarationNoCrash1.ts(12,21): error TS2345: Argument of " +
+        "type '{ [x: string]: unknown; }' is not assignable to parameter"
+    ),
+    TsgoPendingBaseline(
+        "conditionalTypeDoesntSpinForever.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(o: {}): string[]', gave the following " +
+        "error."
+    ),
+    TsgoPendingBaseline(
+        "conflictingDeclarationsImportFromNamespace1.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2497); layer `submoduleAccepted`. tsgo: ==== " +
+        "index.ts (2 errors) ==== | ours: index.ts(1,23): error TS2497: This module can only be " +
+        "referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag " +
+        "and referenc"
+    ),
+    TsgoPendingBaseline(
+        "conflictingDeclarationsImportFromNamespace2.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2497); layer `submoduleAccepted`. tsgo: ==== " +
+        "index.ts (2 errors) ==== | ours: index.ts(1,23): error TS2497: This module can only be " +
+        "referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag " +
+        "and referenc"
+    ),
+    TsgoPendingBaseline(
+        "constraints0.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
+        "constraints0.ts(14,19): error TS2741: Property 'a' is missing in type 'B' but required " +
+        "in type 'A'. | ours: constraints0.ts(14,19): error TS2344: Type 'B' does not satisfy " +
+        "the constraint 'A'."
+    ),
+    TsgoPendingBaseline(
+        "constructorOverloads1.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(s: string): Foo', gave the following " +
+        "error."
+    ),
+    TsgoPendingBaseline(
+        "constructorWithIncompleteTypeAnnotation.js",
+        "JS emit; layer `submodule`. tsgo: return: 1, | ours: return: 1"
+    ),
+    TsgoPendingBaseline(
+        "contextualReturnTypeOfIIFE2.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer " +
+        "`submoduleAccepted`. tsgo: contextualReturnTypeOfIIFE2.ts(5,9): error TS2339: Property " +
+        "'bar' does not exist on type '() => void'. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "controlFlowInstanceof.errors.txt",
+        "F6 top code differs (tsgo TS2683 / ours TS2721); layer `submoduleAccepted`. tsgo: " +
+        "uglify.js(5,23): error TS2683: 'this' implicitly has type 'any' because it does not " +
+        "have a type annotation. | ours: controlFlowInstanceof.ts(20,7): error TS2339: Property " +
+        "'add' does not exist on type 'Promise<any> | Set<number>'."
+    ),
+    TsgoPendingBaseline(
+        "declarationEmitExpandoPropertyPrivateName.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~~~~~~~~~~~ | " +
+        "ours: ~~~~~"
+    ),
+    TsgoPendingBaseline(
+        "declarationEmitRetainsJsdocyComments.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: ({ | ours: /**"
+    ),
+    TsgoPendingBaseline(
+        "declarationEmitUnknownImport(target=es2015).errors.txt",
+        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "declarationEmitUnknownImport.ts(2,9): error TS2303: Circular definition of import " +
+        "alias 'Foo'. | ours: ==== declarationEmitUnknownImport.ts (3 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "declarationEmitUnknownImport2(target=es2015).errors.txt",
+        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "declarationEmitUnknownImport2.ts(2,1): error TS2303: Circular definition of import " +
+        "alias 'Foo'. | ours: ==== declarationEmitUnknownImport2.ts (5 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "declarationEmitUsingTypeAlias2.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: exports.bar = some_dep_1.goodDeclaration; | " +
+        "ours: exports.bar = (some_dep_1.goodDeclaration);"
+    ),
+    TsgoPendingBaseline(
+        "declarationFileNoCrashOnExtraExportModifier.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2300); layer `submoduleAccepted`. tsgo: ==== " +
+        "input.ts (1 errors) ==== | ours: input.ts(6,14): error TS2300: Duplicate identifier " +
+        "'Sub'."
+    ),
+    TsgoPendingBaseline(
+        "declareModifierOnImport1.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var a = b;"
+    ),
+    TsgoPendingBaseline(
+        "deeplyNestedAssignabilityIssue.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "?[96mdeeplyNestedAssignabilityIssue.ts?[0m:?[93m2?[0m:?[93m5?[0m - 'a' is declared " +
+        "here. | ours: ?[96mdeeplyNestedAssignabilityIssue.ts?[0m:?[93m2?[0m:?[93m5?[0m"
+    ),
+    TsgoPendingBaseline(
+        "deprecatedCompilerOptions1.errors.txt",
+        "F5 removed-option wording; layer `submoduleAccepted`. tsgo: /foo/tsconfig.json(3,19): " +
+        "error TS6046: Argument for '--target' option must be: 'es6', 'es2015', 'es2016', " +
+        "'es2017', 'es2018', 'es2019', 'es2020', 'es | ours: /foo/tsconfig.json(3,19): error " +
+        "TS5107: Option 'target=ES3' is deprecated and will stop functioning in TypeScript 5.5. " +
+        "Specify compilerOption '\"ignore"
+    ),
+    TsgoPendingBaseline(
+        "deprecatedCompilerOptions3.errors.txt",
+        "F5 removed-option wording; layer `submoduleAccepted`. tsgo: /foo/tsconfig.json(3,19): " +
+        "error TS6046: Argument for '--target' option must be: 'es6', 'es2015', 'es2016', " +
+        "'es2017', 'es2018', 'es2019', 'es2020', 'es | ours: /foo/tsconfig.json(3,19): error " +
+        "TS5108: Option 'target=ES3' has been removed. Please remove it from your " +
+        "configuration."
+    ),
+    TsgoPendingBaseline(
+        "deprecatedCompilerOptions4.errors.txt",
+        "F5 removed-option wording; layer `submoduleAccepted`. tsgo: /foo/tsconfig.json(3,19): " +
+        "error TS6046: Argument for '--target' option must be: 'es6', 'es2015', 'es2016', " +
+        "'es2017', 'es2018', 'es2019', 'es2020', 'es | ours: /foo/tsconfig.json(3,19): error " +
+        "TS5108: Option 'target=ES3' has been removed. Please remove it from your " +
+        "configuration."
+    ),
+    TsgoPendingBaseline(
+        "deprecatedCompilerOptions5.errors.txt",
+        "F5 removed-option wording; layer `submoduleAccepted`. tsgo: /foo/tsconfig.json(3,19): " +
+        "error TS6046: Argument for '--target' option must be: 'es6', 'es2015', 'es2016', " +
+        "'es2017', 'es2018', 'es2019', 'es2020', 'es | ours: /foo/tsconfig.json(3,19): error " +
+        "TS5108: Option 'target=ES3' has been removed. Please remove it from your " +
+        "configuration."
+    ),
+    TsgoPendingBaseline(
+        "destructuringInVariableDeclarations1.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: ({ toString: exports.toString } = 1); | " +
+        "ours: exports.toString = 1..toString;"
+    ),
+    TsgoPendingBaseline(
+        "destructuringTuple.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 3, '(callbackfn: (previousValue: number, " +
+        "currentValue: number, currentIndex: number, array: number[]) => number, initialValue: " +
+        "number): "
+    ),
+    TsgoPendingBaseline(
+        "differentTypesWithSameName.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "differentTypesWithSameName.ts(16,15): error TS2741: Property 's' is missing in type " +
+        "'variable' but required in type 'm.variable'. | ours: " +
+        "differentTypesWithSameName.ts(16,15): error TS2345: Argument of type 'variable' is not " +
+        "assignable to parameter of type 'm.variable'."
+    ),
+    TsgoPendingBaseline(
+        "dissallowSymbolAsWeakType.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: dissallowSymbolAsWeakType.ts(3,25): " +
+        "error TS2769: No overload matches this call. | ours: " +
+        "dissallowSymbolAsWeakType.ts(3,16): error TS2769: No overload matches this call."
+    ),
+    TsgoPendingBaseline(
+        "downlevelLetConst13(target=es2015).js",
+        "JS emit; layer `submoduleAccepted`. tsgo: [exports.bar1] = [1]; | ours: exports.bar1 = " +
+        "[1][0];"
+    ),
+    TsgoPendingBaseline(
+        "duplicateClassElements.errors.txt",
+        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
+        "duplicateClassElements.ts(2,12): error TS2300: Duplicate identifier 'a'. | ours: ==== " +
+        "duplicateClassElements.ts (14 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "duplicateIdentifierComputedName.errors.txt",
+        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
+        "duplicateIdentifierComputedName.ts(2,5): error TS2300: Duplicate identifier '[\"a\"]'. " +
+        "| ours: ==== duplicateIdentifierComputedName.ts (3 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "duplicateIdentifierDifferentSpelling.errors.txt",
+        "F7 diagnostic COUNT changed; layer `submoduleAccepted`. tsgo: " +
+        "duplicateIdentifierDifferentSpelling.ts(2,3): error TS2300: Duplicate identifier " +
+        "'0b11'. | ours: duplicateIdentifierDifferentSpelling.ts(3,3): error TS2300: Duplicate " +
+        "identifier '3'."
+    ),
+    TsgoPendingBaseline(
+        "duplicateIdentifierRelatedSpans1.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "?[96mfile2.ts?[0m:?[93m1?[0m:?[93m6?[0m - 'Foo' was also declared here. | ours: " +
+        "?[96mfile2.ts?[0m:?[93m1?[0m:?[93m6?[0m"
+    ),
+    TsgoPendingBaseline(
+        "duplicateIdentifierRelatedSpans2.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "?[96mfile1.ts?[0m:?[93m1?[0m:?[93m7?[0m - ?[91merror?[0m?[90m TS2300: ?[0mDuplicate " +
+        "identifier 'A'. | ours: ?[96mfile1.ts?[0m:?[93m1?[0m:?[93m1?[0m - ?[91merror?[0m?[90m " +
+        "TS6200: ?[0mDefinitions of the following identifiers conflict with those in another " +
+        "file"
+    ),
+    TsgoPendingBaseline(
+        "duplicateIdentifierRelatedSpans3.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "?[96mfile2.ts?[0m:?[93m2?[0m:?[93m5?[0m - 'duplicate1' was also declared here. | ours: " +
+        "?[96mfile2.ts?[0m:?[93m2?[0m:?[93m5?[0m"
+    ),
+    TsgoPendingBaseline(
+        "duplicateIdentifierRelatedSpans4.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "?[96mfile1.ts?[0m:?[93m2?[0m:?[93m5?[0m - ?[91merror?[0m?[90m TS2300: ?[0mDuplicate " +
+        "identifier 'duplicate1'. | ours: ?[96mfile1.ts?[0m:?[93m1?[0m:?[93m1?[0m - " +
+        "?[91merror?[0m?[90m TS6200: ?[0mDefinitions of the following identifiers conflict with " +
+        "those in another file"
+    ),
+    TsgoPendingBaseline(
+        "duplicateIdentifierRelatedSpans5.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "?[96mfile2.ts?[0m:?[93m4?[0m:?[93m9?[0m - 'duplicate1' was also declared here. | ours: " +
+        "?[96mfile2.ts?[0m:?[93m4?[0m:?[93m9?[0m"
+    ),
+    TsgoPendingBaseline(
+        "duplicateIdentifierRelatedSpans6.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "?[96mfile2.ts?[0m:?[93m5?[0m:?[93m9?[0m - 'duplicate1' was also declared here. | ours: " +
+        "?[96mfile2.ts?[0m:?[93m5?[0m:?[93m9?[0m"
+    ),
+    TsgoPendingBaseline(
+        "duplicateIdentifierRelatedSpans7.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "?[96mfile1.ts?[0m:?[93m3?[0m:?[93m9?[0m - ?[91merror?[0m?[90m TS2300: ?[0mDuplicate " +
+        "identifier 'duplicate1'. | ours: ?[96mfile1.ts?[0m:?[93m1?[0m:?[93m1?[0m - " +
+        "?[91merror?[0m?[90m TS6200: ?[0mDefinitions of the following identifiers conflict with " +
+        "those in another file"
+    ),
+    TsgoPendingBaseline(
+        "duplicateIdentifierRelatedSpans_moduleAugmentation.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: !!! related " +
+        "TS6203 /dir/b.ts:8:18: 'x' was also declared here. | ours: !!! related TS6204 " +
+        "/dir/b.ts:8:18: and here."
+    ),
+    TsgoPendingBaseline(
+        "duplicateStringNamedProperty1.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "duplicateStringNamedProperty1.ts(2,5): error TS2300: Duplicate identifier " +
+        "'\"artist\"'. | ours: duplicateStringNamedProperty1.ts(2,5): error TS2300: Duplicate " +
+        "identifier 'artist'."
+    ),
+    TsgoPendingBaseline(
+        "dynamicNamesErrors.errors.txt",
+        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
+        "dynamicNamesErrors.ts(5,5): error TS2300: Duplicate identifier '1'. | ours: ==== " +
+        "dynamicNamesErrors.ts (4 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "elidedJSImport1.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "caller.js(2,8): error TS18042: 'TruffleContract' is a type and cannot be imported in " +
+        "JavaScript files. Use 'import(\"@truffle/contract\")' in a JSDoc ty | ours: " +
+        "caller.js(2,8): error TS18042: 'TruffleContract' is a type and cannot be imported in " +
+        "JavaScript files. Use 'import(\"@truffle/contract\").TruffleContrac"
+    ),
+    TsgoPendingBaseline(
+        "emitBOM.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: //// [emitBOM.js] | ours: emitBOM.js(1,2): " +
+        "error TS1127: Invalid character."
+    ),
+    TsgoPendingBaseline(
+        "es6ExportEqualsInterop.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2497); layer `submoduleAccepted`. tsgo: " +
+        "main.ts(56,4): error TS2339: Property 'a' does not exist on type '{ default: () => " +
+        "any; }'. | ours: main.ts(39,21): error TS2497: This module can only be referenced with " +
+        "ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referenc"
+    ),
+    TsgoPendingBaseline(
+        "es6ImportEqualsExportModuleEs2015Error.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2497); layer `submoduleAccepted`. tsgo: ==== " +
+        "main.ts (0 errors) ==== | ours: main.ts(1,20): error TS2497: This module can only be " +
+        "referenced with ECMAScript imports/exports by turning on the " +
+        "'allowSyntheticDefaultImports' flag "
+    ),
+    TsgoPendingBaseline(
+        "esModuleInteropPrettyErrorRelatedInformation.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "?[96mindex.ts?[0m:?[93m1?[0m:?[93m1?[0m - Type originates at this import. A " +
+        "namespace-style import cannot be called or constructed, and will cause a f | ours: " +
+        "?[96mindex.ts?[0m:?[93m1?[0m:?[93m1?[0m"
+    ),
+    TsgoPendingBaseline(
+        "esModuleInteropTslibHelpers.errors.txt",
+        "F6 top code differs (tsgo TS2354 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "file.ts(1,1): error TS2354: This syntax requires an imported helper but module 'tslib' " +
+        "cannot be found. | ours: ==== file.ts (0 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "excessPropertiesInOverloads.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(a: { x: string; }): void', gave the " +
+        "following error."
+    ),
+    TsgoPendingBaseline(
+        "excessPropertyCheckWithUnions.errors.txt",
+        "F6 top code differs (tsgo TS2353 / ours TS2322); layer `submoduleAccepted`. tsgo: " +
+        "excessPropertyCheckWithUnions.ts(64,9): error TS2353: Object literal may only specify " +
+        "known properties, and 'b' does not exist in type 'AN'. | ours: " +
+        "excessPropertyCheckWithUnions.ts(64,9): error TS2322: Type '{ kind: \"A\"; n: { a: " +
+        "string; b: string; }; }' is not assignable to type 'AB'."
+    ),
+    TsgoPendingBaseline(
+        "expandoFunctionNestedAssigments.errors.txt",
+        "F9 message wording, same code and span; layer `submodule`. tsgo: " +
+        "expandoFunctionNestedAssigments.ts(7,23): error TS2339: Property 'inNestedFunction' " +
+        "does not exist on type '{ (): void; inVariableInit: number; bla: { | ours: " +
+        "expandoFunctionNestedAssigments.ts(7,23): error TS2339: Property 'inNestedFunction' " +
+        "does not exist on type 'typeof Foo'."
+    ),
+    TsgoPendingBaseline(
+        "exportAsNamespaceConflict.errors.txt",
+        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "/a.d.ts(2,1): error TS2303: Circular definition of import alias 'N'. | ours: ==== " +
+        "/a.d.ts (1 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "exportAsNamespace_augment.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: !!! related " +
+        "TS6203 /b.ts:12:18: 'conflict' was also declared here. | ours: !!! related TS6204 " +
+        "/b.ts:12:18: and here."
+    ),
+    TsgoPendingBaseline(
+        "exportAssignmentMembersVisibleInAugmentation.errors.txt",
+        "F6 top code differs (tsgo TS4060 / ours TS2304,TS2664); layer `submoduleTriaged`. " +
+        "tsgo: /a.ts(3,26): error TS4060: Return type of exported function has or is using " +
+        "private name 'T'. | ours: /a.ts(2,16): error TS2664: Invalid module name in " +
+        "augmentation, module 'foo' cannot be found."
+    ),
+    TsgoPendingBaseline(
+        "exportDefaultStripsFreshness.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "index.ts(10,6): error TS2741: Property 'foo' is missing in type '{ foob: string; }' " +
+        "but required in type 'IFoo'. | ours: index.ts(10,6): error TS2345: Argument of type '{ " +
+        "foob: string; }' is not assignable to parameter of type 'IFoo'."
+    ),
+    TsgoPendingBaseline(
+        "exportEmptyArrayBindingPattern(module=commonjs,target=esnext).js",
+        "JS emit; layer `submoduleAccepted`. tsgo: [] = []; | ours: var _a;"
+    ),
+    TsgoPendingBaseline(
+        "exportEmptyObjectBindingPattern(module=commonjs,target=esnext).js",
+        "JS emit; layer `submoduleAccepted`. tsgo: ({} = {}); | ours: var _a;"
+    ),
+    TsgoPendingBaseline(
+        "exportObjectRest(module=commonjs,target=esnext).js",
+        "JS emit; layer `submoduleAccepted`. tsgo: ({ x: exports.x, ...exports.rest } = { x: " +
+        "'x', y: 'y' }); | ours: var _a;"
+    ),
+    TsgoPendingBaseline(
+        "expressionWithJSDocTypeArguments.errors.txt",
+        "F6 top code differs (tsgo TS1110 / ours TS17019,TS17020,TS8020); layer " +
+        "`submoduleAccepted`. tsgo: expressionWithJSDocTypeArguments.ts(9,22): error TS1110: " +
+        "Type expected. | ours: expressionWithJSDocTypeArguments.ts(9,21): error TS8020: JSDoc " +
+        "types can only be used inside documentation comments."
+    ),
+    TsgoPendingBaseline(
+        "expressionWithJSDocTypeArguments.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: const WhatFoo = foo; | ours: const WhatFoo = " +
+        "foo<?>;"
+    ),
+    TsgoPendingBaseline(
+        "extendsUntypedModule.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: /a.ts(2,8): " +
+        "error TS6133: 'Bar' is declared but its value is never read. | ours: /a.ts(2,1): error " +
+        "TS6133: 'Bar' is declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "fatarrowfunctionsErrors.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: foo((1), { return: 0, }); | ours: foo((1), { " +
+        "return: 0 });"
+    ),
+    TsgoPendingBaseline(
+        "functionOverloads2.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(bar: string): string', gave the following " +
+        "error."
+    ),
+    TsgoPendingBaseline(
+        "functionOverloads40.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(bar: { a: number; }[]): string', gave the " +
+        "following error."
+    ),
+    TsgoPendingBaseline(
+        "functionOverloads41.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(bar: { a: number; }[]): string', gave the " +
+        "following error."
+    ),
+    TsgoPendingBaseline(
+        "genericCallAtYieldExpressionInGenericCall1.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type " +
+        "'Generator<number, void, any>' is not assignable to type 'Generator<never, unknown, " +
+        "unknown>'. | ours: Call signature return types 'Generator<number, void, any>' and " +
+        "'Generator<never, unknown, unknown>' are incompatible."
+    ),
+    TsgoPendingBaseline(
+        "genericConstraint2.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
+        "genericConstraint2.ts(21,17): error TS2741: Property 'comparer' is missing in type " +
+        "'ComparableString' but required in type 'Comparable<ComparableStrin | ours: " +
+        "genericConstraint2.ts(21,17): error TS2344: Type 'ComparableString' does not satisfy " +
+        "the constraint 'Comparable<ComparableString>'."
+    ),
+    TsgoPendingBaseline(
+        "genericTypeConstraints.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
+        "genericTypeConstraints.ts(9,31): error TS2741: Property 'fooMethod' is missing in type " +
+        "'FooExtended' but required in type 'Foo'. | ours: genericTypeConstraints.ts(9,31): " +
+        "error TS2344: Type 'FooExtended' does not satisfy the constraint 'Foo'."
+    ),
+    TsgoPendingBaseline(
+        "generics1.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
+        "generics1.ts(10,14): error TS2741: Property 'b' is missing in type 'A' but required in " +
+        "type 'B'. | ours: generics1.ts(10,14): error TS2344: Type 'A' does not satisfy the " +
+        "constraint 'B'."
+    ),
+    TsgoPendingBaseline(
+        "generics2.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
+        "generics2.ts(17,14): error TS2741: Property 'b' is missing in type 'A' but required in " +
+        "type 'B'. | ours: generics2.ts(17,14): error TS2344: Type 'A' does not satisfy the " +
+        "constraint 'B'."
+    ),
+    TsgoPendingBaseline(
+        "generics5.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
+        "generics5.ts(10,14): error TS2741: Property 'b' is missing in type 'A' but required in " +
+        "type 'B'. | ours: generics5.ts(10,14): error TS2344: Type 'A' does not satisfy the " +
+        "constraint 'B'."
+    ),
+    TsgoPendingBaseline(
+        "gettersAndSettersErrors.errors.txt",
+        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
+        "gettersAndSettersErrors.ts(2,16): error TS2300: Duplicate identifier 'Foo'. | ours: " +
+        "==== gettersAndSettersErrors.ts (7 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "gettersAndSettersErrors.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: set Goo(v) { } // error - setters must not " +
+        "specify a return type | ours: set Goo(v): string { } // error - setters must not " +
+        "specify a return type"
+    ),
+    TsgoPendingBaseline(
+        "heterogeneousArrayAndOverloads.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
+        "heterogeneousArrayAndOverloads.ts(9,20): error TS2769: No overload matches this call. " +
+        "| ours: heterogeneousArrayAndOverloads.ts(9,26): error TS2769: No overload matches " +
+        "this call."
+    ),
+    TsgoPendingBaseline(
+        "importAssertionsDeprecatedIgnored.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer " +
+        "`submoduleAccepted`. tsgo: /a.ts(2,35): error TS2880: Import assertions have been " +
+        "replaced by import attributes. Use 'with' instead of 'assert'. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "importDeclWithDeclareModifier.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: export {}; | ours: export var a = x.c;"
+    ),
+    TsgoPendingBaseline(
+        "importDeclWithExportModifierAndExportAssignment.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: Object.defineProperty(exports, " +
+        "\"__esModule\", { value: true }); | ours: module.exports = x;"
+    ),
+    TsgoPendingBaseline(
+        "importNonExportedMember11.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2497); layer `submoduleAccepted`. tsgo: ==== b.js " +
+        "(1 errors) ==== | ours: b.js(1,21): error TS2497: This module can only be referenced " +
+        "with ECMAScript imports/exports by turning on the 'allowSyntheticDefaultImports' flag " +
+        "and"
+    ),
+    TsgoPendingBaseline(
+        "importNonExportedMember5.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2497); layer `submoduleAccepted`. tsgo: ==== b.ts " +
+        "(1 errors) ==== | ours: b.ts(1,21): error TS2497: This module can only be referenced " +
+        "with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and " +
+        "referencing "
+    ),
+    TsgoPendingBaseline(
+        "importNonExportedMember7.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2497); layer `submoduleAccepted`. tsgo: ==== b.ts " +
+        "(1 errors) ==== | ours: b.ts(1,21): error TS2497: This module can only be referenced " +
+        "with ECMAScript imports/exports by turning on the 'allowSyntheticDefaultImports' flag " +
+        "and"
+    ),
+    TsgoPendingBaseline(
+        "importNonExportedMember9.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2497); layer `submoduleAccepted`. tsgo: ==== b.js " +
+        "(1 errors) ==== | ours: b.js(1,21): error TS2497: This module can only be referenced " +
+        "with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and " +
+        "referencing "
+    ),
+    TsgoPendingBaseline(
+        "importTypeAssertionDeprecation.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "/main.ts(1,30): error TS2880: Import assertions have been replaced by import " +
+        "attributes. Use 'with' instead of 'assert'. | ours: /main.ts(1,38): error TS2880: " +
+        "Import assertions have been replaced by import attributes. Use 'with' instead of " +
+        "'assert'."
+    ),
+    TsgoPendingBaseline(
+        "importTypeAssertionDeprecationIgnored.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "/main.ts(2,30): error TS2880: Import assertions have been replaced by import " +
+        "attributes. Use 'with' instead of 'assert'. | ours: /main.ts(2,38): error TS2880: " +
+        "Import assertions have been replaced by import attributes. Use 'with' instead of " +
+        "'assert'."
+    ),
+    TsgoPendingBaseline(
+        "incompatibleExports1.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2309); layer `submoduleAccepted`. tsgo: ==== " +
+        "incompatibleExports1.ts (1 errors) ==== | ours: incompatibleExports1.ts(4,5): error " +
+        "TS2309: An export assignment cannot be used in a module with other exported elements."
+    ),
+    TsgoPendingBaseline(
+        "incompatibleTypes.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(i: IFoo1): void', gave the following " +
+        "error."
+    ),
+    TsgoPendingBaseline(
+        "incompleteObjectLiteral1.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: var tt = { aa, }; | ours: var tt = { aa };"
+    ),
+    TsgoPendingBaseline(
+        "incorrectRecursiveMappedTypeConstraint.errors.txt",
+        "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
+        "TS2751 incorrectRecursiveMappedTypeConstraint.ts:3:10: Circularity originates in type " +
+        "at this location. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "incrementalInvalid.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: error TS5074: " +
+        "Option '--incremental' is only valid with a known configuration file (like " +
+        "'tsconfig.json') or when '--tsBuildInfoFile' is explicitly pr | ours: error TS5074: " +
+        "Option '--incremental' can only be specified using tsconfig, emitting to single file " +
+        "or when option '--tsBuildInfoFile' is specified."
+    ),
+    TsgoPendingBaseline(
+        "inexistentPropertyInsideToStringType.errors.txt",
+        "F6 top code differs (tsgo TS2683 / ours TS2339); layer `submoduleAccepted`. tsgo: " +
+        "index.js(2,5): error TS2683: 'this' implicitly has type 'any' because it does not have " +
+        "a type annotation. | ours: index.js(2,10): error TS2339: Property 'yadda' does not " +
+        "exist on type 'toString'."
+    ),
+    TsgoPendingBaseline(
+        "inferTypePredicates.errors.txt",
+        "F6 top code differs (tsgo TS2322 / ours TS2740); layer `submoduleAccepted`. tsgo: " +
+        "inferTypePredicates.ts(133,7): error TS2322: Type 'object' is not assignable to type " +
+        "'Date'. | ours: inferTypePredicates.ts(133,7): error TS2740: Type '{}' is missing the " +
+        "following properties from type 'Date': toDateString, toTimeString, toLocaleDateS"
+    ),
+    TsgoPendingBaseline(
+        "inferenceFromIncompleteSource.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "inferenceFromIncompleteSource.ts(11,11): error TS2741: Property 'prop' is missing in " +
+        "type '{ items: { name: string; }[]; itemKey: \"name\"; }' but requi | ours: " +
+        "inferenceFromIncompleteSource.ts(11,11): error TS2345: Argument of type '{ items: { " +
+        "name: string; }[]; itemKey: \"name\"; }' is not assignable to parame"
+    ),
+    TsgoPendingBaseline(
+        "inferenceOuterResultNotIncorrectlyInstantiatedWithInnerResult.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 4, '(target: {}, source: { x: number; }): { x: " +
+        "number; }', gave the following error."
+    ),
+    TsgoPendingBaseline(
+        "inheritance1.errors.txt",
+        "F6 top code differs (tsgo TS2322 / ours TS2741); layer `submoduleAccepted`. tsgo: " +
+        "inheritance1.ts(40,1): error TS2322: Type 'ImageBase' is not assignable to type " +
+        "'SelectableControl'. | ours: inheritance1.ts(40,1): error TS2741: Property 'select' is " +
+        "missing in type 'Control' but required in type 'SelectableControl'."
+    ),
+    TsgoPendingBaseline(
+        "inheritedConstructorWithRestParams2.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
+        "inheritedConstructorWithRestParams2.ts(33,17): error TS2769: No overload matches this " +
+        "call. | ours: inheritedConstructorWithRestParams2.ts(33,5): error TS2769: No overload " +
+        "matches this call."
+    ),
+    TsgoPendingBaseline(
+        "instanceofOnInstantiationExpression.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: maybeBox instanceof Box; // error | ours: " +
+        "maybeBox instanceof (Box); // error"
+    ),
+    TsgoPendingBaseline(
+        "intTypeCheck.errors.txt",
+        "F6 top code differs (tsgo TS2322 / ours TS2696); layer `submoduleAccepted`. tsgo: " +
+        "intTypeCheck.ts(99,5): error TS2322: Type 'Object' is not assignable to type 'i1'. | " +
+        "ours: intTypeCheck.ts(99,5): error TS2696: The 'Object' type is assignable to very few " +
+        "other types. Did you mean to use the 'any' type instead?"
+    ),
+    TsgoPendingBaseline(
+        "interfaceMergeWithNonGenericTypeArguments.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2346); layer `submoduleAccepted`. tsgo: ==== " +
+        "interfaceMergeWithNonGenericTypeArguments.ts (1 errors) ==== | ours: " +
+        "interfaceMergeWithNonGenericTypeArguments.ts(6,3): error TS2346: Call target does not " +
+        "contain any signatures."
+    ),
+    TsgoPendingBaseline(
+        "invalidUnicodeEscapeSequance.errors.txt",
+        "F0 rows tsgo emits that ours does not; layer `submoduleAccepted`. tsgo: ~ | ours: " +
+        "nothing"
+    ),
+    TsgoPendingBaseline(
+        "invalidUnicodeEscapeSequance2.errors.txt",
+        "F0 rows tsgo emits that ours does not; layer `submoduleAccepted`. tsgo: ~ | ours: " +
+        "nothing"
+    ),
+    TsgoPendingBaseline(
+        "invalidUnicodeEscapeSequance3.errors.txt",
+        "F0 rows tsgo emits that ours does not; layer `submoduleAccepted`. tsgo: ~ | ours: " +
+        "nothing"
+    ),
+    TsgoPendingBaseline(
+        "invalidUnicodeEscapeSequance4.errors.txt",
+        "F0 rows tsgo emits that ours does not; layer `submoduleAccepted`. tsgo: ~ | ours: " +
+        "nothing"
+    ),
+    TsgoPendingBaseline(
+        "invariantGenericErrorElaboration.errors.txt",
+        "F7 diagnostic COUNT changed; layer `submoduleAccepted`. tsgo: Type " +
+        "'Constraint<Runtype<any>>' is not assignable to type 'Constraint<Num>'. | ours: " +
+        "Property 'tag' is missing in type 'Runtype<any>' but required in type 'Num'."
+    ),
+    TsgoPendingBaseline(
+        "isolatedDeclarationsAddUndefined.errors.txt",
+        "F6 top code differs (tsgo TS9025 / ours TS9011); layer `submoduleAccepted`. tsgo: " +
+        "file2.ts(4,27): error TS9025: Declaration emit for this parameter requires implicitly " +
+        "adding undefined to its type. This is not supported with --isola | ours: " +
+        "file2.ts(4,38): error TS9011: Parameter must have an explicit type annotation with " +
+        "--isolatedDeclarations."
+    ),
+    TsgoPendingBaseline(
+        "isolatedDeclarationsAllowJs.errors.txt",
+        "F6 top code differs (tsgo TS9010 / ours -); layer `submodule`. tsgo: file2.js(1,12): " +
+        "error TS9010: Variable must have an explicit type annotation with " +
+        "--isolatedDeclarations. | ours: ==== file2.js (0 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "jsDeclarationEmitExportedClassWithExtends.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ==== " +
+        "node_modules/lit-element/development/lit-element.d.ts (0 errors) ==== | ours: ==== " +
+        "node_modules/lit-element/development//lit-element.d.ts (0 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "jsDeclarationsGlobalFileConstFunction.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
+        "file.js(2,2): error TS2683: 'this' implicitly has type 'any' because it does not have " +
+        "a type annotation. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "jsDeclarationsGlobalFileConstFunctionNamed.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
+        "file.js(2,2): error TS2683: 'this' implicitly has type 'any' because it does not have " +
+        "a type annotation. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "jsEnumCrossFileExport.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
+        "enumDef.js(14,20): error TS1003: Identifier expected. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "jsEnumTagOnObjectFrozen.errors.txt",
+        "F6 top code differs (tsgo TS2749 / ours -); layer `submodule`. tsgo: index.js(17,16): " +
+        "error TS2749: 'Thing' refers to a value, but is being used as a type here. Did you " +
+        "mean 'typeof Thing'? | ours: ==== index.js (1 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "jsExpandoObjectDefineProperty.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
+        "index.js(3,17): error TS2339: Property 'inspectedWindow' does not exist on type '{}'. " +
+        "| ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "jsExportAssignmentNonMutableLocation.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
+        "file.js(4,1): error TS2309: An export assignment cannot be used in a module with other " +
+        "exported elements. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "jsExportMemberMergedWithModuleAugmentation.errors.txt",
+        "F6 top code differs (tsgo TS2671,TS2749 / ours TS2741); layer `submodule`. tsgo: " +
+        "/index.ts(3,16): error TS2671: Cannot augment module './test' because it resolves to a " +
+        "non-module entity. | ours: /index.ts(11,7): error TS2741: Property 'x' is missing in " +
+        "type '{ b: string; }' but required in type 'Abcde'."
+    ),
+    TsgoPendingBaseline(
+        "jsExportMemberMergedWithModuleAugmentation2.errors.txt",
+        "F6 top code differs (tsgo TS2671 / ours TS2300); layer `submodule`. tsgo: " +
+        "/index.ts(3,16): error TS2671: Cannot augment module './test' because it resolves to a " +
+        "non-module entity. | ours: /index.ts(4,16): error TS2300: Duplicate identifier 'a'."
+    ),
+    TsgoPendingBaseline(
+        "jsExportMemberMergedWithModuleAugmentation3.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
+        "/x.js(1,16): error TS2339: Property 'x' does not exist on type 'typeof " +
+        "import(\"/y\")'. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "jsExtendsImplicitAny.errors.txt",
+        "F6 top code differs (tsgo TS8026 / ours TS2314); layer `submodule`. tsgo: /b.js(5,17): " +
+        "error TS8026: Expected A<T> type arguments; provide these with an '@extends' tag. | " +
+        "ours: /b.js(4,15): error TS2314: Generic type 'A<T>' requires 1 type argument(s)."
+    ),
+    TsgoPendingBaseline(
+        "jsFileCompilationBindDeepExportsAssignment.errors.txt",
+        "F6 top code differs (tsgo TS2304 / ours TS2339); layer `submodule`. tsgo: a.js(1,1): " +
+        "error TS2304: Cannot find name 'exports'. | ours: a.js(1,9): error TS2339: Property " +
+        "'a' does not exist on type 'typeof import(\"a\")'."
+    ),
+    TsgoPendingBaseline(
+        "jsFileCompilationConstructorOverloadSyntax.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "~~~~~~~~~~~~~~ | ours: ~~~~~~~~~~~"
+    ),
+    TsgoPendingBaseline(
+        "jsFileCompilationFunctionOverloadSyntax.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: a.js(1,1): " +
+        "error TS8017: Signature declarations can only be used in TypeScript files. | ours: " +
+        "a.js(1,10): error TS8017: Signature declarations can only be used in TypeScript files."
+    ),
+    TsgoPendingBaseline(
+        "jsFileCompilationMethodOverloadSyntax.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~~~~~~ | " +
+        "ours: ~~~"
+    ),
+    TsgoPendingBaseline(
+        "jsFunctionWithPrototypeNoErrorTruncationNoCrash.errors.txt",
+        "F6 top code differs (tsgo TS2683 / ours -); layer `submodule`. tsgo: index.js(2,5): " +
+        "error TS2683: 'this' implicitly has type 'any' because it does not have a type " +
+        "annotation. | ours: index.js(14,35): error TS2339: Property 'rgb' does not exist on " +
+        "type 'Color'."
+    ),
+    TsgoPendingBaseline(
+        "jsdocFunctionClassPropertiesDeclaration.errors.txt",
+        "F6 top code differs (tsgo TS2683,TS7009 / ours TS7006,TS7023); layer `submodule`. " +
+        "tsgo: /a.js(6,11): error TS2683: 'this' implicitly has type 'any' because it does not " +
+        "have a type annotation. | ours: /a.js(5,17): error TS7023: 'Foo' implicitly has return " +
+        "type 'any' because it does not have a return type annotation and is referenced " +
+        "directly or indi"
+    ),
+    TsgoPendingBaseline(
+        "jsdocIllegalTags.errors.txt",
+        "F9 message wording, same code and span; layer `submodule`. tsgo: /a.js(2,9): error " +
+        "TS1092: Type parameters cannot appear on a constructor declaration. | ours: " +
+        "/a.js(2,19): error TS1092: Type parameters cannot appear on a constructor declaration."
+    ),
+    TsgoPendingBaseline(
+        "jsdocImportTypeNodeNamespace.errors.txt",
+        "F6 top code differs (tsgo TS2694 / ours TS2352); layer `submodule`. tsgo: " +
+        "Main.js(2,49): error TS2694: Namespace '\"GeometryType\"' has no exported member " +
+        "'default'. | ours: Main.js(2,21): error TS2352: Conversion of type 'string' to type " +
+        "'typeof _default' may be a mistake because neither type sufficiently overlaps with th"
+    ),
+    TsgoPendingBaseline(
+        "jsdocParameterParsingInfiniteLoop.errors.txt",
+        "F6 top code differs (tsgo TS1005 / ours TS1110,TS2304,TS7014); layer `submodule`. " +
+        "tsgo: example.js(3,19): error TS1005: '}' expected. | ours: example.js(3,11): error " +
+        "TS7014: Function type, which lacks return-type annotation, implicitly has an 'any' " +
+        "return type."
+    ),
+    TsgoPendingBaseline(
+        "jsdocRestParameter.errors.txt",
+        "F6 top code differs (tsgo TS2554 / ours TS2345); layer `submodule`. tsgo: /a.js(8,6): " +
+        "error TS2554: Expected 1 arguments, but got 2. | ours: /a.js(7,3): error TS2345: " +
+        "Argument of type 'number[]' is not assignable to parameter of type 'number'."
+    ),
+    TsgoPendingBaseline(
+        "jsdocTypeNongenericInstantiationAttempt.errors.txt",
+        "F6 top code differs (tsgo TS2749 / ours -); layer `submodule`. tsgo: index8.js(4,12): " +
+        "error TS2749: 'fn' refers to a value, but is being used as a type here. Did you mean " +
+        "'typeof fn'? | ours: ==== index8.js (1 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "jsdocTypedefNoCrash.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
+        "export.js(3,5): error TS1003: Identifier expected. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "jsdocTypedefNoCrash2.errors.txt",
+        "F6 top code differs (tsgo TS1003 / ours TS2451); layer `submodule`. tsgo: " +
+        "export.js(4,5): error TS1003: Identifier expected. | ours: export.js(1,13): error " +
+        "TS2451: Cannot redeclare block-scoped variable 'foo'."
+    ),
+    TsgoPendingBaseline(
+        "mappedTypeAsStringTemplate.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "mappedTypeAsStringTemplate.ts(7,5): error TS2741: Property 'xy' is missing in type '{ " +
+        "x: number; }' but required in type '{ xy: number; }'. | ours: " +
+        "mappedTypeAsStringTemplate.ts(7,5): error TS2345: Argument of type '{ x: number; }' is " +
+        "not assignable to parameter of type '{ xy: number; }'."
+    ),
+    TsgoPendingBaseline(
+        "maximum10SpellingSuggestions.errors.txt",
+        "F6 top code differs (tsgo TS2552 / ours TS2304); layer `submoduleAccepted`. tsgo: " +
+        "maximum10SpellingSuggestions.ts(5,1): error TS2552: Cannot find name 'bob'. Did you " +
+        "mean 'blob'? | ours: maximum10SpellingSuggestions.ts(5,1): error TS2304: Cannot find " +
+        "name 'bob'."
+    ),
+    TsgoPendingBaseline(
+        "methodSignatureHandledDeclarationKindForSymbol.errors.txt",
+        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
+        "methodSignatureHandledDeclarationKindForSymbol.ts(2,5): error TS2300: Duplicate " +
+        "identifier 'bold'. | ours: methodSignatureHandledDeclarationKindForSymbol.ts(6,5): " +
+        "error TS2717: Subsequent property declarations must have the same type. Property " +
+        "'bold' must b"
+    ),
+    TsgoPendingBaseline(
+        "misspelledJsDocTypedefTags.errors.txt",
+        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
+        "a.js(4,59): error TS1003: Identifier expected. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "mixinPrivateAndProtected.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: The " +
+        "intersection 'mixB.(Anonymous class) & A' was reduced to 'never' because property " +
+        "'pvt' exists in multiple constituents and is private in some. | ours: The intersection " +
+        "'mixB<typeof A>.(Anonymous class) & A' was reduced to 'never' because property 'pvt' " +
+        "exists in multiple constituents and is private i"
+    ),
+    TsgoPendingBaseline(
+        "moduleElementsInWrongContext.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: var I = M; | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "moduleElementsInWrongContext2.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: var I = M; | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "module_augmentExistingVariable.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var console;"
+    ),
+    TsgoPendingBaseline(
+        "mutuallyRecursiveCallbacks.errors.txt",
+        "F7 diagnostic COUNT changed; layer `submoduleAccepted`. tsgo: Type 'Foo<unknown>' is " +
+        "not assignable to type 'Bar<{}>'. | ours: Types of parameters 'bar' and 'foo' are " +
+        "incompatible."
+    ),
+    TsgoPendingBaseline(
+        "nameCollisions.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: let x;"
+    ),
+    TsgoPendingBaseline(
+        "namespaceMergedWithFunctionWithOverloadsUsage.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(opts?: Whatever | undefined): void', gave " +
+        "the following error."
+    ),
+    TsgoPendingBaseline(
+        "nestedCallbackErrorNotFlattened.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type '() => " +
+        "() => () => number' is not assignable to type '() => () => () => string'. | ours: Call " +
+        "signature return types '() => () => () => number' and '() => () => () => string' are " +
+        "incompatible."
+    ),
+    TsgoPendingBaseline(
+        "nestedGlobalNamespaceInClass.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var global;"
+    ),
+    TsgoPendingBaseline(
+        "newOperator.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: var t5 = new (new Date); | ours: var t5 = " +
+        "new new Date;"
+    ),
+    TsgoPendingBaseline(
+        "noParameterReassignmentIIFEAnnotated.errors.txt",
+        "F6 top code differs (tsgo TS2740 / ours TS2345,TS8029); layer `submoduleAccepted`. " +
+        "tsgo: index.js(6,42): error TS2740: Type 'IArguments' is missing the following " +
+        "properties from type 'string[]': pop, push, concat, join, and 23 more. | ours: " +
+        "index.js(3,28): error TS8029: JSDoc '@param' tag has name 'rest', but there is no " +
+        "parameter with that name. It would match 'arguments' if it had an ar"
+    ),
+    TsgoPendingBaseline(
+        "noParameterReassignmentJSIIFE.errors.txt",
+        "F6 top code differs (tsgo TS2740 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "index.js(3,42): error TS2740: Type 'IArguments' is missing the following properties " +
+        "from type 'string[]': pop, push, concat, join, and 23 more. | ours: index.js(3,42): " +
+        "error TS2345: Argument of type 'IArguments' is not assignable to parameter of type " +
+        "'string[]'."
+    ),
+    TsgoPendingBaseline(
+        "noUnusedLocals_typeParameterMergedWithParameter.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "noUnusedLocals_typeParameterMergedWithParameter.ts(1,18): error TS6196: 'T' is " +
+        "declared but never used. | ours: " +
+        "noUnusedLocals_typeParameterMergedWithParameter.ts(1,17): error TS6133: 'T' is " +
+        "declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "nodeNextPackageSelfNameWithOutDir.errors.txt",
+        "F6 top code differs (tsgo TS2307 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "index.ts(1,21): error TS2307: Cannot find module '@this/package' or its corresponding " +
+        "type declarations. | ours: ==== index.ts (0 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "nodeNextPackageSelfNameWithOutDirDeclDir.errors.txt",
+        "F6 top code differs (tsgo TS2307 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "index.ts(1,21): error TS2307: Cannot find module '@this/package' or its corresponding " +
+        "type declarations. | ours: ==== index.ts (0 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "numericClassMembers1.errors.txt",
+        "F7 diagnostic COUNT changed; layer `submoduleAccepted`. tsgo: " +
+        "numericClassMembers1.ts(2,3): error TS2300: Duplicate identifier '0'. | ours: " +
+        "numericClassMembers1.ts(3,3): error TS2300: Duplicate identifier '0.0'."
+    ),
+    TsgoPendingBaseline(
+        "objectLiteralFunctionArgContextualTyping.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "objectLiteralFunctionArgContextualTyping.ts(11,4): error TS2741: Property 'value' is " +
+        "missing in type '{ toString: (s: string) => string; }' but requir | ours: " +
+        "objectLiteralFunctionArgContextualTyping.ts(11,4): error TS2345: Argument of type '{ " +
+        "toString: (s: string) => string; }' is not assignable to paramete"
+    ),
+    TsgoPendingBaseline(
+        "objectLiteralFunctionArgContextualTyping2.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "objectLiteralFunctionArgContextualTyping2.ts(9,4): error TS2741: Property 'doStuff' is " +
+        "missing in type '{ value: string; }' but required in type 'I2'. | ours: " +
+        "objectLiteralFunctionArgContextualTyping2.ts(9,4): error TS2345: Argument of type '{ " +
+        "value: string; }' is not assignable to parameter of type 'I2'."
+    ),
+    TsgoPendingBaseline(
+        "objectLiteralThisWidenedOnUse.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "objectLiteralThisWidenedOnUse.ts(8,21): error TS2741: Property 'bar' is missing in " +
+        "type '{ prop1: number; prop2: number; prop3: number; test(): void;  | ours: " +
+        "objectLiteralThisWidenedOnUse.ts(8,21): error TS2345: Argument of type '{ prop1: " +
+        "number; prop2: number; prop3: number; test(): void; accept_foo(foo: F"
+    ),
+    TsgoPendingBaseline(
+        "objectLiteralWithSemicolons3.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: c, | ours: c"
+    ),
+    TsgoPendingBaseline(
+        "objectLiteralWithSemicolons5.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: var v = { foo() { }, a: b, get baz() { }, }; " +
+        "| ours: var v = { foo() { }, a: b, get baz() { } };"
+    ),
+    TsgoPendingBaseline(
+        "optionalChainWithInstantiationExpression2(target=es2019).js",
+        "JS emit; layer `submoduleAccepted`. tsgo: (_a = a) === null || _a === void 0 ? void 0 " +
+        ": _a(); | ours: (_a = (a)) === null || _a === void 0 ? void 0 : _a();"
+    ),
+    TsgoPendingBaseline(
+        "orderMattersForSignatureGroupIdentity.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
+        "orderMattersForSignatureGroupIdentity.ts(19,5): error TS2769: No overload matches this " +
+        "call. | ours: orderMattersForSignatureGroupIdentity.ts(19,1): error TS2769: No " +
+        "overload matches this call."
+    ),
+    TsgoPendingBaseline(
+        "overload1.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: overload1.ts(34,9): error TS2769: " +
+        "No overload matches this call. | ours: overload1.ts(34,5): error TS2769: No overload " +
+        "matches this call."
+    ),
+    TsgoPendingBaseline(
+        "overloadOnConstNoAnyImplementation2.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "overloadOnConstNoAnyImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
+        "'bye') => number' is not assignable to parameter of type '(x: \"hi\")  | ours: " +
+        "overloadOnConstNoAnyImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
+        "\"bye\") => number' is not assignable to parameter of type '(x: \"hi\") "
+    ),
+    TsgoPendingBaseline(
+        "overloadOnConstNoStringImplementation2.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "overloadOnConstNoStringImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
+        "'bye') => number' is not assignable to parameter of type '(x: \"hi | ours: " +
+        "overloadOnConstNoStringImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
+        "\"bye\") => number' is not assignable to parameter of type '(x: \"hi"
+    ),
+    TsgoPendingBaseline(
+        "overloadResolutionTest1.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(bar: { a: number; }[]): string', gave the " +
+        "following error."
+    ),
+    TsgoPendingBaseline(
+        "overloadingOnConstants2.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(x: \"hi\", items: string[]): D', gave the " +
+        "following error."
+    ),
+    TsgoPendingBaseline(
+        "overloadresolutionWithConstraintCheckingDeferred.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
+        "overloadresolutionWithConstraintCheckingDeferred.ts(14,26): error TS2769: No overload " +
+        "matches this call. | ours: overloadresolutionWithConstraintCheckingDeferred.ts(14,22): " +
+        "error TS2769: No overload matches this call."
+    ),
+    TsgoPendingBaseline(
+        "overloadsWithProvisionalErrors.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
+        "overloadsWithProvisionalErrors.ts(6,11): error TS2769: No overload matches this call. " +
+        "| ours: overloadsWithProvisionalErrors.ts(6,1): error TS2769: No overload matches this " +
+        "call."
+    ),
+    TsgoPendingBaseline(
+        "parameterPropertyInConstructor2.errors.txt",
+        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
+        "parameterPropertyInConstructor2.ts(3,24): error TS2300: Duplicate identifier 'names'. " +
+        "| ours: ==== parameterPropertyInConstructor2.ts (3 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "pathMappingBasedModuleResolution1_node.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "c:/root/tsconfig.json(5,17): error TS5090: Non-relative paths are not allowed. Did you " +
+        "forget a leading './'? | ours: c:/root/tsconfig.json(5,17): error TS5090: Non-relative " +
+        "paths are not allowed when 'baseUrl' is not set. Did you forget a leading './'?"
+    ),
+    TsgoPendingBaseline(
+        "pathsValidation5.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "tsconfig.json(5,26): error TS5090: Non-relative paths are not allowed. Did you forget " +
+        "a leading './'? | ours: tsconfig.json(5,26): error TS5090: Non-relative paths are not " +
+        "allowed when 'baseUrl' is not set. Did you forget a leading './'?"
+    ),
+    TsgoPendingBaseline(
+        "prettyContextNotDebugAssertion.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ?[7m ?[0m " +
+        "?[91m~?[0m | ours: ?[7m ?[0m ?[91m?[0m"
+    ),
+    TsgoPendingBaseline(
+        "prettyFileWithErrorsAndTabs.errors.txt",
+        "ours emits EXTRA rows tsgo does not; layer `submoduleAccepted`. tsgo: !!! error " +
+        "TS2322: Type 'number' is not assignable to type 'string'. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "promisePermutations.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type " +
+        "'Promise<number>' is not assignable to type 'IPromise<string>'. | ours: Call signature " +
+        "return types 'Promise<number>' and 'IPromise<string>' are incompatible."
+    ),
+    TsgoPendingBaseline(
+        "promisePermutations2.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type " +
+        "'Promise<number>' is not assignable to type 'IPromise<string>'. | ours: Call signature " +
+        "return types 'Promise<number>' and 'IPromise<string>' are incompatible."
+    ),
+    TsgoPendingBaseline(
+        "promisePermutations3.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type " +
+        "'Promise<number>' is not assignable to type 'IPromise<string>'. | ours: Call signature " +
+        "return types 'Promise<number>' and 'IPromise<string>' are incompatible."
+    ),
+    TsgoPendingBaseline(
+        "pushTypeGetTypeOfAlias.errors.txt",
+        "F6 top code differs (tsgo TS2309 / ours TS2303); layer `submodule`. tsgo: bar.js(1,1): " +
+        "error TS2309: An export assignment cannot be used in a module with other exported " +
+        "elements. | ours: bar.js(2,1): error TS2303: Circular definition of import alias " +
+        "'blah'."
+    ),
+    TsgoPendingBaseline(
+        "reachabilityChecksNoCrash1.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: out, : .push(await v), | ours: out, : " +
+        ".push(await v)"
+    ),
+    TsgoPendingBaseline(
+        "readonlyTupleAndArrayElaboration.errors.txt",
+        "F6 top code differs (tsgo TS4104 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "readonlyTupleAndArrayElaboration.ts(10,20): error TS4104: The type 'readonly [3, 4]' " +
+        "is 'readonly' and cannot be assigned to the mutable type '[number | ours: " +
+        "readonlyTupleAndArrayElaboration.ts(10,20): error TS2345: Argument of type 'readonly " +
+        "[3, 4]' is not assignable to parameter of type '[number, number]'"
+    ),
+    TsgoPendingBaseline(
+        "reassignStaticProp.errors.txt",
+        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
+        "reassignStaticProp.ts(3,12): error TS2300: Duplicate identifier 'bar'. | ours: ==== " +
+        "reassignStaticProp.ts (2 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "recursiveClassReferenceTest.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "recursiveClassReferenceTest.ts(95,21): error TS2741: Property 'getInitialState' is " +
+        "missing in type 'Window' but required in type 'IMode'. | ours: " +
+        "recursiveClassReferenceTest.ts(95,21): error TS2345: Argument of type 'Window' is not " +
+        "assignable to parameter of type 'IMode'."
+    ),
+    TsgoPendingBaseline(
+        "recursiveExportAssignmentAndFindAliasedType1.errors.txt",
+        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "recursiveExportAssignmentAndFindAliasedType1_moduleDef.d.ts(3,5): error TS2303: " +
+        "Circular definition of import alias 'self'. | ours: ==== " +
+        "recursiveExportAssignmentAndFindAliasedType1_moduleDef.d.ts (1 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "recursiveExportAssignmentAndFindAliasedType2.errors.txt",
+        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "recursiveExportAssignmentAndFindAliasedType2_moduleDef.d.ts(3,5): error TS2303: " +
+        "Circular definition of import alias 'self'. | ours: ==== " +
+        "recursiveExportAssignmentAndFindAliasedType2_moduleDef.d.ts (1 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "recursiveExportAssignmentAndFindAliasedType3.errors.txt",
+        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "recursiveExportAssignmentAndFindAliasedType3_moduleDef.d.ts(3,5): error TS2303: " +
+        "Circular definition of import alias 'self'. | ours: ==== " +
+        "recursiveExportAssignmentAndFindAliasedType3_moduleDef.d.ts (1 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "recursiveExportAssignmentAndFindAliasedType4.errors.txt",
+        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "recursiveExportAssignmentAndFindAliasedType4_moduleC.ts(2,1): error TS2303: Circular " +
+        "definition of import alias 'self'. | ours: ==== " +
+        "recursiveExportAssignmentAndFindAliasedType4_moduleC.ts (1 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "recursiveExportAssignmentAndFindAliasedType5.errors.txt",
+        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "recursiveExportAssignmentAndFindAliasedType5_moduleC.ts(1,1): error TS2303: Circular " +
+        "definition of import alias 'self'. | ours: ==== " +
+        "recursiveExportAssignmentAndFindAliasedType5_moduleC.ts (0 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "recursiveExportAssignmentAndFindAliasedType6.errors.txt",
+        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "recursiveExportAssignmentAndFindAliasedType6_moduleC.ts(1,1): error TS2303: Circular " +
+        "definition of import alias 'self'. | ours: ==== " +
+        "recursiveExportAssignmentAndFindAliasedType6_moduleC.ts (0 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "recursiveFunctionTypes.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 4, '(a: { (): typeof f7; (a: typeof f7): () => " +
+        "number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }): () => " +
+        "number', g"
+    ),
+    TsgoPendingBaseline(
+        "recursivelyExpandingUnionNoStackoverflow.errors.txt",
+        "F6 top code differs (tsgo - / ours TS2589); layer `submoduleAccepted`. tsgo: ==== " +
+        "recursivelyExpandingUnionNoStackoverflow.ts (1 errors) ==== | ours: " +
+        "recursivelyExpandingUnionNoStackoverflow.ts(3,10): error TS2589: Type instantiation is " +
+        "excessively deep and possibly infinite."
+    ),
+    TsgoPendingBaseline(
+        "regularExpressionCharacterClassRangeOrder.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "regularExpressionCharacterClassRangeOrder.ts(7,4): error TS1517: Range out of order in " +
+        "character class. | ours: regularExpressionCharacterClassRangeOrder.ts(7,5): error " +
+        "TS1517: Range out of order in character class."
+    ),
+    TsgoPendingBaseline(
+        "regularExpressionWithNonBMPFlags.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~ | ours: ~~"
+    ),
+    TsgoPendingBaseline(
+        "setMethods.errors.txt",
+        "F6 top code differs (tsgo TS2739 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "setMethods.ts(13,17): error TS2739: Type 'undefined[]' is missing the following " +
+        "properties from type 'ReadonlySetLike<unknown>': has, size | ours: " +
+        "setMethods.ts(13,17): error TS2345: Argument of type 'undefined[]' is not assignable " +
+        "to parameter of type 'ReadonlySetLike<unknown>'."
+    ),
+    TsgoPendingBaseline(
+        "signatureLengthMismatchInOverload.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
+        "following error. | ours: Overload 1 of 2, '(callback: (arg: string, arg2: string) => " +
+        "void): void', gave the following error."
+    ),
+    TsgoPendingBaseline(
+        "slashBeforeVariableDeclaration1.errors.txt",
+        "F0 rows tsgo emits that ours does not; layer `submoduleAccepted`. tsgo: ~ | ours: " +
+        "nothing"
+    ),
+    TsgoPendingBaseline(
+        "sourceMapValidationVarInDownLevelGenerator(target=es2015).errors.txt",
+        "F6 top code differs (tsgo TS5102 / ours TS5101); layer `submoduleAccepted`. tsgo: " +
+        "error TS5102: Option 'downlevelIteration' has been removed. Please remove it from your " +
+        "configuration. | ours: error TS5101: Option 'downlevelIteration' is deprecated and " +
+        "will stop functioning in TypeScript 7.0. Specify compilerOption " +
+        "'\"ignoreDeprecations\": \"6."
+    ),
+    TsgoPendingBaseline(
+        "specializedSignatureAsCallbackParameter1.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
+        "specializedSignatureAsCallbackParameter1.ts(7,4): error TS2769: No overload matches " +
+        "this call. | ours: specializedSignatureAsCallbackParameter1.ts(7,1): error TS2769: No " +
+        "overload matches this call."
+    ),
+    TsgoPendingBaseline(
+        "staticModifierAlreadySeen.errors.txt",
+        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
+        "staticModifierAlreadySeen.ts(2,12): error TS2300: Duplicate identifier 'static'. | " +
+        "ours: ==== staticModifierAlreadySeen.ts (3 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "strictFunctionTypesErrors.errors.txt",
+        "F6 top code differs (tsgo TS2322 / ours TS2328); layer `submoduleAccepted`. tsgo: " +
+        "strictFunctionTypesErrors.ts(133,1): error TS2322: Type '(f: (x: Dog) => Dog) => void' " +
+        "is not assignable to type '(f: (x: Animal) => Animal) => void'. | ours: " +
+        "strictFunctionTypesErrors.ts(133,1): error TS2328: Types of parameters 'f' and 'f' are " +
+        "incompatible."
+    ),
+    TsgoPendingBaseline(
+        "templateStringsArrayTypeRedefinedInES6Mode.errors.txt",
+        "F6 top code differs (tsgo TS2740 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "templateStringsArrayTypeRedefinedInES6Mode.ts(7,3): error TS2740: Type '{}' is missing " +
+        "the following properties from type 'TemplateStringsArray': raw, | ours: " +
+        "templateStringsArrayTypeRedefinedInES6Mode.ts(7,3): error TS2345: Argument of type " +
+        "'{}' is not assignable to parameter of type 'TemplateStringsArray'."
+    ),
+    TsgoPendingBaseline(
+        "thisInObjectJs.js",
+        "JS emit; layer `submoduleAccepted`. tsgo: export {}; | ours: export {};"
+    ),
+    TsgoPendingBaseline(
+        "tslibMissingHelper.errors.txt",
+        "F6 top code differs (tsgo TS2343 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "/package2/index.ts(2,16): error TS2343: This syntax requires an imported helper named " +
+        "'__awaiter' which does not exist in 'tslib'. Consider upgrading  | ours: ==== " +
+        "/package2/index.ts (0 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "tslibMultipleMissingHelper.errors.txt",
+        "F6 top code differs (tsgo TS2343 / ours -); layer `submoduleAccepted`. tsgo: " +
+        "/package1/other.ts(2,23): error TS2343: This syntax requires an imported helper named " +
+        "'__awaiter' which does not exist in 'tslib'. Consider upgrading  | ours: ==== " +
+        "/package1/other.ts (1 errors) ===="
+    ),
+    TsgoPendingBaseline(
+        "typeArgumentInferenceWithConstraintAsCommonRoot.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
+        "typeArgumentInferenceWithConstraintAsCommonRoot.ts(7,6): error TS2741: Property 'y' is " +
+        "missing in type 'Elephant' but required in type 'Giraffe'. | ours: " +
+        "typeArgumentInferenceWithConstraintAsCommonRoot.ts(7,6): error TS2345: Argument of " +
+        "type 'Elephant' is not assignable to parameter of type 'Giraffe'."
+    ),
+    TsgoPendingBaseline(
+        "typeParamExtendsOtherTypeParam.errors.txt",
+        "F6 top code differs (tsgo TS2741 / ours TS2344); layer `submoduleAccepted`. tsgo: " +
+        "typeParamExtendsOtherTypeParam.ts(12,26): error TS2741: Property 'a' is missing in " +
+        "type '{ b: string; }' but required in type '{ a: string; }'. | ours: " +
+        "typeParamExtendsOtherTypeParam.ts(12,26): error TS2344: Type '{ b: string; }' does not " +
+        "satisfy the constraint '{ a: string; }'."
+    ),
+    TsgoPendingBaseline(
+        "typeParameterArgumentEquivalence5.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: Type '(item: " +
+        "any) => T' is not assignable to type '(item: any) => U'. | ours: Call signature return " +
+        "types '(item: any) => T' and '(item: any) => U' are incompatible."
+    ),
+    TsgoPendingBaseline(
+        "typeParameterWithInvalidConstraintType.errors.txt",
+        "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
+        "TS2751 typeParameterWithInvalidConstraintType.ts:4:17: Circularity originates in type " +
+        "at this location. | ours: nothing"
+    ),
+    TsgoPendingBaseline(
+        "underscoreTest1.errors.txt",
+        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
+        "underscoreTest1_underscoreTests.ts(26,7): error TS2769: No overload matches this call. " +
+        "| ours: underscoreTest1_underscoreTests.ts(26,3): error TS2769: No overload matches " +
+        "this call."
+    ),
+    TsgoPendingBaseline(
+        "unicodeEscapesInNames02(target=es2015).errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~ | ours: " +
+        "~~~~~"
+    ),
+    TsgoPendingBaseline(
+        "uniqueSymbolJs.errors.txt",
+        "F6 top code differs (tsgo TS1268,TS2749 / ours TS1337); layer `submodule`. tsgo: " +
+        "a.js(5,18): error TS1268: An index signature parameter type must be 'string', " +
+        "'number', 'symbol', or a template literal type. | ours: a.js(5,18): error TS1337: An " +
+        "index signature parameter type cannot be a literal type or generic type. Consider " +
+        "using a mapped object type instead."
+    ),
+    TsgoPendingBaseline(
+        "unusedDestructuring.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "unusedDestructuring.ts(6,9): error TS6133: 'e' is declared but its value is never " +
+        "read. | ours: unusedDestructuring.ts(6,7): error TS6133: 'e' is declared but its value " +
+        "is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedDestructuringParameters.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "unusedDestructuringParameters.ts(1,13): error TS6133: 'a' is declared but its value is " +
+        "never read. | ours: unusedDestructuringParameters.ts(1,12): error TS6133: 'a' is " +
+        "declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedIdentifiersConsolidated1.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedIdentifiersConsolidated1.ts(5,32): error TS6196: 'unusedtypeparameter' is " +
+        "declared but never used. | ours: unusedIdentifiersConsolidated1.ts(5,32): error " +
+        "TS6133: 'unusedtypeparameter' is declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedImports1.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "file2.ts(1,9): error TS6133: 'Calculator' is declared but its value is never read. | " +
+        "ours: file2.ts(1,1): error TS6133: 'Calculator' is declared but its value is never " +
+        "read."
+    ),
+    TsgoPendingBaseline(
+        "unusedImports12.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: a.ts(1,10): " +
+        "error TS6133: 'Member' is declared but its value is never read. | ours: a.ts(1,1): " +
+        "error TS6133: 'Member' is declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedImports2.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "file2.ts(2,9): error TS6133: 'test' is declared but its value is never read. | ours: " +
+        "file2.ts(2,1): error TS6133: 'test' is declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedImports6.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "file2.ts(1,8): error TS6133: 'd' is declared but its value is never read. | ours: " +
+        "file2.ts(1,1): error TS6133: 'd' is declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedImports7.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: " +
+        "file2.ts(1,13): error TS6133: 'n' is declared but its value is never read. | ours: " +
+        "file2.ts(1,1): error TS6133: 'n' is declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedLocalsInMethod2.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~~~~~~~~~~~~~ " +
+        "| ours: ~~~~~~~~~~~~~~"
+    ),
+    TsgoPendingBaseline(
+        "unusedLocalsInMethod3.errors.txt",
+        "F9 message wording, same code and span; layer `submoduleAccepted`. tsgo: ~~~~~~~~ | " +
+        "ours: ~~~~~~~~~"
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInFunction1.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInFunction1.ts(1,13): error TS6196: 'T' is declared but never used. " +
+        "| ours: unusedTypeParameterInFunction1.ts(1,12): error TS6133: 'T' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInFunction2.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInFunction2.ts(1,16): error TS6196: 'Y' is declared but never used. " +
+        "| ours: unusedTypeParameterInFunction2.ts(1,16): error TS6133: 'Y' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInFunction3.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInFunction3.ts(1,16): error TS6196: 'Y' is declared but never used. " +
+        "| ours: unusedTypeParameterInFunction3.ts(1,16): error TS6133: 'Y' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInFunction4.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInFunction4.ts(1,13): error TS6196: 'X' is declared but never used. " +
+        "| ours: unusedTypeParameterInFunction4.ts(1,13): error TS6133: 'X' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInInterface1.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInInterface1.ts(1,15): error TS6196: 'T' is declared but never " +
+        "used. | ours: unusedTypeParameterInInterface1.ts(1,14): error TS6133: 'T' is declared " +
+        "but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInInterface2.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInInterface2.ts(1,18): error TS6196: 'U' is declared but never " +
+        "used. | ours: unusedTypeParameterInInterface2.ts(1,18): error TS6133: 'U' is declared " +
+        "but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInLambda1.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInLambda1.ts(3,17): error TS6196: 'T' is declared but never used. | " +
+        "ours: unusedTypeParameterInLambda1.ts(3,16): error TS6133: 'T' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInLambda2.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInLambda2.ts(3,17): error TS6196: 'T' is declared but never used. | " +
+        "ours: unusedTypeParameterInLambda2.ts(3,17): error TS6133: 'T' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInLambda3.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInLambda3.ts(5,15): error TS6196: 'U' is declared but never used. | " +
+        "ours: unusedTypeParameterInLambda3.ts(5,15): error TS6133: 'U' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInMethod1.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInMethod1.ts(2,15): error TS6196: 'X' is declared but never used. | " +
+        "ours: unusedTypeParameterInMethod1.ts(2,15): error TS6133: 'X' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInMethod2.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInMethod2.ts(2,18): error TS6196: 'Y' is declared but never used. | " +
+        "ours: unusedTypeParameterInMethod2.ts(2,18): error TS6133: 'Y' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInMethod3.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInMethod3.ts(2,21): error TS6196: 'Z' is declared but never used. | " +
+        "ours: unusedTypeParameterInMethod3.ts(2,21): error TS6133: 'Z' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInMethod4.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInMethod4.ts(2,15): error TS6196: 'X' is declared but never used. | " +
+        "ours: unusedTypeParameterInMethod4.ts(2,14): error TS6133: 'X' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameterInMethod5.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameterInMethod5.ts(2,26): error TS6196: 'X' is declared but never used. | " +
+        "ours: unusedTypeParameterInMethod5.ts(2,25): error TS6133: 'X' is declared but its " +
+        "value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameters1.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameters1.ts(1,15): error TS6196: 'typeparameter1' is declared but never " +
+        "used. | ours: unusedTypeParameters1.ts(1,14): error TS6133: 'typeparameter1' is " +
+        "declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameters10.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameters10.ts(1,12): error TS6196: 'T' is declared but never used. | ours: " +
+        "unusedTypeParameters10.ts(1,11): error TS6133: 'T' is declared but its value is never " +
+        "read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameters2.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameters2.ts(1,15): error TS6196: 'typeparameter1' is declared but never " +
+        "used. | ours: unusedTypeParameters2.ts(1,15): error TS6133: 'typeparameter1' is " +
+        "declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameters3.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameters3.ts(1,15): error TS6196: 'typeparameter1' is declared but never " +
+        "used. | ours: unusedTypeParameters3.ts(1,15): error TS6133: 'typeparameter1' is " +
+        "declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameters4.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameters4.ts(2,13): error TS6196: 'U' is declared but never used. | ours: " +
+        "unusedTypeParameters4.ts(2,13): error TS6133: 'U' is declared but its value is never " +
+        "read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameters5.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameters5.ts(6,16): error TS6196: 'K' is declared but never used. | ours: " +
+        "unusedTypeParameters5.ts(6,16): error TS6133: 'K' is declared but its value is never " +
+        "read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParametersCheckedByNoUnusedParameters.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParametersCheckedByNoUnusedParameters.ts(1,12): error TS6196: 'T' is " +
+        "declared but never used. | ours: " +
+        "unusedTypeParametersCheckedByNoUnusedParameters.ts(1,11): error TS6133: 'T' is " +
+        "declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParametersWithUnderscore.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParametersWithUnderscore.ts(1,16): error TS6196: 'U' is declared but never " +
+        "used. | ours: unusedTypeParametersWithUnderscore.ts(1,16): error TS6133: 'U' is " +
+        "declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameters_infer.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "unusedTypeParameters_infer.ts(1,44): error TS6196: 'U' is declared but never used. | " +
+        "ours: unusedTypeParameters_infer.ts(1,38): error TS6133: 'U' is declared but its value " +
+        "is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameters_templateTag.errors.txt",
+        "F4 TS6133 -> TS6196 for unused TYPE entities; layer `submoduleAccepted`. tsgo: " +
+        "/a.js(1,15): error TS6196: 'T' is declared but never used. | ours: /a.js(1,5): error " +
+        "TS6133: 'T' is declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedTypeParameters_templateTag2.errors.txt",
+        "F6 top code differs (tsgo TS2339 / ours TS6133); layer `submodule`. tsgo: /a.js(2,3): " +
+        "error TS6205: All type parameters are unused. | ours: /a.js(3,4): error TS6133: 'V' is " +
+        "declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedVariablesWithUnderscoreInBindingElement.errors.txt",
+        "F6 top code differs (tsgo - / ours TS6133); layer `submoduleAccepted`. tsgo: " +
+        "unusedVariablesWithUnderscoreInBindingElement.ts(14,11): error TS6198: All " +
+        "destructured elements are unused. | ours: " +
+        "unusedVariablesWithUnderscoreInBindingElement.ts(14,12): error TS6133: 'a3' is " +
+        "declared but its value is never read."
+    ),
+    TsgoPendingBaseline(
+        "unusedVariablesWithUnderscoreInForOfLoop.errors.txt",
+        "F6 top code differs (tsgo TS6198 / ours TS6133); layer `submoduleAccepted`. tsgo: " +
+        "unusedVariablesWithUnderscoreInForOfLoop.ts(19,16): error TS6198: All destructured " +
+        "elements are unused. | ours: unusedVariablesWithUnderscoreInForOfLoop.ts(19,17): error " +
+        "TS6133: 'a' is declared but its value is never read."
+    ),
 )
 
 val cloneTypeScriptRepo = tasks.register("cloneTypeScriptRepo") {
@@ -532,6 +2652,99 @@ val cloneTypeScriptRepo = tasks.register("cloneTypeScriptRepo") {
         runCommand("git", "checkout", typeScriptCommit, workingDir = typeScriptRepoDir)
 
         logger.lifecycle("TypeScript repository cloned + pinned successfully.")
+    }
+}
+
+/**
+ * (LEGACY.0b): ensures `typescript-go-repo/` is present and checked out at
+ * [typeScriptGoCommit], so the generator can read tsgo's own baselines.
+ *
+ * THREE ways this deliberately differs from [cloneTypeScriptRepo], each for a measured
+ * reason — do not "make them consistent":
+ *
+ *  1. **No `outputs.dir`.** That checkout is 390 MB / 55k files here and, unlike
+ *     `typescript-repo`, it may PRE-EXIST as a full manual clone carrying tsgo's Go
+ *     sources (the reference implementation CLAUDE.md sends agents to read). Declaring it
+ *     as an output hands Gradle's stale-output handling a directory it did not create and
+ *     costs a 55k-file snapshot on every build. The body is instead a fast no-op when the
+ *     pin is already checked out, which is the same guarantee for ~30 ms a build.
+ *  2. **`sparse-checkout set` only when the clone is already sparse.** A pre-existing full
+ *     clone stays full: narrowing it would delete `internal/checker/checker.go` and
+ *     `testdata/submoduleTriaged.txt`, both of which this project reads by name.
+ *  3. **Sparse, and in NON-CONE mode, to the file kinds we read.** Cone mode can only take
+ *     whole directories, and `submodule/{compiler,conformance}` is three quarters `.types` /
+ *     `.symbols` that nothing here reads. Measured on a fresh clone: the cone form is 290 MB,
+ *     the extension form below is 104 MB of working tree (~40 MB apparent) and 124 MB with
+ *     the object store. `docs/tsgo-baselines.md`'s "≈29 MB" counted only the compiler suite's
+ *     two extensions and is low by ~4x.
+ *
+ * The generator declares [typeScriptGoCommit] as a task PROPERTY rather than these
+ * directories as input trees, for the same reason `baselinesDir` is not an input of it
+ * today: the baselines are a function of the pin and of nothing else.
+ */
+val cloneTypeScriptGoRepo = tasks.register("cloneTypeScriptGoRepo") {
+    group = "typescript"
+    description = "Ensures the typescript-go checkout is present and pinned to tsgo 7.0.2 (its baselines are the corpus reference)."
+    inputs.property("typeScriptGoCommit", typeScriptGoCommit)
+
+    doLast {
+        // NON-CONE patterns (gitignore syntax, rooted): the baselines we compare against,
+        // the `.diff` records that classify a divergence by LAYER in all three directories,
+        // and tsgo's two classification lists, which the KDoc of [TsgoBaselineChoice] cites
+        // and a reader will want on disk. `.types`/`.symbols` are deliberately absent.
+        val sparsePaths = arrayOf(
+            "--no-cone",
+            "/testdata/baselines/reference/submodule/compiler/*.js",
+            "/testdata/baselines/reference/submodule/compiler/*.errors.txt",
+            "/testdata/baselines/reference/submodule/compiler/*.diff",
+            "/testdata/baselines/reference/submodule/conformance/*.js",
+            "/testdata/baselines/reference/submodule/conformance/*.errors.txt",
+            "/testdata/baselines/reference/submodule/conformance/*.diff",
+            "/testdata/baselines/reference/submoduleAccepted/**",
+            "/testdata/baselines/reference/submoduleTriaged/**",
+            "/testdata/submoduleAccepted.txt",
+            "/testdata/submoduleTriaged.txt",
+        )
+        val baselinesPresent = typeScriptGoRepoDir
+            .resolve("testdata/baselines/reference/submodule/compiler").isDirectory
+
+        if (typeScriptGoRepoDir.resolve(".git").exists()) {
+            val head = runCatching {
+                captureCommand("git", "rev-parse", "HEAD", workingDir = typeScriptGoRepoDir).trim()
+            }.getOrNull()
+            if (head == typeScriptGoCommit && baselinesPresent) {
+                logger.info("typescript-go checkout already pinned to $typeScriptGoCommit.")
+                return@doLast
+            }
+            logger.lifecycle("Re-pinning typescript-go repository to $typeScriptGoCommit ...")
+            // `git config --get` EXITS 1 when the key is absent, so this must not go
+            // through runCommand/captureCommand's exit-code check.
+            val sparse = runCatching {
+                captureCommand("git", "config", "--get", "core.sparseCheckout", workingDir = typeScriptGoRepoDir).trim()
+            }.getOrNull() == "true"
+            if (sparse) {
+                runCommand("git", "sparse-checkout", "set", *sparsePaths, workingDir = typeScriptGoRepoDir)
+            }
+            runCommand("git", "fetch", "--depth=1", "origin", typeScriptGoCommit, workingDir = typeScriptGoRepoDir)
+            runCommand("git", "checkout", "--force", typeScriptGoCommit, workingDir = typeScriptGoRepoDir)
+            logger.lifecycle("typescript-go repository re-pinned successfully.")
+            return@doLast
+        }
+
+        logger.lifecycle("Cloning typescript-go repository (pinned $typeScriptGoCommit, partial+sparse) into: $typeScriptGoRepoDir ...")
+        runCommand(
+            "git", "clone",
+            "--depth=1",
+            "--filter=blob:none",
+            "--sparse",
+            "--no-checkout",
+            "https://github.com/microsoft/typescript-go.git",
+            typeScriptGoRepoDir.absolutePath,
+        )
+        runCommand("git", "sparse-checkout", "set", *sparsePaths, workingDir = typeScriptGoRepoDir)
+        runCommand("git", "fetch", "--depth=1", "origin", typeScriptGoCommit, workingDir = typeScriptGoRepoDir)
+        runCommand("git", "checkout", typeScriptGoCommit, workingDir = typeScriptGoRepoDir)
+        logger.lifecycle("typescript-go repository cloned + pinned successfully.")
     }
 }
 
@@ -852,10 +3065,17 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
     description = "Generates Kotlin test cases from the TypeScript compiler test suite."
 
     dependsOn(cloneTypeScriptRepo)
+    // (LEGACY.0b): the corpus reads tsgo's OWN baselines as its primary root.
+    dependsOn(cloneTypeScriptGoRepo)
 
     val testsDir = typeScriptRepoDir.resolve("tests/cases/compiler")
     val conformanceRootDir = typeScriptRepoDir.resolve("tests/cases/conformance")
     val baselinesDir = typeScriptRepoDir.resolve("tests/baselines/reference")
+    // (LEGACY.0b): tsgo checks in its OWN full output per SUITE; the three sibling
+    // `submodule*` directories hold only `.diff` RECORDS, which classify a divergence by
+    // LAYER and never replace a baseline. See docs/tsgo-baselines.md § 1.
+    val tsgoBaselinesRoot = typeScriptGoRepoDir.resolve("testdata/baselines/reference")
+    val tsgoBaselinesDir = tsgoBaselinesRoot.resolve("submodule")
     val outputDir = layout.buildDirectory.dir("generated/typescript-tests")
     // PARITY.1: the ledger doc is rewritten from `logicalParityDivergences` (see
     // below), and the declared `pinnedBy` classes are looked up here. Deliberately
@@ -879,6 +3099,10 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
     inputs.property("logicalParityDivergences", divergences.map { it.toString() })
     // (LEGACY.0a): likewise for the tsgo-pending list.
     inputs.property("tsgoPendingBaselines", pending.map { it.toString() })
+    // (LEGACY.0b): the baseline ROOT is a function of this pin and of nothing else, so
+    // the pin — not tsgo's 46k-file baseline tree — is what re-runs the generator. Same
+    // reason `baselinesDir` has never been declared as an input tree either.
+    inputs.property("typeScriptGoCommit", typeScriptGoCommit)
     outputs.dir(outputDir)
 
     doLast {
@@ -1060,6 +3284,96 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
             return false
         }
 
+
+        // ---------------------------------------------------------------------------
+        // (LEGACY.0b) — the baseline ROOT, chosen per subtest with a three-way fallback.
+        //
+        // tsgo stores full output, not a patch, so "re-pin the corpus to what tsgo emits"
+        // is a root switch. What makes it more than a path change is the case where tsgo
+        // has NO file: that is two different facts wearing one absence, and reading them
+        // as one silently shrinks (or silently freezes) the corpus.
+        //
+        //   present                     -> use tsgo's baseline.
+        //   absent, a `.diff` exists    -> tsgo RAN the case and emitted nothing: DELETE.
+        //   absent, no `.diff`          -> tsgo never ran the configuration: KEEP tsc's.
+        //
+        // Every bucket is counted and asserted below against the pinned constants.
+        val tsgoDiffLayerOf = HashMap<String, String>()
+        for (layer in listOf("submodule", "submoduleAccepted", "submoduleTriaged")) {
+            for (suite in listOf("compiler", "conformance")) {
+                val names = tsgoBaselinesRoot.resolve("$layer/$suite").list() ?: continue
+                for (n in names) {
+                    if (!n.endsWith(".diff")) continue
+                    val key = "$suite/${n.removeSuffix(".diff")}"
+                    val prior = tsgoDiffLayerOf.put(key, layer)
+                    // tsgo's own runner fatals when a baseline is listed as both accepted
+                    // and triaged; a third layer holding it too would make `layer` a
+                    // function of iteration order rather than of tsgo's classification.
+                    check(prior == null) {
+                        "tsgo classifies $key in two layers at once ($prior and $layer) — " +
+                            "the layer is supposed to be tsgo's single verdict on that diff."
+                    }
+                }
+            }
+        }
+        var tsgoAdopted = 0
+        var tsgoNew = 0
+        var tsgoDeleted = 0
+        var tscKept = 0
+        // Only the baselines a subtest is actually generated from, keyed "<suite>/<name>"
+        // so the layer census below cannot mis-attribute a name the two suites share.
+        val adoptedTsgoFiles = LinkedHashMap<String, File>()
+
+        /**
+         * Resolves [baselineName] for a case in [suite], counting the bucket it falls in.
+         * `null` means NO subtest is generated. Call it only once the case's own filters
+         * (tsgo-removed options, deferred conformance error baselines) have passed, so the
+         * counts describe ACTIVE subtests and nothing else.
+         */
+        fun resolveBaseline(suite: String, baselineName: String): TsgoBaselineChoice? {
+            val tsgoFile = tsgoBaselinesDir.resolve(suite).resolve(baselineName)
+            val tscFile = baselinesDir.resolve(baselineName)
+            val layer = tsgoDiffLayerOf["$suite/$baselineName"]
+            if (tsgoFile.isFile) {
+                tsgoAdopted++
+                if (!tscFile.isFile) tsgoNew++
+                adoptedTsgoFiles["$suite/$baselineName"] = tsgoFile
+                return TsgoBaselineChoice(
+                    tsgoFile,
+                    "${D}typeScriptGoBaselineDir/$suite/$baselineName",
+                    layer,
+                    fromTsgo = true,
+                )
+            }
+            if (layer != null) {
+                if (tscFile.isFile) tsgoDeleted++
+                return null
+            }
+            if (!tscFile.isFile) return null
+            tscKept++
+            return TsgoBaselineChoice(
+                tscFile,
+                "${D}typeScriptBaselineDir/$baselineName",
+                layer = null,
+                fromTsgo = false,
+            )
+        }
+
+        /**
+         * Emits tsgo's LAYER for a baseline that differs from tsc's, so a reader of the
+         * generated test — and a `grep` over them — can tell an intended TypeScript 7
+         * behaviour from a tsgo defect without leaving the file.
+         */
+        fun StringBuilder.appendTsgoLayer(choice: TsgoBaselineChoice) {
+            val layer = choice.layer ?: return
+            val gloss = when (layer) {
+                "submoduleAccepted" -> "an INTENDED TypeScript 7 divergence (submoduleAccepted.txt)"
+                "submoduleTriaged" -> "a tsgo DEFECT it intends to fix (submoduleTriaged.txt) — do NOT target this family"
+                else -> "UNTRIAGED by tsgo (in neither list)"
+            }
+            appendLine("    // TSGO BASELINE (LEGACY.0b), layer `$layer`: $gloss.")
+        }
+
         // PARITY.1 — a baseline whose divergence from pristine tsc is FORM, not
         // MEANING, is switched off HERE and nowhere else: the emission stays, carrying
         // `@Ignore` plus the reason, so the case remains visible as SKIPPED instead of
@@ -1093,7 +3407,7 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
         fun StringBuilder.appendDivergence(baseline: String) {
             pendingByBaseline[baseline]?.let { p ->
                 usedPending += baseline
-                appendLine("    // TSGO-PENDING (LEGACY.0a): a TypeScript 7 row this compiler does not produce")
+                appendLine("    // TSGO-PENDING (LEGACY.0): a TypeScript 7 row this compiler does not produce")
                 appendLine("    // yet. Declared in build.gradle.kts `tsgoPendingBaselines`; ledger in")
                 appendLine("    // docs/logical-parity.md.")
                 var line = StringBuilder()
@@ -1172,6 +3486,9 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                     val rel = file.parentFile.relativeTo(conformanceRootDir).invariantSeparatorsPath
                     "\"tests/cases/conformance/$rel\""
                 } else ""
+                // (LEGACY.0b): tsgo files its baselines by SUITE, where tsc's reference
+                // directory is flat. The suite is the corpus the case came from.
+                val tsgoSuite = if (isConformance) "conformance" else "compiler"
                 // Kotlin 2.x does not allow dots in JVM method names, even in backtick-quoted identifiers.
                 // Replace every dot in the base name with an underscore for the function identifier.
                 val id = name.replace('.', '_')
@@ -1194,18 +3511,19 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                 //     baseline is dropped too.
                 val bareUnsupported = usesUnsupportedOption(directives, emptyMap())
 
-                val jsBaseline = baselinesDir.resolve("$name.js")
                 // .d.ts sections in baselines are stripped by TypeScriptTestSupport.stripDtsSection()
                 // so tests with declaration output can be included safely.
-                if (jsBaseline.exists() && !bareUnsupported) {
+                val jsChoice = if (bareUnsupported) null else resolveBaseline(tsgoSuite, "$name.js")
+                if (jsChoice != null) {
                     totalBareTests++
                     sb.appendLine()
+                    sb.appendTsgoLayer(jsChoice)
                     sb.appendDivergence("$name.js")
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts compiles to JavaScript matching ${id}_js`() {")
                     sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
                     sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\").toBaseline($baselineArgs)")
-                    sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$name.js\"))")
+                    sb.appendLine("            .sameAs(Path(\"${jsChoice.pathExpr}\"))")
                     sb.appendLine("    }")
                 }
 
@@ -1214,12 +3532,14 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
 
                 for (config in variations) {
                     val paramName = paramBaselineName(name, config, "js")
-                    val paramBaseline = baselinesDir.resolve(paramName)
-                    if (paramBaseline.exists()) {
-                        // Skip this whole config if its resolved options include a tsgo-removed
-                        // feature (the varying config value overrides the fixed directive of the
-                        // same key; a fixed unsupported directive is caught via `directives`).
-                        if (usesUnsupportedOption(directives, config)) continue
+                    // Skip this whole config if its resolved options include a tsgo-removed
+                    // feature (the varying config value overrides the fixed directive of the
+                    // same key; a fixed unsupported directive is caught via `directives`).
+                    // (LEGACY.0b): asked BEFORE the baseline lookup, so a config the corpus
+                    // does not run cannot land in a bucket count.
+                    if (usesUnsupportedOption(directives, config)) continue
+                    val paramChoice = resolveBaseline(tsgoSuite, paramName)
+                    if (paramChoice != null) {
                         totalParamTests++
                         // Build config suffix for test function name (e.g., target_es5 or alwaysstrict_true_target_es2015)
                         val configId = config.entries.sortedBy { it.key }
@@ -1229,39 +3549,41 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                         val overridesStr = config.entries.sortedBy { it.key }
                             .joinToString(", ") { "\"${it.key}\" to \"${it.value}\"" }
                         sb.appendLine()
+                        sb.appendTsgoLayer(paramChoice)
                         sb.appendDivergence(paramName)
                         sb.appendLine("    @Test")
                         sb.appendLine("    fun `${id}_ts__${configId}__compiles to JavaScript matching baseline`() {")
                         sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
                         sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\", mapOf($overridesStr)).toBaseline($baselineArgs)")
-                        sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$paramName\"))")
+                        sb.appendLine("            .sameAs(Path(\"${paramChoice.pathExpr}\"))")
                         sb.appendLine("    }")
                     }
                 }
 
                 // .errors.txt baseline test (bare-name). tsgo skips the WHOLE config (the error
                 // baseline too, not just emit) for a removed-feature option, so gate on bareUnsupported.
-                val errorsBaseline = baselinesDir.resolve("$name.errors.txt")
                 val errorBaselineDeferred = isConformance && name in conformanceDeferredErrorBaselines
-                if (errorsBaseline.exists() && !bareUnsupported && !errorBaselineDeferred) {
+                val errorsChoice = if (bareUnsupported || errorBaselineDeferred) null
+                    else resolveBaseline(tsgoSuite, "$name.errors.txt")
+                if (errorsChoice != null) {
                     totalErrorTests++
                     sb.appendLine()
+                    sb.appendTsgoLayer(errorsChoice)
                     sb.appendDivergence("$name.errors.txt")
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts has expected errors matching ${id}_errors_txt`() {")
                     sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
                     sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\")")
-                    sb.appendLine("            .errorsMatchBaseline(Path(\"${D}typeScriptBaselineDir/$name.errors.txt\"))")
+                    sb.appendLine("            .errorsMatchBaseline(Path(\"${errorsChoice.pathExpr}\"))")
                     sb.appendLine("    }")
                 }
 
                 // .errors.txt parameterized baseline tests
                 for (config in variations) {
                     val paramErrorName = paramBaselineName(name, config, "errors.txt")
-                    val paramErrorBaseline = baselinesDir.resolve(paramErrorName)
-                    if (paramErrorBaseline.exists() && !usesUnsupportedOption(directives, config) &&
-                        !errorBaselineDeferred
-                    ) {
+                    if (usesUnsupportedOption(directives, config) || errorBaselineDeferred) continue
+                    val paramErrorChoice = resolveBaseline(tsgoSuite, paramErrorName)
+                    if (paramErrorChoice != null) {
                         totalErrorTests++
                         val configId = config.entries.sortedBy { it.key }
                             .joinToString("_") { "${it.key}_${it.value}" }
@@ -1269,12 +3591,13 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                         val overridesStr = config.entries.sortedBy { it.key }
                             .joinToString(", ") { "\"${it.key}\" to \"${it.value}\"" }
                         sb.appendLine()
+                        sb.appendTsgoLayer(paramErrorChoice)
                         sb.appendDivergence(paramErrorName)
                         sb.appendLine("    @Test")
                         sb.appendLine("    fun `${id}_ts__${configId}__has expected errors matching baseline`() {")
                         sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
                         sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\", mapOf($overridesStr))")
-                        sb.appendLine("            .errorsMatchBaseline(Path(\"${D}typeScriptBaselineDir/$paramErrorName\"))")
+                        sb.appendLine("            .errorsMatchBaseline(Path(\"${paramErrorChoice.pathExpr}\"))")
                         sb.appendLine("    }")
                     }
                 }
@@ -1285,6 +3608,62 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
 
             packageDir.resolve("$className.kt").writeText(sb.toString())
         }
+
+        // (LEGACY.0b) validation — the three-way fallback's bucket sizes, asserted.
+        //
+        // A wrong fallback is SILENT: it does not fail a test, it removes one (or freezes
+        // one on the old root), and a shrunken corpus reads exactly like a green one. The
+        // counts are therefore part of the pin, not diagnostics.
+        val bucketReport = "adopted=$tsgoAdopted (of which new=$tsgoNew), " +
+            "deleted=$tsgoDeleted, kept-tsc=$tscKept"
+        check(tsgoDeleted == tsgoExpectedDeleted && tscKept == tsgoExpectedKeptTsc &&
+            tsgoNew == tsgoExpectedNew && tsgoAdopted == tsgoExpectedAdopted
+        ) {
+            "the tsgo baseline buckets moved: $bucketReport, expected adopted=" +
+                "$tsgoExpectedAdopted (of which new=$tsgoExpectedNew), deleted=" +
+                "$tsgoExpectedDeleted, kept-tsc=$tsgoExpectedKeptTsc.\nEither a pin " +
+                "(typeScriptCommit / typeScriptGoCommit) moved, or a filter did. Re-measure " +
+                "all four and update them together with the round note saying which cases " +
+                "moved — never adjust one constant to make the build green."
+        }
+
+        // (LEGACY.0b) guard — `/.src/` is tsgo's own virtual-filesystem ROOT, so a baseline
+        // carrying it (`_jsxFileName = "/.src/two.tsx"`) is pinning a HARNESS ARTIFACT that
+        // our compiler cannot produce by construction. Such a row is a decision not to
+        // follow tsgo, i.e. a `logicalParityDivergences` entry; it may never simply land.
+        val srcRootLeaks = adoptedTsgoFiles
+            .filterKeys { it.substringAfter('/') !in divergenceByBaseline }
+            .filterValues { it.readText().contains("/.src/") }
+            .keys
+        check(srcRootLeaks.isEmpty()) {
+            "${srcRootLeaks.size} adopted tsgo baseline(s) carry tsgo's VFS root `/.src/`:\n" +
+                srcRootLeaks.sorted().joinToString("\n") { "  - $it" } +
+                "\nThat path is unreachable by construction here. Declare each in " +
+                "logicalParityDivergences (with the class pinning the LOGIC it used to pin) " +
+                "or exclude it; see docs/tsgo-baselines.md § 3."
+        }
+
+        // (LEGACY.0b) — the layer census, and the per-baseline record a family round reads
+        // to know whether a red row is an INTENDED TypeScript 7 answer or a tsgo defect.
+        // Deliberately NOT a declared task output, for the same reason `docs/logical-parity.md`
+        // is not: it is a report about the run, not an input to any compilation.
+        val layered = adoptedTsgoFiles.keys.mapNotNull { k -> tsgoDiffLayerOf[k]?.let { k to it } }
+        val layerCounts = layered.groupingBy { it.second }.eachCount()
+        val layerReport = layout.buildDirectory.file("tsgo-baselines/layers.txt").get().asFile
+        layerReport.parentFile.mkdirs()
+        layerReport.writeText(
+            buildString {
+                appendLine("# (LEGACY.0b) adopted tsgo baselines that DIFFER from tsc's, by layer.")
+                appendLine("# tsgo pin: $typeScriptGoCommit / TypeScript pin: $typeScriptCommit")
+                appendLine("# submoduleAccepted = intended; submoduleTriaged = a tsgo defect; submodule = untriaged.")
+                for ((n, l) in layered.sortedWith(compareBy({ it.second }, { it.first }))) {
+                    appendLine("$l\t$n")
+                }
+            }
+        )
+        logger.lifecycle("tsgo baselines: $bucketReport; differing ${layered.size} (" +
+            layerCounts.entries.sortedBy { it.key }.joinToString(", ") { "${it.key}=${it.value}" } +
+            "); layer report: $layerReport")
 
         // PARITY.1 validation — the two controls that keep the ledger honest.
         val stale = divergences.filter { it.baseline !in usedDivergences }

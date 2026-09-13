@@ -1,0 +1,259 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Kazimierz Pogoda / Xemantic
+ * SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-xtsc-output-exception
+ *
+ * xemantic-typescript-compiler - a conformant TypeScript compiler and type
+ * checker that runs on JVM, native, and WebAssembly
+ * Copyright (C) 2026 Kazimierz Pogoda / Xemantic
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public
+ * License along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * As a special exception, this file contains Helper Code covered by the
+ * xemantic-typescript-compiler Output Exception; additional permissions
+ * are granted as described in the file LICENSE-EXCEPTION.
+ */
+
+package com.xemantic.typescript.compiler
+
+import com.xemantic.kotlin.test.assert
+import kotlinx.io.files.Path
+import kotlin.test.Test
+
+/**
+ * (LEGACY.0b) — the LOGIC the 21 `error TS-1` corpus baselines used to pin, now that they are
+ * switched off as logical-parity divergences.
+ *
+ * **What a TS-1 baseline IS.** `TS-1` is not a TypeScript diagnostic code; it is tsgo's own
+ * harness SELF-CHECK, written in place of a case's output when tsgo's pre-emit and post-emit
+ * diagnostic counts disagree ("This can indicate that a semantic _error_ was added by the
+ * emit resolver"). tsgo files every one of them under `submoduleTriaged`, whose header reads
+ * "known diffs that we intend to fix. Each group should include a link to the tracking
+ * issue", and whose group for this family says in as many words: **"ANY test with a TS-1
+ * indicates a problem, not just these diffs"**
+ * (`typescript-go-repo/testdata/submoduleTriaged.txt`, issue "checker order dependence
+ * creating diagnostic instability in API scenarios").
+ *
+ * So the file is not tsgo's ANSWER to a TypeScript question — it is a report that tsgo could
+ * not settle on one, on a case where tsc's harness settles fine. CLAUDE.md's standing rule is
+ * that no round may target a `submoduleTriaged` family, so this is a DECISION not to follow,
+ * ledgered, rather than a `tsgoPendingBaselines` row, which would mean "implement this".
+ *
+ * **What it is NOT.** It is not an unreachable shape: the pre/post-emit split is tsc's own
+ * harness convention, tsc's baselines carry TS-1 too, and `Checker.checkPreEmitCountMismatchPins`
+ * synthesizes exactly that marker for the three cases whose TSC baseline has one. So an
+ * invariant of the form "we never emit a code below 1000" is measurably FALSE here — the
+ * disagreement with tsgo is about WHICH cases destabilize, not about the shape of the row.
+ *
+ * **What is pinned here instead.** Sixteen of the twenty-one cases had a tsc baseline before
+ * the re-pin, and those comparisons are reproduced below verbatim against
+ * [typeScriptBaselineDir] — so switching the tsgo files off costs this corpus NO coverage,
+ * and a regression in any of those cases still reddens. The other five had no tsc baseline at
+ * all (tsgo's TS-1 file is the only one that ever existed for them), so there is nothing to
+ * reproduce; the invariant pin below is what covers them.
+ *
+ * Revisit when tsgo closes its tracking issue: those baselines then become real answers, the
+ * entries leave `logicalParityDivergences`, and these mirrors go with them.
+ */
+class TsgoHarnessSelfCheckBaselinesTest {
+
+    /**
+     * The 21 switched-off baselines, as (case name, harness option overrides, tsgo path).
+     * Two are parameterized configs of the same case, which is why the case name alone is
+     * not the key.
+     */
+    private val tsgoSelfCheckBaselines: List<Triple<String, Map<String, String>, String>> = listOf(
+        Triple("acceptableAlias1", mapOf(), "compiler/acceptableAlias1.errors.txt"),
+        Triple("accessorInferredReturnTypeErrorInReturnStatement", mapOf(), "compiler/accessorInferredReturnTypeErrorInReturnStatement.errors.txt"),
+        Triple("aliasInaccessibleModule", mapOf(), "compiler/aliasInaccessibleModule.errors.txt"),
+        Triple("checkingObjectWithThisInNamePositionNoCrash", mapOf(), "compiler/checkingObjectWithThisInNamePositionNoCrash.errors.txt"),
+        Triple("classExpressionWithDecorator1", mapOf(), "compiler/classExpressionWithDecorator1.errors.txt"),
+        Triple("constructorWithIncompleteTypeAnnotation", mapOf(), "compiler/constructorWithIncompleteTypeAnnotation.errors.txt"),
+        Triple("declarationEmitNameConflictsWithAlias", mapOf(), "compiler/declarationEmitNameConflictsWithAlias.errors.txt"),
+        Triple("declarationEmitTypeofThisInClass", mapOf(), "compiler/declarationEmitTypeofThisInClass.errors.txt"),
+        Triple("exportImportNonInstantiatedModule", mapOf(), "compiler/exportImportNonInstantiatedModule.errors.txt"),
+        Triple("interfaceMayNotBeExtendedWitACall", mapOf(), "compiler/interfaceMayNotBeExtendedWitACall.errors.txt"),
+        Triple("isolatedModulesExportImportUninstantiatedNamespace", mapOf(), "compiler/isolatedModulesExportImportUninstantiatedNamespace.errors.txt"),
+        Triple("manyCompilerErrorsInTheTwoFiles", mapOf(), "compiler/manyCompilerErrorsInTheTwoFiles.errors.txt"),
+        Triple("missingCloseParenStatements", mapOf("alwaysstrict" to "true"), "compiler/missingCloseParenStatements(alwaysstrict=true).errors.txt"),
+        Triple("noUnusedLocals_selfReference", mapOf(), "compiler/noUnusedLocals_selfReference.errors.txt"),
+        Triple("reachabilityChecksNoCrash1", mapOf(), "compiler/reachabilityChecksNoCrash1.errors.txt"),
+        Triple("reverseMappedPartiallyInferableTypes", mapOf(), "compiler/reverseMappedPartiallyInferableTypes.errors.txt"),
+        Triple("shorthandPropertyAssignmentsInDestructuring", mapOf("target" to "es2015"), "compiler/shorthandPropertyAssignmentsInDestructuring(target=es2015).errors.txt"),
+        Triple("shorthandPropertyAssignmentsInDestructuring_ES6", mapOf(), "compiler/shorthandPropertyAssignmentsInDestructuring_ES6.errors.txt"),
+        Triple("superCallsInConstructor", mapOf(), "compiler/superCallsInConstructor.errors.txt"),
+        Triple("withStatement", mapOf(), "compiler/withStatement.errors.txt"),
+        Triple("withStatementErrors", mapOf(), "compiler/withStatementErrors.errors.txt"),
+    )
+
+    /**
+     * Every one of the 21 entries is LOAD-BEARING: this compiler's answer for the case is
+     * not tsgo's file, so no entry is sitting in `logicalParityDivergences` masking an
+     * agreement that would make it stale.
+     *
+     * It is a real, failable check in the direction that matters. `TS-1` is NOT unreachable
+     * here — `Checker.checkPreEmitCountMismatchPins` synthesizes exactly that marker for the
+     * three cases whose **tsc** baseline carries one, because the pre/post-emit split is
+     * tsc's harness convention and predates tsgo. What tsgo's `submoduleTriaged` group
+     * records is that ITS checker produces the instability on cases where tsc's does not, so
+     * the disagreement is about which cases, not about the shape. When tsgo closes that
+     * tracking issue this test is what says so: an entry whose answer starts matching makes
+     * it fail, and the entry should then leave the ledger.
+     *
+     * The count assertion is round 753's rule — an ablation that counts nothing tested
+     * nothing — and it is also what fails if a baseline name rots.
+     */
+    @Test
+    fun `every switched-off TS-1 baseline still disagrees with what we emit`() {
+        var checked = 0
+        var agreeing = 0
+        for ((case, overrides, baseline) in tsgoSelfCheckBaselines) {
+            val source = Path("$typeScriptCasesDir/$case.ts").readText()
+            val result = TypeScriptCompiler().compile(source, "$case.ts", overrides)
+            val matched = runCatching {
+                result.errorsMatchBaseline(Path("$typeScriptGoBaselineDir/$baseline"))
+            }.isSuccess
+            if (matched) agreeing++
+            checked++
+        }
+        assert(agreeing == 0)
+        assert(checked == 21)
+    }
+
+    /** Reproduces the switched-off `accessorInferredReturnTypeErrorInReturnStatement.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `accessorInferredReturnTypeErrorInReturnStatement_ts has expected errors matching accessorInferredReturnTypeErrorInReturnStatement_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/accessorInferredReturnTypeErrorInReturnStatement.ts").readText()
+        TypeScriptCompiler().compile(source, "accessorInferredReturnTypeErrorInReturnStatement.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/accessorInferredReturnTypeErrorInReturnStatement.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `checkingObjectWithThisInNamePositionNoCrash.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `checkingObjectWithThisInNamePositionNoCrash_ts has expected errors matching checkingObjectWithThisInNamePositionNoCrash_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/checkingObjectWithThisInNamePositionNoCrash.ts").readText()
+        TypeScriptCompiler().compile(source, "checkingObjectWithThisInNamePositionNoCrash.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/checkingObjectWithThisInNamePositionNoCrash.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `classExpressionWithDecorator1.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `classExpressionWithDecorator1_ts has expected errors matching classExpressionWithDecorator1_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/classExpressionWithDecorator1.ts").readText()
+        TypeScriptCompiler().compile(source, "classExpressionWithDecorator1.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/classExpressionWithDecorator1.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `constructorWithIncompleteTypeAnnotation.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `constructorWithIncompleteTypeAnnotation_ts has expected errors matching constructorWithIncompleteTypeAnnotation_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/constructorWithIncompleteTypeAnnotation.ts").readText()
+        TypeScriptCompiler().compile(source, "constructorWithIncompleteTypeAnnotation.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/constructorWithIncompleteTypeAnnotation.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `interfaceMayNotBeExtendedWitACall.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `interfaceMayNotBeExtendedWitACall_ts has expected errors matching interfaceMayNotBeExtendedWitACall_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/interfaceMayNotBeExtendedWitACall.ts").readText()
+        TypeScriptCompiler().compile(source, "interfaceMayNotBeExtendedWitACall.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/interfaceMayNotBeExtendedWitACall.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `isolatedModulesExportImportUninstantiatedNamespace.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `isolatedModulesExportImportUninstantiatedNamespace_ts has expected errors matching isolatedModulesExportImportUninstantiatedNamespace_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/isolatedModulesExportImportUninstantiatedNamespace.ts").readText()
+        TypeScriptCompiler().compile(source, "isolatedModulesExportImportUninstantiatedNamespace.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/isolatedModulesExportImportUninstantiatedNamespace.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `manyCompilerErrorsInTheTwoFiles.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `manyCompilerErrorsInTheTwoFiles_ts has expected errors matching manyCompilerErrorsInTheTwoFiles_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/manyCompilerErrorsInTheTwoFiles.ts").readText()
+        TypeScriptCompiler().compile(source, "manyCompilerErrorsInTheTwoFiles.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/manyCompilerErrorsInTheTwoFiles.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `missingCloseParenStatements(alwaysstrict=true).errors.txt` against tsc's own baseline. */
+    @Test
+    fun `missingCloseParenStatements_ts__alwaysstrict_true__has expected errors matching baseline`() {
+        val source = Path("$typeScriptCasesDir/missingCloseParenStatements.ts").readText()
+        TypeScriptCompiler().compile(source, "missingCloseParenStatements.ts", mapOf("alwaysstrict" to "true"))
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/missingCloseParenStatements(alwaysstrict=true).errors.txt"))
+    }
+
+    /** Reproduces the switched-off `noUnusedLocals_selfReference.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `noUnusedLocals_selfReference_ts has expected errors matching noUnusedLocals_selfReference_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/noUnusedLocals_selfReference.ts").readText()
+        TypeScriptCompiler().compile(source, "noUnusedLocals_selfReference.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/noUnusedLocals_selfReference.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `reachabilityChecksNoCrash1.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `reachabilityChecksNoCrash1_ts has expected errors matching reachabilityChecksNoCrash1_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/reachabilityChecksNoCrash1.ts").readText()
+        TypeScriptCompiler().compile(source, "reachabilityChecksNoCrash1.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/reachabilityChecksNoCrash1.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `reverseMappedPartiallyInferableTypes.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `reverseMappedPartiallyInferableTypes_ts has expected errors matching reverseMappedPartiallyInferableTypes_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/reverseMappedPartiallyInferableTypes.ts").readText()
+        TypeScriptCompiler().compile(source, "reverseMappedPartiallyInferableTypes.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/reverseMappedPartiallyInferableTypes.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `shorthandPropertyAssignmentsInDestructuring(target=es2015).errors.txt` against tsc's own baseline. */
+    @Test
+    fun `shorthandPropertyAssignmentsInDestructuring_ts__target_es2015__has expected errors matching baseline`() {
+        val source = Path("$typeScriptCasesDir/shorthandPropertyAssignmentsInDestructuring.ts").readText()
+        TypeScriptCompiler().compile(source, "shorthandPropertyAssignmentsInDestructuring.ts", mapOf("target" to "es2015"))
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/shorthandPropertyAssignmentsInDestructuring(target=es2015).errors.txt"))
+    }
+
+    /** Reproduces the switched-off `shorthandPropertyAssignmentsInDestructuring_ES6.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `shorthandPropertyAssignmentsInDestructuring_ES6_ts has expected errors matching shorthandPropertyAssignmentsInDestructuring_ES6_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/shorthandPropertyAssignmentsInDestructuring_ES6.ts").readText()
+        TypeScriptCompiler().compile(source, "shorthandPropertyAssignmentsInDestructuring_ES6.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/shorthandPropertyAssignmentsInDestructuring_ES6.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `superCallsInConstructor.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `superCallsInConstructor_ts has expected errors matching superCallsInConstructor_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/superCallsInConstructor.ts").readText()
+        TypeScriptCompiler().compile(source, "superCallsInConstructor.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/superCallsInConstructor.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `withStatement.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `withStatement_ts has expected errors matching withStatement_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/withStatement.ts").readText()
+        TypeScriptCompiler().compile(source, "withStatement.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/withStatement.errors.txt"))
+    }
+
+    /** Reproduces the switched-off `withStatementErrors.errors.txt` against tsc's own baseline. */
+    @Test
+    fun `withStatementErrors_ts has expected errors matching withStatementErrors_errors_txt`() {
+        val source = Path("$typeScriptCasesDir/withStatementErrors.ts").readText()
+        TypeScriptCompiler().compile(source, "withStatementErrors.ts")
+            .errorsMatchBaseline(Path("$typeScriptBaselineDir/withStatementErrors.errors.txt"))
+    }
+}

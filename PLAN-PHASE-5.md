@@ -25,6 +25,94 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.86) — (LEGACY.0b) step 1: the corpus reads tsgo's OWN baselines, and a `.diff` classifies a FILE where a failure classifies what WE got wrong (2026-09-13)
+
+**Suite 19,045 → 19,082 / 0 / 310** — skipped 20 → 310 = 3 pre-existing + **285 pending**
++ **22 divergences**, and all 307 of those are generated subtests carrying
+`@kotlin.test.Ignore`, so the corpus stays a GREEN gate while every adopted row is visible
+and counted. Generated corpus **8,838 → 8,852**, exactly the projection. `cost_gate.py`
+exit 0 with **all 20 counters at +0.00%** — the right receipt for a generator-only change,
+and the reason the 8-profile grid was not run: **no `commonMain` file is touched**, so the
+compiler binary is unchanged by construction. `huge_methods.py --fail-over 0` exit 0 (858
+classes); warning-clean. **(LEGACY.0) stays OPEN** on (0b-2) onwards.
+
+**THE ROOT SWITCH.** `cloneTypeScriptGoRepo` pins `typescript-go-repo` to `2bd066d87…`
+(tag `typescript/v7.0.2`) with the submodule side `4d4f005c` recorded in its KDoc, and the
+four baseline lookups now choose per subtest between tsgo's checked-in output and tsc's.
+Three deliberate divergences from `cloneTypeScriptRepo`, each with a reason: no
+`outputs.dir` (the clone is not a task output), a **NON-CONE** sparse set at extension
+granularity, and `sparse-checkout set` issued ONLY when the clone is already sparse —
+narrowing a FULL clone would delete `internal/checker/checker.go`, which this repo reads as
+a reference implementation. The no-op path is verified (3 s, Go sources intact) and the
+fresh-clone path was rehearsed end to end.
+
+**THE THREE-WAY FALLBACK IS ASSERTED, NOT DIAGNOSED, AND THE GUARD FIRED TWICE.**
+`adopted = 8,765` (of which `new = 23`), `deleted = 9`, `kept-tsc = 87`. A wrong fallback is
+SILENT — it does not fail a test, it removes one, and a shrunken corpus reads exactly like a
+green one — so all four counts are `check`ed together with a message that forbids adjusting
+one constant to make the build green. **`new` is 23 against the design's 24, and that is a
+FINDING rather than a tolerance**: the design sized (0b) against pristine `637d5746`, where
+`coAndContraVariantInferences5.errors.txt` does not exist; (0a) moved the pin to `4d4f005c`,
+which carries it, so one of the 24 landed a round early. Corpus size is unaffected because
+the BASE moved by the same one. The off-by-one surfaced because the guard fired, which is
+the whole argument for asserting counts rather than printing them.
+
+**THE RED SET IS 289, WITH TWO CONTROLS THAT MAKE IT ATTRIBUTABLE** (256 errors + 33 js;
+the design estimated ≈315): **all 289 come from the tsgo root** — no kept-tsc subtest
+reddened — and **all 289 carry a `.diff` layer**, so nothing tsgo and tsc AGREE on went red.
+Either control failing would have meant the fallback, not the compiler, was the variable.
+Layers: 238 Accepted / 27 submodule / 24 Triaged. Families: F6 code-differs 88, F9 wording
+53, JS 33, F4 26, F3 25, **TS-1 21**, F1 11, F2 9, F0 7, F10 4, F7 4, F5 4, F8 2, plus 2
+ours-extra.
+
+**THE PER-FAMILY COUNTS DIFFER MATERIALLY FROM THE DESIGN'S, AND THE REASON IS A LAW RATHER
+THAN AN ERROR: a `.diff` classifies a FILE, while a FAILURE classifies what *we* got wrong.**
+F10 went 45 → 4, F9 11 → 53, F7 43 → 4. A file whose diff is "tsgo shortened the chain" can
+still fail here for an unrelated reason, or not fail at all because our answer already
+matched tsgo's side. So a family ranking taken from the reference's own diff layers is a
+ranking of THEIR divergences, not of OUR work — re-derive it from the red set before
+ordering any family rounds.
+
+**THE BIGGEST REFUTATION IS ABOUT A PIN THIS ROUND WROTE.** "A compiler emitting a NEGATIVE
+diagnostic code is impossible here" is **FALSE**: `TS-1` is tsc's own harness convention and
+`Checker.checkPreEmitCountMismatchPins` deliberately synthesizes it for three cases, so the
+first invariant pin written on that assumption went RED against the real binary and was
+replaced. The decision not to follow tsgo's 21 TS-1 rows stands — they are its own
+`submoduleTriaged` "known diffs that we intend to fix" — but its stated reason did not
+survive contact.
+
+**SIX MORE REFUTED PREDICTIONS**, all from a read-only design study whose numbers were
+explicitly estimates: the sparse set is **104 MB worktree / 124 MB total** against "≈29 MB"
+(conformance and the `.diff` layers were uncounted); differing subtests **392** against 378
+(layers 28/331/19 → 35/333/24); `/.src/` is **1 active subtest** against "5 rows" (six
+baselines carry it, five are not generated); the red set is 289 against ≈315. Confirmed as
+predicted: the 9 deletions, the 87 kept-tsc family, `==== ./` at exactly **13**, and
+conformance contributing zero.
+
+**ABLATION**: reverting the `==== ./` prefix line reddens **12 of 13** — the thirteenth
+(`uniqueSymbolJs`) is `@Ignore`d as a pending row of an unrelated family and so is
+unreachable by the arm, which is the honest reading rather than a 13/13 claim. Restored and
+rebuilt before the final gates.
+
+**THE TS-1 FAMILY COST 16 REAL tsc BASELINES AND THE COST WAS PAID BACK, NOT ACCEPTED.**
+Ledgering those 21 rows as divergences retires 16 comparisons this suite genuinely had, so
+`TsgoHarnessSelfCheckBaselinesTest` reproduces all 16 verbatim against
+`typeScriptBaselineDir`, beside an invariant pin that every one of the 21 entries is still
+load-bearing — which doubles as the countdown for when tsgo closes its own issue. Net
+coverage change: zero.
+
+**ONE DESIGN QUESTION LEFT OPEN DELIBERATELY, AND IT SHOULD BE DECIDED BEFORE (0b-3).** A
+FOURTH fallback arm — "a HARNESS ARTIFACT (TS-1 content, a `/.src/` path) is not tsgo's
+ANSWER, so fall back to tsc's baseline" — would preserve those 17 subtests with no ledger
+entries and no hand-written mirrors at all. It was not taken: the brief was explicit, the
+choice is reversible, and an arm phrased that way risks decaying into "fall back whenever
+tsgo is inconvenient", which is exactly the escape hatch round 873 warns absorbs unrelated
+defects. Recorded rather than silently adopted.
+
+**NEXT**: (0b-2), the free wins — `==== ./` is already in, so F9 wording (53), F4
+TS6133 → TS6196 (26) and F5 removed-option wording (4, which also answers (LEGACY.1)'s
+6.0-vs-7.0 question) are the cheap families; then the ranked family rounds, ordered from the
+RED SET rather than from the diff layers.
 ### Round (P18.85) — (LEGACY.0a): the corpus is pinned to tsgo's `tsgo-port` sha, and tsc's STABLE TYPE ORDERING is an INTERNING order rather than a display one (2026-09-13)
 
 **Suite 19,028 → 19,045 / 0 / 20** — +16 pins (`StableTypeOrderingTest`) and +1 generated
@@ -792,83 +880,6 @@ pre-existing B83.4i inference gaps identical on a plain array (predicate `filter
 **NEXT**: **(CHK.133)** — `Signature.thisParameter`, the model change D6 is blocked on, queued
 at the top with its three consumers. Then (INV.0) step 10b-ii's own unblockers.
 
-### Round (P18.76) — (CHK.97) D3, the DIFFERING half: TS7006 through a union contextual type, and the arity filter the identical half had left out (2026-09-12)
-
-**Suite 18,718 → 18,738 / 0 / 3** (+20 pins, `UnionContextualSignatureDifferingTest`; 39 pins
-across the two D3 classes). Grid 8×`added=0 removed=0`; library arm marked 18 → 18 and cronstrue
-1 → 1 with TS7006/TS7031 at 0 on ours and on tsgo; `cost_gate.py` exit 0, no rebaseline (the
-pristine before-binary through `--from-log` reads all 20 counters digit-identical — the standing
-+1.18% is baseline staleness); `huge_methods.py --fail-over 0` exit 0; warning-clean.
-**(CHK.97) stays OPEN** — D5 and D6 remain; D3 is CLOSED in both halves.
-
-**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item and (P18.75) named
-this half as its cheapest measured residue. Per the WORK ORDER's 2026-09-08 addendum the
-successor is **(INV.0) step 10b-ii**.
-
-**THE REACH CENSUS DECIDED THE DESIGN, AND IT READ ZERO.** A temporary counter splitting
-`unionContextualSignature`'s outcomes (answered / not identical / overloaded member / lazy
-reference / no signature) was run over all eight dashboard profiles, marked, cronstrue and the
-2,400-file generated project BEFORE any emission was written: **0 reached everywhere**, with the
-positive control live at 3-22 per fixture. So the grid and both library arms are CONTROLS for
-this half, and the pins plus the corpus are the gate. Two things the census said that reading
-had not: the "refused-lazy-reference" outcome NEVER fires (a `Type.Reference`'s own signatures
-are instantiated by the time a contextual type reaches here), and the overloaded-member
-refusal that (P18.75) recorded as a residue fires **6 times on one fixture** — i.e. without an
-arity filter the emission is UNSOUND (`(p, q) =>` against `A | B` where only `B` fits would
-report TS7006 on a parameter tsc types), and it had to be closed in the same sub-step.
-
-**THE FIX IS tsc's `getContextualCallSignature` PLUS THE VERDICT IT ALREADY HAD.**
-`callableSignaturesForCtx` now takes an optional `requiredParamCount`; with it each union member
-contributes tsc's per-member answer — the member's signatures filtered by `signatureArityBelow`
-(tsc's `isAritySmaller`), ONE applicable contributes it, several fold through
-`getIntersectedSignatures`, none skips the member — and `unionContextualSignature` returns
-`UnionCtxSignature(signature, differing)`, where a failed `compareSignaturesIdentical` is the
-DIFFERING verdict. `SpineIanyCtx` carries the callee parameter from a split
-`calleeArgSignature` / `calleeArgParam` / `calleeParamGivesNoContext(param)` (still one callee
-resolution per edge), and `spineIanyFnExprEnter` asks `spineIanyUnionCtxDiffers` on the `typed`
-short-circuit, emitting through the EXISTING owner `checkParamsForImplicitAny` (TS7006 at the
-parameter, TS7031 for a binding pattern) — no second emitter. The instantiated callee type is
-pulled only for a GENERIC callee, after the declared read, which is why the counters did not
-move.
-
-**BEFORE → AFTER (`agree/ours-only/missing`, zero REF-SPLIT, zero NEW ours-only anywhere)**:
-differing parameter types 0/0/1 → 1/0/0; differing arity 0/0/1 → 1/0/0; `(x?: string)` vs
-`(x: string)` 0/0/1 → 1/0/0; the overloaded family 0/0/3 → **3/0/0** (the (P18.75) residue
-closed); generic member 0/0/2 → 1/0/1; the new 16-file family (intersection member,
-one-applicable overload, two overloaded members, rest vs fixed, nested pair, function
-expression, object-literal method, generic-alias instantiations) 2/0/18 → **17/0/3**; the
-extras 5/2/4 → 6/2/3 with both ours-only rows pre-existing. **Five of (P18.75)'s `negative
-control - … not identical` pins were COUNTDOWNS** — they asserted today's silence on shapes
-both references report — and now assert the TS7006 row; the `residue - overloaded member` pin
-flipped to its two TS2322 rows. Per (CHK.114) only expectations changed.
-
-**ABLATION over 39 pins**: a1 the emission removed — **16 RED**; a2 the arity filter collapsed
-— **3 RED**, exactly the three negative controls (the one-applicable-overload shapes), which is
-the filter's whole job; a3 the parameter typed from the FIRST member despite the refusal —
-**15 RED**. Final rebuild md5 = the gated build; `javap -c -p` minus line numbers identical
-after the census removal.
-
-**A DEFECT THE FIXTURE MATRIX COULD NOT SEE.** The first cut carried a `sig!!` on an
-unresolvable callee and passed every D3 fixture; the at-risk sweep of the neighbouring classes
-(634 tests / 63 classes) read 24 RED on it. A matrix drawn from the shape the fix targets is
-round 902's dead-arm law one instrument over — the neighbours are the control.
-
-**RESIDUES, MEASURED AND NOT FIXED**: a `new` argument against a differing union stays silent
-(pinned as `residue - …`, with the reference row in its KDoc); a generic callee's parameter and
-a both-generic identical pair type nothing (pre-existing); an INITIALISED parameter
-(`(p = "d") =>`) against a differing union; a typed context with no readable type (an overloaded
-CALLEE, an `=` whose left side is unknowable, a call-argument object-literal method); and the
-pre-existing x5/x6/x8/y3/y7 rows recorded at (P18.75).
-
-**PREDICTIONS REFUTED**: "the arity walker records `typed = true`" was half the story —
-object-literal-property, return and `=` positions already emitted, only the call-argument
-position was silent; the feared fourth contextual pull was unnecessary; the intersection
-member is not a union member here and needed no residue.
-
-**NEXT**: (CHK.97)'s remaining rows are D5 (one row, generic inference through a combined
-signature) and D6 (blocked on `Signature.thisParameter`). Per the WORK ORDER, **(INV.0) step
-10b-ii** is where the order sends the arc.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1199,7 +1210,18 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) LANDED 2026-09-13 ((P18.85) note) — `typeScriptCommit` = `4d4f005c`, corpus 8,838,
+- [ ] **(LEGACY.0) (0a) + (0b) STEP 1 LANDED 2026-09-13 ((P18.85)/(P18.86) notes) — the corpus now reads tsgo's OWN
+  baselines (`cloneTypeScriptGoRepo` at tag `typescript/v7.0.2`, a three-way fallback with all four bucket counts
+  ASSERTED, corpus 8,852, red set 289 disposed as 285 pending + 22 divergences, suite 0 failed / 310 skipped).
+  **REMAINING: (0b-2) the free wins** — F9 wording (53), F4 `TS6133`→`TS6196` (26), F5 removed-option wording (4,
+  which also answers (LEGACY.1)'s 6.0-vs-7.0 question); **then the family rounds ordered from the RED SET, never from
+  the `.diff` layers** (a diff classifies a FILE, a failure classifies what WE got wrong: F10 45→4, F9 11→53,
+  F7 43→4). Families by red count: F6 code-differs 88, F9 53, JS 33, F4 26, F3 25, TS-1 21 (ledgered, do NOT follow —
+  `submoduleTriaged`), F1 11, F2 9, F0 7, F10 4, F7 4, F5 4, F8 2. **BLOCKED-PENDING-USER before (0b-3)**: a FOURTH
+  fallback arm — "a harness artifact (TS-1 content, a `/.src/` path) is not tsgo's ANSWER, so fall back to tsc's
+  baseline" — would preserve 17 subtests with no ledger entries and no hand-written mirrors; not taken because it
+  risks decaying into "fall back whenever tsgo is inconvenient" (round 873's escape-hatch warning). PREVIOUS HEAD:
+  (0a) LANDED 2026-09-13 ((P18.85) note) — `typeScriptCommit` = `4d4f005c`, corpus 8,838,
   `StableTypeOrdering.kt` reproduces tsc's `compareTypes` as an INTERNING order in `getUnionType` (display-only was
   measured insufficient); 29 first-run reds → 12 engine, 6 re-measured expectations, **17 in the new
   `tsgoPendingBaselines` list** (`@Ignore`d, counted, stale-checked, NO `pinnedBy` — rows to IMPLEMENT, not

@@ -551,8 +551,8 @@ fun formatErrorBaseline(
         for (diag in sorted) {
             val df = diag.fileName
             if (df != null && diag.line != null && diag.character != null) {
-                // TypeScript strips leading "./" from filenames in the diagnostic summary.
-                // Source-echo headers ("==== ./foo.ts ====") keep the prefix.
+                // TypeScript strips leading "./" from filenames in the diagnostic summary,
+                // and (LEGACY.0b) TypeScript 7 strips it from the source-echo header below too.
                 +df.removePrefix("./")
                 +"("
                 +diag.line.toString()
@@ -631,7 +631,12 @@ fun formatErrorBaseline(
             val errorCount = fileDiags.size
 
             +"==== "
-            +fileName
+            // (LEGACY.0b): TypeScript 7 strips a leading "./" from the source-echo header
+            // too, where tsc 6 kept it there and stripped it only from the summary lines
+            // above (20 tsc baselines carry `==== ./a.ts`, zero tsgo ones do). tsgo's own
+            // runner hides this: `DiffFixupOld` rewrites the OLD side of every `.diff`, so
+            // the difference is invisible in the diff records and real in the full files.
+            +fileName.removePrefix("./")
             +" ("
             +errorCount.toString()
             +" errors) ===="

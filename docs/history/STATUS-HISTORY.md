@@ -3310,3 +3310,20 @@ tsc's optional-tuple display landed with it. Ablation 31/4/15/9/2 RED over 45 pi
 reddening the compiler profile to 47 rows. cost_gate exit 0 (18/20 digit-identical;
 `globals.lookups` +19 is the `Function` consult), huge_methods exit 0, warning-clean.
 (CHK.134) stays open on `bind`.
+
+**(P18.81) — (CHK.134)(2): `f.bind` — THE BUILD SHAPE SUFFICED, THE LIB HAS TWO OVERLOADS NOT FIVE, AND A RE-BOUND FUNCTION'S `any` WAS THE ARITH RECORDER'S FIRST-TOUCH HAZARD, 18,907 / 0 / 3 (2026-09-12).**
+`Checker.bindType` builds `bind`'s member per call from the receiver alone — `OmitThisParameter`
+is the receiver itself when its `this` is absent/`unknown`/`any` (overloads and type
+parameters KEPT, measured) else the erased last signature minus `this`; the variadic overload
+splits the parameter list at the partial count — with no conditional type touched, and
+`NewableFunction.bind` came free. The queue item's `A0..A3` quartet does not exist in any of
+the three libs. **One signature wherever one decides the call**: handing the lib's PAIR over
+typed a re-bound function `any`, so the pair is built only when overload 1 refuses — which
+is exactly pristine's per-candidate TS2769 chain. Census: 5-24 `bind` sites per profile, ALL
+refused as non-strict, 0 on every library, so the grid and libraries are controls. 52
+fixtures: 60 agree / 1 ours-only / 14 missing, every missing row attributed to a
+pre-existing general gap reproduced WITHOUT `bind` (a variable callee's TS2554, and
+`spineArithRecordVarDecl`'s first-touch under an `any`-reading ambient — now a CLAUDE.md
+gotcha). Ablation 43/26/6/8 RED over 127 pins. cost_gate exit 0 with 20/20 counters
+digit-identical to the rebuilt HEAD, huge_methods exit 0, warning-clean. **(CHK.134) is
+CHECKED OFF**; next is (CHK.98).

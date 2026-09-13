@@ -1,3 +1,80 @@
+### Round (P18.76) — (CHK.97) D3, the DIFFERING half: TS7006 through a union contextual type, and the arity filter the identical half had left out (2026-09-12)
+
+**Suite 18,718 → 18,738 / 0 / 3** (+20 pins, `UnionContextualSignatureDifferingTest`; 39 pins
+across the two D3 classes). Grid 8×`added=0 removed=0`; library arm marked 18 → 18 and cronstrue
+1 → 1 with TS7006/TS7031 at 0 on ours and on tsgo; `cost_gate.py` exit 0, no rebaseline (the
+pristine before-binary through `--from-log` reads all 20 counters digit-identical — the standing
++1.18% is baseline staleness); `huge_methods.py --fail-over 0` exit 0; warning-clean.
+**(CHK.97) stays OPEN** — D5 and D6 remain; D3 is CLOSED in both halves.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item and (P18.75) named
+this half as its cheapest measured residue. Per the WORK ORDER's 2026-09-08 addendum the
+successor is **(INV.0) step 10b-ii**.
+
+**THE REACH CENSUS DECIDED THE DESIGN, AND IT READ ZERO.** A temporary counter splitting
+`unionContextualSignature`'s outcomes (answered / not identical / overloaded member / lazy
+reference / no signature) was run over all eight dashboard profiles, marked, cronstrue and the
+2,400-file generated project BEFORE any emission was written: **0 reached everywhere**, with the
+positive control live at 3-22 per fixture. So the grid and both library arms are CONTROLS for
+this half, and the pins plus the corpus are the gate. Two things the census said that reading
+had not: the "refused-lazy-reference" outcome NEVER fires (a `Type.Reference`'s own signatures
+are instantiated by the time a contextual type reaches here), and the overloaded-member
+refusal that (P18.75) recorded as a residue fires **6 times on one fixture** — i.e. without an
+arity filter the emission is UNSOUND (`(p, q) =>` against `A | B` where only `B` fits would
+report TS7006 on a parameter tsc types), and it had to be closed in the same sub-step.
+
+**THE FIX IS tsc's `getContextualCallSignature` PLUS THE VERDICT IT ALREADY HAD.**
+`callableSignaturesForCtx` now takes an optional `requiredParamCount`; with it each union member
+contributes tsc's per-member answer — the member's signatures filtered by `signatureArityBelow`
+(tsc's `isAritySmaller`), ONE applicable contributes it, several fold through
+`getIntersectedSignatures`, none skips the member — and `unionContextualSignature` returns
+`UnionCtxSignature(signature, differing)`, where a failed `compareSignaturesIdentical` is the
+DIFFERING verdict. `SpineIanyCtx` carries the callee parameter from a split
+`calleeArgSignature` / `calleeArgParam` / `calleeParamGivesNoContext(param)` (still one callee
+resolution per edge), and `spineIanyFnExprEnter` asks `spineIanyUnionCtxDiffers` on the `typed`
+short-circuit, emitting through the EXISTING owner `checkParamsForImplicitAny` (TS7006 at the
+parameter, TS7031 for a binding pattern) — no second emitter. The instantiated callee type is
+pulled only for a GENERIC callee, after the declared read, which is why the counters did not
+move.
+
+**BEFORE → AFTER (`agree/ours-only/missing`, zero REF-SPLIT, zero NEW ours-only anywhere)**:
+differing parameter types 0/0/1 → 1/0/0; differing arity 0/0/1 → 1/0/0; `(x?: string)` vs
+`(x: string)` 0/0/1 → 1/0/0; the overloaded family 0/0/3 → **3/0/0** (the (P18.75) residue
+closed); generic member 0/0/2 → 1/0/1; the new 16-file family (intersection member,
+one-applicable overload, two overloaded members, rest vs fixed, nested pair, function
+expression, object-literal method, generic-alias instantiations) 2/0/18 → **17/0/3**; the
+extras 5/2/4 → 6/2/3 with both ours-only rows pre-existing. **Five of (P18.75)'s `negative
+control - … not identical` pins were COUNTDOWNS** — they asserted today's silence on shapes
+both references report — and now assert the TS7006 row; the `residue - overloaded member` pin
+flipped to its two TS2322 rows. Per (CHK.114) only expectations changed.
+
+**ABLATION over 39 pins**: a1 the emission removed — **16 RED**; a2 the arity filter collapsed
+— **3 RED**, exactly the three negative controls (the one-applicable-overload shapes), which is
+the filter's whole job; a3 the parameter typed from the FIRST member despite the refusal —
+**15 RED**. Final rebuild md5 = the gated build; `javap -c -p` minus line numbers identical
+after the census removal.
+
+**A DEFECT THE FIXTURE MATRIX COULD NOT SEE.** The first cut carried a `sig!!` on an
+unresolvable callee and passed every D3 fixture; the at-risk sweep of the neighbouring classes
+(634 tests / 63 classes) read 24 RED on it. A matrix drawn from the shape the fix targets is
+round 902's dead-arm law one instrument over — the neighbours are the control.
+
+**RESIDUES, MEASURED AND NOT FIXED**: a `new` argument against a differing union stays silent
+(pinned as `residue - …`, with the reference row in its KDoc); a generic callee's parameter and
+a both-generic identical pair type nothing (pre-existing); an INITIALISED parameter
+(`(p = "d") =>`) against a differing union; a typed context with no readable type (an overloaded
+CALLEE, an `=` whose left side is unknowable, a call-argument object-literal method); and the
+pre-existing x5/x6/x8/y3/y7 rows recorded at (P18.75).
+
+**PREDICTIONS REFUTED**: "the arity walker records `typed = true`" was half the story —
+object-literal-property, return and `=` positions already emitted, only the call-argument
+position was silent; the feared fourth contextual pull was unnecessary; the intersection
+member is not a union member here and needed no residue.
+
+**NEXT**: (CHK.97)'s remaining rows are D5 (one row, generic inference through a combined
+signature) and D6 (blocked on `Signature.thisParameter`). Per the WORK ORDER, **(INV.0) step
+10b-ii** is where the order sends the arc.
+
 ### Round (P18.75) — (CHK.97) D3, the IDENTICAL half: a union contextual signature is answered, and the brief's own fixture never reached the arm (2026-09-12)
 
 **Suite 18,699 → 18,718 / 0 / 3** (+19 pins, `UnionContextualSignatureIdenticalTest`). Grid

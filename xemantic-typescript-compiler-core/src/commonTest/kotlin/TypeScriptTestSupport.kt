@@ -43,8 +43,29 @@ internal const val typeScriptCasesDir = "$typeScriptRepoDir/tests/cases/compiler
  */
 internal const val typeScriptConformanceDir = "$typeScriptRepoDir/tests/cases/conformance"
 
-/** Directory containing the TypeScript baseline reference files. */
+/**
+ * Directory containing TypeScript's OWN baseline reference files.
+ *
+ * (LEGACY.0b): no longer the primary root. It serves exactly the subtests whose case tsgo
+ * never ran — see [typeScriptGoBaselineDir]; the generator decides per subtest and the
+ * choice is asserted by bucket count in `build.gradle.kts`.
+ */
 internal const val typeScriptBaselineDir = "$typeScriptRepoDir/tests/baselines/reference"
+
+/** Root of the `microsoft/typescript-go` checkout (relative to the test working directory). */
+internal const val typeScriptGoRepoDir = "typescript-go-repo"
+
+/**
+ * (LEGACY.0b): the PRIMARY baseline root — what tsgo 7.0.2 itself emits, checked into its
+ * repository as full files (never as a patch over tsc's) under one directory per SUITE, so
+ * a generated path is `$typeScriptGoBaselineDir/<compiler|conformance>/<baseline>`.
+ *
+ * TypeScript 7 is this project's only compatibility target (owner directive 2026-09-12), so
+ * a baseline here IS the expected answer; where tsgo and tsc disagree, the generated test
+ * carries tsgo's own LAYER for that divergence as a comment.
+ */
+internal const val typeScriptGoBaselineDir =
+    "$typeScriptGoRepoDir/testdata/baselines/reference/submodule"
 
 /**
  * Reads the full text content of this [Path] using the system filesystem.
