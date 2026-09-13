@@ -3381,3 +3381,24 @@ contextual typing: `Record<K, V>` resolves to bare `any`, now (CHK.135). Promise
 one found dead on the first pin set and repaired. cost_gate exit 0 (within +0.05% of
 rebuilt HEAD), huge_methods exit 0, warning-clean. **(CHK.98) is CHECKED OFF**; the queue's
 head is now (LEGACY.0), the owner's corpus re-pin.
+
+**(P18.85) — (LEGACY.0a): THE CORPUS IS PINNED TO tsgo's `tsgo-port` SHA, AND tsc's STABLE TYPE ORDERING IS AN *INTERNING* ORDER RATHER THAN A DISPLAY ONE, 19,045 / 0 / 20 (2026-09-13).**
+`typeScriptCommit` moves to `4d4f005c` (tsgo 7.0.2's `_submodules/TypeScript`); the corpus
+generates 8,838 subtests and the first run read **29 red, exactly the sizing's
+22 / 2 / 2 / 2 / 1**. tsc's `compareTypes` (checker.ts:53856) is reproduced in
+`StableTypeOrdering.kt` and wired into `getUnionType` — **display-only was measured
+insufficient**, because the first-failing chain constituent, a `Pick<A|B,K>` intersection,
+the TS2339 sub-line and the suggestion tie-break all read the INTERNAL member list. Two
+facts the brief lacked: **TypeScript 7 reordered `TypeFlags`** (so `NEW_BIT` remaps per bit
+and `Zeta | void` prints `void | Zeta` on both references), and pristine 6.0.3 under
+`--stableTypeOrdering` equals tsgo on 21/21 fixture rows. Twelve reds closed through the
+engine, six were hand-written expectations re-measured against tsgo, and **17 survive as a
+new `tsgoPendingBaselines` list** — `@Ignore`d, visible, counted, stale-checked, and
+deliberately NOT `LogicalParityDivergence` (these are rows to IMPLEMENT, not divergences to
+keep, so no `pinnedBy`). The sizing predicted ≤4 residue; 17 survive because most ordering
+rows never pass through `typeToString(Type.Union)` at all. Ablation 13 RED (comparator
+reverted) / 5 RED (name key dropped). Grid 8×`added=0 removed=0`, marked 18→18, cronstrue
+1→1, huge_methods exit 0, warning-clean. **cost_gate REBASELINED with attribution**: the
++2.13% printed against the stale baseline is +1.31% on a rebuilt pristine parent, so this
+change's own effect is `typeNode.bypassed` +0.81% — the interning-order change means
+`Foo | Bar` and `Bar | Foo` now intern to ONE union. (LEGACY.0) stays open on (0b).

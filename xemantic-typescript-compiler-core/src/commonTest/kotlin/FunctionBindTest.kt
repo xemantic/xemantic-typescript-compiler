@@ -89,8 +89,10 @@ class FunctionBindTest {
     private fun d(src: String, directives: String = strictReal) =
         diagnose(prelude + "\n" + src + "\nexport {};", directives = directives)
 
-    private val oneOfTwo = "  Overload 1 of 2, '(this: (this: ZzzT, x: string) => number, thisArg: ZzzT): (x: string) => number', gave the following error."
-    private val twoOfTwo = "  Overload 2 of 2, '(this: (this: ZzzT, x: string) => number, thisArg: ZzzT): (x: string) => number', gave the following error."
+    /** (LEGACY.0b) F3: TypeScript 7 prints one entry — the LAST failing candidate's — under
+     *  this fixed head, where pristine printed `Overload i of N, '<sig>', …` per candidate.
+     *  Every chain below was re-measured against `tools/tsgo-7.0.2/lib/tsc` on its own fixture. */
+    private val lastOverload = "  The last overload gave the following error."
 
     // ------------------------------------------------------------------ the zero-partial overload
 
@@ -131,15 +133,13 @@ class FunctionBindTest {
     }
 
     @Test
-    fun `an unassignable thisArg is TS2769 with pristine's per-candidate chain`() {
+    fun `an unassignable thisArg is TS2769 with the last-overload chain`() {
         val d = d("zzzF.bind(undefined);")
         d should {
             have(any {
                 it.code == 2769 && it.message == "No overload matches this call." &&
                     it.messageChain == listOf(
-                        oneOfTwo,
-                        "    Argument of type 'undefined' is not assignable to parameter of type 'ZzzT'.",
-                        twoOfTwo,
+                        lastOverload,
                         "    Argument of type 'undefined' is not assignable to parameter of type 'ZzzT'.",
                     )
             })
@@ -153,9 +153,7 @@ class FunctionBindTest {
         d should {
             have(any {
                 it.code == 2769 && it.messageChain == listOf(
-                    oneOfTwo,
-                    "    Type 'number' is not assignable to type 'string'.",
-                    twoOfTwo,
+                    lastOverload,
                     "    Type 'number' is not assignable to type 'string'.",
                 )
             })
@@ -169,11 +167,7 @@ class FunctionBindTest {
         d should {
             have(any {
                 it.code == 2769 && it.messageChain == listOf(
-                    oneOfTwo,
-                    "    Argument of type '{ m: number; }' is not assignable to parameter of type 'ZzzT'.",
-                    "      Types of property 'm' are incompatible.",
-                    "        Type 'number' is not assignable to type 'string'.",
-                    twoOfTwo,
+                    lastOverload,
                     "    Argument of type '{ m: number; }' is not assignable to parameter of type 'ZzzT'.",
                     "      Types of property 'm' are incompatible.",
                     "        Type 'number' is not assignable to type 'string'.",
@@ -281,9 +275,7 @@ class FunctionBindTest {
         d should {
             have(any {
                 it.code == 2769 && it.messageChain == listOf(
-                    "  Overload 1 of 2, '(this: (this: void, x: string) => number, thisArg: void): (x: string) => number', gave the following error.",
-                    "    Argument of type 'ZzzT' is not assignable to parameter of type 'void'.",
-                    "  Overload 2 of 2, '(this: (this: void, x: string) => number, thisArg: void): (x: string) => number', gave the following error.",
+                    lastOverload,
                     "    Argument of type 'ZzzT' is not assignable to parameter of type 'void'.",
                 )
             })
@@ -416,9 +408,7 @@ class FunctionBindTest {
             have(any { it.code == 2322 && it.message == "Type 'number' is not assignable to type 'string'." })
             have(any {
                 it.code == 2769 && it.messageChain == listOf(
-                    "  Overload 1 of 2, '(this: ZzzFn, thisArg: ZzzT): (x: string) => number', gave the following error.",
-                    "    Argument of type 'undefined' is not assignable to parameter of type 'ZzzT'.",
-                    twoOfTwo,
+                    lastOverload,
                     "    Argument of type 'undefined' is not assignable to parameter of type 'ZzzT'.",
                 )
             })
@@ -535,9 +525,7 @@ class FunctionBindTest {
             have(any { it.code == 2322 && it.message == "Type 'number' is not assignable to type 'string'." })
             have(any {
                 it.code == 2769 && it.messageChain == listOf(
-                    oneOfTwo,
-                    "    Argument of type 'undefined' is not assignable to parameter of type 'ZzzT'.",
-                    twoOfTwo,
+                    lastOverload,
                     "    Argument of type 'undefined' is not assignable to parameter of type 'ZzzT'.",
                 )
             })
@@ -625,19 +613,17 @@ class FunctionBindTest {
 
     @Test
     fun `residue - a class this thisArg chain drills a mismatched member before the missing one`() {
-        // Pristine's chain under each overload: `Argument of type 'ZzzT' is not assignable
-        // to parameter of type 'ZzzC'.` / `Property 'n' is missing in type 'ZzzT' but
-        // required in type 'ZzzC'.` — the overload-chain elaboration (B560) drills the
-        // mismatched `m` first; the ordinary `zzzc.m.call(zzzO, "x")` prints pristine's line.
+        // RESIDUE, re-measured against tsgo 7.0.2 on 2026-09-13: tsgo's chain under the last
+        // overload is `Property 'n' is missing in type 'ZzzT' but required in type 'ZzzC'.`
+        // where the overload-chain elaboration (B560) drills the mismatched `m` first. Only
+        // the chain SHAPE moved in (LEGACY.0b)'s F3 round; the leaf divergence is unchanged
+        // and belongs to the elaboration ORDER, not to this family. The ordinary
+        // `zzzc.m.call(zzzO, "x")` prints the reference line.
         val d = d("class ZzzC { n = 1; m(this: ZzzC, x: string): number { return this.n + x.length } }\nconst zzzc = new ZzzC();\nzzzc.m.bind(zzzO);")
         d should {
             have(any {
                 it.code == 2769 && it.messageChain == listOf(
-                    "  Overload 1 of 2, '(this: (this: ZzzC, x: string) => number, thisArg: ZzzC): (x: string) => number', gave the following error.",
-                    "    Argument of type 'ZzzT' is not assignable to parameter of type 'ZzzC'.",
-                    "      Types of property 'm' are incompatible.",
-                    "        Type 'string' is not assignable to type '(this: ZzzC, x: string) => number'.",
-                    "  Overload 2 of 2, '(this: (this: ZzzC, x: string) => number, thisArg: ZzzC): (x: string) => number', gave the following error.",
+                    lastOverload,
                     "    Argument of type 'ZzzT' is not assignable to parameter of type 'ZzzC'.",
                     "      Types of property 'm' are incompatible.",
                     "        Type 'string' is not assignable to type '(this: ZzzC, x: string) => number'.",

@@ -241,7 +241,7 @@ class EnumLiteralValueRelationTest {
     }
 
     @Test
-    fun `an overload set whose enum overload cannot hold the literal reports pristine's chain`() {
+    fun `an overload set whose enum overload cannot hold the literal reports the last overload`() {
         val d = diagnose(
             enums + "declare function fOvl(e: E): void\ndeclare function fOvl(e: string): void\nfOvl(3)",
         )
@@ -249,9 +249,7 @@ class EnumLiteralValueRelationTest {
         assert(d[0].message == "No overload matches this call.")
         assert(
             d[0].messageChain == listOf(
-                "  Overload 1 of 2, '(e: E): void', gave the following error.",
-                "    Argument of type '3' is not assignable to parameter of type 'E'.",
-                "  Overload 2 of 2, '(e: string): void', gave the following error.",
+                "  The last overload gave the following error.",
                 "    Argument of type 'number' is not assignable to parameter of type 'string'.",
             ),
         )

@@ -882,24 +882,12 @@ val tsgoPendingBaselines = listOf(
         "'IArguments' is not assignable to parameter of type '[f?: any, ...any[]]'."
     ),
     TsgoPendingBaseline(
-        "arrayBestCommonTypes.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 3, '(x: boolean, y?: boolean | undefined): " +
-        "number', gave the following error."
-    ),
-    TsgoPendingBaseline(
         "arrayCast.errors.txt",
         "F6 top code differs (tsgo TS2353 / ours TS2352); layer `submoduleAccepted`. tsgo: " +
         "arrayCast.ts(3,23): error TS2353: Object literal may only specify known properties, " +
         "and 'foo' does not exist in type '{ id: number; }'. | ours: arrayCast.ts(3,23): error " +
         "TS2352: Conversion of type '{ foo: string; }[]' to type '{ id: number; }[]' may be a " +
         "mistake because neither type sufficient"
-    ),
-    TsgoPendingBaseline(
-        "arrayConcatMap.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(...items: ConcatArray<never>[]): never[]', " +
-        "gave the following error."
     ),
     TsgoPendingBaseline(
         "arrayIterationLibES5TargetDifferent(nolib=true,target=es2015).errors.txt",
@@ -1042,18 +1030,6 @@ val tsgoPendingBaselines = listOf(
         "'map(...).size' are incompatible between these types."
     ),
     TsgoPendingBaseline(
-        "conditionalTypeDoesntSpinForever.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(o: {}): string[]', gave the following " +
-        "error."
-    ),
-    TsgoPendingBaseline(
-        "constructorOverloads1.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(s: string): Foo', gave the following " +
-        "error."
-    ),
-    TsgoPendingBaseline(
         "constructorWithIncompleteTypeAnnotation.js",
         "JS emit; layer `submodule`. tsgo: return: 1, | ours: return: 1"
     ),
@@ -1110,19 +1086,6 @@ val tsgoPendingBaselines = listOf(
         "destructuringInVariableDeclarations1.js",
         "JS emit; layer `submoduleAccepted`. tsgo: ({ toString: exports.toString } = 1); | " +
         "ours: exports.toString = 1..toString;"
-    ),
-    TsgoPendingBaseline(
-        "destructuringTuple.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 3, '(callbackfn: (previousValue: number, " +
-        "currentValue: number, currentIndex: number, array: number[]) => number, initialValue: " +
-        "number): "
-    ),
-    TsgoPendingBaseline(
-        "dissallowSymbolAsWeakType.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: dissallowSymbolAsWeakType.ts(3,25): " +
-        "error TS2769: No overload matches this call. | ours: " +
-        "dissallowSymbolAsWeakType.ts(3,16): error TS2769: No overload matches this call."
     ),
     TsgoPendingBaseline(
         "downlevelLetConst13(target=es2015).js",
@@ -1228,12 +1191,6 @@ val tsgoPendingBaselines = listOf(
         "cannot be found. | ours: ==== file.ts (0 errors) ===="
     ),
     TsgoPendingBaseline(
-        "excessPropertiesInOverloads.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(a: { x: string; }): void', gave the " +
-        "following error."
-    ),
-    TsgoPendingBaseline(
         "excessPropertyCheckWithUnions.errors.txt",
         "F6 top code differs (tsgo TS2353 / ours TS2322); layer `submoduleAccepted`. tsgo: " +
         "excessPropertyCheckWithUnions.ts(64,9): error TS2353: Object literal may only specify " +
@@ -1299,24 +1256,6 @@ val tsgoPendingBaselines = listOf(
         "return: 0 });"
     ),
     TsgoPendingBaseline(
-        "functionOverloads2.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(bar: string): string', gave the following " +
-        "error."
-    ),
-    TsgoPendingBaseline(
-        "functionOverloads40.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(bar: { a: number; }[]): string', gave the " +
-        "following error."
-    ),
-    TsgoPendingBaseline(
-        "functionOverloads41.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(bar: { a: number; }[]): string', gave the " +
-        "following error."
-    ),
-    TsgoPendingBaseline(
         "gettersAndSettersErrors.errors.txt",
         "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
         "gettersAndSettersErrors.ts(2,16): error TS2300: Duplicate identifier 'Foo'. | ours: " +
@@ -1327,13 +1266,6 @@ val tsgoPendingBaselines = listOf(
         "JS emit; layer `submoduleAccepted`. tsgo: set Goo(v) { } // error - setters must not " +
         "specify a return type | ours: set Goo(v): string { } // error - setters must not " +
         "specify a return type"
-    ),
-    TsgoPendingBaseline(
-        "heterogeneousArrayAndOverloads.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
-        "heterogeneousArrayAndOverloads.ts(9,20): error TS2769: No overload matches this call. " +
-        "| ours: heterogeneousArrayAndOverloads.ts(9,26): error TS2769: No overload matches " +
-        "this call."
     ),
     TsgoPendingBaseline(
         "importAssertionsDeprecatedIgnored.errors.txt",
@@ -1373,12 +1305,6 @@ val tsgoPendingBaselines = listOf(
         "TS2309: An export assignment cannot be used in a module with other exported elements."
     ),
     TsgoPendingBaseline(
-        "incompatibleTypes.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(i: IFoo1): void', gave the following " +
-        "error."
-    ),
-    TsgoPendingBaseline(
         "incompleteObjectLiteral1.js",
         "JS emit; layer `submoduleAccepted`. tsgo: var tt = { aa, }; | ours: var tt = { aa };"
     ),
@@ -1394,19 +1320,6 @@ val tsgoPendingBaselines = listOf(
         "index.js(2,5): error TS2683: 'this' implicitly has type 'any' because it does not have " +
         "a type annotation. | ours: index.js(2,10): error TS2339: Property 'yadda' does not " +
         "exist on type 'toString'."
-    ),
-    TsgoPendingBaseline(
-        "inferenceOuterResultNotIncorrectlyInstantiatedWithInnerResult.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 4, '(target: {}, source: { x: number; }): { x: " +
-        "number; }', gave the following error."
-    ),
-    TsgoPendingBaseline(
-        "inheritedConstructorWithRestParams2.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
-        "inheritedConstructorWithRestParams2.ts(33,17): error TS2769: No overload matches this " +
-        "call. | ours: inheritedConstructorWithRestParams2.ts(33,5): error TS2769: No overload " +
-        "matches this call."
     ),
     TsgoPendingBaseline(
         "instanceofOnInstantiationExpression.js",
@@ -1628,12 +1541,6 @@ val tsgoPendingBaselines = listOf(
         "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: let x;"
     ),
     TsgoPendingBaseline(
-        "namespaceMergedWithFunctionWithOverloadsUsage.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(opts?: Whatever | undefined): void', gave " +
-        "the following error."
-    ),
-    TsgoPendingBaseline(
         "nestedGlobalNamespaceInClass.js",
         "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var global;"
     ),
@@ -1687,19 +1594,6 @@ val tsgoPendingBaselines = listOf(
         ": _a(); | ours: (_a = (a)) === null || _a === void 0 ? void 0 : _a();"
     ),
     TsgoPendingBaseline(
-        "orderMattersForSignatureGroupIdentity.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
-        "orderMattersForSignatureGroupIdentity.ts(19,5): error TS2769: No overload matches this " +
-        "call. | ours: orderMattersForSignatureGroupIdentity.ts(19,1): error TS2769: No " +
-        "overload matches this call."
-    ),
-    TsgoPendingBaseline(
-        "overload1.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: overload1.ts(34,9): error TS2769: " +
-        "No overload matches this call. | ours: overload1.ts(34,5): error TS2769: No overload " +
-        "matches this call."
-    ),
-    TsgoPendingBaseline(
         "overloadOnConstNoAnyImplementation2.errors.txt",
         "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
         "overloadOnConstNoAnyImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
@@ -1714,32 +1608,6 @@ val tsgoPendingBaselines = listOf(
         "'bye') => number' is not assignable to parameter of type '(x: \"hi | ours: " +
         "overloadOnConstNoStringImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
         "\"bye\") => number' is not assignable to parameter of type '(x: \"hi"
-    ),
-    TsgoPendingBaseline(
-        "overloadResolutionTest1.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(bar: { a: number; }[]): string', gave the " +
-        "following error."
-    ),
-    TsgoPendingBaseline(
-        "overloadingOnConstants2.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(x: \"hi\", items: string[]): D', gave the " +
-        "following error."
-    ),
-    TsgoPendingBaseline(
-        "overloadresolutionWithConstraintCheckingDeferred.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
-        "overloadresolutionWithConstraintCheckingDeferred.ts(14,26): error TS2769: No overload " +
-        "matches this call. | ours: overloadresolutionWithConstraintCheckingDeferred.ts(14,22): " +
-        "error TS2769: No overload matches this call."
-    ),
-    TsgoPendingBaseline(
-        "overloadsWithProvisionalErrors.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
-        "overloadsWithProvisionalErrors.ts(6,11): error TS2769: No overload matches this call. " +
-        "| ours: overloadsWithProvisionalErrors.ts(6,1): error TS2769: No overload matches this " +
-        "call."
     ),
     TsgoPendingBaseline(
         "parameterPropertyInConstructor2.errors.txt",
@@ -1832,13 +1700,6 @@ val tsgoPendingBaselines = listOf(
         "recursiveExportAssignmentAndFindAliasedType6_moduleC.ts (0 errors) ===="
     ),
     TsgoPendingBaseline(
-        "recursiveFunctionTypes.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 4, '(a: { (): typeof f7; (a: typeof f7): () => " +
-        "number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }): () => " +
-        "number', g"
-    ),
-    TsgoPendingBaseline(
         "recursivelyExpandingUnionNoStackoverflow.errors.txt",
         "F6 top code differs (tsgo - / ours TS2589); layer `submoduleAccepted`. tsgo: ==== " +
         "recursivelyExpandingUnionNoStackoverflow.ts (1 errors) ==== | ours: " +
@@ -1857,25 +1718,12 @@ val tsgoPendingBaselines = listOf(
         "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ~ | ours: ~~"
     ),
     TsgoPendingBaseline(
-        "signatureLengthMismatchInOverload.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: The last overload gave the " +
-        "following error. | ours: Overload 1 of 2, '(callback: (arg: string, arg2: string) => " +
-        "void): void', gave the following error."
-    ),
-    TsgoPendingBaseline(
         "sourceMapValidationVarInDownLevelGenerator(target=es2015).errors.txt",
         "F6 top code differs (tsgo TS5102 / ours TS5101); layer `submoduleAccepted`. tsgo: " +
         "error TS5102: Option 'downlevelIteration' has been removed. Please remove it from your " +
         "configuration. | ours: error TS5101: Option 'downlevelIteration' is deprecated and " +
         "will stop functioning in TypeScript 7.0. Specify compilerOption " +
         "'\"ignoreDeprecations\": \"6."
-    ),
-    TsgoPendingBaseline(
-        "specializedSignatureAsCallbackParameter1.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
-        "specializedSignatureAsCallbackParameter1.ts(7,4): error TS2769: No overload matches " +
-        "this call. | ours: specializedSignatureAsCallbackParameter1.ts(7,1): error TS2769: No " +
-        "overload matches this call."
     ),
     TsgoPendingBaseline(
         "staticModifierAlreadySeen.errors.txt",
@@ -1906,13 +1754,6 @@ val tsgoPendingBaselines = listOf(
         "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
         "TS2751 typeParameterWithInvalidConstraintType.ts:4:17: Circularity originates in type " +
         "at this location. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "underscoreTest1.errors.txt",
-        "F3 last-overload; layer `submoduleAccepted`. tsgo: " +
-        "underscoreTest1_underscoreTests.ts(26,7): error TS2769: No overload matches this call. " +
-        "| ours: underscoreTest1_underscoreTests.ts(26,3): error TS2769: No overload matches " +
-        "this call."
     ),
     TsgoPendingBaseline(
         "unicodeEscapesInNames02(target=es2015).errors.txt",

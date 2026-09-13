@@ -25,6 +25,99 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.90) — F3 last-overload: 25 of 25, and the three tsc-6 anchor heuristics went with it (2026-09-13)
+
+**Suite 19,139 → 19,139 / 0 / 190** — `tsgoPendingBaselines` 190 → **165** and skipped 215 →
+**190**, both −25, and all 25 subtests verified PRESENT and PASSED in the XMLs rather than
+merely un-skipped. Grid 8×`added=0 removed=0`; `cost_gate.py` exit 0, all 20 counters +0.00%;
+`huge_methods.py --fail-over 0` exit 0 (861 classes, 0 over); warning-clean (7,306-byte log,
+`w=0`, no `-q`, positive control produced exactly 1 `w:` line).
+**(LEGACY.0) stays OPEN** on (0b-6).
+
+**THE PRE-MEASUREMENT IS WHY THIS FAMILY WAS PICKED, AND IT IS THE REUSABLE PART.** F3 was
+third by red count (25 behind F6z's 33 and JS emit's 33) and first by *mechanism count*: it is
+ONE rule where those are 33 and many. Before any code, the 2,982 ACTIVE `errors.txt` subtests
+were scanned against their tsgo baselines: **ZERO** contain tsc 6's `Overload N of M, '<sig>',
+gave the following error.` — tsgo never emits that form — so the change was structurally unable
+to redden a green baseline on its own axis. Three active baselines already expect `The last
+overload gave the following error.` and **all three are served by a hardcoded wipe-and-pin
+walker**, so they were not evidence either way. A family whose prize is 25 and whose risk on the
+axis it changes is provably 0 outranks a bigger pile of singletons.
+
+**THE RULE, TAKEN FROM tsgo's SOURCE AND NOT FROM ITS BASELINES** (`reportCallResolutionErrors`,
+checker.go ~9624): `candidatesForArgumentError` holds the candidates that passed type-argument
+arity AND `hasCorrectArity` and then failed `isSignatureApplicable`, in DECLARATION order; tsgo
+takes its **LAST** element, re-runs the applicability check for that candidate alone with
+`reportErrors=true`, and emits one diagnostic per produced entry — chained under `The last
+overload gave the following error.` (**TS2770**) and `No overload matches this call.` (TS2769)
+when there is more than one candidate, with `The last overload is declared here.` (**TS2771**)
+at that candidate's declaration. Neither TS2770 nor TS2771 existed in the general path before
+this round; `grep -a` found them only inside hardcoded `pinDiag` walkers.
+
+**WHAT CAME OUT WITH IT.** tsgo anchors wherever the last candidate's own argument check
+anchors, full stop — so the emitter's three tsc-6 anchor heuristics are now unreachable and were
+deleted: B418's "best matching overload" collapse, 17.15b/B50.11's fn-vs-fn callee anchor and
+B280's method-name anchor, plus the per-candidate related-info accumulation (tsc 6 carried one
+TS6500/TS2728 row per candidate where TypeScript 7 carries one). The emission block went 153 →
+107 lines. This is the owner's 2026-09-12 "legacy code supporting deprecated features can be
+removed" paying out as a side effect of a parity fix rather than as its own arc. **The line
+accounting, stated honestly: the change SET is −115, but `Checker.kt` itself is +101** (194,337 →
+194,438) — the deleted heuristics are outweighed by the new TS2770/TS2771 helpers and the
+tsgo-citing KDoc, and the −159 belongs to build.gradle.kts shedding 25 pending entries.
+
+**THERE WERE THREE GENERAL EMITTERS, NOT THE TWO THE BRIEF NAMED** — `checkInheritedOverloadedCtorArgs`
+was a third, and `osceVisitExpr` a fourth site. And `heterogeneousArrayAndOverloads` needed the
+*opposite* of B418: tsgo emits one diagnostic per failing ELEMENT of the last candidate (an array
+literal against `Array<E>` is the one multi-diagnostic shape here) where B418 collapsed to a
+single best candidate.
+
+**NINE PIN WALKERS UPDATED, ZERO DELETED — MEASURED WITH THE PassLab, NOT ASSUMED.** Each was
+ablated with `build/pass-lab.txt`'s `disable <pass>` (zero recompile, one CLI run each); with the
+pin off the general path produced a different answer in **every** case (missing rows, wrong
+elaborations, wrong anchors). So "the general emitter now produces the right CODE" is not
+evidence that a pin walker is dead. `checkPromisePermutations{,2,3}` and `checkBigintWithLib`
+were already tsgo-shaped and untouched. **Zero `Overload N of M` literals remain anywhere** in
+`commonMain` or the tests.
+
+**TWO SILENT-FAILURE MECHANISMS FOUND, BOTH NOW IN CLAUDE.md.** (1) `checkOverloadsWithProvisionalErrors`
+located the row it rewrites by `it.start == calleePos`; once the general emitter moved the anchor
+to the argument the lookup simply missed, the pin stopped firing, and the general path's answer
+leaked through with no error anywhere — which reads as a general-path defect rather than a stale
+pin. Re-keyed to the CALL's span. (2) A call signature `(x: T): R` in an interface is a
+`MethodDeclaration` whose `name` is an **empty `Identifier` at pos 0**, so the idiomatic
+`(decl.name as? Identifier)?.pos ?: decl.pos` answers 0 and TS2771 rendered at `1:1`.
+
+**ABLATION — 10 arms, 8 discriminating, `tests` identical at 17,632 in every one**: a1 report the
+FIRST failing candidate **22 RED**; a2 force `multi = true` **0 — UNDISCRIMINATED**; a2b (a2's
+control) force `multi = false` **48 RED**; a3 drop TS2771 **14**; a4 chain leaf one indent too
+deep **31**; a5 drop the per-element enumeration **1**; a6 accumulate related info from every
+candidate **3**; a7 pool over all signatures instead of `arityMatches` **0 — UNDISCRIMINATED**;
+a8 anchor at the callee **20**; a9 let an empty member name win the TS2771 position elvis **1**.
+**a2's zero is ATTRIBUTED rather than shrugged at**: a2b shows `multi` is load-bearing, and a2 is
+zero because `multi` is always true on every input the suite reaches — exactly-one-arity-match is
+routed to the single-signature path earlier. a7 is unexercised (no corpus input has a signature
+that fails arity *and* yields a first-argument error). Both are kept as faithful ports of tsgo.
+
+**THE GRID IS A CONTROL HERE AND IT WAS COUNTED, NOT ASSUMED** ((CHK.124)): **TS2769 rows = 0 on
+all eight profiles**, and 0 on cronstrue, marked, many-small-600 and many-small-2400 as well. The
+real gate is the corpus, where **28 active `.errors.txt` baselines carry a TS2769**, 25 of them
+this round's. The grid still ran as a genuine two-binary comparison with a `cmp` control that the
+two `Checker.class` files differ.
+
+**27 HAND-WRITTEN ASSERTIONS IN 5 CLASSES RE-MEASURED AGAINST tsgo, NOT AGAINST OUR NEW OUTPUT.**
+Every fixture went through `tools/tsgo-7.0.2/lib/tsc` and the expectations were taken from *its*
+answer; tsgo agrees with our new output on 15 of the 16 that moved. **Three names were countdowns
+and were renamed** — `three weak overloads contribute three sublines - not a collapsed
+last-overload one` asserted the exact opposite of tsgo, and two more pinned "pristine's
+per-candidate chain"; two class KDocs said the corpus oracle is pristine and were rewritten. The
+16th, `FunctionBindTest`'s already-named `residue - …`, is unchanged in its leaf (tsgo drills the
+missing member where we drill a mismatched one first — the B560 elaboration ORDER, its own
+family); only the chain's shape moved, and its KDoc now carries tsgo's row and the date.
+
+**SIX PREDICTIONS REFUTED**, the sharpest being that three cases still printing the old form after
+the main fix looked like a fourth general emitter and were pins; and that the grid was predicted
+to be a partial gate when it fires zero times on every profile and every library.
+
 ### Round (P18.89) — F6a: the "unblocker" was not needed, because tsgo's condition is over RENDERED STRINGS — 27 of 28 rows, both directions (2026-09-13)
 
 **Suite 19,130 → 19,139 / 0 / 215** — `tsgoPendingBaselines` 217 → 190 and skipped 242 →
@@ -791,96 +884,6 @@ overload emitter (a single rest signature answers it silently); the re-bound mis
 **NEXT**: (CHK.98), the next unchecked item. Per the WORK ORDER, (INV.0) step 10b-ii's own
 unblockers follow.
 
-### Round (P18.80) — (CHK.134)(1): `f.call` / `f.apply` typed from the receiver's own signature — no inference was needed, and the grid's one row per profile was a MISSING OPTION (2026-09-12)
-
-**Suite 18,809 → 18,854 / 0 / 3** (+45 pins, `FunctionCallApplyTest`: 36 diagnostic, 4
-negative controls, 5 `residue -`; one (P18.78) countdown pin inverted). Grid 8×`added=0
-removed=0`; marked 18 → 18 (14 sites RESOLVED there, 0 refused — the first library arm this
-session that exercised the change), cronstrue 1 → 1; `cost_gate.py` exit 0, not rebaselined
-(18 of 20 counters digit-identical against the rebuilt HEAD via `--from-log`; `globals.lookups`
-+19 is the `globals["Function"]` consult, `typeNode.cacheable` +5); `huge_methods.py
---fail-over 0` exit 0; warning-clean (main + test). **(CHK.134) stays OPEN on `bind`** —
-decomposition (2).
-
-**WHY THIS ITEM, SAID OUT LOUD.** (CHK.134) is the top item, split out of (CHK.133) by
-(P18.79); (INV.0) step 10b-ii stays blocked on its two named families.
-
-**THE PREMISE WAS REFUTED BEFORE DESIGN: T, A AND R NEED NO INFERENCE.**
-`CallableFunction.call<T, A extends any[], R>(this: (this: T, ...args: A) => R, thisArg: T,
-...args: A): R` has exactly ONE candidate per type parameter — the receiver — so the
-instantiated member is BUILT (`Checker.bindCallApplyType`: the receiver's last overload, a
-generic receiver erased to its constraints) and the ordinary single-signature machinery does
-the rest. A rest-TUPLE parameter is unsupported by the arity checker, so `call` EXPANDS the
-receiver's parameters (tsc's `getExpandedParameters`, which is what its messages count);
-`apply` is built per call from the ARGUMENT COUNT (one argument → the first overload with
-its `this` type, TS2684 plus the *Target signature provides too few arguments* chain; two →
-the labeled-tuple `args`; otherwise both, *Expected 1-2 arguments*). The hook is tsc's
-`getPropertyOfType` miss augmentation in `computeRawTypeOfPropertyAccess` for a
-function-shaped receiver (`functionObjectMemberType`), which also serves the `Function`
-members (`length`/`name`/`toString`/`prototype`/`arguments`/`caller`). `thisArgParamType` is
-tsc's covariant-vs-contravariant `T`: an assignable `thisArg` becomes its own type, so a
-literal with an extra property is silent, as on both references.
-
-**THE GRID READ +1 ROW ON EVERY PROFILE, AND THE CAUSE WAS AN OPTION THIS COMPILER DID NOT
-HAVE.** `utilities.ts:11201 stringReplace.call(s, "*", replacement)` reported TS2345 against
-the last `String.replace` overload — EXACTLY tsc's answer with `strictBindCallApply` ON (a
-fixture agrees 4/0/0) — and tsc's own sources set `"strictBindCallApply": false` explicitly
-in every profile's tsconfig, which `CompilerOptions` ignored. It now exists
-(`strictBindCallApply` / `…ExplicitlySet`, a directive arm, `effectiveStrictBindCallApply`
-= the flag when set, else `strict`, tsc's `getStrictOptionValue`); the loose half keeps `any`
-(measured silent on both references). With it honoured: `added=0 removed=0` on all eight.
-**The census reads the same story**: compiler + twins 52 sites, **0 resolved** — 28 `call` +
-1 `apply` refused as non-strict, 1 union receiver, 5 `bind`; harness 86 (31 + 4 non-strict,
-24 `bind`). So the grid gates the OPTION, not the synthesis; marked (strict) is what
-exercised the synthesis, 14 resolved, no row moved.
-
-**TWO THINGS OUTSIDE THE ITEM THE MATRIX FORCED.** The parser CONSUMED tuple labels and
-dropped them (`TupleType.elementNames` now carries them; `Type.tupleElementNames` is
-display-only), because `apply`'s messages print `[x: string]`; and the tuple DISPLAY rules
-tsc uses — `T?`, `(number | undefined)?`, `b?: number | undefined` — landed with it
-(optional-tuple display fixture 0/0/0/3 → 3/0/0/0). A dead `Target requires N element(s)`
-chain arm was removed on the way.
-
-**BEFORE → AFTER over 55 fixtures**: every `call`/`apply` shape MISSING → AGREE with zero
-ours-only rows — wrong argument, `undefined`/literal `thisArg` (TS2345 / TS2322 at the
-property), arities (TS2554 `2`/`1` and `2`/`3`, TS2555 *at least 1*), results, `apply`
-element and arity chains, the TS2684 chain, the `1-2` range, no-argument and all-optional
-receivers, `this: void`, a no-`this` receiver, an arrow, overloads (the last), a generic
-(`unknown`), `hasOwnProperty.call` (`boolean`, 17 sites on the compiler profile, not the 12
-the sizing counted), a method reference, a callback, an element-access map, optional + rest,
-rest-only, `fromCharCode.apply`, a Promise result, the `Function` members, merged-interface
-overloads; loose configurations silent on both sides; the REF-SPLIT rows hand-adjudicated to
-pristine (ours byte-identical).
-
-**ABLATION over 45 pins**: a1 the augmentation removed — **31 RED**; a2 `thisArg` unchecked
-— 4; a3 `R` as `any` — 15; a4 a no-`this` receiver's wrong `T` (the `hasOwnProperty` shape) —
-9; a5 an explicit `strictBindCallApply: false` ignored — **2 RED plus the compiler profile at
-47 rows, added=1** — the grid discriminates the OPTION (a4 cannot redden it: every profile
-site is loose). The core module suite as the superset of 54 at-risk classes + 10 at-risk
-baselines read 17,347 / 1, the one failure being the (P18.78) countdown pin, inverted.
-
-**RESIDUES, MEASURED AND NOT FIXED**: `bind` (sub-step 2, pinned `residue -`); an
-optional-chain receiver (the (CHK.133) residue); an anonymous-object identifier or class
-`this` `thisArg` against an interface (the argument firewall, identical for ordinary calls);
-a spread of a plain array into expanded parameters (TS2556 needs a declaration's
-`paramInfo`); a primitive against `[x: string]` (relation leniency, ordinary calls too);
-`any[]` against a required tuple; the bare `f.call` display; a variable rest callee's
-too-few; `NewableFunction` unmodelled; TS2554's related information names the receiver's
-parameter, not the lib's `args`.
-
-**PREDICTIONS REFUTED**: "`strictBindCallApply` is not an option here" (it is now, at one
-false positive per profile without it); "inference is needed"; "the grid is a real gate for
-the synthesis" (it gates the option); `f.apply(o)` is TS2684 and `f.call()` TS2555 where
-`f.call(o)` is TS2554; the grep's 81/18/12 is not the miss population (28-31 / 1-4 / 5-24);
-`hasOwnProperty.call` is 17 sites; and the parser dropped tuple labels, so the AST had to
-grow them.
-
-**NEXT**: (CHK.134)(2) `bind` — `ThisParameterType<T>` / `OmitThisParameter<T>`, i.e. `infer`
-in the `this:` position of a conditional type, and whether the same BUILD-not-infer shape
-serves it (`bind<T>(this: T, thisArg: ThisParameterType<T>): OmitThisParameter<T>` plus the
-partial-application overloads). Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers
-follow.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1211,7 +1214,24 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-4 LANDED 2026-09-13 ((P18.85)-(P18.89) notes) — pending 190, skipped 215,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-5 LANDED 2026-09-13 ((P18.85)-(P18.90) notes) — pending 165, skipped 190,
+  suite 19,139/0. **F3 last-overload CLOSED 25/25 by (P18.90)**: tsgo's `reportCallResolutionErrors` reports only the
+  LAST argument-failing candidate under `The last overload gave the following error.` (TS2770) with
+  `The last overload is declared here.` (TS2771) at its declaration — and because tsgo anchors wherever THAT
+  candidate's own argument check anchors, the emitter's three tsc-6 anchor heuristics (B418's best-overload collapse,
+  17.15b/B50.11's fn-vs-fn callee anchor, B280's method-name anchor) went with it. **REMAINING (0b-6), by red
+  count**: F6z 33 singletons (15 JS/checkJs/JSDoc — a `checkJs` slice may be cheapest), JS emit 33, F1 11
+  (**9 of the 11 are JS/JSDoc too, and TS2683 x3 + TS1003 x3 are two single mechanisms** — so a JS/JSDoc round has
+  ~24 rows in reach across F6z+F1), F8 unrelated-anchor residue ~11, F6d TS2303 import-alias cycle 10,
+  F2 duplicate-identifier 9 + 6 (**sized read-only at (P18.90): TS2300 must ALSO fire at the FIRST declaration of a
+  duplicate group, and TS2717 is suppressed when the two declarations differ in KIND and kept when they agree — but
+  it is NOT uniform, `class K { b: number; b(): number }` already reports at both, so census the orderings before
+  writing the rule**), F0 7. **A KNOWN
+  FOLLOW-ON**: three hand-written pins differ from tsgo in CODE because our relation CHAIN line names the type
+  parameter / undistributed intersection where tsgo names its constraint / one distributed constituent — that chain
+  SOURCE DISPLAY is its own family and closing it also closes those three. The 21 TS-1 rows stay LEDGERED.
+  **BLOCKED-PENDING-USER, still open**: the fourth "harness artifact ⇒ fall back to tsc" arm ((P18.86)).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-4 LANDED 2026-09-13 ((P18.85)-(P18.89) notes) — pending 190, skipped 215,
   suite 19,139/0. **F6a CLOSED (27/28) by (P18.89) WITHOUT the hand-funnel (P18.88) demanded**: tsgo's
   `chainArgsMatch` compares RENDERED STRINGS, so `RelationHeadSuppression.kt` decides it at the single
   `Checker.getDiagnostics()` exit, routing all 61 emission sites fail-closed. **REMAINING (0b-5), by red count**:

@@ -197,10 +197,10 @@ class BodyLocalLiteralArgumentTest {
         val d = diagnose(prelude + src)
         assert(d.map { it.code } == listOf(2769))
         assert(d[0].message == "No overload matches this call.")
+        // (LEGACY.0b) F3: TypeScript 7 prints only the LAST candidate's entry —
+        // re-measured against tsgo 7.0.2, which reports exactly this at (12,37).
         assert(d[0].messageChain == listOf(
-            "  Overload 1 of 2, '(x: \"b\"): void', gave the following error.",
-            "    Argument of type '\"a\"' is not assignable to parameter of type '\"b\"'.",
-            "  Overload 2 of 2, '(x: number): void', gave the following error.",
+            "  The last overload gave the following error.",
             "    Argument of type 'string' is not assignable to parameter of type 'number'.",
         ))
         assert(d[0].character == col(src, "s)"))

@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194,425** lines (**+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **194,438** lines (**+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,34 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.90) — F3 LAST-OVERLOAD: 25 OF 25, AND THE THREE tsc-6 ANCHOR HEURISTICS WENT WITH IT, 19,139 / 0 / 190 (2026-09-13).**
+Pending 190 → **165**, skipped 215 → **190**, both −25, with all 25 subtests verified PRESENT
+and PASSED in the XMLs rather than merely un-skipped. **F3 was third by red count and FIRST by
+mechanism count** — one rule where F6z's 33 and JS emit's 33 are many — and the pre-measurement
+is what licensed it: of the 2,982 active `errors.txt` subtests **ZERO** carry tsc 6's
+`Overload N of M, '<sig>', gave the following error.`, because tsgo never emits it, so the change
+was structurally unable to redden a green baseline on its own axis. The rule was taken from
+tsgo's SOURCE (`reportCallResolutionErrors`, checker.go ~9624) and not from its baselines: report
+only the LAST argument-failing candidate, under `The last overload gave the following error.`
+(**TS2770**) and `No overload matches this call.`, with `The last overload is declared here.`
+(**TS2771**) at that candidate's declaration — neither code existed in the general path before,
+only inside hardcoded pins. **Because tsgo anchors wherever the last candidate's own argument
+check anchors, three tsc-6 heuristics became unreachable and were deleted** (B418's best-overload
+collapse, 17.15b/B50.11's fn-vs-fn callee anchor, B280's method-name anchor) along with the
+per-candidate related-info accumulation: the emission block 153 → 107 lines. (The change SET is
+−115 lines, but `Checker.kt` itself is **+101** — the deleted heuristics are outweighed by the new
+TS2770/TS2771 helpers and the tsgo-citing KDoc; the −159 is build.gradle.kts shedding 25 pending entries.) **Nine pin
+walkers updated and ZERO deletable — measured with the PassLab, not assumed**: with the pin off
+the general path differs in every case. Two silent-failure mechanisms found and recorded: a pin
+that locates its row by ANCHOR POSITION stops firing when a general emitter moves the anchor
+(no error, the general answer just leaks through), and a call signature `(x: T): R` is a
+`MethodDeclaration` with an EMPTY name at pos 0, so the idiomatic `?.pos ?: decl.pos` renders at
+`1:1`. Ablation 10 arms, 8 discriminating, both zeros ATTRIBUTED rather than shrugged at (a2's
+control a2b reddens 48, so `multi` is load-bearing and merely always-true here). 27 hand-written
+assertions in 5 classes re-measured against tsgo — **three were countdowns asserting pristine's
+per-candidate chain** and were renamed. Grid a MEASURED control (TS2769 rows = 0 on all eight
+profiles and on every library; the gate is the 28 corpus baselines that carry one). cost_gate all
+20 counters +0.00%, huge_methods exit 0 (861 classes), warning-clean with the gate proven live.
 **(P18.89) — F6a: THE "UNBLOCKER" WAS NOT NEEDED, BECAUSE tsgo's CONDITION IS OVER *RENDERED STRINGS* — 27 OF 28 ROWS, BOTH DIRECTIONS, 19,139 / 0 / 215 (2026-09-13).**
 Pending 217 → **190**, skipped 242 → **215**, both −27. (P18.88) refused this family for
 want of a relation-error funnel across "~30 sites"; the re-taken census says **61 sites and
@@ -103,23 +131,3 @@ coverage change zero). cost_gate all 20 counters +0.00% (no `commonMain` touched
 grid is unaffected by construction), huge_methods exit 0, warning-clean. **Left open for a
 decision before (0b-3)**: a fourth "harness artifact ⇒ fall back to tsc" arm would preserve
 those 17 subtests with no ledger at all.
-**(P18.85) — (LEGACY.0a): THE CORPUS IS PINNED TO tsgo's `tsgo-port` SHA, AND tsc's STABLE TYPE ORDERING IS AN *INTERNING* ORDER RATHER THAN A DISPLAY ONE, 19,045 / 0 / 20 (2026-09-13).**
-`typeScriptCommit` moves to `4d4f005c` (tsgo 7.0.2's `_submodules/TypeScript`); the corpus
-generates 8,838 subtests and the first run read **29 red, exactly the sizing's
-22 / 2 / 2 / 2 / 1**. tsc's `compareTypes` (checker.ts:53856) is reproduced in
-`StableTypeOrdering.kt` and wired into `getUnionType` — **display-only was measured
-insufficient**, because the first-failing chain constituent, a `Pick<A|B,K>` intersection,
-the TS2339 sub-line and the suggestion tie-break all read the INTERNAL member list. Two
-facts the brief lacked: **TypeScript 7 reordered `TypeFlags`** (so `NEW_BIT` remaps per bit
-and `Zeta | void` prints `void | Zeta` on both references), and pristine 6.0.3 under
-`--stableTypeOrdering` equals tsgo on 21/21 fixture rows. Twelve reds closed through the
-engine, six were hand-written expectations re-measured against tsgo, and **17 survive as a
-new `tsgoPendingBaselines` list** — `@Ignore`d, visible, counted, stale-checked, and
-deliberately NOT `LogicalParityDivergence` (these are rows to IMPLEMENT, not divergences to
-keep, so no `pinnedBy`). The sizing predicted ≤4 residue; 17 survive because most ordering
-rows never pass through `typeToString(Type.Union)` at all. Ablation 13 RED (comparator
-reverted) / 5 RED (name key dropped). Grid 8×`added=0 removed=0`, marked 18→18, cronstrue
-1→1, huge_methods exit 0, warning-clean. **cost_gate REBASELINED with attribution**: the
-+2.13% printed against the stale baseline is +1.31% on a rebuilt pristine parent, so this
-change's own effect is `typeNode.bypassed` +0.81% — the interning-order change means
-`Foo | Bar` and `Bar | Foo` now intern to ONE union. (LEGACY.0) stays open on (0b).

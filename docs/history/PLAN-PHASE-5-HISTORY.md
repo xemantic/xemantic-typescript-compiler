@@ -65165,3 +65165,93 @@ shadow cell — 10a's residue, unchanged); and the `const` shadow above.
 
 **NEXT**: 10c (heritage + `resolveQualifiedName`), which is small and is the last TYPE-name
 funnel, then 10b-ii once the two unmasked families are closed.
+
+### Round (P18.80) — (CHK.134)(1): `f.call` / `f.apply` typed from the receiver's own signature — no inference was needed, and the grid's one row per profile was a MISSING OPTION (2026-09-12)
+
+**Suite 18,809 → 18,854 / 0 / 3** (+45 pins, `FunctionCallApplyTest`: 36 diagnostic, 4
+negative controls, 5 `residue -`; one (P18.78) countdown pin inverted). Grid 8×`added=0
+removed=0`; marked 18 → 18 (14 sites RESOLVED there, 0 refused — the first library arm this
+session that exercised the change), cronstrue 1 → 1; `cost_gate.py` exit 0, not rebaselined
+(18 of 20 counters digit-identical against the rebuilt HEAD via `--from-log`; `globals.lookups`
++19 is the `globals["Function"]` consult, `typeNode.cacheable` +5); `huge_methods.py
+--fail-over 0` exit 0; warning-clean (main + test). **(CHK.134) stays OPEN on `bind`** —
+decomposition (2).
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.134) is the top item, split out of (CHK.133) by
+(P18.79); (INV.0) step 10b-ii stays blocked on its two named families.
+
+**THE PREMISE WAS REFUTED BEFORE DESIGN: T, A AND R NEED NO INFERENCE.**
+`CallableFunction.call<T, A extends any[], R>(this: (this: T, ...args: A) => R, thisArg: T,
+...args: A): R` has exactly ONE candidate per type parameter — the receiver — so the
+instantiated member is BUILT (`Checker.bindCallApplyType`: the receiver's last overload, a
+generic receiver erased to its constraints) and the ordinary single-signature machinery does
+the rest. A rest-TUPLE parameter is unsupported by the arity checker, so `call` EXPANDS the
+receiver's parameters (tsc's `getExpandedParameters`, which is what its messages count);
+`apply` is built per call from the ARGUMENT COUNT (one argument → the first overload with
+its `this` type, TS2684 plus the *Target signature provides too few arguments* chain; two →
+the labeled-tuple `args`; otherwise both, *Expected 1-2 arguments*). The hook is tsc's
+`getPropertyOfType` miss augmentation in `computeRawTypeOfPropertyAccess` for a
+function-shaped receiver (`functionObjectMemberType`), which also serves the `Function`
+members (`length`/`name`/`toString`/`prototype`/`arguments`/`caller`). `thisArgParamType` is
+tsc's covariant-vs-contravariant `T`: an assignable `thisArg` becomes its own type, so a
+literal with an extra property is silent, as on both references.
+
+**THE GRID READ +1 ROW ON EVERY PROFILE, AND THE CAUSE WAS AN OPTION THIS COMPILER DID NOT
+HAVE.** `utilities.ts:11201 stringReplace.call(s, "*", replacement)` reported TS2345 against
+the last `String.replace` overload — EXACTLY tsc's answer with `strictBindCallApply` ON (a
+fixture agrees 4/0/0) — and tsc's own sources set `"strictBindCallApply": false` explicitly
+in every profile's tsconfig, which `CompilerOptions` ignored. It now exists
+(`strictBindCallApply` / `…ExplicitlySet`, a directive arm, `effectiveStrictBindCallApply`
+= the flag when set, else `strict`, tsc's `getStrictOptionValue`); the loose half keeps `any`
+(measured silent on both references). With it honoured: `added=0 removed=0` on all eight.
+**The census reads the same story**: compiler + twins 52 sites, **0 resolved** — 28 `call` +
+1 `apply` refused as non-strict, 1 union receiver, 5 `bind`; harness 86 (31 + 4 non-strict,
+24 `bind`). So the grid gates the OPTION, not the synthesis; marked (strict) is what
+exercised the synthesis, 14 resolved, no row moved.
+
+**TWO THINGS OUTSIDE THE ITEM THE MATRIX FORCED.** The parser CONSUMED tuple labels and
+dropped them (`TupleType.elementNames` now carries them; `Type.tupleElementNames` is
+display-only), because `apply`'s messages print `[x: string]`; and the tuple DISPLAY rules
+tsc uses — `T?`, `(number | undefined)?`, `b?: number | undefined` — landed with it
+(optional-tuple display fixture 0/0/0/3 → 3/0/0/0). A dead `Target requires N element(s)`
+chain arm was removed on the way.
+
+**BEFORE → AFTER over 55 fixtures**: every `call`/`apply` shape MISSING → AGREE with zero
+ours-only rows — wrong argument, `undefined`/literal `thisArg` (TS2345 / TS2322 at the
+property), arities (TS2554 `2`/`1` and `2`/`3`, TS2555 *at least 1*), results, `apply`
+element and arity chains, the TS2684 chain, the `1-2` range, no-argument and all-optional
+receivers, `this: void`, a no-`this` receiver, an arrow, overloads (the last), a generic
+(`unknown`), `hasOwnProperty.call` (`boolean`, 17 sites on the compiler profile, not the 12
+the sizing counted), a method reference, a callback, an element-access map, optional + rest,
+rest-only, `fromCharCode.apply`, a Promise result, the `Function` members, merged-interface
+overloads; loose configurations silent on both sides; the REF-SPLIT rows hand-adjudicated to
+pristine (ours byte-identical).
+
+**ABLATION over 45 pins**: a1 the augmentation removed — **31 RED**; a2 `thisArg` unchecked
+— 4; a3 `R` as `any` — 15; a4 a no-`this` receiver's wrong `T` (the `hasOwnProperty` shape) —
+9; a5 an explicit `strictBindCallApply: false` ignored — **2 RED plus the compiler profile at
+47 rows, added=1** — the grid discriminates the OPTION (a4 cannot redden it: every profile
+site is loose). The core module suite as the superset of 54 at-risk classes + 10 at-risk
+baselines read 17,347 / 1, the one failure being the (P18.78) countdown pin, inverted.
+
+**RESIDUES, MEASURED AND NOT FIXED**: `bind` (sub-step 2, pinned `residue -`); an
+optional-chain receiver (the (CHK.133) residue); an anonymous-object identifier or class
+`this` `thisArg` against an interface (the argument firewall, identical for ordinary calls);
+a spread of a plain array into expanded parameters (TS2556 needs a declaration's
+`paramInfo`); a primitive against `[x: string]` (relation leniency, ordinary calls too);
+`any[]` against a required tuple; the bare `f.call` display; a variable rest callee's
+too-few; `NewableFunction` unmodelled; TS2554's related information names the receiver's
+parameter, not the lib's `args`.
+
+**PREDICTIONS REFUTED**: "`strictBindCallApply` is not an option here" (it is now, at one
+false positive per profile without it); "inference is needed"; "the grid is a real gate for
+the synthesis" (it gates the option); `f.apply(o)` is TS2684 and `f.call()` TS2555 where
+`f.call(o)` is TS2554; the grep's 81/18/12 is not the miss population (28-31 / 1-4 / 5-24);
+`hasOwnProperty.call` is 17 sites; and the parser dropped tuple labels, so the AST had to
+grow them.
+
+**NEXT**: (CHK.134)(2) `bind` — `ThisParameterType<T>` / `OmitThisParameter<T>`, i.e. `infer`
+in the `this:` position of a conditional type, and whether the same BUILD-not-infer shape
+serves it (`bind<T>(this: T, thisArg: ThisParameterType<T>): OmitThisParameter<T>` plus the
+partial-application overloads). Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers
+follow.

@@ -49,15 +49,15 @@ import kotlin.test.Test
  *  * **The wording is right and it is TS2559's, not an assignability line.** So the
  *    subline is minted from the weak verdict beside the existing walk, on the path
  *    where the relation SUCCEEDED — [Checker.weakOverloadArgRefuses].
- *  * **The "which overload" half is a tsgo RENDERING and not tsc's.** `tsgo 7.0.2`
+ *  * **The "which overload" half is settled by the compatibility target.** `tsgo 7.0.2`
  *    prints `The last overload gave the following error.` for 2, 3 and 4 candidates
- *    alike; PRISTINE tsc prints `Overload N of M, '<sig>', gave the following error.`
- *    for every failing candidate below four — 42 baselines in `typescript-repo` carry
- *    `Overload 1 of 2,` against 4 carrying the last-overload form, and
- *    `tsxStatelessFunctionComponentOverload4.errors.txt` carries a *no properties in
- *    common* subline INSIDE exactly that per-overload chain. Round 938's law, paid
- *    again. Our chain has always had the pristine shape, so no "which overload"
- *    policy was needed: the weak verdict is simply one more per-overload error string.
+ *    alike; PRISTINE tsc printed `Overload N of M, '<sig>', gave the following error.`
+ *    per failing candidate. This class originally pinned the PRISTINE shape; the
+ *    2026-09-12 owner directive makes TypeScript 7 the only compatibility target and
+ *    (LEGACY.0b)'s F3 round switched the emitter, so every chain below is now tsgo's
+ *    — re-measured against `tools/tsgo-7.0.2/lib/tsc`, fixture by fixture. The weak
+ *    verdict is still simply one more per-candidate error string; what changed is that
+ *    only the LAST candidate's string is printed.
  *
  * ## What is measured and deliberately NOT closed here
  *
@@ -90,9 +90,7 @@ class OverloadWeakParamDiagnosticTest {
         assert(d.map { it.code } == listOf(2769))
         assert(d[0].message == "No overload matches this call.")
         assert(d[0].messageChain == listOf(
-            "  Overload 1 of 2, '(o: { zzzA?: null | undefined; zzzF?: string | undefined; }): number', gave the following error.",
-            "    Type '123' has no properties in common with type '{ zzzA?: null | undefined; zzzF?: string | undefined; }'.",
-            "  Overload 2 of 2, '(o: { zzzB?: null | undefined; zzzG?: string | undefined; }): string', gave the following error.",
+            "  The last overload gave the following error.",
             "    Type '123' has no properties in common with type '{ zzzB?: null | undefined; zzzG?: string | undefined; }'.",
         ))
         assert(d[0].line == 3)
@@ -105,7 +103,7 @@ class OverloadWeakParamDiagnosticTest {
      * reports the second (weak) one as its last-overload subline.
      */
     @Test
-    fun `a weak overload and a plain one contribute their own sublines`() {
+    fun `a weak LAST overload beside a plain one contributes the weak subline`() {
         val d = diagnose("""
             declare function zzzV(o: string): string
             declare function zzzV(o: { zzzA?: null; zzzF?: string }): number
@@ -113,9 +111,7 @@ class OverloadWeakParamDiagnosticTest {
         """)
         assert(d.map { it.code } == listOf(2769))
         assert(d[0].messageChain == listOf(
-            "  Overload 1 of 2, '(o: string): string', gave the following error.",
-            "    Argument of type 'number' is not assignable to parameter of type 'string'.",
-            "  Overload 2 of 2, '(o: { zzzA?: null | undefined; zzzF?: string | undefined; }): number', gave the following error.",
+            "  The last overload gave the following error.",
             "    Type '123' has no properties in common with type '{ zzzA?: null | undefined; zzzF?: string | undefined; }'.",
         ))
         assert(d[0].line == 3)
@@ -140,9 +136,7 @@ class OverloadWeakParamDiagnosticTest {
         """)
         assert(d.map { it.code } == listOf(2769))
         assert(d[0].messageChain == listOf(
-            "  Overload 1 of 2, '(o: ZzzWk | null): number', gave the following error.",
-            "    Type '123' has no properties in common with type 'ZzzWk'.",
-            "  Overload 2 of 2, '(o: ZzzWk | null): string', gave the following error.",
+            "  The last overload gave the following error.",
             "    Type '123' has no properties in common with type 'ZzzWk'.",
         ))
         assert(d[0].line == 4)
@@ -166,9 +160,7 @@ class OverloadWeakParamDiagnosticTest {
         """)
         assert(d.map { it.code } == listOf(2769))
         assert(d[0].messageChain == listOf(
-            "  Overload 1 of 2, '(o: string | { zzzA?: null | undefined; }): number', gave the following error.",
-            "    Argument of type 'number' is not assignable to parameter of type 'string | { zzzA?: null | undefined; }'.",
-            "  Overload 2 of 2, '(o: string | { zzzB?: null | undefined; }): string', gave the following error.",
+            "  The last overload gave the following error.",
             "    Argument of type 'number' is not assignable to parameter of type 'string | { zzzB?: null | undefined; }'.",
         ))
         assert(d[0].line == 3)
@@ -209,7 +201,7 @@ class OverloadWeakParamDiagnosticTest {
      * silently diverge from every `Overload N of M` baseline in the corpus.
      */
     @Test
-    fun `three weak overloads contribute three sublines - not a collapsed last-overload one`() {
+    fun `three weak overloads collapse to the LAST one - the subline is its own`() {
         val d = diagnose("""
             declare function zzzGg(o: { zzzA?: null }): number
             declare function zzzGg(o: { zzzB?: null }): string
@@ -218,11 +210,7 @@ class OverloadWeakParamDiagnosticTest {
         """)
         assert(d.map { it.code } == listOf(2769))
         assert(d[0].messageChain == listOf(
-            "  Overload 1 of 3, '(o: { zzzA?: null | undefined; }): number', gave the following error.",
-            "    Type '123' has no properties in common with type '{ zzzA?: null | undefined; }'.",
-            "  Overload 2 of 3, '(o: { zzzB?: null | undefined; }): string', gave the following error.",
-            "    Type '123' has no properties in common with type '{ zzzB?: null | undefined; }'.",
-            "  Overload 3 of 3, '(o: { zzzC?: null | undefined; }): boolean', gave the following error.",
+            "  The last overload gave the following error.",
             "    Type '123' has no properties in common with type '{ zzzC?: null | undefined; }'.",
         ))
         assert(d[0].line == 4)
@@ -319,9 +307,7 @@ class OverloadWeakParamDiagnosticTest {
         """)
         assert(d.map { it.code } == listOf(2769))
         assert(d[0].messageChain == listOf(
-            "  Overload 1 of 2, '(o: string): number', gave the following error.",
-            "    Argument of type 'number' is not assignable to parameter of type 'string'.",
-            "  Overload 2 of 2, '(o: boolean): string', gave the following error.",
+            "  The last overload gave the following error.",
             "    Argument of type 'number' is not assignable to parameter of type 'boolean'.",
         ))
     }

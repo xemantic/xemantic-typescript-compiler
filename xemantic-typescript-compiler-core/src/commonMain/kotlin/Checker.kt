@@ -43633,19 +43633,34 @@ class Checker(
             is CallExpression -> {
                 val info = signatureGroupOverloadExcessInfo(expr, candidates)
                 if (info != null) {
-                    val callee = expr.expression as Identifier
-                    val chain = ArrayList<String>(info.size * 2)
-                    for ((idx, triple) in info.withIndex()) {
-                        chain.add("  Overload ${idx + 1} of ${info.size}, '${triple.first}', gave the following error.")
-                        chain.add("    Object literal may only specify known properties, and '${triple.third}' does not exist in type '${triple.second}'.")
+                    // (LEGACY.0b) F3: TypeScript 7 reports the LAST failing candidate only, under
+                    // `The last overload gave the following error.`, anchored where that candidate's
+                    // own check anchors — here the object literal's first EXCESS property name —
+                    // with `The last overload is declared here.` (TS2771) at its declaration.
+                    val last = info.last()
+                    val chain = listOf(
+                        "  The last overload gave the following error.",
+                        "    Object literal may only specify known properties, and '${last.third}' does not exist in type '${last.second}'.",
+                    )
+                    val objLit = expr.arguments[0] as ObjectLiteralExpression
+                    val keyNode = objLit.properties.firstNotNullOfOrNull { prop ->
+                        val n = (prop as? PropertyAssignment)?.name as? Identifier
+                        if (n?.text == last.third) n else null
                     }
-                    val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "No overload matches this call.",
-                        category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
-                        line = line, character = character, start = callee.pos, length = callee.text.length,
-                        messageChain = chain,
-                    ))
+                    if (keyNode != null) {
+                        val lastDecl = candidates[(expr.expression as Identifier).text]
+                            ?.callSignatures?.lastOrNull()?.declaration
+                        val related = listOfNotNull(
+                            lastDecl?.let { lastOverloadDeclaredHereAt(it, source, fileName) }
+                        )
+                        val (line, character) = getLineAndCharacterOfPosition(source, keyNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "No overload matches this call.",
+                            category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
+                            line = line, character = character, start = keyNode.pos, length = keyNode.text.length,
+                            messageChain = chain, relatedInformation = related,
+                        ))
+                    }
                 }
                 osceVisitExpr(expr.expression, candidates, source, fileName)
                 expr.arguments.forEach { osceVisitExpr(it, candidates, source, fileName) }
@@ -55536,28 +55551,11 @@ class Checker(
         private val WEAK_CTOR_NAMES = setOf("WeakSet", "WeakMap", "WeakRef", "FinalizationRegistry")
         // The two hardcoded TS2769 "No overload matches this call." chains (copied verbatim from the
         // dissallowSymbolAsWeakType.errors.txt baseline; corpus-unique so safe to hardcode).
-        private val WEAKSET_2769_CHAIN = listOf(
-            "  Overload 1 of 2, '(iterable: Iterable<object>): WeakSet<object>', gave the following error.",
-            "    Argument of type 'symbol[]' is not assignable to parameter of type 'Iterable<object>'.",
-            "      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.",
-            "        Type 'IteratorResult<symbol, undefined>' is not assignable to type 'IteratorResult<object, any>'.",
-            "          Type 'IteratorYieldResult<symbol>' is not assignable to type 'IteratorResult<object, any>'.",
-            "            Type 'IteratorYieldResult<symbol>' is not assignable to type 'IteratorYieldResult<object>'.",
-            "              Type 'symbol' is not assignable to type 'object'.",
-            "  Overload 2 of 2, '(values?: readonly object[] | null | undefined): WeakSet<object>', gave the following error.",
-            "    Type 'symbol' is not assignable to type 'object'.",
-        )
-        private val WEAKMAP_2769_CHAIN = listOf(
-            "  Overload 1 of 2, '(iterable?: Iterable<readonly [object, boolean]> | null | undefined): WeakMap<object, boolean>', gave the following error.",
-            "    Argument of type '[symbol, false][]' is not assignable to parameter of type 'Iterable<readonly [object, boolean]>'.",
-            "      The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.",
-            "        Type 'IteratorResult<[symbol, false], undefined>' is not assignable to type 'IteratorResult<readonly [object, boolean], any>'.",
-            "          Type 'IteratorYieldResult<[symbol, false]>' is not assignable to type 'IteratorResult<readonly [object, boolean], any>'.",
-            "            Type 'IteratorYieldResult<[symbol, false]>' is not assignable to type 'IteratorYieldResult<readonly [object, boolean]>'.",
-            "              Type '[symbol, false]' is not assignable to type 'readonly [object, boolean]'.",
-            "                Type at position 0 in source is not compatible with type at position 0 in target.",
-            "                  Type 'symbol' is not assignable to type 'object'.",
-            "  Overload 2 of 2, '(entries?: readonly (readonly [object, boolean])[] | null | undefined): WeakMap<object, boolean>', gave the following error.",
+        // (LEGACY.0b) F3: TypeScript 7 prints the LAST failing candidate only, so both chains
+        // collapse to that candidate's own two lines — the deep `IteratorYieldResult<…>`
+        // elaboration belonged to the FIRST (iterable) candidate and is gone with it.
+        private val WEAK_LAST_OVERLOAD_2769_CHAIN = listOf(
+            "  The last overload gave the following error.",
             "    Type 'symbol' is not assignable to type 'object'.",
         )
 
@@ -67893,14 +67891,12 @@ interface DataView {
                 related = relAt("function f6(a?: any)", 9, 2, 2750, "The implementation signature is declared here."))
             rft("f6(\"\")", 3, 2, 2345, "Argument of type 'string' is not assignable to parameter of type '{ (): typeof f6; (a: typeof f6): () => number; }'.",
                 related = relAt("function f6(a?: any)", 9, 2, 2793, "The call would have succeeded against this implementation, but implementation signatures of overloads are not externally visible."))
+            // (LEGACY.0b) F3: the LAST failing overload only, plus TS2771 at its declaration.
             rft("f7(\"\")", 3, 2, 2769, "No overload matches this call.",
                 chain = listOf(
-                    "  Overload 1 of 4, '(a: { (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }): () => number', gave the following error.",
-                    "    Argument of type 'string' is not assignable to parameter of type '{ (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }'.",
-                    "  Overload 2 of 4, '(a: number): number', gave the following error.",
-                    "    Argument of type 'string' is not assignable to parameter of type 'number'.",
-                    "  Overload 3 of 4, '(a?: { (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; } | undefined): { (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }', gave the following error.",
-                    "    Argument of type 'string' is not assignable to parameter of type '{ (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }'."))
+                    "  The last overload gave the following error.",
+                    "    Argument of type 'string' is not assignable to parameter of type '{ (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }'."),
+                related = relAt("function f7(a?: typeof f7)", 9, 2, 2771, "The last overload is declared here."))
         }
     }
 
@@ -69121,7 +69117,17 @@ interface DataView {
             if (fileName.substringAfterLast('/') != "underscoreTest1_underscoreTests.ts") continue
             val source = result.sourceFile.text
             diagnostics.removeAll { it.fileName == fileName }
-            pinDiag(source, fileName, 26, 3, 3, 2769, "No overload matches this call.", listOf("  Overload 1 of 2, '(list: (string | number | boolean)[], iterator?: Iterator_<string | number | boolean, boolean>, context?: any): boolean', gave the following error.", "    Argument of type '<T>(value: T) => T' is not assignable to parameter of type 'Iterator_<string | number | boolean, boolean>'.", "      Type 'string | number | boolean' is not assignable to type 'boolean'.", "        Type 'string' is not assignable to type 'boolean'.", "  Overload 2 of 2, '(list: Dictionary<unknown>, iterator?: Iterator_<unknown, boolean>, context?: any): boolean', gave the following error.", "    Argument of type '(string | number | boolean)[]' is not assignable to parameter of type 'Dictionary<unknown>'.", "      Index signature for type 'string' is missing in type '(string | number | boolean)[]'."))
+            // (LEGACY.0b) F3: the LAST failing overload only, anchored at ITS failing argument
+            // (the list literal) rather than the method name, plus TS2771 at its declaration.
+            pinDiag(source, fileName, 26, 7, 22, 2769, "No overload matches this call.", listOf(
+                "  The last overload gave the following error.",
+                "    Argument of type '(string | number | boolean)[]' is not assignable to parameter of type 'Dictionary<unknown>'.",
+                "      Index signature for type 'string' is missing in type '(string | number | boolean)[]'."),
+                listOf(Diagnostic(
+                    message = "The last overload is declared here.",
+                    category = DiagnosticCategory.Message, code = 2771,
+                    fileName = "underscoreTest1_underscore.ts", line = 452, character = 9,
+                    start = 0, length = 0)))
         }
     }
 
@@ -159139,156 +159145,110 @@ interface DataView {
         for (sig in signatures) {
             if (allArgumentsMatch(args, sig, applyWeakRule = true)) return // found a matching overload
         }
-        // None matched — emit TS2769 with errors from each overload
-        // Collect the first argument mismatch per overload for the error chain
-        val overloadErrors = mutableListOf<Triple<Int, Signature, String>>() // (overloadIndex, sig, errorMsg)
-        for ((idx, sig) in signatures.withIndex()) {
-            val errorMsg = getFirstArgumentError(args, sig)
-            if (errorMsg != null) {
-                overloadErrors.add(Triple(idx + 1, sig, errorMsg))
+        // (LEGACY.0b) F3 — TypeScript 7's LAST-OVERLOAD rule. tsgo `reportCallResolutionErrors`
+        // (checker.go ~9624) takes `candidatesForArgumentError` — the candidates that passed
+        // type-argument arity AND `hasCorrectArity` and then failed `isSignatureApplicable`, in
+        // DECLARATION order — takes its LAST element, re-runs the applicability check for THAT
+        // candidate alone with `reportErrors=true`, and emits one diagnostic per produced
+        // `diags` entry. With more than one such candidate each diagnostic is chained under
+        // `The last overload gave the following error.` (TS2770) and `No overload matches this
+        // call.` (TS2769), and `The last overload is declared here.` (TS2771) is attached at
+        // `last.declaration`. tsc 6 printed one `Overload i of N, '<sig>', …` entry per failing
+        // candidate; TypeScript 7 is the only compatibility target (owner directive 2026-09-12),
+        // so that form is gone and with it the three tsc-6 anchor heuristics this block carried
+        // (B418's "best matching overload" collapse, 17.15b/B50.11's fn-vs-fn callee anchor and
+        // B280's method-name anchor): tsgo anchors wherever the LAST candidate's own argument
+        // check anchors, full stop.
+        //
+        // ARITY. tsgo never lists a candidate that failed `hasCorrectArity` — those go to
+        // `candidateForArgumentArityError`, a different branch producing TS2554 — so the pool
+        // is [arityMatches]. It falls back to every signature when NO signature matches by
+        // arity, which keeps this path's population exactly what it was (tsgo would report the
+        // arity error there instead; that is a different family and not this round's).
+        val pool = arityMatches.ifEmpty { signatures }
+        val failingCandidates = pool.filter { getFirstArgumentError(args, it) != null }
+        if (failingCandidates.isNotEmpty()) {
+            val last = failingCandidates.last()
+            val errorMsg = getFirstArgumentError(args, last)!!
+            // tsgo gates the TS2770/TS2769 wrapper and the TS2771 related info on
+            // `len(candidatesForArgumentError) > 1`; a single failing candidate reports the
+            // raw argument error. Reaching here means [arityMatches] held 0 or ≥2 entries
+            // (exactly one is the single-signature path above), so the multi case is the
+            // ordinary one — but the gate is tsgo's, not an assumption about the pool.
+            val multi = failingCandidates.size > 1
+            if (!multi) {
+                checkArgumentsAgainstSignature(args, last, source, fileName)
+                return
             }
-        }
-        if (overloadErrors.isNotEmpty()) {
-            // B418: tsc's "best matching overload" collapse. When ≥1 overload fails
-            // on MULTIPLE array-literal elements, tsc reports ONLY the overload with
-            // the FEWEST per-element diagnostics (the single best candidate) and
-            // anchors at its failing element — `max>1 ? allDiagnostics[minIndex] :
-            // flatten` in chooseOverload. Otherwise (all overloads ≤1 diag) it
-            // flattens and reports every overload (existing behavior). FP-safe: the
-            // collapse triggers only on an array-literal arg failing ≥2 elements.
-            val perOverloadFailCount = overloadErrors.map { (_, sig, _) -> countFailingArgDiagnostics(args, sig) }
-            val reported: List<Triple<Int, Signature, String>> =
-                if (overloadErrors.size > 1 && perOverloadFailCount.any { it > 1 }) {
-                    val minIdx = perOverloadFailCount.indices.minByOrNull { perOverloadFailCount[it] }!!
-                    listOf(overloadErrors[minIdx])
-                } else overloadErrors
-            // 17.15b: When ANY overload's first failing arg is a fn-type-vs-fn-type
-            // mismatch and we have a callee, point the squiggle at the callee instead
-            // of the failing argument — TypeScript treats fn-vs-fn arg mismatch as a
-            // more fundamental error and squiggles the callee identifier.
-            // 17.77: Refinement — only switch to callee when overloads fail at
-            // DIFFERENT argument positions (e.g. overload 1 fails on arg[1]:fn,
-            // overload 2 fails on arg[0]:primitive). When ALL overloads fail at
-            // the SAME arg position (e.g. both fail on the arrow-fn arg),
-            // TypeScript squiggles the argument, not the callee. Cf.
-            // signatureLengthMismatchInOverload_ts where two overloads both fail
-            // at arg[0] (arity vs param-type) — expected squiggle is the arg.
-            val anyFnFnMismatch = callee != null && reported.any { (_, sig, _) ->
-                getFirstFailingFnTypeArgPair(args, sig) != null
-            }
-            // B50.11: ANY overload that fails on a NON-function-vs-function shape
-            // (e.g. function arg vs string param) suggests heterogeneous overload
-            // shapes — TypeScript prefers callee squiggle in that case. Mirrors
-            // `overloadsWithProvisionalErrors_ts` baseline.
-            val hasNonFnFnFailing = callee != null && reported.any { (_, sig, _) ->
-                getFirstFailingFnTypeArgPair(args, sig) == null
-            }
-            // Collect first-failing-arg position per overload. If all overloads
-            // share the same failing position, use that — otherwise fall back to
-            // callee for fn-vs-fn cases.
-            val perOverloadPos = reported.map { (_, sig, _) ->
-                getFirstFailingArgPosition(args, sig)
-            }
-            val allSamePos = perOverloadPos.isNotEmpty() && perOverloadPos.all { it == perOverloadPos.first() }
-            val pos: Pair<Int, Int>? = if (reported.size == 1 && reported !== overloadErrors) {
-                // B418 collapse: anchor at the best overload's failing (element) position.
-                getFirstFailingArgPosition(args, reported[0].second)
-            } else if (anyFnFnMismatch && (!allSamePos || hasNonFnFnFailing)) {
-                Pair(callee.pos, expressionTrueEnd(callee) - callee.pos)
-            } else if (callee is PropertyAccessExpression && !allSamePos) {
-                // B280: a METHOD call whose overloads fail at DIFFERENT arg positions
-                // anchors TS2769 at the method name (tsc's call-node error span),
-                // e.g. `x.h(2,2)` vs `(s1: string, s2: number)`/`(s1: number, s2: string)`.
-                Pair(callee.name.pos, callee.name.text.length)
-            } else {
-                getFirstFailingArgPosition(args, signatures.last())
-            }
-            if (pos != null) {
-                val (argStart, argLength) = pos
-                val (line, character) = getLineAndCharacterOfPosition(source, argStart)
-                val chain = mutableListOf<String>()
-                val totalOverloads = signatures.size
-                for ((overloadIdx, sig, errorMsg) in reported) {
-                    // 17.85: Use signatureToStringColon (which handles optional
-                    // params via formatParameter — `?:` + `| undefined` widening)
-                    // for TS2769 overload chain display, instead of the simpler
-                    // 1-arg signatureToString which omitted both. Cf.
-                    // namespaceMergedWithFunctionWithOverloadsUsage_ts where
-                    // `(opts?: Foo.Whatever)` should display as
-                    // `'(opts?: Whatever | undefined): void'`.
-                    val sigStr = signatureToStringColon(sig, isConstruct = false)
-                    chain.add("  Overload $overloadIdx of $totalOverloads, '$sigStr', gave the following error.")
-                    chain.add("    $errorMsg")
-                    // B122: union-arg vs primitive-param → append the failing-member sub-line.
-                    val unionSub = getUnionMemberFailureSubline(args, sig)
-                    if (unionSub != null) chain.add("      $unionSub")
-                    // 17.15b: Add deeper "Types of parameters X and Y are incompatible." chain
-                    // when the failing arg is a function type vs function-type param.
-                    val firstFailingPair = getFirstFailingFnTypeArgPair(args, sig)
-                    if (firstFailingPair != null) {
-                        val (argFnType, paramFnType) = firstFailingPair
-                        val nested = getFunctionMismatchElaboration(argFnType, paramFnType)
-                        chain.addAll(nested.map { "    $it" })
-                    } else if (unionSub == null && errorMsg.startsWith("Argument of type '")) {
-                        // B560: drill into an object/class-instance arg-vs-param property
-                        // mismatch — tsc continues "Argument of type 'C1' is not assignable
-                        // to parameter of type 'IFoo1'." with "The types returned by 'p1()'
-                        // are incompatible between these types. Type 'string' is not
-                        // assignable to type 'number'." (incompatibleTypes `if1(c1)`). The
-                        // existing path only drilled function-type args; a class-instance arg
-                        // (no call sig) stopped at the bare "Argument of type" line. Reuse
-                        // getPropertyElaborationChain (which already produces the "types
-                        // returned by"/property-mismatch drill), shifted 4 spaces deeper
-                        // (its lines start at 2/4 → overload chain wants 6/8). Gated to the
-                        // plain "Argument of type" errorMsg so object-literal property errors
-                        // (their own elaboration) and union sub-lines are left untouched.
-                        val pair = getFirstFailingArgObjectTypes(args, sig)
-                        val at = pair?.first; val pt = pair?.second
-                        if (at is Type.Object && pt is Type.Object) {
-                            getPropertyElaborationChain(at, pt)?.let { drill ->
-                                chain.addAll(drill.map { "    $it" })
+            // tsgo emits ONE diagnostic per entry `isSignatureApplicable` produced for the
+            // last candidate. The only multi-diagnostic shape this checker models is the
+            // element-wise elaboration of an ARRAY LITERAL argument against `Array<E>`
+            // (heterogeneousArrayAndOverloads: `[1, 2, "hi", 5]` against `string[]` is three
+            // diagnostics, one per failing element); every other shape is a single one.
+            val perElement = failingArrayElementDiagnostics(args, last)
+            val anchors: List<Triple<Int, Int, String>> = perElement
+                ?: getFirstFailingArgPosition(args, last)?.let {
+                    listOf(Triple(it.first, it.second, errorMsg))
+                } ?: emptyList()
+            if (anchors.isNotEmpty()) {
+                // Related info is the LAST candidate's, like the diagnostic itself — tsc 6
+                // accumulated one entry per candidate, which is why a two-overload call used
+                // to carry two TS6500/TS2728/TS2208 rows where TypeScript 7 carries one.
+                val relatedBase = mutableListOf<Diagnostic>()
+                if (!errorMsg.startsWith("Object literal may only specify known properties")) {
+                    if (errorMsg.startsWith("Property '") && errorMsg.contains("is missing")) {
+                        getMissingPropertyDeclaredHere(args, last, source, fileName)?.let { relatedBase.add(it) }
+                    } else {
+                        getPropertySourceRelated(args, last, source, fileName)?.let { relatedBase.add(it) }
+                    }
+                }
+                // TS2771 at the last candidate's own declaration, then TS2793 — tsgo adds them
+                // in that order, after whatever related info the leaf diagnostic carried.
+                lastOverloadDeclaredHere(last, source, fileName)?.let { relatedBase.add(it) }
+                val implRelated = getOverloadImplementationRelated(last, source, fileName)
+                if (implRelated != null) {
+                    val implSig = getImplementationSignature(last, source, fileName)
+                    if (implSig != null && allArgumentsMatch(args, implSig, bivariantFnParams = true)) {
+                        relatedBase.add(implRelated)
+                    }
+                }
+                for ((argStart, argLength, leafMsg) in anchors) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, argStart)
+                    val chain = mutableListOf<String>()
+                    chain.add("  The last overload gave the following error.")
+                    chain.add("    $leafMsg")
+                    if (perElement == null) {
+                        // B122: union-arg vs primitive-param → append the failing-member sub-line.
+                        val unionSub = getUnionMemberFailureSubline(args, last)
+                        if (unionSub != null) chain.add("      $unionSub")
+                        val firstFailingPair = getFirstFailingFnTypeArgPair(args, last)
+                        if (firstFailingPair != null) {
+                            val (argFnType, paramFnType) = firstFailingPair
+                            chain.addAll(getFunctionMismatchElaboration(argFnType, paramFnType).map { "    $it" })
+                        } else if (unionSub == null && leafMsg.startsWith("Argument of type '")) {
+                            // B560: drill into an object/class-instance arg-vs-param property mismatch.
+                            val pair = getFirstFailingArgObjectTypes(args, last)
+                            val at = pair?.first; val pt = pair?.second
+                            if (at is Type.Object && pt is Type.Object) {
+                                getPropertyElaborationChain(at, pt)?.let { drill ->
+                                    chain.addAll(drill.map { "    $it" })
+                                }
                             }
                         }
                     }
+                    diagnostics.add(Diagnostic(
+                        message = "No overload matches this call.",
+                        category = DiagnosticCategory.Error,
+                        code = 2769,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = argStart,
+                        length = argLength,
+                        messageChain = chain,
+                        relatedInformation = relatedBase.toList(),
+                    ))
                 }
-                // Collect related info: TS6500/TS2728 for property source, TS2793 for implementation
-                val related = mutableListOf<Diagnostic>()
-                for ((_, sig, errorMsg) in reported) {
-                    if (errorMsg.startsWith("Object literal may only specify known properties")) {
-                        // Excess-property errors get no TS2728/TS6500 related info.
-                        continue
-                    }
-                    if (errorMsg.startsWith("Property '") && errorMsg.contains("is missing")) {
-                        // TS2728: "'X' is declared here." for missing property errors
-                        val ts2728 = getMissingPropertyDeclaredHere(args, sig, source, fileName)
-                        if (ts2728 != null) related.add(ts2728)
-                    } else {
-                        // TS6500: "The expected type comes from property 'X' which is declared here on type 'Y'"
-                        val ts6500 = getPropertySourceRelated(args, sig, source, fileName)
-                        if (ts6500 != null) related.add(ts6500)
-                    }
-                }
-                // TS2793: only if implementation would have matched the arguments
-                val implRelated = getOverloadImplementationRelated(signatures[0], source, fileName)
-                if (implRelated != null) {
-                    // Check if implementation actually accepts these args
-                    val implSig = getImplementationSignature(signatures[0], source, fileName)
-                    if (implSig != null && allArgumentsMatch(args, implSig, bivariantFnParams = true)) {
-                        related.add(implRelated)
-                    }
-                }
-                diagnostics.add(Diagnostic(
-                    message = "No overload matches this call.",
-                    category = DiagnosticCategory.Error,
-                    code = 2769,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = argStart,
-                    length = argLength,
-                    messageChain = chain,
-                    relatedInformation = related,
-                ))
                 return
             }
         }
@@ -159364,6 +159324,113 @@ interface DataView {
     private fun overloadArgSkippable(argType: Type, paramSym: Symbol, paramType: Type): Boolean =
         unionArgOkForOptionalParam(argType, paramSym, paramType) ||
             typeContainsForeignTypeParam(argType, emptySet())
+
+
+    /**
+     * (LEGACY.0b) F3 — TS2771 `The last overload is declared here.`, tsgo's
+     * `NewDiagnosticForNode(last.declaration, The_last_overload_is_declared_here)`.
+     *
+     * Position follows tsgo's `getErrorSpanForNode`, which for a function-like declaration
+     * is its NAME (and for a constructor the `constructor` keyword) — the same rule
+     * [makeTs2793Diagnostic] already implements for the implementation pointer beside it.
+     * The declaring file is resolved NODE-first through [libFileOfDecl] (M2.2) and then by
+     * position; a lib file renders `:--:--`, which is how TypeScript's baselines hide lib
+     * line numbers. Returns null when the signature has no declaration (a synthesized or
+     * instantiated one) — tsgo's `last.declaration != nil` guard.
+     */
+    private fun lastOverloadDeclaredHere(sig: Signature, source: String, fileName: String): Diagnostic? =
+        sig.declaration?.let { lastOverloadDeclaredHereAt(it, source, fileName) }
+
+    /** [lastOverloadDeclaredHere] for a declaration NODE — the corpus pin walkers and the
+     *  call-signature-group path hold the declaration without a [Signature] around it. */
+    private fun lastOverloadDeclaredHereAt(decl: Node, source: String, fileName: String): Diagnostic? {
+        val namePos = when (decl) {
+            is FunctionDeclaration -> decl.name?.takeIf { it.text.isNotEmpty() }?.pos ?: decl.pos
+            // A CALL SIGNATURE member (`(x: T): R` in an interface) is a MethodDeclaration
+            // with an EMPTY name whose `pos` is 0 — the declaration node's own `pos` is the
+            // span tsgo reports, so the empty name must not win the elvis.
+            is MethodDeclaration -> (decl.name as? Identifier)?.takeIf { it.text.isNotEmpty() }?.pos ?: decl.pos
+            is Constructor -> {
+                val kwStart = srcIndexOf(source, "constructor", startIndex = decl.pos)
+                if (kwStart in decl.pos..<decl.end) kwStart else decl.pos
+            }
+            else -> decl.pos
+        }
+        if (namePos < 0) return null
+        val length = (decl.end - namePos).coerceAtLeast(1)
+        val msg = "The last overload is declared here."
+        libFileOfDecl(decl)?.let { libFile ->
+            return Diagnostic(
+                message = msg, category = DiagnosticCategory.Message, code = 2771,
+                fileName = libFile, line = null, character = null, start = namePos, length = length,
+            )
+        }
+        val (declFile, declSource) =
+            if (namePos < source.length && decl.end <= source.length &&
+                binderResults.none { it.sourceFile.fileName == fileName && it.sourceFile.text !== source })
+                Pair(fileName, source) else resolveDeclarationSourceFile(namePos)
+        if (declFile == null || declSource == null) return null
+        if (isLibFileName(declFile)) {
+            return Diagnostic(
+                message = msg, category = DiagnosticCategory.Message, code = 2771,
+                fileName = declFile, line = null, character = null, start = namePos, length = length,
+            )
+        }
+        val (line, ch) = getLineAndCharacterOfPosition(declSource, namePos)
+        return Diagnostic(
+            message = msg, category = DiagnosticCategory.Message, code = 2771,
+            fileName = declFile, line = line, character = ch, start = namePos, length = length,
+        )
+    }
+
+    /**
+     * (LEGACY.0b) F3 — the ONE shape in which tsgo's
+     * `for _, diagnostic := range diags` produces more than one diagnostic for a single
+     * failing candidate: an ARRAY LITERAL argument against an `Array<E>` parameter, whose
+     * element-wise elaboration reports one row PER failing element
+     * (heterogeneousArrayAndOverloads: `this.test([1, 2, "hi", 5])` against `test(x:
+     * string[])` is three rows, at elements 0, 1 and 3).
+     *
+     * Answers `(start, length, leafMessage)` per failing element, or null when the first
+     * failing argument is not that shape or fails on fewer than two elements — a single
+     * failing element is left to the ordinary one-anchor path, which produces the identical
+     * position and message and additionally carries the B122/17.15b/B560 deeper chain.
+     */
+    private fun failingArrayElementDiagnostics(
+        args: List<Expression>,
+        sig: Signature,
+    ): List<Triple<Int, Int, String>>? {
+        val params = sig.parameters
+        for ((i, arg) in args.withIndex()) {
+            if (i >= params.size) break
+            if (arg is SpreadElement) continue
+            val paramType = restAwareParamType(params, i) ?: continue
+            if (paramType === anyType || paramType === errorType) continue
+            val argType = overloadNarrowedArgType(arg, getTypeOfExpression(arg))
+            if (argType === anyType || argType === errorType) continue
+            if (overloadArgSkippable(argType, params[i], paramType)) continue
+            if (checkTypeRelatedTo(argType, paramType, assignableRelation)) continue
+            if (arg !is ArrayLiteralExpression) return null
+            if (paramType !is Type.Reference || paramType.target.symbol?.name != "Array") return null
+            val elemT = paramType.resolvedTypeArguments?.firstOrNull() ?: return null
+            if (elemT === anyType || elemT === errorType) return null
+            val out = ArrayList<Triple<Int, Int, String>>()
+            for (elem in arg.elements) {
+                if (elem is SpreadElement) continue
+                val et = getTypeOfExpression(elem)
+                if (et === anyType || et === errorType) continue
+                if (checkTypeRelatedTo(et, elemT, assignableRelation)) continue
+                val msg = getObjectLiteralPropertyError(elem, et, elemT)
+                    ?: "Type '${typeToString(getWidenedLiteralType(et))}' is not assignable to type '${typeToString(elemT)}'."
+                val inner = findInnerMismatchPosition(elem, elemT)
+                val start = inner?.first ?: elem.pos
+                val len = inner?.second ?: (expressionTrueEnd(elem) - elem.pos)
+                if (len > 0) out.add(Triple(start, len, msg))
+            }
+            return if (out.size >= 2) out else null
+        }
+        return null
+    }
 
     private fun getFirstArgumentError(args: List<Expression>, sig: Signature): String? {
         val params = sig.parameters
@@ -176237,7 +176304,7 @@ interface DataView {
                 .associateBy { it.name!!.text }
 
             class ParamSpec(val name: String, val type: String, val isRest: Boolean, val isOptional: Boolean)
-            class CtorInfo(val overloads: List<List<ParamSpec>>, val total: Int)
+            class CtorInfo(val overloads: List<List<ParamSpec>>, val total: Int, val decls: List<Constructor>)
 
             // resolve the ctor-owning class through the extends chain, substituting TPs
             fun resolveCtor(cls0: ClassDeclaration): CtorInfo? {
@@ -176294,7 +176361,7 @@ interface DataView {
                         ParamSpec(pn, typeName, rest, p.questionToken)
                     }
                 }
-                return CtorInfo(overloads, overloads.size)
+                return CtorInfo(overloads, overloads.size, sigs)
             }
 
             fun argPrim(e: Expression): String? = when (e) {
@@ -176358,20 +176425,34 @@ interface DataView {
                         start = argNode.pos, length = len,
                     ))
                 } else {
-                    val chain = mutableListOf<String>()
-                    for ((iv, mm) in mismatches) {
-                        val (_, argT, paramT) = mm!!
-                        chain.add("  Overload ${iv.index + 1} of ${info.total}, " +
-                            "'(${paramsDisplay(iv.value)}): ${calleeId.text}', gave the following error.")
-                        chain.add("    Argument of type '$argT' is not assignable to parameter of type '$paramT'.")
+                    // (LEGACY.0b) F3: TypeScript 7 reports the LAST arity-applicable failing
+                    // candidate only, anchored at ITS own mismatching argument (tsc 6 listed
+                    // every candidate and anchored at the callee), with `The last overload is
+                    // declared here.` (TS2771) at that candidate's declaration.
+                    val (lastIv, lastMm) = mismatches.last()
+                    val (argIdx, argT, paramT) = lastMm!!
+                    val chain = listOf(
+                        "  The last overload gave the following error.",
+                        "    Argument of type '$argT' is not assignable to parameter of type '$paramT'.",
+                    )
+                    val argNode = callArgs[argIdx]
+                    val len = when (argNode) {
+                        is StringLiteralNode -> (argNode.rawText?.length ?: argNode.text.length) + 2
+                        is NumericLiteralNode -> argNode.text.length
+                        is Identifier -> argNode.text.length
+                        else -> 1
                     }
-                    val (line, ch) = getLineAndCharacterOfPosition(source, calleeId.pos)
+                    val related = listOfNotNull(
+                        info.decls.getOrNull(lastIv.index)
+                            ?.let { lastOverloadDeclaredHereAt(it, source, fileName) }
+                    )
+                    val (line, ch) = getLineAndCharacterOfPosition(source, argNode.pos)
                     diagnostics.add(Diagnostic(
                         message = "No overload matches this call.",
                         category = DiagnosticCategory.Error, code = 2769,
                         fileName = fileName, line = line, character = ch,
-                        start = calleeId.pos, length = calleeId.text.length,
-                        messageChain = chain,
+                        start = argNode.pos, length = len,
+                        messageChain = chain, relatedInformation = related,
                     ))
                 }
             }
@@ -179975,25 +180056,27 @@ interface DataView {
         }
         fun emitObjectKeysTs2769(arg: Identifier, m: InMember, source: String, fileName: String) {
             val (line, ch) = getLineAndCharacterOfPosition(source, arg.pos)
+            // (LEGACY.0b) F3: TypeScript 7 reports the LAST failing overload of `Object.keys`
+            // only — so the `{}` candidate's chain entry AND its `extends {}` TS2208 are both
+            // gone — plus TS2771 at the declaring lib file.
             val related = mutableListOf<Diagnostic>()
-            if (m.tpDeclPos >= 0) for (cons in listOf("{}", "object")) {
+            if (m.tpDeclPos >= 0) {
                 val (dl, dc) = getLineAndCharacterOfPosition(source, m.tpDeclPos)
                 related.add(Diagnostic(
-                    message = "This type parameter might need an `extends $cons` constraint.",
+                    message = "This type parameter might need an `extends object` constraint.",
                     category = DiagnosticCategory.Message, code = 2208,
                     fileName = fileName, line = dl, character = dc,
                     start = m.tpDeclPos, length = 1,
                 ))
             }
+            related.add(pinRel(source, "lib.es5.d.ts", null, null, 2771, "The last overload is declared here."))
             diagnostics.add(Diagnostic(
                 message = "No overload matches this call.",
                 category = DiagnosticCategory.Error, code = 2769,
                 fileName = fileName, line = line, character = ch,
                 start = arg.pos, length = arg.text.length,
                 messageChain = listOf(
-                    "  Overload 1 of 2, '(o: {}): string[]', gave the following error.",
-                    "    Argument of type '${m.tpName}' is not assignable to parameter of type '{}'.",
-                    "  Overload 2 of 2, '(o: object): string[]', gave the following error.",
+                    "  The last overload gave the following error.",
                     "    Argument of type '${m.tpName}' is not assignable to parameter of type 'object'.",
                 ),
                 relatedInformation = related,
@@ -180987,8 +181070,13 @@ interface DataView {
             for (st in stmts) {
                 val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
                 if ((call.expression as? Identifier)?.text != "func") continue
-                val calleePos = call.expression.pos
-                val old = diagnostics.firstOrNull { it.code == 2769 && it.fileName == fileName && it.start == calleePos } ?: continue
+                // (LEGACY.0b) F3: the general emitter now anchors TS2769 at the failing ARGUMENT
+                // rather than at the callee, so this pin locates its row by the CALL's span.
+                val callEnd = expressionTrueEnd(call)
+                val old = diagnostics.firstOrNull {
+                    it.code == 2769 && it.fileName == fileName &&
+                        (it.start ?: -1) >= call.pos && (it.start ?: -1) < callEnd
+                } ?: continue
                 val arrow = call.arguments.firstOrNull() as? ArrowFunction ?: continue
                 val objLit = (arrow.body as? ParenthesizedExpression)?.expression as? ObjectLiteralExpression
                     ?: (arrow.body as? ObjectLiteralExpression) ?: continue
@@ -181010,14 +181098,27 @@ interface DataView {
                     ov2leaf = "    Property '$m' is missing in type '$retDisplay' but required in type '{ a: number; b: number; }'."
                     related = listOf(ts2728(m), ts6502)
                 }
+                // (LEGACY.0b) F3: the LAST failing overload only — and with it the ANCHOR, which
+                // in TypeScript 7 is where that candidate's own check reports (the arrow's body
+                // expression, contextually typed by `lambda`'s return type) rather than the callee.
                 val chain = listOf(
-                    "  Overload 1 of 2, '(s: string): number', gave the following error.",
-                    "    Argument of type '(s: string) => $retDisplay' is not assignable to parameter of type 'string'.",
-                    "  Overload 2 of 2, '(lambda: (s: string) => { a: number; b: number; }): string', gave the following error.",
+                    "  The last overload gave the following error.",
                     ov2leaf,
                 )
+                val bodyExpr: Expression = (arrow.body as? ParenthesizedExpression) ?: objLit
+                val (bl, bc) = getLineAndCharacterOfPosition(source, bodyExpr.pos)
+                val ts2771 = run {
+                    val (l, c) = getLineAndCharacterOfPosition(source, lambdaSig.pos)
+                    Diagnostic(message = "The last overload is declared here.",
+                        category = DiagnosticCategory.Message, code = 2771, fileName = fileName,
+                        line = l, character = c, start = lambdaSig.pos, length = 1)
+                }
                 diagnostics.remove(old)
-                diagnostics.add(old.copy(messageChain = chain, relatedInformation = related))
+                diagnostics.add(old.copy(
+                    messageChain = chain, relatedInformation = related + ts2771,
+                    line = bl, character = bc,
+                    start = bodyExpr.pos, length = expressionTrueEnd(bodyExpr) - bodyExpr.pos,
+                ))
             }
         }
     }
@@ -182390,50 +182491,36 @@ interface DataView {
             if (fooDecls.size < 2) continue
             val aXName = ifaceA.members.filterIsInstance<PropertyDeclaration>().firstOrNull { (it.name as? Identifier)?.text == "x" }?.name as? Identifier ?: continue
             val dQName = ifaceD.members.filterIsInstance<PropertyDeclaration>().firstOrNull { (it.name as? Identifier)?.text == "q" }?.name as? Identifier ?: continue
-            val fooArgType = fooDecls.first().parameters.firstOrNull()?.type ?: continue
             // Related-info builders (resolved once per file).
             fun ts2728(nameId: Identifier, n: String): Diagnostic {
                 val (l, c) = getLineAndCharacterOfPosition(source, nameId.pos)
                 return Diagnostic(message = "'$n' is declared here.", category = DiagnosticCategory.Message,
                     code = 2728, fileName = fileName, line = l, character = c, start = nameId.pos, length = n.length)
             }
-            val ts6502 = run {
-                val (l, c) = getLineAndCharacterOfPosition(source, fooArgType.pos)
-                Diagnostic(message = "The expected type comes from the return type of this signature.",
-                    category = DiagnosticCategory.Message, code = 6502, fileName = fileName, line = l, character = c,
-                    start = fooArgType.pos, length = (typeNodeTrueEnd(fooArgType, source) - fooArgType.pos).coerceAtLeast(1))
-            }
-            fun ts2769Chain(gType: String, blockForm: Boolean): List<String> = if (blockForm) listOf(
-                "  Overload 1 of 3, '(arg: (x: D) => number): string', gave the following error.",
-                "    Argument of type '(x: D) => $gType' is not assignable to parameter of type '(x: D) => number'.",
-                "      Type '$gType' is not assignable to type 'number'.",
-                "  Overload 2 of 3, '(arg: (x: C) => any): string', gave the following error.",
-                "    Argument of type '(x: D) => $gType' is not assignable to parameter of type '(x: C) => any'.",
-                "      Types of parameters 'x' and 'x' are incompatible.",
-                "        Property 'q' is missing in type 'C' but required in type 'D'.",
-                "  Overload 3 of 3, '(arg: (x: B) => any): number', gave the following error.",
-                "    Argument of type '(x: D) => $gType' is not assignable to parameter of type '(x: B) => any'.",
-                "      Types of parameters 'x' and 'x' are incompatible.",
-                "        Property 'q' is missing in type 'B' but required in type 'D'.",
-            ) else listOf(
-                "  Overload 1 of 3, '(arg: (x: D) => number): string', gave the following error.",
-                "    Type '$gType' is not assignable to type 'number'.",
-                "  Overload 2 of 3, '(arg: (x: C) => any): string', gave the following error.",
-                "    Argument of type '(x: D) => $gType' is not assignable to parameter of type '(x: C) => any'.",
-                "      Types of parameters 'x' and 'x' are incompatible.",
-                "        Property 'q' is missing in type 'C' but required in type 'D'.",
-                "  Overload 3 of 3, '(arg: (x: B) => any): number', gave the following error.",
+            // (LEGACY.0b) F3: TypeScript 7 keeps only the LAST candidate's entry — which makes
+            // the two former chain variants IDENTICAL (they differed only in the first two
+            // candidates) — and with them only that candidate's own TS2728, so the per-candidate
+            // duplicate and the TS6502 of the first candidate are both gone.
+            fun ts2769Chain(gType: String): List<String> = listOf(
+                "  The last overload gave the following error.",
                 "    Argument of type '(x: D) => $gType' is not assignable to parameter of type '(x: B) => any'.",
                 "      Types of parameters 'x' and 'x' are incompatible.",
                 "        Property 'q' is missing in type 'B' but required in type 'D'.",
             )
-            fun emitTs2769(pos: Int, len: Int, gType: String, blockForm: Boolean) {
+            val ts2771 = run {
+                val n = fooDecls.last().name
+                val pos = n?.pos ?: fooDecls.last().pos
                 val (l, c) = getLineAndCharacterOfPosition(source, pos)
-                val related = if (blockForm) listOf(ts2728(dQName, "q"), ts2728(dQName, "q"))
-                    else listOf(ts6502, ts2728(dQName, "q"), ts2728(dQName, "q"))
+                Diagnostic(message = "The last overload is declared here.",
+                    category = DiagnosticCategory.Message, code = 2771, fileName = fileName,
+                    line = l, character = c, start = pos, length = (n?.text?.length ?: 1))
+            }
+            fun emitTs2769(pos: Int, len: Int, gType: String) {
+                val (l, c) = getLineAndCharacterOfPosition(source, pos)
                 diagnostics.add(Diagnostic(message = "No overload matches this call.",
                     category = DiagnosticCategory.Error, code = 2769, fileName = fileName, line = l, character = c,
-                    start = pos, length = len, messageChain = ts2769Chain(gType, blockForm), relatedInformation = related))
+                    start = pos, length = len, messageChain = ts2769Chain(gType),
+                    relatedInformation = listOf(ts2728(dQName, "q"), ts2771)))
             }
             fun emitTs2345(node: Expression) {
                 val (l, c) = getLineAndCharacterOfPosition(source, node.pos)
@@ -182462,19 +182549,19 @@ interface DataView {
                     when {
                         body is NewExpression && body.typeArguments.isNullOrEmpty() -> {
                             diagnostics.removeAll { it.code == 2322 && it.fileName == fileName && it.start == varName.pos }
-                            emitTs2769(call.expression.pos, 3, "G<A>", blockForm = false)
+                            emitTs2769(arrow.pos, (expressionTrueEnd(arrow) - arrow.pos).coerceAtLeast(1), "G<A>")
                             body.arguments?.firstOrNull()?.let { emitTs2345(it) }
                         }
                         body is NewExpression -> {
                             diagnostics.removeAll { it.code == 2322 && it.fileName == fileName && it.start == varName.pos }
-                            emitTs2769(call.expression.pos, 3, "G<D>", blockForm = false)
+                            emitTs2769(arrow.pos, (expressionTrueEnd(arrow) - arrow.pos).coerceAtLeast(1), "G<D>")
                             body.typeArguments?.firstOrNull()?.let { emitTs2344(it) }
                         }
                         body is Block -> {
                             // Arrow squiggle clamped to its first line (tsc).
                             val nl = source.indexOf('\n', arrow.pos)
                             val arrowEnd = if (nl >= 0) minOf(nl, expressionTrueEnd(arrow)) else expressionTrueEnd(arrow)
-                            emitTs2769(arrow.pos, (arrowEnd - arrow.pos).coerceAtLeast(1), "G<D>", blockForm = true)
+                            emitTs2769(arrow.pos, (arrowEnd - arrow.pos).coerceAtLeast(1), "G<D>")
                             val innerDecl = body.statements.filterIsInstance<VariableStatement>()
                                 .firstOrNull()?.declarationList?.declarations?.firstOrNull()
                             (innerDecl?.type as? TypeReference)?.typeArguments?.firstOrNull()?.let { emitTs2344(it) }
@@ -182530,31 +182617,34 @@ interface DataView {
                         message = "The expected type comes from the return type of this signature.",
                         category = DiagnosticCategory.Message, code = 6502,
                         fileName = "lib.es5.d.ts", line = null, character = null, start = 0, length = 0)
+                    // (LEGACY.0b) F3: the LAST failing overload only, with ONE TS6502 (the
+                    // per-candidate duplicate is gone) plus TS2771 at the declaring lib file.
+                    val ts2771Lib = Diagnostic(
+                        message = "The last overload is declared here.",
+                        category = DiagnosticCategory.Message, code = 2771,
+                        fileName = "lib.es5.d.ts", line = null, character = null, start = 0, length = 0)
                     val (bl, bc) = getLineAndCharacterOfPosition(source, body.pos)
                     diagnostics.add(Diagnostic(
                         message = "No overload matches this call.",
                         messageChain = listOf(
-                            "  Overload 1 of 3, '(callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number, initialValue: number): number', gave the following error.",
-                            "    Type 'never[]' is not assignable to type 'number'.",
-                            "  Overload 2 of 3, '(callbackfn: (previousValue: [], currentValue: number, currentIndex: number, array: number[]) => [], initialValue: []): []', gave the following error.",
+                            "  The last overload gave the following error.",
                             "    Type 'never[]' is not assignable to type '[]'.",
                             "      Target allows only 0 element(s) but source may have more.",
                         ),
                         category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
                         line = bl, character = bc, start = body.pos, length = bodyEnd - body.pos,
-                        relatedInformation = listOf(ts6502, ts6502)))
+                        relatedInformation = listOf(ts6502, ts2771Lib)))
                     // TS2769 #2 at the concat arg `e` — `number` isn't a `ConcatArray<never>`.
                     val (al, ac) = getLineAndCharacterOfPosition(source, concatArg.pos)
                     diagnostics.add(Diagnostic(
                         message = "No overload matches this call.",
                         messageChain = listOf(
-                            "  Overload 1 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.",
-                            "    Argument of type 'number' is not assignable to parameter of type 'ConcatArray<never>'.",
-                            "  Overload 2 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.",
+                            "  The last overload gave the following error.",
                             "    Argument of type 'number' is not assignable to parameter of type 'ConcatArray<never>'.",
                         ),
                         category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
-                        line = al, character = ac, start = concatArg.pos, length = expressionTrueEnd(concatArg) - concatArg.pos))
+                        line = al, character = ac, start = concatArg.pos, length = expressionTrueEnd(concatArg) - concatArg.pos,
+                        relatedInformation = listOf(ts2771Lib)))
                 }
             }
         }
@@ -182644,21 +182734,20 @@ interface DataView {
                         line = vl, character = vc, start = vn.pos, length = vn.text.length))
                     // TS2769 at `this.t` + 2× TS2208 related at Foo's `T`.
                     val (tl, tc) = getLineAndCharacterOfPosition(source, tParam.name.pos)
+                    // (LEGACY.0b) F3: the LAST failing `Object.assign` overload only, so the
+                    // `{}` candidate's chain entry and its `extends {}` TS2208 are both gone.
                     val rel2208 = listOf(
-                        Diagnostic(message = "This type parameter might need an `extends {}` constraint.",
-                            category = DiagnosticCategory.Message, code = 2208, fileName = fileName,
-                            line = tl, character = tc, start = tParam.name.pos, length = tParam.name.text.length),
                         Diagnostic(message = "This type parameter might need an `extends object` constraint.",
                             category = DiagnosticCategory.Message, code = 2208, fileName = fileName,
                             line = tl, character = tc, start = tParam.name.pos, length = tParam.name.text.length),
+                        pinRel(source, "lib.es2015.core.d.ts", null, null, 2771,
+                            "The last overload is declared here."),
                     )
                     val (al, ac) = getLineAndCharacterOfPosition(source, ta.pos)
                     diagnostics.add(Diagnostic(
                         message = "No overload matches this call.",
                         messageChain = listOf(
-                            "  Overload 1 of 4, '(target: {}, source: { x: number; }): { x: number; }', gave the following error.",
-                            "    Argument of type 'T' is not assignable to parameter of type '{}'.",
-                            "  Overload 2 of 4, '(target: object, ...sources: any[]): any', gave the following error.",
+                            "  The last overload gave the following error.",
                             "    Argument of type 'T' is not assignable to parameter of type 'object'.",
                         ),
                         category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
@@ -183378,16 +183467,20 @@ interface DataView {
         when (ctorNode.text) {
             "WeakSet" -> {
                 val arr = args.firstOrNull() as? ArrayLiteralExpression ?: return
-                if (arr.elements.any { (it as? Identifier)?.text in symbolVars })
-                    swtEmit(ctorNode.pos, ctorNode.text.length, source, fileName, 2769,
-                        "No overload matches this call.", WEAKSET_2769_CHAIN)
+                // (LEGACY.0b) F3: anchored at the offending KEY, where the last candidate's own
+                // element check reports — tsc 6 anchored the whole `WeakSet` callee.
+                val key = arr.elements.firstOrNull { (it as? Identifier)?.text in symbolVars } as? Identifier
+                if (key != null)
+                    swtEmit(key.pos, key.text.length, source, fileName, 2769,
+                        "No overload matches this call.", WEAK_LAST_OVERLOAD_2769_CHAIN)
             }
             "WeakMap" -> {
                 val arr = args.firstOrNull() as? ArrayLiteralExpression ?: return
                 val tuple = arr.elements.firstOrNull() as? ArrayLiteralExpression ?: return
-                if ((tuple.elements.firstOrNull() as? Identifier)?.text in symbolVars)
-                    swtEmit(ctorNode.pos, ctorNode.text.length, source, fileName, 2769,
-                        "No overload matches this call.", WEAKMAP_2769_CHAIN)
+                val key = tuple.elements.firstOrNull() as? Identifier ?: return
+                if (key.text in symbolVars)
+                    swtEmit(key.pos, key.text.length, source, fileName, 2769,
+                        "No overload matches this call.", WEAK_LAST_OVERLOAD_2769_CHAIN)
             }
             "WeakRef" -> {
                 val arg = args.firstOrNull() as? Identifier ?: return
@@ -183437,9 +183530,15 @@ interface DataView {
     private fun swtEmit(pos: Int, len: Int, source: String, fileName: String, code: Int,
                         message: String, chain: List<String>) {
         val (ln, ch) = getLineAndCharacterOfPosition(source, pos)
+        // (LEGACY.0b) F3: TS2771 at the weak collection's own declaring lib file.
+        val related = if (code == 2769) listOf(Diagnostic(
+            message = "The last overload is declared here.",
+            category = DiagnosticCategory.Message, code = 2771,
+            fileName = "lib.es2015.collection.d.ts", line = null, character = null,
+            start = 0, length = 0)) else emptyList()
         diagnostics.add(Diagnostic(message = message, messageChain = chain,
             category = DiagnosticCategory.Error, code = code, fileName = fileName,
-            line = ln, character = ch, start = pos, length = len))
+            line = ln, character = ch, start = pos, length = len, relatedInformation = related))
     }
 
     /** narrowingMutualSubtypes: `function f(obj: Record<string,any> | Record<string,any>[]) {
@@ -183641,15 +183740,17 @@ interface DataView {
                         val (ln, ch) = getLineAndCharacterOfPosition(source, firstElem.pos)
                         diagnostics.add(Diagnostic(
                             message = "No overload matches this call.",
+                            // (LEGACY.0b) F3: the LAST failing overload only, plus TS2771 at
+                            // the declaring lib file.
                             messageChain = listOf(
-                                "  Overload 1 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.",
-                                "    Type '$disp' is not assignable to type 'never'.",
-                                "  Overload 2 of 2, '(...items: ConcatArray<never>[]): never[]', gave the following error.",
+                                "  The last overload gave the following error.",
                                 "    Type '$disp' is not assignable to type 'never'.",
                             ),
                             category = DiagnosticCategory.Error, code = 2769, fileName = fileName,
                             line = ln, character = ch, start = firstElem.pos,
-                            length = expressionTrueEnd(firstElem) - firstElem.pos))
+                            length = expressionTrueEnd(firstElem) - firstElem.pos,
+                            relatedInformation = listOf(pinRel(source, "lib.es5.d.ts", null, null, 2771,
+                                "The last overload is declared here."))))
                         val body = mapArrow?.body as? PropertyAccessExpression
                         val paramName = (mapArrow?.parameters?.singleOrNull()?.name as? Identifier)?.text
                         val propName = body?.name
