@@ -3343,3 +3343,22 @@ classified declaration-first, and that shape is the hazard pin. Ablation 21/2/7/
 134 pins; three countdown pins inverted. Grid 8×`added=0 removed=0` as a measured GATE,
 marked/cronstrue byte-identical, cost_gate exit 0 (20/20 within +0.05% of rebuilt HEAD),
 huge_methods exit 0, warning-clean. (CHK.98) stays open on the `new` arm and stage 2.
+
+**(P18.83) — (CHK.98)(i): THE `NewExpression` ARGUMENT ARM — THE CONSTRUCT SIDE WAS THE CONTROL AND THE CALL SIDE'S FREE-TYPE-PARAMETER RULE WAS THE GATE, 18,986 / 0 / 3 (2026-09-12).**
+A callback passed to a constructor now gets its parameter types through the call arm's own
+core (`ctxArgTypesFromSignatures`), with tsc's rules for a `new`: a class callee's OWN
+constructors first (`MemberResolver` stores construct signatures inherited-FIRST, so an
+unfiltered `sigs[0]` was the base's), explicit type arguments as a positional mapper,
+overloads adopted by arity, and — for BOTH call-likes — tsc's first-pass answer for a
+type parameter no other argument mentions: `default ?: constraint ?: unknown`. "Refuse an
+uninferable `T`" was the wrong shape for that case and measurement said so; refusal stays
+right only where an argument MENTIONS the parameter and inference fails (the hazard,
+pinned twice). **Found and fixed inside the arm**: class constructor parameter symbols are
+typed LAZILY under the first asker's scope, so `seed: T` read `any` until the annotations
+were resolved under the class's own scope. Census: the `new` arm resolves 4 sites across all
+eight profiles (a control); the shared free-TP rule fires 1,031-2,169 times per profile on
+the CALL side (the gate) and moved the grid by nothing. `new` set 11/2/45/2 → 41/2/13/4, the
+call twins 7/1/7/1 → 10/1/4/1, zero REF-SPLIT. Ablation 28/2/6/2 RED over 45 pins. Grid
+8×0/0, libraries byte-identical, cost_gate exit 0 (`typeOfExpr.calls` +0.83% vs rebuilt
+HEAD, the (P18.31) cache-hit pattern, not rebaselined), huge_methods exit 0, warning-clean.
+(CHK.98) stays open on its stage-2 rows.

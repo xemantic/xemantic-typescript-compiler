@@ -371,14 +371,17 @@ class Parser(
                 overrideStart = hashBang, overrideLength = 2)
         }
         // An identifier BEGINNING with a unicode escape that decodes to a non-identifier-
-        // start char: tsc reports TS1127 "Invalid character." (0-width) AT SCAN TIME, so
-        // it lands BEFORE any same-position recovery diagnostic (a var-decl list's
-        // ','-expected dedups against it — constructorWithIncompleteTypeAnnotation line 72).
+        // start char: TS1127 "Invalid character." is reported AT SCAN TIME, so it lands
+        // BEFORE any same-position recovery diagnostic (a var-decl list's ','-expected
+        // dedups against it — constructorWithIncompleteTypeAnnotation line 72; that dedup
+        // keys on START only, so the span below does not reach it).
+        // (LEGACY.0b step 3) the span is ONE character. tsc 6 reported TS1127 zero-width
+        // here; TypeScript 7's scanner reports `errorAt(Invalid_character, pos, 1)`.
         val invEsc = scanner.invalidEscapeIdentStartPos
         if (invEsc >= 0 && invEsc !in reportedInvalidEscapeStarts) {
             reportedInvalidEscapeStarts.add(invEsc)
             reportError("Invalid character.", code = 1127,
-                overrideStart = invEsc, overrideLength = 0)
+                overrideStart = invEsc, overrideLength = 1)
         }
         return token
     }
@@ -1377,7 +1380,8 @@ class Parser(
                     // Error recovery: invalid character (like `\` from an incomplete unicode escape)
                     // appears in place of a comma in a var declaration list.
                     // E.g., `var arg\uxxxx` → treat as `var arg, uxxxx` (matches TypeScript behavior).
-                    reportError("Invalid character.", code = 1127, overrideLength = 0)
+                    // (LEGACY.0b step 3) one-character span — see parseIdentifier.
+                    reportError("Invalid character.", code = 1127, overrideLength = 1)
                     nextToken() // consume the Unknown token (the invalid character)
                     decls.add(parseVariableDeclaration())
                 } else if (inForInitializer && token == SyntaxKind.CloseParen
@@ -7055,11 +7059,12 @@ class Parser(
                         // Unknown token = invalid character (e.g. `\` from an incomplete unicode escape).
                         // Report TS1127 "Invalid character." but do NOT consume the token —
                         // parseStatements' safety mechanism will skip it and discard this "statement".
-                        // tsc's scanner-level invalid-character error spans the char — mirrored
-                        // here for C0 control chars (binary garbage) only; `\`-style recovery
-                        // keeps the legacy zero-width span.
+                        // (LEGACY.0b step 3) the span is the OFFENDING TOKEN's own width, which is
+                        // TypeScript 7's scanner rule (`errorAt(Invalid_character, pos, size)`).
+                        // tsc 6 spanned the character for a C0 control (binary garbage) and left
+                        // `\`-style recovery zero-width; TypeScript 7 squiggles both.
                         val tokText = scanner.getTokenText()
-                        val w = if (tokText.length == 1 && tokText[0].code < 0x20) 1 else 0
+                        val w = if (tokText.isEmpty()) 1 else tokText.length
                         reportError("Invalid character.", code = 1127, overrideLength = w)
                     }
                     Identifier(text = "", pos = pos, end = getEnd())
@@ -9878,10 +9883,12 @@ class Parser(
             val raw = scanner.getCorrectedRawText() ?: scanner.getTokenText()
             // Only store rawText if it differs (contains \uXXXX escapes)
             val rawText = if (raw != value) raw else null
-            // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
+            // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits).
+            // (LEGACY.0b step 3) the span is ONE character — TypeScript 7's scanner reports
+            // `errorAt(Invalid_character, pos, 1)` where tsc 6 reported it zero-width.
             if (scanner.hasInvalidUnicodeEscapeInToken()) {
                 val escapePos = scanner.getInvalidUnicodeEscapePos()
-                reportError("Invalid character.", code = 1127, overrideLength = 0,
+                reportError("Invalid character.", code = 1127, overrideLength = 1,
                     overrideStart = if (escapePos >= 0) escapePos else null)
             }
             nextToken()
@@ -9907,10 +9914,11 @@ class Parser(
         // Use corrected raw text when the identifier starts with an invalid unicode escape
         val raw = scanner.getCorrectedRawText() ?: scanner.getTokenText()
         val rawText = if (raw != value) raw else null
-        // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits)
+        // Report invalid unicode escapes (e.g. \u003 with only 3 hex digits).
+        // (LEGACY.0b step 3) one-character span — see parseIdentifier.
         if (scanner.hasInvalidUnicodeEscapeInToken()) {
             val escapePos = scanner.getInvalidUnicodeEscapePos()
-            reportError("Invalid character.", code = 1127, overrideLength = 0,
+            reportError("Invalid character.", code = 1127, overrideLength = 1,
                 overrideStart = if (escapePos >= 0) escapePos else null)
         }
         nextToken()

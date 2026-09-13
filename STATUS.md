@@ -19,6 +19,25 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.88) — (LEGACY.0b) STEP 3: F6 DECOMPOSED INTO EIGHT MECHANISMS, FOUR SUB-FAMILIES LANDED, THE LARGEST REFUSED ON A MEASURED BLOCKER, 19,130 / 0 / 242 (2026-09-13).**
+Pending 242 → **217** and skipped 267 → **242**, both −25. **"F6 code-differs" was a
+first-differing-LINE label for the second round running**: its 88 rows are EIGHT mechanisms,
+and the decomposition table is the round's durable output. Its largest, F6a (28 rows,
+missing-property head suppression), confirms the design's hypothesis — one decision point in
+tsgo's `reportRelationError` — and **refutes its direction**: 24 rows have tsgo reporting the
+leaf but 4 have tsgo KEEPING a head we drop. **REFUSED on a measured blocker rather than
+deferred**: that message is emitted at ~30 independent sites with no relation-error funnel,
+reaching 73 of 2,955 active baselines, so it needs an unblocker first; all 28 reasons are
+rewritten greppable as `F6a`. Landed instead: unused-local ANCHORS 10/10 (the handover said
+seven — TypeScript 7 dropped three tsc-6 special cases, and the other 15 F8 rows are a
+different emitter entirely), TS2497 deleted 7/8 (the code is referenced by no tsgo code and
+appears in none of its baselines), TS1127 spanning one character 5/6, TS8017 spanning the
+declaration 3/3. Ablation 14 arms, 13 discriminating, one recorded UNDISCRIMINATED, `@Test`
+identical in all. Grid a real gate for TS2497 alone, a control for the other three. Five
+predictions refuted, including two of the round's OWN censuses taken off a stale generated
+tree at the repo root — conclusions survived, numbers did not; the same tree had already
+misled the orchestrator this session, so it is now a documented trap. cost_gate all 20
+counters +0.00%, huge_methods exit 0, warning-clean.
 **(P18.87) — (LEGACY.0b) STEP 2: THE "FREE WINS", AND F9 WAS A FIRST-DIFFERING-*LINE* LABEL RATHER THAN A FAMILY, 19,100 / 0 / 267 (2026-09-13).**
 Pending 285 → **242** and skipped 310 → **267**, both −43 — and that agreement IS the
 receipt, since the build fails on a stale ledger entry, so a green suite after deleting 43
@@ -100,22 +119,3 @@ contextual typing: `Record<K, V>` resolves to bare `any`, now (CHK.135). Promise
 one found dead on the first pin set and repaired. cost_gate exit 0 (within +0.05% of
 rebuilt HEAD), huge_methods exit 0, warning-clean. **(CHK.98) is CHECKED OFF**; the queue's
 head is now (LEGACY.0), the owner's corpus re-pin.
-
-**(P18.83) — (CHK.98)(i): THE `NewExpression` ARGUMENT ARM — THE CONSTRUCT SIDE WAS THE CONTROL AND THE CALL SIDE'S FREE-TYPE-PARAMETER RULE WAS THE GATE, 18,986 / 0 / 3 (2026-09-12).**
-A callback passed to a constructor now gets its parameter types through the call arm's own
-core (`ctxArgTypesFromSignatures`), with tsc's rules for a `new`: a class callee's OWN
-constructors first (`MemberResolver` stores construct signatures inherited-FIRST, so an
-unfiltered `sigs[0]` was the base's), explicit type arguments as a positional mapper,
-overloads adopted by arity, and — for BOTH call-likes — tsc's first-pass answer for a
-type parameter no other argument mentions: `default ?: constraint ?: unknown`. "Refuse an
-uninferable `T`" was the wrong shape for that case and measurement said so; refusal stays
-right only where an argument MENTIONS the parameter and inference fails (the hazard,
-pinned twice). **Found and fixed inside the arm**: class constructor parameter symbols are
-typed LAZILY under the first asker's scope, so `seed: T` read `any` until the annotations
-were resolved under the class's own scope. Census: the `new` arm resolves 4 sites across all
-eight profiles (a control); the shared free-TP rule fires 1,031-2,169 times per profile on
-the CALL side (the gate) and moved the grid by nothing. `new` set 11/2/45/2 → 41/2/13/4, the
-call twins 7/1/7/1 → 10/1/4/1, zero REF-SPLIT. Ablation 28/2/6/2 RED over 45 pins. Grid
-8×0/0, libraries byte-identical, cost_gate exit 0 (`typeOfExpr.calls` +0.83% vs rebuilt
-HEAD, the (P18.31) cache-hit pattern, not rebaselined), huge_methods exit 0, warning-clean.
-(CHK.98) stays open on its stage-2 rows.

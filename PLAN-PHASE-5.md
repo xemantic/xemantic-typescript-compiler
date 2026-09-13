@@ -25,6 +25,78 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.88) — (LEGACY.0b) step 3: F6 decomposed into eight mechanisms, four sub-families landed, and the largest one REFUSED on a measured blocker (2026-09-13)
+
+**Suite 19,100 → 19,130 / 0 / 242** — `tsgoPendingBaselines` 242 → 217 and skipped 267 →
+242, **both −25**, which is the receipt. +30 pins in four classes (13 / 6 / 6 / 5). Grid
+8×`added=0 removed=0` (arms verified distinct, AFTER byte-identical to the shipped classes);
+`cost_gate.py` exit 0 with all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0
+(858 classes); warning-clean. **(LEGACY.0) stays OPEN.**
+
+**THE F6 DECOMPOSITION IS THE DURABLE OUTPUT, AND IT IS (P18.87)'s LESSON A SECOND TIME:
+"F6 code-differs" is a first-differing-LINE label, not a family.** Read pairwise — tsc's
+baseline IS our output for every row that was green before the root switch, so the two
+baselines are a free differential — the 88 rows are EIGHT mechanisms:
+
+| mechanism | rows | example |
+|---|---:|---|
+| **F6a** missing-property HEAD SUPPRESSION | **28** | `assignmentCompatFunctionsWithOptionalArgs` |
+| F6z singletons and mixed (15 of them JS / checkJs / JSDoc) | 33 | `arrayCast`, `jsdocRestParameter` |
+| **F6d** TS2303 at EVERY node of an import-alias cycle | 10 | `circularModuleImports` |
+| **F6c** TS2497 does not exist in TS7 | 8 | `importNonExportedMember5` — **LANDED (7)** |
+| F6b unused-local GROUPING (array and nested patterns) | 3 | `unusedVariablesWithUnderscoreInBindingElement` |
+| F6g TS2696 `Object`-type message gone | 2 | `assigningFromObjectToAnythingElse` |
+| F6e TS5101 → TS5102 | 2 | (LEGACY.1)(k)'s own rows |
+| F6f TS2304 → TS2552 suggestion | 2 | `commonMissingSemicolons` |
+
+**F6a: THE DESIGN'S HYPOTHESIS IS CONFIRMED AND ITS DIRECTION IS WRONG.** It really is one
+decision point — tsgo's `relater.go` ~4809, where `reportRelationError` suppresses the HEAD
+when `getChainMessage(0)` is the missing-property message, the head is not a conversion or
+interface-implementation one, and `chainArgsMatch(nil, source, target)` — but the rows do
+not all run one way: **24 have tsgo reporting the leaf, and 4 have tsgo KEEPING a head we
+drop.** It is REFUSED this round on a measured blocker rather than deferred: that message is
+emitted at **~30 independent sites** in `Checker.kt` with no relation-error funnel to put
+the rule in, and its reach is **73 of the 2,955 active `.errors.txt` subtests**. All 28
+reasons are rewritten in place and greppable as `F6a`, so the next attempt starts from the
+mechanism rather than the label.
+
+**LANDED, four sub-families, 25 rows.** **(a) F8 unused-local ANCHORS, 10 of 10** — and the
+handover said seven. Three tsc-6 special cases TypeScript 7 simply dropped: a one-binding
+import clause squiggling the whole statement, a one-element binding pattern squiggling the
+pattern (in BOTH emitters), and TS6199 taking the statement's `;`. **The remaining 15 F8
+rows are NOT this emitter** — about 11 are unrelated per-diagnostic anchors (TS5053 ×2,
+TS1356, TS2447, TS2880 ×2, TS1092, TS1517, …), so F8 is itself two families. **(b) F6c,
+TS2497, 7 of 8**: the code sits in tsgo's message table and is **referenced by no tsgo code
+and present in none of its baselines**, so six emission sites came out with every companion
+row (TS2616 / 2595 / 2597 / 2617 / 7023) intact. **(c) F0 TS1127 spans one character, 5 of
+6** — 0 active baselines expect a zero-width squiggle and 9 expect at least one. **(d) F8
+TS8017 spans the declaration, 3 of 3.**
+
+**ABLATION: 14 arms, 13 discriminate, `@Test` identical at 3,971 in every one.** a1 **15**,
+a2 3, a3 4, a4 4, **a5 0 — UNDISCRIMINATED and recorded as such**, a6 3, a7 4, a8 2, a9 4,
+a10 4, a11 5, a12 2 (corpus baselines only, no pin covers that walker — said rather than
+claimed), a13 2, a14 2.
+
+**THE GRID IS A GATE FOR EXACTLY ONE OF THE FOUR.** Real gate for TS2497: every profile
+imports across files, so a deletion reaching past `export =` interop would print
+`removed=N`. Control for the other three — no profile sets `noUnusedLocals`, none holds an
+invalid character, and none is a `.js` file with `checkJs`.
+
+**FIVE REFUTED PREDICTIONS, TWO OF THEM THIS ROUND'S OWN MEASUREMENTS.** The design's F6
+direction; the handover's "seven F8 rows" (ten); "TS1127 closes six" (five — and the sixth
+UNCOVERED a baseline-formatter codepoint-versus-UTF-16 column count that was invisible while
+the squiggle had zero width, i.e. fixing one defect exposed another beneath it); "TS2497
+costs one kept-tsc baseline" (zero — tsgo ran that case, and (0b) step 1 had already deleted
+the comparison). **And two of this round's own censuses were taken off a STALE
+`build/generated/typescript-tests` tree at the REPO ROOT dated 2026-08-07** — 3,145 "active"
+subtests against the true 2,955, and an F6a reach of 166 against the true 73. The
+conclusions survived; the numbers did not. That same stale tree misled the orchestrator
+earlier in this session, so it is now a CLAUDE.md entry.
+
+**NEXT**: (0b-4). By red count the field is now F6a 28 (REFUSED above — needs a
+relation-error funnel first, which is its own unblocker), F6z 33 singletons (15 of them
+JS/checkJs/JSDoc, so a `checkJs` sub-round may be the cheapest slice), JS emit 33, F3
+last-overload 25, F6d 10, F1 11, F2 9, F8's unrelated-anchor residue ~11.
 ### Round (P18.87) — (LEGACY.0b) step 2: the "free wins", and F9 was a first-differing-LINE label rather than a family (2026-09-13)
 
 **Suite 19,082 → 19,100 / 0 / 267** — skipped 310 → 267 and `tsgoPendingBaselines`
@@ -813,99 +885,6 @@ its declared return) and `Object.prototype.hasOwnProperty.call` (12 sites). Queu
 lib's `CallableFunction` + inference through the `this`-typed signature), `bind` after (the
 two lib conditionals). Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
 
-### Round (P18.78) — (CHK.133)(a)+(c): `Signature.thisType` and the call-site TS2684 — "a pure model change" moved five rows before any consumer existed, and (CHK.97) closes (2026-09-12)
-
-**Suite 18,752 → 18,781 / 0 / 3** (+29 pins, `SignatureThisParameterTest`: 19 diagnostic
-pins, 5 negative controls, 3 `residue -`, 7 MODEL pins by direct `Checker` construction).
-Grid 8×`added=0 removed=0`; marked 18 → 18, cronstrue 1 → 1; `cost_gate.py` exit 0, not
-rebaselined (`typeNode.bypassed` +718 = +0.49%, `typeNode.cacheable` +15, `mapped.keyed` +26,
-`mapped.hits` +20, `globals.lookups` +1 against the pristine before-binary via `--from-log`,
-everything else digit-identical — the `declaredThisType` resolutions, bounded by the census
-below); `huge_methods.py --fail-over 0` exit 0 (845 classes); warning-clean. **(CHK.97) IS
-CHECKED OFF**: D1 rejected on a measurement, D2/D2b/D3/D4/D5 closed in (P18.71)-(P18.77), and
-D6 — the union intersection of `this` types that produces `unionTypeCallSignatures5/6`'s rows —
-closed here (its fixture 0/0/5 → 5/0/0, both baselines byte-identical to pristine).
-**(CHK.133) stays OPEN** on (b), the relation's `this` leg, and the `.call/.apply/.bind`
-consumer.
-
-**WHY THIS ITEM, SAID OUT LOUD.** (CHK.133) was promoted to the top by (P18.77) as (CHK.97)
-D6's unblocker; (INV.0) step 10b-ii, the WORK ORDER's successor, is itself blocked on two
-named families, so the promote-unblocker rule applies at both ends.
-
-**"(a) IS A PURE MODEL CHANGE" WAS REFUTED BEFORE ANY CONSUMER WAS WRITTEN.** Carrying the
-`this:` pseudo-parameter on `Signature` (`thisType`, built by `declaredThisType`, threaded
-through every one of the **28** `Signature(` constructions — function declaration, method
-arm, the property-access member rebuild with the receiver's mapper, object-literal method,
-function expression, `buildMethodType`, implementation signature, `FunctionType`/
-`ConstructorType` nodes, type-literal members, the decorator builder, `MemberResolver`'s
-interface/class signatures, and all four instantiators in `TypeInstantiator`) moved five
-rows toward pristine on its own: the `this`-aware parameter ZIP closes a pre-existing false
-TS2345 on every call of an interface or class method declared with a `this` parameter (two
-ours-only rows each on two fixtures → 0), and `compareSignaturesIdentical`'s new `this` arm
-makes `unionTypeCallSignatures6:38`'s TS2349 fire and removes `…5`'s ours-only `'0' … 'never'`
-TS2345. Constructor signatures deliberately carry none (TS2681 territory).
-
-**(c) IS CONTAINED AND LANDED WITH (a)**: one ~50-line `checkThisArgumentOfCall` on the
-single-signature branch of `checkSingleCallExpressionTypesCore` — tsc's
-`getSignatureApplicabilityError` `this` leg with `getThisArgumentOfCall`/`getThisArgumentType`
-— emitting TS2684 *The 'this' context of type 'X' is not assignable to method's 'this' of type
-'Y'.* with a one-level elaboration matching pristine's chains. Reach census: **387-533
-declared `this` parameters per profile and ZERO call sites reaching the check** on all 8
-profiles, marked (149 / 0), cronstrue (0 / 0) and the 2,400-file project (4 / 0), positive
-control live on the fixtures (reached 1-7 each). So the grid is a CONTROL for (c) and a GATE
-for (a) — a `this`-declaring method call is on every profile, and the zip change is what
-those 46/94 rows exercise.
-
-**TWO THINGS THE MATRIX FOUND THAT THE SIZING DID NOT PREDICT.** (1) Once `this` is
-instantiated, `extractThisParam` was still rendering the DECLARATION's text — `ZzzBox<T>`
-where pristine prints `ZzzBox<number>` — so it now renders `sig.thisType`, gated by all 18
-ACTIVE `.errors.txt` baselines carrying a `this:` rendering (run by name, green). (2)
-`getIntersectionType`'s anonymous-object exemption ((CHK.106)(b)) meets ALIAS-declared `this`
-types and printed `B & B` / `A & A & B` / `A & B & A & B & C`; the `this` combiners
-(`combineSignatureThisTypes`/`intersectThisTypes`) flatten and dedupe by IDENTITY, and since
-our `identityRelation` accepts `A & B & C` ≡ `A & B`, the `this` arm compares composites by
-constituent identity on the exact attempt.
-
-**BEFORE → AFTER (`agree/ours-only/missing`; the REF-SPLIT rows were hand-adjudicated against
-pristine, chains included, and are byte-identical on every one)**: bare call 0/0/1 → 1/0/0;
-interface method 0/2/0 → 0/0/0; union-combined 0/0/1 → 1/0/0; union with an ours-only
-0/1/1 → 1/0/0; `unionTypeCallSignatures5/6` 0/0/5 → 5/0/0; class method 0/2/0 → 0/0/0;
-generic receiver 0/0/1 → 1/0/0; `this: void`, an arrow, a method signature, the display
-fixture (`ZzzBox<number>`) all match pristine; the `.call`/optional-chain/type-parameter
-fixtures unchanged (residues).
-
-**ABLATION over 29 pins per arm (nine arms, per-arm `cmp` snapshot, rebuilt after every
-restore)**: a1 the builders drop `this` — **19 RED**; a2 `instantiateSignature` leaves a raw
-`this` — 1; a2b `substituteOuterTypeArgsInSignature` raw — 1; a3 the union arm takes the
-FIRST member's `this` instead of the intersection — 2; a4 the emission removed — **15**; a5
-the relation direction reversed — 8; a6 no `this` arm in `compareSignaturesIdentical` — 1;
-a7 the zip reverted — 2; a8 the identity dedupe dropped — 1; a9 the display keeps the
-declaration text — 1. Final rebuild md5 = the gated build, `javap -c -p` minus line numbers
-identical after the census removal. At-risk sweep: the named patterns + 27 source-grep classes
-+ 18 `this:` baselines = **1,222 tests / 91 classes / 0 RED**, every intended class present.
-
-**RESIDUES, MEASURED AND NOT FIXED**: `.call/.apply/.bind` (references TS2353/TS2769 through
-lib `CallableFunction`; `zzzF.call` itself types `any` here — a separate consumer, pinned
-`residue -`); an optional-chain receiver `o?.f()` (references TS2684; `o?.f` types `any`, so
-the check's nullish strip is unreachable, pinned `residue -`); a `this` type mentioning a
-TYPE PARAMETER (references name the instantiated `ZzzBox<2>`; skipped, no inference at the
-check, pinned `residue -`); overload SETS are not `this`-checked; the elaboration is one
-level deep; (b) the relation's `this` leg is untouched; `buildMethodType` resolves `this`
-without a method-TP scope (the property-access path every call uses is correct); TS7006 for an
-un-annotated `this` and TS2681 for a constructor `this` are pre-existing.
-
-**PREDICTIONS REFUTED**: (a) as a pure model change; the grid as a real gate for (c); "the
-union intersection falls out of the field" (it needed the identity dedupe and the composite
-identity compare); the `.call` and optional-chain shapes reaching the check (both die at an
-`any` callee); and the agent's own first XML reader read RED=0 over 5 failures (`Element`
-truthiness) — fixed before any arm was recorded.
-
-**NEXT**: (CHK.133)(b), the relation's `this` leg (tsc's `compareSignaturesRelated`: a source
-`this` other than `void` must relate to the target's — bivariant unless `strictFunctionTypes`
-and a non-method — with TS2684 *The 'this' types of each signature are incompatible.* as the
-chain line), then the `.call/.apply/.bind` consumer. Per the WORK ORDER, (INV.0) step 10b-ii's
-own unblockers follow.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1236,7 +1215,17 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-2 LANDED 2026-09-13 ((P18.85)/(P18.86)/(P18.87) notes) — pending 242,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-3 LANDED 2026-09-13 ((P18.85)-(P18.88) notes) — pending 217, skipped 242,
+  suite 19,130/0. **F6 IS DECOMPOSED (the (P18.88) table): F6a head-suppression 28, F6z singletons 33 (15 JS/checkJs/
+  JSDoc), F6d TS2303 import-alias cycle 10, F6c TS2497 8 (7 landed), F6b unused-local grouping 3, F6g TS2696 2,
+  F6e TS5101→TS5102 2, F6f TS2304→TS2552 2** — all reasons greppable by mechanism. **REMAINING (0b-4), by red
+  count**: F6z 33 (a `checkJs` slice may be cheapest), JS emit 33, F6a 28 (**REFUSED (P18.88) on a measured
+  blocker — the missing-property message has ~30 independent emission sites and no relation-error funnel, reach 73
+  of 2,955 active baselines; the FUNNEL is its unblocker and should be promoted before re-attempting**), F3
+  last-overload 25, F1 11, F8 unrelated-anchor residue ~11 (TS5053 ×2, TS1356, TS2447, TS2880 ×2, TS1092, TS1517 —
+  a DIFFERENT emitter from the anchors (P18.88) landed), F6d 10, F2 9, F0 7. The 21 TS-1 rows stay LEDGERED.
+  **BLOCKED-PENDING-USER before (0b-3) — still open**: the fourth "harness artifact ⇒ fall back to tsc" arm
+  ((P18.86)). PREVIOUS HEAD: (0a) + (0b) STEPS 1-2 LANDED 2026-09-13 ((P18.85)/(P18.86)/(P18.87) notes) — pending 242,
   skipped 267, suite 19,100/0. **REMAINING: (0b-3), the ranked family rounds, ordered from the RED SET**: F6
   code-differs 88, F8 span/width ~25 (SEVEN of which share F4's anchor mechanism — tsgo's `reportUnusedLocal`
   anchors on `node.Name()`, tsc on the statement — so one step in that emitter closes them together), JS 33,

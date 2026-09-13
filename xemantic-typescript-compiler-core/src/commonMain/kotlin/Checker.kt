@@ -8978,7 +8978,8 @@ class Checker(
         pass("checkNamedImportFromExportEqualsInDts") { checkNamedImportFromExportEqualsInDts() }
         pass("checkNamedImportFromAmbientExportEqualsValue") { checkNamedImportFromAmbientExportEqualsValue() }
         // conflictingDeclarationsImportFromNamespace1/2 — `import * as N from '<pkg>'` +
-        // self-calling `export const N = () => N()` → TS2497 + TS7023.
+        // self-calling `export const N = () => N()` → TS7023 ((LEGACY.0b step 3) removed
+        // the TS2497 that used to accompany it).
         pass("checkConflictingNamespaceImportSelfConst") { checkConflictingNamespaceImportSelfConst() }
         // 15. Break/continue jump targets (TS1104/TS1105/TS1107/TS1115/TS1116
         // + TS1344) migrated to the check spine (INV.4(b) batch 11) — see
@@ -16837,11 +16838,14 @@ class Checker(
             val totalDeclCount = varStmt.declarationList.declarations.size
             if (decls.size == totalDeclCount && totalDeclCount > 1) {
                 ts6199Stmts.add(varStmt)
-                // Emit TS6199 for the entire statement
-                // Span covers from `var` keyword to the end of the statement line (including `;`)
+                // (LEGACY.0b step 3) TypeScript 7 anchors TS6199 on the VariableDeclaration
+                // LIST (tsgo's `reportUnusedVariables` builds the diagnostic for the list node),
+                // so the trailing `;` of the enclosing statement is OUTSIDE the squiggle where
+                // tsc 6 included it.
                 val stmtStart = varStmt.pos
                 val lineEnd = source.indexOf('\n', stmtStart).let { if (it < 0) source.length else it }
-                val spanLength = source.substring(stmtStart, lineEnd).trimEnd().length
+                val spanLength = source.substring(stmtStart, lineEnd).trimEnd()
+                    .removeSuffix(";").length
                 val (line, character) = getLineAndCharacterOfPosition(source, stmtStart)
                 diagnostics.add(Diagnostic(
                     message = "All variables are unused.",
@@ -16933,37 +16937,20 @@ class Checker(
             if (decl.name.startsWith("_") && decl.parentBindingPattern != null) continue
 
             val nameNode = decl.nameNode
-            // For single-element destructuring, use the pattern span instead of the name
-            val usePatternSpan = decl.parentBindingPattern is ObjectBindingPattern && decl.bindingElementCount == 1
+            // (LEGACY.0b step 3) TypeScript 7 anchors an ungrouped destructuring element's
+            // TS6133 on the element NAME whatever the pattern's size: tsgo's
+            // `reportUnusedBindingElements` groups into TS6198 only for MORE THAN ONE element
+            // and otherwise falls through to `reportUnusedVariableDeclarations`, which anchors
+            // on `declaration.Name()`. tsc 6 rerouted a one-element pattern in a variable
+            // declaration through `unusedVariables`, which anchored on the PATTERN; that
+            // special case is gone.
             // For import specifiers with aliases (e.g. `test2 as t2`), point to the local name `t2`
             val start = when {
-                usePatternSpan -> decl.parentBindingPattern.pos
                 nameNode is ImportSpecifier && nameNode.propertyName != null -> nameNode.name.pos
                 else -> nameNode.pos
             }
-            // Compute squiggle length: for imports using whole-statement node,
-            // measure the line text; otherwise use identifier text length
             val length = when {
-                usePatternSpan -> computeBindingPatternSpan(source, start, decl.parentBindingPattern)
                 decl.spanLength > 0 -> decl.spanLength
-                nameNode is ImportDeclaration -> {
-                    // Squiggle covers the import statement up to semicolon (excluding comments)
-                    val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
-                    var endPos = start
-                    var idx = start
-                    while (idx < lineEnd) {
-                        val ch = source[idx]
-                        if (ch == ';') { endPos = idx + 1; break }
-                        if (ch == '/' && idx + 1 < lineEnd && (source[idx + 1] == '/' || source[idx + 1] == '*')) {
-                            while (endPos > start && source[endPos - 1].let { it == ' ' || it == '\t' }) endPos--
-                            break
-                        }
-                        endPos = idx + 1
-                        idx++
-                    }
-                    if (endPos <= start) endPos = start + 1
-                    endPos - start
-                }
                 else -> decl.name.length
             }
             val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -17100,25 +17087,19 @@ class Checker(
                 if (stmt.importClause?.isTypeOnly == true) return
                 val clause = stmt.importClause ?: return
                 val bindings = clause.namedBindings
-                // Count total non-type-only bindings to determine nameNode strategy:
-                // - 1 binding: use whole import statement for TS6133 (whole-statement squiggle)
-                // - 2+ bindings: use individual binding names for TS6133 (per-binding squiggle)
-                //   (when all unused, TS6192 will replace individual TS6133s)
-                var totalBindingCount = 0
-                if (clause.name != null) totalBindingCount++
-                when (bindings) {
-                    is NamedImports -> totalBindingCount += bindings.elements.count { !it.isTypeOnly }
-                    is NamespaceImport -> totalBindingCount++
-                    else -> {}
-                }
-                val useStatementAsNameNode = totalBindingCount <= 1
+                // (LEGACY.0b step 3) TypeScript 7 anchors an unused import's TS6133 on the
+                // imported NAME at every binding count: tsgo's `reportUnusedImports` groups
+                // into TS6192 only when the clause declares MORE THAN ONE binding and all of
+                // them are unused, and otherwise calls `reportUnusedLocal`, which anchors on
+                // `node.Name()`. tsc 6 additionally anchored a SINGLE unused binding on the
+                // whole import statement; that special case is gone.
                 when (bindings) {
                     is NamedImports -> {
                         for (spec in bindings.elements) {
                             if (spec.isTypeOnly) continue
                             scope.declarations.add(UnusedDecl(
                                 name = spec.name.text,
-                                nameNode = if (useStatementAsNameNode) stmt else spec,
+                                nameNode = spec,
                                 declNode = stmt,
                                 isExported = false,
                                 isParameter = false,
@@ -17131,7 +17112,7 @@ class Checker(
                     is NamespaceImport -> {
                         scope.declarations.add(UnusedDecl(
                             name = bindings.name.text,
-                            nameNode = if (useStatementAsNameNode) stmt else bindings.name,
+                            nameNode = bindings.name,
                             declNode = stmt,
                             isExported = false,
                             isParameter = false,
@@ -17146,7 +17127,7 @@ class Checker(
                 if (clause.name != null) {
                     scope.declarations.add(UnusedDecl(
                         name = clause.name.text,
-                        nameNode = if (useStatementAsNameNode) stmt else clause.name,
+                        nameNode = clause.name,
                         declNode = stmt,
                         isExported = false,
                         isParameter = false,
@@ -19086,11 +19067,11 @@ class Checker(
                 // Underscore-prefixed names don't get individual TS6133 (only TS6198 above)
                 if (decl.name.startsWith("_")) continue
                 val nameNode = decl.nameNode
-                // Single-element destructuring parameter: use pattern span for both { } and [ ]
-                val usePatternSpan = decl.parentBindingPattern != null && decl.bindingElementCount == 1
-                val start = if (usePatternSpan) decl.parentBindingPattern.pos else nameNode.pos
-                val length = if (usePatternSpan) computeBindingPatternSpan(source, start, decl.parentBindingPattern)
-                    else if (decl.spanLength > 0) decl.spanLength else decl.name.length
+                // (LEGACY.0b step 3) TypeScript 7 anchors on the element NAME for a
+                // one-element destructuring parameter too — see the sibling comment in
+                // `checkUnusedInStatements`.
+                val start = nameNode.pos
+                val length = if (decl.spanLength > 0) decl.spanLength else decl.name.length
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 diagnostics.add(Diagnostic(
                     message = "'${decl.name}' is declared but its value is never read.",
@@ -51698,11 +51679,11 @@ class Checker(
                     }
                 }
 
-                // TS2617/TS2596/TS2598 + TS2497: `import { X } from "./a"` where "./a" uses
+                // TS2617/TS2596/TS2598: `import { X } from "./a"` where "./a" uses
                 // `export =` and esModuleInterop is explicitly false. TypeScript cannot synthesize
                 // named bindings without esModuleInterop, so the named import is invalid.
-                // The specific code + TS2497 message depend on the importer's file kind and module
-                // output target.
+                // The specific code depends on the importer's file kind and module output target.
+                // (LEGACY.0b step 3) the TS2497 that used to accompany it is gone.
                 val namedBindingsEM = importClause.namedBindings
                 if (hasExportEquals && options.esModuleInteropExplicitlyFalse &&
                     namedBindingsEM is NamedImports) {
@@ -51736,34 +51717,15 @@ class Checker(
                             length = nameLength,
                         ))
                     }
-                    val specStart = specifier.pos
-                    val specLength = moduleName.length + 2
-                    val (line, character) = getLineAndCharacterOfPosition(source, specStart)
-                    val ts2497Message = if (isEsmTarget) {
-                        "This module can only be referenced with ECMAScript imports/exports by turning on the 'allowSyntheticDefaultImports' flag and referencing its default export."
-                    } else {
-                        "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export."
-                    }
-                    diagnostics.add(Diagnostic(
-                        message = ts2497Message,
-                        category = DiagnosticCategory.Error,
-                        code = 2497,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = specStart,
-                        length = specLength,
-                    ))
                 }
 
-                // TS2595 + TS2497: `import { X } from "./a"` where "./a" uses `export =`
+                // TS2595: `import { X } from "./a"` where "./a" uses `export =`
                 // in an ESM output target AND esModuleInterop is NOT explicitly false
-                // (default or true). TypeScript emits TS2595 per named import and TS2497
-                // at the module specifier with an "allowSyntheticDefaultImports" wording.
+                // (default or true). TypeScript emits TS2595 per named import.
+                // (LEGACY.0b step 3) the accompanying TS2497 is gone.
                 val isEsmOutputForEquals = isESModuleFormat(options, fileName)
                 if (isEsmOutputForEquals && hasExportEquals && !options.esModuleInteropExplicitlyFalse &&
                     namedBindingsEM is NamedImports) {
-                    var anyNamedImportEmitted = false
                     for (importSpecifier in namedBindingsEM.elements) {
                         if (importSpecifier.isTypeOnly) continue
                         val nameNode = importSpecifier.propertyName ?: importSpecifier.name
@@ -51782,22 +51744,6 @@ class Checker(
                             start = nameStart,
                             length = nameLength,
                         ))
-                        anyNamedImportEmitted = true
-                    }
-                    if (anyNamedImportEmitted) {
-                        val specStart = specifier.pos
-                        val specLength = moduleName.length + 2
-                        val (line, character) = getLineAndCharacterOfPosition(source, specStart)
-                        diagnostics.add(Diagnostic(
-                            message = "This module can only be referenced with ECMAScript imports/exports by turning on the 'allowSyntheticDefaultImports' flag and referencing its default export.",
-                            category = DiagnosticCategory.Error,
-                            code = 2497,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = specStart,
-                            length = specLength,
-                        ))
                     }
                 }
 
@@ -51806,8 +51752,8 @@ class Checker(
                 // explicitly false), and output is CJS (not ESM). A named import cannot
                 // be synthesized from an export=class/function module; the valid forms
                 // are `import X = require(...)` or a default import. Emits TS2616 (TS
-                // importer) / TS2597 (JS importer) per named specifier + one TS2497 at
-                // the specifier. Disjoint from the isPlainValue TS2616 branch (plain
+                // importer) / TS2597 (JS importer) per named specifier ((LEGACY.0b step 3)
+                // the accompanying TS2497 is gone). Disjoint from the isPlainValue TS2616 branch (plain
                 // variable), the explicitly-false TS2617/2596/2598 branch, the TS2305
                 // namespace-member branch (getExportEqualsMemberNames non-null), and the
                 // ESM-output TS2595 branch (isEsmOutput) — all gated mutually exclusive.
@@ -51822,7 +51768,6 @@ class Checker(
                     if (targetSymR85 != null && targetSymR85.flags.hasAny(SymbolFlags.Class or SymbolFlags.Function)) {
                         val importerIsJsR85 = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
                             fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
-                        var anyEmittedR85 = false
                         for (importSpecifier in namedBindingsEM.elements) {
                             if (importSpecifier.isTypeOnly) continue
                             val nameNode = importSpecifier.propertyName ?: importSpecifier.name
@@ -51844,98 +51789,16 @@ class Checker(
                                 start = nameStart,
                                 length = importedName.length,
                             ))
-                            anyEmittedR85 = true
-                        }
-                        if (anyEmittedR85) {
-                            val specStart = specifier.pos
-                            val specLength = moduleName.length + 2
-                            val (line, character) = getLineAndCharacterOfPosition(source, specStart)
-                            diagnostics.add(Diagnostic(
-                                message = "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.",
-                                category = DiagnosticCategory.Error,
-                                code = 2497,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = specStart,
-                                length = specLength,
-                            ))
                         }
                     }
                 }
 
-                // TS2497: `import * as X from` against an `export =` module in an ESM
-                // output format (ES2015+, ESNext, Preserve) requires
-                // allowSyntheticDefaultImports (already guarded at the top of this
-                // function). Only fires when the namespace alias is actually referenced
-                // as a value — plain `import * as X from "./a"` without any use of X
-                // compiles away cleanly.
-                val isEsmOutput = isESModuleFormat(options, fileName)
-                val nsBinding = importClause.namedBindings
-                if (isEsmOutput && hasExportEquals && nsBinding is NamespaceImport) {
-                    val aliasName = nsBinding.name.text
-                    if (aliasName.isNotEmpty() && isIdentifierReferencedAsValue(aliasName, result.sourceFile.statements, stmt)) {
-                        val specStart = specifier.pos
-                        val specLength = moduleName.length + 2 // +2 for quotes
-                        val (line, character) = getLineAndCharacterOfPosition(source, specStart)
-                        diagnostics.add(Diagnostic(
-                            message = "This module can only be referenced with ECMAScript imports/exports by turning on the 'allowSyntheticDefaultImports' flag and referencing its default export.",
-                            category = DiagnosticCategory.Error,
-                            code = 2497,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = specStart,
-                            length = specLength,
-                        ))
-                    }
-                } else if (!isEsmOutput && hasExportEquals && nsBinding is NamespaceImport) {
-                    // B98.r18: CJS output — `import * as X from "./a"` where a uses
-                    // `export = <class|function>` and X is referenced as a value → TS2497 with
-                    // the 'esModuleInterop' flag message (vs the ESM 'allowSyntheticDefaultImports'
-                    // form above). A namespace object can't BE the exported class/function value;
-                    // you must default-import it. Fires regardless of esModuleInterop (matches TS:
-                    // the JS still emits via __importStar but the value-position use is invalid).
-                    // GATED to class/function export= targets — a namespace/var `export =` is a
-                    // legal namespace-import target, so restricting keeps the FP surface zero.
-                    val aliasName = nsBinding.name.text
-                    val exportEqStmt = targetFile.statements
-                        .firstOrNull { it is ExportAssignment && it.isExportEquals } as? ExportAssignment
-                    val exportEqName = (exportEqStmt?.expression as? Identifier)?.text
-                    val targetIsClassOrFn = exportEqName != null && targetFile.statements.any {
-                        (it is ClassDeclaration && it.name?.text == exportEqName) ||
-                            (it is FunctionDeclaration && it.name?.text == exportEqName)
-                    }
-                    // esModuleInteropPrettyErrorRelatedInformation: when the export= target ALSO
-                    // merges with a namespace or variable (tsc: it carries SymbolFlags.Module|Variable),
-                    // TS2497 is SUPPRESSED — the namespace-style import yields a synthetic-default value
-                    // `{ default: <value> }`, not the bare class/fn, so the value-position use isn't a
-                    // hard TS2497. The dedicated walker `checkNamespaceImportSyntheticDefaultCall` then
-                    // owns the resulting TS2345/TS7038. (es6ImportEqualsExportModuleCommonJsError's pure
-                    // `class a` has no merge → still fires.)
-                    val targetHasNsOrVarMerge = exportEqName != null && targetFile.statements.any {
-                        (it is ModuleDeclaration && (it.name as? Identifier)?.text == exportEqName) ||
-                            (it is VariableStatement && it.declarationList.declarations.any { d ->
-                                (d.name as? Identifier)?.text == exportEqName
-                            })
-                    }
-                    if (targetIsClassOrFn && !targetHasNsOrVarMerge && aliasName.isNotEmpty() &&
-                        isIdentifierReferencedAsValue(aliasName, result.sourceFile.statements, stmt)) {
-                        val specStart = specifier.pos
-                        val specLength = moduleName.length + 2
-                        val (line, character) = getLineAndCharacterOfPosition(source, specStart)
-                        diagnostics.add(Diagnostic(
-                            message = "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.",
-                            category = DiagnosticCategory.Error,
-                            code = 2497,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = specStart,
-                            length = specLength,
-                        ))
-                    }
-                }
+                // (LEGACY.0b step 3) TypeScript 7 does not have TS2497 at all: the two
+                // options its two wordings name (`esModuleInterop`,
+                // `allowSyntheticDefaultImports`) may no longer be set to `false`, so the
+                // rule is unreachable — `This_module_can_only_be_referenced_with_ECMAScript_
+                // imports...` is in tsgo's message table and referenced by NO tsgo code.
+                // A namespace import of an `export =` module is simply accepted.
             }
         }
     }
@@ -51948,7 +51811,7 @@ class Checker(
      *  related TS7038 anchored at the import. We don't model the synthetic-default type, so the
      *  general arg-check path emits nothing → purely additive. Corpus-unique (TS7038 appears in
      *  only this baseline; the export=(fn+namespace) + namespace-import + bare-Identifier-call-arg
-     *  shape is the firewall). Pairs with the TS2497 suppression above (the merge case). */
+     *  shape is the firewall). */
     private fun checkNamespaceImportSyntheticDefaultCall() {
         if (!options.esModuleInterop || options.esModuleInteropExplicitlyFalse) return
         if (binderResults.size <= 1 && !isMultiFileSource) return
@@ -52018,60 +51881,6 @@ class Checker(
                 }
             }
         }
-    }
-
-    /**
-     * Returns true if [name] appears as a value-position Identifier anywhere in the
-     * file's [statements], excluding [skipStmt] (the import declaration that introduces
-     * the alias). Used by TS2497 to avoid emitting the diagnostic for unused namespace
-     * imports.
-     */
-    private fun isIdentifierReferencedAsValue(
-        name: String,
-        statements: List<Statement>,
-        skipStmt: Statement,
-    ): Boolean {
-        fun exprContains(e: Expression?): Boolean {
-            if (e == null) return false
-            return when (e) {
-                is Identifier -> e.text == name
-                is PropertyAccessExpression -> exprContains(e.expression)
-                is ElementAccessExpression -> exprContains(e.expression) || exprContains(e.argumentExpression)
-                is CallExpression -> exprContains(e.expression) || e.arguments.any { exprContains(it) }
-                is NewExpression -> exprContains(e.expression) || (e.arguments?.any { exprContains(it) } == true)
-                is BinaryExpression -> exprContains(e.left) || exprContains(e.right)
-                is PrefixUnaryExpression -> exprContains(e.operand)
-                is PostfixUnaryExpression -> exprContains(e.operand)
-                is ParenthesizedExpression -> exprContains(e.expression)
-                is ConditionalExpression -> exprContains(e.condition) || exprContains(e.whenTrue) || exprContains(e.whenFalse)
-                is TypeOfExpression -> exprContains(e.expression)
-                is SpreadElement -> exprContains(e.expression)
-                is ArrayLiteralExpression -> e.elements.any { exprContains(it) }
-                is ObjectLiteralExpression -> e.properties.any { p ->
-                    when (p) {
-                        is PropertyAssignment -> exprContains(p.initializer)
-                        is ShorthandPropertyAssignment -> p.name.text == name
-                        is SpreadAssignment -> exprContains(p.expression)
-                        else -> false
-                    }
-                }
-                else -> false
-            }
-        }
-        fun stmtContains(s: Statement): Boolean {
-            if (s === skipStmt) return false
-            return when (s) {
-                is ExpressionStatement -> exprContains(s.expression)
-                is VariableStatement -> s.declarationList.declarations.any { exprContains(it.initializer) }
-                is ReturnStatement -> exprContains(s.expression)
-                is IfStatement -> exprContains(s.expression) || stmtContains(s.thenStatement) ||
-                    (s.elseStatement?.let { stmtContains(it) } == true)
-                is Block -> s.statements.any { stmtContains(it) }
-                is ExportAssignment -> exprContains(s.expression)
-                else -> false
-            }
-        }
-        return statements.any { stmtContains(it) }
     }
 
     // -----------------------------------------------------------------------
@@ -52210,12 +52019,11 @@ class Checker(
     }
 
     /** conflictingDeclarationsImportFromNamespace1/2: `import * as N from '<bare-pkg>'` plus a
-     *  same-name self-calling `export const N = () => N()` → TS2497 (the bare-pkg `export =`
-     *  value can't be a namespace import) at the specifier + TS7023 (circular implicit return)
-     *  at the const name. The existing checkDefaultImports TS2497 branch requires the export=
-     *  target to be a locally-DECLARED class/function (here it's a re-exported imported alias,
-     *  so it doesn't fire); the self-referential-return walker doesn't fire under the import
-     *  name-conflict. Both are additive. Corpus-unique gate: `import * as N` + a same-name
+     *  same-name self-calling `export const N = () => N()` → TS7023 (circular implicit return)
+     *  at the const name; the self-referential-return walker doesn't fire under the import
+     *  name-conflict, so this is additive. (LEGACY.0b step 3 removed the TS2497 this walker
+     *  used to emit at the specifier — TypeScript 7 has no TS2497.)
+     *  Corpus-unique gate: `import * as N` + a same-name
      *  `const N = () => N(...)` arrow (the only other import-star+same-name-const tests use a
      *  for-loop var / a `||` initializer, neither a self-calling arrow). */
     private fun checkConflictingNamespaceImportSelfConst() {
@@ -52240,15 +52048,8 @@ class Checker(
                     val arrow = decl.initializer as? ArrowFunction ?: continue
                     val call = arrow.body as? CallExpression ?: continue
                     if ((call.expression as? Identifier)?.text != cname) continue
-                    var specStart = spec.pos
-                    while (specStart < source.length && source[specStart].isWhitespace()) specStart++
-                    val specLen = spec.text.length + 2
-                    val (l1, c1) = getLineAndCharacterOfPosition(source, specStart)
-                    diagnostics.add(Diagnostic(
-                        message = "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.",
-                        category = DiagnosticCategory.Error, code = 2497,
-                        fileName = fileName, line = l1, character = c1, start = specStart, length = specLen,
-                    ))
+                    // (LEGACY.0b step 3) the TS2497 companion of this row is gone —
+                    // TypeScript 7 does not emit that code anywhere.
                     var nameStart = decl.name.pos
                     while (nameStart < source.length && source[nameStart].isWhitespace()) nameStart++
                     val (l2, c2) = getLineAndCharacterOfPosition(source, nameStart)
@@ -193357,9 +193158,8 @@ interface DataView {
             is FunctionDeclaration -> {
                 // TS8017: Signature declarations without body — takes priority over other TS8xxx
                 if (stmt.body == null) {
-                    val nameNode = stmt.name
-                    if (nameNode != null) {
-                        emitTs8xxx(nameNode, "Signature declarations can only be used in TypeScript files.", 8017, source, fileName)
+                    if (stmt.name != null) {
+                        emitTs8017(stmt.pos, stmt.end, source, fileName)
                     }
                 } else {
                     // Check type parameters (TS8004) — skip JSDoc-derived ones (B5.3)
@@ -193523,7 +193323,7 @@ interface DataView {
             is MethodDeclaration -> {
                 // TS8017: Signature declarations without body — takes priority over other checks
                 if (member.body == null) {
-                    emitTs8xxx(member.name, "Signature declarations can only be used in TypeScript files.", 8017, source, fileName)
+                    emitTs8017(memberPos, member.end, source, fileName)
                     return
                 }
                 // Check optional ? modifier (TS8009)
@@ -193548,20 +193348,9 @@ interface DataView {
             is Constructor -> {
                 // TS8017: Constructor signature without body
                 if (member.body == null) {
-                    // Span covers "constructor" keyword
                     val ctorIdx = srcIndexOf(source, "constructor", memberPos)
                     if (ctorIdx >= 0 && ctorIdx < memberPos + 30) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, ctorIdx)
-                        diagnostics.add(Diagnostic(
-                            message = "Signature declarations can only be used in TypeScript files.",
-                            category = DiagnosticCategory.Error,
-                            code = 8017,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = ctorIdx,
-                            length = 11, // "constructor"
-                        ))
+                        emitTs8017(ctorIdx, member.end, source, fileName)
                     }
                     return
                 }
@@ -193721,6 +193510,41 @@ interface DataView {
     }
 
     /** Emit TS8009 for a modifier keyword found near the given pos. */
+    /**
+     * (LEGACY.0b step 3) The span of a bodiless SIGNATURE declaration in a JavaScript file,
+     * for TS8017. TypeScript 7 builds that diagnostic for the DECLARATION node
+     * (`NewDiagnosticForNode(node, …)`), so `function foo();` squiggles all fifteen characters
+     * including the `;`; tsc 6 squiggled the NAME alone.
+     *
+     * [Node.end] overshoots by the following token (its documented behaviour), so the span is
+     * the text from [start] to the FIRST `;` inside that window — a bodiless signature cannot
+     * legally carry a statement, so the first `;` in it terminates the declaration. With no
+     * `;` at all (a recovery shape) the window is trimmed instead.
+     */
+    private fun signatureDeclarationSpan(start: Int, nodeEnd: Int, source: String): Int {
+        val hardEnd = nodeEnd.coerceAtMost(source.length)
+        if (hardEnd <= start) return 1
+        val text = source.substring(start, hardEnd)
+        val semi = text.indexOf(';')
+        val length = if (semi >= 0) semi + 1 else text.trimEnd().length
+        return length.coerceAtLeast(1)
+    }
+
+    /** TS8017 at a bodiless signature declaration, spanning the declaration itself. */
+    private fun emitTs8017(start: Int, nodeEnd: Int, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Signature declarations can only be used in TypeScript files.",
+            category = DiagnosticCategory.Error,
+            code = 8017,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = signatureDeclarationSpan(start, nodeEnd, source),
+        ))
+    }
+
     private fun emitTs8xxxModifier(keyword: String, nearPos: Int, keywordLen: Int, source: String, fileName: String) {
         val idx = srcIndexOf(source, keyword, nearPos)
         if (idx < 0 || idx > nearPos + 30) return

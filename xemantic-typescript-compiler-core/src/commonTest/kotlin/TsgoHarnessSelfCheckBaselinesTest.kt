@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import com.xemantic.kotlin.test.sameAs
 import kotlinx.io.files.Path
 import kotlin.test.Test
 
@@ -155,12 +156,56 @@ class TsgoHarnessSelfCheckBaselinesTest {
             .errorsMatchBaseline(Path("$typeScriptBaselineDir/classExpressionWithDecorator1.errors.txt"))
     }
 
-    /** Reproduces the switched-off `constructorWithIncompleteTypeAnnotation.errors.txt` against tsc's own baseline. */
+    /**
+     * Reproduces the switched-off `constructorWithIncompleteTypeAnnotation.errors.txt` against
+     * tsc's own baseline, with ONE annotation: (LEGACY.0b) step 3 gave TS1127
+     * `Invalid character.` a one-character span, where tsc 6 reported four of its positions
+     * zero-width, so every blank squiggle line under a TS1127 in a tsc-6 baseline is now a
+     * single `~`. That is a deliberate TypeScript 7 divergence — tsgo's own baseline for this
+     * case carries the `~` — and it is pinned by `TsgoInvalidCharacterSpanTest`; the rest of
+     * the 20 diagnostics this mirror covers is still compared verbatim. Second instance of the
+     * shape (LEGACY.0b) step 2 met with `manyCompilerErrorsInTheTwoFiles`: a tsc-6 mirror
+     * cannot stay verbatim across a TypeScript 7 RENDERING change.
+     */
     @Test
     fun `constructorWithIncompleteTypeAnnotation_ts has expected errors matching constructorWithIncompleteTypeAnnotation_errors_txt`() {
         val source = Path("$typeScriptCasesDir/constructorWithIncompleteTypeAnnotation.ts").readText()
-        TypeScriptCompiler().compile(source, "constructorWithIncompleteTypeAnnotation.ts")
-            .errorsMatchBaseline(Path("$typeScriptBaselineDir/constructorWithIncompleteTypeAnnotation.errors.txt"))
+        val actual = TypeScriptCompiler()
+            .compile(source, "constructorWithIncompleteTypeAnnotation.ts")
+            .toErrorBaseline()
+        val expected =
+            Path("$typeScriptBaselineDir/constructorWithIncompleteTypeAnnotation.errors.txt").readText()
+        fun normalize(text: String) =
+            text.replace("\r\n", "\n").replace("\r", "\n").trimEnd().split("\n")
+        /**
+         * Drops the SQUIGGLE line sitting directly above a `!!! error TS1127`, on both sides.
+         * That one line is the whole annotation: tsc 6 rendered it blank (a zero-width span)
+         * and TypeScript 7 renders one `~`, and the baseline additionally trims the blank
+         * line's trailing spaces, so the two cannot be reconciled by padding. Every other
+         * line — all 20 diagnostics, their codes, messages and positions, and the rest of the
+         * annotated source — is still compared verbatim.
+         */
+        fun dropInvalidCharacterSquiggles(text: List<String>): Pair<List<String>, Int> {
+            val out = mutableListOf<String>()
+            var dropped = 0
+            for (i in text.indices) {
+                val next = if (i + 1 < text.size) text[i + 1] else ""
+                if (next.trimStart().startsWith("!!! error TS1127:") &&
+                    (text[i].isBlank() || text[i].trim() == "~")
+                ) {
+                    dropped++
+                    continue
+                }
+                out.add(text[i])
+            }
+            return out to dropped
+        }
+        val (expectedLines, expectedDropped) = dropInvalidCharacterSquiggles(normalize(expected))
+        val (actualLines, actualDropped) = dropInvalidCharacterSquiggles(normalize(actual ?: ""))
+        // The annotation is a claim about this baseline: exactly one TS1127, one line each side.
+        assert(expectedDropped == 1)
+        assert(actualDropped == 1)
+        actualLines.joinToString("\n") sameAs expectedLines.joinToString("\n")
     }
 
     /** Reproduces the switched-off `interfaceMayNotBeExtendedWitACall.errors.txt` against tsc's own baseline. */
