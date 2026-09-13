@@ -25,6 +25,101 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.85) — (LEGACY.0a): the corpus is pinned to tsgo's `tsgo-port` sha, and tsc's STABLE TYPE ORDERING is an INTERNING order rather than a display one (2026-09-13)
+
+**Suite 19,028 → 19,045 / 0 / 20** — +16 pins (`StableTypeOrderingTest`) and +1 generated
+subtest, with **skipped 3 → 20** because 17 rows are declared in the new
+`tsgoPendingBaselines` list. Generated corpus **8,837 → 8,838**. Grid 8×`added=0 removed=0`;
+marked 18 → 18, cronstrue 1 → 1; `cost_gate.py` exit 0 **REBASELINED with attribution**;
+`huge_methods.py --fail-over 0` exit 0; warning-clean. **(LEGACY.0) stays OPEN on (0b)** —
+tsgo's own testdata layers.
+
+**WHY THIS ITEM, SAID OUT LOUD.** The owner re-pinned the corpus on 2026-09-12 and chose
+"both, in order"; (LEGACY.0a) is the first half and the head of the queue.
+
+**THE PIN.** `typeScriptCommit` `637d5746…` → `4d4f005c8541e0255a9d8791205fdce326e462bc`
+(tsgo 7.0.2's `_submodules/TypeScript`, the `tsgo-port` tip, whose SECOND parent is pristine
+`637d5746`); `cloneTypeScriptRepo`'s KDoc at `build.gradle.kts:240-261` is rewritten to the
+2026-09-12 policy, replacing the "never pin to the tsgo submodule sha" rule it used to carry.
+
+**THE FIRST RUN WAS EXACTLY THE SIZING'S 22 / 2 / 2 / 2 / 1.** 29 red, all compiler-suite:
+22 pure reorder (union members or object properties), 2 reorder plus downstream text, 2
+reorder plus changed chain content, 2 single-line text (`conditionalExpression1` →
+`string`, `thislessFunctionsNotContextSensitive1` → `"$test1"`), and the 1 new test. A
+read-only sizing predicting a red set to the family is worth the round it costs.
+
+**tsc's COMPARATOR IS AN *INTERNING* ORDER, AND THAT IS THE WHOLE DESIGN QUESTION.**
+`addTypeToUnion` inserts by `binarySearch(…, compareTypes)` (checker.ts l.18095), and
+`compareTypes` (l.53856) is: ascending `getSortOrderFlags` (an enum unit type sorts as
+`Enum`) → `compareTypeNames` (alias / type-parameter / class-interface / reference symbol;
+named before unnamed; same alias by alias arguments) → per kind (objects by `compareSymbols`
+= first declaration's file index then `pos`, references before other objects, references by
+argument list, tuples by shape; unions and intersections by member list; enum members and
+type parameters by symbol; literals by VALUE; `false` < `true`) → type id. The DISPLAY half
+is separate: `formatUnionTypes` (null and undefined last; `false | true` → `boolean`; a
+whole-enum run → the enum) and `getNamedMembers` sorting properties by `compareSymbols`.
+**Display-only was measured insufficient**: the first-failing chain constituent, a
+`Pick<A|B, K>` intersection, the TS2339 sub-line and the suggestion tie-break all read the
+INTERNAL list, so the comparator is wired into `Checker.getUnionType`.
+
+**TWO FACTS THE BRIEF DID NOT HAVE.** TypeScript 7 reordered `TypeFlags` to tsgo's bit
+order (`Undefined = 1<<2` … `Void = 1<<4`, `String = 1<<5` …, `Enum = 1<<16`,
+`NonPrimitive = 1<<17`, `Union = 1<<27`) while ours is the pre-7 order — so
+`StableTypeOrdering.NEW_BIT` remaps per bit, and `Zeta | void` prints `void | Zeta` on both
+references. And pristine 6.0.3 run with `--stableTypeOrdering` equals tsgo on **21 of 21**
+fixture rows, which is what makes the flag's own semantics checkable without tsgo.
+
+**LANDED WITH THE COMPARATOR, each its own tsc rule**: `boolean` absorbs `true`/`false`;
+the union display collapses `false | true` and a whole-enum run and parenthesizes
+intersection members; `void` is no longer forced last; the chain picker is FIRST-failing at
+four sites (tsc's `eachTypeRelatedToType`); `findBestUnionConstituent` is last-on-tie
+(`findMostOverlappyType`); mapped-type properties order by source declaration (AST order
+while the table is in flight); `Type.Object.declaredAt` carries a symbol-less anonymous
+object; the node-formatter's union arm sorts; and six hardcoded pin walkers move to the new
+baselines. Fixture matrix against tsgo: **21/21 byte-identical** (`ref_matrix.py` also
+adjudicates pristine, which differs on every ordering row BY CONSTRUCTION, so the
+comparison is against tsgo alone).
+
+**THE RESIDUE IS 17, NOT THE ≤4 THE SIZING PREDICTED, AND THE REASON IS STRUCTURAL:** most
+"mechanical" ordering rows never pass through `typeToString(Type.Union)` at all. They are
+rendered by pin walkers, by node TEXT, or by the JSDoc formatters, or they need tsc concepts
+this model does not have (type mappers, `Substitution`, `Index`; a symbol-less
+enclosing-scope type parameter; a reverse-mapped member list ordered by name). Twelve of the
+29 closed through the engine and walkers, six were hand-written expectations re-measured
+against tsgo (`BindingElementTypeTest`, `UnionCalleeOneOverloadedMemberTest`'s
+`ZzzN | ZzzO`, `CvdaSplitTest`, the externals generator's `void | Box`, and both externals
+library gates), and the remaining 17 are declared.
+
+**THE PENDING MECHANISM IS NEW AND IS NOT `LogicalParityDivergence`.** A `tsgo-pending` row
+is a tsgo-TARGET answer this compiler does not produce YET — not a divergence we have
+decided to keep — so `tsgoPendingBaselines` emits the subtest `@Ignore`d (visible as
+SKIPPED, counted, `tsgo-pending: 17` in the build log), fails the build on a stale entry,
+fails on a baseline declared in BOTH lists, and carries NO `pinnedBy` requirement, because
+the obligation is to implement the row rather than to pin a decision. Ledger:
+`docs/logical-parity.md` § 5.
+
+**ABLATION**: a1 the comparator reverted at both interning sites — **13 RED** (10 pins plus
+`unionTypeWithRecursiveSubtypeReduction2`, `widenToAny1`, `widenToAny2`); a2 the NAME key
+dropped from the comparator — **5 RED** (4 pins plus one corpus baseline). The 17 pending
+rows are skipped and so cannot contribute to either arm, which is the honest reading.
+
+**THE COST GATE IS REBASELINED, AND THE NUMBER IS ATTRIBUTED RATHER THAN ACCEPTED.** The
+landed binary read `typeNode.bypassed +2.13%` against the recorded baseline — over the ±2%
+tolerance — but a REBUILT pristine parent reads **+1.31%** against that same baseline, so
+the stale-baseline share is most of it and **this change's own effect is `typeNode.bypassed`
+146,769 → 149,894 = +0.81%**, with every other counter inside 0.1% of pristine. The
+mechanism is exactly what the design predicts: an interning-order change means `Foo | Bar`
+and `Bar | Foo` now intern to ONE union, which moves first-touch order and therefore the
+INV.5(c) bypass counter. Rebaselined per COST.1 with that justification, 12 rows.
+
+**SIZING ERRORS WORTH CARRYING**: "one engine change closes 22" (17 rows are outside the
+engine's reach); TypeFlags bit order changed in 7.0; "≤ 4 residue" against 17; and
+"display-only" against an interning-order change that moves cost counters ~0.8%.
+
+**NEXT**: (LEGACY.0b) per `docs/tsgo-baselines.md` — the baseline ROOT switch to
+`typescript-go-repo/testdata/baselines/reference/submodule/` with the three-way fallback and
+its asserted bucket counts (9 delete / 87 keep-tsc / 24 new), ≈315 first-run reds. Then
+(LEGACY.1).
 ### Round (P18.84) — (CHK.98) stage 2: `Promise.then`, a namespace-import callee and predicate `filter` — two instantiations that no-op'd a union-wrapped function type, and the item closes (2026-09-12)
 
 **Suite 18,986 → 19,028 / 0 / 3** (+42 pins, `ContextualCallbackStage2Test`: 34 value, 4
@@ -774,84 +869,6 @@ member is not a union member here and needed no residue.
 signature) and D6 (blocked on `Signature.thisParameter`). Per the WORK ORDER, **(INV.0) step
 10b-ii** is where the order sends the arc.
 
-### Round (P18.75) — (CHK.97) D3, the IDENTICAL half: a union contextual signature is answered, and the brief's own fixture never reached the arm (2026-09-12)
-
-**Suite 18,699 → 18,718 / 0 / 3** (+19 pins, `UnionContextualSignatureIdenticalTest`). Grid
-8×`added=0 removed=0`; `cost_gate.py` exit 0, no rebaseline (`mapped.keyed` +1.18% and
-`mapped.hits` +1.03% are BASELINE STALENESS — the pristine before-binary through `--from-log`
-reads every one of the 20 counters digit-identical to the fixed one, so the fix moves zero
-counters); `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean. **(CHK.97) stays
-OPEN** — D3's DIFFERING half, D5 and D6 remain.
-
-**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item and the last three
-round notes each named D3's identical half as the next tractable sub-step. Per the WORK ORDER's
-2026-09-08 addendum the successor is **(INV.0) step 10b-ii**.
-
-**THE FIX IS tsc's OWN RULE, ~50 LINES.** `callableSignaturesForCtx`'s union arm refused at the
-SECOND callable member (`if (single != null) return null`). It now collects every callable member
-and hands ≥2 to `unionContextualSignature` — the union arm of tsc's `getContextualSignature`
-(checker.ts:33224): each member contributes its ONE own call signature, every later one must be
-`compareSignaturesIdentical(first, sig, partialMatch = false, ignoreReturnTypes = true)` (`this`
-ignored by construction — `getParameterSymbols` never lists it), and the answer is
-`createUnionSignature` — the first member's parameters with the members' RETURNS unioned. A
-failing comparison answers null, which is today's silence: the DIFFERING half (tsc's TS7006 on
-the parameter) is NOT emitted and is recorded below. The single-callable-member path is
-byte-for-byte the old code.
-
-**THE BRIEF'S FIXTURE SHAPE WAS THE WRONG INSTRUMENT.** The obvious repro —
-`declare const zf: A | B; zf((p) => …)` — never reaches the union arm at all: the argument is
-handed the COMBINED signature's parameter (stage 1's `combineUnionSignatures`), so both
-references print TS7006 + TS2345 there and the shape measures the union CALLEE, not the union
-CONTEXTUAL TYPE. The whole matrix was re-cut through `declare function take(cb: A | B)` and
-through annotations (variable, object-literal property, return position). Before → after per
-fixture (`agree/ours-only/missing`, zero REF-SPLIT anywhere): identical params with differing
-returns 0/0/1 → 1/0/0; identical params and returns 0/0/1 → 1/0/0; three members 0/0/1 → 1/0/0;
-a nullish member beside two identical ones 0/0/1 → 1/0/0; differing `this` 0/0/1 → 1/0/0; the
-four positions (call argument, variable annotation, object-literal property, return) 0/2/4 →
-4/0/0 — the TWO ours-only TS7006 rows that the old refusal manufactured are gone. Unchanged and
-correctly so: differing parameter TYPES, differing ARITY, `(x?: string)` vs `(x: string)`
-(not identical, refused on both sides).
-
-**TWO CONSERVATISMS THE HELPER NEEDS BECAUSE IT HAS NO NODE.** tsc filters each member's
-signatures by the ARROW's arity (`getContextualCallSignature`) before comparing; this helper is
-called without the arrow, so an OVERLOADED member refuses the whole union (measured residue, 2
-missing TS2322 rows, pinned as `residue - …`). And a `Type.Reference` whose OWN signatures are
-still lazy refuses rather than reading its TARGET's — the single-member path's target-fallback
-would have read `Cb<string> | Cb<number>` as identical and handed the arrow a bare `T`; that
-control is one of the three pins arm a2 reddens.
-
-**THE ARM ANSWERS ZERO TIMES ON EVERY PROFILE, SO THE GRID IS A CONTROL AND WAS MEASURED AS
-ONE.** A temporary counter read 0 on all eight dashboard profiles, 0 on `marked`, 0 on the
-2,400-file generated project and 14 on the round's own fixture — the KDoc first asserted the
-opposite and was corrected. The marker was removed and the shipped class proven
-bytecode-identical to the gated build (`javap -c -p` minus line numbers).
-
-**ABLATION (per-arm `cmp` snapshot, rebuilt after every restore, 19 pins per arm)**: a1 the
-arm restored to `return null` — **12 RED**; a2 an arity-only comparison — **3 RED** (the
-differing-types control, the `Cb<string> | Cb<number>` control, a nested differing pair); a3
-the FIRST member's return instead of the union — **1 RED**, and the obvious discriminator does
-not exist: the arrow's own return checked against the declared union never sees it (residue 7
-below); what does is the unioned return reaching a NESTED concise-body arrow whose inner
-contextual type is then a DIFFERING pair, so the inner parameter must be TS7006 — first-return-
-only types it and silences the row both references print.
-
-**RESIDUES, MEASURED AND NOT FIXED**: (1) the DIFFERING half — differing types, arity, an
-overloaded-vs-plain pair, a generic member, `(x?:)` vs `(x:)` — references TS7006, ours silent
-(the (CHK.98) territory the item already names; the arity walker records `typed = true` with no
-type); (2) the overloaded member above; (3) a BOTH-generic identical pair (references type
-`p: T`, ours nothing); (4) a REST contextual parameter against a plain arrow parameter types
-`string[]` for `string` — pre-existing on a SINGLE member too; (5) reads inside a NESTED arrow
-body of a contextually typed parameter report nothing — pre-existing single-member control; (6)
-TS2683 beside a union contextual `this`: `this` IS typed from the first member (its TS2322
-agrees with both references) but the TS2683 emitter's `typeIsFunctionWithThisParam` wants a
-`Type.Object`, so the ours-only TS2683 stays; (7) a concise-body object literal against a union
-of object-returning members is a pre-existing ours-only TS2322 (`(p: any) => { k: string; }`) —
-the arrow's VALUE type ignores the contextual signature.
-
-**NEXT**: (CHK.97)'s remaining rows are D3's DIFFERING half (TS7006 emission, unbounded per
-(CHK.50)) and D5 (one row). Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order
-sends the arc.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1182,7 +1199,12 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) RE-PIN THE CORPUS TO tsgo's REGENERATED BASELINES (owner approval 2026-09-12: "Green light to
+- [ ] **(LEGACY.0) (0a) LANDED 2026-09-13 ((P18.85) note) — `typeScriptCommit` = `4d4f005c`, corpus 8,838,
+  `StableTypeOrdering.kt` reproduces tsc's `compareTypes` as an INTERNING order in `getUnionType` (display-only was
+  measured insufficient); 29 first-run reds → 12 engine, 6 re-measured expectations, **17 in the new
+  `tsgoPendingBaselines` list** (`@Ignore`d, counted, stale-checked, NO `pinnedBy` — rows to IMPLEMENT, not
+  divergences to keep). **(0b) IS WHAT REMAINS** — the baseline-ROOT switch per `docs/tsgo-baselines.md`. ORIGINAL:
+  RE-PIN THE CORPUS TO tsgo's REGENERATED BASELINES (owner approval 2026-09-12: "Green light to
   tsgo regenerated baseline"; a test-generation-pipeline change, pre-approved by that sentence). SIZED READ-ONLY THE
   SAME DAY, AND THE TARGET IS TWO THINGS: (0a) the `tsgo-port` sha `4d4f005c` is pristine + `stableTypeOrdering` ON —
   791 baselines, zero deleted, zero cases changed, ONE family (display ORDER), **29 active subtests max RED** (22 files

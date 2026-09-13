@@ -3293,3 +3293,20 @@ digit-identical to the rebuilt HEAD, huge_methods exit 0, warning-clean. **(CHK.
 CHECKED OFF**; `.call/.apply/.bind` sized read-only as a NEW mechanism (member-miss
 augmentation with `CallableFunction` + inference through a `this`-typed lib signature;
 81/18/12 sites on the compiler profile, so a REAL gate) and queued as **(CHK.134)**.
+
+**(P18.80) — (CHK.134)(1): `f.call` / `f.apply` TYPED FROM THE RECEIVER'S OWN SIGNATURE — NO INFERENCE WAS NEEDED, AND THE GRID'S ONE ROW PER PROFILE WAS A MISSING OPTION, 18,854 / 0 / 3 (2026-09-12).**
+tsc's `getPropertyOfType` miss augmentation now serves a function-shaped receiver: `call`
+and `apply` are BUILT from the receiver's last signature (`CallableFunction`'s `T`/`A`/`R`
+each have exactly one candidate, so nothing is inferred; `call` expands the parameters as
+tsc's messages count them, `apply` is built per call from the argument count), plus the
+`Function` members. **The grid read +1 row on every profile and the cause was an option this
+compiler did not have**: tsc's own sources set `"strictBindCallApply": false` explicitly,
+and `utilities.ts:11201`'s `stringReplace.call(s, "*", replacement)` is exactly tsc's
+strict answer; `strictBindCallApply` now exists (flag if set, else `strict`) and the grid is
+8×`added=0 removed=0` — it gates the OPTION, marked (strict, 14 sites resolved, 18 → 18)
+exercised the synthesis. Every `call`/`apply` shape across 55 fixtures `missing → agree`,
+zero ours-only; the parser had been DROPPING tuple labels (`TupleType.elementNames`) and
+tsc's optional-tuple display landed with it. Ablation 31/4/15/9/2 RED over 45 pins, a5
+reddening the compiler profile to 47 rows. cost_gate exit 0 (18/20 digit-identical;
+`globals.lookups` +19 is the `Function` consult), huge_methods exit 0, warning-clean.
+(CHK.134) stays open on `bind`.

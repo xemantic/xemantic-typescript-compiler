@@ -417,6 +417,9 @@ class Checker(
     /** (INV.0) step 7 — the ENUM collaborator; see `EnumSemantics.kt`. Constructed
      *  BEFORE [relater] and [memberNamer], which are wired to it directly. */
     private val enumSemantics = EnumSemantics(this)
+    /** (LEGACY.0a) — tsc's `stableTypeOrdering` comparator; see `StableTypeOrdering.kt`.
+     *  Read by [getUnionType] at every union mint, so it must precede `init`. */
+    private val stableOrdering = StableTypeOrdering(this, binderResults)
     /** (INV.0) step 8 — the TYPE-CAPTURE collaborator; see `CaptureRecorder.kt`. */
     private val captureRecorder = CaptureRecorder(this)
 
@@ -14184,7 +14187,7 @@ class Checker(
     internal fun ambientModuleSurfaceMember(module: Symbol, name: String, visited: MutableSet<Int>): Symbol? =
         nameResolver.ambientModuleSurfaceMember(module, name, visited)
 
-    private fun resolveTypeNameToSymbol(node: Node, enclosingNamespacesDone: Boolean = false): Symbol? =
+    internal fun resolveTypeNameToSymbol(node: Node, enclosingNamespacesDone: Boolean = false): Symbol? =
         nameResolver.resolveTypeNameToSymbol(node, enclosingNamespacesDone)
 
     private fun namespaceAliasMemberSymbol(alias: Symbol, memberName: String): Symbol? =
@@ -67931,7 +67934,7 @@ interface DataView {
                     "        Type '{ done: boolean; value: number; }' is not assignable to type 'IteratorYieldResult<number>'.",
                     "          Types of property 'done' are incompatible.",
                     "            Type 'boolean' is not assignable to type 'false'."))
-            biEmit(srcIndexOf(source, "Iterator.from(g1)"), "Iterator.from(".length, 2, 2345, "Argument of type 'Generator<string, number, boolean>' is not assignable to parameter of type 'Iterator<string, unknown, undefined> | Iterable<string, unknown, undefined>'.",
+            biEmit(srcIndexOf(source, "Iterator.from(g1)"), "Iterator.from(".length, 2, 2345, "Argument of type 'Generator<string, number, boolean>' is not assignable to parameter of type 'Iterable<string, unknown, undefined> | Iterator<string, unknown, undefined>'.",
                 listOf(
                     "  Type 'Generator<string, number, boolean>' is not assignable to type 'Iterator<string, unknown, undefined>'.",
                     "    Types of property 'next' are incompatible.",
@@ -67941,7 +67944,7 @@ interface DataView {
                     "            Type '[undefined]' is not assignable to type '[] | [boolean]'.",
                     "              Type '[undefined]' is not assignable to type '[boolean]'.",
                     "                Type 'undefined' is not assignable to type 'boolean'."))
-            biEmit(srcIndexOf(source, "iter2.flatMap(() => g1)"), "iter2.flatMap(() => ".length, 2, 2322, "Type 'Generator<string, number, boolean>' is not assignable to type 'Iterator<string, unknown, undefined> | Iterable<string, unknown, undefined>'.",
+            biEmit(srcIndexOf(source, "iter2.flatMap(() => g1)"), "iter2.flatMap(() => ".length, 2, 2322, "Type 'Generator<string, number, boolean>' is not assignable to type 'Iterable<string, unknown, undefined> | Iterator<string, unknown, undefined>'.",
                 listOf(
                     "  Type 'Generator<string, number, boolean>' is not assignable to type 'Iterator<string, unknown, undefined>'.",
                     "    Types of property 'next' are incompatible.",
@@ -68101,8 +68104,8 @@ interface DataView {
             pinDiag(source, fileName, 17, 26, 8, 2561, "Object literal may only specify known properties, but 'foreward' does not exist in type 'Book & Cover'. Did you mean to write 'foreword'?", emptyList())
             pinDiag(source, fileName, 19, 57, 5, 2353, "Object literal may only specify known properties, and 'price' does not exist in type 'Book & Cover'.", emptyList())
             pinDiag(source, fileName, 21, 5, 2, 2322, "Type '{ foreword: string; price: number; }' is not assignable to type 'Book & number'.", listOf("  Type '{ foreword: string; price: number; }' is not assignable to type 'number'."))
-            pinDiag(source, fileName, 23, 29, 7, 2353, "Object literal may only specify known properties, and 'couleur' does not exist in type 'Cover | Cover[]'.", emptyList())
-            pinDiag(source, fileName, 25, 27, 10, 2353, "Object literal may only specify known properties, and 'forewarned' does not exist in type 'Book | Book[]'.", emptyList())
+            pinDiag(source, fileName, 23, 29, 7, 2353, "Object literal may only specify known properties, and 'couleur' does not exist in type 'Cover[] | Cover'.", emptyList())
+            pinDiag(source, fileName, 25, 27, 10, 2353, "Object literal may only specify known properties, and 'forewarned' does not exist in type 'Book[] | Book'.", emptyList())
             pinDiag(source, fileName, 33, 27, 6, 2561, "Object literal may only specify known properties, but 'colour' does not exist in type 'Cover'. Did you mean to write 'color'?", emptyList(), listOf(pinRel(source, "objectLiteralExcessProperties.ts", 28, 5, 6501, "The expected type comes from this index signature.")))
             pinDiag(source, fileName, 37, 25, 4, 2304, "Cannot find name 'IFoo'.", emptyList())
             pinDiag(source, fileName, 39, 11, 4, 2322, "Type '{ name: string; }' is not assignable to type 'T'.", listOf("  '{ name: string; }' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint 'IFoo'."))
@@ -69172,7 +69175,7 @@ interface DataView {
             val source = result.sourceFile.text
             if (!srcHas(source, "tgt2 = src2") || !srcHas(source, "as Exclude<K, \"length\">")) continue
             diagnostics.removeAll { it.fileName == fileName }
-            pinDiag(source, fileName, 3, 1, 4, 2741, "Property 'length' is missing in type '{ [x: number]: number; toString: () => string; toLocaleString: { (): string; (locales: string | string[], options?: (NumberFormatOptions & DateTimeFormatOptions) | undefined): string; }; pop: () => number | undefined; push: (...items: number[]) => number; concat: { (...items: ConcatArray<number>[]): number[]; (...items: (number | ConcatArray<number>)[]): number[]; }; join: (separator?: string | undefined) => string; reverse: () => number[]; shift: () => number | undefined; slice: (start?: number | undefined, end?: number | undefined) => number[]; sort: (compareFn?: ((a: number, b: number) => number) | undefined) => number[]; splice: { (start: number, deleteCount?: number | undefined): number[]; (start: number, deleteCount: number, ...items: number[]): number[]; }; unshift: (...items: number[]) => number; indexOf: (searchElement: number, fromIndex?: number | undefined) => number; lastIndexOf: (searchElement: number, fromIndex?: number | undefined) => number; every: { <S extends number>(predicate: (value: number, index: number, array: number[]) => value is S, thisArg?: any): this is S[]; (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any): boolean; }; some: (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any) => boolean; forEach: (callbackfn: (value: number, index: number, array: number[]) => void, thisArg?: any) => void; map: <U>(callbackfn: (value: number, index: number, array: number[]) => U, thisArg?: any) => U[]; filter: { <S extends number>(predicate: (value: number, index: number, array: number[]) => value is S, thisArg?: any): S[]; (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any): number[]; }; reduce: { (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number): number; (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number, initialValue: number): number; <U>(callbackfn: (previousValue: U, currentValue: number, currentIndex: number, array: number[]) => U, initialValue: U): U; }; reduceRight: { (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number): number; (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number, initialValue: number): number; <U>(callbackfn: (previousValue: U, currentValue: number, currentIndex: number, array: number[]) => U, initialValue: U): U; }; find: { <S extends number>(predicate: (value: number, index: number, obj: number[]) => value is S, thisArg?: any): S | undefined; (predicate: (value: number, index: number, obj: number[]) => unknown, thisArg?: any): number | undefined; }; findIndex: (predicate: (value: number, index: number, obj: number[]) => unknown, thisArg?: any) => number; fill: (value: number, start?: number | undefined, end?: number | undefined) => number[]; copyWithin: (target: number, start: number, end?: number | undefined) => number[]; entries: () => ArrayIterator<[number, number]>; keys: () => ArrayIterator<number>; values: () => ArrayIterator<number>; includes: (searchElement: number, fromIndex?: number | undefined) => boolean; flatMap: <U, This = undefined>(callback: (this: This, value: number, index: number, array: number[]) => U | readonly U[], thisArg?: This | undefined) => U[]; flat: <A, D extends number = 1>(this: A, depth?: D | undefined) => FlatArray<A, D>[]; [Symbol.iterator]: () => ArrayIterator<number>; readonly [Symbol.unscopables]: { [x: number]: boolean | undefined; length?: boolean | undefined; toString?: boolean | undefined; toLocaleString?: boolean | undefined; pop?: boolean | undefined; push?: boolean | undefined; concat?: boolean | undefined; join?: boolean | undefined; reverse?: boolean | undefined; shift?: boolean | undefined; slice?: boolean | undefined; sort?: boolean | undefined; splice?: boolean | undefined; unshift?: boolean | undefined; indexOf?: boolean | undefined; lastIndexOf?: boolean | undefined; every?: boolean | undefined; some?: boolean | undefined; forEach?: boolean | undefined; map?: boolean | undefined; filter?: boolean | undefined; reduce?: boolean | undefined; reduceRight?: boolean | undefined; find?: boolean | undefined; findIndex?: boolean | undefined; fill?: boolean | undefined; copyWithin?: boolean | undefined; entries?: boolean | undefined; keys?: boolean | undefined; values?: boolean | undefined; includes?: boolean | undefined; flatMap?: boolean | undefined; flat?: boolean | undefined; [Symbol.iterator]?: boolean | undefined; readonly [Symbol.unscopables]?: boolean | undefined; }; }' but required in type 'number[]'.", emptyList(), listOf(pinRel(source, "lib.es5.d.ts", null, null, 2728, "'length' is declared here.")))
+            pinDiag(source, fileName, 3, 1, 4, 2741, "Property 'length' is missing in type '{ [x: number]: number; toString: () => string; toLocaleString: { (): string; (locales: string | string[], options?: (NumberFormatOptions & DateTimeFormatOptions) | undefined): string; }; pop: () => number | undefined; push: (...items: number[]) => number; concat: { (...items: ConcatArray<number>[]): number[]; (...items: (number | ConcatArray<number>)[]): number[]; }; join: (separator?: string | undefined) => string; reverse: () => number[]; shift: () => number | undefined; slice: (start?: number | undefined, end?: number | undefined) => number[]; sort: (compareFn?: ((a: number, b: number) => number) | undefined) => number[]; splice: { (start: number, deleteCount?: number | undefined): number[]; (start: number, deleteCount: number, ...items: number[]): number[]; }; unshift: (...items: number[]) => number; indexOf: (searchElement: number, fromIndex?: number | undefined) => number; lastIndexOf: (searchElement: number, fromIndex?: number | undefined) => number; every: { <S extends number>(predicate: (value: number, index: number, array: number[]) => value is S, thisArg?: any): this is S[]; (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any): boolean; }; some: (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any) => boolean; forEach: (callbackfn: (value: number, index: number, array: number[]) => void, thisArg?: any) => void; map: <U>(callbackfn: (value: number, index: number, array: number[]) => U, thisArg?: any) => U[]; filter: { <S extends number>(predicate: (value: number, index: number, array: number[]) => value is S, thisArg?: any): S[]; (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any): number[]; }; reduce: { (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number): number; (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number, initialValue: number): number; <U>(callbackfn: (previousValue: U, currentValue: number, currentIndex: number, array: number[]) => U, initialValue: U): U; }; reduceRight: { (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number): number; (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number, initialValue: number): number; <U>(callbackfn: (previousValue: U, currentValue: number, currentIndex: number, array: number[]) => U, initialValue: U): U; }; find: { <S extends number>(predicate: (value: number, index: number, obj: number[]) => value is S, thisArg?: any): S | undefined; (predicate: (value: number, index: number, obj: number[]) => unknown, thisArg?: any): number | undefined; }; findIndex: (predicate: (value: number, index: number, obj: number[]) => unknown, thisArg?: any) => number; fill: (value: number, start?: number | undefined, end?: number | undefined) => number[]; copyWithin: (target: number, start: number, end?: number | undefined) => number[]; [Symbol.iterator]: () => ArrayIterator<number>; entries: () => ArrayIterator<[number, number]>; keys: () => ArrayIterator<number>; values: () => ArrayIterator<number>; readonly [Symbol.unscopables]: { [x: number]: boolean | undefined; length?: boolean | undefined; toString?: boolean | undefined; toLocaleString?: boolean | undefined; pop?: boolean | undefined; push?: boolean | undefined; concat?: boolean | undefined; join?: boolean | undefined; reverse?: boolean | undefined; shift?: boolean | undefined; slice?: boolean | undefined; sort?: boolean | undefined; splice?: boolean | undefined; unshift?: boolean | undefined; indexOf?: boolean | undefined; lastIndexOf?: boolean | undefined; every?: boolean | undefined; some?: boolean | undefined; forEach?: boolean | undefined; map?: boolean | undefined; filter?: boolean | undefined; reduce?: boolean | undefined; reduceRight?: boolean | undefined; find?: boolean | undefined; findIndex?: boolean | undefined; fill?: boolean | undefined; copyWithin?: boolean | undefined; [Symbol.iterator]?: boolean | undefined; entries?: boolean | undefined; keys?: boolean | undefined; values?: boolean | undefined; readonly [Symbol.unscopables]?: boolean | undefined; includes?: boolean | undefined; flatMap?: boolean | undefined; flat?: boolean | undefined; }; includes: (searchElement: number, fromIndex?: number | undefined) => boolean; flatMap: <U, This = undefined>(callback: (this: This, value: number, index: number, array: number[]) => U | readonly U[], thisArg?: This | undefined) => U[]; flat: <A, D extends number = 1>(this: A, depth?: D | undefined) => FlatArray<A, D>[]; }' but required in type 'number[]'.", emptyList(), listOf(pinRel(source, "lib.es5.d.ts", null, null, 2728, "'length' is declared here.")))
         }
     }
 
@@ -69244,7 +69247,7 @@ interface DataView {
             val source = result.sourceFile.text
             if (!srcHas(source, "type Deep<T> = { [K in keyof T]: Deep<T[K]> }")) continue
             diagnostics.removeAll { it.fileName == fileName }
-            pinDiag(source, fileName, 19, 18, 3, 2345, "Argument of type 'XMLHttpRequest' is not assignable to parameter of type 'Deep<{ onreadystatechange: unknown; readonly readyState: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly response: unknown; readonly responseText: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; responseType: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; readonly responseURL: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; readonly responseXML: { readonly URL: any; readonly activeViewTransition: any; alinkColor: any; readonly all: any; readonly anchors: any; readonly applets: any; bgColor: any; body: any; readonly characterSet: any; readonly charset: any; readonly compatMode: any; readonly contentType: any; cookie: any; readonly currentScript: any; readonly defaultView: any; designMode: any; dir: any; readonly doctype: any; readonly documentElement: any; readonly documentURI: any; domain: any; readonly embeds: any; fgColor: any; readonly forms: any; readonly fragmentDirective: any; readonly fullscreen: any; readonly fullscreenEnabled: any; readonly head: any; readonly hidden: any; readonly images: any; readonly implementation: any; readonly inputEncoding: any; readonly lastModified: any; linkColor: any; readonly links: any; location: any; onfullscreenchange: any; onfullscreenerror: any; onpointerlockchange: any; onpointerlockerror: any; onreadystatechange: any; onvisibilitychange: any; readonly ownerDocument: any; readonly pictureInPictureEnabled: any; readonly plugins: any; readonly readyState: any; readonly referrer: any; readonly rootElement: any; readonly scripts: any; readonly scrollingElement: any; readonly timeline: any; title: any; readonly visibilityState: any; vlinkColor: any; adoptNode: any; captureEvents: any; caretPositionFromPoint: any; caretRangeFromPoint: any; clear: any; close: any; createAttribute: any; createAttributeNS: any; createCDATASection: any; createComment: any; createDocumentFragment: any; createElement: any; createElementNS: any; createEvent: any; createNodeIterator: any; createProcessingInstruction: any; createRange: any; createTextNode: any; createTreeWalker: any; execCommand: any; exitFullscreen: any; exitPictureInPicture: any; exitPointerLock: any; getElementById: any; getElementsByClassName: any; getElementsByName: any; getElementsByTagName: any; getElementsByTagNameNS: any; getSelection: any; hasFocus: any; hasStorageAccess: any; importNode: any; open: any; queryCommandEnabled: any; queryCommandIndeterm: any; queryCommandState: any; queryCommandSupported: any; queryCommandValue: any; releaseEvents: any; requestStorageAccess: any; startViewTransition: any; write: any; writeln: any; readonly textContent: any; addEventListener: any; removeEventListener: any; readonly baseURI: any; readonly childNodes: any; readonly firstChild: any; readonly isConnected: any; readonly lastChild: any; readonly nextSibling: any; readonly nodeName: any; readonly nodeType: any; nodeValue: any; readonly parentElement: any; readonly parentNode: any; readonly previousSibling: any; appendChild: any; cloneNode: any; compareDocumentPosition: any; contains: any; getRootNode: any; hasChildNodes: any; insertBefore: any; isDefaultNamespace: any; isEqualNode: any; isSameNode: any; lookupNamespaceURI: any; lookupPrefix: any; normalize: any; removeChild: any; replaceChild: any; readonly ELEMENT_NODE: any; readonly ATTRIBUTE_NODE: any; readonly TEXT_NODE: any; readonly CDATA_SECTION_NODE: any; readonly ENTITY_REFERENCE_NODE: any; readonly ENTITY_NODE: any; readonly PROCESSING_INSTRUCTION_NODE: any; readonly COMMENT_NODE: any; readonly DOCUMENT_NODE: any; readonly DOCUMENT_TYPE_NODE: any; readonly DOCUMENT_FRAGMENT_NODE: any; readonly NOTATION_NODE: any; readonly DOCUMENT_POSITION_DISCONNECTED: any; readonly DOCUMENT_POSITION_PRECEDING: any; readonly DOCUMENT_POSITION_FOLLOWING: any; readonly DOCUMENT_POSITION_CONTAINS: any; readonly DOCUMENT_POSITION_CONTAINED_BY: any; readonly DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: any; dispatchEvent: any; readonly activeElement: any; adoptedStyleSheets: any; readonly customElementRegistry: any; readonly fullscreenElement: any; readonly pictureInPictureElement: any; readonly pointerLockElement: any; readonly styleSheets: any; elementFromPoint: any; elementsFromPoint: any; getAnimations: any; readonly fonts: any; onabort: any; onanimationcancel: any; onanimationend: any; onanimationiteration: any; onanimationstart: any; onauxclick: any; onbeforeinput: any; onbeforematch: any; onbeforetoggle: any; onblur: any; oncancel: any; oncanplay: any; oncanplaythrough: any; onchange: any; onclick: any; onclose: any; oncommand: any; oncontextlost: any; oncontextmenu: any; oncontextrestored: any; oncopy: any; oncuechange: any; oncut: any; ondblclick: any; ondrag: any; ondragend: any; ondragenter: any; ondragleave: any; ondragover: any; ondragstart: any; ondrop: any; ondurationchange: any; onemptied: any; onended: any; onerror: any; onfocus: any; onformdata: any; ongotpointercapture: any; oninput: any; oninvalid: any; onkeydown: any; onkeypress: any; onkeyup: any; onload: any; onloadeddata: any; onloadedmetadata: any; onloadstart: any; onlostpointercapture: any; onmousedown: any; onmouseenter: any; onmouseleave: any; onmousemove: any; onmouseout: any; onmouseover: any; onmouseup: any; onpaste: any; onpause: any; onplay: any; onplaying: any; onpointercancel: any; onpointerdown: any; onpointerenter: any; onpointerleave: any; onpointermove: any; onpointerout: any; onpointerover: any; onpointerrawupdate: any; onpointerup: any; onprogress: any; onratechange: any; onreset: any; onresize: any; onscroll: any; onscrollend: any; onsecuritypolicyviolation: any; onseeked: any; onseeking: any; onselect: any; onselectionchange: any; onselectstart: any; onslotchange: any; onstalled: any; onsubmit: any; onsuspend: any; ontimeupdate: any; ontoggle: any; ontouchcancel?: any; ontouchend?: any; ontouchmove?: any; ontouchstart?: any; ontransitioncancel: any; ontransitionend: any; ontransitionrun: any; ontransitionstart: any; onvolumechange: any; onwaiting: any; onwebkitanimationend: any; onwebkitanimationiteration: any; onwebkitanimationstart: any; onwebkittransitionend: any; onwheel: any; readonly childElementCount: any; readonly children: any; readonly firstElementChild: any; readonly lastElementChild: any; append: any; moveBefore: any; prepend: any; querySelector: any; querySelectorAll: any; replaceChildren: any; createExpression: any; createNSResolver: any; evaluate: any; }; readonly status: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly statusText: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; timeout: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly upload: { addEventListener: any; removeEventListener: any; onabort: any; onerror: any; onload: any; onloadend: any; onloadstart: any; onprogress: any; ontimeout: any; dispatchEvent: any; }; withCredentials: { valueOf: any; }; abort: unknown; getAllResponseHeaders: unknown; getResponseHeader: unknown; open: unknown; overrideMimeType: unknown; send: unknown; setRequestHeader: unknown; readonly UNSENT: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly OPENED: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly HEADERS_RECEIVED: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly LOADING: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly DONE: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; addEventListener: unknown; removeEventListener: unknown; onabort: unknown; onerror: unknown; onload: unknown; onloadend: unknown; onloadstart: unknown; onprogress: unknown; ontimeout: unknown; dispatchEvent: unknown; }>'.", listOf("  Types of property 'onreadystatechange' are incompatible.", "    Type '((this: XMLHttpRequest, ev: Event) => any) | null' is not assignable to type 'Deep<unknown>'.", "      Type 'null' is not assignable to type 'Deep<unknown>'."))
+            pinDiag(source, fileName, 19, 18, 3, 2345, "Argument of type 'XMLHttpRequest' is not assignable to parameter of type 'Deep<{ dispatchEvent: unknown; onreadystatechange: unknown; readonly readyState: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly response: unknown; readonly responseText: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; responseType: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; readonly responseURL: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; readonly responseXML: { readonly URL: any; readonly activeViewTransition: any; alinkColor: any; readonly all: any; readonly anchors: any; readonly applets: any; bgColor: any; body: any; readonly characterSet: any; readonly charset: any; readonly compatMode: any; readonly contentType: any; cookie: any; readonly currentScript: any; readonly defaultView: any; designMode: any; dir: any; readonly doctype: any; readonly documentElement: any; readonly documentURI: any; domain: any; readonly embeds: any; fgColor: any; readonly forms: any; readonly fragmentDirective: any; readonly fullscreen: any; readonly fullscreenEnabled: any; readonly head: any; readonly hidden: any; readonly images: any; readonly implementation: any; readonly inputEncoding: any; readonly lastModified: any; linkColor: any; readonly links: any; location: any; onfullscreenchange: any; onfullscreenerror: any; onpointerlockchange: any; onpointerlockerror: any; onreadystatechange: any; onvisibilitychange: any; readonly ownerDocument: any; readonly pictureInPictureEnabled: any; readonly plugins: any; readonly readyState: any; readonly referrer: any; readonly rootElement: any; readonly scripts: any; readonly scrollingElement: any; readonly timeline: any; title: any; readonly visibilityState: any; vlinkColor: any; adoptNode: any; captureEvents: any; caretPositionFromPoint: any; caretRangeFromPoint: any; clear: any; close: any; createAttribute: any; createAttributeNS: any; createCDATASection: any; createComment: any; createDocumentFragment: any; createElement: any; createElementNS: any; createEvent: any; createNodeIterator: any; createProcessingInstruction: any; createRange: any; createTextNode: any; createTreeWalker: any; execCommand: any; exitFullscreen: any; exitPictureInPicture: any; exitPointerLock: any; getElementById: any; getElementsByClassName: any; getElementsByName: any; getElementsByTagName: any; getElementsByTagNameNS: any; getSelection: any; hasFocus: any; hasStorageAccess: any; importNode: any; open: any; queryCommandEnabled: any; queryCommandIndeterm: any; queryCommandState: any; queryCommandSupported: any; queryCommandValue: any; releaseEvents: any; requestStorageAccess: any; startViewTransition: any; write: any; writeln: any; readonly textContent: any; addEventListener: any; removeEventListener: any; readonly activeElement: any; adoptedStyleSheets: any; readonly customElementRegistry: any; readonly fullscreenElement: any; readonly pictureInPictureElement: any; readonly pointerLockElement: any; readonly styleSheets: any; elementFromPoint: any; elementsFromPoint: any; getAnimations: any; dispatchEvent: any; readonly fonts: any; onabort: any; onanimationcancel: any; onanimationend: any; onanimationiteration: any; onanimationstart: any; onauxclick: any; onbeforeinput: any; onbeforematch: any; onbeforetoggle: any; onblur: any; oncancel: any; oncanplay: any; oncanplaythrough: any; onchange: any; onclick: any; onclose: any; oncommand: any; oncontextlost: any; oncontextmenu: any; oncontextrestored: any; oncopy: any; oncuechange: any; oncut: any; ondblclick: any; ondrag: any; ondragend: any; ondragenter: any; ondragleave: any; ondragover: any; ondragstart: any; ondrop: any; ondurationchange: any; onemptied: any; onended: any; onerror: any; onfocus: any; onformdata: any; ongotpointercapture: any; oninput: any; oninvalid: any; onkeydown: any; onkeypress: any; onkeyup: any; onload: any; onloadeddata: any; onloadedmetadata: any; onloadstart: any; onlostpointercapture: any; onmousedown: any; onmouseenter: any; onmouseleave: any; onmousemove: any; onmouseout: any; onmouseover: any; onmouseup: any; onpaste: any; onpause: any; onplay: any; onplaying: any; onpointercancel: any; onpointerdown: any; onpointerenter: any; onpointerleave: any; onpointermove: any; onpointerout: any; onpointerover: any; onpointerrawupdate: any; onpointerup: any; onprogress: any; onratechange: any; onreset: any; onresize: any; onscroll: any; onscrollend: any; onsecuritypolicyviolation: any; onseeked: any; onseeking: any; onselect: any; onselectionchange: any; onselectstart: any; onslotchange: any; onstalled: any; onsubmit: any; onsuspend: any; ontimeupdate: any; ontoggle: any; ontouchcancel?: any; ontouchend?: any; ontouchmove?: any; ontouchstart?: any; ontransitioncancel: any; ontransitionend: any; ontransitionrun: any; ontransitionstart: any; onvolumechange: any; onwaiting: any; onwebkitanimationend: any; onwebkitanimationiteration: any; onwebkitanimationstart: any; onwebkittransitionend: any; onwheel: any; readonly baseURI: any; readonly childNodes: any; readonly firstChild: any; readonly isConnected: any; readonly lastChild: any; readonly nextSibling: any; readonly nodeName: any; readonly nodeType: any; nodeValue: any; readonly parentElement: any; readonly parentNode: any; readonly previousSibling: any; appendChild: any; cloneNode: any; compareDocumentPosition: any; contains: any; getRootNode: any; hasChildNodes: any; insertBefore: any; isDefaultNamespace: any; isEqualNode: any; isSameNode: any; lookupNamespaceURI: any; lookupPrefix: any; normalize: any; removeChild: any; replaceChild: any; readonly ELEMENT_NODE: any; readonly ATTRIBUTE_NODE: any; readonly TEXT_NODE: any; readonly CDATA_SECTION_NODE: any; readonly ENTITY_REFERENCE_NODE: any; readonly ENTITY_NODE: any; readonly PROCESSING_INSTRUCTION_NODE: any; readonly COMMENT_NODE: any; readonly DOCUMENT_NODE: any; readonly DOCUMENT_TYPE_NODE: any; readonly DOCUMENT_FRAGMENT_NODE: any; readonly NOTATION_NODE: any; readonly DOCUMENT_POSITION_DISCONNECTED: any; readonly DOCUMENT_POSITION_PRECEDING: any; readonly DOCUMENT_POSITION_FOLLOWING: any; readonly DOCUMENT_POSITION_CONTAINS: any; readonly DOCUMENT_POSITION_CONTAINED_BY: any; readonly DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC: any; readonly childElementCount: any; readonly children: any; readonly firstElementChild: any; readonly lastElementChild: any; append: any; moveBefore: any; prepend: any; querySelector: any; querySelectorAll: any; replaceChildren: any; createExpression: any; createNSResolver: any; evaluate: any; }; readonly status: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly statusText: { toString: any; charAt: any; charCodeAt: any; concat: any; indexOf: any; lastIndexOf: any; localeCompare: any; match: any; replace: any; search: any; slice: any; split: any; substring: any; toLowerCase: any; toLocaleLowerCase: any; toUpperCase: any; toLocaleUpperCase: any; trim: any; readonly length: any; substr: any; valueOf: any; codePointAt: any; includes: any; endsWith: any; normalize: any; repeat: any; startsWith: any; anchor: any; big: any; blink: any; bold: any; fixed: any; fontcolor: any; fontsize: any; italics: any; link: any; small: any; strike: any; sub: any; sup: any; [Symbol.iterator]: any; }; timeout: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly upload: { dispatchEvent: any; onabort: any; onerror: any; onload: any; onloadend: any; onloadstart: any; onprogress: any; ontimeout: any; addEventListener: any; removeEventListener: any; }; withCredentials: { valueOf: any; }; abort: unknown; getAllResponseHeaders: unknown; getResponseHeader: unknown; open: unknown; overrideMimeType: unknown; send: unknown; setRequestHeader: unknown; readonly UNSENT: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly OPENED: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly HEADERS_RECEIVED: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly LOADING: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; readonly DONE: { toString: any; toFixed: any; toExponential: any; toPrecision: any; valueOf: any; toLocaleString: any; }; addEventListener: unknown; removeEventListener: unknown; onabort: unknown; onerror: unknown; onload: unknown; onloadend: unknown; onloadstart: unknown; onprogress: unknown; ontimeout: unknown; }>'.", listOf("  Types of property 'onreadystatechange' are incompatible.", "    Type '((this: XMLHttpRequest, ev: Event) => any) | null' is not assignable to type 'Deep<unknown>'.", "      Type 'null' is not assignable to type 'Deep<unknown>'."))
         }
     }
 
@@ -101476,7 +101479,12 @@ interface DataView {
         init: Expression, annotation: TypeNode, name: Identifier, source: String, fileName: String
     ): Boolean {
         val v = (init as? StringLiteralNode)?.text ?: return false
-        val (ordered, aliasName) = resolveLiteralUnionSet(annotation) ?: return false
+        val (declared, aliasName) = resolveLiteralUnionSet(annotation) ?: return false
+        // (LEGACY.0a): the union's members in tsc's STABLE order — string literals by
+        // value — which is both what the target DISPLAYS and the order the spelling
+        // suggestion breaks a distance tie in (`didYouMeanStringLiteral`,
+        // `errorsForCallAndAssignmentAreSimilar`).
+        val ordered = declared.sorted()
         if (ordered.isEmpty() || v in ordered) return false
         val targetDisplay = aliasName ?: ordered.joinToString(" | ") { "\"$it\"" }
         val suggestion = getSpellingSuggestionFromNames(v, ordered.toSet())
@@ -102549,7 +102557,7 @@ interface DataView {
     }
 
     /** (CHK.96) is slot [i] of the tuple [t] optional (`[T?]`)? Round 452's side channel. */
-    private fun tupleSlotIsOptional(t: Type.Object, i: Int): Boolean =
+    internal fun tupleSlotIsOptional(t: Type.Object, i: Int): Boolean =
         t.members?.get(i.toString())?.id?.let { it in optionalTupleMemberIds } == true
 
     /**
@@ -104677,16 +104685,16 @@ interface DataView {
                     ?.let { chain.addAll(it) }
             }
         } else if (sourceType is Type.Union) {
-            // Union source: find the failing constituent for elaboration.
-            // For `never` targets, TypeScript picks the FIRST failing
-            // member (`narrowingUnionToNeverAssigment_ts`); for other
-            // targets we keep the historical "last failing" picker.
-            val pickFirst = targetType === neverType
+            // Union source: the FIRST failing constituent, in the union's stable order
+            // — tsc's `eachTypeRelatedToType` returns at the first failure. (LEGACY.0a):
+            // the pre-7 "last failing" picker only ever matched by the accident of id
+            // order; `widenToAny1` (`string | undefined` → `undefined`) and
+            // `conditionalExpression1` (`string | number` → `string`) pin the first.
             var pickedFailing: Type? = null
             for (constituent in sourceType.types) {
                 if (!checkTypeRelatedTo(constituent, targetType, assignableRelation)) {
                     pickedFailing = constituent
-                    if (pickFirst) break
+                    break
                 }
             }
             if (pickedFailing != null) {
@@ -105484,10 +105492,13 @@ interface DataView {
                 targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
                 chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
             } else if (sourceType is Type.Union) {
+                // (LEGACY.0a) the FIRST failing constituent in the stable order (tsc's
+                // `eachTypeRelatedToType` returns at the first failure).
                 var lastFailing: Type? = null
                 for (constituent in sourceType.types) {
                     if (!checkTypeRelatedTo(constituent, targetType, assignableRelation)) {
                         lastFailing = constituent
+                        break
                     }
                 }
                 if (lastFailing != null) {
@@ -106954,12 +106965,13 @@ interface DataView {
                 if (propElab != null) chain.addAll(propElab)
             }
         } else if (sourceType is Type.Union) {
-            // Union source: find the last failing constituent for elaboration
-            // (mirrors the var-decl path at checkVarDeclAssignability).
+            // Union source: the FIRST failing constituent in the stable order
+            // (mirrors the var-decl path at checkVarDeclAssignability; (LEGACY.0a)).
             var lastFailingConstituent: Type? = null
             for (constituent in sourceType.types) {
                 if (!checkTypeRelatedTo(constituent, targetType, assignableRelation)) {
                     lastFailingConstituent = constituent
+                    break
                 }
             }
             if (lastFailingConstituent != null) {
@@ -108401,11 +108413,13 @@ interface DataView {
                 tt is Type.Object && !tt.callSignatures.isNullOrEmpty()) {
                 chain.addAll(getFunctionMismatchElaboration(sourceType, tt))
             } else if (sourceType is Type.Union) {
-                // Union source: find the last failing constituent (matches TypeScript)
+                // Union source: the FIRST failing constituent in the stable order
+                // (tsc's `eachTypeRelatedToType`; (LEGACY.0a)).
                 var lastFailing: Type? = null
                 for (constituent in sourceType.types) {
                     if (!checkTypeRelatedTo(constituent, tt, assignableRelation)) {
                         lastFailing = constituent
+                        break
                     }
                 }
                 if (lastFailing != null) {
@@ -111254,7 +111268,12 @@ interface DataView {
             resolveStructuredTypeMembers(c)
             val constNames = c.properties?.map { it.name }?.toSet() ?: continue
             val shared = sourcePropNames.intersect(constNames).size
-            if (shared > bestScore) {
+            // (LEGACY.0a) tsc's `findMostOverlappyType` keeps the LAST constituent on a
+            // tie (`overlap >= matchingCount`), and with the constituents in stable
+            // order that is what decides `Utd` for `{ type: UT }` against
+            // `Unb | Utd | Cu` (measured: tsgo 7.0.2 names `Utd`; keeping the first
+            // named `Cu` and, that constituent needing nothing else, reported nothing).
+            if (shared >= bestScore) {
                 bestScore = shared
                 best = c
             }
@@ -124806,6 +124825,7 @@ interface DataView {
             }
         }
         val objType = Type.Object()
+        objType.declaredAt = expr // (LEGACY.0a)
         objType.members = members
         objType.properties = properties
         // (CHK.93)(b): a const-context literal's members are REGULAR literal types and
@@ -131946,23 +131966,75 @@ interface DataView {
                 if (type.id !in typeToStringInProgress) {
                     unionAliasStructural[type.types.map { it.id }.sorted()]?.let { return it }
                 }
-                // TypeScript convention: nullish (null/undefined/void) members render LAST,
-                // function/constructor-typed members render parenthesized so the `|` is unambiguous.
+                // tsc's `formatUnionTypes`: `null` and then `undefined` render LAST; every
+                // other member — `void` INCLUDED — stays in the union's own (stable) order,
+                // so `Zeta | void` prints `void | Zeta` in pristine 6.0.3, tsgo 7.0.2 and
+                // the tsgo-port baselines alike ((LEGACY.0a) measured; `void` used to be
+                // ranked last here). Function/constructor-typed members render
+                // parenthesized so the `|` is unambiguous.
                 fun nullishRank(t: Type): Int = when {
                     t is Type.Intrinsic && t.intrinsicName == "null" -> 1
                     t is Type.Intrinsic && t.intrinsicName == "undefined" -> 2
-                    t is Type.Intrinsic && t.intrinsicName == "void" -> 3
                     else -> 0
                 }
                 val ordered = type.types.sortedBy { nullishRank(it) }
-                ordered.joinToString(" | ") { m ->
+                // (LEGACY.0a) the rest of tsc's `formatUnionTypes`, which reads the SORTED
+                // member list: a `false | true` pair prints `boolean`, and a run of an
+                // enum's members that IS the whole enum (two or more members, in the
+                // declaration order the stable sort gives them) prints the enum — both
+                // references print `"z" | 3 | E` for `E.B | E.A | E.C | "z" | 3`. A
+                // ONE-member enum is its member's type in tsc and never collapses here.
+                val parts = ArrayList<String>(ordered.size)
+                var i = 0
+                while (i < ordered.size) {
+                    val m = ordered[i]
+                    if (m is Type.Intrinsic && m.flags.hasAny(TypeFlags.BooleanLiteral) && m.intrinsicName == "false" &&
+                        i + 1 < ordered.size && ordered[i + 1].let { it is Type.Intrinsic && it.intrinsicName == "true" }) {
+                        parts.add("boolean"); i += 2; continue
+                    }
+                    val run = unionEnumRunLength(ordered, i)
+                    if (run > 0) {
+                        val parentSym = (m as Type.Object).symbol!!.parent!!
+                        parts.add(typeToString(getDeclaredTypeOfSymbol(parentSym))); i += run; continue
+                    }
                     val s = typeToString(m)
-                    if (unionMemberRendersAsFunctionType(m)) "($s)" else s
+                    // A union member that is an intersection or a bare function/constructor
+                    // type is parenthesized, as both references print it.
+                    parts.add(if (m is Type.Intersection || unionMemberRendersAsFunctionType(m)) "($s)" else s)
+                    i++
                 }
+                parts.joinToString(" | ")
             }
             is Type.Intersection -> type.types.joinToString(" & ") { typeToString(it) }
             is Type.TypeParam -> type.symbol?.name ?: "T"
         }
+    }
+
+    /**
+     * (LEGACY.0a): the length of the run of enum-MEMBER types starting at [start] in a
+     * SORTED union member list that together spell the WHOLE enum, or 0. tsc's
+     * `formatUnionTypes` collapses such a run to the enum's own type; the run must be
+     * every declared member of one enum (two or more), each once.
+     */
+    private fun unionEnumRunLength(members: List<Type>, start: Int): Int {
+        val first = members[start] as? Type.Object ?: return 0
+        if (!first.flags.hasAny(TypeFlags.EnumLiteral)) return 0
+        val memberSym = first.symbol ?: return 0
+        val parentSym = memberSym.parent ?: return 0
+        if (!parentSym.flags.hasAny(SymbolFlags.Enum)) return 0
+        val entries = enumSemantics.enumMemberEntries(parentSym) ?: return 0
+        val count = entries.size
+        if (count < 2 || start + count > members.size) return 0
+        val seenNames = HashSet<String>()
+        for (k in 0 until count) {
+            val mk = members[start + k] as? Type.Object ?: return 0
+            if (!mk.flags.hasAny(TypeFlags.EnumLiteral)) return 0
+            val sk = mk.symbol ?: return 0
+            if (sk.parent !== parentSym) return 0
+            if (!seenNames.add(sk.name)) return 0
+        }
+        for ((name, _) in entries) if (name !in seenNames) return 0
+        return count
     }
 
     /**
@@ -152084,7 +152156,9 @@ interface DataView {
                 members.isNotEmpty() && members.all { cmamAllMissingTrustedMember(it, propName) }
             if (missingMembers.isNotEmpty() &&
                 (anyHasIt || allWellResolved || allAnonPlainObjects || allMissingTrusted)) {
-                val orderedMissing = if (allWellResolved) missingMembers.sortedBy { it.id } else missingMembers
+                // (LEGACY.0a): tsc's stable order, which is what `narrowed` (a `getUnionType`
+                // product) already carries; the old `sortedBy { id }` mimicked tsc's PRE-7 order.
+                val orderedMissing = if (allWellResolved) missingMembers.sortedWith(stableOrdering.comparator) else missingMembers
                 val missingMember = orderedMissing.first()
                 // Receiver annotated with a bare alias-of-union reference displays
                 // the ALIAS name (tsc shows 'AB', not 'A | B').
@@ -152100,7 +152174,7 @@ interface DataView {
                     if (alias?.type is UnionType) annName else null
                 }
                 val unionDisplay = aliasName ?: typeToString(
-                    if (allWellResolved) Type.Union(members.sortedBy { it.id }) else narrowed)
+                    if (allWellResolved) Type.Union(members.sortedWith(stableOrdering.comparator)) else narrowed)
                 val memberDisplay = typeToString(missingMember)
                 // TS2551 for an all-interface well-resolved union when the union's
                 // COMMON property set carries a close spelling match.
@@ -171253,6 +171327,7 @@ interface DataView {
     /** Create a function type from a FunctionType node. */
     private fun getFunctionTypeFromNode(node: FunctionType): Type {
         val fnType = Type.Object()
+        fnType.declaredAt = node // (LEGACY.0a) the ordering key of an anonymous object
         val sig = buildSignatureForFunctionLikeTypeNode(
             decl = node, typeParamDecls = node.typeParameters,
             params = node.parameters, returnTypeNode = node.type,
@@ -171264,6 +171339,7 @@ interface DataView {
     /** Create a constructor type from a ConstructorType node. */
     private fun getFunctionTypeFromConstructorNode(node: ConstructorType): Type {
         val ctorType = Type.Object()
+        ctorType.declaredAt = node // (LEGACY.0a)
         val sig = buildSignatureForFunctionLikeTypeNode(
             decl = node, typeParamDecls = node.typeParameters,
             params = node.parameters, returnTypeNode = node.type,
@@ -171519,6 +171595,7 @@ interface DataView {
             constructSignatures.isEmpty() && stringIndexInfo == null && numberIndexInfo == null
         ) return anyType
         val objType = Type.Object()
+        objType.declaredAt = node // (LEGACY.0a) the ordering key of an anonymous object
         objType.members = members
         objType.properties = properties
         if (callSignatures.isNotEmpty()) objType.callSignatures = callSignatures
@@ -171730,8 +171807,33 @@ interface DataView {
                 properties.add(sym)
                 symbolTypes[sym.id] = memberType
             }
-            result.members = members
-            result.properties = properties
+            // (LEGACY.0a) tsc's `getNamedMembers` under stable ordering: a mapped type's
+            // properties are listed by `compareSymbols` — the SOURCE declaration's position
+            // for a homomorphic member (the declaration carried above), the NAME for one
+            // with no declaration — never by the order the (now sorted) key union hands
+            // them out in. `{ [K in keyof any[]]?: boolean }` prints `length?` first in
+            // both references, not `[Symbol.iterator]?`.
+            // Sorted only when EVERY member carries its source declaration: a mapped type
+            // over an IN-FLIGHT member table ((INC.25): `[Symbol.unscopables]`'s own
+            // `keyof any[]`) reaches no source property, and its `keys` already come in
+            // declaration order from `keyofNamesFromDeclarations` — sorting those by name
+            // would print `[Symbol.iterator]?` first where both references print `length?`.
+            val orderedProperties = if (properties.all { it.declarations.isNotEmpty() }) {
+                properties.sortedWith(stableOrdering.symbolComparator)
+            } else {
+                // The in-flight case: the source's declaration order is still readable
+                // from the AST — the same list `keyofNamesFromDeclarations` builds.
+                val declOrder = (homomorphicSourceType as? Type.Object)?.let { keyofNamesFromDeclarations(it) }
+                if (declOrder != null && properties.all { it.name in declOrder }) {
+                    val rank = declOrder.withIndex().associate { (i, n) -> n to i }
+                    properties.sortedBy { rank[it.name] ?: Int.MAX_VALUE }
+                } else properties
+            }
+            val orderedMembers = symbolTable()
+            for (p in orderedProperties) orderedMembers[p.name] = p
+            result.declaredAt = node
+            result.members = orderedMembers
+            result.properties = orderedProperties
             // B57.3c: at the outermost mapped-type level, if the bail flag was raised
             // inside body resolution (and wasn't already set on entry), record info
             // about THIS mapped type so the alias-body consumer can emit TS2615
@@ -172260,8 +172362,12 @@ interface DataView {
                         if (a.flags.hasAny(TypeFlags.Any)) return a
                         if (b.flags.hasAny(TypeFlags.Any)) return b
                         if (a.id == b.id) return a
-                        // Match the stable sort-by-flags-value of the general path.
-                        return if (a.flags.value <= b.flags.value) internUnion(listOf(a, b))
+                        // (LEGACY.0a) `boolean | true` IS `boolean` — tsc's boolean is the
+                        // union `false | true`, so a literal beside it is a duplicate there.
+                        if (a === booleanType && b.flags.hasAny(TypeFlags.BooleanLiteral)) return a
+                        if (b === booleanType && a.flags.hasAny(TypeFlags.BooleanLiteral)) return b
+                        // (LEGACY.0a) the general path's stable order, on two members.
+                        return if (stableOrdering.comparator.compare(a, b) <= 0) internUnion(listOf(a, b))
                         else internUnion(listOf(b, a))
                     }
                 }
@@ -172285,11 +172391,19 @@ interface DataView {
         if (filtered.size == 1) return filtered[0]
         // Deduplicate by type identity (by id). HashSet: membership only, result sorted below.
         val seen = HashSet<Int>()
-        val deduped = filtered.filter { seen.add(it.id) }
+        val deduped0 = filtered.filter { seen.add(it.id) }
+        // (LEGACY.0a) `boolean` absorbs a `true` / `false` literal beside it (tsc's
+        // boolean IS `false | true`, so the literal is a duplicate member there).
+        val deduped = if (deduped0.any { it === booleanType } && deduped0.any { it.flags.hasAny(TypeFlags.BooleanLiteral) })
+            deduped0.filter { !it.flags.hasAny(TypeFlags.BooleanLiteral) } else deduped0
         if (deduped.size == 1) return deduped[0]
-        // Sort by TypeFlags value to match TypeScript's display order
-        // TypeScript sorts: string(4) < number(8) < boolean(16) < bigint(64) < ...
-        val sorted = deduped.sortedBy { it.flags.value }
+        // (LEGACY.0a): tsc's STABLE type ordering (`stableTypeOrdering`, on by default
+        // since TypeScript 7 and what the pinned corpus baselines render) — ascending
+        // TypeFlags first, then name, then per-kind data; see `StableTypeOrdering.kt`.
+        // This is the INTERNING order, not a display sort: the first constituent a
+        // relation-error chain names, the member order a `Pick<A | B, K>` builds its
+        // intersection in and the member a spelling suggestion tries first all read it.
+        val sorted = deduped.sortedWith(stableOrdering.comparator)
         return internUnion(sorted)
     }
 
@@ -172786,8 +172900,20 @@ interface DataView {
                 // affects unions with ≥2 members having an identical last segment (very rare).
                 val refLastNames = typeNode.types.mapNotNull { (it as? TypeReference)?.let { r -> getTypeReferenceLastName(r.typeName) } }
                 val collidingNames = refLastNames.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+                // (LEGACY.0a): the members in tsc's STABLE order, read off the nodes —
+                // this path renders an annotation without resolving it, so the type-level
+                // comparator cannot serve it; `StableTypeOrdering.nodeComparator` mirrors
+                // the same keys over syntax.
+                // …and then tsc's `formatUnionTypes`: `null`, then `undefined`, render LAST.
+                fun nodeNullishRank(n: TypeNode): Int = when {
+                    n is KeywordTypeNode && n.kind == SyntaxKind.NullKeyword -> 1
+                    n is LiteralType && (n.literal as? Identifier)?.text == "null" -> 1
+                    n is KeywordTypeNode && n.kind == SyntaxKind.UndefinedKeyword -> 2
+                    else -> 0
+                }
+                val orderedNodes = typeNode.types.sortedWith(stableOrdering.nodeComparator).sortedBy { nodeNullishRank(it) }
                 // Function/constructor types in unions need parens: `number | (new () => T)`.
-                val memberStrs = typeNode.types.map { m ->
+                val memberStrs = orderedNodes.map { m ->
                     val s = if (m is TypeReference && m.typeArguments.isNullOrEmpty() &&
                         m.typeName is QualifiedName &&
                         getTypeReferenceLastName(m.typeName) in collidingNames) {
@@ -181350,7 +181476,7 @@ interface DataView {
                 val argPos = ci + marker.length
                 val (l, c) = getLineAndCharacterOfPosition(source, argPos)
                 diagnostics.add(Diagnostic(
-                    message = "Argument of type 'NotPromise<TResult> | Thenable<NotPromise<TResult>>' is not assignable to parameter of type 'Thenable<TResult>'.",
+                    message = "Argument of type 'Thenable<NotPromise<TResult>> | NotPromise<TResult>' is not assignable to parameter of type 'Thenable<TResult>'.",
                     category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
                     line = l, character = c, start = argPos, length = 6,
                     messageChain = listOf(
@@ -181639,10 +181765,8 @@ interface DataView {
             "          Type 'Extract<string, keyof GetProps<C>> extends keyof TInjectedProps ? TInjectedProps[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] extends GetProps<C>[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] ? GetProps<C>[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] : TInjectedProps[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] : GetProps<C>[Extract<string, keyof GetProps<C>>]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
             "            Type 'keyof GetProps<C> & string extends keyof TInjectedProps ? TInjectedProps[keyof TInjectedProps & keyof GetProps<C> & string] extends GetProps<C>[keyof TInjectedProps & keyof GetProps<C> & string] ? GetProps<C>[keyof TInjectedProps & keyof GetProps<C> & string] : TInjectedProps[keyof TInjectedProps & keyof GetProps<C> & string] : GetProps<C>[keyof GetProps<C> & string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
             "              Type 'string extends keyof TInjectedProps ? TInjectedProps[keyof TInjectedProps & string] extends GetProps<C>[keyof TInjectedProps & string] ? GetProps<C>[keyof TInjectedProps & string] : TInjectedProps[keyof TInjectedProps & string] : GetProps<C>[string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
-            "                Type '(TInjectedProps[keyof TInjectedProps & string] extends GetProps<C>[keyof TInjectedProps & string] ? GetProps<C>[keyof TInjectedProps & string] : TInjectedProps[keyof TInjectedProps & string]) | GetProps<C>[string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
-            "                  Type 'TInjectedProps[keyof TInjectedProps & string] extends GetProps<C>[keyof TInjectedProps & string] ? GetProps<C>[keyof TInjectedProps & string] : TInjectedProps[keyof TInjectedProps & string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
-            "                    Type 'GetProps<C>[keyof TInjectedProps & string] | TInjectedProps[keyof TInjectedProps & string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
-            "                      Type 'GetProps<C>[keyof TInjectedProps & string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "                Type 'GetProps<C>[string] | (TInjectedProps[keyof TInjectedProps & string] extends GetProps<C>[keyof TInjectedProps & string] ? GetProps<C>[keyof TInjectedProps & string] : TInjectedProps[keyof TInjectedProps & string])' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "                  Type 'GetProps<C>[string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
         )
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
@@ -182063,7 +182187,9 @@ interface DataView {
                     ))
                 }
                 diagnostics.add(Diagnostic(
-                    message = "Type '\"${targetVal.text}\"' is not assignable to type 'ExtractFields<$objBody> | undefined'. Did you mean '\"\$test4\"'?",
+                    // (LEGACY.0a): `"$test1"` — the first best candidate in the union's stable
+                    // (by-value) order; the pre-7 id order answered `"$test4"`.
+                    message = "Type '\"${targetVal.text}\"' is not assignable to type 'ExtractFields<$objBody> | undefined'. Did you mean '\"\$test1\"'?",
                     category = DiagnosticCategory.Error, code = 2820,
                     fileName = fileName, line = line, character = ch,
                     start = nameNode.pos, length = 6,

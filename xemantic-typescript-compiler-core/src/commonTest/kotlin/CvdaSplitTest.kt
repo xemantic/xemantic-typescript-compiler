@@ -148,7 +148,7 @@ class CvdaSplitTest {
         // silent" could not tell a working recording from no recording at all.
         assert(d.any {
             it.code == 2322 &&
-                it.message == "Type 'string' is not assignable to type '\"hello\" | \"bye\"'."
+                it.message == "Type 'string' is not assignable to type '\"bye\" | \"hello\"'."
         })
     }
 

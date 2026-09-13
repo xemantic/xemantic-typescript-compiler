@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **192,433** lines (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **194,425** lines (**+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,26 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.85) — (LEGACY.0a): THE CORPUS IS PINNED TO tsgo's `tsgo-port` SHA, AND tsc's STABLE TYPE ORDERING IS AN *INTERNING* ORDER RATHER THAN A DISPLAY ONE, 19,045 / 0 / 20 (2026-09-13).**
+`typeScriptCommit` moves to `4d4f005c` (tsgo 7.0.2's `_submodules/TypeScript`); the corpus
+generates 8,838 subtests and the first run read **29 red, exactly the sizing's
+22 / 2 / 2 / 2 / 1**. tsc's `compareTypes` (checker.ts:53856) is reproduced in
+`StableTypeOrdering.kt` and wired into `getUnionType` — **display-only was measured
+insufficient**, because the first-failing chain constituent, a `Pick<A|B,K>` intersection,
+the TS2339 sub-line and the suggestion tie-break all read the INTERNAL member list. Two
+facts the brief lacked: **TypeScript 7 reordered `TypeFlags`** (so `NEW_BIT` remaps per bit
+and `Zeta | void` prints `void | Zeta` on both references), and pristine 6.0.3 under
+`--stableTypeOrdering` equals tsgo on 21/21 fixture rows. Twelve reds closed through the
+engine, six were hand-written expectations re-measured against tsgo, and **17 survive as a
+new `tsgoPendingBaselines` list** — `@Ignore`d, visible, counted, stale-checked, and
+deliberately NOT `LogicalParityDivergence` (these are rows to IMPLEMENT, not divergences to
+keep, so no `pinnedBy`). The sizing predicted ≤4 residue; 17 survive because most ordering
+rows never pass through `typeToString(Type.Union)` at all. Ablation 13 RED (comparator
+reverted) / 5 RED (name key dropped). Grid 8×`added=0 removed=0`, marked 18→18, cronstrue
+1→1, huge_methods exit 0, warning-clean. **cost_gate REBASELINED with attribution**: the
++2.13% printed against the stale baseline is +1.31% on a rebuilt pristine parent, so this
+change's own effect is `typeNode.bypassed` +0.81% — the interning-order change means
+`Foo | Bar` and `Bar | Foo` now intern to ONE union. (LEGACY.0) stays open on (0b).
 **(P18.84) — (CHK.98) STAGE 2: `Promise.then`, A NAMESPACE-IMPORT CALLEE AND PREDICATE `filter` — TWO INSTANTIATIONS THAT NO-OP'D A UNION-WRAPPED FUNCTION TYPE, AND THE ITEM CLOSES, 19,028 / 0 / 3 (2026-09-12).**
 The first round measured against tsgo 7.0.2 ALONE (owner directive the same day). A
 callback passed to `then`/`catch` was untyped because the lib parameter is
@@ -89,20 +109,3 @@ pre-existing general gap reproduced WITHOUT `bind` (a variable callee's TS2554, 
 gotcha). Ablation 43/26/6/8 RED over 127 pins. cost_gate exit 0 with 20/20 counters
 digit-identical to the rebuilt HEAD, huge_methods exit 0, warning-clean. **(CHK.134) is
 CHECKED OFF**; next is (CHK.98).
-
-**(P18.80) — (CHK.134)(1): `f.call` / `f.apply` TYPED FROM THE RECEIVER'S OWN SIGNATURE — NO INFERENCE WAS NEEDED, AND THE GRID'S ONE ROW PER PROFILE WAS A MISSING OPTION, 18,854 / 0 / 3 (2026-09-12).**
-tsc's `getPropertyOfType` miss augmentation now serves a function-shaped receiver: `call`
-and `apply` are BUILT from the receiver's last signature (`CallableFunction`'s `T`/`A`/`R`
-each have exactly one candidate, so nothing is inferred; `call` expands the parameters as
-tsc's messages count them, `apply` is built per call from the argument count), plus the
-`Function` members. **The grid read +1 row on every profile and the cause was an option this
-compiler did not have**: tsc's own sources set `"strictBindCallApply": false` explicitly,
-and `utilities.ts:11201`'s `stringReplace.call(s, "*", replacement)` is exactly tsc's
-strict answer; `strictBindCallApply` now exists (flag if set, else `strict`) and the grid is
-8×`added=0 removed=0` — it gates the OPTION, marked (strict, 14 sites resolved, 18 → 18)
-exercised the synthesis. Every `call`/`apply` shape across 55 fixtures `missing → agree`,
-zero ours-only; the parser had been DROPPING tuple labels (`TupleType.elementNames`) and
-tsc's optional-tuple display landed with it. Ablation 31/4/15/9/2 RED over 45 pins, a5
-reddening the compiler profile to 47 rows. cost_gate exit 0 (18/20 digit-identical;
-`globals.lookups` +19 is the `Function` consult), huge_methods exit 0, warning-clean.
-(CHK.134) stays open on `bind`.

@@ -415,7 +415,7 @@ export type TomlValueWithoutBigInt = Exclude<TomlPrimitive, bigint> | TomlValueW
     fun `smol-toml's recursive and union aliases refuse loudly`() {
         val result = generateSmolToml()
         val rendered = result.kotlin
-        val primitive = "/* xtsc: skipped type alias TomlPrimitive with unmappable body string | number | boolean | bigint | TomlDate */" in rendered
+        val primitive = "/* xtsc: skipped type alias TomlPrimitive with unmappable body string | number | bigint | boolean | TomlDate */" in rendered
         val bigInt = "/* xtsc: skipped type alias IntegersAsBigInt with unmappable body" in rendered
         val table = "/* xtsc: skipped type alias TomlTable with unmappable body" in rendered
         val value = "/* xtsc: skipped type alias TomlValue with unmappable body" in rendered

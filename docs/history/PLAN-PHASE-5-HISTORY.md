@@ -1,3 +1,81 @@
+### Round (P18.75) — (CHK.97) D3, the IDENTICAL half: a union contextual signature is answered, and the brief's own fixture never reached the arm (2026-09-12)
+
+**Suite 18,699 → 18,718 / 0 / 3** (+19 pins, `UnionContextualSignatureIdenticalTest`). Grid
+8×`added=0 removed=0`; `cost_gate.py` exit 0, no rebaseline (`mapped.keyed` +1.18% and
+`mapped.hits` +1.03% are BASELINE STALENESS — the pristine before-binary through `--from-log`
+reads every one of the 20 counters digit-identical to the fixed one, so the fix moves zero
+counters); `huge_methods.py --fail-over 0` exit 0 (844 classes); warning-clean. **(CHK.97) stays
+OPEN** — D3's DIFFERING half, D5 and D6 remain.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.97) is the first unchecked queue item and the last three
+round notes each named D3's identical half as the next tractable sub-step. Per the WORK ORDER's
+2026-09-08 addendum the successor is **(INV.0) step 10b-ii**.
+
+**THE FIX IS tsc's OWN RULE, ~50 LINES.** `callableSignaturesForCtx`'s union arm refused at the
+SECOND callable member (`if (single != null) return null`). It now collects every callable member
+and hands ≥2 to `unionContextualSignature` — the union arm of tsc's `getContextualSignature`
+(checker.ts:33224): each member contributes its ONE own call signature, every later one must be
+`compareSignaturesIdentical(first, sig, partialMatch = false, ignoreReturnTypes = true)` (`this`
+ignored by construction — `getParameterSymbols` never lists it), and the answer is
+`createUnionSignature` — the first member's parameters with the members' RETURNS unioned. A
+failing comparison answers null, which is today's silence: the DIFFERING half (tsc's TS7006 on
+the parameter) is NOT emitted and is recorded below. The single-callable-member path is
+byte-for-byte the old code.
+
+**THE BRIEF'S FIXTURE SHAPE WAS THE WRONG INSTRUMENT.** The obvious repro —
+`declare const zf: A | B; zf((p) => …)` — never reaches the union arm at all: the argument is
+handed the COMBINED signature's parameter (stage 1's `combineUnionSignatures`), so both
+references print TS7006 + TS2345 there and the shape measures the union CALLEE, not the union
+CONTEXTUAL TYPE. The whole matrix was re-cut through `declare function take(cb: A | B)` and
+through annotations (variable, object-literal property, return position). Before → after per
+fixture (`agree/ours-only/missing`, zero REF-SPLIT anywhere): identical params with differing
+returns 0/0/1 → 1/0/0; identical params and returns 0/0/1 → 1/0/0; three members 0/0/1 → 1/0/0;
+a nullish member beside two identical ones 0/0/1 → 1/0/0; differing `this` 0/0/1 → 1/0/0; the
+four positions (call argument, variable annotation, object-literal property, return) 0/2/4 →
+4/0/0 — the TWO ours-only TS7006 rows that the old refusal manufactured are gone. Unchanged and
+correctly so: differing parameter TYPES, differing ARITY, `(x?: string)` vs `(x: string)`
+(not identical, refused on both sides).
+
+**TWO CONSERVATISMS THE HELPER NEEDS BECAUSE IT HAS NO NODE.** tsc filters each member's
+signatures by the ARROW's arity (`getContextualCallSignature`) before comparing; this helper is
+called without the arrow, so an OVERLOADED member refuses the whole union (measured residue, 2
+missing TS2322 rows, pinned as `residue - …`). And a `Type.Reference` whose OWN signatures are
+still lazy refuses rather than reading its TARGET's — the single-member path's target-fallback
+would have read `Cb<string> | Cb<number>` as identical and handed the arrow a bare `T`; that
+control is one of the three pins arm a2 reddens.
+
+**THE ARM ANSWERS ZERO TIMES ON EVERY PROFILE, SO THE GRID IS A CONTROL AND WAS MEASURED AS
+ONE.** A temporary counter read 0 on all eight dashboard profiles, 0 on `marked`, 0 on the
+2,400-file generated project and 14 on the round's own fixture — the KDoc first asserted the
+opposite and was corrected. The marker was removed and the shipped class proven
+bytecode-identical to the gated build (`javap -c -p` minus line numbers).
+
+**ABLATION (per-arm `cmp` snapshot, rebuilt after every restore, 19 pins per arm)**: a1 the
+arm restored to `return null` — **12 RED**; a2 an arity-only comparison — **3 RED** (the
+differing-types control, the `Cb<string> | Cb<number>` control, a nested differing pair); a3
+the FIRST member's return instead of the union — **1 RED**, and the obvious discriminator does
+not exist: the arrow's own return checked against the declared union never sees it (residue 7
+below); what does is the unioned return reaching a NESTED concise-body arrow whose inner
+contextual type is then a DIFFERING pair, so the inner parameter must be TS7006 — first-return-
+only types it and silences the row both references print.
+
+**RESIDUES, MEASURED AND NOT FIXED**: (1) the DIFFERING half — differing types, arity, an
+overloaded-vs-plain pair, a generic member, `(x?:)` vs `(x:)` — references TS7006, ours silent
+(the (CHK.98) territory the item already names; the arity walker records `typed = true` with no
+type); (2) the overloaded member above; (3) a BOTH-generic identical pair (references type
+`p: T`, ours nothing); (4) a REST contextual parameter against a plain arrow parameter types
+`string[]` for `string` — pre-existing on a SINGLE member too; (5) reads inside a NESTED arrow
+body of a contextually typed parameter report nothing — pre-existing single-member control; (6)
+TS2683 beside a union contextual `this`: `this` IS typed from the first member (its TS2322
+agrees with both references) but the TS2683 emitter's `typeIsFunctionWithThisParam` wants a
+`Type.Object`, so the ours-only TS2683 stays; (7) a concise-body object literal against a union
+of object-returning members is a pre-existing ours-only TS2322 (`(p: any) => { k: string; }`) —
+the arrow's VALUE type ignores the contextual signature.
+
+**NEXT**: (CHK.97)'s remaining rows are D3's DIFFERING half (TS7006 emission, unbounded per
+(CHK.50)) and D5 (one row). Per the WORK ORDER, **(INV.0) step 10b-ii** is where the order
+sends the arc.
+
 ### Round (P18.74) — (CHK.130): the parentheses were asking about the SHAPE, not about what is printed — and the instrument's FOURTH blindness (2026-09-11)
 
 **Suite 18,688 → 18,699 / 0 / 3** (+11 pins). Grid 8×`added=0 removed=0`; `cost_gate.py`

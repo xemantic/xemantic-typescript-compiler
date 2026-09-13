@@ -488,7 +488,7 @@ class BindingElementTypeTest {
         val ft = locals["ft"]; val frest = locals["frest"]; val fd = locals["fd"]; val fl = locals["fl"]
         assert(fp != null && fo != null && fr != null && ft != null && frest != null && fd != null && fl != null)
         assert(checker.getTypeOfSymbol(fp).toString() == "number")
-        assert(checker.getTypeOfSymbol(fo).toString() == "number | undefined")
+        assert(checker.typeToString(checker.getTypeOfSymbol(fo)) == "number | undefined")
         assert(checker.getTypeOfSymbol(fr).toString() == "string")
         assert(checker.getTypeOfSymbol(ft).toString() == "number")
         val restSlots = (checker.getTypeOfSymbol(frest) as? Type.Object)?.tupleElementTypes?.map { it.toString() }

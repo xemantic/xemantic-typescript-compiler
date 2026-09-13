@@ -236,25 +236,29 @@ tasks.register<JavaExec>("compileTsProject") {
 val typeScriptRepoDir = rootProject.projectDir.resolve("typescript-repo")
 
 /**
- * The exact mainline TypeScript commit our test corpus is PINNED to. This is the
- * PRISTINE tsc commit that tsgo's `_submodules/TypeScript` submodule MERGES IN — the
- * `main`-side parent of tsgo's current `tsgo-port` merge — NOT the tsgo-port branch
- * tip itself.
+ * The exact TypeScript commit our test corpus is PINNED to: tsgo 7.0.2's
+ * `_submodules/TypeScript` sha, i.e. the tip of the `tsgo-port` branch, whose
+ * `tests/baselines/reference` are regenerated to what TypeScript 7 emits.
  *
- * That distinction is LOAD-BEARING: the tsgo-port branch REGENERATES its reference
- * baselines to the Go compiler's output (e.g. a different, type-id-based union-member
- * display ordering: `'boolean' | 'number'` where tsc emits `'number' | 'boolean'`),
- * which are tsgo DIVERGENCES. We deliberately diff char-by-char against ORIGINAL tsc
- * (project owner's directive), so we pin to the pristine `main` commit tsgo tracks —
- * giving tsgo's exact test-case set (set A) with real tsc baselines.
+ * (LEGACY.0a), 2026-09-12, owner directive: TypeScript 7.0 / tsgo 7.0.2 is the ONLY
+ * compatibility target, and the corpus follows it. This supersedes the earlier rule
+ * ("never pin to the tsgo submodule sha; pin to its pristine `main`-side parent")
+ * that stood while pristine tsc was the reference.
  *
- * To follow tsgo forward, read tsgo's submodule sha, then take its `main`-side parent:
- *   S=$(curl -s https://api.github.com/repos/microsoft/typescript-go/contents/_submodules/TypeScript | grep '"sha"')
- *   # that sha is a "Merge branch 'main' into tsgo-port" commit; the pristine target
- *   # is its 2nd parent:
- *   curl -s https://api.github.com/repos/microsoft/TypeScript/commits/<sha>   # -> parents[1].sha
+ * What the sha IS, measured (`docs/tsgo-baselines.md`): the `tsgo-port` tip is a
+ * "Merge branch 'main' into tsgo-port" commit whose SECOND parent is pristine main
+ * `637d5746` (the previous pin), and the branch differs from pristine by exactly ONE
+ * source change — `stableTypeOrdering` defaulting ON (checker.ts:1545 + its
+ * commandLineParser default) — so its baselines are pristine's with tsc's STABLE
+ * type ordering (union/intersection constituents ordered by `compareTypes`, object
+ * members by `compareSymbols` = declaration position) instead of type-id order.
+ * 791 baselines differ, zero baselines are deleted, zero cases change.
+ *
+ * To follow tsgo forward, read tsgo's submodule sha and pin it DIRECTLY:
+ *   curl -s https://api.github.com/repos/microsoft/typescript-go/contents/_submodules/TypeScript | grep '"sha"'
+ * (For reference, its pristine main-side parent is `parents[1].sha` of that commit.)
  */
-val typeScriptCommit = "637d5746b70257028fb95aad32ddec6b26ab0a14" // pristine tsc @ 2026-06-25 (main-parent of tsgo pin 4d4f005c)
+val typeScriptCommit = "4d4f005c8541e0255a9d8791205fdce326e462bc" // tsgo 7.0.2 `_submodules/TypeScript` (tsgo-port tip; 2nd parent = pristine 637d5746)
 
 /**
  * Performs a sparse, PINNED, partial clone of the Microsoft TypeScript repository,
@@ -355,9 +359,130 @@ data class LogicalParityDivergence(
  */
 val logicalParityDivergences = listOf<LogicalParityDivergence>()
 
+/**
+ * (LEGACY.0a): a corpus baseline the pinned TypeScript 7 reference produces and this
+ * compiler does not produce YET — a row to IMPLEMENT, not a decision not to follow it.
+ *
+ * The corpus is pinned to tsgo 7.0.2's own baselines (see [typeScriptCommit]), so a
+ * red baseline is by definition tsgo's answer. While its family is unimplemented the
+ * subtest is generated `@Ignore`d — VISIBLE as skipped, counted in the build log as
+ * `tsgo-pending: N`, and STALE-CHECKED: an entry naming no generated subtest fails
+ * the build, so a baseline that starts passing (or is renamed) cannot sit in the list
+ * unnoticed. Unlike [LogicalParityDivergence] it needs no `pinnedBy` class — nothing
+ * is being pinned instead; the entry IS the queue. Remove the entry when the row lands.
+ *
+ * Procedure and ledger: `docs/logical-parity.md` § "tsgo-pending".
+ */
+data class TsgoPendingBaseline(
+    /** Exact baseline file name under `tests/baselines/reference` (e.g. `foo.errors.txt`). */
+    val baseline: String,
+    /** One line: the family and the tsgo row this compiler does not produce yet. */
+    val reason: String,
+)
+
+/** The live set; every entry is a red the (LEGACY.0a) re-pin left, by family. */
+val tsgoPendingBaselines = listOf(
+    TsgoPendingBaseline(
+        "coAndContraVariantInferences5.errors.txt",
+        "NEW in the tsgo-port baselines: a TS2322 on a contravariant callback property " +
+            "(`onChange: (status: Thing | null) => void` against `(key: KeyT) => void`) that " +
+            "generic inference does not reach here; not an ordering row.",
+    ),
+    TsgoPendingBaseline(
+        "complicatedIndexedAccessKeyofReliesOnKeyofNeverUpperBound.errors.txt",
+        "ORDER + downstream: the chain, the `Pick<…>` intersection and the constraint " +
+            "`\"email\" | \"text\"` all follow the union's stable member order " +
+            "(`ChannelOfType<T, EmailChannel>` first, by alias argument name); the pin " +
+            "walker prints the written order.",
+    ),
+    TsgoPendingBaseline(
+        "destructuringUnspreadableIntoRest.errors.txt",
+        "ORDER: `Omit<this, K>`'s literal-key argument is printed in destructuring order; " +
+            "tsc sorts the keys by value (`\"getter\" | \"method\" | \"publicProp\" | " +
+            "\"setter\"`). The rest type's display is built outside `getUnionType`.",
+    ),
+    TsgoPendingBaseline(
+        "errorsForCallAndAssignmentAreSimilar.errors.txt",
+        "ORDER: the TS2820 ARGUMENT-position literal-union target is printed in " +
+            "declaration order (`\"hddvd\" | \"bluray\"`); the declaration position was " +
+            "moved to the sorted display, the B364 argument walker still reads the annotation.",
+    ),
+    TsgoPendingBaseline(
+        "excessPropertyCheckWithMultipleDiscriminants.errors.txt",
+        "ORDER: the TS2353 union display (`A | Common`, `OneToOneAttribute | " +
+            "StringAttribute`, by name) is built by the discriminated-union excess walker in " +
+            "declaration order.",
+    ),
+    TsgoPendingBaseline(
+        "inDoesNotOperateOnPrimitiveTypes.errors.txt",
+        "ORDER: the chain constituent `\"hello\" | object` (StringLiteral before " +
+            "NonPrimitive) is printed from the written constraint by the `in`-operator walker.",
+    ),
+    TsgoPendingBaseline(
+        "indirectDiscriminantAndExcessProperty.errors.txt",
+        "ORDER: `Blah[\"type\"]`'s literal union renders `\"bar\" | \"foo\"` (by value); " +
+            "the indirect-discriminant walker prints the declaration order.",
+    ),
+    TsgoPendingBaseline(
+        "jsdocBracelessTypeTag1.errors.txt",
+        "ORDER: a JSDoc `@type` union (`\"bar\" | \"foo\"`) is rendered by the checkJs " +
+            "JSDoc type formatter in written order.",
+    ),
+    TsgoPendingBaseline(
+        "keyRemappingKeyofResult.errors.txt",
+        "ORDER: `\"str\" | unique symbol | DistributiveNonIndex<K>` — a unique symbol and " +
+            "a conditional have no type of their own here; the B534 walker prints the written order.",
+    ),
+    TsgoPendingBaseline(
+        "mappedTypeGenericWithKnownKeys.errors.txt",
+        "ORDER: `Record<\"knownLiteralKey\" | keyof Shape, number>` — a literal sorts before " +
+            "an `Index` type in tsc; `keyof` over a type parameter has no type here and the " +
+            "display keeps the written order.",
+    ),
+    TsgoPendingBaseline(
+        "mappedTypeIndexedAccess.errors.txt",
+        "ORDER: two instantiations of ONE mapped-type body (`{ key: \"bar\"; … } | { key: " +
+            "\"foo\"; … }`) are ordered by tsc's type MAPPER (`\"bar\"` < `\"foo\"`); this " +
+            "model has no mapper to compare and falls to the type id.",
+    ),
+    TsgoPendingBaseline(
+        "namespaceDisambiguationInUnion.errors.txt",
+        "ORDER + downstream: an object against a union with no discriminant match is " +
+            "reported against the LAST target constituent (`typeRelatedToSomeType`), " +
+            "`Bar.Yep` — the collision special case here picks the other.",
+    ),
+    TsgoPendingBaseline(
+        "noInferUnionExcessPropertyCheck1.errors.txt",
+        "ORDER: `NoInfer<T>` is a Substitution type in tsc (sorts after objects, so " +
+            "`(() => NoInfer<…>) | NoInfer<…>`); here it is its argument with an alias display.",
+    ),
+    TsgoPendingBaseline(
+        "parenthesizedJSDocCastDoesNotNarrow.errors.txt",
+        "ORDER: a JSDoc cast's union (`\"bar\" | \"foo\"`) is rendered by the checkJs " +
+            "JSDoc type formatter in written order.",
+    ),
+    TsgoPendingBaseline(
+        "reverseMappedTypeIntersectionConstraint.errors.txt",
+        "ORDER: a reverse-mapped type's members carry no declarations in tsc and list by " +
+            "NAME (`{ anotherField: \"a\"; field: 1; }`); ours carry the literal's " +
+            "declarations and list by position.",
+    ),
+    TsgoPendingBaseline(
+        "typeParameterDiamond4.errors.txt",
+        "ORDER: `T | Top | U` — a type parameter resolved from an ENCLOSING function's " +
+            "scope is minted without its symbol here and cannot be ordered by name " +
+            "(`typeParameterDiamond3`'s chain line already agrees).",
+    ),
+    TsgoPendingBaseline(
+        "unionPropertyOfProtectedAndIntersectionProperty.errors.txt",
+        "ORDER: B169's `(Foo | Bar)['foo']` TS2339 prints the receiver from the written " +
+            "union; tsc prints `Bar | Foo` (by name).",
+    ),
+)
+
 val cloneTypeScriptRepo = tasks.register("cloneTypeScriptRepo") {
     group = "typescript"
-    description = "Sparse-clones the TypeScript repository (tests only), pinned to tsgo's submodule commit."
+    description = "Sparse-clones the TypeScript repository (tests only), pinned to tsgo 7.0.2's submodule commit."
     inputs.property("typeScriptCommit", typeScriptCommit) // re-run when the pin changes
     // M3.0: the sparse checkout is DERIVED from the allowlist (see `sparsePaths`
     // below), so the allowlist is an input of this task and is declared as one.
@@ -740,6 +865,7 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
     val logicalParityDoc = rootProject.layout.projectDirectory.file("docs/logical-parity.md").asFile
     val commonTestDir = layout.projectDirectory.dir("src/commonTest/kotlin").asFile
     val divergences = logicalParityDivergences
+    val pending = tsgoPendingBaselines
 
     inputs.dir(testsDir).optional()
     // M3.0: re-generate when the allowlist changes, or when an allowlisted
@@ -751,6 +877,8 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
     // PARITY.1: re-generate (and re-validate, and rewrite the ledger) when a
     // divergence is declared, edited, or removed.
     inputs.property("logicalParityDivergences", divergences.map { it.toString() })
+    // (LEGACY.0a): likewise for the tsgo-pending list.
+    inputs.property("tsgoPendingBaselines", pending.map { it.toString() })
     outputs.dir(outputDir)
 
     doLast {
@@ -943,6 +1071,19 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                 divergences.groupingBy { it.baseline }.eachCount().filterValues { it > 1 }.keys
         }
         val usedDivergences = mutableSetOf<String>()
+        // (LEGACY.0a): the tsgo-pending list, keyed the same way and emitted through the
+        // same `@Ignore` path — a skipped subtest, never a vanished one.
+        val pendingByBaseline = pending.associateBy { it.baseline }
+        check(pendingByBaseline.size == pending.size) {
+            "tsgoPendingBaselines declares the same baseline twice: " +
+                pending.groupingBy { it.baseline }.eachCount().filterValues { it > 1 }.keys
+        }
+        check(pendingByBaseline.keys.none { it in divergenceByBaseline }) {
+            "a baseline is in BOTH logicalParityDivergences and tsgoPendingBaselines: " +
+                pendingByBaseline.keys.filter { it in divergenceByBaseline } +
+                " — a row is either a decision not to follow tsgo or a row still to implement, never both."
+        }
+        val usedPending = mutableSetOf<String>()
 
         /**
          * Emits the divergence preamble when [baseline] is declared, and records the
@@ -950,6 +1091,23 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
          * is indistinguishable from a hidden regression).
          */
         fun StringBuilder.appendDivergence(baseline: String) {
+            pendingByBaseline[baseline]?.let { p ->
+                usedPending += baseline
+                appendLine("    // TSGO-PENDING (LEGACY.0a): a TypeScript 7 row this compiler does not produce")
+                appendLine("    // yet. Declared in build.gradle.kts `tsgoPendingBaselines`; ledger in")
+                appendLine("    // docs/logical-parity.md.")
+                var line = StringBuilder()
+                for (word in p.reason.split(Regex("\\s+")).filter { it.isNotEmpty() }) {
+                    if (line.isNotEmpty() && line.length + 1 + word.length > 84) {
+                        appendLine("    // $line"); line = StringBuilder()
+                    }
+                    if (line.isNotEmpty()) line.append(' ')
+                    line.append(word)
+                }
+                if (line.isNotEmpty()) appendLine("    // $line")
+                appendLine("    @kotlin.test.Ignore")
+                return
+            }
             val d = divergenceByBaseline[baseline] ?: return
             usedDivergences += baseline
             appendLine("    // LOGICAL-PARITY DIVERGENCE (round ${d.round}): switched off deliberately —")
@@ -1156,6 +1314,15 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
             }
         }
 
+        // (LEGACY.0a) validation — a pending entry that switches nothing off is stale.
+        val stalePending = pending.filter { it.baseline !in usedPending }
+        check(stalePending.isEmpty()) {
+            "tsgoPendingBaselines has ${stalePending.size} entr(y|ies) matching no generated test:\n" +
+                stalePending.joinToString("\n") { "  - ${it.baseline}" } +
+                "\nEither the baseline was renamed/removed, or its test is already skipped for " +
+                "another reason. Delete the entry or fix the baseline name."
+        }
+
         // PARITY.1 — rewrite the ledger from the declarations so the doc cannot drift.
         val ledger = if (divergences.isEmpty()) {
             "_No baseline is currently switched off under the logical-parity policy._"
@@ -1184,12 +1351,38 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
             "docs/logical-parity.md lost its $beginMarker / $endMarker region — the ledger " +
                 "is generated into it and cannot be hand-maintained."
         }
-        val updated = docText.substring(0, begin + beginMarker.length) +
+        var updated = docText.substring(0, begin + beginMarker.length) +
             "\n" + ledger + "\n" + docText.substring(end)
+        // (LEGACY.0a) — the tsgo-pending ledger, rewritten the same way.
+        val pendingLedger = if (pending.isEmpty()) {
+            "_No baseline is currently pending under the tsgo-pending list._"
+        } else {
+            buildString {
+                appendLine("| baseline | the TypeScript 7 row still to implement |")
+                appendLine("|---|---|")
+                for (p in pending.sortedBy { it.baseline }) {
+                    val reason = p.reason.split(Regex("\\s+")).filter { it.isNotEmpty() }
+                        .joinToString(" ").replace("|", "\\|")
+                    appendLine("| `${p.baseline}` | $reason |")
+                }
+                append("\n**${pending.size} baseline(s) pending.**")
+            }
+        }
+        val pendingBegin = "<!-- BEGIN GENERATED TSGO-PENDING -->"
+        val pendingEnd = "<!-- END GENERATED TSGO-PENDING -->"
+        val pb = updated.indexOf(pendingBegin)
+        val pe = updated.indexOf(pendingEnd)
+        check(pb >= 0 && pe > pb) {
+            "docs/logical-parity.md lost its $pendingBegin / $pendingEnd region — the " +
+                "tsgo-pending ledger is generated into it and cannot be hand-maintained."
+        }
+        updated = updated.substring(0, pb + pendingBegin.length) +
+            "\n" + pendingLedger + "\n" + updated.substring(pe)
         if (updated != docText) {
             logicalParityDoc.writeText(updated)
             logger.lifecycle("Rewrote the logical-parity ledger in ${logicalParityDoc.name}.")
         }
+        logger.lifecycle("tsgo-pending: ${pending.size}")
 
         logger.lifecycle("Generated $totalBareTests bare-name JS + $totalParamTests parameterized JS + $totalErrorTests error baseline = ${totalBareTests + totalParamTests + totalErrorTests} test functions across ${groups.size} files in: $packageDir (${divergences.size} logical-parity divergence(s) switched off)")
     }

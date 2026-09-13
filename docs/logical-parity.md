@@ -176,3 +176,46 @@ Every baseline switched off under this policy, generated from
 <!-- BEGIN GENERATED LEDGER -->
 _No baseline is currently switched off under the logical-parity policy._
 <!-- END GENERATED LEDGER -->
+
+---
+
+## 5. tsgo-pending
+
+*(LEGACY.0a), 2026-09-12.* The corpus is pinned to tsgo 7.0.2's own baselines (the
+`tsgo-port` sha, `typeScriptCommit` in `xemantic-typescript-compiler-core/build.gradle.kts`),
+so a red corpus baseline is TypeScript 7's answer that this compiler does not produce
+YET — a row to implement, not a divergence to argue. Such a row goes into
+`tsgoPendingBaselines` beside `logicalParityDivergences`:
+
+- the generator emits the subtest `@Ignore`d, exactly as it does for a divergence, so it
+  stays visible as SKIPPED and counted (`tsgo-pending: N` in the build log);
+- an entry naming no generated subtest FAILS the build (stale), and a baseline may never
+  be in both lists;
+- no `pinnedBy` class is required — nothing is pinned instead of the baseline; the entry is
+  the queue, and it is deleted the round its family lands.
+
+The ledger below is rewritten from the declarations by `generateTypeScriptTests`.
+
+<!-- BEGIN GENERATED TSGO-PENDING -->
+| baseline | the TypeScript 7 row still to implement |
+|---|---|
+| `coAndContraVariantInferences5.errors.txt` | NEW in the tsgo-port baselines: a TS2322 on a contravariant callback property (`onChange: (status: Thing \| null) => void` against `(key: KeyT) => void`) that generic inference does not reach here; not an ordering row. |
+| `complicatedIndexedAccessKeyofReliesOnKeyofNeverUpperBound.errors.txt` | ORDER + downstream: the chain, the `Pick<…>` intersection and the constraint `"email" \| "text"` all follow the union's stable member order (`ChannelOfType<T, EmailChannel>` first, by alias argument name); the pin walker prints the written order. |
+| `destructuringUnspreadableIntoRest.errors.txt` | ORDER: `Omit<this, K>`'s literal-key argument is printed in destructuring order; tsc sorts the keys by value (`"getter" \| "method" \| "publicProp" \| "setter"`). The rest type's display is built outside `getUnionType`. |
+| `errorsForCallAndAssignmentAreSimilar.errors.txt` | ORDER: the TS2820 ARGUMENT-position literal-union target is printed in declaration order (`"hddvd" \| "bluray"`); the declaration position was moved to the sorted display, the B364 argument walker still reads the annotation. |
+| `excessPropertyCheckWithMultipleDiscriminants.errors.txt` | ORDER: the TS2353 union display (`A \| Common`, `OneToOneAttribute \| StringAttribute`, by name) is built by the discriminated-union excess walker in declaration order. |
+| `inDoesNotOperateOnPrimitiveTypes.errors.txt` | ORDER: the chain constituent `"hello" \| object` (StringLiteral before NonPrimitive) is printed from the written constraint by the `in`-operator walker. |
+| `indirectDiscriminantAndExcessProperty.errors.txt` | ORDER: `Blah["type"]`'s literal union renders `"bar" \| "foo"` (by value); the indirect-discriminant walker prints the declaration order. |
+| `jsdocBracelessTypeTag1.errors.txt` | ORDER: a JSDoc `@type` union (`"bar" \| "foo"`) is rendered by the checkJs JSDoc type formatter in written order. |
+| `keyRemappingKeyofResult.errors.txt` | ORDER: `"str" \| unique symbol \| DistributiveNonIndex<K>` — a unique symbol and a conditional have no type of their own here; the B534 walker prints the written order. |
+| `mappedTypeGenericWithKnownKeys.errors.txt` | ORDER: `Record<"knownLiteralKey" \| keyof Shape, number>` — a literal sorts before an `Index` type in tsc; `keyof` over a type parameter has no type here and the display keeps the written order. |
+| `mappedTypeIndexedAccess.errors.txt` | ORDER: two instantiations of ONE mapped-type body (`{ key: "bar"; … } \| { key: "foo"; … }`) are ordered by tsc's type MAPPER (`"bar"` < `"foo"`); this model has no mapper to compare and falls to the type id. |
+| `namespaceDisambiguationInUnion.errors.txt` | ORDER + downstream: an object against a union with no discriminant match is reported against the LAST target constituent (`typeRelatedToSomeType`), `Bar.Yep` — the collision special case here picks the other. |
+| `noInferUnionExcessPropertyCheck1.errors.txt` | ORDER: `NoInfer<T>` is a Substitution type in tsc (sorts after objects, so `(() => NoInfer<…>) \| NoInfer<…>`); here it is its argument with an alias display. |
+| `parenthesizedJSDocCastDoesNotNarrow.errors.txt` | ORDER: a JSDoc cast's union (`"bar" \| "foo"`) is rendered by the checkJs JSDoc type formatter in written order. |
+| `reverseMappedTypeIntersectionConstraint.errors.txt` | ORDER: a reverse-mapped type's members carry no declarations in tsc and list by NAME (`{ anotherField: "a"; field: 1; }`); ours carry the literal's declarations and list by position. |
+| `typeParameterDiamond4.errors.txt` | ORDER: `T \| Top \| U` — a type parameter resolved from an ENCLOSING function's scope is minted without its symbol here and cannot be ordered by name (`typeParameterDiamond3`'s chain line already agrees). |
+| `unionPropertyOfProtectedAndIntersectionProperty.errors.txt` | ORDER: B169's `(Foo \| Bar)['foo']` TS2339 prints the receiver from the written union; tsc prints `Bar \| Foo` (by name). |
+
+**17 baseline(s) pending.**
+<!-- END GENERATED TSGO-PENDING -->

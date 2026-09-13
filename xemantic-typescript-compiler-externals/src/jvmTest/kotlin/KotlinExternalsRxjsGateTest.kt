@@ -1466,7 +1466,7 @@ export { zipWith } from './internal/operators/zipWith';
         // alias refuse as declarations...
         val input = "/* xtsc: skipped generic type alias ObservableInput with unmappable body */" in rendered
         val falsy = "/* xtsc: skipped type alias Falsy with unmappable body" in rendered
-        val teardown = "/* xtsc: skipped type alias TeardownLogic with unmappable body Subscription | Unsubscribable | (() => void) | void */" in rendered
+        val teardown = "/* xtsc: skipped type alias TeardownLogic with unmappable body void | Subscription | Unsubscribable | (() => void) */" in rendered
         // ...`typeof Action` is marked by what was WRITTEN, not by the
         // instance type the lens answers for a class value (CHK.73)...
         val scheduler = "public open external class Scheduler(schedulerActionCtor: Any? /* xtsc: unmapped typeof Action */, now: (() -> Double)? = definedExternally) : SchedulerLike {\n" in rendered
@@ -1481,7 +1481,7 @@ export { zipWith } from './internal/operators/zipWith';
         // union of two DISTINCT texts (`Subscriber<any> | Observer<any>`),
         // an OPTIONAL parameter inside a function type (arity), and a
         // `Promise<T>` (no classpath in the gate, not a built-in).
-        val distinctUnion = "public open external class Subscriber<T>(destination: Any? /* xtsc: unmapped Subscriber<any> | Observer<any> */ = definedExternally) : Subscription, Observer<T> {\n" in rendered
+        val distinctUnion = "public open external class Subscriber<T>(destination: Any? /* xtsc: unmapped Observer<any> | Subscriber<any> */ = definedExternally) : Subscription, Observer<T> {\n" in rendered
         val optionalInFunctionType = "public fun <T> create(next: Any? /* xtsc: unmapped (x?: T | undefined) => void */ = definedExternally, error: Any? /* xtsc: unmapped (e?: any | undefined) => void */ = definedExternally, complete: (() -> Unit)? = definedExternally): Subscriber<T>\n" in rendered
         val promise = "    public fun toPromise(): Any? /* xtsc: unmapped Promise<any> */\n" in rendered
         assert(distinctUnion)

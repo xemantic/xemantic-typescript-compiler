@@ -2322,7 +2322,7 @@ class KotlinExternalsGeneratorTest {
                 public var p: Any? /* xtsc: unmapped string | number */
                 public var q: Any? /* xtsc: unmapped string | number | null */
                 public var r: Any? /* xtsc: unmapped string | Box | undefined */
-                public var s: Any? /* xtsc: unmapped Box | void */
+                public var s: Any? /* xtsc: unmapped void | Box */
             }
         """.trimIndent() + "\n"
         val rendered = result.kotlin

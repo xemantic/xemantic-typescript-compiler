@@ -293,7 +293,7 @@ class UnionCalleeOneOverloadedMemberTest {
         )
         assert(d.map { it.code } == listOf(2349))
         assert(d[0].messageChain == listOf(
-            "  Not all constituents of type 'ZzzO | ZzzN' are callable.",
+            "  Not all constituents of type 'ZzzN | ZzzO' are callable.",
             "    Type 'ZzzN' has no call signatures.",
         ))
     }

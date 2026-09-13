@@ -173,6 +173,15 @@ sealed class Type {
     /** Object type with lazily resolved members, properties, and signatures. */
     open class Object(override val flags: TypeFlags = TypeFlags.Object) : Type() {
         var symbol: Symbol? = null
+        /**
+         * (LEGACY.0a) The NODE an anonymous object type was declared by — a type literal,
+         * a function/constructor type, a mapped type. tsc gives such a type a symbol whose
+         * declaration is that node and orders two anonymous types by it (`compareSymbols`
+         * inside `compareTypes`); this model mints them symbol-less, so the node is carried
+         * here for `StableTypeOrdering` alone. Null for a tuple (symbol-less in tsc too) and
+         * for every type minted without a declaration.
+         */
+        var declaredAt: Node? = null
         var members: SymbolTable? = null
         var properties: List<Symbol>? = null
         var callSignatures: List<Signature>? = null
