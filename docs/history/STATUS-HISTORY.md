@@ -3627,3 +3627,29 @@ notification as "finished"; CLAUDE.md's rule is one invocation per BOX, not per 
 documented, both walked into. The KIR timeout is NOT a regression (seven straight-line
 `console.*` calls, no loop; 159 KIR tests pass in isolation). cost_gate all 20 counters +0.00%,
 huge_methods exit 0 (867 classes), warning-clean, screen 3,046/0.
+
+**(P18.95) — THE SCREEN GAINS THE *EMIT* CHANNEL, AND THREE PRINTER RULES CLOSE 12 JS-EMIT ROWS, 19,214 / 0 / 139 (2026-09-14).**
+Pending 126 -> **114**, skipped -12, tests +14, 9 modules asserted present. **Part 0 is why this
+family had been deferred five rounds**: JS emit was the largest pending family and had NO
+blast-radius instrument, because the (P18.93) screen covered only errors subtests. It now runs
+both — **8,716 subtests in ~70 s** — through the suite's OWN helpers, so `stripDtsSection`, CRLF,
+the BOM decode and the conformance `casesDir` provenance cannot drift; floors are PER CHANNEL,
+since one combined number is satisfied by a healthy channel while its sibling has collapsed. The
+emit channel is nearly TWICE the errors one (5,692 against 3,160) — this round's own brief
+under-counted it. **The orchestrator's decomposition was wrong three ways**, one of which would
+have mis-routed six rows into (LEGACY.1): the destructuring group was hypothesised as a
+`target ES5` question and `downlevelLetConst13(target=es2015)` refutes it in ONE file at ONE
+target, where top-level exported bindings keep their pattern while namespace-level ones are
+lowered. **Landed: three printer rules** — an instantiation expression prints as its operand
+bare (stripped at PRINT time, so no transform decision moves; its JSDoc half was another tsc-6
+transcription and was DELETED, not re-transcribed), a recovered `;` before `}` is a TRAILING
+separator, and tsc's `parenthesizeExpressionOfNew`. **The screen paid for itself inside the first
+hour, on a SEMANTIC bug**: the first cut stripped the paren unconditionally and moved two green
+baselines, because a `<T>` list ENDS an optional chain — `a?.b<c>.d` is `(a?.b).d` — and nothing
+downstream can re-derive that, so the parser marks it. Ablation 8 arms, all discriminating, each
+reporting pin reds AND screen mismatches; **a5 read 0 RED and was repaired** (its control cannot
+see the mistake, because there the loop's `else` runs last). **The gates had to be labelled and
+the emit-mode control is itself blind**: `--outDir` + `diff -r` read 78 files IDENTICAL across a
+change that moved 12 baselines, because tsc's own sources contain none of the three shapes — for
+an emit family the corpus EMIT CHANNEL is the gate. cost_gate all 20 counters +0.00% (a control
+here), huge_methods exit 0 (867 classes), warning-clean.

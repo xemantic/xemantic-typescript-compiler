@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **195,007** lines (**+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **195,100** lines (**+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,21 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.100) — THE F8 SPAN/WIDTH FAMILY, TEN OF TEN IN SEVEN MECHANISMS, AND THE tsc-6 MIRROR'S EXPECTATIONS ARE FILES, 19,344 / 0 / 90 (2026-09-14).**
+Pending 76 -> **66**, skipped -10, +29 pins, 9 modules asserted. File-less ORDER was not emission
+order but the test-support comparator sorting by code — tsgo ranks an OPTIONS diagnostic before a
+checker GLOBAL, now decided by our `start` marker convention; the related TS1356 anchors on a
+nameless function's ASSIGNED name (measured over 8 parents — the brief said "keyword"); TS2447 on the
+operator token; TS4032 over the whole expando assignment; TS1092 over the reparsed `@template` LIST
+(five shapes, and `comment.text` runs two characters past `*/`); the pretty renderer prints one `~`
+for a zero-width span; and astral characters are padded by RUNE in tsgo's harness while its regexp
+scanner splits a non-BMP rune into surrogates — one row a tsgo-vs-tsc-6 divergence. `pathsValidation5`
+REFUSED with the count: its tsconfig-first order protects 7 green `baseUrl`/`node` baselines tsgo
+never runs, a (LEGACY.1) question. **The suite's one red was the tsc-6 mirror again**, and the agent's
+grep missed it because the mirror's expectations are FILES, not class source — third counted
+annotation. Ablation 10 arms, all discriminating; 20 of 29 pins red pre-change, the rest exactly the
+controls. cost_gate 20/20 +0.00%, grid 8×0/0 + emit 78/78 (controls), huge_methods exit 0 (871
+classes), warning-clean, screen errors 3,077/0, emit 5,688/0.
 **(P18.99) — TS2880 UNCONDITIONAL, THE `@typedef` NAME HAS *TWO* EMITTERS, AND TS2749 LANDS IN TEN NESTED JSDoc POSITIONS, 19,315 / 0 / 100 (2026-09-14).**
 Pending 84 -> **76** (9 closed, 1 re-sized), skipped -9, +23 pins, 9 modules asserted. TS2880
 lost its `ignoreDeprecations` gate AND a module-kind gate the brief did not name, anchors on the
@@ -90,28 +105,3 @@ cross-family clusters (TS2880 split across two, TS1003 across two). JS-emit resi
 plus 8 singletons, and `emitBOM` turns out to be a SCANNER bug. Grid and `--outDir` + `diff -r`
 both CONTROLS and both counted; the corpus and its screen were the gates. cost_gate 20/20 +0.00%,
 huge_methods exit 0 (867 classes), warning-clean, screen 8,727 / 0.
-**(P18.95) — THE SCREEN GAINS THE *EMIT* CHANNEL, AND THREE PRINTER RULES CLOSE 12 JS-EMIT ROWS, 19,214 / 0 / 139 (2026-09-14).**
-Pending 126 -> **114**, skipped -12, tests +14, 9 modules asserted present. **Part 0 is why this
-family had been deferred five rounds**: JS emit was the largest pending family and had NO
-blast-radius instrument, because the (P18.93) screen covered only errors subtests. It now runs
-both — **8,716 subtests in ~70 s** — through the suite's OWN helpers, so `stripDtsSection`, CRLF,
-the BOM decode and the conformance `casesDir` provenance cannot drift; floors are PER CHANNEL,
-since one combined number is satisfied by a healthy channel while its sibling has collapsed. The
-emit channel is nearly TWICE the errors one (5,692 against 3,160) — this round's own brief
-under-counted it. **The orchestrator's decomposition was wrong three ways**, one of which would
-have mis-routed six rows into (LEGACY.1): the destructuring group was hypothesised as a
-`target ES5` question and `downlevelLetConst13(target=es2015)` refutes it in ONE file at ONE
-target, where top-level exported bindings keep their pattern while namespace-level ones are
-lowered. **Landed: three printer rules** — an instantiation expression prints as its operand
-bare (stripped at PRINT time, so no transform decision moves; its JSDoc half was another tsc-6
-transcription and was DELETED, not re-transcribed), a recovered `;` before `}` is a TRAILING
-separator, and tsc's `parenthesizeExpressionOfNew`. **The screen paid for itself inside the first
-hour, on a SEMANTIC bug**: the first cut stripped the paren unconditionally and moved two green
-baselines, because a `<T>` list ENDS an optional chain — `a?.b<c>.d` is `(a?.b).d` — and nothing
-downstream can re-derive that, so the parser marks it. Ablation 8 arms, all discriminating, each
-reporting pin reds AND screen mismatches; **a5 read 0 RED and was repaired** (its control cannot
-see the mistake, because there the loop's `else` runs last). **The gates had to be labelled and
-the emit-mode control is itself blind**: `--outDir` + `diff -r` read 78 files IDENTICAL across a
-change that moved 12 baselines, because tsc's own sources contain none of the three shapes — for
-an emit family the corpus EMIT CHANNEL is the gate. cost_gate all 20 counters +0.00% (a control
-here), huge_methods exit 0 (867 classes), warning-clean.
