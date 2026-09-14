@@ -156,6 +156,18 @@ class InstantiationAndListEmitTest {
     }
 
     @Test
+    fun `negative control - a recovered semicolon at END OF FILE is not a trailing separator`() {
+        // The arm that writes `hasTrailingComma = true` UNCONDITIONALLY in the `;` branch is
+        // invisible to the `{ a; b; c }` control above, because there the loop's `else` branch
+        // runs last and overwrites the flag with `false`. The one shape that separates them is
+        // a `;` consumed with NO closing brace after it, which is the corpus's
+        // `objectLiteralWithSemicolons4` — found by that arm reading 0 RED while moving exactly
+        // one green baseline. tsgo 7.0.2 prints `{\n    a\n}`.
+        val js = emit("var v = {\n  a\n;")
+        assert(js == "\"use strict\";\nvar v = {\n    a\n};")
+    }
+
+    @Test
     fun `the recovery covers methods and accessors, not only shorthand properties`() {
         val js = emit("declare var b: any;\nvar v = { foo() { }; a: b; get baz() { }; }")
         assert(js == "\"use strict\";\nvar v = { foo() { }, a: b, get baz() { }, };")
