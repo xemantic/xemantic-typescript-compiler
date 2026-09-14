@@ -19,6 +19,31 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.95) — THE SCREEN GAINS THE *EMIT* CHANNEL, AND THREE PRINTER RULES CLOSE 12 JS-EMIT ROWS, 19,214 / 0 / 139 (2026-09-14).**
+Pending 126 -> **114**, skipped -12, tests +14, 9 modules asserted present. **Part 0 is why this
+family had been deferred five rounds**: JS emit was the largest pending family and had NO
+blast-radius instrument, because the (P18.93) screen covered only errors subtests. It now runs
+both — **8,716 subtests in ~70 s** — through the suite's OWN helpers, so `stripDtsSection`, CRLF,
+the BOM decode and the conformance `casesDir` provenance cannot drift; floors are PER CHANNEL,
+since one combined number is satisfied by a healthy channel while its sibling has collapsed. The
+emit channel is nearly TWICE the errors one (5,692 against 3,160) — this round's own brief
+under-counted it. **The orchestrator's decomposition was wrong three ways**, one of which would
+have mis-routed six rows into (LEGACY.1): the destructuring group was hypothesised as a
+`target ES5` question and `downlevelLetConst13(target=es2015)` refutes it in ONE file at ONE
+target, where top-level exported bindings keep their pattern while namespace-level ones are
+lowered. **Landed: three printer rules** — an instantiation expression prints as its operand
+bare (stripped at PRINT time, so no transform decision moves; its JSDoc half was another tsc-6
+transcription and was DELETED, not re-transcribed), a recovered `;` before `}` is a TRAILING
+separator, and tsc's `parenthesizeExpressionOfNew`. **The screen paid for itself inside the first
+hour, on a SEMANTIC bug**: the first cut stripped the paren unconditionally and moved two green
+baselines, because a `<T>` list ENDS an optional chain — `a?.b<c>.d` is `(a?.b).d` — and nothing
+downstream can re-derive that, so the parser marks it. Ablation 8 arms, all discriminating, each
+reporting pin reds AND screen mismatches; **a5 read 0 RED and was repaired** (its control cannot
+see the mistake, because there the loop's `else` runs last). **The gates had to be labelled and
+the emit-mode control is itself blind**: `--outDir` + `diff -r` read 78 files IDENTICAL across a
+change that moved 12 baselines, because tsc's own sources contain none of the three shapes — for
+an emit family the corpus EMIT CHANNEL is the gate. cost_gate all 20 counters +0.00% (a control
+here), huge_methods exit 0 (867 classes), warning-clean.
 **(P18.94) — THE ORDER FAMILY: 13 OF 18, AND FIVE OF THE "MODEL GAPS" WERE REACH ROWS, 19,200 / 0 / 151 (2026-09-14).**
 Pending 139 -> **126**, skipped 164 -> **151**, both -13, plus +8 pins. **The orchestrator's
 read-only decomposition was wrong in both directions and the measurement said so**: it is THREE
@@ -123,31 +148,3 @@ pin needed a following statement to discriminate. A refuted prediction worth kee
 `declarationEmitUnknownImport` is **not a cycle at all** in tsgo — moving the `export` above the
 import silences it, an artifact of tsgo's own resolution stack. cost_gate all 20 counters
 +0.00%, huge_methods exit 0 (862 classes), warning-clean against a gate proven live.
-**(P18.90) — F3 LAST-OVERLOAD: 25 OF 25, AND THE THREE tsc-6 ANCHOR HEURISTICS WENT WITH IT, 19,139 / 0 / 190 (2026-09-13).**
-Pending 190 → **165**, skipped 215 → **190**, both −25, with all 25 subtests verified PRESENT
-and PASSED in the XMLs rather than merely un-skipped. **F3 was third by red count and FIRST by
-mechanism count** — one rule where F6z's 33 and JS emit's 33 are many — and the pre-measurement
-is what licensed it: of the 2,982 active `errors.txt` subtests **ZERO** carry tsc 6's
-`Overload N of M, '<sig>', gave the following error.`, because tsgo never emits it, so the change
-was structurally unable to redden a green baseline on its own axis. The rule was taken from
-tsgo's SOURCE (`reportCallResolutionErrors`, checker.go ~9624) and not from its baselines: report
-only the LAST argument-failing candidate, under `The last overload gave the following error.`
-(**TS2770**) and `No overload matches this call.`, with `The last overload is declared here.`
-(**TS2771**) at that candidate's declaration — neither code existed in the general path before,
-only inside hardcoded pins. **Because tsgo anchors wherever the last candidate's own argument
-check anchors, three tsc-6 heuristics became unreachable and were deleted** (B418's best-overload
-collapse, 17.15b/B50.11's fn-vs-fn callee anchor, B280's method-name anchor) along with the
-per-candidate related-info accumulation: the emission block 153 → 107 lines. (The change SET is
-−115 lines, but `Checker.kt` itself is **+101** — the deleted heuristics are outweighed by the new
-TS2770/TS2771 helpers and the tsgo-citing KDoc; the −159 is build.gradle.kts shedding 25 pending entries.) **Nine pin
-walkers updated and ZERO deletable — measured with the PassLab, not assumed**: with the pin off
-the general path differs in every case. Two silent-failure mechanisms found and recorded: a pin
-that locates its row by ANCHOR POSITION stops firing when a general emitter moves the anchor
-(no error, the general answer just leaks through), and a call signature `(x: T): R` is a
-`MethodDeclaration` with an EMPTY name at pos 0, so the idiomatic `?.pos ?: decl.pos` renders at
-`1:1`. Ablation 10 arms, 8 discriminating, both zeros ATTRIBUTED rather than shrugged at (a2's
-control a2b reddens 48, so `multi` is load-bearing and merely always-true here). 27 hand-written
-assertions in 5 classes re-measured against tsgo — **three were countdowns asserting pristine's
-per-candidate chain** and were renamed. Grid a MEASURED control (TS2769 rows = 0 on all eight
-profiles and on every library; the gate is the 28 corpus baselines that carry one). cost_gate all
-20 counters +0.00%, huge_methods exit 0 (861 classes), warning-clean with the gate proven live.

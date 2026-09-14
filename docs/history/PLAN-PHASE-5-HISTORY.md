@@ -65573,3 +65573,99 @@ member-union branch as a gate on tsc's sources.
 
 **NEXT**: (LEGACY.0a), the `tsgo-port` pin — 29 subtests at most, one display-order family.
 Then (LEGACY.0b) per `docs/tsgo-baselines.md`, then (LEGACY.1).
+
+### Round (P18.85) — (LEGACY.0a): the corpus is pinned to tsgo's `tsgo-port` sha, and tsc's STABLE TYPE ORDERING is an INTERNING order rather than a display one (2026-09-13)
+
+**Suite 19,028 → 19,045 / 0 / 20** — +16 pins (`StableTypeOrderingTest`) and +1 generated
+subtest, with **skipped 3 → 20** because 17 rows are declared in the new
+`tsgoPendingBaselines` list. Generated corpus **8,837 → 8,838**. Grid 8×`added=0 removed=0`;
+marked 18 → 18, cronstrue 1 → 1; `cost_gate.py` exit 0 **REBASELINED with attribution**;
+`huge_methods.py --fail-over 0` exit 0; warning-clean. **(LEGACY.0) stays OPEN on (0b)** —
+tsgo's own testdata layers.
+
+**WHY THIS ITEM, SAID OUT LOUD.** The owner re-pinned the corpus on 2026-09-12 and chose
+"both, in order"; (LEGACY.0a) is the first half and the head of the queue.
+
+**THE PIN.** `typeScriptCommit` `637d5746…` → `4d4f005c8541e0255a9d8791205fdce326e462bc`
+(tsgo 7.0.2's `_submodules/TypeScript`, the `tsgo-port` tip, whose SECOND parent is pristine
+`637d5746`); `cloneTypeScriptRepo`'s KDoc at `build.gradle.kts:240-261` is rewritten to the
+2026-09-12 policy, replacing the "never pin to the tsgo submodule sha" rule it used to carry.
+
+**THE FIRST RUN WAS EXACTLY THE SIZING'S 22 / 2 / 2 / 2 / 1.** 29 red, all compiler-suite:
+22 pure reorder (union members or object properties), 2 reorder plus downstream text, 2
+reorder plus changed chain content, 2 single-line text (`conditionalExpression1` →
+`string`, `thislessFunctionsNotContextSensitive1` → `"$test1"`), and the 1 new test. A
+read-only sizing predicting a red set to the family is worth the round it costs.
+
+**tsc's COMPARATOR IS AN *INTERNING* ORDER, AND THAT IS THE WHOLE DESIGN QUESTION.**
+`addTypeToUnion` inserts by `binarySearch(…, compareTypes)` (checker.ts l.18095), and
+`compareTypes` (l.53856) is: ascending `getSortOrderFlags` (an enum unit type sorts as
+`Enum`) → `compareTypeNames` (alias / type-parameter / class-interface / reference symbol;
+named before unnamed; same alias by alias arguments) → per kind (objects by `compareSymbols`
+= first declaration's file index then `pos`, references before other objects, references by
+argument list, tuples by shape; unions and intersections by member list; enum members and
+type parameters by symbol; literals by VALUE; `false` < `true`) → type id. The DISPLAY half
+is separate: `formatUnionTypes` (null and undefined last; `false | true` → `boolean`; a
+whole-enum run → the enum) and `getNamedMembers` sorting properties by `compareSymbols`.
+**Display-only was measured insufficient**: the first-failing chain constituent, a
+`Pick<A|B, K>` intersection, the TS2339 sub-line and the suggestion tie-break all read the
+INTERNAL list, so the comparator is wired into `Checker.getUnionType`.
+
+**TWO FACTS THE BRIEF DID NOT HAVE.** TypeScript 7 reordered `TypeFlags` to tsgo's bit
+order (`Undefined = 1<<2` … `Void = 1<<4`, `String = 1<<5` …, `Enum = 1<<16`,
+`NonPrimitive = 1<<17`, `Union = 1<<27`) while ours is the pre-7 order — so
+`StableTypeOrdering.NEW_BIT` remaps per bit, and `Zeta | void` prints `void | Zeta` on both
+references. And pristine 6.0.3 run with `--stableTypeOrdering` equals tsgo on **21 of 21**
+fixture rows, which is what makes the flag's own semantics checkable without tsgo.
+
+**LANDED WITH THE COMPARATOR, each its own tsc rule**: `boolean` absorbs `true`/`false`;
+the union display collapses `false | true` and a whole-enum run and parenthesizes
+intersection members; `void` is no longer forced last; the chain picker is FIRST-failing at
+four sites (tsc's `eachTypeRelatedToType`); `findBestUnionConstituent` is last-on-tie
+(`findMostOverlappyType`); mapped-type properties order by source declaration (AST order
+while the table is in flight); `Type.Object.declaredAt` carries a symbol-less anonymous
+object; the node-formatter's union arm sorts; and six hardcoded pin walkers move to the new
+baselines. Fixture matrix against tsgo: **21/21 byte-identical** (`ref_matrix.py` also
+adjudicates pristine, which differs on every ordering row BY CONSTRUCTION, so the
+comparison is against tsgo alone).
+
+**THE RESIDUE IS 17, NOT THE ≤4 THE SIZING PREDICTED, AND THE REASON IS STRUCTURAL:** most
+"mechanical" ordering rows never pass through `typeToString(Type.Union)` at all. They are
+rendered by pin walkers, by node TEXT, or by the JSDoc formatters, or they need tsc concepts
+this model does not have (type mappers, `Substitution`, `Index`; a symbol-less
+enclosing-scope type parameter; a reverse-mapped member list ordered by name). Twelve of the
+29 closed through the engine and walkers, six were hand-written expectations re-measured
+against tsgo (`BindingElementTypeTest`, `UnionCalleeOneOverloadedMemberTest`'s
+`ZzzN | ZzzO`, `CvdaSplitTest`, the externals generator's `void | Box`, and both externals
+library gates), and the remaining 17 are declared.
+
+**THE PENDING MECHANISM IS NEW AND IS NOT `LogicalParityDivergence`.** A `tsgo-pending` row
+is a tsgo-TARGET answer this compiler does not produce YET — not a divergence we have
+decided to keep — so `tsgoPendingBaselines` emits the subtest `@Ignore`d (visible as
+SKIPPED, counted, `tsgo-pending: 17` in the build log), fails the build on a stale entry,
+fails on a baseline declared in BOTH lists, and carries NO `pinnedBy` requirement, because
+the obligation is to implement the row rather than to pin a decision. Ledger:
+`docs/logical-parity.md` § 5.
+
+**ABLATION**: a1 the comparator reverted at both interning sites — **13 RED** (10 pins plus
+`unionTypeWithRecursiveSubtypeReduction2`, `widenToAny1`, `widenToAny2`); a2 the NAME key
+dropped from the comparator — **5 RED** (4 pins plus one corpus baseline). The 17 pending
+rows are skipped and so cannot contribute to either arm, which is the honest reading.
+
+**THE COST GATE IS REBASELINED, AND THE NUMBER IS ATTRIBUTED RATHER THAN ACCEPTED.** The
+landed binary read `typeNode.bypassed +2.13%` against the recorded baseline — over the ±2%
+tolerance — but a REBUILT pristine parent reads **+1.31%** against that same baseline, so
+the stale-baseline share is most of it and **this change's own effect is `typeNode.bypassed`
+146,769 → 149,894 = +0.81%**, with every other counter inside 0.1% of pristine. The
+mechanism is exactly what the design predicts: an interning-order change means `Foo | Bar`
+and `Bar | Foo` now intern to ONE union, which moves first-touch order and therefore the
+INV.5(c) bypass counter. Rebaselined per COST.1 with that justification, 12 rows.
+
+**SIZING ERRORS WORTH CARRYING**: "one engine change closes 22" (17 rows are outside the
+engine's reach); TypeFlags bit order changed in 7.0; "≤ 4 residue" against 17; and
+"display-only" against an interning-order change that moves cost counters ~0.8%.
+
+**NEXT**: (LEGACY.0b) per `docs/tsgo-baselines.md` — the baseline ROOT switch to
+`typescript-go-repo/testdata/baselines/reference/submodule/` with the three-way fallback and
+its asserted bucket counts (9 delete / 87 keep-tsc / 24 new), ≈315 first-run reds. Then
+(LEGACY.1).

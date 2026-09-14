@@ -3490,3 +3490,32 @@ hand-written pins now differ in code rather than text, and avoiding them would c
 carried a `-q` that suppresses the warnings it greps for — a positive-control probe read
 zero — so four rounds' "warning-clean" claims were worthless and HEAD was in fact dirty; the
 current tree is clean against a gate proven live.
+
+**(P18.90) — F3 LAST-OVERLOAD: 25 OF 25, AND THE THREE tsc-6 ANCHOR HEURISTICS WENT WITH IT, 19,139 / 0 / 190 (2026-09-13).**
+Pending 190 → **165**, skipped 215 → **190**, both −25, with all 25 subtests verified PRESENT
+and PASSED in the XMLs rather than merely un-skipped. **F3 was third by red count and FIRST by
+mechanism count** — one rule where F6z's 33 and JS emit's 33 are many — and the pre-measurement
+is what licensed it: of the 2,982 active `errors.txt` subtests **ZERO** carry tsc 6's
+`Overload N of M, '<sig>', gave the following error.`, because tsgo never emits it, so the change
+was structurally unable to redden a green baseline on its own axis. The rule was taken from
+tsgo's SOURCE (`reportCallResolutionErrors`, checker.go ~9624) and not from its baselines: report
+only the LAST argument-failing candidate, under `The last overload gave the following error.`
+(**TS2770**) and `No overload matches this call.`, with `The last overload is declared here.`
+(**TS2771**) at that candidate's declaration — neither code existed in the general path before,
+only inside hardcoded pins. **Because tsgo anchors wherever the last candidate's own argument
+check anchors, three tsc-6 heuristics became unreachable and were deleted** (B418's best-overload
+collapse, 17.15b/B50.11's fn-vs-fn callee anchor, B280's method-name anchor) along with the
+per-candidate related-info accumulation: the emission block 153 → 107 lines. (The change SET is
+−115 lines, but `Checker.kt` itself is **+101** — the deleted heuristics are outweighed by the new
+TS2770/TS2771 helpers and the tsgo-citing KDoc; the −159 is build.gradle.kts shedding 25 pending entries.) **Nine pin
+walkers updated and ZERO deletable — measured with the PassLab, not assumed**: with the pin off
+the general path differs in every case. Two silent-failure mechanisms found and recorded: a pin
+that locates its row by ANCHOR POSITION stops firing when a general emitter moves the anchor
+(no error, the general answer just leaks through), and a call signature `(x: T): R` is a
+`MethodDeclaration` with an EMPTY name at pos 0, so the idiomatic `?.pos ?: decl.pos` renders at
+`1:1`. Ablation 10 arms, 8 discriminating, both zeros ATTRIBUTED rather than shrugged at (a2's
+control a2b reddens 48, so `multi` is load-bearing and merely always-true here). 27 hand-written
+assertions in 5 classes re-measured against tsgo — **three were countdowns asserting pristine's
+per-candidate chain** and were renamed. Grid a MEASURED control (TS2769 rows = 0 on all eight
+profiles and on every library; the gate is the 28 corpus baselines that carry one). cost_gate all
+20 counters +0.00%, huge_methods exit 0 (861 classes), warning-clean with the gate proven live.

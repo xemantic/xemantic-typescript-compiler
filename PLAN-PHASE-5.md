@@ -25,6 +25,75 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.95) — the screen gains the EMIT channel, and three printer rules close 12 JS-emit rows (2026-09-14)
+
+**Three commits** (`1f5b13d2a` Part 0, `bb846ff1e` Part 1, `12592cc55` a blind-control repair).
+**Suite 19,200 → 19,214 / 0 / 139** — `tsgoPendingBaselines` 126 → **114**, skipped −12, tests
++14, **9 modules asserted present**. `cost_gate.py` exit 0, all 20 counters +0.00%;
+`huge_methods.py --fail-over 0` exit 0 (867 classes); warning-clean (7,300-byte log, `w=0 e=0`,
+no `-q`, positive control 1 `w:` line); **corpus screen 8,716 subtests / 0 mismatches over BOTH
+channels**. **(LEGACY.0) stays OPEN** on (0b-11).
+
+**PART 0 — THE SCREEN NOW SEES EMITTED BYTES, WHICH IS WHY THIS FAMILY HAD BEEN DEFERRED FIVE
+ROUNDS.** JS emit was the largest pending family and had NO blast-radius instrument: the (P18.93)
+screen covered only the errors subtests. It now runs both channels — **errors 3,046 and emit
+5,670, 8,716 in ~70 s against a ~4-minute `jvmTest`**. Both go through the suite's own helpers
+(`errorsMatchBaseline`; `toBaseline(casesDir)` + `sameAs`), so `stripDtsSection`, the CRLF
+normalisation, the UTF-16 BOM decode and the conformance `casesDir` provenance are the suite's by
+construction rather than reproduced — and the `casesDir` is RECOVERED from the generated source,
+not defaulted, because 34 emit subtests pass one. **Floors are PER CHANNEL** (2,800 / 5,200): one
+combined number is satisfied by a healthy channel while its sibling has collapsed. **The emit
+channel is nearly TWICE the errors one — 5,692 against 3,160 — so this round's own brief
+under-counted it** (it said ~3,100).
+
+**THE ORCHESTRATOR'S DECOMPOSITION WAS WRONG THREE WAYS, AND ONE WOULD HAVE MIS-ROUTED SIX ROWS
+INTO ANOTHER ARC.** (i) The instantiation-expression group is ONE rule of FIVE rows, not "~4, may
+be two" — and it absorbs a row filed as a singleton. `newOperator` is NOT in it (it is tsc's
+`parenthesizeExpressionOfNew`, which ADDS a paren). (ii) The trailing-comma group is 6, not 5,
+and three of the six are not object-literal fixtures at all — a `{ return 0; }` BLOCK recovered
+INTO an object literal is the same shape. (iii) **The destructuring group is NOT a target-gating
+question and does not belong with (LEGACY.1)**: the brief hypothesised TypeScript 7's removal of
+`downlevelIteration`/ES5, and `downlevelLetConst13(target=es2015)` refutes it by itself — in ONE
+file at ONE target the top-level exported bindings keep their pattern (`[exports.bar1] = [1];`)
+while the namespace-level ones are lowered. All six are one MODULE-TRANSFORM rule.
+
+**WHAT LANDED: THREE PRINTER RULES, 12 ROWS.** (1) An instantiation expression `expr<T>` prints
+as its operand, BARE — the parser's synthetic paren exists for checker squiggles and is not in
+the source, so it is stripped at PRINT time, leaving every transform decision untouched; an
+author's paren is a separate node and survives, which is the whole content of
+`instanceofOnInstantiationExpression`. Its JSDoc half was a **tsc-6 transcription — (P18.94)'s
+third group again — and was DELETED, not re-transcribed.** (2) A recovered `;` is a separator
+like any other, so a `;` before `}` is a TRAILING separator; the branch wrote
+`hasTrailingComma = false` unconditionally where its `hadComma` sibling decides on
+`token == CloseBrace`. (3) tsc's `parenthesizeExpressionOfNew`.
+
+**THE SCREEN PAID FOR ITSELF INSIDE THE FIRST HOUR, ON A SEMANTIC BUG.** The first cut of rule 1
+stripped the paren unconditionally and **moved two green baselines**: a `<T>` argument list ENDS
+an optional chain, so `a?.b<c>.d` must print `(a?.b).d` — dropping it changes what the program
+means. Nothing downstream can re-derive it (the transform turns the chain into a conditional, and
+synthesized nodes carry no `parent`), so the parser marks it where it already knows:
+`instantiationTerminatesChain`. **A synthetic paren is not uniformly cosmetic**, and this one was
+caught before any commit.
+
+**ABLATION — 8 arms, one mistake each, all discriminating**, every arm with a distinct
+`Emitter.class`/`Parser.class` md5: a1 paren never stripped 4 pins / **5 screen**; a2 the
+first cut (chain mark ignored) 2/**2**; a3 the mark also set on the value-position catch-all 3/4;
+a4 `;` recovery writes `false` 2/**6**; a5 writes `true` unconditionally **0 → 1**/1; a6 `new`
+never parenthesizes 1/1; a7 the leftmost walk descends into an author's paren 1/**0**; a8 any
+`new` leftmost parenthesized 1/**0**. **a5 read 0 RED and was REPAIRED** (the third commit): its
+control `{ a; b; c }` cannot see the mistake, because there the loop's `else` runs last and
+overwrites the flag — the separating shape is a `;` with NO closing brace after it, which no
+hand-written fixture reaches by accident. **a7/a8's zero SCREEN counts are attributed**:
+`new (new D).x` and `new new D().x` appear nowhere in the ~13k baselines, so the pins are the
+only instrument for the two halves of `newLeftmostExpression`, which is exactly why they exist.
+
+**THE GATES HAD TO BE LABELLED, AND THE EMIT-MODE CONTROL IS ITSELF BLIND.** `--noEmit` skips the
+transformer (round 738's `skipEmitOutputs`), so `cost_gate.py` and 7 of the 8 profile arms are
+CONTROLS here. **And the `--outDir` + `diff -r` emit-mode control read 78 files IDENTICAL across
+a change that moved 12 baselines** — real well-formed code contains no instantiation expression,
+no `;`-recovered object literal and no `new new X`. For an emit family the corpus EMIT CHANNEL is
+the gate and the `--outDir` diff is a control; the grid is a gate for rule 1 only.
+
 ### Round (P18.94) — the ORDER family: 13 of 18, and FIVE of the "model gaps" were reach rows (2026-09-14)
 
 **Suite 19,192 → 19,200 / 0 / 151** — `tsgoPendingBaselines` 139 → **126** and skipped 164 →
@@ -788,101 +857,6 @@ defects. Recorded rather than silently adopted.
 TS6133 → TS6196 (26) and F5 removed-option wording (4, which also answers (LEGACY.1)'s
 6.0-vs-7.0 question) are the cheap families; then the ranked family rounds, ordered from the
 RED SET rather than from the diff layers.
-### Round (P18.85) — (LEGACY.0a): the corpus is pinned to tsgo's `tsgo-port` sha, and tsc's STABLE TYPE ORDERING is an INTERNING order rather than a display one (2026-09-13)
-
-**Suite 19,028 → 19,045 / 0 / 20** — +16 pins (`StableTypeOrderingTest`) and +1 generated
-subtest, with **skipped 3 → 20** because 17 rows are declared in the new
-`tsgoPendingBaselines` list. Generated corpus **8,837 → 8,838**. Grid 8×`added=0 removed=0`;
-marked 18 → 18, cronstrue 1 → 1; `cost_gate.py` exit 0 **REBASELINED with attribution**;
-`huge_methods.py --fail-over 0` exit 0; warning-clean. **(LEGACY.0) stays OPEN on (0b)** —
-tsgo's own testdata layers.
-
-**WHY THIS ITEM, SAID OUT LOUD.** The owner re-pinned the corpus on 2026-09-12 and chose
-"both, in order"; (LEGACY.0a) is the first half and the head of the queue.
-
-**THE PIN.** `typeScriptCommit` `637d5746…` → `4d4f005c8541e0255a9d8791205fdce326e462bc`
-(tsgo 7.0.2's `_submodules/TypeScript`, the `tsgo-port` tip, whose SECOND parent is pristine
-`637d5746`); `cloneTypeScriptRepo`'s KDoc at `build.gradle.kts:240-261` is rewritten to the
-2026-09-12 policy, replacing the "never pin to the tsgo submodule sha" rule it used to carry.
-
-**THE FIRST RUN WAS EXACTLY THE SIZING'S 22 / 2 / 2 / 2 / 1.** 29 red, all compiler-suite:
-22 pure reorder (union members or object properties), 2 reorder plus downstream text, 2
-reorder plus changed chain content, 2 single-line text (`conditionalExpression1` →
-`string`, `thislessFunctionsNotContextSensitive1` → `"$test1"`), and the 1 new test. A
-read-only sizing predicting a red set to the family is worth the round it costs.
-
-**tsc's COMPARATOR IS AN *INTERNING* ORDER, AND THAT IS THE WHOLE DESIGN QUESTION.**
-`addTypeToUnion` inserts by `binarySearch(…, compareTypes)` (checker.ts l.18095), and
-`compareTypes` (l.53856) is: ascending `getSortOrderFlags` (an enum unit type sorts as
-`Enum`) → `compareTypeNames` (alias / type-parameter / class-interface / reference symbol;
-named before unnamed; same alias by alias arguments) → per kind (objects by `compareSymbols`
-= first declaration's file index then `pos`, references before other objects, references by
-argument list, tuples by shape; unions and intersections by member list; enum members and
-type parameters by symbol; literals by VALUE; `false` < `true`) → type id. The DISPLAY half
-is separate: `formatUnionTypes` (null and undefined last; `false | true` → `boolean`; a
-whole-enum run → the enum) and `getNamedMembers` sorting properties by `compareSymbols`.
-**Display-only was measured insufficient**: the first-failing chain constituent, a
-`Pick<A|B, K>` intersection, the TS2339 sub-line and the suggestion tie-break all read the
-INTERNAL list, so the comparator is wired into `Checker.getUnionType`.
-
-**TWO FACTS THE BRIEF DID NOT HAVE.** TypeScript 7 reordered `TypeFlags` to tsgo's bit
-order (`Undefined = 1<<2` … `Void = 1<<4`, `String = 1<<5` …, `Enum = 1<<16`,
-`NonPrimitive = 1<<17`, `Union = 1<<27`) while ours is the pre-7 order — so
-`StableTypeOrdering.NEW_BIT` remaps per bit, and `Zeta | void` prints `void | Zeta` on both
-references. And pristine 6.0.3 run with `--stableTypeOrdering` equals tsgo on **21 of 21**
-fixture rows, which is what makes the flag's own semantics checkable without tsgo.
-
-**LANDED WITH THE COMPARATOR, each its own tsc rule**: `boolean` absorbs `true`/`false`;
-the union display collapses `false | true` and a whole-enum run and parenthesizes
-intersection members; `void` is no longer forced last; the chain picker is FIRST-failing at
-four sites (tsc's `eachTypeRelatedToType`); `findBestUnionConstituent` is last-on-tie
-(`findMostOverlappyType`); mapped-type properties order by source declaration (AST order
-while the table is in flight); `Type.Object.declaredAt` carries a symbol-less anonymous
-object; the node-formatter's union arm sorts; and six hardcoded pin walkers move to the new
-baselines. Fixture matrix against tsgo: **21/21 byte-identical** (`ref_matrix.py` also
-adjudicates pristine, which differs on every ordering row BY CONSTRUCTION, so the
-comparison is against tsgo alone).
-
-**THE RESIDUE IS 17, NOT THE ≤4 THE SIZING PREDICTED, AND THE REASON IS STRUCTURAL:** most
-"mechanical" ordering rows never pass through `typeToString(Type.Union)` at all. They are
-rendered by pin walkers, by node TEXT, or by the JSDoc formatters, or they need tsc concepts
-this model does not have (type mappers, `Substitution`, `Index`; a symbol-less
-enclosing-scope type parameter; a reverse-mapped member list ordered by name). Twelve of the
-29 closed through the engine and walkers, six were hand-written expectations re-measured
-against tsgo (`BindingElementTypeTest`, `UnionCalleeOneOverloadedMemberTest`'s
-`ZzzN | ZzzO`, `CvdaSplitTest`, the externals generator's `void | Box`, and both externals
-library gates), and the remaining 17 are declared.
-
-**THE PENDING MECHANISM IS NEW AND IS NOT `LogicalParityDivergence`.** A `tsgo-pending` row
-is a tsgo-TARGET answer this compiler does not produce YET — not a divergence we have
-decided to keep — so `tsgoPendingBaselines` emits the subtest `@Ignore`d (visible as
-SKIPPED, counted, `tsgo-pending: 17` in the build log), fails the build on a stale entry,
-fails on a baseline declared in BOTH lists, and carries NO `pinnedBy` requirement, because
-the obligation is to implement the row rather than to pin a decision. Ledger:
-`docs/logical-parity.md` § 5.
-
-**ABLATION**: a1 the comparator reverted at both interning sites — **13 RED** (10 pins plus
-`unionTypeWithRecursiveSubtypeReduction2`, `widenToAny1`, `widenToAny2`); a2 the NAME key
-dropped from the comparator — **5 RED** (4 pins plus one corpus baseline). The 17 pending
-rows are skipped and so cannot contribute to either arm, which is the honest reading.
-
-**THE COST GATE IS REBASELINED, AND THE NUMBER IS ATTRIBUTED RATHER THAN ACCEPTED.** The
-landed binary read `typeNode.bypassed +2.13%` against the recorded baseline — over the ±2%
-tolerance — but a REBUILT pristine parent reads **+1.31%** against that same baseline, so
-the stale-baseline share is most of it and **this change's own effect is `typeNode.bypassed`
-146,769 → 149,894 = +0.81%**, with every other counter inside 0.1% of pristine. The
-mechanism is exactly what the design predicts: an interning-order change means `Foo | Bar`
-and `Bar | Foo` now intern to ONE union, which moves first-touch order and therefore the
-INV.5(c) bypass counter. Rebaselined per COST.1 with that justification, 12 rows.
-
-**SIZING ERRORS WORTH CARRYING**: "one engine change closes 22" (17 rows are outside the
-engine's reach); TypeFlags bit order changed in 7.0; "≤ 4 residue" against 17; and
-"display-only" against an interning-order change that moves cost counters ~0.8%.
-
-**NEXT**: (LEGACY.0b) per `docs/tsgo-baselines.md` — the baseline ROOT switch to
-`typescript-go-repo/testdata/baselines/reference/submodule/` with the three-way fallback and
-its asserted bucket counts (9 delete / 87 keep-tsc / 24 new), ≈315 first-run reds. Then
-(LEGACY.1).
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1213,7 +1187,29 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-9 LANDED 2026-09-14 ((P18.85)-(P18.94) notes) — pending 126, skipped 151,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-10 LANDED 2026-09-14 ((P18.85)-(P18.95) notes) — pending 114, skipped 139,
+  suite 19,214/0. **JS EMIT 12 of 33 by (P18.95)** (three printer rules), which also gave the screen its **EMIT
+  CHANNEL**: `bash scripts/corpus-screen.sh` now covers **8,716 subtests over errors+emit in ~70 s** with PER-CHANNEL
+  floors — and the emit channel (5,692) is nearly TWICE the errors one (3,160). **THAT IS THE INSTRUMENT FOR EVERY
+  REMAINING ROUND**; for an EMIT family it is the GATE, because `--noEmit` skips the transformer so `cost_gate.py`
+  and most of the grid are controls — and the `--outDir` + `diff -r` control read 78 files IDENTICAL across a change
+  that moved 12 baselines. Known nit: `--include` keeps only the last value, so verify rows one at a time.
+  **JS-EMIT RESIDUE, decomposed and measured (21 rows)**: the **module-transform** group (6 rows — an `export`ed
+  destructuring declaration in a CommonJS module is emitted as a destructuring ASSIGNMENT through `exports.*`, NOT
+  lowered to temps; **this was hypothesised as a `target ES5` question and is NOT — `downlevelLetConst13(target=es2015)`
+  refutes it in one file at one target, so it does NOT belong to (LEGACY.1)**); the **emit-nothing** group (~6 rows,
+  FOUR mechanisms: an enum/namespace `var` suppressed by a preceding `var`, a `declare`d import emitting nothing, a
+  `class C { global x }` recovery, an async-arrow temp — low yield per unit of work); and ~9 singletons (`emitBOM`,
+  `augmentExportEquals2` file ORDER, `moduleElementsInWrongContext{,2}`, …). **REMAINING (0b-11), by red count**: JS
+  emit residue 21, F6z singletons ~29, F8 unrelated-anchor residue ~11, F1 residue ~8, F0 7, F2-residue 6, F10
+  elaboration-chain shortening 4, ORDER-model residue 5. **PICK AND SIZE WITH THE SCREEN** — (P18.93)/(P18.94)/(P18.95)
+  each landed a high-radius family on a measured 0, and (P18.95)'s screen caught a SEMANTIC bug (an optional-chain
+  paren is load-bearing) inside the first hour, before any commit. **A KNOWN
+  FOLLOW-ON**: three hand-written pins differ from tsgo in CODE because our relation CHAIN line names the type
+  parameter / undistributed intersection where tsgo names its constraint / one distributed constituent — that chain
+  SOURCE DISPLAY is its own family and closing it also closes those three. The 21 TS-1 rows stay LEDGERED.
+  **BLOCKED-PENDING-USER, still open**: the fourth "harness artifact ⇒ fall back to tsc" arm ((P18.86)).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-9 LANDED 2026-09-14 ((P18.85)-(P18.94) notes) — pending 126, skipped 151,
   suite 19,200/0. **ORDER 13 of 18 by (P18.94)**, which also found a pin walker that had been ACTIVELY converting
   TypeScript 7's answer back into TypeScript 6's (`baseClassImprovedMismatchErrors`, deleted). **FIVE rows whose
   ledger reason called them MODEL gaps were REACH rows** — re-measure a recorded reason before inheriting it; the
