@@ -3055,7 +3055,19 @@ class Emitter(
             write(" > ")
         }
         emitInlineLeadingComments(leftmostExpression(node.expression))
+        // (LEGACY.0b step 10) tsc's `parenthesizeExpressionOfNew`, the half we lacked: when the
+        // callee's LEFTMOST expression is itself a `new` with NO argument list, the callee is
+        // parenthesized — `new new D` prints `new (new D)`. Without it the two `new`s run
+        // together and the printed text, although it re-parses to the same tree, is not
+        // TypeScript 7's (`newOperator`'s `var t5 = new new Date;`).
+        //
+        // The CallExpression half of that function needs nothing here: a `new (A())` keeps its
+        // source paren, and the Transformer already re-wraps one that type erasure dropped.
+        val newCalleeNeedsParens = newLeftmostExpression(node.expression)
+            .let { it is NewExpression && it.arguments == null }
+        if (newCalleeNeedsParens) write("(")
         emitExpression(node.expression)
+        if (newCalleeNeedsParens) write(")")
         // trailing type arguments erased
         if (node.arguments != null) {
             write("(")
@@ -3123,12 +3135,28 @@ class Emitter(
     }
 
     private fun emitParenthesizedExpression(node: ParenthesizedExpression) {
-        // expressionWithJSDocTypeArguments: a value-position instantiation `foo<?string>` whose
-        // type args are pure-JSDoc-nullable is re-printed verbatim (no paren wrap, no TS-strip)
-        // because the JSDoc factories never set ContainsTypeScript. Emit `expr<...>` and return.
-        node.instantiationJsDocTypeArgsText?.let {
+        // (LEGACY.0b step 10) AN INSTANTIATION EXPRESSION EMITS AS ITS INNER EXPRESSION, BARE.
+        //
+        // `instantiationEnd != null` marks a paren the PARSER synthesized around `expr<T>` — it
+        // exists so the checker can squiggle `expr<T>` as a unit (TS1477/TS2364/TS2848/TS2532)
+        // and so the downlevel optional-chain lowering treats the chain head as non-trivial. It
+        // is not in the source, so it must not be in the output: TypeScript 7 erases the type
+        // arguments and prints the operand unchanged (`obj.fn<number> = …` -> `obj.fn = …`).
+        //
+        // WHY THIS IS THE RIGHT LAYER. A paren the AUTHOR wrote is a SEPARATE
+        // [ParenthesizedExpression] carrying no `instantiationEnd`, so it survives — which is
+        // the whole content of tsgo's `instanceofOnInstantiationExpression` baseline, where
+        // `maybeBox instanceof Box<number>` prints bare and `maybeBox instanceof (Box<number>)`
+        // keeps exactly one paren. Stripping in the Transformer instead would have to preserve
+        // the node for the lowering that reads it and then remove it again; stripping at print
+        // time leaves every transform decision as it is and changes only the bytes.
+        //
+        // This subsumes the former `instantiationJsDocTypeArgsText` re-print, which reproduced
+        // TypeScript 6's `const WhatFoo = foo<?>;` for a pure-JSDoc-nullable argument list
+        // (`expressionWithJSDocTypeArguments`); 7.0.2 prints `const WhatFoo = foo;` like every
+        // other instantiation expression, so there is no JSDoc case left to special-case.
+        if (node.instantiationEnd != null && !node.instantiationTerminatesChain) {
             emitExpression(node.expression)
-            write(it)
             return
         }
         write("(")
@@ -3313,6 +3341,30 @@ class Emitter(
         is CallExpression -> leftmostExpression(expr.expression)
         is TaggedTemplateExpression -> leftmostExpression(expr.tag)
         is NonNullExpression -> leftmostExpression(expr.expression)
+        else -> expr
+    }
+
+    /**
+     * tsc's `getLeftmostExpression(node, stopAtCallExpressions = true)`, used only by
+     * [emitNewExpression]'s parenthesisation.
+     *
+     * It differs from [leftmostExpression] in two ways that both matter there: it STOPS at a
+     * `CallExpression` (so `new f()` inside a callee is a call, not whatever `f` is), and it
+     * stops at a `ParenthesizedExpression` (so a paren the author wrote already does the
+     * grouping — `new (new D).x` needs no second one). It descends through the operand/left/
+     * condition/tag positions, which is what makes `new (new D + 1)`-shaped callees answer
+     * about their leading `new`.
+     */
+    private fun newLeftmostExpression(expr: Expression): Expression = when (expr) {
+        is PostfixUnaryExpression -> newLeftmostExpression(expr.operand)
+        is BinaryExpression -> newLeftmostExpression(expr.left)
+        is ConditionalExpression -> newLeftmostExpression(expr.condition)
+        is TaggedTemplateExpression -> newLeftmostExpression(expr.tag)
+        is PropertyAccessExpression -> newLeftmostExpression(expr.expression)
+        is ElementAccessExpression -> newLeftmostExpression(expr.expression)
+        is NonNullExpression -> newLeftmostExpression(expr.expression)
+        is AsExpression -> newLeftmostExpression(expr.expression)
+        is SatisfiesExpression -> newLeftmostExpression(expr.expression)
         else -> expr
     }
 

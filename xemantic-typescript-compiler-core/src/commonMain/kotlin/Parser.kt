@@ -101,11 +101,6 @@ class Parser(
      *  marker does not leak to an enclosing element). */
     private var tupleElementConsumedOptionalMarker = false
     private var jsxElementDepth = 0
-    /** expressionWithJSDocTypeArguments: set true when a JSDoc-`?` (nullable) type was recovered
-     *  inside a type-argument list (`foo<?string>`), so a value-position instantiation paren can
-     *  preserve the raw `<...>` text in JS emit. Reset before each `tryParseTypeArguments`. */
-    private var sawJsDocInTypeArgs = false
-
     /** Stack of opening token positions for related-info on missing close tokens. */
     private val openTokenStack = mutableListOf<Int>()
     // B18.1: set true by parseInterfaceMembers when it bails out on a
@@ -6536,7 +6531,6 @@ class Parser(
                     val typeArgsStart = getPos()
                     var typeArgsEnd = -1
                     val callExpr: Expression? = scanner.tryScan {
-                        sawJsDocInTypeArgs = false
                         val typeArgs = tryParseTypeArguments()
                         if (typeArgs != null) typeArgsEnd = scanner.getPrevTokenEnd()
                         when {
@@ -6619,6 +6613,10 @@ class Parser(
                                                 ParenthesizedExpression(
                                                     expression = result,
                                                     instantiationEnd = typeArgsEnd,
+                                                    // LOAD-BEARING, not cosmetic: the `<T>` ends the
+                                                    // chain, so the `.`/`?.` that follows applies to the
+                                                    // chain's RESULT. `a?.b<c>.d` is `(a?.b).d`.
+                                                    instantiationTerminatesChain = true,
                                                     pos = result.pos,
                                                     end = getEnd(),
                                                 )
@@ -6630,14 +6628,11 @@ class Parser(
                                         // Tag this synthetic paren as originating from an
                                         // instantiation expression — checker uses this to
                                         // emit TS2364 when the paren appears as the LHS of
-                                        // an assignment (`obj.fn<T> = ...`).
+                                        // an assignment (`obj.fn<T> = ...`). It is NOT printed:
+                                        // TypeScript 7 erases the type arguments and leaves the
+                                        // operand alone, JSDoc-`?` argument lists included
+                                        // (`const WhatFoo = foo<?>;` prints `foo;`).
                                         instantiationEnd = typeArgsEnd,
-                                        // expressionWithJSDocTypeArguments: preserve JSDoc-`?`
-                                        // type args (`foo<?string>`) for value-position JS emit.
-                                        instantiationJsDocTypeArgsText =
-                                            if (sawJsDocInTypeArgs && typeArgsEnd > typeArgsStart)
-                                                normalizeJsDocTypeArgs(source.substring(typeArgsStart, typeArgsEnd))
-                                            else null,
                                         pos = result.pos,
                                         end = getEnd()
                                     )
@@ -7514,7 +7509,21 @@ class Parser(
                 if (postSemiTrailing != null && properties.isNotEmpty()) {
                     properties[properties.size - 1] = withTrailingComments(properties.last(), postSemiTrailing)
                 }
-                hasTrailingComma = false
+                // (LEGACY.0b step 10) A RECOVERED `;` IS A SEPARATOR LIKE ANY OTHER, SO A `;`
+                // IMMEDIATELY BEFORE `}` IS A TRAILING SEPARATOR — exactly as the `hadComma`
+                // branch below decides it. `{ a; b; c; }` prints `{ a, b, c, }` and
+                // `{ a; b; c }` prints `{ a, b, c }`; measured against tsgo 7.0.2, which also
+                // preserves a genuine `{ a: 1, }` (we already did) and DROPS a trailing comma
+                // in a parameter or argument list (we already did) — the object-literal and
+                // array-literal lists are the two that carry it.
+                //
+                // Writing `false` here made every `;`-recovered literal print without the
+                // trailing comma, which is six of this family's rows: the three explicit
+                // `objectLiteral*`/`incompleteObjectLiteral1` shapes plus three where a
+                // `{ return 0; }` BLOCK is recovered INTO an object literal
+                // (`fatarrowfunctionsErrors`, `constructorWithIncompleteTypeAnnotation`,
+                // `reachabilityChecksNoCrash1`).
+                hasTrailingComma = (token == SyntaxKind.CloseBrace)
                 hadSemicolonRecovery = true
             } else if (hadComma) {
                 // Capture any same-line trailing comments that appeared after the comma
@@ -9096,21 +9105,6 @@ class Parser(
         return type
     }
 
-    /** expressionWithJSDocTypeArguments: normalize a raw `<...>` instantiation type-arg list that
-     *  contained JSDoc-`?` (nullable) markers. tsc re-prints each arg with all `?` collapsed to a
-     *  single prefix: `?` → `?`, `string?` → `?string`, `?string?` → `??string`. */
-    private fun normalizeJsDocTypeArgs(raw: String): String {
-        val inner = raw.trim().removePrefix("<").removeSuffix(">")
-        val parts = inner.split(",").map { part ->
-            var s = part.trim()
-            var q = 0
-            while (s.startsWith("?")) { q++; s = s.substring(1).trim() }
-            while (s.endsWith("?")) { q++; s = s.substring(0, s.length - 1).trim() }
-            "?".repeat(q) + s
-        }
-        return "<" + parts.joinToString(", ") + ">"
-    }
-
     private fun parseNonUnionType(): TypeNode {
         val pos = getPos()
         // Error recovery: leading ! in type position (e.g. a: !string) — skip it.
@@ -9132,7 +9126,6 @@ class Parser(
             nextToken()
             if (!isStartOfType(token)) {
                 if (inTypeArgsDepth > 0) {
-                    sawJsDocInTypeArgs = true
                     reportError(
                         message = "JSDoc types can only be used inside documentation comments.",
                         code = 8020,
@@ -9254,7 +9247,6 @@ class Parser(
         ) {
             val questionEnd = scanner.getPos()
             nextToken()
-            if (inTypeArgsDepth > 0) sawJsDocInTypeArgs = true
             // A direct tuple-element `?` (`[number?]`) is a valid optional marker, silently
             // consumed here; flag it so parseTupleType can record the optionality (gated to
             // NOT-inside-type-args so a `[Map<K, V?>]` inner `?` is not mistaken for the
@@ -9276,7 +9268,6 @@ class Parser(
         }
 
         if (leadingQuestionPos >= 0) {
-            if (inTypeArgsDepth > 0) sawJsDocInTypeArgs = true
             val combinedEnd = scanner.getPrevTokenEnd()
             val typeText = source.substring(type.pos, typeProperEnd)
             val suggestion = when (typeText) {

@@ -989,11 +989,22 @@ data class ParenthesizedExpression(
      *  TS2532 squiggle position computation (covers `expr<T>` from `expr.pos` to
      *  `instantiationEnd`). */
     val instantiationEnd: Int? = null,
-    /** expressionWithJSDocTypeArguments: when non-null, this synthetic instantiation paren had
-     *  JSDoc-`?` (nullable) type arguments (`foo<?string>`/`foo<string?>`), which tsc preserves
-     *  in value-position JS emit (re-printed with the `?` normalized to a prefix). Holds the
-     *  normalized `<...>` text; the emitter prints `expr<...>` instead of `(expr)`. */
-    val instantiationJsDocTypeArgsText: String? = null,
+    /** (LEGACY.0b step 10) True when this synthetic instantiation paren is SEMANTICALLY
+     *  LOAD-BEARING and must therefore be PRINTED, against the default for its kind.
+     *
+     *  A `<T>` argument list ENDS an optional chain, so in `a?.b<T>.d` the `.d` applies to the
+     *  chain's result rather than to `b` — `(a?.b).d`, which is what TypeScript 7 emits, and
+     *  dropping the paren would change what the program means (and, downlevel, would leave a
+     *  bare `a === null || … : a.b` in front of a `.d`). Every OTHER synthetic instantiation
+     *  paren is invisible in the output: a value-position `obj.fn<T> = …` prints `obj.fn = …`,
+     *  and the B23.1 `a<T>?.()` wrap exists only so the downlevel lowering treats the chain
+     *  head as non-trivial — it is dropped at print time, and the temp-assignment paren the
+     *  lowering builds for itself is a different node.
+     *
+     *  Set by the parser, which is the only place the three cases are distinguished; nothing
+     *  downstream can re-derive it, because the transform replaces the inner expression (an
+     *  optional chain becomes a conditional) and synthesized nodes carry no `parent`. */
+    val instantiationTerminatesChain: Boolean = false,
     /** 17.140b: when non-null, this paren is a JSDoc type cast `/** @type {T} */ (expr)`.
      *  The checker uses this to override the inner expression's type. JS-like files only. */
     val jsdocCastType: TypeNode? = null,

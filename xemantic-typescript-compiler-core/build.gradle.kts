@@ -882,11 +882,6 @@ val tsgoPendingBaselines = listOf(
         "construct signatures are incompatible."
     ),
     TsgoPendingBaseline(
-        "assignmentToInstantiationExpression.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: obj.fn = () => 1234; | ours: (obj.fn) = () " +
-        "=> 1234;"
-    ),
-    TsgoPendingBaseline(
         "asyncArrowInClassES5(target=es2015).js",
         "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var _a;"
     ),
@@ -970,10 +965,6 @@ val tsgoPendingBaselines = listOf(
         "'map(...).size' are incompatible between these types."
     ),
     TsgoPendingBaseline(
-        "constructorWithIncompleteTypeAnnotation.js",
-        "JS emit; layer `submodule`. tsgo: return: 1, | ours: return: 1"
-    ),
-    TsgoPendingBaseline(
         "contextualReturnTypeOfIIFE2.errors.txt",
         "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer " +
         "`submoduleAccepted`. tsgo: contextualReturnTypeOfIIFE2.ts(5,9): error TS2339: Property " +
@@ -997,11 +988,6 @@ val tsgoPendingBaselines = listOf(
     TsgoPendingBaseline(
         "declarationEmitRetainsJsdocyComments.js",
         "JS emit; layer `submoduleAccepted`. tsgo: ({ | ours: /**"
-    ),
-    TsgoPendingBaseline(
-        "declarationEmitUsingTypeAlias2.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: exports.bar = some_dep_1.goodDeclaration; | " +
-        "ours: exports.bar = (some_dep_1.goodDeclaration);"
     ),
     TsgoPendingBaseline(
         "declarationFileNoCrashOnExtraExportModifier.errors.txt",
@@ -1151,16 +1137,6 @@ val tsgoPendingBaselines = listOf(
         "types can only be used inside documentation comments."
     ),
     TsgoPendingBaseline(
-        "expressionWithJSDocTypeArguments.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: const WhatFoo = foo; | ours: const WhatFoo = " +
-        "foo<?>;"
-    ),
-    TsgoPendingBaseline(
-        "fatarrowfunctionsErrors.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: foo((1), { return: 0, }); | ours: foo((1), { " +
-        "return: 0 });"
-    ),
-    TsgoPendingBaseline(
         "gettersAndSettersErrors.js",
         "JS emit; layer `submoduleAccepted`. tsgo: set Goo(v) { } // error - setters must not " +
         "specify a return type | ours: set Goo(v): string { } // error - setters must not " +
@@ -1204,19 +1180,10 @@ val tsgoPendingBaselines = listOf(
         "TS2309: An export assignment cannot be used in a module with other exported elements."
     ),
     TsgoPendingBaseline(
-        "incompleteObjectLiteral1.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: var tt = { aa, }; | ours: var tt = { aa };"
-    ),
-    TsgoPendingBaseline(
         "incorrectRecursiveMappedTypeConstraint.errors.txt",
         "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
         "TS2751 incorrectRecursiveMappedTypeConstraint.ts:3:10: Circularity originates in type " +
         "at this location. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "instanceofOnInstantiationExpression.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: maybeBox instanceof Box; // error | ours: " +
-        "maybeBox instanceof (Box); // error"
     ),
     TsgoPendingBaseline(
         "intTypeCheck.errors.txt",
@@ -1423,11 +1390,6 @@ val tsgoPendingBaselines = listOf(
         "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var global;"
     ),
     TsgoPendingBaseline(
-        "newOperator.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: var t5 = new (new Date); | ours: var t5 = " +
-        "new new Date;"
-    ),
-    TsgoPendingBaseline(
         "noParameterReassignmentIIFEAnnotated.errors.txt",
         "JSDoc: an OURS-ONLY TS8029. (LEGACY.0b) F6a is CLOSED for this row -- its " +
             "TS2740 leaf now matches tsgo byte for byte -- and what is left is a " +
@@ -1450,20 +1412,6 @@ val tsgoPendingBaselines = listOf(
         "F6 top code differs (tsgo TS2307 / ours -); layer `submoduleAccepted`. tsgo: " +
         "index.ts(1,21): error TS2307: Cannot find module '@this/package' or its corresponding " +
         "type declarations. | ours: ==== index.ts (0 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "objectLiteralWithSemicolons3.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: c, | ours: c"
-    ),
-    TsgoPendingBaseline(
-        "objectLiteralWithSemicolons5.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: var v = { foo() { }, a: b, get baz() { }, }; " +
-        "| ours: var v = { foo() { }, a: b, get baz() { } };"
-    ),
-    TsgoPendingBaseline(
-        "optionalChainWithInstantiationExpression2(target=es2019).js",
-        "JS emit; layer `submoduleAccepted`. tsgo: (_a = a) === null || _a === void 0 ? void 0 " +
-        ": _a(); | ours: (_a = (a)) === null || _a === void 0 ? void 0 : _a();"
     ),
     TsgoPendingBaseline(
         "overloadOnConstNoAnyImplementation2.errors.txt",
@@ -1519,11 +1467,6 @@ val tsgoPendingBaselines = listOf(
         "error TS2309: An export assignment cannot be used in a module with other exported " +
         "elements. | ours: bar.js(2,1): error TS2303: Circular definition of import alias " +
         "'blah'."
-    ),
-    TsgoPendingBaseline(
-        "reachabilityChecksNoCrash1.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: out, : .push(await v), | ours: out, : " +
-        ".push(await v)"
     ),
     TsgoPendingBaseline(
         "readonlyTupleAndArrayElaboration.errors.txt",
