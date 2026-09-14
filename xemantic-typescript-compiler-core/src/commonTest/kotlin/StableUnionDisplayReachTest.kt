@@ -142,10 +142,38 @@ class StableUnionDisplayReachTest {
     // -------------------------------------------------------------------------
     // The discriminated-union excess-property TS2353 (excessPropertyCheck-
     // WithMultipleDiscriminants). tsc orders two named interfaces by NAME.
+    //
+    // THE SHAPE MATTERS AND A FIRST ATTEMPT GOT IT WRONG. There is more than one
+    // TS2353 emitter, and an ARGUMENT-position object literal against a plain two
+    // -member union is served by one that already agreed with tsgo — measured by
+    // ablation, where dropping the ordering under test left that fixture GREEN and
+    // moved a corpus baseline. The walker this pin exists for is the DISCRIMINATED
+    // -union one: a VAR-DECL annotation over a union some of whose constituents the
+    // discriminant DROPS, so the display is built from its own `kept` list.
     // -------------------------------------------------------------------------
 
     @Test
-    fun `a discriminated-union excess-property target renders its constituents by name`() {
+    fun `a discriminated-union excess-property target renders its kept constituents by name`() {
+        val messages = diagnose(
+            """
+            interface ZCommon { kind: "za" | "zb"; n: number }
+            interface ZAlpha { kind: "za"; a?: number }
+            interface ZBeta { kind: "zb"; b?: number }
+            type ZU = ZCommon | ZAlpha | ZBeta;
+            const zc: ZU = { kind: "za", n: 1, a: 1, b: 1 };
+            """,
+        ).map { it.message }
+        assert(
+            messages == listOf(
+                "Object literal may only specify known properties, and 'b' does not exist in type 'ZAlpha | ZCommon'.",
+            ),
+        )
+    }
+
+    @Test
+    fun `an argument-position excess-property union target also renders by name`() {
+        // A DIFFERENT TS2353 emitter, which already agreed with tsgo before this round;
+        // kept as a value control that the two do not drift apart.
         val messages = diagnose(
             """
             interface ZBeta { d: number; shared: string }
