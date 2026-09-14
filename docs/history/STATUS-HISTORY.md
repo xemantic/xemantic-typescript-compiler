@@ -3571,3 +3571,33 @@ on all eight; no profile sets `checkJs`/`allowJs`/`emitDeclarationOnly`). **A re
 landed with it**: a 28-second full-active-corpus harness outside Gradle (2,789 subtests, 0
 mismatches after every step). cost_gate all 20 counters +0.00%, huge_methods exit 0 (862
 classes), warning-clean against a gate proven live.
+
+**(P18.93) — THE CORPUS *SCREEN* IS COMMITTED, AND F2 DUPLICATE-IDENTIFIER LANDS 12 OF 18 WITH THREE tsc-6 NARROWINGS DELETED, 19,192 / 0 / 164 (2026-09-14).**
+Two commits. **Part 0** is the instrument (P18.92) built, used and LOST: `scripts/corpus-screen.sh`
++ `CorpusScreenMain.kt`, ~28 s over every active errors subtest outside Gradle, now committed
+because with 139 rows still open its absence was a tax on every remaining round. Three properties
+are STRUCTURAL, not remembered — it **refuses the frozen repo-root generated tree** (whose
+positive control shows it really is a different corpus, 3,145 subtests against the live 3,160),
+it **calls the suite's own** `errorsMatchBaseline`/`Path.readText()` so CRLF, `.d.ts` stripping
+and the UTF-16 BOM decode cannot drift, and it **refuses below a subtest floor**. It is NOT the
+gate and its header says so. **Part 1**: pending 151 -> **139**, skipped 176 -> **164**, both -12,
+plus +22 pins. **The screen decided the round** — TS2300 is in **80** active baselines, the
+largest radius of any remaining family, but the candidate rule read **0 mismatches / 3,021** on a
+throwaway build before any commitment, which is how an 80-baseline family landed in one round.
+The pre-measurement also corrected the roster (group A was 9, not 12; the missing three are a
+NAMING mechanism; group B is two mechanisms, not one). **The rule deletes three tsc-6
+narrowings**: `reportDuplicateMemberErrors` errors at EVERY matching member, so the flag table
+collapses to "report all, except a get/set PAIR and METHOD OVERLOADS", and the TS6200/TS6201
+amalgamation is deleted rather than re-thresholded. Byte-identical to tsgo across all 29 rows of
+a 14-shape fixture, silences included. **My read-only TS2717 rule was WRONG and the measurement
+said so**: it is not a "differing KIND" test but tsgo's binder SPLIT — the group's first member
+must not be a METHOD — which no two-member fixture can distinguish. **Six countdown pins, not
+anticipated**: five in `PristineDivergenceRound940Test` and one whose own comment read "a tsgo
+divergence this compiler does not chase", all asserting pristine's answer for the family being
+closed; all six re-measured against tsgo and re-pointed. **And changing a row's NAME silently
+changed its SQUIGGLE** (an `else -> name.length` fallback), caught only by a two-character width
+diff. Three holdouts have named mechanisms and **the related-span three are a refusal with
+numbers**: the rule built from tsgo's SOURCE does not reproduce tsgo's own BASELINES. Ablation 12
+arms, ALL discriminating, each reporting pin reds AND screen mismatches. Grid a MEASURED control
+(TS2300/TS2717/TS6200 all 0/0 in both arms of all eight). cost_gate all 20 counters +0.00%,
+huge_methods exit 0 (862 classes), warning-clean against a gate proven live.

@@ -1,3 +1,76 @@
+### Round (P18.88) — (LEGACY.0b) step 3: F6 decomposed into eight mechanisms, four sub-families landed, and the largest one REFUSED on a measured blocker (2026-09-13)
+
+**Suite 19,100 → 19,130 / 0 / 242** — `tsgoPendingBaselines` 242 → 217 and skipped 267 →
+242, **both −25**, which is the receipt. +30 pins in four classes (13 / 6 / 6 / 5). Grid
+8×`added=0 removed=0` (arms verified distinct, AFTER byte-identical to the shipped classes);
+`cost_gate.py` exit 0 with all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0
+(858 classes); warning-clean. **(LEGACY.0) stays OPEN.**
+
+**THE F6 DECOMPOSITION IS THE DURABLE OUTPUT, AND IT IS (P18.87)'s LESSON A SECOND TIME:
+"F6 code-differs" is a first-differing-LINE label, not a family.** Read pairwise — tsc's
+baseline IS our output for every row that was green before the root switch, so the two
+baselines are a free differential — the 88 rows are EIGHT mechanisms:
+
+| mechanism | rows | example |
+|---|---:|---|
+| **F6a** missing-property HEAD SUPPRESSION | **28** | `assignmentCompatFunctionsWithOptionalArgs` |
+| F6z singletons and mixed (15 of them JS / checkJs / JSDoc) | 33 | `arrayCast`, `jsdocRestParameter` |
+| **F6d** TS2303 at EVERY node of an import-alias cycle | 10 | `circularModuleImports` |
+| **F6c** TS2497 does not exist in TS7 | 8 | `importNonExportedMember5` — **LANDED (7)** |
+| F6b unused-local GROUPING (array and nested patterns) | 3 | `unusedVariablesWithUnderscoreInBindingElement` |
+| F6g TS2696 `Object`-type message gone | 2 | `assigningFromObjectToAnythingElse` |
+| F6e TS5101 → TS5102 | 2 | (LEGACY.1)(k)'s own rows |
+| F6f TS2304 → TS2552 suggestion | 2 | `commonMissingSemicolons` |
+
+**F6a: THE DESIGN'S HYPOTHESIS IS CONFIRMED AND ITS DIRECTION IS WRONG.** It really is one
+decision point — tsgo's `relater.go` ~4809, where `reportRelationError` suppresses the HEAD
+when `getChainMessage(0)` is the missing-property message, the head is not a conversion or
+interface-implementation one, and `chainArgsMatch(nil, source, target)` — but the rows do
+not all run one way: **24 have tsgo reporting the leaf, and 4 have tsgo KEEPING a head we
+drop.** It is REFUSED this round on a measured blocker rather than deferred: that message is
+emitted at **~30 independent sites** in `Checker.kt` with no relation-error funnel to put
+the rule in, and its reach is **73 of the 2,955 active `.errors.txt` subtests**. All 28
+reasons are rewritten in place and greppable as `F6a`, so the next attempt starts from the
+mechanism rather than the label.
+
+**LANDED, four sub-families, 25 rows.** **(a) F8 unused-local ANCHORS, 10 of 10** — and the
+handover said seven. Three tsc-6 special cases TypeScript 7 simply dropped: a one-binding
+import clause squiggling the whole statement, a one-element binding pattern squiggling the
+pattern (in BOTH emitters), and TS6199 taking the statement's `;`. **The remaining 15 F8
+rows are NOT this emitter** — about 11 are unrelated per-diagnostic anchors (TS5053 ×2,
+TS1356, TS2447, TS2880 ×2, TS1092, TS1517, …), so F8 is itself two families. **(b) F6c,
+TS2497, 7 of 8**: the code sits in tsgo's message table and is **referenced by no tsgo code
+and present in none of its baselines**, so six emission sites came out with every companion
+row (TS2616 / 2595 / 2597 / 2617 / 7023) intact. **(c) F0 TS1127 spans one character, 5 of
+6** — 0 active baselines expect a zero-width squiggle and 9 expect at least one. **(d) F8
+TS8017 spans the declaration, 3 of 3.**
+
+**ABLATION: 14 arms, 13 discriminate, `@Test` identical at 3,971 in every one.** a1 **15**,
+a2 3, a3 4, a4 4, **a5 0 — UNDISCRIMINATED and recorded as such**, a6 3, a7 4, a8 2, a9 4,
+a10 4, a11 5, a12 2 (corpus baselines only, no pin covers that walker — said rather than
+claimed), a13 2, a14 2.
+
+**THE GRID IS A GATE FOR EXACTLY ONE OF THE FOUR.** Real gate for TS2497: every profile
+imports across files, so a deletion reaching past `export =` interop would print
+`removed=N`. Control for the other three — no profile sets `noUnusedLocals`, none holds an
+invalid character, and none is a `.js` file with `checkJs`.
+
+**FIVE REFUTED PREDICTIONS, TWO OF THEM THIS ROUND'S OWN MEASUREMENTS.** The design's F6
+direction; the handover's "seven F8 rows" (ten); "TS1127 closes six" (five — and the sixth
+UNCOVERED a baseline-formatter codepoint-versus-UTF-16 column count that was invisible while
+the squiggle had zero width, i.e. fixing one defect exposed another beneath it); "TS2497
+costs one kept-tsc baseline" (zero — tsgo ran that case, and (0b) step 1 had already deleted
+the comparison). **And two of this round's own censuses were taken off a STALE
+`build/generated/typescript-tests` tree at the REPO ROOT dated 2026-08-07** — 3,145 "active"
+subtests against the true 2,955, and an F6a reach of 166 against the true 73. The
+conclusions survived; the numbers did not. That same stale tree misled the orchestrator
+earlier in this session, so it is now a CLAUDE.md entry.
+
+**NEXT**: (0b-4). By red count the field is now F6a 28 (REFUSED above — needs a
+relation-error funnel first, which is its own unblocker), F6z 33 singletons (15 of them
+JS/checkJs/JSDoc, so a `checkJs` sub-round may be the cheapest slice), JS emit 33, F3
+last-overload 25, F6d 10, F1 11, F2 9, F8's unrelated-anchor residue ~11.
+
 ### Round (P18.87) — (LEGACY.0b) step 2: the "free wins", and F9 was a first-differing-LINE label rather than a family (2026-09-13)
 
 **Suite 19,082 → 19,100 / 0 / 267** — skipped 310 → 267 and `tsgoPendingBaselines`

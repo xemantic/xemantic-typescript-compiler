@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194,595** lines (**+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **194,674** lines (**+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,22 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.98) — FOUR CHECKER MECHANISMS, 8 ROWS, AND THE tsc-6 MIRROR WAS A COUNTDOWN FOR THE SUGGESTION CAP, 19,292 / 0 / 109 (2026-09-14).**
+Pending 92 -> **84**, skipped -8, +32 pins, 9 modules asserted. tsgo has NO 10-suggestion cap
+(tsc 6's `maximumSuggestionCount` gate deleted, algorithm unchanged); TS6198 groups an ARRAY
+binding pattern and recurses, in one home for variables, parameters and every `for` head — with
+five sub-rules the brief did not name (a rest exempts nothing, an omitted slot counts, a lone
+shorthand `_h` is reported, `_` array/parameter elements are USED, nested parameter patterns were
+never collected); the global `Object` source keeps its TS2322 head with the "very few other types"
+sentence as the first chain line, target-independent except a type-parameter target (three
+baselines, caught by an arm); and the size-only leaf-promotion pair LANDED on a measured zero.
+**The full suite read one red, in the tsc-6 MIRROR of a ledgered TS-1 case**: its `val` row was a
+capped TS2304 where tsgo's own baseline says TS2552 `Did you mean 'eval'?` — lifted by a counted
+substitution; the mirrors are countdowns for every rendering change left. Ablation 8 arms, all
+discriminating. cost_gate 20/20 +0.00% (a gate here), grid 8×0/0 (a real gate for the cap: 46
+unresolved names per profile, no suggestion appeared), emit control 78/78, huge_methods exit 0
+(869 classes), warning-clean, screen errors 3,058/0, emit 5,688/0. The gate chain was killed once
+for low memory by three idle build daemons (11.5 GB) — stopped, re-run clean.
 **(P18.97) — THE JS-EMIT RESIDUE: SEVEN MECHANISMS, 11 ROWS, AND THE HOIST KEYWORD IS A *SCOPE* PROPERTY, 19,260 / 0 / 117 (2026-09-14).**
 Pending 103 -> **92**, skipped -11, +20 pins, 9 modules asserted. Briefed as five mechanisms / 9
 rows, landed seven / 11 — the agent sized the two singletons it was told to report on and landed
@@ -109,32 +125,3 @@ notification as "finished"; CLAUDE.md's rule is one invocation per BOX, not per 
 documented, both walked into. The KIR timeout is NOT a regression (seven straight-line
 `console.*` calls, no loop; 159 KIR tests pass in isolation). cost_gate all 20 counters +0.00%,
 huge_methods exit 0 (867 classes), warning-clean, screen 3,046/0.
-**(P18.93) — THE CORPUS *SCREEN* IS COMMITTED, AND F2 DUPLICATE-IDENTIFIER LANDS 12 OF 18 WITH THREE tsc-6 NARROWINGS DELETED, 19,192 / 0 / 164 (2026-09-14).**
-Two commits. **Part 0** is the instrument (P18.92) built, used and LOST: `scripts/corpus-screen.sh`
-+ `CorpusScreenMain.kt`, ~28 s over every active errors subtest outside Gradle, now committed
-because with 139 rows still open its absence was a tax on every remaining round. Three properties
-are STRUCTURAL, not remembered — it **refuses the frozen repo-root generated tree** (whose
-positive control shows it really is a different corpus, 3,145 subtests against the live 3,160),
-it **calls the suite's own** `errorsMatchBaseline`/`Path.readText()` so CRLF, `.d.ts` stripping
-and the UTF-16 BOM decode cannot drift, and it **refuses below a subtest floor**. It is NOT the
-gate and its header says so. **Part 1**: pending 151 -> **139**, skipped 176 -> **164**, both -12,
-plus +22 pins. **The screen decided the round** — TS2300 is in **80** active baselines, the
-largest radius of any remaining family, but the candidate rule read **0 mismatches / 3,021** on a
-throwaway build before any commitment, which is how an 80-baseline family landed in one round.
-The pre-measurement also corrected the roster (group A was 9, not 12; the missing three are a
-NAMING mechanism; group B is two mechanisms, not one). **The rule deletes three tsc-6
-narrowings**: `reportDuplicateMemberErrors` errors at EVERY matching member, so the flag table
-collapses to "report all, except a get/set PAIR and METHOD OVERLOADS", and the TS6200/TS6201
-amalgamation is deleted rather than re-thresholded. Byte-identical to tsgo across all 29 rows of
-a 14-shape fixture, silences included. **My read-only TS2717 rule was WRONG and the measurement
-said so**: it is not a "differing KIND" test but tsgo's binder SPLIT — the group's first member
-must not be a METHOD — which no two-member fixture can distinguish. **Six countdown pins, not
-anticipated**: five in `PristineDivergenceRound940Test` and one whose own comment read "a tsgo
-divergence this compiler does not chase", all asserting pristine's answer for the family being
-closed; all six re-measured against tsgo and re-pointed. **And changing a row's NAME silently
-changed its SQUIGGLE** (an `else -> name.length` fallback), caught only by a two-character width
-diff. Three holdouts have named mechanisms and **the related-span three are a refusal with
-numbers**: the rule built from tsgo's SOURCE does not reproduce tsgo's own BASELINES. Ablation 12
-arms, ALL discriminating, each reporting pin reds AND screen mismatches. Grid a MEASURED control
-(TS2300/TS2717/TS6200 all 0/0 in both arms of all eight). cost_gate all 20 counters +0.00%,
-huge_methods exit 0 (862 classes), warning-clean against a gate proven live.
