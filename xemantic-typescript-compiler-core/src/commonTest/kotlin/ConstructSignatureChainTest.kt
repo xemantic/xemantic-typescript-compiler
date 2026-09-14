@@ -125,6 +125,25 @@ class ConstructSignatureChainTest {
     }
 
     @Test
+    fun `a return-type mismatch is dedented with the rest`() {
+        // The chain's THIRD reachable link, and the ablation of its indentation alone reads 0
+        // RED without this pin — no corpus baseline exercises a construct-signature RETURN
+        // mismatch whose parameters all relate. Measured byte-identical to tsgo 7.0.2.
+        assert(
+            chainOf(
+                """
+                class C { constructor(n: number) {} }
+                declare let d: { new (n: number): string };
+                d = C;
+                """
+            ) == listOf(
+                "Type 'typeof C' is not assignable to type 'new (n: number) => string'.",
+                "  Type 'C' is not assignable to type 'string'.",
+            )
+        )
+    }
+
+    @Test
     fun `negative control - a CALL-signature chain is untouched by the construct-side shortening`() {
         // TypeScript 6 and 7 agree here, and this compiler has never emitted a
         // `Types of call signatures are incompatible.` header at all — so the chain below is
