@@ -65496,3 +65496,80 @@ of the 21 rows was never a contextual-typing gap.
 **NEXT**: (CHK.98)'s stage-2 rows — `Promise.then`/`PromiseLike.then` and a namespace-import
 callee (missing), predicate `filter` (missing and text-diff), the `reduce(cb, {} as
 Record<…>)` false positive. Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
+
+### Round (P18.84) — (CHK.98) stage 2: `Promise.then`, a namespace-import callee and predicate `filter` — two instantiations that no-op'd a union-wrapped function type, and the item closes (2026-09-12)
+
+**Suite 18,986 → 19,028 / 0 / 3** (+42 pins, `ContextualCallbackStage2Test`: 34 value, 4
+controls, 3 negative controls, 5 `residue -` with the tsgo row in the KDoc). Grid 8×`added=0
+removed=0` across three builds; marked 18 → 18, cronstrue 1 → 1, the 2,400-file project 1 → 1;
+`cost_gate.py` exit 0 with every counter within +0.05% of the rebuilt HEAD (the +0.85/+1.31/
++1.35 rows are the stale baseline, identical on HEAD; not rebaselined); `huge_methods.py
+--fail-over 0` exit 0; warning-clean (main + test). **(CHK.98) IS CHECKED OFF** — (a)/(b)/(c)
+in (P18.31), (d) in (P18.82), (i) in (P18.83), stage 2 here; its one real residue is queued
+as (CHK.135). **This is the first round measured against tsgo 7.0.2 ALONE** under the
+2026-09-12 directive; pristine happened to agree on every adjudicated row (the one
+REF-SPLIT-MSG is union member order, where ours already prints tsgo's).
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.98) was the first unchecked item. The queue's head is
+now (LEGACY.0) — the owner's corpus re-pin — and that is where the next round goes.
+
+**THE MECHANISMS, INSTRUMENTED RATHER THAN READ.** (a) `Promise.then`/`PromiseLike.then`/
+`catch`: the lib parameter is the union `((value: T) => …) | undefined | null`, and TWO
+instantiations no-op'd a union-WRAPPED function type — the generic-member resolver's
+parameter branch (the receiver's `T`) and `instantiateContextualParamType` (the method's own
+`TResult1`) — while the property-access reader arms tested `contextualType is Type.Object`
+outright. The nullish strip, the brief's suspect, was never the loss: a marker showed the
+pull receiving `params=[T]`. (b) A namespace-import callee: `getTypeOfPropertyAccess`
+answers `any` for the alias while the ARGUMENT/RETURN walkers already resolved it
+(`zns.take(1)` reported on HEAD); the pull now falls to `resolveNamespaceQualifiedSymbol`
+only where the access answered nothing, refusing a root shadowed lexically — by a
+SYNTACTIC `nameBoundByEnclosingScope`, because an `any`-annotated parameter is registered
+nowhere and a `currentLocalTypes` guard produced a false TS2322. (c) Predicate `filter`:
+(P18.77)'s "lib `filter` is a `MethodSignature`" claim is REFUTED (it arrives as a
+`MethodDeclaration`); the loss was `predicateTargetTypeOfGuardExpr` having no inline-arrow
+leg. With it landed tsc 5.5's INFERRED `typeof` predicate — object members fall to the false
+branch, keep-nothing answers `never` — which closes a PRE-EXISTING false positive on
+`nums.filter(x => typeof x === "string")`. (d) `reduce(cb, {} as Record<…>)` is not
+contextual typing at all: `Record<K, V>` resolves to bare `any` (3 missing rows at a plain
+declaration), so the `initialValue: T` overload is selected; `{ n: 0 } as { n: number }`
+selects `U` correctly — recorded as `residue -` and queued as (CHK.135). (e) `NonNullable<…>`
+is `T & {}` un-distributed (round 777's architecture), display-only and (PARITY.1)-blind.
+
+**BEFORE → AFTER (`agree/ours-only/missing/text-diff`, zero REF-SPLIT)**: promise family
+(14) 0/0/12/0 → **9/0/3/0**; namespace import (5) 1/0/4/0 → **5/0/0/0**; predicate `filter`
+(8) 1/0/5/2 → **6/0/1/1**; `reduce` (9) 6/1/2/0 unchanged (mechanism recorded); the item's
+own stage-2 set (14) 4/1/4/4 → **9/1/0/3**. (P18.83)'s free-type-parameter rule had moved
+NONE of these — re-measuring on the fresh binary was not optional.
+
+**THE CENSUS GRADED THREE MECHANISMS AS GATES AND THREE AS CONTROLS.** The instantiator's
+union arm fires 1,159-2,455 times per profile, the namespace callee 26-642 (harness), the
+inline guard 41-122 and the reader-through-union 16-33 — with the grid at 8×0/0 those are
+GATES that stayed green. The member-union branch, the `typeof` inference and the receiver
+source read 0 on every corpus (tsc's `.then(` spellings are all in emit-helper strings and
+comments) — controls. Libraries 0 for everything.
+
+**ABLATION, eleven arms, per-arm `cmp`, @Test asserted**: both union arms **11 RED**; the
+member branch alone 10; the instantiator arm alone 1; the reader strip 1; the namespace
+callee 4; the shadow test 1; the inline guard 4; `S` from the parameter — **0, a DEAD ARM on
+un-annotated guards** until an annotated-guard pin was added, then 1; the `typeof` rule 6;
+the receiver source 7; the `never` answer 1. Every red set is exactly its pins. Core module
+17,520 / 0 with all 74 ACTIVE `.errors.txt` cases carrying the shapes and all 40 grepped
+classes present; the embedded-lib `then` is a plain function parameter, so (a) is
+unreachable in the corpus by construction and pinned as a control.
+
+**RESIDUES, MEASURED AND NOT FIXED**: `then`'s RETURN type (the single-TP callback-return
+inference exists but `then` fails three of its gates — two type parameters, a union-wrapped
+parameter, a `U | PromiseLike<U>` return — three `residue -` pins); `Record<K, V>` → `any`
+((CHK.135)); an element-access receiver's member gap (`zf[0].b`, pre-existing); chain-depth
+display rows; `(string | "a")` under INV.5(a)'s interning; an inline guard with its own type
+parameter (refused by design); TS7006 under a shadowed-`any` callee (pre-existing);
+`typeof "object"/"function"` guards refused.
+
+**PREDICTIONS REFUTED**: the `MethodSignature` claim; "find where `getCalleeType` refuses"
+(it was not the losing reader); the nullish strip; (d) as an overload-selection defect; the
+agent's own primitive-only `typeof` rule (tsgo infers over `(string | ZO)[]` and answers
+`never`); its first shadow guard; a dead ablation arm on the first pin set; and the
+member-union branch as a gate on tsc's sources.
+
+**NEXT**: (LEGACY.0a), the `tsgo-port` pin — 29 subtests at most, one display-order family.
+Then (LEGACY.0b) per `docs/tsgo-baselines.md`, then (LEGACY.1).

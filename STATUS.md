@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194,514** lines (**-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **194,595** lines (**+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,31 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.94) — THE ORDER FAMILY: 13 OF 18, AND FIVE OF THE "MODEL GAPS" WERE REACH ROWS, 19,200 / 0 / 151 (2026-09-14).**
+Pending 139 -> **126**, skipped 164 -> **151**, both -13, plus +8 pins. **The orchestrator's
+read-only decomposition was wrong in both directions and the measurement said so**: it is THREE
+groups not two, five of the nine briefed "model gaps" were reachable, and two briefed reach
+attributions were the same site. The discriminator is one scratch run — rewrite the SOURCE
+union's order: if the output changes the display reads nodes and the fix is a sort; if not, the
+TYPE is wrong. **A third group nobody had: tsc-6 TRANSCRIPTION**, whose find is that
+`baseClassImprovedMismatchErrors` did not merely hold a stale string — it **actively rewrote**
+`() => string | number` into `() => number | string`, converting TypeScript 7's answer into
+TypeScript 6's for this entire arc. Deleted, not re-transcribed. **The screen is now the primary
+instrument**: 3,033/0 before, **3,033/0 after all 13 fixes** on the family with the highest
+display blast radius left, with every closed row verified through `--include` and the 5 holdouts
+as the positive control that the path was live. Every ablation arm reports screen mismatches
+beside pin reds, which is what makes its six ZERO-PIN arms attributable — each moves precisely
+one baseline. **A blind pin was found by its own ablation** (arm a3 stayed green while moving a
+baseline): more than one emitter owns TS2353, so the pin asserted the right answer from the wrong
+site. A recorded ledger REASON was also wrong — `typeParameterDiamond4` is a resolution gap, not
+an ordering one — and two holdouts are not ORDER rows at all. **An operational failure, and it
+was the orchestrator's**: four suite runs were lost to `EOFException`/`NoSuchFileException`/a KIR
+timeout because it ran `./gradlew` while the agent's suite was in flight, having read a stop
+notification as "finished"; CLAUDE.md's rule is one invocation per BOX, not per agent. It also
+`--stop`ped a later invocation's daemon and `pgrep`-killed its own shell — both already
+documented, both walked into. The KIR timeout is NOT a regression (seven straight-line
+`console.*` calls, no loop; 159 KIR tests pass in isolation). cost_gate all 20 counters +0.00%,
+huge_methods exit 0 (867 classes), warning-clean, screen 3,046/0.
 **(P18.93) — THE CORPUS *SCREEN* IS COMMITTED, AND F2 DUPLICATE-IDENTIFIER LANDS 12 OF 18 WITH THREE tsc-6 NARROWINGS DELETED, 19,192 / 0 / 164 (2026-09-14).**
 Two commits. **Part 0** is the instrument (P18.92) built, used and LOST: `scripts/corpus-screen.sh`
 + `CorpusScreenMain.kt`, ~28 s over every active errors subtest outside Gradle, now committed
@@ -126,25 +151,3 @@ assertions in 5 classes re-measured against tsgo — **three were countdowns ass
 per-candidate chain** and were renamed. Grid a MEASURED control (TS2769 rows = 0 on all eight
 profiles and on every library; the gate is the 28 corpus baselines that carry one). cost_gate all
 20 counters +0.00%, huge_methods exit 0 (861 classes), warning-clean with the gate proven live.
-**(P18.89) — F6a: THE "UNBLOCKER" WAS NOT NEEDED, BECAUSE tsgo's CONDITION IS OVER *RENDERED STRINGS* — 27 OF 28 ROWS, BOTH DIRECTIONS, 19,139 / 0 / 215 (2026-09-13).**
-Pending 217 → **190**, skipped 242 → **215**, both −27. (P18.88) refused this family for
-want of a relation-error funnel across "~30 sites"; the re-taken census says **61 sites and
-119 baselines** (not 73), and the funnel was never needed: **tsgo's `chainArgsMatch` compares
-RENDERED STRINGS**, so deciding it from a finished `Diagnostic` at the single
-`Checker.getDiagnostics()` exit is not an approximation of its rule but the rule itself — one
-call site routing all 61, fail-closed on a head that does not parse. Stage 1 landed as an
-identity function with a byte-identical receipt; stage 2 is the four-conjunct condition, with
-conjunct 3 parsed and then EXCLUDED exactly as tsgo does. **Both directions are one rule** —
-23 of 24 leaf-reporting plus 4 of 4 head-keeping close together, and the 4 turned out to be
-three mechanisms. **The pre-measurement is what made it safe**: of 2,955 active baselines not
-one has a head whose displays match its chain entry, and the 25 where ours did were all
-already ignored — so the rule provably could not move a green baseline, and the first
-post-change suite had 32 failures of which zero were corpus subtests. Ablation 98 / 771 / 14
-/ 49 RED, no conjunct redundant, one arm recorded as having no local pin and then given one.
-32 existing pins in 27 classes strengthened from code-only to full text. Grid a MEASURED
-control (the rule fires zero times on the profiles). One cost refused on arithmetic: three
-hand-written pins now differ in code rather than text, and avoiding them would cost 7 of the
-27 rows. **An instrument failure was also found and fixed**: this session's warning check
-carried a `-q` that suppresses the warnings it greps for — a positive-control probe read
-zero — so four rounds' "warning-clean" claims were worthless and HEAD was in fact dirty; the
-current tree is clean against a gate proven live.

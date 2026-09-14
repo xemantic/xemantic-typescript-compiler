@@ -3467,3 +3467,26 @@ predictions refuted, including two of the round's OWN censuses taken off a stale
 tree at the repo root — conclusions survived, numbers did not; the same tree had already
 misled the orchestrator this session, so it is now a documented trap. cost_gate all 20
 counters +0.00%, huge_methods exit 0, warning-clean.
+
+**(P18.89) — F6a: THE "UNBLOCKER" WAS NOT NEEDED, BECAUSE tsgo's CONDITION IS OVER *RENDERED STRINGS* — 27 OF 28 ROWS, BOTH DIRECTIONS, 19,139 / 0 / 215 (2026-09-13).**
+Pending 217 → **190**, skipped 242 → **215**, both −27. (P18.88) refused this family for
+want of a relation-error funnel across "~30 sites"; the re-taken census says **61 sites and
+119 baselines** (not 73), and the funnel was never needed: **tsgo's `chainArgsMatch` compares
+RENDERED STRINGS**, so deciding it from a finished `Diagnostic` at the single
+`Checker.getDiagnostics()` exit is not an approximation of its rule but the rule itself — one
+call site routing all 61, fail-closed on a head that does not parse. Stage 1 landed as an
+identity function with a byte-identical receipt; stage 2 is the four-conjunct condition, with
+conjunct 3 parsed and then EXCLUDED exactly as tsgo does. **Both directions are one rule** —
+23 of 24 leaf-reporting plus 4 of 4 head-keeping close together, and the 4 turned out to be
+three mechanisms. **The pre-measurement is what made it safe**: of 2,955 active baselines not
+one has a head whose displays match its chain entry, and the 25 where ours did were all
+already ignored — so the rule provably could not move a green baseline, and the first
+post-change suite had 32 failures of which zero were corpus subtests. Ablation 98 / 771 / 14
+/ 49 RED, no conjunct redundant, one arm recorded as having no local pin and then given one.
+32 existing pins in 27 classes strengthened from code-only to full text. Grid a MEASURED
+control (the rule fires zero times on the profiles). One cost refused on arithmetic: three
+hand-written pins now differ in code rather than text, and avoiding them would cost 7 of the
+27 rows. **An instrument failure was also found and fixed**: this session's warning check
+carried a `-q` that suppresses the warnings it greps for — a positive-control probe read
+zero — so four rounds' "warning-clean" claims were worthless and HEAD was in fact dirty; the
+current tree is clean against a gate proven live.
