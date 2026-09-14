@@ -1,40 +1,54 @@
 #!/usr/bin/env bash
-# corpus-screen.sh — a ~30-second SCREEN over every ACTIVE `errors.txt` subtest of the
-# generated corpus, outside Gradle, in one JVM.
+# corpus-screen.sh — a ~70-second SCREEN over every ACTIVE generated corpus subtest of
+# BOTH baseline channels — `.errors.txt` (3,046 active) and `.js` EMIT (5,658 active) —
+# outside Gradle, in one JVM.
 #
 # **IT IS NOT THE GATE.** `./gradlew jvmTest` remains the commit gate and always will:
-# this screen sees neither the ~3,100 `.js` EMIT subtests, nor any hand-written pin in
-# `src/commonTest` — and round (P18.92) measured a real defect that ONLY a hand-written
-# negative control saw, on a run where the whole corpus was clean. What it is FOR is the
-# question a (LEGACY.0b) family round has to answer before it writes any code: *how many
-# currently-green baselines would this rule move?* Round (P18.91) could only argue that;
-# with this it is one command against a THROWAWAY build.
+# this screen sees no hand-written pin in `src/commonTest` — and round (P18.92) measured
+# a real defect that ONLY a hand-written negative control saw, on a run where the whole
+# corpus was clean — nor the `.types`/`.symbols` channels, the `-project` module, the
+# externals module or the KIR backend. What it is FOR is the question a (LEGACY.0b)
+# family round has to answer before it writes any code: *how many currently-green
+# baselines would this rule move?* Round (P18.91) could only argue that; with this it is
+# one command against a THROWAWAY build.
 #
-# WHY IT IS COMMITTED. (P18.92) built this, used it, and left it in a scratch directory,
-# so the next round would have had to rebuild it — including rediscovering the two traps
-# below, which is exactly what its first run got wrong.
+# WHY THE EMIT CHANNEL EXISTS ((P18.95)). `--noEmit` skips `Transformer.transform` and
+# `Emitter.emit` entirely (round 738's `skipEmitOutputs` gate), so the 8-profile grid,
+# `cost_gate.py` and every other `--noEmit` instrument in this repo is STRUCTURALLY BLIND
+# to a change in emitted bytes. Until this channel existed the JS-emit family of
+# (LEGACY.0b) had no blast-radius instrument at all, which is why it was deferred five
+# rounds running. (The emit channel is also nearly TWICE the size of the errors one —
+# the "~3,100 .js subtests" this file used to quote was an under-count.)
 #
-# THE TWO TRAPS, both now structural rather than remembered:
+# WHY IT IS COMMITTED. (P18.92) built the errors half, used it, and left it in a scratch
+# directory, so the next round would have had to rebuild it — including rediscovering the
+# traps below, which is exactly what its first run got wrong.
+#
+# THE TRAPS, all now structural rather than remembered:
 #   * the LIVE generated tree is `xemantic-typescript-compiler-core/build/generated/…`;
 #     the one at the REPO ROOT is a frozen pre-module-split leftover carrying ZERO
 #     `@Ignore` lines, so a census off it reads a plausible-but-wrong corpus. The driver
 #     REFUSES a zero-`@Ignore` tree.
 #   * the case and baseline files must be read through the suite's own `Path.readText()`,
 #     which decodes UTF-16 BOMs; re-implementing it reported two false regressions. The
-#     driver calls that function, and the suite's own `errorsMatchBaseline`, directly —
-#     so the comparison is the suite's by construction.
-#
-# A shrunken population reads exactly like a clean run, so the driver refuses below a
-# floor (`--floor`, default 2800 against a measured 2,955 active).
+#     driver calls that function, and the suite's own `errorsMatchBaseline` /
+#     `toBaseline` + `sameAs`, directly — so both comparisons (CRLF normalisation,
+#     `stripDtsSection`, the conformance `casesDir` provenance header) are the suite's by
+#     construction.
+#   * a shrunken population reads exactly like a clean run, so the driver refuses below a
+#     floor — PER CHANNEL (2800 errors / 5200 emit), because one combined number is met
+#     by a healthy channel while its sibling has collapsed to nothing.
 #
 # USAGE
-#     scripts/corpus-screen.sh                       # whole active corpus
-#     scripts/corpus-screen.sh --filter duplicate    # one family (floor waived)
+#     scripts/corpus-screen.sh                       # both channels, whole active corpus
+#     scripts/corpus-screen.sh --emit                # the emit channel only
+#     scripts/corpus-screen.sh --errors              # the diagnostics channel only
+#     scripts/corpus-screen.sh --filter duplicate    # one family (floors waived)
 #     scripts/corpus-screen.sh --include Identifier  # also run @Ignore'd matching rows
 #     scripts/corpus-screen.sh --diff 3              # print the first 3 diffs
 #     XTSC_CLASSES=<dir> scripts/corpus-screen.sh    # screen a THROWAWAY build's classes
 #
-# Exit 0 only when the floor is met and nothing mismatched.
+# Exit 0 only when every selected channel meets its floor and nothing mismatched.
 set -uo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
