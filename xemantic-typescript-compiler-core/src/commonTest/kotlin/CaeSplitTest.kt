@@ -139,7 +139,15 @@ class CaeSplitTest {
         val ts2322 = ds.filter { it.code == 2322 }
         assert(ts2322.size == 1)
         assert(ts2322[0].message == "Type 'typeof C' is not assignable to type 'new (s: string) => C'.")
-        assert(ts2322[0].messageChain.firstOrNull() == "  Types of construct signatures are incompatible.")
+        // (LEGACY.0b) step 11 shortened this chain by two links — TypeScript 7 emits neither
+        // `Types of construct signatures are incompatible.` nor the signature-level line — so
+        // the seam's probe is now the first REASON. Measured byte-identical to tsgo 7.0.2.
+        assert(
+            ts2322[0].messageChain == listOf(
+                "  Types of parameters 'n' and 's' are incompatible.",
+                "    Type 'string' is not assignable to type 'number'.",
+            )
+        )
     }
 
     @Test

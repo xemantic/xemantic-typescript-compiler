@@ -171368,9 +171368,15 @@ interface DataView {
 
     /**
      * Generate a TS2322 elaboration chain for a construct-signature mismatch.
-     * Mirrors `getFunctionMismatchElaboration` but operates on `constructSignatures`,
-     * and prefixes the chain with `Types of construct signatures are incompatible.`
-     * to match TypeScript's baseline format (see `assignmentCompatability44/45`).
+     * Mirrors `getFunctionMismatchElaboration` but operates on `constructSignatures`.
+     *
+     * (LEGACY.0b) step 11, family F10 — **TypeScript 7 SHORTENS this chain by two links.**
+     * TypeScript 6 prefixed it with `Types of construct signatures are incompatible.` and then
+     * a signature-level `Type 'new (…) => X' is not assignable to type 'new (…) => Y'.`;
+     * tsgo's `Relater.signaturesRelatedTo` (`internal/checker/relater.go`) emits NEITHER —
+     * `Types_of_construct_signatures_are_incompatible` is present in its message table and has
+     * ZERO call sites in its checker, and its single-signature arm hands straight to
+     * `signatureRelatedTo`. So the first real reason becomes the chain's own second line.
      *
      * Returns `emptyList()` when neither side has construct sigs or when the
      * single-sig pair is mutually compatible (defensive — caller should only
@@ -171385,15 +171391,10 @@ interface DataView {
         if (sourceSigs.isNullOrEmpty() || targetSigs.isNullOrEmpty()) return emptyList()
         val sourceSig = sourceSigs.first()
         val targetSig = targetSigs.first()
-        val sourceStr = signatureToString(sourceSig, isConstruct = true)
-        val targetStr = signatureToString(targetSig, isConstruct = true)
-        val chain = mutableListOf(
-            "  Types of construct signatures are incompatible.",
-            "    Type '$sourceStr' is not assignable to type '$targetStr'.",
-        )
+        val chain = mutableListOf<String>()
         if (sourceSig.minArgumentCount > targetSig.parameters.size) {
             chain.add(
-                "      Target signature provides too few arguments. Expected ${sourceSig.parameters.size} or more, but got ${targetSig.parameters.size}."
+                "  Target signature provides too few arguments. Expected ${sourceSig.parameters.size} or more, but got ${targetSig.parameters.size}."
             )
             return chain
         }
@@ -171416,9 +171417,9 @@ interface DataView {
                         }) "_" else p.name
                 }
                 chain.add(
-                    "      Types of parameters '$sName' and '$tName' are incompatible."
+                    "  Types of parameters '$sName' and '$tName' are incompatible."
                 )
-                chain.add("        Type '${typeToString(tp)}' is not assignable to type '${typeToString(sp)}'.")
+                chain.add("    Type '${typeToString(tp)}' is not assignable to type '${typeToString(sp)}'.")
                 return chain
             }
         }
@@ -171427,7 +171428,7 @@ interface DataView {
         val targetRet = targetSig.resolvedReturnType ?: anyType
         if (!targetRet.flags.hasAny(TypeFlags.Void) &&
             !checkTypeRelatedTo(sourceRet, targetRet, assignableRelation)) {
-            chain.add("      Type '${typeToString(sourceRet)}' is not assignable to type '${typeToString(targetRet)}'.")
+            chain.add("  Type '${typeToString(sourceRet)}' is not assignable to type '${typeToString(targetRet)}'.")
         }
         return chain
     }

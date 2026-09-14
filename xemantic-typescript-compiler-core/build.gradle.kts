@@ -864,24 +864,6 @@ val tsgoPendingBaselines = listOf(
         "the 'any' type i"
     ),
     TsgoPendingBaseline(
-        "assignmentCompatWithOverloads.errors.txt",
-        "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Types of " +
-        "parameters 'x' and 'x' are incompatible. | ours: Types of construct signatures are " +
-        "incompatible."
-    ),
-    TsgoPendingBaseline(
-        "assignmentCompatability44.errors.txt",
-        "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Target " +
-        "signature provides too few arguments. Expected 1 or more, but got 0. | ours: Types of " +
-        "construct signatures are incompatible."
-    ),
-    TsgoPendingBaseline(
-        "assignmentCompatability45.errors.txt",
-        "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Target " +
-        "signature provides too few arguments. Expected 1 or more, but got 0. | ours: Types of " +
-        "construct signatures are incompatible."
-    ),
-    TsgoPendingBaseline(
         "asyncArrowInClassES5(target=es2015).js",
         "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var _a;"
     ),
@@ -928,12 +910,6 @@ val tsgoPendingBaselines = listOf(
         "tsgo: index.js(7,14): error TS2339: Property 'justProp' does not exist on type " +
         "'YaddaBase'. | ours: index.js(26,22): error TS2855: Class field 'justProp' defined by " +
         "the parent class is not accessible in the child class via super."
-    ),
-    TsgoPendingBaseline(
-        "classSideInheritance3.errors.txt",
-        "F10 elaboration chain SHORTENED by tsgo; layer `submoduleAccepted`. tsgo: Target " +
-        "signature provides too few arguments. Expected 2 or more, but got 1. | ours: Types of " +
-        "construct signatures are incompatible."
     ),
     TsgoPendingBaseline(
         "commonMissingSemicolons.errors.txt",
