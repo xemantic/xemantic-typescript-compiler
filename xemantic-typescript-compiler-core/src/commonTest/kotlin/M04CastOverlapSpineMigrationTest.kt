@@ -126,18 +126,23 @@ class M04CastOverlapSpineMigrationTest {
         }
     }
 
+    /**
+     * (LEGACY.0b step 13) tsgo's `Relater.reportRelationError` returns without a head when
+     * the chain's next message is an excess-property error, so the excess property IS the
+     * diagnostic: TS2353 at `foo`, width 3, and no *Conversion of type …* TS2352 anywhere
+     * (`arrayCast`; re-measured on `tools/tsgo-7.0.2/lib/tsc` over this fixture). The
+     * pre-13 pin asserted the tsc-6 shape, TS2352 with the excess line as its chain.
+     */
     @Test
-    fun `array-literal cast with an excess property reports the excess-prop chain`() {
+    fun `array-literal cast with an excess property reports the excess property alone`() {
         val ds = diagnose(
             """const a = <{ id: number; }[]>[{ foo: "s" }];"""
         )
-        assert(ds.count { it.code == 2352 } == 1)
-        ds should {
-            have(any { it.code == 2352 && it.length == 3 &&
-                it.messageChain.any { m ->
-                    "Object literal may only specify known properties" in m && "'foo'" in m
-                } })
-        }
+        assert(ds.none { it.code == 2352 })
+        val row = ds.single { it.code == 2353 }
+        assert(row.length == 3)
+        assert(row.message == "Object literal may only specify known properties, and 'foo' does not exist in type '{ id: number; }'.")
+        assert(row.messageChain.isEmpty())
     }
 
     // ── emitTS2352IfFunctionReturnMismatch gates ───────────────────────────

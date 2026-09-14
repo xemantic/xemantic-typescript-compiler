@@ -162,8 +162,11 @@ class TsgoHarnessSelfCheckBaselinesTest {
      * `Invalid character.` a one-character span, where tsc 6 reported four of its positions
      * zero-width, so every blank squiggle line under a TS1127 in a tsc-6 baseline is now a
      * single `~`. That is a deliberate TypeScript 7 divergence — tsgo's own baseline for this
-     * case carries the `~` — and it is pinned by `TsgoInvalidCharacterSpanTest`; the rest of
-     * the 20 diagnostics this mirror covers is still compared verbatim. Second instance of the
+     * case carries the `~` — and it is pinned by `TsgoInvalidCharacterSpanTest`; and a SECOND
+     * one since (P18.98): tsc 6's 10-suggestion cap made the `val` row a plain TS2304 where
+     * TypeScript 7 (no cap) and tsgo's own baseline say TS2552 `Did you mean 'eval'?` — lifted
+     * by a counted substitution below. The rest of the diagnostics this mirror covers is
+     * still compared verbatim. Second instance of the
      * shape (LEGACY.0b) step 2 met with `manyCompilerErrorsInTheTwoFiles`: a tsc-6 mirror
      * cannot stay verbatim across a TypeScript 7 RENDERING change.
      */
@@ -200,7 +203,26 @@ class TsgoHarnessSelfCheckBaselinesTest {
             }
             return out to dropped
         }
-        val (expectedLines, expectedDropped) = dropInvalidCharacterSquiggles(normalize(expected))
+        /**
+         * The SECOND annotation ((LEGACY.0b) step 13, (P18.98)): tsc 6 stopped offering
+         * spelling suggestions after its tenth unresolved name (`maximumSuggestionCount`),
+         * and this case has 36 of them, so its tsc-6 baseline reads a plain TS2304 for `val`
+         * at (235,24). TypeScript 7 has no such cap, and tsgo's OWN baseline for this case
+         * (`submodule/compiler/constructorWithIncompleteTypeAnnotation.errors.txt`, lines 59
+         * and 456) carries `TS2552: Cannot find name 'val'. Did you mean 'eval'?` at that
+         * position — the row this compiler now produces. The substitution is COUNTED: exactly
+         * the summary row and its annotated `!!! error` row, nothing else, or the claim is
+         * stale.
+         */
+        fun liftSuggestionCap(text: String): Pair<String, Int> {
+            val tsc6 = "error TS2304: Cannot find name 'val'."
+            val tsgo = "error TS2552: Cannot find name 'val'. Did you mean 'eval'?"
+            val count = text.windowed(tsc6.length).count { it == tsc6 }
+            return text.replace(tsc6, tsgo) to count
+        }
+        val (expectedLifted, lifted) = liftSuggestionCap(expected)
+        assert(lifted == 2)
+        val (expectedLines, expectedDropped) = dropInvalidCharacterSquiggles(normalize(expectedLifted))
         val (actualLines, actualDropped) = dropInvalidCharacterSquiggles(normalize(actual ?: ""))
         // The annotation is a claim about this baseline: exactly one TS1127, one line each side.
         assert(expectedDropped == 1)
