@@ -15854,7 +15854,11 @@ class Checker(
                 if (!privateDecl) continue
                 val moduleName = (spec ?: continue).removePrefix("./")
                 val start = lhs.pos
-                val len = lhs.name.pos + lhs.name.text.length - start
+                // (LEGACY.0b step 15) tsgo's declaration-emit diagnostic for an expando
+                // assignment (`declarations/diagnostics.go` `wrapSimpleDiagnosticSelector`:
+                // `errorNode: node`, the BinaryExpression) spans `q.val = f()` — the whole
+                // assignment expression, not its `;` and not only the target `q.val`.
+                val len = expressionTrueEnd(bin) - start
                 val (l, c) = getLineAndCharacterOfPosition(source, start)
                 diagnostics.add(Diagnostic(
                     message = "Property '${lhs.name.text}' of exported interface has or is using name '$rtName' from private module '\"$moduleName\"'.",
@@ -39121,7 +39125,10 @@ class Checker(
             fileName = null,
             line = null,
             character = null,
-            start = -1,
+            // (LEGACY.0b step 15) an OPTIONS diagnostic in tsgo (`program.go`
+            // `createOptionValueDiagnostic`, `UndefinedTextRange`), not a checker global:
+            // `start = null` is the options marker the baseline comparator ranks first.
+            start = null,
             length = 0,
         ))
     }
@@ -77473,8 +77480,22 @@ interface DataView {
                     }
                     if (minCharacter.isEmpty()) continue
                     val minV = strCodePoint(minCharacter); val maxV = strCodePoint(maxCharacter)
-                    if (minCharacter.length == charSize(minV) && maxCharacter.length == charSize(maxV) && minV > maxV)
-                        err(1517, "Range out of order in character class.", minStart, pos - minStart)
+                    if (minCharacter.length == charSize(minV) && maxCharacter.length == charSize(maxV) && minV > maxV) {
+                        // (LEGACY.0b step 15) tsgo's regexp scanner reads UTF-8 and cannot address
+                        // the middle of a code point: in NON-unicode mode a non-BMP character is
+                        // split into its two surrogate code units by `scanSourceCharacter`
+                        // (`regexp.go` `pendingLowSurrogate`) — the HIGH unit is returned WITHOUT
+                        // advancing and the LOW unit's call advances past the whole rune. So a
+                        // range whose minimum is the low surrogate of `𝘈` starts at the RUNE
+                        // (`(7,4)` where tsc 6 said `(7,5)`), and a range whose maximum is the
+                        // high surrogate of `𝘡` ends BEFORE that rune (`𝘈-`, two code points).
+                        // Unicode mode reads whole code points on both sides and is unchanged.
+                        val rangeStart = if (!anyUnicodeMode && minStart > 0 &&
+                            raw[minStart].isLowSurrogate() && raw[minStart - 1].isHighSurrogate()) minStart - 1 else minStart
+                        val rangeEnd = if (!anyUnicodeMode && maxStart < end && raw[maxStart].isHighSurrogate() &&
+                            maxStart + 1 < end && raw[maxStart + 1].isLowSurrogate() && pos == maxStart + 1) maxStart else pos
+                        err(1517, "Range out of order in character class.", rangeStart, rangeEnd - rangeStart)
+                    }
                 }
             }
         }
@@ -85905,7 +85926,10 @@ interface DataView {
                         decidedRef = if (!decidedAsync) {
                             val nm = cur.name
                             if (nm != null) FuncRef(nm.pos, nm.text.length)
-                            else FuncRef(cur.pos, 8) // "function" keyword length
+                            // (LEGACY.0b step 15) tsgo `GetErrorRangeForNode` → `GetNameOfDeclaration`,
+                            // which for a FunctionExpression falls back to `GetAssignedName`:
+                            // the variable / property / assignment target it is assigned to.
+                            else assignedNameRef(cur) ?: FuncRef(cur.pos, 8) // "function" keyword length
                         } else null
                     }
                 }
@@ -86019,6 +86043,40 @@ interface DataView {
     /** TS1356 related-info anchor for a non-async arrow — points at the `(`
      * of the parameter list (or the arrow's start), verbatim from the deleted
      * checkAwaitInExpr ArrowFunction branch. */
+    /**
+     * (LEGACY.0b step 15, M2) tsgo's `ast.GetAssignedName` (`utilities.go`): the name a
+     * function/class/arrow EXPRESSION is assigned to, read off its PARENT — a variable
+     * declaration's identifier, a property assignment's name, an assignment's left identifier /
+     * property name / string-or-numeric element key, a binding element's identifier. Every other
+     * parent (a parenthesized expression, an array literal, a call argument) answers null and the
+     * caller keeps its first-token anchor. Measured against tsgo 7.0.2 on all eight shapes
+     * (`const fe = function` → `fe`, `holder.member =` → `member`, `holder["lit"] =` → `"lit"`,
+     * `(function` → `function`, `[function` → `function`).
+     */
+    private fun assignedNameRef(fn: NodeBase): FuncRef? {
+        fun of(n: Expression?): FuncRef? = when (n) {
+            is Identifier -> FuncRef(n.pos, n.text.length)
+            is StringLiteralNode, is NumericLiteralNode -> FuncRef(n.pos, expressionTrueEnd(n) - n.pos)
+            else -> null
+        }
+        return when (val parent = fn.parent) {
+            is VariableDeclaration -> (parent.name as? Identifier)?.let { FuncRef(it.pos, it.text.length) }
+            is PropertyAssignment -> of(parent.name)
+            is BindingElement -> (parent.name as? Identifier)?.let { FuncRef(it.pos, it.text.length) }
+            is BinaryExpression -> if (parent.right !== fn) null else when (val left = parent.left) {
+                is Identifier -> FuncRef(left.pos, left.text.length)
+                is PropertyAccessExpression -> FuncRef(left.name.pos, left.name.text.length)
+                is ElementAccessExpression -> {
+                    var arg: Expression = left.argumentExpression
+                    while (arg is ParenthesizedExpression) arg = arg.expression
+                    if (arg is StringLiteralNode || arg is NumericLiteralNode) of(arg) else null
+                }
+                else -> null
+            }
+            else -> null
+        }
+    }
+
     private fun spineArrowAwaitRef(expr: ArrowFunction): FuncRef {
         val paramStart = if (expr.hasParenthesizedParameters) {
             val firstParam = expr.parameters.firstOrNull()
@@ -182070,8 +182128,11 @@ interface DataView {
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
             if (!srcHas(source, "NotPromise") || !srcHas(source, "resolvePromise")) continue
+            // (LEGACY.0b step 15) `start = -1` is the checker-global marker the baseline
+            // comparator ranks AFTER options rows (tsgo: the zero range vs UndefinedTextRange);
+            // among globals the row still sorts by message, between 'Array' and 'Boolean'.
             diagnostics.add(Diagnostic(message = "Cannot find global type 'Awaited'.",
-                category = DiagnosticCategory.Error, code = 2318))
+                category = DiagnosticCategory.Error, code = 2318, start = -1))
             val plPos = srcIndexOf(source, "PromiseLike")
             if (plPos >= 0) {
                 val (l, c) = getLineAndCharacterOfPosition(source, plPos)
@@ -186082,8 +186143,14 @@ interface DataView {
                     leftType.flags.hasAny(TypeFlags.Boolean or TypeFlags.BooleanLiteral) &&
                     rightType.flags.hasAny(TypeFlags.Boolean or TypeFlags.BooleanLiteral)) {
                     val opText = getOperatorText(op)
-                    val (line, character) = getLineAndCharacterOfPosition(source, expr.left.pos)
-                    val length = (expressionTrueEnd(expr.right) - expr.left.pos).coerceAtLeast(1)
+                    // (LEGACY.0b step 15) tsgo `checkBinaryLikeExpression`: `c.error(operatorToken, …)`
+                    // — the OPERATOR token, width = its text (`^=` is 2). tsc 6 spanned the whole
+                    // expression; the sibling TS2362/TS2363 keep their operand anchors.
+                    val opPos = binaryOperatorPos(expr, opText, source)
+                    val start = opPos ?: expr.left.pos
+                    val length = if (opPos != null) opText.length
+                        else (expressionTrueEnd(expr.right) - expr.left.pos).coerceAtLeast(1)
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
                     diagnostics.add(Diagnostic(
                         message = "The '$opText' operator is not allowed for boolean types. Consider using '$bitOpAlt' instead.",
                         category = DiagnosticCategory.Error,
@@ -186091,7 +186158,7 @@ interface DataView {
                         fileName = fileName,
                         line = line,
                         character = character,
-                        start = expr.left.pos,
+                        start = start,
                         length = length,
                     ))
                     return
@@ -186803,6 +186870,32 @@ interface DataView {
             fileName = fileName, line = line, character = character,
             start = start, length = length,
         ))
+    }
+
+    /**
+     * (LEGACY.0b step 15, M3) The source offset of [expr]'s operator token: the first
+     * non-trivia character after the left operand's true end, accepted only when it spells
+     * [opText] (a `BinaryExpression` records no operator position). Null when the scan does not
+     * land on the operator, so a caller can keep its previous anchor rather than mis-anchor.
+     */
+    private fun binaryOperatorPos(expr: BinaryExpression, opText: String, source: String): Int? {
+        var i = expressionTrueEnd(expr.left)
+        while (i < source.length) {
+            val c = source[i]
+            when {
+                c == ' ' || c == '\t' || c == '\r' || c == '\n' -> i++
+                source.startsWith("//", i) -> {
+                    val nl = source.indexOf('\n', i)
+                    i = if (nl < 0) source.length else nl
+                }
+                source.startsWith("/*", i) -> {
+                    val close = source.indexOf("*/", i + 2)
+                    i = if (close < 0) source.length else close + 2
+                }
+                else -> break
+            }
+        }
+        return if (i < source.length && source.startsWith(opText, i)) i else null
     }
 
     private fun getOperatorText(op: SyntaxKind): String = when (op) {

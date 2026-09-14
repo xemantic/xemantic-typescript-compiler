@@ -836,18 +836,6 @@ val tsgoPendingBaselines = listOf(
         "'IArguments' is not assignable to parameter of type '[f?: any, ...any[]]'."
     ),
     TsgoPendingBaseline(
-        "arrayIterationLibES5TargetDifferent(nolib=true,target=es2015).errors.txt",
-        "F8 span/column only; layer `submoduleAccepted`. tsgo: error TS5053: Option 'lib' " +
-        "cannot be specified with option 'noLib'. | ours: error TS5053: Option 'lib' cannot be " +
-        "specified with option 'noLib'."
-    ),
-    TsgoPendingBaseline(
-        "arrayIterationLibES5TargetDifferent(nolib=true,target=esnext).errors.txt",
-        "F8 span/column only; layer `submoduleAccepted`. tsgo: error TS5053: Option 'lib' " +
-        "cannot be specified with option 'noLib'. | ours: error TS5053: Option 'lib' cannot be " +
-        "specified with option 'noLib'."
-    ),
-    TsgoPendingBaseline(
         "asyncArrowInClassES5(target=es2015).js",
         "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var _a;"
     ),
@@ -856,25 +844,10 @@ val tsgoPendingBaselines = listOf(
         "JS emit; layer `submoduleAccepted`. tsgo: //// [file3.ts] | ours: //// [file1.js]"
     ),
     TsgoPendingBaseline(
-        "awaitInNonAsyncFunction.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: !!! related " +
-        "TS1356 awaitInNonAsyncFunction.ts:13:7: Did you mean to mark this function as 'async'? " +
-        "| ours: !!! related TS1356 awaitInNonAsyncFunction.ts:13:28: Did you mean to mark this " +
-        "function as 'async'?"
-    ),
-    TsgoPendingBaseline(
         "bigintWithLib.errors.txt",
         "ours emits EXTRA rows tsgo does not; layer `submoduleAccepted`. tsgo: " +
         "bigintWithLib.ts(4,1): error TS2350: Only a void function can be called with the 'new' " +
         "keyword. | ours: Type 'number' is not assignable to type 'bigint'."
-    ),
-    TsgoPendingBaseline(
-        "bitwiseCompoundAssignmentOperators.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
-        "bitwiseCompoundAssignmentOperators.ts(3,3): error TS2447: The '^=' operator is not " +
-        "allowed for boolean types. Consider using '!==' instead. | ours: " +
-        "bitwiseCompoundAssignmentOperators.ts(3,1): error TS2447: The '^=' operator is not " +
-        "allowed for boolean types. Consider using '!==' instead."
     ),
     TsgoPendingBaseline(
         "blockScopedBindingsInDownlevelGenerator(target=es2015).errors.txt",
@@ -923,11 +896,6 @@ val tsgoPendingBaselines = listOf(
         "`Set<number>`) and controlFlowInstanceof.ts(105,5) TS2721 `Cannot invoke an object " +
         "which is possibly 'null'`; missing: uglify.js(9,7) TS2339 `Property 'val' does not " +
         "exist on type '{}'`. layer `submoduleAccepted`."
-    ),
-    TsgoPendingBaseline(
-        "declarationEmitExpandoPropertyPrivateName.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ~~~~~~~~~~~ | " +
-        "ours: ~~~~~"
     ),
     TsgoPendingBaseline(
         "declarationFileNoCrashOnExtraExportModifier.errors.txt",
@@ -1150,12 +1118,6 @@ val tsgoPendingBaselines = listOf(
         "parameter typing is its own family. layer `submodule`."
     ),
     TsgoPendingBaseline(
-        "jsdocIllegalTags.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submodule`. tsgo: /a.js(2,9): error " +
-        "TS1092: Type parameters cannot appear on a constructor declaration. | ours: " +
-        "/a.js(2,19): error TS1092: Type parameters cannot appear on a constructor declaration."
-    ),
-    TsgoPendingBaseline(
         "jsdocImportTypeNodeNamespace.errors.txt",
         "F6 top code differs (tsgo TS2694 / ours TS2352); layer `submodule`. tsgo: " +
         "Main.js(2,49): error TS2694: Namespace '\"GeometryType\"' has no exported member " +
@@ -1261,12 +1223,11 @@ val tsgoPendingBaselines = listOf(
             "TS5090 wording matches and the ONLY difference is where a `tsconfig.json` row " +
             "sorts against a source file's in the summary — tsgo lists `src/main.ts(1,8): " +
             "TS2882` FIRST and we list it last. Changing it reorders the summary of every " +
-            "multi-file baseline, so it needs its own round.",
-    ),
-    TsgoPendingBaseline(
-        "prettyContextNotDebugAssertion.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ?[7m ?[0m " +
-        "?[91m~?[0m | ours: ?[7m ?[0m ?[91m?[0m"
+            "multi-file baseline, so it needs its own round. MEASURED (LEGACY.0b step 15): " +
+            "tsgo's rule is pure path order (`ast.CompareDiagnostics`), and adopting it moves " +
+            "SEVEN green baselines whose tsconfig rows stay first — all seven are baseUrl / " +
+            "moduleResolution=node cases tsgo 7 does not run (no baseline under " +
+            "typescript-go-repo/testdata), so their order is a (LEGACY.1) question, not a rule.",
     ),
     TsgoPendingBaseline(
         "prettyFileWithErrorsAndTabs.errors.txt",
@@ -1296,17 +1257,6 @@ val tsgoPendingBaselines = listOf(
         "excessively deep and possibly infinite."
     ),
     TsgoPendingBaseline(
-        "regularExpressionCharacterClassRangeOrder.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
-        "regularExpressionCharacterClassRangeOrder.ts(7,4): error TS1517: Range out of order in " +
-        "character class. | ours: regularExpressionCharacterClassRangeOrder.ts(7,5): error " +
-        "TS1517: Range out of order in character class."
-    ),
-    TsgoPendingBaseline(
-        "regularExpressionWithNonBMPFlags.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: ~ | ours: ~~"
-    ),
-    TsgoPendingBaseline(
         "sourceMapValidationVarInDownLevelGenerator(target=es2015).errors.txt",
         "F6 top code differs (tsgo TS5102 / ours TS5101); layer `submoduleAccepted`. tsgo: " +
         "error TS5102: Option 'downlevelIteration' has been removed. Please remove it from your " +
@@ -1333,19 +1283,6 @@ val tsgoPendingBaselines = listOf(
         "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
         "TS2751 typeParameterWithInvalidConstraintType.ts:4:17: Circularity originates in type " +
         "at this location. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "unicodeEscapesInNames02(target=es2015).errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 3) F8 span -> baseline-FORMATTER column counting: the " +
-        "TS1127 span itself is now TypeScript 7's one character and the reported (line,column) " +
-        "of all four rows is byte-correct; what still differs is where the `~` PRINTS. The " +
-        "annotated source line holds an ASTRAL character (`_\uD83D` style, U+102A7), and the " +
-        "reference's baseline formatter pads the squiggle line by CODEPOINT where " +
-        "`BaselineFormatter` pads by UTF-16 unit, so every squiggle after the astral character " +
-        "sits one column right — the TS2305 rows shift with it. A formatter change, not a " +
-        "diagnostic one, and it reaches every baseline whose annotated source carries a " +
-        "surrogate pair; layer `submoduleAccepted`. tsgo squiggle: `                   ~` | " +
-        "ours: `                    ~`."
     ),
     TsgoPendingBaseline(
         "unusedTypeParameters_templateTag2.errors.txt",

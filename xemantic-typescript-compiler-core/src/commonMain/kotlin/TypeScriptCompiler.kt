@@ -938,6 +938,13 @@ class TypeScriptCompiler {
                     message = "Cannot find global type '$name'.",
                     category = DiagnosticCategory.Error,
                     code = 2318,
+                    // (LEGACY.0b step 15) In tsgo this row is a CHECKER global
+                    // (`c.error(nil, Cannot_find_global_type_0)`, the zero range), which sorts
+                    // AFTER every options diagnostic (`UndefinedTextRange`, pos -1) — `error
+                    // TS5053` precedes `error TS2318` in the summary. `start = -1` is this
+                    // compiler's marker for a checker global (the Checker's own TS2318 sites
+                    // carry it); an options diagnostic keeps `start = null`.
+                    start = -1,
                 ))
             }
         }

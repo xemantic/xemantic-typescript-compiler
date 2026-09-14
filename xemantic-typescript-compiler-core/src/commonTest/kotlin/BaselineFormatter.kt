@@ -485,7 +485,13 @@ fun formatErrorBaseline(
                         // Squiggle line: gutter uses reverse video for spaces
                         val gutterSpaces = " ".repeat(diag.line.toString().length)
                         val squiggleStart = diag.character - 1
-                        val squiggleLen = diag.length ?: 0
+                        // (LEGACY.0b step 15) tsgo's pretty writer (`diagnosticwriter.go`
+                        // `writeCodeSnippet`: `if length == 0 { lastLineChar++ }`) squiggles the
+                        // character right after a ZERO-WIDTH span — one `~` — where tsc 6 printed
+                        // nothing (prettyContextNotDebugAssertion: TS1005 at EOF on an empty line).
+                        // The pretty writer stays in UTF-16 units (tsgo's is), unlike the
+                        // harness formatter below, which counts RUNES.
+                        val squiggleLen = maxOf(1, diag.length ?: 0)
                         val indent = " ".repeat(squiggleStart)
                         val squiggle = "~".repeat(squiggleLen)
                         +"\u001b[7m$gutterSpaces\u001b[0m \u001b[91m$indent$squiggle\u001b[0m\r\n"
@@ -649,15 +655,15 @@ fun formatErrorBaseline(
                     if (len == 0) {
                         // Zero-length span — empty squiggle line (just indentation, no ~)
                         +"    "
-                        +lineContent.take(col).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                        +squiggleIndent(lineContent, col)
                         +"\r\n"
                     } else {
                         // First squiggle line
                         val charsOnFirstLine = (lineContent.length - col).coerceAtLeast(1)
                         val firstLineLen = len.coerceAtMost(charsOnFirstLine)
                         +"    "
-                        +lineContent.take(col).map { if (it == '\t') '\t' else ' ' }.joinToString("")
-                        +"~".repeat(firstLineLen)
+                        +squiggleIndent(lineContent, col)
+                        +"~".repeat(squiggleTildes(lineContent, col, firstLineLen))
                         +"\r\n"
                         if (len > charsOnFirstLine + 1) {
                             // Multi-line span REACHING next-line content: defer the
@@ -743,14 +749,14 @@ fun formatErrorBaseline(
                             val mLen = moreDiag.length ?: 1
                             if (mLen == 0) {
                                 +"    "
-                                +contLineContent.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                                +squiggleIndent(contLineContent, mCol)
                                 +"\r\n"
                             } else {
                                 val mCharsOnLine = (contLineContent.length - mCol).coerceAtLeast(1)
                                 val mFirstLineLen = mLen.coerceAtMost(mCharsOnLine)
                                 +"    "
-                                +contLineContent.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
-                                +"~".repeat(mFirstLineLen)
+                                +squiggleIndent(contLineContent, mCol)
+                                +"~".repeat(squiggleTildes(contLineContent, mCol, mFirstLineLen))
                                 +"\r\n"
                             }
                             +"!!! "
@@ -794,7 +800,7 @@ fun formatErrorBaseline(
                         val squiggleLen = remaining.coerceAtMost(nextLine.length)
                         if (squiggleLen > 0) {
                             +"    "
-                            +"~".repeat(squiggleLen)
+                            +"~".repeat(codePointCount(nextLine.take(squiggleLen)))
                             +"\r\n"
                         } else if (nextLine.isEmpty()) {
                             +"    "
@@ -816,14 +822,14 @@ fun formatErrorBaseline(
                             val mLen = moreDiag.length ?: 1
                             if (mLen == 0) {
                                 +"    "
-                                +nextLine.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                                +squiggleIndent(nextLine, mCol)
                                 +"\r\n"
                             } else {
                                 val mCharsOnLine = (nextLine.length - mCol).coerceAtLeast(1)
                                 val mFirstLineLen = mLen.coerceAtMost(mCharsOnLine)
                                 +"    "
-                                +nextLine.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
-                                +"~".repeat(mFirstLineLen)
+                                +squiggleIndent(nextLine, mCol)
+                                +"~".repeat(squiggleTildes(nextLine, mCol, mFirstLineLen))
                                 +"\r\n"
                             }
                             +"!!! "
@@ -901,14 +907,14 @@ fun formatErrorBaseline(
                             val mLen = moreDiag.length ?: 1
                             if (mLen == 0) {
                                 +"    "
-                                +contLineContent.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                                +squiggleIndent(contLineContent, mCol)
                                 +"\r\n"
                             } else {
                                 val mCharsOnLine = (contLineContent.length - mCol).coerceAtLeast(1)
                                 val mFirstLineLen = mLen.coerceAtMost(mCharsOnLine)
                                 +"    "
-                                +contLineContent.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
-                                +"~".repeat(mFirstLineLen)
+                                +squiggleIndent(contLineContent, mCol)
+                                +"~".repeat(squiggleTildes(contLineContent, mCol, mFirstLineLen))
                                 +"\r\n"
                             }
                             +"!!! "
@@ -971,9 +977,31 @@ private val diagnosticComparator = Comparator<Diagnostic> { a, b ->
     when {
         fileA == null && fileB != null -> return@Comparator -1
         fileA != null && fileB == null -> return@Comparator 1
+        fileA == null && fileB == null -> {
+            // (LEGACY.0b step 15) tsgo's `ast.CompareDiagnostics` orders two file-less rows
+            // by their `Loc.Pos()` BEFORE their code, and the two producers of file-less rows
+            // carry DIFFERENT positions there: a program/options diagnostic is
+            // `NewCompilerDiagnostic` = `core.UndefinedTextRange()` (pos -1), a checker
+            // global (`c.error(nil, …)`, e.g. TS2318 *Cannot find global type*) is the zero
+            // range (pos 0) — so `error TS5053` precedes every `error TS2318` however the
+            // codes compare. This compiler's convention for the same split is the `start`
+            // field: an options diagnostic (`TypeScriptCompiler`'s validation and the
+            // checker's TS5067) carries `start = null`; a checker global carries `start = -1`.
+            // Rank them exactly as tsgo's positions would, then fall through to code/message.
+            fun rank(d: Diagnostic) = if (d.start == null) -1 else 0
+            compareValues(rank(a), rank(b)).let { if (it != 0) return@Comparator it }
+            a.code.compareTo(b.code).let { if (it != 0) return@Comparator it }
+            return@Comparator a.message.compareTo(b.message)
+        }
         fileA != null && fileB != null -> {
             // tsconfig.json diagnostics (program-level) sort before source file diagnostics,
-            // matching TypeScript's ordering: program/options diagnostics precede per-file diagnostics
+            // matching TypeScript's ordering: program/options diagnostics precede per-file diagnostics.
+            // (LEGACY.0b step 15) MEASURED AND KEPT: tsgo's `ast.CompareDiagnostics` compares
+            // the two PATHS as strings, which puts `src/main.ts` before `tsconfig.json`
+            // (pathsValidation5, tsgo's own baseline) — but dropping this rule for that one
+            // row moves SEVEN green baselines whose tsconfig rows tsgo keeps first, every one a
+            // case tsgo 7 does not run (baseUrl / node10 / rootDir cases with no baseline under
+            // typescript-go-repo/testdata). Their pristine-shaped order is a (LEGACY.1) question.
             val aIsTsconfig = fileA.endsWith("tsconfig.json")
             val bIsTsconfig = fileB.endsWith("tsconfig.json")
             if (aIsTsconfig && !bIsTsconfig) return@Comparator -1
@@ -997,3 +1025,45 @@ private val diagnosticComparator = Comparator<Diagnostic> { a, b ->
     a.code.compareTo(b.code).let { if (it != 0) return@Comparator it }
     a.message.compareTo(b.message)
 }
+
+/**
+ * (LEGACY.0b step 15, M7) tsgo's harness formatter (`error_baseline.go`) builds a squiggle line
+ * from the source line's RUNES: the padding is `nonWhitespace.ReplaceAllString(line[:start], " ")`
+ * (one space per non-whitespace rune, tabs kept) and the tildes are
+ * `utf8.RuneCountInString(line[start:end])`. This compiler's positions are UTF-16 offsets, so a
+ * line carrying an ASTRAL character (a surrogate pair — `𐊧`, the mathematical italic letters of
+ * the `regularExpression*` fixtures) pads one column too many per pair and prints two tildes per
+ * astral character unless the count is taken per code point. The header `(line,col)` stays
+ * UTF-16 — tsgo's header is `GetECMALineAndUTF16CharacterOfPosition` — which is why the same
+ * baseline can read `(7,23)` in its summary and place the `~` under column 18.
+ *
+ * A lone surrogate counts as one code point, as `RuneCountInString` counts an invalid byte.
+ */
+private fun codePointCount(s: String): Int {
+    var n = 0
+    var i = 0
+    while (i < s.length) {
+        i += if (s[i].isHighSurrogate() && i + 1 < s.length && s[i + 1].isLowSurrogate()) 2 else 1
+        n++
+    }
+    return n
+}
+
+/** The squiggle line's indentation under [line] for a 0-based UTF-16 column [col]: one space
+ *  per CODE POINT of the prefix, a tab kept as a tab (tsgo pads by rune, see [codePointCount]). */
+private fun squiggleIndent(line: String, col: Int): String = buildString {
+    val prefix = line.take(col)
+    var i = 0
+    while (i < prefix.length) {
+        val c = prefix[i]
+        append(if (c == '\t') '\t' else ' ')
+        i += if (c.isHighSurrogate() && i + 1 < prefix.length && prefix[i + 1].isLowSurrogate()) 2 else 1
+    }
+}
+
+/** The tilde count for a span starting at UTF-16 column [col] covering [unitsOnLine] UTF-16
+ *  units of [line]: the CODE POINTS of that slice. A span starting past the line's end keeps
+ *  its unit count (the pre-existing "at least one `~`" rendering of a span on the newline). */
+private fun squiggleTildes(line: String, col: Int, unitsOnLine: Int): Int =
+    if (col >= line.length) unitsOnLine
+    else codePointCount(line.substring(col, minOf(col + unitsOnLine, line.length)))

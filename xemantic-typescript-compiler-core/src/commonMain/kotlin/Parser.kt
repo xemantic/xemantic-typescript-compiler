@@ -3266,10 +3266,31 @@ class Parser(
                     while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
                 }
                 if (i < ct.length && (ct[i].isLetter() || ct[i] == '_' || ct[i] == '$')) {
-                    val nameStart = i
-                    while (i < ct.length && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$')) i++
+                    // (LEGACY.0b step 15) tsgo `checkGrammarConstructorTypeParameters` reports on
+                    // the reparsed TypeParameters LIST, whose range `gatherTypeParameters` sets
+                    // to [first `@template` tag's `@`, last `@template` tag's end) — and a JSDoc
+                    // tag ends where the NEXT tag's `@` begins or at the comment's `*/` (its
+                    // `finishNode` end is the scanner's token start there), so same-line
+                    // trailing spaces and a following comment line are inside it. Measured on
+                    // tsgo 7.0.2: `/** @template T */` = 12, `T   */` = 14, `T @template U */`
+                    // = 24, `T\n * @param …` runs to the `@` of `@param`. tsc 6 squiggled `T`.
+                    var lastTag = tagIdx
+                    var scan = ct.indexOf("@template", tagIdx + 9)
+                    while (scan >= 0) {
+                        val after = if (scan + 9 < ct.length) ct[scan + 9] else ' '
+                        if (!(after.isLetterOrDigit() || after == '_')) lastTag = scan
+                        scan = ct.indexOf("@template", scan + 9)
+                    }
+                    // `comment.text` may run past the `*/` (measured: two characters), so the
+                    // close is located, never assumed to be the text's end.
+                    var tagEnd = ct.lastIndexOf("*/").let { if (it >= 0) it else ct.length }
+                    var k = lastTag + 9
+                    while (k < tagEnd) {
+                        if (ct[k] == '@' && k + 1 < ct.length && ct[k + 1].isLetter()) { tagEnd = k; break }
+                        k++
+                    }
                     reportError("Type parameters cannot appear on a constructor declaration.",
-                        code = 1092, overrideStart = comment.pos + nameStart, overrideLength = i - nameStart)
+                        code = 1092, overrideStart = comment.pos + tagIdx, overrideLength = tagEnd - tagIdx)
                 }
             }
             // TS1093: @return/@returns {type} on a constructor — squiggle the inner type text.
