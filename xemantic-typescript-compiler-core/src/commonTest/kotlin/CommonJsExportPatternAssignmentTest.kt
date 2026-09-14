@@ -188,6 +188,20 @@ class CommonJsExportPatternAssignmentTest {
         )
     }
 
+    @Test
+    fun `a later read of a converted name is rewritten to its export reference`() {
+        // The local binding does not exist at run time on either side of the conversion, so
+        // every later read must still become `exports.x` — byte-identical to tsgo.
+        val js = emit(
+            """
+            export let [bar1] = [1];
+            export const { a: bar3 } = { a: 1 };
+            function later() { return bar1 + bar3; }
+            """
+        )
+        assert(js.endsWith("function later() { return exports.bar1 + exports.bar3; }"))
+    }
+
     // ------------------------------------------------------------------
     // Negative controls — each keeps the TypeScript-6 lowering.
     // ------------------------------------------------------------------
