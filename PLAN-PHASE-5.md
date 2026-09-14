@@ -25,6 +25,76 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.96) — the CommonJS export-pattern assignment (7) and F10's construct-signature chain (4), and the F-letters are not families (2026-09-14)
+
+**Five commits** (`24467868c`, `034625221`, `6ff2c195d`, `b568cc749`, `e828fbfb8`).
+**Suite 19,214 → 19,240 / 0 / 128**, 9 modules asserted — `tsgoPendingBaselines` 114 → **103**,
+skipped −11. Screen **8,727 / 0 over both channels**; `cost_gate.py` exit 0, all 20 counters
++0.00%; `huge_methods.py --fail-over 0` exit 0 (867 classes); warning-clean (7,300-byte log,
+`w=0 e=0`, no `-q`, positive control 1 `w:` line). **(LEGACY.0) stays OPEN** on (0b-12).
+
+**THE PRIMARY MECHANISM, AND IT IS SEVEN ROWS NOT SIX.** tsgo's
+`CommonJSModuleTransformer.transformInitializedVariable` converts an exported binding pattern
+into an equivalent destructuring ASSIGNMENT with every leaf substituted to `exports.<name>`, and
+**its own comment gives the reason: that preserves native destructuring and therefore the ITERATOR
+SEMANTICS of an array pattern.** TypeScript 6 flattened with `FlattenLevel.All`. The refusal set
+is tsgo's `destructuringNeedsFlattening` — a re-aliased or multi-exported leaf.
+`declarationEmitRetainsJsdocyComments` was filed as a singleton and is the SAME mechanism, needing
+one printer half besides: a property's own-line leading comment must break the line inside a
+SINGLE-LINE object literal, which `Emitter.emitObjectLiteral` dropped outright. (P18.95)'s
+refutation of the target-gating hypothesis held.
+
+**THE SECONDARY LANDED TOO, AND THE CHAIN LOSES *TWO* LINKS, NOT ONE.** tsgo's
+`Relater.signaturesRelatedTo` has **ZERO call sites** for
+`Types_of_construct_signatures_are_incompatible` — the message survives in its table with no
+references — and its single-signature arm hands straight to `signatureRelatedTo`. A self-contained
+builder (`getConstructMismatchElaboration`); the change is deleting two lines and dedenting by 4.
+
+**BLAST RADIUS MEASURED AT ZERO FOR BOTH**, on the CHANGED binary over the UNCHANGED active
+population: 8,716/0 for the emit rule and 8,723/0 for F10.
+
+**ABLATION — 12 arms, all discriminating**, each with a distinct `Transformer`/`Checker`/`Emitter`
+class md5 and each reporting pin reds AND screen mismatches: a1 rule off 13/**7**; a2
+`propertyName` ignored 3/1; a3 the pattern's trailing comma carried 1/1; a4 the
+object-rest-below-ES2018 refusal dropped **0/0**; a4c (a4's control) refuse rest at every target
+1/1; a5 re-alias refusal dropped 3/0; a6 all-patterns gate dropped 3/**41**; a7 printer comment
+branch removed 1/1; a8 `directExportedVarNames` not populated 1/0; b1 F10 shortening off 5/4; b2
+parameter links keep the TS6 indent 2/1; b3 return link keeps it **0 → 1**/0.
+
+**a4's DOUBLE ZERO IS ATTRIBUTED AND IS THE ROUND'S REUSABLE FINDING**: below ES2018 the
+object-rest downlevel has ALREADY rewritten the declaration into
+`_a = init, { x } = _a, rest = __rest(_a, …)` before the CommonJS transform sees it, so no
+declarator reaching the conversion still carries a rest — the ALL-PATTERNS gate refuses it there,
+and dropping THAT moves 41 baselines. Control a4c proves the expression is reached. Recorded in
+code and KDoc as a MEASURED redundant guard (its own commit). **b3 was a BLIND pin and was
+repaired** (the fifth commit): the return-type link is reachable and byte-identical to tsgo, and
+no corpus baseline exercises it.
+
+**TWO STRUCTURAL PINS WERE REPAIRED RATHER THAN DELETED.** `TransformToCommonJsSplitTest` used
+`export const {} = { q: 1 }` purely as a VEHICLE for asserting `var _a;` — the very shape this
+round removes. Both keep their subject: the side-effect temp path is still live and is now
+reached through a REFUSAL, which doubles as the negative control.
+
+**THE DECOMPOSITION OF THE REMAINING 103 IS WORTH AS MUCH AS THE ROWS, AND IT RETIRES THE
+F-LETTERS.** **F6 "top code differs" is 38 rows and is NOT a family — it is ~32 distinct code
+pairs, largest cluster 2**; reading the ledger's F-letters as families overstates every remaining
+estimate. The letters also HIDE cross-family clusters: TS2880 is 3 rows split between F8 and F1,
+and TS1003 is 3 in F1 plus 1 in F6 — all four JSDoc/JS shapes. **JS-emit residue (14) decomposes
+into 3 groups + 8 singletons**: *JE-A* the namespace/enum IIFE's redundant `var <name>;` hoist
+when the name already has a value declaration (3 rows, ONE mechanism); *JE-B* an EMPTY namespace
+emits nothing at all (1); *JE-C* a `declare`d import/var elides (2); plus
+`moduleElementsInWrongContext{,2}` (2). **`emitBOM` is a SCANNER bug** — we emit TS1127 on a BOM.
+
+**WRONG PREDICTIONS**: the brief said 6 rows and it is 7; the printer change was expected to have
+some radius and is structurally ZERO (its branch is reachable only through a SYNTHESIZED
+single-line object literal, since a source literal spanning lines parses `multiLine`); and the
+object-rest target refusal was expected to be load-bearing and measured redundant.
+
+**GATE LABELLING**: the grid is a CONTROL and was counted (**0 TS2322 rows and 0 construct-chain
+lines** across all 413 rows, and 0 files with an exported destructuring); the emit-mode `--outDir`
++ `diff -r` is a CONTROL and was counted (78/78 files, 0 differing); `cost_gate.py` is a CONTROL
+for the emit half and a GATE for F10. The corpus and its screen were the gates.
+
 ### Round (P18.95) — the screen gains the EMIT channel, and three printer rules close 12 JS-emit rows (2026-09-14)
 
 **Three commits** (`1f5b13d2a` Part 0, `bb846ff1e` Part 1, `12592cc55` a blind-control repair).
@@ -769,94 +839,6 @@ left alone rather than copied.
 span/width (now ~25 with F9's reclassification, and seven of those share F4's anchor
 mechanism), JS 33, F3 last-overload 25, F1 11, F2 9, F0 7, F10 4, F7 4. The 21 TS-1 rows
 stay ledgered — they are tsgo's own `submoduleTriaged` known bugs.
-### Round (P18.86) — (LEGACY.0b) step 1: the corpus reads tsgo's OWN baselines, and a `.diff` classifies a FILE where a failure classifies what WE got wrong (2026-09-13)
-
-**Suite 19,045 → 19,082 / 0 / 310** — skipped 20 → 310 = 3 pre-existing + **285 pending**
-+ **22 divergences**, and all 307 of those are generated subtests carrying
-`@kotlin.test.Ignore`, so the corpus stays a GREEN gate while every adopted row is visible
-and counted. Generated corpus **8,838 → 8,852**, exactly the projection. `cost_gate.py`
-exit 0 with **all 20 counters at +0.00%** — the right receipt for a generator-only change,
-and the reason the 8-profile grid was not run: **no `commonMain` file is touched**, so the
-compiler binary is unchanged by construction. `huge_methods.py --fail-over 0` exit 0 (858
-classes); warning-clean. **(LEGACY.0) stays OPEN** on (0b-2) onwards.
-
-**THE ROOT SWITCH.** `cloneTypeScriptGoRepo` pins `typescript-go-repo` to `2bd066d87…`
-(tag `typescript/v7.0.2`) with the submodule side `4d4f005c` recorded in its KDoc, and the
-four baseline lookups now choose per subtest between tsgo's checked-in output and tsc's.
-Three deliberate divergences from `cloneTypeScriptRepo`, each with a reason: no
-`outputs.dir` (the clone is not a task output), a **NON-CONE** sparse set at extension
-granularity, and `sparse-checkout set` issued ONLY when the clone is already sparse —
-narrowing a FULL clone would delete `internal/checker/checker.go`, which this repo reads as
-a reference implementation. The no-op path is verified (3 s, Go sources intact) and the
-fresh-clone path was rehearsed end to end.
-
-**THE THREE-WAY FALLBACK IS ASSERTED, NOT DIAGNOSED, AND THE GUARD FIRED TWICE.**
-`adopted = 8,765` (of which `new = 23`), `deleted = 9`, `kept-tsc = 87`. A wrong fallback is
-SILENT — it does not fail a test, it removes one, and a shrunken corpus reads exactly like a
-green one — so all four counts are `check`ed together with a message that forbids adjusting
-one constant to make the build green. **`new` is 23 against the design's 24, and that is a
-FINDING rather than a tolerance**: the design sized (0b) against pristine `637d5746`, where
-`coAndContraVariantInferences5.errors.txt` does not exist; (0a) moved the pin to `4d4f005c`,
-which carries it, so one of the 24 landed a round early. Corpus size is unaffected because
-the BASE moved by the same one. The off-by-one surfaced because the guard fired, which is
-the whole argument for asserting counts rather than printing them.
-
-**THE RED SET IS 289, WITH TWO CONTROLS THAT MAKE IT ATTRIBUTABLE** (256 errors + 33 js;
-the design estimated ≈315): **all 289 come from the tsgo root** — no kept-tsc subtest
-reddened — and **all 289 carry a `.diff` layer**, so nothing tsgo and tsc AGREE on went red.
-Either control failing would have meant the fallback, not the compiler, was the variable.
-Layers: 238 Accepted / 27 submodule / 24 Triaged. Families: F6 code-differs 88, F9 wording
-53, JS 33, F4 26, F3 25, **TS-1 21**, F1 11, F2 9, F0 7, F10 4, F7 4, F5 4, F8 2, plus 2
-ours-extra.
-
-**THE PER-FAMILY COUNTS DIFFER MATERIALLY FROM THE DESIGN'S, AND THE REASON IS A LAW RATHER
-THAN AN ERROR: a `.diff` classifies a FILE, while a FAILURE classifies what *we* got wrong.**
-F10 went 45 → 4, F9 11 → 53, F7 43 → 4. A file whose diff is "tsgo shortened the chain" can
-still fail here for an unrelated reason, or not fail at all because our answer already
-matched tsgo's side. So a family ranking taken from the reference's own diff layers is a
-ranking of THEIR divergences, not of OUR work — re-derive it from the red set before
-ordering any family rounds.
-
-**THE BIGGEST REFUTATION IS ABOUT A PIN THIS ROUND WROTE.** "A compiler emitting a NEGATIVE
-diagnostic code is impossible here" is **FALSE**: `TS-1` is tsc's own harness convention and
-`Checker.checkPreEmitCountMismatchPins` deliberately synthesizes it for three cases, so the
-first invariant pin written on that assumption went RED against the real binary and was
-replaced. The decision not to follow tsgo's 21 TS-1 rows stands — they are its own
-`submoduleTriaged` "known diffs that we intend to fix" — but its stated reason did not
-survive contact.
-
-**SIX MORE REFUTED PREDICTIONS**, all from a read-only design study whose numbers were
-explicitly estimates: the sparse set is **104 MB worktree / 124 MB total** against "≈29 MB"
-(conformance and the `.diff` layers were uncounted); differing subtests **392** against 378
-(layers 28/331/19 → 35/333/24); `/.src/` is **1 active subtest** against "5 rows" (six
-baselines carry it, five are not generated); the red set is 289 against ≈315. Confirmed as
-predicted: the 9 deletions, the 87 kept-tsc family, `==== ./` at exactly **13**, and
-conformance contributing zero.
-
-**ABLATION**: reverting the `==== ./` prefix line reddens **12 of 13** — the thirteenth
-(`uniqueSymbolJs`) is `@Ignore`d as a pending row of an unrelated family and so is
-unreachable by the arm, which is the honest reading rather than a 13/13 claim. Restored and
-rebuilt before the final gates.
-
-**THE TS-1 FAMILY COST 16 REAL tsc BASELINES AND THE COST WAS PAID BACK, NOT ACCEPTED.**
-Ledgering those 21 rows as divergences retires 16 comparisons this suite genuinely had, so
-`TsgoHarnessSelfCheckBaselinesTest` reproduces all 16 verbatim against
-`typeScriptBaselineDir`, beside an invariant pin that every one of the 21 entries is still
-load-bearing — which doubles as the countdown for when tsgo closes its own issue. Net
-coverage change: zero.
-
-**ONE DESIGN QUESTION LEFT OPEN DELIBERATELY, AND IT SHOULD BE DECIDED BEFORE (0b-3).** A
-FOURTH fallback arm — "a HARNESS ARTIFACT (TS-1 content, a `/.src/` path) is not tsgo's
-ANSWER, so fall back to tsc's baseline" — would preserve those 17 subtests with no ledger
-entries and no hand-written mirrors at all. It was not taken: the brief was explicit, the
-choice is reversible, and an arm phrased that way risks decaying into "fall back whenever
-tsgo is inconvenient", which is exactly the escape hatch round 873 warns absorbs unrelated
-defects. Recorded rather than silently adopted.
-
-**NEXT**: (0b-2), the free wins — `==== ./` is already in, so F9 wording (53), F4
-TS6133 → TS6196 (26) and F5 removed-option wording (4, which also answers (LEGACY.1)'s
-6.0-vs-7.0 question) are the cheap families; then the ranked family rounds, ordered from the
-RED SET rather than from the diff layers.
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1187,7 +1169,26 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-10 LANDED 2026-09-14 ((P18.85)-(P18.95) notes) — pending 114, skipped 139,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-11 LANDED 2026-09-14 ((P18.85)-(P18.96) notes) — pending 103, skipped 128,
+  suite 19,240/0. **THE ARC IS IN ITS LONG TAIL AND THE F-LETTERS MUST BE RETIRED AS A PLANNING UNIT**: (P18.96)
+  measured that **F6 "top code differs" is 38 rows and ~32 DISTINCT CODE PAIRS, largest cluster 2** — so any
+  remaining estimate phrased in F-letters overstates the work, and the letters also HIDE cross-family clusters
+  (TS2880 is 3 rows split across F8 and F1; TS1003 is 3 in F1 plus 1 in F6, all four JSDoc/JS shapes). Seven rounds
+  closed 87 rows at 25/13/12/12/11/10/4; expect ≤6 per round now and SIZE BY MECHANISM, never by letter.
+  **THE DECOMPOSED RESIDUE (103)**: display/chain-content ~21; **JS-emit 14 = 3 groups + 8 singletons** — *JE-A*
+  the namespace/enum IIFE's redundant `var <name>;` hoist when the name already has a value declaration (3 rows,
+  ONE mechanism, the cheapest thing left), *JE-B* an EMPTY namespace emits nothing (1), *JE-C* a `declare`d
+  import/var elides (2), `moduleElementsInWrongContext{,2}` (2), and **`emitBOM` is a SCANNER bug** (we emit TS1127
+  on a BOM); F8 span 12 (TS5053 ×2, TS2880 ×2); F1 silent 8 (TS1003 ×3, TS2339 ×3); F2-residue 6 (four mechanisms,
+  named at (P18.93)); TS2683-residue 3; ORDER-model 5 (named at (P18.94)); the rest singletons.
+  **PICK AND SIZE WITH `bash scripts/corpus-screen.sh`** — 8,727 subtests over errors+emit in ~70 s; for an EMIT
+  family it is the GATE, because `--noEmit` skips the transformer and the `--outDir` + `diff -r` control has now
+  twice read byte-identical across changes that moved 12 and 7 baselines. **A KNOWN
+  FOLLOW-ON**: three hand-written pins differ from tsgo in CODE because our relation CHAIN line names the type
+  parameter / undistributed intersection where tsgo names its constraint / one distributed constituent — that chain
+  SOURCE DISPLAY is its own family and closing it also closes those three. The 21 TS-1 rows stay LEDGERED.
+  **BLOCKED-PENDING-USER, still open**: the fourth "harness artifact ⇒ fall back to tsc" arm ((P18.86)).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-10 LANDED 2026-09-14 ((P18.85)-(P18.95) notes) — pending 114, skipped 139,
   suite 19,214/0. **JS EMIT 12 of 33 by (P18.95)** (three printer rules), which also gave the screen its **EMIT
   CHANNEL**: `bash scripts/corpus-screen.sh` now covers **8,716 subtests over errors+emit in ~70 s** with PER-CHANNEL
   floors — and the emit channel (5,692) is nearly TWICE the errors one (3,160). **THAT IS THE INSTRUMENT FOR EVERY

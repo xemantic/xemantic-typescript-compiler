@@ -3519,3 +3519,28 @@ assertions in 5 classes re-measured against tsgo — **three were countdowns ass
 per-candidate chain** and were renamed. Grid a MEASURED control (TS2769 rows = 0 on all eight
 profiles and on every library; the gate is the 28 corpus baselines that carry one). cost_gate all
 20 counters +0.00%, huge_methods exit 0 (861 classes), warning-clean with the gate proven live.
+
+**(P18.91) — F6d: TypeScript 7 REPORTS TS2303 AT *EVERY* ALIAS DECLARATION ON THE CYCLE, AND THE DETECTOR WAS ALREADY THERE, 19,153 / 0 / 180 (2026-09-14).**
+Pending 165 → **155**, skipped 190 → **180**, both −10, all ten subtests verified PRESENT and
+PASSED. **The family was picked on a BLAST-RADIUS measurement rather than on size** — 10 rows
+against F2's 15, chosen because TS2303 appears in **ZERO active baselines** where F2's TS2300
+appears in **80**, the same "cannot redden a green baseline on its own axis" property that
+carried (P18.90). The exposure was inverted (this ADDS a diagnostic), so the grid was briefed as
+a real gate; measured, it is a **control** — TS2303 fires 0 times on all eight profiles and on
+cronstrue/marked/many-small, which the new script's header states rather than hiding. tsgo's
+`popTypeResolution` marks the whole resolution SUFFIX false, so **every frame from the cycle
+start upward emits**: one row per alias DECLARATION the cycle passes through, each named after
+its own symbol, where tsc 6 reported one. Third member of the "tsgo reports at ALL declarations"
+family after F2's TS2300. **The brief's design question was answered "neither"** — not a new
+emitter and not a collecting pass: FOUR existing walkers each needed the same one-line
+generalisation, and tsc 6's `findEntry` entry-point heuristic went with it (−38 lines). The four
+are **measurably disjoint** (PassLab, one `disable` per run: each is the sole emitter of its
+shape, none redundant, nothing deletable) — **and the first such measurement was DEAD**, because
+the probe script `cd`s into the fixture directory and `PassLab` loads from the process CWD; a
+dead lab prints exactly what three redundant passes would. Ablation 9 arms, all discriminating;
+a8's initial **0** was investigated rather than shrugged at and its control a8b reddens 10 —
+`Identifier.end` coincides with the correct span whenever the next token is `;` or EOF, so the
+pin needed a following statement to discriminate. A refuted prediction worth keeping:
+`declarationEmitUnknownImport` is **not a cycle at all** in tsgo — moving the `export` above the
+import silences it, an artifact of tsgo's own resolution stack. cost_gate all 20 counters
++0.00%, huge_methods exit 0 (862 classes), warning-clean against a gate proven live.

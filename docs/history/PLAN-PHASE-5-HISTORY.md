@@ -65669,3 +65669,92 @@ engine's reach); TypeFlags bit order changed in 7.0; "≤ 4 residue" against 17;
 `typescript-go-repo/testdata/baselines/reference/submodule/` with the three-way fallback and
 its asserted bucket counts (9 delete / 87 keep-tsc / 24 new), ≈315 first-run reds. Then
 (LEGACY.1).
+
+### Round (P18.86) — (LEGACY.0b) step 1: the corpus reads tsgo's OWN baselines, and a `.diff` classifies a FILE where a failure classifies what WE got wrong (2026-09-13)
+
+**Suite 19,045 → 19,082 / 0 / 310** — skipped 20 → 310 = 3 pre-existing + **285 pending**
++ **22 divergences**, and all 307 of those are generated subtests carrying
+`@kotlin.test.Ignore`, so the corpus stays a GREEN gate while every adopted row is visible
+and counted. Generated corpus **8,838 → 8,852**, exactly the projection. `cost_gate.py`
+exit 0 with **all 20 counters at +0.00%** — the right receipt for a generator-only change,
+and the reason the 8-profile grid was not run: **no `commonMain` file is touched**, so the
+compiler binary is unchanged by construction. `huge_methods.py --fail-over 0` exit 0 (858
+classes); warning-clean. **(LEGACY.0) stays OPEN** on (0b-2) onwards.
+
+**THE ROOT SWITCH.** `cloneTypeScriptGoRepo` pins `typescript-go-repo` to `2bd066d87…`
+(tag `typescript/v7.0.2`) with the submodule side `4d4f005c` recorded in its KDoc, and the
+four baseline lookups now choose per subtest between tsgo's checked-in output and tsc's.
+Three deliberate divergences from `cloneTypeScriptRepo`, each with a reason: no
+`outputs.dir` (the clone is not a task output), a **NON-CONE** sparse set at extension
+granularity, and `sparse-checkout set` issued ONLY when the clone is already sparse —
+narrowing a FULL clone would delete `internal/checker/checker.go`, which this repo reads as
+a reference implementation. The no-op path is verified (3 s, Go sources intact) and the
+fresh-clone path was rehearsed end to end.
+
+**THE THREE-WAY FALLBACK IS ASSERTED, NOT DIAGNOSED, AND THE GUARD FIRED TWICE.**
+`adopted = 8,765` (of which `new = 23`), `deleted = 9`, `kept-tsc = 87`. A wrong fallback is
+SILENT — it does not fail a test, it removes one, and a shrunken corpus reads exactly like a
+green one — so all four counts are `check`ed together with a message that forbids adjusting
+one constant to make the build green. **`new` is 23 against the design's 24, and that is a
+FINDING rather than a tolerance**: the design sized (0b) against pristine `637d5746`, where
+`coAndContraVariantInferences5.errors.txt` does not exist; (0a) moved the pin to `4d4f005c`,
+which carries it, so one of the 24 landed a round early. Corpus size is unaffected because
+the BASE moved by the same one. The off-by-one surfaced because the guard fired, which is
+the whole argument for asserting counts rather than printing them.
+
+**THE RED SET IS 289, WITH TWO CONTROLS THAT MAKE IT ATTRIBUTABLE** (256 errors + 33 js;
+the design estimated ≈315): **all 289 come from the tsgo root** — no kept-tsc subtest
+reddened — and **all 289 carry a `.diff` layer**, so nothing tsgo and tsc AGREE on went red.
+Either control failing would have meant the fallback, not the compiler, was the variable.
+Layers: 238 Accepted / 27 submodule / 24 Triaged. Families: F6 code-differs 88, F9 wording
+53, JS 33, F4 26, F3 25, **TS-1 21**, F1 11, F2 9, F0 7, F10 4, F7 4, F5 4, F8 2, plus 2
+ours-extra.
+
+**THE PER-FAMILY COUNTS DIFFER MATERIALLY FROM THE DESIGN'S, AND THE REASON IS A LAW RATHER
+THAN AN ERROR: a `.diff` classifies a FILE, while a FAILURE classifies what *we* got wrong.**
+F10 went 45 → 4, F9 11 → 53, F7 43 → 4. A file whose diff is "tsgo shortened the chain" can
+still fail here for an unrelated reason, or not fail at all because our answer already
+matched tsgo's side. So a family ranking taken from the reference's own diff layers is a
+ranking of THEIR divergences, not of OUR work — re-derive it from the red set before
+ordering any family rounds.
+
+**THE BIGGEST REFUTATION IS ABOUT A PIN THIS ROUND WROTE.** "A compiler emitting a NEGATIVE
+diagnostic code is impossible here" is **FALSE**: `TS-1` is tsc's own harness convention and
+`Checker.checkPreEmitCountMismatchPins` deliberately synthesizes it for three cases, so the
+first invariant pin written on that assumption went RED against the real binary and was
+replaced. The decision not to follow tsgo's 21 TS-1 rows stands — they are its own
+`submoduleTriaged` "known diffs that we intend to fix" — but its stated reason did not
+survive contact.
+
+**SIX MORE REFUTED PREDICTIONS**, all from a read-only design study whose numbers were
+explicitly estimates: the sparse set is **104 MB worktree / 124 MB total** against "≈29 MB"
+(conformance and the `.diff` layers were uncounted); differing subtests **392** against 378
+(layers 28/331/19 → 35/333/24); `/.src/` is **1 active subtest** against "5 rows" (six
+baselines carry it, five are not generated); the red set is 289 against ≈315. Confirmed as
+predicted: the 9 deletions, the 87 kept-tsc family, `==== ./` at exactly **13**, and
+conformance contributing zero.
+
+**ABLATION**: reverting the `==== ./` prefix line reddens **12 of 13** — the thirteenth
+(`uniqueSymbolJs`) is `@Ignore`d as a pending row of an unrelated family and so is
+unreachable by the arm, which is the honest reading rather than a 13/13 claim. Restored and
+rebuilt before the final gates.
+
+**THE TS-1 FAMILY COST 16 REAL tsc BASELINES AND THE COST WAS PAID BACK, NOT ACCEPTED.**
+Ledgering those 21 rows as divergences retires 16 comparisons this suite genuinely had, so
+`TsgoHarnessSelfCheckBaselinesTest` reproduces all 16 verbatim against
+`typeScriptBaselineDir`, beside an invariant pin that every one of the 21 entries is still
+load-bearing — which doubles as the countdown for when tsgo closes its own issue. Net
+coverage change: zero.
+
+**ONE DESIGN QUESTION LEFT OPEN DELIBERATELY, AND IT SHOULD BE DECIDED BEFORE (0b-3).** A
+FOURTH fallback arm — "a HARNESS ARTIFACT (TS-1 content, a `/.src/` path) is not tsgo's
+ANSWER, so fall back to tsc's baseline" — would preserve those 17 subtests with no ledger
+entries and no hand-written mirrors at all. It was not taken: the brief was explicit, the
+choice is reversible, and an arm phrased that way risks decaying into "fall back whenever
+tsgo is inconvenient", which is exactly the escape hatch round 873 warns absorbs unrelated
+defects. Recorded rather than silently adopted.
+
+**NEXT**: (0b-2), the free wins — `==== ./` is already in, so F9 wording (53), F4
+TS6133 → TS6196 (26) and F5 removed-option wording (4, which also answers (LEGACY.1)'s
+6.0-vs-7.0 question) are the cheap families; then the ranked family rounds, ordered from the
+RED SET rather than from the diff layers.

@@ -19,6 +19,28 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.96) — THE CommonJS EXPORT-PATTERN ASSIGNMENT (7) AND F10's CONSTRUCT-SIGNATURE CHAIN (4), AND THE F-LETTERS ARE NOT FAMILIES, 19,240 / 0 / 128 (2026-09-14).**
+Pending 114 -> **103**, skipped -11, 9 modules asserted. **The primary is one rule and it is SEVEN
+rows, not six**: tsgo converts an exported binding pattern into a destructuring ASSIGNMENT with
+each leaf substituted to `exports.<name>`, and its own comment gives the reason — that preserves
+native destructuring and therefore the ITERATOR SEMANTICS of an array pattern, where TypeScript 6
+flattened. A row filed as an unrelated singleton was the same mechanism plus a printer half
+(`Emitter.emitObjectLiteral` dropped a property's leading comment in its single-line branch).
+**The secondary landed too, and the chain loses TWO links, not one**: tsgo has ZERO call sites for
+`Types of construct signatures are incompatible.` — the message survives in its table unreferenced.
+**Blast radius measured at zero for both**, on the changed binary over the unchanged population.
+Ablation 12 arms, all discriminating; **a4's double zero is attributed and is the reusable
+finding** — below ES2018 the object-rest downlevel has ALREADY rewritten the declaration before
+the CommonJS transform sees it, so a `target` conjunct there can never decide anything, while
+dropping the gate that DOES refuse it moves 41 baselines. A blind pin was found by its own
+ablation and repaired, and two structural pins that used the removed shape as a VEHICLE were
+re-vehicled rather than weakened. **The durable output is the decomposition of the remaining
+103**: F6 "top code differs" is 38 rows and **~32 distinct code pairs, largest cluster 2**, so
+every estimate phrased in the ledger's F-letters overstates the work — and the letters hide
+cross-family clusters (TS2880 split across two, TS1003 across two). JS-emit residue is 3 groups
+plus 8 singletons, and `emitBOM` turns out to be a SCANNER bug. Grid and `--outDir` + `diff -r`
+both CONTROLS and both counted; the corpus and its screen were the gates. cost_gate 20/20 +0.00%,
+huge_methods exit 0 (867 classes), warning-clean, screen 8,727 / 0.
 **(P18.95) — THE SCREEN GAINS THE *EMIT* CHANNEL, AND THREE PRINTER RULES CLOSE 12 JS-EMIT ROWS, 19,214 / 0 / 139 (2026-09-14).**
 Pending 126 -> **114**, skipped -12, tests +14, 9 modules asserted present. **Part 0 is why this
 family had been deferred five rounds**: JS emit was the largest pending family and had NO
@@ -124,27 +146,3 @@ on all eight; no profile sets `checkJs`/`allowJs`/`emitDeclarationOnly`). **A re
 landed with it**: a 28-second full-active-corpus harness outside Gradle (2,789 subtests, 0
 mismatches after every step). cost_gate all 20 counters +0.00%, huge_methods exit 0 (862
 classes), warning-clean against a gate proven live.
-**(P18.91) — F6d: TypeScript 7 REPORTS TS2303 AT *EVERY* ALIAS DECLARATION ON THE CYCLE, AND THE DETECTOR WAS ALREADY THERE, 19,153 / 0 / 180 (2026-09-14).**
-Pending 165 → **155**, skipped 190 → **180**, both −10, all ten subtests verified PRESENT and
-PASSED. **The family was picked on a BLAST-RADIUS measurement rather than on size** — 10 rows
-against F2's 15, chosen because TS2303 appears in **ZERO active baselines** where F2's TS2300
-appears in **80**, the same "cannot redden a green baseline on its own axis" property that
-carried (P18.90). The exposure was inverted (this ADDS a diagnostic), so the grid was briefed as
-a real gate; measured, it is a **control** — TS2303 fires 0 times on all eight profiles and on
-cronstrue/marked/many-small, which the new script's header states rather than hiding. tsgo's
-`popTypeResolution` marks the whole resolution SUFFIX false, so **every frame from the cycle
-start upward emits**: one row per alias DECLARATION the cycle passes through, each named after
-its own symbol, where tsc 6 reported one. Third member of the "tsgo reports at ALL declarations"
-family after F2's TS2300. **The brief's design question was answered "neither"** — not a new
-emitter and not a collecting pass: FOUR existing walkers each needed the same one-line
-generalisation, and tsc 6's `findEntry` entry-point heuristic went with it (−38 lines). The four
-are **measurably disjoint** (PassLab, one `disable` per run: each is the sole emitter of its
-shape, none redundant, nothing deletable) — **and the first such measurement was DEAD**, because
-the probe script `cd`s into the fixture directory and `PassLab` loads from the process CWD; a
-dead lab prints exactly what three redundant passes would. Ablation 9 arms, all discriminating;
-a8's initial **0** was investigated rather than shrugged at and its control a8b reddens 10 —
-`Identifier.end` coincides with the correct span whenever the next token is `;` or EOF, so the
-pin needed a following statement to discriminate. A refuted prediction worth keeping:
-`declarationEmitUnknownImport` is **not a cycle at all** in tsgo — moving the `export` above the
-import silences it, an artifact of tsgo's own resolution stack. cost_gate all 20 counters
-+0.00%, huge_methods exit 0 (862 classes), warning-clean against a gate proven live.
