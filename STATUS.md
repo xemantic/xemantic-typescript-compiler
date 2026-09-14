@@ -19,6 +19,24 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.97) — THE JS-EMIT RESIDUE: SEVEN MECHANISMS, 11 ROWS, AND THE HOIST KEYWORD IS A *SCOPE* PROPERTY, 19,260 / 0 / 117 (2026-09-14).**
+Pending 103 -> **92**, skipped -11, +20 pins, 9 modules asserted. Briefed as five mechanisms / 9
+rows, landed seven / 11 — the agent sized the two singletons it was told to report on and landed
+both on a measured zero. **The finding came from the red arms**: tsgo decides the enum/namespace
+`var <name>;` hoist with a PER-SCOPE first-declaration map (functions, classes, every variable
+declarator, in source order) and its keyword by the SCOPE (`let` anywhere but the SourceFile, a
+dotted inner inheriting its outer's); ablating the keyword rule moves **40** baselines and the
+per-scope reset **29** — the old file-level name sets had matched them by coincidence — and a
+CaseClause must gate its recording on the subtree containing TypeScript syntax, as tsgo's early
+return does. The other six: `declare import` never emits (a tsc-6 special case deleted); `import
+I = M` in a plain block prints `var I = M;`; a setter's return type is never printed, and its
+object-literal twin was a PARSER gap invisible to every gate; `emitBOM` prepended nothing before
+and the harness's round-375 mojibake branch went with the pristine artefact; a body-less `global`
+recovery emits nothing; and a source-written `export {}` is kept in place in a JS file only — the
+general keep moved 14 green TS baselines and is refused. One BLIND pin repaired by its own arm.
+Ablation 12 arms, all discriminating. JS emit is down to 3 singletons. cost_gate 20/20 +0.00%
+and the grid/`--outDir` control both COUNTED controls; huge_methods exit 0 (869 classes);
+warning-clean; screen emit 5,688/0, errors 3,050/0.
 **(P18.96) — THE CommonJS EXPORT-PATTERN ASSIGNMENT (7) AND F10's CONSTRUCT-SIGNATURE CHAIN (4), AND THE F-LETTERS ARE NOT FAMILIES, 19,240 / 0 / 128 (2026-09-14).**
 Pending 114 -> **103**, skipped -11, 9 modules asserted. **The primary is one rule and it is SEVEN
 rows, not six**: tsgo converts an exported binding pattern into a destructuring ASSIGNMENT with
@@ -120,29 +138,3 @@ numbers**: the rule built from tsgo's SOURCE does not reproduce tsgo's own BASEL
 arms, ALL discriminating, each reporting pin reds AND screen mismatches. Grid a MEASURED control
 (TS2300/TS2717/TS6200 all 0/0 in both arms of all eight). cost_gate all 20 counters +0.00%,
 huge_methods exit 0 (862 classes), warning-clean against a gate proven live.
-**(P18.92) — TS2683 IN JS FILES: THE SKIP WAS STANDING IN FOR A *GATE BUG*, AND 3 OF 4 "CASCADES" WERE FOUR SEPARATE FAMILIES, 19,170 / 0 / 176 (2026-09-14).**
-Pending 155 -> **151**, skipped 180 -> **176**, both -4, plus +17 pins. **4 of 7 rows — and the
-shortfall is the finding.** Picked by the same blast-radius method as (P18.90)/(P18.91), but
-where those chose codes appearing in ZERO active baselines, TS2683 is in **17** and the changed
-gate is exposed to **133 active baselines involving a `.js` file**, so the brief demanded the
-exposure measurement before any code. The cascade hypothesis (tsgo emits TS2683 -> `this` becomes
-`any` -> our downstream error disappears) holds for exactly ONE of four rows; the other three are
-a kept TS2339, two ours-only `.ts` rows, and a JSDoc `@param` typing gap. **A shared diagnostic
-CODE is no more a family than a shared first-differing LINE** — the third way this arc has
-mis-grouped rows. **The JS skip turned out to be standing in for a gate bug**: tsgo's
-`GetStrictOptionValue` makes an explicit sub-option `false` WIN over `strict`'s default-on, which
-our `X || strict || !strictExplicitlyFalse` idiom did not model — the one fixture in 133 that
-separates them was being protected by the skip instead of by its own `@noImplicitThis: false`.
-Fixed at 2 measured sites; **28 left on the old idiom deliberately**, recorded rather than
-silently inconsistent. **The corpus did NOT catch the round's one real mistake — a negative
-control did**: dropping the skip wholesale emits under `allowJs` without `checkJs`, where tsgo is
-silent and no baseline exists to notice. A second control was vacuous (no `this` in its fixture)
-and was fixed rather than trusted — probed properly, our `.d.ts` guard is NOT tsgo-faithful, now
-pinned as `residue - ...`. Also landed: the TS7009 sibling family (same gate, same bug), tsc-6
-walker B424 RETIRED, and a `declarationOnly` driver — which is what actually blocked two rows,
-not anything `this`-shaped. Ablation 10 arms, 9 discriminating, a7's zero attributed to a
-redundant guard via its control. Grid a MEASURED control (TS2683 and TS7009 both 0 in both arms
-on all eight; no profile sets `checkJs`/`allowJs`/`emitDeclarationOnly`). **A reusable instrument
-landed with it**: a 28-second full-active-corpus harness outside Gradle (2,789 subtests, 0
-mismatches after every step). cost_gate all 20 counters +0.00%, huge_methods exit 0 (862
-classes), warning-clean against a gate proven live.

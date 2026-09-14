@@ -3544,3 +3544,30 @@ pin needed a following statement to discriminate. A refuted prediction worth kee
 `declarationEmitUnknownImport` is **not a cycle at all** in tsgo — moving the `export` above the
 import silences it, an artifact of tsgo's own resolution stack. cost_gate all 20 counters
 +0.00%, huge_methods exit 0 (862 classes), warning-clean against a gate proven live.
+
+**(P18.92) — TS2683 IN JS FILES: THE SKIP WAS STANDING IN FOR A *GATE BUG*, AND 3 OF 4 "CASCADES" WERE FOUR SEPARATE FAMILIES, 19,170 / 0 / 176 (2026-09-14).**
+Pending 155 -> **151**, skipped 180 -> **176**, both -4, plus +17 pins. **4 of 7 rows — and the
+shortfall is the finding.** Picked by the same blast-radius method as (P18.90)/(P18.91), but
+where those chose codes appearing in ZERO active baselines, TS2683 is in **17** and the changed
+gate is exposed to **133 active baselines involving a `.js` file**, so the brief demanded the
+exposure measurement before any code. The cascade hypothesis (tsgo emits TS2683 -> `this` becomes
+`any` -> our downstream error disappears) holds for exactly ONE of four rows; the other three are
+a kept TS2339, two ours-only `.ts` rows, and a JSDoc `@param` typing gap. **A shared diagnostic
+CODE is no more a family than a shared first-differing LINE** — the third way this arc has
+mis-grouped rows. **The JS skip turned out to be standing in for a gate bug**: tsgo's
+`GetStrictOptionValue` makes an explicit sub-option `false` WIN over `strict`'s default-on, which
+our `X || strict || !strictExplicitlyFalse` idiom did not model — the one fixture in 133 that
+separates them was being protected by the skip instead of by its own `@noImplicitThis: false`.
+Fixed at 2 measured sites; **28 left on the old idiom deliberately**, recorded rather than
+silently inconsistent. **The corpus did NOT catch the round's one real mistake — a negative
+control did**: dropping the skip wholesale emits under `allowJs` without `checkJs`, where tsgo is
+silent and no baseline exists to notice. A second control was vacuous (no `this` in its fixture)
+and was fixed rather than trusted — probed properly, our `.d.ts` guard is NOT tsgo-faithful, now
+pinned as `residue - ...`. Also landed: the TS7009 sibling family (same gate, same bug), tsc-6
+walker B424 RETIRED, and a `declarationOnly` driver — which is what actually blocked two rows,
+not anything `this`-shaped. Ablation 10 arms, 9 discriminating, a7's zero attributed to a
+redundant guard via its control. Grid a MEASURED control (TS2683 and TS7009 both 0 in both arms
+on all eight; no profile sets `checkJs`/`allowJs`/`emitDeclarationOnly`). **A reusable instrument
+landed with it**: a 28-second full-active-corpus harness outside Gradle (2,789 subtests, 0
+mismatches after every step). cost_gate all 20 counters +0.00%, huge_methods exit 0 (862
+classes), warning-clean against a gate proven live.

@@ -25,6 +25,87 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.97) — (LEGACY.0b) step 12: the JS-emit residue, seven mechanisms, 11 rows, and the hoist keyword is a SCOPE property (2026-09-14)
+
+**Three commits** (`5f3e40a67` feat, `caf095c10` test, this docs commit). **Suite 19,240 → 19,260 / 0 / 117**,
+9 modules asserted — `tsgoPendingBaselines` 103 → **92**, skipped −11, +20 pins
+(`TsgoJsEmitResidueTest`). Screen **emit 5,688 / 0 and errors 3,050 / 0** on the final binary,
+every closed row `--include`d and 0. `cost_gate.py` exit 0, all 20 counters +0.00% (a CONTROL —
+`--noEmit` never runs the transformer); `huge_methods.py --fail-over 0` exit 0 (869 classes);
+grid 8×`added=0 removed=0` and the emit-mode `--outDir` + `diff -r` control 78/78 identical
+(both COUNTED, both controls: tsc's own sources carry none of the seven shapes); warning-clean
+(no `-q`, positive control 1 `w:`). **(LEGACY.0) stays OPEN** on (0b-13).
+
+**THE ROUND WAS BRIEFED AS FIVE MECHANISMS / 9 ROWS AND LANDED SEVEN / 11.** The brief's own
+read-only sizing of the 14 pending JS-emit rows put five in one round: *M1* JE-A (3 rows),
+*M2* `declare import` (2), *M3* `import I = M` in a top-level block (2), *M4* the printed
+setter return type (1), *M5* `emitBOM` (1); the agent sized the two singletons it was told to
+report on and landed both on a measured zero: *M6* the body-less `global` recovery inside a
+class emits nothing, *M7* a source-written `export {}` is kept in place in a **JavaScript** file.
+Every rule was read out of `typescript-go-repo/internal/transformers/tstransforms` and every
+pin's expectation out of `tools/tsgo-7.0.2/lib/tsc` over the same fixture.
+
+**M1 IS THE ROUND'S FINDING, AND IT CAME FROM THE RED ARMS, NOT THE FIX.** tsgo's
+`runtimesyntax.go` keeps a PER-SCOPE first-declaration map (SourceFile / Block / ModuleBlock /
+CaseBlock / function body), recording functions, classes and every variable declarator in
+source order, and hoists `var <name>;` for an enum/namespace only when it IS the first — so
+`var x5 = 1; enum x5 {}` gets no hoist and `namespace z { var t } var z;` keeps it, with no
+special case. Our two sites used file-level name sets that knew only classes and functions
+and were bypassed inside function scopes. **Three things the brief got wrong**: (a) "keep the
+let-vs-var rule unchanged" — tsgo's keyword is a property of the SCOPE (`let` anywhere but the
+SourceFile: a top-level Block or CaseBlock prints `let E;`, a dotted inner namespace inherits
+its OUTER's scope), and ablating that (arm a9) moves **40** baselines the old
+`nested || functionScopeDepth > 0 && !useDottedVar` had matched by coincidence; (b) the map's
+per-scope RESET (arm a2) carries **29** baselines; (c) a CaseClause is the one non-scope parent
+between a scope and a recorded statement, and tsgo's visitor returns early on a subtree with no
+TypeScript syntax BEFORE recording its children — so `case 1: var h; case 2: enum h {}` still
+prints `let h;` (tsgo-verified), which `subtreeContainsTypeScript` now gates per clause.
+The enum/module records itself only when EMITTED, so a non-instantiated namespace suppresses
+nothing in either order.
+
+**THE OTHER SIX, ONE LINE EACH.** M2: `hasDeclareModifier` now answers for an
+`ImportEqualsDeclaration`; the tsc-6 "declare export import still emits" special case is
+DELETED, and the `export {};` marker then lands last through the existing
+`emitEmptyExportIfNeeded` (nothing to add). M3: the entity-name elision survives only inside a
+block WITHIN a namespace body (`namespaceBodyDepth`), a plain block prints `var I = M;`. M4:
+the emitter branch is deleted — **and the object-literal twin was a PARSER gap, not an emitter
+transcription**: `set p(v: number): number {}` in an object literal de-synchronised the whole
+literal, invisible to every gate (0 corpus rows either way, arm a8's only witness is a pin).
+M5: `options.emitBOM` prepended nothing anywhere; `TypeScriptCompiler.withByteOrderMark` now
+does, and `BaselineFormatter`'s round-375 mojibake branch is deleted with the pristine artifact
+it reproduced (`.d.ts` BOM untouched — `stripDtsSection` keeps it out of every comparison).
+M6: `transformModuleDeclaration`'s body-less `global` arm returns nothing. M7: **the first cut
+kept every source-written `export {}` in place and moved 14 green TS baselines** — tsgo's
+import elision keeps any alias declaration in a JS file (`IsInJSFile`) and elides-then-re-adds
+it LAST in a TS file; the rule is JS-only.
+
+**PINS.** 20; 13 of the first 17 reddened on the pre-change binary. One was BLIND — an
+UNREFERENCED alias under a `declare import` inside a namespace body, elided by the unused-alias
+rule on both arms — and was rewritten with a referenced alias and proven red by re-running its
+arm (2 → 3 reds). Two were RENAMED from "negative control" to positive after the red run showed
+they move. One recorded pure control (`M2 negative control`, non-declare aliases) is green under
+every arm and says so in its KDoc.
+
+**ABLATION — 12 arms, all discriminating**, each `cmp`'d against a snapshot, each reporting pin
+reds AND screen mismatches: a1 variables not recorded 5/3; a2 no per-scope reset 1/**29**; a3 M2
+off 3/2; a4 M3 off 2/2; a5 namespace-block elision dropped 1/1; a6 M4 off 1/1; a7 M5 off 2/1;
+a8 objlit setter type parse dropped 1/**0**; a9 old hoist keyword 1/**40**; a10 M6 off 1/1; a11
+M7 off 1/1; a12 M7 emitter count dropped 1/1. Final md5s `Transformer 643a275c…`,
+`Emitter c006900b…`, `Parser 72233d94…`, `TypeScriptCompiler 9cfdd79b…` — the orchestrator's
+AFTER arm matched all four.
+
+**WHAT REMAINS OF JS EMIT: 3 rows**, each a singleton — `asyncArrowInClassES5(target=es2015)`
+(a `_a = Test` capture temp tsgo does not mint), `augmentExportEquals2` (a baseline whose
+expected text is a harness artefact: `//// [file3.ts]` twice and only `file3.js`), and
+`importDeclWithExportModifierAndExportAssignment` (tsgo drops `module.exports = x` beside other
+exports, a TS2309 shape). **Pending 92** decomposes as display/chain-content ~21, F8 span 12,
+F1 silent 8, F2-residue 6, ORDER-model 5, TS2683-residue 3, JS emit 3, the rest singletons.
+
+**GATE LABELLING.** The corpus and its screen were the gates for all seven; the grid,
+`cost_gate.py` and the `--outDir` diff are controls and were counted. The orchestrator's one
+process failure: none this round — one Gradle invocation at a time, the agent's under
+`build/bench/p18-97-agent/`, the orchestrator's under `build/bench/p18-97-orch/`.
+
 ### Round (P18.96) — the CommonJS export-pattern assignment (7) and F10's construct-signature chain (4), and the F-letters are not families (2026-09-14)
 
 **Five commits** (`24467868c`, `034625221`, `6ff2c195d`, `b568cc749`, `e828fbfb8`).
@@ -738,107 +819,6 @@ earlier in this session, so it is now a CLAUDE.md entry.
 relation-error funnel first, which is its own unblocker), F6z 33 singletons (15 of them
 JS/checkJs/JSDoc, so a `checkJs` sub-round may be the cheapest slice), JS emit 33, F3
 last-overload 25, F6d 10, F1 11, F2 9, F8's unrelated-anchor residue ~11.
-### Round (P18.87) — (LEGACY.0b) step 2: the "free wins", and F9 was a first-differing-LINE label rather than a family (2026-09-13)
-
-**Suite 19,082 → 19,100 / 0 / 267** — skipped 310 → 267 and `tsgoPendingBaselines`
-285 → 242, **both −43, which is the receipt**: an entry deleted from that list re-arms its
-subtest, and the build fails on a stale entry, so a green suite after removing 43 entries
-IS the proof that 43 tsgo rows now pass. +18 pins. Grid 8×`added=0 removed=0` (arms
-verified distinct, AFTER byte-identical to the shipped classes); `cost_gate.py` exit 0 with
-all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (858 classes);
-warning-clean. **(LEGACY.0) stays OPEN** on (0b-3) onwards.
-
-**(a) F9 — 53 ATTEMPTED, 13 LANDED, 40 RECLASSIFIED, AND THE LABEL IS THE LESSON.** "F9
-wording" was assigned by the FIRST DIFFERING LINE of each row, which is not a family: only
-13 of the 53 are wording at all, in four unrelated mechanisms — the TS5090 sentence (TS7
-removed `baseUrl`, so the clause naming it went with it, 2 rows), TS5074 (1), a
-`Call signature return types 'X' and 'Y' are incompatible.` elaboration that **TypeScript 7
-does not have at all — 0 tsgo baselines against 12 tsc ones** (6), and the `--pretty`
-related-info LAYOUT (5). The other 40 were reclassified IN PLACE with their reasons
-rewritten so a family round can still grep them: **23 → F8 span/width**, 7 → type DISPLAY,
-6 → duplicate-identifier, 1 → union ORDER ((0a)'s residue), 1 → chain CONTENT (TS2200 vs
-TS2201), 1 → a source-echo PATH. Two findings inside that reclassification are worth more
-than the 13: **seven of the F8 rows are the same mechanism as F4's anchor half** (tsgo's
-`reportUnusedLocal` anchors on `node.Name()` where tsc anchored on the statement), so one
-more step in F4's emitter closes them together; and two of the six duplicate-identifier rows
-are NOT a wording swap — tsgo keeps both TS6203 and TS6204 and picks the leading one from
-the error's EXISTING related list (`addDuplicateDeclarationError`) where we pick by index.
-
-**(b) F4 — 26 of 26, and the sizing was wrong about where the code lives.** The design
-called this "one emitter choosing between two codes by type-space"; the whole population is
-**type PARAMETERS**, served by two dedicated emitters (`reportUnusedTypeParams` and the
-`infer` walker), neither of which is the `isTypeDecl` site. Three changes, all tsgo's
-`checkUnusedTypeParameters`: the code and message; the span is the type-parameter **NODE**,
-so `in T` / `T extends string` / `T = number` fall inside it (`typeParamNodeSpan`, trimming
-exactly one `,` or `>` off `Node.end`'s documented overshoot); and the one grouping TS7
-keeps — TS6205 over the whole `<…>` list when there is more than one parameter and ALL are
-unreferenced, with a `_`-prefixed parameter counting as used. **A code-only change closes
-14 of the 26**, so the anchor and the grouping are the other twelve.
-
-**(c) F5 — 4 of 4, and it settles (LEGACY.1)'s open question in the OPPOSITE direction to
-the one this session predicted.** There are TWO DISJOINT populations and a third case. An
-option TypeScript 7 **deleted from its table** (`charset`, `out`, `keyofStringsOnly`,
-`noImplicitUseStrict`, `noStrictGenericChecks`, `suppress*`, `importsNotUsedAsValues`,
-`preserveValueImports`) is simply **unknown** — TS5023 at the NAME, with no ladder, so
-neither `ignoreDeprecations` nor `@typeScriptVersion` silences it, which is why four
-`deprecatedCompilerOptions` cases declared at 5.0/6.0/5.5/6.0 produce IDENTICAL tsgo
-output. `target: "ES3"` is the third thing: `es3` is not in TS7's target enum map at all, so
-it is an invalid **argument** — TS6046 at the VALUE.
-
-**SO (LEGACY.1) STEP (k)'s TS5102/TS5108 PLAN IS CONFIRMED, NOT REPLACED.** tsgo's
-`createRemovedOptionDiagnostic` emits exactly our sentences for every option TS7 KEEPS but
-refuses; TS5023 never touches them. Three further facts the round measured: **TS5101 and
-TS5107 appear in ZERO tsgo baselines**, so the "is deprecated and will stop functioning"
-rung is unreachable under a TS7 target; **(LEGACY.1)'s own stated blocker for moving
-`simulatedVersion`'s default to `"7.0"` is GONE** — its "four ACTIVE corpus subtests pin the
-6.0 TS5101 line for `downlevelIteration`" are now tsgo baselines saying TS5102, both already
-pending, and they are the ONLY tsgo baselines carrying TS5102, so moving the default would
-CLOSE two more pending rows rather than redden anything (still an owner decision about
-PROJECT behaviour, but the corpus no longer opposes it); and if it moves, the `baseUrl`
-chain must be re-derived, because tsgo appends `Use '"paths": {"*": […]}' instead.`
-(**TS5106**, computed from the config path) where we append a `Visit https://aka.ms/ts6…`
-line.
-
-**ABLATION**, one mistake per arm, `cmp` against the arm's own snapshot, rebuilt after every
-restore, `@Test` identical (4,701) in all three: a1 the F9 elaboration template reverted —
-**2 RED**; b1 the type-space predicate INVERTED at both emitters — **98 RED**, of which 5 of
-7 pins fail **in opposite directions** plus 93 corpus baselines; c1 the deleted names put
-back on the version-gated ladder — **6 RED** (2 pins + the four `deprecatedCompilerOptions`
-cases). Two `TsgoUnusedTypeParameterTest` pins do NOT redden under b1 — the TS6205 grouping
-and the `infer` emitter are different code paths from the inverted predicate — recorded
-rather than claimed as coverage.
-
-**THE GRID'S VERDICT IS SPLIT, AND SAYING SO IS THE POINT.** It is a CONTROL for the F9
-display half ((PARITY.1): every row on all eight profiles is `Cannot find name …`) and a
-SECOND, independent control for F4, because **not one of the eight tsconfigs sets
-`noUnusedLocals` or `noUnusedParameters`**. It is a real GATE for F5 — every profile has a
-tsconfig, so a wrongly-widened "unknown option" rule adds a row per profile — and for the F9
-elaboration, which runs in the assignability path the profiles exercise constantly.
-
-**ONE MIRROR TEST CHANGED SHAPE, WITH ITS REASON IN ITS KDoc.**
-`TsgoHarnessSelfCheckBaselinesTest.manyCompilerErrorsInTheTwoFiles` was converted from a
-verbatim tsc mirror to an ANNOTATED-SOURCE comparison: it is the one `--pretty` case among
-(0b)'s sixteen mirrors, so any TS7 pretty-layout change makes a verbatim tsc-6 comparison
-impossible by construction. Its 20 diagnostics across two files are still compared; only the
-header rendering moved, and that is pinned by `TsgoMessageWordingTest`.
-
-**SIX REFUTED PREDICTIONS**, four of them this session's own: F9 is not 53 wording rows in a
-handful of templates; F4 is not one emitter and the code is only half the change; the design's
-"tsgo says TS5023 where we say TS5101/5102/5107/5108" is half right, since TS5102/TS5108 stay
-correct for every option TS7 keeps; "fixing the wording closes the row" is false
-(`pathsValidation5` is now byte-correct on TS5090 and still fails, on where a `tsconfig.json`
-row sorts against a source file's in the summary); and the round's own first two readings of
-the TS7 pretty layout were both wrong before the third stuck. **The most interesting one is
-about tsgo itself**: the predicted "an import used only in type position is the interesting
-case" is real but tsgo is INCONSISTENT there — an unused `import type { P }` is TS6196 while
-an unused `import { type Q }` is TS6133, because its `IsTypeOnly()` reads `PhaseModifier` on
-the clause but a separate bool on the specifier. No pending row demands either, so it was
-left alone rather than copied.
-
-**NEXT**: (0b-3) — the ranked family rounds from the RED SET: F6 code-differs 88, F8
-span/width (now ~25 with F9's reclassification, and seven of those share F4's anchor
-mechanism), JS 33, F3 last-overload 25, F1 11, F2 9, F0 7, F10 4, F7 4. The 21 TS-1 rows
-stay ledgered — they are tsgo's own `submoduleTriaged` known bugs.
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1169,7 +1149,22 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-11 LANDED 2026-09-14 ((P18.85)-(P18.96) notes) — pending 103, skipped 128,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-12 LANDED 2026-09-14 ((P18.85)-(P18.97) notes) — pending 92, skipped 117,
+  suite 19,260/0. **JS EMIT IS DOWN TO 3 SINGLETONS by (P18.97)** (seven mechanisms, 11 rows; the enum/namespace
+  hoist is now tsgo's per-scope first-declaration map and its keyword is a SCOPE property — 40 + 29 baselines had
+  matched the old file-level sets by coincidence, see the note): `asyncArrowInClassES5(target=es2015)` (a `_a =
+  Test` capture temp), `augmentExportEquals2` (expected text is a harness artefact — `//// [file3.ts]` twice),
+  `importDeclWithExportModifierAndExportAssignment` (tsgo drops `module.exports = x` beside other exports).
+  **THE DECOMPOSED RESIDUE (92)**: display/chain-content ~21; F8 span 12 (TS5053 ×2, TS2880 ×2); F1 silent 8
+  (TS1003 ×3, TS2339 ×3); F2-residue 6 (four mechanisms, named at (P18.93)); ORDER-model 5 (named at (P18.94));
+  TS2683-residue 3; JS emit 3; the rest singletons — SIZE BY MECHANISM, never by F-letter, and expect ≤6 per
+  round. **PICK AND SIZE WITH `bash scripts/corpus-screen.sh`** (8,738 subtests over errors+emit in ~70 s; for an
+  EMIT family it is the GATE). **A KNOWN FOLLOW-ON**: three hand-written pins differ from tsgo in CODE because our
+  relation CHAIN line names the type parameter / undistributed intersection where tsgo names its constraint / one
+  distributed constituent — that chain SOURCE DISPLAY is its own family and closing it also closes those three.
+  The 21 TS-1 rows stay LEDGERED. **BLOCKED-PENDING-USER, still open**: the fourth "harness artifact ⇒ fall back
+  to tsc" arm ((P18.86)).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-11 LANDED 2026-09-14 ((P18.85)-(P18.96) notes) — pending 103, skipped 128,
   suite 19,240/0. **THE ARC IS IN ITS LONG TAIL AND THE F-LETTERS MUST BE RETIRED AS A PLANNING UNIT**: (P18.96)
   measured that **F6 "top code differs" is 38 rows and ~32 DISTINCT CODE PAIRS, largest cluster 2** — so any
   remaining estimate phrased in F-letters overstates the work, and the letters also HIDE cross-family clusters

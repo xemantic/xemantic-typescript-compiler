@@ -1,3 +1,105 @@
+### Round (P18.87) — (LEGACY.0b) step 2: the "free wins", and F9 was a first-differing-LINE label rather than a family (2026-09-13)
+
+**Suite 19,082 → 19,100 / 0 / 267** — skipped 310 → 267 and `tsgoPendingBaselines`
+285 → 242, **both −43, which is the receipt**: an entry deleted from that list re-arms its
+subtest, and the build fails on a stale entry, so a green suite after removing 43 entries
+IS the proof that 43 tsgo rows now pass. +18 pins. Grid 8×`added=0 removed=0` (arms
+verified distinct, AFTER byte-identical to the shipped classes); `cost_gate.py` exit 0 with
+all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (858 classes);
+warning-clean. **(LEGACY.0) stays OPEN** on (0b-3) onwards.
+
+**(a) F9 — 53 ATTEMPTED, 13 LANDED, 40 RECLASSIFIED, AND THE LABEL IS THE LESSON.** "F9
+wording" was assigned by the FIRST DIFFERING LINE of each row, which is not a family: only
+13 of the 53 are wording at all, in four unrelated mechanisms — the TS5090 sentence (TS7
+removed `baseUrl`, so the clause naming it went with it, 2 rows), TS5074 (1), a
+`Call signature return types 'X' and 'Y' are incompatible.` elaboration that **TypeScript 7
+does not have at all — 0 tsgo baselines against 12 tsc ones** (6), and the `--pretty`
+related-info LAYOUT (5). The other 40 were reclassified IN PLACE with their reasons
+rewritten so a family round can still grep them: **23 → F8 span/width**, 7 → type DISPLAY,
+6 → duplicate-identifier, 1 → union ORDER ((0a)'s residue), 1 → chain CONTENT (TS2200 vs
+TS2201), 1 → a source-echo PATH. Two findings inside that reclassification are worth more
+than the 13: **seven of the F8 rows are the same mechanism as F4's anchor half** (tsgo's
+`reportUnusedLocal` anchors on `node.Name()` where tsc anchored on the statement), so one
+more step in F4's emitter closes them together; and two of the six duplicate-identifier rows
+are NOT a wording swap — tsgo keeps both TS6203 and TS6204 and picks the leading one from
+the error's EXISTING related list (`addDuplicateDeclarationError`) where we pick by index.
+
+**(b) F4 — 26 of 26, and the sizing was wrong about where the code lives.** The design
+called this "one emitter choosing between two codes by type-space"; the whole population is
+**type PARAMETERS**, served by two dedicated emitters (`reportUnusedTypeParams` and the
+`infer` walker), neither of which is the `isTypeDecl` site. Three changes, all tsgo's
+`checkUnusedTypeParameters`: the code and message; the span is the type-parameter **NODE**,
+so `in T` / `T extends string` / `T = number` fall inside it (`typeParamNodeSpan`, trimming
+exactly one `,` or `>` off `Node.end`'s documented overshoot); and the one grouping TS7
+keeps — TS6205 over the whole `<…>` list when there is more than one parameter and ALL are
+unreferenced, with a `_`-prefixed parameter counting as used. **A code-only change closes
+14 of the 26**, so the anchor and the grouping are the other twelve.
+
+**(c) F5 — 4 of 4, and it settles (LEGACY.1)'s open question in the OPPOSITE direction to
+the one this session predicted.** There are TWO DISJOINT populations and a third case. An
+option TypeScript 7 **deleted from its table** (`charset`, `out`, `keyofStringsOnly`,
+`noImplicitUseStrict`, `noStrictGenericChecks`, `suppress*`, `importsNotUsedAsValues`,
+`preserveValueImports`) is simply **unknown** — TS5023 at the NAME, with no ladder, so
+neither `ignoreDeprecations` nor `@typeScriptVersion` silences it, which is why four
+`deprecatedCompilerOptions` cases declared at 5.0/6.0/5.5/6.0 produce IDENTICAL tsgo
+output. `target: "ES3"` is the third thing: `es3` is not in TS7's target enum map at all, so
+it is an invalid **argument** — TS6046 at the VALUE.
+
+**SO (LEGACY.1) STEP (k)'s TS5102/TS5108 PLAN IS CONFIRMED, NOT REPLACED.** tsgo's
+`createRemovedOptionDiagnostic` emits exactly our sentences for every option TS7 KEEPS but
+refuses; TS5023 never touches them. Three further facts the round measured: **TS5101 and
+TS5107 appear in ZERO tsgo baselines**, so the "is deprecated and will stop functioning"
+rung is unreachable under a TS7 target; **(LEGACY.1)'s own stated blocker for moving
+`simulatedVersion`'s default to `"7.0"` is GONE** — its "four ACTIVE corpus subtests pin the
+6.0 TS5101 line for `downlevelIteration`" are now tsgo baselines saying TS5102, both already
+pending, and they are the ONLY tsgo baselines carrying TS5102, so moving the default would
+CLOSE two more pending rows rather than redden anything (still an owner decision about
+PROJECT behaviour, but the corpus no longer opposes it); and if it moves, the `baseUrl`
+chain must be re-derived, because tsgo appends `Use '"paths": {"*": […]}' instead.`
+(**TS5106**, computed from the config path) where we append a `Visit https://aka.ms/ts6…`
+line.
+
+**ABLATION**, one mistake per arm, `cmp` against the arm's own snapshot, rebuilt after every
+restore, `@Test` identical (4,701) in all three: a1 the F9 elaboration template reverted —
+**2 RED**; b1 the type-space predicate INVERTED at both emitters — **98 RED**, of which 5 of
+7 pins fail **in opposite directions** plus 93 corpus baselines; c1 the deleted names put
+back on the version-gated ladder — **6 RED** (2 pins + the four `deprecatedCompilerOptions`
+cases). Two `TsgoUnusedTypeParameterTest` pins do NOT redden under b1 — the TS6205 grouping
+and the `infer` emitter are different code paths from the inverted predicate — recorded
+rather than claimed as coverage.
+
+**THE GRID'S VERDICT IS SPLIT, AND SAYING SO IS THE POINT.** It is a CONTROL for the F9
+display half ((PARITY.1): every row on all eight profiles is `Cannot find name …`) and a
+SECOND, independent control for F4, because **not one of the eight tsconfigs sets
+`noUnusedLocals` or `noUnusedParameters`**. It is a real GATE for F5 — every profile has a
+tsconfig, so a wrongly-widened "unknown option" rule adds a row per profile — and for the F9
+elaboration, which runs in the assignability path the profiles exercise constantly.
+
+**ONE MIRROR TEST CHANGED SHAPE, WITH ITS REASON IN ITS KDoc.**
+`TsgoHarnessSelfCheckBaselinesTest.manyCompilerErrorsInTheTwoFiles` was converted from a
+verbatim tsc mirror to an ANNOTATED-SOURCE comparison: it is the one `--pretty` case among
+(0b)'s sixteen mirrors, so any TS7 pretty-layout change makes a verbatim tsc-6 comparison
+impossible by construction. Its 20 diagnostics across two files are still compared; only the
+header rendering moved, and that is pinned by `TsgoMessageWordingTest`.
+
+**SIX REFUTED PREDICTIONS**, four of them this session's own: F9 is not 53 wording rows in a
+handful of templates; F4 is not one emitter and the code is only half the change; the design's
+"tsgo says TS5023 where we say TS5101/5102/5107/5108" is half right, since TS5102/TS5108 stay
+correct for every option TS7 keeps; "fixing the wording closes the row" is false
+(`pathsValidation5` is now byte-correct on TS5090 and still fails, on where a `tsconfig.json`
+row sorts against a source file's in the summary); and the round's own first two readings of
+the TS7 pretty layout were both wrong before the third stuck. **The most interesting one is
+about tsgo itself**: the predicted "an import used only in type position is the interesting
+case" is real but tsgo is INCONSISTENT there — an unused `import type { P }` is TS6196 while
+an unused `import { type Q }` is TS6133, because its `IsTypeOnly()` reads `PhaseModifier` on
+the clause but a separate bool on the specifier. No pending row demands either, so it was
+left alone rather than copied.
+
+**NEXT**: (0b-3) — the ranked family rounds from the RED SET: F6 code-differs 88, F8
+span/width (now ~25 with F9's reclassification, and seven of those share F4's anchor
+mechanism), JS 33, F3 last-overload 25, F1 11, F2 9, F0 7, F10 4, F7 4. The 21 TS-1 rows
+stay ledgered — they are tsgo's own `submoduleTriaged` known bugs.
+
 ### Round (P18.79) — (CHK.133)(b): the relation's `this` leg — one predicate, three elaboration sites, and a bivariance rule that was an under-approximation (2026-09-12)
 
 **Suite 18,781 → 18,809 / 0 / 3** (+28 pins, `SignatureThisRelationTest`: 15 diagnostic pins,
