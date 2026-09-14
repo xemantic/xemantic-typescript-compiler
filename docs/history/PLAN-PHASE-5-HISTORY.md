@@ -65406,3 +65406,93 @@ does not resolve a function-body local from the walker's ambient; optional tuple
 **NEXT**: (CHK.98)(i), the `NewExpression` argument arm — 21 measured missing rows, a control
 grid, and the item's own hazard (an un-substituted `T` reaching the argument relation) to pin
 as a refusal. Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
+
+### Round (P18.83) — (CHK.98)(i): the `NewExpression` argument arm — the construct side was the CONTROL and the call side's free-type-parameter rule was the GATE (2026-09-12)
+
+**Suite 18,941 → 18,986 / 0 / 3** (+45 pins, `NewExpressionContextualArgumentTest`: 32 value
+pins, 2 negative controls, 11 `residue -` each with the reference row in its KDoc). Grid
+8×`added=0 removed=0`; marked 18 → 18, cronstrue 1 → 1, the 2,400-file project 1 → 1,
+byte-identical; `cost_gate.py` exit 0, not rebaselined (against the REBUILT HEAD:
+`typeOfExpr.calls` +0.83%, `typeNode.bypassed` +0.48%, `narrow.memoServed` +0.42%, all others
+within ±0.12%, `output.errors` 46 = 46 — the (P18.31) pattern, cache-HIT counters rising as
+parameters become narrowable references; the baseline's +1.3% `mapped.*` rows are (P18.78)
+staleness); `huge_methods.py --fail-over 0` exit 0; warning-clean (main + test — one redundant
+cast of the agent's own was removed and every receipt re-taken on the rebuilt binary).
+**(CHK.98) stays OPEN** on its stage-2 rows.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.98) is the first unchecked item; (i) was its largest
+measured prize (21 missing) after (P18.82) measured all four. (INV.0) step 10b-ii stays
+blocked on its two named families.
+
+**THE DESIGN IS tsc's `getContextualTypeForArgumentAtIndex` FOR A `new`, THROUGH THE CALL
+ARM'S OWN CORE.** `cpaComputeArgCtxTypes`'s tail became the shared `ctxArgTypesFromSignatures`;
+`newExprArgCtxTypes` resolves the callee — a CLASS callee ((CHK.73): this checker types a class
+value as its instance) yields the instance's `constructSignatures` filtered to its OWN
+constructors when it declares any, else the inherited list (`MemberResolver` stores them
+inherited-FIRST, so an unfiltered `sigs[0]` is the BASE's — a defect found by the matrix), and
+every other callee goes through `getConstructSignaturesOfType`; a spread argument refuses the
+list; an overloaded constructor is adopted by ARITY even when `sigs[0]` wins (`new` only — the
+call side keeps its legacy heuristic byte-identical, its own divergence recorded). Three
+wiring sites — the pull's `is NewExpression` arm, `cpaCtxAt`'s New arm (per argument instead
+of inherited) and `checkPropertyAccessInExpr`'s New arm behind the call arm's pre-gate — all
+through the one helper.
+
+**"REFUSE AN UNINFERABLE `T`" WAS THE WRONG SHAPE FOR THE FREE CASE, AND MEASUREMENT SAID
+SO.** tsc's FIRST pass answers a type parameter that NO non-context-sensitive argument
+mentions with `default ?: constraint ?: unknown` — that rule, added to the shared core for
+BOTH call-likes, closes six rows exactly (`unknown`, a default, a constraint, the
+`new Promise(…)` executor, and two call-side twins). Refusal is right ONLY where an argument's
+parameter MENTIONS the type parameter and our inference fails: then the callback parameter
+stays `any` — never `unknown`, never `T` — and the mention test descends into function-shaped
+objects and answers `true` for anything it cannot read (the hazard, pinned twice, and arm a2
+reddens exactly those two).
+
+**A DEFECT FOUND AND FIXED INSIDE THE ARM.** Class constructor parameter symbols are typed
+LAZILY under the FIRST ASKER's scope: measured, `seed: T` read `any` and the callback's `T`
+was a by-name interned parameter rather than the class's own, so no mapper could reach it.
+`ctxParamTypesOf` resolves them under the class's own scope. This is (CHK.102)'s frozen-first-
+touch family on a SYMBOL rather than a node.
+
+**THE CENSUS INVERTED THE GATE.** The `new` arm RESOLVES **4 sites across all eight profiles**
+(harness 3, server 1 — the rest of the `new Promise` grep hits are helper strings and
+comments) and 0 on every library, so the construct side is a CONTROL; the shared core's
+free-type-parameter substitution fires **1,031-2,169 times per profile** on the CALL side,
+with 27-100 explicit-type-argument mappers — THAT is the gate, and it moved the grid by
+nothing.
+
+**BEFORE → AFTER (zero REF-SPLIT)**: the `new` set (47 files) 11/2/45/2 → **41/2/13/4**;
+the call-side twins (9) 7/1/7/1 → **10/1/4/1**. Thirty-two MISSING rows closed: explicit type
+arguments ×5, seed inference ×2, overloads by arity ×4, an interface `new (…)` signature, free
+TP → `unknown`/default/constraint ×3, the `Promise<number>` executor ×2, an untyped
+`new Promise(…)`, member/argument/expression-body readers ×3, qualified/`typeof`/parenthesized
+callees, abstract and derived classes, an object-literal method, a generic construct signature
+×2, a union callee, a nested generic `new`. Both ours-only rows and the two original
+text-diffs are PRE-EXISTING on HEAD (B210's syntactic path, reproducing for a CALL too); the
+two NEW text-diffs are rows that went from missing to right-row-wrong-display
+(`reason?: any | undefined`; an unreduced `unknown | PromiseLike<unknown>`).
+
+**ABLATION over 45 pins**: a1 the arm removed — **28 RED**, exactly the arm's pins; a2 the
+hazard (the free rule binding an evidence-bound TP) — **2 RED**, exactly the two hazard
+residue pins; a3 explicit type arguments ignored — 6 RED; a4 the first overload regardless of
+arity — 2 RED. Two pins recorded UNDISCRIMINATED: the own-over-base derived pin (B210 serves
+it) and the `Map … forEach` real-lib control. At-risk run: the new class + 102 grepped
+classes + the 20 ACTIVE corpus cases passing a callback to `new` = **1,565 tests / 109
+classes / 0 RED**, every one present.
+
+**RESIDUES, MEASURED AND NOT FIXED (eleven pinned)**: `seed: T[]` and named-function evidence
+(refusals by design); a class EXPRESSION callee (`getTypeOfExpressionCore` types it `any` —
+never a contextual-typing gap); a callback carrying its own type parameter; TS18046 on
+`unknown` (this checker never reports a member read on `unknown`); a spread before a generic
+constructor's callback; a rest of callbacks (positional read); the two pre-existing B210 rows;
+`new Map([...])` return inference; the two display rows; on the call side the legacy
+first-overload heuristic, kept deliberately.
+
+**PREDICTIONS REFUTED**: construct-signature plumbing plus explicit instantiation was NOT
+sufficient (the lazy parameter symbols); "refuse an uninferable `T`" was wrong for the free
+case; the arm resolves 4 sites, not 6-10 per profile, and the real gate is the call side;
+`getConstructSignaturesOfType(instance)` is inherited-first; the "class expression" family
+of the 21 rows was never a contextual-typing gap.
+
+**NEXT**: (CHK.98)'s stage-2 rows — `Promise.then`/`PromiseLike.then` and a namespace-import
+callee (missing), predicate `filter` (missing and text-diff), the `reduce(cb, {} as
+Record<…>)` false positive. Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.

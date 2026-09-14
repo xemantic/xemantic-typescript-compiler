@@ -25,6 +25,91 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.93) — the corpus SCREEN is committed, and F2 duplicate-identifier lands 12 of 18 with three tsc-6 narrowings deleted (2026-09-14)
+
+**Two commits. Part 0** (`f917b1f6b`): `scripts/corpus-screen.sh` + `CorpusScreenMain.kt`.
+**Part 1** (this one): **suite 19,170 → 19,192 / 0 / 164** — `tsgoPendingBaselines` 151 → **139**
+and skipped 176 → **164**, both −12, plus +22 pins. Grid 8×`added=0 removed=0`; `cost_gate.py`
+exit 0, all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (862 classes, 0 over);
+warning-clean (7,306-byte log, `w=0 e=0`, no `-q`, positive control produced exactly 1 `w:` line);
+corpus screen 3,033 subtests / **0 mismatches** / 28.0 s. **12 of 18; the 6 holdouts each have a
+NAMED mechanism. (LEGACY.0) stays OPEN** on (0b-9).
+
+**PART 0 — AN INSTRUMENT THAT WAS BUILT, USED AND LOST IS NOW COMMITTED.** (P18.92) built a
+~28-second full-active-corpus screen, measured with it, and left it in a scratch directory; with
+151 rows still open that was a standing tax on every remaining round, so rebuilding it was
+promoted ahead of the family work. Three properties are STRUCTURAL rather than remembered: it
+**refuses the frozen repo-root generated tree** (exit 3 — and the positive control shows that
+tree really is a different corpus, **3,145** subtests against the live **3,160**, not merely an
+un-annotated one); it **calls the suite's own** `errorsMatchBaseline`/`Path.readText()`, so CRLF,
+`.d.ts` stripping and the UTF-16 BOM decode cannot drift from the suite; and it **refuses below a
+subtest floor**, because a shrunken population reads exactly like a clean run. **It is not the
+gate and its header says so** — it sees neither the ~3,100 `.js` emit subtests nor any
+hand-written pin, and (P18.92)'s one real defect was seen ONLY by a hand-written negative control
+on a run where the whole corpus was clean.
+
+**THE PRE-MEASUREMENT DECIDED THE ROUND, AND THE ROSTER WAS WRONG.** TS2300 is in **80** active
+baselines — the largest blast radius of any remaining family — but only **17** carry
+class/interface MEMBER rows, which is the reachable population; TS2717 is in **1**; TS6200/TS6201
+in **0**, so deleting the amalgamation could not redden anything. The brief's group A was **9**,
+not 12 (the missing three are a NAMING mechanism), and group B is **two** mechanisms 3/3, not
+one. **The decision number: the candidate rule read `0 mismatches / 3,021` on a throwaway build**
+— which is exactly what Part 0 exists to produce, and it is why a family with an 80-baseline
+radius was landable in one round.
+
+**THE RULE — AND THREE tsc-6 NARROWINGS WENT WITH IT.** `reportDuplicateMemberErrors` iterates
+EVERY member of the container whose symbol name matches and errors at each, so the `membersToFlag`
+table collapses to "report all, except a get/set PAIR and METHOD OVERLOADS"; its three former
+narrowings were all artefacts of tsc 6's `PropertyExcludes = None`. The TS6200/TS6201
+amalgamation is **deleted** rather than re-thresholded (`emit6200`, `firstTokenSpanOfFile` go with
+it). On a 14-shape fixture our output is **byte-identical to tsgo across all 29 rows, silences
+included**.
+
+**I HAD THE TS2717 RULE WRONG AND THE MEASUREMENT SAID SO.** My read-only recon called it a
+"differing KIND" test. It is tsgo's binder SPLIT: the gate is that the group's FIRST member must
+not be a METHOD, which behaves differently on three-member groups — `{ m(){} m: number; m: string }`
+is three TS2300 and **zero** TS2717, because the two properties do not pair with each other. A
+kind-comparison rule gets that case wrong and no two-member fixture can tell the two apart.
+
+**THE SIX HOLDOUTS, EACH A DIFFERENT MECHANISM** (greppable `F2-residue:` / `dupRelated-residue:`):
+`dynamicNamesErrors` is a LATE-BOUND computed key gated out a level earlier by
+`memberNameIsBinderVisible`, needing tsgo's fourth emitter `lateBindMember` (blast radius: every
+computed member name); `methodSignatureHandledDeclarationKindForSymbol` is a cross-DECLARATION
+interface merge served by a different function, correct except in the differing-KIND case;
+`parameterPropertyInConstructor2` needs a Constructor arm that `checkDuplicateClassMembers` does
+not have at all. **And the three related-span rows are a REFUSAL WITH NUMBERS**: the 6203-vs-6204
+rule was built from tsgo's source and **does not reproduce tsgo's own baselines** — it gives the
+active `promiseDefinitionTest` shape the right answer and predicts 6204 where these three want
+all-6203. With 54 active TS6203 + 7 active TS6204 that is the family's largest exposure, so the
+rule must be read off the BASELINES, not the source. (P18.89)'s lesson in reverse: sometimes the
+source is not enough.
+
+**SIX COUNTDOWN PINS, NOT ANTICIPATED AT ALL.** Five in `PristineDivergenceRound940Test` and one
+in `DuplicateMemberDeclarationTest` whose own comment read *"a tsgo divergence this compiler does
+not chase"* — every one asserting pristine's answer for the family this round was closing. All
+six re-measured against tsgo and re-pointed with the measurement recorded. **A test class NAMED
+after a pristine divergence is a pre-declared red set under the tsgo-only directive**; grepping
+the test sources for `pristine` / `does not chase` / `divergence` before starting a family turns
+six surprise failures into a planned re-point. Now in CLAUDE.md.
+
+**AND CHANGING A ROW'S NAME SILENTLY CHANGED ITS SQUIGGLE** — `emitDuplicate2300`'s
+`else -> name.length` coupled the two quantities, caught only by a two-character width diff in
+`duplicateStringNamedProperty1`. The span now comes from the NODE.
+
+**ABLATION — 12 arms, ALL discriminating, `tests` identical at 69 in every arm**, and each arm
+reports BOTH its pin reds and its corpus-screen mismatches, which is the screen's second use: a1
+report only the second (tsc 6) 6/7; a2 method-first reports only non-methods 2/1; a3
+accessors-then-property reports only the property 6/2; a4 a legal get/set pair starts reporting
+2/**49**; a5 method overloads start reporting 1/**33**; a6 drop the TS2717 method gate 2/1; a7
+name each row after its own member 4/2; a8 drop the written-spelling quoting 2/1; a9 restore the
+≥8 TS6200 amalgamation 1/3; a10 ignore the static/instance split 1/6; a11 squiggle length from
+the NAME again 1/1; a12 interface path keeps per-member naming 1/1.
+
+**THE GRID IS A CONTROL AND THE COUNTS PROVE IT** ((CHK.124)): TS2300 **0/0**, TS2717 **0/0**,
+TS6200 **0/0** in BOTH arms of all eight profiles, and cronstrue/marked byte-identical — a
+duplicate class member is a hard error nobody checks in. The corpus, the screen and the pins did
+the work.
+
 ### Round (P18.92) — TS2683 in JS files: the skip was standing in for a GATE BUG, and 3 of 4 "cascades" were four separate families (2026-09-14)
 
 **Suite 19,153 → 19,170 / 0 / 176** — `tsgoPendingBaselines` 155 → **151** and skipped 180 →
@@ -802,96 +887,6 @@ member-union branch as a gate on tsc's sources.
 **NEXT**: (LEGACY.0a), the `tsgo-port` pin — 29 subtests at most, one display-order family.
 Then (LEGACY.0b) per `docs/tsgo-baselines.md`, then (LEGACY.1).
 
-### Round (P18.83) — (CHK.98)(i): the `NewExpression` argument arm — the construct side was the CONTROL and the call side's free-type-parameter rule was the GATE (2026-09-12)
-
-**Suite 18,941 → 18,986 / 0 / 3** (+45 pins, `NewExpressionContextualArgumentTest`: 32 value
-pins, 2 negative controls, 11 `residue -` each with the reference row in its KDoc). Grid
-8×`added=0 removed=0`; marked 18 → 18, cronstrue 1 → 1, the 2,400-file project 1 → 1,
-byte-identical; `cost_gate.py` exit 0, not rebaselined (against the REBUILT HEAD:
-`typeOfExpr.calls` +0.83%, `typeNode.bypassed` +0.48%, `narrow.memoServed` +0.42%, all others
-within ±0.12%, `output.errors` 46 = 46 — the (P18.31) pattern, cache-HIT counters rising as
-parameters become narrowable references; the baseline's +1.3% `mapped.*` rows are (P18.78)
-staleness); `huge_methods.py --fail-over 0` exit 0; warning-clean (main + test — one redundant
-cast of the agent's own was removed and every receipt re-taken on the rebuilt binary).
-**(CHK.98) stays OPEN** on its stage-2 rows.
-
-**WHY THIS ITEM, SAID OUT LOUD.** (CHK.98) is the first unchecked item; (i) was its largest
-measured prize (21 missing) after (P18.82) measured all four. (INV.0) step 10b-ii stays
-blocked on its two named families.
-
-**THE DESIGN IS tsc's `getContextualTypeForArgumentAtIndex` FOR A `new`, THROUGH THE CALL
-ARM'S OWN CORE.** `cpaComputeArgCtxTypes`'s tail became the shared `ctxArgTypesFromSignatures`;
-`newExprArgCtxTypes` resolves the callee — a CLASS callee ((CHK.73): this checker types a class
-value as its instance) yields the instance's `constructSignatures` filtered to its OWN
-constructors when it declares any, else the inherited list (`MemberResolver` stores them
-inherited-FIRST, so an unfiltered `sigs[0]` is the BASE's — a defect found by the matrix), and
-every other callee goes through `getConstructSignaturesOfType`; a spread argument refuses the
-list; an overloaded constructor is adopted by ARITY even when `sigs[0]` wins (`new` only — the
-call side keeps its legacy heuristic byte-identical, its own divergence recorded). Three
-wiring sites — the pull's `is NewExpression` arm, `cpaCtxAt`'s New arm (per argument instead
-of inherited) and `checkPropertyAccessInExpr`'s New arm behind the call arm's pre-gate — all
-through the one helper.
-
-**"REFUSE AN UNINFERABLE `T`" WAS THE WRONG SHAPE FOR THE FREE CASE, AND MEASUREMENT SAID
-SO.** tsc's FIRST pass answers a type parameter that NO non-context-sensitive argument
-mentions with `default ?: constraint ?: unknown` — that rule, added to the shared core for
-BOTH call-likes, closes six rows exactly (`unknown`, a default, a constraint, the
-`new Promise(…)` executor, and two call-side twins). Refusal is right ONLY where an argument's
-parameter MENTIONS the type parameter and our inference fails: then the callback parameter
-stays `any` — never `unknown`, never `T` — and the mention test descends into function-shaped
-objects and answers `true` for anything it cannot read (the hazard, pinned twice, and arm a2
-reddens exactly those two).
-
-**A DEFECT FOUND AND FIXED INSIDE THE ARM.** Class constructor parameter symbols are typed
-LAZILY under the FIRST ASKER's scope: measured, `seed: T` read `any` and the callback's `T`
-was a by-name interned parameter rather than the class's own, so no mapper could reach it.
-`ctxParamTypesOf` resolves them under the class's own scope. This is (CHK.102)'s frozen-first-
-touch family on a SYMBOL rather than a node.
-
-**THE CENSUS INVERTED THE GATE.** The `new` arm RESOLVES **4 sites across all eight profiles**
-(harness 3, server 1 — the rest of the `new Promise` grep hits are helper strings and
-comments) and 0 on every library, so the construct side is a CONTROL; the shared core's
-free-type-parameter substitution fires **1,031-2,169 times per profile** on the CALL side,
-with 27-100 explicit-type-argument mappers — THAT is the gate, and it moved the grid by
-nothing.
-
-**BEFORE → AFTER (zero REF-SPLIT)**: the `new` set (47 files) 11/2/45/2 → **41/2/13/4**;
-the call-side twins (9) 7/1/7/1 → **10/1/4/1**. Thirty-two MISSING rows closed: explicit type
-arguments ×5, seed inference ×2, overloads by arity ×4, an interface `new (…)` signature, free
-TP → `unknown`/default/constraint ×3, the `Promise<number>` executor ×2, an untyped
-`new Promise(…)`, member/argument/expression-body readers ×3, qualified/`typeof`/parenthesized
-callees, abstract and derived classes, an object-literal method, a generic construct signature
-×2, a union callee, a nested generic `new`. Both ours-only rows and the two original
-text-diffs are PRE-EXISTING on HEAD (B210's syntactic path, reproducing for a CALL too); the
-two NEW text-diffs are rows that went from missing to right-row-wrong-display
-(`reason?: any | undefined`; an unreduced `unknown | PromiseLike<unknown>`).
-
-**ABLATION over 45 pins**: a1 the arm removed — **28 RED**, exactly the arm's pins; a2 the
-hazard (the free rule binding an evidence-bound TP) — **2 RED**, exactly the two hazard
-residue pins; a3 explicit type arguments ignored — 6 RED; a4 the first overload regardless of
-arity — 2 RED. Two pins recorded UNDISCRIMINATED: the own-over-base derived pin (B210 serves
-it) and the `Map … forEach` real-lib control. At-risk run: the new class + 102 grepped
-classes + the 20 ACTIVE corpus cases passing a callback to `new` = **1,565 tests / 109
-classes / 0 RED**, every one present.
-
-**RESIDUES, MEASURED AND NOT FIXED (eleven pinned)**: `seed: T[]` and named-function evidence
-(refusals by design); a class EXPRESSION callee (`getTypeOfExpressionCore` types it `any` —
-never a contextual-typing gap); a callback carrying its own type parameter; TS18046 on
-`unknown` (this checker never reports a member read on `unknown`); a spread before a generic
-constructor's callback; a rest of callbacks (positional read); the two pre-existing B210 rows;
-`new Map([...])` return inference; the two display rows; on the call side the legacy
-first-overload heuristic, kept deliberately.
-
-**PREDICTIONS REFUTED**: construct-signature plumbing plus explicit instantiation was NOT
-sufficient (the lazy parameter symbols); "refuse an uninferable `T`" was wrong for the free
-case; the arm resolves 4 sites, not 6-10 per profile, and the real gate is the call side;
-`getConstructSignaturesOfType(instance)` is inherited-first; the "class expression" family
-of the 21 rows was never a contextual-typing gap.
-
-**NEXT**: (CHK.98)'s stage-2 rows — `Promise.then`/`PromiseLike.then` and a namespace-import
-callee (missing), predicate `filter` (missing and text-diff), the `reduce(cb, {} as
-Record<…>)` false positive. Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1222,7 +1217,31 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-7 LANDED 2026-09-14 ((P18.85)-(P18.92) notes) — pending 151, skipped 176,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-8 LANDED 2026-09-14 ((P18.85)-(P18.93) notes) — pending 139, skipped 164,
+  suite 19,192/0. **F2 duplicate-identifier 12 of 18 by (P18.93)**, which also COMMITTED the blast-radius
+  instrument: **`bash scripts/corpus-screen.sh`** — ~28 s over every active errors subtest, outside Gradle, with
+  `--filter` / `--include` / `--diff`; point it at a THROWAWAY build of a candidate rule and read how many
+  currently-green baselines move. **USE IT TO PICK AND TO SIZE (0b-9)** — it is what let a family with an
+  80-baseline radius land in one round (the candidate read `0 mismatches / 3,021` before any commitment). Six
+  holdouts, greppable `F2-residue:` / `dupRelated-residue:`: `dynamicNamesErrors` needs tsgo's FOURTH TS2300
+  emitter `lateBindMember` for a LATE-BOUND computed key (radius: every computed member name);
+  `methodSignatureHandledDeclarationKindForSymbol` is a cross-DECLARATION interface merge in a different function,
+  wrong only in the differing-KIND case; `parameterPropertyInConstructor2` needs a Constructor arm
+  `checkDuplicateClassMembers` does not have; and **the three related-span rows are a REFUSAL WITH NUMBERS** — the
+  6203-vs-6204 rule built from tsgo's SOURCE does not reproduce tsgo's own BASELINES (it gets the active
+  `promiseDefinitionTest` shape right and predicts 6204 where these want all-6203), and with 54 active TS6203 +
+  7 active TS6204 that rule must be read off the baselines. **REMAINING (0b-9), by red count**: JS emit 33, F6z
+  singletons ~29, ORDER ~17 ((LEGACY.0a) residue — the comparator EXISTS in `StableTypeOrdering.kt` and these are
+  display paths that never reach `getUnionType`, i.e. the cheap "mechanism exists, reach is wrong" shape that
+  carried F6d), F8 unrelated-anchor residue ~11, F0 7, F1 residue ~8, F10 elaboration-chain shortening 4.
+  **PICK BY BLAST RADIUS, MEASURED WITH THE SCREEN**: (P18.90)/(P18.91) chose codes in ZERO active baselines and
+  closed 25/25 and 10/10; (P18.92) chose one in 17 with 133 exposed and closed 4/7; (P18.93) chose one in 80 and
+  closed 12/18 because the screen said the rule moved nothing. **A KNOWN
+  FOLLOW-ON**: three hand-written pins differ from tsgo in CODE because our relation CHAIN line names the type
+  parameter / undistributed intersection where tsgo names its constraint / one distributed constituent — that chain
+  SOURCE DISPLAY is its own family and closing it also closes those three. The 21 TS-1 rows stay LEDGERED.
+  **BLOCKED-PENDING-USER, still open**: the fourth "harness artifact ⇒ fall back to tsc" arm ((P18.86)).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-7 LANDED 2026-09-14 ((P18.85)-(P18.92) notes) — pending 151, skipped 176,
   suite 19,170/0. **TS2683-in-JS 4 of 7 by (P18.92)**: the JS-file skip was standing in for a GATE BUG — tsgo's
   `GetStrictOptionValue` makes an explicit sub-option `false` WIN over `strict`'s default-on, which our
   `X || strict || !strictExplicitlyFalse` idiom did not model; **2 sites fixed, 28 left on the old idiom

@@ -998,13 +998,6 @@ val tsgoPendingBaselines = listOf(
         "construct signatures are incompatible."
     ),
     TsgoPendingBaseline(
-        "classWithDuplicateIdentifier.errors.txt",
-        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
-        "classWithDuplicateIdentifier.ts(2,5): error TS2300: Duplicate identifier 'a'. | ours: " +
-        "classWithDuplicateIdentifier.ts(3,5): error TS2717: Subsequent property declarations " +
-        "must have the same type. Property 'a' must be of type '() => numb"
-    ),
-    TsgoPendingBaseline(
         "commonMissingSemicolons.errors.txt",
         "F6 top code differs (tsgo TS2552 / ours TS2304); layer `submoduleAccepted`. tsgo: " +
         "commonMissingSemicolons.ts(16,8): error TS2552: Cannot find name 'myConst3'. Did you " +
@@ -1083,72 +1076,44 @@ val tsgoPendingBaselines = listOf(
         "[1][0];"
     ),
     TsgoPendingBaseline(
-        "duplicateClassElements.errors.txt",
-        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
-        "duplicateClassElements.ts(2,12): error TS2300: Duplicate identifier 'a'. | ours: ==== " +
-        "duplicateClassElements.ts (14 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "duplicateIdentifierComputedName.errors.txt",
-        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
-        "duplicateIdentifierComputedName.ts(2,5): error TS2300: Duplicate identifier '[\"a\"]'. " +
-        "| ours: ==== duplicateIdentifierComputedName.ts (3 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "duplicateIdentifierDifferentSpelling.errors.txt",
-        "F7 diagnostic COUNT changed; layer `submoduleAccepted`. tsgo: " +
-        "duplicateIdentifierDifferentSpelling.ts(2,3): error TS2300: Duplicate identifier " +
-        "'0b11'. | ours: duplicateIdentifierDifferentSpelling.ts(3,3): error TS2300: Duplicate " +
-        "identifier '3'."
-    ),
-    TsgoPendingBaseline(
         "duplicateIdentifierRelatedSpans1.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: " +
-        "?[96mfile2.ts?[0m:?[93m1?[0m:?[93m6?[0m - 'Foo' was also declared here. | ours: " +
-        "?[96mfile2.ts?[0m:?[93m1?[0m:?[93m6?[0m"
-    ),
-    TsgoPendingBaseline(
-        "duplicateIdentifierRelatedSpans2.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: " +
-        "?[96mfile1.ts?[0m:?[93m1?[0m:?[93m7?[0m - ?[91merror?[0m?[90m TS2300: ?[0mDuplicate " +
-        "identifier 'A'. | ours: ?[96mfile1.ts?[0m:?[93m1?[0m:?[93m1?[0m - ?[91merror?[0m?[90m " +
-        "TS6200: ?[0mDefinitions of the following identifiers conflict with those in another " +
-        "file"
-    ),
-    TsgoPendingBaseline(
-        "duplicateIdentifierRelatedSpans4.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: " +
-        "?[96mfile1.ts?[0m:?[93m2?[0m:?[93m5?[0m - ?[91merror?[0m?[90m TS2300: ?[0mDuplicate " +
-        "identifier 'duplicate1'. | ours: ?[96mfile1.ts?[0m:?[93m1?[0m:?[93m1?[0m - " +
-        "?[91merror?[0m?[90m TS6200: ?[0mDefinitions of the following identifiers conflict with " +
-        "those in another file"
-    ),
-    TsgoPendingBaseline(
-        "duplicateIdentifierRelatedSpans7.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: " +
-        "?[96mfile1.ts?[0m:?[93m3?[0m:?[93m9?[0m - ?[91merror?[0m?[90m TS2300: ?[0mDuplicate " +
-        "identifier 'duplicate1'. | ours: ?[96mfile1.ts?[0m:?[93m1?[0m:?[93m1?[0m - " +
-        "?[91merror?[0m?[90m TS6200: ?[0mDefinitions of the following identifiers conflict with " +
-        "those in another file"
+        "F2-residue: the 6203-vs-6204 selection for an N-WAY CROSS-FILE duplicate. tsgo's "
+            + "`addDuplicateDeclarationError` (checker.go:14158) decides leading-vs-follow-on "
+            + "from the diagnostic's EXISTING related list — empty gives TS6203, non-empty "
+            + "TS6204 — and we decide it by index. That rule reproduces the ACTIVE "
+            + "`promiseDefinitionTest` / `recursiveComplicatedClasses` shape "
+            + "`[6203,6204,6204,…]` (ONE symbol with N declarations, so one call), and NOT "
+            + "the all-TS6203 shape these three want (N separate FILES, i.e. several merge "
+            + "calls accreting onto one diagnostic through `lookupOrIssueError`, which by "
+            + "that rule would give 6204 from the second on). tsgo's source and its own "
+            + "baselines do not reconcile here, so the rule must be read off the BASELINES; "
+            + "exposure is 54 active TS6203 and 7 active TS6204 rows.",
     ),
     TsgoPendingBaseline(
         "duplicateIdentifierRelatedSpans_moduleAugmentation.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: !!! related " +
-        "TS6203 /dir/b.ts:8:18: 'x' was also declared here. | ours: !!! related TS6204 " +
-        "/dir/b.ts:8:18: and here."
-    ),
-    TsgoPendingBaseline(
-        "duplicateStringNamedProperty1.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
-        "duplicateStringNamedProperty1.ts(2,5): error TS2300: Duplicate identifier " +
-        "'\"artist\"'. | ours: duplicateStringNamedProperty1.ts(2,5): error TS2300: Duplicate " +
-        "identifier 'artist'."
+        "F2-residue: the 6203-vs-6204 selection for an N-WAY CROSS-FILE duplicate. tsgo's "
+            + "`addDuplicateDeclarationError` (checker.go:14158) decides leading-vs-follow-on "
+            + "from the diagnostic's EXISTING related list — empty gives TS6203, non-empty "
+            + "TS6204 — and we decide it by index. That rule reproduces the ACTIVE "
+            + "`promiseDefinitionTest` / `recursiveComplicatedClasses` shape "
+            + "`[6203,6204,6204,…]` (ONE symbol with N declarations, so one call), and NOT "
+            + "the all-TS6203 shape these three want (N separate FILES, i.e. several merge "
+            + "calls accreting onto one diagnostic through `lookupOrIssueError`, which by "
+            + "that rule would give 6204 from the second on). tsgo's source and its own "
+            + "baselines do not reconcile here, so the rule must be read off the BASELINES; "
+            + "exposure is 54 active TS6203 and 7 active TS6204 rows.",
     ),
     TsgoPendingBaseline(
         "dynamicNamesErrors.errors.txt",
-        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
-        "dynamicNamesErrors.ts(5,5): error TS2300: Duplicate identifier '1'. | ours: ==== " +
-        "dynamicNamesErrors.ts (4 errors) ===="
+        "F2-residue: a LATE-BOUND computed member name (`[c0]`, a const-initialised key). "
+            + "(LEGACY.0b) step 8 gave the class and interface walkers tsgo's report-at-every-"
+            + "declaration rule, which closed the fixture's plain-name groups; these four rows "
+            + "are gated out one level earlier by `memberNameIsBinderVisible` (round 938, "
+            + "(CHK.5)(b)), read off pristine, where TS2300 is the BINDER's check and a "
+            + "late-bound key never reaches it. TypeScript 7 has a FOURTH TS2300 emitter for "
+            + "exactly this — `lateBindMember`, checker.go:15962 — so the gate, not the "
+            + "report-at-every-declaration rule, is what is left. Its blast radius is every "
+            + "computed member name, not this family.",
     ),
     TsgoPendingBaseline(
         "elidedJSImport1.errors.txt",
@@ -1198,9 +1163,17 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "exportAsNamespace_augment.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> duplicate-identifier family: the leading-vs-follow-on related-info selection (tsgo's `addDuplicateDeclarationError` decides it from the error's EXISTING related list, we decide it by index) and/or TS6200-vs-per-identifier TS2300; layer `submoduleAccepted`. tsgo: !!! related " +
-        "TS6203 /b.ts:12:18: 'conflict' was also declared here. | ours: !!! related TS6204 " +
-        "/b.ts:12:18: and here."
+        "F2-residue: the 6203-vs-6204 selection for an N-WAY CROSS-FILE duplicate. tsgo's "
+            + "`addDuplicateDeclarationError` (checker.go:14158) decides leading-vs-follow-on "
+            + "from the diagnostic's EXISTING related list — empty gives TS6203, non-empty "
+            + "TS6204 — and we decide it by index. That rule reproduces the ACTIVE "
+            + "`promiseDefinitionTest` / `recursiveComplicatedClasses` shape "
+            + "`[6203,6204,6204,…]` (ONE symbol with N declarations, so one call), and NOT "
+            + "the all-TS6203 shape these three want (N separate FILES, i.e. several merge "
+            + "calls accreting onto one diagnostic through `lookupOrIssueError`, which by "
+            + "that rule would give 6204 from the second on). tsgo's source and its own "
+            + "baselines do not reconcile here, so the rule must be read off the BASELINES; "
+            + "exposure is 54 active TS6203 and 7 active TS6204 rows.",
     ),
     TsgoPendingBaseline(
         "exportAssignmentMembersVisibleInAugmentation.errors.txt",
@@ -1238,12 +1211,6 @@ val tsgoPendingBaselines = listOf(
         "fatarrowfunctionsErrors.js",
         "JS emit; layer `submoduleAccepted`. tsgo: foo((1), { return: 0, }); | ours: foo((1), { " +
         "return: 0 });"
-    ),
-    TsgoPendingBaseline(
-        "gettersAndSettersErrors.errors.txt",
-        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
-        "gettersAndSettersErrors.ts(2,16): error TS2300: Duplicate identifier 'Foo'. | ours: " +
-        "==== gettersAndSettersErrors.ts (7 errors) ===="
     ),
     TsgoPendingBaseline(
         "gettersAndSettersErrors.js",
@@ -1458,11 +1425,15 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "methodSignatureHandledDeclarationKindForSymbol.errors.txt",
-        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
-        "methodSignatureHandledDeclarationKindForSymbol.ts(2,5): error TS2300: Duplicate " +
-        "identifier 'bold'. | ours: methodSignatureHandledDeclarationKindForSymbol.ts(6,5): " +
-        "error TS2717: Subsequent property declarations must have the same type. Property " +
-        "'bold' must b"
+        "F2-residue: a CROSS-DECLARATION interface MERGE (`interface Foo` declared twice), "
+            + "so it is served by `checkCrossInterfacePropertyConflict` and not by either "
+            + "walker (LEGACY.0b) step 8 changed. tsgo reports TS2300 at BOTH `bold(): string` "
+            + "and `bold: string` and NO TS2717, for the step-8 reason one function over: "
+            + "method-vs-property is a binder merge CONFLICT, so the property gets a fresh "
+            + "symbol and `checkVariableLikeDeclaration`'s secondary-declaration branch never "
+            + "runs. We emit the TS2717 and neither TS2300. The merge path is otherwise "
+            + "CORRECT (property-vs-property across two declarations is TS2717 alone in tsgo "
+            + "too — measured), so the delta is the differing-KIND case alone.",
     ),
     TsgoPendingBaseline(
         "misspelledJsDocTypedefTags.errors.txt",
@@ -1533,12 +1504,6 @@ val tsgoPendingBaselines = listOf(
         "type declarations. | ours: ==== index.ts (0 errors) ===="
     ),
     TsgoPendingBaseline(
-        "numericClassMembers1.errors.txt",
-        "F7 diagnostic COUNT changed; layer `submoduleAccepted`. tsgo: " +
-        "numericClassMembers1.ts(2,3): error TS2300: Duplicate identifier '0'. | ours: " +
-        "numericClassMembers1.ts(3,3): error TS2300: Duplicate identifier '0.0'."
-    ),
-    TsgoPendingBaseline(
         "objectLiteralWithSemicolons3.js",
         "JS emit; layer `submoduleAccepted`. tsgo: c, | ours: c"
     ),
@@ -1570,9 +1535,16 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "parameterPropertyInConstructor2.errors.txt",
-        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
-        "parameterPropertyInConstructor2.ts(3,24): error TS2300: Duplicate identifier 'names'. " +
-        "| ours: ==== parameterPropertyInConstructor2.ts (3 errors) ===="
+        "F2-residue: a constructor PARAMETER PROPERTY in an OVERLOAD signature. tsgo puts "
+            + "parameter properties in the same per-container name table as ordinary members "
+            + "(`checkPropertyOrAccessor(param, 1, false)`) and walks EVERY constructor "
+            + "including body-less overloads, so `constructor(public names: string);` at (3,24) "
+            + "and its implementation's `public names` at (4,24) are both TS2300. "
+            + "`checkDuplicateClassMembers` has no Constructor arm at all — the (4,24) row we "
+            + "do emit comes from another site — so closing this means MERGING parameter "
+            + "properties into that table, which also makes `{ p: number; constructor(public "
+            + "p: string) }` TS2300-at-both plus TS2403 (measured), i.e. a change with its own "
+            + "blast radius and its own double-emission question.",
     ),
     TsgoPendingBaseline(
         "pathsValidation5.errors.txt",
@@ -1611,12 +1583,6 @@ val tsgoPendingBaselines = listOf(
         "[3, 4]' is not assignable to parameter of type '[number, number]'"
     ),
     TsgoPendingBaseline(
-        "reassignStaticProp.errors.txt",
-        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
-        "reassignStaticProp.ts(3,12): error TS2300: Duplicate identifier 'bar'. | ours: ==== " +
-        "reassignStaticProp.ts (2 errors) ===="
-    ),
-    TsgoPendingBaseline(
         "recursivelyExpandingUnionNoStackoverflow.errors.txt",
         "F6 top code differs (tsgo - / ours TS2589); layer `submoduleAccepted`. tsgo: ==== " +
         "recursivelyExpandingUnionNoStackoverflow.ts (1 errors) ==== | ours: " +
@@ -1641,12 +1607,6 @@ val tsgoPendingBaselines = listOf(
         "configuration. | ours: error TS5101: Option 'downlevelIteration' is deprecated and " +
         "will stop functioning in TypeScript 7.0. Specify compilerOption " +
         "'\"ignoreDeprecations\": \"6."
-    ),
-    TsgoPendingBaseline(
-        "staticModifierAlreadySeen.errors.txt",
-        "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
-        "staticModifierAlreadySeen.ts(2,12): error TS2300: Duplicate identifier 'static'. | " +
-        "ours: ==== staticModifierAlreadySeen.ts (3 errors) ===="
     ),
     TsgoPendingBaseline(
         "thisInObjectJs.js",

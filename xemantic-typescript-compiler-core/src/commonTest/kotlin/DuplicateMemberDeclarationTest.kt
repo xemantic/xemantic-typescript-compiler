@@ -262,12 +262,21 @@ class DuplicateMemberDeclarationTest {
     }
 
     @Test
-    fun `a class duplicate flags only the SECOND declaration, as pristine tsc does`() {
-        // `classWithDuplicateIdentifier` / `duplicateIdentifierComputedName`: pristine tsc
-        // reports ONE TS2300 for a class property-vs-property duplicate (tsc 7.0.2 reports
-        // two — a tsgo divergence this compiler does not chase).
+    fun `a class duplicate flags BOTH declarations, and the two messages spell the key differently`() {
+        // RE-POINTED at (LEGACY.0b) step 8. This pin used to assert ONE TS2300 "as pristine
+        // tsc does", with a comment calling the second row "a tsgo divergence this compiler
+        // does not chase" — written before the 2026-09-12 owner directive made TypeScript 7
+        // the only compatibility target. Measured on tsgo 7.0.2, our output for this exact
+        // source is now byte-identical to it, three rows including the spellings:
+        //   c.ts(1,11): TS2300: Duplicate identifier '["p"]'.
+        //   c.ts(1,30): TS2300: Duplicate identifier '["p"]'.
+        //   c.ts(1,30): TS2717: … Property '[`p`]' must be of type 'number', …
+        // The two codes deliberately disagree about the name: TS2300 carries the group's
+        // FIRST key as written and TS2717 the offending member's own.
         val d = check("class C { [\"p\"]: number = 1; [`p`]: string = \"s\"; }")
-        assert(d.count { it.code == 2300 } == 1)
+        assert(d.count { it.code == 2300 } == 2)
+        assert(d.filter { it.code == 2300 }.all { it.message == "Duplicate identifier '[\"p\"]'." })
         assert(d.count { it.code == 2717 } == 1)
+        assert(d.first { it.code == 2717 }.message.contains("Property '[`p`]'"))
     }
 }

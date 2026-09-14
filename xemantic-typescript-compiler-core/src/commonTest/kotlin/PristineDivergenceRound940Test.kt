@@ -42,8 +42,11 @@ import org.intellij.lang.annotations.Language
  *  - **(CHK.7)(i)** `symbolProperty1` / `symbolProperty3`: `var s: symbol; ({ [s]: 0,
  *    [s]() {}, get [s]() {} })` was TS1117 x2 here and silent there, because
  *    `evaluateComputedPropertyName` named a reference key by its SPELLING.
- *  - **(CHK.7)(iii)** `privateNameDuplicateField`: `class { get #foo() {…}; #foo = "foo" }`
- *    was TS2300 at BOTH declarations and is TS2300 at the FIELD alone in pristine.
+ *  - **(CHK.7)(iii)** — **SUPERSEDED at (LEGACY.0b) step 8, and the section below is
+ *    re-pointed.** `class { get #foo() {…}; #foo = "foo" }` is TS2300 at the FIELD alone
+ *    in pristine and at BOTH declarations in TypeScript 7, which the 2026-09-12 owner
+ *    directive makes the only target. Its five pins here were asserting pristine's
+ *    number, i.e. a countdown: they went red the moment the rule was implemented.
  *  - **(CHK.5)(f)** `dynamicNamesErrors` / `duplicateIdentifierComputedName` /
  *    `assignmentCompatWithEnumIndexer` / `symbolProperty21`: pristine names a missing
  *    LATE-BOUND member by the key AS WRITTEN (`'[K]'`), where we printed the value (`'p'`).
@@ -172,36 +175,42 @@ class PristineDivergenceRound940Test {
         assert(codes(check("declare const keys: any;\nvar t = { [keys.a]: 1, [keys.b]: 2 };"), 1117) == 0)
     }
 
-    // ── (CHK.7)(iii) accessor-then-property is reported at the PROPERTY only ──
+    // ── (CHK.7)(iii) accessor-then-property, RE-POINTED at (LEGACY.0b) step 8 ──
+    //
+    // These four asserted ONE TS2300 because that is pristine's answer, read off
+    // `privateNameDuplicateField`. TypeScript 7 reports at BOTH, measured on tsgo 7.0.2
+    // over all four shapes in one fixture (2 / 2 / 2 / 2). The fixtures are unchanged —
+    // only the number moved — so each still measures exactly what it was written to
+    // measure, now against the reference the project actually targets.
 
     /** `privateNameDuplicateField` lines 106-107: `get #foo` then `#foo = "foo"`. */
     @Test
-    fun `a getter followed by a field is TS2300 at the FIELD alone`() {
+    fun `a getter followed by a field is TS2300 at BOTH`() {
         val d = check("class C {\n    get p() { return \"\" }\n    p = \"foo\";\n}")
-        assert(codes(d, 2300) == 1)
+        assert(codes(d, 2300) == 2)
     }
 
     /** `privateNameDuplicateField` lines 156-157: the `set` twin. */
     @Test
-    fun `a setter followed by a field is TS2300 at the FIELD alone`() {
+    fun `a setter followed by a field is TS2300 at BOTH`() {
         val d = check("class C {\n    set p(v: string) { }\n    p = \"foo\";\n}")
-        assert(codes(d, 2300) == 1)
+        assert(codes(d, 2300) == 2)
     }
 
     /** `privateNameDuplicateField` lines 381-382: the STATIC twin. */
     @Test
-    fun `a static setter followed by a static field is TS2300 at the FIELD alone`() {
+    fun `a static setter followed by a static field is TS2300 at BOTH`() {
         val d = check("class C {\n    static set p(v: string) { }\n    static p = \"foo\";\n}")
-        assert(codes(d, 2300) == 1)
+        assert(codes(d, 2300) == 2)
     }
 
     /** The same three shapes spelled with a PRIVATE name, which is where pristine's
      *  fixture actually lives — a private identifier is an `Identifier` whose text starts
      *  with `#` in this parser, so it must reach the same scan. */
     @Test
-    fun `a private getter followed by a private field is TS2300 at the FIELD alone`() {
+    fun `a private getter followed by a private field is TS2300 at BOTH`() {
         val d = check("class C {\n    get #foo() { return \"\" }\n    #foo = \"foo\";\n}")
-        assert(codes(d, 2300) == 1)
+        assert(codes(d, 2300) == 2)
     }
 
     // POSITIVE CONTROLS — the MIRRORED order still reports both, and so do the
@@ -237,17 +246,19 @@ class PristineDivergenceRound940Test {
         assert(codes(d, 2300) == 2)
     }
 
-    /** `duplicateClassElements`' `x`: property FIRST, then a complete accessor pair — all
-     *  three flagged; and its `x2`: the pair first, then the property — the property alone.
-     *  The complete-pair arm is the one this round MERGED, so both directions are pinned. */
+    /** `duplicateClassElements`' `x` and `x2`: a property and a complete accessor pair, in
+     *  both orders. RE-POINTED at (LEGACY.0b) step 8 — the second direction asserted ONE
+     *  (pristine's answer, the order-SENSITIVE reading); tsgo reports THREE either way, so
+     *  the pair is order-INSENSITIVE and this pin now says that. Keeping both directions is
+     *  the point: it is what would catch a fix that merely moved the narrowing. */
     @Test
-    fun `a complete accessor pair keeps its order-sensitive answer`() {
+    fun `a complete accessor pair is order-INSENSITIVE - three either way`() {
         assert(codes(check(
             "class C {\n    p;\n    get p() { return 1 }\n    set p(v: number) { }\n}"
         ), 2300) == 3)
         assert(codes(check(
             "class C {\n    get p() { return 1 }\n    set p(v: number) { }\n    p;\n}"
-        ), 2300) == 1)
+        ), 2300) == 3)
     }
 
     /** A clean get/set pair with no property is not a duplicate at all. */

@@ -3447,3 +3447,23 @@ rows rather than redden anything). Ablation 2 / 98 / 6 RED, the 98 including 5 p
 in OPPOSITE directions. Grid 8×`added=0 removed=0` with a split verdict — a control for the
 display half and for F4 (no profile sets `noUnusedLocals`), a real gate for F5 and the
 elaboration. cost_gate all 20 counters +0.00%, huge_methods exit 0, warning-clean.
+
+**(P18.88) — (LEGACY.0b) STEP 3: F6 DECOMPOSED INTO EIGHT MECHANISMS, FOUR SUB-FAMILIES LANDED, THE LARGEST REFUSED ON A MEASURED BLOCKER, 19,130 / 0 / 242 (2026-09-13).**
+Pending 242 → **217** and skipped 267 → **242**, both −25. **"F6 code-differs" was a
+first-differing-LINE label for the second round running**: its 88 rows are EIGHT mechanisms,
+and the decomposition table is the round's durable output. Its largest, F6a (28 rows,
+missing-property head suppression), confirms the design's hypothesis — one decision point in
+tsgo's `reportRelationError` — and **refutes its direction**: 24 rows have tsgo reporting the
+leaf but 4 have tsgo KEEPING a head we drop. **REFUSED on a measured blocker rather than
+deferred**: that message is emitted at ~30 independent sites with no relation-error funnel,
+reaching 73 of 2,955 active baselines, so it needs an unblocker first; all 28 reasons are
+rewritten greppable as `F6a`. Landed instead: unused-local ANCHORS 10/10 (the handover said
+seven — TypeScript 7 dropped three tsc-6 special cases, and the other 15 F8 rows are a
+different emitter entirely), TS2497 deleted 7/8 (the code is referenced by no tsgo code and
+appears in none of its baselines), TS1127 spanning one character 5/6, TS8017 spanning the
+declaration 3/3. Ablation 14 arms, 13 discriminating, one recorded UNDISCRIMINATED, `@Test`
+identical in all. Grid a real gate for TS2497 alone, a control for the other three. Five
+predictions refuted, including two of the round's OWN censuses taken off a stale generated
+tree at the repo root — conclusions survived, numbers did not; the same tree had already
+misled the orchestrator this session, so it is now a documented trap. cost_gate all 20
+counters +0.00%, huge_methods exit 0, warning-clean.

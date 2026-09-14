@@ -9944,13 +9944,11 @@ class Checker(
         if (binderResults.size > 1) {
             pass("checkModuleAugmentationOfNonModuleEntity") { checkModuleAugmentationOfNonModuleEntity() }
         }
-        // 73f. Check cross-file merged-interface member conflicts (TS2300 + TS6203, or
-        //      collapsed TS6200 + TS6201 when >= 8 names conflict)
+        // 73f. Check cross-file merged-interface member conflicts (TS2300 + TS6203)
         if (binderResults.size > 1) {
             pass("checkCrossFileInterfaceMemberConflicts") { checkCrossFileInterfaceMemberConflicts() }
         }
-        // 73g. Check cross-file top-level class-vs-class conflicts (TS2300, or collapsed
-        //      TS6200 + TS6201 when >= 8 names conflict)
+        // 73g. Check cross-file top-level class-vs-class conflicts (TS2300)
         if (binderResults.size > 1) {
             pass("checkCrossFileClassConflicts") { checkCrossFileClassConflicts() }
         }
@@ -47419,8 +47417,14 @@ class Checker(
                 // late-bound sibling T3 gets TS2717 alone. TS2717 below is ungated,
                 // because that one IS the checker's re-declaration check.
                 val binderDuplicate = group.all { it.binderVisible }
+                // (LEGACY.0b) step 8: one name for the whole group, the FIRST member's
+                // written spelling — the same rule as the class walker beside it, and the
+                // same reason (tsgo hands one `symbolToString` result to every `c.error`).
+                // `duplicateStringNamedProperty1` is the baseline: `{ "artist": string;
+                // artist: string }` is `'"artist"'` at BOTH members, not `'artist'`.
+                val groupName = writtenMemberName(group[0].nameNode, group[0].display)
                 if (binderDuplicate) for (prop in group) {
-                    emitDuplicate2300(prop.display, prop.nameNode, source, fileName)
+                    emitDuplicate2300(groupName, prop.nameNode, source, fileName)
                 }
                 // TS2687: when same-named duplicate property declarations differ in their
                 // modifiers (visibility / readonly / OPTIONALITY), tsc additionally reports
@@ -47623,59 +47627,43 @@ class Checker(
             val setterCount = group.count { it.kind == "setter" }
 
             // Determine which members to flag with TS2300.
-            // TypeScript's rules (derived from test baselines):
-            // - getter + setter (complete pair) → ALLOWED
-            // - accessor(s) + property, every accessor FIRST → only flag the property
-            //   (round 940 — (CHK.7)(iii); it used to require a COMPLETE pair)
-            // - duplicate getters (2+) or setters (2+) → flag ALL in the group
-            // - method + property (method first) → only flag the property
-            // - property + method (property first) → flag ALL (both property and method)
-            // - property + property → only flag the second and subsequent properties (not the first)
-            // - method + getter/setter → flag ALL
+            //
+            // (LEGACY.0b) step 8 — TypeScript 7 reports TS2300 at EVERY declaration of the
+            // name, never at a chosen one of them. Two tsgo mechanisms produce that between
+            // them and NEITHER has a "second declaration only" case: the binder's
+            // `declareSymbol` reports at every PREVIOUS declaration plus the current one
+            // (binder.go:222), and `reportDuplicateMemberErrors` (checker.go:3199) walks
+            // EVERY member of the container whose symbol name matches.
+            //
+            // This table used to narrow three of those groups to a single member
+            // (accessors-then-property -> the property; method-then-property -> the
+            // non-methods; property-then-property -> `drop(1)`). All three were read off
+            // tsc 6, where `PropertyExcludes = None` kept a TRAILING property out of the
+            // binder's duplicate check, so only the checker's own per-class scan saw it and
+            // that one reports at the current member alone. TypeScript 7 changed
+            // `PropertyExcludes` to `Value & ~(Property | Accessor)` and the asymmetry is
+            // gone. Round 940's (CHK.7)(iii) note — the accessor-first narrowing, argued
+            // from pristine's `privateNameDuplicateField` — is superseded for the same
+            // reason: measured, tsgo reports at `get #foo` AND at `#foo = "foo"`.
+            //
+            // Only TWO shapes report nothing, and both are legal TypeScript:
+            //
+            //  * a get/set PAIR and nothing else. `checkPropertyOrAccessor` deliberately
+            //    does not report accessor-after-accessor (its `state == 2 && kind != 2`
+            //    arm) and `GetAccessorExcludes`/`SetAccessorExcludes` exempt each other.
+            //    TWO getters are NOT this case — the binder does report those.
+            //  * METHOD OVERLOADS and nothing else. `MethodExcludes = Value & ~Method`
+            //    exempts a method from a method, and a method never enters
+            //    `checkPropertyOrAccessor` at all. Two method IMPLEMENTATIONS are TS2393
+            //    from a different check, not TS2300.
+            //
+            // Measured against tsgo 7.0.2 over 25 orderings, three-member groups included.
+            val onlyAccessors = !hasProperty && !hasMethod
+            val onlyMethods = !hasProperty && !hasGetter && !hasSetter
             val membersToFlag: List<MemberInfo> = when {
-                getterCount >= 2 || setterCount >= 2 -> group // all conflict when either accessor is duplicated
-                hasMethod && (hasGetter || hasSetter) -> group // method + accessor → all
-                hasProperty && (hasGetter || hasSetter) -> {
-                    // ACCESSOR(s) + property. Round 940 — (CHK.7)(iii): the branch used to
-                    // split on whether the accessor pair was COMPLETE, and the incomplete
-                    // arm flagged the whole group. Pristine tsc does not: it flags only the
-                    // PROPERTY whenever every accessor precedes it, complete pair or not.
-                    //
-                    // Read off pristine's own baselines rather than argued:
-                    //   `privateNameDuplicateField` — `class { get #foo() {…}; #foo = "foo" }`
-                    //   and its `set` twin are TS2300 at the FIELD ONLY (lines 107 / 157 /
-                    //   382); the mirrored `#foo = "foo"; get #foo() {…}` is TS2300 at BOTH
-                    //   (17 / 18). `duplicateClassElements` — `public x; get x; set x` flags
-                    //   all three, `get x2; set x2; public x2` flags only `x2`.
-                    // The mechanism it reproduces is tsc's `PropertyExcludes = None`: a
-                    // property declared LAST never trips the binder's duplicate check, so
-                    // only the checker's own per-class scan reports it, and that one reports
-                    // at the current member alone.
-                    val propIdx = group.indexOfFirst { it.kind == "property" }
-                    val lastAccessorIdx = maxOf(
-                        group.indexOfLast { it.kind == "getter" },
-                        group.indexOfLast { it.kind == "setter" },
-                    )
-                    if (propIdx > lastAccessorIdx) {
-                        group.filter { it.kind == "property" }
-                    } else {
-                        group
-                    }
-                }
-                hasMethod && hasProperty -> {
-                    // method + property: if method comes FIRST, only flag the property;
-                    // if property comes FIRST, flag ALL
-                    val firstMember = group.first()
-                    if (firstMember.kind == "method") {
-                        group.filter { it.kind != "method" }
-                    } else {
-                        group // property first → both flagged
-                    }
-                }
-                hasProperty && group.count { it.kind == "property" } >= 2 ->
-                    // property + property: only flag the 2nd and subsequent, not the first
-                    group.drop(1)
-                else -> emptyList()
+                onlyAccessors && getterCount <= 1 && setterCount <= 1 -> emptyList()
+                onlyMethods -> emptyList()
+                else -> group
             }
 
             // Round 938 — (CHK.5)(b): TS2300 is the BINDER's duplicate check, so a
@@ -47683,14 +47671,31 @@ class Checker(
             // see [duplicateScanComputedKey]); TS2717 below is the checker's
             // re-declaration check and is deliberately NOT gated the same way.
             if (group.all { it.binderVisible }) {
+                // (LEGACY.0b) step 8: every row of a group carries the SAME name — the one
+                // tsgo renders from the SYMBOL, which is its FIRST declaration's written
+                // spelling (`reportDuplicateMemberErrors` passes one `c.symbolToString`
+                // result to every `c.error`). Measured: `class { 0b11 = ''; 3 = '' }` is
+                // `'0b11'` twice, `{ 0 = 1; 0.0 = 2 }` is `'0'` twice, `{ 0.0 = 1; '0' = 2 }`
+                // is `'0.0'` twice, `{ "a": …; a: … }` is `'"a"'` twice. The SPAN stays
+                // per-member — [emitDuplicate2300] derives it from the node it is given.
+                val groupName = writtenMemberName(group[0].nameNode, group[0].displayName)
                 for (info in membersToFlag) {
-                    emitDuplicate2300(info.displayName, info.nameNode, source, fileName)
+                    emitDuplicate2300(groupName, info.nameNode, source, fileName)
                 }
             }
 
             // TS2717: Subsequent property declarations must have the same type
             // Fires when a property is subsequent to any first declaration with a different type
-            if (hasProperty && group.size >= 2) {
+            // (LEGACY.0b) step 8: NEVER when the group's first member is a METHOD. In tsgo
+            // that falls out of a binder SPLIT rather than from a kind test — a property
+            // conflicting with a method is given a fresh orphan symbol, so it IS its own
+            // `ValueDeclaration` and `checkVariableLikeDeclaration`'s secondary-declaration
+            // branch (checker.go:5927, gated `node != symbol.ValueDeclaration`) never runs.
+            // `symbolTable[name]` keeps pointing at the METHOD after that split, so a third
+            // member does not pair with the second either: `{ m(){} m: number; m: string }`
+            // is three TS2300 and ZERO TS2717 (measured). Observationally the rule is
+            // exactly "the reference declaration must not be a method".
+            if (hasProperty && group.size >= 2 && group[0].kind != "method") {
                 val firstMember = group[0]
                 val firstType = when (firstMember.kind) {
                     "property", "method" -> getMemberTypeString(firstMember.memberNode)
@@ -47962,6 +47967,28 @@ class Checker(
     private fun memberNameIsBinderVisible(name: Node): Boolean =
         name !is ComputedPropertyName || computedLiteralKey(name) != null
 
+    /**
+     * The member name AS WRITTEN, which is what TypeScript 7's TS2300 prints.
+     *
+     * It differs from the name every other consumer wants for exactly one node kind: a
+     * STRING-literal member name keeps its own quotes, and the ORIGINAL quote character
+     * (measured against tsgo 7.0.2: `"a"` renders `'"a"'` and `'b'` renders `''b''`, in
+     * a class body and an interface body alike). Everywhere else the caller's own
+     * display string is already the written one.
+     *
+     * This is deliberately NOT the member's `displayName` and must not be folded into
+     * it: TS2717 beside it prints the SYMBOL's name (`Property 'a' must be of type …`
+     * for that same `"a"` member), so the two spellings have to stay separable.
+     *
+     * `rawText` is the source content between the quotes — `StringLiteralNode.text` is
+     * the COOKED value, so using it would silently un-escape an escape-spelled name.
+     */
+    private fun writtenMemberName(nameNode: Node, display: String): String =
+        if (nameNode is StringLiteralNode) {
+            val quote = if (nameNode.singleQuote) "\u0027" else "\""
+            quote + (nameNode.rawText ?: nameNode.text) + quote
+        } else display
+
     private fun emitDuplicate2300(
         name: String,
         node: Node,
@@ -47970,6 +47997,12 @@ class Checker(
         spanLength: Int = when (node) {
             is StringLiteralNode -> node.text.length + 2 // inner text + 2 quotes
             is NumericLiteralNode -> node.text.length
+            // (LEGACY.0b) step 8: the span is a property of the NODE and the name is not.
+            // Since a duplicate group's rows all carry the FIRST member's spelling, the
+            // `name.length` fallback started squiggling `artist` for eight characters
+            // because its group is named `"artist"` — the one thing that went wrong when
+            // the two quantities were allowed to share a source.
+            is Identifier -> node.text.length
             else -> name.length
         },
     ) {
@@ -189845,14 +189878,10 @@ interface DataView {
      * file and a METHOD in another, the merged interface has a duplicate-identifier
      * conflict (property-vs-method is always a hard conflict in TypeScript).
      *
-     * TypeScript amalgamates these per ordered file-pair: when FEWER THAN 8 member
-     * names conflict, it emits per-member TS2300 "Duplicate identifier 'X'." with a
-     * related TS6203 "'X' was also declared here." pointing to the other file's
-     * member. When 8 OR MORE names conflict, it COLLAPSES to a single TS6200 per
-     * file ("Definitions of the following identifiers conflict ...: a, b, c") at the
-     * file's first non-trivia token, with a related TS6201 "Conflicts are in this
-     * file." pointing at the other file's first token. (TypeScript's threshold is
-     * `conflictingSymbols.size < 8` → per-member, else collapsed.)
+     * TypeScript 7 emits per-member TS2300 "Duplicate identifier 'X'." with a related
+     * TS6203 "'X' was also declared here." pointing to the other file's member — for
+     * EVERY conflicting name. (tsc 6 collapsed eight-or-more into one TS6200 per file;
+     * (LEGACY.0b) step 8 removed that — see [amalgamateAndEmitCrossFileDuplicates].)
      *
      * Gate is narrow (property-vs-method, cross-file, same interface name in a shared
      * scope) so the FP surface is tiny: such a pairing is always a genuine error.
@@ -189950,12 +189979,11 @@ interface DataView {
      * Shared amalgamation + emission for cross-file duplicate-identifier conflicts
      * (B92). [entries] are the conflicting declaration sites; the caller has already
      * decided they conflict. Groups by name, restricts to the common 2-distinct-file
-     * case, amalgamates per ordered file-pair, then for each pair: when FEWER THAN 8
-     * names conflict → per-member TS2300 "Duplicate identifier 'X'." + related TS6203
-     * "'X' was also declared here."; when 8 OR MORE → collapsed TS6200 "Definitions of
-     * the following identifiers conflict ...: a, b, c" at the file's first non-trivia
-     * token + related TS6201 "Conflicts are in this file." (TypeScript's threshold is
-     * `conflictingSymbols.size < 8`.)
+     * case, amalgamates per ordered file-pair, and emits per-member TS2300 "Duplicate
+     * identifier 'X'." + related TS6203 "'X' was also declared here." for every one.
+     *
+     * (LEGACY.0b) step 8 removed tsc 6's `conflictingSymbols.size < 8` threshold and the
+     * TS6200/TS6201 collapse it selected: TypeScript 7 has no such diagnostic at all.
      */
     private fun amalgamateAndEmitCrossFileDuplicates(entries: List<CrossFileDupDecl>) {
         if (entries.isEmpty()) return
@@ -189999,37 +190027,20 @@ interface DataView {
             ))
         }
 
-        fun emit6200(thisFile: String, otherFile: String, list: String) {
-            val thisSrc = fileSources[thisFile] ?: return
-            val otherSrc = fileSources[otherFile] ?: return
-            val (tStart, tLen) = firstTokenSpanOfFile(thisSrc)
-            val (oStart, oLen) = firstTokenSpanOfFile(otherSrc)
-            val (tLine, tCh) = getLineAndCharacterOfPosition(thisSrc, tStart)
-            val (oLine, oCh) = getLineAndCharacterOfPosition(otherSrc, oStart)
-            diagnostics.add(Diagnostic(
-                message = "Definitions of the following identifiers conflict with those in another file: $list",
-                category = DiagnosticCategory.Error, code = 6200,
-                fileName = thisFile, line = tLine, character = tCh, start = tStart, length = tLen,
-                relatedInformation = listOf(Diagnostic(
-                    message = "Conflicts are in this file.",
-                    category = DiagnosticCategory.Message, code = 6201,
-                    fileName = otherFile, line = oLine, character = oCh, start = oStart, length = oLen,
-                )),
-            ))
-        }
-
+        // (LEGACY.0b) step 8: ALWAYS per-identifier. tsc 6 collapsed a pair of files
+        // conflicting in EIGHT OR MORE names into one TS6200 "Definitions of the following
+        // identifiers conflict with those in another file: a, b, c" per file, plus a
+        // related TS6201 "Conflicts are in this file."; TypeScript 7 has neither
+        // diagnostic. Neither message exists anywhere in tsgo's source or in any of its
+        // baselines, and the three `duplicateIdentifierRelatedSpans` layers that carried
+        // them record their REMOVAL. So the threshold and both emitters are GONE rather
+        // than raised: there is no number at which the collapse is right.
         for ((_, pc) in amalgam) {
-            if (pc.names.size < 8) {
-                for (name in pc.names) {
-                    val firstNodes = pc.firstLocs[name] ?: emptyList()
-                    val secondNodes = pc.secondLocs[name] ?: emptyList()
-                    for (fn in firstNodes) emit2300(fn, secondNodes)
-                    for (sn in secondNodes) emit2300(sn, firstNodes)
-                }
-            } else {
-                val list = pc.names.joinToString(", ")
-                emit6200(pc.firstFile, pc.secondFile, list)
-                emit6200(pc.secondFile, pc.firstFile, list)
+            for (name in pc.names) {
+                val firstNodes = pc.firstLocs[name] ?: emptyList()
+                val secondNodes = pc.secondLocs[name] ?: emptyList()
+                for (fn in firstNodes) emit2300(fn, secondNodes)
+                for (sn in secondNodes) emit2300(sn, firstNodes)
             }
         }
     }
@@ -190038,8 +190049,8 @@ interface DataView {
      * B92d: Cross-file duplicate-identifier conflicts for top-level CLASS declarations
      * in script (non-module) files sharing the global scope. Two same-named class
      * declarations in different script files always conflict (classes never merge with
-     * classes), so this is a genuine TS2300 — collapsed to TS6200 when >= 8 names
-     * conflict (e.g. `class A..I` in two files). Restricted to script files (module
+     * classes), so this is a genuine TS2300 at every declaration. Restricted to script
+     * files (module
      * files are scoped separately) and the 2-distinct-file case to keep FP surface
      * minimal. Class-vs-interface / class-vs-namespace MERGES are unaffected (only the
      * class-vs-class pair conflicts; an interface/namespace partner does not rescue it).
@@ -190531,45 +190542,6 @@ interface DataView {
             val callee = (expr as? CallExpression)?.expression ?: expr
             (callee as? PropertyAccessExpression)?.let { handleAccess(it) }
         }
-    }
-
-    /**
-     * Span of the first non-trivia token in [source] (start position + length).
-     * Mirrors TypeScript's `getSpanOfTokenAtPosition(sourceFile, skipTrivia(text, 0))`
-     * used when a diagnostic is reported on a whole SourceFile node (e.g. TS6200).
-     * Skips whitespace, line comments (`//`, `///`) and block comments, then reads
-     * the leading identifier/keyword run (e.g. `interface`, `class`, `declare`).
-     */
-    private fun firstTokenSpanOfFile(source: String): Pair<Int, Int> {
-        var i = 0
-        val n = source.length
-        loop@ while (i < n) {
-            when (source[i]) {
-                ' ', '\t', '\r', '\n', '\u000B', '\u000C', '\u00A0', '\uFEFF' -> i++
-                '/' -> when {
-                    i + 1 < n && source[i + 1] == '/' -> {
-                        i += 2
-                        while (i < n && source[i] != '\n' && source[i] != '\r') i++
-                    }
-                    i + 1 < n && source[i + 1] == '*' -> {
-                        i += 2
-                        while (i + 1 < n && !(source[i] == '*' && source[i + 1] == '/')) i++
-                        i = (i + 2).coerceAtMost(n)
-                    }
-                    else -> break@loop
-                }
-                else -> break@loop
-            }
-        }
-        val start = i
-        if (i >= n) return start to 0
-        val c0 = source[i]
-        if (c0.isLetter() || c0 == '_' || c0 == '$') {
-            var j = i + 1
-            while (j < n && (source[j].isLetterOrDigit() || source[j] == '_' || source[j] == '$')) j++
-            return start to (j - start)
-        }
-        return start to 1
     }
 
     /**
