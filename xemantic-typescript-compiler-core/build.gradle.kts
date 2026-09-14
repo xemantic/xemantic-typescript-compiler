@@ -836,14 +836,6 @@ val tsgoPendingBaselines = listOf(
         "'IArguments' is not assignable to parameter of type '[f?: any, ...any[]]'."
     ),
     TsgoPendingBaseline(
-        "arrayCast.errors.txt",
-        "F6 top code differs (tsgo TS2353 / ours TS2352); layer `submoduleAccepted`. tsgo: " +
-        "arrayCast.ts(3,23): error TS2353: Object literal may only specify known properties, " +
-        "and 'foo' does not exist in type '{ id: number; }'. | ours: arrayCast.ts(3,23): error " +
-        "TS2352: Conversion of type '{ foo: string; }[]' to type '{ id: number; }[]' may be a " +
-        "mistake because neither type sufficient"
-    ),
-    TsgoPendingBaseline(
         "arrayIterationLibES5TargetDifferent(nolib=true,target=es2015).errors.txt",
         "F8 span/column only; layer `submoduleAccepted`. tsgo: error TS5053: Option 'lib' " +
         "cannot be specified with option 'noLib'. | ours: error TS5053: Option 'lib' cannot be " +
@@ -854,14 +846,6 @@ val tsgoPendingBaselines = listOf(
         "F8 span/column only; layer `submoduleAccepted`. tsgo: error TS5053: Option 'lib' " +
         "cannot be specified with option 'noLib'. | ours: error TS5053: Option 'lib' cannot be " +
         "specified with option 'noLib'."
-    ),
-    TsgoPendingBaseline(
-        "assigningFromObjectToAnythingElse.errors.txt",
-        "F6 top code differs (tsgo TS2322 / ours TS2696); layer `submoduleAccepted`. tsgo: " +
-        "assigningFromObjectToAnythingElse.ts(3,1): error TS2322: Type 'Object' is not " +
-        "assignable to type 'RegExp'. | ours: assigningFromObjectToAnythingElse.ts(3,1): error " +
-        "TS2696: The 'Object' type is assignable to very few other types. Did you mean to use " +
-        "the 'any' type i"
     ),
     TsgoPendingBaseline(
         "asyncArrowInClassES5(target=es2015).js",
@@ -906,13 +890,6 @@ val tsgoPendingBaselines = listOf(
         "tsgo: index.js(7,14): error TS2339: Property 'justProp' does not exist on type " +
         "'YaddaBase'. | ours: index.js(26,22): error TS2855: Class field 'justProp' defined by " +
         "the parent class is not accessible in the child class via super."
-    ),
-    TsgoPendingBaseline(
-        "commonMissingSemicolons.errors.txt",
-        "F6 top code differs (tsgo TS2552 / ours TS2304); layer `submoduleAccepted`. tsgo: " +
-        "commonMissingSemicolons.ts(16,8): error TS2552: Cannot find name 'myConst3'. Did you " +
-        "mean 'myConst1'? | ours: commonMissingSemicolons.ts(16,8): error TS2304: Cannot find " +
-        "name 'myConst3'."
     ),
     TsgoPendingBaseline(
         "commonjsAccessExports.errors.txt",
@@ -1024,14 +1001,6 @@ val tsgoPendingBaselines = listOf(
         "cannot be found. | ours: ==== file.ts (0 errors) ===="
     ),
     TsgoPendingBaseline(
-        "excessPropertyCheckWithUnions.errors.txt",
-        "F6 top code differs (tsgo TS2353 / ours TS2322); layer `submoduleAccepted`. tsgo: " +
-        "excessPropertyCheckWithUnions.ts(64,9): error TS2353: Object literal may only specify " +
-        "known properties, and 'b' does not exist in type 'AN'. | ours: " +
-        "excessPropertyCheckWithUnions.ts(64,9): error TS2322: Type '{ kind: \"A\"; n: { a: " +
-        "string; b: string; }; }' is not assignable to type 'AB'."
-    ),
-    TsgoPendingBaseline(
         "expandoFunctionNestedAssigments.errors.txt",
         "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submodule`. tsgo: " +
         "expandoFunctionNestedAssigments.ts(7,23): error TS2339: Property 'inNestedFunction' " +
@@ -1105,13 +1074,6 @@ val tsgoPendingBaselines = listOf(
         "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
         "TS2751 incorrectRecursiveMappedTypeConstraint.ts:3:10: Circularity originates in type " +
         "at this location. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "intTypeCheck.errors.txt",
-        "F6 top code differs (tsgo TS2322 / ours TS2696); layer `submoduleAccepted`. tsgo: " +
-        "intTypeCheck.ts(99,5): error TS2322: Type 'Object' is not assignable to type 'i1'. | " +
-        "ours: intTypeCheck.ts(99,5): error TS2696: The 'Object' type is assignable to very few " +
-        "other types. Did you mean to use the 'any' type instead?"
     ),
     TsgoPendingBaseline(
         "interfaceMergeWithNonGenericTypeArguments.errors.txt",
@@ -1251,13 +1213,6 @@ val tsgoPendingBaselines = listOf(
         "F6 top code differs (tsgo TS1003 / ours TS2451); layer `submodule`. tsgo: " +
         "export.js(4,5): error TS1003: Identifier expected. | ours: export.js(1,13): error " +
         "TS2451: Cannot redeclare block-scoped variable 'foo'."
-    ),
-    TsgoPendingBaseline(
-        "maximum10SpellingSuggestions.errors.txt",
-        "F6 top code differs (tsgo TS2552 / ours TS2304); layer `submoduleAccepted`. tsgo: " +
-        "maximum10SpellingSuggestions.ts(5,1): error TS2552: Cannot find name 'bob'. Did you " +
-        "mean 'blob'? | ours: maximum10SpellingSuggestions.ts(5,1): error TS2304: Cannot find " +
-        "name 'bob'."
     ),
     TsgoPendingBaseline(
         "methodSignatureHandledDeclarationKindForSymbol.errors.txt",
@@ -1449,31 +1404,6 @@ val tsgoPendingBaselines = listOf(
         "F6 top code differs (tsgo TS2339 / ours TS6133); layer `submodule`. tsgo: /a.js(2,3): " +
         "error TS6205: All type parameters are unused. | ours: /a.js(3,4): error TS6133: 'V' is " +
         "declared but its value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedVariablesWithUnderscoreInBindingElement.errors.txt",
-        "F6b unused-local GROUPING ((LEGACY.0b) step 3 diagnosis, NOT the ANCHOR half it landed): " +
-        "TypeScript 7 groups an ARRAY binding pattern into TS6198 as it does an OBJECT one and " +
-        "RECURSES into nested patterns, so one outer row replaces every inner one; an `_` element " +
-        "counts as USED unless it is an object-pattern shorthand (checker.go " +
-        "`reportUnusedBindingElements` / `isUnreferencedVariableDeclaration`). ORIGINAL: " +
-        "F6 top code differs (tsgo - / ours TS6133); layer `submoduleAccepted`. tsgo: " +
-        "unusedVariablesWithUnderscoreInBindingElement.ts(14,11): error TS6198: All " +
-        "destructured elements are unused. | ours: " +
-        "unusedVariablesWithUnderscoreInBindingElement.ts(14,12): error TS6133: 'a3' is " +
-        "declared but its value is never read."
-    ),
-    TsgoPendingBaseline(
-        "unusedVariablesWithUnderscoreInForOfLoop.errors.txt",
-        "F6b unused-local GROUPING ((LEGACY.0b) step 3 diagnosis, NOT the ANCHOR half it landed): " +
-        "TypeScript 7 groups an ARRAY binding pattern into TS6198 as it does an OBJECT one and " +
-        "RECURSES into nested patterns, so one outer row replaces every inner one; an `_` element " +
-        "counts as USED unless it is an object-pattern shorthand (checker.go " +
-        "`reportUnusedBindingElements` / `isUnreferencedVariableDeclaration`). ORIGINAL: " +
-        "F6 top code differs (tsgo TS6198 / ours TS6133); layer `submoduleAccepted`. tsgo: " +
-        "unusedVariablesWithUnderscoreInForOfLoop.ts(19,16): error TS6198: All destructured " +
-        "elements are unused. | ours: unusedVariablesWithUnderscoreInForOfLoop.ts(19,17): error " +
-        "TS6133: 'a' is declared but its value is never read."
     ),
 )
 

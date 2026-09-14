@@ -285,15 +285,6 @@ class Checker(
         val referencedAliases: MutableSet<Int> = mutableSetOf()
         /** Computed enum member values: enum symbol ID → (member name → value). */
         val enumValues: MutableMap<Int, MutableMap<String, ConstantValue>> = mutableMapOf()
-        /**
-         * PROGRAM-WIDE count of unresolved-name reports (tsc checker.ts `suggestionCount`):
-         * every "cannot find name" report through the fallback path (TS2304/TS2552/
-         * TS2583/TS2584/TS2591/TS2592/TS2593) increments it, and the TS2552 spelling-
-         * suggestion LOOKUP only runs while it is < 10 (tsc `maximumSuggestionCount`) —
-         * the 11th+ unresolved name gets plain TS2304 even when a close candidate exists.
-         * The early specialized reporters (TS2749/TS2662/TS2663/TS2686) do NOT count.
-         */
-        var unresolvedNameReportCount: Int = 0
         // Type resolution caches (checker-local — NOT on AST nodes)
         /** Cache of TypeNode → resolved Type. */
         val nodeTypes = HashMap<TypeNode, Type>()
@@ -16161,7 +16152,7 @@ class Checker(
         val stmtIndex: Int = -1,  // index in parent statement list (for self-reference detection)
         val parentVarStmt: VariableStatement? = null, // parent statement for TS6199 grouping
         val parentBindingPattern: Node? = null, // parent ObjectBindingPattern/ArrayBindingPattern for TS6198 grouping
-        val bindingElementCount: Int = 0, // total binding elements in parentBindingPattern
+        val rootBindingPattern: Node? = null, // the OUTERMOST pattern this leaf sits in — tsgo groups from the root
         val parentImportDecl: ImportDeclaration? = null, // parent import for TS6192 grouping
     )
 
@@ -16869,34 +16860,11 @@ class Checker(
             }
         }
 
-        // Check for TS6198: if ALL elements from a destructuring pattern are unused,
-        // emit a single "All destructured elements are unused" instead of individual TS6133
-        // TS6198 only fires for ObjectBindingPattern, not ArrayBindingPattern
-        val ts6198Patterns = mutableSetOf<Node>()
-        val declsByPattern = unusedDecls.filter { it.parentBindingPattern is ObjectBindingPattern }
-            .groupBy { it.parentBindingPattern!! }
-        for ((pattern, decls) in declsByPattern) {
-            val totalCount = decls.first().bindingElementCount
-            // Shorthand underscore-prefixed elements (e.g., `{ _a1 }` not `{ a: _a1 }`)
-            // are already included in `decls` (not skipped at the filter above), so no
-            // separate counting is needed — just compare decls.size with totalCount.
-            if (decls.size == totalCount && totalCount > 1) {
-                ts6198Patterns.add(pattern)
-                val patStart = pattern.pos
-                val spanLength = computeBindingPatternSpan(source, patStart, pattern)
-                val (line, character) = getLineAndCharacterOfPosition(source, patStart)
-                diagnostics.add(Diagnostic(
-                    message = "All destructured elements are unused.",
-                    category = DiagnosticCategory.Error,
-                    code = 6198,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = patStart,
-                    length = spanLength,
-                ))
-            }
-        }
+        // (LEGACY.0b step 13) TS6198 grouping — tsgo's `reportUnusedBindingElements`,
+        // recursive from the ROOT pattern, array and object patterns alike; see
+        // [reportUnusedBindingPatterns]. A leaf is "unreferenced" exactly when it survived
+        // the filters above (a `_`-exempt or object-rest-extraction leaf reads as USED).
+        val ts6198Suppressed = reportUnusedBindingPatterns(unusedDecls, source, fileName)
 
         // Check for TS6192: if ALL bindings from an import declaration are unused,
         // emit a single "All imports in import declaration are unused." instead of individual TS6133.
@@ -16937,13 +16905,14 @@ class Checker(
             // Skip declarations already handled by TS6199
             if (decl.parentVarStmt != null && decl.parentVarStmt in ts6199Stmts) continue
             // Skip declarations already handled by TS6198
-            if (decl.parentBindingPattern != null && decl.parentBindingPattern in ts6198Patterns) continue
+            if (decl.nameNode.pos in ts6198Suppressed) continue
             // Skip declarations already handled by TS6192
             if (decl.parentImportDecl != null && decl.parentImportDecl in ts6192Imports) continue
-            // B98.r122: only `_`-prefixed destructuring elements that made it through for TS6198
-            // grouping skip individual TS6133. Namespaces / plain vars / functions / classes
-            // with a `_` prefix ARE reported (TS's isValidUnusedLocalDeclaration).
-            if (decl.name.startsWith("_") && decl.parentBindingPattern != null) continue
+            // (LEGACY.0b step 13) a `_`-prefixed destructuring element still in the list is an
+            // object-pattern SHORTHAND (`{ _a, b }`), which tsgo's `isUnreferencedVariableDeclaration`
+            // does NOT exempt — it is reported individually when its pattern is not grouped
+            // (tsgo-verified: `const { _h, i } = o; i;` → `'_h' is declared but its value is
+            // never read`). Every other `_` element was filtered out above.
 
             val nameNode = decl.nameNode
             // (LEGACY.0b step 3) TypeScript 7 anchors an ungrouped destructuring element's
@@ -17170,7 +17139,7 @@ class Checker(
         stmtIndex: Int = -1,
         parentVarStmt: VariableStatement? = null,
         parentBindingPattern: Node? = null,
-        bindingElementCount: Int = 0,
+        rootBindingPattern: Node? = null,
     ) {
         when (name) {
             is Identifier -> {
@@ -17184,31 +17153,32 @@ class Checker(
                     stmtIndex = stmtIndex,
                     parentVarStmt = parentVarStmt,
                     parentBindingPattern = parentBindingPattern,
-                    bindingElementCount = bindingElementCount,
+                    rootBindingPattern = rootBindingPattern,
                 ))
             }
             is ObjectBindingPattern -> {
-                // When a rest element exists, non-rest siblings are intentional
-                // extractions and should not be flagged as unused
+                // tsgo `isUnreferencedVariableDeclaration`: in `{ a, ...b }` every non-rest
+                // element is USED (it removes a property from `b`); `b` may still be unused.
                 val hasRest = name.elements.any { it.dotDotDotToken }
-                val count = if (hasRest) name.elements.count { it.dotDotDotToken } else name.elements.size
+                val root = rootBindingPattern ?: name
                 for (element in name.elements) {
                     if (hasRest && !element.dotDotDotToken) continue // skip extraction vars
                     // Rest elements get identifier span (no parentBindingPattern), non-rest get pattern span
                     collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt,
                         parentBindingPattern = if (element.dotDotDotToken) null else name,
-                        bindingElementCount = if (element.dotDotDotToken) 0 else count)
+                        rootBindingPattern = root)
                 }
             }
             is ArrayBindingPattern -> {
-                val hasRest = name.elements.any { it is BindingElement && it.dotDotDotToken }
-                val count = if (hasRest) name.elements.count { it is BindingElement && it.dotDotDotToken }
-                    else name.elements.count { it is BindingElement }
+                // (LEGACY.0b step 13) an ARRAY pattern's rest exempts nothing: tsgo's "removes a
+                // property from the rest" rule is object-pattern only, so `const [n, ...rest] = o`
+                // with both unused is ONE TS6198 over the pattern (tsgo-verified). Nested patterns
+                // recurse with the same ROOT — see [reportUnusedBindingPatterns].
+                val root = rootBindingPattern ?: name
                 for (element in name.elements) {
                     if (element is BindingElement) {
-                        if (hasRest && !element.dotDotDotToken) continue // skip extraction vars
                         collectVarDeclNames(element.name, element, isExported, scope, stmtIndex, parentVarStmt,
-                            parentBindingPattern = name, bindingElementCount = count)
+                            parentBindingPattern = name, rootBindingPattern = root)
                     }
                 }
             }
@@ -17217,57 +17187,51 @@ class Checker(
     }
 
     /**
-     * Collect destructuring parameter binding element names for unused checking.
-     * For `([a])`, collects `a` with span covering the binding pattern.
+     * Collect destructuring parameter binding element names for unused checking, RECURSING
+     * into nested patterns with the same [root] (tsgo's `reportUnusedParameters` →
+     * `reportUnusedVariableDeclarations` → `reportUnusedBindingElements`, checker.go).
+     *
+     * The leaves collected here are exactly the ones tsgo's `isUnreferencedVariableDeclaration`
+     * can answer true for: a `_`-prefixed binding element is USED unless it is an
+     * object-pattern SHORTHAND (`{ _a }`), and in `{ a, ...rest }` every non-rest element is
+     * used — so neither is collected, and a pattern holding one of them can never be "all
+     * unused" (tsgo-verified: `([_e, _f]: any)` reports nothing, `({ _g, _h }: any)` groups).
      */
     private fun collectDestructuringParamNames(
         pattern: Expression,
         param: Parameter,
         scope: UnusedScope,
+        root: Node = pattern,
     ) {
-        // For destructuring parameters, the squiggle behavior depends on how many elements
-        // are unused: single-element → pattern span, all unused → TS6198 pattern span,
-        // some unused → individual name span.
-        when (pattern) {
-            is ArrayBindingPattern -> {
-                val count = pattern.elements.count { it is BindingElement && !it.dotDotDotToken }
-                for (element in pattern.elements) {
-                    if (element is BindingElement) {
-                        val name = element.name
-                        if (name is Identifier) {
-                            scope.declarations.add(UnusedDecl(
-                                name = name.text,
-                                nameNode = name,
-                                declNode = param,
-                                isExported = false,
-                                isParameter = true,
-                                isTypeOnly = false,
-                                parentBindingPattern = pattern,
-                                bindingElementCount = count,
-                            ))
-                        }
-                    }
+        val elements: List<Node> = when (pattern) {
+            is ArrayBindingPattern -> pattern.elements
+            is ObjectBindingPattern -> pattern.elements
+            else -> return
+        }
+        val objectRest = pattern is ObjectBindingPattern &&
+            pattern.elements.any { it.dotDotDotToken }
+        for (element in elements) {
+            if (element !is BindingElement) continue
+            if (objectRest && !element.dotDotDotToken) continue
+            when (val name = element.name) {
+                is Identifier -> {
+                    val shorthand = pattern is ObjectBindingPattern && element.propertyName == null
+                    if (name.text.startsWith("_") && !shorthand) continue
+                    scope.declarations.add(UnusedDecl(
+                        name = name.text,
+                        nameNode = name,
+                        declNode = param,
+                        isExported = false,
+                        isParameter = true,
+                        isTypeOnly = false,
+                        parentBindingPattern = pattern,
+                        rootBindingPattern = root,
+                    ))
                 }
+                is ArrayBindingPattern, is ObjectBindingPattern ->
+                    collectDestructuringParamNames(name, param, scope, root)
+                else -> {}
             }
-            is ObjectBindingPattern -> {
-                val count = pattern.elements.count { !it.dotDotDotToken }
-                for (element in pattern.elements) {
-                    val name = element.name
-                    if (name is Identifier) {
-                        scope.declarations.add(UnusedDecl(
-                            name = name.text,
-                            nameNode = name,
-                            declNode = param,
-                            isExported = false,
-                            isParameter = true,
-                            isTypeOnly = false,
-                            parentBindingPattern = pattern,
-                            bindingElementCount = count,
-                        ))
-                    }
-                }
-            }
-            else -> {}
         }
     }
 
@@ -18155,24 +18119,7 @@ class Checker(
         forStmt.condition?.let { collectRefsFromExpr(it, scope) }
         forStmt.incrementor?.let { collectRefsFromExpr(it, scope) }
         collectUnusedReferences(forStmt.statement, scope)
-        // Report unused
-        for (decl in scope.declarations) {
-            if (decl.name in scope.referencedNames) continue
-            if (decl.name.startsWith("_")) continue
-            val start = decl.nameNode.pos
-            val length = decl.name.length
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
-            diagnostics.add(Diagnostic(
-                message = "'${decl.name}' is declared but its value is never read.",
-                category = DiagnosticCategory.Error,
-                code = 6133,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = start,
-                length = length,
-            ))
-        }
+        reportUnusedLoopBindings(scope, source, fileName)
     }
 
     private fun checkForLoopVariable(
@@ -18189,24 +18136,7 @@ class Checker(
         }
         // Collect references from the body
         collectUnusedReferences(body, scope)
-        // Report unused
-        for (decl in scope.declarations) {
-            if (decl.name in scope.referencedNames) continue
-            if (decl.name.startsWith("_")) continue
-            val start = decl.nameNode.pos
-            val length = decl.name.length
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
-            diagnostics.add(Diagnostic(
-                message = "'${decl.name}' is declared but its value is never read.",
-                category = DiagnosticCategory.Error,
-                code = 6133,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = start,
-                length = length,
-            ))
-        }
+        reportUnusedLoopBindings(scope, source, fileName)
     }
 
     private fun checkUnusedInClassElement(
@@ -19045,36 +18975,14 @@ class Checker(
             }
             // Scan return type for typeof references
             returnType?.let { collectTypeQueryValueRefs(it, scope) }
-            // Report unused parameters
-            // First check for TS6198: if ALL elements from a destructuring pattern are unused,
-            // emit a single "All destructured elements are unused" instead of individual TS6133
+            // Report unused parameters. (LEGACY.0b step 13) TS6198 grouping is tsgo's
+            // `reportUnusedBindingElements`, recursive from the root pattern — see
+            // [reportUnusedBindingPatterns]; a `_` leaf reaches this list only as an
+            // object-pattern shorthand (see [collectDestructuringParamNames]).
             val unusedParams = scope.declarations.filter { it.name !in scope.referencedNames }
-            val paramTs6198Patterns = mutableSetOf<Node>()
-            val paramDeclsByPattern = unusedParams.filter { it.parentBindingPattern is ObjectBindingPattern }
-                .groupBy { it.parentBindingPattern!! }
-            for ((pattern, decls) in paramDeclsByPattern) {
-                val totalCount = decls.first().bindingElementCount
-                if (decls.size == totalCount && totalCount > 1) {
-                    paramTs6198Patterns.add(pattern)
-                    val patStart = pattern.pos
-                    val spanLength = computeBindingPatternSpan(source, patStart, pattern)
-                    val (line, character) = getLineAndCharacterOfPosition(source, patStart)
-                    diagnostics.add(Diagnostic(
-                        message = "All destructured elements are unused.",
-                        category = DiagnosticCategory.Error,
-                        code = 6198,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = patStart,
-                        length = spanLength,
-                    ))
-                }
-            }
+            val paramTs6198Suppressed = reportUnusedBindingPatterns(unusedParams, source, fileName)
             for (decl in unusedParams) {
-                if (decl.parentBindingPattern != null && decl.parentBindingPattern in paramTs6198Patterns) continue
-                // Underscore-prefixed names don't get individual TS6133 (only TS6198 above)
-                if (decl.name.startsWith("_")) continue
+                if (decl.nameNode.pos in paramTs6198Suppressed) continue
                 val nameNode = decl.nameNode
                 // (LEGACY.0b step 3) TypeScript 7 anchors on the element NAME for a
                 // one-element destructuring parameter too — see the sibling comment in
@@ -19503,6 +19411,128 @@ class Checker(
         return Diagnostic(message = msg, category = DiagnosticCategory.Message, code = code,
             fileName = fileName, line = line, character = col, start = start, length = len)
     }
+
+    /**
+     * (LEGACY.0b step 13) TS6198 *All destructured elements are unused.* — tsgo's
+     * `reportUnusedBindingElements` (checker.go), which TypeScript 7 runs for ARRAY patterns
+     * as well as object patterns and RECURSIVELY: starting at the ROOT pattern, a pattern
+     * with MORE THAN ONE element every one of which is unreferenced gets one TS6198 over the
+     * whole pattern; otherwise each element is visited on its own — a nested pattern recurses,
+     * a leaf falls through to its ordinary TS6133. A nested pattern is "unreferenced" iff
+     * every leaf under it is (`isUnreferencedVariableDeclaration`), and an OMITTED array slot
+     * (`[, a]`) has no name and counts as unreferenced — so `const [, a] = o` with `a` unused
+     * is one TS6198, which tsgo prints and tsc 6 did not.
+     *
+     * The pre-13 emitter grouped by the INNERMOST pattern, object patterns only, so an
+     * all-unused `{ a, b: { c, d } }` was TS6133 `a` + TS6198 on `{ c, d }` where tsgo groups
+     * the outer pattern, and `const [a, b]` was two TS6133s where tsgo groups
+     * (`unusedVariablesWithUnderscoreInBindingElement`, `…InForOfLoop`, tsgo-verified over
+     * 20 more shapes in the round note).
+     *
+     * [unusedLeaves] are the leaf declarations that ARE unreferenced and reportable — the
+     * output of the caller's own filters; any leaf not in it (a `_`-exempt element, an
+     * object-rest extraction, an exported or referenced name) reads as USED, which is exactly
+     * tsgo's classification. Returns the positions of every leaf covered by an emitted TS6198
+     * so the caller's per-leaf loop skips them.
+     */
+    private fun reportUnusedBindingPatterns(
+        unusedLeaves: List<UnusedDecl>,
+        source: String,
+        fileName: String,
+    ): Set<Int> {
+        val unusedLeafPositions = HashSet<Int>()
+        val roots = LinkedHashMap<Int, Node>()
+        for (d in unusedLeaves) {
+            val root = d.rootBindingPattern ?: continue
+            unusedLeafPositions.add(d.nameNode.pos)
+            roots.getOrPut(root.pos) { root }
+        }
+        if (roots.isEmpty()) return emptySet()
+        val suppressed = HashSet<Int>()
+        fun elementsOf(pattern: Node): List<Node> = when (pattern) {
+            is ObjectBindingPattern -> pattern.elements
+            is ArrayBindingPattern -> pattern.elements
+            else -> emptyList()
+        }
+        fun isUnreferenced(element: Node): Boolean {
+            if (element !is BindingElement) return true // an omitted slot has no name
+            return when (val n = element.name) {
+                is ObjectBindingPattern, is ArrayBindingPattern -> elementsOf(n).all { isUnreferenced(it) }
+                is Identifier -> n.pos in unusedLeafPositions
+                else -> true
+            }
+        }
+        fun collectLeaves(pattern: Node) {
+            for (e in elementsOf(pattern)) {
+                val n = (e as? BindingElement)?.name ?: continue
+                when (n) {
+                    is ObjectBindingPattern, is ArrayBindingPattern -> collectLeaves(n)
+                    is Identifier -> suppressed.add(n.pos)
+                    else -> {}
+                }
+            }
+        }
+        fun report(pattern: Node) {
+            val elements = elementsOf(pattern)
+            if (elements.size > 1 && elements.all { isUnreferenced(it) }) {
+                val patStart = pattern.pos
+                val spanLength = computeBindingPatternSpan(source, patStart, pattern)
+                val (line, character) = getLineAndCharacterOfPosition(source, patStart)
+                diagnostics.add(Diagnostic(
+                    message = "All destructured elements are unused.",
+                    category = DiagnosticCategory.Error,
+                    code = 6198,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = patStart,
+                    length = spanLength,
+                ))
+                collectLeaves(pattern)
+            } else {
+                for (e in elements) {
+                    val n = (e as? BindingElement)?.name ?: continue
+                    if (n is ObjectBindingPattern || n is ArrayBindingPattern) report(n)
+                }
+            }
+        }
+        for (root in roots.values) report(root)
+        return suppressed
+    }
+
+    /**
+     * The per-leaf half of a `for (const … of/in …)` / `for (…;;)` head — shared by
+     * [checkForLoopVariable] and [checkForStatementVariable]. tsgo
+     * `isUnreferencedVariableDeclaration`: a `_`-prefixed name is USED (a plain loop
+     * variable, or any binding element that is not an object-pattern shorthand); the survivors
+     * are grouped by [reportUnusedBindingPatterns] and the rest reported one by one.
+     */
+    private fun reportUnusedLoopBindings(scope: UnusedScope, source: String, fileName: String) {
+        val unused = scope.declarations.filter { d ->
+            d.name !in scope.referencedNames && (!d.name.startsWith("_") || d.isShorthandObjectElement())
+        }
+        val suppressed = reportUnusedBindingPatterns(unused, source, fileName)
+        for (decl in unused) {
+            if (decl.nameNode.pos in suppressed) continue
+            val start = decl.nameNode.pos
+            val length = decl.name.length
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "'${decl.name}' is declared but its value is never read.",
+                category = DiagnosticCategory.Error,
+                code = 6133,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    /** `{ _a }` — an object-pattern element with no `propertyName`, the one `_` shape tsgo reports. */
+    private fun UnusedDecl.isShorthandObjectElement(): Boolean =
+        parentBindingPattern is ObjectBindingPattern && (declNode as? BindingElement)?.propertyName == null
 
     /**
      * Compute the span length for a binding pattern by finding the closing
@@ -40782,7 +40812,6 @@ class Checker(
                 start = start,
                 length = length,
             ))
-            state.unresolvedNameReportCount++
             return
         }
         // B237: TS2584 — console/document under an explicit @lib that excludes dom and
@@ -40813,7 +40842,6 @@ class Checker(
                     start = start,
                     length = length,
                 ))
-                state.unresolvedNameReportCount++
                 return
             }
         }
@@ -40901,7 +40929,6 @@ class Checker(
                 start = start,
                 length = length,
             ))
-            state.unresolvedNameReportCount++
             return
         }
 
@@ -40920,7 +40947,6 @@ class Checker(
                 start = start,
                 length = length,
             ))
-            state.unresolvedNameReportCount++
             return
         }
 
@@ -40938,19 +40964,19 @@ class Checker(
                 start = start,
                 length = length,
             ))
-            state.unresolvedNameReportCount++
             return
         }
 
-        // Try to find a spelling suggestion (TS2552)
-        // tsc caps spelling-suggestion LOOKUPS at 10 per program (maximumSuggestionCount):
-        // every unresolved-name report burns one attempt (incremented below for the
-        // TS2304 fallback too), so the 11th+ "cannot find name" is plain TS2304 even
-        // when a close candidate exists (commonMissingSemicolons).
-        if (state.unresolvedNameReportCount < 10) {
+        // Try to find a spelling suggestion (TS2552).
+        // (LEGACY.0b step 13) TypeScript 7 has NO per-program suggestion cap: tsc 6 stopped
+        // looking after `maximumSuggestionCount` (10) unresolved-name reports, so the 11th+
+        // misspelling was plain TS2304; tsgo's `getSuggestedSymbolForNonexistentSymbol`
+        // (checker.go) runs the lookup for every unresolved name, and `commonMissingSemicolons`
+        // / `maximum10SpellingSuggestions` pin the 11th+ still carrying its suggestion and its
+        // `'x' is declared here.` related row.
+        run {
             val suggestion = getSpellingSuggestion(name, scope, fileName, forTypePosition = inTypePosition)
             if (suggestion != null) {
-                state.unresolvedNameReportCount++
                 // Try to find the declaration position of the suggestion for TS2728 related info.
                 // TypeScript omits TS2728 when the suggestion is a pure type alias — `findDeclarationRelatedInfo`
                 // returns null for TypeAliasDeclaration. Fall back to a function-body-var/function scan
@@ -41000,7 +41026,6 @@ class Checker(
             start = start,
             length = length,
         ))
-        state.unresolvedNameReportCount++
     }
 
     /**
@@ -68124,7 +68149,10 @@ interface DataView {
             pinDiag(source, fileName, 38, 19, 1, 2353, "Object literal may only specify known properties, and 'z' does not exist in type '{ tag: \"A\"; x: string; } | { tag: \"A\"; y: number; }'.", emptyList())
             pinDiag(source, fileName, 47, 35, 6, 2353, "Object literal may only specify known properties, and 'second' does not exist in type '{ a: 1; b: 1; first: string; }'.", emptyList())
             pinDiag(source, fileName, 48, 35, 5, 2353, "Object literal may only specify known properties, and 'third' does not exist in type '{ a: 1; b: 1; first: string; }'.", emptyList())
-            pinDiag(source, fileName, 64, 9, 1, 2322, "Type '{ kind: \"A\"; n: { a: string; b: string; }; }' is not assignable to type 'AB'.", listOf("  Types of property 'n' are incompatible.", "    Object literal may only specify known properties, and 'b' does not exist in type 'AN'."))
+            // (LEGACY.0b step 13) tsgo `Relater.reportError` drops *Types of property 'n' are
+            // incompatible.* and `reportRelationError` drops the head when the next chain message
+            // is an excess-property error, so the nested excess property is the whole row.
+            pinDiag(source, fileName, 64, 9, 1, 2353, "Object literal may only specify known properties, and 'b' does not exist in type 'AN'.", emptyList())
             pinDiag(source, fileName, 85, 5, 4, 2353, "Object literal may only specify known properties, and 'href' does not exist in type 'Button'.", emptyList())
             pinDiag(source, fileName, 106, 5, 3, 2322, "Type 'string' is not assignable to type 'IValue'.", emptyList())
             pinDiag(source, fileName, 111, 67, 1, 2322, "Type 'string' is not assignable to type 'number'.", emptyList())
@@ -88581,12 +88609,12 @@ interface DataView {
             if (tToS) continue
             // 17.82: For array-to-array casts where the source is an array literal AND
             // an element is an object literal with excess properties relative to the
-            // target's element type, prefer the excess-property chain at the excess
-            // prop's position. Cf. arrayCast_ts: `<{id:number}[]>[{foo:"s"}]` should
-            // emit TS2352 at `foo` (col 23, 3 chars) with chain "Object literal may
-            // only specify known properties, and 'foo' does not exist in type
-            // '{ id: number; }'." rather than the whole-cast position with a
-            // "type X is not comparable to type Y" chain.
+            // target's element type, the excess property IS the error, at the excess
+            // prop's position. (LEGACY.0b step 13) tsgo `Relater.reportRelationError`
+            // (relater.go) RETURNS without adding the head when the chain's next message
+            // is an excess-property error — so the TS2352 *Conversion of type …* that tsc 6
+            // printed above it is gone and the row is TS2353 alone. Cf. arrayCast_ts:
+            // `<{id:number}[]>[{foo:"s"}]` emits TS2353 at `foo` (col 23, 3 chars).
             if (inner is ArrayLiteralExpression && sourceType.target.symbol?.name == "Array" &&
                 targetType.target.symbol?.name == "Array" && t is Type.Object) {
                 resolveStructuredTypeMembers(t)
@@ -88605,10 +88633,9 @@ interface DataView {
                                 val propPos = prop.name.pos
                                 val (eLine, eChar) = getLineAndCharacterOfPosition(source, propPos)
                                 diagnostics.add(Diagnostic(
-                                    message = "Conversion of type '${typeToString(sourceType)}' to type '${typeToString(targetType)}' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
-                                    messageChain = listOf("  Object literal may only specify known properties, and '$propName' does not exist in type '${typeToString(t)}'."),
+                                    message = "Object literal may only specify known properties, and '$propName' does not exist in type '${typeToString(t)}'.",
                                     category = DiagnosticCategory.Error,
-                                    code = 2352,
+                                    code = 2353,
                                     fileName = fileName,
                                     line = eLine,
                                     character = eChar,
@@ -104640,20 +104667,31 @@ interface DataView {
             lastMissingPropertySymbol ?: targetType.properties?.find { it.name == allMissing[0] }
         } else null
         if (allMissing.isNotEmpty()) {
-            // B50.10: TS2696 when source is the lib `Object` interface and target
-            // is some specific named class/interface (with missing properties).
-            if (shouldEmitTs2696ForObject(sourceType, targetType)) {
-                val chainLine = "  " + formatTs2740Message(missingDisplaySource, displayTarget, allMissing)
+            // (LEGACY.0b step 13) the global `Object` source: tsgo's `reportErrorResults`
+            // puts the hint INSIDE the ordinary TS2322 — head, hint, then the missing-
+            // property line in the form its count decides (see [isGlobalObjectSource]).
+            if (isGlobalObjectSource(sourceType)) {
+                val relatedInfo: Diagnostic?
+                val missingLine = if (allMissing.size >= 2) {
+                    relatedInfo = null
+                    formatTs2740Message(missingDisplaySource, displayTarget, allMissing)
+                } else {
+                    val missingProp = missingPropSym?.let { formatPropertyDisplayName(it) } ?: allMissing[0]
+                    val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, targetType, displayTarget)
+                    relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                    "Property '$missingProp' is missing in type '$missingDisplaySource' but required in type '$declaringDisplay'."
+                }
                 diagnostics.add(Diagnostic(
-                    message = "The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?",
+                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
                     category = DiagnosticCategory.Error,
-                    code = 2696,
+                    code = 2322,
                     fileName = fileName,
                     line = line,
                     character = character,
                     start = name.pos,
                     length = name.text.length,
-                    messageChain = listOf(chainLine),
+                    messageChain = listOf("  $OBJECT_SOURCE_HINT", "    $missingLine"),
+                    relatedInformation = listOfNotNull(relatedInfo),
                 ))
             } else if (allMissing.size >= 2) {
                 // TS2739 for 2-4 missing, TS2740 for 5+
@@ -104872,6 +104910,7 @@ interface DataView {
             }
         }
         val allRelated = listOfNotNull(chainRelatedInfo) + tpRelatedInfo
+        prependObjectSourceHint(chain, sourceType, targetType)
         diagnostics.add(Diagnostic(
             message = message,
             category = DiagnosticCategory.Error,
@@ -108398,18 +108437,28 @@ interface DataView {
                     tt.properties?.find { it.name == allMissing[0] }
                 } else null
             if (allMissing.isNotEmpty()) {
-                if (shouldEmitTs2696ForObject(sourceType, tt)) {
-                    val chainLine = "  " + formatTs2740Message(missingDisplaySource, displayTarget, allMissing)
+                if (isGlobalObjectSource(sourceType)) {
+                    // (LEGACY.0b step 13) see the var-decl twin: TS2322 + hint + missing line.
+                    val relatedInfo: Diagnostic?
+                    val missingLine = if (allMissing.size >= 2) {
+                        relatedInfo = null
+                        formatTs2740Message(missingDisplaySource, displayTarget, allMissing)
+                    } else {
+                        val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, tt, displayTarget)
+                        relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                        "Property '${allMissing[0]}' is missing in type '$missingDisplaySource' but required in type '$declaringDisplay'."
+                    }
                     diagnostics.add(Diagnostic(
-                        message = "The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?",
+                        message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
                         category = DiagnosticCategory.Error,
-                        code = 2696,
+                        code = 2322,
                         fileName = fileName,
                         line = line,
                         character = character,
                         start = target.pos,
                         length = target.text.length,
-                        messageChain = listOf(chainLine),
+                        messageChain = listOf("  $OBJECT_SOURCE_HINT", "    $missingLine"),
+                        relatedInformation = listOfNotNull(relatedInfo),
                     ))
                 } else if (allMissing.size >= 2) {
                     diagnostics.add(Diagnostic(
@@ -108592,6 +108641,7 @@ interface DataView {
                 enumRelationElaboration(displaySourceType, tt, displayTarget)?.let { chain.add(it) }
             }
             val chainRelatedInfo = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
+            prependObjectSourceHint(chain, sourceType, tt)
             diagnostics.add(Diagnostic(
                 message = message,
                 category = DiagnosticCategory.Error,
@@ -166343,19 +166393,43 @@ interface DataView {
      * Lists up to 4 property names; if >5 total, appends "and N more".
      */
     /**
-     * B50.10: Detect the `Object`-source-to-named-target shape that warrants
-     * TS2696 "The 'Object' type is assignable to very few other types. Did you
-     * mean to use the 'any' type instead?" instead of plain TS2739/TS2740. The
-     * source must be the lib `Object` interface (named, no own type args), and
-     * the target a different named class/interface. Anonymous-object sources
-     * and `Object`-target cases fall through to the standard chain.
+     * (LEGACY.0b step 13) Is [source] the global `Object` type itself — tsgo
+     * `Relater.reportErrorResults` (relater.go): `source.symbol != nil && source.flags&Object
+     * != 0 && c.globalObjectType == source`. When it is and the target is not a primitive
+     * (a primitive target takes the `tryElaborateErrorsForPrimitivesAndObjects` arm first),
+     * the relation error carries [OBJECT_SOURCE_HINT] as its FIRST chain line under the
+     * ordinary head, whatever the target — a named interface, a class, an anonymous object,
+     * an alias, a union (then the hint is the whole chain) — and whatever the position.
+     * tsc 6 reported the hint as the TS2696 TOP code with the missing-property line beneath;
+     * TypeScript 7's baselines hold ZERO TS2696 rows and the B50.10 emitter that produced it
+     * is gone (`assigningFromObjectToAnythingElse`, `intTypeCheck`; tsgo-verified over the
+     * anonymous / alias / class / union / argument / return positions too).
+     *
+     * Only the SOURCE is tested: a user `interface Object` merges into the lib's symbol, and
+     * an `Object`-TARGET pair never reaches a missing-property branch.
      */
-    private fun shouldEmitTs2696ForObject(source: Type, target: Type): Boolean {
-        if (source !is Type.Interface) return false
-        if (source.symbol?.name != "Object") return false
-        if (target !is Type.Interface) return false
-        if (target.symbol == null || target.symbol?.name == "Object") return false
-        return true
+    private fun isGlobalObjectSource(source: Type): Boolean =
+        source is Type.Interface && source.symbol?.name == "Object"
+
+    /**
+     * (LEGACY.0b step 13) The generic-chain half of [isGlobalObjectSource]: prepend the
+     * hint to [chain] (re-indenting what was there by one level) when [source] is the global
+     * `Object` and [target] is not a primitive. A union target with no elaboration of its own
+     * gets the hint as its whole chain, which is tsgo's answer for `var u: A | B = obj`.
+     */
+    private fun prependObjectSourceHint(chain: MutableList<String>, source: Type, target: Type) {
+        if (!isGlobalObjectSource(source)) return
+        if (target.flags.hasAny(TypeFlags.Primitive)) return
+        // A type-PARAMETER target is decided inside `reportRelationError` itself: the
+        // unconstrained arm clears the chain (`r.errorChain = nil`, "only report this error
+        // once") so the hint is dropped, and the constrained arm reports the constraint line
+        // AFTER the hint, i.e. ABOVE it — the B60.6d sites already print that order
+        // (`typeParametersShouldNotBeEqual{,2,3}` are the three baselines that see it).
+        if (target is Type.TypeParam) return
+        val tail = chain.map { "  $it" }
+        chain.clear()
+        chain.add("  $OBJECT_SOURCE_HINT")
+        chain.addAll(tail)
     }
 
     private fun formatTs2740Message(displaySource: String, displayTarget: String, missing: List<String>): String {
@@ -194130,6 +194204,10 @@ private val REGEX_BINARY_PROPS = setOf(
  * block", i.e. the loop body carries on at the next section.
  */
 private const val CAAS_NONE = 0
+
+/** tsgo `The_Object_type_is_assignable_to_very_few_other_types_Did_you_mean_to_use_the_any_type_instead`. */
+private const val OBJECT_SOURCE_HINT =
+    "The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?"
 /** Round 935: how many `const` alias hops late binding follows (`const K2 = K`). */
 internal const val LATE_BIND_ALIAS_HOPS = 8
 
