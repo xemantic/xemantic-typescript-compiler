@@ -2644,6 +2644,15 @@ class Transformer(
                         exportedPatternDecls.all { decl ->
                             (decl.name is ObjectBindingPattern || decl.name is ArrayBindingPattern) &&
                                 decl.initializer != null &&
+                                // MEASURED REDUNDANT (step 11 ablation arm a4, 0 pins and 0
+                                // baselines): below ES2018 the object-rest downlevel has ALREADY
+                                // rewritten such a declaration into `_a = init, { x } = _a,
+                                // rest = __rest(_a, …)` before the CommonJS transform sees it, so
+                                // no declarator reaching here still carries a rest and the target
+                                // half can never decide anything. The `containsObjectRestBinding`
+                                // half IS live — refusing a rest at EVERY target reddens the
+                                // esnext pin and `exportObjectRest` (arm a4c) — and the pair is
+                                // kept as a statement of intent, not claimed as covered.
                                 (options.effectiveTarget >= ScriptTarget.ES2018 ||
                                     !containsObjectRestBinding(decl.name)) &&
                                 collectBoundNames(decl.name).none { boundName ->

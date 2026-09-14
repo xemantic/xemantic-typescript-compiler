@@ -76,6 +76,17 @@ import kotlin.test.Test
  *
  * None of the three is covered by any corpus baseline (the emit channel of
  * `scripts/corpus-screen.sh` reads 5,670 subtests and 0 mismatches across this change).
+ *
+ * ## One refusal is a RECORDED REDUNDANT GUARD, not a claim
+ *
+ * The object-rest-below-ES2018 conjunct ablates to **0 pins and 0 baselines**, and the reason
+ * is attributed rather than shrugged at: below ES2018 the object-rest downlevel has already
+ * rewritten the declaration into `_a = init, { x } = _a, rest = __rest(_a, …)` before the
+ * CommonJS transform sees it, so no declarator reaching the conversion still carries a rest —
+ * the ALL-PATTERNS gate is what refuses it there, and dropping THAT moves 41 baselines. A
+ * control arm refusing a rest at every target reddens the `esnext` pin below and
+ * `exportObjectRest`, which is what proves the expression is reached at all. The test below
+ * therefore pins the OUTCOME at `es2016` and does not claim to discriminate that conjunct.
  */
 class CommonJsExportPatternAssignmentTest {
 
