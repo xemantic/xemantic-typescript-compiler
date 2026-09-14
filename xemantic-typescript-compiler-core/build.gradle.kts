@@ -872,10 +872,6 @@ val tsgoPendingBaselines = listOf(
         "JS emit; layer `submoduleAccepted`. tsgo: //// [file3.ts] | ours: //// [file1.js]"
     ),
     TsgoPendingBaseline(
-        "augmentedTypesVar.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var x5;"
-    ),
-    TsgoPendingBaseline(
         "awaitInNonAsyncFunction.errors.txt",
         "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: !!! related " +
         "TS1356 awaitInNonAsyncFunction.ts:13:7: Did you mean to mark this function as 'async'? " +
@@ -963,10 +959,6 @@ val tsgoPendingBaselines = listOf(
         "'Sub'."
     ),
     TsgoPendingBaseline(
-        "declareModifierOnImport1.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var a = b;"
-    ),
-    TsgoPendingBaseline(
         "duplicateIdentifierRelatedSpans1.errors.txt",
         "F2-residue: the 6203-vs-6204 selection for an N-WAY CROSS-FILE duplicate. tsgo's "
             + "`addDuplicateDeclarationError` (checker.go:14158) decides leading-vs-follow-on "
@@ -1013,11 +1005,6 @@ val tsgoPendingBaselines = listOf(
         "JavaScript files. Use 'import(\"@truffle/contract\")' in a JSDoc ty | ours: " +
         "caller.js(2,8): error TS18042: 'TruffleContract' is a type and cannot be imported in " +
         "JavaScript files. Use 'import(\"@truffle/contract\").TruffleContrac"
-    ),
-    TsgoPendingBaseline(
-        "emitBOM.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: //// [emitBOM.js] | ours: emitBOM.js(1,2): " +
-        "error TS1127: Invalid character."
     ),
     TsgoPendingBaseline(
         "es6ExportEqualsInterop.errors.txt",
@@ -1081,20 +1068,10 @@ val tsgoPendingBaselines = listOf(
         "types can only be used inside documentation comments."
     ),
     TsgoPendingBaseline(
-        "gettersAndSettersErrors.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: set Goo(v) { } // error - setters must not " +
-        "specify a return type | ours: set Goo(v): string { } // error - setters must not " +
-        "specify a return type"
-    ),
-    TsgoPendingBaseline(
         "importAssertionsDeprecatedIgnored.errors.txt",
         "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer " +
         "`submoduleAccepted`. tsgo: /a.ts(2,35): error TS2880: Import assertions have been " +
         "replaced by import attributes. Use 'with' instead of 'assert'. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "importDeclWithDeclareModifier.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: export {}; | ours: export var a = x.c;"
     ),
     TsgoPendingBaseline(
         "importDeclWithExportModifierAndExportAssignment.js",
@@ -1308,30 +1285,10 @@ val tsgoPendingBaselines = listOf(
         "exists in multiple constituents and is private i"
     ),
     TsgoPendingBaseline(
-        "moduleElementsInWrongContext.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: var I = M; | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "moduleElementsInWrongContext2.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: var I = M; | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "module_augmentExistingVariable.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var console;"
-    ),
-    TsgoPendingBaseline(
         "mutuallyRecursiveCallbacks.errors.txt",
         "F7 diagnostic COUNT changed; layer `submoduleAccepted`. tsgo: Type 'Foo<unknown>' is " +
         "not assignable to type 'Bar<{}>'. | ours: Types of parameters 'bar' and 'foo' are " +
         "incompatible."
-    ),
-    TsgoPendingBaseline(
-        "nameCollisions.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: let x;"
-    ),
-    TsgoPendingBaseline(
-        "nestedGlobalNamespaceInClass.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var global;"
     ),
     TsgoPendingBaseline(
         "noParameterReassignmentIIFEAnnotated.errors.txt",
@@ -1445,10 +1402,6 @@ val tsgoPendingBaselines = listOf(
         "configuration. | ours: error TS5101: Option 'downlevelIteration' is deprecated and " +
         "will stop functioning in TypeScript 7.0. Specify compilerOption " +
         "'\"ignoreDeprecations\": \"6."
-    ),
-    TsgoPendingBaseline(
-        "thisInObjectJs.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: export {}; | ours: export {};"
     ),
     TsgoPendingBaseline(
         "tslibMissingHelper.errors.txt",

@@ -50,7 +50,7 @@ fun CompilationResult.toBaseline(casesDir: String = DEFAULT_CASES_DIR): String {
             sourceEchoes.first().second,
             jsOutputs.first().second,
             options.sourceMap, options.newLine, options.jsx, options.mapRoot, options.outFile,
-            options.inlineSourceMap, options.sourceRoot, options.emitBOM, casesDir,
+            options.inlineSourceMap, options.sourceRoot, casesDir,
         )
     }
     return formatMultiFileBaseline(
@@ -103,7 +103,6 @@ fun formatBaseline(
     outFile: String? = null,
     inlineSourceMap: Boolean = false,
     sourceRoot: String? = null,
-    emitBOM: Boolean = false,
     casesDir: String = DEFAULT_CASES_DIR,
 ): String = text {
     val baseName = fileName.substringAfterLast('/')
@@ -118,40 +117,9 @@ fun formatBaseline(
 
     sourceEcho(fileName, cleanedSource, casesDir)
     +"\r\n"
-    if (emitBOM) {
-        // tsc harness quirk for @emitBOM: the emitted js starts with a UTF-8 BOM whose
-        // bytes the harness re-reads as Latin-1 ("\u00EF\u00BB\u00BF") and re-scans —
-        // '\u00EF' is a valid identifier start, the other two are invalid characters —
-        // so the js section renders as an ERROR BASELINE of the output (two TS1127s at
-        // (1,2)/(1,3) + the ==== echo with squiggles) instead of the plain content.
-        val mojibake = "\u00EF\u00BB\u00BF"
-        val mapLine = if (sourceMap) "//# sourceMappingURL=${percentEncodeSourceMapUrl(jsName)}.map" else null
-        val bodyLines = toCRLF(javascript).trimEnd().split("\r\n") + listOfNotNull(mapLine)
-        +jsName
-        +"(1,2): error TS1127: Invalid character.\r\n"
-        +jsName
-        +"(1,3): error TS1127: Invalid character.\r\n"
-        +"\r\n\r\n"
-        +"==== "
-        +jsName
-        +" (2 errors) ====\r\n"
-        for ((i, line) in bodyLines.withIndex()) {
-            +"    "
-            if (i == 0) {
-                +mojibake
-                +line
-                +"\r\n"
-                +"     ~\r\n"
-                +"!!! error TS1127: Invalid character.\r\n"
-                +"      ~\r\n"
-                +"!!! error TS1127: Invalid character.\r\n"
-            } else {
-                +line
-                +"\r\n"
-            }
-        }
-        return@text
-    }
+    // An `@emitBOM` output is a plain content section whose body starts with the real
+    // U+FEFF the compiler prepended (tsgo's `emitBOM.js`); the pristine harness's Latin-1
+    // re-read of the mark as two TS1127s was a tsc-6 artifact, retired at (P18.97) M5.
     +"//// ["
     +jsName
     +"]\r\n"
@@ -167,7 +135,7 @@ fun formatBaseline(
             sourceTexts = listOf(cleanedSource),
             sourceFileNames = listOf(sourceFileName),
             jsFileName = jsName,
-            jsOutput = javascript,
+            jsOutput = javascript.removePrefix("\uFEFF"),
             sourceRoot = effectiveSourceRoot,
         )
     } else if (sourceMap) {

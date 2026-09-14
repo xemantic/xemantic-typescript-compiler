@@ -110,7 +110,11 @@ class Emitter(
                     // `export { <missing> }` (bigintArbirtraryIdentifier, elided at emit) do NOT count.
                     val clause = stmt.exportClause
                     if (clause is NamedExports)
-                        clause.elements.any { !it.isTypeOnly && (it.propertyName ?: it.name).emitText.isNotEmpty() }
+                        // A source-written empty `export {}` the transformer kept in place IS
+                        // the module marker ((P18.97), `thisInObjectJs`) — tsgo does not add a
+                        // second one at the end.
+                        clause.elements.isEmpty() ||
+                            clause.elements.any { !it.isTypeOnly && (it.propertyName ?: it.name).emitText.isNotEmpty() }
                     else true // `export *` or `export * as ns` always count
                 }
                 // In ES module format, `export = X` is not a valid ES module statement
@@ -1277,11 +1281,8 @@ class Emitter(
         write("(")
         emitParameters(node.parameters)
         write(")")
-        // Setters normally cannot have a return type, but emit it as-is for error recovery.
-        if (node.type != null) {
-            write(": ")
-            write(typeNodeToKeywordText(node.type))
-        }
+        // A setter's return-type annotation (TS1095) is never printed — tsgo strips it
+        // like every other type annotation ((P18.97) M4).
         if (node.body != null) {
             emitBlockBody(node.body, isFunctionBody = true)
         } else {
@@ -1289,20 +1290,6 @@ class Emitter(
             write(" { }")
         }
         writeNewLine()
-    }
-
-    /**
-     * Converts a [TypeNode] to its keyword text representation.
-     * Used for error-recovery cases where type annotations are preserved in JS emit
-     * (e.g., a setter with a return type annotation).
-     */
-    private fun typeNodeToKeywordText(typeNode: TypeNode): String = when (typeNode) {
-        is KeywordTypeNode -> KEYWORDS.entries.firstOrNull { it.value == typeNode.kind }?.key ?: "any"
-        is TypeReference -> when (val name = typeNode.typeName) {
-            is Identifier -> name.emitText
-            else -> "any"
-        }
-        else -> "any"
     }
 
     private fun emitSemicolonClassElement() {

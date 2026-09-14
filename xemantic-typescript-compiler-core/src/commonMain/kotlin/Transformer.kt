@@ -75,12 +75,154 @@ class Transformer(
     // Public entry point
     // -----------------------------------------------------------------
 
-    // Class/function names declared BEFORE the current statement (order-tracked).
-    // Used so that a namespace whose class/function was declared before it can skip var N;
-    private val declaredNames = mutableSetOf<String>()
-    // Names that already have a var declaration emitted (by a prior enum or namespace IIFE).
-    // Used so that a second enum/namespace with the same name doesn't emit var X; again.
-    private val emittedVarNames = mutableSetOf<String>()
+    /**
+     * tsgo's `currentScopeFirstDeclarationsOfName` (`runtimesyntax.go` `pushScope` /
+     * `recordDeclarationInScope` / `isFirstDeclarationInScope` / `addVarForDeclaration`;
+     * (P18.97)): per SCOPE — a SourceFile, Block, ModuleBlock or CaseBlock — the FIRST
+     * declaration recorded under each name, in source order. What is recorded: every
+     * function, class and variable-statement declarator (binding-pattern leaves included)
+     * at its visit, plus every emitted enum/namespace at its own. An enum/namespace IIFE
+     * is preceded by its `var`/`let` hoist ONLY when the enum/namespace itself is the first
+     * recorded declaration of that name in the CURRENT scope — so `var x = 1; enum x {}`
+     * and `namespace z {} var z;` differ by order alone, and a name declared in an OUTER
+     * scope never suppresses an inner scope's hoist. `null` is tsgo's nil map; compared by
+     * identity, never by the data-class `equals`.
+     */
+    private var scopeFirstDeclarations: HashMap<String, Node>? = null
+
+    /**
+     * How many declaration SCOPES enclose the current position — 0 at the SourceFile. tsgo's
+     * `varFlags = currentScope == currentSourceFile ? None : Let` (`addVarForDeclaration`):
+     * the enum/namespace hoist is `let` anywhere but the file level, including a top-level
+     * Block and a CaseBlock. A DOTTED namespace body resets the map but NOT the scope
+     * (`transformModuleBody`'s ModuleDeclaration arm), so `namespace D.E` at file level
+     * hoists `var E;` inside D's IIFE while `namespace A { namespace B.C }` hoists `let C;`.
+     */
+    private var declarationScopeDepth = 0
+
+    /**
+     * Depth of enclosing NAMESPACE bodies, tsgo's `currentNamespace != nil`: an entity-name
+     * `import I = M;` in a Block within a namespace is elided, in a plain block it prints
+     * `var I = M;` ((P18.97) M3). A function body inside a namespace body still counts.
+     */
+    private var namespaceBodyDepth = 0
+
+    /** A JavaScript source file by extension — the population tsgo's import elision never touches. */
+    private fun isJavaScriptFileName(fileName: String): Boolean =
+        fileName.endsWith(".js") || fileName.endsWith(".jsx") || fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+
+    /**
+     * Runs [body] with a fresh first-declaration map (tsgo `pushScope` for a scope KIND).
+     * [entersScope] is false for a dotted namespace body, which resets the map but stays
+     * in the enclosing scope for the hoist keyword — see [declarationScopeDepth].
+     */
+    private inline fun <T> inDeclarationScope(entersScope: Boolean = true, body: () -> T): T {
+        val saved = scopeFirstDeclarations
+        scopeFirstDeclarations = null
+        if (entersScope) declarationScopeDepth++
+        try {
+            return body()
+        } finally {
+            scopeFirstDeclarations = saved
+            if (entersScope) declarationScopeDepth--
+        }
+    }
+
+    /** tsgo `recordDeclarationInScope`: the first declaration under a name wins. */
+    private fun recordDeclarationInScope(node: Node) {
+        when (node) {
+            is VariableStatement -> {
+                for (d in node.declarationList.declarations) recordDeclarationInScope(d)
+                return
+            }
+            is ObjectBindingPattern -> {
+                for (e in node.elements) recordDeclarationInScope(e)
+                return
+            }
+            is ArrayBindingPattern -> {
+                for (e in node.elements) recordDeclarationInScope(e)
+                return
+            }
+            else -> {}
+        }
+        val name: Node? = when (node) {
+            is VariableDeclaration -> node.name
+            is BindingElement -> node.name
+            is FunctionDeclaration -> node.name
+            is ClassDeclaration -> node.name
+            is EnumDeclaration -> node.name
+            is ModuleDeclaration -> node.name
+            else -> null
+        }
+        when (name) {
+            is Identifier -> {
+                val map = scopeFirstDeclarations ?: HashMap<String, Node>().also { scopeFirstDeclarations = it }
+                if (name.text !in map) map[name.text] = node
+            }
+            is ObjectBindingPattern, is ArrayBindingPattern -> recordDeclarationInScope(name)
+            else -> {}
+        }
+    }
+
+    /**
+     * tsgo `addVarForDeclaration`'s decision for an enum/namespace: record [node] under
+     * [name] and answer whether it is the first declaration of that name in this scope —
+     * i.e. whether the `var`/`let` hoist is emitted.
+     */
+    private fun recordAndIsFirstDeclarationInScope(node: Node, name: String): Boolean {
+        recordDeclarationInScope(node)
+        return scopeFirstDeclarations?.get(name) === node
+    }
+
+    /**
+     * tsgo `pushScope`'s recording arm for a statement-list child: a function, class or
+     * variable statement is recorded at its VISIT, before it is transformed. The type
+     * eraser runs first there, so an ambient statement and a body-less overload signature
+     * are never seen and never recorded.
+     */
+    private fun recordScopeDeclarationOf(stmt: Statement) {
+        when (stmt) {
+            is FunctionDeclaration ->
+                if (ModifierFlag.Declare !in stmt.modifiers && stmt.body != null) recordDeclarationInScope(stmt)
+            is ClassDeclaration -> if (ModifierFlag.Declare !in stmt.modifiers) recordDeclarationInScope(stmt)
+            is VariableStatement -> if (ModifierFlag.Declare !in stmt.modifiers) recordDeclarationInScope(stmt)
+            else -> {}
+        }
+    }
+
+    /**
+     * tsgo's `SubtreeContainsTypeScript` for the ONE place it gates recording: its visitor
+     * early-returns on a subtree carrying no TypeScript syntax BEFORE visiting the children,
+     * and a CaseClause is the only non-scope parent between a scope (the CaseBlock) and a
+     * statement it would record. So `case 1: var h;` records nothing and a later `enum h`
+     * in the same switch is first (`let h;` is emitted), while `case 2: var h; enum h {}`
+     * records `h`. A conservative transcription over the node kinds the parser keeps.
+     */
+    private fun subtreeContainsTypeScript(root: Node): Boolean {
+        var found = false
+        fun visit(n: Node) {
+            if (found) return
+            found = when (n) {
+                is TypeNode, is TypeParameter, is Decorator,
+                is EnumDeclaration, is ModuleDeclaration, is ImportEqualsDeclaration,
+                is InterfaceDeclaration, is TypeAliasDeclaration,
+                is AsExpression, is SatisfiesExpression, is NonNullExpression, is TypeAssertionExpression -> true
+                is Parameter -> n.questionToken || n.modifiers.isNotEmpty()
+                is VariableDeclaration -> n.exclamationToken
+                is VariableStatement -> ModifierFlag.Declare in n.modifiers
+                is PropertyDeclaration -> n.questionToken || n.exclamationToken || n.modifiers.any { it in TS_ONLY_MODIFIERS }
+                is MethodDeclaration -> n.questionToken || n.modifiers.any { it in TS_ONLY_MODIFIERS }
+                is GetAccessor -> n.modifiers.any { it in TS_ONLY_MODIFIERS }
+                is SetAccessor -> n.modifiers.any { it in TS_ONLY_MODIFIERS }
+                is ClassDeclaration -> n.modifiers.any { it in TS_ONLY_MODIFIERS }
+                is FunctionDeclaration -> n.body == null || n.modifiers.any { it in TS_ONLY_MODIFIERS }
+                else -> false
+            }
+            if (!found) forEachChild(n, ::visit)
+        }
+        visit(root)
+        return found
+    }
 
     // Source text of the file being transformed (set at the start of transform()).
     // Used in orphanedComments() to detect blank-line-separated comments.
@@ -508,6 +650,9 @@ class Transformer(
         hasSeenAnyTopLevelStatement = false
         functionScopeDepth = 0
         blockScopeDepth = 0
+        scopeFirstDeclarations = null
+        declarationScopeDepth = 0
+        namespaceBodyDepth = 0
         inAsyncBody = false
         inAsyncGeneratorBody = false
         needsAwaiterHelper = false
@@ -6282,6 +6427,7 @@ class Transformer(
         statements: List<Statement>,
         atTopLevel: Boolean = false,
         isFunctionScope: Boolean = false,
+        recordDeclarations: Boolean = true,
     ): List<Statement> {
         val scopeVars = if (isFunctionScope || atTopLevel) {
             mutableListOf<String>().also { hoistedVarScopes.add(it) }
@@ -6293,6 +6439,10 @@ class Transformer(
 
         val result = mutableListOf<Statement>()
         for (stmt in statements) {
+            // (P18.97) M1: tsgo records a function/class/variable statement in the current
+            // declaration scope at its visit — BEFORE it is transformed — so a later
+            // enum/namespace of the same name in this scope emits no `var` hoist.
+            if (recordDeclarations) recordScopeDeclarationOf(stmt)
             val transformed = transformStatement(stmt)
             result.addAll(transformed)
             // At top level: once we see runtime output, stop preserving orphaned comments.
@@ -6301,16 +6451,6 @@ class Transformer(
             }
             // Track that we've processed at least one top-level statement (even erased ones).
             if (atTopLevel) hasSeenAnyTopLevelStatement = true
-            // Track class/function names in declaration order.
-            // This allows namespace/module IIFEs to skip var N; when a class or
-            // function with the same name was declared BEFORE the namespace.
-            if (stmt is Declaration && !hasDeclareModifier(stmt)) {
-                when (stmt) {
-                    is ClassDeclaration -> stmt.name?.text?.let { declaredNames.add(it) }
-                    is FunctionDeclaration -> stmt.name?.text?.let { declaredNames.add(it) }
-                    else -> {}
-                }
-            }
         }
 
         // Pop private field hoist scope and prepend collected WeakMap var declarations at the top.
@@ -6428,10 +6568,10 @@ class Transformer(
      * Transforms a single statement, potentially producing 0, 1, or many output statements.
      */
     private fun transformStatement(statement: Statement): List<Statement> {
-        // Declarations with `declare` modifier produce no output.
-        // Exception: ImportEqualsDeclaration is handled by transformImportEqualsDeclaration
-        // which decides whether to emit it (e.g. `declare export import a = X.Y` still emits).
-        if (statement is Declaration && hasDeclareModifier(statement) && statement !is ImportEqualsDeclaration) {
+        // Declarations with `declare` modifier produce no output — ImportEqualsDeclaration
+        // included: tsgo's type eraser drops every ambient statement (`typeeraser.go`), so
+        // `declare import a = b;` and `declare export import a = x.c;` emit nothing ((P18.97) M2).
+        if (statement is Declaration && hasDeclareModifier(statement)) {
             return orphanedComments(statement)
         }
 
@@ -6511,7 +6651,10 @@ class Transformer(
             // --- Control flow: recurse into children ---
             is Block -> {
                 blockScopeDepth++
-                val result = listOf(statement.copy(statements = transformStatements(statement.statements)))
+                // A Block is a declaration scope of its own (tsgo `pushScope`, KindBlock).
+                val result = inDeclarationScope {
+                    listOf(statement.copy(statements = transformStatements(statement.statements)))
+                }
                 blockScopeDepth--
                 result
             }
@@ -6595,7 +6738,7 @@ class Transformer(
         is ModuleDeclaration -> ModifierFlag.Declare in statement.modifiers
         is VariableDeclaration -> false // handled via VariableStatement
         is ImportDeclaration -> false
-        is ImportEqualsDeclaration -> false
+        is ImportEqualsDeclaration -> ModifierFlag.Declare in statement.modifiers
         is ExportDeclaration -> false
         is ExportAssignment -> false
     }
@@ -9388,7 +9531,10 @@ class Transformer(
             collectConstEnumValues(block.statements, savedEntries = saved)
             saved
         } else null
-        val result = block.copy(statements = transformStatements(block.statements, isFunctionScope = isFunctionScope))
+        // A function body / try block is a declaration scope of its own (tsgo `pushScope`, KindBlock).
+        val result = inDeclarationScope {
+            block.copy(statements = transformStatements(block.statements, isFunctionScope = isFunctionScope))
+        }
         // Restore overridden const enum entries from outer scope
         if (savedConstEnumEntries != null) {
             for ((name, oldValue) in savedConstEnumEntries) {
@@ -9686,23 +9832,33 @@ class Transformer(
     }
 
     private fun transformSwitchStatement(stmt: SwitchStatement): Statement {
-        return stmt.copy(
-            expression = transformExpression(stmt.expression),
-            caseBlock = stmt.caseBlock.map { clause ->
+        val expression = transformExpression(stmt.expression)
+        // The CaseBlock is ONE declaration scope for every clause (tsgo `pushScope`,
+        // KindCaseBlock); a clause's statements are recorded only when the clause carries
+        // TypeScript syntax, see [subtreeContainsTypeScript].
+        val caseBlock = inDeclarationScope {
+            stmt.caseBlock.map { clause ->
                 when (clause) {
                     is CaseClause -> clause.copy(
                         expression = transformExpression(clause.expression),
-                        statements = transformStatements(clause.statements),
+                        statements = transformStatements(
+                            clause.statements,
+                            recordDeclarations = subtreeContainsTypeScript(clause),
+                        ),
                     )
 
                     is DefaultClause -> clause.copy(
-                        statements = transformStatements(clause.statements),
+                        statements = transformStatements(
+                            clause.statements,
+                            recordDeclarations = subtreeContainsTypeScript(clause),
+                        ),
                     )
 
                     else -> clause
                 }
             }
-        )
+        }
+        return stmt.copy(expression = expression, caseBlock = caseBlock)
     }
 
     private fun transformTryStatement(stmt: TryStatement): Statement {
@@ -9772,44 +9928,62 @@ class Transformer(
         // The `priorTypeNamesInFile` walks the current source file's top-level statements
         // looking for matching TypeAlias/InterfaceDeclaration names.
         val aliasName = decl.name.text
-        val isDeclareForShadow = ModifierFlag.Declare in decl.modifiers
-        if (!isDeclareForShadow) {
-            val shadowedByTypeAlias = topLevelStatements.any { other ->
-                when (other) {
-                    is TypeAliasDeclaration -> other.name.text == aliasName
-                    is InterfaceDeclaration -> other.name.text == aliasName
-                    else -> false
-                }
+        val shadowedByTypeAlias = topLevelStatements.any { other ->
+            when (other) {
+                is TypeAliasDeclaration -> other.name.text == aliasName
+                is InterfaceDeclaration -> other.name.text == aliasName
+                else -> false
             }
-            if (shadowedByTypeAlias) return emptyList()
         }
+        if (shadowedByTypeAlias) return emptyList()
 
         val ref = decl.moduleReference
         val isRequire = ref is ExternalModuleReference
 
-        // When inside a nested block or function scope, ImportEqualsDeclaration is a parse error.
-        // TypeScript's error-recovery behavior:
-        // - require() form: keep verbatim (e.g. `import I2 = require("foo")` stays as-is)
-        // - namespace alias form: erase (e.g. `import I = M` is dropped)
+        // Inside a nested block or function body an ImportEqualsDeclaration is a parse
+        // error; tsgo's recovery (`runtimesyntax.go` visit, the ImportEqualsDeclaration arms):
+        // - require() form: keep verbatim (`import I2 = require("foo")` stays as-is);
+        // - entity-name form in a Block WITHIN A NAMESPACE: elided;
+        // - entity-name form in a plain block (a top-level block, a function body):
+        //   `visitImportEqualsDeclaration` — `var I = M;`, unconditionally ((P18.97) M3).
         if (blockScopeDepth > 0 || functionScopeDepth > 0) {
-            return if (isRequire) listOf(decl) else emptyList()
+            if (isRequire) return listOf(decl)
+            if (namespaceBodyDepth > 0) return emptyList()
+            val blockInitializer: Expression = when (ref) {
+                is Expression -> transformExpression(ref)
+                is QualifiedName -> qualifiedNameToPropertyAccess(ref)
+                else -> syntheticId(decl.name.text)
+            }
+            return listOf(
+                VariableStatement(
+                    declarationList = VariableDeclarationList(
+                        declarations = listOf(
+                            VariableDeclaration(name = decl.name, initializer = blockInitializer, pos = -1, end = -1)
+                        ),
+                        flags = VarKeyword,
+                        pos = -1, end = -1,
+                    ),
+                    modifiers = if (ModifierFlag.Export in decl.modifiers) setOf(ModifierFlag.Export) else emptySet(),
+                    pos = decl.pos, end = decl.end,
+                    leadingComments = decl.leadingComments,
+                    trailingComments = decl.trailingComments,
+                )
+            )
         }
 
         val isExported = ModifierFlag.Export in decl.modifiers
-        val isDeclare = ModifierFlag.Declare in decl.modifiers
         // Erase import aliases that resolve to type-only names (interfaces, type aliases,
         // uninstantiated namespaces). This applies to both exported and non-exported aliases:
         // `import b = a.I` where a.I is an interface → no runtime value, erase.
         // `export import b = a.I` same — the export produces no JS binding.
-        // Exception: `declare export import a = x.c` — `declare` modifier means TypeScript
-        // preserves the ambient binding even if the target is type-only.
+        // (A `declare` import never reaches here: transformStatement elides it, (P18.97) M2.)
         // B38.1 (2026-05-17): for exported aliases with a QualifiedName target, the root
         // namespace must be EITHER exported OR runtime-instantiated. A non-exported,
         // type-only-namespace root (`namespace x { interface c {} }`) keeps the alias with
         // a runtime-broken emit (TS2708/TS2694 fire but `exports.a = x.c` is still produced).
         // The privacy test exercises the runtime-root case: `m_private` is non-exported but
         // runtime-instantiated, and `m_private.i_private` (interface) erases as expected.
-        if (!isDeclare) {
+        run {
             if (!isExported) {
                 // Non-exported: erase if the ref is a type-only name (Identifier or qualified path).
                 // Exception: in multi-file script-mode compilations, if a LATER file declares a
@@ -9981,11 +10155,16 @@ class Transformer(
                 localName !in topLevelTypeOnlyNames
             }
             if (filtered.isEmpty()) {
-                // A source-empty `export {}` is kept VERBATIM under verbatimModuleSyntax
-                // (modulePreserve4's dummy.js) — gate on verbatimModuleSyntax ONLY, not
-                // Preserve (impliedNodeFormatEmit1-4 legitimately elide theirs under
-                // plain preserve — the round-96 reverted attempt).
-                if (options.verbatimModuleSyntax && clause.elements.isEmpty()) {
+                // A source-empty `export {}` is kept VERBATIM, where it is written, under
+                // verbatimModuleSyntax (modulePreserve4's dummy.js) and in a JAVASCRIPT file:
+                // tsgo's import elision answers `shouldEmitAliasDeclaration` true for anything
+                // `IsInJSFile` (`importelision.go`), so `thisInObjectJs`'s index.js prints its
+                // own `export {}` FIRST and the emitter adds no second marker. In a TypeScript
+                // file the statement is elided and the emitter's marker lands LAST — measured
+                // on 14 green baselines ((P18.97); `indirectGlobalSymbolPartOfObjectType`,
+                // `spellingSuggestionGlobal2`). Plain `module: preserve` keeps the elision
+                // (impliedNodeFormatEmit1-4 — the round-96 reverted attempt).
+                if (clause.elements.isEmpty() && (options.verbatimModuleSyntax || isJavaScriptFileName(currentFileName))) {
                     return listOf(decl)
                 }
                 return orphanedComments(decl)
@@ -14208,15 +14387,9 @@ class Transformer(
             )
         }
 
-        // Emit var E; unless a class/function declared this name before the enum
-        // (in source order), or a prior enum/namespace already emitted var E;
-        // Inside function scopes, always emit `let` since each function has its own scope
-        val needsVarDecl = functionScopeDepth > 0 ||
-                (enumName !in declaredNames && enumName !in emittedVarNames)
-        if (functionScopeDepth == 0) {
-            emittedVarNames.add(enumName)
-            declaredNames.add(enumName)
-        }
+        // `var E;` only when this enum is the FIRST declaration of its name in the current
+        // scope (tsgo `addVarForDeclaration`; see [scopeFirstDeclarations]).
+        val needsVarDecl = recordAndIsFirstDeclarationInScope(decl, enumName)
         // In ES module format, preserve the `export` modifier so the file is still recognized
         // as a module file (e.g. `export enum E {}` → `export var E; IIFE`).
         // In CommonJS format the CommonJS transform handles exports separately, so no modifier.
@@ -14236,7 +14409,8 @@ class Transformer(
                         pos = -1, end = -1,
                     )
                 ),
-                flags = if (nested || functionScopeDepth > 0) LetKeyword else VarKeyword,
+                // tsgo: `let` anywhere but the SourceFile scope, see [declarationScopeDepth].
+                flags = if (declarationScopeDepth > 0) LetKeyword else VarKeyword,
                 pos = -1, end = -1,
             ),
             modifiers = varModifiers,
@@ -15157,12 +15331,9 @@ class Transformer(
             is ModuleBlock -> body.statements
             is ModuleDeclaration -> {
                 // Nested namespace: recursively transform the inner declaration.
-                // The inner declarations live inside a new IIFE function scope, so
-                // save/restore emittedVarNames so each IIFE body starts fresh.
-                val savedE = emittedVarNames.toMutableSet()
-                val savedD = declaredNames.toMutableSet()
-                emittedVarNames.clear()
-                declaredNames.clear()
+                // The inner declarations live inside a new IIFE function scope — a
+                // declaration scope of its own (tsgo `transformModuleBody`).
+                val (iifeParam, innerStatements) = inDeclarationScope(entersScope = false) {
                 // Detect name collision: if any declaration deep inside the nested module body
                 // shadows the namespace name, the IIFE parameter must be renamed.
                 val hasCollision = namespaceBodyHasNameCollision(moduleName, listOf(body))
@@ -15177,50 +15348,36 @@ class Transformer(
                 if (mergedExports.isNotEmpty()) {
                     outerNamespaceStack.add(Triple(iifeParam, moduleName, mergedExports))
                 }
-                val innerStatements = transformModuleDeclaration(body, nested = true, parentNsName = iifeParam, useDottedVar = useDottedVar)
+                val inner = transformModuleDeclaration(body, nested = true, parentNsName = iifeParam, useDottedVar = useDottedVar)
                 if (mergedExports.isNotEmpty()) {
                     outerNamespaceStack.removeLastOrNull()
                 }
-                emittedVarNames.clear(); emittedVarNames.addAll(savedE)
-                declaredNames.clear(); declaredNames.addAll(savedD)
+                iifeParam to inner
+                }
                 return wrapInNamespaceIife(
                     moduleName = moduleName,
                     innerStatements = innerStatements,
                     outerDecl = decl,
                     nested = nested,
                     parentNsName = parentNsName,
-                    useDottedVar = useDottedVar,
                     iifeParamName = iifeParam,
                 )
             }
 
             null -> {
-                // Body-less non-declare `global` (parse-recovery `global x`): tsc still
-                // emits the empty namespace IIFE for the invalid augmentation.
-                return if (moduleName == "global" && ModifierFlag.Declare !in decl.modifiers) {
-                    wrapInNamespaceIife(
-                        moduleName = moduleName,
-                        innerStatements = emptyList(),
-                        outerDecl = decl,
-                        nested = nested,
-                        parentNsName = parentNsName,
-                        useDottedVar = useDottedVar,
-                    )
-                } else emptyList()
+                // Body-less non-declare `global` (the parser's recovery of `global x` in a
+                // class body): tsc 6 emitted an empty `global` IIFE for the invalid
+                // augmentation; tsgo's `shouldEmitModuleDeclaration` refuses a body-less
+                // namespace and emits nothing ((P18.97), `nestedGlobalNamespaceInClass`).
+                return emptyList()
             }
             else -> return emptyList()
         }
 
-        // Each namespace body is a separate IIFE scope, so names declared inside
-        // one body (e.g. `let Color;`) must not suppress declarations in sibling bodies.
-        // Save and restore both sets so inner-scope names don't pollute the outer scope.
-        // Also clear before transforming the body so that outer-scope names (e.g. a top-level
-        // `namespace Foo`) don't suppress inner `let Foo;` declarations in sibling namespaces.
-        val savedEmittedVarNames = emittedVarNames.toMutableSet()
-        val savedDeclaredNames = declaredNames.toMutableSet()
-        emittedVarNames.clear()
-        declaredNames.clear()
-
+        // Each namespace body is a separate IIFE scope — a declaration scope of its own
+        // (tsgo `transformModuleBody`): names declared inside one body must not suppress
+        // declarations in sibling bodies, and outer-scope names must not suppress inner ones.
+        val (iifeParamName, transformedBody) = inDeclarationScope {
         // Detect name collision: if any declaration/parameter in the body shadows the namespace name,
         // the IIFE parameter must be renamed (e.g. m1 → m1_1) to avoid shadowing.
         val hasCollision = namespaceBodyHasNameCollision(moduleName, bodyStatements)
@@ -15231,12 +15388,14 @@ class Transformer(
         } else moduleName
 
         // Transform body statements, rewriting exports using the IIFE parameter name
-        val transformedBody = transformNamespaceBody(iifeParamName, bodyStatements, originalName = moduleName)
-
-        emittedVarNames.clear()
-        emittedVarNames.addAll(savedEmittedVarNames)
-        declaredNames.clear()
-        declaredNames.addAll(savedDeclaredNames)
+        namespaceBodyDepth++
+        val body = try {
+            transformNamespaceBody(iifeParamName, bodyStatements, originalName = moduleName)
+        } finally {
+            namespaceBodyDepth--
+        }
+        iifeParamName to body
+        }
 
         // If the body transformed to nothing AND there are no runtime-relevant declarations,
         // don't emit the namespace at all — but only if the original body had only types.
@@ -15246,7 +15405,7 @@ class Transformer(
             return orphanedComments(decl)
         }
 
-        return wrapInNamespaceIife(moduleName, transformedBody, decl, nested = nested, parentNsName = parentNsName, useDottedVar = useDottedVar, iifeParamName = iifeParamName)
+        return wrapInNamespaceIife(moduleName, transformedBody, decl, nested = nested, parentNsName = parentNsName, iifeParamName = iifeParamName)
     }
 
     private fun wrapInNamespaceIife(
@@ -15255,27 +15414,19 @@ class Transformer(
         outerDecl: ModuleDeclaration,
         nested: Boolean = false,
         parentNsName: String? = null,
-        useDottedVar: Boolean = false,
         iifeParamName: String = moduleName,
     ): List<Statement> {
         val nsId = syntheticId(moduleName)
 
-        // Skip var N; if a class/function with the same name was declared BEFORE this
-        // namespace (in source order), or if a prior enum/namespace already emitted var N;
-        // Inside function scopes, always emit `let` since each function has its own scope
-        val needsVarDecl = functionScopeDepth > 0 ||
-                (moduleName !in declaredNames && moduleName !in emittedVarNames)
-        // Track that this name now has a runtime var (for subsequent same-name dedup)
-        if (functionScopeDepth == 0) {
-            emittedVarNames.add(moduleName)
-            declaredNames.add(moduleName)
-        }
+        // `var N;` only when this namespace is the FIRST declaration of its name in the
+        // current scope (tsgo `addVarForDeclaration`; see [scopeFirstDeclarations]).
+        val needsVarDecl = recordAndIsFirstDeclarationInScope(outerDecl, moduleName)
 
-        // Inner namespace declarations use `let` (they're inside a function scope),
-        // EXCEPT when the namespace uses dotted shorthand (`namespace A.B { }`), in which
-        // case TypeScript always emits `var` for all levels.
-        // Also use `let` when inside a function body (functionScopeDepth > 0).
-        val varKeyword = if ((nested || functionScopeDepth > 0) && !useDottedVar) SyntaxKind.LetKeyword else VarKeyword
+        // tsgo: `let` anywhere but the SourceFile scope — a namespace body, a function body,
+        // a top-level Block or a CaseBlock — and a dotted inner namespace inherits the scope
+        // its outer sits in (`namespace D.E` at file level keeps `var E;`), see
+        // [declarationScopeDepth].
+        val varKeyword = if (declarationScopeDepth > 0) SyntaxKind.LetKeyword else VarKeyword
 
         // In ES module format, preserve the `export` modifier so the file is still recognized
         // as a module file (e.g. `export namespace N {}` → `export var N; IIFE`).
@@ -15575,6 +15726,9 @@ class Transformer(
             if (stmt is Declaration && hasDeclareModifier(stmt)) continue
             if (stmt is VariableStatement && ModifierFlag.Declare in stmt.modifiers) continue
 
+            // (P18.97) M1: record in the ModuleBlock's declaration scope at the visit.
+            recordScopeDeclarationOf(stmt)
+
             val isExported = when (stmt) {
                 is VariableStatement -> ModifierFlag.Export in stmt.modifiers
                 is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
@@ -15817,10 +15971,6 @@ class Transformer(
                         result.addAll(transformed)
                     }
 
-                    // Track function name so a subsequent same-named namespace/enum
-                    // doesn't emit a duplicate var/let declaration (mirrors transformStatements).
-                    stmt.name?.text?.let { declaredNames.add(it) }
-
                     if (isExported && stmt.name != null && stmt.body != null) {
                         result.add(makeNamespaceExportAssignment(nsName, stmt.name.text))
                     } else if (isExported && ModifierFlag.Default in stmt.modifiers && stmt.name == null && stmt.body != null) {
@@ -15876,9 +16026,6 @@ class Transformer(
                     }
 
                     val className = classStmt.name?.text
-                    // Track class name so a subsequent same-named namespace/enum
-                    // doesn't emit a duplicate var/let declaration (mirrors transformStatements).
-                    className?.let { declaredNames.add(it) }
 
                     if (isExported && className != null) {
                         result.add(makeNamespaceExportAssignment(nsName, className))
@@ -17707,3 +17854,9 @@ class Transformer(
 """
     }
 }
+
+/** Modifiers the type eraser removes — their presence makes a subtree "contain TypeScript". */
+private val TS_ONLY_MODIFIERS: Set<ModifierFlag> = setOf(
+    ModifierFlag.Public, ModifierFlag.Private, ModifierFlag.Protected, ModifierFlag.Readonly,
+    ModifierFlag.Abstract, ModifierFlag.Override, ModifierFlag.Declare,
+)

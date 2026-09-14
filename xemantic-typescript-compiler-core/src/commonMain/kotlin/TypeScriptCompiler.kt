@@ -1234,7 +1234,7 @@ class TypeScriptCompiler {
         val transformed = transformer.transform(sourceFile)
 
         val emitter = Emitter(options)
-        val javascript = emitter.emit(transformed, sourceFile)
+        val javascript = withByteOrderMark(options, emitter.emit(transformed, sourceFile))
 
         val isJsxPreserve = options.jsx?.lowercase() == "preserve"
         val tsxExtension = if (isJsxPreserve) ".jsx" else ".js"
@@ -2554,9 +2554,19 @@ class TypeScriptCompiler {
                 // Handle both Unix '/' and Windows '\' separators.
                 jsName = jsName.substringAfterLast('/').substringAfterLast('\\')
             }
-            jsOutputMap[tsFileName] = jsName to javascript
+            jsOutputMap[tsFileName] = jsName to withByteOrderMark(options, javascript)
         }
     }
+
+    /**
+     * `emitBOM`: tsc writes each JavaScript output with a UTF-8 byte order mark
+     * (`writeFile(..., writeByteOrderMark)`), so the mark is part of the output TEXT here —
+     * what a project build writes to disk and what the corpus harness renders ((P18.97) M5).
+     * It is prepended AFTER emit so no column inside the emitter, and no source-map
+     * mapping computed from the emitted text, counts it.
+     */
+    private fun withByteOrderMark(options: CompilerOptions, javascript: String): String =
+        if (options.emitBOM) "\uFEFF" + javascript else javascript
 
     /**
      * (JIT.1)(e) round 816 — the `require`-only orphan census (inputs reached ONLY by

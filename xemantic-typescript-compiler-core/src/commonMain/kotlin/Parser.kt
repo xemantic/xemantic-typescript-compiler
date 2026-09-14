@@ -7630,11 +7630,15 @@ class Parser(
                 nextToken()
                 val name = parsePropertyName()
                 val params = parseParameterList()
+                // A setter cannot have a return type (TS1095), but it is parsed — as the class
+                // setter's and the getter's are — so the annotation does not de-synchronise the
+                // object literal into `set p(v) { }, number ...` ((P18.97) M4).
+                val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
                 // Error recovery: create empty body when missing, to match TypeScript's output
                 val body = if (token == SyntaxKind.OpenBrace) parseBlock()
                     else { reportErrorAtPrevTokenEnd("'{' expected."); Block(statements = emptyList(), multiLine = false, pos = -1, end = -1) }
                 val trailing = trailingComments()
-                return SetAccessor(name = name, parameters = params, body = body, modifiers = modifiers, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
+                return SetAccessor(name = name, parameters = params, type = type, body = body, modifiers = modifiers, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
             }
         }
 
