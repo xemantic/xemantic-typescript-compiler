@@ -907,11 +907,6 @@ val tsgoPendingBaselines = listOf(
         "keyword. | ours: Type 'number' is not assignable to type 'bigint'."
     ),
     TsgoPendingBaseline(
-        "bindingPatternOmittedExpressionNesting.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: [, , [, [], , []]] = undefined; | ours: var " +
-        "_a, _b, _c, _d;"
-    ),
-    TsgoPendingBaseline(
         "bitwiseCompoundAssignmentOperators.errors.txt",
         "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
         "bitwiseCompoundAssignmentOperators.ts(3,3): error TS2447: The '^=' operator is not " +
@@ -986,10 +981,6 @@ val tsgoPendingBaselines = listOf(
         "ours: ~~~~~"
     ),
     TsgoPendingBaseline(
-        "declarationEmitRetainsJsdocyComments.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: ({ | ours: /**"
-    ),
-    TsgoPendingBaseline(
         "declarationFileNoCrashOnExtraExportModifier.errors.txt",
         "F6 top code differs (tsgo - / ours TS2300); layer `submoduleAccepted`. tsgo: ==== " +
         "input.ts (1 errors) ==== | ours: input.ts(6,14): error TS2300: Duplicate identifier " +
@@ -998,16 +989,6 @@ val tsgoPendingBaselines = listOf(
     TsgoPendingBaseline(
         "declareModifierOnImport1.js",
         "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var a = b;"
-    ),
-    TsgoPendingBaseline(
-        "destructuringInVariableDeclarations1.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: ({ toString: exports.toString } = 1); | " +
-        "ours: exports.toString = 1..toString;"
-    ),
-    TsgoPendingBaseline(
-        "downlevelLetConst13(target=es2015).js",
-        "JS emit; layer `submoduleAccepted`. tsgo: [exports.bar1] = [1]; | ours: exports.bar1 = " +
-        "[1][0];"
     ),
     TsgoPendingBaseline(
         "duplicateIdentifierRelatedSpans1.errors.txt",
@@ -1115,19 +1096,6 @@ val tsgoPendingBaselines = listOf(
         "tsgo: /a.ts(3,26): error TS4060: Return type of exported function has or is using " +
         "private name 'T'. | ours: /a.ts(2,16): error TS2664: Invalid module name in " +
         "augmentation, module 'foo' cannot be found."
-    ),
-    TsgoPendingBaseline(
-        "exportEmptyArrayBindingPattern(module=commonjs,target=esnext).js",
-        "JS emit; layer `submoduleAccepted`. tsgo: [] = []; | ours: var _a;"
-    ),
-    TsgoPendingBaseline(
-        "exportEmptyObjectBindingPattern(module=commonjs,target=esnext).js",
-        "JS emit; layer `submoduleAccepted`. tsgo: ({} = {}); | ours: var _a;"
-    ),
-    TsgoPendingBaseline(
-        "exportObjectRest(module=commonjs,target=esnext).js",
-        "JS emit; layer `submoduleAccepted`. tsgo: ({ x: exports.x, ...exports.rest } = { x: " +
-        "'x', y: 'y' }); | ours: var _a;"
     ),
     TsgoPendingBaseline(
         "expressionWithJSDocTypeArguments.errors.txt",

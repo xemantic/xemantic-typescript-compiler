@@ -1595,6 +1595,15 @@ class Transformer(
         )
         val namedExportLocalToExport = exportClauses.namedExportLocalToExport
         val directExportClauseAliases = exportClauses.directExportClauseAliases
+        // Local names an `export { x as y }` clause re-aliases or exports more than once: tsgo's
+        // `destructuringNeedsFlattening` refuses native destructuring for exactly these, because a
+        // single assignment target cannot update several export bindings.
+        val reExportedLocalNames: Set<String> = buildSet {
+            addAll(directExportClauseAliases.keys)
+            for ((local, exportNames) in namedExportLocalToExport) {
+                if (exportNames.size > 1 || exportNames.any { it != local }) add(local)
+            }
+        }
 
         val prologueSplit = tcjsSplitPrologueDirectives(
             statements = statements,
@@ -1622,6 +1631,7 @@ class Transformer(
                         keepDeclExportAssignments = keepDeclExportAssignments,
                         keepDeclFunctionVarNames = keepDeclFunctionVarNames,
                         sideEffectTempVars = sideEffectTempVars,
+                        reExportedLocalNames = reExportedLocalNames,
                     )
                 }
 
@@ -2453,6 +2463,100 @@ class Transformer(
      * loop, so the moved text runs inside `for (stmt in listOf(stmtIn))` and
      * keeps that `continue` verbatim (see this file's module doc).
      */
+    /**
+     * Converts the binding pattern of an **exported** CommonJS variable declaration into the
+     * equivalent destructuring **assignment target**, substituting every leaf identifier `x`
+     * with `exports.x`.
+     *
+     * This is tsgo's `CommonJSModuleTransformer.transformInitializedVariable`
+     * (`internal/transformers/moduletransforms/commonjsmodule.go`): an exported binding pattern
+     * is converted into an equivalent assignment expression and visited as a destructuring
+     * assignment, which *preserves native destructuring* — and therefore the iterator semantics
+     * of an array pattern — wherever each leaf can be substituted to an export reference.
+     * TypeScript 6 instead flattened every such declaration into individual `exports.x = init.x`
+     * assignments (`FlattenLevel.All`), which is what the `tryExpandObjectBinding` /
+     * temp-variable / `__rest` machinery in [tcjsTransformVariableStatement] still implements
+     * for the shapes this conversion refuses.
+     *
+     * Returns `null` for any shape it will not convert; the caller then keeps the TypeScript-6
+     * lowering, so a refusal is always the previous behaviour.
+     */
+    private fun tcjsBindingPatternToExportTarget(name: Node): Expression? = when (name) {
+        // A leaf: the local binding does not exist at run time, so the assignment target IS the
+        // export reference.
+        is Identifier -> PropertyAccessExpression(
+            expression = syntheticId("exports"),
+            name = Identifier(text = name.text, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+
+        is ObjectBindingPattern -> {
+            val properties = mutableListOf<Node>()
+            var refused = false
+            for (element in name.elements) {
+                val target = tcjsBindingPatternToExportTarget(element.name)
+                if (target == null) { refused = true; break }
+                if (element.dotDotDotToken) {
+                    // A rest element carries no default, and its target is spread directly.
+                    if (element.initializer != null) { refused = true; break }
+                    properties.add(SpreadAssignment(expression = target, pos = -1, end = -1))
+                } else {
+                    // `{ x }` cannot stay a shorthand once its target is `exports.x`, so the key
+                    // is restated: tsgo prints `{ x: exports.x }`, and `{ x: exports.x = d }` for
+                    // a default.
+                    val key: NameNode? = element.propertyName
+                        ?: (element.name as? Identifier)
+                    if (key == null) { refused = true; break }
+                    val withDefault: Expression = if (element.initializer != null) BinaryExpression(
+                        left = target,
+                        operator = Equals,
+                        right = element.initializer,
+                        pos = -1, end = -1,
+                    ) else target
+                    properties.add(PropertyAssignment(
+                        name = key,
+                        initializer = withDefault,
+                        pos = -1, end = -1,
+                        leadingComments = element.leadingComments,
+                    ))
+                }
+            }
+            if (refused) null else ObjectLiteralExpression(properties = properties, pos = -1, end = -1)
+        }
+
+        is ArrayBindingPattern -> {
+            val elements = mutableListOf<Expression>()
+            var refused = false
+            for (element in name.elements) {
+                when (element) {
+                    // A hole stays a hole. The pattern's own trailing comma is deliberately NOT
+                    // carried: tsgo prints `[, [], , []]` for the pattern `[,[],,[],]`.
+                    is OmittedExpression -> elements.add(OmittedExpression(pos = -1, end = -1))
+                    is BindingElement -> {
+                        val target = tcjsBindingPatternToExportTarget(element.name)
+                        if (target == null) { refused = true; break }
+                        if (element.dotDotDotToken) {
+                            if (element.initializer != null) { refused = true; break }
+                            elements.add(SpreadElement(expression = target, pos = -1, end = -1))
+                        } else {
+                            elements.add(if (element.initializer != null) BinaryExpression(
+                                left = target,
+                                operator = Equals,
+                                right = element.initializer,
+                                pos = -1, end = -1,
+                            ) else target)
+                        }
+                    }
+                    else -> refused = true
+                }
+                if (refused) break
+            }
+            if (refused) null else ArrayLiteralExpression(elements = elements, pos = -1, end = -1)
+        }
+
+        else -> null
+    }
+
     private fun tcjsTransformVariableStatement(
         stmtIn: VariableStatement,
         result: MutableList<Statement>,
@@ -2465,6 +2569,7 @@ class Transformer(
         keepDeclExportAssignments: MutableSet<Statement>,
         keepDeclFunctionVarNames: MutableSet<String>,
         sideEffectTempVars: MutableList<String>,
+        reExportedLocalNames: Set<String>,
     ) {
         for (stmt in listOf(stmtIn)) {
             val isExported = ModifierFlag.Export in stmt.modifiers
@@ -2522,6 +2627,52 @@ class Transformer(
                     //   No initializer → just the void0 hoist, no declaration emitted
                     for (decl in stmt.declarationList.declarations) {
                         for (name in collectBoundNames(decl.name)) if (name !in exportedVarNames) exportedVarNames.add(name)
+                    }
+                    // TypeScript 7 (tsgo): an exported CommonJS binding-pattern declaration is
+                    // emitted as a destructuring ASSIGNMENT through `exports.*` rather than
+                    // flattened into per-name assignments — `[exports.bar1] = [1];`,
+                    // `({ x: exports.x, ...exports.rest } = ...)`, `({} = {})`. See
+                    // [tcjsBindingPatternToExportTarget]. The TypeScript-6 lowering below is kept
+                    // whenever a leaf is re-aliased or multi-exported through an `export { x as y }`
+                    // clause, or collides with an import (both need `(0, exports.x)`-shaped reads
+                    // that a destructuring target cannot express), and whenever the pattern carries
+                    // an object rest below ES2018, where the rest itself must still go through
+                    // `__rest`. Only a statement whose declarators are ALL initialized binding
+                    // patterns is converted; a mixed list keeps its existing shape.
+                    val exportedPatternDecls = stmt.declarationList.declarations
+                    val cjsExportPatternAssignment = exportedPatternDecls.isNotEmpty() &&
+                        exportedPatternDecls.all { decl ->
+                            (decl.name is ObjectBindingPattern || decl.name is ArrayBindingPattern) &&
+                                decl.initializer != null &&
+                                (options.effectiveTarget >= ScriptTarget.ES2018 ||
+                                    !containsObjectRestBinding(decl.name)) &&
+                                collectBoundNames(decl.name).none { boundName ->
+                                    boundName in reExportedLocalNames ||
+                                        boundName in conflictingExportedNames
+                                }
+                        }
+                    if (cjsExportPatternAssignment) {
+                        val targets = exportedPatternDecls.map { tcjsBindingPatternToExportTarget(it.name) }
+                        if (targets.all { it != null }) {
+                            for ((declIndex, decl) in exportedPatternDecls.withIndex()) {
+                                for (boundName in collectBoundNames(decl.name)) {
+                                    directExportedVarNames.add(boundName)
+                                }
+                                result.add(ExpressionStatement(
+                                    expression = BinaryExpression(
+                                        left = targets[declIndex]!!,
+                                        operator = Equals,
+                                        right = decl.initializer!!,
+                                        pos = -1, end = -1,
+                                    ),
+                                    leadingComments = if (declIndex == 0) stmt.leadingComments else null,
+                                    trailingComments = if (declIndex == exportedPatternDecls.size - 1)
+                                        stmt.trailingComments else null,
+                                    pos = -1, end = -1,
+                                ))
+                            }
+                            continue
+                        }
                     }
                     // Special case: `export const { x, y, ...rest } = expr` under CJS at target>=ES2018.
                     // Emit comma-expression form:

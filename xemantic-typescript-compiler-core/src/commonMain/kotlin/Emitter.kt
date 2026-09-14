@@ -2555,7 +2555,29 @@ class Emitter(
                     (isSyntheticObject && (prop is MethodDeclaration || prop is GetAccessor || prop is SetAccessor)) ||
                         valueWraps
                 if (needsExtraIndent) indentLevel++
-                emitObjectProperty(prop)
+                // A property carrying an OWN-LINE leading comment breaks the line even in a
+                // single-line object literal: tsc's printer emits `{ `, then the comment at the
+                // property's own indent, then the property, and still closes with ` }` on that
+                // line. `export let { /** c */ someMethod } = x` under CommonJS reaches this
+                // through the (LEGACY.0b) export-pattern assignment, and before it the comment
+                // was simply dropped. Same-line (inline) leading comments are deliberately NOT
+                // handled here — that is a separate, still-open gap.
+                val ownLineLeading = if (options.removeComments) null
+                    else prop.leadingComments?.filter { it.hasPrecedingNewLine }
+                if (!ownLineLeading.isNullOrEmpty()) {
+                    writeNewLine()
+                    indentLevel++
+                    for (comment in ownLineLeading) {
+                        writeIndent()
+                        write(reindentComment(comment))
+                        writeNewLine()
+                    }
+                    writeIndent()
+                    emitObjectProperty(prop)
+                    indentLevel--
+                } else {
+                    emitObjectProperty(prop)
+                }
                 if (needsExtraIndent) indentLevel--
             }
             if (node.hasTrailingComma) write(",")

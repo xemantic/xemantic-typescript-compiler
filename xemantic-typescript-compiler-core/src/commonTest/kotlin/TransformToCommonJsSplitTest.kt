@@ -197,11 +197,16 @@ class TransformToCommonJsSplitTest {
     /**
      * Three distinct paths of the same arm: the DIRECT path (no local binding at
      * all), the KEEP-DECLARATION path (a function initializer keeps its `const`
-     * and gets an assignment after it), and the empty-pattern SIDE-EFFECT path
-     * (a hoisted `var _a;` plus a bare `_a = expr`).
+     * and gets an assignment after it), and the EXPORT-PATTERN ASSIGNMENT path
+     * ((LEGACY.0b) step 11: `({} = { q: 1 })`).
+     *
+     * The third path used to be the empty-pattern SIDE-EFFECT one (a hoisted
+     * `var _a;` plus a bare `_a = expr`), which TypeScript 7 no longer produces
+     * for an exported pattern; the sibling test below still reaches it, through
+     * a shape the export-pattern assignment REFUSES.
      */
     @Test
-    fun `variable arm - direct and keep-declaration and side-effect destructuring paths`() {
+    fun `variable arm - direct and keep-declaration and export-pattern-assignment paths`() {
         val out = js(
             """
             // @Filename: main.ts
@@ -213,8 +218,28 @@ class TransformToCommonJsSplitTest {
         assert(out.contains("exports.plain = 1;"))
         assert(out.contains("const fnVar = function () { return 1; };"))
         assert(out.contains("exports.fnVar = fnVar;"))
+        assert(out.contains("({} = { q: 1 });"))
+        assert(!out.contains("var _a;"))
+    }
+
+    /**
+     * The SIDE-EFFECT temp path is still live, and reaching it now takes a shape the
+     * (LEGACY.0b) step 11 export-pattern assignment refuses: a leaf that a second
+     * `export { x as xx }` clause re-aliases, which no single destructuring target can
+     * update. At `es2018` that lands on the object-rest comma form.
+     */
+    @Test
+    fun `variable arm - the side-effect temp path survives where the export-pattern assignment refuses`() {
+        val out = js(
+            """
+            // @target: es2018
+            // @Filename: main.ts
+            export const { x, ...rest } = { x: 'x', y: 'y' };
+            export { x as xx };
+            """
+        )
         assert(out.contains("var _a;"))
-        assert(out.contains("_a = { q: 1 };"))
+        assert(out.contains("_a = { x: 'x', y: 'y' }, exports.x = _a.x, exports.rest = __rest(_a, [\"x\"]);"))
     }
 
     /**
@@ -388,10 +413,12 @@ class TransformToCommonJsSplitTest {
     fun `early pre-preamble - a header comment is lifted above the preamble`() {
         val out = js(
             """
+            // @target: es2018
             // @Filename: main.ts
             // leading header comment
 
-            export const {} = { q: 1 };
+            export const { x, ...rest } = { x: 'x', y: 'y' };
+            export { x as xx };
             export function hf(): void {}
             export const after = 1;
             """
