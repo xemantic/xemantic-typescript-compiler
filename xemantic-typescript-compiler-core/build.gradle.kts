@@ -784,94 +784,48 @@ val tsgoPendingBaselines = listOf(
             "generic inference does not reach here; not an ordering row.",
     ),
     TsgoPendingBaseline(
-        "complicatedIndexedAccessKeyofReliesOnKeyofNeverUpperBound.errors.txt",
-        "ORDER + downstream: the chain, the `Pick<…>` intersection and the constraint " +
-            "`\"email\" | \"text\"` all follow the union's stable member order " +
-            "(`ChannelOfType<T, EmailChannel>` first, by alias argument name); the pin " +
-            "walker prints the written order.",
-    ),
-    TsgoPendingBaseline(
-        "destructuringUnspreadableIntoRest.errors.txt",
-        "ORDER: `Omit<this, K>`'s literal-key argument is printed in destructuring order; " +
-            "tsc sorts the keys by value (`\"getter\" | \"method\" | \"publicProp\" | " +
-            "\"setter\"`). The rest type's display is built outside `getUnionType`.",
-    ),
-    TsgoPendingBaseline(
-        "errorsForCallAndAssignmentAreSimilar.errors.txt",
-        "ORDER: the TS2820 ARGUMENT-position literal-union target is printed in " +
-            "declaration order (`\"hddvd\" | \"bluray\"`); the declaration position was " +
-            "moved to the sorted display, the B364 argument walker still reads the annotation.",
-    ),
-    TsgoPendingBaseline(
-        "excessPropertyCheckWithMultipleDiscriminants.errors.txt",
-        "ORDER: the TS2353 union display (`A | Common`, `OneToOneAttribute | " +
-            "StringAttribute`, by name) is built by the discriminated-union excess walker in " +
-            "declaration order.",
-    ),
-    TsgoPendingBaseline(
-        "inDoesNotOperateOnPrimitiveTypes.errors.txt",
-        "ORDER: the chain constituent `\"hello\" | object` (StringLiteral before " +
-            "NonPrimitive) is printed from the written constraint by the `in`-operator walker.",
-    ),
-    TsgoPendingBaseline(
-        "indirectDiscriminantAndExcessProperty.errors.txt",
-        "ORDER: `Blah[\"type\"]`'s literal union renders `\"bar\" | \"foo\"` (by value); " +
-            "the indirect-discriminant walker prints the declaration order.",
-    ),
-    TsgoPendingBaseline(
-        "jsdocBracelessTypeTag1.errors.txt",
-        "ORDER: a JSDoc `@type` union (`\"bar\" | \"foo\"`) is rendered by the checkJs " +
-            "JSDoc type formatter in written order.",
-    ),
-    TsgoPendingBaseline(
-        "keyRemappingKeyofResult.errors.txt",
-        "ORDER: `\"str\" | unique symbol | DistributiveNonIndex<K>` — a unique symbol and " +
-            "a conditional have no type of their own here; the B534 walker prints the written order.",
-    ),
-    TsgoPendingBaseline(
-        "mappedTypeGenericWithKnownKeys.errors.txt",
-        "ORDER: `Record<\"knownLiteralKey\" | keyof Shape, number>` — a literal sorts before " +
-            "an `Index` type in tsc; `keyof` over a type parameter has no type here and the " +
-            "display keeps the written order.",
-    ),
-    TsgoPendingBaseline(
-        "mappedTypeIndexedAccess.errors.txt",
-        "ORDER: two instantiations of ONE mapped-type body (`{ key: \"bar\"; … } | { key: " +
-            "\"foo\"; … }`) are ordered by tsc's type MAPPER (`\"bar\"` < `\"foo\"`); this " +
-            "model has no mapper to compare and falls to the type id.",
-    ),
-    TsgoPendingBaseline(
         "namespaceDisambiguationInUnion.errors.txt",
-        "ORDER + downstream: an object against a union with no discriminant match is " +
-            "reported against the LAST target constituent (`typeRelatedToSomeType`), " +
-            "`Bar.Yep` — the collision special case here picks the other.",
+        "RECLASSIFIED (LEGACY.0b step 9) ORDER -> CHAIN-PICKER: the union's own display is " +
+            "now CORRECT (`Foo.Yep | Bar.Yep`, verified) and the whole residue is one chain " +
+            "sub-line — tsgo names `\"bar.yep\"` and we name `\"foo.yep\"`. tsc's " +
+            "`typeRelatedToSomeType` reports a union TARGET with no discriminant match " +
+            "against its LAST constituent; the var-decl chain here picks the first. " +
+            "`findBestUnionConstituent` already keeps the LAST on a tie ((LEGACY.0a)), so " +
+            "this chain does not go through it — that is the gap.",
     ),
     TsgoPendingBaseline(
         "noInferUnionExcessPropertyCheck1.errors.txt",
-        "ORDER: `NoInfer<T>` is a Substitution type in tsc (sorts after objects, so " +
-            "`(() => NoInfer<…>) | NoInfer<…>`); here it is its argument with an alias display.",
-    ),
-    TsgoPendingBaseline(
-        "parenthesizedJSDocCastDoesNotNarrow.errors.txt",
-        "ORDER: a JSDoc cast's union (`\"bar\" | \"foo\"`) is rendered by the checkJs " +
-            "JSDoc type formatter in written order.",
+        "ORDER-model (re-measured (LEGACY.0b) step 9): the residue is the order of two " +
+            "ANONYMOUS constituents — a function type and an object type — and their " +
+            "DECLARATION positions give the opposite of tsgo's answer (row 23 is `(() => { x: " +
+            "string; }) | { x: string; }` where the object's declaration, `T`'s constraint, is " +
+            "the EARLIER node), so it is not `compareSymbols`. Rows 7/15 need the other half: " +
+            "`NoInfer<T>` is a `Substitution` type in tsc (bit 24, after `Object`'s bit 20) " +
+            "where this model represents it as its own argument with an alias display. NOT " +
+            "served by the TS2353 walker step 9 ordered — a `FunctionType` constituent makes " +
+            "that one bail.",
     ),
     TsgoPendingBaseline(
         "reverseMappedTypeIntersectionConstraint.errors.txt",
-        "ORDER: a reverse-mapped type's members carry no declarations in tsc and list by " +
-            "NAME (`{ anotherField: \"a\"; field: 1; }`); ours carry the literal's " +
-            "declarations and list by position.",
+        "ORDER-model — and NOT a union order at all (re-measured (LEGACY.0b) step 9): all " +
+            "four rows are the MEMBER order inside one anonymous object display, and every " +
+            "one of them is tsgo's alphabetical-by-property-name (`{ anotherField; field }`, " +
+            "`{ nested; prop }`, `{ invoke; types }`). A reverse-mapped type's members carry " +
+            "no declarations in tsc and so list by NAME; ours carry the source literal's " +
+            "declarations and list by position. Needs a reverse-mapped MARK on the type — " +
+            "sorting every anonymous object's members by name is a whole-corpus change.",
     ),
     TsgoPendingBaseline(
         "typeParameterDiamond4.errors.txt",
-        "ORDER: `T | Top | U` — a type parameter resolved from an ENCLOSING function's " +
-            "scope is minted without its symbol here and cannot be ordered by name " +
-            "(`typeParameterDiamond3`'s chain line already agrees).",
-    ),
-    TsgoPendingBaseline(
-        "unionPropertyOfProtectedAndIntersectionProperty.errors.txt",
-        "ORDER: B169's `(Foo | Bar)['foo']` TS2339 prints the receiver from the written " +
-            "union; tsc prints `Bar | Foo` (by name).",
+        "ORDER-model (measured (LEGACY.0b) step 9): `T | Top | U`. NOT \"type parameters " +
+            "cannot be ordered\" — the comparator orders a type-parameter union correctly " +
+            "inside ONE function scope (`Zed | Alpha` renders `Alpha | Zed`, byte-identical " +
+            "to tsgo, in both written orders). The variable is an ENCLOSING function's type " +
+            "parameter: this display follows the WRITTEN annotation order exactly (rewriting " +
+            "the fixture as `U | T | Top` renders `U | T | Top`), and the same union is " +
+            "degraded enough elsewhere that the ordinary var-decl reader emits NOTHING for " +
+            "`Zed | Alpha` when `Zed` comes from an enclosing scope. So the ORDER row sits on " +
+            "a RESOLUTION gap, not on the comparator.",
     ),
     // -------------------------------------------------------------------- (LEGACY.0b)
     TsgoPendingBaseline(
@@ -950,12 +904,6 @@ val tsgoPendingBaselines = listOf(
         "TS1356 awaitInNonAsyncFunction.ts:13:7: Did you mean to mark this function as 'async'? " +
         "| ours: !!! related TS1356 awaitInNonAsyncFunction.ts:13:28: Did you mean to mark this " +
         "function as 'async'?"
-    ),
-    TsgoPendingBaseline(
-        "baseClassImprovedMismatchErrors.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> ORDER ((LEGACY.0a) residue): the union's member order, not the wording; layer `submoduleAccepted`. tsgo: Type '() => " +
-        "string | number' is not assignable to type '() => number'. | ours: Type '() => number " +
-        "| string' is not assignable to type '() => number'."
     ),
     TsgoPendingBaseline(
         "bigintWithLib.errors.txt",
@@ -1548,9 +1496,12 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "pathsValidation5.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> summary ORDER: the TS5090 wording now " +
-        "matches, and what is left is where a tsconfig.json row sorts against a source " +
-        "file's — tsgo lists `src/main.ts(1,8): TS2882` FIRST and we list it last."
+        "RECLASSIFIED (LEGACY.0b step 2) F9 -> summary ORDER; re-confirmed at step 9 that " +
+            "it is NOT a union order and shares no mechanism with the ORDER family: the " +
+            "TS5090 wording matches and the ONLY difference is where a `tsconfig.json` row " +
+            "sorts against a source file's in the summary — tsgo lists `src/main.ts(1,8): " +
+            "TS2882` FIRST and we list it last. Changing it reorders the summary of every " +
+            "multi-file baseline, so it needs its own round.",
     ),
     TsgoPendingBaseline(
         "prettyContextNotDebugAssertion.errors.txt",

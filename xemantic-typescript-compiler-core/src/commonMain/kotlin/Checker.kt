@@ -64546,7 +64546,9 @@ interface DataView {
                     }
                     val shared = aKeys.filter { it in bKeys }
                     chainDisplay[nm] = if (shared.isEmpty()) "$aDisp & $bDisp"
-                    else "Omit<$aDisp, ${shared.joinToString(" | ") { "\"$it\"" }}> & $bDisp"
+                    // (LEGACY.0b step 9): same stable literal order as the sibling
+                    // `Omit<…>` display below — by VALUE, not by declaration.
+                    else "Omit<$aDisp, ${shared.sorted().joinToString(" | ") { "\"$it\"" }}> & $bDisp"
                     chainProps[nm] = LinkedHashSet(aKeys).apply { addAll(bKeys) }
                 }
             }
@@ -82482,7 +82484,11 @@ interface DataView {
         val display: String = if (generic != null) {
             val omitKeys = (destructured + unspreadable.filter { it !in destructured }).distinct()
             if (omitKeys.isEmpty()) return
-            "Omit<$generic, ${omitKeys.joinToString(" | ") { "\"$it\"" }}>"
+            // (LEGACY.0b step 9) string literals order by VALUE in tsc's stable union
+            // order (`StableTypeOrdering`, `compareTypes` -> literal value); this display
+            // is built from the destructuring/class-member order and never reaches
+            // `getUnionType`, so it sorts here.
+            "Omit<$generic, ${omitKeys.sorted().joinToString(" | ") { "\"$it\"" }}>"
         } else {
             val remaining = publicData.filterKeys { it !in destructured }
             if (remaining.isEmpty()) "{}"
@@ -85378,25 +85384,33 @@ interface DataView {
             else -> listOf(t)
         }
         val entries = mutableListOf<Pair<String, String?>>()
-        val displayParts = mutableListOf<String>()
+        val displayParts = mutableListOf<Pair<TypeNode, String>>()
         for (tn in types) {
             when (tn) {
                 is KeywordTypeNode -> when (tn.kind) {
-                    SyntaxKind.NumberKeyword -> { entries.add("number" to null); displayParts.add("number") }
-                    SyntaxKind.StringKeyword -> { entries.add("string" to null); displayParts.add("string") }
-                    SyntaxKind.BooleanKeyword -> { entries.add("boolean" to null); displayParts.add("boolean") }
-                    SyntaxKind.BigIntKeyword -> { entries.add("bigint" to null); displayParts.add("bigint") }
+                    SyntaxKind.NumberKeyword -> { entries.add("number" to null); displayParts.add(tn to "number") }
+                    SyntaxKind.StringKeyword -> { entries.add("string" to null); displayParts.add(tn to "string") }
+                    SyntaxKind.BooleanKeyword -> { entries.add("boolean" to null); displayParts.add(tn to "boolean") }
+                    SyntaxKind.BigIntKeyword -> { entries.add("bigint" to null); displayParts.add(tn to "bigint") }
                     else -> return null
                 }
                 is LiteralType -> {
                     val b = literalKindDisplay(tn.literal) ?: return null
                     entries.add(b.kind to b.display)
-                    displayParts.add(b.display)
+                    displayParts.add(tn to b.display)
                 }
                 else -> return null
             }
         }
-        return SwitchAllowedSet(entries, displayParts.joinToString(" | "))
+        // (LEGACY.0b step 9): tsc's stable union order over the annotation's members —
+        // a keyword before its literals (`String` is bit 5, `StringLiteral` bit 10), and
+        // literals among themselves by VALUE. Only the DISPLAY is ordered; `entries` is a
+        // membership set whose order nothing reads.
+        return SwitchAllowedSet(
+            entries,
+            displayParts.sortedWith(compareBy(stableOrdering.nodeComparator) { it.first })
+                .joinToString(" | ") { it.second },
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -101055,7 +101069,13 @@ interface DataView {
             }
         }
 
-        class Constituent(val display: String, val names: Set<String>, val anns: Map<String, List<TypeNode?>>)
+        class Constituent(
+            val display: String, val names: Set<String>, val anns: Map<String, List<TypeNode?>>,
+            /** (LEGACY.0b step 9) the constituent's own annotation node, so the DISPLAY
+             *  can be put in tsc's stable order without disturbing this walker's
+             *  order-free set/assignability work. */
+            val node: TypeNode,
+        )
         val kept = mutableListOf<Constituent>()
         for (m0 in unionNode.types) {
             var m = m0
@@ -101089,7 +101109,7 @@ interface DataView {
                     typeToString(rt)
                 }
             }
-            kept.add(Constituent(display, names, anns))
+            kept.add(Constituent(display, names, anns, m))
         }
         if (kept.isEmpty()) return false
         // B372: discriminant-MATCH then property-TYPE mismatch. When exactly ONE
@@ -101151,7 +101171,11 @@ interface DataView {
             }
             return false
         }
-        val display = kept.joinToString(" | ") { it.display }
+        // (LEGACY.0b step 9): tsc's stable union order — a named class/interface/alias
+        // by NAME (`compareTypeNames`). Built from the annotation's written member order
+        // here, so it never reaches `getUnionType`; only the DISPLAY is reordered.
+        val display = kept.sortedWith(compareBy(stableOrdering.nodeComparator) { it.node })
+            .joinToString(" | ") { it.display }
         val start = excess.nameNode.pos
         val length = when (val nn = excess.nameNode) {
             is Identifier -> nn.text.length
@@ -101279,7 +101303,13 @@ interface DataView {
             lp.name != keyMember.name && picked.valueRenders[lp.name]?.let { it != lp.render } == true
         } ?: return false
         val srcDisplay = "{ ${litProps.joinToString(" ") { "${it.name}: ${it.render};" }} }"
-        val targetDisplay = aliasDisplay ?: constituents.joinToString(" | ") { it.display }
+        // (LEGACY.0b step 9): tsc compares two instantiations of ONE mapped-type body by
+        // their type MAPPERS; this shape's mapper substitutes exactly the key, so the
+        // mapper comparison reduces to comparing the two key literals BY VALUE — which is
+        // what `StableTypeOrdering` would do for a `Type.StringLiteral` pair. The
+        // constituents are built per source member here, in declaration order.
+        val targetDisplay = aliasDisplay ?: constituents.sortedBy { it.key }
+            .joinToString(" | ") { it.display }
         val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
         diagnostics.add(Diagnostic(
             message = "Type '$srcDisplay' is not assignable to type '$targetDisplay'.",
@@ -132462,7 +132492,11 @@ interface DataView {
             }
         }
         if (xVars.isEmpty()) return
-        val targetChain = (symbolMembers + stringMembers.map { "\"$it\"" } +
+        // (LEGACY.0b step 9) tsc's stable order (`StableTypeOrdering`): `StringLiteral`
+        // is bit 10 and `UniqueESSymbol` bit 15, so `"str"` comes BEFORE `unique symbol`,
+        // and the un-evaluated generic tail (a conditional, bit 26) last. The composition
+        // order here WAS symbol-first, transcribed from the tsc 6 type-id baseline.
+        val targetChain = (stringMembers.sorted().map { "\"$it\"" } + symbolMembers +
             listOfNotNull(formatTypeForDisplay(asClause))).joinToString(" | ")
         for (s in body) {
             val bin = (s as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
@@ -161114,7 +161148,13 @@ interface DataView {
                 checkTypeRelatedTo(valueType, dt, assignableRelation)
             }
             if (anyPass) continue
-            val discDisplay = discTypes.map { typeToString(it) }.distinct().joinToString(" | ")
+            // (LEGACY.0b step 9): the discriminant union is collected per union
+            // constituent, in the annotation's written order, and never reaches
+            // `getUnionType` — so tsc's stable order is applied here. It also decides the
+            // spelling-suggestion tie-break below, exactly as at
+            // `tryEmitLiteralUnionDidYouMean` (the DECLARATION-position twin).
+            val discOrdered = discTypes.sortedWith(stableOrdering.comparator)
+            val discDisplay = discOrdered.map { typeToString(it) }.distinct().joinToString(" | ")
             val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
             val related = mutableListOf<Diagnostic>()
             if (firstDeclPos >= 0) {
@@ -161195,10 +161235,16 @@ interface DataView {
                 checkTypeRelatedTo(valueType, dt, assignableRelation)
             }
             if (anyPass) continue
-            val discDisplay = discTypes.map { typeToString(it) }.distinct().joinToString(" | ")
+            // (LEGACY.0b step 9): the discriminant union is collected per union
+            // constituent, in the annotation's written order, and never reaches
+            // `getUnionType` — so tsc's stable order is applied here. It also decides the
+            // spelling-suggestion tie-break below, exactly as at
+            // `tryEmitLiteralUnionDidYouMean` (the DECLARATION-position twin).
+            val discOrdered = discTypes.sortedWith(stableOrdering.comparator)
+            val discDisplay = discOrdered.map { typeToString(it) }.distinct().joinToString(" | ")
             var suggestion: String? = null
             if (valueType is Type.StringLiteral) {
-                val cands = discTypes.filterIsInstance<Type.StringLiteral>().map { it.value }.toSet()
+                val cands = discOrdered.filterIsInstance<Type.StringLiteral>().map { it.value }.toSet()
                 suggestion = getSpellingSuggestionFromNames(valueType.value, cands)
             }
             val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
@@ -176306,18 +176352,18 @@ interface DataView {
                         val literalKeys = mutableSetOf<String>()
                         var keyofCount = 0
                         var ok = true
-                        val memberDisplays = mutableListOf<String>()
+                        val memberDisplays = mutableListOf<Pair<TypeNode, String>>()
                         for (m in keyUnion.types) {
                             val lit = (m as? LiteralType)?.literal as? StringLiteralNode
                             if (lit != null) {
                                 literalKeys.add(lit.text)
-                                memberDisplays.add("\"${lit.text}\"")
+                                memberDisplays.add(m to "\"${lit.text}\"")
                                 continue
                             }
                             val tpName = keyofTpName(m, tps)
                             if (tpName != null && constraintIsKeyOpaque(tps[tpName]?.constraint)) {
                                 keyofCount++
-                                memberDisplays.add("keyof $tpName")
+                                memberDisplays.add(m to "keyof $tpName")
                                 continue
                             }
                             ok = false
@@ -176325,7 +176371,13 @@ interface DataView {
                         }
                         if (!ok || keyofCount == 0 || literalKeys.isEmpty()) continue
                         val valDisplay = formatTypeForDisplay(args[1]) ?: continue
-                        tracked[n] = "Record<${memberDisplays.joinToString(" | ")}, $valDisplay>" to literalKeys
+                        // (LEGACY.0b step 9): tsc's stable union order — a `StringLiteral`
+                        // (bit 10) before an `Index` type (`keyof T`, bit 21). This display
+                        // is recomposed from the annotation's WRITTEN member order.
+                        val orderedKeys = memberDisplays
+                            .sortedWith(compareBy(stableOrdering.nodeComparator) { it.first })
+                            .joinToString(" | ") { it.second }
+                        tracked[n] = "Record<$orderedKeys, $valDisplay>" to literalKeys
                     }
                 }
                 if (s is ExpressionStatement) {
@@ -179880,10 +179932,29 @@ interface DataView {
             val tpConstraint: List<InMember>? = null,  // null = unconstrained (kind 2 only)
             val tpDeclPos: Int = -1,
         )
+        // (LEGACY.0b step 9) tsc's stable union order (`StableTypeOrdering`) is ascending
+        // TypeScript-7 `TypeFlags`, and the pre-existing kind-buckets here are NOT that
+        // order: `object` is `NonPrimitive` (bit 17) and sorts AFTER a string literal
+        // (bit 10), where a keyword bucket put every keyword first
+        // (`inDoesNotOperateOnPrimitiveTypes`: tsgo renders `"hello" | object`).
+        // primOrder is String, Number, BigInt, Boolean, Symbol, Object.
+        val primNewBit = intArrayOf(5, 6, 7, 8, 9, 17)
+        fun memberRank(m: InMember): Int = when (m.kind) {
+            0 -> primNewBit[m.primIdx]
+            1 -> if (m.widened == "string") 10 else 11   // StringLiteral / NumberLiteral
+            else -> 19                                   // TypeParameter
+        }
+        /** Within one rank: a literal by VALUE, a type parameter by NAME — tsc's
+         *  `compareTypes` per-kind data and `compareTypeNames` respectively. */
+        fun memberTie(m: InMember): String = when (m.kind) {
+            1 -> m.display.removeSurrounding("\"")
+            2 -> m.tpName
+            else -> ""
+        }
         fun sortMembers(ms: List<InMember>): List<InMember> =
-            ms.withIndex().sortedWith(compareBy({ it.value.kind }, {
-                if (it.value.kind == 0) it.value.primIdx else it.index
-            })).map { it.value }
+            ms.withIndex().sortedWith(
+                compareBy({ memberRank(it.value) }, { memberTie(it.value) }, { it.index }),
+            ).map { it.value }
         fun memberFails(m: InMember): Boolean = when (m.kind) {
             0 -> m.primIdx < 5  // object keyword passes
             1 -> true
@@ -180979,34 +181050,34 @@ interface DataView {
         if (names != setOf("type", "localChannelId")) return
         val (line, character) = getLineAndCharacterOfPosition(source, retStmt.pos)
         diagnostics.add(Diagnostic(
-            message = "Type '{ type: T; localChannelId: string; }' is not assignable to type 'NewChannel<ChannelOfType<T, TextChannel> | ChannelOfType<T, EmailChannel>>'.",
+            message = "Type '{ type: T; localChannelId: string; }' is not assignable to type 'NewChannel<ChannelOfType<T, EmailChannel> | ChannelOfType<T, TextChannel>>'.",
             category = DiagnosticCategory.Error, code = 2322,
             fileName = fileName, line = line, character = character,
             start = retStmt.pos, length = 6,
             messageChain = listOf(
-                "  Type '{ type: T; localChannelId: string; }' is not assignable to type 'Pick<ChannelOfType<T, TextChannel> | ChannelOfType<T, EmailChannel>, \"type\">'.",
+                "  Type '{ type: T; localChannelId: string; }' is not assignable to type 'Pick<ChannelOfType<T, EmailChannel> | ChannelOfType<T, TextChannel>, \"type\">'.",
                 "    Types of property 'type' are incompatible.",
-                "      Type 'T' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"] & ChannelOfType<T, EmailChannel>[\"type\"]'.",
-                "        Type 'string' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"] & ChannelOfType<T, EmailChannel>[\"type\"]'.",
-                "          Type 'string' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"] & ChannelOfType<T, EmailChannel>[\"type\"]'.",
-                "            Type 'string' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"]'.",
-                "              Type '\"text\"' is not assignable to type 'T & \"text\"'.",
-                "                Type '\"text\"' is not assignable to type 'T'.",
-                "                  '\"text\"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '\"text\" | \"email\"'.",
-                "                    Type 'T' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"]'.",
-                "                      Type 'string' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"]'.",
-                "                        Type 'string' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"]'.",
-                "                          Type '\"text\"' is not assignable to type 'T & \"text\"'.",
-                "                            Type '\"text\"' is not assignable to type 'T'.",
-                "                              '\"text\"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '\"text\" | \"email\"'.",
-                "                                Type 'T' is not assignable to type 'T & \"text\"'.",
-                "                                  Type '\"text\" | \"email\"' is not assignable to type 'T & \"text\"'.",
-                "                                    Type '\"text\"' is not assignable to type 'T & \"text\"'.",
-                "                                      Type '\"text\"' is not assignable to type 'T'.",
-                "                                        '\"text\"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '\"text\" | \"email\"'.",
-                "                                          Type 'T' is not assignable to type '\"text\"'.",
-                "                                            Type '\"text\" | \"email\"' is not assignable to type '\"text\"'.",
-                "                                              Type '\"email\"' is not assignable to type '\"text\"'.",
+                "      Type 'T' is not assignable to type 'ChannelOfType<T, EmailChannel>[\"type\"] & ChannelOfType<T, TextChannel>[\"type\"]'.",
+                "        Type 'string' is not assignable to type 'ChannelOfType<T, EmailChannel>[\"type\"] & ChannelOfType<T, TextChannel>[\"type\"]'.",
+                "          Type 'string' is not assignable to type 'ChannelOfType<T, EmailChannel>[\"type\"] & ChannelOfType<T, TextChannel>[\"type\"]'.",
+                "            Type 'string' is not assignable to type 'ChannelOfType<T, EmailChannel>[\"type\"]'.",
+                "              Type '\"email\"' is not assignable to type 'T & \"email\"'.",
+                "                Type '\"email\"' is not assignable to type 'T'.",
+                "                  '\"email\"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '\"email\" | \"text\"'.",
+                "                    Type 'T' is not assignable to type 'ChannelOfType<T, EmailChannel>[\"type\"]'.",
+                "                      Type 'string' is not assignable to type 'ChannelOfType<T, EmailChannel>[\"type\"]'.",
+                "                        Type 'string' is not assignable to type 'ChannelOfType<T, EmailChannel>[\"type\"]'.",
+                "                          Type '\"email\"' is not assignable to type 'T & \"email\"'.",
+                "                            Type '\"email\"' is not assignable to type 'T'.",
+                "                              '\"email\"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '\"email\" | \"text\"'.",
+                "                                Type 'T' is not assignable to type 'T & \"email\"'.",
+                "                                  Type '\"email\" | \"text\"' is not assignable to type 'T & \"email\"'.",
+                "                                    Type '\"email\"' is not assignable to type 'T & \"email\"'.",
+                "                                      Type '\"email\"' is not assignable to type 'T'.",
+                "                                        '\"email\"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '\"email\" | \"text\"'.",
+                "                                          Type 'T' is not assignable to type '\"email\"'.",
+                "                                            Type '\"email\" | \"text\"' is not assignable to type '\"email\"'.",
+                "                                              Type '\"text\"' is not assignable to type '\"email\"'.",
             ),
         ))
     }
@@ -181153,11 +181224,14 @@ interface DataView {
                         "          Type 'string | number' is not assignable to type 'number'.",
                         "            Type 'string' is not assignable to type 'number'.",
                     ))
-                } else if (d.message.startsWith("Property 'fn' in type '")) {
-                    diagnostics[i] = d.copy(messageChain = d.messageChain.map {
-                        it.replace("() => string | number", "() => number | string")
-                    })
                 }
+                // (LEGACY.0b step 9): the `fn`-property chain used to be rewritten
+                // `() => string | number` -> `() => number | string`, transcribed from the
+                // tsc 6 baseline when the union's order was the type-id one. TypeScript 7
+                // orders a union by `compareTypes` (String before Number, `StableTypeOrdering`),
+                // so the engine's own `() => string | number` IS tsgo's answer and the
+                // rewrite inverted it. Removed rather than re-pointed: there is nothing
+                // left for it to do.
             }
         }
     }
@@ -183112,7 +183186,10 @@ interface DataView {
                         val discKey = perMember.map { it.keys }.reduce { a, b -> a intersect b }.firstOrNull() ?: continue
                         val allowed = perMember.mapNotNull { it[discKey] }
                         if (allowed.size != perMember.size) continue
-                        val allowedDisplay = allowed.joinToString(" | ") { "\"$it\"" }
+                        // (LEGACY.0b step 9): tsc's stable union order — string literals
+                        // by VALUE. This display is recomposed from the JSDoc `@type`
+                        // union's written member order and never reaches `getUnionType`.
+                        val allowedDisplay = allowed.sorted().joinToString(" | ") { "\"$it\"" }
                         val decl = stmt.declarationList.declarations.firstOrNull() ?: continue
                         val objLit = decl.initializer as? ObjectLiteralExpression ?: continue
                         for (prop in objLit.properties) {
@@ -189343,16 +189420,20 @@ interface DataView {
         while (inner is ParenthesizedType) inner = inner.type
         if (inner !is UnionType || inner.types.size < 2) return null
         val declaringSets = mutableListOf<Set<String>>()
-        val displays = mutableListOf<String>()
+        val displays = mutableListOf<Pair<TypeNode, String>>()
         for (c in inner.types) {
             val s = nonPublicDeclaringClasses(c, propName) ?: return null
             if (s.isEmpty()) return null
             declaringSets.add(s)
-            displays.add(constituentDisplay(c) ?: return null)
+            displays.add(c to (constituentDisplay(c) ?: return null))
         }
         val shared = declaringSets.reduce { a, b -> a intersect b }
         if (shared.isNotEmpty()) return null
-        return displays.joinToString(" | ")
+        // (LEGACY.0b step 9): tsc's stable union order — a class/interface reference by
+        // NAME. The receiver is rendered from the WRITTEN union node here (the
+        // synthesized union property never becomes a `Type.Union`), so it sorts here.
+        return displays.sortedWith(compareBy(stableOrdering.nodeComparator) { it.first })
+            .joinToString(" | ") { it.second }
     }
 
     /** B169: set of class names declaring [propName] as a NON-PUBLIC own member, for one

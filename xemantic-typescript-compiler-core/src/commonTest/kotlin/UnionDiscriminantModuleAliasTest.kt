@@ -37,6 +37,14 @@ import kotlin.test.Test
  * owning file — a MODULE file's top-level `type`/`let` is no longer in the
  * merged [Checker.globals] after the INV.3(d) retire, so the legacy consult
  * silently bailed and the whole emitter died in module files.
+ *
+ * (LEGACY.0b) step 9 — the EXPECTATION moved, the subject did not. The literal union was
+ * transcribed as `"foo" | "bar"` when this walker rendered the annotation's WRITTEN order;
+ * TypeScript 7 orders a union's string literals by VALUE (`StableTypeOrdering`), and
+ * tsgo 7.0.2's own baseline for the very fixture this class reproduces
+ * (`indirectDiscriminantAndExcessProperty.errors.txt`) reads `'"bar" | "foo"'`. Only the
+ * rendered string changed: the code, the span and the count are untouched, which is
+ * exactly why a display change has to be caught by a full-text pin like this one.
  */
 class UnionDiscriminantModuleAliasTest {
 
@@ -64,7 +72,7 @@ class UnionDiscriminantModuleAliasTest {
             """.trimIndent(),
             directives = "",
         ) should {
-            have(any { it.code == 2322 && it.message == "Type 'string' is not assignable to type '\"foo\" | \"bar\"'." })
+            have(any { it.code == 2322 && it.message == "Type 'string' is not assignable to type '\"bar\" | \"foo\"'." })
         }
     }
 
@@ -97,7 +105,7 @@ class UnionDiscriminantModuleAliasTest {
             """.trimIndent(),
             directives = "",
         ) should {
-            have(any { it.code == 2322 && it.message == "Type 'string' is not assignable to type '\"foo\" | \"bar\"'." })
+            have(any { it.code == 2322 && it.message == "Type 'string' is not assignable to type '\"bar\" | \"foo\"'." })
         }
     }
 }
