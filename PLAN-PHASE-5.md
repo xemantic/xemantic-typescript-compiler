@@ -25,6 +25,79 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.99) — (LEGACY.0b) step 14: TS2880 unconditional, the JSDoc `@typedef` name has TWO emitters, and TS2749 lands in ten nested JSDoc positions (2026-09-14)
+
+**Three commits** (`e6fa3d310` feat, `521e058e6` test, this docs commit). **Suite 19,292 → 19,315 / 0 / 100**,
+9 modules asserted — `tsgoPendingBaselines` 84 → **76** (9 closed, 1 re-sized), skipped −9, +23 pins
+(`TsgoStep14MechanismsTest`). Screen **errors 3,067 / 0 and emit 5,688 / 0** on the final binary, all
+nine closed rows `--include`d and 0. `cost_gate.py` exit 0, all 20 counters +0.00% (the new walkers
+run on JS/JSDoc shapes the compiler profile has none of — a CONTROL); `huge_methods.py --fail-over 0`
+exit 0 (871 classes); grid 8×`added=0 removed=0` and the emit-mode control 78/78 (tsc's own sources
+carry no `assert` clause and no JSDoc type — CONTROLS, counted); warning-clean. `Checker.kt`
+194,674 → **195,007** (+333, a SEMANTIC change: two new walkers). **(LEGACY.0) stays OPEN** on (0b-15).
+
+**M1 — TS2880 IS UNCONDITIONAL, AND THE BRIEF NAMED ONE OF ITS TWO GATES.** tsgo emits *Import
+assertions have been replaced by import attributes* from the parser (`parser.go:2504`, `:3045`) and
+from the dynamic-`import()` options check (`checker.go:8272`, on the PROPERTY NAME, `break` after the
+first) and consults nothing: `checkImportAssertionsDeprecated` lost its `ignoreDeprecations` gate AND
+a module-kind gate the brief did not name (tsgo emits under `commonjs` and `node16` too — measured);
+the type form anchors on the `assert` token (width 6, col 30 not 38); a string-named or shorthand
+`assert` is silent; and a side-effect `import "x" assert {…}` was PARSED AND DROPPED (its clause
+never reached the node, so that form emitted nothing) — now kept. Residue: `assert` after a line
+break is not a clause (tsgo `!hasPrecedingLineBreak()`), ours prints tsgo's TS1435 plus a
+pre-existing TS1005/TS2304 for the leftover statement.
+
+**M2 — THE `@typedef` NAME'S TS1003 COMES FROM *TWO* EMITTERS, AND THE BRIEF'S ANCHOR RULE WAS OFF
+BY ONE CHARACTER IN EVERY CASE.** Reading `parseJSDocIdentifierName` ("at the next token") predicted
+the wrong column for every probe; only `reparser.go:47` explained them: (R1) the REPARSER rejects the
+zero-width synthesised name and reports on the ONE CHARACTER BEFORE its position — a syntactic row
+every JS file gets under `allowJs` alone; (R2) the JSDoc parser's own row at the CURRENT token
+(newline / whitespace run / `@`), which `program.go:1350` appends **for checkJs files only** — so
+`jsdocTypedefNoCrash` (allowJs) has one row and `jsEnumCrossFileExport` (checkJs) two, and a
+type-less `@typedef` under `checkJs:false` prints nothing. tsgo's CLI stops at syntactic errors and
+shows only R1, so R2 was read off the harness baselines and pinned as such. `checkJsDocTypedefMissingName`
+carries a faithful mini `ScanJSDocToken` + `skipWhitespaceOrAsterisk` (including its "nothing but
+trivia to the close → skip nothing" branch), the tag-at-line-start rule and `SortAndDeduplicate` for
+the `{T}*/` case where both rows coincide. The JS `type X`/`const X` TS2451 pair is DELETED (tsgo:
+TS8008 alone in `.js`, silent in `.ts` — both pinned).
+
+**M3 — TS2749 IN NESTED JSDoc POSITIONS: SIZED WIDER THAN THE BRIEF AND ALL OF IT LANDED ON ZERO.**
+`checkJsDocNestedValueAsType` sub-parses the JSDoc type text (refusing any expression with a parse
+diagnostic), classifies each `TypeReference` by parent, re-verifies the name at the computed offset
+and applies 16.4ct's value-only rule (file locals minus `@template` / program-wide `@typedef` /
+`@callback` names). The brief named four positions; type argument, array element, union member,
+type-literal member, function-type return and the `@type`/`@returns`/`@typedef` ROOT all screened
+at zero and all landed (7/7 rows byte-exact against tsgo on the `t6` probe). Two neighbours closed
+on the way: a KEYWORD type argument (`fn<string>`) no longer reads an ours-only TS2304, and the
+index-signature wording is tsgo's — TS1268 for a value-typed parameter, TS1337 kept only for a
+literal-typedef / `@template` parameter type (`checkGrammarIndexSignatureParameters`).
+
+**REFUSED WITH NUMBERS — `jsEnumCrossFileExport` stays pending, re-sized.** Its two `enumDef.js`
+TS1003 rows now match; the two `index.js` rows are TS2749 on a QUALIFIED name
+`Host.UserMetrics.Action`, which tsgo resolves only through the JSDoc-NAMESPACE declarations that
+`@typedef {…} Host.UserMetrics.Bargh` creates (a plain expando `Host.A` is TS2503 in tsgo, measured)
+— unmodelled here; and the (14,21) row's width-1 range is the NEWLINE, which tsgo's harness renders as
+an empty squiggle line where our formatter prints `~` at column 21. Two blockers, neither in the brief.
+
+**PINS AND ABLATION.** 23 pins, 18 red on the pre-change binary, the 5 green exactly the declared
+controls (no blind positive). Twelve arms, all discriminating (pin reds / errors-screen mismatches
+over 3,067): a1 `ignoreDeprecations` gate restored 1/1; a2 type-form anchor on the inner `{` 1/2; a3
+M2 off 6/3; a4 R1 anchor +1 5/3; a5 JS TS2451 restored 1/1; a6 fn-type param position off 2/1; a7
+generic head off 3/1; a8 TS1337 for every index name 2/1; a9 side-effect clause dropped 1/0; a10
+module-kind gate restored 1/0; a11 index value test inverted 2/1; a12 R2 not checkJs-gated 1/3.
+Final md5s Parser `c8281f88…`, Checker `5e0f0d75…` — the orchestrator's AFTER arm matched both.
+
+**RESIDUES, RECORDED NOT PINNED.** Closure syntax `function(Thing): void` (tsgo TS1005) and
+`[key: string] boolean` (tsgo TS1021+TS1005) are silent here; `[key: Unknown]` lacks tsgo's TS2304;
+an ours-only TS2882 on `import "./p.json"` under `resolveJsonModule`. **And a build trap hit twice
+in one insertion**: a KDoc containing a literal `/**` opens a NESTED comment (CLAUDE.md's entry) —
+2,325 cascade errors from one line.
+
+**WHAT REMAINS (76)**: display/chain-content ~21; F8 span 10 (TS5053 ×2 among them); F1 silent 5
+(TS2339 ×3, TS2309, the qualified-JSDoc TS2749 above); F2-residue 6; ORDER-model 5; TS2683-residue 3;
+JS emit 3; the `downlevelIteration` TS5102 pair (an owner decision under (LEGACY.1)); the TS2749
+JS residue (`jsExportMemberMergedWithModuleAugmentation`, `jsEnumCrossFileExport`); the rest singletons.
+
 ### Round (P18.98) — (LEGACY.0b) step 13: four checker mechanisms, 8 rows, and the tsc-6 mirror was a countdown for the suggestion cap (2026-09-14)
 
 **Three commits** (`94351d42b` feat, `3d51b5190` test, this docs commit). **Suite 19,260 → 19,292 / 0 / 109**,
@@ -735,98 +808,6 @@ family); only the chain's shape moved, and its KDoc now carries tsgo's row and t
 the main fix looked like a fourth general emitter and were pins; and that the grid was predicted
 to be a partial gate when it fires zero times on every profile and every library.
 
-### Round (P18.89) — F6a: the "unblocker" was not needed, because tsgo's condition is over RENDERED STRINGS — 27 of 28 rows, both directions (2026-09-13)
-
-**Suite 19,130 → 19,139 / 0 / 215** — `tsgoPendingBaselines` 217 → 190 and skipped 242 →
-215, **both −27**, which is the receipt. +9 pins. Grid 8×`added=0 removed=0`;
-`cost_gate.py` exit 0 with all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0
-(861 classes, 0 over); **warning-clean, verified with a gate proven live by a positive
-control** — see the last section, which is about this round's instrument rather than its
-subject. **(LEGACY.0) stays OPEN.**
-
-**THE ROUND'S BRIEF WAS WRONG ABOUT ITS OWN PREMISE, AND THAT IS THE FINDING.** (P18.88)
-refused F6a because "the missing-property message is emitted at ~30 independent sites with
-no relation-error funnel", and this round was briefed to build that funnel by hand. The
-re-taken census says **61 distinct emission sites reached by the corpus** (115 static
-occurrences) and **119 baselines** carrying the message, not 73 — i.e. the hand-refactor was
-priced against half the real population. It was also unnecessary: **tsgo's condition is a
-comparison of RENDERED STRINGS.** `chainArgsMatch(nil, generalizedSourceType, targetType)`
-compares strings against the chain entry's own string arguments, so deciding it from a
-FINISHED `Diagnostic` is not an approximation of tsgo's rule — **it is tsgo's rule.** Every
-checker diagnostic leaves through `Checker.getDiagnostics()` (nothing reads
-`checker.diagnostics`), so ONE call site routes all 61 — a stronger routing claim than 61
-edits could make, and fail-closed: a head that does not parse keeps today's answer.
-
-**STAGE 1 WAS AN IDENTITY FUNCTION WITH A BYTE-IDENTICAL RECEIPT**
-(`RelationHeadSuppression.kt`, 257 lines, one call): suite 19,130/0/242 identical to HEAD,
-grid 8×`added=0 removed=0`, `cost_gate.py` +0.00% — and the note that matters is that
-**+0.00% is expected BY CONSTRUCTION for an identity function and is therefore a control,
-not the gate**; the corpus is the gate.
-
-**STAGE 2 — THE RULE, AND BOTH DIRECTIONS ARE ONE RULE.** `chain[0]` is a missing-property
-message **and** the head parses as `(source, target)` **and** the head is not a conversion
-or interface-implementation one **and** the two display pairs are EQUAL ⇒ drop the head,
-re-code to 2741/2739/2740 (chosen by the `, and N more.` tail) and de-indent the chain.
-Conjunct 3 is **parsed and then excluded**, mirroring tsgo, because those heads' displays
-genuinely DO match (26 corpus hits) and TypeScript 7 keeps them anyway. Four sites that
-pre-suppressed were changed so the funnel decides. **Rows: 23 of 24 leaf-reporting and 4 of
-4 head-keeping — so the brief's "a fix that closes 24 and reddens 4 is wrong" was right
-about the risk and wrong about the shape**: they are one rule, 27 close together, nothing
-reddened, and the 4 turned out to be THREE mechanisms. The single row left pending is
-byte-correct on its F6a half; its residue is an ours-only TS8029 (a variadic `@param` is an
-array type, so the *would match 'arguments'* rung must not fire), reason corrected in place.
-
-**THE PRE-MEASUREMENT IS WHAT MADE THIS SAFE, AND IT IS REUSABLE.** Before writing the rule:
-of all **2,955** active baselines, **not one** has a head whose displays match its
-missing-property chain entry, and the **25** where OUR output did were **all 25 already
-`@Ignore`d**. That is a statement that the rule cannot move a green baseline, taken before
-the build rather than inferred from a green run afterwards — and the first post-change suite
-had 32 failures of which **zero were corpus subtests**, exactly as the pre-measurement
-predicted.
-
-**ABLATION — 4 arms, all discriminate, `tests` identical at 19,138 in every one:** a1 the
-string comparison INVERTED — **98 RED** (5 new-class pins **in opposite directions**, 55
-corpus, 43 hand-written); a2 conjunct 1 dropped — **771**; a3 conjunct 2 dropped — **14**;
-a4 conjunct 3 dropped — **49**. **No conjunct is redundant.** a3 initially reddened ZERO
-new-class pins (its coverage lived in `SignatureThisParameterTest`) — recorded as such and
-then fixed with a tenth pin rather than left as a claim.
-
-**32 EXISTING PINS IN 27 CLASSES WERE RE-EXPRESSED, WHICH IS (PARITY.2)'s LAW IN PRACTICE**:
-strengthened from `it.code == N` to full message text, with the values taken from a temporary
-funnel trace rather than guessed. `EnumComparisonDisplayTest`'s recorded countdown is closed.
-
-**THE GRID IS A MEASURED CONTROL, NOT AN ASSUMED ONE**: 8×`added=0 removed=0` with arms
-distinct, and `grep "is missing"` finds **nothing in any of the 16 captures** — the rule
-fires zero times on the profiles. Libraries agree (cronstrue 2 → 2, marked 18 → 18).
-
-**THE ONE MEASURED COST, REFUSED ON ARITHMETIC.** Three HAND-WRITTEN pins (no corpus
-baseline, no profile) now differ from tsgo in CODE where they previously differed only in
-chain TEXT — `GenericCallArgConstraintTest`, `ExplicitCallTypeArgIntersectionTest`,
-`IntersectionOverUnionRelationTest` — because **our chain line names the type parameter or
-the undistributed intersection where tsgo names its constraint or one distributed
-constituent**, so tsgo's display pair disagrees where ours agrees. Each carries tsgo's row
-and the date in its KDoc. Restricting the rule to non-TS2344 heads would avoid all three and
-lose **7 of the 27** landed rows; refused on that arithmetic, and the real fix is the chain's
-SOURCE DISPLAY, a separate family.
-
-**SIX REFUTED PREDICTIONS**, four of them this session's own: (P18.88)'s "~30 sites" (61)
-and "reach 73" (119); the brief's "the blocker is the absence of a funnel" (no hand-funnel
-needed); "a fix that closes 24 and reddens 4 is wrong" (one rule closes both); "the grid will
-be a real gate" (it fires zero times); and "`strictFunctionTypesErrors` is not F6a" (it is
-the same family inverted). Also fixed in passing: **HEAD `cb9ff87d` was NOT warning-clean** —
-`Checker.kt:52047`, left by (P18.88) and missed by its gate, for the reason below.
-
-**THE INSTRUMENT FAILURE THIS ROUND EXPOSED, WHICH INVALIDATES FOUR EARLIER GREENS.** The
-warning check used across (P18.85)-(P18.88) was `./gradlew … --rerun -q … | grep '^w:'`, and
-the `-q` **suppresses the warnings it greps for**: a deliberately injected `USELESS_CAST`
-probe produced a **ZERO-BYTE log and `w=0`**, i.e. the gate could not see a warning that was
-certainly there. Without `-q` the same probe reads `w: … No cast needed.` and the log is
-1,364 bytes. CLAUDE.md's own documented incantation has no `-q`; it was added by this
-session. Those four rounds' "warning-clean" claims were worthless, HEAD was in fact dirty,
-and the current tree is clean **verified against a live gate**. Entry added.
-
-**NEXT**: (0b-4), by red count — F6z 33 singletons (15 JS/checkJs/JSDoc), JS emit 33, F3
-last-overload 25, F1 11, F8's unrelated-anchor residue ~11, F6d 10, F2 9, F0 7.
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1157,7 +1138,24 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-13 LANDED 2026-09-14 ((P18.85)-(P18.98) notes) — pending 84, skipped 109,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-14 LANDED 2026-09-14 ((P18.85)-(P18.99) notes) — pending 76, skipped 100,
+  suite 19,315/0. **(P18.99) closed 9 rows in three mechanisms** (TS2880 unconditional and key-anchored; the
+  `@typedef` name's TS1003 from its TWO emitters — reparser one char BEFORE, JSDoc parser at the current token
+  for checkJs only; TS2749 in ten nested JSDoc positions) and re-sized `jsEnumCrossFileExport` on two named
+  blockers (a QUALIFIED expando name needs tsgo's JSDoc-namespace declarations; a newline-wide range renders as
+  an empty squiggle line in tsgo's harness). **THE DECOMPOSED RESIDUE (76)**: display/chain-content ~21 (6
+  type-DISPLAY + 1 chain-CONTENT reclassified rows, the `Object` hint in argument/return position, the
+  suggestion tie-break by declaration order); F8 span 10 (TS5053 ×2); F1 silent 5 (TS2339 ×3, TS2309, the
+  qualified-JSDoc TS2749); F2-residue 6 (four mechanisms, (P18.93)); ORDER-model 5 ((P18.94)); TS2683-residue 3;
+  JS emit 3; the `downlevelIteration` TS5102 pair (2 — an owner decision under (LEGACY.1), would redden nothing);
+  the rest singletons — SIZE BY MECHANISM, never by F-letter, expect ≤6 per round. **PICK AND SIZE WITH
+  `bash scripts/corpus-screen.sh`** (8,755 subtests over errors+emit in ~70 s) **and grep the two tsc-6 MIRROR
+  classes for the codes a round will move BEFORE starting it** ((P18.98)). **A KNOWN FOLLOW-ON**: three
+  hand-written pins differ from tsgo in CODE because our relation CHAIN line names the type parameter /
+  undistributed intersection where tsgo names its constraint / one distributed constituent — that chain SOURCE
+  DISPLAY is its own family and closing it also closes those three. The 21 TS-1 rows stay LEDGERED.
+  **BLOCKED-PENDING-USER, still open**: the fourth "harness artifact ⇒ fall back to tsc" arm ((P18.86)).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-13 LANDED 2026-09-14 ((P18.85)-(P18.98) notes) — pending 84, skipped 109,
   suite 19,292/0. **(P18.98) closed four checker mechanisms** (no suggestion cap, recursive array-pattern TS6198,
   the `Object`-source TS2322 head, leaf promotion of an elaborated excess property) — and found that the tsc-6
   MIRROR classes (`TsgoHarnessSelfCheckBaselinesTest`, `manyCompilerErrorsInTheTwoFiles`'s twin) are COUNTDOWNS

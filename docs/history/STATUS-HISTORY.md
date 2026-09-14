@@ -3601,3 +3601,29 @@ numbers**: the rule built from tsgo's SOURCE does not reproduce tsgo's own BASEL
 arms, ALL discriminating, each reporting pin reds AND screen mismatches. Grid a MEASURED control
 (TS2300/TS2717/TS6200 all 0/0 in both arms of all eight). cost_gate all 20 counters +0.00%,
 huge_methods exit 0 (862 classes), warning-clean against a gate proven live.
+
+**(P18.94) — THE ORDER FAMILY: 13 OF 18, AND FIVE OF THE "MODEL GAPS" WERE REACH ROWS, 19,200 / 0 / 151 (2026-09-14).**
+Pending 139 -> **126**, skipped 164 -> **151**, both -13, plus +8 pins. **The orchestrator's
+read-only decomposition was wrong in both directions and the measurement said so**: it is THREE
+groups not two, five of the nine briefed "model gaps" were reachable, and two briefed reach
+attributions were the same site. The discriminator is one scratch run — rewrite the SOURCE
+union's order: if the output changes the display reads nodes and the fix is a sort; if not, the
+TYPE is wrong. **A third group nobody had: tsc-6 TRANSCRIPTION**, whose find is that
+`baseClassImprovedMismatchErrors` did not merely hold a stale string — it **actively rewrote**
+`() => string | number` into `() => number | string`, converting TypeScript 7's answer into
+TypeScript 6's for this entire arc. Deleted, not re-transcribed. **The screen is now the primary
+instrument**: 3,033/0 before, **3,033/0 after all 13 fixes** on the family with the highest
+display blast radius left, with every closed row verified through `--include` and the 5 holdouts
+as the positive control that the path was live. Every ablation arm reports screen mismatches
+beside pin reds, which is what makes its six ZERO-PIN arms attributable — each moves precisely
+one baseline. **A blind pin was found by its own ablation** (arm a3 stayed green while moving a
+baseline): more than one emitter owns TS2353, so the pin asserted the right answer from the wrong
+site. A recorded ledger REASON was also wrong — `typeParameterDiamond4` is a resolution gap, not
+an ordering one — and two holdouts are not ORDER rows at all. **An operational failure, and it
+was the orchestrator's**: four suite runs were lost to `EOFException`/`NoSuchFileException`/a KIR
+timeout because it ran `./gradlew` while the agent's suite was in flight, having read a stop
+notification as "finished"; CLAUDE.md's rule is one invocation per BOX, not per agent. It also
+`--stop`ped a later invocation's daemon and `pgrep`-killed its own shell — both already
+documented, both walked into. The KIR timeout is NOT a regression (seven straight-line
+`console.*` calls, no loop; 159 KIR tests pass in isolation). cost_gate all 20 counters +0.00%,
+huge_methods exit 0 (867 classes), warning-clean, screen 3,046/0.

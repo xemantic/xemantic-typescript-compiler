@@ -1,3 +1,96 @@
+### Round (P18.89) — F6a: the "unblocker" was not needed, because tsgo's condition is over RENDERED STRINGS — 27 of 28 rows, both directions (2026-09-13)
+
+**Suite 19,130 → 19,139 / 0 / 215** — `tsgoPendingBaselines` 217 → 190 and skipped 242 →
+215, **both −27**, which is the receipt. +9 pins. Grid 8×`added=0 removed=0`;
+`cost_gate.py` exit 0 with all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0
+(861 classes, 0 over); **warning-clean, verified with a gate proven live by a positive
+control** — see the last section, which is about this round's instrument rather than its
+subject. **(LEGACY.0) stays OPEN.**
+
+**THE ROUND'S BRIEF WAS WRONG ABOUT ITS OWN PREMISE, AND THAT IS THE FINDING.** (P18.88)
+refused F6a because "the missing-property message is emitted at ~30 independent sites with
+no relation-error funnel", and this round was briefed to build that funnel by hand. The
+re-taken census says **61 distinct emission sites reached by the corpus** (115 static
+occurrences) and **119 baselines** carrying the message, not 73 — i.e. the hand-refactor was
+priced against half the real population. It was also unnecessary: **tsgo's condition is a
+comparison of RENDERED STRINGS.** `chainArgsMatch(nil, generalizedSourceType, targetType)`
+compares strings against the chain entry's own string arguments, so deciding it from a
+FINISHED `Diagnostic` is not an approximation of tsgo's rule — **it is tsgo's rule.** Every
+checker diagnostic leaves through `Checker.getDiagnostics()` (nothing reads
+`checker.diagnostics`), so ONE call site routes all 61 — a stronger routing claim than 61
+edits could make, and fail-closed: a head that does not parse keeps today's answer.
+
+**STAGE 1 WAS AN IDENTITY FUNCTION WITH A BYTE-IDENTICAL RECEIPT**
+(`RelationHeadSuppression.kt`, 257 lines, one call): suite 19,130/0/242 identical to HEAD,
+grid 8×`added=0 removed=0`, `cost_gate.py` +0.00% — and the note that matters is that
+**+0.00% is expected BY CONSTRUCTION for an identity function and is therefore a control,
+not the gate**; the corpus is the gate.
+
+**STAGE 2 — THE RULE, AND BOTH DIRECTIONS ARE ONE RULE.** `chain[0]` is a missing-property
+message **and** the head parses as `(source, target)` **and** the head is not a conversion
+or interface-implementation one **and** the two display pairs are EQUAL ⇒ drop the head,
+re-code to 2741/2739/2740 (chosen by the `, and N more.` tail) and de-indent the chain.
+Conjunct 3 is **parsed and then excluded**, mirroring tsgo, because those heads' displays
+genuinely DO match (26 corpus hits) and TypeScript 7 keeps them anyway. Four sites that
+pre-suppressed were changed so the funnel decides. **Rows: 23 of 24 leaf-reporting and 4 of
+4 head-keeping — so the brief's "a fix that closes 24 and reddens 4 is wrong" was right
+about the risk and wrong about the shape**: they are one rule, 27 close together, nothing
+reddened, and the 4 turned out to be THREE mechanisms. The single row left pending is
+byte-correct on its F6a half; its residue is an ours-only TS8029 (a variadic `@param` is an
+array type, so the *would match 'arguments'* rung must not fire), reason corrected in place.
+
+**THE PRE-MEASUREMENT IS WHAT MADE THIS SAFE, AND IT IS REUSABLE.** Before writing the rule:
+of all **2,955** active baselines, **not one** has a head whose displays match its
+missing-property chain entry, and the **25** where OUR output did were **all 25 already
+`@Ignore`d**. That is a statement that the rule cannot move a green baseline, taken before
+the build rather than inferred from a green run afterwards — and the first post-change suite
+had 32 failures of which **zero were corpus subtests**, exactly as the pre-measurement
+predicted.
+
+**ABLATION — 4 arms, all discriminate, `tests` identical at 19,138 in every one:** a1 the
+string comparison INVERTED — **98 RED** (5 new-class pins **in opposite directions**, 55
+corpus, 43 hand-written); a2 conjunct 1 dropped — **771**; a3 conjunct 2 dropped — **14**;
+a4 conjunct 3 dropped — **49**. **No conjunct is redundant.** a3 initially reddened ZERO
+new-class pins (its coverage lived in `SignatureThisParameterTest`) — recorded as such and
+then fixed with a tenth pin rather than left as a claim.
+
+**32 EXISTING PINS IN 27 CLASSES WERE RE-EXPRESSED, WHICH IS (PARITY.2)'s LAW IN PRACTICE**:
+strengthened from `it.code == N` to full message text, with the values taken from a temporary
+funnel trace rather than guessed. `EnumComparisonDisplayTest`'s recorded countdown is closed.
+
+**THE GRID IS A MEASURED CONTROL, NOT AN ASSUMED ONE**: 8×`added=0 removed=0` with arms
+distinct, and `grep "is missing"` finds **nothing in any of the 16 captures** — the rule
+fires zero times on the profiles. Libraries agree (cronstrue 2 → 2, marked 18 → 18).
+
+**THE ONE MEASURED COST, REFUSED ON ARITHMETIC.** Three HAND-WRITTEN pins (no corpus
+baseline, no profile) now differ from tsgo in CODE where they previously differed only in
+chain TEXT — `GenericCallArgConstraintTest`, `ExplicitCallTypeArgIntersectionTest`,
+`IntersectionOverUnionRelationTest` — because **our chain line names the type parameter or
+the undistributed intersection where tsgo names its constraint or one distributed
+constituent**, so tsgo's display pair disagrees where ours agrees. Each carries tsgo's row
+and the date in its KDoc. Restricting the rule to non-TS2344 heads would avoid all three and
+lose **7 of the 27** landed rows; refused on that arithmetic, and the real fix is the chain's
+SOURCE DISPLAY, a separate family.
+
+**SIX REFUTED PREDICTIONS**, four of them this session's own: (P18.88)'s "~30 sites" (61)
+and "reach 73" (119); the brief's "the blocker is the absence of a funnel" (no hand-funnel
+needed); "a fix that closes 24 and reddens 4 is wrong" (one rule closes both); "the grid will
+be a real gate" (it fires zero times); and "`strictFunctionTypesErrors` is not F6a" (it is
+the same family inverted). Also fixed in passing: **HEAD `cb9ff87d` was NOT warning-clean** —
+`Checker.kt:52047`, left by (P18.88) and missed by its gate, for the reason below.
+
+**THE INSTRUMENT FAILURE THIS ROUND EXPOSED, WHICH INVALIDATES FOUR EARLIER GREENS.** The
+warning check used across (P18.85)-(P18.88) was `./gradlew … --rerun -q … | grep '^w:'`, and
+the `-q` **suppresses the warnings it greps for**: a deliberately injected `USELESS_CAST`
+probe produced a **ZERO-BYTE log and `w=0`**, i.e. the gate could not see a warning that was
+certainly there. Without `-q` the same probe reads `w: … No cast needed.` and the log is
+1,364 bytes. CLAUDE.md's own documented incantation has no `-q`; it was added by this
+session. Those four rounds' "warning-clean" claims were worthless, HEAD was in fact dirty,
+and the current tree is clean **verified against a live gate**. Entry added.
+
+**NEXT**: (0b-4), by red count — F6z 33 singletons (15 JS/checkJs/JSDoc), JS emit 33, F3
+last-overload 25, F1 11, F8's unrelated-anchor residue ~11, F6d 10, F2 9, F0 7.
+
 ### Round (P18.88) — (LEGACY.0b) step 3: F6 decomposed into eight mechanisms, four sub-families landed, and the largest one REFUSED on a measured blocker (2026-09-13)
 
 **Suite 19,100 → 19,130 / 0 / 242** — `tsgoPendingBaselines` 242 → 217 and skipped 267 →

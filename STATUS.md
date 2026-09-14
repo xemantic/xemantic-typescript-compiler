@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194,674** lines (**+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **195,007** lines (**+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,21 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.99) — TS2880 UNCONDITIONAL, THE `@typedef` NAME HAS *TWO* EMITTERS, AND TS2749 LANDS IN TEN NESTED JSDoc POSITIONS, 19,315 / 0 / 100 (2026-09-14).**
+Pending 84 -> **76** (9 closed, 1 re-sized), skipped -9, +23 pins, 9 modules asserted. TS2880
+lost its `ignoreDeprecations` gate AND a module-kind gate the brief did not name, anchors on the
+`assert` key (width 6), and a side-effect `import "x" assert {…}` had been parsed and DROPPED. The
+brief's anchor rule for a nameless `@typedef` was off by one character in every probe: tsgo's
+REPARSER reports one character BEFORE the zero-width name (every JS file) and its JSDoc parser adds a
+second row at the current token for checkJs files only — read off the harness baselines, since the
+CLI stops at syntactic errors. TS2749 for a value in a nested JSDoc type position was sized wider
+than briefed and all ten positions landed on a measured zero, with the index-signature wording
+(TS1268/TS1337) and a keyword type argument closed on the way. `jsEnumCrossFileExport` is REFUSED
+with two named blockers (a QUALIFIED expando name needs tsgo's JSDoc-namespace declarations; a
+newline-wide range renders as an empty squiggle line). Ablation 12 arms, all discriminating; 18 of 23
+pins red on the pre-change binary, the rest exactly the controls. cost_gate 20/20 +0.00% and the
+grid 8×0/0 + emit 78/78 — controls, counted (tsc's sources hold no `assert` clause and no JSDoc
+type); huge_methods exit 0 (871 classes); warning-clean; screen errors 3,067/0, emit 5,688/0.
 **(P18.98) — FOUR CHECKER MECHANISMS, 8 ROWS, AND THE tsc-6 MIRROR WAS A COUNTDOWN FOR THE SUGGESTION CAP, 19,292 / 0 / 109 (2026-09-14).**
 Pending 92 -> **84**, skipped -8, +32 pins, 9 modules asserted. tsgo has NO 10-suggestion cap
 (tsc 6's `maximumSuggestionCount` gate deleted, algorithm unchanged); TS6198 groups an ARRAY
@@ -100,28 +115,3 @@ the emit-mode control is itself blind**: `--outDir` + `diff -r` read 78 files ID
 change that moved 12 baselines, because tsc's own sources contain none of the three shapes — for
 an emit family the corpus EMIT CHANNEL is the gate. cost_gate all 20 counters +0.00% (a control
 here), huge_methods exit 0 (867 classes), warning-clean.
-**(P18.94) — THE ORDER FAMILY: 13 OF 18, AND FIVE OF THE "MODEL GAPS" WERE REACH ROWS, 19,200 / 0 / 151 (2026-09-14).**
-Pending 139 -> **126**, skipped 164 -> **151**, both -13, plus +8 pins. **The orchestrator's
-read-only decomposition was wrong in both directions and the measurement said so**: it is THREE
-groups not two, five of the nine briefed "model gaps" were reachable, and two briefed reach
-attributions were the same site. The discriminator is one scratch run — rewrite the SOURCE
-union's order: if the output changes the display reads nodes and the fix is a sort; if not, the
-TYPE is wrong. **A third group nobody had: tsc-6 TRANSCRIPTION**, whose find is that
-`baseClassImprovedMismatchErrors` did not merely hold a stale string — it **actively rewrote**
-`() => string | number` into `() => number | string`, converting TypeScript 7's answer into
-TypeScript 6's for this entire arc. Deleted, not re-transcribed. **The screen is now the primary
-instrument**: 3,033/0 before, **3,033/0 after all 13 fixes** on the family with the highest
-display blast radius left, with every closed row verified through `--include` and the 5 holdouts
-as the positive control that the path was live. Every ablation arm reports screen mismatches
-beside pin reds, which is what makes its six ZERO-PIN arms attributable — each moves precisely
-one baseline. **A blind pin was found by its own ablation** (arm a3 stayed green while moving a
-baseline): more than one emitter owns TS2353, so the pin asserted the right answer from the wrong
-site. A recorded ledger REASON was also wrong — `typeParameterDiamond4` is a resolution gap, not
-an ordering one — and two holdouts are not ORDER rows at all. **An operational failure, and it
-was the orchestrator's**: four suite runs were lost to `EOFException`/`NoSuchFileException`/a KIR
-timeout because it ran `./gradlew` while the agent's suite was in flight, having read a stop
-notification as "finished"; CLAUDE.md's rule is one invocation per BOX, not per agent. It also
-`--stop`ped a later invocation's daemon and `pgrep`-killed its own shell — both already
-documented, both walked into. The KIR timeout is NOT a regression (seven straight-line
-`console.*` calls, no loop; 159 KIR tests pass in isolation). cost_gate all 20 counters +0.00%,
-huge_methods exit 0 (867 classes), warning-clean, screen 3,046/0.
