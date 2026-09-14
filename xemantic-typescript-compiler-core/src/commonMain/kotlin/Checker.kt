@@ -38083,11 +38083,17 @@ class Checker(
                 // (TS2303) + identifier as not-found (TS2304). Non-exported or
                 // non-declaration-emit files emit TS2503 only.
                 if (ref is Identifier && !scope.has(name) && options.declaration) {
-                    val isExported = ModifierFlag.Export in stmt.modifiers
-                        || isImportAliasReExported(fileName, stmt.name.text)
+                    val reExports = importAliasReExportSites(fileName, stmt.name.text)
+                    val isExported = ModifierFlag.Export in stmt.modifiers || reExports.isNotEmpty()
                     if (isExported) {
                         emitTS2304ForImportRef(name, leftmost, source, fileName)
                         emitTS2303ForImportEquals(stmt, source, fileName)
+                        // (LEGACY.0b) F6d: the re-export is a SECOND alias declaration of the
+                        // same unresolvable target and TypeScript 7 reports it too
+                        // (`declarationEmitUnknownImport{,2}`); tsc 6 reported only the import.
+                        for (site in reExports) {
+                            emitTS2303At(site.name, site.start, site.end, source, fileName)
+                        }
                     }
                 }
             }
@@ -38112,27 +38118,47 @@ class Checker(
         }
     }
 
-    /** 16.4ee: Returns true when `aliasName` is re-exported by a top-level
-     *  `export { aliasName }` (no `from` clause) in the given file. Used to narrow
-     *  TS2303/TS2304 emission to the declaration-emit-visible surface. */
-    private fun isImportAliasReExported(fileName: String, aliasName: String): Boolean {
-        val result = fileResults[fileName] ?: return false
+    /** One re-export of an import alias: the alias declaration TypeScript 7 reports as the
+     *  SECOND half of the 16.4ee "circular" pair, with the name it reports it under. */
+    private class AliasReExportSite(val name: String, val start: Int, val end: Int)
+
+    /** 16.4ee: every top-level `export { aliasName }` / `export { aliasName as X }` /
+     *  `export default aliasName` (no `from` clause) in the given file — each of which is
+     *  its own alias DECLARATION. Used to narrow TS2303/TS2304 emission to the
+     *  declaration-emit-visible surface, and, since (LEGACY.0b) F6d, to place the second
+     *  TS2303 row.
+     *
+     *  Spans and names measured against tsgo 7.0.2: an `ExportSpecifier` squiggles the whole
+     *  specifier (`Bar as Foo`, 10 chars) and is named by its EXPORTED name (`Foo`, and
+     *  `default` for `export { Foo as default }`); an `export default Foo` squiggles the
+     *  whole statement and is named by the EXPRESSION (`Foo`, not `default`). */
+    private fun importAliasReExportSites(fileName: String, aliasName: String): List<AliasReExportSite> {
+        val result = fileResults[fileName] ?: return emptyList()
+        val source = result.sourceFile.text
+        val sites = mutableListOf<AliasReExportSite>()
+        fun idEnd(id: Identifier) = id.pos + (id.rawText?.length ?: id.text.length)
         for (stmt in result.sourceFile.statements) {
             if (stmt is ExportDeclaration && stmt.moduleSpecifier == null) {
                 val clause = stmt.exportClause
                 if (clause is NamedExports) {
                     for (spec in clause.elements) {
                         val internalName = spec.propertyName?.text ?: spec.name.text
-                        if (internalName == aliasName) return true
+                        if (internalName != aliasName) continue
+                        val start = (spec.propertyName ?: spec.name).pos
+                        sites.add(AliasReExportSite(spec.name.text, start, idEnd(spec.name)))
                     }
                 }
             }
             // `export default Foo` re-exports the import alias `Foo` just like `export { Foo }`
             // (declarationEmitUnknownImport2 — `import Foo From './Foo'; export default Foo`).
             if (stmt is ExportAssignment && !stmt.isExportEquals &&
-                (stmt.expression as? Identifier)?.text == aliasName) return true
+                (stmt.expression as? Identifier)?.text == aliasName) {
+                var st = stmt.pos
+                while (st < source.length && source[st].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) st++
+                sites.add(AliasReExportSite(aliasName, st, aliasStatementSpanEnd(stmt.expression, source)))
+            }
         }
-        return false
+        return sites
     }
 
     /** 16.4ee: TS2303 "Circular definition of import alias 'Foo'." emitted at an
@@ -92257,7 +92283,11 @@ interface DataView {
             var current = (decl.moduleReference as Identifier).text
             while (current in importMap && current !in reported) {
                 if (current in visited) {
-                    // Cycle detected — report on the first import in the cycle
+                    // Cycle detected — TypeScript 7 (tsgo) reports at EVERY alias
+                    // declaration on the cycle, where tsc 6 reported only the first
+                    // ((LEGACY.0b) F6d, measured: `import A = B; import B = A` is two
+                    // rows under tsgo and one under tsc 6 — the same split as F2's
+                    // TS2300-at-both-duplicate-declarations).
                     val cycleStart = visited.indexOf(current)
                     for (i in cycleStart until visited.size) {
                         val cycleName = visited[i]
@@ -92286,7 +92316,6 @@ interface DataView {
                             start = spanStart,
                             length = length,
                         ))
-                        break // TypeScript only reports on the first import in the cycle
                     }
                     break
                 }
@@ -92362,6 +92391,9 @@ interface DataView {
     private class SelfExportModule(
         val key: String,
         val importNode: ImportEqualsDeclaration,
+        /** The `export = NAME` statement that re-exports [importNode] — the SECOND
+         *  alias declaration on the cycle, which TypeScript 7 also reports ((LEGACY.0b) F6d). */
+        val exportNode: ExportAssignment,
         val source: String,
         val fileName: String,
         val nextSpec: String,
@@ -92384,7 +92416,7 @@ interface DataView {
             it.name.text == exprName && it.moduleReference is ExternalModuleReference
         } ?: return null
         val spec = ((imp.moduleReference as ExternalModuleReference).expression as? StringLiteralNode)?.text ?: return null
-        return SelfExportModule(key, imp, source, fileName, spec, fileName)
+        return SelfExportModule(key, imp, exportEq, source, fileName, spec, fileName)
     }
 
     private fun checkCircularExportEqualsImportAlias() {
@@ -92421,44 +92453,6 @@ interface DataView {
             return if (resolved != null) "file:$resolved" else null
         }
 
-        // Resolve a single `import X = require(spec)` declaration to a module key (for entry detection).
-        fun importTargetKey(imp: ImportEqualsDeclaration, contextFile: String): String? {
-            val ref = imp.moduleReference as? ExternalModuleReference ?: return null
-            val spec = (ref.expression as? StringLiteralNode)?.text ?: return null
-            if (spec in ambientNames) return "ambient:$spec"
-            val resolved = resolveModuleSpecifierRelative(spec, contextFile) ?: resolveModuleSpecifier(spec)
-            return if (resolved != null) "file:$resolved" else null
-        }
-
-        // Find, for a given cycle, the "entry" module: a cycle member imported by an
-        // `import X = require(...)` whose container is NOT in the cycle.
-        fun findEntry(cycle: Set<String>): String? {
-            for (result in binderResults) {
-                val fn = result.sourceFile.fileName
-                val containerKey = "file:$fn"
-                // file-level imports
-                for (stmt in result.sourceFile.statements) {
-                    if (stmt is ImportEqualsDeclaration) {
-                        val tgt = importTargetKey(stmt, fn)
-                        if (tgt != null && tgt in cycle && containerKey !in cycle) return tgt
-                    }
-                    if (stmt is ModuleDeclaration && stmt.name is StringLiteralNode) {
-                        val modKey = "ambient:" + (stmt.name).text
-                        val body = stmt.body as? ModuleBlock
-                        if (body != null) {
-                            for (inner in body.statements) {
-                                if (inner is ImportEqualsDeclaration) {
-                                    val tgt = importTargetKey(inner, fn)
-                                    if (tgt != null && tgt in cycle && modKey !in cycle) return tgt
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            return null
-        }
-
         val emittedCycles = mutableSetOf<Set<String>>()
         for ((startKey, _) in modules) {
             val path = mutableListOf<String>()
@@ -92466,18 +92460,18 @@ interface DataView {
             while (cur != null && cur in modules) {
                 if (cur in path) {
                     val idx = path.indexOf(cur)
-                    val cycle = path.subList(idx, path.size).toSet()
+                    val cycleKeys = path.subList(idx, path.size).toList()
+                    val cycle = cycleKeys.toSet()
                     if (cycle in emittedCycles) break
                     emittedCycles.add(cycle)
-                    // Determine the entry (a cycle member imported from outside the cycle).
-                    val entry = findEntry(cycle) ?: break
-                    val reportKey = if (entry.startsWith("ambient:")) {
-                        entry
-                    } else {
-                        // FILE entry: report the predecessor (member whose next == entry).
-                        cycle.firstOrNull { k -> modules[k]?.let { nextKey(it) } == entry } ?: entry
-                    }
-                    modules[reportKey]?.let { emitTS2303ForExportEqualsCycle(it) }
+                    // (LEGACY.0b) F6d: TypeScript 7 reports at EVERY alias declaration on
+                    // the cycle — for each participating module BOTH its self-import and
+                    // the `export = NAME` that re-exports it (measured against tsgo 7.0.2
+                    // on `recursiveExportAssignmentAndFindAliasedType1..6`, where a
+                    // three-module cycle prints six rows). tsc 6 reported ONE row, at the
+                    // cycle member some non-cycle file imports, which is why the previous
+                    // implementation carried an entry-point heuristic here.
+                    for (k in cycleKeys) modules[k]?.let { emitTS2303ForExportEqualsCycle(it) }
                     break
                 }
                 path.add(cur)
@@ -92486,10 +92480,16 @@ interface DataView {
         }
     }
 
-    /** Emit TS2303 on a self-import `import NAME = require("...")`, squiggle spanning
-     *  the declaration up to the closing `)` of `require(...)` (no trailing `;`). */
+    /** Emit the TWO TS2303 rows a cycle member contributes: one on the self-import
+     *  `import NAME = require("...")` (squiggle from the declaration to the closing `)`
+     *  of `require(...)`, plus a trailing `;`) and one on the `export = NAME` that
+     *  re-exports it (squiggle over the whole statement, `;` included).
+     *
+     *  Both are alias DECLARATIONS of the same name, and TypeScript 7 reports every alias
+     *  declaration on a cycle ((LEGACY.0b) F6d, measured against tsgo 7.0.2). */
     private fun emitTS2303ForExportEqualsCycle(m: SelfExportModule) {
         val source = m.source
+        val name = m.importNode.name.text
         var spanStart = m.importNode.pos
         while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
         val refExpr = (m.importNode.moduleReference as ExternalModuleReference).expression
@@ -92501,13 +92501,38 @@ interface DataView {
         var probe = spanEnd
         while (probe < source.length && source[probe].let { it == ' ' || it == '\t' }) probe++
         if (probe < source.length && source[probe] == ';') spanEnd = probe + 1
+        emitTS2303At(name, spanStart, spanEnd, source, m.fileName)
+        // The `export = NAME` half.
+        val exp = m.exportNode
+        var expStart = exp.pos
+        while (expStart < source.length && source[expStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) expStart++
+        emitTS2303At(name, expStart, aliasStatementSpanEnd(exp.expression, source), source, m.fileName)
+    }
+
+    /** End offset of an alias-declaring statement whose payload is [expression]: the end of
+     *  the expression's own text plus an immediately following `;`. Deliberately NOT
+     *  `Statement.end`, which is the end of the token AFTER the statement (CLAUDE.md). */
+    private fun aliasStatementSpanEnd(expression: Node?, source: String): Int {
+        val end = when (expression) {
+            is Identifier -> expression.pos + expression.text.length
+            null -> return 0
+            else -> expression.end
+        }
+        var probe = end
+        while (probe < source.length && source[probe].let { it == ' ' || it == '\t' }) probe++
+        return if (probe < source.length && source[probe] == ';') probe + 1 else end
+    }
+
+    /** The one TS2303 emitter: `Circular definition of import alias '<name>'.` over
+     *  `[spanStart, spanEnd)` of [source]. */
+    private fun emitTS2303At(name: String, spanStart: Int, spanEnd: Int, source: String, fileName: String) {
         val length = (spanEnd - spanStart).coerceAtLeast(1)
         val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
         diagnostics.add(Diagnostic(
-            message = "Circular definition of import alias '${m.importNode.name.text}'.",
+            message = "Circular definition of import alias '$name'.",
             category = DiagnosticCategory.Error,
             code = 2303,
-            fileName = m.fileName,
+            fileName = fileName,
             line = line,
             character = character,
             start = spanStart,
@@ -92540,11 +92565,11 @@ interface DataView {
             val statements = result.sourceFile.statements
             val source = result.sourceFile.text
             // (a) `export = X` with an Identifier target.
-            val exportEqName = statements.asSequence()
+            val exportEq = statements.asSequence()
                 .filterIsInstance<ExportAssignment>()
-                .firstOrNull { it.isExportEquals }
-                ?.let { (it.expression as? Identifier)?.text }
+                .firstOrNull { it.isExportEquals && it.expression is Identifier }
                 ?: continue
+            val exportEqName = (exportEq.expression as Identifier).text
             // (b) `export as namespace X` with the same name.
             val match = umdRegex.findAll(source).firstOrNull { it.groups[2]?.value == exportEqName } ?: continue
             val grp = match.groups[1]!!
@@ -92553,14 +92578,15 @@ interface DataView {
             // statements) — exclude any statement that falls within the UMD declaration's source
             // span so the misparse isn't mistaken for a genuine local declaration of X.
             if (declaresNameModuleLocally(statements, exportEqName, grp.range)) continue
+            // (LEGACY.0b) F6d: BOTH halves of the cycle are alias declarations and
+            // TypeScript 7 reports both (measured on `exportAsNamespaceConflict`, where
+            // tsgo prints `/a.d.ts(2,1)` for `export = N;` and `/a.d.ts(3,1)` for
+            // `export as namespace N;`). tsc 6 printed only the UMD one.
+            var eqStart = exportEq.pos
+            while (eqStart < source.length && source[eqStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) eqStart++
+            emitTS2303At(exportEqName, eqStart, aliasStatementSpanEnd(exportEq.expression, source), source, fileName)
             val pos = grp.range.first
-            val (line, ch) = getLineAndCharacterOfPosition(source, pos)
-            diagnostics.add(Diagnostic(
-                message = "Circular definition of import alias '$exportEqName'.",
-                category = DiagnosticCategory.Error, code = 2303,
-                fileName = fileName, line = line, character = ch,
-                start = pos, length = grp.value.length,
-            ))
+            emitTS2303At(exportEqName, pos, pos + grp.value.length, source, fileName)
         }
     }
 

@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194,438** lines (**+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **194464** lines (**+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,30 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.91) — F6d: TypeScript 7 REPORTS TS2303 AT *EVERY* ALIAS DECLARATION ON THE CYCLE, AND THE DETECTOR WAS ALREADY THERE, 19,153 / 0 / 180 (2026-09-14).**
+Pending 165 → **155**, skipped 190 → **180**, both −10, all ten subtests verified PRESENT and
+PASSED. **The family was picked on a BLAST-RADIUS measurement rather than on size** — 10 rows
+against F2's 15, chosen because TS2303 appears in **ZERO active baselines** where F2's TS2300
+appears in **80**, the same "cannot redden a green baseline on its own axis" property that
+carried (P18.90). The exposure was inverted (this ADDS a diagnostic), so the grid was briefed as
+a real gate; measured, it is a **control** — TS2303 fires 0 times on all eight profiles and on
+cronstrue/marked/many-small, which the new script's header states rather than hiding. tsgo's
+`popTypeResolution` marks the whole resolution SUFFIX false, so **every frame from the cycle
+start upward emits**: one row per alias DECLARATION the cycle passes through, each named after
+its own symbol, where tsc 6 reported one. Third member of the "tsgo reports at ALL declarations"
+family after F2's TS2300. **The brief's design question was answered "neither"** — not a new
+emitter and not a collecting pass: FOUR existing walkers each needed the same one-line
+generalisation, and tsc 6's `findEntry` entry-point heuristic went with it (−38 lines). The four
+are **measurably disjoint** (PassLab, one `disable` per run: each is the sole emitter of its
+shape, none redundant, nothing deletable) — **and the first such measurement was DEAD**, because
+the probe script `cd`s into the fixture directory and `PassLab` loads from the process CWD; a
+dead lab prints exactly what three redundant passes would. Ablation 9 arms, all discriminating;
+a8's initial **0** was investigated rather than shrugged at and its control a8b reddens 10 —
+`Identifier.end` coincides with the correct span whenever the next token is `;` or EOF, so the
+pin needed a following statement to discriminate. A refuted prediction worth keeping:
+`declarationEmitUnknownImport` is **not a cycle at all** in tsgo — moving the `export` above the
+import silences it, an artifact of tsgo's own resolution stack. cost_gate all 20 counters
++0.00%, huge_methods exit 0 (862 classes), warning-clean against a gate proven live.
 **(P18.90) — F3 LAST-OVERLOAD: 25 OF 25, AND THE THREE tsc-6 ANCHOR HEURISTICS WENT WITH IT, 19,139 / 0 / 190 (2026-09-13).**
 Pending 190 → **165**, skipped 215 → **190**, both −25, with all 25 subtests verified PRESENT
 and PASSED in the XMLs rather than merely un-skipped. **F3 was third by red count and FIRST by
@@ -110,24 +134,3 @@ rows rather than redden anything). Ablation 2 / 98 / 6 RED, the 98 including 5 p
 in OPPOSITE directions. Grid 8×`added=0 removed=0` with a split verdict — a control for the
 display half and for F4 (no profile sets `noUnusedLocals`), a real gate for F5 and the
 elaboration. cost_gate all 20 counters +0.00%, huge_methods exit 0, warning-clean.
-**(P18.86) — (LEGACY.0b) STEP 1: THE CORPUS READS tsgo's OWN BASELINES, AND A `.diff` CLASSIFIES A *FILE* WHERE A FAILURE CLASSIFIES WHAT *WE* GOT WRONG, 19,082 / 0 / 310 (2026-09-13).**
-`cloneTypeScriptGoRepo` pins tsgo at tag `typescript/v7.0.2` and the four baseline lookups
-now choose per subtest between tsgo's checked-in output and tsc's, through a three-way
-fallback whose four bucket counts are **asserted together** (`adopted=8,765` / `new=23` /
-`deleted=9` / `kept-tsc=87`) because a wrong fallback is SILENT — it removes a subtest
-rather than failing one. **The guard fired twice and caught an off-by-one**: `new` is 23,
-not the design's 24, because (0a)'s pin move already carried
-`coAndContraVariantInferences5` a round early. Corpus 8,838 → **8,852**; the red set is
-**289** with two controls that make it attributable (all 289 from the tsgo root, all 289
-carrying a `.diff` layer), disposed as 268 pending (285 with (0a)'s) + 22 divergences (21
-TS-1 + 1 `/.src/`), so the suite is 0 failed with 310 visible skips. **The per-family
-ranking moved materially from the design's** (F10 45→4, F9 11→53, F7 43→4) for a reason
-worth carrying: a `.diff` classifies a FILE, a failure classifies what WE got wrong. Seven
-predictions refuted, the sharpest being that a NEGATIVE diagnostic code is not impossible
-here — `checkPreEmitCountMismatchPins` synthesizes `TS-1` deliberately, so the round's first
-invariant pin went red against the real binary. Ledgering the 21 TS-1 rows cost 16 real tsc
-comparisons, which were **paid back verbatim** in `TsgoHarnessSelfCheckBaselinesTest` (net
-coverage change zero). cost_gate all 20 counters +0.00% (no `commonMain` touched, so the
-grid is unaffected by construction), huge_methods exit 0, warning-clean. **Left open for a
-decision before (0b-3)**: a fourth "harness artifact ⇒ fall back to tsc" arm would preserve
-those 17 subtests with no ledger at all.

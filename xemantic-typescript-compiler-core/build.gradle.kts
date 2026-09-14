@@ -985,12 +985,6 @@ val tsgoPendingBaselines = listOf(
         "'\"ignoreDeprecations\": \"6."
     ),
     TsgoPendingBaseline(
-        "circularModuleImports.errors.txt",
-        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "circularModuleImports.ts(7,5): error TS2303: Circular definition of import alias 'B'. " +
-        "| ours: ==== circularModuleImports.ts (1 errors) ===="
-    ),
-    TsgoPendingBaseline(
         "classFieldSuperNotAccessibleJs.errors.txt",
         "F6 top code differs (tsgo TS2339,TS7053 / ours TS2855); layer `submoduleAccepted`. " +
         "tsgo: index.js(7,14): error TS2339: Property 'justProp' does not exist on type " +
@@ -1054,18 +1048,6 @@ val tsgoPendingBaselines = listOf(
     TsgoPendingBaseline(
         "declarationEmitRetainsJsdocyComments.js",
         "JS emit; layer `submoduleAccepted`. tsgo: ({ | ours: /**"
-    ),
-    TsgoPendingBaseline(
-        "declarationEmitUnknownImport(target=es2015).errors.txt",
-        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "declarationEmitUnknownImport.ts(2,9): error TS2303: Circular definition of import " +
-        "alias 'Foo'. | ours: ==== declarationEmitUnknownImport.ts (3 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "declarationEmitUnknownImport2(target=es2015).errors.txt",
-        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "declarationEmitUnknownImport2.ts(2,1): error TS2303: Circular definition of import " +
-        "alias 'Foo'. | ours: ==== declarationEmitUnknownImport2.ts (5 errors) ===="
     ),
     TsgoPendingBaseline(
         "declarationEmitUsingTypeAlias2.js",
@@ -1205,12 +1187,6 @@ val tsgoPendingBaselines = listOf(
         "does not exist on type '{ (): void; inVariableInit: number; bla: { | ours: " +
         "expandoFunctionNestedAssigments.ts(7,23): error TS2339: Property 'inNestedFunction' " +
         "does not exist on type 'typeof Foo'."
-    ),
-    TsgoPendingBaseline(
-        "exportAsNamespaceConflict.errors.txt",
-        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "/a.d.ts(2,1): error TS2303: Circular definition of import alias 'N'. | ours: ==== " +
-        "/a.d.ts (1 errors) ===="
     ),
     TsgoPendingBaseline(
         "exportAsNamespace_augment.errors.txt",
@@ -1656,48 +1632,6 @@ val tsgoPendingBaselines = listOf(
         "F2 TS2300 at BOTH duplicate declarations; layer `submoduleAccepted`. tsgo: " +
         "reassignStaticProp.ts(3,12): error TS2300: Duplicate identifier 'bar'. | ours: ==== " +
         "reassignStaticProp.ts (2 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "recursiveExportAssignmentAndFindAliasedType1.errors.txt",
-        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "recursiveExportAssignmentAndFindAliasedType1_moduleDef.d.ts(3,5): error TS2303: " +
-        "Circular definition of import alias 'self'. | ours: ==== " +
-        "recursiveExportAssignmentAndFindAliasedType1_moduleDef.d.ts (1 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "recursiveExportAssignmentAndFindAliasedType2.errors.txt",
-        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "recursiveExportAssignmentAndFindAliasedType2_moduleDef.d.ts(3,5): error TS2303: " +
-        "Circular definition of import alias 'self'. | ours: ==== " +
-        "recursiveExportAssignmentAndFindAliasedType2_moduleDef.d.ts (1 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "recursiveExportAssignmentAndFindAliasedType3.errors.txt",
-        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "recursiveExportAssignmentAndFindAliasedType3_moduleDef.d.ts(3,5): error TS2303: " +
-        "Circular definition of import alias 'self'. | ours: ==== " +
-        "recursiveExportAssignmentAndFindAliasedType3_moduleDef.d.ts (1 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "recursiveExportAssignmentAndFindAliasedType4.errors.txt",
-        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "recursiveExportAssignmentAndFindAliasedType4_moduleC.ts(2,1): error TS2303: Circular " +
-        "definition of import alias 'self'. | ours: ==== " +
-        "recursiveExportAssignmentAndFindAliasedType4_moduleC.ts (1 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "recursiveExportAssignmentAndFindAliasedType5.errors.txt",
-        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "recursiveExportAssignmentAndFindAliasedType5_moduleC.ts(1,1): error TS2303: Circular " +
-        "definition of import alias 'self'. | ours: ==== " +
-        "recursiveExportAssignmentAndFindAliasedType5_moduleC.ts (0 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "recursiveExportAssignmentAndFindAliasedType6.errors.txt",
-        "F6 top code differs (tsgo TS2303 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "recursiveExportAssignmentAndFindAliasedType6_moduleC.ts(1,1): error TS2303: Circular " +
-        "definition of import alias 'self'. | ours: ==== " +
-        "recursiveExportAssignmentAndFindAliasedType6_moduleC.ts (0 errors) ===="
     ),
     TsgoPendingBaseline(
         "recursivelyExpandingUnionNoStackoverflow.errors.txt",

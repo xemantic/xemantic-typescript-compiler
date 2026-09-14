@@ -3402,3 +3402,25 @@ reverted) / 5 RED (name key dropped). Grid 8×`added=0 removed=0`, marked 18→1
 +2.13% printed against the stale baseline is +1.31% on a rebuilt pristine parent, so this
 change's own effect is `typeNode.bypassed` +0.81% — the interning-order change means
 `Foo | Bar` and `Bar | Foo` now intern to ONE union. (LEGACY.0) stays open on (0b).
+
+**(P18.86) — (LEGACY.0b) STEP 1: THE CORPUS READS tsgo's OWN BASELINES, AND A `.diff` CLASSIFIES A *FILE* WHERE A FAILURE CLASSIFIES WHAT *WE* GOT WRONG, 19,082 / 0 / 310 (2026-09-13).**
+`cloneTypeScriptGoRepo` pins tsgo at tag `typescript/v7.0.2` and the four baseline lookups
+now choose per subtest between tsgo's checked-in output and tsc's, through a three-way
+fallback whose four bucket counts are **asserted together** (`adopted=8,765` / `new=23` /
+`deleted=9` / `kept-tsc=87`) because a wrong fallback is SILENT — it removes a subtest
+rather than failing one. **The guard fired twice and caught an off-by-one**: `new` is 23,
+not the design's 24, because (0a)'s pin move already carried
+`coAndContraVariantInferences5` a round early. Corpus 8,838 → **8,852**; the red set is
+**289** with two controls that make it attributable (all 289 from the tsgo root, all 289
+carrying a `.diff` layer), disposed as 268 pending (285 with (0a)'s) + 22 divergences (21
+TS-1 + 1 `/.src/`), so the suite is 0 failed with 310 visible skips. **The per-family
+ranking moved materially from the design's** (F10 45→4, F9 11→53, F7 43→4) for a reason
+worth carrying: a `.diff` classifies a FILE, a failure classifies what WE got wrong. Seven
+predictions refuted, the sharpest being that a NEGATIVE diagnostic code is not impossible
+here — `checkPreEmitCountMismatchPins` synthesizes `TS-1` deliberately, so the round's first
+invariant pin went red against the real binary. Ledgering the 21 TS-1 rows cost 16 real tsc
+comparisons, which were **paid back verbatim** in `TsgoHarnessSelfCheckBaselinesTest` (net
+coverage change zero). cost_gate all 20 counters +0.00% (no `commonMain` touched, so the
+grid is unaffected by construction), huge_methods exit 0, warning-clean. **Left open for a
+decision before (0b-3)**: a fourth "harness artifact ⇒ fall back to tsc" arm would preserve
+those 17 subtests with no ledger at all.

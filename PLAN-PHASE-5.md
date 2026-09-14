@@ -25,6 +25,80 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.91) — F6d: TypeScript 7 reports TS2303 at EVERY alias declaration on the cycle, and the detector was already there (2026-09-14)
+
+**Suite 19,139 → 19,153 / 0 / 180** — `tsgoPendingBaselines` 165 → **155** and skipped 190 →
+**180**, both −10, with all ten subtests verified PRESENT and PASSED in the XMLs (two of them
+carry a `(target=es2015)` variation suffix and do NOT match the obvious test-name pattern — a
+first pass "found" only eight and that reads exactly like two vanished subtests). +14 pins. Grid
+8×`added=0 removed=0`; `cost_gate.py` exit 0, all 20 counters +0.00%; `huge_methods.py
+--fail-over 0` exit 0 (862 classes, 0 over); warning-clean (7,305-byte log, `w=0 e=0`, no `-q`,
+positive control produced exactly 1 `w:` line). **10 of 10, the family is empty. (LEGACY.0) stays
+OPEN** on (0b-7).
+
+**THE FAMILY WAS PICKED ON A BLAST-RADIUS MEASUREMENT, NOT ON SIZE.** F6d is 10 rows against F2
+duplicate-identifier's 15, and it was chosen because **TS2303 appears in ZERO active baselines**
+where F2's TS2300 appears in **80** — the same "provably cannot redden a green baseline on its
+own axis" property that carried (P18.90). The risk was inverted, though: this round ADDS a
+diagnostic, so false positives elsewhere were the exposure and the grid was briefed as a real
+gate rather than a control.
+
+**THE RULE.** tsgo's `resolveAlias` (checker.go ~16199) wraps alias resolution in
+`pushTypeResolution`/`popTypeResolution`; a detected cycle marks the whole resolution SUFFIX
+false, so **every frame from the cycle start upward emits** — i.e. TypeScript 7 reports TS2303
+once per alias DECLARATION the cycle passes through, each named after its own symbol and anchored
+at its own declaration, where tsc 6 reported exactly one. This is the third member of the "tsgo
+reports at ALL declarations" family, after F2's TS2300-at-both-duplicate-declarations.
+
+**THE DESIGN QUESTION THE BRIEF ASKED WAS ANSWERED "NEITHER".** The brief offered emit-from-
+`resolveAlias` versus collect-and-emit-from-a-pass. Measured, this checker already had **FOUR**
+walkers owning the four cycle shapes, and each needed the same one-line generalisation:
+`checkCircularImportAlias` lost its `break // TypeScript only reports on the first import in the
+cycle`; `checkCircularExportEqualsImportAlias` now reports at every cycle MEMBER with two rows
+each (self-import + `export = self`) and **shed tsc 6's `findEntry` entry-point heuristic
+entirely (−38 lines)**; `checkExportAsNamespaceSelfCycle` reports the `export = N` half beside
+the `export as namespace N` half; and 16.4ee (`checkUnresolvedInImportEquals`) now reports each
+`export {Foo}` / `export {Bar as Foo}` / `export default Foo` re-export, every one of which is a
+second alias declaration. Three emitters folded into one `emitTS2303At`.
+
+**SPANS AND NAMES MEASURED OFF tsgo, NOT DERIVED.** An export SPECIFIER squiggles the whole
+specifier and is named by its **exported** name (`default` for `export {Foo as default}`); an
+`export default Foo` squiggles the whole statement and is named by the **expression**.
+
+**THE FOUR WALKERS ARE PERFECTLY DISJOINT — MEASURED WITH THE PassLab, AND THE FIRST MEASUREMENT
+WAS DEAD.** One `disable` per run over four fixtures: each walker is the SOLE emitter of its
+shape, none redundant, no double emission, nothing deletable. The first attempt read "no effect"
+on all three — **a dead lab, because the probe script `cd`s into the fixture directory and
+`PassLab` loads from the process CWD**, and a dead lab prints exactly what three redundant passes
+would. Round 860's entry is the `diagnose()` twin of this; the CWD form is now in CLAUDE.md.
+
+**A PREDICTION REFUTED, AND IT IS THE INTERESTING ONE.** `declarationEmitUnknownImport{,2}` were
+predicted residue and closed anyway — and tsgo's TS2303 there is **not a cycle at all**:
+`declare const V; import Foo = V; export {Foo}` draws two TS2303 on legal-looking code, and
+moving the `export` ABOVE the import silences it. That is order-dependent, an artifact of tsgo's
+own resolution stack rather than a rule. It closed because this repo already modelled that
+behaviour at 16.4ee and merely lacked the export-side row.
+
+**ABLATION — 9 arms, all discriminating, `tests` identical at 3,177 in every arm**: a1 report
+only the first member of an entity-name cycle **3 RED**; a2 only the first member of a require
+cycle **5**; a3 drop the `export = self` half **8**; a4 drop the `export = N` half **2**; a5 drop
+the re-export rows **5**; a6 name a specifier by its LOCAL name **1**; a7 anchor a specifier at
+`name` rather than the whole specifier **1**; a8 read the span end off `Node.end` **0 → 1**; a8b
+(a8's control) drop the trailing-`;` inclusion **10**. **a8's zero was investigated rather than
+shrugged at**: a8b proves the replaced code is load-bearing, and the attribution is that
+`Identifier.end` — the end of the token AFTER the identifier — coincides with the correct span
+whenever the next token is `;` **or EOF**, which was true of every fixture in hand. Adding a
+following `declare const` to the `export default` pin (tsgo re-measured: still `(2,1)` width 18)
+made a8 discriminate. The patcher asserts its anchor occurs exactly once and **refused a1's first
+anchor**, which occurred twice — the guard working.
+
+**LEFT UNDONE DELIBERATELY**: tightening `aliasStatementSpanEnd`'s parameter from `Node?` to
+`Expression` (dropping a dead `null ->` branch) moves the bytecode, so it was reverted to keep
+every gate and every ablation arm referring to ONE binary; the class files on disk are
+bytecode-identical to what was gated. `pushTypeGetTypeOfAlias` — the 11th TS2303 row, running the
+OTHER way (tsgo TS2309, ours TS2303 from the B438d pin) — is untouched, still pending, and
+unaffected by all three ablations.
+
 ### Round (P18.90) — F3 last-overload: 25 of 25, and the three tsc-6 anchor heuristics went with it (2026-09-13)
 
 **Suite 19,139 → 19,139 / 0 / 190** — `tsgoPendingBaselines` 190 → **165** and skipped 215 →
@@ -809,81 +883,6 @@ does not resolve a function-body local from the walker's ambient; optional tuple
 grid, and the item's own hazard (an un-substituted `T` reaching the argument relation) to pin
 as a refusal. Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
 
-### Round (P18.81) — (CHK.134)(2): `f.bind` — the BUILD shape sufficed, the lib has TWO overloads not five, and a re-bound function's `any` was the arith recorder's first-touch hazard (2026-09-12)
-
-**Suite 18,854 → 18,907 / 0 / 3** (+53 pins, `FunctionBindTest`: 40 diagnostic, 4 negative
-controls, 9 `residue -`; two countdown pins from (P18.80) inverted, names kept). Grid
-8×`added=0 removed=0`; marked 18 → 18, cronstrue 1 → 1; `cost_gate.py` exit 0 with **20 of 20
-counters digit-identical against the rebuilt HEAD** via `--from-log` (the +1.28/+1.32% rows are
-baseline staleness, not rebaselined); `huge_methods.py --fail-over 0` exit 0; warning-clean
-(main + test). **(CHK.134) IS CHECKED OFF** — `call`/`apply` in (P18.80), `bind` here.
-
-**WHY THIS ITEM, SAID OUT LOUD.** (CHK.134) is the top item; (INV.0) step 10b-ii stays blocked
-on its two named families. The next unchecked item is (CHK.98).
-
-**THE BUILD SHAPE SUFFICED, AND NO CONDITIONAL TYPE WAS TOUCHED.** The queue item's
-`A0..A3` partial-application quartet does not exist: our real-lib snapshot, tsgo 7.0.2 and
-pristine 6.0.3 all declare TWO `CallableFunction.bind` overloads — the zero-partial
-conditional form `bind<T>(this: T, thisArg: ThisParameterType<T>): OmitThisParameter<T>` and
-ONE variadic `bind<T, A extends any[], B extends any[], R>(this: (this: T, ...args: [...A,
-...B]) => R, thisArg: T, ...args: A): (...args: B) => R`. Both are functions of the receiver
-alone, so `Checker.bindType` builds the member per call as (P18.80)'s `apply` does:
-`ThisParameterType` is the declared `this` (`unknown` without one); `OmitThisParameter` is the
-receiver ITSELF when that `this` is absent, `unknown` or `any` — overloads and type parameters
-KEPT, measured against both references — and otherwise the erased last signature minus
-`this`; overload 2 splits the parameter list at the partial count, a trailing rest absorbing
-the surplus. `NewableFunction.bind` came free (a construct receiver: `new (y: number) => ZzzK`
-agrees with both references). Only a UNION receiver needs the conditional's own distributing
-behaviour — residue, kept `any`.
-
-**TWO FACTS THE PROBES FORCED.** (1) ONE signature wherever one decides the call: handing the
-lib's PAIR over unconditionally typed a re-bound function `any`, because the call-return path
-bails on a multi-signature member behind an inferred variable receiver. The pair is built
-only when overload 1 refuses the `thisArg` — which is exactly what prints PRISTINE's
-per-candidate TS2769 chain (tsgo prints `The last overload…`, round 938's family; ref_matrix
-labels a MISSING row with tsgo's text, so the split only shows once we report the row).
-(2) A rest slot that is the whole remainder is `...args: B` on both references, not the
-receiver's own `...xs`.
-
-**THE CENSUS READ ZERO RESOLVED EVERYWHERE REAL**: 5 `bind` sites on each of compiler / tsc /
-jsTyping / deprecatedCompat / typingsInstallerCore, 8 on services, 14 on server, 24 on
-harness — all refused as non-strict (every profile sets `strictBindCallApply: false`) plus 2-6
-optional-chain union receivers; marked, cronstrue and the 2,400-file project have no `bind`
-site at all. So the grid and both library arms are CONTROLS; the pins and the ablation are
-the gate. Counter removed, bytecode proven identical.
-
-**BEFORE → AFTER over 52 fixtures**: 60 agree / 1 ours-only / 14 missing / 1 text-diff /
-6 REF-SPLIT-MSG — and the six splits are ours == pristine byte-for-byte on five (the sixth
-differs only in drill ORDER). **Every remaining MISSING row is attributed to a pre-existing
-general gap reproduced WITHOUT `bind`**: TS2554 through a variable callee ((CHK.97)'s
-recorded gap), an inline call-of-call at a declaration reader, and a re-bound-then-called
-function — where `spineArithRecordVarDecl`'s callable-shadow arm first-touches the symbol
-under an ambient that reads the receiver as `any`, and the answer PERSISTS (a CLAUDE.md
-gotcha now). The one ours-only row is the variable-callee gap's other face (an argument
-reported where tsc reports arity).
-
-**ABLATION over 127 pins across the three classes (per-arm `cmp`, @Test count asserted,
-restore proven)**: a1 `bind` back to `any` — **43 RED**; a2 the `this` type NOT dropped from
-the result — **26 RED**; a3 partials not dropped — 6 RED; a4 `thisArg` unchecked — 8 RED.
-At-risk run: 106 module-qualified patterns, 2,553 tests, all 42 grepped classes ran,
-`underscoreTest1` (the only ACTIVE `.errors.txt` with `.bind(` — a user interface's own
-`bind`) ran; the single failure was the (P18.80) countdown, inverted. The embedded-lib path
-(no `CallableFunction`) is pinned identical to before.
-
-**RESIDUES, MEASURED AND NOT FIXED (nine pinned `residue -`)**: a union receiver; an
-optional-chain receiver (the (CHK.133) residue); a spread partial; the bare `f.bind` display;
-a class VALUE displayed as `ZzzK` where the references print `typeof ZzzK`; the three
-general gaps above.
-
-**PREDICTIONS REFUTED**: four partial overloads (one variadic); "tsc prints the last-overload
-form" (only tsgo does); the pair can be handed over unconditionally (it types a re-bound
-function `any`); the remainder rest keeps the receiver's name; `f.bind()` goes through the
-overload emitter (a single rest signature answers it silently); the re-bound miss is
-`bind`-specific (it is the arith recorder's first-touch hazard).
-
-**NEXT**: (CHK.98), the next unchecked item. Per the WORK ORDER, (INV.0) step 10b-ii's own
-unblockers follow.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1214,7 +1213,28 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-5 LANDED 2026-09-13 ((P18.85)-(P18.90) notes) — pending 165, skipped 190,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-6 LANDED 2026-09-14 ((P18.85)-(P18.91) notes) — pending 155, skipped 180,
+  suite 19,153/0. **F6d TS2303 circular-alias CLOSED 10/10 by (P18.91)**: TypeScript 7 reports the row at EVERY
+  alias declaration the cycle passes through (tsgo's `popTypeResolution` marks the whole resolution suffix false)
+  where tsc 6 reported one — so the fix was a one-line generalisation in each of FOUR existing walkers, which are
+  measurably disjoint and none deletable; tsc 6's `findEntry` entry-point heuristic went with it. **THE NEXT ROUND'S
+  PICK SHOULD BE MADE THE SAME WAY, BY BLAST RADIUS**: (P18.90)/(P18.91) both chose a family whose diagnostic CODE
+  appears in ZERO active baselines (F3's form, and TS2303), which makes reddening a green baseline on that axis
+  structurally impossible; measure `active baselines carrying the code` before picking. **REMAINING (0b-7), by red
+  count**: F6z 33 singletons (15 JS/checkJs/JSDoc — a `checkJs` slice may be cheapest), JS emit 33, F1 11
+  (**9 of the 11 are JS/JSDoc too, and TS2683 x3 + TS1003 x3 are two single mechanisms** — so a JS/JSDoc round has
+  ~24 rows in reach across F6z+F1; blast radius is NOT free there, TS2683 is in 18 active baselines and TS1003 in
+  22), F8 unrelated-anchor residue ~11,
+  F2 duplicate-identifier 9 + 6 (**sized read-only at (P18.90): TS2300 must ALSO fire at the FIRST declaration of a
+  duplicate group — the same "tsgo reports at ALL declarations" rule (P18.91) just implemented for TS2303 — and
+  TS2717 is suppressed when the two declarations differ in KIND and kept when they agree; but it is NOT uniform,
+  `class K { b: number; b(): number }` already reports at both, so census the orderings first, and note TS2300 is in
+  **80 active baselines**, the largest blast radius of any remaining family**), F0 7. **A KNOWN
+  FOLLOW-ON**: three hand-written pins differ from tsgo in CODE because our relation CHAIN line names the type
+  parameter / undistributed intersection where tsgo names its constraint / one distributed constituent — that chain
+  SOURCE DISPLAY is its own family and closing it also closes those three. The 21 TS-1 rows stay LEDGERED.
+  **BLOCKED-PENDING-USER, still open**: the fourth "harness artifact ⇒ fall back to tsc" arm ((P18.86)).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-5 LANDED 2026-09-13 ((P18.85)-(P18.90) notes) — pending 165, skipped 190,
   suite 19,139/0. **F3 last-overload CLOSED 25/25 by (P18.90)**: tsgo's `reportCallResolutionErrors` reports only the
   LAST argument-failing candidate under `The last overload gave the following error.` (TS2770) with
   `The last overload is declared here.` (TS2771) at its declaration — and because tsgo anchors wherever THAT

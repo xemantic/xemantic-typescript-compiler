@@ -65255,3 +65255,78 @@ in the `this:` position of a conditional type, and whether the same BUILD-not-in
 serves it (`bind<T>(this: T, thisArg: ThisParameterType<T>): OmitThisParameter<T>` plus the
 partial-application overloads). Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers
 follow.
+
+### Round (P18.81) — (CHK.134)(2): `f.bind` — the BUILD shape sufficed, the lib has TWO overloads not five, and a re-bound function's `any` was the arith recorder's first-touch hazard (2026-09-12)
+
+**Suite 18,854 → 18,907 / 0 / 3** (+53 pins, `FunctionBindTest`: 40 diagnostic, 4 negative
+controls, 9 `residue -`; two countdown pins from (P18.80) inverted, names kept). Grid
+8×`added=0 removed=0`; marked 18 → 18, cronstrue 1 → 1; `cost_gate.py` exit 0 with **20 of 20
+counters digit-identical against the rebuilt HEAD** via `--from-log` (the +1.28/+1.32% rows are
+baseline staleness, not rebaselined); `huge_methods.py --fail-over 0` exit 0; warning-clean
+(main + test). **(CHK.134) IS CHECKED OFF** — `call`/`apply` in (P18.80), `bind` here.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.134) is the top item; (INV.0) step 10b-ii stays blocked
+on its two named families. The next unchecked item is (CHK.98).
+
+**THE BUILD SHAPE SUFFICED, AND NO CONDITIONAL TYPE WAS TOUCHED.** The queue item's
+`A0..A3` partial-application quartet does not exist: our real-lib snapshot, tsgo 7.0.2 and
+pristine 6.0.3 all declare TWO `CallableFunction.bind` overloads — the zero-partial
+conditional form `bind<T>(this: T, thisArg: ThisParameterType<T>): OmitThisParameter<T>` and
+ONE variadic `bind<T, A extends any[], B extends any[], R>(this: (this: T, ...args: [...A,
+...B]) => R, thisArg: T, ...args: A): (...args: B) => R`. Both are functions of the receiver
+alone, so `Checker.bindType` builds the member per call as (P18.80)'s `apply` does:
+`ThisParameterType` is the declared `this` (`unknown` without one); `OmitThisParameter` is the
+receiver ITSELF when that `this` is absent, `unknown` or `any` — overloads and type parameters
+KEPT, measured against both references — and otherwise the erased last signature minus
+`this`; overload 2 splits the parameter list at the partial count, a trailing rest absorbing
+the surplus. `NewableFunction.bind` came free (a construct receiver: `new (y: number) => ZzzK`
+agrees with both references). Only a UNION receiver needs the conditional's own distributing
+behaviour — residue, kept `any`.
+
+**TWO FACTS THE PROBES FORCED.** (1) ONE signature wherever one decides the call: handing the
+lib's PAIR over unconditionally typed a re-bound function `any`, because the call-return path
+bails on a multi-signature member behind an inferred variable receiver. The pair is built
+only when overload 1 refuses the `thisArg` — which is exactly what prints PRISTINE's
+per-candidate TS2769 chain (tsgo prints `The last overload…`, round 938's family; ref_matrix
+labels a MISSING row with tsgo's text, so the split only shows once we report the row).
+(2) A rest slot that is the whole remainder is `...args: B` on both references, not the
+receiver's own `...xs`.
+
+**THE CENSUS READ ZERO RESOLVED EVERYWHERE REAL**: 5 `bind` sites on each of compiler / tsc /
+jsTyping / deprecatedCompat / typingsInstallerCore, 8 on services, 14 on server, 24 on
+harness — all refused as non-strict (every profile sets `strictBindCallApply: false`) plus 2-6
+optional-chain union receivers; marked, cronstrue and the 2,400-file project have no `bind`
+site at all. So the grid and both library arms are CONTROLS; the pins and the ablation are
+the gate. Counter removed, bytecode proven identical.
+
+**BEFORE → AFTER over 52 fixtures**: 60 agree / 1 ours-only / 14 missing / 1 text-diff /
+6 REF-SPLIT-MSG — and the six splits are ours == pristine byte-for-byte on five (the sixth
+differs only in drill ORDER). **Every remaining MISSING row is attributed to a pre-existing
+general gap reproduced WITHOUT `bind`**: TS2554 through a variable callee ((CHK.97)'s
+recorded gap), an inline call-of-call at a declaration reader, and a re-bound-then-called
+function — where `spineArithRecordVarDecl`'s callable-shadow arm first-touches the symbol
+under an ambient that reads the receiver as `any`, and the answer PERSISTS (a CLAUDE.md
+gotcha now). The one ours-only row is the variable-callee gap's other face (an argument
+reported where tsc reports arity).
+
+**ABLATION over 127 pins across the three classes (per-arm `cmp`, @Test count asserted,
+restore proven)**: a1 `bind` back to `any` — **43 RED**; a2 the `this` type NOT dropped from
+the result — **26 RED**; a3 partials not dropped — 6 RED; a4 `thisArg` unchecked — 8 RED.
+At-risk run: 106 module-qualified patterns, 2,553 tests, all 42 grepped classes ran,
+`underscoreTest1` (the only ACTIVE `.errors.txt` with `.bind(` — a user interface's own
+`bind`) ran; the single failure was the (P18.80) countdown, inverted. The embedded-lib path
+(no `CallableFunction`) is pinned identical to before.
+
+**RESIDUES, MEASURED AND NOT FIXED (nine pinned `residue -`)**: a union receiver; an
+optional-chain receiver (the (CHK.133) residue); a spread partial; the bare `f.bind` display;
+a class VALUE displayed as `ZzzK` where the references print `typeof ZzzK`; the three
+general gaps above.
+
+**PREDICTIONS REFUTED**: four partial overloads (one variadic); "tsc prints the last-overload
+form" (only tsgo does); the pair can be handed over unconditionally (it types a re-bound
+function `any`); the remainder rest keeps the receiver's name; `f.bind()` goes through the
+overload emitter (a single rest signature answers it silently); the re-bound miss is
+`bind`-specific (it is the arith recorder's first-touch hazard).
+
+**NEXT**: (CHK.98), the next unchecked item. Per the WORK ORDER, (INV.0) step 10b-ii's own
+unblockers follow.
