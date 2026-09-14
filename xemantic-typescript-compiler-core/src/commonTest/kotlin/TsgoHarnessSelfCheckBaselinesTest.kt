@@ -165,8 +165,9 @@ class TsgoHarnessSelfCheckBaselinesTest {
      * case carries the `~` — and it is pinned by `TsgoInvalidCharacterSpanTest`; and a SECOND
      * one since (P18.98): tsc 6's 10-suggestion cap made the `val` row a plain TS2304 where
      * TypeScript 7 (no cap) and tsgo's own baseline say TS2552 `Did you mean 'eval'?` — lifted
-     * by a counted substitution below. The rest of the diagnostics this mirror covers is
-     * still compared verbatim. Second instance of the
+     * by a counted substitution below; and a THIRD since (P18.100): TS2447 anchors on the
+     * operator token, not the operand pair, as tsgo's own baseline says. The rest of the
+     * diagnostics this mirror covers is still compared verbatim. Second instance of the
      * shape (LEGACY.0b) step 2 met with `manyCompilerErrorsInTheTwoFiles`: a tsc-6 mirror
      * cannot stay verbatim across a TypeScript 7 RENDERING change.
      */
@@ -222,7 +223,28 @@ class TsgoHarnessSelfCheckBaselinesTest {
         }
         val (expectedLifted, lifted) = liftSuggestionCap(expected)
         assert(lifted == 2)
-        val (expectedLines, expectedDropped) = dropInvalidCharacterSquiggles(normalize(expectedLifted))
+        /**
+         * The THIRD annotation ((LEGACY.0b) step 15, (P18.100)): tsc 6 anchored TS2447 on the
+         * whole `true ^ false` operand pair, TypeScript 7 on the OPERATOR token — tsgo's own
+         * baseline for this case (line 46 / line 375) says `(180,45)` with a one-character
+         * squiggle. Two counted rows again: the summary row and the squiggle line under it.
+         */
+        fun liftOperatorAnchor(text: String): Pair<String, Int> {
+            val tsc6Row = "constructorWithIncompleteTypeAnnotation.ts(180,40): error TS2447:"
+            val tsgoRow = "constructorWithIncompleteTypeAnnotation.ts(180,45): error TS2447:"
+            val tsc6Squiggle = " ".repeat(43) + "~".repeat(12)
+            val tsgoSquiggle = " ".repeat(48) + "~"
+            val count = text.windowed(tsc6Row.length).count { it == tsc6Row } +
+                text.split("\n").count { it.trimEnd('\r') == tsc6Squiggle }
+            val lifted = text.replace(tsc6Row, tsgoRow)
+                .split("\n").joinToString("\n") { line ->
+                    if (line.trimEnd('\r') == tsc6Squiggle) line.replace(tsc6Squiggle, tsgoSquiggle) else line
+                }
+            return lifted to count
+        }
+        val (expectedLifted2, lifted2) = liftOperatorAnchor(expectedLifted)
+        assert(lifted2 == 2)
+        val (expectedLines, expectedDropped) = dropInvalidCharacterSquiggles(normalize(expectedLifted2))
         val (actualLines, actualDropped) = dropInvalidCharacterSquiggles(normalize(actual ?: ""))
         // The annotation is a claim about this baseline: exactly one TS1127, one line each side.
         assert(expectedDropped == 1)
