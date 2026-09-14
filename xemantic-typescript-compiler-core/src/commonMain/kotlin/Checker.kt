@@ -8690,6 +8690,10 @@ class Checker(
         // 7b'''''. TS8021: JSDoc `@typedef` tag lacking BOTH a `{type}` annotation AND
         // any `@property`/`@member` tags. JS-like files only.
         pass("checkJSDocTypedefTags") { checkJSDocTypedefTags() }
+        // (P18.99) M2: TS1003 for a `@typedef {type}` with NO name (both TypeScript 7 rows).
+        pass("checkJsDocTypedefMissingName") { checkJsDocTypedefMissingName() }
+        // (P18.99) M3: TS2749 for a VALUE used as a type in a NESTED JSDoc type position.
+        pass("checkJsDocNestedValueAsType") { checkJsDocNestedValueAsType() }
         // B438c: TS1337 + TS1005 for a malformed index signature inside a JSDoc inline-object
         // `@typedef {{ [key: foo] boolean }}` in a checkJs file (uniqueSymbolJs).
     }
@@ -32863,32 +32867,61 @@ class Checker(
      */
     private fun checkJsDocTypedefIndexSignature() {
         if (!options.checkJs) return
-        val re = Regex("""@(?:typedef|type)\s*\{\{\s*\[\s*([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)\s*]\s*([A-Za-z_$][\w$]*)""")
+        // (P18.99) M3: the `:` after `]` is optional in the match and decides TS1005 alone.
+        val re = Regex("""@(?:typedef|type)\s*\{\{\s*\[\s*([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)\s*](\s*:)?\s*([A-Za-z_$][\w$]*)""")
         val validIndexParamTypes = setOf("string", "number", "symbol")
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             for (m in re.findAll(source)) {
-                if (m.groupValues[2] in validIndexParamTypes) continue  // valid index-sig param type → no TS1337
+                val paramType = m.groupValues[2]
+                if (paramType in validIndexParamTypes) continue  // valid index-sig param type
                 val keyRange = m.groups[1]?.range ?: continue
-                val valRange = m.groups[3]?.range ?: continue
+                val valRange = m.groups[4]?.range ?: continue
                 val ks = keyRange.first
                 val (kl, kc) = getLineAndCharacterOfPosition(source, ks)
+                // (P18.99) M3: tsgo's `checkGrammarIndexSignatureParameters` says TS1337 for a
+                // LITERAL type or a type PARAMETER and TS1268 for everything else — a value name
+                // (`foo`, `uniqueSymbolJs`), a class, an unresolvable name (all measured).
+                val literalOrGeneric = jsDocTemplateNamesIn(jsDocCommentTextAround(source, m.range.first)).contains(paramType) ||
+                    Regex("""@typedef\s*\{\s*(?:"[^"]*"|'[^']*'|-?\d[\d.]*|true|false)\s*\}\s*""" + Regex.escape(paramType) + """\b""").containsMatchIn(source)
                 diagnostics.add(Diagnostic(
-                    message = "An index signature parameter type cannot be a literal type or generic type. Consider using a mapped object type instead.",
-                    category = DiagnosticCategory.Error, code = 1337, fileName = fileName,
+                    message = if (literalOrGeneric) "An index signature parameter type cannot be a literal type or generic type. Consider using a mapped object type instead."
+                        else "An index signature parameter type must be 'string', 'number', 'symbol', or a template literal type.",
+                    category = DiagnosticCategory.Error, code = if (literalOrGeneric) 1337 else 1268, fileName = fileName,
                     line = kl, character = kc, start = ks, length = m.groupValues[1].length,
                 ))
+                // (P18.99) M3: the parameter type is the checker's TS2749 when it names a value.
+                val typeRange = m.groups[2]?.range
+                if (typeRange != null && jsDocValueOnlyLocal(result, paramType)) {
+                    val ts = typeRange.first
+                    val (tl, tc) = getLineAndCharacterOfPosition(source, ts)
+                    diagnostics.add(Diagnostic(
+                        message = "'$paramType' refers to a value, but is being used as a type here. Did you mean 'typeof $paramType'?",
+                        category = DiagnosticCategory.Error, code = 2749, fileName = fileName,
+                        line = tl, character = tc, start = ts, length = paramType.length,
+                    ))
+                }
+                if (m.groups[3] != null) continue // `[key: T]: V` — well-formed, no `;` expected
                 val vs = valRange.first
                 val (vl, vc) = getLineAndCharacterOfPosition(source, vs)
                 diagnostics.add(Diagnostic(
                     message = "';' expected.",
                     category = DiagnosticCategory.Error, code = 1005, fileName = fileName,
-                    line = vl, character = vc, start = vs, length = m.groupValues[3].length,
+                    line = vl, character = vc, start = vs, length = m.groupValues[4].length,
                 ))
             }
         }
+    }
+
+    /** The text of the JSDoc comment enclosing [at] (or "" when [at] is in none). */
+    private fun jsDocCommentTextAround(source: String, at: Int): String {
+        val open = source.lastIndexOf("/**", at)
+        if (open < 0) return ""
+        val close = source.indexOf("*/", open + 3)
+        if (close < 0 || close < at) return ""
+        return source.substring(open, close + 2)
     }
 
     private fun checkJSDocClosureFnTypeMalformedArgs() {
@@ -33291,6 +33324,317 @@ class Checker(
                 idx = if (i > tagIdx + 8) i else tagIdx + 8
             }
         }
+    }
+
+    /**
+     * (P18.99) M2 — TS1003 *Identifier expected.* for a JSDoc `@typedef` with NO name, in
+     * a JS-like file. TypeScript 7 reports it from TWO places and the corpus carries both:
+     *
+     *  * **R1** — the REPARSER (`reparser.go` `checkNonIdentifierName`) rejects the empty
+     *    name the JSDoc parser synthesised at the next token's position and, the name being
+     *    zero-width, reports on the ONE CHARACTER BEFORE it: for `@typedef {string}` at a
+     *    line end that is the closing `}` (`jsdocTypedefNoCrash` (3,5),
+     *    `misspelledJsDocTypedefTags` (4,59)); for `@typedef {string} 5` the space before
+     *    the `5`; for a following `@property` line the space before its `@`. A syntactic
+     *    diagnostic, so EVERY JS file reports it (`allowJs` alone). Needs a `{type}` — the
+     *    reparser `break`s on a type-less tag.
+     *  * **R2** — the JSDoc parser's own `parseJSDocIdentifierName(Identifier_expected)` at
+     *    the CURRENT token's range (the newline, a whitespace run, the `@` of the next tag;
+     *    at the comment's end the range runs from the last token scanned to the close),
+     *    which `program.go` appends only for a checkJs file (`JSDocDiagnostics()`), so a
+     *    plain `allowJs` file shows R1 alone and a checkJs file both — `jsEnumCrossFileExport`
+     *    (14,20) + (14,21), where (14,21) is the width-1 newline.
+     *
+     * "Next token" is tsgo's JSDoc tokenisation after `skipWhitespaceOrAsterisk`: whitespace
+     * runs, newlines and a line-leading `*` are skipped — UNLESS nothing but whitespace and
+     * newlines remain before the comment close, in which case nothing is skipped — and a
+     * name is any identifier-or-keyword token (`class` and `éx` are names, `5`, `-` and `@`
+     * are not). Every position was read off `tools/tsgo-7.0.2/lib/tsc` over the round's
+     * probe projects; the CLI stops at syntactic errors, so it prints R1 alone, and the R2
+     * rows are tsgo's HARNESS baselines (a `.ts` file reparses no JSDoc and reports neither).
+     * `// @ts-check` is not modelled for R2 (the sibling JSDoc walkers gate on `checkJs` too).
+     */
+    private fun checkJsDocTypedefMissingName() {
+        for (result in checkedResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            if (!srcHas(source, "@typedef")) continue
+            forEachJsDocComment(result.sourceFile) { comment ->
+                val ct = comment.text
+                var from = 0
+                while (true) {
+                    val t = ct.indexOf("@typedef", from)
+                    if (t < 0) break
+                    from = t + 8
+                    val after = if (t + 8 < ct.length) ct[t + 8] else ' '
+                    if (after.isLetterOrDigit() || after == '_' || after == '$') continue
+                    if (!jsDocTagAtLineStart(ct, t)) continue
+                    jsDocTypedefMissingNameAt(ct, t, comment.pos, source, fileName)
+                }
+            }
+        }
+    }
+
+    /** A JSDoc tag starts only where tsc's comment state machine is at a line start or just
+     *  past the line's leading `*` (`BeginningOfLine` / `SawAsterisk`); an `@` anywhere else
+     *  is comment text. The first line's opener is the JSDoc opener itself. */
+    private fun jsDocTagAtLineStart(ct: String, at: Int): Boolean {
+        var i = at - 1
+        while (i >= 0 && (ct[i] == ' ' || ct[i] == '\t')) i--
+        if (i < 0) return false
+        if (ct[i] == '*') {
+            if (i >= 2 && ct[i - 1] == '*' && ct[i - 2] == '/') return true // the `/**` opener
+            i--
+            while (i >= 0 && (ct[i] == ' ' || ct[i] == '\t')) i--
+            return i < 0 || ct[i] == '\n' || ct[i] == '\r'
+        }
+        return ct[i] == '\n' || ct[i] == '\r'
+    }
+
+    /** One tsgo JSDoc token over a comment's text (`ScanJSDocToken`): a whitespace RUN, one
+     *  newline (`\r\n` is one), one `*`, an identifier-or-keyword, or one other character;
+     *  [start] == [end] == the limit is the end of the comment (before its close). */
+    private class JsDocTok(val kind: Int, val start: Int, val end: Int)
+
+    private fun jsDocScan(ct: String, from: Int, limit: Int): JsDocTok {
+        if (from >= limit) return JsDocTok(JSDOC_TOK_EOF, limit, limit)
+        val c = ct[from]
+        var i = from + 1
+        return when {
+            c == ' ' || c == '\t' || c == '' || c == '' -> {
+                while (i < limit && (ct[i] == ' ' || ct[i] == '\t' || ct[i] == '' || ct[i] == '')) i++
+                JsDocTok(JSDOC_TOK_WS, from, i)
+            }
+            c == '\r' -> { if (i < limit && ct[i] == '\n') i++; JsDocTok(JSDOC_TOK_NL, from, i) }
+            c == '\n' -> JsDocTok(JSDOC_TOK_NL, from, i)
+            c == '*' -> JsDocTok(JSDOC_TOK_STAR, from, i)
+            c.isLetter() || c == '_' || c == '$' -> {
+                while (i < limit && (ct[i].isLetterOrDigit() || ct[i] == '_' || ct[i] == '$' || ct[i] == '-')) i++
+                JsDocTok(JSDOC_TOK_IDENT, from, i)
+            }
+            else -> JsDocTok(JSDOC_TOK_OTHER, from, i)
+        }
+    }
+
+    private fun jsDocTypedefMissingNameAt(ct: String, tagAt: Int, commentPos: Int, source: String, fileName: String) {
+        val limit = if (ct.endsWith("*/")) ct.length - 2 else ct.length
+        // `prevStart` mirrors the scanner's `tokenStart`, which `ScanJSDocToken` leaves at
+        // the LAST real token when it answers EOF; the tag name is the first real token.
+        var prevStart = tagAt + 1
+        var cur = jsDocScan(ct, tagAt + 8, limit)
+        fun advance() { if (cur.kind != JSDOC_TOK_EOF) prevStart = cur.start; cur = jsDocScan(ct, cur.end, limit) }
+        fun onlyTriviaToEnd(from: Int): Boolean {
+            var t = jsDocScan(ct, from, limit)
+            while (t.kind == JSDOC_TOK_WS || t.kind == JSDOC_TOK_NL) t = jsDocScan(ct, t.end, limit)
+            return t.kind == JSDOC_TOK_EOF
+        }
+        fun skipWhitespaceOrAsterisk() {
+            if ((cur.kind == JSDOC_TOK_WS || cur.kind == JSDOC_TOK_NL) && onlyTriviaToEnd(cur.end)) return
+            var precedingLineBreak = cur.kind == JSDOC_TOK_NL
+            while ((precedingLineBreak && cur.kind == JSDOC_TOK_STAR) || cur.kind == JSDOC_TOK_WS || cur.kind == JSDOC_TOK_NL) {
+                if (cur.kind == JSDOC_TOK_NL) precedingLineBreak = true
+                else if (cur.kind == JSDOC_TOK_STAR) precedingLineBreak = false
+                advance()
+            }
+        }
+        skipWhitespaceOrAsterisk() // parseTag's indent text
+        skipWhitespaceOrAsterisk() // tryParseTypeExpression
+        var hasType = false
+        if (cur.kind == JSDOC_TOK_OTHER && ct[cur.start] == '{') {
+            var depth = 0
+            var j = cur.start
+            var close = -1
+            while (j < limit) {
+                when (ct[j]) { '{' -> depth++; '}' -> { depth--; if (depth == 0) { close = j; break } } }
+                j++
+            }
+            if (close < 0) return // unbalanced — not a shape this walker can position
+            hasType = true
+            prevStart = close
+            cur = jsDocScan(ct, close + 1, limit)
+        }
+        skipWhitespaceOrAsterisk() // parseTypedefTag, before the name
+        if (cur.kind == JSDOC_TOK_IDENT) return // named
+        fun emit(start: Int, end: Int) {
+            if (end <= start) return
+            val abs = commentPos + start
+            val (line, character) = getLineAndCharacterOfPosition(source, abs)
+            diagnostics.add(Diagnostic(
+                message = "Identifier expected.", category = DiagnosticCategory.Error, code = 1003,
+                fileName = fileName, line = line, character = character, start = abs, length = end - start,
+            ))
+        }
+        // R1 — the reparser's row: the character before the missing name's position.
+        if (hasType) emit(cur.start - 1, cur.start)
+        // R2 — the JSDoc parser's row, a checkJs-only diagnostic in TypeScript 7. When the
+        // comment closes right after the `}` (`{string}*\/`) both rows are the same one
+        // character, and tsgo's `SortAndDeduplicateDiagnostics` keeps one.
+        if (options.checkJs) {
+            val r2Start = if (cur.kind == JSDOC_TOK_EOF) prevStart else cur.start
+            if (!(hasType && r2Start == cur.start - 1 && cur.end == cur.start)) emit(r2Start, cur.end)
+        }
+    }
+
+    /** Every JSDoc (slash-star-star) comment attached to any node of [sf], once each (a comment may be the
+     *  leading comment of two nested nodes). Iterative — an expression chain is deep. */
+    private inline fun forEachJsDocComment(sf: SourceFile, action: (Comment) -> Unit) {
+        val seen = HashSet<Int>()
+        val work = ArrayDeque<Node>()
+        work.addLast(sf)
+        while (work.isNotEmpty()) {
+            val n = work.removeLast()
+            n.leadingComments?.forEach { c ->
+                if (c.kind == SyntaxKind.MultiLineComment && c.text.startsWith("/**") && seen.add(c.pos)) action(c)
+            }
+            forEachChild(n) { work.addLast(it) }
+        }
+    }
+
+    /**
+     * (P18.99) M3 — TS2749 *'X' refers to a value, but is being used as a type here.* for a
+     * VALUE named in a NESTED JSDoc type position of a checkJs JS file. The top-level
+     * `@param {Thing}` has been reported since B5.2 (the parser bridges a bare identifier
+     * onto the parameter and the ordinary 16.4ct emitter fires); tsgo reports the same for
+     * `Thing` at every position of the type expression — a function-type parameter
+     * (`(x: Thing) => void`, `jsEnumTagOnObjectFrozen`), a generic head (`fn<T>`,
+     * `jsdocTypeNongenericInstantiationAttempt`), a type argument, an array element, a
+     * union member, a type-literal member, a function-type return, and the ROOT of a
+     * `@type`/`@returns`/`@typedef`/`@property` (all tsgo-measured). The expression is
+     * sub-parsed with [Parser.parseJsDocTypeTextClean] — a malformed one (closure syntax,
+     * `!T`, `?T`, a missing `:`) is refused whole — and every emission re-verifies that the
+     * source spells the name at the computed offset. A QUALIFIED name (`Host.UserMetrics.X`)
+     * is deliberately NOT reached: tsgo answers it through the JSDoc-namespace declarations a
+     * `@typedef {…} A.B.C` creates (a plain expando `Host.A` is TS2503 *Cannot find namespace*
+     * there, measured), which this checker does not model. The index-signature parameter type
+     * of a `@typedef {{ [key: foo] … }}` belongs to [checkJsDocTypedefIndexSignature].
+     *
+     * Value-only means: a symbol in the file's own locals carrying a Value flag and none of
+     * Type / Module / Alias, not a JSDoc primitive, not a lib global with a type meaning,
+     * not a `@template` parameter of the same comment, and not a `@typedef`/`@callback` NAME
+     * declared in any JS file of the program (a script's typedef is global).
+     */
+    private fun checkJsDocNestedValueAsType() {
+        if (!options.checkJs) return
+        val tagRe = Regex("""@(?:param|arg|argument|type|returns?|typedef|property|prop)\b""")
+        var jsDocTypeNames: HashSet<String>? = null
+        for (result in checkedResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            if (!srcHas(source, "/**")) continue
+            val subParser = Parser("", fileName)
+            forEachJsDocComment(result.sourceFile) { comment ->
+                val ct = comment.text
+                var templateNames: Set<String>? = null
+                for (tag in tagRe.findAll(ct)) {
+                    val tagAt = tag.range.first
+                    if (!jsDocTagAtLineStart(ct, tagAt)) continue
+                    var i = tag.range.last + 1
+                    while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
+                    if (i >= ct.length || ct[i] != '{') continue
+                    val open = i
+                    var depth = 0
+                    var close = -1
+                    var j = open
+                    while (j < ct.length) {
+                        when (ct[j]) { '{' -> depth++; '}' -> { depth--; if (depth == 0) { close = j; break } } }
+                        j++
+                    }
+                    if (close < 0) continue
+                    val raw = ct.substring(open + 1, close)
+                    val text = raw.trim()
+                    if (text.isEmpty()) continue
+                    val base = comment.pos + open + 1 + (raw.length - raw.trimStart().length)
+                    val root = subParser.parseJsDocTypeTextClean(text) ?: continue
+                    val isParamTag = tag.value != "@type" && tag.value != "@returns" && tag.value != "@return" &&
+                        tag.value != "@typedef" && tag.value != "@property" && tag.value != "@prop"
+                    // The bridged bare `@param {Thing}` is 16.4ct's row already.
+                    if (isParamTag && root is TypeReference && root.typeName is Identifier && root.typeArguments == null) continue
+                    val templates = templateNames ?: jsDocTemplateNamesIn(ct).also { templateNames = it }
+                    val declaredTypeNames = jsDocTypeNames ?: collectJsDocDeclaredTypeNames().also { jsDocTypeNames = it }
+                    val work = ArrayDeque<Triple<Node, Node?, Node?>>()
+                    work.addLast(Triple(root, null, null))
+                    while (work.isNotEmpty()) {
+                        val (n, parent, grand) = work.removeLast()
+                        if (n is TypeReference) {
+                            val id = n.typeName as? Identifier
+                            if (id != null && jsDocNestedTypePositionReported(n, parent, grand)) {
+                                val name = id.text
+                                val abs = base + id.pos
+                                if (name !in templates && name !in declaredTypeNames &&
+                                    jsDocValueOnlyLocal(result, name) &&
+                                    abs + name.length <= source.length && source.regionMatches(abs, name, 0, name.length)) {
+                                    val (line, character) = getLineAndCharacterOfPosition(source, abs)
+                                    diagnostics.add(Diagnostic(
+                                        message = "'$name' refers to a value, but is being used as a type here. Did you mean 'typeof $name'?",
+                                        category = DiagnosticCategory.Error, code = 2749, fileName = fileName,
+                                        line = line, character = character, start = abs, length = name.length,
+                                    ))
+                                }
+                            }
+                        }
+                        // A parenthesised type is transparent: its children see its parent.
+                        val childParent = if (n is ParenthesizedType) parent else n
+                        val childGrand = if (n is ParenthesizedType) grand else parent
+                        forEachChild(n) { c -> work.addLast(Triple(c, childParent, childGrand)) }
+                    }
+                }
+            }
+        }
+    }
+
+    /** The nested positions tsgo reports a value-as-type at, by the reference's parent:
+     *  root, function/constructor-type parameter, generic head, type argument, array
+     *  element, union/intersection member, type-literal member, function-type return. The
+     *  index-signature parameter type is [checkJsDocTypedefIndexSignature]'s. */
+    private fun jsDocNestedTypePositionReported(ref: TypeReference, parent: Node?, grand: Node?): Boolean = when {
+        ref.typeArguments != null -> true
+        parent == null -> true
+        parent is Parameter -> grand is FunctionType || grand is ConstructorType
+        parent is TypeReference -> true
+        parent is ArrayType -> true
+        parent is UnionType || parent is IntersectionType -> true
+        parent is FunctionType || parent is ConstructorType -> true
+        parent is IndexSignature -> false
+        parent is ClassElement -> true
+        else -> false
+    }
+
+    private fun jsDocTemplateNamesIn(ct: String): Set<String> {
+        var out: HashSet<String>? = null
+        for (m in Regex("""@template\b[^\n*]*?([A-Za-z_$][\w$,\s]*)""").findAll(ct)) {
+            for (p in m.groupValues[1].split(',')) {
+                val name = p.trim()
+                if (name.isNotEmpty()) (out ?: HashSet<String>().also { out = it }).add(name)
+            }
+        }
+        return out ?: emptySet()
+    }
+
+    /** Every `@typedef`/`@callback` NAME in any JS file of the program — a lookup, not a walk. */
+    private fun collectJsDocDeclaredTypeNames(): HashSet<String> {
+        val out = HashSet<String>()
+        val re = Regex("""@(?:typedef|callback)\s+(?:\{[^\n]*\}\s+)?([A-Za-z_$][\w$]*)""")
+        for (r in binderResults) {
+            val fn = r.sourceFile.fileName
+            if (!isJsLikeFileName(fn)) continue
+            val text = r.sourceFile.text
+            if (!srcHas(text, "@typedef") && !srcHas(text, "@callback")) continue
+            for (m in re.findAll(text)) out.add(m.groupValues[1])
+        }
+        return out
+    }
+
+    /** A name the file declares as a VALUE only (16.4ct's rule, file-keyed): a local with a
+     *  Value flag and none of Type / Module / Alias; never a JSDoc primitive, never a lib
+     *  global that also names a type. */
+    private fun jsDocValueOnlyLocal(result: BinderResult, name: String): Boolean {
+        if (name in JSDOC_TYPE_PRIMITIVE_NAMES) return false
+        if (name in KNOWN_GLOBALS && name !in VALUE_ONLY_GLOBALS) return false
+        val sym = result.locals[name] ?: return false
+        if (sym.flags.hasAny(SymbolFlags.Type or SymbolFlags.Module or SymbolFlags.Alias)) return false
+        return sym.flags.hasAny(SymbolFlags.Value)
     }
 
     /**
@@ -47065,34 +47409,15 @@ class Checker(
         val hasConst = "const" in kinds
         val hasBlockScoped = hasLet || hasConst
         val hasNamespace2 = "namespace" in kinds
-        val hasType = "type" in kinds
 
-        // TS2451: type alias + let/const (no other kinds). This is a JS-ONLY
-        // rule: in a `.js` file a `type X` alias is illegal (TS8008) so it does
-        // NOT occupy the TYPE space, and tsc treats `type X` + `const X` as a
-        // value-side block-scoped redeclaration (jsdocTypedefNoCrash2). In a
-        // `.ts`/`.tsx` file a type alias and a value const legally COEXIST
-        // (different declaration spaces) — NO error (longObjectInstantiationChain1's
-        // `type merge<…>` + `declare const merge`). So gate to JS-like files.
-        if (hasType && hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2 && group.size >= 2 && isJsLikeFileName(fileName)) {
-            for (decl in group) {
-                val start = decl.nameNode.pos
-                val nameLen = if (decl.nameNode is Identifier) (decl.nameNode).text.length
-                    else (decl.nameNode.end - decl.nameNode.pos)
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "Cannot redeclare block-scoped variable '${decl.name}'.",
-                    category = DiagnosticCategory.Error,
-                    code = 2451,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = nameLen,
-                ))
-            }
-            return true
-        }
+        // (P18.99) M2: a `type X` alias beside a `const X` is NOT a block-scoped
+        // redeclaration in ANY file kind. tsc 6 made it a JS-ONLY TS2451 pair (a `type X`
+        // in a `.js` file is TS8008, so tsc 6 read it as a value-space declaration —
+        // `jsdocTypedefNoCrash2`'s old baseline); TypeScript 7 (tsgo, measured) reports
+        // the TS8008 alone in a `.js` file and NOTHING in a `.ts` file, where a type alias
+        // and a value const legally COEXIST (`longObjectInstantiationChain1`'s
+        // `type merge<…>` + `declare const merge`). The alias therefore neither counts
+        // toward nor receives the diagnostic — see `blockScopedDecls` below.
 
         // 17.127: skip TS2451 when an import binding is in the group — TS2395
         // (mixed export status) and TS2440 (import conflicts with local) are emitted
@@ -55742,6 +56067,14 @@ class Checker(
             "string", "number", "boolean", "object", "function", "undefined", "null",
             "void", "any", "unknown", "never", "symbol", "bigint", "this", "true", "false",
         )
+
+        /** (P18.99) M2: tsgo JSDoc token kinds for [jsDocScan]. */
+        private const val JSDOC_TOK_EOF = 0
+        private const val JSDOC_TOK_WS = 1
+        private const val JSDOC_TOK_NL = 2
+        private const val JSDOC_TOK_STAR = 3
+        private const val JSDOC_TOK_IDENT = 4
+        private const val JSDOC_TOK_OTHER = 5
 
         /** B57.3b: Maximum recursion depth for [getTypeFromMappedType]. Mirrors the
          *  alias-substitution depth limit (10). When exceeded, [getTypeFromMappedType]
@@ -66692,20 +67025,19 @@ interface DataView {
 
     /**
      * TS2880: `import x from "y" assert { ... }` — import assertions have been replaced by
-     * import attributes (`with`). Fires only when the module target supports import
-     * attributes (esnext / nodenext / node18 / node20 / preserve) and the clause uses the
-     * deprecated `assert` keyword; suppressed entirely by `ignoreDeprecations`. Squiggle is
-     * the `assert` keyword (6 chars). Purely syntactic — the parser captures the clause
-     * keyword text and position — so this can never FP on a `with`-clause or non-attribute
-     * import. (For non-supporting module kinds TypeScript emits a different code we don't
-     * implement; leaving those silent matches current behaviour.)
+     * import attributes (`with`). (P18.99) M1: in TypeScript 7 this is an ERROR the PARSER
+     * reports (tsgo `parser.go` `tryParseImportAttributes` / `parseExportDeclaration`,
+     * `parseErrorAtCurrentToken` on the `assert` keyword, width 6) — UNCONDITIONALLY:
+     * nothing consults `ignoreDeprecations` (tsc 6 silenced it under `"6.0"`), and nothing
+     * consults the module kind (tsc 6 fired only for esnext/nodenext/node18/node20/preserve;
+     * tsgo reports it under `commonjs` and `node16` alike, measured). Every clause form
+     * takes it: the import clause, the namespace and named forms, `export … from`, and the
+     * side-effect `import "x" assert { … }`. Purely syntactic — the parser captures the
+     * clause keyword text and position — so this can never FP on a `with`-clause or a
+     * non-attribute import; an `assert` on a NEW LINE is not a clause (the parser refuses
+     * it, as tsgo does).
      */
     private fun checkImportAssertionsDeprecated() {
-        if (options.ignoreDeprecations != null) return
-        val m = options.effectiveModule
-        val supportsAttributes = m == ModuleKind.ESNext || m == ModuleKind.NodeNext ||
-            m == ModuleKind.Node18 || m == ModuleKind.Node20 || m == ModuleKind.Preserve
-        if (!supportsAttributes) return
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
@@ -177610,7 +177942,8 @@ interface DataView {
                     val fnName = whole.groupValues[1]
                     val argName = whole.groupValues[2]
                     if (fnName !in topLevelFns) continue
-                    if (argName in topLevelTypeNames || argName in KNOWN_GLOBALS) continue
+                    // (P18.99): a KEYWORD type argument (`fn<string>`) is not a name to find.
+                    if (argName in topLevelTypeNames || argName in KNOWN_GLOBALS || argName in JSDOC_TYPE_PRIMITIVE_NAMES) continue
                     val argRel = content.indexOf('<', whole.range.first).let { lt ->
                         var j = lt + 1
                         while (j < content.length && content[j].isWhitespace()) j++

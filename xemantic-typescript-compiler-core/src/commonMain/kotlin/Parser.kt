@@ -517,35 +517,39 @@ class Parser(
     private var lastImportAttributesPos: Int = -1
 
     /**
-     * B397: TS2880 — `assert` in an import-CALL attributes object
-     * (`import(spec, { assert: {...} })`, type or value position) is deprecated; use `with`.
-     * tsc reports at DIFFERENT spans for the two positions: a VALUE-position dynamic import
-     * squiggles the `assert` keyword (length 6); a TYPE-position `import(...).X` squiggles the
-     * assert clause's VALUE (the inner `{`, length 1). Emitted as a parser diagnostic (2880 is
-     * in GRAMMAR_CLASS_CODES so it does not trigger the real-parse-diagnostic suppression).
+     * B397 / (P18.99) M1: TS2880 — `assert` in an import-CALL options object
+     * (`import(spec, { assert: {...} })`). TypeScript 7 (tsgo `checker.go`
+     * `checkImportCallExpression`) reports it on the PROPERTY NAME (the `assert` key,
+     * width 6) for an IDENTIFIER-named `PropertyAssignment` only — a string-named
+     * `"assert"` or a shorthand `{ assert }` is silent — and `break`s after the first, so
+     * a duplicated key gets ONE row (plus TS1117 from the literal itself). It is an ERROR,
+     * not a deprecation: nothing consults `ignoreDeprecations`. Emitted as a parser
+     * diagnostic (2880 is in GRAMMAR_CLASS_CODES so it does not trigger the
+     * real-parse-diagnostic suppression). The TYPE-position `import("x", { assert: … })`
+     * form is [parseImportType]'s own site, anchored the same way.
      */
-    private fun emitImportAttrAssertDeprecation(attrs: Expression?, typePosition: Boolean) {
+    private fun emitImportAttrAssertDeprecation(attrs: Expression?) {
         val obj = attrs as? ObjectLiteralExpression ?: return
         for (p in obj.properties) {
             if (p !is PropertyAssignment) continue
             val nameNode = p.name as? Identifier ?: continue
             if (nameNode.text != "assert") continue
-            val (start, len) = if (typePosition) {
-                p.initializer.pos to 1
-            } else {
-                nameNode.pos to 6
-            }
             reportError(
                 "Import assertions have been replaced by import attributes. Use 'with' instead of 'assert'.",
-                code = 2880, overrideStart = start, overrideLength = len,
+                code = 2880, overrideStart = nameNode.pos, overrideLength = 6,
             )
+            break
         }
     }
 
     private fun parseImportAttributes(): String? {
         lastImportAttributesPos = -1
-        // `assert` is not a keyword — check as identifier value
-        val isAssert = token == SyntaxKind.Identifier && scanner.getTokenValue() == "assert"
+        // `assert` is not a keyword — check as identifier value. (P18.99) M1: an `assert`
+        // on a NEW LINE is not an attributes clause (tsgo `tryParseImportAttributes` and
+        // `parseExportDeclaration` both demand `!hasPrecedingLineBreak()` for it); the
+        // statement ends by ASI and `assert { … }` is parsed as whatever it is on its own.
+        val isAssert = token == SyntaxKind.Identifier && scanner.getTokenValue() == "assert" &&
+            !scanner.hasPrecedingLineBreak()
         val isWith = token == SyntaxKind.WithKeyword
         if (!isAssert && !isWith) return null
         val startPos = scanner.getTokenPos()
@@ -4365,14 +4369,21 @@ class Parser(
             )
         }
 
-        // import "module" (side-effect import)
+        // import "module" (side-effect import). (P18.99) M1: the attributes clause is
+        // KEPT on the node — `import "x" assert { … }` is a TS2880 in TypeScript 7 exactly
+        // like the clause forms, and the checker reads it off `assertClause`.
         if (token == SyntaxKind.StringLiteral) {
             val spec = parseStringLiteral()
             recordModuleSpecifier(spec)
-            parseImportAttributes()
+            val sideEffectClause = parseImportAttributes()
+            val sideEffectClausePos = lastImportAttributesPos
             parseSemicolon()
             val trailing = trailingComments()
-            return ImportDeclaration(moduleSpecifier = spec, modifiers = outerModifiers, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing)
+            return ImportDeclaration(
+                moduleSpecifier = spec, modifiers = outerModifiers, pos = pos, end = getEnd(),
+                leadingComments = comments, trailingComments = trailing,
+                assertClause = sideEffectClause, assertClausePos = sideEffectClausePos,
+            )
         }
 
         // import clause from "module"
@@ -6353,7 +6364,7 @@ class Parser(
                             // fails on `{`), and flag a deprecated `assert` clause (TS2880).
                             val secondArg = parseAssignmentExpression()
                             callArgs.add(secondArg)
-                            emitImportAttrAssertDeprecation(secondArg, typePosition = false)
+                            emitImportAttrAssertDeprecation(secondArg)
                             if (token == Comma) nextToken()
                         }
                     }
@@ -8957,6 +8968,23 @@ class Parser(
         }
     }
 
+    /**
+     * (P18.99) M3: parse a JSDoc `{…}` type-expression TEXT into a TypeNode whose positions
+     * are RELATIVE to [text] (offset 0), answering null unless the parse consumed the whole
+     * text with NO diagnostic — a malformed JSDoc type (`{ [key: foo] boolean }`, closure
+     * syntax, `!T`/`?T`/`T=`) is refused rather than walked with recovery nodes, and a
+     * caller re-verifies every position against the source text before emitting on it.
+     */
+    fun parseJsDocTypeTextClean(text: String): TypeNode? {
+        return try {
+            val sub = Parser(text, fileName)
+            val parsed = sub.runParseTypeFromExternal()
+            if (parsed != null && sub.diagnostics.isEmpty()) parsed else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun runParseTypeFromExternal(): TypeNode? {
         return try {
             nextToken()
@@ -9769,15 +9797,12 @@ class Parser(
             val isWith = token == SyntaxKind.WithKeyword
             if (isWith || isAssert) {
                 if (isAssert) {
-                    // `assert` is deprecated — TS2880 at the inner attributes object (`{`),
-                    // matching the typePosition span (initializer.pos, len 1).
-                    val innerBracePos = scanner.lookAhead {
-                        scanner.scan(); scanner.scan() // over `assert` and `:`
-                        scanner.getTokenPos()
-                    }
+                    // (P18.99) M1: TS2880 at the `assert` keyword itself (width 6) — tsgo
+                    // `parseImportType` reports `parseErrorAtCurrentToken` while the current
+                    // token IS `assert`; tsc 6 anchored the type form on the inner `{`.
                     reportError(
                         "Import assertions have been replaced by import attributes. Use 'with' instead of 'assert'.",
-                        code = 2880, overrideStart = innerBracePos, overrideLength = 1,
+                        code = 2880, overrideStart = scanner.getTokenPos(), overrideLength = 6,
                     )
                 }
                 nextToken() // consume `with`/`assert`

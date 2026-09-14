@@ -1037,31 +1037,9 @@ val tsgoPendingBaselines = listOf(
         "types can only be used inside documentation comments."
     ),
     TsgoPendingBaseline(
-        "importAssertionsDeprecatedIgnored.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer " +
-        "`submoduleAccepted`. tsgo: /a.ts(2,35): error TS2880: Import assertions have been " +
-        "replaced by import attributes. Use 'with' instead of 'assert'. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
         "importDeclWithExportModifierAndExportAssignment.js",
         "JS emit; layer `submoduleAccepted`. tsgo: Object.defineProperty(exports, " +
         "\"__esModule\", { value: true }); | ours: module.exports = x;"
-    ),
-    TsgoPendingBaseline(
-        "importTypeAssertionDeprecation.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
-        "/main.ts(1,30): error TS2880: Import assertions have been replaced by import " +
-        "attributes. Use 'with' instead of 'assert'. | ours: /main.ts(1,38): error TS2880: " +
-        "Import assertions have been replaced by import attributes. Use 'with' instead of " +
-        "'assert'."
-    ),
-    TsgoPendingBaseline(
-        "importTypeAssertionDeprecationIgnored.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> F8 span/width: the CODE and TEXT agree and only the anchor or squiggle length differs; layer `submoduleAccepted`. tsgo: " +
-        "/main.ts(2,30): error TS2880: Import assertions have been replaced by import " +
-        "attributes. Use 'with' instead of 'assert'. | ours: /main.ts(2,38): error TS2880: " +
-        "Import assertions have been replaced by import attributes. Use 'with' instead of " +
-        "'assert'."
     ),
     TsgoPendingBaseline(
         "incompatibleExports1.errors.txt",
@@ -1110,14 +1088,14 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "jsEnumCrossFileExport.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
-        "enumDef.js(14,20): error TS1003: Identifier expected. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "jsEnumTagOnObjectFrozen.errors.txt",
-        "F6 top code differs (tsgo TS2749 / ours -); layer `submodule`. tsgo: index.js(17,16): " +
-        "error TS2749: 'Thing' refers to a value, but is being used as a type here. Did you " +
-        "mean 'typeof Thing'? | ours: ==== index.js (1 errors) ===="
+        "RE-SIZED (LEGACY.0b step 14): the two enumDef.js TS1003 rows now MATCH ((P18.99) M2); " +
+        "what remains is (a) the two index.js TS2749 rows on a QUALIFIED expando name " +
+        "(`Host.UserMetrics.Action`), which tsgo resolves through the JSDoc-namespace " +
+        "declarations a `@typedef {…} Host.UserMetrics.Bargh` creates (a plain expando is " +
+        "TS2503 there, measured) — unmodelled here — and (b) the baseline RENDERING of the " +
+        "(14,21) row, whose width-1 range is the NEWLINE: tsgo's harness prints an empty " +
+        "squiggle line, the next source line and the message after it, where ours prints a " +
+        "`~` at column 21."
     ),
     TsgoPendingBaseline(
         "jsExpandoObjectDefineProperty.errors.txt",
@@ -1198,23 +1176,6 @@ val tsgoPendingBaselines = listOf(
         "Argument of type 'number[]' is not assignable to parameter of type 'number'."
     ),
     TsgoPendingBaseline(
-        "jsdocTypeNongenericInstantiationAttempt.errors.txt",
-        "F6 top code differs (tsgo TS2749 / ours -); layer `submodule`. tsgo: index8.js(4,12): " +
-        "error TS2749: 'fn' refers to a value, but is being used as a type here. Did you mean " +
-        "'typeof fn'? | ours: ==== index8.js (1 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "jsdocTypedefNoCrash.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
-        "export.js(3,5): error TS1003: Identifier expected. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "jsdocTypedefNoCrash2.errors.txt",
-        "F6 top code differs (tsgo TS1003 / ours TS2451); layer `submodule`. tsgo: " +
-        "export.js(4,5): error TS1003: Identifier expected. | ours: export.js(1,13): error " +
-        "TS2451: Cannot redeclare block-scoped variable 'foo'."
-    ),
-    TsgoPendingBaseline(
         "methodSignatureHandledDeclarationKindForSymbol.errors.txt",
         "F2-residue: a CROSS-DECLARATION interface MERGE (`interface Foo` declared twice), "
             + "so it is served by `checkCrossInterfacePropertyConflict` and not by either "
@@ -1225,11 +1186,6 @@ val tsgoPendingBaselines = listOf(
             + "runs. We emit the TS2717 and neither TS2300. The merge path is otherwise "
             + "CORRECT (property-vs-property across two declarations is TS2717 alone in tsgo "
             + "too — measured), so the delta is the differing-KIND case alone.",
-    ),
-    TsgoPendingBaseline(
-        "misspelledJsDocTypedefTags.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
-        "a.js(4,59): error TS1003: Identifier expected. | ours: nothing"
     ),
     TsgoPendingBaseline(
         "mixinPrivateAndProtected.errors.txt",
@@ -1390,14 +1346,6 @@ val tsgoPendingBaselines = listOf(
         "diagnostic one, and it reaches every baseline whose annotated source carries a " +
         "surrogate pair; layer `submoduleAccepted`. tsgo squiggle: `                   ~` | " +
         "ours: `                    ~`."
-    ),
-    TsgoPendingBaseline(
-        "uniqueSymbolJs.errors.txt",
-        "F6 top code differs (tsgo TS1268,TS2749 / ours TS1337); layer `submodule`. tsgo: " +
-        "a.js(5,18): error TS1268: An index signature parameter type must be 'string', " +
-        "'number', 'symbol', or a template literal type. | ours: a.js(5,18): error TS1337: An " +
-        "index signature parameter type cannot be a literal type or generic type. Consider " +
-        "using a mapped object type instead."
     ),
     TsgoPendingBaseline(
         "unusedTypeParameters_templateTag2.errors.txt",
