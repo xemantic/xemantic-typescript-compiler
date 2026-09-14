@@ -25,6 +25,91 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.92) — TS2683 in JS files: the skip was standing in for a GATE BUG, and 3 of 4 "cascades" were four separate families (2026-09-14)
+
+**Suite 19,153 → 19,170 / 0 / 176** — `tsgoPendingBaselines` 155 → **151** and skipped 180 →
+**176**, both −4, plus +17 pins. Grid 8×`added=0 removed=0`; `cost_gate.py` exit 0, all 20
+counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (862 classes, 0 over); warning-clean
+(7,306-byte log, `w=0 e=0`, no `-q`, positive control produced exactly 1 `w:` line). **4 of 7
+rows; the 3 holdouts each have a NAMED mechanism and a rewritten, greppable `TS2683-residue:`
+reason. (LEGACY.0) stays OPEN** on (0b-8).
+
+**THIS ROUND'S FAMILY WAS PICKED THE SAME WAY AS THE LAST TWO AND CAME OUT DIFFERENTLY, WHICH IS
+THE POINT.** (P18.90)/(P18.91) each chose a family whose code appears in ZERO active baselines,
+making a regression on that axis structurally impossible. TS2683 is in **17** active baselines
+(the ranking said 18; re-measured, 17) and the changed gate is exposed to **133 active baselines
+involving a `.js` file** — so the brief demanded the exposure measurement BEFORE any code, with
+explicit permission to scope down. It was needed: the round landed 4 rows, not 7.
+
+**THE CASCADE HYPOTHESIS WAS REFUTED FOR 3 OF 4.** The four "top code differs" rows were expected
+to be one mechanism — tsgo emits TS2683, `this` becomes `any`, our downstream member error
+disappears. Only `inexistentPropertyInsideToStringType` is that. `jsFunctionWithPrototype…` KEEPS
+its TS2339 in tsgo; `controlFlowInstanceof` is two ours-only **`.ts`** rows plus a missing JS one;
+`jsdocFunctionClassPropertiesDeclaration` is a JSDoc-`@param` typing gap. **A shared diagnostic
+code is no more a family than a shared first-differing line** — the third distinct way this arc
+has mis-grouped rows, after (P18.87)'s and (P18.88)'s.
+
+**THE LOCALISATION WAS RIGHT, THE NAME IN OUR OWN COMMENT WAS WRONG.** The gate is
+`spineItSetup`, not `spineNaSetup` — `Checker.kt:8583`'s comment misnames it (`spineNa` is
+TS7009). Archive entry B438b is the record of why the skip existed: under tsc 6, `allowJs`/
+`checkJs` inferred `this` from JSDoc `@this`, prototype assignment and IIFE context, so a bare
+`this` in a JS file was not implicit-any the way a `.ts` one is.
+
+**AND THE SKIP TURNED OUT TO BE STANDING IN FOR A GATE BUG.** tsgo's `GetStrictOptionValue` is
+`options.Strict != TSFalse` — **TypeScript 7 defaults every strict sub-option ON unless
+`strict:false` is explicit, and an explicit sub-option `false` WINS over that default.** Our
+`spineItRunActive` was `noImplicitThis || strict || !strictExplicitlyFalse`, which reproduces the
+default but NOT the explicit-false half; the one fixture in 133 that separated them
+(`noParameterReassignmentJSIIFE`) was being protected by the JS skip instead of by its own
+explicit `@noImplicitThis: false`. Both halves of B438b's justification dissolve under
+TypeScript 7. Landed: the JS skip becomes `(!spineIsJsLike || options.checkJs)`, and both run
+gates become tsgo's exact spelling. **Scoped deliberately: 2 sites changed, 28 left on the old
+`X || options.strict` idiom** — changing 29 unmeasured sites would be reckless, and the drift is
+now a CLAUDE.md entry rather than a silent inconsistency.
+
+**THE CORPUS DID NOT CATCH THE ROUND'S ONE REAL MISTAKE — THE NEGATIVE CONTROL DID.** Dropping
+the JS skip wholesale emits TS2683 under `allowJs` WITHOUT `checkJs`, where tsgo is silent. No
+corpus baseline sees it, because such a fixture has no errors baseline at all. The brief asked
+for three negative controls (a `.d.ts`, a JS file with `checkJs` off, a typed `this`) and the
+second one is what fired.
+
+**A SECOND CONTROL WAS VACUOUS AND WAS FIXED RATHER THAN TRUSTED.** The `.d.ts` negative control
+had no `this` in its fixture, so it read 0 RED for a reason unrelated to the guard. Probed
+properly, a `.d.ts` *carrying a function body* does emit when the guard is dropped — **and tsgo
+emits TS2683 there too** (beside TS1183), so our `.d.ts` guard is NOT tsgo-faithful. That pin is
+now named `residue - …` per the countdown rule and records tsgo's row.
+
+**ALSO LANDED, ALL IN SERVICE OF THE 7 ROWS**: the TS7009 sibling family took the identical two
+changes (same gate, same bug — CLAUDE.md's add-it-to-both-of-a-pair rule); tsc-6 walker **B424
+`checkJsConstructorThisReads` RETIRED** (−2,641 chars, superseded by TS2683, archive records it
+as corpus-exhaustive to one fixture); a new `checkDeclarationOnlySpineFamilies` driver, because
+`emitDeclarationOnly` takes the `declarationOnly` whitelist path where `checkSpine` never runs —
+which is what actually blocked the two `jsDeclarationsGlobalFileConstFunction` rows, not anything
+`this`-shaped; and named-function-expression self-reference TS7009.
+
+**ABLATION — 10 arms, 9 discriminating, `tests` identical at 17 in every arm**: a1 restore the
+B438b JS skip **5 RED**; a2 drop the `checkJs` half **1**; a3 restore the pre-round run gate
+**1**; a4 emit in `.d.ts` too **1**; a5 drop the declarationOnly dispatch **1**; a6 B432 names
+the constructor again **1**; a7 adopt an enclosing `FunctionDeclaration`'s name **0 —
+UNDISCRIMINATED**; a7b (a7's control) delete the self-reference leg **1**; a8 declarationOnly
+driver drops the TS7009 family **1**; a9 restore the JS skip on TS7009 **3**. a7's zero is
+ATTRIBUTED: the `FunctionDeclaration -> return false` arm is a **redundant guard**, because a
+function declaration's name reaches the symbol-table path below and emits the same TS7009 for the
+same node.
+
+**THE GRID IS A CONTROL, COUNTED NOT ASSUMED** ((CHK.124)): TS2683 = 0 **and** TS7009 = 0 in BOTH
+arms of all eight profiles, and **no profile sets `checkJs`, `allowJs` or `emitDeclarationOnly`**,
+so the changed path is structurally unreachable there. cronstrue and marked byte-identical
+(marked is the live-emitter control: 4 pre-existing TS2683 rows in `.ts`, unchanged). The corpus
+was the gate.
+
+**A REUSABLE INSTRUMENT CAME OUT OF IT**: a **28-second** full-active-corpus harness (a Java
+driver calling `TypeScriptCompiler().compile` + `toErrorBaseline()` over all 2,789 active errors
+subtests, outside Gradle) that read **0 mismatches of 2,789** after every step. It turns a family
+round's blast-radius question from an argument into a measurement — but it must reproduce
+`Path.readText()`'s **UTF-16 BOM** handling or two fixtures read as false regressions, which is
+exactly what its first run did.
+
 ### Round (P18.91) — F6d: TypeScript 7 reports TS2303 at EVERY alias declaration on the cycle, and the detector was already there (2026-09-14)
 
 **Suite 19,139 → 19,153 / 0 / 180** — `tsgoPendingBaselines` 165 → **155** and skipped 190 →
@@ -807,82 +892,6 @@ of the 21 rows was never a contextual-typing gap.
 callee (missing), predicate `filter` (missing and text-diff), the `reduce(cb, {} as
 Record<…>)` false positive. Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
 
-### Round (P18.82) — (CHK.98)(d): TS2556 for a non-tuple spread was WRONG IN BOTH DIRECTIONS, not missing — and every remaining (CHK.98) deliverable is now measured (2026-09-12)
-
-**Suite 18,907 → 18,941 / 0 / 3** (+34 pins, `SpreadArgumentTupleTest`: 23 diagnostic, 8
-negative controls including the hazard, 3 `residue -`; three countdown pins in
-`SpreadIntoFixedAritySpreadTest`, `Inv4SpineBatch26Test` and `FunctionCallApplyTest` inverted).
-Grid 8×`added=0 removed=0` — **a REAL GATE this time**: a temporary counter read 45-46 arity
-verdicts on known signatures per profile, every one `ok`; marked 18 → 18 and cronstrue 1 → 1
-byte-identical; `cost_gate.py` exit 0, 20/20 counters within +0.05% of the rebuilt HEAD (not
-rebaselined — the +1.3% `mapped.*` rows are the stale baseline, identical on HEAD);
-`huge_methods.py --fail-over 0` exit 0; warning-clean (main + test). **(CHK.98) stays OPEN** on
-(i) the `NewExpression` argument arm and the open half of its STAGE 2.
-
-**WHY THIS ITEM, SAID OUT LOUD.** (CHK.98) is the first unchecked item after (CHK.134) closed;
-(INV.0) step 10b-ii stays blocked on its two named families.
-
-**ALL FOUR REMAINING DELIVERABLES WERE MEASURED BEFORE ONE WAS PICKED** (ours + tsgo 7.0.2 +
-pristine 6.0.3, zero REF-SPLIT):
-
-| deliverable | fixtures | agree / ours-only / missing / text-diff | gate it would have |
-|---|---|---|---|
-| (i) `NewExpression` argument arm | 24 | 5 / 0 / **21** / 0 | 6-10 `new X(callback)` per profile, libraries 0 — likely a control |
-| (ii) TS2556 non-tuple spread | 24 → 33 | 6 / **6** / 20 / 0 | 45-46 arity verdicts per profile — a GATE |
-| (iii) STAGE 2 (the item's own list) | 14 | 4 / 1 / 4 / 4 | ≥ 5 mechanisms |
-| (iv) (CHK.98b) | 3 | 0 / 0 / 1 / 0 | **already CLOSED 2026-09-06** — the one row is (P18.32)'s recorded known gap |
-
-(ii) was picked because its ours-only column is not zero: four FALSE POSITIVES on legal code
-and two WRONG CODES — the queue had it as "missing", and it was wrong in both directions.
-Stage 2 decomposes into `Promise.then`/`PromiseLike.then` and a namespace-import callee
-(missing), predicate `filter` (missing and text-diff), a `reduce` with a `Record` initial
-value (ours-only `acc.nope`), the union-of-arrays chain naming the LAST constituent where the
-references name the FIRST ((CHK.132)'s population) and an unreduced `NonNullable<…>`; three of
-its bullets (`q<R = T>`, a union-with-null class-TP callback, a destructured parameter) already
-agree.
-
-**THE FIX IS tsc's TUPLE EXPANSION AT ALL THREE ARITY WALKERS.** `getEffectiveCallArguments`'s
-tuple expansion plus `hasCorrectArity`'s spread clause plus `getArgumentArityError`'s first
-line, at the identifier-callee walker (overloads included), the `new` walker and the
-method-callee walker; the old `spreadOperandIsNonTupleArray` is gone. An UNDECIDABLE operand
-makes the index a lower bound, so only the "already past a rest-less list" verdict survives
-it — that is the hazard arm, and the two `residue -` pins are exactly what it reddens.
-
-**THE HAZARD THE ITEM DID NOT NAME: THE ARITY WALKERS RUN UNDER THE FILE-LEVEL AMBIENT.** A
-spread operand classified through the name resolver produced a FALSE TS2556 on a body-local
-TUPLE shadowing a file-level ARRAY — the resolver answered the file-level binding. Operands
-are therefore classified DECLARATION-first (the enclosing parameter, or the enclosing block's
-`VariableStatement`), and that shape is the hazard pin (arm a3 reddens it as a false
-positive). Two more measured facts: optional tuple slots COUNT (tsc pushes one synthetic
-argument each), and "too-many stands with a trailing spread" was wrong on both references.
-
-**BEFORE → AFTER**: the spread family 6/6/20 → **22/0/4**, the four remaining rows each
-attributed to a pre-existing gap reproduced without a spread — a VARIABLE callee ×2
-((CHK.97)'s recorded arity gap), a `...any` operand (a deliberate refusal) and the element
-type through a rest parameter. Nine INACTIVE pristine TS2556 baselines extracted with
-`pristine_oracle.py`: **8 of 9 match pristine's rows exactly**; `callWithSpread4` line 18 is
-the variable-callee gap. `readonlyRestParameters`, the only ACTIVE TS2556 baseline, green.
-
-**ABLATION over 134 pins per arm**: a1 the mechanism removed — **21 RED**; a2 an undecided
-operand treated as decided — **2 RED**, exactly the two residue pins; a3 the declaration
-route removed — **7 RED** including the hazard pin as a false positive; a4 the count printed
-beside TS2556 — 6; a5 the excess anchor — 5. At-risk run: 2,316 tests / 140 classes, all 82
-grepped classes present, the one failure the (P18.80) countdown whose own KDoc recorded both
-references at TS2556.
-
-**RESIDUES, MEASURED AND NOT FIXED**: the variable-callee arity gap; `...any`; an
-array-literal spread with an inner spread; a type-parameter operand; element typing through
-a rest parameter; all of (i); the open stage-2 rows above.
-
-**PREDICTIONS REFUTED**: (CHK.98b) was not open; a plain `new C(cb)` already works (B210's
-syntactic path — (i)'s 21 rows are the explicit-type-argument, overloaded and interface-
-construct shapes); TS2556 was not missing but wrong both ways; `lexicalValueSymbolForNode`
-does not resolve a function-body local from the walker's ambient; optional tuple slots count.
-
-**NEXT**: (CHK.98)(i), the `NewExpression` argument arm — 21 measured missing rows, a control
-grid, and the item's own hazard (an un-substituted `T` reaching the argument relation) to pin
-as a refusal. Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1213,7 +1222,32 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-6 LANDED 2026-09-14 ((P18.85)-(P18.91) notes) — pending 155, skipped 180,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-7 LANDED 2026-09-14 ((P18.85)-(P18.92) notes) — pending 151, skipped 176,
+  suite 19,170/0. **TS2683-in-JS 4 of 7 by (P18.92)**: the JS-file skip was standing in for a GATE BUG — tsgo's
+  `GetStrictOptionValue` makes an explicit sub-option `false` WIN over `strict`'s default-on, which our
+  `X || strict || !strictExplicitlyFalse` idiom did not model; **2 sites fixed, 28 left on the old idiom
+  DELIBERATELY** (see the CLAUDE.md entry). Three holdouts, each a DIFFERENT family, greppable as
+  `TS2683-residue:` — (i) `commonjsAccessExports` needs TS7009 for a **property-access callee**, a gap measured to
+  be GENERAL and not JS-specific (`new O.m()` is silent in a plain `.ts` file too) and decidable from the callee
+  TYPE; (ii) `controlFlowInstanceof` is two ours-only `.ts` rows (an `instanceof` narrow tsgo resolves to
+  `Set<number>`, and a TS2721) plus a missing `uglify.js` TS2339; (iii) `jsdocFunctionClassPropertiesDeclaration` is
+  a JSDoc `@param {number|undefined} x` typing gap costing three ours-only rows. **A REUSABLE INSTRUMENT LANDED
+  WITH IT**: a 28-second full-active-corpus harness outside Gradle (2,789 subtests) that turns a family's
+  blast-radius question into a measurement — use it to pick (0b-8). **REMAINING (0b-8), by red count**: F6z
+  singletons ~29, JS emit 33, F8 unrelated-anchor residue ~11,
+  F2 duplicate-identifier 9 + 6 (**sized read-only at (P18.90): TS2300 must ALSO fire at the FIRST declaration of a
+  duplicate group — the same "tsgo reports at ALL declarations" rule (P18.91) implemented for TS2303 — and TS2717 is
+  suppressed when the two declarations differ in KIND and kept when they agree; but it is NOT uniform,
+  `class K { b: number; b(): number }` already reports at both, so census the orderings first, and note TS2300 is in
+  **80 active baselines**, the largest blast radius of any remaining family**), F0 7, F1 residue ~8. **PICK BY
+  BLAST RADIUS**: (P18.90)/(P18.91) each chose a code appearing in ZERO active baselines and closed 25/25 and 10/10;
+  (P18.92) chose one in 17 active baselines with 133 exposed and closed 4/7. Measure
+  `active baselines carrying the code` first. **A KNOWN
+  FOLLOW-ON**: three hand-written pins differ from tsgo in CODE because our relation CHAIN line names the type
+  parameter / undistributed intersection where tsgo names its constraint / one distributed constituent — that chain
+  SOURCE DISPLAY is its own family and closing it also closes those three. The 21 TS-1 rows stay LEDGERED.
+  **BLOCKED-PENDING-USER, still open**: the fourth "harness artifact ⇒ fall back to tsc" arm ((P18.86)).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-6 LANDED 2026-09-14 ((P18.85)-(P18.91) notes) — pending 155, skipped 180,
   suite 19,153/0. **F6d TS2303 circular-alias CLOSED 10/10 by (P18.91)**: TypeScript 7 reports the row at EVERY
   alias declaration the cycle passes through (tsgo's `popTypeResolution` marks the whole resolution suffix false)
   where tsc 6 reported one — so the fix was a one-line generalisation in each of FOUR existing walkers, which are

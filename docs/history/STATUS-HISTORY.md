@@ -3424,3 +3424,26 @@ coverage change zero). cost_gate all 20 counters +0.00% (no `commonMain` touched
 grid is unaffected by construction), huge_methods exit 0, warning-clean. **Left open for a
 decision before (0b-3)**: a fourth "harness artifact ⇒ fall back to tsc" arm would preserve
 those 17 subtests with no ledger at all.
+
+**(P18.87) — (LEGACY.0b) STEP 2: THE "FREE WINS", AND F9 WAS A FIRST-DIFFERING-*LINE* LABEL RATHER THAN A FAMILY, 19,100 / 0 / 267 (2026-09-13).**
+Pending 285 → **242** and skipped 310 → **267**, both −43 — and that agreement IS the
+receipt, since the build fails on a stale ledger entry, so a green suite after deleting 43
+entries proves 43 tsgo rows now pass. **F9 "wording" was assigned by each row's FIRST
+DIFFERING LINE, which is not a family**: 13 of 53 are wording (in four unrelated mechanisms,
+one of them an elaboration TypeScript 7 does not have at all — 0 tsgo baselines against 12
+tsc ones), and 40 were reclassified in place, 23 of them into span/width. Two findings beat
+the 13: seven of those span rows share F4's anchor mechanism (tsgo anchors unused-local on
+the NAME, tsc on the statement), and two duplicate-identifier rows are not a wording swap at
+all — tsgo picks the leading message from the error's existing related list where we pick by
+index. **F4 landed 26/26** and the sizing was wrong about where it lives: the population is
+type PARAMETERS served by two dedicated emitters, and a code-only change closes just 14 —
+the span moves to the type-parameter NODE and TS7 keeps one grouping (TS6205 over the whole
+list). **F5 landed 4/4 and settles (LEGACY.1)'s wording question**: an option TS7 DELETED
+from its table is simply unknown (TS5023, no ladder, so no directive silences it) while
+every option it KEEPS but refuses still says TS5102/TS5108 — so (LEGACY.1) step (k)'s plan
+is CONFIRMED, and its stated blocker for moving `simulatedVersion` to `"7.0"` is gone (the
+four rows it cited are now tsgo baselines saying TS5102, and moving would close two pending
+rows rather than redden anything). Ablation 2 / 98 / 6 RED, the 98 including 5 pins failing
+in OPPOSITE directions. Grid 8×`added=0 removed=0` with a split verdict — a control for the
+display half and for F4 (no profile sets `noUnusedLocals`), a real gate for F5 and the
+elaboration. cost_gate all 20 counters +0.00%, huge_methods exit 0, warning-clean.

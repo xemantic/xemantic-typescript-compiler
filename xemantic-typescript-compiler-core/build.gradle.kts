@@ -1013,9 +1013,14 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "commonjsAccessExports.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer " +
-        "`submoduleAccepted`. tsgo: /a.js(8,9): error TS2683: 'this' implicitly has type 'any' " +
-        "because it does not have a type annotation. | ours: nothing"
+        "TS2683-residue: the TS2683 row is CORRECT since (LEGACY.0b step 7); what is left " +
+        "is TS7009 for a PROPERTY-ACCESS callee (`new exports.Cls()` where `exports.Cls = " +
+        "function(){}`), and that gap is GENERAL rather than JS-specific — measured, we are " +
+        "silent for `new O.m()` and `new N.f()` in a plain .ts file too where tsgo reports " +
+        "both. `checkNewExprImplicitAny` demands `callee is Identifier`; the fix is to decide " +
+        "TS7009 from the callee TYPE (tsgo: the resolved signature's declaration is not a " +
+        "constructor / construct signature / constructor type), which is its own family. " +
+        "tsgo: /a.js(12,18): error TS7009 | ours: nothing"
     ),
     TsgoPendingBaseline(
         "complexRecursiveCollections.errors.txt",
@@ -1035,10 +1040,13 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "controlFlowInstanceof.errors.txt",
-        "F6 top code differs (tsgo TS2683 / ours TS2721); layer `submoduleAccepted`. tsgo: " +
-        "uglify.js(5,23): error TS2683: 'this' implicitly has type 'any' because it does not " +
-        "have a type annotation. | ours: controlFlowInstanceof.ts(20,7): error TS2339: Property " +
-        "'add' does not exist on type 'Promise<any> | Set<number>'."
+        "TS2683-residue: the `uglify.js(5,23)` TS2683 row is CORRECT since (LEGACY.0b step " +
+        "7); the residue is THREE other mechanisms and none is implicit-`this`. Ours-only: " +
+        "controlFlowInstanceof.ts(20,7) TS2339 `Property 'add' does not exist on type " +
+        "'Promise<any> | Set<number>'` (an `instanceof` narrow that tsgo resolves to " +
+        "`Set<number>`) and controlFlowInstanceof.ts(105,5) TS2721 `Cannot invoke an object " +
+        "which is possibly 'null'`; missing: uglify.js(9,7) TS2339 `Property 'val' does not " +
+        "exist on type '{}'`. layer `submoduleAccepted`."
     ),
     TsgoPendingBaseline(
         "declarationEmitExpandoPropertyPrivateName.errors.txt",
@@ -1291,13 +1299,6 @@ val tsgoPendingBaselines = listOf(
         "at this location. | ours: nothing"
     ),
     TsgoPendingBaseline(
-        "inexistentPropertyInsideToStringType.errors.txt",
-        "F6 top code differs (tsgo TS2683 / ours TS2339); layer `submoduleAccepted`. tsgo: " +
-        "index.js(2,5): error TS2683: 'this' implicitly has type 'any' because it does not have " +
-        "a type annotation. | ours: index.js(2,10): error TS2339: Property 'yadda' does not " +
-        "exist on type 'toString'."
-    ),
-    TsgoPendingBaseline(
         "instanceofOnInstantiationExpression.js",
         "JS emit; layer `submoduleAccepted`. tsgo: maybeBox instanceof Box; // error | ours: " +
         "maybeBox instanceof (Box); // error"
@@ -1341,18 +1342,6 @@ val tsgoPendingBaselines = listOf(
         "RECLASSIFIED (LEGACY.0b step 2) F9 -> source-echo PATH: the annotated-source header spells a doubled separator; layer `submoduleAccepted`. tsgo: ==== " +
         "node_modules/lit-element/development/lit-element.d.ts (0 errors) ==== | ours: ==== " +
         "node_modules/lit-element/development//lit-element.d.ts (0 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "jsDeclarationsGlobalFileConstFunction.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
-        "file.js(2,2): error TS2683: 'this' implicitly has type 'any' because it does not have " +
-        "a type annotation. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "jsDeclarationsGlobalFileConstFunctionNamed.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
-        "file.js(2,2): error TS2683: 'this' implicitly has type 'any' because it does not have " +
-        "a type annotation. | ours: nothing"
     ),
     TsgoPendingBaseline(
         "jsEnumCrossFileExport.errors.txt",
@@ -1409,19 +1398,13 @@ val tsgoPendingBaselines = listOf(
         "'a' does not exist on type 'typeof import(\"a\")'."
     ),
     TsgoPendingBaseline(
-        "jsFunctionWithPrototypeNoErrorTruncationNoCrash.errors.txt",
-        "F6 top code differs (tsgo TS2683 / ours -); layer `submodule`. tsgo: index.js(2,5): " +
-        "error TS2683: 'this' implicitly has type 'any' because it does not have a type " +
-        "annotation. | ours: index.js(14,35): error TS2339: Property 'rgb' does not exist on " +
-        "type 'Color'."
-    ),
-    TsgoPendingBaseline(
         "jsdocFunctionClassPropertiesDeclaration.errors.txt",
-        "F6 top code differs (tsgo TS2683,TS7009 / ours TS7006,TS7023); layer `submodule`. " +
-        "tsgo: /a.js(6,11): error TS2683: 'this' implicitly has type 'any' because it does not " +
-        "have a type annotation. | ours: /a.js(5,17): error TS7023: 'Foo' implicitly has return " +
-        "type 'any' because it does not have a return type annotation and is referenced " +
-        "directly or indi"
+        "TS2683-residue: the three TS2683 rows and the TS7009 row are CORRECT since " +
+        "(LEGACY.0b step 7); the residue is that a JSDoc `@param {number | undefined} x` tag " +
+        "does not TYPE the parameter it names, so we add three ours-only rows tsgo does not " +
+        "have — /a.js(5,21) and (5,24) TS7006 `Parameter 'x'/'y' implicitly has an 'any' " +
+        "type.` plus /a.js(5,17) TS7023 `'Foo' implicitly has return type 'any'…`. JSDoc " +
+        "parameter typing is its own family. layer `submodule`."
     ),
     TsgoPendingBaseline(
         "jsdocIllegalTags.errors.txt",

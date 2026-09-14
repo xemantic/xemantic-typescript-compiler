@@ -6309,6 +6309,13 @@ class Checker(
     /** True while the declarationOnly minimal driver runs [spineWalkFile] for the
      *  unresolved-names family ONLY (every other spine handler skipped). */
     private var spineUResOnly = false
+    /** (LEGACY.0b) True while [checkDeclarationOnlySpineFamilies] runs
+     *  [spineWalkFile] for the implicit-`this` (TS2683/TS7041/TS7017) and
+     *  implicit-any-`new` (TS7009) families ONLY. Rides the same [spineUResOnly]
+     *  suppression (which is set with it), so the walk performs no scope
+     *  maintenance and no other handler; this flag only re-admits the TWO
+     *  dispatches those families need. */
+    private var spineDeclOnlyFamilies = false
     /** Batch 4: per-file nodeId memo for [spineUResExprChecked] — 0 unknown /
      *  1 checked / 2 not (a deep binary chain would otherwise cost O(n²)
      *  across its operand identifiers). */
@@ -8089,6 +8096,11 @@ class Checker(
         checkDeclarationEmitComputedSymbolNameability()
         checkDeclarationEmitHugeInferredType()
         checkDeclarationEmitCyclicInferredReturn()
+        // (LEGACY.0b): TS2683/TS7041/TS7017 and TS7009 fire under emitDeclarationOnly
+        // too — TypeScript 7 has no declaration-only CHECKING mode, so tsgo reports
+        // them from its ordinary full check (jsDeclarationsGlobalFileConstFunction,
+        // jsDeclarationsGlobalFileConstFunctionNamed).
+        checkDeclarationOnlySpineFamilies()
         // B439: TS2564 strict-property-initialization fires in emitDeclarationOnly too
         // (tsc reports it there — e.g. jsDeclarationsInheritedTypes). The walker is
         // self-contained and well-guarded (skips any/optional/declare/static/abstract/
@@ -8716,9 +8728,6 @@ class Checker(
         // inside a single-return body (no narrowing possible) where the bare type-param
         // member lacks the property (e.g. `value.hasOwnProperty` on `T | { data: T }`).
         pass("checkTypeParamUnionMemberAccess") { checkTypeParamUnionMemberAccess() }
-        // B424: TS2339 for reading an undeclared `this.<prop>` inside a top-level
-        // constructor-style `function NAME() { … }` in a checkJs JS file.
-        pass("checkJsConstructorThisReads") { checkJsConstructorThisReads() }
         // B432: TS2339 for `this.<prop>` inside a checkJs prototype method (`Color.prototype
         // = {…}`) where prop is not a constructor `this.X=` write nor a prototype key.
         pass("checkJsPrototypeMethodThisReads") { checkJsPrototypeMethodThisReads() }
@@ -25116,6 +25125,15 @@ class Checker(
         // `new <` misparse recovery: the callee is a zero-width MISSING identifier
         // (B319) — TS1109/TS2365/TS2693 own this shape, never TS7009.
         if (callee.text.isEmpty()) return
+        // (LEGACY.0b) TypeScript 7 reports TS7009 for EVERY callee that resolves to a
+        // call-signature-only value; a NAMED function expression's own name is one such
+        // value that reaches no symbol table at all — `const S = function Named() { …
+        // new Named() … }` (jsDeclarationsGlobalFileConstFunctionNamed) — so it is
+        // decided syntactically, above the symbol-table consult.
+        if (newExprCalleeIsEnclosingFunctionExpressionName(expr, callee.text)) {
+            emitNewExprImplicitAny(expr, source, fileName)
+            return
+        }
         val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return
         // Only a pure plain-function target lacks a construct signature. Classes
         // (construct sig), interfaces/vars with `new()` types, and `any` casts are
@@ -25123,6 +25141,41 @@ class Checker(
         if (!sym.flags.hasAny(SymbolFlags.Function)) return
         if (sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)) return
         if (sym.declarations.any { it is ClassDeclaration }) return
+        emitNewExprImplicitAny(expr, source, fileName)
+    }
+
+    /** True when [name] is the OWN name of an enclosing [FunctionExpression] — a
+     *  self-reference, which can only ever denote that function value: a function
+     *  expression never carries a construct signature, and its name is in scope only
+     *  inside itself, so it reaches no symbol table at all (B83.5). The ascent stops
+     *  at the first function-like or class that binds the name in ANY other position,
+     *  so a shadowing parameter or declaration refuses rather than being adopted. */
+    private fun newExprCalleeIsEnclosingFunctionExpressionName(expr: NewExpression, name: String): Boolean {
+        var cur: Node? = (expr as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            when (cur) {
+                is FunctionExpression -> {
+                    if (cur.parameters.any { (it.name as? Identifier)?.text == name }) return false
+                    if (cur.name?.text == name) return true
+                }
+                is FunctionDeclaration -> {
+                    if (cur.name?.text == name) return false
+                    if (cur.parameters.any { (it.name as? Identifier)?.text == name }) return false
+                }
+                is ArrowFunction ->
+                    if (cur.parameters.any { (it.name as? Identifier)?.text == name }) return false
+                is MethodDeclaration -> if (cur.parameters.any { (it.name as? Identifier)?.text == name }) return false
+                is Constructor -> if (cur.parameters.any { (it.name as? Identifier)?.text == name }) return false
+                is ClassDeclaration -> if (cur.name?.text == name) return false
+                is ClassExpression -> if (cur.name?.text == name) return false
+                else -> {}
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
+    private fun emitNewExprImplicitAny(expr: NewExpression, source: String, fileName: String) {
         val start = expr.pos
         val length = (expressionTrueEnd(expr) - start).coerceAtLeast(1)
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -25545,8 +25598,12 @@ class Checker(
         // (checkDeleteReadonlyOperand's `currentFileLocals ?: globals`
         // class-name consult must see the legacy slot's resting value).
         spineDelRestingLocals = currentFileLocals
-        spineItRunActive = options.noImplicitThis || options.strict ||
-            !options.strictExplicitlyFalse
+        // (LEGACY.0b) TypeScript 7: tsgo's `c.noImplicitThis` is exactly
+        // `GetStrictOptionValue(NoImplicitThis)` — the flag when EXPLICITLY set,
+        // else `strict != false`. An explicit `@noImplicitThis: false` therefore
+        // WINS over the harness default (noParameterReassignmentJSIIFE).
+        spineItRunActive = options.noImplicitThis ||
+            (!options.noImplicitThisExplicitlyFalse && !options.strictExplicitlyFalse)
         // (M0.4) round 636: the property-init anchors' run gate (the legacy
         // dispatch gate, verbatim).
         spinePiRunActive = !options.strictExplicitlyFalse &&
@@ -25566,7 +25623,8 @@ class Checker(
         // (M0.4) round 655: the implicit-any-`new` anchors' run gate (the
         // legacy slot-7a' dispatch gate, verbatim: TS7009 needs
         // noImplicitAny/strict explicitly — it is NOT a harness default).
-        spineNaRunActive = options.noImplicitAny || options.strict
+        spineNaRunActive = options.noImplicitAny ||
+            (!options.noImplicitAnyExplicitlyFalse && !options.strictExplicitlyFalse)
         // (M0.4) round 658: the B60.12 pass's file-level TP-scope base — its
         // legacy driver installed only currentFileLocals, inheriting whatever
         // its slot's ambient held (expected null: every installer restores).
@@ -25874,6 +25932,10 @@ class Checker(
             if (spineUResActive) {
                 spineUResEnter(node)
                 spineUResDispatch(node)
+            }
+            if (spineDeclOnlyFamilies) {
+                if (spineItFileActive) spineItEnterNode(node)
+                if (spineNaActive) spineNaEnterNode(node)
             }
             if (!spineUResOnly) spineEnterNode(node)
             buf.clear()
@@ -33501,62 +33563,6 @@ class Checker(
         ))
     }
 
-    private fun checkJsConstructorThisReads() {
-        if (!options.checkJs) return
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
-            for (stmt in result.sourceFile.statements) {
-                if (stmt !is FunctionDeclaration) continue
-                val fnName = stmt.name?.text ?: continue
-                val body = stmt.body ?: continue
-                checkJsConstructorThisReadsInFn(body, fnName, fileName, result.sourceFile.text)
-            }
-        }
-    }
-
-    private fun checkJsConstructorThisReadsInFn(
-        body: Block, fnName: String, fileName: String, source: String,
-    ) {
-        val writes = LinkedHashMap<String, MutableList<Expression>>()
-        collectConstructorThisAssignments(body.statements, writes)
-        if (writes.isEmpty()) return // not a constructor-function shape
-        val reads = mutableListOf<Identifier>()
-        for (s in body.statements) {
-            val expr = (s as? ExpressionStatement)?.expression ?: return // bail: non-expr statement
-            when (expr) {
-                is BinaryExpression -> {
-                    // Only a plain `this.<id> = …` write is supported (already collected).
-                    if (expr.operator != SyntaxKind.Equals) return
-                    val pa = expr.left as? PropertyAccessExpression ?: return
-                    if ((pa.expression as? Identifier)?.text != "this") return
-                    // RHS `this.<id>` reads are deliberately NOT scanned (conservative FN).
-                }
-                is PropertyAccessExpression -> {
-                    // A bare `this.<id>` read statement.
-                    if ((expr.expression as? Identifier)?.text != "this") return
-                    val nameId = expr.name
-                    reads.add(nameId)
-                }
-                else -> return // bail: any other expression shape
-            }
-        }
-        for (nameId in reads) {
-            val n = nameId.text
-            if (n in writes.keys) continue
-            if (n in RUNTIME_PROPERTIES) continue
-            val pos = nameId.pos
-            if (pos < 0) continue
-            val (line, character) = getLineAndCharacterOfPosition(source, pos)
-            diagnostics.add(Diagnostic(
-                message = "Property '$n' does not exist on type '$fnName'.",
-                category = DiagnosticCategory.Error, code = 2339,
-                fileName = fileName, line = line, character = character,
-                start = pos, length = n.length,
-            ))
-        }
-    }
-
     /**
      * B432 (jsFunctionWithPrototypeNoErrorTruncationNoCrash, TS2339): in a checkJs JS file,
      * a constructor-function + `Color.prototype = { …methods… }` defines the instance type
@@ -33605,6 +33611,14 @@ class Checker(
                     }
                     nm?.let { members.add(it) }
                 }
+                // (LEGACY.0b) TypeScript 7 names the type of `this` INSIDE a prototype
+                // method after the PROTOTYPE OBJECT LITERAL, not after the constructor
+                // function — `this` there is the literal (tsgo `checkThisExpression` ->
+                // `getContextualThisParameterType`'s object-literal arm). tsc 6 printed
+                // the constructor name; keep that only as the fallback for a literal
+                // whose type cannot be rendered.
+                val thisDisplay = runCatching { typeToString(getTypeOfExpression(objLit)) }
+                    .getOrNull()?.takeIf { it.isNotBlank() && it != "any" } ?: ctorName
                 for (p in objLit.properties) {
                     val fnBody: Node? = when (p) {
                         is PropertyAssignment -> when (val init = p.initializer) {
@@ -33626,7 +33640,7 @@ class Checker(
                         if (pos < 0) continue
                         val (line, character) = getLineAndCharacterOfPosition(source, pos)
                         diagnostics.add(Diagnostic(
-                            message = "Property '$n' does not exist on type '$ctorName'.",
+                            message = "Property '$n' does not exist on type '$thisDisplay'.",
                             category = DiagnosticCategory.Error, code = 2339,
                             fileName = fileName, line = line, character = character,
                             start = pos, length = n.length,
@@ -37480,6 +37494,67 @@ class Checker(
             }
         } finally {
             spineUResOnly = false
+        }
+    }
+
+    /**
+     * (LEGACY.0b) The implicit-`this` (TS2683/TS7041/TS7017) and implicit-any-`new`
+     * (TS7009) families under
+     * `emitDeclarationOnly`, where `checkSpine` does not run.
+     *
+     * TypeScript 7 has no "declaration-only" CHECKING mode — tsgo type-checks the
+     * whole program and then emits only declarations — so every diagnostic tsgo
+     * reports for such a project is reported from the full check. This checker's
+     * `declarationOnly` mode is an FP-avoidance whitelist instead, and the
+     * two families here belong on it for the same reason [checkUnresolvedNames]
+     * does: each is self-contained (one syntactic ancestor fold per `this` anchor,
+     * [spineItContextAt]; one memoized reach classifier plus a symbol-table consult
+     * per `new`, [spineNaStatus]), neither resolves types beyond the two
+     * contextual-`this` probes the `this` edges already run, and neither has a
+     * TS6133-style unused-declaration false positive.
+     *
+     * Drives [spineWalkFile] with [spineUResOnly] set — so scope maintenance and
+     * every other handler are skipped exactly as in [checkUnresolvedNames] — plus
+     * [spineDeclOnlyFamilies], which re-admits [spineItEnterNode] and
+     * [spineNaEnterNode] alone. Neither flag is ever set together with
+     * `spineUResActive`, so no emission can be duplicated.
+     */
+    private fun checkDeclarationOnlySpineFamilies() {
+        // Both run gates are [checkSpine]'s, recomputed here because that function
+        // does not run in this mode (it is where the two fields are assigned).
+        spineItRunActive = options.noImplicitThis ||
+            (!options.noImplicitThisExplicitlyFalse && !options.strictExplicitlyFalse)
+        spineNaRunActive = options.noImplicitAny ||
+            (!options.noImplicitAnyExplicitlyFalse && !options.strictExplicitlyFalse)
+        if (!spineItRunActive && !spineNaRunActive) return
+        // The `this` family's `currentFileLocals` install is the RESTING value,
+        // verbatim as in [checkSpine]'s setup — every installer restores, so this is
+        // the same ambient the spine driver would hand [spineItEnterNode].
+        spineItRestingLocals = currentFileLocals
+        spineUResOnly = true
+        spineDeclOnlyFamilies = true
+        try {
+            for (result in checkedResults) {
+                val sf = result.sourceFile
+                spineFileName = sf.fileName
+                spineSource = sf.text
+                spineIsDts = isDtsFile(spineFileName)
+                spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
+                    spineFileName.endsWith(".mjs") || spineFileName.endsWith(".cjs")
+                spineItSetup()
+                spineNaSetup(result)
+                try {
+                    if (spineItFileActive || spineNaActive) spineWalkFile(sf)
+                } finally {
+                    spineItTeardown()
+                    spineNaTeardown()
+                }
+            }
+        } finally {
+            spineDeclOnlyFamilies = false
+            spineUResOnly = false
+            spineItRunActive = false
+            spineNaRunActive = false
         }
     }
 
@@ -69485,8 +69560,10 @@ interface DataView {
     /** Per-file gate: the legacy dts skip + the round-79h/B438b JS-like skip
      *  (a JS file is checked only under an EXPLICIT `@noImplicitThis: true`). */
     private fun spineItSetup() {
+        // A JS-like file is CHECKED only under `checkJs` — `allowJs` alone puts it in
+        // the program without type-checking it, and tsgo is silent there.
         spineItFileActive = spineItRunActive && !spineIsDts &&
-            (!spineIsJsLike || options.noImplicitThis)
+            (!spineIsJsLike || options.checkJs)
     }
 
     private fun spineItTeardown() {
@@ -71187,7 +71264,8 @@ interface DataView {
     private fun spineNaSetup(result: BinderResult) {
         // The legacy driver's per-file gates, verbatim: .d.ts and JS-like
         // files are skipped whole.
-        spineNaActive = spineNaRunActive && !spineIsDts && !spineIsJsLike
+        spineNaActive = spineNaRunActive && !spineIsDts &&
+            (!spineIsJsLike || options.checkJs)
         if (!spineNaActive) {
             spineNaReachMemo = ByteArray(0)
             spineNaLocals = null

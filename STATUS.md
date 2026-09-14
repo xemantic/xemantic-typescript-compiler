@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194464** lines (**+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **194,542** lines (**+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,32 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.92) — TS2683 IN JS FILES: THE SKIP WAS STANDING IN FOR A *GATE BUG*, AND 3 OF 4 "CASCADES" WERE FOUR SEPARATE FAMILIES, 19,170 / 0 / 176 (2026-09-14).**
+Pending 155 -> **151**, skipped 180 -> **176**, both -4, plus +17 pins. **4 of 7 rows — and the
+shortfall is the finding.** Picked by the same blast-radius method as (P18.90)/(P18.91), but
+where those chose codes appearing in ZERO active baselines, TS2683 is in **17** and the changed
+gate is exposed to **133 active baselines involving a `.js` file**, so the brief demanded the
+exposure measurement before any code. The cascade hypothesis (tsgo emits TS2683 -> `this` becomes
+`any` -> our downstream error disappears) holds for exactly ONE of four rows; the other three are
+a kept TS2339, two ours-only `.ts` rows, and a JSDoc `@param` typing gap. **A shared diagnostic
+CODE is no more a family than a shared first-differing LINE** — the third way this arc has
+mis-grouped rows. **The JS skip turned out to be standing in for a gate bug**: tsgo's
+`GetStrictOptionValue` makes an explicit sub-option `false` WIN over `strict`'s default-on, which
+our `X || strict || !strictExplicitlyFalse` idiom did not model — the one fixture in 133 that
+separates them was being protected by the skip instead of by its own `@noImplicitThis: false`.
+Fixed at 2 measured sites; **28 left on the old idiom deliberately**, recorded rather than
+silently inconsistent. **The corpus did NOT catch the round's one real mistake — a negative
+control did**: dropping the skip wholesale emits under `allowJs` without `checkJs`, where tsgo is
+silent and no baseline exists to notice. A second control was vacuous (no `this` in its fixture)
+and was fixed rather than trusted — probed properly, our `.d.ts` guard is NOT tsgo-faithful, now
+pinned as `residue - ...`. Also landed: the TS7009 sibling family (same gate, same bug), tsc-6
+walker B424 RETIRED, and a `declarationOnly` driver — which is what actually blocked two rows,
+not anything `this`-shaped. Ablation 10 arms, 9 discriminating, a7's zero attributed to a
+redundant guard via its control. Grid a MEASURED control (TS2683 and TS7009 both 0 in both arms
+on all eight; no profile sets `checkJs`/`allowJs`/`emitDeclarationOnly`). **A reusable instrument
+landed with it**: a 28-second full-active-corpus harness outside Gradle (2,789 subtests, 0
+mismatches after every step). cost_gate all 20 counters +0.00%, huge_methods exit 0 (862
+classes), warning-clean against a gate proven live.
 **(P18.91) — F6d: TypeScript 7 REPORTS TS2303 AT *EVERY* ALIAS DECLARATION ON THE CYCLE, AND THE DETECTOR WAS ALREADY THERE, 19,153 / 0 / 180 (2026-09-14).**
 Pending 165 → **155**, skipped 190 → **180**, both −10, all ten subtests verified PRESENT and
 PASSED. **The family was picked on a BLAST-RADIUS measurement rather than on size** — 10 rows
@@ -112,25 +138,3 @@ predictions refuted, including two of the round's OWN censuses taken off a stale
 tree at the repo root — conclusions survived, numbers did not; the same tree had already
 misled the orchestrator this session, so it is now a documented trap. cost_gate all 20
 counters +0.00%, huge_methods exit 0, warning-clean.
-**(P18.87) — (LEGACY.0b) STEP 2: THE "FREE WINS", AND F9 WAS A FIRST-DIFFERING-*LINE* LABEL RATHER THAN A FAMILY, 19,100 / 0 / 267 (2026-09-13).**
-Pending 285 → **242** and skipped 310 → **267**, both −43 — and that agreement IS the
-receipt, since the build fails on a stale ledger entry, so a green suite after deleting 43
-entries proves 43 tsgo rows now pass. **F9 "wording" was assigned by each row's FIRST
-DIFFERING LINE, which is not a family**: 13 of 53 are wording (in four unrelated mechanisms,
-one of them an elaboration TypeScript 7 does not have at all — 0 tsgo baselines against 12
-tsc ones), and 40 were reclassified in place, 23 of them into span/width. Two findings beat
-the 13: seven of those span rows share F4's anchor mechanism (tsgo anchors unused-local on
-the NAME, tsc on the statement), and two duplicate-identifier rows are not a wording swap at
-all — tsgo picks the leading message from the error's existing related list where we pick by
-index. **F4 landed 26/26** and the sizing was wrong about where it lives: the population is
-type PARAMETERS served by two dedicated emitters, and a code-only change closes just 14 —
-the span moves to the type-parameter NODE and TS7 keeps one grouping (TS6205 over the whole
-list). **F5 landed 4/4 and settles (LEGACY.1)'s wording question**: an option TS7 DELETED
-from its table is simply unknown (TS5023, no ladder, so no directive silences it) while
-every option it KEEPS but refuses still says TS5102/TS5108 — so (LEGACY.1) step (k)'s plan
-is CONFIRMED, and its stated blocker for moving `simulatedVersion` to `"7.0"` is gone (the
-four rows it cited are now tsgo baselines saying TS5102, and moving would close two pending
-rows rather than redden anything). Ablation 2 / 98 / 6 RED, the 98 including 5 pins failing
-in OPPOSITE directions. Grid 8×`added=0 removed=0` with a split verdict — a control for the
-display half and for F4 (no profile sets `noUnusedLocals`), a real gate for F5 and the
-elaboration. cost_gate all 20 counters +0.00%, huge_methods exit 0, warning-clean.

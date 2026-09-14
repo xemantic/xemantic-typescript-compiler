@@ -65330,3 +65330,79 @@ overload emitter (a single rest signature answers it silently); the re-bound mis
 
 **NEXT**: (CHK.98), the next unchecked item. Per the WORK ORDER, (INV.0) step 10b-ii's own
 unblockers follow.
+
+### Round (P18.82) — (CHK.98)(d): TS2556 for a non-tuple spread was WRONG IN BOTH DIRECTIONS, not missing — and every remaining (CHK.98) deliverable is now measured (2026-09-12)
+
+**Suite 18,907 → 18,941 / 0 / 3** (+34 pins, `SpreadArgumentTupleTest`: 23 diagnostic, 8
+negative controls including the hazard, 3 `residue -`; three countdown pins in
+`SpreadIntoFixedAritySpreadTest`, `Inv4SpineBatch26Test` and `FunctionCallApplyTest` inverted).
+Grid 8×`added=0 removed=0` — **a REAL GATE this time**: a temporary counter read 45-46 arity
+verdicts on known signatures per profile, every one `ok`; marked 18 → 18 and cronstrue 1 → 1
+byte-identical; `cost_gate.py` exit 0, 20/20 counters within +0.05% of the rebuilt HEAD (not
+rebaselined — the +1.3% `mapped.*` rows are the stale baseline, identical on HEAD);
+`huge_methods.py --fail-over 0` exit 0; warning-clean (main + test). **(CHK.98) stays OPEN** on
+(i) the `NewExpression` argument arm and the open half of its STAGE 2.
+
+**WHY THIS ITEM, SAID OUT LOUD.** (CHK.98) is the first unchecked item after (CHK.134) closed;
+(INV.0) step 10b-ii stays blocked on its two named families.
+
+**ALL FOUR REMAINING DELIVERABLES WERE MEASURED BEFORE ONE WAS PICKED** (ours + tsgo 7.0.2 +
+pristine 6.0.3, zero REF-SPLIT):
+
+| deliverable | fixtures | agree / ours-only / missing / text-diff | gate it would have |
+|---|---|---|---|
+| (i) `NewExpression` argument arm | 24 | 5 / 0 / **21** / 0 | 6-10 `new X(callback)` per profile, libraries 0 — likely a control |
+| (ii) TS2556 non-tuple spread | 24 → 33 | 6 / **6** / 20 / 0 | 45-46 arity verdicts per profile — a GATE |
+| (iii) STAGE 2 (the item's own list) | 14 | 4 / 1 / 4 / 4 | ≥ 5 mechanisms |
+| (iv) (CHK.98b) | 3 | 0 / 0 / 1 / 0 | **already CLOSED 2026-09-06** — the one row is (P18.32)'s recorded known gap |
+
+(ii) was picked because its ours-only column is not zero: four FALSE POSITIVES on legal code
+and two WRONG CODES — the queue had it as "missing", and it was wrong in both directions.
+Stage 2 decomposes into `Promise.then`/`PromiseLike.then` and a namespace-import callee
+(missing), predicate `filter` (missing and text-diff), a `reduce` with a `Record` initial
+value (ours-only `acc.nope`), the union-of-arrays chain naming the LAST constituent where the
+references name the FIRST ((CHK.132)'s population) and an unreduced `NonNullable<…>`; three of
+its bullets (`q<R = T>`, a union-with-null class-TP callback, a destructured parameter) already
+agree.
+
+**THE FIX IS tsc's TUPLE EXPANSION AT ALL THREE ARITY WALKERS.** `getEffectiveCallArguments`'s
+tuple expansion plus `hasCorrectArity`'s spread clause plus `getArgumentArityError`'s first
+line, at the identifier-callee walker (overloads included), the `new` walker and the
+method-callee walker; the old `spreadOperandIsNonTupleArray` is gone. An UNDECIDABLE operand
+makes the index a lower bound, so only the "already past a rest-less list" verdict survives
+it — that is the hazard arm, and the two `residue -` pins are exactly what it reddens.
+
+**THE HAZARD THE ITEM DID NOT NAME: THE ARITY WALKERS RUN UNDER THE FILE-LEVEL AMBIENT.** A
+spread operand classified through the name resolver produced a FALSE TS2556 on a body-local
+TUPLE shadowing a file-level ARRAY — the resolver answered the file-level binding. Operands
+are therefore classified DECLARATION-first (the enclosing parameter, or the enclosing block's
+`VariableStatement`), and that shape is the hazard pin (arm a3 reddens it as a false
+positive). Two more measured facts: optional tuple slots COUNT (tsc pushes one synthetic
+argument each), and "too-many stands with a trailing spread" was wrong on both references.
+
+**BEFORE → AFTER**: the spread family 6/6/20 → **22/0/4**, the four remaining rows each
+attributed to a pre-existing gap reproduced without a spread — a VARIABLE callee ×2
+((CHK.97)'s recorded arity gap), a `...any` operand (a deliberate refusal) and the element
+type through a rest parameter. Nine INACTIVE pristine TS2556 baselines extracted with
+`pristine_oracle.py`: **8 of 9 match pristine's rows exactly**; `callWithSpread4` line 18 is
+the variable-callee gap. `readonlyRestParameters`, the only ACTIVE TS2556 baseline, green.
+
+**ABLATION over 134 pins per arm**: a1 the mechanism removed — **21 RED**; a2 an undecided
+operand treated as decided — **2 RED**, exactly the two residue pins; a3 the declaration
+route removed — **7 RED** including the hazard pin as a false positive; a4 the count printed
+beside TS2556 — 6; a5 the excess anchor — 5. At-risk run: 2,316 tests / 140 classes, all 82
+grepped classes present, the one failure the (P18.80) countdown whose own KDoc recorded both
+references at TS2556.
+
+**RESIDUES, MEASURED AND NOT FIXED**: the variable-callee arity gap; `...any`; an
+array-literal spread with an inner spread; a type-parameter operand; element typing through
+a rest parameter; all of (i); the open stage-2 rows above.
+
+**PREDICTIONS REFUTED**: (CHK.98b) was not open; a plain `new C(cb)` already works (B210's
+syntactic path — (i)'s 21 rows are the explicit-type-argument, overloaded and interface-
+construct shapes); TS2556 was not missing but wrong both ways; `lexicalValueSymbolForNode`
+does not resolve a function-body local from the walker's ambient; optional tuple slots count.
+
+**NEXT**: (CHK.98)(i), the `NewExpression` argument arm — 21 measured missing rows, a control
+grid, and the item's own hazard (an un-substituted `T` reaching the argument relation) to pin
+as a refusal. Per the WORK ORDER, (INV.0) step 10b-ii's own unblockers follow.
