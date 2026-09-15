@@ -41,7 +41,9 @@ import kotlin.test.Test
  * `target === ES3 ? undefined : target` then `?? LatestStandard`), so at an unset target
  * its downlevel gates are all SHUT. Ours were all OPEN, and a tsconfig with no `target`
  * therefore collected SIX false positives from the one small file this class pins:
- * TS1250, TS1501, TS1503, TS2659, TS2737 and TS18045.
+ * TS1250, TS1501, TS1503, TS2659, TS2737 and TS18045. (TS1250 has since left the compiler
+ * altogether — (LEGACY.1)(j1), 2026-09-15: TypeScript 7 never emits it at any target, so its
+ * explicit-es5 pin below is gone and `TargetGatedDiagnosticsRemovedTest` pins the silence.)
  *
  * The oracle for that: across the whole pristine baseline corpus, **every** TS2737 (4
  * baselines), TS18045 (5), TS1250 (7) and TS2802 (10) comes from a fixture with an
@@ -74,7 +76,6 @@ class DownlevelGateDefaultTargetTest {
     fun `a project that names no target gets no downlevel diagnostic at all`() {
         val d = diagnose(downlevelShapes, directives = "")
         d should {
-            have(none { it.code == 1250 })
             have(none { it.code == 1501 })
             have(none { it.code == 1503 })
             have(none { it.code == 2659 })
@@ -113,20 +114,6 @@ class DownlevelGateDefaultTargetTest {
             directives = "// @target: es5\n// @ignoreDeprecations: 6.0",
         ) should {
             have(any { it.code == 18045 })
-        }
-    }
-
-    @Test
-    fun `an explicit es5 target still refuses a block-scoped function in strict mode`() {
-        diagnose(
-            """
-            {
-                function blockScopedFn() { }
-            }
-            """,
-            directives = "// @target: es5\n// @strict: true\n// @ignoreDeprecations: 6.0",
-        ) should {
-            have(any { it.code == 1250 })
         }
     }
 
