@@ -136,7 +136,11 @@ class Inv3GlobalsForFileTest {
     }
 
     @Test
-    fun `the mirrored TS2346 super-call gate keeps firing for a same-file non-generic base`() {
+    fun `a same-file non-generic base with a super call draws TS2315 alone - TS2346 has no tsgo emission site`() {
+        // Re-measured against tsgo 7.0.2 (2026-09-15, (P18.101) M1): `Type 'Base' is not generic.`
+        // at the extends clause and NOTHING at `super()` — TS2346 is emitted nowhere in tsgo, and
+        // the 16.4db walker that mirrored the TS2315 gate to emit it is deleted. This pin used to
+        // assert that walker kept firing; it is now the negative control for its absence.
         diagnose(
             """
             class Base {}
@@ -148,7 +152,8 @@ class Inv3GlobalsForFileTest {
             }
             """
         ) should {
-            have(any { it.code == 2346 })
+            have(none { it.code == 2346 })
+            have(any { it.code == 2315 && it.message == "Type 'Base' is not generic." })
         }
     }
 }

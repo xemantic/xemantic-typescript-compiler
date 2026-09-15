@@ -226,17 +226,20 @@ class ReadonlyTupleTest {
     }
 
     @Test
-    fun `an argument carries the TS4104 line as the chain of TS2345`() {
-        // pristine 6.0.3 (the corpus's oracle); tsgo 7.0.2 prints a bare TS4104 instead.
+    fun `an argument against a mutable parameter is a bare TS4104 head`() {
+        // tsgo 7.0.2 (re-measured 2026-09-15, (P18.101) M4): `reportRelationError` drops the TS2345
+        // head when the chain's first entry is the readonly-vs-mutable line about the same two
+        // types, so each argument is ONE diagnostic, TS4104, with no chain. (tsc 6 printed the
+        // TS2345 head with this line as its chain; that was this pin's expectation until then.)
         val src = "declare function zg(x: number[]): void; zg(rt); zg(ra)"
         val d = diagnose(prelude + src)
         assert(d.map { it.message } == listOf(
-            "Argument of type 'readonly [1, 2]' is not assignable to parameter of type 'number[]'.",
-            "Argument of type 'readonly number[]' is not assignable to parameter of type 'number[]'.",
+            ts4104("readonly [1, 2]", "number[]"),
+            ts4104("readonly number[]", "number[]"),
         ))
-        assert(d.map { it.code } == listOf(2345, 2345))
-        assert(d[0].messageChain == listOf("  " + ts4104("readonly [1, 2]", "number[]")))
-        assert(d[1].messageChain == listOf("  " + ts4104("readonly number[]", "number[]")))
+        assert(d.map { it.code } == listOf(4104, 4104))
+        assert(d[0].messageChain.isEmpty())
+        assert(d[1].messageChain.isEmpty())
         assert(d[0].character == col(src, "rt)"))
         assert(d[0].length == 2)
         assert(d[1].character == col(src, "ra)"))

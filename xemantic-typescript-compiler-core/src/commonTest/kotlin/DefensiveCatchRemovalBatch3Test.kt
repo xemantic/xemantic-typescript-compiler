@@ -130,9 +130,12 @@ class DefensiveCatchRemovalBatch3Test {
     }
 
     @Test
-    fun `negative control - an infinitely expanding alias still bails with TS2589`() {
+    fun `negative control - an infinitely expanding mapped alias still bails and is reported as TS2615 alone`() {
         // The alias-substitution DEPTH bail is the cycle protection on the
-        // cache-bypassing path; this pin keeps it firing.
+        // cache-bypassing path; this pin keeps it firing. The bail that originates in a
+        // mapped type's circular self-reference is REPORTED as tsgo 7.0.2 reports it
+        // (re-measured 2026-09-15, (P18.101) M5): TS2615 alone at the annotation, never
+        // TS2589 beside it (tsc 6 paired the two, which this pin used to assert).
         val diagnostics = diagnose(
             """
             type Nest<T, K extends string> = T | { [P in K]: Nest<T, K> }[K];
@@ -140,6 +143,7 @@ class DefensiveCatchRemovalBatch3Test {
             n;
             """,
         )
-        assert(diagnostics.any { it.code == 2589 })
+        val messages = diagnostics.map { it.code to it.message }
+        assert(messages == listOf(2615 to "Type of property 'a' circularly references itself in mapped type '{ [P in \"a\"]: any; }'."))
     }
 }

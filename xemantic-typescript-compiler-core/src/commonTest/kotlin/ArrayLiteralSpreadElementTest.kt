@@ -215,10 +215,13 @@ class ArrayLiteralSpreadElementTest {
             takeNumArr(ct);
             """
         ) should {
+            // The spread's TYPE is the subject; the vehicle is the head tsgo 7.0.2 prints for a
+            // readonly source against a mutable parameter — a bare TS4104 naming both types
+            // ((P18.101) M4; tsc 6 carried the same type in a TS2345 head).
             have(any {
-                it.code == 2345 &&
-                    it.message == "Argument of type 'readonly [number, string]' is not assignable " +
-                    "to parameter of type 'number[]'."
+                it.code == 4104 &&
+                    it.message == "The type 'readonly [number, string]' is 'readonly' and cannot be " +
+                    "assigned to the mutable type 'number[]'."
             })
         }
     }
@@ -233,10 +236,11 @@ class ArrayLiteralSpreadElementTest {
             takeStrArr(ct2);
             """
         ) should {
+            // Same vehicle as above: tsgo 7.0.2's bare TS4104 head carries the literal slots.
             have(any {
-                it.code == 2345 &&
-                    it.message == "Argument of type 'readonly [1, 2]' is not assignable " +
-                    "to parameter of type 'string[]'."
+                it.code == 4104 &&
+                    it.message == "The type 'readonly [1, 2]' is 'readonly' and cannot be " +
+                    "assigned to the mutable type 'string[]'."
             })
         }
     }
