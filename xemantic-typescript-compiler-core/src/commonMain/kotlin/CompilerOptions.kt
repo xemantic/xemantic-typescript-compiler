@@ -721,6 +721,13 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
         for ((extContent, extFileName) in extendedContents) {
             options = applyTsconfigOptions(options, extContent, extFileName)
         }
+        // (LEGACY.1)(d) Option POSITIONS come from the ROOT tsconfig alone, as tsgo's
+        // `createDiagnosticForOption` consults only the root's object literal: an option
+        // inherited from an extended file anchors at the root's `"compilerOptions"` key
+        // (`tsconfigAnchorFor`), never inside the extended file. The VALUES above stay
+        // merged; only the extended files' positions are dropped — which is exactly what
+        // [TsConfigLoader] records on the project path, so the two cannot drift.
+        options = options.copy(tsconfigOptionPositions = emptyMap())
         options = applyTsconfigOptions(options, tsconfigEntry.content, tsconfigEntry.fileName)
     }
 
@@ -1039,13 +1046,47 @@ private fun resolveTsconfigPath(baseDir: String, spec: String): String {
  * Uses simple string matching rather than a full JSON parser.
  * Tracks option value positions for emitting positioned deprecation diagnostics.
  */
-private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfigFileName: String = "tsconfig.json"): CompilerOptions {
+/**
+ * One `"key": value` pair of a tsconfig's `compilerOptions` block, with the KEY's and the
+ * VALUE's positions in the WHOLE file's text: `keyStart`/`keyLength` cover the key
+ * including its quotes, `valueStart`/`valueLength` the value including the quotes of a
+ * string one. Produced by [scanCompilerOptionsBlock], the one scanner both tsconfig
+ * paths share.
+ */
+private class TsconfigKvMatch(
+    val key: String, val value: String,
+    val keyStart: Int, val keyLength: Int,
+    val valueStart: Int, val valueLength: Int,
+)
+
+/** [scanCompilerOptionsBlock]'s answer: where the block sits, its text, and its pairs. */
+private class CompilerOptionsBlockScan(
+    val compilerOptionsKeyStart: Int,
+    val blockStart: Int,
+    val block: String,
+    val kvMatches: List<TsconfigKvMatch>,
+)
+
+/**
+ * Finds the `"compilerOptions": { … }` block of a tsconfig text and scans its scalar
+ * `"key": value` pairs (string, boolean, number), recording each key's and value's
+ * position in [json]. Null when the text has no `compilerOptions` block.
+ *
+ * (LEGACY.1)(d) THIS IS THE ONE SCANNER BEHIND EVERY TSCONFIG-ANCHORED DIAGNOSTIC — the
+ * corpus harness's embedded `@Filename: tsconfig.json` fixtures ([applyTsconfigOptions])
+ * and a real project's `tsconfig.json` ([TsConfigLoader], through
+ * [tsconfigOptionPositionsOf]) both read positions from here, so the two paths cannot
+ * drift: a removed-option row anchors at the same token whichever way the config arrived.
+ * It is a TEXT scan, not a JSON parse, so a pair inside a `//` comment is recorded too
+ * (last write wins); tsgo parses the JSONC and would ignore it.
+ */
+private fun scanCompilerOptionsBlock(json: String): CompilerOptionsBlockScan? {
     // Extract the compilerOptions block
     val compilerOptionsStart = json.indexOf("\"compilerOptions\"")
-    if (compilerOptionsStart < 0) return options
+    if (compilerOptionsStart < 0) return null
 
     val braceStart = json.indexOf('{', compilerOptionsStart + "\"compilerOptions\"".length)
-    if (braceStart < 0) return options
+    if (braceStart < 0) return null
 
     // Find matching closing brace
     var depth = 1
@@ -1062,14 +1103,8 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
 
     // Parse key-value pairs from the block, tracking positions relative to the full JSON
     // keyStart/keyLength point to the option KEY (e.g., "baseUrl"), valueStart/valueLength to the VALUE
-    data class KvMatch(
-        val key: String, val value: String,
-        val keyStart: Int, val keyLength: Int,
-        val valueStart: Int, val valueLength: Int,
-    )
-
     val kvPattern = Regex(""""(\w+)"\s*:\s*("([^"]*)"|(true|false)|(\d+))""")
-    val kvMatches = mutableListOf<KvMatch>()
+    val kvMatches = mutableListOf<TsconfigKvMatch>()
     for (match in kvPattern.findAll(compilerOptionsBlock)) {
         val key = match.groupValues[1].lowercase()
         val value = match.groupValues[3].ifEmpty {
@@ -1084,8 +1119,90 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
         val valueGroup = match.groups[2]!!
         val valueStartInJson = blockStart + valueGroup.range.first
         val valueLength = valueGroup.range.last - valueGroup.range.first + 1
-        kvMatches.add(KvMatch(key, value, keyStartInJson, keyLength, valueStartInJson, valueLength))
+        kvMatches.add(TsconfigKvMatch(key, value, keyStartInJson, keyLength, valueStartInJson, valueLength))
     }
+    return CompilerOptionsBlockScan(compilerOptionsStart, blockStart, compilerOptionsBlock, kvMatches)
+}
+
+/**
+ * The `(key, value)` positions of every option in [json]'s `compilerOptions` block that
+ * the compiler models (the [allowedTsconfigOptions] subset), keyed by the LOWERCASED
+ * option name, plus the synthetic `compileroptionskey` entry pointing at the
+ * `"compilerOptions"` key itself — the anchor tsgo's `createCompilerOptionsDiagnostic`
+ * uses for an option that is set but not written in THIS file (inherited through
+ * `extends`, or given on the command line). Empty when the text has no
+ * `compilerOptions` block, which is when tsgo reports such a row file-less.
+ *
+ * [tsconfigFileName] is the name every recorded position carries: the harness passes
+ * the fixture's `@Filename`, [TsConfigLoader] the normalized absolute path it read.
+ */
+internal fun tsconfigOptionPositionsOf(json: String, tsconfigFileName: String): Map<String, TsconfigOptionPosition> {
+    val scan = scanCompilerOptionsBlock(json) ?: return emptyMap()
+    // Compute line/column positions for option keys and values in the tsconfig JSON
+    val optionPositions = mutableMapOf<String, TsconfigOptionPosition>()
+    // Add a synthetic "compileroptionskey" entry pointing to the "compilerOptions" key itself.
+    // This is used as a fallback position for TS5107 deprecation diagnostics when the deprecated
+    // option is set via CLI/test directive (not in tsconfig), but a tsconfig is present.
+    // TypeScript attributes such CLI-level deprecated options to the "compilerOptions" key position.
+    val compilerOptionsKeyStart = scan.compilerOptionsKeyStart
+    val keyLength = "\"compilerOptions\"".length
+    val keyLineCol = computeLineAndColumn(json, compilerOptionsKeyStart)
+    optionPositions["compileroptionskey"] = TsconfigOptionPosition(
+        fileName = tsconfigFileName,
+        keyLine = keyLineCol.first,
+        keyCharacter = keyLineCol.second,
+        keyStart = compilerOptionsKeyStart,
+        keyLength = keyLength,
+        valueLine = keyLineCol.first,
+        valueCharacter = keyLineCol.second,
+        valueStart = compilerOptionsKeyStart,
+        valueLength = keyLength,
+    )
+    for (kv in scan.kvMatches) {
+        if (kv.key in allowedTsconfigOptions) {
+            val keyLineCol = computeLineAndColumn(json, kv.keyStart)
+            val valueLineCol = computeLineAndColumn(json, kv.valueStart)
+            optionPositions[kv.key] = TsconfigOptionPosition(
+                fileName = tsconfigFileName,
+                keyLine = keyLineCol.first,
+                keyCharacter = keyLineCol.second,
+                keyStart = kv.keyStart,
+                keyLength = kv.keyLength,
+                valueLine = valueLineCol.first,
+                valueCharacter = valueLineCol.second,
+                valueStart = kv.valueStart,
+                valueLength = kv.valueLength,
+            )
+        }
+    }
+    return optionPositions
+}
+
+// Only apply a safe subset of tsconfig options that our transpiler handles correctly.
+private val allowedTsconfigOptions = setOf(
+    "target", "module", "strict", "noemit", "noemithelpers",
+    "declaration", "declarationmap", "removecomments", "preserveconstenums", "sourcemap",
+    "experimentaldecorators", "emitdecoratormetadata", "jsx", "jsxfactory", "jsxfragmentfactory", "reactnamespace",
+    "esmoduleinterop", "isolatedmodules", "downleveliteration",
+    "importhelpers", "allowsyntheticdefaultimports", "usedefineforclassfields",
+    "verbatimmodulesyntax", "emitdeclarationonly", "outfile",
+    "alwaysstrict", "newline", "noresolve", "moduledetection",
+    "outdir", "rootdir", "allowjs", "ignoredeprecations", "moduleresolution",
+    // Deprecated/removed options needed for diagnostics
+    "charset", "keyofstringsonly", "noimplicitusestrict", "nostrictgenericchecks",
+    "suppressexcesspropertyerrors", "suppressimplicitanyindexerrors",
+    "out", "importsnotusedasvalues", "preservevalueimports",
+    "noimplicitany", "noimplicitreturns", "strictnullchecks",
+    "nounusedlocals", "nounusedparameters", "baseurl",
+    "resolvejsonmodule", "inlinesourcemap", "sourcemap", "maproot",
+    "declarationdir",
+)
+
+private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfigFileName: String = "tsconfig.json"): CompilerOptions {
+    val scan = scanCompilerOptionsBlock(json) ?: return options
+    val blockStart = scan.blockStart
+    val compilerOptionsBlock = scan.block
+    val kvMatches = scan.kvMatches
 
     // Parse array-valued options (e.g. moduleSuffixes: [".ios", ""])
     val arrayPattern = Regex(""""(\w+)"\s*:\s*\[([^\]]*)]""")
@@ -1238,65 +1355,8 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
         }
     }
 
-    // Only apply a safe subset of tsconfig options that our transpiler handles correctly.
-    val allowedTsconfigOptions = setOf(
-        "target", "module", "strict", "noemit", "noemithelpers",
-        "declaration", "declarationmap", "removecomments", "preserveconstenums", "sourcemap",
-        "experimentaldecorators", "emitdecoratormetadata", "jsx", "jsxfactory", "jsxfragmentfactory", "reactnamespace",
-        "esmoduleinterop", "isolatedmodules", "downleveliteration",
-        "importhelpers", "allowsyntheticdefaultimports", "usedefineforclassfields",
-        "verbatimmodulesyntax", "emitdeclarationonly", "outfile",
-        "alwaysstrict", "newline", "noresolve", "moduledetection",
-        "outdir", "rootdir", "allowjs", "ignoredeprecations", "moduleresolution",
-        // Deprecated/removed options needed for diagnostics
-        "charset", "keyofstringsonly", "noimplicitusestrict", "nostrictgenericchecks",
-        "suppressexcesspropertyerrors", "suppressimplicitanyindexerrors",
-        "out", "importsnotusedasvalues", "preservevalueimports",
-        "noimplicitany", "noimplicitreturns", "strictnullchecks",
-        "nounusedlocals", "nounusedparameters", "baseurl",
-        "resolvejsonmodule", "inlinesourcemap", "sourcemap", "maproot",
-        "declarationdir",
-    )
-
-    // Compute line/column positions for option keys and values in the tsconfig JSON
-    val optionPositions = mutableMapOf<String, TsconfigOptionPosition>()
-    // Add a synthetic "compileroptionskey" entry pointing to the "compilerOptions" key itself.
-    // This is used as a fallback position for TS5107 deprecation diagnostics when the deprecated
-    // option is set via CLI/test directive (not in tsconfig), but a tsconfig is present.
-    // TypeScript attributes such CLI-level deprecated options to the "compilerOptions" key position.
-    val compilerOptionsKeyStart = json.indexOf("\"compilerOptions\"")
-    if (compilerOptionsKeyStart >= 0) {
-        val keyLength = "\"compilerOptions\"".length
-        val keyLineCol = computeLineAndColumn(json, compilerOptionsKeyStart)
-        optionPositions["compileroptionskey"] = TsconfigOptionPosition(
-            fileName = tsconfigFileName,
-            keyLine = keyLineCol.first,
-            keyCharacter = keyLineCol.second,
-            keyStart = compilerOptionsKeyStart,
-            keyLength = keyLength,
-            valueLine = keyLineCol.first,
-            valueCharacter = keyLineCol.second,
-            valueStart = compilerOptionsKeyStart,
-            valueLength = keyLength,
-        )
-    }
-    for (kv in kvMatches) {
-        if (kv.key in allowedTsconfigOptions) {
-            val keyLineCol = computeLineAndColumn(json, kv.keyStart)
-            val valueLineCol = computeLineAndColumn(json, kv.valueStart)
-            optionPositions[kv.key] = TsconfigOptionPosition(
-                fileName = tsconfigFileName,
-                keyLine = keyLineCol.first,
-                keyCharacter = keyLineCol.second,
-                keyStart = kv.keyStart,
-                keyLength = kv.keyLength,
-                valueLine = valueLineCol.first,
-                valueCharacter = valueLineCol.second,
-                valueStart = kv.valueStart,
-                valueLength = kv.valueLength,
-            )
-        }
-    }
+    // The option positions, from the scanner both tsconfig paths share.
+    val optionPositions = tsconfigOptionPositionsOf(json, tsconfigFileName)
 
     var result = options
     for (kv in kvMatches) {

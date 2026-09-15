@@ -360,6 +360,27 @@ class TypeScriptCompiler {
             return ign >= deprecationVersion // lexicographic comparison works for "X.Y" format
         }
 
+        /**
+         * (LEGACY.1)(d) Where a deprecation / removed-option row for [tsconfigKey] is
+         * anchored — tsgo's `createDiagnosticForOption` (`program.go:784`), measured on
+         * tsgo 7.0.2 over one-line, multi-line, CRLF and `extends` configs:
+         *
+         * - the option is written in the ROOT `tsconfig.json`: its own token there (the
+         *   VALUE for TS5107/TS5108, the KEY for TS5101/TS5102 — the caller picks);
+         * - the option is set but not written in the root (inherited through `extends`,
+         *   or a command-line / harness directive) and the root has a `"compilerOptions"`
+         *   key: THAT key, in the root file (`createCompilerOptionsDiagnostic`);
+         * - no `compilerOptions` anywhere in the root: file-less.
+         *
+         * tsgo consults only the root's object literal, so `{ "extends": "./base.json",
+         * "compilerOptions": {} }` reports `base.json`'s `alwaysStrict: false` at
+         * `tsconfig.json(1,29)`; both producers of [tsconfigPos] record the ROOT file's
+         * positions only ([tsconfigOptionPositionsOf]), which is what makes this a
+         * two-step fallback rather than a file comparison.
+         */
+        fun tsconfigAnchorFor(tsconfigKey: String?, tsconfigPos: Map<String, TsconfigOptionPosition>): TsconfigOptionPosition? =
+            tsconfigKey?.let { tsconfigPos[it] ?: tsconfigPos["compileroptionskey"] }
+
         // TS5101/TS5102: Deprecated/removed options — point to KEY position in tsconfig.
         // Logic (simulatedVersion is always set, defaults to "6.0"):
         // - simulatedVersion < stopFunctioningVersion: option is still deprecated → emit TS5101
@@ -372,12 +393,7 @@ class TypeScriptCompiler {
             stopFunctioningVersion: String = "7.0",
             withMigrationUrl: Boolean = true,
         ) {
-            val rawPos = tsconfigKey?.let { tsconfigPos[it] }
-            val mainKey = tsconfigPos["compileroptionskey"]
-            // When the option was inherited from an extended tsconfig, attribute the
-            // diagnostic to the EXTENDING file's "compilerOptions" key (matching tsc).
-            val pos = if (rawPos != null && mainKey != null && rawPos.fileName != mainKey.fileName) mainKey
-                      else rawPos
+            val pos = tsconfigAnchorFor(tsconfigKey, tsconfigPos)
             if (simulatedVersion >= stopFunctioningVersion) {
                 // Option has been removed: ignoreDeprecations no longer suppresses the diagnostic
                 diagnostics.add(Diagnostic(
@@ -470,10 +486,7 @@ class TypeScriptCompiler {
         // - simulatedVersion < version (stopFunctioningVersion): option is deprecated → emit TS5107
         // - simulatedVersion >= version: option is removed → emit TS5108 (ignoreDeprecations ignored)
         fun addDeprecation(optionDesc: String, tsconfigKey: String? = null, version: String = "7.0", deprecationVersion: String = "6.0", withMigrationUrl: Boolean = false) {
-            // When the option is not explicitly in tsconfig but a tsconfig exists, fall back to
-            // the "compilerOptions" key position. TypeScript attributes CLI-level deprecated options
-            // to the "compilerOptions" section when a tsconfig is present.
-            val pos = tsconfigKey?.let { tsconfigPos[it] ?: tsconfigPos["compileroptionskey"] }
+            val pos = tsconfigAnchorFor(tsconfigKey, tsconfigPos)
             if (simulatedVersion >= version) {
                 // Option has been removed: ignoreDeprecations no longer suppresses the diagnostic
                 diagnostics.add(Diagnostic(

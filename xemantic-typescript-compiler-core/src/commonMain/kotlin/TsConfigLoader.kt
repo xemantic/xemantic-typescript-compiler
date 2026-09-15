@@ -102,7 +102,8 @@ class TsConfigLoader(private val vfs: Vfs) {
     fun load(tsconfigPath: String): LoadedTsConfig {
         val configDir = PathUtil.dirname(tsconfigPath)
         val diags = mutableListOf<Diagnostic>()
-        val merged = loadMerged(tsconfigPath, mutableSetOf(), diags)
+        val rootText = arrayOfNulls<String>(1)
+        val merged = loadMerged(tsconfigPath, mutableSetOf(), diags, rootText)
             ?: return LoadedTsConfig(
                 projectDefaults(),
                 configDir,
@@ -131,9 +132,21 @@ class TsConfigLoader(private val vfs: Vfs) {
         options = applyImpliedAllowJs(options)
 
         // outDir / rootDir are resolved to absolute paths relative to the config dir.
+        // (LEGACY.1)(d) The option positions come from the ROOT file's text alone, through
+        // the scanner the corpus harness's embedded tsconfig uses — so a deprecation /
+        // removed-option row anchors at the option's own token in `tsconfig.json`, and an
+        // option INHERITED through `extends` has no entry and falls back to the root's
+        // `"compilerOptions"` key, which is tsgo's `createCompilerOptionsDiagnostic`
+        // (measured: `tsconfig.json(1,29)` on `{ "extends": "./base.json",
+        // "compilerOptions": {} }`, and FILE-LESS when the root has no `compilerOptions`).
+        // The text was read by `loadMerged` already; a second `Vfs` read here would double
+        // every `-project` cost pin that counts `tsconfig.json` reads as its unit.
         options = options.copy(
             outDir = options.outDir?.let { PathUtil.join(configDir, it) },
             rootDir = options.rootDir?.let { PathUtil.join(configDir, it) },
+            tsconfigOptionPositions = rootText[0]?.let {
+                tsconfigOptionPositionsOf(it, PathUtil.normalize(tsconfigPath))
+            } ?: emptyMap(),
         )
 
         val include = (merged.include ?: emptyList()).ifEmpty {
@@ -156,6 +169,8 @@ class TsConfigLoader(private val vfs: Vfs) {
         tsconfigPath: String,
         seen: MutableSet<String>,
         diags: MutableList<Diagnostic>,
+        /** Receives the ROOT config's raw text (the first file read); null for a parent. */
+        rootText: Array<String?>? = null,
     ): TsConfigFile? {
         val norm = PathUtil.normalize(tsconfigPath)
         if (!seen.add(norm)) return null // cycle guard
@@ -164,6 +179,7 @@ class TsConfigLoader(private val vfs: Vfs) {
             diags.add(configError("Cannot read file '$norm'.", 5083, norm))
             return null
         }
+        rootText?.set(0, text)
         val self = try {
             LENIENT_JSON.decodeFromString<TsConfigFile>(text)
         } catch (e: SerializationException) {
