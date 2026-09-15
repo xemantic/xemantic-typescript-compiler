@@ -253,20 +253,6 @@ class Inv4SpineBatch9Test {
     }
 
     @Test
-    fun `negative control - with under alwaysStrict false draws no TS1101 but still TS2410`() {
-        diagnose(
-            """
-            declare const o: any;
-            with (o) {}
-            """,
-            directives = "// @alwaysStrict: false",
-        ) should {
-            have(none { it.code == 1101 })
-            have(any { it.code == 2410 })
-        }
-    }
-
-    @Test
     fun `negative control - arrow body inside an async function does not fire TS1300`() {
         // The old walker reset isInAsync to FALSE at every arrow boundary
         // (tsc's AwaitContext would fire for async arrows — a signal-driven

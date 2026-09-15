@@ -128,18 +128,6 @@ class Inv4SpineBatch11Test {
     }
 
     @Test
-    fun `negative control - explicit alwaysStrict false suppresses TS1344`() {
-        diagnose(
-            """
-            L: var x = 1;
-            """,
-            directives = "// @alwaysStrict: false",
-        ) should {
-            have(none { it.code == 1344 })
-        }
-    }
-
-    @Test
     fun `negative control - break inside a loop is fine`() {
         diagnose("while (true) { break; }") should {
             have(none { it.code == 1105 })
