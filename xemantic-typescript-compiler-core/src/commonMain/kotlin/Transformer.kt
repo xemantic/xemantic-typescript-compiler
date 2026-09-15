@@ -3365,8 +3365,9 @@ class Transformer(
                 val bindings = clause.namedBindings
                 if (clause.name != null && bindings == null) {
                     // Default import only: import d from "bar"
-                    // esModuleInterop: const bar_1 = __importDefault(require("./b")); d → bar_1.default
-                    // no esModuleInterop: const bar_1 = require("./b"); d → bar_1.default
+                    // const bar_1 = __importDefault(require("./b")); d → bar_1.default
+                    // ((LEGACY.1)(d2) TypeScript 7 has no `esModuleInterop` option — the
+                    // interop helpers are unconditional, as in tsgo's `commonjsmodule.go`.)
                     val localName = clause.name.text
                     // An UNUSED default import is elided entirely (tsc: a default binding
                     // is not a side-effect import). Elide BEFORE allocating the module temp
@@ -3384,12 +3385,8 @@ class Transformer(
                     if (!options.emitDecoratorMetadata &&
                         localName !in valueReferencedNames && localName !in importEqualsReferencedNames) continue
                     val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                    if (options.esModuleInterop) {
-                        needsImportDefault = true
-                        result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, stmt.trailingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                    } else {
-                        result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, stmt.trailingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                    }
+                    needsImportDefault = true
+                    result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, stmt.trailingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                     importStmtForLocalName[localName] = result.last()
                     // Rename: Namespace → b_1.default
                     renameMap[localName] = PropertyAccessExpression(
@@ -3408,7 +3405,7 @@ class Transformer(
                     if (!isDefaultUsed && !isNsUsed) {
                         continue
                     }
-                    if (options.esModuleInterop && isNsUsed) {
+                    if (isNsUsed) {
                         // Namespace is used — use NS name directly as const, like pure import * as NS
                         needsImportStar = true
                         result.add(makeImportHelperConst(nsLocalName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
@@ -3424,27 +3421,11 @@ class Transformer(
                             )
                             defaultModuleTempVars.add(nsLocalName)
                         }
-                    } else if (isNsUsed) {
-                        // No esModuleInterop: use NS name directly with require
-                        result.add(makeRequireConst(nsLocalName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                        importStmtForLocalName[nsLocalName] = result.last()
-                        if (isDefaultUsed) {
-                            importStmtForLocalName[defaultLocalName] = result.last()
-                            renameMap[defaultLocalName] = PropertyAccessExpression(
-                                expression = syntheticId(nsLocalName),
-                                name = syntheticId("default"),
-                                pos = -1, end = -1,
-                            )
-                        }
                     } else {
                         // NS unused, only default used — use temp name with __importDefault
                         val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                        if (options.esModuleInterop) {
-                            needsImportDefault = true
-                            result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                        } else {
-                            result.add(makeRequireConst(tempName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                        }
+                        needsImportDefault = true
+                        result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                         importStmtForLocalName[defaultLocalName] = result.last()
                         renameMap[defaultLocalName] = PropertyAccessExpression(
                             expression = syntheticId(tempName),
@@ -3454,9 +3435,7 @@ class Transformer(
                         defaultModuleTempVars.add(tempName)
                     }
                 } else if (bindings is NamespaceImport) {
-                    // import * as x from "y"
-                    // esModuleInterop: const x = __importStar(require("y"))
-                    // no esModuleInterop: const x = require("y")
+                    // import * as x from "y"  →  const x = __importStar(require("y"))
                     val localName = bindings.name.text
                     // A MISSING namespace name (parse recovery — `import * as
                     // while from "foo"`, reservedWords2) can never be referenced:
@@ -3481,12 +3460,8 @@ class Transformer(
                             checker?.moduleHasOnlyTypeOnlyExports(it, currentFileName) == true ||
                                 checker?.isTypeOnlyNamespaceImportModule(it, currentFileName) == true
                         } == true) continue
-                    if (options.esModuleInterop) {
-                        needsImportStar = true
-                        result.add(makeImportHelperConst(localName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                    } else {
-                        result.add(makeRequireConst(localName, moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                    }
+                    needsImportStar = true
+                    result.add(makeImportHelperConst(localName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                     importStmtForLocalName[localName] = result.last()
                     // B343: under isolatedModules a namespace import survives the
                     // unused-require elision when the name is referenced ANYWHERE in
@@ -3522,11 +3497,11 @@ class Transformer(
                         continue
                     }
                     val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                    if (options.esModuleInterop && isDefaultUsed && anyNamedUsed) {
+                    if (isDefaultUsed && anyNamedUsed) {
                         // Both default and named bindings are used → __importStar (like namespace import)
                         needsImportStar = true
                         result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                    } else if (options.esModuleInterop && isDefaultUsed) {
+                    } else if (isDefaultUsed) {
                         // Only default is used → __importDefault
                         needsImportDefault = true
                         result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
@@ -3559,15 +3534,15 @@ class Transformer(
                     }
                 } else if (bindings is NamedImports) {
                     // import { a, b as c } from "y" → const y_1 = require("y")
-                    // import { default as x } → with esModuleInterop: __importDefault; without: plain require
+                    // import { default as x } → __importDefault
                     val hasDefaultElement = bindings.elements.any { (it.propertyName ?: it.name).text == "default" }
                     val hasNonDefaultElement = bindings.elements.any { (it.propertyName ?: it.name).text != "default" }
                     val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
-                    if (options.esModuleInterop && hasDefaultElement && hasNonDefaultElement) {
+                    if (hasDefaultElement && hasNonDefaultElement) {
                         // Both default and named: need __importStar to preserve all exports
                         needsImportStar = true
                         result.add(makeImportHelperConst(tempName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
-                    } else if (options.esModuleInterop && hasDefaultElement) {
+                    } else if (hasDefaultElement) {
                         needsImportDefault = true
                         result.add(makeImportHelperConst(tempName, "__importDefault", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
                     } else {
@@ -3678,7 +3653,7 @@ class Transformer(
                         for (spec in nonTypeSpecs) {
                             val importedName = (spec.propertyName ?: spec.name).text
                             val exportName = spec.name.text
-                            if (importedName == "default" && options.esModuleInterop) {
+                            if (importedName == "default") {
                                 needsImportDefault = true
                                 result.add(makeReExportGetter(exportName, tempName, importedName, useImportDefault = true))
                             } else {
@@ -3688,9 +3663,7 @@ class Transformer(
                     }
                 }
                 is NamespaceExport -> {
-                    // export * as ns from "m"
-                    // esModuleInterop: exports.ns = __importStar(require("m"))
-                    // no esModuleInterop: exports.ns = require("m")
+                    // export * as ns from "m"  →  exports.ns = __importStar(require("m"))
                     val exportName = clause.name.text
                     if (exportName !in exportedVarNames) exportedVarNames.add(exportName)
                     val normalizedSpec = normalizeModuleSpecifier(stmt.moduleSpecifier)
@@ -3699,16 +3672,12 @@ class Transformer(
                         arguments = listOf(normalizedSpec),
                         pos = -1, end = -1,
                     )
-                    val rhs: Expression = if (options.esModuleInterop) {
-                        needsImportStar = true
-                        CallExpression(
-                            expression = helperExpr("__importStar"),
-                            arguments = listOf(requireCall),
-                            pos = -1, end = -1,
-                        )
-                    } else {
-                        requireCall
-                    }
+                    needsImportStar = true
+                    val rhs: Expression = CallExpression(
+                        expression = helperExpr("__importStar"),
+                        arguments = listOf(requireCall),
+                        pos = -1, end = -1,
+                    )
                     result.add(
                         ExpressionStatement(
                             expression = BinaryExpression(

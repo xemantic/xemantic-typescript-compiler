@@ -11080,7 +11080,7 @@ class Checker(
     /**
      * Like [isTypeOnlyImportRequire] but for a NAMESPACE import (`import * as y from "X"`).
      * A body-less `declare module "X";` is an UNTYPED (`any`) runtime module, so its namespace
-     * import must be KEPT (esModuleInteropTslibHelpers: `import * as path from "path"`), whereas
+     * import must be KEPT (the corpus's esModuleInteropTslibHelpers: `import * as path from "path"`), whereas
      * an `export = <type-only>` ambient module is genuinely type-only and elided
      * (es6ExportEqualsInterop: `import * as y1 from "interface"`).
      */
@@ -51459,7 +51459,9 @@ class Checker(
     /**
      * Check for TS1192: "Module '...' has no default export."
      * Emitted when a default import binding is used against a module that doesn't
-     * export a default value. Suppressed when allowSyntheticDefaultImports is true.
+     * export a default value and has no SYNTHETIC default either — tsgo's
+     * `canHaveSyntheticDefault`, a property of the target alone ((LEGACY.1)(d2):
+     * TypeScript 7 has no `allowSyntheticDefaultImports` / `esModuleInterop` option).
      *
      * Also checks for TS2614: "Module '...' has no exported member 'X'. Did you mean
      * to use 'import X from ...' instead?" — fires when a named import specifier
@@ -51834,27 +51836,17 @@ class Checker(
     }
 
     private fun checkDefaultImports() {
-        // allowSyntheticDefaultImports suppresses TS1192 check.
-        // Explicit false overrides all implicit true conditions.
-        // It is implicitly true when:
-        //   1. Explicitly set to true
-        //   2. module is System (System.js includes synthetic default support)
-        //
-        // Note: esModuleInterop does NOT generally suppress TS1192 for normal modules.
-        // For 'export =' modules with esModuleInterop=true, TS1259 fires instead (handled separately).
-        val effectiveSyntheticDefaults = if (options.allowSyntheticDefaultImportsExplicitlyFalse) {
-            false // Explicit false always wins
-        } else {
-            options.allowSyntheticDefaultImports ||
-            options.effectiveModule == ModuleKind.System
-        }
-        // NOTE: do NOT early-return on effectiveSyntheticDefaults. Synthetic defaults
-        // (allowSyntheticDefaultImports / System / esModuleInterop) only synthesize a default
-        // for CJS-format targets — the whole module.exports becomes the default. An ESM-format
-        // target (.mts/.mjs/.d.mts, unconditionally ESM) has NO synthetic default: only an actual
-        // `export default` counts, so a default import against a no-default ESM module is TS1192
-        // even with allowSyntheticDefaultImports. The per-import `targetIsEsm` gate below handles
-        // this; for CJS targets the synthetic-default skip is applied per-import.
+        // (LEGACY.1)(d2) Whether a default import is legal against a module with no
+        // `export default` is tsgo's `canHaveSyntheticDefault` (checker.go:14744), decided
+        // per TARGET and reading NO option: TypeScript 7 removed the `false` values of
+        // `esModuleInterop` and `allowSyntheticDefaultImports` and consults neither field
+        // anywhere but the TS5108 row (`program.go:862-868`). The tsc-6 model this replaced
+        // honoured an explicit `allowSyntheticDefaultImports: true` as a BLANKET skip of
+        // every CommonJS-format target (so `import d from "./esm"` against a `.ts` module
+        // with no default went silent — tsgo reports TS1192 there in every cell of the
+        // 3×3 matrix) and an explicit `false` as TS1259 on an `export =` target (tsgo:
+        // legal, `__importDefault`). The rule, per target, is in the `syntheticDefault`
+        // `when` below; an ESM-format target never has one.
 
         val isMultiFile = binderResults.size > 1 || isMultiFileSource
         if (!isMultiFile) return
@@ -51919,27 +51911,32 @@ class Checker(
                 val targetIsEsm = nmEsmTarget ||
                     ((resolvedFile.endsWith(".mts") || resolvedFile.endsWith(".mjs")) &&
                         options.effectiveModule.isNodeNext)
-                // CJS-format target: synthetic defaults make the default import legal → skip.
-                if (effectiveSyntheticDefaults && !targetIsEsm) continue
-
                 val hasDefaultExport = moduleHasDefaultExport(targetFile)
-
-                // TS1192: default binding used but module has no default export
-                // Suppress for 'export =' modules when esModuleInterop=true (TS1259 would fire instead)
                 val hasExportEquals = !targetIsEsm && targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
-                val esModuleInteropActive = !targetIsEsm && options.esModuleInterop && !options.esModuleInteropExplicitlyFalse &&
-                    !options.allowSyntheticDefaultImportsExplicitlyFalse
-                // Suppress for JS CJS files (no ESM exports) when esModuleInterop=true —
-                // module.exports becomes a synthetic default export under esModuleInterop.
-                val targetIsJsCjs = esModuleInteropActive &&
-                    (resolvedFile.endsWith(".js") || resolvedFile.endsWith(".jsx") ||
-                     resolvedFile.endsWith(".cjs") || resolvedFile.endsWith(".mjs")) &&
+                val targetIsJs = resolvedFile.endsWith(".js") || resolvedFile.endsWith(".jsx") ||
+                    resolvedFile.endsWith(".cjs") || resolvedFile.endsWith(".mjs")
+                // A JS CommonJS file (no ESM exports): module.exports IS the synthetic default.
+                val targetIsJsCjs = !targetIsEsm && targetIsJs &&
                     targetFile.statements.none { it is ExportAssignment || it is ExportDeclaration ||
                         (it is FunctionDeclaration && ModifierFlag.Export in it.modifiers) ||
                         (it is ClassDeclaration && ModifierFlag.Export in it.modifiers) ||
                         (it is VariableStatement && ModifierFlag.Export in it.modifiers) }
+                // tsgo's `canHaveSyntheticDefault`, arm for arm: two ESM files never have one;
+                // under node16+ a CommonJS target imported into ESM always has one; a
+                // declaration file has one unless it declares the `__esModule` marker (its
+                // syntactic default, when present, is a real default — `hasDefaultExport`);
+                // a TypeScript file has one exactly when it is an `export =` module; a JS file
+                // when it carries no ES-module syntax and no `__esModule`.
+                val syntheticDefault = when {
+                    targetIsEsm -> false
+                    options.effectiveModule.isNodeNext && isESModuleFormat(options, fileName) ->
+                        !isESModuleFormat(options, resolvedFile)
+                    isDtsFile(resolvedFile) -> !declaresEsModuleMarker(targetFile)
+                    !targetIsJs -> hasExportEquals
+                    else -> targetIsJsCjs
+                }
                 val defaultBinding = importClause.name
-                if (defaultBinding != null && !hasDefaultExport && !(hasExportEquals && esModuleInteropActive) && !targetIsJsCjs) {
+                if (defaultBinding != null && !hasDefaultExport && !syntheticDefault) {
                     // Compute display module name: strip leading "./" from relative specifiers.
                     // For ESM-format (.mjs/.mts) targets, TS also strips the trailing extension
                     // ("./other.mjs" displays as "other"); other targets keep the verbatim form.
@@ -51961,70 +51958,39 @@ class Checker(
                     val nameStart = defaultBinding.pos
                     val nameLength = defaultBinding.text.length
                     val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
-                    // TS1259: fires when the target module has `export = X` and neither
-                    // esModuleInterop nor allowSyntheticDefaultImports allow a default import.
-                    // TypeScript emits TS1259 (not TS1192) with a TS2594 related-info pointing
-                    // to the `export =` statement.
-                    if (hasExportEquals && !esModuleInteropActive) {
-                        val exportEqStmt = targetFile.statements
-                            .firstOrNull { it is ExportAssignment && it.isExportEquals }
-                        val relatedInfos: List<Diagnostic> = if (exportEqStmt != null) {
-                            val (rLine, rChar) = getLineAndCharacterOfPosition(targetFile.text, exportEqStmt.pos)
-                            listOf(
-                                Diagnostic(
-                                    message = "This module is declared with 'export =', and can only be used with a default import when using the 'esModuleInterop' flag.",
-                                    category = DiagnosticCategory.Message,
-                                    code = 2594,
-                                    fileName = resolvedFile,
-                                    line = rLine,
-                                    character = rChar,
-                                    start = exportEqStmt.pos,
-                                    length = 1,
-                                )
-                            )
-                        } else emptyList()
+                    // ((LEGACY.1)(d2) TS1259 *can only be default-imported using the
+                    // 'esModuleInterop' flag* is unreachable in TypeScript 7 — an `export =`
+                    // target always has the synthetic default — and its emitter is gone;
+                    // tsgo's checker never references the message.)
+                    // TS2613: Module has no default export. Did you mean to use named import?
+                    // Fires when the default binding name matches a named export of the module
+                    // (star-following, M1.1 — a name provided via `export *` upgrades the
+                    // message; an unknowable set falls back to direct exports, keeping TS1192).
+                    val importName = defaultBinding.text
+                    val moduleNamedExports = getModuleExportsFollowingStars(targetFile)
+                        ?: getModuleNamedExports(targetFile)
+                    if (importName in moduleNamedExports) {
                         diagnostics.add(Diagnostic(
-                            message = "Module '\"$displayName\"' can only be default-imported using the 'esModuleInterop' flag",
+                            message = "Module '\"$displayName\"' has no default export. Did you mean to use 'import { $importName } from \"$displayName\"' instead?",
                             category = DiagnosticCategory.Error,
-                            code = 1259,
+                            code = 2613,
                             fileName = fileName,
                             line = line,
                             character = character,
                             start = nameStart,
                             length = nameLength,
-                            relatedInformation = relatedInfos,
                         ))
                     } else {
-                        // TS2613: Module has no default export. Did you mean to use named import?
-                        // Fires when the default binding name matches a named export of the module
-                        // (star-following, M1.1 — a name provided via `export *` upgrades the
-                        // message; an unknowable set falls back to direct exports, keeping TS1192).
-                        val importName = defaultBinding.text
-                        val moduleNamedExports = getModuleExportsFollowingStars(targetFile)
-                            ?: getModuleNamedExports(targetFile)
-                        if (importName in moduleNamedExports) {
-                            diagnostics.add(Diagnostic(
-                                message = "Module '\"$displayName\"' has no default export. Did you mean to use 'import { $importName } from \"$displayName\"' instead?",
-                                category = DiagnosticCategory.Error,
-                                code = 2613,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = nameStart,
-                                length = nameLength,
-                            ))
-                        } else {
-                            diagnostics.add(Diagnostic(
-                                message = "Module '\"$displayName\"' has no default export.",
-                                category = DiagnosticCategory.Error,
-                                code = 1192,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = nameStart,
-                                length = nameLength,
-                            ))
-                        }
+                        diagnostics.add(Diagnostic(
+                            message = "Module '\"$displayName\"' has no default export.",
+                            category = DiagnosticCategory.Error,
+                            code = 1192,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameStart,
+                            length = nameLength,
+                        ))
                     }
                 }
 
@@ -52067,10 +52033,7 @@ class Checker(
                 // 16.4ea: TS2616 — `import { a } from "./mod"` where `./mod` has
                 // `export = <plain-variable>` (a primitive or non-namespace value). Named
                 // imports can't destructure properties off a primitive, so the only valid
-                // forms are `import a = require(...)` or a default import. Fires regardless
-                // of esModuleInterop setting; the TS2617 branch below handles the different
-                // failure mode when esModuleInterop is explicitly false AND the exported
-                // value is namespace-like.
+                // forms are `import a = require(...)` or a default import.
                 //
                 // B52.8 refinement: when the exported value's type has discoverable named
                 // members (union of object types with common props, intersection, indexable
@@ -52129,53 +52092,22 @@ class Checker(
                     }
                 }
 
-                // TS2617/TS2596/TS2598: `import { X } from "./a"` where "./a" uses
-                // `export =` and esModuleInterop is explicitly false. TypeScript cannot synthesize
-                // named bindings without esModuleInterop, so the named import is invalid.
-                // The specific code depends on the importer's file kind and module output target.
-                // (LEGACY.0b step 3) the TS2497 that used to accompany it is gone.
+                // ((LEGACY.1)(d2) TS2617/TS2596/TS2598 — the *by turning on the
+                // 'esModuleInterop' flag* wordings for a named import of an `export =`
+                // module under an explicit `esModuleInterop: false` — are unreachable in
+                // TypeScript 7 and their emitter is gone: tsgo's
+                // `reportInvalidImportEqualsExportMember` (checker.go:14867) knows only
+                // TS2595 / TS2597 / TS2616, chosen by the `module` OPTION and the
+                // importer's file kind.)
                 val namedBindingsEM = importClause.namedBindings
-                if (hasExportEquals && options.esModuleInteropExplicitlyFalse &&
-                    namedBindingsEM is NamedImports) {
-                    val importerIsJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
-                        fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
-                    val isEsmTarget = isESModuleFormat(options, fileName)
-                    for (importSpecifier in namedBindingsEM.elements) {
-                        if (importSpecifier.isTypeOnly) continue
-                        val nameNode = importSpecifier.propertyName ?: importSpecifier.name
-                        val importedName = nameNode.text
-                        if (importedName == "default") continue
-                        val nameStart = nameNode.pos
-                        val nameLength = importedName.length
-                        val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
-                        val (code, message) = when {
-                            isEsmTarget -> 2596 to
-                                "'$importedName' can only be imported by turning on the 'esModuleInterop' flag and using a default import."
-                            importerIsJs -> 2598 to
-                                "'$importedName' can only be imported by using a 'require' call or by turning on the 'esModuleInterop' flag and using a default import."
-                            else -> 2617 to
-                                "'$importedName' can only be imported by using 'import $importedName = require(\"$moduleName\")' or by turning on the 'esModuleInterop' flag and using a default import."
-                        }
-                        diagnostics.add(Diagnostic(
-                            message = message,
-                            category = DiagnosticCategory.Error,
-                            code = code,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = nameStart,
-                            length = nameLength,
-                        ))
-                    }
-                }
 
-                // TS2595: `import { X } from "./a"` where "./a" uses `export =`
-                // in an ESM output target AND esModuleInterop is NOT explicitly false
-                // (default or true). TypeScript emits TS2595 per named import.
-                // (LEGACY.0b step 3) the accompanying TS2497 is gone.
-                val isEsmOutputForEquals = isESModuleFormat(options, fileName)
-                if (isEsmOutputForEquals && hasExportEquals && !options.esModuleInteropExplicitlyFalse &&
-                    namedBindingsEM is NamedImports) {
+                // TS2595: `import { X } from "./a"` where "./a" uses `export =` and the
+                // `module` option is ES2015 or higher (tsc's `moduleKind >= ES2015` — a
+                // CommonJS-scoped `.ts` under `nodenext` still reads TS2595). TypeScript
+                // emits TS2595 per named import. (LEGACY.0b step 3) the accompanying
+                // TS2497 is gone.
+                val isEsmOutputForEquals = options.effectiveModule.isEs2015OrHigher
+                if (isEsmOutputForEquals && hasExportEquals && namedBindingsEM is NamedImports) {
                     for (importSpecifier in namedBindingsEM.elements) {
                         if (importSpecifier.isTypeOnly) continue
                         val nameNode = importSpecifier.propertyName ?: importSpecifier.name
@@ -52198,17 +52130,15 @@ class Checker(
                 }
 
                 // B98.r85: `import { X } from "./a"` where "./a" uses `export = <class
-                // or function>`, esModuleInterop is active (true / default — NOT
-                // explicitly false), and output is CJS (not ESM). A named import cannot
-                // be synthesized from an export=class/function module; the valid forms
-                // are `import X = require(...)` or a default import. Emits TS2616 (TS
-                // importer) / TS2597 (JS importer) per named specifier ((LEGACY.0b step 3)
-                // the accompanying TS2497 is gone). Disjoint from the isPlainValue TS2616 branch (plain
-                // variable), the explicitly-false TS2617/2596/2598 branch, the TS2305
+                // or function>` and the `module` option is below ES2015 (CommonJS
+                // output). A named import cannot be synthesized from an export=class/
+                // function module; the valid forms are `import X = require(...)` or a
+                // default import. Emits TS2616 (TS importer) / TS2597 (JS importer) per
+                // named specifier ((LEGACY.0b step 3) the accompanying TS2497 is gone).
+                // Disjoint from the isPlainValue TS2616 branch (plain variable), the TS2305
                 // namespace-member branch (getExportEqualsMemberNames non-null), and the
-                // ESM-output TS2595 branch (isEsmOutput) — all gated mutually exclusive.
-                if (hasExportEquals && options.esModuleInterop && !options.esModuleInteropExplicitlyFalse &&
-                    !isEsmOutputForEquals && namedBindingsEM is NamedImports &&
+                // ES2015+ TS2595 branch (isEsmOutputForEquals) — all gated mutually exclusive.
+                if (hasExportEquals && !isEsmOutputForEquals && namedBindingsEM is NamedImports &&
                     getExportEqualsMemberNames(targetFile, targetResult) == null) {
                     val exportEqStmtR85 = targetFile.statements.firstOrNull {
                         it is ExportAssignment && it.isExportEquals
@@ -52263,7 +52193,6 @@ class Checker(
      *  only this baseline; the export=(fn+namespace) + namespace-import + bare-Identifier-call-arg
      *  shape is the firewall). */
     private fun checkNamespaceImportSyntheticDefaultCall() {
-        if (!options.esModuleInterop || options.esModuleInteropExplicitlyFalse) return
         if (binderResults.size <= 1 && !isMultiFileSource) return
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
@@ -52521,12 +52450,11 @@ class Checker(
         // resolve to the correct suffixed file (e.g. ./foo → ./foo.ios.ts with suffix ".ios")
         if (!options.moduleSuffixes.isNullOrEmpty()) return
 
-        // For re-exports of 'default': suppress TS2305 only for System module format,
-        // unless allowSyntheticDefaultImports is explicitly set to false.
-        // System format handles default re-exports dynamically.
-        // Note: allowSyntheticDefaultImports=true alone does NOT suppress TS2305 for re-exports.
-        val suppressDefaultReexportError = options.effectiveModule == ModuleKind.System &&
-            !options.allowSyntheticDefaultImportsExplicitlyFalse
+        // For re-exports of 'default': suppress TS2305 only for System module format.
+        // System format handles default re-exports dynamically. ((LEGACY.1)(d2) the
+        // `allowSyntheticDefaultImports: false` exception is gone — a removed value; the
+        // System arm itself is (LEGACY.1)(f)'s.)
+        val suppressDefaultReexportError = options.effectiveModule == ModuleKind.System
 
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
@@ -52953,14 +52881,23 @@ class Checker(
                         if (ambientModuleSurfaceMember(target, name, HashSet()) != null) continue
                         if (classDeclaresStatic(target, name)) continue
                         if (ambientCarrierAugmentationDeclares(carrier, name)) continue
-                        if (diagnostics.any { (it.code == 2305 || it.code == 2616 || it.code == 2617) && it.fileName == fileName && it.start == nameNode.pos }) continue
+                        if (diagnostics.any { (it.code == 2305 || it.code == 2595 || it.code == 2597 || it.code == 2616) && it.fileName == fileName && it.start == nameNode.pos }) continue
                         if (name == exportEqualsName && carrier.exports?.get(name) === target) {
                             val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                            val (code, message) =
-                                if (options.esModuleInteropExplicitlyFalse) 2617 to
-                                    "'$name' can only be imported by using 'import $name = require(\"$spec\")' or by turning on the 'esModuleInterop' flag and using a default import."
-                                else 2616 to
+                            // tsgo's `reportInvalidImportEqualsExportMember` (checker.go:14867):
+                            // the `module` option at or above ES2015 → TS2595, a JS importer →
+                            // TS2597, else TS2616. ((LEGACY.1)(d2) the TS2617 arm for an explicit
+                            // `esModuleInterop: false` is gone — a removed value.)
+                            val importerIsJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+                            val (code, message) = when {
+                                options.effectiveModule.isEs2015OrHigher -> 2595 to
+                                    "'$name' can only be imported by using a default import."
+                                importerIsJs -> 2597 to
+                                    "'$name' can only be imported by using a 'require' call or by using a default import."
+                                else -> 2616 to
                                     "'$name' can only be imported by using 'import $name = require(\"$spec\")' or a default import."
+                            }
                             diagnostics.add(Diagnostic(
                                 message = message, category = DiagnosticCategory.Error, code = code, fileName = fileName,
                                 line = line, character = character, start = nameNode.pos, length = name.length,
@@ -53418,6 +53355,19 @@ class Checker(
      * - `export default function/class` (declaration with Default modifier)
      * - `export { X as default }` (ExportDeclaration with a specifier named "default")
      */
+    /**
+     * tsgo's `resolveExportByName(moduleSymbol, "__esModule")` half of `canHaveSyntheticDefault`:
+     * a declaration file that itself declares an exported `__esModule` member is a compiled
+     * ES module and has no synthetic default (`export declare const __esModule: true` or
+     * `export { __esModule }`).
+     */
+    private fun declaresEsModuleMarker(file: SourceFile): Boolean = file.statements.any { stmt ->
+        (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers &&
+            stmt.declarationList.declarations.any { (it.name as? Identifier)?.text == "__esModule" }) ||
+            (stmt is ExportDeclaration &&
+                (stmt.exportClause as? NamedExports)?.elements?.any { it.name.text == "__esModule" } == true)
+    }
+
     private fun moduleHasDefaultExport(file: SourceFile): Boolean {
         for (stmt in file.statements) {
             when (stmt) {
@@ -53769,12 +53719,11 @@ class Checker(
         val nsMembers = mutableMapOf<String, MutableMap<String, String>>()
         val out: Pair<Map<String, String>, Map<String, Map<String, String>>> = direct to nsMembers
         cjsDefaultNsShapesCache[fileName] = out
-        // Gate: (a) nodenext ESM importer (.mts/.mjs), or (b) @module commonjs +
-        // esModuleInterop with a .ts importer (the `export =`->require-alias chain).
+        // Gate: (a) nodenext ESM importer (.mts/.mjs), or (b) @module commonjs with a .ts
+        // importer (the `export =`->require-alias chain; interop is always on in TS7).
         val nodenextEsm = options.effectiveModule.isNodeNext &&
             (fileName.endsWith(".mts") || fileName.endsWith(".mjs"))
         val commonjsMode = options.effectiveModule == ModuleKind.CommonJS &&
-            options.esModuleInterop && !options.esModuleInteropExplicitlyFalse &&
             fileName.endsWith(".ts") && !isDtsFile(fileName)
         if (!nodenextEsm && !commonjsMode) return out
         val result = binderResults.firstOrNull { it.sourceFile.fileName == fileName } ?: return out
@@ -93860,9 +93809,10 @@ interface DataView {
         }
 
         val em = options.effectiveModule
-        // esModuleInterop helpers needed for CJS/AMD/UMD/NodeNext (not System/ES) modules
-        val needsEsmHelpers = options.esModuleInterop && (em == ModuleKind.CommonJS || em == ModuleKind.AMD ||
-                em == ModuleKind.UMD || em.isNodeNext)
+        // ES-module interop helpers are needed for CJS/AMD/UMD/NodeNext (not System/ES)
+        // modules — unconditionally, TypeScript 7 having no `esModuleInterop` option.
+        val needsEsmHelpers = em == ModuleKind.CommonJS || em == ModuleKind.AMD ||
+                em == ModuleKind.UMD || em.isNodeNext
         // Class extends helpers needed when target < ES2015 ([CompilerOptions.defaultedTarget])
         val needsExtendsHelper = options.defaultedTarget <= ScriptTarget.ES5
         // Decorator helpers always needed when experimentalDecorators is set

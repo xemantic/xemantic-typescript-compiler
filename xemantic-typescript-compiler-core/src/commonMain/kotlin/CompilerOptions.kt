@@ -54,6 +54,16 @@ enum class ModuleKind {
     /** True for Node16, Node18, Node20, NodeNext — all node-resolution module kinds. */
     val isNodeNext: Boolean get() = this == Node16 || this == Node18 || this == Node20 || this == NodeNext
 
+    /**
+     * tsc's `moduleKind >= ModuleKind.ES2015` — ES2015…ESNext, Node16…NodeNext and Preserve,
+     * in the same order tsc numbers them. It decides which wording a named import of an
+     * `export =` module gets (`reportInvalidImportEqualsExportMember`, checker.go:14867):
+     * TS2595 *can only be imported by using a default import* at or above ES2015, TS2616 /
+     * TS2597 below — a property of the `module` OPTION, not of the importer's file format
+     * (a CommonJS-scoped `.ts` under `nodenext` still reads TS2595).
+     */
+    val isEs2015OrHigher: Boolean get() = ordinal >= ES2015.ordinal
+
     companion object {
         fun fromString(value: String): ModuleKind? = when (value.lowercase()) {
             "none" -> None
@@ -183,7 +193,19 @@ data class CompilerOptions(
     val baseUrl: String? = null,
     val paths: Map<String, List<String>> = emptyMap(),
     val moduleResolution: String? = null,
-    val esModuleInterop: Boolean = true,
+    /**
+     * (LEGACY.1)(d2) `esModuleInterop` and `allowSyntheticDefaultImports` are not options in
+     * TypeScript 7: tsgo 7.0.2's `core.CompilerOptions` carries both fields and reads them in
+     * exactly one place — `program.go:862-868`, the TS5108 *has been removed* row for an
+     * explicit `false` — so ES-module interop is ALWAYS on (`checker.go:14478`: "With
+     * `esModuleInterop` (always enabled)") and a synthetic default is decided by the TARGET
+     * alone (`canHaveSyntheticDefault`, no option gate). Measured over 45 projects
+     * (5 module kinds × the 3×3 unset/false/true matrix): every cell's checker rows and
+     * emitted helpers are byte-identical, the explicit-`false` cells differing only in the
+     * TS5108 row. So the two boolean options are gone; what survives is the pair of
+     * "written as `false`" markers below, read by [addDeprecation]'s TS5107/TS5108 row and
+     * by nothing else.
+     */
     val esModuleInteropExplicitlyFalse: Boolean = false,
     val allowSyntheticDefaultImportsExplicitlyFalse: Boolean = false,
     val allowJs: Boolean = false,
@@ -196,7 +218,6 @@ data class CompilerOptions(
     val downlevelIteration: Boolean = false,
     val downlevelIterationExplicitlySet: Boolean = false,
     val importHelpers: Boolean = false,
-    val allowSyntheticDefaultImports: Boolean = false,
     val useDefineForClassFields: Boolean? = null,
     val verbatimModuleSyntax: Boolean = false,
     val noCheck: Boolean = false,
@@ -873,10 +894,8 @@ private fun applyDirectiveArms2(
         "types" -> options.copy(types = value.split(',').map { it.trim() }.filter { it.isNotEmpty() })
         "baseurl" -> options.copy(baseUrl = value.trim())
         "moduleresolution" -> options.copy(moduleResolution = value.trim())
-        "esmoduleinterop" -> options.copy(
-            esModuleInterop = boolValue,
-            esModuleInteropExplicitlyFalse = !boolValue,
-        )
+        // (LEGACY.1)(d2) a removed value: only the "written as false" marker is recorded.
+        "esmoduleinterop" -> options.copy(esModuleInteropExplicitlyFalse = !boolValue)
         else -> null
     }
 }
@@ -906,10 +925,8 @@ private fun applyDirectiveArms3(
         "noemitonerror" -> options.copy(noEmitOnError = boolValue)
         "downleveliteration" -> options.copy(downlevelIteration = boolValue, downlevelIterationExplicitlySet = true)
         "importhelpers" -> options.copy(importHelpers = boolValue)
-        "allowsyntheticdefaultimports" -> options.copy(
-            allowSyntheticDefaultImports = boolValue,
-            allowSyntheticDefaultImportsExplicitlyFalse = !boolValue,
-        )
+        // (LEGACY.1)(d2) a removed value: only the "written as false" marker is recorded.
+        "allowsyntheticdefaultimports" -> options.copy(allowSyntheticDefaultImportsExplicitlyFalse = !boolValue)
         "usedefineforclassfields" -> options.copy(useDefineForClassFields = boolValue)
         "verbatimmodulesyntax" -> options.copy(verbatimModuleSyntax = boolValue)
         "nocheck" -> options.copy(noCheck = boolValue)
