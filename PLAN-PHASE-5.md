@@ -25,6 +25,68 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.107) — (LEGACY.1) step (f): amd/umd/system fold onto CommonJS as a PROPERTY of the kind, three of nine arms were deletable, and the corpus is a counted control (2026-09-15)
+
+**Three commits** (`3f5aeea85` refactor, `4556f254d` test, this docs commit). **Suite 19,465 → 19,487 / 0 / 83** (+22
+pins: 17 in the rewritten `RemovedModuleKindsTest`, 6 in the new `-project` class, net of the pins it replaced), 9
+modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS, counted: 283 case files name
+`amd|umd|system` in a directive and 3 in an embedded tsconfig, and every one is dropped, so **no active subtest runs
+under a removed kind and the hand-written pins are the whole gate**; `cost_gate.py` exit 0, 20/20 +0.00%;
+`huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls;
+`-externals` 290 / 0 as the `export as namespace` control; warning-clean over four compile tasks. `Checker.kt`
+194,993 → **194,996** (+3: deleted behaviour, added KDoc); main total +217/−183 (the `wrapCallsWithZero` threading
+alone is 108 pass-throughs). **(LEGACY.1)(f) is CHECKED OFF; (g) `baseUrl` is next; (LEGACY.0) stays OPEN** on
+(0b-17).
+
+**THE MEASUREMENT.** 240 cells (20 programs × 6 kinds × 2 targets), emit through `--outDir` and checker rows through
+the LSP (the tsgo CLI stops at the option rows). tsgo reports `TS5108 Option 'module=AMD|UMD|System' has been
+removed` at the value, beside (e)'s TS5095, and then EMITS: the amd/umd/system output is byte-identical to the
+commonjs output of the same program in **17 of 20** programs at both targets. The three exceptions are tsgo's
+own, in a removed configuration, and were recorded rather than copied: `system` keeps the leading comments of
+enums/namespaces (`runtimesyntax.go:308/450`), and `importHelpers` without tslib emits `require("tslib")` and then
+UNBOUND `__exportStar`/`__importDefault` calls with no TS2354 — broken JavaScript. Checker rows: amd/umd equal
+commonjs in every program; **system differs on exactly three LIVE arms keyed on the WRITTEN kind** (TS1218 on
+`export =`, top-level `await` allowed, `import.meta` allowed). TS5071 has no emitter anywhere in tsgo; a `.json`
+import resolves under every kind (`GetResolveJsonModule` is on under the derived Bundler).
+
+**WHAT LANDED.** The fold is a PROPERTY, not a parse — `ModuleKind.foldsToCommonJS` (CommonJS | AMD | UMD | System)
+admitted by the Transformer's `useCJS` and the Emitter's `.mts` override, while the WRITTEN kind survives for the
+TS5107/TS5108 rows, TS2725's message (`with module AMD`) and TS2441 (tsgo `< ES2015`, now `foldsToCommonJS`).
+Deleted, each measured: TS5071; the AMD/UMD/System exemption of TS2882 (tsgo reports it); the System suppression
+of the default-re-export TS2305; the `__exportStar`/System tslib exemptions (now `foldsToCommonJS || isNodeNext`);
+and the `wrapCallsWithZero` parameter (never passed `false` — 3 declarations, 108 pass-throughs, two KDoc blocks).
+Folded: three explicit-commonjs unresolved-import arms (17.214/B524/B227) and `commonjsMode` admit the removed
+kinds, as tsgo's rows do. The top-level-await list is unified into `ModuleKind.allowsTopLevelAwait` — **System
+STAYS in it** (a live tsgo arm) — read by the checker gate and both parser-flag sites. `export as namespace` (all
+~38 UMD hits) untouched. On the final binary `fold_check.py` reads **120 of 120 removed-kind cells byte-identical
+to our own commonjs cell** on emit and rows; every remaining divergence from tsgo in those cells is one the
+commonjs cell carries too.
+
+**WHERE THE ITEM WAS WRONG.** "14 Checker arms" — after (d2)/(e) nine sites remained and only THREE were deletable
+behaviour; TS2725, TS2441 and the TLA list are live tsgo arms on the written kind. "Parse to the CommonJS-equivalent
+behaviour" — tsgo keeps the written kind through the checker (`GetEmitModuleKind` returns it) and folds only at
+`getModuleTransformer`. The `resolveJsonModule` derivation needed no code. `wrapCallsWithZero` had no observable
+and so no ablation arm — undiscriminated by construction, recorded.
+
+**PINS AND ABLATION.** 23 pins; stash-ablation core 8/17 red, project 3/6 red — the greens are the seven named
+controls and two pre-existing option-row pins, plus ONE harness TS2882 pin that was green on both arms (a second
+harness emitter serves the row) and was renamed a control, the project-path pin being the discriminator. Nine
+arms, each reddening a disjoint set (core / project reds; screens 0/0 on all): a1 routing back to `== CommonJS`
+3/2; a2 TS5071 back 1/1; a3 TS2882 exemption back 0/1; a4 System TS2305 suppression back 1/0; a5 tslib
+exemptions back 1/0; a6 explicit-commonjs arms back 2/0; a7 System dropped from `allowsTopLevelAwait` 1/0; a9
+TS2441 narrowed 1/0; a10 TS2725 loses the removed names 1/0. Final md5s Checker `988428d0`, TypeScriptCompiler
+`80651a67`, Transformer `0b9d3bc1`, CompilerOptions `b408f37b`, CompilerOptionsKt `ebd9fe8c`, Emitter `73f58dd7` —
+the orchestrator's AFTER arm matched all six.
+
+**PRE-EXISTING GAPS THE MATRIX FOUND IN THE *COMMONJS* CELL — (LEGACY.0b)/ledger, not (LEGACY.1)**: TS1378/TS1432 are
+never reported for a non-TLA module kind (tsgo's default branch); TS1343 `import.meta` has no emitter; TS2354
+anchors at line 3 where tsgo anchors at the first helper site; `data.json` is not copied to `outDir`;
+`exports.string name =` for a string-literal export name (tsgo `exports["string name"]`); TS2307 for a missing
+import is never reported on the PROJECT path; an `export as namespace` global reads as TS2304 in a script on the
+project path. **What (g)/(h) inherit**: the ten `baseUrl == null` conjuncts are untouched (three now sit under
+`foldsToCommonJS`); `TypeScriptCompiler.kt:~2515` still reads `outFile != null && effectiveModule == None` — the
+last None/outFile coupling, in (h)'s range.
+
 ### Round (P18.106) — (LEGACY.1) step (e): there is no "classic" resolution in TypeScript 7 — one derivation replaces five copies, and a removed value turned out to have live corpus coverage (2026-09-15)
 
 **Three commits** (`963a03381` refactor, `d1b475798` test, this docs commit). **Suite 19,427 → 19,465 / 0 / 83** (+38
@@ -561,87 +623,6 @@ foreground — CLAUDE.md's daemon rule, applied BEFORE a java-only measurement r
 
 **NOT TAKEN**: the `downlevelIteration` TS5101→TS5102 pair (2 rows) — `simulatedVersion`'s default
 is recorded under (LEGACY.1) as an owner decision; it would close both rows and redden nothing.
-
-### Round (P18.97) — (LEGACY.0b) step 12: the JS-emit residue, seven mechanisms, 11 rows, and the hoist keyword is a SCOPE property (2026-09-14)
-
-**Three commits** (`5f3e40a67` feat, `caf095c10` test, this docs commit). **Suite 19,240 → 19,260 / 0 / 117**,
-9 modules asserted — `tsgoPendingBaselines` 103 → **92**, skipped −11, +20 pins
-(`TsgoJsEmitResidueTest`). Screen **emit 5,688 / 0 and errors 3,050 / 0** on the final binary,
-every closed row `--include`d and 0. `cost_gate.py` exit 0, all 20 counters +0.00% (a CONTROL —
-`--noEmit` never runs the transformer); `huge_methods.py --fail-over 0` exit 0 (869 classes);
-grid 8×`added=0 removed=0` and the emit-mode `--outDir` + `diff -r` control 78/78 identical
-(both COUNTED, both controls: tsc's own sources carry none of the seven shapes); warning-clean
-(no `-q`, positive control 1 `w:`). **(LEGACY.0) stays OPEN** on (0b-13).
-
-**THE ROUND WAS BRIEFED AS FIVE MECHANISMS / 9 ROWS AND LANDED SEVEN / 11.** The brief's own
-read-only sizing of the 14 pending JS-emit rows put five in one round: *M1* JE-A (3 rows),
-*M2* `declare import` (2), *M3* `import I = M` in a top-level block (2), *M4* the printed
-setter return type (1), *M5* `emitBOM` (1); the agent sized the two singletons it was told to
-report on and landed both on a measured zero: *M6* the body-less `global` recovery inside a
-class emits nothing, *M7* a source-written `export {}` is kept in place in a **JavaScript** file.
-Every rule was read out of `typescript-go-repo/internal/transformers/tstransforms` and every
-pin's expectation out of `tools/tsgo-7.0.2/lib/tsc` over the same fixture.
-
-**M1 IS THE ROUND'S FINDING, AND IT CAME FROM THE RED ARMS, NOT THE FIX.** tsgo's
-`runtimesyntax.go` keeps a PER-SCOPE first-declaration map (SourceFile / Block / ModuleBlock /
-CaseBlock / function body), recording functions, classes and every variable declarator in
-source order, and hoists `var <name>;` for an enum/namespace only when it IS the first — so
-`var x5 = 1; enum x5 {}` gets no hoist and `namespace z { var t } var z;` keeps it, with no
-special case. Our two sites used file-level name sets that knew only classes and functions
-and were bypassed inside function scopes. **Three things the brief got wrong**: (a) "keep the
-let-vs-var rule unchanged" — tsgo's keyword is a property of the SCOPE (`let` anywhere but the
-SourceFile: a top-level Block or CaseBlock prints `let E;`, a dotted inner namespace inherits
-its OUTER's scope), and ablating that (arm a9) moves **40** baselines the old
-`nested || functionScopeDepth > 0 && !useDottedVar` had matched by coincidence; (b) the map's
-per-scope RESET (arm a2) carries **29** baselines; (c) a CaseClause is the one non-scope parent
-between a scope and a recorded statement, and tsgo's visitor returns early on a subtree with no
-TypeScript syntax BEFORE recording its children — so `case 1: var h; case 2: enum h {}` still
-prints `let h;` (tsgo-verified), which `subtreeContainsTypeScript` now gates per clause.
-The enum/module records itself only when EMITTED, so a non-instantiated namespace suppresses
-nothing in either order.
-
-**THE OTHER SIX, ONE LINE EACH.** M2: `hasDeclareModifier` now answers for an
-`ImportEqualsDeclaration`; the tsc-6 "declare export import still emits" special case is
-DELETED, and the `export {};` marker then lands last through the existing
-`emitEmptyExportIfNeeded` (nothing to add). M3: the entity-name elision survives only inside a
-block WITHIN a namespace body (`namespaceBodyDepth`), a plain block prints `var I = M;`. M4:
-the emitter branch is deleted — **and the object-literal twin was a PARSER gap, not an emitter
-transcription**: `set p(v: number): number {}` in an object literal de-synchronised the whole
-literal, invisible to every gate (0 corpus rows either way, arm a8's only witness is a pin).
-M5: `options.emitBOM` prepended nothing anywhere; `TypeScriptCompiler.withByteOrderMark` now
-does, and `BaselineFormatter`'s round-375 mojibake branch is deleted with the pristine artifact
-it reproduced (`.d.ts` BOM untouched — `stripDtsSection` keeps it out of every comparison).
-M6: `transformModuleDeclaration`'s body-less `global` arm returns nothing. M7: **the first cut
-kept every source-written `export {}` in place and moved 14 green TS baselines** — tsgo's
-import elision keeps any alias declaration in a JS file (`IsInJSFile`) and elides-then-re-adds
-it LAST in a TS file; the rule is JS-only.
-
-**PINS.** 20; 13 of the first 17 reddened on the pre-change binary. One was BLIND — an
-UNREFERENCED alias under a `declare import` inside a namespace body, elided by the unused-alias
-rule on both arms — and was rewritten with a referenced alias and proven red by re-running its
-arm (2 → 3 reds). Two were RENAMED from "negative control" to positive after the red run showed
-they move. One recorded pure control (`M2 negative control`, non-declare aliases) is green under
-every arm and says so in its KDoc.
-
-**ABLATION — 12 arms, all discriminating**, each `cmp`'d against a snapshot, each reporting pin
-reds AND screen mismatches: a1 variables not recorded 5/3; a2 no per-scope reset 1/**29**; a3 M2
-off 3/2; a4 M3 off 2/2; a5 namespace-block elision dropped 1/1; a6 M4 off 1/1; a7 M5 off 2/1;
-a8 objlit setter type parse dropped 1/**0**; a9 old hoist keyword 1/**40**; a10 M6 off 1/1; a11
-M7 off 1/1; a12 M7 emitter count dropped 1/1. Final md5s `Transformer 643a275c…`,
-`Emitter c006900b…`, `Parser 72233d94…`, `TypeScriptCompiler 9cfdd79b…` — the orchestrator's
-AFTER arm matched all four.
-
-**WHAT REMAINS OF JS EMIT: 3 rows**, each a singleton — `asyncArrowInClassES5(target=es2015)`
-(a `_a = Test` capture temp tsgo does not mint), `augmentExportEquals2` (a baseline whose
-expected text is a harness artefact: `//// [file3.ts]` twice and only `file3.js`), and
-`importDeclWithExportModifierAndExportAssignment` (tsgo drops `module.exports = x` beside other
-exports, a TS2309 shape). **Pending 92** decomposes as display/chain-content ~21, F8 span 12,
-F1 silent 8, F2-residue 6, ORDER-model 5, TS2683-residue 3, JS emit 3, the rest singletons.
-
-**GATE LABELLING.** The corpus and its screen were the gates for all seven; the grid,
-`cost_gate.py` and the `--outDir` diff are controls and were counted. The orchestrator's one
-process failure: none this round — one Gradle invocation at a time, the agent's under
-`build/bench/p18-97-agent/`, the orchestrator's under `build/bench/p18-97-orch/`.
 
 ## QUEUE
 
@@ -1353,7 +1334,7 @@ CLAUDE.md § "AI agent mission".
     `isClassicResolution` + 5 consults (49468, 49672, 49687, 49712, 49774), `TypeScriptCompiler.kt:745-762`
     (TS5070 + the `None/AMD/UMD/System → "classic"` derivation), ~40 lines; fold to tsgo's Bundler/Node16 answer.
     Do (e) BEFORE (g): the ten `options.baseUrl == null` guards interact.
-  - [ ] (f) `module: AMD/UMD/System` — `CompilerOptions.kt:51-63` enum + `fromString` (parse to the CommonJS-equivalent
+  - [x] (f) LANDED 2026-09-15 ((P18.107), `3f5aeea85`: the fold is `ModuleKind.foldsToCommonJS`, a PROPERTY the Transformer/Emitter read while the written kind survives for TS5107/5108, TS2725 and TS2441; TS5071 deleted (no tsgo emitter), three kind-only arms deleted, System kept in `allowsTopLevelAwait` as tsgo does; `export as namespace` untouched; tsgo's own System residues (TS1218, kept enum comments, the unbound-helper defect) recorded not copied; (h) inherits the last None/outFile coupling at `TypeScriptCompiler.kt:~2515`) — `module: AMD/UMD/System` — `CompilerOptions.kt:51-63` enum + `fromString` (parse to the CommonJS-equivalent
     behaviour, `emitter.go:98-99`), 14 `Checker.kt` module-kind arms (49304, 49464, 50389, 51357, 52216, 74575,
     80400-80401, 93224, 93268-93269, 93473, 93569, 187545, 188800-188802), `TypeScriptCompiler.kt:513-515, 750, 769,
     933-934`; `RemovedModuleKindsTest` keeps its 5107 pin and gains a 7.0 sibling asserting 5108; `Checker.kt`'s 38

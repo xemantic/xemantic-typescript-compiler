@@ -3753,3 +3753,11 @@ tsgo measurement each; their NAMES named no code, so a source grep could not hav
 discriminating (a2b: the JS `exports.p` gate is load-bearing on 5 green baselines). cost_gate 20/20 +0.00%, grid
 8×0/0 + emit 78/78 (controls, counted), huge_methods exit 0 (871 classes), warning-clean, screen errors 3,084/0,
 emit 5,688/0.
+**(P18.102) — (LEGACY.1) STEPS (a)+(b): THE DEAD System-MODULE HELPERS, −249 LINES, 19,370 / 0 / 83 (2026-09-15).**
+The first removal round of the TS7-only directive, picked over (LEGACY.0)'s 58-singleton tail (said so, successor
+(c)). Two `Transformer.kt` clusters deleted, closed by a repo-wide reference census rather than the compile
+(mutually recursive helpers compile either way); `collectBoundNames` stays with 34 callers. The item's "fold
+System onto CommonJS" is NOT today's behaviour — System/AMD/UMD pass module statements through untransformed —
+so it is step (f)'s routing change, with `TypeScriptCompiler.kt`'s five System arms and a never-`false`
+`wrapCallsWithZero` parameter. Screen emit 5,688/0 (the instrument), errors 3,084/0; cost_gate 20/20 +0.00%;
+huge_methods exit 0 (871 classes); grid 8×0/0 + emit 78/78 (controls, counted); warning-clean.

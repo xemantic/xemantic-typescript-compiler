@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194,993** lines (**−89 at (P18.106)**, five module-resolution derivation copies → one; **−50 at (P18.105)**, the interop arms; unchanged at (P18.104), which lifted the tsconfig option-position scan into `CompilerOptions.kt` for both paths; **+8 at (P18.103)**: code −6, KDoc +14, the `alwaysStrict: false` arms; unchanged at (P18.102), which deleted **249** lines of dead System-module code from `Transformer.kt`, 17,862 → 17,613 — the first (LEGACY.1) removal; **+24 at (P18.101)** — ~150 deleted (TS2346 gate + helpers, a one-fixture TS2300 walker), ~175 for tsgo's TS2309 rule; **+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **194,996** lines (+3 at (P18.107), the amd/umd/system fold — deleted behaviour, added KDoc; **−89 at (P18.106)**, five module-resolution derivation copies → one; **−50 at (P18.105)**, the interop arms; unchanged at (P18.104), which lifted the tsconfig option-position scan into `CompilerOptions.kt` for both paths; **+8 at (P18.103)**: code −6, KDoc +14, the `alwaysStrict: false` arms; unchanged at (P18.102), which deleted **249** lines of dead System-module code from `Transformer.kt`, 17,862 → 17,613 — the first (LEGACY.1) removal; **+24 at (P18.101)** — ~150 deleted (TS2346 gate + helpers, a one-fixture TS2300 walker), ~175 for tsgo's TS2309 rule; **+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,16 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.107) — (LEGACY.1) STEP (f): amd/umd/system FOLD ONTO CommonJS AS A *PROPERTY* OF THE KIND, THREE OF NINE ARMS WERE DELETABLE, 19,487 / 0 / 83 (2026-09-15).**
+240 cells on tsgo (emit via `--outDir`, rows via the LSP): the removed kinds emit byte-identically to commonjs in
+17 of 20 programs (three tsgo residues in a removed configuration, recorded not copied) and check identically
+except System's three live arms (TS1218, top-level await, `import.meta`), which stay. `ModuleKind.foldsToCommonJS`
+replaces the untransformed pass-through; TS5071 (no tsgo emitter), the TS2882 exemption, the System TS2305
+suppression, the tslib exemptions and the never-`false` `wrapCallsWithZero` parameter are deleted; `export as
+namespace` untouched (`-externals` 290/0). **The corpus is a counted control here** — no active subtest runs under
+a removed kind — so the 23 pins are the whole gate; nine arms all discriminating. cost_gate 20/20 +0.00%;
+huge_methods exit 0 (874 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. Seven pre-existing
+commonjs-cell gaps found for the ledger.
 **(P18.106) — (LEGACY.1) STEP (e): NO "classic" RESOLUTION EXISTS IN TypeScript 7 — ONE DERIVATION REPLACES FIVE, AND A REMOVED VALUE HAD LIVE CORPUS COVERAGE, 19,465 / 0 / 83 (2026-09-15).**
 42 cells measured on tsgo: classic/node/node10 equal the unset cell bar the TS5108 row, unset derives
 Node16/NodeNext/Bundler from the module kind; TS5070 and TS2792 have no emitter in tsgo. Five string-typed
@@ -56,11 +66,3 @@ value-anchored under 7.0). Found for later: `strict: false` alone is still stric
 ours lacks — (LEGACY.0b)), and the PROJECT path anchors no deprecation row (family-wide, (d)). 14 pins, five
 disjoint arms; screens 3,084/0 + 5,688/0 and grid 8×0/0 + emit 78/78 all counted controls; cost_gate 20/20
 +0.00%; huge_methods exit 0 (871 classes); warning-clean.
-**(P18.102) — (LEGACY.1) STEPS (a)+(b): THE DEAD System-MODULE HELPERS, −249 LINES, 19,370 / 0 / 83 (2026-09-15).**
-The first removal round of the TS7-only directive, picked over (LEGACY.0)'s 58-singleton tail (said so, successor
-(c)). Two `Transformer.kt` clusters deleted, closed by a repo-wide reference census rather than the compile
-(mutually recursive helpers compile either way); `collectBoundNames` stays with 34 callers. The item's "fold
-System onto CommonJS" is NOT today's behaviour — System/AMD/UMD pass module statements through untransformed —
-so it is step (f)'s routing change, with `TypeScriptCompiler.kt`'s five System arms and a never-`false`
-`wrapCallsWithZero` parameter. Screen emit 5,688/0 (the instrument), errors 3,084/0; cost_gate 20/20 +0.00%;
-huge_methods exit 0 (871 classes); grid 8×0/0 + emit 78/78 (controls, counted); warning-clean.

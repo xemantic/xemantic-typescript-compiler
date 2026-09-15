@@ -1,3 +1,84 @@
+### Round (P18.97) — (LEGACY.0b) step 12: the JS-emit residue, seven mechanisms, 11 rows, and the hoist keyword is a SCOPE property (2026-09-14)
+
+**Three commits** (`5f3e40a67` feat, `caf095c10` test, this docs commit). **Suite 19,240 → 19,260 / 0 / 117**,
+9 modules asserted — `tsgoPendingBaselines` 103 → **92**, skipped −11, +20 pins
+(`TsgoJsEmitResidueTest`). Screen **emit 5,688 / 0 and errors 3,050 / 0** on the final binary,
+every closed row `--include`d and 0. `cost_gate.py` exit 0, all 20 counters +0.00% (a CONTROL —
+`--noEmit` never runs the transformer); `huge_methods.py --fail-over 0` exit 0 (869 classes);
+grid 8×`added=0 removed=0` and the emit-mode `--outDir` + `diff -r` control 78/78 identical
+(both COUNTED, both controls: tsc's own sources carry none of the seven shapes); warning-clean
+(no `-q`, positive control 1 `w:`). **(LEGACY.0) stays OPEN** on (0b-13).
+
+**THE ROUND WAS BRIEFED AS FIVE MECHANISMS / 9 ROWS AND LANDED SEVEN / 11.** The brief's own
+read-only sizing of the 14 pending JS-emit rows put five in one round: *M1* JE-A (3 rows),
+*M2* `declare import` (2), *M3* `import I = M` in a top-level block (2), *M4* the printed
+setter return type (1), *M5* `emitBOM` (1); the agent sized the two singletons it was told to
+report on and landed both on a measured zero: *M6* the body-less `global` recovery inside a
+class emits nothing, *M7* a source-written `export {}` is kept in place in a **JavaScript** file.
+Every rule was read out of `typescript-go-repo/internal/transformers/tstransforms` and every
+pin's expectation out of `tools/tsgo-7.0.2/lib/tsc` over the same fixture.
+
+**M1 IS THE ROUND'S FINDING, AND IT CAME FROM THE RED ARMS, NOT THE FIX.** tsgo's
+`runtimesyntax.go` keeps a PER-SCOPE first-declaration map (SourceFile / Block / ModuleBlock /
+CaseBlock / function body), recording functions, classes and every variable declarator in
+source order, and hoists `var <name>;` for an enum/namespace only when it IS the first — so
+`var x5 = 1; enum x5 {}` gets no hoist and `namespace z { var t } var z;` keeps it, with no
+special case. Our two sites used file-level name sets that knew only classes and functions
+and were bypassed inside function scopes. **Three things the brief got wrong**: (a) "keep the
+let-vs-var rule unchanged" — tsgo's keyword is a property of the SCOPE (`let` anywhere but the
+SourceFile: a top-level Block or CaseBlock prints `let E;`, a dotted inner namespace inherits
+its OUTER's scope), and ablating that (arm a9) moves **40** baselines the old
+`nested || functionScopeDepth > 0 && !useDottedVar` had matched by coincidence; (b) the map's
+per-scope RESET (arm a2) carries **29** baselines; (c) a CaseClause is the one non-scope parent
+between a scope and a recorded statement, and tsgo's visitor returns early on a subtree with no
+TypeScript syntax BEFORE recording its children — so `case 1: var h; case 2: enum h {}` still
+prints `let h;` (tsgo-verified), which `subtreeContainsTypeScript` now gates per clause.
+The enum/module records itself only when EMITTED, so a non-instantiated namespace suppresses
+nothing in either order.
+
+**THE OTHER SIX, ONE LINE EACH.** M2: `hasDeclareModifier` now answers for an
+`ImportEqualsDeclaration`; the tsc-6 "declare export import still emits" special case is
+DELETED, and the `export {};` marker then lands last through the existing
+`emitEmptyExportIfNeeded` (nothing to add). M3: the entity-name elision survives only inside a
+block WITHIN a namespace body (`namespaceBodyDepth`), a plain block prints `var I = M;`. M4:
+the emitter branch is deleted — **and the object-literal twin was a PARSER gap, not an emitter
+transcription**: `set p(v: number): number {}` in an object literal de-synchronised the whole
+literal, invisible to every gate (0 corpus rows either way, arm a8's only witness is a pin).
+M5: `options.emitBOM` prepended nothing anywhere; `TypeScriptCompiler.withByteOrderMark` now
+does, and `BaselineFormatter`'s round-375 mojibake branch is deleted with the pristine artifact
+it reproduced (`.d.ts` BOM untouched — `stripDtsSection` keeps it out of every comparison).
+M6: `transformModuleDeclaration`'s body-less `global` arm returns nothing. M7: **the first cut
+kept every source-written `export {}` in place and moved 14 green TS baselines** — tsgo's
+import elision keeps any alias declaration in a JS file (`IsInJSFile`) and elides-then-re-adds
+it LAST in a TS file; the rule is JS-only.
+
+**PINS.** 20; 13 of the first 17 reddened on the pre-change binary. One was BLIND — an
+UNREFERENCED alias under a `declare import` inside a namespace body, elided by the unused-alias
+rule on both arms — and was rewritten with a referenced alias and proven red by re-running its
+arm (2 → 3 reds). Two were RENAMED from "negative control" to positive after the red run showed
+they move. One recorded pure control (`M2 negative control`, non-declare aliases) is green under
+every arm and says so in its KDoc.
+
+**ABLATION — 12 arms, all discriminating**, each `cmp`'d against a snapshot, each reporting pin
+reds AND screen mismatches: a1 variables not recorded 5/3; a2 no per-scope reset 1/**29**; a3 M2
+off 3/2; a4 M3 off 2/2; a5 namespace-block elision dropped 1/1; a6 M4 off 1/1; a7 M5 off 2/1;
+a8 objlit setter type parse dropped 1/**0**; a9 old hoist keyword 1/**40**; a10 M6 off 1/1; a11
+M7 off 1/1; a12 M7 emitter count dropped 1/1. Final md5s `Transformer 643a275c…`,
+`Emitter c006900b…`, `Parser 72233d94…`, `TypeScriptCompiler 9cfdd79b…` — the orchestrator's
+AFTER arm matched all four.
+
+**WHAT REMAINS OF JS EMIT: 3 rows**, each a singleton — `asyncArrowInClassES5(target=es2015)`
+(a `_a = Test` capture temp tsgo does not mint), `augmentExportEquals2` (a baseline whose
+expected text is a harness artefact: `//// [file3.ts]` twice and only `file3.js`), and
+`importDeclWithExportModifierAndExportAssignment` (tsgo drops `module.exports = x` beside other
+exports, a TS2309 shape). **Pending 92** decomposes as display/chain-content ~21, F8 span 12,
+F1 silent 8, F2-residue 6, ORDER-model 5, TS2683-residue 3, JS emit 3, the rest singletons.
+
+**GATE LABELLING.** The corpus and its screen were the gates for all seven; the grid,
+`cost_gate.py` and the `--outDir` diff are controls and were counted. The orchestrator's one
+process failure: none this round — one Gradle invocation at a time, the agent's under
+`build/bench/p18-97-agent/`, the orchestrator's under `build/bench/p18-97-orch/`.
+
 ### Round (P18.96) — the CommonJS export-pattern assignment (7) and F10's construct-signature chain (4), and the F-letters are not families (2026-09-14)
 
 **Five commits** (`24467868c`, `034625221`, `6ff2c195d`, `b568cc749`, `e828fbfb8`).

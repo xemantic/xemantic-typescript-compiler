@@ -98,6 +98,8 @@ Function ranges: TS1250 family `80735-80875` (141 lines); TS18028 family `80496-
 
 ### 2b. `module: AMD/UMD/System`
 
+**DONE 2026-09-15 ((P18.107), `3f5aeea85`, after (a)+(b) at (P18.102)) — the fold is a property (`ModuleKind.foldsToCommonJS`), not a parse: tsgo keeps the written kind through the checker and folds only at the module transformer. Of the nine surviving Checker sites, three were deletable (the TS2882 exemption, the System TS2305 suppression, the tslib exemptions); TS2725, TS2441 and the top-level-await list are LIVE tsgo arms on the written kind and stay. TS5071 deleted. The enum members and the TS5107/TS5108 rows stay.**
+
 The transforms and `outFile` bundling were deleted 2026-07-02 (`RemovedModuleKindsTest.kt`).
 Residue — **the two `Transformer.kt` clusters below were DELETED 2026-09-15 ((P18.102), commit `ba18310a5`, −249 lines, closed by a repo-wide reference census); the `Checker.kt`/`TypeScriptCompiler.kt` arms remain step (f)**: `Transformer.kt:5964-6070` `buildSystemDynamicImport`/`rewriteSystemDynExpr`/
 `rewriteSystemDynStmt` (107 lines, DEAD — every occurrence of both names lies inside the
