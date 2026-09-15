@@ -6185,7 +6185,6 @@ class Checker(
     private var spineForOfNonIterableActive: Boolean = false
     private var spineIterableOperandActive: Boolean = false
     private var spineAbstractAccessorActive: Boolean = false
-    private var spineWithStrictActive: Boolean = false
     // INV.4(b) batch 2 per-file spine state (cleared per file in checkSpine):
     // statement-level object-literal locals (first-wins — TS1320 operand
     // resolution) and their bad-iterator subset (last-BAD-wins — TS2488/TS2504),
@@ -6398,8 +6397,10 @@ class Checker(
      */
     private val spineTavCandidates = HashSet<String>()
 
-    /** True for a file that is EXPLICITLY non-strict (strict/alwaysStrict false,
-     *  no module/"use strict") — the let/const-implies-strict TS1212 shortcut must
+    /** True for a file that is EXPLICITLY non-strict (`strict: false` with
+     *  `alwaysStrict` not true, no module/"use strict"; an explicit
+     *  `alwaysStrict: false` no longer counts — (LEGACY.1)(c)) — the
+     *  let/const-implies-strict TS1212 shortcut must
      *  not fire there (tsc only has TS2480 for `let let` in non-strict code;
      *  commonMissingSemicolons). Assigned per file in checkSpine. */
     private var strictReservedExplicitNonStrict = false
@@ -25608,9 +25609,10 @@ class Checker(
         // (M0.4) round 652: the TS7057 implicit-any-yield anchors carry the
         // legacy pass's dispatch gate as a run-level flag.
         spineIyRunActive = options.noImplicitAny || options.strict
-        // TS1101 fires unless alwaysStrict is EXPLICITLY false (the old
-        // checkWithStatements gate).
-        spineWithStrictActive = options.alwaysStrict != false
+        // TS1101 (`with`) has no run gate: `alwaysStrict: false` is a REMOVED value in
+        // TypeScript 7 ((LEGACY.1)(c)) — tsgo's binder has no `inStrictMode` at all and
+        // `checkStrictModeWithStatement` fires for every `with` statement whatever the
+        // strict-family options say (measured on tsgo 7.0.2, 2026-09-15).
         // INV.4(c)(iii): the unresolved-names file roots are built at THIS slot
         // (shared with the legacy walk) — the type-lib strip they consult is
         // computed here instead of at its later pass (pure split; the TS2688
@@ -25742,13 +25744,18 @@ class Checker(
                 // Batch 14 per-file strict-mode flags (the deleted
                 // checkStrictModeReservedWords preamble, verbatim): binding
                 // strictness uses effectiveTarget, EXPRESSION strictness the
-                // RAW target; an explicitly non-strict file (strict/
-                // alwaysStrict false, no module/"use strict") suppresses the
-                // target-derived paths AND the let/const-implies-strict
-                // TS1212 shortcut (strictReservedExplicitNonStrict).
+                // RAW target; an explicitly non-strict file (`strict: false`
+                // with `alwaysStrict` not true, no module/"use strict")
+                // suppresses the target-derived paths AND the
+                // let/const-implies-strict TS1212 shortcut
+                // (strictReservedExplicitNonStrict). (LEGACY.1)(c): an explicit
+                // `alwaysStrict: false` no longer counts — TypeScript 7 removed
+                // the value and tsgo ignores it; the `strict: false` disjunct is
+                // a separate, still-open tsc-6 residue (tsgo binds every file
+                // strict), gated by the corpus's `@strict: false` baselines.
                 val hasUseStrict = stmtsHaveUseStrictPrologue(sf.statements)
-                val explicitNonStrict = options.alwaysStrict == false ||
-                    (options.alwaysStrict != true && options.strictExplicitlyFalse)
+                val explicitNonStrict =
+                    options.alwaysStrict != true && options.strictExplicitlyFalse
                 strictReservedExplicitNonStrict =
                     explicitNonStrict && !spineFileIsModule && !hasUseStrict
                 spineStrictFileIsStrict = if (explicitNonStrict) {
@@ -29591,14 +29598,15 @@ class Checker(
     }
 
     /**
-     * TS1344: a label on a declaration statement (strict mode only) — the
-     * LabeledStatement leg of the deleted `checkJumpTargets` family. Position
-     * independent in tsc, so the spine's full coverage (arrow bodies in
-     * conditions, class-expression members, …) is a faithful widening.
+     * TS1344: a label on a declaration statement — the LabeledStatement leg of
+     * the deleted `checkJumpTargets` family. Position independent in tsc, so the
+     * spine's full coverage (arrow bodies in conditions, class-expression
+     * members, …) is a faithful widening. Unconditional since (LEGACY.1)(c):
+     * tsgo's `checkStrictModeLabeledStatement` has no strict-mode gate and
+     * `alwaysStrict: false` is a removed value in TypeScript 7.
      */
     private fun spineCheckLabelOnDeclaration(node: LabeledStatement) {
         if (spineIsDts) return
-        if (options.alwaysStrict == false) return
         if (!isDeclarationStatement(node.statement)) return
         val labelStart = node.label.pos
         val (line, character) = getLineAndCharacterOfPosition(spineSource, labelStart)
@@ -31041,9 +31049,10 @@ class Checker(
      * function declaration / function expression / method — ARROWS reset to
      * false (the old walker's rule; tsc's AwaitContext would fire for async
      * arrows — a signal-driven widening candidate), as do constructors,
-     * accessors, static blocks, and namespace bodies. TS1101 is gated on
-     * [spineWithStrictActive] (alwaysStrict not explicitly false); TS2410's
-     * balanced-paren span scan is preserved exactly.
+     * accessors, static blocks, and namespace bodies. TS1101 is unconditional
+     * ((LEGACY.1)(c): `alwaysStrict: false` is removed in TypeScript 7 and tsgo
+     * binds every file strict); TS2410's balanced-paren span scan is preserved
+     * exactly.
      */
     /**
      * (M3.0, round 833) The general `satisfies` check: TS1360 plus the fresh
@@ -31214,19 +31223,18 @@ class Checker(
         var spanStart = node.pos
         while (spanStart < source.length && source[spanStart].isWhitespace()) spanStart++
         val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
-        if (spineWithStrictActive) {
-            // TS1101: span = just the 'with' keyword (4 chars)
-            diagnostics.add(Diagnostic(
-                message = "'with' statements are not allowed in strict mode.",
-                category = DiagnosticCategory.Error,
-                code = 1101,
-                fileName = spineFileName,
-                line = line,
-                character = character,
-                start = spanStart,
-                length = 4,
-            ))
-        }
+        // TS1101: span = just the 'with' keyword (4 chars). Unconditional — every
+        // file is strict to tsgo's binder ((LEGACY.1)(c)).
+        diagnostics.add(Diagnostic(
+            message = "'with' statements are not allowed in strict mode.",
+            category = DiagnosticCategory.Error,
+            code = 1101,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = spanStart,
+            length = 4,
+        ))
         // Only the outermost 'with' in a chain draws TS1300 and TS2410.
         if (isInWith) return
         if (isInAsync) {

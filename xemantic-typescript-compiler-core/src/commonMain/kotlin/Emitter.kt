@@ -230,9 +230,11 @@ class Emitter(
     private fun emitUseStrict(sourceFile: SourceFile) {
         // module: preserve skips "use strict" for module files (ESM) but adds it for scripts
         if (options.effectiveModule == ModuleKind.Preserve && hasModuleStatements(sourceFile)) return
-        // When alwaysStrict is explicitly false, don't emit "use strict".
-        // Note: `strict: false` does NOT suppress it — only explicit `alwaysStrict: false` does.
-        if (options.alwaysStrict == false) return
+        // (LEGACY.1)(c) `alwaysStrict: false` is a REMOVED value in TypeScript 7: tsgo's
+        // `estransforms/usestrict.go` never reads the flag, so the prologue is unconditional
+        // for every non-ESM-format file (measured 2026-09-15 — `"use strict"` emitted under
+        // `alwaysStrict: false`, with and without `strict: false`). `strict: false` never
+        // suppressed it either.
 
         // Check if the file is an ES module format — ESM files are inherently strict,
         // no explicit "use strict" needed. But for .mts/.mjs under CommonJS module setting,

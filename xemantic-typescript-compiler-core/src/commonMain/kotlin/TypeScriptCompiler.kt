@@ -539,6 +539,12 @@ class TypeScriptCompiler {
             addDeprecation("allowSyntheticDefaultImports=false", tsconfigKey = "allowsyntheticdefaultimports")
         if (options.esModuleInteropExplicitlyFalse)
             addDeprecation("esModuleInterop=false", tsconfigKey = "esmoduleinterop")
+        // (LEGACY.1)(c) `alwaysStrict=false` — tsc 6.0.3 deprecates it in the same 6.0→7.0
+        // ladder as the two above (`checkDeprecations("6.0", "7.0", …)`), tsgo 7.0.2 reports
+        // TS5108 at the VALUE (`program.go:858`) and then IGNORES the option (it has no
+        // behavioural reader). This compiler used to HONOUR the false and report nothing.
+        if (options.alwaysStrict == false)
+            addDeprecation("alwaysStrict=false", tsconfigKey = "alwaysstrict")
     }
 
     /**
