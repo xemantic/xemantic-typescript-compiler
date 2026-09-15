@@ -25,6 +25,61 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.106) — (LEGACY.1) step (e): there is no "classic" resolution in TypeScript 7 — one derivation replaces five copies, and a removed value turned out to have live corpus coverage (2026-09-15)
+
+**Three commits** (`963a03381` refactor, `d1b475798` test, this docs commit). **Suite 19,427 → 19,465 / 0 / 83** (+38
+pins: 12 in `-project`, 26 in core), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — and
+this time the errors screen is a REAL gate: **17 active baselines carry `node10`/`node` in an EMBEDDED tsconfig**
+(`moduleResolutionWithSuffixes_*`, `moduleResolutionWithExtensions_withPaths`), which `usesUnsupportedOption` never
+sees, and arms a1/a11 move exactly those 17; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0`
+exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls (every profile is NodeNext under both
+rules); warning-clean over four compile tasks. `Checker.kt` 195,082 → **194,993** (−89); three files 222 +/257 −.
+**(LEGACY.1)(e) is CHECKED OFF; (f) `module: AMD/UMD/System` is next; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE MEASUREMENT.** 42 cells (`moduleResolution` × `module`) over seven specifier shapes whose candidates export
+distinguishable literal types, tsgo read through `--traceResolution` and the LSP: the `classic` / `node` / `node10`
+cells are byte-identical to the `unset` cell of the same `module` on every resolved file and every checker row bar
+the TS5108 row (`node` is an enum alias of `node10`, `enummaps.go:150`, and reports as `node10`; `classic` reports
+as `Classic`). tsgo's `GetModuleResolutionKind` (`compileroptions.go:223`) derives Node16 / NodeNext / **Bundler**
+from the emit module kind for unset AND for every removed value. **TS5070 and TS2792 have no emitter anywhere in
+tsgo** (message tables only), TS5095 fires for the DERIVED bundler under `amd`/`system`, TS5109 exists
+(`bundler`×`nodenext`), and TS5110's `node18`/`node20` resolution VALUES were an invention of ours.
+
+**WHAT LANDED.** `CompilerOptions.effectiveModuleResolution` (a new enum `Node16 | NodeNext | Bundler`) replaces
+FIVE string-typed tsc-6 derivation copies in `Checker.kt` and the one in `TypeScriptCompiler.kt`. Deleted: the
+classic TS2792/TS2307 arm, `!isClassicResolution` on four arms, TS5070, the "classic root tslib" rule and
+`checkMissingTslibHelpers`' classic branch, the import-type walker's classic exclusion; r107 and r168 merged into
+ONE Bundler arm; the 17.214 ES-kind strict probe (a pre-existing false TS2307 on `./dir` the derivation was
+carrying into four more cells) replaced by `resolveRelativeIncludingIndex`; and **two `isNodeNext || bundler` gates
+that were importer-FORMAT questions** (B235's default import, `checkDynamicImportNamespaceMembers`) now read
+`isESModuleFormat` — measured, the resolution never decided them and they were wrong in both directions.
+TS5095/TS5109/TS5110 are keyed on the derived kind and value-anchored ((P18.104)'s scanner). **Kept, re-labelled
+for (g)**: the emit-order ancestor walk at `TypeScriptCompiler.kt:~3357` — deleting it moved two green EMIT
+baselines (`pathMappingBasedModuleResolution4_node`/`7_node`); it is the relative-`baseUrl` edge fallback of the
+emit ORDER, and tsgo's `--listFiles` order for those fixtures differs from ours anyway, so (g) moves both whatever
+it does.
+
+**WHERE THE ITEM WAS WRONG.** `ModuleResolver.kt` has no `moduleResolution` read at all — the project path never
+resolved differently across the seven values (42/42 probe rows unchanged before and after); the whole family was
+the checker's string copies plus the option rows. The derivation was five functions, not one to "unify"; TS5109
+did not exist; and of the ten `baseUrl == null` guards (e) deleted NONE — but the three re-keyed arms (17.214,
+B98, B227) and the merged Bundler arm now sit under a `Bundler` test that tsgo's `baseUrl`-less world makes
+unconditional, so under (g) four of those conjuncts simplify to `true` first.
+
+**PINS AND ABLATION.** 38 pins, every expectation tsgo's; stash-ablation project 12/12 red, core 19/23 with the four
+greens the named controls (two pins named as controls discriminated and were renamed). Twelve arms, each
+discriminating (core / project reds; errors screen): a1 removed values derive Node16 3/4/**17**; a2 TS2792 back
+2/0/0; a3 TS5070 back 1/4/0; a4 `classic` spelling 2/2/0; a5 TS5095 on the raw value 1/2/0; a6 TS5109 deleted
+1/1/0; a7 classic root-tslib back 1/0/0; a8 import-type exclusion back 1/0/0; a9 importer gates → resolution
+4/0/0; a10 Bundler arms on the raw value 4/0/0; a11 `node` spelled `node` 1/1/**17**; a12 ES-kind strict probe
+back 1/1/0. Final md5s Checker `c4d2f171`, TypeScriptCompiler `590a8c01`, CompilerOptions `69187447`,
+CompilerOptionsKt `79ec25fb` — the orchestrator's AFTER arm matched all four.
+
+**WHAT (f) INHERITS.** TS5071 (`TypeScriptCompiler.kt:~792`) has no tsgo emitter and now SURFACES on every
+`*×system` cell where TS5070 used to mask it — five of the eleven cells still differing from tsgo are that one
+row; and tsgo's `GetResolveJsonModule` derives from the module kind (effectively default-on under Bundler), not
+modelled. The other six differing cells are (P18.105)'s TS2834-for-TS2835 ESM-importer divergence.
+
 ### Round (P18.105) — (LEGACY.1) step (d2): TypeScript 7 reads neither interop flag, the synthetic default is a property of the TARGET, and (d) is closed (2026-09-15)
 
 **Three commits** (`5bbbffe8e` refactor, `4b9d3931f` test, this docs commit). **Suite 19,402 → 19,427 / 0 / 83** (+25
@@ -587,76 +642,6 @@ F1 silent 8, F2-residue 6, ORDER-model 5, TS2683-residue 3, JS emit 3, the rest 
 `cost_gate.py` and the `--outDir` diff are controls and were counted. The orchestrator's one
 process failure: none this round — one Gradle invocation at a time, the agent's under
 `build/bench/p18-97-agent/`, the orchestrator's under `build/bench/p18-97-orch/`.
-
-### Round (P18.96) — the CommonJS export-pattern assignment (7) and F10's construct-signature chain (4), and the F-letters are not families (2026-09-14)
-
-**Five commits** (`24467868c`, `034625221`, `6ff2c195d`, `b568cc749`, `e828fbfb8`).
-**Suite 19,214 → 19,240 / 0 / 128**, 9 modules asserted — `tsgoPendingBaselines` 114 → **103**,
-skipped −11. Screen **8,727 / 0 over both channels**; `cost_gate.py` exit 0, all 20 counters
-+0.00%; `huge_methods.py --fail-over 0` exit 0 (867 classes); warning-clean (7,300-byte log,
-`w=0 e=0`, no `-q`, positive control 1 `w:` line). **(LEGACY.0) stays OPEN** on (0b-12).
-
-**THE PRIMARY MECHANISM, AND IT IS SEVEN ROWS NOT SIX.** tsgo's
-`CommonJSModuleTransformer.transformInitializedVariable` converts an exported binding pattern
-into an equivalent destructuring ASSIGNMENT with every leaf substituted to `exports.<name>`, and
-**its own comment gives the reason: that preserves native destructuring and therefore the ITERATOR
-SEMANTICS of an array pattern.** TypeScript 6 flattened with `FlattenLevel.All`. The refusal set
-is tsgo's `destructuringNeedsFlattening` — a re-aliased or multi-exported leaf.
-`declarationEmitRetainsJsdocyComments` was filed as a singleton and is the SAME mechanism, needing
-one printer half besides: a property's own-line leading comment must break the line inside a
-SINGLE-LINE object literal, which `Emitter.emitObjectLiteral` dropped outright. (P18.95)'s
-refutation of the target-gating hypothesis held.
-
-**THE SECONDARY LANDED TOO, AND THE CHAIN LOSES *TWO* LINKS, NOT ONE.** tsgo's
-`Relater.signaturesRelatedTo` has **ZERO call sites** for
-`Types_of_construct_signatures_are_incompatible` — the message survives in its table with no
-references — and its single-signature arm hands straight to `signatureRelatedTo`. A self-contained
-builder (`getConstructMismatchElaboration`); the change is deleting two lines and dedenting by 4.
-
-**BLAST RADIUS MEASURED AT ZERO FOR BOTH**, on the CHANGED binary over the UNCHANGED active
-population: 8,716/0 for the emit rule and 8,723/0 for F10.
-
-**ABLATION — 12 arms, all discriminating**, each with a distinct `Transformer`/`Checker`/`Emitter`
-class md5 and each reporting pin reds AND screen mismatches: a1 rule off 13/**7**; a2
-`propertyName` ignored 3/1; a3 the pattern's trailing comma carried 1/1; a4 the
-object-rest-below-ES2018 refusal dropped **0/0**; a4c (a4's control) refuse rest at every target
-1/1; a5 re-alias refusal dropped 3/0; a6 all-patterns gate dropped 3/**41**; a7 printer comment
-branch removed 1/1; a8 `directExportedVarNames` not populated 1/0; b1 F10 shortening off 5/4; b2
-parameter links keep the TS6 indent 2/1; b3 return link keeps it **0 → 1**/0.
-
-**a4's DOUBLE ZERO IS ATTRIBUTED AND IS THE ROUND'S REUSABLE FINDING**: below ES2018 the
-object-rest downlevel has ALREADY rewritten the declaration into
-`_a = init, { x } = _a, rest = __rest(_a, …)` before the CommonJS transform sees it, so no
-declarator reaching the conversion still carries a rest — the ALL-PATTERNS gate refuses it there,
-and dropping THAT moves 41 baselines. Control a4c proves the expression is reached. Recorded in
-code and KDoc as a MEASURED redundant guard (its own commit). **b3 was a BLIND pin and was
-repaired** (the fifth commit): the return-type link is reachable and byte-identical to tsgo, and
-no corpus baseline exercises it.
-
-**TWO STRUCTURAL PINS WERE REPAIRED RATHER THAN DELETED.** `TransformToCommonJsSplitTest` used
-`export const {} = { q: 1 }` purely as a VEHICLE for asserting `var _a;` — the very shape this
-round removes. Both keep their subject: the side-effect temp path is still live and is now
-reached through a REFUSAL, which doubles as the negative control.
-
-**THE DECOMPOSITION OF THE REMAINING 103 IS WORTH AS MUCH AS THE ROWS, AND IT RETIRES THE
-F-LETTERS.** **F6 "top code differs" is 38 rows and is NOT a family — it is ~32 distinct code
-pairs, largest cluster 2**; reading the ledger's F-letters as families overstates every remaining
-estimate. The letters also HIDE cross-family clusters: TS2880 is 3 rows split between F8 and F1,
-and TS1003 is 3 in F1 plus 1 in F6 — all four JSDoc/JS shapes. **JS-emit residue (14) decomposes
-into 3 groups + 8 singletons**: *JE-A* the namespace/enum IIFE's redundant `var <name>;` hoist
-when the name already has a value declaration (3 rows, ONE mechanism); *JE-B* an EMPTY namespace
-emits nothing at all (1); *JE-C* a `declare`d import/var elides (2); plus
-`moduleElementsInWrongContext{,2}` (2). **`emitBOM` is a SCANNER bug** — we emit TS1127 on a BOM.
-
-**WRONG PREDICTIONS**: the brief said 6 rows and it is 7; the printer change was expected to have
-some radius and is structurally ZERO (its branch is reachable only through a SYNTHESIZED
-single-line object literal, since a source literal spanning lines parses `multiLine`); and the
-object-rest target refusal was expected to be load-bearing and measured redundant.
-
-**GATE LABELLING**: the grid is a CONTROL and was counted (**0 TS2322 rows and 0 construct-chain
-lines** across all 413 rows, and 0 files with an exported destructuring); the emit-mode `--outDir`
-+ `diff -r` is a CONTROL and was counted (78/78 files, 0 differing); `cost_gate.py` is a CONTROL
-for the emit half and a GATE for F10. The corpus and its screen were the gates.
 
 ## QUEUE
 
@@ -1364,7 +1349,7 @@ CLAUDE.md § "AI agent mission".
     the `…ExplicitlyFalse` fields; **a BEHAVIOUR change at the default**: `allowSyntheticDefaultImports` defaults
     `false` today (`CompilerOptions.kt:199`) and must become interop-derived as tsgo's — land the flip and the arm
     deletion as one commit, measured on a 7.0 fixture.
-  - [ ] (e) `moduleResolution: classic/node10` — `ModuleResolver.kt` has NO such arm; the family is `Checker.kt:49308`
+  - [x] (e) LANDED 2026-09-15 ((P18.106), `963a03381`: `CompilerOptions.effectiveModuleResolution` is tsgo's derivation and replaces five Checker copies; TS5070/TS2792 deleted (no tsgo emitter), TS5109 added; (f) inherits TS5071 — no tsgo emitter, now visible on `*×system` — and `resolveJsonModule`'s module-kind derivation; (g) inherits the emit-order ancestor walk at `TypeScriptCompiler.kt:~3357`, which two green emit baselines pin, and four `baseUrl == null` conjuncts that simplify to `true` first) — `moduleResolution: classic/node10` — `ModuleResolver.kt` has NO such arm; the family is `Checker.kt:49308`
     `isClassicResolution` + 5 consults (49468, 49672, 49687, 49712, 49774), `TypeScriptCompiler.kt:745-762`
     (TS5070 + the `None/AMD/UMD/System → "classic"` derivation), ~40 lines; fold to tsgo's Bundler/Node16 answer.
     Do (e) BEFORE (g): the ten `options.baseUrl == null` guards interact.

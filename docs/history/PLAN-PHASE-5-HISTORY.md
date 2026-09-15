@@ -1,3 +1,73 @@
+### Round (P18.96) — the CommonJS export-pattern assignment (7) and F10's construct-signature chain (4), and the F-letters are not families (2026-09-14)
+
+**Five commits** (`24467868c`, `034625221`, `6ff2c195d`, `b568cc749`, `e828fbfb8`).
+**Suite 19,214 → 19,240 / 0 / 128**, 9 modules asserted — `tsgoPendingBaselines` 114 → **103**,
+skipped −11. Screen **8,727 / 0 over both channels**; `cost_gate.py` exit 0, all 20 counters
++0.00%; `huge_methods.py --fail-over 0` exit 0 (867 classes); warning-clean (7,300-byte log,
+`w=0 e=0`, no `-q`, positive control 1 `w:` line). **(LEGACY.0) stays OPEN** on (0b-12).
+
+**THE PRIMARY MECHANISM, AND IT IS SEVEN ROWS NOT SIX.** tsgo's
+`CommonJSModuleTransformer.transformInitializedVariable` converts an exported binding pattern
+into an equivalent destructuring ASSIGNMENT with every leaf substituted to `exports.<name>`, and
+**its own comment gives the reason: that preserves native destructuring and therefore the ITERATOR
+SEMANTICS of an array pattern.** TypeScript 6 flattened with `FlattenLevel.All`. The refusal set
+is tsgo's `destructuringNeedsFlattening` — a re-aliased or multi-exported leaf.
+`declarationEmitRetainsJsdocyComments` was filed as a singleton and is the SAME mechanism, needing
+one printer half besides: a property's own-line leading comment must break the line inside a
+SINGLE-LINE object literal, which `Emitter.emitObjectLiteral` dropped outright. (P18.95)'s
+refutation of the target-gating hypothesis held.
+
+**THE SECONDARY LANDED TOO, AND THE CHAIN LOSES *TWO* LINKS, NOT ONE.** tsgo's
+`Relater.signaturesRelatedTo` has **ZERO call sites** for
+`Types_of_construct_signatures_are_incompatible` — the message survives in its table with no
+references — and its single-signature arm hands straight to `signatureRelatedTo`. A self-contained
+builder (`getConstructMismatchElaboration`); the change is deleting two lines and dedenting by 4.
+
+**BLAST RADIUS MEASURED AT ZERO FOR BOTH**, on the CHANGED binary over the UNCHANGED active
+population: 8,716/0 for the emit rule and 8,723/0 for F10.
+
+**ABLATION — 12 arms, all discriminating**, each with a distinct `Transformer`/`Checker`/`Emitter`
+class md5 and each reporting pin reds AND screen mismatches: a1 rule off 13/**7**; a2
+`propertyName` ignored 3/1; a3 the pattern's trailing comma carried 1/1; a4 the
+object-rest-below-ES2018 refusal dropped **0/0**; a4c (a4's control) refuse rest at every target
+1/1; a5 re-alias refusal dropped 3/0; a6 all-patterns gate dropped 3/**41**; a7 printer comment
+branch removed 1/1; a8 `directExportedVarNames` not populated 1/0; b1 F10 shortening off 5/4; b2
+parameter links keep the TS6 indent 2/1; b3 return link keeps it **0 → 1**/0.
+
+**a4's DOUBLE ZERO IS ATTRIBUTED AND IS THE ROUND'S REUSABLE FINDING**: below ES2018 the
+object-rest downlevel has ALREADY rewritten the declaration into
+`_a = init, { x } = _a, rest = __rest(_a, …)` before the CommonJS transform sees it, so no
+declarator reaching the conversion still carries a rest — the ALL-PATTERNS gate refuses it there,
+and dropping THAT moves 41 baselines. Control a4c proves the expression is reached. Recorded in
+code and KDoc as a MEASURED redundant guard (its own commit). **b3 was a BLIND pin and was
+repaired** (the fifth commit): the return-type link is reachable and byte-identical to tsgo, and
+no corpus baseline exercises it.
+
+**TWO STRUCTURAL PINS WERE REPAIRED RATHER THAN DELETED.** `TransformToCommonJsSplitTest` used
+`export const {} = { q: 1 }` purely as a VEHICLE for asserting `var _a;` — the very shape this
+round removes. Both keep their subject: the side-effect temp path is still live and is now
+reached through a REFUSAL, which doubles as the negative control.
+
+**THE DECOMPOSITION OF THE REMAINING 103 IS WORTH AS MUCH AS THE ROWS, AND IT RETIRES THE
+F-LETTERS.** **F6 "top code differs" is 38 rows and is NOT a family — it is ~32 distinct code
+pairs, largest cluster 2**; reading the ledger's F-letters as families overstates every remaining
+estimate. The letters also HIDE cross-family clusters: TS2880 is 3 rows split between F8 and F1,
+and TS1003 is 3 in F1 plus 1 in F6 — all four JSDoc/JS shapes. **JS-emit residue (14) decomposes
+into 3 groups + 8 singletons**: *JE-A* the namespace/enum IIFE's redundant `var <name>;` hoist
+when the name already has a value declaration (3 rows, ONE mechanism); *JE-B* an EMPTY namespace
+emits nothing at all (1); *JE-C* a `declare`d import/var elides (2); plus
+`moduleElementsInWrongContext{,2}` (2). **`emitBOM` is a SCANNER bug** — we emit TS1127 on a BOM.
+
+**WRONG PREDICTIONS**: the brief said 6 rows and it is 7; the printer change was expected to have
+some radius and is structurally ZERO (its branch is reachable only through a SYNTHESIZED
+single-line object literal, since a source literal spanning lines parses `multiLine`); and the
+object-rest target refusal was expected to be load-bearing and measured redundant.
+
+**GATE LABELLING**: the grid is a CONTROL and was counted (**0 TS2322 rows and 0 construct-chain
+lines** across all 413 rows, and 0 files with an exported destructuring); the emit-mode `--outDir`
++ `diff -r` is a CONTROL and was counted (78/78 files, 0 differing); `cost_gate.py` is a CONTROL
+for the emit half and a GATE for F10. The corpus and its screen were the gates.
+
 ### Round (P18.95) — the screen gains the EMIT channel, and three printer rules close 12 JS-emit rows (2026-09-14)
 
 **Three commits** (`1f5b13d2a` Part 0, `bb846ff1e` Part 1, `12592cc55` a blind-control repair).

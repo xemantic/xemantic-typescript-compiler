@@ -3739,3 +3739,17 @@ grep missed it because the mirror's expectations are FILES, not class source —
 annotation. Ablation 10 arms, all discriminating; 20 of 29 pins red pre-change, the rest exactly the
 controls. cost_gate 20/20 +0.00%, grid 8×0/0 + emit 78/78 (controls), huge_methods exit 0 (871
 classes), warning-clean, screen errors 3,077/0, emit 5,688/0.
+**(P18.101) — OURS-ONLY ROWS ON PLAIN TS: SEVEN CLOSED, THREE TS2309 HALVES MATCHED, AND THREE OF SIX "MECHANISMS" WERE tsc-6 TRANSCRIPTIONS, 19,370 / 0 / 83 (2026-09-15).**
+Pending 66 -> **58** (7 removed, 3 entries rewritten to a measured residue), skipped -7, +26 pins, 9 modules
+asserted. Picked by THEME — rows where ours reports what tsgo 7.0.2 does not, or prints the wrong head — sized
+with one screen run per candidate. TS2346 has ZERO tsgo call sites and is retired; TS2309 is tsgo's
+value-exports-or-shadowed-namespace rule with no `.d.ts` skip and no JS guard (an alias to an UNEXPORTED namespace
+member had to be classified tsgo's way — the screen caught the one green baseline it moved); the TS2300 at an
+`export { Sub }` specifier was a one-fixture pin walker (deleted); `RelationHeadSuppression` gained tsgo's two-arg
+leaves (TS4104 / TS2859 / TS2321); TS2615 is no longer paired with TS2589; `bigintWithLib`'s triplicated chain
+was HARDCODED in a `pinDiag` walker whose engine cannot answer the fixture (re-transcribed, said so). **The full
+suite read FIVE reds, all pre-existing pins asserting tsc 6's form of the changed rules** — re-pointed after a
+tsgo measurement each; their NAMES named no code, so a source grep could not have found them. Thirteen arms, all
+discriminating (a2b: the JS `exports.p` gate is load-bearing on 5 green baselines). cost_gate 20/20 +0.00%, grid
+8×0/0 + emit 78/78 (controls, counted), huge_methods exit 0 (871 classes), warning-clean, screen errors 3,084/0,
+emit 5,688/0.

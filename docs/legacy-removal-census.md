@@ -113,6 +113,8 @@ overwhelmingly `export as namespace` — leave them; the externals module
 
 ### 2c. `moduleResolution: classic/node10` (~40 lines)
 
+**DONE 2026-09-15 ((P18.106), `963a03381`) — and it was ~250 lines, not ~40: five string-typed derivation copies in `Checker.kt`, not one, plus TS5070/TS2792 (no tsgo emitter) and the classic root-tslib rule; `ModuleResolver.kt` never read the option. The wording row (`:518-521`) stays, spelled `Classic`; TS5109 was missing and was added.**
+
 `moduleResolution` is a bare `String?` (`CompilerOptions.kt:185`); `ModuleResolver.kt` has
 NO classic or node10 arm. The family is `TypeScriptCompiler.kt:518-521` (TS5107/5108),
 `:745-762` (TS5070 + the `None/AMD/UMD/System → "classic"` derivation), `Checker.kt:49304,
