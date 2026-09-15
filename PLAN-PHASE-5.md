@@ -25,6 +25,51 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.103) — (LEGACY.1) step (c): TypeScript 7 binds EVERY file strict, so `alwaysStrict: false` was four dead arms and one missing diagnostic (2026-09-15)
+
+**Three commits** (`e81d07381` refactor, `75b3baa97` test, this docs commit). **Suite 19,370 → 19,382 / 0 / 83**
+(+14 pins, −2 deleted tsc-6 controls), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 —
+CONTROLS, counted: zero active subtests carry `alwaysstrict=false` (33 carry `true`), and the 11 active `with`
+baselines with no strict directive were already reporting TS1101; `cost_gate.py` exit 0, 20/20 +0.00%;
+`huge_methods.py --fail-over 0` exit 0 (871 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls
+(every profile sets `alwaysStrict: true`); warning-clean (2,236-byte log, `w=0`). `Checker.kt` 195,124 →
+**195,132** (code −6, KDoc +14), `Emitter.kt` +2, `TypeScriptCompiler.kt` +6. **(LEGACY.1)(c) CHECKED OFF; (d)
+next; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE MEASUREMENT THAT LICENSED IT.** Six configurations on tsgo 7.0.2 (`with` in a script, a module file; TS1101
+read through the LSP because the CLI stops at the options row — yet still EMITS): `alwaysStrict: false`,
+`alwaysStrict: false` + `strict: false`, `strict: false` alone, nothing set, `alwaysStrict: true` ± `strict:
+false` ALL report TS1101 (+TS2410) at the `with` and emit `"use strict"` into BOTH files; the only trace of the
+option is `TS5108 Option 'alwaysStrict=false' has been removed` anchored at the tsconfig VALUE. In the Go
+source `AlwaysStrict` has three references — the parser, the field, `program.go:858`'s removed-option row —
+and the binder has NO `inStrictMode`: `checkStrictModeWithStatement` fires unconditionally. **So tsgo is not
+"ignoring an explicit false", it is strict-ALWAYS** — `strict: false` alone gives it three TS1212 rows on
+`var let/yield/interface` where ours gives 0, which makes the SURVIVING `explicitNonStrict` disjunct a tsc-6
+residue too. That one moves the corpus's `@strict: false` baselines and is (LEGACY.0b) territory, recorded in
+the pin class's KDoc, deliberately not landed here.
+
+**WHAT LANDED.** Deleted: the Emitter's `alwaysStrict == false` suppression of the `"use strict"` prologue, the
+`spineWithStrictActive` field and its gate around TS1101 (now unconditional; `javap -p` has 0 hits), the
+`explicitNonStrict` disjunct on the explicit false, and the TS1344 early return. Kept: every `== true` read and
+the parse. **Added — the item said "keep its removed-option diagnostic" and there was none**: neither
+`TypeScriptCompiler.kt` nor the census's `:523-526` mentioned `alwaysStrict` (only the two interop flags had the
+row); one `addDeprecation("alwaysStrict=false", …)` line beside them now prints TS5107 at the 6.0 default and
+TS5108 under `@typeScriptVersion: 7.0`, value-anchored as tsgo — without it an explicit `false` would have been
+silently ignored. The two negative controls in `Inv4SpineBatch11Test`/`Inv4SpineBatch9Test` are deleted, not
+re-pointed (their positive twins live in the same classes).
+
+**PINS AND ABLATION.** `AlwaysStrictRemovedTest`, 14 pins (9 + 5 controls); stash-ablation 8 of 13 red, exactly
+the non-controls (the TS1212 pin was added after that run and measured directly: 0 rows on the pre-change
+binary). Five arms, each reddening a disjoint set: a1 Emitter suppression 3/0; a2 TS1101 gate 2/0; a3
+`explicitNonStrict` disjunct 1/0; a4 TS1344 return 1/0; a5 the added deprecation row 2/0 — screens 0/0 on every
+arm. Final md5s Checker `f1cf432e`, Emitter `116cf3b5`, TypeScriptCompiler `918c9612`; the orchestrator's AFTER
+arm matched all three.
+
+**WHAT (d) INHERITS.** On the PROJECT path (`TsConfigLoader`) `tsconfigOptionPositions` is never populated, so
+every `addDeprecation` row — the new one and the `esModuleInterop=false` sibling alike — prints FILE-LESS
+(` - error TS5107`) where tsgo anchors at `tsconfig.json(1,98)` on the value; only the embedded-tsconfig harness
+path carries positions, which is what the 7.0 pin exercises. A family-wide anchoring gap, not (c)'s.
+
 ### Round (P18.102) — (LEGACY.1) steps (a)+(b): the dead System-module helpers, −249 lines, and why this round left (LEGACY.0)'s tail (2026-09-15)
 
 **Two commits** (`ba18310a5` refactor, this docs commit). **Suite 19,370 → 19,370 / 0 / 83**, 9 modules asserted;
@@ -654,91 +699,6 @@ is not a regression**: the fixture is seven straight-line `console.*` calls with
 passes in isolation (159 KIR tests, 0 failures). Its deadline is a 2-minute wall clock around a
 SPAWNED CHILD, so memory pressure presents as "the generated program did not terminate", which
 reads exactly like an infinite loop in the compiler's output.
-
-### Round (P18.93) — the corpus SCREEN is committed, and F2 duplicate-identifier lands 12 of 18 with three tsc-6 narrowings deleted (2026-09-14)
-
-**Two commits. Part 0** (`f917b1f6b`): `scripts/corpus-screen.sh` + `CorpusScreenMain.kt`.
-**Part 1** (this one): **suite 19,170 → 19,192 / 0 / 164** — `tsgoPendingBaselines` 151 → **139**
-and skipped 176 → **164**, both −12, plus +22 pins. Grid 8×`added=0 removed=0`; `cost_gate.py`
-exit 0, all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (862 classes, 0 over);
-warning-clean (7,306-byte log, `w=0 e=0`, no `-q`, positive control produced exactly 1 `w:` line);
-corpus screen 3,033 subtests / **0 mismatches** / 28.0 s. **12 of 18; the 6 holdouts each have a
-NAMED mechanism. (LEGACY.0) stays OPEN** on (0b-9).
-
-**PART 0 — AN INSTRUMENT THAT WAS BUILT, USED AND LOST IS NOW COMMITTED.** (P18.92) built a
-~28-second full-active-corpus screen, measured with it, and left it in a scratch directory; with
-151 rows still open that was a standing tax on every remaining round, so rebuilding it was
-promoted ahead of the family work. Three properties are STRUCTURAL rather than remembered: it
-**refuses the frozen repo-root generated tree** (exit 3 — and the positive control shows that
-tree really is a different corpus, **3,145** subtests against the live **3,160**, not merely an
-un-annotated one); it **calls the suite's own** `errorsMatchBaseline`/`Path.readText()`, so CRLF,
-`.d.ts` stripping and the UTF-16 BOM decode cannot drift from the suite; and it **refuses below a
-subtest floor**, because a shrunken population reads exactly like a clean run. **It is not the
-gate and its header says so** — it sees neither the ~3,100 `.js` emit subtests nor any
-hand-written pin, and (P18.92)'s one real defect was seen ONLY by a hand-written negative control
-on a run where the whole corpus was clean.
-
-**THE PRE-MEASUREMENT DECIDED THE ROUND, AND THE ROSTER WAS WRONG.** TS2300 is in **80** active
-baselines — the largest blast radius of any remaining family — but only **17** carry
-class/interface MEMBER rows, which is the reachable population; TS2717 is in **1**; TS6200/TS6201
-in **0**, so deleting the amalgamation could not redden anything. The brief's group A was **9**,
-not 12 (the missing three are a NAMING mechanism), and group B is **two** mechanisms 3/3, not
-one. **The decision number: the candidate rule read `0 mismatches / 3,021` on a throwaway build**
-— which is exactly what Part 0 exists to produce, and it is why a family with an 80-baseline
-radius was landable in one round.
-
-**THE RULE — AND THREE tsc-6 NARROWINGS WENT WITH IT.** `reportDuplicateMemberErrors` iterates
-EVERY member of the container whose symbol name matches and errors at each, so the `membersToFlag`
-table collapses to "report all, except a get/set PAIR and METHOD OVERLOADS"; its three former
-narrowings were all artefacts of tsc 6's `PropertyExcludes = None`. The TS6200/TS6201
-amalgamation is **deleted** rather than re-thresholded (`emit6200`, `firstTokenSpanOfFile` go with
-it). On a 14-shape fixture our output is **byte-identical to tsgo across all 29 rows, silences
-included**.
-
-**I HAD THE TS2717 RULE WRONG AND THE MEASUREMENT SAID SO.** My read-only recon called it a
-"differing KIND" test. It is tsgo's binder SPLIT: the gate is that the group's FIRST member must
-not be a METHOD, which behaves differently on three-member groups — `{ m(){} m: number; m: string }`
-is three TS2300 and **zero** TS2717, because the two properties do not pair with each other. A
-kind-comparison rule gets that case wrong and no two-member fixture can tell the two apart.
-
-**THE SIX HOLDOUTS, EACH A DIFFERENT MECHANISM** (greppable `F2-residue:` / `dupRelated-residue:`):
-`dynamicNamesErrors` is a LATE-BOUND computed key gated out a level earlier by
-`memberNameIsBinderVisible`, needing tsgo's fourth emitter `lateBindMember` (blast radius: every
-computed member name); `methodSignatureHandledDeclarationKindForSymbol` is a cross-DECLARATION
-interface merge served by a different function, correct except in the differing-KIND case;
-`parameterPropertyInConstructor2` needs a Constructor arm that `checkDuplicateClassMembers` does
-not have at all. **And the three related-span rows are a REFUSAL WITH NUMBERS**: the 6203-vs-6204
-rule was built from tsgo's source and **does not reproduce tsgo's own baselines** — it gives the
-active `promiseDefinitionTest` shape the right answer and predicts 6204 where these three want
-all-6203. With 54 active TS6203 + 7 active TS6204 that is the family's largest exposure, so the
-rule must be read off the BASELINES, not the source. (P18.89)'s lesson in reverse: sometimes the
-source is not enough.
-
-**SIX COUNTDOWN PINS, NOT ANTICIPATED AT ALL.** Five in `PristineDivergenceRound940Test` and one
-in `DuplicateMemberDeclarationTest` whose own comment read *"a tsgo divergence this compiler does
-not chase"* — every one asserting pristine's answer for the family this round was closing. All
-six re-measured against tsgo and re-pointed with the measurement recorded. **A test class NAMED
-after a pristine divergence is a pre-declared red set under the tsgo-only directive**; grepping
-the test sources for `pristine` / `does not chase` / `divergence` before starting a family turns
-six surprise failures into a planned re-point. Now in CLAUDE.md.
-
-**AND CHANGING A ROW'S NAME SILENTLY CHANGED ITS SQUIGGLE** — `emitDuplicate2300`'s
-`else -> name.length` coupled the two quantities, caught only by a two-character width diff in
-`duplicateStringNamedProperty1`. The span now comes from the NODE.
-
-**ABLATION — 12 arms, ALL discriminating, `tests` identical at 69 in every arm**, and each arm
-reports BOTH its pin reds and its corpus-screen mismatches, which is the screen's second use: a1
-report only the second (tsc 6) 6/7; a2 method-first reports only non-methods 2/1; a3
-accessors-then-property reports only the property 6/2; a4 a legal get/set pair starts reporting
-2/**49**; a5 method overloads start reporting 1/**33**; a6 drop the TS2717 method gate 2/1; a7
-name each row after its own member 4/2; a8 drop the written-spelling quoting 2/1; a9 restore the
-≥8 TS6200 amalgamation 1/3; a10 ignore the static/instance split 1/6; a11 squiggle length from
-the NAME again 1/1; a12 interface path keeps per-member naming 1/1.
-
-**THE GRID IS A CONTROL AND THE COUNTS PROVE IT** ((CHK.124)): TS2300 **0/0**, TS2717 **0/0**,
-TS6200 **0/0** in BOTH arms of all eight profiles, and cronstrue/marked byte-identical — a
-duplicate class member is a hard error nobody checks in. The corpus, the screen and the pins did
-the work.
 
 ## QUEUE
 
@@ -1437,11 +1397,11 @@ CLAUDE.md § "AI agent mission".
     `rewriteSystemDyn*`, 107 lines, zero callers) — risk nil.
   - [x] (b) LANDED 2026-09-15 ((P18.102), −142 lines; `collectBoundNames` stays) — DEAD System var-hoist helpers `Transformer.kt:16315-16461` (`stripVarDeclsFromStatement`,
     `collectVarNamesFromStmt(s)`, ~147 lines, zero callers; `collectBoundNames` at 16463 STAYS) — risk nil.
-  - [ ] (c) `alwaysStrict: false` — `Emitter.kt:229-231` (`"use strict"` suppression; tsgo's `usestrict.go` never
+  - [x] (c) LANDED 2026-09-15 ((P18.103), `e81d07381`; tsgo is strict-ALWAYS — measured over six configs — so the four `== false` arms went and the MISSING deprecation row was added; the surviving `explicitNonStrict` `strict: false` disjunct is a tsc-6 residue for (LEGACY.0b)) — `alwaysStrict: false` — `Emitter.kt:229-231` (`"use strict"` suppression; tsgo's `usestrict.go` never
     reads the flag), `Checker.kt:29451`, `:25470-25472` `spineWithStrictActive` (always active), `:25600-25605`
     `explicitNonStrict`'s disjunct; keep every `== true` read and the parse/report; delete the two negative controls
     `Inv4SpineBatch11Test.kt:131`, `Inv4SpineBatch9Test.kt:256`; watch TS1101 (`with`) now always firing.
-  - [ ] (d) `esModuleInterop: false` + `allowSyntheticDefaultImports: false` — the no-interop `else` arms in
+  - [ ] (d) INHERITS from (c): on the PROJECT path `tsconfigOptionPositions` is never populated, so every `addDeprecation` row prints file-less where tsgo anchors at the tsconfig VALUE — fix it once for the family. `esModuleInterop: false` + `allowSyntheticDefaultImports: false` — the no-interop `else` arms in
     `Transformer.kt:3082-3397` (12 sites), `NameResolver.kt:446`, `Checker.kt:51353-51356, 51438-51442, 52216-52217`,
     the `…ExplicitlyFalse` fields; **a BEHAVIOUR change at the default**: `allowSyntheticDefaultImports` defaults
     `false` today (`CompilerOptions.kt:199`) and must become interop-derived as tsgo's — land the flip and the arm

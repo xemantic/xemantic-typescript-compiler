@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **195,124** lines (unchanged at (P18.102), which deleted **249** lines of dead System-module code from `Transformer.kt`, 17,862 → 17,613 — the first (LEGACY.1) removal; **+24 at (P18.101)** — ~150 deleted (TS2346 gate + helpers, a one-fixture TS2300 walker), ~175 for tsgo's TS2309 rule; **+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **195,132** lines (**+8 at (P18.103)**: code −6, KDoc +14, the `alwaysStrict: false` arms; unchanged at (P18.102), which deleted **249** lines of dead System-module code from `Transformer.kt`, 17,862 → 17,613 — the first (LEGACY.1) removal; **+24 at (P18.101)** — ~150 deleted (TS2346 gate + helpers, a one-fixture TS2300 walker), ~175 for tsgo's TS2309 rule; **+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,15 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.103) — (LEGACY.1) STEP (c): TypeScript 7 BINDS EVERY FILE STRICT, SO `alwaysStrict: false` WAS FOUR DEAD ARMS AND ONE MISSING DIAGNOSTIC, 19,382 / 0 / 83 (2026-09-15).**
+Six configurations measured on tsgo (LSP diagnostics + emitted JS): TS1101 at a `with` and `"use strict"` in
+every file whatever the flags say; the Go binder has no `inStrictMode`. The Emitter suppression, the
+`spineWithStrictActive` gate, the `explicitNonStrict` false-disjunct and a TS1344 return are deleted; the
+removed-option row the item said to KEEP did not exist and was added (TS5107 at the 6.0 default, TS5108
+value-anchored under 7.0). Found for later: `strict: false` alone is still strict in tsgo (three TS1212 rows
+ours lacks — (LEGACY.0b)), and the PROJECT path anchors no deprecation row (family-wide, (d)). 14 pins, five
+disjoint arms; screens 3,084/0 + 5,688/0 and grid 8×0/0 + emit 78/78 all counted controls; cost_gate 20/20
++0.00%; huge_methods exit 0 (871 classes); warning-clean.
 **(P18.102) — (LEGACY.1) STEPS (a)+(b): THE DEAD System-MODULE HELPERS, −249 LINES, 19,370 / 0 / 83 (2026-09-15).**
 The first removal round of the TS7-only directive, picked over (LEGACY.0)'s 58-singleton tail (said so, successor
 (c)). Two `Transformer.kt` clusters deleted, closed by a repo-wide reference census rather than the compile
@@ -71,19 +80,3 @@ newline-wide range renders as an empty squiggle line). Ablation 12 arms, all dis
 pins red on the pre-change binary, the rest exactly the controls. cost_gate 20/20 +0.00% and the
 grid 8×0/0 + emit 78/78 — controls, counted (tsc's sources hold no `assert` clause and no JSDoc
 type); huge_methods exit 0 (871 classes); warning-clean; screen errors 3,067/0, emit 5,688/0.
-**(P18.98) — FOUR CHECKER MECHANISMS, 8 ROWS, AND THE tsc-6 MIRROR WAS A COUNTDOWN FOR THE SUGGESTION CAP, 19,292 / 0 / 109 (2026-09-14).**
-Pending 92 -> **84**, skipped -8, +32 pins, 9 modules asserted. tsgo has NO 10-suggestion cap
-(tsc 6's `maximumSuggestionCount` gate deleted, algorithm unchanged); TS6198 groups an ARRAY
-binding pattern and recurses, in one home for variables, parameters and every `for` head — with
-five sub-rules the brief did not name (a rest exempts nothing, an omitted slot counts, a lone
-shorthand `_h` is reported, `_` array/parameter elements are USED, nested parameter patterns were
-never collected); the global `Object` source keeps its TS2322 head with the "very few other types"
-sentence as the first chain line, target-independent except a type-parameter target (three
-baselines, caught by an arm); and the size-only leaf-promotion pair LANDED on a measured zero.
-**The full suite read one red, in the tsc-6 MIRROR of a ledgered TS-1 case**: its `val` row was a
-capped TS2304 where tsgo's own baseline says TS2552 `Did you mean 'eval'?` — lifted by a counted
-substitution; the mirrors are countdowns for every rendering change left. Ablation 8 arms, all
-discriminating. cost_gate 20/20 +0.00% (a gate here), grid 8×0/0 (a real gate for the cap: 46
-unresolved names per profile, no suggestion appeared), emit control 78/78, huge_methods exit 0
-(869 classes), warning-clean, screen errors 3,058/0, emit 5,688/0. The gate chain was killed once
-for low memory by three idle build daemons (11.5 GB) — stopped, re-run clean.

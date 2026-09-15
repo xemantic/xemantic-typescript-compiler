@@ -3693,3 +3693,19 @@ general keep moved 14 green TS baselines and is refused. One BLIND pin repaired 
 Ablation 12 arms, all discriminating. JS emit is down to 3 singletons. cost_gate 20/20 +0.00%
 and the grid/`--outDir` control both COUNTED controls; huge_methods exit 0 (869 classes);
 warning-clean; screen emit 5,688/0, errors 3,050/0.
+**(P18.98) — FOUR CHECKER MECHANISMS, 8 ROWS, AND THE tsc-6 MIRROR WAS A COUNTDOWN FOR THE SUGGESTION CAP, 19,292 / 0 / 109 (2026-09-14).**
+Pending 92 -> **84**, skipped -8, +32 pins, 9 modules asserted. tsgo has NO 10-suggestion cap
+(tsc 6's `maximumSuggestionCount` gate deleted, algorithm unchanged); TS6198 groups an ARRAY
+binding pattern and recurses, in one home for variables, parameters and every `for` head — with
+five sub-rules the brief did not name (a rest exempts nothing, an omitted slot counts, a lone
+shorthand `_h` is reported, `_` array/parameter elements are USED, nested parameter patterns were
+never collected); the global `Object` source keeps its TS2322 head with the "very few other types"
+sentence as the first chain line, target-independent except a type-parameter target (three
+baselines, caught by an arm); and the size-only leaf-promotion pair LANDED on a measured zero.
+**The full suite read one red, in the tsc-6 MIRROR of a ledgered TS-1 case**: its `val` row was a
+capped TS2304 where tsgo's own baseline says TS2552 `Did you mean 'eval'?` — lifted by a counted
+substitution; the mirrors are countdowns for every rendering change left. Ablation 8 arms, all
+discriminating. cost_gate 20/20 +0.00% (a gate here), grid 8×0/0 (a real gate for the cap: 46
+unresolved names per profile, no suggestion appeared), emit control 78/78, huge_methods exit 0
+(869 classes), warning-clean, screen errors 3,058/0, emit 5,688/0. The gate chain was killed once
+for low memory by three idle build daemons (11.5 GB) — stopped, re-run clean.

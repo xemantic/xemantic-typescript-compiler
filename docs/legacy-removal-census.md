@@ -137,7 +137,7 @@ outFile is set"), `:1908-1923`, `:2079`, `:2468-2473`; `CompilerOptions.kt:205, 
 
 ### 2f. `alwaysStrict: false`, `esModuleInterop: false`, `allowSyntheticDefaultImports: false`
 
-`alwaysStrict`: `Emitter.kt:229-231` (the `"use strict"` prologue suppression),
+`alwaysStrict` — **DONE 2026-09-15 ((P18.103), `e81d07381`); the "all three have the diagnostic at `:523-526`" claim was wrong, `alwaysStrict` had none and gained one**: `Emitter.kt:229-231` (the `"use strict"` prologue suppression),
 `Checker.kt:25470-25472` `spineWithStrictActive` (TS1101), `:29451`, `:25600-25605`
 `explicitNonStrict`; the `== true` reads at `:53571, 71484, 25612, 25619, 25623` stay;
 `CompilerOptions.kt:206, 913`. `esModuleInterop`: `CompilerOptions.kt:186-187, 869-871`,
