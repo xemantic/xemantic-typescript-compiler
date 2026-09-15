@@ -4405,7 +4405,7 @@ object FrontEnd {
     const val POST_TOPO = 25
     /** `cpcRequireOnlyOrphans`. INSIDE [POST_OUTPUTS]. */
     const val POST_ORPHANS = 26
-    /** JS-output selection, outFile concatenation and source-echo ordering. INSIDE [POST_OUTPUTS]. */
+    /** JS-output selection and source-echo ordering. INSIDE [POST_OUTPUTS]. */
     const val POST_ASSEMBLE = 27
 
     // ---- (WARM.8)(c) level 3 — [POST_ORPHANS] is 97.6% of [POST_OUTPUTS] and

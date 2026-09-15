@@ -886,8 +886,10 @@ class TypeScriptCompiler {
                 code = 6379,
             ))
         }
-        // TS5074: incremental without outFile/tsBuildInfoFile (in non-tsconfig context)
-        if (options.incremental == true && options.outFile == null && !options.composite) {
+        // TS5074: incremental without tsBuildInfoFile (in non-tsconfig context). tsgo's rule
+        // (`program.go:912`) is `TsBuildInfoFile == "" && Incremental && ConfigFilePath == ""`
+        // — `outFile` is not read; the `outFile == null` conjunct went with (LEGACY.1)(h).
+        if (options.incremental == true && !options.composite) {
             diagnostics.add(Diagnostic(
                 message = "Option '--incremental' is only valid with a known configuration file (like 'tsconfig.json') or when '--tsBuildInfoFile' is explicitly provided.",
                 category = DiagnosticCategory.Error,
@@ -1250,13 +1252,15 @@ class TypeScriptCompiler {
         val isJsxPreserve = options.jsx?.lowercase() == "preserve"
         val tsxExtension = if (isJsxPreserve) ".jsx" else ".js"
         val jsxExtension = if (isJsxPreserve) ".jsx" else ".js"
-        val jsName = options.outFile?.substringAfterLast('/')
-            ?: file.fileName.substringAfterLast('/')
-                .replace(".tsx", tsxExtension)
-                .replace(".jsx", jsxExtension)
-                .replace(".mts", ".mjs")
-                .replace(".cts", ".cjs")
-                .replace(".ts", ".js")
+        // (LEGACY.1)(h): the output is named after the SOURCE. `outFile` is a removed option in
+        // TypeScript 7 — tsgo reports it (TS5102) and emits per file, so `outFile: bundle.js`
+        // over `solo.ts` writes `solo.js` (measured 2026-09-15).
+        val jsName = file.fileName.substringAfterLast('/')
+            .replace(".tsx", tsxExtension)
+            .replace(".jsx", jsxExtension)
+            .replace(".mts", ".mjs")
+            .replace(".cts", ".cjs")
+            .replace(".ts", ".js")
 
         // When noEmitOnError is set and there are errors, suppress all JS output
         val singleFileJsOutputs = if (options.noEmitOnError &&
@@ -1624,23 +1628,20 @@ class TypeScriptCompiler {
         // is `/src` and each output keeps its `a/x.js` / `b/y.js` suffix under outDir.
         // `.d.ts` files outside the tsconfig dir (e.g. under a `typeRoots` location like
         // `/types/`) are excluded so they don't shift commonSourceDir upward.
-        // Skipped when outFile is set (concatenation) or when no outDir.
-        val commonSourceDir: String? = if (resolvedOutDir != null && options.outFile == null && tsFileNames.isNotEmpty()) {
+        // Skipped when no outDir. (LEGACY.1)(h) dropped the `outFile == null` conjunct: tsgo
+        // keeps `src/a/x.js` / `src/b/y.js` under `outDir` in every `outFile` cell, because
+        // `outFile` is a removed option it reports and then ignores.
+        val commonSourceDir: String? = if (resolvedOutDir != null && tsFileNames.isNotEmpty()) {
             val parentDirs = (tsFileNames + dtsFileNamesInProjectDir)
                 .map { it.substringBeforeLast('/', "") }
             longestCommonPathPrefix(parentDirs)
         } else null
 
-        // Compute file processing order via topological sort BEFORE the transform loop,
-        // so per-file transforms run in the same order as the final emit.
-        val depsForTransformSort = when {
-            options.noResolve -> emptyMap()
-            hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
-            else -> importDeps
-        }
-        val transformOrder = if (options.outFile != null && !options.noResolve) {
-            topologicalSort(tsFileNames, depsForTransformSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
-        } else tsFileNames
+        // The per-file transforms run in INPUT order. Until (LEGACY.1)(h) an `outFile` build
+        // ran them in topological order for the (long-deleted) concatenation; the EMIT order
+        // of `jsOutputs` is `sortedTsFiles` below, in both cases, so this order was never
+        // observable — a per-file transform reads nothing another file's transform wrote.
+        val transformOrder = tsFileNames
         // (INC.59) `transformOrder.toSet()` was written INSIDE the filter's lambda, so
         // an N-element set was rebuilt once per entry of `parsedSourceFiles` — O(files^2)
         // string hashes, on every build including `--noEmit`. Measured on generated
@@ -1931,22 +1932,24 @@ class TypeScriptCompiler {
             }
             // Track whether this JS file should be skipped for emit but still parsed/bound/checked
             var skipJsEmit = false
-            // Plain .js/.mjs/.cjs: only emit when outDir/outFile is set (avoids overwriting sources)
+            // Plain .js/.mjs/.cjs: only emit when outDir is set (avoids overwriting sources).
             // But still parse/bind/check when allowJs is set (for TS8xxx, TS2451, etc.)
-            if (isPureJsFile && options.outDir == null && options.outFile == null) {
+            // (LEGACY.1)(h): `outFile` no longer stands in for an output location — tsgo emits
+            // per file, so with no `outDir` such an input would overwrite itself (TS5055).
+            if (isPureJsFile && options.outDir == null) {
                 if (options.allowJs) {
                     skipJsEmit = true
                 } else {
                     continue
                 }
             }
-            // .jsx (JavaScript+JSX): without outDir/outFile, skip non-empty `.jsx` when allowJs
+            // .jsx (JavaScript+JSX): without outDir, skip non-empty `.jsx` when allowJs
             // is unset (TypeScript reports nothing for those). Empty `.jsx` fixtures are
             // admitted so they appear in `fileResults`, letting B11.2's
             // `resolveJsxTsxCandidate` match `.jsx`/`.tsx` import targets even when the
             // source happens to be blank (multi-file fixture pattern). Tracked in
             // `emptyJsxTsxFixtures` so Phase 3 can skip their emit.
-            if (isJsxFile && options.outDir == null && options.outFile == null) {
+            if (isJsxFile && options.outDir == null) {
                 if (!options.allowJs && file.content.isNotBlank()) continue
                 if (file.content.isBlank()) emptyJsxTsxFixtures.add(file.fileName)
             }
@@ -2102,7 +2105,7 @@ class TypeScriptCompiler {
                 }
             }
 
-            // JS files parsed only for diagnostics (no outDir/outFile): skip emit but keep in parsedSourceFiles for checker
+            // JS files parsed only for diagnostics (no outDir): skip emit but keep in parsedSourceFiles for checker
             if (skipJsEmit) continue
 
             // Extract relative imports for dependency ordering.
@@ -2490,26 +2493,6 @@ class TypeScriptCompiler {
             // would add a `"use strict";` prologue and produce a phantom
             // `//// [foo.js]` entry in the baseline.
             if (tsFileName in emptyJsxTsxFixtures) continue
-
-            // For @module: none + @outFile, auxiliary .js files with module statements
-            // (export/import) are NOT bundled into the outFile output. Only the entry
-            // .ts file is emitted. TypeScript treats `.js` files under module:none as
-            // pulled in only for type info / allowJs checking, not for runtime bundling.
-            val tsFileNameIsPureJs = tsFileName.endsWith(".js") || tsFileName.endsWith(".mjs") || tsFileName.endsWith(".cjs")
-            if (options.outFile != null && options.effectiveModule == ModuleKind.None && tsFileNameIsPureJs) {
-                val hasModuleStatements = sourceFile.statements.any { stmt ->
-                    when (stmt) {
-                        is ExportDeclaration, is ExportAssignment, is ImportDeclaration -> true
-                        is ImportEqualsDeclaration -> stmt.moduleReference is ExternalModuleReference || ModifierFlag.Export in stmt.modifiers
-                        is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
-                        is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
-                        is VariableStatement -> ModifierFlag.Export in stmt.modifiers
-                        is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
-                        else -> false
-                    }
-                }
-                if (hasModuleStatements) continue
-            }
 
             val feTrT0 = FrontEnd.t()
             val transformer = Transformer(options, checker, crossFileNamespaceExports)
@@ -3107,8 +3090,12 @@ private fun extractRelativeImports(
     }
 
     // Extract /// <reference path="..."/> directives from the raw source text.
-    // These create ordering dependencies (referenced file must be emitted first in outFile bundles).
-    // Only used when outFile is set — for separate-file output TypeScript uses original order.
+    // These create ordering dependencies: a referenced file precedes its referrer in the
+    // PROGRAM's order (tsc processes references first), which `sortedTsFiles` reproduces for
+    // the emitted outputs whatever the options say — tsgo 7.0.2's `--listFiles` puts `b.ts`
+    // before the `a.ts` that references it with and without the removed `outFile` alike
+    // (measured 2026-09-15, (LEGACY.1)(h)). The earlier "only used when outFile is set"
+    // label here was stale: the full graph feeds `sortedTsFiles` on every emitting build.
     if (includeReferencePathDeps) {
         for (line in sourceFile.text.lineSequence()) {
             val trimmed = line.trimStart()

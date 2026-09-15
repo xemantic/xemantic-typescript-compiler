@@ -1237,7 +1237,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             val input = inputByOutputName[name]
             var rel =
                 if (input != null) swapOutputExtension(PathUtil.relativeTo(rootDir, input), jsxPreserve)
-                else PathUtil.relativeTo(rootDir, name) // e.g. an outFile bundle name
+                else PathUtil.relativeTo(rootDir, name) // an output with no matching input (defensive; every JS output is per-file)
             // Not under rootDir (relativeTo fell back to the path itself): never write
             // outside outDir — drop to the basename.
             if (rel.isEmpty() || PathUtil.isAbsolute(rel)) rel = PathUtil.basename(name)
