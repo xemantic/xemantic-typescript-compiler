@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **194,753** lines (**−243 at (P18.109)**, the `downlevelIteration` block; unchanged at (P18.108), which deleted `outFile`'s six arms from `TypeScriptCompiler.kt`, 6,566 → 6,553; +3 at (P18.107), the amd/umd/system fold — deleted behaviour, added KDoc; **−89 at (P18.106)**, five module-resolution derivation copies → one; **−50 at (P18.105)**, the interop arms; unchanged at (P18.104), which lifted the tsconfig option-position scan into `CompilerOptions.kt` for both paths; **+8 at (P18.103)**: code −6, KDoc +14, the `alwaysStrict: false` arms; unchanged at (P18.102), which deleted **249** lines of dead System-module code from `Transformer.kt`, 17,862 → 17,613 — the first (LEGACY.1) removal; **+24 at (P18.101)** — ~150 deleted (TS2346 gate + helpers, a one-fixture TS2300 walker), ~175 for tsgo's TS2309 rule; **+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **194,468** lines (**−285 at (P18.110)**, the TS1250/TS18028 families; **−243 at (P18.109)**, the `downlevelIteration` block; unchanged at (P18.108), which deleted `outFile`'s six arms from `TypeScriptCompiler.kt`, 6,566 → 6,553; +3 at (P18.107), the amd/umd/system fold — deleted behaviour, added KDoc; **−89 at (P18.106)**, five module-resolution derivation copies → one; **−50 at (P18.105)**, the interop arms; unchanged at (P18.104), which lifted the tsconfig option-position scan into `CompilerOptions.kt` for both paths; **+8 at (P18.103)**: code −6, KDoc +14, the `alwaysStrict: false` arms; unchanged at (P18.102), which deleted **249** lines of dead System-module code from `Transformer.kt`, 17,862 → 17,613 — the first (LEGACY.1) removal; **+24 at (P18.101)** — ~150 deleted (TS2346 gate + helpers, a one-fixture TS2300 walker), ~175 for tsgo's TS2309 rule; **+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,15 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.110) — (LEGACY.1) STEP (j1): TS1250/TS1251 AND TS18028 HAVE NO REACHABLE EMITTER IN TypeScript 7 — BOTH FAMILIES DELETED, −285 LINES, 19,538 / 0 / 83 (2026-09-15).**
+The three Go references to the TS1250 family are one uncalled binder function's `return` statements; TS18028 has
+none. Four tsgo cells at a written es5: 0 rows, byte-identical to es2015, where ours printed 8 per file regardless
+of strictness. Both families deleted by reference census (TS1251 shares the emitter and went too);
+`PrivateIdentifierTargetGateTest` deleted as a tsc-6 countdown. **The corpus cannot see the family in either
+direction** (0 active es5/es3 subtests — a first census read 557 off `@target: es5, es2015` lists whose only
+active variation is es2015), so the 17 pins are the gate; two arms partition them exactly. cost_gate 20/20
++0.00%; huge_methods exit 0 (874 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. (j2)-(j4) remain,
+high risk; (g) stays blocked on the embedded-tsconfig skip decision.
 **(P18.109) — (LEGACY.1) STEP (i): TS2802 IS *LIB*-GATED IN TypeScript 7, NOT TARGET-GATED — THE `downlevelIteration` BLOCK WAS WRONG BOTH WAYS AND IS GONE, −243 LINES, 19,527 / 0 / 83 (2026-09-15).**
 16 cells on tsgo: a written `target: es5` checks and emits byte-identically to es2015 (its default lib reaches
 es2015, so `Iterable` exists), 0 TS2802; TS2802 fires only when `lib` excludes es2015, at any target. Our block
@@ -58,13 +67,3 @@ been keyed on resolution fixed in both directions. **The errors screen was a rea
 pins, twelve arms all discriminating; cost_gate 20/20 +0.00%; huge_methods exit 0 (874 classes); grid 8×0/0 +
 emit 78/78 (controls); warning-clean. `Checker.kt` −89. (f) inherits TS5071 (no tsgo emitter, now visible on
 `*×system`); (g) inherits a load-bearing emit-order ancestor walk.
-**(P18.105) — (LEGACY.1) STEP (d2): TypeScript 7 READS NEITHER INTEROP FLAG, THE SYNTHETIC DEFAULT IS A PROPERTY OF THE *TARGET*, AND (d) IS CLOSED, 19,427 / 0 / 83 (2026-09-15).**
-45 scratch projects on tsgo (five module families × the {unset,false,true}² matrix, 8 targets, 4 import forms):
-every cell byte-identical on diagnostics and emit except the TS5108 row; in the Go source both fields are read
-only by the removed-option diagnostic. Deleted: the 12 no-interop Transformer arms, the TS1259/TS2617 emitters,
-NameResolver's gate, the explicit-false conjuncts, and the two boolean options; changed at the default: tsgo's
-`canHaveSyntheticDefault` (a `.d.ts` with named exports is default-importable, an explicit `true` no longer
-blanket-skips TS1192) and TS2595/TS2616 keyed on `module`. 25 pins, seven arms all discriminating; screens
-3,084/0 + 5,688/0 a counted control (the reachable fixtures are dropped or target `.ts`); cost_gate 20/20 +0.00%;
-huge_methods exit 0 (872 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. `Checker.kt` −50. Six
-pre-existing import divergences recorded for (LEGACY.0b)/(e).

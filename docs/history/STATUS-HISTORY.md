@@ -3778,3 +3778,13 @@ positions at all and the harness path had two asymmetries of its own; `tsconfigO
 is a real gate here (`pathMappingInheritedBaseUrl` moves under two arms); cost_gate 20/20 +0.00%; huge_methods
 exit 0 (872 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. Residue: the scanner is a text scan and
 records a commented-out option. (d2), the interop flags' behaviour, is next.
+**(P18.105) — (LEGACY.1) STEP (d2): TypeScript 7 READS NEITHER INTEROP FLAG, THE SYNTHETIC DEFAULT IS A PROPERTY OF THE *TARGET*, AND (d) IS CLOSED, 19,427 / 0 / 83 (2026-09-15).**
+45 scratch projects on tsgo (five module families × the {unset,false,true}² matrix, 8 targets, 4 import forms):
+every cell byte-identical on diagnostics and emit except the TS5108 row; in the Go source both fields are read
+only by the removed-option diagnostic. Deleted: the 12 no-interop Transformer arms, the TS1259/TS2617 emitters,
+NameResolver's gate, the explicit-false conjuncts, and the two boolean options; changed at the default: tsgo's
+`canHaveSyntheticDefault` (a `.d.ts` with named exports is default-importable, an explicit `true` no longer
+blanket-skips TS1192) and TS2595/TS2616 keyed on `module`. 25 pins, seven arms all discriminating; screens
+3,084/0 + 5,688/0 a counted control (the reachable fixtures are dropped or target `.ts`); cost_gate 20/20 +0.00%;
+huge_methods exit 0 (872 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. `Checker.kt` −50. Six
+pre-existing import divergences recorded for (LEGACY.0b)/(e).

@@ -1,3 +1,68 @@
+### Round (P18.100) — (LEGACY.0b) step 15: the F8 span/width family, ten of ten, and the tsc-6 mirror's expectations are FILES (2026-09-14)
+
+**Three commits** (`656ceaa41` feat, `735758798` test, this docs commit). **Suite 19,315 → 19,344 / 0 / 90**,
+9 modules asserted — `tsgoPendingBaselines` 76 → **66**, skipped −10, +29 pins (`TsgoStep15SpanWidthTest`).
+The full run read **ONE red, in the tsc-6 mirror again** (below), re-pointed and its class re-run 17/0.
+Screen **errors 3,077 / 0 and emit 5,688 / 0** on the final binary, all ten rows `--include`d and 0.
+`cost_gate.py` exit 0, all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (871 classes);
+grid 8×`added=0 removed=0` and the emit-mode control 78/78 — CONTROLS, counted (anchor and formatter
+rules move no row on tsc's own sources); warning-clean. `Checker.kt` 195,007 → **195,100** (+93).
+**(LEGACY.0) stays OPEN** on (0b-16).
+
+**SEVEN MECHANISMS, TEN ROWS, AND THE BRIEF WAS WRONG IN FOUR OF THEM.** *M1* file-less ORDER: not
+emission order but the test-support COMPARATOR, which sorted file-less rows by code (2318 < 5053);
+tsgo's `ast.CompareDiagnostics` ranks an OPTIONS diagnostic (`UndefinedTextRange`, pos −1) before a
+checker GLOBAL (the zero range) — our `start` convention (`null` vs `-1`) now decides it, the noLib
+TS2318 loop and the `Awaited` row gained the marker and TS5067 lost it (it is an options diagnostic
+in `program.go`). *M2* the related TS1356 anchors on the ASSIGNED NAME of a nameless function
+expression (`GetAssignedName` off the parent — variable, property assignment, assignment target,
+binding element), the `function` keyword only for a parenthesized / array-element / argument function
+— measured over 8 parents on tsgo; the brief said "keyword". *M3* TS2447 on the operator token
+(`binaryOperatorPos` scans from the left operand's true end, since a `BinaryExpression` records no
+operator position). *M4* TS4032 spans the whole `q.val = f()` expression; the suggested negative
+control is unpinnable because this compiler emits TS4032 for the expando shape only. *M5* TS1092 for
+JSDoc `@template` spans the reparsed type-parameter LIST — `[first @template's @, last tag's end)`,
+where a tag ends at the next tag's `@` or the comment's `*/` — "col 9 width 12" was one shape of
+five, and `comment.text` runs two characters PAST `*/` (the corpus row had passed the first build only
+because the formatter CLAMPS a squiggle to its line). *M6* the pretty renderer prints one `~` for a
+zero-width span. *M7* two halves, and only one row needed both: tsgo's HARNESS pads squiggles by RUNE
+while the header stays UTF-16 (`(7,23)` in the summary, `~` under column 18) — a formatter change,
+two of the three rows; and its regexp SCANNER splits a non-BMP rune into surrogates in non-unicode
+mode with a `pendingLowSurrogate` that does not advance, so a class range whose min is the low
+surrogate anchors on the RUNE — one row, and a tsgo-vs-tsc-6 divergence (tsc 6's own baseline says
+our old answer).
+
+**REFUSED WITH THE COUNT — `pathsValidation5`.** The brief's "bonus" (a tsconfig row sorts before a
+source file's) is NOT M1's mechanism: dropping the tsconfig-first rule closes that row and moves
+**7 green baselines**, all `baseUrl` / `moduleResolution: node` cases with NO baseline anywhere under
+`typescript-go-repo/testdata` — tsgo 7 never runs them. Whether their pristine-shaped order should
+survive is a (LEGACY.1) question; rule restored, count in the entry's reason.
+
+**THE ONE SUITE RED, AND WHY THE AGENT'S GREP MISSED IT.** `TsgoHarnessSelfCheckBaselinesTest`'s
+`constructorWithIncompleteTypeAnnotation` mirror anchored TS2447 on the operand pair (tsc 6) where
+tsgo's own baseline says `(180,45)` on the operator — a THIRD counted annotation (summary row +
+squiggle line). The brief said to grep the mirror classes for the codes; **the mirror's expectations
+are FILES under the tsc-6 baseline dir, so a grep of the class SOURCE finds nothing** — grep the
+mirrored baselines themselves (the 21 names in `tsgoSelfCheckBaselines`).
+
+**PINS AND ABLATION.** 29 pins, 20 red on the pre-change binary, 9 green exactly the controls. Ten
+arms, all discriminating (pin reds / errors-screen mismatches over 3,077): a1 rank by code 1/2; a2
+noLib marker dropped 1/3; a3 `Awaited` marker dropped 0/1; a4 assigned name off 5/1; a5 operator pos
+off 3/1; a6 span → target 1/1; a7 anchor → name 5/1; a8 min width off 1/1; a9 formatter UTF-16 4/3;
+a10 scanner adjustment off 1/1. a1/a2 are a round-927 PAIR on the two `arrayIteration…` rows. Final
+md5s Checker `854421c5…`, Parser `3b9cc57e…`, TypeScriptCompiler `5e6ff3de…` — the orchestrator's
+AFTER arm matched all three. **A harness fact that cost 24 red pins on the first run**: `diagnose()`
+strips the `// @directive` lines before compiling, so a pin's line numbers are of the STRIPPED file.
+
+**RESIDUE.** The formatter still prints ≥1 `~` for a span starting past the line end where tsgo's
+harness prints none ((P18.99)'s `jsEnumCrossFileExport (14,21)`), deliberately untouched.
+
+**WHAT REMAINS (66)**: display/chain-content ~21; F1 silent 5; F2-residue 6; ORDER-model 5;
+TS2683-residue 3; JS emit 3; the `downlevelIteration` TS5102 pair and `pathsValidation5`'s order (both
+(LEGACY.1) questions); the TS2749 JS residue; the rest singletons (`nodeNextPackageSelfName*` ×2 need
+nodenext self-name resolution, `tslib*MissingHelper` ×2 need tslib helper lookup, `isolatedDeclarations*`
+×2, and a dozen one-offs).
+
 ### Round (P18.99) — (LEGACY.0b) step 14: TS2880 unconditional, the JSDoc `@typedef` name has TWO emitters, and TS2749 lands in ten nested JSDoc positions (2026-09-14)
 
 **Three commits** (`e6fa3d310` feat, `521e058e6` test, this docs commit). **Suite 19,292 → 19,315 / 0 / 100**,

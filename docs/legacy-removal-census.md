@@ -53,6 +53,8 @@ are lib-keyed (`checker.go:1677, 11536, 13842, 13861`) — out of scope.
 
 ### 2a. `target` ES5/ES3 (~730 lines of `Checker.kt` + ~90 of `CompilerOptions.kt`)
 
+**(j1) DONE 2026-09-15 ((P18.110), `df7516a6b`, −285 lines): the TS1250/TS1251 family and the TS18028 family are deleted — the receipt "TS1250's emitter is dead code, TS18028 has zero references" held exactly (the three Go references are one uncalled function's returns). (j2)-(j4) remain open.**
+
 Option surface (`CompilerOptions.kt`): `:28-49` `enum class ScriptTarget { ES3, ES5, … }` +
 `fromString` `:33-34`; `:98-99` `target = ES3`, `targetExplicitlySet`; `:274-287`
 `effectiveTarget` with the ES5→ES2015 emit map at `:284`; `:288-348` `defaultedTarget`
