@@ -783,24 +783,11 @@ class TypeScriptCompiler {
     ) {
         // (LEGACY.1)(e) TS5070 (`resolveJsonModule` with `moduleResolution: classic`) is
         // gone with the classic resolution: TypeScript 7 has no such resolution and tsgo has
-        // no emitter for the message. (TS5071 below is (LEGACY.1)(f)'s — `module`
-        // none/system/umd — and tsgo has no emitter for it either.)
-
-        // TS5071: resolveJsonModule with module=none/system/umd
-        // Also fires when moduleResolution=bundler (which implies resolveJsonModule)
-        run {
-            val effectiveResolveJson = options.resolveJsonModule || options.moduleResolution?.lowercase() == "bundler"
-            if (effectiveResolveJson) {
-                val effModule = options.effectiveModule
-                if (effModule == ModuleKind.None || effModule == ModuleKind.System || effModule == ModuleKind.UMD) {
-                    diagnostics.add(Diagnostic(
-                        message = "Option '--resolveJsonModule' cannot be specified when 'module' is set to 'none', 'system', or 'umd'.",
-                        category = DiagnosticCategory.Error,
-                        code = 5071,
-                    ))
-                }
-            }
-        }
+        // no emitter for the message. (LEGACY.1)(f) TS5071 (`resolveJsonModule` with
+        // `module` none/system/umd) is gone the same way: tsgo has no emitter for it
+        // either (message table only), a `.json` import resolves and emits under every
+        // removed kind (measured 2026-09-15), and `GetResolveJsonModule` defaults the
+        // option ON under the derived Bundler resolution.
 
         // B236: TS5052 — exactOptionalPropertyTypes requires strictNullChecks. Real-tsc
         // semantics here (NOT the harness !explicitlyFalse convention): SNC is on only
@@ -1158,10 +1145,7 @@ class TypeScriptCompiler {
         // (which runs the checker with declarationOnly = true).
         if (options.emitDeclarationOnly) {
             val edoParser = Parser(file.content, file.fileName,
-                topLevelAwait = options.effectiveModule.let { m ->
-                    m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
-                        m == ModuleKind.Preserve || m == ModuleKind.System
-                } || fileLooksLikeModuleForAwait(file.content),
+                topLevelAwait = options.effectiveModule.allowsTopLevelAwait || fileLooksLikeModuleForAwait(file.content),
                 noImplicitAny = options.noImplicitAny || options.strict)
             val edoSourceFile = edoParser.parse()
             diagnostics.addAll(edoParser.getDiagnostics())
@@ -3079,10 +3063,9 @@ fun computeParserFlags(fileName: String, content: String, options: CompilerOptio
     // OR when allowJs is true (TypeScript enables JSX for .js files with allowJs)
     val isPlainJsFile = fileName.endsWith(".js") || fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
     val forceJsx = isPlainJsFile && (options.jsx != null || options.allowJs)
-    val topLevelAwait = options.effectiveModule.let { m ->
-        m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
-            m == ModuleKind.Preserve || m == ModuleKind.System
-    } || fileLooksLikeModuleForAwait(content)
+    // (LEGACY.1)(f) [ModuleKind.allowsTopLevelAwait] is tsgo's TS1378 case list, System
+    // included — a live arm keyed on the written kind (measured 2026-09-15).
+    val topLevelAwait = options.effectiveModule.allowsTopLevelAwait || fileLooksLikeModuleForAwait(content)
     return ParserFlags(
         forceJsx = forceJsx,
         topLevelAwait = topLevelAwait,

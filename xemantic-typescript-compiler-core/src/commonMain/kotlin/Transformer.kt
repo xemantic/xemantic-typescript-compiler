@@ -805,11 +805,16 @@ class Transformer(
             helpersAndTransformed.take(helpers.size) + tempVarStmt + helpersAndTransformed.drop(helpers.size)
         } else helpersAndTransformed
 
-        // CommonJS module transform (also for Node16/NodeNext and .cts/.cjs files)
+        // CommonJS module transform (also for Node16/NodeNext and .cts/.cjs files).
+        // (LEGACY.1)(f) tsgo's `getModuleTransformer` (`emitter.go:82-101`) sends every kind
+        // it does not list to the CommonJS transform: `none` and the REMOVED `amd` / `umd` /
+        // `system` ([ModuleKind.foldsToCommonJS]). Measured 2026-09-15: their emit is
+        // byte-identical to the `commonjs` cell of the same program (the one exception,
+        // System's kept enum/namespace leading comments, is recorded there and not copied).
         val effectiveModule = options.effectiveModule
         val fileName = sourceFile.fileName
         val useCJS = !isESModuleFormat(options, fileName) &&
-                (effectiveModule == ModuleKind.CommonJS ||
+                (effectiveModule.foldsToCommonJS ||
                 effectiveModule == ModuleKind.None ||
                 effectiveModule.isNodeNext ||
                 fileName.endsWith(".cts") || fileName.endsWith(".cjs"))
@@ -16793,90 +16798,88 @@ class Transformer(
      * Rewrites identifier references in a statement using [renameMap].
      * Only value-position identifiers are rewritten; declaration names, property keys,
      * and member names are left unchanged.
-     * @param wrapCallsWithZero If true (default), bare-identifier calls rewritten to property-access
-     *   calls are wrapped as (0, expr)() to avoid `this` binding — needed for CJS but not System.
      */
-    private fun rewriteIdInStatement(stmt: Statement, map: Map<String, Expression>, wrapCallsWithZero: Boolean = true): Statement = when (stmt) {
-        is ExpressionStatement -> stmt.copy(expression = rewriteId(stmt.expression, map, wrapCallsWithZero))
+    private fun rewriteIdInStatement(stmt: Statement, map: Map<String, Expression>): Statement = when (stmt) {
+        is ExpressionStatement -> stmt.copy(expression = rewriteId(stmt.expression, map))
         is VariableStatement -> stmt.copy(
             declarationList = stmt.declarationList.copy(
                 declarations = stmt.declarationList.declarations.map { decl ->
-                    decl.copy(initializer = decl.initializer?.let { rewriteId(it, map, wrapCallsWithZero) })
+                    decl.copy(initializer = decl.initializer?.let { rewriteId(it, map) })
                 }
             )
         )
-        is ReturnStatement -> stmt.copy(expression = stmt.expression?.let { rewriteId(it, map, wrapCallsWithZero) })
-        is ThrowStatement -> stmt.copy(expression = stmt.expression?.let { rewriteId(it, map, wrapCallsWithZero) })
+        is ReturnStatement -> stmt.copy(expression = stmt.expression?.let { rewriteId(it, map) })
+        is ThrowStatement -> stmt.copy(expression = stmt.expression?.let { rewriteId(it, map) })
         is IfStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
-            thenStatement = rewriteIdInStatement(stmt.thenStatement, map, wrapCallsWithZero),
-            elseStatement = stmt.elseStatement?.let { rewriteIdInStatement(it, map, wrapCallsWithZero) },
+            expression = rewriteId(stmt.expression, map),
+            thenStatement = rewriteIdInStatement(stmt.thenStatement, map),
+            elseStatement = stmt.elseStatement?.let { rewriteIdInStatement(it, map) },
         )
-        is Block -> stmt.copy(statements = stmt.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) })
+        is Block -> stmt.copy(statements = stmt.statements.map { rewriteIdInStatement(it, map) })
         is DoStatement -> stmt.copy(
-            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
-            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
+            statement = rewriteIdInStatement(stmt.statement, map),
+            expression = rewriteId(stmt.expression, map),
         )
         is WhileStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
-            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
+            expression = rewriteId(stmt.expression, map),
+            statement = rewriteIdInStatement(stmt.statement, map),
         )
         is ForStatement -> stmt.copy(
             initializer = stmt.initializer?.let { init ->
                 when (init) {
                     is VariableDeclarationList -> init.copy(
-                        declarations = init.declarations.map { d -> d.copy(initializer = d.initializer?.let { rewriteId(it, map, wrapCallsWithZero) }) }
+                        declarations = init.declarations.map { d -> d.copy(initializer = d.initializer?.let { rewriteId(it, map) }) }
                     )
-                    is Expression -> rewriteId(init, map, wrapCallsWithZero)
+                    is Expression -> rewriteId(init, map)
                     else -> init
                 }
             },
-            condition = stmt.condition?.let { rewriteId(it, map, wrapCallsWithZero) },
-            incrementor = stmt.incrementor?.let { rewriteId(it, map, wrapCallsWithZero) },
-            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
+            condition = stmt.condition?.let { rewriteId(it, map) },
+            incrementor = stmt.incrementor?.let { rewriteId(it, map) },
+            statement = rewriteIdInStatement(stmt.statement, map),
         )
         is ForInStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
-            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
+            expression = rewriteId(stmt.expression, map),
+            statement = rewriteIdInStatement(stmt.statement, map),
         )
         is ForOfStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
-            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
+            expression = rewriteId(stmt.expression, map),
+            statement = rewriteIdInStatement(stmt.statement, map),
         )
         is SwitchStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
+            expression = rewriteId(stmt.expression, map),
             caseBlock = stmt.caseBlock.map { clause ->
                 when (clause) {
                     is CaseClause -> clause.copy(
-                        expression = rewriteId(clause.expression, map, wrapCallsWithZero),
-                        statements = clause.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) },
+                        expression = rewriteId(clause.expression, map),
+                        statements = clause.statements.map { rewriteIdInStatement(it, map) },
                     )
                     is DefaultClause -> clause.copy(
-                        statements = clause.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) },
+                        statements = clause.statements.map { rewriteIdInStatement(it, map) },
                     )
                     else -> clause
                 }
             }
         )
-        is LabeledStatement -> stmt.copy(statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero))
+        is LabeledStatement -> stmt.copy(statement = rewriteIdInStatement(stmt.statement, map))
         is WithStatement -> stmt.copy(
-            expression = rewriteId(stmt.expression, map, wrapCallsWithZero),
-            statement = rewriteIdInStatement(stmt.statement, map, wrapCallsWithZero),
+            expression = rewriteId(stmt.expression, map),
+            statement = rewriteIdInStatement(stmt.statement, map),
         )
         is TryStatement -> stmt.copy(
-            tryBlock = stmt.tryBlock.copy(statements = stmt.tryBlock.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
+            tryBlock = stmt.tryBlock.copy(statements = stmt.tryBlock.statements.map { rewriteIdInStatement(it, map) }),
             catchClause = stmt.catchClause?.let { cc ->
-                cc.copy(block = cc.block.copy(statements = cc.block.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }))
+                cc.copy(block = cc.block.copy(statements = cc.block.statements.map { rewriteIdInStatement(it, map) }))
             },
             finallyBlock = stmt.finallyBlock?.let { fb ->
-                fb.copy(statements = fb.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) })
+                fb.copy(statements = fb.statements.map { rewriteIdInStatement(it, map) })
             },
         )
         is ClassDeclaration -> stmt.copy(
             heritageClauses = stmt.heritageClauses?.map { hc ->
-                hc.copy(types = hc.types.map { t -> t.copy(expression = rewriteId(t.expression, map, wrapCallsWithZero)) })
+                hc.copy(types = hc.types.map { t -> t.copy(expression = rewriteId(t.expression, map)) })
             },
-            members = stmt.members.map { rewriteIdInClassElement(it, map, wrapCallsWithZero) },
+            members = stmt.members.map { rewriteIdInClassElement(it, map) },
         )
         is FunctionDeclaration -> {
             // Parameters shadow exported names — exclude param names and body-local names from the map
@@ -16891,22 +16894,22 @@ class Transformer(
             val localNames = paramNames + bodyLocalNames
             val bodyMap = if (localNames.isEmpty()) map else map - localNames
             stmt.copy(
-                parameters = stmt.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
-                body = stmt.body?.copy(statements = stmt.body.statements.map { rewriteIdInStatement(it, bodyMap, wrapCallsWithZero) }),
+                parameters = stmt.parameters.map { p -> rewriteIdInParameter(p, map) },
+                body = stmt.body?.copy(statements = stmt.body.statements.map { rewriteIdInStatement(it, bodyMap) }),
             )
         }
         else -> stmt
     }
 
-    private fun rewriteIdInClassElement(member: ClassElement, map: Map<String, Expression>, wrapCallsWithZero: Boolean = true): ClassElement = when (member) {
+    private fun rewriteIdInClassElement(member: ClassElement, map: Map<String, Expression>): ClassElement = when (member) {
         is Constructor -> {
             // Parameters shadow any imported names in the constructor body.
             // Remove parameter-bound names from the rename map before rewriting the body.
             val paramNames = member.parameters.flatMap { collectBoundNames(it.name) }.toSet()
             val bodyMap = if (paramNames.isEmpty()) map else map - paramNames
             member.copy(
-                parameters = member.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
-                body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, bodyMap, wrapCallsWithZero) }),
+                parameters = member.parameters.map { p -> rewriteIdInParameter(p, map) },
+                body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, bodyMap) }),
             )
         }
         is MethodDeclaration -> {
@@ -16914,48 +16917,48 @@ class Transformer(
             val paramNames = member.parameters.flatMap { collectBoundNames(it.name) }.toSet()
             val bodyMap = if (paramNames.isEmpty()) map else map - paramNames
             member.copy(
-                name = rewriteComputedName(member.name, map, wrapCallsWithZero),
-                parameters = member.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
-                body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, bodyMap, wrapCallsWithZero) }),
+                name = rewriteComputedName(member.name, map),
+                parameters = member.parameters.map { p -> rewriteIdInParameter(p, map) },
+                body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, bodyMap) }),
             )
         }
         is PropertyDeclaration -> member.copy(
-            name = rewriteComputedName(member.name, map, wrapCallsWithZero),
-            initializer = member.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
+            name = rewriteComputedName(member.name, map),
+            initializer = member.initializer?.let { rewriteId(it, map) },
         )
         is GetAccessor -> member.copy(
-            name = rewriteComputedName(member.name, map, wrapCallsWithZero),
-            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
+            name = rewriteComputedName(member.name, map),
+            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map) }),
         )
         is SetAccessor -> member.copy(
-            name = rewriteComputedName(member.name, map, wrapCallsWithZero),
-            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
+            name = rewriteComputedName(member.name, map),
+            body = member.body?.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map) }),
         )
         is ClassStaticBlockDeclaration -> member.copy(
-            body = member.body.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
+            body = member.body.copy(statements = member.body.statements.map { rewriteIdInStatement(it, map) }),
         )
         else -> member
     }
 
-    private fun rewriteComputedName(name: Expression, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Expression =
-        if (name is ComputedPropertyName) name.copy(expression = rewriteId(name.expression, map, wrapCallsWithZero)) else name
+    private fun rewriteComputedName(name: Expression, map: Map<String, Expression>): Expression =
+        if (name is ComputedPropertyName) name.copy(expression = rewriteId(name.expression, map)) else name
 
-    private fun rewriteIdInParameter(p: Parameter, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Parameter =
+    private fun rewriteIdInParameter(p: Parameter, map: Map<String, Expression>): Parameter =
         p.copy(
-            name = rewriteIdInBindingName(p.name, map, wrapCallsWithZero),
-            initializer = p.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
+            name = rewriteIdInBindingName(p.name, map),
+            initializer = p.initializer?.let { rewriteId(it, map) },
         )
 
-    private fun rewriteIdInBindingName(name: Expression, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Expression = when (name) {
+    private fun rewriteIdInBindingName(name: Expression, map: Map<String, Expression>): Expression = when (name) {
         is ObjectBindingPattern -> name.copy(
             elements = name.elements.map { elem ->
                 elem.copy(
                     propertyName = when (val pn = elem.propertyName) {
-                        is ComputedPropertyName -> pn.copy(expression = rewriteId(pn.expression, map, wrapCallsWithZero))
+                        is ComputedPropertyName -> pn.copy(expression = rewriteId(pn.expression, map))
                         else -> pn
                     },
-                    name = rewriteIdInBindingName(elem.name, map, wrapCallsWithZero),
-                    initializer = elem.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
+                    name = rewriteIdInBindingName(elem.name, map),
+                    initializer = elem.initializer?.let { rewriteId(it, map) },
                 )
             }
         )
@@ -16963,8 +16966,8 @@ class Transformer(
             elements = name.elements.map { elem ->
                 when (elem) {
                     is BindingElement -> elem.copy(
-                        name = rewriteIdInBindingName(elem.name, map, wrapCallsWithZero),
-                        initializer = elem.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
+                        name = rewriteIdInBindingName(elem.name, map),
+                        initializer = elem.initializer?.let { rewriteId(it, map) },
                     )
                     else -> elem
                 }
@@ -16976,23 +16979,21 @@ class Transformer(
     /**
      * Rewrites identifier references in an expression using [map].
      * Only rewrites identifiers in value position; property names, computed keys, etc. are left alone.
-     * @param wrapCallsWithZero If true (default), bare-identifier calls rewritten to property-access
-     *   calls are wrapped as (0, expr)() to avoid `this` binding — needed for CJS but not System.
      */
-    private fun rewriteId(expr: Expression, map: Map<String, Expression>, wrapCallsWithZero: Boolean = true): Expression = when (expr) {
+    private fun rewriteId(expr: Expression, map: Map<String, Expression>): Expression = when (expr) {
         is Identifier -> map[expr.text] ?: expr
-        is PropertyAccessExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
+        is PropertyAccessExpression -> expr.copy(expression = rewriteId(expr.expression, map))
         is ElementAccessExpression -> expr.copy(
-            expression = rewriteId(expr.expression, map, wrapCallsWithZero),
-            argumentExpression = rewriteId(expr.argumentExpression, map, wrapCallsWithZero),
+            expression = rewriteId(expr.expression, map),
+            argumentExpression = rewriteId(expr.argumentExpression, map),
         )
         is CallExpression -> {
             val origCallee = expr.expression
-            val newCallee = rewriteId(origCallee, map, wrapCallsWithZero)
+            val newCallee = rewriteId(origCallee, map)
             // When a bare identifier call is rewritten to a property access (named import),
             // wrap as (0, expr)() to avoid implicit `this` binding — matches TypeScript CJS emit.
-            // For System format, this wrapping is not needed (wrapCallsWithZero = false).
-            val wrappedCallee = if (wrapCallsWithZero && origCallee is Identifier && origCallee.text in map && newCallee is PropertyAccessExpression) {
+            // ((LEGACY.1)(f): the System-only opt-out this once carried is gone with the format.)
+            val wrappedCallee = if (origCallee is Identifier && origCallee.text in map && newCallee is PropertyAccessExpression) {
                 ParenthesizedExpression(
                     expression = BinaryExpression(
                         left = NumericLiteralNode("0", pos = -1, end = -1),
@@ -17005,12 +17006,12 @@ class Transformer(
             } else newCallee
             expr.copy(
                 expression = wrappedCallee,
-                arguments = expr.arguments.map { rewriteId(it, map, wrapCallsWithZero) },
+                arguments = expr.arguments.map { rewriteId(it, map) },
             )
         }
         is NewExpression -> expr.copy(
-            expression = rewriteId(expr.expression, map, wrapCallsWithZero),
-            arguments = expr.arguments?.map { rewriteId(it, map, wrapCallsWithZero) },
+            expression = rewriteId(expr.expression, map),
+            arguments = expr.arguments?.map { rewriteId(it, map) },
         )
         is BinaryExpression -> {
             // Iteratively walk right spine to avoid StackOverflow on deep chains
@@ -17018,34 +17019,34 @@ class Transformer(
             val spine = ArrayList<BinaryExpression>()
             var cur: Expression = expr
             while (cur is BinaryExpression) { spine.add(cur); cur = cur.right }
-            var result = rewriteId(cur, map, wrapCallsWithZero)
+            var result = rewriteId(cur, map)
             for (i in spine.lastIndex downTo 0) {
                 val n = spine[i]
-                result = n.copy(left = rewriteId(n.left, map, wrapCallsWithZero), right = result)
+                result = n.copy(left = rewriteId(n.left, map), right = result)
             }
             result
         }
         is ConditionalExpression -> expr.copy(
-            condition = rewriteId(expr.condition, map, wrapCallsWithZero),
-            whenTrue = rewriteId(expr.whenTrue, map, wrapCallsWithZero),
-            whenFalse = rewriteId(expr.whenFalse, map, wrapCallsWithZero),
+            condition = rewriteId(expr.condition, map),
+            whenTrue = rewriteId(expr.whenTrue, map),
+            whenFalse = rewriteId(expr.whenFalse, map),
         )
-        is ParenthesizedExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
-        is PrefixUnaryExpression -> expr.copy(operand = rewriteId(expr.operand, map, wrapCallsWithZero))
-        is PostfixUnaryExpression -> expr.copy(operand = rewriteId(expr.operand, map, wrapCallsWithZero))
-        is DeleteExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
-        is TypeOfExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
-        is VoidExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
-        is AwaitExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
-        is YieldExpression -> expr.copy(expression = expr.expression?.let { rewriteId(it, map, wrapCallsWithZero) })
-        is SpreadElement -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
-        is ArrayLiteralExpression -> expr.copy(elements = expr.elements.map { rewriteId(it, map, wrapCallsWithZero) })
+        is ParenthesizedExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is PrefixUnaryExpression -> expr.copy(operand = rewriteId(expr.operand, map))
+        is PostfixUnaryExpression -> expr.copy(operand = rewriteId(expr.operand, map))
+        is DeleteExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is TypeOfExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is VoidExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is AwaitExpression -> expr.copy(expression = rewriteId(expr.expression, map))
+        is YieldExpression -> expr.copy(expression = expr.expression?.let { rewriteId(it, map) })
+        is SpreadElement -> expr.copy(expression = rewriteId(expr.expression, map))
+        is ArrayLiteralExpression -> expr.copy(elements = expr.elements.map { rewriteId(it, map) })
         is ObjectLiteralExpression -> expr.copy(
             properties = expr.properties.map { prop ->
                 when (prop) {
                     is PropertyAssignment -> prop.copy(
-                        name = rewriteComputedName(prop.name, map, wrapCallsWithZero),
-                        initializer = rewriteId(prop.initializer, map, wrapCallsWithZero),
+                        name = rewriteComputedName(prop.name, map),
+                        initializer = rewriteId(prop.initializer, map),
                     )
                     is ShorthandPropertyAssignment -> {
                         val replacement = map[prop.name.text]
@@ -17058,27 +17059,27 @@ class Transformer(
                             )
                         } else prop
                     }
-                    is SpreadAssignment -> prop.copy(expression = rewriteId(prop.expression, map, wrapCallsWithZero))
+                    is SpreadAssignment -> prop.copy(expression = rewriteId(prop.expression, map))
                     is MethodDeclaration -> prop.copy(
-                        name = rewriteComputedName(prop.name, map, wrapCallsWithZero),
-                        body = prop.body?.copy(statements = prop.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
+                        name = rewriteComputedName(prop.name, map),
+                        body = prop.body?.copy(statements = prop.body.statements.map { rewriteIdInStatement(it, map) }),
                     )
                     is GetAccessor -> prop.copy(
-                        name = rewriteComputedName(prop.name, map, wrapCallsWithZero),
-                        body = prop.body?.copy(statements = prop.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
+                        name = rewriteComputedName(prop.name, map),
+                        body = prop.body?.copy(statements = prop.body.statements.map { rewriteIdInStatement(it, map) }),
                     )
                     is SetAccessor -> prop.copy(
-                        name = rewriteComputedName(prop.name, map, wrapCallsWithZero),
-                        body = prop.body?.copy(statements = prop.body.statements.map { rewriteIdInStatement(it, map, wrapCallsWithZero) }),
+                        name = rewriteComputedName(prop.name, map),
+                        body = prop.body?.copy(statements = prop.body.statements.map { rewriteIdInStatement(it, map) }),
                     )
                     else -> prop
                 }
             }
         )
-        is TaggedTemplateExpression -> expr.copy(tag = rewriteId(expr.tag, map, wrapCallsWithZero))
+        is TaggedTemplateExpression -> expr.copy(tag = rewriteId(expr.tag, map))
         is TemplateExpression -> expr.copy(
             templateSpans = expr.templateSpans.map { span ->
-                span.copy(expression = rewriteId(span.expression, map, wrapCallsWithZero))
+                span.copy(expression = rewriteId(span.expression, map))
             }
         )
         is ArrowFunction -> {
@@ -17086,10 +17087,10 @@ class Transformer(
             val paramNames = expr.parameters.flatMapTo(mutableSetOf()) { collectBoundNames(it.name) }
             val bodyMap = if (paramNames.isEmpty()) map else map - paramNames
             expr.copy(
-                parameters = expr.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
+                parameters = expr.parameters.map { p -> rewriteIdInParameter(p, map) },
                 body = when (val b = expr.body) {
-                    is Block -> b.copy(statements = b.statements.map { rewriteIdInStatement(it, bodyMap, wrapCallsWithZero) })
-                    is Expression -> rewriteId(b, bodyMap, wrapCallsWithZero)
+                    is Block -> b.copy(statements = b.statements.map { rewriteIdInStatement(it, bodyMap) })
+                    is Expression -> rewriteId(b, bodyMap)
                     else -> b
                 },
             )
@@ -17109,51 +17110,51 @@ class Transformer(
             val localNames = paramNames + bodyLocalNames
             val localMap = if (localNames.isEmpty()) map else map - localNames
             expr.copy(
-                parameters = expr.parameters.map { p -> rewriteIdInParameter(p, map, wrapCallsWithZero) },
-                body = expr.body.copy(statements = expr.body.statements.map { rewriteIdInStatement(it, localMap, wrapCallsWithZero) }),
+                parameters = expr.parameters.map { p -> rewriteIdInParameter(p, map) },
+                body = expr.body.copy(statements = expr.body.statements.map { rewriteIdInStatement(it, localMap) }),
             )
         }
-        is NonNullExpression -> expr.copy(expression = rewriteId(expr.expression, map, wrapCallsWithZero))
+        is NonNullExpression -> expr.copy(expression = rewriteId(expr.expression, map))
         is ClassExpression -> expr.copy(
             heritageClauses = expr.heritageClauses?.map { hc ->
-                hc.copy(types = hc.types.map { t -> t.copy(expression = rewriteId(t.expression, map, wrapCallsWithZero)) })
+                hc.copy(types = hc.types.map { t -> t.copy(expression = rewriteId(t.expression, map)) })
             },
-            members = expr.members.map { rewriteIdInClassElement(it, map, wrapCallsWithZero) },
+            members = expr.members.map { rewriteIdInClassElement(it, map) },
         )
         // JSX nodes — rewrite identifiers in tag names and expression containers
         is JsxSelfClosingElement -> expr.copy(
-            tagName = rewriteId(expr.tagName, map, wrapCallsWithZero),
-            attributes = expr.attributes.map { rewriteIdInJsxAttr(it, map, wrapCallsWithZero) },
+            tagName = rewriteId(expr.tagName, map),
+            attributes = expr.attributes.map { rewriteIdInJsxAttr(it, map) },
         )
         is JsxElement -> expr.copy(
             openingElement = expr.openingElement.copy(
-                tagName = rewriteId(expr.openingElement.tagName, map, wrapCallsWithZero),
-                attributes = expr.openingElement.attributes.map { rewriteIdInJsxAttr(it, map, wrapCallsWithZero) },
+                tagName = rewriteId(expr.openingElement.tagName, map),
+                attributes = expr.openingElement.attributes.map { rewriteIdInJsxAttr(it, map) },
             ),
-            children = expr.children.map { rewriteIdInJsxChild(it, map, wrapCallsWithZero) },
+            children = expr.children.map { rewriteIdInJsxChild(it, map) },
         )
         is JsxFragment -> expr.copy(
-            children = expr.children.map { rewriteIdInJsxChild(it, map, wrapCallsWithZero) },
+            children = expr.children.map { rewriteIdInJsxChild(it, map) },
         )
         else -> expr
     }
 
-    private fun rewriteIdInJsxAttr(attr: Node, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Node =
+    private fun rewriteIdInJsxAttr(attr: Node, map: Map<String, Expression>): Node =
         when (attr) {
             is JsxAttribute -> when (val v = attr.value) {
-                is JsxExpressionContainer -> attr.copy(value = v.copy(expression = v.expression?.let { rewriteId(it, map, wrapCallsWithZero) }))
+                is JsxExpressionContainer -> attr.copy(value = v.copy(expression = v.expression?.let { rewriteId(it, map) }))
                 else -> attr
             }
-            is JsxSpreadAttribute -> attr.copy(expression = rewriteId(attr.expression, map, wrapCallsWithZero))
+            is JsxSpreadAttribute -> attr.copy(expression = rewriteId(attr.expression, map))
             else -> attr
         }
 
-    private fun rewriteIdInJsxChild(child: Node, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Node =
+    private fun rewriteIdInJsxChild(child: Node, map: Map<String, Expression>): Node =
         when (child) {
-            is JsxExpressionContainer -> child.copy(expression = child.expression?.let { rewriteId(it, map, wrapCallsWithZero) })
-            is JsxElement -> rewriteId(child, map, wrapCallsWithZero) as Node
-            is JsxSelfClosingElement -> rewriteId(child, map, wrapCallsWithZero) as Node
-            is JsxFragment -> rewriteId(child, map, wrapCallsWithZero) as Node
+            is JsxExpressionContainer -> child.copy(expression = child.expression?.let { rewriteId(it, map) })
+            is JsxElement -> rewriteId(child, map) as Node
+            is JsxSelfClosingElement -> rewriteId(child, map) as Node
+            is JsxFragment -> rewriteId(child, map) as Node
             else -> child
         }
 

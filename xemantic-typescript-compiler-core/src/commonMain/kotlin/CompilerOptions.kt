@@ -55,6 +55,52 @@ enum class ModuleKind {
     val isNodeNext: Boolean get() = this == Node16 || this == Node18 || this == Node20 || this == NodeNext
 
     /**
+     * (LEGACY.1)(f) `amd` / `umd` / `system` are REMOVED values in TypeScript 7: tsgo 7.0.2's
+     * `program.go:844-852` reports each (TS5108 `module=AMD` / `module=System` / `module=UMD`,
+     * value-anchored — [CompilerOptions.module] keeps the WRITTEN kind so the option row and
+     * TS2725's `with module AMD` wording can name it) and then IGNORES it: `GetEmitModuleKind()`
+     * (`compileroptions.go:202`) answers the option as written and `getModuleTransformer`
+     * (`emitter.go:82-101`) sends every kind it does not list — the three removed ones and
+     * `none` — to the CommonJS module transform. There is no AMD, UMD or System emit in
+     * TypeScript 7.
+     */
+    val isRemoved: Boolean get() = this == AMD || this == UMD || this == System
+
+    /**
+     * (LEGACY.1)(f) tsgo 7.0.2 checks and emits a removed kind exactly as `commonjs` — the
+     * fold this compiler mirrors at the CommonJS transform ([Transformer]), at the tslib
+     * helper checks, at the explicit-`commonjs` unresolved-import arms and at TS2441.
+     *
+     * Measured 2026-09-15 (20 scratch programs × `module` ∈ {amd, umd, system, commonjs,
+     * esnext, unset} × `target` ∈ {es2020, esnext}, tsgo CLI + `--outDir` + the LSP's
+     * `textDocument/diagnostic`, since the CLI stops at the option rows): the `amd` and `umd`
+     * cells are byte-identical to the `commonjs` cell of the same program on every emitted
+     * file and every checker row — TS1343, TS1378/TS1432, TS2305, TS2441, TS2725 (naming the
+     * written kind), TS2882 — except `importHelpers`, where tsgo emits an UNBOUND
+     * `__exportStar(…)` beside `const tslib_1 = require("tslib")` and reports no TS2354, a
+     * tsgo defect this compiler does not copy (it reports TS2354 as under `commonjs`). The
+     * `system` cell is the `commonjs` cell too, bar three checker arms tsgo keys on the
+     * WRITTEN kind — TS1218 on `export =`, top-level `await` allowed ([allowsTopLevelAwait]),
+     * `import.meta` allowed — and the enum/namespace leading comments its `runtimesyntax.go`
+     * keeps under System.
+     *
+     * `none` is deliberately NOT here: it takes tsgo's CommonJS transform too, but its checker
+     * rows (TS1148) are its own and it is outside (LEGACY.1)'s scope ((k)).
+     */
+    val foldsToCommonJS: Boolean get() = this == CommonJS || isRemoved
+
+    /**
+     * The module kinds under which a top-level `await` / `for await` / `await using` is
+     * legal at `target >= es2017` — tsgo 7.0.2's `grammarchecks.go:1219-1228` /
+     * `:1705-1730` case list: the node kinds, ES2022, ESNext, Preserve and (a live arm
+     * keyed on the WRITTEN kind, measured 2026-09-15 — no TS1378 under `system`, TS1378
+     * under `amd`/`umd` as under `commonjs`) the removed System. The one home for the list
+     * the parser's `topLevelAwait` flag and the checker's TS1378/TS1432 gate both read.
+     */
+    val allowsTopLevelAwait: Boolean
+        get() = this == ES2022 || this == ESNext || isNodeNext || this == Preserve || this == System
+
+    /**
      * tsc's `moduleKind >= ModuleKind.ES2015` — ES2015…ESNext, Node16…NodeNext and Preserve,
      * in the same order tsc numbers them. It decides which wording a named import of an
      * `export =` module gets (`reportInvalidImportEqualsExportMember`, checker.go:14867):

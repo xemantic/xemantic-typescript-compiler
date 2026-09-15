@@ -49944,10 +49944,9 @@ class Checker(
                             && moduleName !in dtsFileBaseNames
                             && !hasNodeModulesPackage(moduleName)
                         ) {
-                            val mod = options.module
-                            if (mod != ModuleKind.AMD && mod != ModuleKind.System && mod != ModuleKind.UMD) {
-                                emitTS2882(specifier, moduleName, source, fileName)
-                            }
+                            // (LEGACY.1)(f) the `amd`/`umd`/`system` exemption is gone: tsgo
+                            // 7.0.2 reports TS2882 under every kind (measured 2026-09-15).
+                            emitTS2882(specifier, moduleName, source, fileName)
                         }
                     } else if (!options.moduleSuffixes.isNullOrEmpty() && isRelative && !moduleName.endsWith(".json")) {
                         // Node resolution with moduleSuffixes: relative imports only resolve to a
@@ -49983,7 +49982,7 @@ class Checker(
                             emitTS2307(specifier, moduleName, source, fileName)
                         }
                     } else if (isRelative && !moduleName.endsWith(".json")
-                        && options.module == ModuleKind.CommonJS
+                        && options.module?.foldsToCommonJS == true
                         && effectiveModuleRes == ModuleResolutionKind.Bundler
                         && options.paths.isNullOrEmpty()
                         && options.baseUrl == null
@@ -50191,7 +50190,7 @@ class Checker(
                             // untyped node_modules `.js` (bareModulePackageInAnyInput) + symlinked
                             // packages whose target is a real `<pkg>/index.{ts,tsx,d.ts}` dir
                             // (bareModuleSymlinkTargetDir).
-                            || (options.module == ModuleKind.CommonJS
+                            || (options.module.foldsToCommonJS
                                 && !bareModulePackageInAnyInput(moduleName)
                                 && !bareModuleSymlinkTargetDir(moduleName)))
                         && options.paths.isNullOrEmpty()
@@ -52399,11 +52398,9 @@ class Checker(
         // resolve to the correct suffixed file (e.g. ./foo → ./foo.ios.ts with suffix ".ios")
         if (!options.moduleSuffixes.isNullOrEmpty()) return
 
-        // For re-exports of 'default': suppress TS2305 only for System module format.
-        // System format handles default re-exports dynamically. ((LEGACY.1)(d2) the
-        // `allowSyntheticDefaultImports: false` exception is gone — a removed value; the
-        // System arm itself is (LEGACY.1)(f)'s.)
-        val suppressDefaultReexportError = options.effectiveModule == ModuleKind.System
+        // (LEGACY.1)(f) the System-only suppression of a `default` re-export's TS2305 is
+        // gone: tsgo 7.0.2 reports the row under `system` as under `commonjs` (measured
+        // 2026-09-15); the (d2) `allowSyntheticDefaultImports: false` exception went before it.
 
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
@@ -52468,7 +52465,7 @@ class Checker(
                                 // 'import { default as X }' — check if module has default
                                 // This is not covered by checkDefaultImports (which only checks importClause.name)
                                 // TS2305 fires if no default export and allowSyntheticDefaultImports is false
-                                if (!hasDefaultExport && !hasExportEquals && !suppressDefaultReexportError) {
+                                if (!hasDefaultExport && !hasExportEquals) {
                                     val nameNode = specEl.propertyName ?: specEl.name
                                     emitTs2305(source, fileName, moduleName, importedName, nameNode)
                                 }
@@ -52654,7 +52651,7 @@ class Checker(
                             // is either propertyName (for `export { X as Y } from ...`) or name
                             val sourceName = (specEl.propertyName ?: specEl.name).text
                             if (sourceName == "default") {
-                                if (!hasDefaultExport && !hasExportEqualsInTarget && !suppressDefaultReexportError) {
+                                if (!hasDefaultExport && !hasExportEqualsInTarget) {
                                     val nameNode = specEl.propertyName ?: specEl.name
                                     emitTs2305(source, fileName, moduleName, "default", nameNode)
                                 }
@@ -53672,7 +53669,7 @@ class Checker(
         // importer (the `export =`->require-alias chain; interop is always on in TS7).
         val nodenextEsm = options.effectiveModule.isNodeNext &&
             (fileName.endsWith(".mts") || fileName.endsWith(".mjs"))
-        val commonjsMode = options.effectiveModule == ModuleKind.CommonJS &&
+        val commonjsMode = options.effectiveModule.foldsToCommonJS &&
             fileName.endsWith(".ts") && !isDtsFile(fileName)
         if (!nodenextEsm && !commonjsMode) return out
         val result = binderResults.firstOrNull { it.sourceFile.fileName == fileName } ?: return out
@@ -75002,10 +74999,9 @@ interface DataView {
      * which the parser permits top-level await but TypeScript forbids it.
      */
     private fun checkTopLevelAwaitTargetGate() {
-        val m = options.effectiveModule
-        val tlaModule = m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
-            m == ModuleKind.Preserve || m == ModuleKind.System
-        if (!tlaModule || options.effectiveTarget >= ScriptTarget.ES2017) return
+        // (LEGACY.1)(f) [ModuleKind.allowsTopLevelAwait] is tsgo's case list; the removed
+        // System is IN it (a live tsgo arm keyed on the written kind, measured 2026-09-15).
+        if (!options.effectiveModule.allowsTopLevelAwait || options.effectiveTarget >= ScriptTarget.ES2017) return
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
@@ -80837,14 +80833,15 @@ interface DataView {
     }
 
     // TS2441: Duplicate identifier 'exports'/'require'. Compiler reserves name in top level scope.
-    // Applies to CJS/AMD/UMD/System module formats where exports/require are runtime variables.
+    // Applies to the CommonJS emit — tsgo's `checkCollisionWithRequireExportsInGeneratedCode`
+    // (`checker.go:10439`) returns for `GetEmitModuleFormatOfFile >= ES2015`, so the removed
+    // `amd`/`umd`/`system` kinds report it exactly as `commonjs` ((LEGACY.1)(f), measured
+    // 2026-09-15: two TS2441 rows in every one of those cells).
     private fun checkReservedModuleNames() {
         // Skip when no emit (no runtime conflict possible)
         if (options.noEmit) return
-        val module = options.effectiveModule
         // Only applies to module formats that use exports/require at runtime
-        if (module != ModuleKind.CommonJS && module != ModuleKind.AMD
-            && module != ModuleKind.UMD && module != ModuleKind.System) return
+        if (!options.effectiveModule.foldsToCommonJS) return
 
         val reservedNames = setOf("exports", "require")
 
@@ -93740,10 +93737,13 @@ interface DataView {
         }
 
         val em = options.effectiveModule
-        // ES-module interop helpers are needed for CJS/AMD/UMD/NodeNext (not System/ES)
-        // modules — unconditionally, TypeScript 7 having no `esModuleInterop` option.
-        val needsEsmHelpers = em == ModuleKind.CommonJS || em == ModuleKind.AMD ||
-                em == ModuleKind.UMD || em.isNodeNext
+        // ES-module interop helpers are needed wherever the CommonJS transform runs — CJS,
+        // NodeNext and ((LEGACY.1)(f)) the removed `amd`/`umd`/`system`, which fold onto it
+        // (not ES modules) — unconditionally, TypeScript 7 having no `esModuleInterop`
+        // option. (tsgo 7.0.2 itself skips this check under the removed kinds and emits an
+        // UNBOUND helper beside its `tslib` import — a defect in a removed configuration
+        // this compiler does not copy; measured 2026-09-15.)
+        val needsEsmHelpers = em.foldsToCommonJS || em.isNodeNext
         // Class extends helpers needed when target < ES2015 ([CompilerOptions.defaultedTarget])
         val needsExtendsHelper = options.defaultedTarget <= ScriptTarget.ES5
         // Decorator helpers always needed when experimentalDecorators is set
@@ -94029,10 +94029,9 @@ interface DataView {
     ) {
         when (stmt) {
             is ExportDeclaration -> {
-                // export * from "X" → needs __exportStar (not for System modules — they inline it)
-                val em = options.effectiveModule
-                val isSystemOrAmd = em == ModuleKind.System || em == ModuleKind.AMD || em == ModuleKind.UMD
-                if (!isSystemOrAmd && stmt.exportClause == null && stmt.moduleSpecifier != null && !stmt.isTypeOnly) {
+                // export * from "X" → needs __exportStar. ((LEGACY.1)(f): the System/AMD/UMD
+                // exemption is gone — those kinds take the CommonJS transform, which emits it.)
+                if (stmt.exportClause == null && stmt.moduleSpecifier != null && !stmt.isTypeOnly) {
                     if ("__exportStar" !in tslibExports) {
                         // Span: from stmt.pos to after ';' (inclusive)
                         val semiPos = source.indexOf(';', stmt.pos)
@@ -188295,7 +188294,7 @@ interface DataView {
                         val isRelativeSpec = bareSpec.startsWith("./") || bareSpec.startsWith("../")
                         if (isRelativeSpec && !isAmbientSpec
                             && !isJsLikeFileName(fileName) && !isDtsFile(fileName)
-                            && options.module == ModuleKind.CommonJS
+                            && options.module?.foldsToCommonJS == true
                             && options.effectiveModuleResolution == ModuleResolutionKind.Bundler
                             && options.paths.isNullOrEmpty()
                             && options.baseUrl == null
@@ -189526,7 +189525,11 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkObjectClassNameConflict() {
-        // Only fires for CommonJS, AMD, System, or UMD modules
+        // Only fires for CommonJS, AMD, System, or UMD modules — tsgo's
+        // `checkClassNameCollisionWithObject` (`checker.go:10587`): the emit format is below
+        // ES2015 and the message prints `c.moduleKind.String()`, i.e. the WRITTEN kind, so
+        // the removed kinds keep their own names here ((LEGACY.1)(f), measured 2026-09-15:
+        // `with module AMD` / `UMD` / `System`).
         val moduleName = when (options.effectiveModule) {
             ModuleKind.CommonJS -> "CommonJS"
             ModuleKind.AMD -> "AMD"

@@ -241,7 +241,8 @@ class Emitter(
         // TypeScript still emits "use strict".
         val effectiveModule = options.effectiveModule
         val isESM = isESModuleFormat(options, sourceFile.fileName)
-        val isCommonJSOverride = effectiveModule == ModuleKind.CommonJS &&
+        // ((LEGACY.1)(f): the removed `amd`/`umd`/`system` fold onto `commonjs` here too.)
+        val isCommonJSOverride = effectiveModule.foldsToCommonJS &&
                 (sourceFile.fileName.endsWith(".mts") || sourceFile.fileName.endsWith(".mjs"))
         if (hasModuleStatements(sourceFile) && isESM && !isCommonJSOverride) return
 
