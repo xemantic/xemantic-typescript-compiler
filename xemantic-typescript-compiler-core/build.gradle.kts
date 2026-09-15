@@ -844,12 +844,6 @@ val tsgoPendingBaselines = listOf(
         "JS emit; layer `submoduleAccepted`. tsgo: //// [file3.ts] | ours: //// [file1.js]"
     ),
     TsgoPendingBaseline(
-        "bigintWithLib.errors.txt",
-        "ours emits EXTRA rows tsgo does not; layer `submoduleAccepted`. tsgo: " +
-        "bigintWithLib.ts(4,1): error TS2350: Only a void function can be called with the 'new' " +
-        "keyword. | ours: Type 'number' is not assignable to type 'bigint'."
-    ),
-    TsgoPendingBaseline(
         "blockScopedBindingsInDownlevelGenerator(target=es2015).errors.txt",
         "F6 top code differs (tsgo TS5102 / ours TS5101); layer `submoduleAccepted`. tsgo: " +
         "error TS5102: Option 'downlevelIteration' has been removed. Please remove it from your " +
@@ -896,12 +890,6 @@ val tsgoPendingBaselines = listOf(
         "`Set<number>`) and controlFlowInstanceof.ts(105,5) TS2721 `Cannot invoke an object " +
         "which is possibly 'null'`; missing: uglify.js(9,7) TS2339 `Property 'val' does not " +
         "exist on type '{}'`. layer `submoduleAccepted`."
-    ),
-    TsgoPendingBaseline(
-        "declarationFileNoCrashOnExtraExportModifier.errors.txt",
-        "F6 top code differs (tsgo - / ours TS2300); layer `submoduleAccepted`. tsgo: ==== " +
-        "input.ts (1 errors) ==== | ours: input.ts(6,14): error TS2300: Duplicate identifier " +
-        "'Sub'."
     ),
     TsgoPendingBaseline(
         "duplicateIdentifierRelatedSpans1.errors.txt",
@@ -1010,23 +998,10 @@ val tsgoPendingBaselines = listOf(
         "\"__esModule\", { value: true }); | ours: module.exports = x;"
     ),
     TsgoPendingBaseline(
-        "incompatibleExports1.errors.txt",
-        "F6 top code differs (tsgo - / ours TS2309); layer `submoduleAccepted`. tsgo: ==== " +
-        "incompatibleExports1.ts (1 errors) ==== | ours: incompatibleExports1.ts(4,5): error " +
-        "TS2309: An export assignment cannot be used in a module with other exported elements."
-    ),
-    TsgoPendingBaseline(
         "incorrectRecursiveMappedTypeConstraint.errors.txt",
         "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
         "TS2751 incorrectRecursiveMappedTypeConstraint.ts:3:10: Circularity originates in type " +
         "at this location. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
-        "interfaceMergeWithNonGenericTypeArguments.errors.txt",
-        "F6 top code differs (tsgo - / ours TS2346); layer `submoduleAccepted`. tsgo: ==== " +
-        "interfaceMergeWithNonGenericTypeArguments.ts (1 errors) ==== | ours: " +
-        "interfaceMergeWithNonGenericTypeArguments.ts(6,3): error TS2346: Call target does not " +
-        "contain any signatures."
     ),
     TsgoPendingBaseline(
         "invariantGenericErrorElaboration.errors.txt",
@@ -1073,9 +1048,12 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "jsExportAssignmentNonMutableLocation.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
-        "file.js(4,1): error TS2309: An export assignment cannot be used in a module with other " +
-        "exported elements. | ours: nothing"
+        "(P18.101) M2 PARTIAL: the TS2309 at `module.exports = {…}` (file.js(4,1), the assignment " +
+        "EXPRESSION, under emitDeclarationOnly) now matches. RESIDUE: tsgo's file.js(8,9) TS2551 " +
+        "`Property 'customSymbol2' does not exist on type '{ customSymbol: symbol; }'. Did you " +
+        "mean 'customSymbol'?` — TypeScript 7 types `exports.p = …` AFTER a `module.exports = X` " +
+        "as a property access on X's type, where this binder still declares it as an export " +
+        "member (silent here). layer `submodule`."
     ),
     TsgoPendingBaseline(
         "jsExportMemberMergedWithModuleAugmentation.errors.txt",
@@ -1092,9 +1070,11 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "jsExportMemberMergedWithModuleAugmentation3.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
-        "/x.js(1,16): error TS2339: Property 'x' does not exist on type 'typeof " +
-        "import(\"/y\")'. | ours: nothing"
+        "(P18.101) M2 PARTIAL: the TS2309 at `module.exports = require(\"./y.js\")` (/x.js(2,1)) " +
+        "now matches. RESIDUE: tsgo's /x.js(1,16) TS2339 `Property 'x' does not exist on type " +
+        "'typeof import(\"/y\")'` — `module.exports.x = 1` BEFORE the `module.exports = require(…)` " +
+        "is a property write on the re-exported module's type in TypeScript 7, an export " +
+        "declaration here. Same family as pushTypeGetTypeOfAlias's residue. layer `submodule`."
     ),
     TsgoPendingBaseline(
         "jsExtendsImplicitAny.errors.txt",
@@ -1230,31 +1210,13 @@ val tsgoPendingBaselines = listOf(
             "typescript-go-repo/testdata), so their order is a (LEGACY.1) question, not a rule.",
     ),
     TsgoPendingBaseline(
-        "prettyFileWithErrorsAndTabs.errors.txt",
-        "ours emits EXTRA rows tsgo does not; layer `submoduleAccepted`. tsgo: !!! error " +
-        "TS2322: Type 'number' is not assignable to type 'string'. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
         "pushTypeGetTypeOfAlias.errors.txt",
-        "F6 top code differs (tsgo TS2309 / ours TS2303); layer `submodule`. tsgo: bar.js(1,1): " +
-        "error TS2309: An export assignment cannot be used in a module with other exported " +
-        "elements. | ours: bar.js(2,1): error TS2303: Circular definition of import alias " +
-        "'blah'."
-    ),
-    TsgoPendingBaseline(
-        "readonlyTupleAndArrayElaboration.errors.txt",
-        "F6 top code differs (tsgo TS4104 / ours TS2345); layer `submoduleAccepted`. tsgo: " +
-        "readonlyTupleAndArrayElaboration.ts(10,20): error TS4104: The type 'readonly [3, 4]' " +
-        "is 'readonly' and cannot be assigned to the mutable type '[number | ours: " +
-        "readonlyTupleAndArrayElaboration.ts(10,20): error TS2345: Argument of type 'readonly " +
-        "[3, 4]' is not assignable to parameter of type '[number, number]'"
-    ),
-    TsgoPendingBaseline(
-        "recursivelyExpandingUnionNoStackoverflow.errors.txt",
-        "F6 top code differs (tsgo - / ours TS2589); layer `submoduleAccepted`. tsgo: ==== " +
-        "recursivelyExpandingUnionNoStackoverflow.ts (1 errors) ==== | ours: " +
-        "recursivelyExpandingUnionNoStackoverflow.ts(3,10): error TS2589: Type instantiation is " +
-        "excessively deep and possibly infinite."
+        "(P18.101) M2 PARTIAL: the TS2309 at `module.exports = function () {}` (bar.js(1,1)) now " +
+        "matches. RESIDUE: tsgo reads `exports.blah` / `exports.someProp` after a `module.exports " +
+        "= fn` as property accesses on `() => void` — two TS2339 at (2,9) and (2,24) — where this " +
+        "checker declares `blah` as an export alias (a false TS2303 `Circular definition of " +
+        "import alias 'blah'` at (2,1)) and types the receiver `{ (): void; blah: any; }`. Same " +
+        "mechanism as jsExportAssignmentNonMutableLocation's residue. layer `submodule`."
     ),
     TsgoPendingBaseline(
         "sourceMapValidationVarInDownLevelGenerator(target=es2015).errors.txt",

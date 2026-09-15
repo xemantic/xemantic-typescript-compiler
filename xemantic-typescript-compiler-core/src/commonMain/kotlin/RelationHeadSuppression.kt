@@ -27,7 +27,8 @@ package com.xemantic.typescript.compiler
 
 /**
  * (LEGACY.0b) F6a — the ONE place TypeScript 7's missing-property HEAD SUPPRESSION
- * is decided.
+ * is decided; since (P18.101) M4 also the readonly-vs-mutable / excessive-complexity one
+ * (see [parseTwoArgLeaf]).
  *
  * tsgo's `Relater.reportRelationError` (`internal/checker/relater.go` ~4809) does not
  * report the outer *not assignable* head at all when the error chain's innermost entry
@@ -82,6 +83,15 @@ internal object RelationHeadSuppression {
     /** `Type '{0}' is missing the following properties from type '{1}': {2}, and {3} more.` */
     private const val MISSING_PROPERTIES_AND_MORE_CODE = 2740
 
+    /** `The type '{0}' is 'readonly' and cannot be assigned to the mutable type '{1}'.` */
+    private const val READONLY_TO_MUTABLE_CODE = 4104
+
+    /** `Excessive complexity comparing types '{0}' and '{1}'.` */
+    private const val EXCESSIVE_COMPLEXITY_CODE = 2859
+
+    /** `Excessive stack depth comparing types '{0}' and '{1}'.` */
+    private const val EXCESSIVE_STACK_DEPTH_CODE = 2321
+
     /**
      * Applies the rule to a whole diagnostic list.
      *
@@ -110,13 +120,16 @@ internal object RelationHeadSuppression {
     fun suppressHead(d: Diagnostic): Diagnostic {
         val rawFirst = d.messageChain.firstOrNull() ?: return d
         val first = rawFirst.trimStart()
-        // (1) `getChainMessage(0)` is one of the three missing-property messages.
-        val leaf = parseMissingProperty(first) ?: return d
+        // (1) `getChainMessage(0)` is one of the three missing-property messages, or one of
+        //     the three two-argument messages of the readonly / excessive-complexity case.
+        val leaf = parseMissingProperty(first) ?: parseTwoArgLeaf(first) ?: return d
         val head = parseRelationHead(d.message) ?: return d
-        // (2) `!isConversionOrInterfaceImplementationMessage(message)`.
-        if (head.conversionOrInterfaceImplementation) return d
+        // (2) `!isConversionOrInterfaceImplementationMessage(message)` — a conjunct of the
+        //     missing-property case ONLY; the readonly case has no such exclusion.
+        if (leaf.missingProperty && head.conversionOrInterfaceImplementation) return d
         // (3) `chainArgsMatch(nil, generalizedSourceType, targetType)` — the property
-        //     name is a wildcard, the two TYPE displays are compared.
+        //     name is a wildcard, the two TYPE displays are compared; for the two-argument
+        //     leaves it is `chainArgsMatch(generalizedSourceType, targetType)`, both compared.
         if (head.source != leaf.source || head.target != leaf.target) return d
         val indent = rawFirst.length - first.length
         return d.copy(
@@ -139,8 +152,9 @@ internal object RelationHeadSuppression {
         val conversionOrInterfaceImplementation: Boolean,
     )
 
-    /** `Property '{0}' …` / `Type '{0}' …`: the two type displays plus the code. */
-    private class Leaf(val source: String, val target: String, val code: Int)
+    /** `Property '{0}' …` / `Type '{0}' …` / `The type '{0}' is 'readonly' …`: the two type
+     *  displays plus the code; [missingProperty] says which of tsgo's two `case` arms it is. */
+    private class Leaf(val source: String, val target: String, val code: Int, val missingProperty: Boolean = true)
 
     /**
      * Every head this compiler emits with a missing-property first chain entry, measured
@@ -237,6 +251,34 @@ internal object RelationHeadSuppression {
                 MISSING_PROPERTIES_AND_MORE_CODE else MISSING_PROPERTIES_CODE
             return Leaf(source, target, code)
         }
+        return null
+    }
+
+    /**
+     * (P18.101) M4 — tsgo's OTHER suppressing `case`, `relater.go` ~4798:
+     *
+     * ```go
+     * case diagnostics.Excessive_complexity_comparing_types_0_and_1,
+     *     diagnostics.Excessive_stack_depth_comparing_types_0_and_1,
+     *     diagnostics.The_type_0_is_readonly_and_cannot_be_assigned_to_the_mutable_type_1:
+     *     if r.chainArgsMatch(generalizedSourceType, targetType) { return }
+     * ```
+     *
+     * `The type '{0}' is 'readonly' and cannot be assigned to the mutable type '{1}'.` (TS4104),
+     * `Excessive complexity comparing types '{0}' and '{1}'.` (TS2859) and `Excessive stack depth
+     * comparing types '{0}' and '{1}'.` (TS2321). Both arguments are compared and there is no
+     * conversion/interface-implementation exclusion — so `arryFn(point)` with a `readonly [3, 4]`
+     * argument is a bare TS4104 head (`readonlyTupleAndArrayElaboration`), while `variadicTuples1`'s
+     * `Type 'T' is not assignable to type '[...T]'.` keeps its head over `The type 'readonly
+     * unknown[]' …` because the generalized source (`T`) is not the chain entry's (`readonly unknown[]`).
+     */
+    private fun parseTwoArgLeaf(chainEntry: String): Leaf? {
+        pair(chainEntry, "The type '", "' is 'readonly' and cannot be assigned to the mutable type '", "'.")
+            ?.let { return Leaf(it.first, it.second, READONLY_TO_MUTABLE_CODE, missingProperty = false) }
+        pair(chainEntry, "Excessive complexity comparing types '", "' and '", "'.")
+            ?.let { return Leaf(it.first, it.second, EXCESSIVE_COMPLEXITY_CODE, missingProperty = false) }
+        pair(chainEntry, "Excessive stack depth comparing types '", "' and '", "'.")
+            ?.let { return Leaf(it.first, it.second, EXCESSIVE_STACK_DEPTH_CODE, missingProperty = false) }
         return null
     }
 

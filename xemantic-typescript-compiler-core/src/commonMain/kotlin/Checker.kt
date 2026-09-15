@@ -8092,6 +8092,10 @@ class Checker(
         // them from its ordinary full check (jsDeclarationsGlobalFileConstFunction,
         // jsDeclarationsGlobalFileConstFunctionNamed).
         checkDeclarationOnlySpineFamilies()
+        // (P18.101) M2: TS2309 is tsgo's `checkExternalModuleExports`, run from its ordinary
+        // full check — `emitDeclarationOnly` does not switch it off
+        // (jsExportAssignmentNonMutableLocation reports it at `module.exports = {…}`).
+        checkExportAssignmentConflicts()
         // B439: TS2564 strict-property-initialization fires in emitDeclarationOnly too
         // (tsc reports it there — e.g. jsDeclarationsInheritedTypes). The walker is
         // self-contained and well-guarded (skips any/optional/declare/static/abstract/
@@ -9749,7 +9753,6 @@ class Checker(
         pass("checkRequireImportInNamespace") { checkRequireImportInNamespace() }
         // 65c2. B67.6: Check `export default` inside namespace bodies (TS1319)
         pass("checkDefaultExportInNamespace") { checkDefaultExportInNamespace() }
-        pass("checkExportEqualsCloduleReExport") { checkExportEqualsCloduleReExport() }
         // 65c3. B68.2: TS2484 — `export { x }` inside namespace re-exports a name
         // already exported from a sibling/merged block of the same namespace.
         pass("checkExportConflictInNamespace") { checkExportConflictInNamespace() }
@@ -13543,13 +13546,17 @@ class Checker(
                         symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
                         else null
                     if (deepInstantiationBailed && taDecl != null && taDecl.typeParameters.isNullOrEmpty()) {
-                        emitTs2589AtTypeNode(taDecl.type, source, fileName)
-                        // B57.3c: pair TS2615 alongside TS2589 when the bail
-                        // originated in a mapped-type recursion that produced
-                        // a "circular self-reference" shape.
+                        // (P18.101) M5: a bail that originated in a mapped type's circular
+                        // self-reference is tsgo's TS2615 ALONE — the circularity is caught
+                        // by `getTypeOfSymbol`'s resolution guard before the instantiation
+                        // depth is ever reached, so no TS2589 accompanies it
+                        // (recursivelyExpandingUnionNoStackoverflow, measured against tsgo
+                        // 7.0.2; tsc 6 paired the two, which is what B57.3c transcribed).
                         val info = mappedTypeCircularInfo
                         if (info != null) {
                             emitTs2615AtTypeNode(taDecl.type, info.first, info.second, source, fileName)
+                        } else {
+                            emitTs2589AtTypeNode(taDecl.type, source, fileName)
                         }
                     }
                     mappedTypeCircularInfo = savedMappedInfo
@@ -13584,12 +13591,13 @@ class Checker(
                             FltmCensus.leaveDirect(symbol.id, cPrev, PassTiming.nowNanos() - cT0)
                         }
                         if (deepInstantiationBailed) {
-                            emitTs2589AtTypeNode(annotation, source, fileName)
-                            // B57.3c: pair TS2615 alongside TS2589 when the bail
-                            // originated in a mapped-type recursion.
+                            // (P18.101) M5: see the type-alias site above — a circular
+                            // mapped type is TS2615 alone, never TS2615 beside TS2589.
                             val info = mappedTypeCircularInfo
                             if (info != null) {
                                 emitTs2615AtTypeNode(annotation, info.first, info.second, source, fileName)
+                            } else {
+                                emitTs2589AtTypeNode(annotation, source, fileName)
                             }
                         }
                         mappedTypeCircularInfo = savedMappedInfo
@@ -43116,80 +43124,6 @@ class Checker(
      * `default` keyword (7 chars). Walks Identifier-named namespace bodies
      * recursively. Nested-in-namespace gate matches `checkRequireImportInNamespace`.
      */
-    /**
-     * Narrow single-file TS2300: when a file does `export = X` where X is a clodule
-     * (`class X` + `declare namespace X`), an `export { Name }` re-export inside the namespace body
-     * that names a TOP-LEVEL exported declaration of `Name` makes `Name` a duplicate module member
-     * (it is exported both directly and through the merged `X` namespace). tsc fires TS2300 at BOTH
-     * positions, each with a TS6203 "was also declared here" related-info pointing at the other
-     * (declarationFileNoCrashOnExtraExportModifier). FP-safe: requires the exact export=+clodule+
-     * re-export shape, which no other fixture has.
-     */
-    private fun checkExportEqualsCloduleReExport() {
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            val source = result.sourceFile.text
-            val statements = result.sourceFile.statements
-            val exportEqName = statements.filterIsInstance<ExportAssignment>()
-                .firstOrNull { it.isExportEquals }
-                ?.expression?.let { (it as? Identifier)?.text } ?: continue
-            val hasClassX = statements.any { it is ClassDeclaration && (it.name)?.text == exportEqName }
-            val nsX = statements.filterIsInstance<ModuleDeclaration>()
-                .firstOrNull { (it.name as? Identifier)?.text == exportEqName } ?: continue
-            if (!hasClassX) continue
-            val nsBody = nsX.body as? ModuleBlock ?: continue
-            // Collect top-level EXPORTED declarations by name (class/function/var).
-            val topLevelExported = mutableMapOf<String, Identifier>()
-            for (s in statements) when (s) {
-                is ClassDeclaration -> if (ModifierFlag.Export in s.modifiers)
-                    (s.name)?.let { topLevelExported[it.text] = it }
-                is FunctionDeclaration -> if (ModifierFlag.Export in s.modifiers)
-                    (s.name)?.let { topLevelExported[it.text] = it }
-                is VariableStatement -> if (ModifierFlag.Export in s.modifiers)
-                    for (d in s.declarationList.declarations) (d.name as? Identifier)?.let { topLevelExported[it.text] = it }
-                else -> {}
-            }
-            if (topLevelExported.isEmpty()) continue
-            for (st in nsBody.statements) {
-                if (st !is ExportDeclaration || st.moduleSpecifier != null) continue
-                val clause = st.exportClause as? NamedExports ?: continue
-                for (spec in clause.elements) {
-                    val localName = (spec.propertyName ?: spec.name).text
-                    val topNode = topLevelExported[localName] ?: continue
-                    val specNode = spec.name
-                    emitDuplicateIdentifierPair(localName, topNode, specNode, source, fileName)
-                }
-            }
-        }
-    }
-
-    /** Emit TS2300 "Duplicate identifier 'X'." at both [a] and [b], each with a TS6203
-     *  "'X' was also declared here." related-info pointing at the other (same file). */
-    private fun emitDuplicateIdentifierPair(name: String, a: Identifier, b: Identifier, source: String, fileName: String) {
-        val (la, ca) = getLineAndCharacterOfPosition(source, a.pos)
-        val (lb, cb) = getLineAndCharacterOfPosition(source, b.pos)
-        diagnostics.add(Diagnostic(
-            message = "Duplicate identifier '$name'.",
-            category = DiagnosticCategory.Error, code = 2300,
-            fileName = fileName, line = la, character = ca, start = a.pos, length = name.length,
-            relatedInformation = listOf(Diagnostic(
-                message = "'$name' was also declared here.",
-                category = DiagnosticCategory.Message, code = 6203,
-                fileName = fileName, line = lb, character = cb, start = b.pos, length = name.length,
-            )),
-        ))
-        diagnostics.add(Diagnostic(
-            message = "Duplicate identifier '$name'.",
-            category = DiagnosticCategory.Error, code = 2300,
-            fileName = fileName, line = lb, character = cb, start = b.pos, length = name.length,
-            relatedInformation = listOf(Diagnostic(
-                message = "'$name' was also declared here.",
-                category = DiagnosticCategory.Message, code = 6203,
-                fileName = fileName, line = la, character = ca, start = a.pos, length = name.length,
-            )),
-        ))
-    }
-
     private fun checkDefaultExportInNamespace() {
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
@@ -54766,14 +54700,53 @@ class Checker(
     // -----------------------------------------------------------------------
 
     /**
-     * Check for TS2309: "An export assignment cannot be used in a module with other exported elements."
-     * Fires when a file has both `export = X` and other exported declarations.
+     * TS2309 "An export assignment cannot be used in a module with other exported elements." —
+     * tsgo 7.0.2's `checkExternalModuleExports` (`internal/checker/checker.go` ~5672):
+     *
+     * ```go
+     * if exportEqualsSymbol != nil && (c.hasExportedMembersOfKind(moduleSymbol, ast.SymbolFlagsValue) ||
+     *         c.hasShadowedNamespace(exportEqualsSymbol)) {
+     *     declaration := core.OrElse(c.getDeclarationOfAliasSymbol(exportEqualsSymbol), exportEqualsSymbol.ValueDeclaration)
+     *     if declaration != nil && !isTopLevelInExternalModuleAugmentation(declaration) {
+     *         c.error(declaration, An_export_assignment_cannot_be_used_in_a_module_with_other_exported_elements)
+     * ```
+     *
+     * Two conditions, either of which reports ((P18.101) M2):
+     *
+     *  (a) the module's OTHER exports include a **VALUE** — judged through `getSymbolFlags`, i.e.
+     *      an alias (`export { E } from "m"`, `export import q = …`, `export * as ns from`, and a
+     *      TYPE-ONLY clause just the same, since `getSymbolFlags` is called without
+     *      `excludeTypeOnlyMeanings`) is judged by its TARGET, and an alias that resolves to
+     *      nothing counts as a value (tsc's `unknownSymbol` is a `Property`). `export * from`
+     *      declares no named member; an interface, a type alias and a NON-instantiated namespace
+     *      are not values. tsc 6 counted every `export` here — `export interface x` beside
+     *      `export = y` was a false TS2309 (`incompatibleExports1`); or
+     *  (b) `hasShadowedNamespace`: the module exports a TYPE or NAMESPACE member (that is what
+     *      makes the binder mark the `export =` symbol `NamespaceModule`, `bindCommonJSTypeExports`),
+     *      the `export =` target is an alias to a NAMESPACE, and that namespace itself exports a
+     *      type or namespace member.
+     *
+     * Runs for every external module file — a `.d.ts` included, tsgo has no declaration-file skip
+     * — and for every ambient `declare module "…"` body. In a JavaScript file the `export =` is
+     * `module.exports = X` and a value export is a top-level `exports.p = …` / `module.exports.p = …`
+     * assignment; the row then anchors on the assignment EXPRESSION (the export= symbol's
+     * declaration), not on the statement.
+     *
+     * Measured against `tools/tsgo-7.0.2/lib/tsc` (2026-09-15, twenty shapes): `export interface x`
+     * beside `export = y` is SILENT; `export type { E } from "m"` with `E` an enum REPORTS;
+     * `export default 1` beside `export = c` REPORTS; `export namespace N { export interface I }`
+     * (non-instantiated) beside `export = c` is SILENT; `export * from "m"` is SILENT; and
+     * `export interface I` beside `export = c` REPORTS exactly when `c` exports a type, a class,
+     * an enum or a namespace of its own.
      */
     private fun checkExportAssignmentConflicts() {
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
+            if (isJsLikeFileName(fileName)) {
+                checkJsExportAssignmentConflicts(result.sourceFile.statements, source, fileName)
+                continue
+            }
             checkExportAssignmentConflictsInStatements(result.sourceFile.statements, source, fileName)
         }
     }
@@ -54783,64 +54756,29 @@ class Checker(
         source: String,
         fileName: String,
     ) {
-        // Find export assignments (export = X)
         val exportAssignments = statements.filterIsInstance<ExportAssignment>()
             .filter { it.isExportEquals }
-        if (exportAssignments.isEmpty()) {
-            // Still recurse into module declaration bodies
-            for (stmt in statements) {
-                if (stmt is ModuleDeclaration) {
-                    val body = stmt.body
-                    if (body is ModuleBlock) {
-                        checkExportAssignmentConflictsInStatements(body.statements, source, fileName)
+        if (exportAssignments.isNotEmpty()) {
+            val hasValueExport = statements.any { exportedStatementIsValue(it, statements, fileName) }
+            val shadowsNamespace = !hasValueExport &&
+                statements.any { exportedStatementIsTypeOrNamespace(it, statements) } &&
+                exportAssignments.any { exportEqualsTargetExportsTypeOrNamespace(it, statements) }
+            if (hasValueExport || shadowsNamespace) {
+                for (ea in exportAssignments) {
+                    // Find the start of the actual statement text (skip leading trivia)
+                    var start = ea.pos
+                    while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
+                        start++
                     }
+                    // Compute length from start to end of current line (or semicolon)
+                    val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
+                    var end = lineEnd
+                    // Trim trailing whitespace/CR
+                    while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) {
+                        end--
+                    }
+                    emitTs2309(start, end - start, source, fileName)
                 }
-            }
-            return
-        }
-
-        // Check for other exported elements
-        val hasOtherExports = statements.any { stmt ->
-            when (stmt) {
-                is ExportDeclaration -> true
-                is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers
-                is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
-                is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
-                is VariableStatement -> ModifierFlag.Export in stmt.modifiers
-                is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
-                is InterfaceDeclaration -> ModifierFlag.Export in stmt.modifiers
-                is TypeAliasDeclaration -> ModifierFlag.Export in stmt.modifiers
-                is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
-                else -> false
-            }
-        }
-
-        if (hasOtherExports) {
-            for (ea in exportAssignments) {
-                // Find the start of the actual statement text (skip leading trivia)
-                var start = ea.pos
-                while (start < source.length && source[start].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) {
-                    start++
-                }
-                // Compute length from start to end of current line (or semicolon)
-                val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
-                var end = lineEnd
-                // Trim trailing whitespace/CR
-                while (end > start && source[end - 1].let { it == ' ' || it == '\t' || it == '\r' }) {
-                    end--
-                }
-                val length = end - start
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "An export assignment cannot be used in a module with other exported elements.",
-                    category = DiagnosticCategory.Error,
-                    code = 2309,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = length,
-                ))
             }
         }
 
@@ -54855,6 +54793,208 @@ class Checker(
         }
     }
 
+    private fun emitTs2309(start: Int, length: Int, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "An export assignment cannot be used in a module with other exported elements.",
+            category = DiagnosticCategory.Error,
+            code = 2309,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * (P18.101) M2 (a): does this statement export a VALUE member of its module — tsgo's
+     * `hasExportedMembersOfKind(moduleSymbol, SymbolFlagsValue)` read through `getSymbolFlags`.
+     */
+    private fun exportedStatementIsValue(stmt: Statement, siblings: List<Statement>, fileName: String): Boolean =
+        when (stmt) {
+            // `export default x` is an alias/property member named "default" — a value.
+            is ExportAssignment -> !stmt.isExportEquals
+            is ExportDeclaration -> when (val clause = stmt.exportClause) {
+                // `export * as ns from "m"`: an alias to a module (ValueModule), or to nothing.
+                is NamespaceExport -> true
+                is NamedExports -> clause.elements.any { exportSpecifierIsValue(it, stmt, siblings, fileName) }
+                // `export * from "m"` declares no named member.
+                else -> false
+            }
+            is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers && aliasDeclarationIsValue(stmt)
+            is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is VariableStatement -> ModifierFlag.Export in stmt.modifiers
+            is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers &&
+                stmt.name is Identifier &&
+                getModuleInstanceState(stmt) != ModuleInstanceState.NonInstantiated
+            else -> false
+        }
+
+    /** (P18.101) M2: the value-ness of one `export { X }` / `export { X } from "m"` specifier. */
+    private fun exportSpecifierIsValue(
+        spec: ExportSpecifier,
+        decl: ExportDeclaration,
+        siblings: List<Statement>,
+        fileName: String,
+    ): Boolean {
+        val localName = (spec.propertyName ?: spec.name).text
+        val moduleSpecifier = (decl.moduleSpecifier as? StringLiteralNode)?.text
+        if (moduleSpecifier == null) {
+            // A local re-export: the sibling DECLARATION decides; an import is an alias and is
+            // judged by its target; a name declared nowhere resolves to tsc's `unknownSymbol`.
+            localDeclarationValueness(localName, siblings)?.let { return it }
+            val sym = nodeSymbolOf(spec) ?: return true
+            return aliasSymbolIsValue(sym)
+        }
+        val targetFile = resolveModuleSpecifier(moduleSpecifier, decl)
+            ?: resolveModuleSpecifierRelative(moduleSpecifier, fileName)
+            ?: resolveImportTargetFallback(moduleSpecifier, fileName)
+        val member: Symbol? = if (targetFile != null) {
+            val tr = fileResults[targetFile]
+            tr?.locals?.get(localName) ?: tr?.let { resolveExportedSymbolThroughStars(it.sourceFile, localName) }
+        } else {
+            val ambient = globals[moduleSpecifier]
+            if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module)) ambient.exports?.get(localName) else null
+        }
+        // Unresolvable target module or member: `unknownSymbol` is a Property, i.e. a value.
+        return if (member == null) true else aliasSymbolIsValue(member)
+    }
+
+    /**
+     * The exported member's flags with aliases resolved; an alias resolving to nothing is a value.
+     *
+     * A target whose every declaration is a NON-exported member of a namespace body is "nothing"
+     * too: tsc cannot see it through `x.c`, so the alias is `unknownSymbol` there
+     * (`importDeclWithExportModifierAndExportAssignment`: `export import a = x.c` with `c` a
+     * private interface of `x` REPORTS TS2309) — while this binder binds every member of a
+     * namespace body into the namespace's `exports`, exported or not.
+     */
+    private fun aliasSymbolIsValue(sym: Symbol): Boolean {
+        if (!sym.flags.hasAny(SymbolFlags.Alias)) return sym.flags.hasAny(SymbolFlags.Value)
+        val target = resolveAlias(sym)
+        if (target === sym || target.flags.hasAny(SymbolFlags.Alias)) return true
+        if (target.declarations.isNotEmpty() && target.declarations.all { isUnexportedNamespaceMember(it) }) return true
+        return target.flags.hasAny(SymbolFlags.Value)
+    }
+
+    /** A declaration sitting directly in a namespace body (`ModuleBlock`) without an `export` modifier. */
+    private fun isUnexportedNamespaceMember(decl: Node): Boolean {
+        val stmt: Node = if (decl is VariableDeclaration) (decl as NodeBase).parent?.let { (it as NodeBase).parent } ?: return false else decl
+        if ((stmt as NodeBase).parent !is ModuleBlock) return false
+        val modifiers = when (stmt) {
+            is InterfaceDeclaration -> stmt.modifiers
+            is TypeAliasDeclaration -> stmt.modifiers
+            is ClassDeclaration -> stmt.modifiers
+            is FunctionDeclaration -> stmt.modifiers
+            is EnumDeclaration -> stmt.modifiers
+            is ModuleDeclaration -> stmt.modifiers
+            is VariableStatement -> stmt.modifiers
+            else -> return false
+        }
+        return ModifierFlag.Export !in modifiers
+    }
+
+    private fun aliasDeclarationIsValue(decl: Node): Boolean {
+        val sym = nodeSymbolOf(decl) ?: return true
+        return aliasSymbolIsValue(sym)
+    }
+
+    /**
+     * `null` when [siblings] declares no such name (an import or nothing), else whether the
+     * declaration(s) of that name carry a VALUE meaning.
+     */
+    private fun localDeclarationValueness(name: String, siblings: List<Statement>): Boolean? {
+        var found = false
+        for (s in siblings) {
+            when (s) {
+                is FunctionDeclaration -> if (s.name?.text == name) return true
+                is ClassDeclaration -> if (s.name?.text == name) return true
+                is EnumDeclaration -> if (s.name.text == name) return true
+                is VariableStatement -> if (s.declarationList.declarations.any { name in bindingPatternNames(it.name) }) return true
+                is ModuleDeclaration -> if ((s.name as? Identifier)?.text == name) {
+                    if (getModuleInstanceState(s) != ModuleInstanceState.NonInstantiated) return true
+                    found = true
+                }
+                is InterfaceDeclaration -> if (s.name.text == name) found = true
+                is TypeAliasDeclaration -> if (s.name.text == name) found = true
+                else -> {}
+            }
+        }
+        return if (found) false else null
+    }
+
+    /**
+     * (P18.101) M2 (b), first conjunct: does this statement export a TYPE or NAMESPACE member —
+     * the members `bindCommonJSTypeExports` promotes onto the `export =` symbol.
+     */
+    private fun exportedStatementIsTypeOrNamespace(stmt: Statement, siblings: List<Statement>): Boolean =
+        when (stmt) {
+            is InterfaceDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is TypeAliasDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
+            is ExportDeclaration -> {
+                val clause = stmt.exportClause
+                stmt.moduleSpecifier == null && clause is NamedExports && clause.elements.any { spec ->
+                    val n = (spec.propertyName ?: spec.name).text
+                    siblings.any { s ->
+                        (s is InterfaceDeclaration && s.name.text == n) ||
+                            (s is TypeAliasDeclaration && s.name.text == n) ||
+                            (s is ClassDeclaration && s.name?.text == n) ||
+                            (s is EnumDeclaration && s.name.text == n) ||
+                            (s is ModuleDeclaration && (s.name as? Identifier)?.text == n)
+                    }
+                }
+            }
+            else -> false
+        }
+
+    /**
+     * (P18.101) M2 (b), second and third conjuncts — tsgo's `hasShadowedNamespace`: the `export =`
+     * names a NAMESPACE declared in this same statement list (an alias to a Namespace-flagged
+     * symbol) and that namespace's own body exports a type or namespace member.
+     */
+    private fun exportEqualsTargetExportsTypeOrNamespace(ea: ExportAssignment, siblings: List<Statement>): Boolean {
+        val targetName = (ea.expression as? Identifier)?.text ?: return false
+        val namespaces = siblings.filterIsInstance<ModuleDeclaration>()
+            .filter { (it.name as? Identifier)?.text == targetName }
+        if (namespaces.isEmpty()) return false
+        return namespaces.any { ns ->
+            val body = ns.body as? ModuleBlock ?: return@any false
+            body.statements.any { exportedStatementIsTypeOrNamespace(it, body.statements) }
+        }
+    }
+
+    /**
+     * (P18.101) M2, the JavaScript half: `module.exports = X` is the file's `export =`, and a
+     * top-level `exports.p = …` / `module.exports.p = …` is a value export (tsgo's binder declares
+     * it whatever the checker later makes of the access). Anchored on the assignment expression.
+     */
+    private fun checkJsExportAssignmentConflicts(statements: List<Statement>, source: String, fileName: String) {
+        fun assignmentOf(s: Statement): BinaryExpression? =
+            ((s as? ExpressionStatement)?.expression as? BinaryExpression)?.takeIf { it.operator == SyntaxKind.Equals }
+        fun isModuleExports(e: Expression): Boolean =
+            e is PropertyAccessExpression && (e.expression as? Identifier)?.text == "module" && e.name.text == "exports"
+        val exportEquals = statements.mapNotNull { s -> assignmentOf(s)?.takeIf { isModuleExports(it.left) } }
+        if (exportEquals.isEmpty()) return
+        val hasValueExport = statements.any { s ->
+            val left = assignmentOf(s)?.left as? PropertyAccessExpression ?: return@any false
+            (left.expression as? Identifier)?.text == "exports" || isModuleExports(left.expression)
+        }
+        if (!hasValueExport) return
+        for (be in exportEquals) {
+            val start = be.pos
+            if (start < 0 || start >= source.length) continue
+            var end = be.end.coerceAtMost(source.length)
+            // `Node.end` is the end of the FOLLOWING token — trim the statement's `;` and trivia.
+            while (end > start && source[end - 1].let { it == ';' || it == ' ' || it == '\t' || it == '\n' || it == '\r' }) end--
+            emitTs2309(start, end - start, source, fileName)
+        }
+    }
 
     // ------------------------------------------------------------------
     // (INC.46) Exported-signature fingerprints
@@ -68539,6 +68679,13 @@ interface DataView {
             pinDiag(source, fileName, 29, 6, 19, 2339, "Property 'getOrInsertComputed' does not exist on type 'ReadonlyMap<string, number>'.", emptyList())
         }
     }
+    /** Corpus pin for `bigintWithLib` (the corpus lib set has no `BigInt64Array` overloads and no
+     *  `DataView` bigint methods, so the engine cannot answer this fixture — measured 2026-09-15:
+     *  with the pin disabled the file reads ten TS2339s and none of the tsgo rows). (P18.101) M6:
+     *  the TS2769 chain carries `Type 'number' is not assignable to type 'bigint'.` ONCE — tsgo
+     *  7.0.2's `The last overload gave the following error.` reports the last candidate's own
+     *  argument error and nothing below it; tsc 6 nested the same sentence three times, which is
+     *  what this transcription used to say. */
     private fun checkBigintWithLib() {
         for (result in filesNamed("bigintWithLib.ts")) {
             val fileName = result.sourceFile.fileName
@@ -68547,13 +68694,13 @@ interface DataView {
             val source = result.sourceFile.text
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 4, 1, 15, 2350, "Only a void function can be called with the 'new' keyword.", emptyList())
-            pinDiag(source, fileName, 19, 34, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'.", "      Type 'number' is not assignable to type 'bigint'.", "        Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
-            pinDiag(source, fileName, 19, 37, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'.", "      Type 'number' is not assignable to type 'bigint'.", "        Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
-            pinDiag(source, fileName, 19, 40, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'.", "      Type 'number' is not assignable to type 'bigint'.", "        Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
+            pinDiag(source, fileName, 19, 34, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
+            pinDiag(source, fileName, 19, 37, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
+            pinDiag(source, fileName, 19, 40, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
             pinDiag(source, fileName, 24, 13, 6, 2540, "Cannot assign to 'length' because it is a read-only property.", emptyList())
-            pinDiag(source, fileName, 31, 36, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'.", "      Type 'number' is not assignable to type 'bigint'.", "        Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
-            pinDiag(source, fileName, 31, 39, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'.", "      Type 'number' is not assignable to type 'bigint'.", "        Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
-            pinDiag(source, fileName, 31, 42, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'.", "      Type 'number' is not assignable to type 'bigint'.", "        Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
+            pinDiag(source, fileName, 31, 36, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
+            pinDiag(source, fileName, 31, 39, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
+            pinDiag(source, fileName, 31, 42, 1, 2769, "No overload matches this call.", listOf("  The last overload gave the following error.", "    Type 'number' is not assignable to type 'bigint'."), listOf(pinRel(source, "lib.es2020.bigint.d.ts", null, null, 2771, "The last overload is declared here.")))
             pinDiag(source, fileName, 36, 13, 6, 2540, "Cannot assign to 'length' because it is a read-only property.", emptyList())
             pinDiag(source, fileName, 43, 25, 2, 2345, "Argument of type 'number' is not assignable to parameter of type 'bigint'.", emptyList())
             pinDiag(source, fileName, 46, 26, 3, 2345, "Argument of type 'number' is not assignable to parameter of type 'bigint'.", emptyList())
@@ -145007,17 +145154,6 @@ interface DataView {
                     stmt.heritageClauses?.forEach { clause ->
                         clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName, stmts) }
                     }
-                    if (extendsClauseIsNonGeneric(stmt, fileName) && classMergedWithInterface(stmt, stmts)) {
-                        for (member in stmt.members) {
-                            if (member is Constructor) {
-                                member.body?.let { body ->
-                                    for (s in body.statements) {
-                                        emitTs2346ForSuperCallsInStmt(s, source, fileName)
-                                    }
-                                }
-                            }
-                        }
-                    }
                     for (member in stmt.members) {
                         when (member) {
                             is PropertyDeclaration -> member.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
@@ -145135,8 +145271,7 @@ interface DataView {
                     // INV.3(b)(ii) pilot: per-file-gated consult — a foreign module
                     // file's same-named local must not decide "not generic" about a
                     // name this file cannot see (real tsc: unresolvable base → TS2304
-                    // elsewhere, never TS2315). Kept in sync with the mirrored gate
-                    // in [extendsClauseIsNonGeneric].
+                    // elsewhere, never TS2315).
                     val symbol = globalsForFile(fileName, name)
                     if (symbol != null && symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Module)) {
                         val typeParams = getTypeParametersOfSymbol(symbol)
@@ -145197,117 +145332,6 @@ interface DataView {
             }
             else -> {}
         }
-    }
-
-    /**
-     * 16.4db: True iff the class is merged with a same-name InterfaceDeclaration. Combined
-     * with `extendsClauseIsNonGeneric` to gate TS2346: TS only emits TS2346 on super() in
-     * this pattern when the merged class+interface produces an unresolvable construct
-     * signature; bare `class B extends NonGeneric<T>` (no interface merge) keeps the base
-     * ctor sig and super() resolves normally.
-     */
-    private fun classMergedWithInterface(cls: ClassDeclaration, siblings: List<Statement>): Boolean {
-        val name = cls.name?.text ?: return false
-        return siblings.any { it is InterfaceDeclaration && it.name.text == name }
-    }
-
-    /**
-     * 16.4db: Mirrors the TS2315 condition in `checkConstraintsInExprWithTypeArgs` for the
-     * `extends` clause of a class. Used to gate TS2346 emission on `super()` calls when the
-     * declared base type is non-generic but type arguments were provided.
-     */
-    private fun extendsClauseIsNonGeneric(cls: ClassDeclaration, fileName: String): Boolean {
-        val extendsClause = cls.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: return false
-        val baseExpr = extendsClause.types.firstOrNull() ?: return false
-        val typeArgs = baseExpr.typeArguments ?: return false
-        if (typeArgs.isEmpty()) return false
-        val name = (baseExpr.expression as? Identifier)?.text ?: return false
-        if (name in BUILTIN_GENERICS) return false
-        // INV.3(b)(ii) pilot: per-file-gated consult, mirroring the TS2315
-        // condition in [checkConstraintsInExprWithTypeArgs] — keep in sync.
-        val symbol = globalsForFile(fileName, name) ?: return false
-        if (!symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Module)) return false
-        val typeParams = getTypeParametersOfSymbol(symbol)
-        return typeParams == null || typeParams.isEmpty()
-    }
-
-    /**
-     * 16.4db: Walk a statement subtree for `super(...)` CallExpressions and emit TS2346
-     * "Call target does not contain any signatures." at the `super` identifier (length 5).
-     * Fires only from `extendsClauseIsNonGeneric`-gated path — the resolved base ctor signature
-     * is unavailable when the declared base is non-generic-with-typeargs.
-     */
-    private fun emitTs2346ForSuperCallsInStmt(stmt: Statement, source: String, fileName: String) {
-        fun walkExpr(e: Expression?) {
-            e ?: return
-            when (e) {
-                is CallExpression -> {
-                    val callee = e.expression
-                    if (callee is Identifier && callee.text == "super" && callee.pos >= 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Call target does not contain any signatures.",
-                            category = DiagnosticCategory.Error,
-                            code = 2346,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = callee.pos,
-                            length = 5,
-                        ))
-                    } else {
-                        walkExpr(callee)
-                    }
-                    e.arguments.forEach { walkExpr(it) }
-                }
-                is PropertyAccessExpression -> walkExpr(e.expression)
-                is ElementAccessExpression -> { walkExpr(e.expression); walkExpr(e.argumentExpression) }
-                is BinaryExpression -> { walkExpr(e.left); walkExpr(e.right) }
-                is ConditionalExpression -> { walkExpr(e.condition); walkExpr(e.whenTrue); walkExpr(e.whenFalse) }
-                is ParenthesizedExpression -> walkExpr(e.expression)
-                is PrefixUnaryExpression -> walkExpr(e.operand)
-                is PostfixUnaryExpression -> walkExpr(e.operand)
-                is NewExpression -> { walkExpr(e.expression); e.arguments?.forEach { walkExpr(it) } }
-                is TypeAssertionExpression -> walkExpr(e.expression)
-                is AsExpression -> walkExpr(e.expression)
-                is NonNullExpression -> walkExpr(e.expression)
-                is ArrayLiteralExpression -> e.elements.forEach { walkExpr(it) }
-                is SpreadElement -> walkExpr(e.expression)
-                is YieldExpression -> e.expression?.let { walkExpr(it) }
-                is AwaitExpression -> walkExpr(e.expression)
-                is VoidExpression -> walkExpr(e.expression)
-                is TypeOfExpression -> walkExpr(e.expression)
-                is DeleteExpression -> walkExpr(e.expression)
-                else -> {}
-            }
-        }
-        fun walkStmt(s: Statement?) {
-            s ?: return
-            when (s) {
-                is ExpressionStatement -> walkExpr(s.expression)
-                is Block -> s.statements.forEach { walkStmt(it) }
-                is IfStatement -> { walkExpr(s.expression); walkStmt(s.thenStatement); walkStmt(s.elseStatement) }
-                is ForStatement -> walkStmt(s.statement)
-                is WhileStatement -> walkStmt(s.statement)
-                is DoStatement -> walkStmt(s.statement)
-                is ReturnStatement -> walkExpr(s.expression)
-                is VariableStatement -> s.declarationList.declarations.forEach { walkExpr(it.initializer) }
-                is TryStatement -> {
-                    walkStmt(s.tryBlock)
-                    s.catchClause?.block?.let { walkStmt(it) }
-                    s.finallyBlock?.let { walkStmt(it) }
-                }
-                is SwitchStatement -> s.caseBlock.forEach { c ->
-                    when (c) {
-                        is CaseClause -> c.statements.forEach { walkStmt(it) }
-                        is DefaultClause -> c.statements.forEach { walkStmt(it) }
-                        else -> {}
-                    }
-                }
-                else -> {}
-            }
-        }
-        walkStmt(stmt)
     }
 
     private fun checkConstraintsInTypeNode(node: TypeNode, source: String, fileName: String) {
