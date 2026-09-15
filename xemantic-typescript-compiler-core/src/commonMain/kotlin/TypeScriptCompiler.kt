@@ -474,7 +474,8 @@ class TypeScriptCompiler {
         if (options.out != null) addUnknownOption("out", "out")
         if (options.suppressExcessPropertyErrors) addUnknownOption("suppressExcessPropertyErrors", "suppressexcesspropertyerrors")
         if (options.suppressImplicitAnyIndexErrors) addUnknownOption("suppressImplicitAnyIndexErrors", "suppressimplicitanyindexerrors")
-        // downlevelIteration (TS5101 - deprecated in 6.0, will stop functioning in 7.0)
+        // downlevelIteration (TS5101 - deprecated in 6.0, will stop functioning in 7.0; tsgo 7.0.2 reports
+        // TS5102 at the key and reads the option NOWHERE else — (LEGACY.1)(i) deleted every behaviour read)
         if (options.downlevelIterationExplicitlySet) addDeprecation5101("downlevelIteration", tsconfigKey = "downleveliteration")
         // outFile deprecation (TS5101 - only when explicitly set, not via 'out')
         if (options.outFile != null && options.out == null) addDeprecation5101("outFile", tsconfigKey = "outfile")

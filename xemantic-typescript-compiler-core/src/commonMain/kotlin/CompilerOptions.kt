@@ -276,7 +276,8 @@ data class CompilerOptions(
     val skipLibCheck: Boolean = false,
     val forceConsistentCasingInFileNames: Boolean = false,
     val noEmitOnError: Boolean = false,
-    val downlevelIteration: Boolean = false,
+    /** (LEGACY.1)(i) `downlevelIteration` is a REMOVED option in TypeScript 7: only the "was
+     *  written" marker survives, for the TS5101/TS5102 row — nothing reads a value. */
     val downlevelIterationExplicitlySet: Boolean = false,
     val importHelpers: Boolean = false,
     val useDefineForClassFields: Boolean? = null,
@@ -1015,7 +1016,7 @@ private fun applyDirectiveArms3(
         "skiplibcheck" -> options.copy(skipLibCheck = boolValue)
         "forceconsistentcasinginfilenames" -> options.copy(forceConsistentCasingInFileNames = boolValue)
         "noemitonerror" -> options.copy(noEmitOnError = boolValue)
-        "downleveliteration" -> options.copy(downlevelIteration = boolValue, downlevelIterationExplicitlySet = true)
+        "downleveliteration" -> options.copy(downlevelIterationExplicitlySet = true) // (LEGACY.1)(i) removed option: the value is not recorded
         "importhelpers" -> options.copy(importHelpers = boolValue)
         // (LEGACY.1)(d2) a removed value: only the "written as false" marker is recorded.
         "allowsyntheticdefaultimports" -> options.copy(allowSyntheticDefaultImportsExplicitlyFalse = !boolValue)

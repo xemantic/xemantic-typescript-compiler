@@ -9869,10 +9869,6 @@ class Checker(
         pass("checkImportTypeUsedAsType") { checkImportTypeUsedAsType() }
         // 70. Check property used before initialization (TS2729)
         pass("checkPropertyUseBeforeInit") { checkPropertyUseBeforeInit() }
-        // 71. Check downlevelIteration requirement (TS2802)
-        if (options.defaultedTarget < ScriptTarget.ES2015 && !options.downlevelIteration) {
-            pass("checkDownlevelIteration") { checkDownlevelIteration() }
-        }
         // 71b. Check BigInt literals at targets lower than ES2020 (TS2737)
         if (options.defaultedTarget < ScriptTarget.ES2020) {
             pass("checkBigIntLiterals") { checkBigIntLiterals() }
@@ -25600,9 +25596,9 @@ class Checker(
         // `languageVersion >= ES2015 && getGlobalIterableType() !== emptyGenericType`.
         // Below that (or with the ES2015+ libs excluded, or under `noLib`) the
         // array-like leg owns the position — TS2495 / TS2461 / TS2569, whose gate is
-        // [spineForOfNonIterableActive] one field up. `downlevelIteration` is
-        // deliberately NOT admitted: it makes tsc CONSULT the iterable protocol but
-        // still passes `undefined` as the errorNode, so no diagnostic is produced.
+        // [spineForOfNonIterableActive] one field up. `downlevelIteration` is a REMOVED
+        // option in TypeScript 7 ((LEGACY.1)(i)): tsgo reports TS5102 and never reads it,
+        // so the gate has no option conjunct; the target conjunct is (LEGACY.1)(j)'s.
         spineIterableOperandActive = options.defaultedTarget >= ScriptTarget.ES2015 &&
             !options.noLib && !spineForOfNonIterableActive
         spineAbstractAccessorActive = options.noImplicitAny || options.strict
@@ -56248,19 +56244,6 @@ class Checker(
             "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
             "toLocaleString", "length", "name", "caller", "arguments", "apply",
             "bind", "call",
-        )
-
-        /** Typed-array constructor names whose `new X(...)` initialized variables iterate as
-         *  `X<ArrayBuffer>` (`NodeList` is a special non-typed-array iterable that needs
-         *  downlevelIteration too). Used by `collectTypedArrayVars` to detect TS2802 spreads
-         *  under target<ES2015 && !downlevelIteration. */
-        private val TYPED_ARRAY_CONSTRUCTORS = setOf(
-            "Int8Array", "Uint8Array", "Uint8ClampedArray",
-            "Int16Array", "Uint16Array",
-            "Int32Array", "Uint32Array",
-            "Float32Array", "Float64Array",
-            "BigInt64Array", "BigUint64Array",
-            "NodeList",
         )
 
         /** Object.prototype members implicitly available on every base class — skip TS2339 for super.X. */
@@ -161934,9 +161917,12 @@ interface DataView {
      * provably-empty intersection) and array-destructuring `never` is always TS2488 in tsc.
      */
     private fun checkIntersectionNeverArrayDestructure() {
-        // TS2488 uses the Symbol.iterator protocol; under ES3/ES5 without downlevelIteration
-        // array-destructuring uses array-likeness (no iterator) → tsc emits NOTHING there.
-        if (options.defaultedTarget < ScriptTarget.ES2015 && !options.downlevelIteration) return
+        // (LEGACY.1)(i) `downlevelIteration` is a REMOVED option in TypeScript 7 and tsgo never
+        // reads it: its TS2488 here is gated on the LIB alone (`getGlobalIterableType() !=
+        // emptyGenericType`), so at a written `target: es5` — whose default `lib.d.ts` pulls
+        // in es2015 through `lib.dom.d.ts` in TypeScript 7 — tsgo DOES report this row. The
+        // surviving target conjunct is the tsc-6 array-likeness leg and is (LEGACY.1)(j)'s.
+        if (options.defaultedTarget < ScriptTarget.ES2015) return
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
@@ -188363,235 +188349,6 @@ interface DataView {
             is OptionalType -> visitBareImportType(type.type, source, fileName)
             is NamedTupleMember -> visitBareImportType(type.type, source, fileName)
             else -> {} // TypeQuery (typeof import(...) is valid) and leaf types: do not recurse
-        }
-    }
-
-    // TS2802: Type can only be iterated through when using --downlevelIteration
-    // -----------------------------------------------------------------------
-
-    private fun checkDownlevelIteration() {
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val typedArrayVars = collectTypedArrayVars(result.sourceFile.statements)
-            checkDownlevelIterationInStatements(result.sourceFile.statements, source, fileName, typedArrayVars = typedArrayVars)
-        }
-    }
-
-    private fun checkDownlevelIterationInStatements(
-        stmts: List<Statement>, source: String, fileName: String,
-        iteratorVars: Set<String> = emptySet(),
-        typedArrayVars: Map<String, String> = emptyMap(),
-    ) {
-        for (stmt in stmts) checkDownlevelIterationInStmt(stmt, source, fileName, iteratorVars, typedArrayVars)
-    }
-
-    /** Collect names of vars initialized from `arguments[<expr>]` at this body's top level.
-     *  These produce `ArrayIterator<any>` when called, so iterating their result needs TS2802. */
-    private fun collectArgumentsIteratorVars(stmts: List<Statement>): Set<String> {
-        val names = mutableSetOf<String>()
-        for (stmt in stmts) {
-            if (stmt !is VariableStatement) continue
-            for (decl in stmt.declarationList.declarations) {
-                val name = decl.name
-                val init = decl.initializer ?: continue
-                if (name !is Identifier) continue
-                if (init !is ElementAccessExpression) continue
-                val target = init.expression
-                if (target is Identifier && target.text == "arguments") {
-                    names.add(name.text)
-                }
-            }
-        }
-        return names
-    }
-
-    /** Collect names of vars initialized from `new TypedArrayConstructor(...)` or `new NodeList()`.
-     *  Iterating these via `[...x]` under target<ES2015 && !downlevelIteration emits TS2802. */
-    private fun collectTypedArrayVars(stmts: List<Statement>): Map<String, String> {
-        val names = mutableMapOf<String, String>()
-        for (stmt in stmts) {
-            if (stmt !is VariableStatement) continue
-            for (decl in stmt.declarationList.declarations) {
-                val name = decl.name
-                val init = decl.initializer ?: continue
-                if (name !is Identifier) continue
-                if (init !is NewExpression) continue
-                val callee = init.expression as? Identifier ?: continue
-                if (callee.text in TYPED_ARRAY_CONSTRUCTORS) {
-                    names[name.text] = callee.text
-                }
-            }
-        }
-        return names
-    }
-
-    /** For a `Identifier(...)` call expression, compute the squiggle length covering
-     *  the callee identifier through the matching `)`. */
-    private fun computeIdentCallSpanLength(callee: Identifier, source: String): Int {
-        var i = callee.pos + callee.text.length
-        while (i < source.length && source[i].isWhitespace()) i++
-        if (i >= source.length || source[i] != '(') return callee.text.length
-        var depth = 1
-        i++
-        while (i < source.length && depth > 0) {
-            when (source[i]) {
-                '(' -> depth++
-                ')' -> depth--
-            }
-            i++
-        }
-        return i - callee.pos
-    }
-
-    private fun checkDownlevelIterationInStmt(
-        stmt: Statement, source: String, fileName: String,
-        iteratorVars: Set<String> = emptySet(),
-        typedArrayVars: Map<String, String> = emptyMap(),
-    ) {
-        when (stmt) {
-            is ForOfStatement -> {
-                // Check if the expression is `arguments` (type IArguments)
-                val expr = stmt.expression
-                if (expr is Identifier && expr.text == "arguments") {
-                    val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "Type 'IArguments' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.",
-                        category = DiagnosticCategory.Error,
-                        code = 2802,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = expr.pos,
-                        length = expr.text.length,
-                    ))
-                } else if (expr is CallExpression) {
-                    val callee = expr.expression
-                    if (callee is Identifier && callee.text in iteratorVars) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
-                        val len = computeIdentCallSpanLength(callee, source)
-                        diagnostics.add(Diagnostic(
-                            message = "Type 'ArrayIterator<any>' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.",
-                            category = DiagnosticCategory.Error,
-                            code = 2802,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = callee.pos,
-                            length = len,
-                        ))
-                    }
-                }
-                // Recurse into body
-                when (val body = stmt.statement) {
-                    is Block -> checkDownlevelIterationInStatements(body.statements, source, fileName, iteratorVars, typedArrayVars)
-                    else -> checkDownlevelIterationInStmt(body, source, fileName, iteratorVars, typedArrayVars)
-                }
-            }
-            is ExpressionStatement -> {
-                checkDownlevelIterationInExpr(stmt.expression, source, fileName, typedArrayVars)
-            }
-            is VariableStatement -> {
-                // Check for array destructuring from `arguments`: let [x, y, z] = arguments
-                for (decl in stmt.declarationList.declarations) {
-                    if (decl.name is ArrayBindingPattern && decl.initializer is Identifier) {
-                        val init = decl.initializer
-                        if (init.text == "arguments") {
-                            val bindingPattern = decl.name
-                            val start = bindingPattern.pos
-                            // Find the closing ] in source text
-                            val closeBracket = source.indexOf(']', start)
-                            val len = if (closeBracket >= 0) closeBracket - start + 1 else bindingPattern.end - start
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "Type 'IArguments' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.",
-                                category = DiagnosticCategory.Error,
-                                code = 2802,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = len,
-                            ))
-                        }
-                    }
-                }
-            }
-            is Block -> checkDownlevelIterationInStatements(stmt.statements, source, fileName, iteratorVars, typedArrayVars)
-            is IfStatement -> {
-                checkDownlevelIterationInStmt(stmt.thenStatement, source, fileName, iteratorVars, typedArrayVars)
-                stmt.elseStatement?.let { checkDownlevelIterationInStmt(it, source, fileName, iteratorVars, typedArrayVars) }
-            }
-            is WhileStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars, typedArrayVars)
-            is DoStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars, typedArrayVars)
-            is ForStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars, typedArrayVars)
-            is ForInStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars, typedArrayVars)
-            is SwitchStatement -> {
-                for (c in stmt.caseBlock) when (c) {
-                    is CaseClause -> checkDownlevelIterationInStatements(c.statements, source, fileName, iteratorVars, typedArrayVars)
-                    is DefaultClause -> checkDownlevelIterationInStatements(c.statements, source, fileName, iteratorVars, typedArrayVars)
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                checkDownlevelIterationInStatements(stmt.tryBlock.statements, source, fileName, iteratorVars, typedArrayVars)
-                stmt.catchClause?.let { checkDownlevelIterationInStatements(it.block.statements, source, fileName, iteratorVars, typedArrayVars) }
-                stmt.finallyBlock?.let { checkDownlevelIterationInStatements(it.statements, source, fileName, iteratorVars, typedArrayVars) }
-            }
-            is LabeledStatement -> checkDownlevelIterationInStmt(stmt.statement, source, fileName, iteratorVars, typedArrayVars)
-            is FunctionDeclaration -> stmt.body?.let {
-                checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements), typedArrayVars)
-            }
-            is ClassDeclaration -> for (member in stmt.members) {
-                when (member) {
-                    is MethodDeclaration -> member.body?.let {
-                        checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements), typedArrayVars)
-                    }
-                    is Constructor -> member.body?.let {
-                        checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements), typedArrayVars)
-                    }
-                    is GetAccessor -> member.body?.let {
-                        checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements), typedArrayVars)
-                    }
-                    is SetAccessor -> member.body?.let {
-                        checkDownlevelIterationInStatements(it.statements, source, fileName, collectArgumentsIteratorVars(it.statements), typedArrayVars)
-                    }
-                    else -> {}
-                }
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
-                checkDownlevelIterationInStatements(it.statements, source, fileName, iteratorVars, typedArrayVars)
-            }
-            else -> {}
-        }
-    }
-
-    /** Check an expression for `[...identifier]` patterns where identifier names a typed-array
-     *  variable. Emits TS2802 on the identifier's span. */
-    private fun checkDownlevelIterationInExpr(
-        expr: Expression, source: String, fileName: String,
-        typedArrayVars: Map<String, String>,
-    ) {
-        if (typedArrayVars.isEmpty()) return
-        if (expr !is ArrayLiteralExpression) return
-        for (element in expr.elements) {
-            if (element !is SpreadElement) continue
-            val spreadTarget = element.expression
-            if (spreadTarget !is Identifier) continue
-            val ctorName = typedArrayVars[spreadTarget.text] ?: continue
-            val displayType = if (ctorName == "NodeList") "NodeList" else "$ctorName<ArrayBuffer>"
-            val (line, character) = getLineAndCharacterOfPosition(source, spreadTarget.pos)
-            diagnostics.add(Diagnostic(
-                message = "Type '$displayType' can only be iterated through when using the '--downlevelIteration' flag or with a '--target' of 'es2015' or higher.",
-                category = DiagnosticCategory.Error,
-                code = 2802,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = spreadTarget.pos,
-                length = spreadTarget.text.length,
-            ))
         }
     }
 
