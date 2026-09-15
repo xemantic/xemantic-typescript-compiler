@@ -27,7 +27,7 @@ it is the live Phase 18 queue.
 
 ### Round (P18.101) — (LEGACY.0b) step 16: ours-only rows on plain TS — seven landed, and three of the six "mechanisms" were tsc-6 transcriptions (2026-09-15)
 
-**Three commits** (`3def1dfb1` feat, `69fe6f6bc` test, this docs commit). **Suite 19,344 → 19,370 / 0 / 83**,
+**Three commits** (`9e3bb73a0` feat, `01d76cf2c` test, this docs commit). **Suite 19,344 → 19,370 / 0 / 83**,
 9 modules asserted — `tsgoPendingBaselines` 66 → **58** (7 removed, 3 entries REWRITTEN to a measured residue),
 skipped −7, +26 pins (`TsgoStep16OursOnlyTest`). The full run read **FIVE reds, all pre-existing pins in other
 classes encoding tsc 6's answer for the very rules this round changed** (below) — re-pointed after a tsgo
