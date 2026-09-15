@@ -3770,3 +3770,11 @@ value-anchored under 7.0). Found for later: `strict: false` alone is still stric
 ours lacks — (LEGACY.0b)), and the PROJECT path anchors no deprecation row (family-wide, (d)). 14 pins, five
 disjoint arms; screens 3,084/0 + 5,688/0 and grid 8×0/0 + emit 78/78 all counted controls; cost_gate 20/20
 +0.00%; huge_methods exit 0 (871 classes); warning-clean.
+**(P18.104) — (LEGACY.1) STEP (d1): DEPRECATION AND REMOVED-OPTION ROWS ANCHOR AT THE tsconfig TOKEN ON BOTH PATHS, FROM ONE SCANNER, 19,402 / 0 / 83 (2026-09-15).**
+tsgo's rule measured over 18 projects: TS5107/TS5108 at the VALUE, TS5101/TS5102 at the KEY, root config only,
+`extends`/CLI options at the root's `compilerOptions` key, file-less without it. The project path had no
+positions at all and the harness path had two asymmetries of its own; `tsconfigOptionPositionsOf` +
+`tsconfigAnchorFor` now serve both. 20 pins (16 in `-project`), five arms all discriminating — the errors screen
+is a real gate here (`pathMappingInheritedBaseUrl` moves under two arms); cost_gate 20/20 +0.00%; huge_methods
+exit 0 (872 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. Residue: the scanner is a text scan and
+records a commented-out option. (d2), the interop flags' behaviour, is next.

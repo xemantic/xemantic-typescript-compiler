@@ -1,3 +1,76 @@
+### Round (P18.99) — (LEGACY.0b) step 14: TS2880 unconditional, the JSDoc `@typedef` name has TWO emitters, and TS2749 lands in ten nested JSDoc positions (2026-09-14)
+
+**Three commits** (`e6fa3d310` feat, `521e058e6` test, this docs commit). **Suite 19,292 → 19,315 / 0 / 100**,
+9 modules asserted — `tsgoPendingBaselines` 84 → **76** (9 closed, 1 re-sized), skipped −9, +23 pins
+(`TsgoStep14MechanismsTest`). Screen **errors 3,067 / 0 and emit 5,688 / 0** on the final binary, all
+nine closed rows `--include`d and 0. `cost_gate.py` exit 0, all 20 counters +0.00% (the new walkers
+run on JS/JSDoc shapes the compiler profile has none of — a CONTROL); `huge_methods.py --fail-over 0`
+exit 0 (871 classes); grid 8×`added=0 removed=0` and the emit-mode control 78/78 (tsc's own sources
+carry no `assert` clause and no JSDoc type — CONTROLS, counted); warning-clean. `Checker.kt`
+194,674 → **195,007** (+333, a SEMANTIC change: two new walkers). **(LEGACY.0) stays OPEN** on (0b-15).
+
+**M1 — TS2880 IS UNCONDITIONAL, AND THE BRIEF NAMED ONE OF ITS TWO GATES.** tsgo emits *Import
+assertions have been replaced by import attributes* from the parser (`parser.go:2504`, `:3045`) and
+from the dynamic-`import()` options check (`checker.go:8272`, on the PROPERTY NAME, `break` after the
+first) and consults nothing: `checkImportAssertionsDeprecated` lost its `ignoreDeprecations` gate AND
+a module-kind gate the brief did not name (tsgo emits under `commonjs` and `node16` too — measured);
+the type form anchors on the `assert` token (width 6, col 30 not 38); a string-named or shorthand
+`assert` is silent; and a side-effect `import "x" assert {…}` was PARSED AND DROPPED (its clause
+never reached the node, so that form emitted nothing) — now kept. Residue: `assert` after a line
+break is not a clause (tsgo `!hasPrecedingLineBreak()`), ours prints tsgo's TS1435 plus a
+pre-existing TS1005/TS2304 for the leftover statement.
+
+**M2 — THE `@typedef` NAME'S TS1003 COMES FROM *TWO* EMITTERS, AND THE BRIEF'S ANCHOR RULE WAS OFF
+BY ONE CHARACTER IN EVERY CASE.** Reading `parseJSDocIdentifierName` ("at the next token") predicted
+the wrong column for every probe; only `reparser.go:47` explained them: (R1) the REPARSER rejects the
+zero-width synthesised name and reports on the ONE CHARACTER BEFORE its position — a syntactic row
+every JS file gets under `allowJs` alone; (R2) the JSDoc parser's own row at the CURRENT token
+(newline / whitespace run / `@`), which `program.go:1350` appends **for checkJs files only** — so
+`jsdocTypedefNoCrash` (allowJs) has one row and `jsEnumCrossFileExport` (checkJs) two, and a
+type-less `@typedef` under `checkJs:false` prints nothing. tsgo's CLI stops at syntactic errors and
+shows only R1, so R2 was read off the harness baselines and pinned as such. `checkJsDocTypedefMissingName`
+carries a faithful mini `ScanJSDocToken` + `skipWhitespaceOrAsterisk` (including its "nothing but
+trivia to the close → skip nothing" branch), the tag-at-line-start rule and `SortAndDeduplicate` for
+the `{T}*/` case where both rows coincide. The JS `type X`/`const X` TS2451 pair is DELETED (tsgo:
+TS8008 alone in `.js`, silent in `.ts` — both pinned).
+
+**M3 — TS2749 IN NESTED JSDoc POSITIONS: SIZED WIDER THAN THE BRIEF AND ALL OF IT LANDED ON ZERO.**
+`checkJsDocNestedValueAsType` sub-parses the JSDoc type text (refusing any expression with a parse
+diagnostic), classifies each `TypeReference` by parent, re-verifies the name at the computed offset
+and applies 16.4ct's value-only rule (file locals minus `@template` / program-wide `@typedef` /
+`@callback` names). The brief named four positions; type argument, array element, union member,
+type-literal member, function-type return and the `@type`/`@returns`/`@typedef` ROOT all screened
+at zero and all landed (7/7 rows byte-exact against tsgo on the `t6` probe). Two neighbours closed
+on the way: a KEYWORD type argument (`fn<string>`) no longer reads an ours-only TS2304, and the
+index-signature wording is tsgo's — TS1268 for a value-typed parameter, TS1337 kept only for a
+literal-typedef / `@template` parameter type (`checkGrammarIndexSignatureParameters`).
+
+**REFUSED WITH NUMBERS — `jsEnumCrossFileExport` stays pending, re-sized.** Its two `enumDef.js`
+TS1003 rows now match; the two `index.js` rows are TS2749 on a QUALIFIED name
+`Host.UserMetrics.Action`, which tsgo resolves only through the JSDoc-NAMESPACE declarations that
+`@typedef {…} Host.UserMetrics.Bargh` creates (a plain expando `Host.A` is TS2503 in tsgo, measured)
+— unmodelled here; and the (14,21) row's width-1 range is the NEWLINE, which tsgo's harness renders as
+an empty squiggle line where our formatter prints `~` at column 21. Two blockers, neither in the brief.
+
+**PINS AND ABLATION.** 23 pins, 18 red on the pre-change binary, the 5 green exactly the declared
+controls (no blind positive). Twelve arms, all discriminating (pin reds / errors-screen mismatches
+over 3,067): a1 `ignoreDeprecations` gate restored 1/1; a2 type-form anchor on the inner `{` 1/2; a3
+M2 off 6/3; a4 R1 anchor +1 5/3; a5 JS TS2451 restored 1/1; a6 fn-type param position off 2/1; a7
+generic head off 3/1; a8 TS1337 for every index name 2/1; a9 side-effect clause dropped 1/0; a10
+module-kind gate restored 1/0; a11 index value test inverted 2/1; a12 R2 not checkJs-gated 1/3.
+Final md5s Parser `c8281f88…`, Checker `5e0f0d75…` — the orchestrator's AFTER arm matched both.
+
+**RESIDUES, RECORDED NOT PINNED.** Closure syntax `function(Thing): void` (tsgo TS1005) and
+`[key: string] boolean` (tsgo TS1021+TS1005) are silent here; `[key: Unknown]` lacks tsgo's TS2304;
+an ours-only TS2882 on `import "./p.json"` under `resolveJsonModule`. **And a build trap hit twice
+in one insertion**: a KDoc containing a literal `/**` opens a NESTED comment (CLAUDE.md's entry) —
+2,325 cascade errors from one line.
+
+**WHAT REMAINS (76)**: display/chain-content ~21; F8 span 10 (TS5053 ×2 among them); F1 silent 5
+(TS2339 ×3, TS2309, the qualified-JSDoc TS2749 above); F2-residue 6; ORDER-model 5; TS2683-residue 3;
+JS emit 3; the `downlevelIteration` TS5102 pair (an owner decision under (LEGACY.1)); the TS2749
+JS residue (`jsExportMemberMergedWithModuleAugmentation`, `jsEnumCrossFileExport`); the rest singletons.
+
 ### Round (P18.98) — (LEGACY.0b) step 13: four checker mechanisms, 8 rows, and the tsc-6 mirror was a countdown for the suggestion cap (2026-09-14)
 
 **Three commits** (`94351d42b` feat, `3d51b5190` test, this docs commit). **Suite 19,260 → 19,292 / 0 / 109**,

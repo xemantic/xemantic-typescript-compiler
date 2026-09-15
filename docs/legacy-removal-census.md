@@ -157,6 +157,8 @@ All three: `TypeScriptCompiler.kt:523-526`.
 
 ### 2g. `downlevelIteration`
 
+**DONE 2026-09-15 ((P18.109), `f52af89ce`) — and the premise was wrong: TS2802 is not target-gated in TypeScript 7, it is LIB-gated (`getIteratedTypeOrElementType` takes the iterable protocol whenever the global `Iterable` exists; a written es5 loads `lib.d.ts` → dom → es2015). The block, its seven functions and `TYPED_ARRAY_CONSTRUCTORS` are deleted; the TS2488 gate keeps its target conjunct for (j); the parse, `downlevelIterationExplicitlySet` and the row stay.**
+
 `CompilerOptions.kt:196-197, 900`; `TypeScriptCompiler.kt:457-458`; the only behavioural
 consumers are `Checker.kt:9861` and `:161374`, both `defaultedTarget < ES2015 &&
 !options.downlevelIteration` — the family is entirely inside the ES5 family.

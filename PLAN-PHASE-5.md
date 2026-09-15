@@ -25,6 +25,55 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.109) — (LEGACY.1) step (i): TS2802 is LIB-gated in TypeScript 7, not target-gated — the `downlevelIteration` block was wrong in both directions and is gone, −243 lines (2026-09-15)
+
+**Three commits** (`f52af89ce` refactor, `f94418c1a` test, this docs commit). **Suite 19,506 → 19,527 / 0 / 83** (+21
+pins: 14 core, 7 `-project`), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS,
+counted: 2 active cases carry `@downlevelIteration` (only their es2015 variation is active), 3 an embedded
+`"target": "es5"` in a NESTED config the harness never applies, 4 an embedded `"ES3"` — no active baseline
+compiles at es5 with an iteration shape, so the pins are the whole gate; `cost_gate.py` exit 0, 20/20 +0.00% (a real
+gate — a checker pass was deleted); `huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0`
+and emit 78/78 — controls; warning-clean with an injected positive control; `spine_closure_audit.py` clean.
+`Checker.kt` 194,996 → **194,753** (−243). **(LEGACY.1)(i) is CHECKED OFF; (g) stays BLOCKED-PENDING-USER; (j)
+`target: ES5/ES3` is the next open step and is HIGH-risk by the item's own label; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE MEASUREMENT, AND IT FIT NEITHER OF THE BRIEF'S TWO OUTCOMES.** 16 cells (target es5 / es2015 / unset ×
+`downlevelIteration` unset / true / false × `lib` default / `[es5]` / `noLib`) over twelve iteration shapes, LSP
+diagnostics + `--outDir` emit. At a written `es5` — whatever the option says — tsgo's checker rows and emit are
+byte-identical to es2015: ES2015-native `for…of`, generators and spreads, no `__values`/`__read`/`__spreadArray`
+helper, **0 TS2802**. TS2802 fires only when `lib` excludes es2015 — three rows on the typed-array shapes — **at
+ANY target, es2015 included**. The mechanism (`checker.go:6084-6164`): `getIteratedTypeOrElementType` takes the
+iterable protocol whenever the global `Iterable` type exists; there is no language-version conjunct and the option
+is read nowhere but the TS5102 row (three references: parser, field, `program.go:874`). At a written es5 the default
+lib is `lib.d.ts`, whose `lib.dom.d.ts` references es2015 (`--listFiles` confirms), so `Iterable` exists. Our block
+was tsc 6's TARGET rule — it fired at a written es5 where tsgo is silent (two false `IArguments` rows per cell)
+and stayed silent under `lib: ["es5"]` at es2015 where tsgo reports.
+
+**WHAT LANDED.** The pass registration, the seven single-caller `checkDownlevelIteration*` functions (228 lines)
+and `TYPED_ARRAY_CONSTRUCTORS` deleted, each shown by a repo-wide reference census to have no other caller; the
+TS2488 sibling gate keeps its `defaultedTarget < ES2015` conjunct for (j) and drops the option read; the boolean
+`downlevelIteration` is deleted (no reader survives); the parse, `downlevelIterationExplicitlySet` and the
+TS5101/TS5102 row stay. Emit byte-identical before/after in all 16 cells.
+
+**WHERE THE ITEM (AND THE BRIEF) WERE WRONG.** Line numbers stale by ~730. "Four active subtests pin the 6.0 line" —
+the two `…has expected errors` halves are `@Ignore`d in `tsgoPendingBaselines` (the TS5102 pair), only the
+`…compiles` halves run. "7 embedded es5 cases, all with tsgo baselines" — 3 es5 (nested, inert) + 4 ES3. And
+TS2802 is neither dead nor target-gated: it is LIB-gated — a rule (j4) must carry when it rebuilds the es5 lib
+set (`Array.from` at a written es5 is TS2550 here and clean in tsgo for the same reason).
+
+**PINS AND ABLATION.** 21 pins; stash-ablation core 7/14 red, project 2/7 red, every `control -` green; a NodeList
+pin was BLIND on the first run (declared through `declare const`, while the old block keyed on `new NodeList()`)
+and was re-pointed. Two arms: a1 the block re-inserted target-gated 7/4/0; a2 the TS2488 gate re-reading the
+option 1/0/0 — the boolean's deletion is structural (a read no longer compiles). Final md5s Checker `420f4469`,
+CompilerOptions `13810fb9`, TypeScriptCompiler `a307c9cc` — the orchestrator's AFTER arm matched all three.
+
+**WHAT (j) INHERITS.** `checkIntersectionNeverArrayDestructure`'s `defaultedTarget < ES2015` return — tsgo reports
+TS2488 there at a written es5 (the one pin named `residue -`); `spineIterableOperandActive`'s target conjunct
+(`spineForOfNonIterableActive` is already lib-shaped); and what tsgo DOES at a written es5 — TS5108 at the value,
+default lib `lib.d.ts` → dom → es2015, checker rows and emit identical to es2015. Recorded residues, none of
+this round's: `lib: ["es5"]` typed-array iteration (tsgo TS2802 at any target), `arguments` spread (tsgo
+TS2495/TS2461), `[..."str"]` (TS2461) — ours silent in all three.
+
 ### Round (P18.108) — (LEGACY.1) step (h): `outFile` was already inert on the project path — six harness-only arms deleted, the reference-directive edges kept as tsgo's program order (2026-09-15)
 
 **Three commits** (`0c956db1a` refactor, `aaef62990` test, this docs commit). **Suite 19,487 → 19,506 / 0 / 83** (+19
@@ -518,79 +567,6 @@ TS2683-residue 3; JS emit 3; the `downlevelIteration` TS5102 pair and `pathsVali
 (LEGACY.1) questions); the TS2749 JS residue; the rest singletons (`nodeNextPackageSelfName*` ×2 need
 nodenext self-name resolution, `tslib*MissingHelper` ×2 need tslib helper lookup, `isolatedDeclarations*`
 ×2, and a dozen one-offs).
-
-### Round (P18.99) — (LEGACY.0b) step 14: TS2880 unconditional, the JSDoc `@typedef` name has TWO emitters, and TS2749 lands in ten nested JSDoc positions (2026-09-14)
-
-**Three commits** (`e6fa3d310` feat, `521e058e6` test, this docs commit). **Suite 19,292 → 19,315 / 0 / 100**,
-9 modules asserted — `tsgoPendingBaselines` 84 → **76** (9 closed, 1 re-sized), skipped −9, +23 pins
-(`TsgoStep14MechanismsTest`). Screen **errors 3,067 / 0 and emit 5,688 / 0** on the final binary, all
-nine closed rows `--include`d and 0. `cost_gate.py` exit 0, all 20 counters +0.00% (the new walkers
-run on JS/JSDoc shapes the compiler profile has none of — a CONTROL); `huge_methods.py --fail-over 0`
-exit 0 (871 classes); grid 8×`added=0 removed=0` and the emit-mode control 78/78 (tsc's own sources
-carry no `assert` clause and no JSDoc type — CONTROLS, counted); warning-clean. `Checker.kt`
-194,674 → **195,007** (+333, a SEMANTIC change: two new walkers). **(LEGACY.0) stays OPEN** on (0b-15).
-
-**M1 — TS2880 IS UNCONDITIONAL, AND THE BRIEF NAMED ONE OF ITS TWO GATES.** tsgo emits *Import
-assertions have been replaced by import attributes* from the parser (`parser.go:2504`, `:3045`) and
-from the dynamic-`import()` options check (`checker.go:8272`, on the PROPERTY NAME, `break` after the
-first) and consults nothing: `checkImportAssertionsDeprecated` lost its `ignoreDeprecations` gate AND
-a module-kind gate the brief did not name (tsgo emits under `commonjs` and `node16` too — measured);
-the type form anchors on the `assert` token (width 6, col 30 not 38); a string-named or shorthand
-`assert` is silent; and a side-effect `import "x" assert {…}` was PARSED AND DROPPED (its clause
-never reached the node, so that form emitted nothing) — now kept. Residue: `assert` after a line
-break is not a clause (tsgo `!hasPrecedingLineBreak()`), ours prints tsgo's TS1435 plus a
-pre-existing TS1005/TS2304 for the leftover statement.
-
-**M2 — THE `@typedef` NAME'S TS1003 COMES FROM *TWO* EMITTERS, AND THE BRIEF'S ANCHOR RULE WAS OFF
-BY ONE CHARACTER IN EVERY CASE.** Reading `parseJSDocIdentifierName` ("at the next token") predicted
-the wrong column for every probe; only `reparser.go:47` explained them: (R1) the REPARSER rejects the
-zero-width synthesised name and reports on the ONE CHARACTER BEFORE its position — a syntactic row
-every JS file gets under `allowJs` alone; (R2) the JSDoc parser's own row at the CURRENT token
-(newline / whitespace run / `@`), which `program.go:1350` appends **for checkJs files only** — so
-`jsdocTypedefNoCrash` (allowJs) has one row and `jsEnumCrossFileExport` (checkJs) two, and a
-type-less `@typedef` under `checkJs:false` prints nothing. tsgo's CLI stops at syntactic errors and
-shows only R1, so R2 was read off the harness baselines and pinned as such. `checkJsDocTypedefMissingName`
-carries a faithful mini `ScanJSDocToken` + `skipWhitespaceOrAsterisk` (including its "nothing but
-trivia to the close → skip nothing" branch), the tag-at-line-start rule and `SortAndDeduplicate` for
-the `{T}*/` case where both rows coincide. The JS `type X`/`const X` TS2451 pair is DELETED (tsgo:
-TS8008 alone in `.js`, silent in `.ts` — both pinned).
-
-**M3 — TS2749 IN NESTED JSDoc POSITIONS: SIZED WIDER THAN THE BRIEF AND ALL OF IT LANDED ON ZERO.**
-`checkJsDocNestedValueAsType` sub-parses the JSDoc type text (refusing any expression with a parse
-diagnostic), classifies each `TypeReference` by parent, re-verifies the name at the computed offset
-and applies 16.4ct's value-only rule (file locals minus `@template` / program-wide `@typedef` /
-`@callback` names). The brief named four positions; type argument, array element, union member,
-type-literal member, function-type return and the `@type`/`@returns`/`@typedef` ROOT all screened
-at zero and all landed (7/7 rows byte-exact against tsgo on the `t6` probe). Two neighbours closed
-on the way: a KEYWORD type argument (`fn<string>`) no longer reads an ours-only TS2304, and the
-index-signature wording is tsgo's — TS1268 for a value-typed parameter, TS1337 kept only for a
-literal-typedef / `@template` parameter type (`checkGrammarIndexSignatureParameters`).
-
-**REFUSED WITH NUMBERS — `jsEnumCrossFileExport` stays pending, re-sized.** Its two `enumDef.js`
-TS1003 rows now match; the two `index.js` rows are TS2749 on a QUALIFIED name
-`Host.UserMetrics.Action`, which tsgo resolves only through the JSDoc-NAMESPACE declarations that
-`@typedef {…} Host.UserMetrics.Bargh` creates (a plain expando `Host.A` is TS2503 in tsgo, measured)
-— unmodelled here; and the (14,21) row's width-1 range is the NEWLINE, which tsgo's harness renders as
-an empty squiggle line where our formatter prints `~` at column 21. Two blockers, neither in the brief.
-
-**PINS AND ABLATION.** 23 pins, 18 red on the pre-change binary, the 5 green exactly the declared
-controls (no blind positive). Twelve arms, all discriminating (pin reds / errors-screen mismatches
-over 3,067): a1 `ignoreDeprecations` gate restored 1/1; a2 type-form anchor on the inner `{` 1/2; a3
-M2 off 6/3; a4 R1 anchor +1 5/3; a5 JS TS2451 restored 1/1; a6 fn-type param position off 2/1; a7
-generic head off 3/1; a8 TS1337 for every index name 2/1; a9 side-effect clause dropped 1/0; a10
-module-kind gate restored 1/0; a11 index value test inverted 2/1; a12 R2 not checkJs-gated 1/3.
-Final md5s Parser `c8281f88…`, Checker `5e0f0d75…` — the orchestrator's AFTER arm matched both.
-
-**RESIDUES, RECORDED NOT PINNED.** Closure syntax `function(Thing): void` (tsgo TS1005) and
-`[key: string] boolean` (tsgo TS1021+TS1005) are silent here; `[key: Unknown]` lacks tsgo's TS2304;
-an ours-only TS2882 on `import "./p.json"` under `resolveJsonModule`. **And a build trap hit twice
-in one insertion**: a KDoc containing a literal `/**` opens a NESTED comment (CLAUDE.md's entry) —
-2,325 cascade errors from one line.
-
-**WHAT REMAINS (76)**: display/chain-content ~21; F8 span 10 (TS5053 ×2 among them); F1 silent 5
-(TS2339 ×3, TS2309, the qualified-JSDoc TS2749 above); F2-residue 6; ORDER-model 5; TS2683-residue 3;
-JS emit 3; the `downlevelIteration` TS5102 pair (an owner decision under (LEGACY.1)); the TS2749
-JS residue (`jsExportMemberMergedWithModuleAugmentation`, `jsEnumCrossFileExport`); the rest singletons.
 
 ## QUEUE
 
@@ -1316,7 +1292,7 @@ CLAUDE.md § "AI agent mission".
     ordering, "only used when outFile is set"; `ReferenceDirectiveCrawlTest` may be its single pin — convert), `:1227`,
     `:2468-2473`, the `outFile == null` conjuncts at `:876-877, 1601-1602, 1908-1923`; keep parse and keep `out`
     (a 5.5 removal, `ApplyDirectiveSplitTest.kt:181` pins it).
-  - [ ] (i) `downlevelIteration` — `Checker.kt:9861-9863`, `:161374`, the whole TS2802 block `187638-187866` (229
+  - [x] (i) LANDED 2026-09-15 ((P18.109), `f52af89ce`, −243 lines: TS2802 is LIB-gated in tsgo — it fires only when `lib` excludes es2015, at ANY target, and never at a written es5 whose default lib reaches es2015 — so the whole target-gated block was wrong in both directions and is deleted; the TS2488 sibling gate keeps its target conjunct for (j); parse, `downlevelIterationExplicitlySet` and the TS5101/5102 row kept; (j) inherits `checkIntersectionNeverArrayDestructure`'s target return and `spineIterableOperandActive`'s conjunct) — `downlevelIteration` — `Checker.kt:9861-9863`, `:161374`, the whole TS2802 block `187638-187866` (229
     lines, seven single-caller functions); KEEP `TypeScriptCompiler.kt:457-458`'s TS5101 at the 6.0 default; run the
     four active subtests by name. Must precede or accompany (j).
   - [ ] (j) `target: ES5`/ES3, split: (j1) the two dead diagnostics TS1250 (`Checker.kt:9149-9151` + `80735-80875`,
