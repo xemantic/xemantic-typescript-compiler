@@ -134,6 +134,8 @@ tsconfig dir); `NameResolver.kt:573, 604-609`; `Checker.kt` guards of the shape
 
 ### 2e. `outFile` (~50 lines)
 
+**DONE 2026-09-15 ((P18.108), `0c956db1a`) — 13 net lines, not ~50: the six behaviour arms (`jsName`, `commonSourceDir`'s skip, `transformOrder`, the `.js`/`.jsx` admission, the None/outFile drop, TS5074's conjunct) are deleted; `:3075-3076`'s reference-directive edges are KEPT — they are program order with or without `outFile`, as tsgo's `--listFiles` shows; the parse, `out` and the TS5101/TS5102 row stay.**
+
 `TypeScriptCompiler.kt:459-460` TS5101, `:876-877` TS5074, `:1227` `jsName`, `:1601-1602`,
 `:1615` `transformOrder` + `:3075-3076` (reference-directive ordering, "only used when
 outFile is set"), `:1908-1923`, `:2079`, `:2468-2473`; `CompilerOptions.kt:205, 223,

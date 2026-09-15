@@ -3761,3 +3761,12 @@ System onto CommonJS" is NOT today's behaviour — System/AMD/UMD pass module st
 so it is step (f)'s routing change, with `TypeScriptCompiler.kt`'s five System arms and a never-`false`
 `wrapCallsWithZero` parameter. Screen emit 5,688/0 (the instrument), errors 3,084/0; cost_gate 20/20 +0.00%;
 huge_methods exit 0 (871 classes); grid 8×0/0 + emit 78/78 (controls, counted); warning-clean.
+**(P18.103) — (LEGACY.1) STEP (c): TypeScript 7 BINDS EVERY FILE STRICT, SO `alwaysStrict: false` WAS FOUR DEAD ARMS AND ONE MISSING DIAGNOSTIC, 19,382 / 0 / 83 (2026-09-15).**
+Six configurations measured on tsgo (LSP diagnostics + emitted JS): TS1101 at a `with` and `"use strict"` in
+every file whatever the flags say; the Go binder has no `inStrictMode`. The Emitter suppression, the
+`spineWithStrictActive` gate, the `explicitNonStrict` false-disjunct and a TS1344 return are deleted; the
+removed-option row the item said to KEEP did not exist and was added (TS5107 at the 6.0 default, TS5108
+value-anchored under 7.0). Found for later: `strict: false` alone is still strict in tsgo (three TS1212 rows
+ours lacks — (LEGACY.0b)), and the PROJECT path anchors no deprecation row (family-wide, (d)). 14 pins, five
+disjoint arms; screens 3,084/0 + 5,688/0 and grid 8×0/0 + emit 78/78 all counted controls; cost_gate 20/20
++0.00%; huge_methods exit 0 (871 classes); warning-clean.

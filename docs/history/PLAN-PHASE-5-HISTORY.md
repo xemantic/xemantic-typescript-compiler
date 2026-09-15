@@ -1,3 +1,83 @@
+### Round (P18.98) — (LEGACY.0b) step 13: four checker mechanisms, 8 rows, and the tsc-6 mirror was a countdown for the suggestion cap (2026-09-14)
+
+**Three commits** (`94351d42b` feat, `3d51b5190` test, this docs commit). **Suite 19,260 → 19,292 / 0 / 109**,
+9 modules asserted — `tsgoPendingBaselines` 92 → **84**, skipped −8, +32 pins
+(`TsgoStep13MechanismsTest`). The full run read **ONE red**, in the tsc-6 MIRROR
+`TsgoHarnessSelfCheckBaselinesTest` (see below), re-pointed and its class re-run 17/0; every other
+class green in the full run. Screen **errors 3,058 / 0 and emit 5,688 / 0** on the final binary, all
+eight closed rows `--include`d and 0. `cost_gate.py` exit 0, **all 20 counters +0.00% — a GATE
+this round** (the checker changed; the suggestion lookup is not a `globals` probe, so lifting the
+cap moved nothing the gate counts); `huge_methods.py --fail-over 0` exit 0 (869 classes); grid
+8×`added=0 removed=0` — **a real gate for M1** (every profile carries 46 unresolved names, past
+tsc 6's cap, and no suggestion appeared) — and the emit-mode control 78/78; warning-clean (no
+`-q`, positive control 1 `w:`). `Checker.kt` 194,595 → **194,674** (+79, a SEMANTIC change).
+**(LEGACY.0) stays OPEN** on (0b-14).
+
+**FOUR MECHANISMS, TWO OF THEM WHERE THE BRIEF SAID THREE PLUS "SIZE ONLY".** *M1* tsgo has NO
+10-suggestion cap (`checker.go` ~1585-1600 has no counter): tsc 6's `maximumSuggestionCount`
+gate and its program-wide counter are deleted and the TS2552 lookup runs for every unresolved
+name; the ALGORITHM needed no change (`floor(0.4·n)+0.9`, length diff ≤ `max(2, floor(0.34·n))`
+were already tsgo's). *M2* TS6198 groups an ARRAY pattern and recurses (`reportUnusedBindingElements`,
+`checker.go` ~7172-7195): `reportUnusedBindingPatterns` is now the ONE home for variables,
+parameters and every `for` head. *M3* the global `Object` source keeps its TS2322 head with the
+"assignable to very few other types" sentence as the FIRST chain line (`relater.go`
+`reportErrorResults` ~4697-4714); TS2696 has no producer left. *M4*, briefed as size-only, LANDED on
+a measured zero: an excess-property error found while elaborating is the WHOLE diagnostic —
+`arrayCast` emits TS2353 at the property with no TS2352 head — and pristine's corpus holds exactly
+the two indented excess lines outside TS2769 wrappers, so a general rule has no further witness.
+
+**WHERE THE BRIEF WAS WRONG, ALL tsgo-VERIFIED ON PROBE PROJECTS.** (M1) `parserRealSource11`
+and its 100 TS2552 rows are not "active and green" — the file is not generated at all, so no
+green baseline was hiding a cap effect (screen: 0 movers). (M2) five sub-rules the brief did not
+name: an array REST exempts nothing (`[n, ...rest]` both unused → one TS6198; ours skipped `n`),
+an OMITTED slot counts as unreferenced (`[, a]` groups), a LONE shorthand `_h` is reported (ours
+suppressed it), `_`-prefixed ARRAY/PARAMETER elements are USED (ours grouped `([_e, _f])`), and
+nested PARAMETER patterns were never collected. (M3) the rule is TARGET-independent (anonymous,
+alias, class, union, argument, return all carry the hint in tsgo) — **except a TYPE-PARAMETER
+target, which tsgo skips**, and the first cut moved `typeParametersShouldNotBeEqual{,2,3}` before
+arm a8 pinned it; and ours printed the 2739 form for ONE missing property where tsgo prints 2741.
+
+**THE ONE SUITE RED WAS A COUNTDOWN NOBODY HAD LISTED.** `TsgoHarnessSelfCheckBaselinesTest`
+mirrors the 21 ledgered TS-1 cases against **tsc 6's** baselines; `constructorWithIncompleteTypeAnnotation`
+has 36 unresolved names, so its tsc-6 row for `val` is a capped TS2304 — while **tsgo's OWN
+baseline for the case (`submodule/…`, lines 59 and 456) says TS2552 `Did you mean 'eval'?`**,
+exactly what the changed binary prints. The mirror now lifts that row by a COUNTED substitution
+(exactly two rows, or the claim is stale), its second TypeScript-7 annotation after the TS1127
+span. **Any tsc-6 mirror is a countdown for every rendering change the arc has left** — grep both
+mirror classes before a family round, not after the suite.
+
+**PINS.** 32; 20 reddened on the pre-change binary (`bbe23813…`), 12 green = 9 declared negative
+controls + 3 acted on: two blind positives renamed to the controls they are, one renamed to the
+descent boundary it pins (it discriminates arm a4). The `M04CastOverlapSpineMigrationTest`
+array-literal cast countdown was re-pointed to TS2353 (tsgo re-measured).
+
+**ABLATION — 8 arms, all discriminating** (pin reds over 58 / errors-screen mismatches over 3,058):
+a1 cap restored 3/2; a2 threshold off by one 2/**9**; a3 arrays not grouped 7/2; a4 descent
+dropped 4/1; a5 top-level TS2696 restored 5/2; a6 hint line dropped 6/2; a7 `arrayCast` back to
+TS2352 2/1; a8 TypeParam skip dropped 1/**3**. Final `Checker.class` md5 `2072d5e7…`, matched by
+the orchestrator's AFTER arm.
+
+**RESIDUES, RECORDED NOT PINNED.** tsgo breaks suggestion-distance TIES by `compareSymbols`
+(declaration order across files), ours by candidate order — no row separates them. The `eval`
+suggestion prints no `!!! related TS2728 lib.es5.d.ts:--:--` row in the corpus-harness compile
+where tsgo's baseline has one (the `Function` row in `commonMissingSemicolons` DOES print it —
+unexplained, one row). Argument (TS2345) and return positions still lack the `Object` hint. The
+union-target `Object` row: through `diagnose()`'s embedded lib the B50.3 union-constituent drill
+appends two lines beneath the hint where the real-lib path prints the hint alone. The general
+engine is SILENT for `const abab: AB = { kind: "A", n: { a, b } }` outside the pin-walker-owned
+fixture (tsgo: TS2353 at `b`). `<number>"s"` is silent (a pre-existing TS2352 gap). Argument
+position prints the 2741 form with the first missing property for a 15-property target (tsgo:
+2740).
+
+**AN OPERATIONAL NOTE.** The orchestrator's gate chain (cost gate → huge methods → grid) was
+KILLED for low memory at the sixth profile: two idle Kotlin daemons (6.4 GB + 0.7 GB) and the
+4.4 GB Gradle daemon were squatting after the agent's builds. `./gradlew --stop` + the
+bracket-pattern kill (no Gradle in flight) freed 12.8 GB and the grid re-ran clean in the
+foreground — CLAUDE.md's daemon rule, applied BEFORE a java-only measurement rather than after.
+
+**NOT TAKEN**: the `downlevelIteration` TS5101→TS5102 pair (2 rows) — `simulatedVersion`'s default
+is recorded under (LEGACY.1) as an owner decision; it would close both rows and redden nothing.
+
 ### Round (P18.97) — (LEGACY.0b) step 12: the JS-emit residue, seven mechanisms, 11 rows, and the hoist keyword is a SCOPE property (2026-09-14)
 
 **Three commits** (`5f3e40a67` feat, `caf095c10` test, this docs commit). **Suite 19,240 → 19,260 / 0 / 117**,
