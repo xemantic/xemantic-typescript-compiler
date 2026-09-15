@@ -3653,3 +3653,25 @@ the emit-mode control is itself blind**: `--outDir` + `diff -r` read 78 files ID
 change that moved 12 baselines, because tsc's own sources contain none of the three shapes — for
 an emit family the corpus EMIT CHANNEL is the gate. cost_gate all 20 counters +0.00% (a control
 here), huge_methods exit 0 (867 classes), warning-clean.
+**(P18.96) — THE CommonJS EXPORT-PATTERN ASSIGNMENT (7) AND F10's CONSTRUCT-SIGNATURE CHAIN (4), AND THE F-LETTERS ARE NOT FAMILIES, 19,240 / 0 / 128 (2026-09-14).**
+Pending 114 -> **103**, skipped -11, 9 modules asserted. **The primary is one rule and it is SEVEN
+rows, not six**: tsgo converts an exported binding pattern into a destructuring ASSIGNMENT with
+each leaf substituted to `exports.<name>`, and its own comment gives the reason — that preserves
+native destructuring and therefore the ITERATOR SEMANTICS of an array pattern, where TypeScript 6
+flattened. A row filed as an unrelated singleton was the same mechanism plus a printer half
+(`Emitter.emitObjectLiteral` dropped a property's leading comment in its single-line branch).
+**The secondary landed too, and the chain loses TWO links, not one**: tsgo has ZERO call sites for
+`Types of construct signatures are incompatible.` — the message survives in its table unreferenced.
+**Blast radius measured at zero for both**, on the changed binary over the unchanged population.
+Ablation 12 arms, all discriminating; **a4's double zero is attributed and is the reusable
+finding** — below ES2018 the object-rest downlevel has ALREADY rewritten the declaration before
+the CommonJS transform sees it, so a `target` conjunct there can never decide anything, while
+dropping the gate that DOES refuse it moves 41 baselines. A blind pin was found by its own
+ablation and repaired, and two structural pins that used the removed shape as a VEHICLE were
+re-vehicled rather than weakened. **The durable output is the decomposition of the remaining
+103**: F6 "top code differs" is 38 rows and **~32 distinct code pairs, largest cluster 2**, so
+every estimate phrased in the ledger's F-letters overstates the work — and the letters hide
+cross-family clusters (TS2880 split across two, TS1003 across two). JS-emit residue is 3 groups
+plus 8 singletons, and `emitBOM` turns out to be a SCANNER bug. Grid and `--outDir` + `diff -r`
+both CONTROLS and both counted; the corpus and its screen were the gates. cost_gate 20/20 +0.00%,
+huge_methods exit 0 (867 classes), warning-clean, screen 8,727 / 0.

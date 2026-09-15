@@ -1,3 +1,77 @@
+### Round (P18.91) — F6d: TypeScript 7 reports TS2303 at EVERY alias declaration on the cycle, and the detector was already there (2026-09-14)
+
+**Suite 19,139 → 19,153 / 0 / 180** — `tsgoPendingBaselines` 165 → **155** and skipped 190 →
+**180**, both −10, with all ten subtests verified PRESENT and PASSED in the XMLs (two of them
+carry a `(target=es2015)` variation suffix and do NOT match the obvious test-name pattern — a
+first pass "found" only eight and that reads exactly like two vanished subtests). +14 pins. Grid
+8×`added=0 removed=0`; `cost_gate.py` exit 0, all 20 counters +0.00%; `huge_methods.py
+--fail-over 0` exit 0 (862 classes, 0 over); warning-clean (7,305-byte log, `w=0 e=0`, no `-q`,
+positive control produced exactly 1 `w:` line). **10 of 10, the family is empty. (LEGACY.0) stays
+OPEN** on (0b-7).
+
+**THE FAMILY WAS PICKED ON A BLAST-RADIUS MEASUREMENT, NOT ON SIZE.** F6d is 10 rows against F2
+duplicate-identifier's 15, and it was chosen because **TS2303 appears in ZERO active baselines**
+where F2's TS2300 appears in **80** — the same "provably cannot redden a green baseline on its
+own axis" property that carried (P18.90). The risk was inverted, though: this round ADDS a
+diagnostic, so false positives elsewhere were the exposure and the grid was briefed as a real
+gate rather than a control.
+
+**THE RULE.** tsgo's `resolveAlias` (checker.go ~16199) wraps alias resolution in
+`pushTypeResolution`/`popTypeResolution`; a detected cycle marks the whole resolution SUFFIX
+false, so **every frame from the cycle start upward emits** — i.e. TypeScript 7 reports TS2303
+once per alias DECLARATION the cycle passes through, each named after its own symbol and anchored
+at its own declaration, where tsc 6 reported exactly one. This is the third member of the "tsgo
+reports at ALL declarations" family, after F2's TS2300-at-both-duplicate-declarations.
+
+**THE DESIGN QUESTION THE BRIEF ASKED WAS ANSWERED "NEITHER".** The brief offered emit-from-
+`resolveAlias` versus collect-and-emit-from-a-pass. Measured, this checker already had **FOUR**
+walkers owning the four cycle shapes, and each needed the same one-line generalisation:
+`checkCircularImportAlias` lost its `break // TypeScript only reports on the first import in the
+cycle`; `checkCircularExportEqualsImportAlias` now reports at every cycle MEMBER with two rows
+each (self-import + `export = self`) and **shed tsc 6's `findEntry` entry-point heuristic
+entirely (−38 lines)**; `checkExportAsNamespaceSelfCycle` reports the `export = N` half beside
+the `export as namespace N` half; and 16.4ee (`checkUnresolvedInImportEquals`) now reports each
+`export {Foo}` / `export {Bar as Foo}` / `export default Foo` re-export, every one of which is a
+second alias declaration. Three emitters folded into one `emitTS2303At`.
+
+**SPANS AND NAMES MEASURED OFF tsgo, NOT DERIVED.** An export SPECIFIER squiggles the whole
+specifier and is named by its **exported** name (`default` for `export {Foo as default}`); an
+`export default Foo` squiggles the whole statement and is named by the **expression**.
+
+**THE FOUR WALKERS ARE PERFECTLY DISJOINT — MEASURED WITH THE PassLab, AND THE FIRST MEASUREMENT
+WAS DEAD.** One `disable` per run over four fixtures: each walker is the SOLE emitter of its
+shape, none redundant, no double emission, nothing deletable. The first attempt read "no effect"
+on all three — **a dead lab, because the probe script `cd`s into the fixture directory and
+`PassLab` loads from the process CWD**, and a dead lab prints exactly what three redundant passes
+would. Round 860's entry is the `diagnose()` twin of this; the CWD form is now in CLAUDE.md.
+
+**A PREDICTION REFUTED, AND IT IS THE INTERESTING ONE.** `declarationEmitUnknownImport{,2}` were
+predicted residue and closed anyway — and tsgo's TS2303 there is **not a cycle at all**:
+`declare const V; import Foo = V; export {Foo}` draws two TS2303 on legal-looking code, and
+moving the `export` ABOVE the import silences it. That is order-dependent, an artifact of tsgo's
+own resolution stack rather than a rule. It closed because this repo already modelled that
+behaviour at 16.4ee and merely lacked the export-side row.
+
+**ABLATION — 9 arms, all discriminating, `tests` identical at 3,177 in every arm**: a1 report
+only the first member of an entity-name cycle **3 RED**; a2 only the first member of a require
+cycle **5**; a3 drop the `export = self` half **8**; a4 drop the `export = N` half **2**; a5 drop
+the re-export rows **5**; a6 name a specifier by its LOCAL name **1**; a7 anchor a specifier at
+`name` rather than the whole specifier **1**; a8 read the span end off `Node.end` **0 → 1**; a8b
+(a8's control) drop the trailing-`;` inclusion **10**. **a8's zero was investigated rather than
+shrugged at**: a8b proves the replaced code is load-bearing, and the attribution is that
+`Identifier.end` — the end of the token AFTER the identifier — coincides with the correct span
+whenever the next token is `;` **or EOF**, which was true of every fixture in hand. Adding a
+following `declare const` to the `export default` pin (tsgo re-measured: still `(2,1)` width 18)
+made a8 discriminate. The patcher asserts its anchor occurs exactly once and **refused a1's first
+anchor**, which occurred twice — the guard working.
+
+**LEFT UNDONE DELIBERATELY**: tightening `aliasStatementSpanEnd`'s parameter from `Node?` to
+`Expression` (dropping a dead `null ->` branch) moves the bytecode, so it was reverted to keep
+every gate and every ablation arm referring to ONE binary; the class files on disk are
+bytecode-identical to what was gated. `pushTypeGetTypeOfAlias` — the 11th TS2303 row, running the
+OTHER way (tsgo TS2309, ours TS2303 from the B438d pin) — is untouched, still pending, and
+unaffected by all three ablations.
+
 ### Round (P18.90) — F3 last-overload: 25 of 25, and the three tsc-6 anchor heuristics went with it (2026-09-13)
 
 **Suite 19,139 → 19,139 / 0 / 190** — `tsgoPendingBaselines` 190 → **165** and skipped 215 →

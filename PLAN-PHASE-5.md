@@ -25,6 +25,88 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.101) — (LEGACY.0b) step 16: ours-only rows on plain TS — seven landed, and three of the six "mechanisms" were tsc-6 transcriptions (2026-09-15)
+
+**Three commits** (`3def1dfb1` feat, `69fe6f6bc` test, this docs commit). **Suite 19,344 → 19,370 / 0 / 83**,
+9 modules asserted — `tsgoPendingBaselines` 66 → **58** (7 removed, 3 entries REWRITTEN to a measured residue),
+skipped −7, +26 pins (`TsgoStep16OursOnlyTest`). The full run read **FIVE reds, all pre-existing pins in other
+classes encoding tsc 6's answer for the very rules this round changed** (below) — re-pointed after a tsgo
+measurement each, never weakened. Screen **errors 3,084 / 0 and emit 5,688 / 0** on the final binary, all seven
+closed rows `--include`d and 0, the three partial rows showing exactly their recorded residues. `cost_gate.py`
+exit 0, all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (871 classes); grid 8×`added=0 removed=0` and the emit-mode control
+78/78 — CONTROLS, counted (tsc's 78 sources carry none of these shapes: 46 `Cannot find name` rows per profile);
+warning-clean (2,236-byte log, `w=0`, no `-q`). `Checker.kt` 195,100 → **195,124** (+24: ~150 deleted, ~175 for the
+tsgo TS2309 rule and its KDoc). **(LEGACY.0) stays OPEN** on (0b-17).
+
+**THE PICK.** Sized from the pending list's recorded reasons plus one screen run per candidate (~30 s each):
+the theme was rows where OUR compiler reports what tsgo 7.0.2 does not on plain `.ts` sources, or prints the
+wrong HEAD for a right verdict — the false-positive class that hurts the embeddable-checker leg most. Seven
+mechanisms over eight rows; one row (`prettyFileWithErrorsAndTabs`) already read 0 on the screen and was a free
+entry removal.
+
+**SEVEN MECHANISMS, AND THREE WERE NOT MECHANISMS.** *M1* TS2346 `Call target does not contain any signatures.`
+has ZERO call sites in tsgo (only the message-table entry) — the 16.4db gate in `checkConstraintsInStatements`
+and its three helpers are deleted; exactly one live baseline carried the code. *M2* TS2309 is tsgo's
+`checkExternalModuleExports` (checker.go:5672): the OTHER exports must include a VALUE — resolved through the alias
+(`export { E } from`, `export import`, `export * as ns`, and a TYPE-ONLY clause of a value target too, since tsgo's
+`getSymbolFlags` runs without `excludeTypeOnlyMeanings`), an unresolvable alias counting as a value (tsc's
+`unknownSymbol` is a `Property`), `export default` counting, `export *` / interface / type alias / a
+NON-instantiated namespace not — OR `hasShadowedNamespace`; there is NO `.d.ts` skip and NO JS guard, and the JS
+half (`module.exports = X` beside `exports.p = …`) anchors on the assignment EXPRESSION. The first build moved ONE
+green baseline (`importDeclWithExportModifierAndExportAssignment`): this binder puts every namespace-body member
+into `exports`, exported or not, so an alias to an UNEXPORTED member had to be classified tsgo's way
+(`isUnexportedNamespaceMember`) — the screen found it, a 20-shape probe matrix had not. `incompatibleExports1`
+closes; `jsExportAssignmentNonMutableLocation`, `pushTypeGetTypeOfAlias` and `jsExportMemberMergedWithModuleAugmentation3`
+(not in the brief) now MATCH their TS2309 row and keep their entries for named residues (TS2551 / a false
+ours-only TS2303 / a TS2339 — TypeScript 7 types `exports.p` after `module.exports = X` as a property access on
+X's type). The first of those was also silent for a SECOND reason: it is an `emitDeclarationOnly` case and the
+pass was missing from the `initDeclarationOnlyPasses` whitelist. *M3* the TS2300 at `export { Sub }` inside
+`declare namespace exports` came from `checkExportEqualsCloduleReExport` — a hardcoded pin walker written for
+this ONE fixture — deleted with its registration; the PassLab preview (`disable checkExportEqualsCloduleReExport`)
+read 0 mismatches before a line was touched. *M4* `RelationHeadSuppression.parseTwoArgLeaf`: tsgo's
+`reportRelationError` (relater.go:4794-4806) also drops the head when chain[0] is TS4104 readonly / TS2859
+excessive complexity / TS2321 excessive stack depth **and BOTH args match the head's** — no
+conversion/interface exclusion for this arm (that conjunct now applies to the missing-property leaf only);
+`variadicTuples1` (head `T` ≠ leaf `readonly unknown[]`) is the natural negative control and stays a chain.
+*M5* both TS2589 and TS2615 came from ONE site of `init:buildFileLocalTypeMaps` (B57.3c paired them — a tsc-6
+transcription); now `if circular → TS2615 else TS2589` at the alias and annotation sites. tsgo evidence:
+`recursiveMappedTypes` carries both codes at DIFFERENT nodes and no baseline pairs them. *M6* the triplicated
+TS2769 leaf in `bigintWithLib` was HARDCODED in `checkBigintWithLib`, a `pinDiag` walker that wipes the file and
+re-pins tsc 6's chain; disabling it shows the engine cannot answer the fixture (the corpus lib set lacks the
+bigint typed-array overloads — ten TS2339s), so the six chains were RE-TRANSCRIBED to tsgo's, with a KDoc saying
+so. *M7* free. *M8* (`controlFlowInstanceof`'s three `instanceof` residues) not attempted — out of budget.
+
+**THE FIVE SUITE REDS.** All five were pre-existing pins in OTHER classes asserting tsc 6's form for exactly the rules this round changed, and tsgo agreed with every rule on re-measurement: `ReadonlyTupleTest` expected two TS2345 heads carrying the readonly line and now gets two bare TS4104 heads (tsgo `(6,44)`/`(6,52)`); `ArrayLiteralSpreadElementTest` ×2 asserted the spread's TYPE through the TS2345 vehicle M4 removed — re-vehicled through the TS4104 head; `Inv3GlobalsForFileTest`'s `the mirrored TS2346 super-call gate keeps firing` was a countdown for M1 (tsgo: TS2315 `Type 'Base' is not generic.` alone) — re-pointed to `none { 2346 }` + the TS2315 row, and its sibling `none { 2346 }` pin is now vacuous on every binary (flagged, left); `DefensiveCatchRemovalBatch3Test`'s `an infinitely expanding alias still bails with TS2589` measures TS2615 alone on tsgo — re-pointed, the bail (which sets `mappedTypeCircularInfo`) is still what the pin observes. The agent's first grep of the class SOURCES could not have found these: they name no code the round touched in their test names, only in their assertions — the full suite is the only instrument.
+
+**PINS AND ABLATION.** 26 pins; stash-ablation 16 RED / 9 green on the pre-change sources — six of the nine
+greens were satisfied trivially by tsc 6's count-everything TS2309 rule and are discriminated by their own arms
+(a2b/a2c/a2e/a2x/a4b); one M5 control was BLIND at the alias site (served by the annotation site, arm a5b 0/0) and
+was re-pointed at `type X = Foo<"true", {}>` (tsgo `(2,10)`), now red under a5b. Thirteen arms, all
+discriminating (pin reds / errors-screen mismatches over 3,084): a1 TS2346 restored 2/1; a2 interface counts
+2/1; a2x namespace never a value 2/1; **a2b JS half without the `exports.p` gate 1/5** (five green baselines
+move — the gate is load-bearing even though the JS target rows themselves are pending); a2c shadow half off
+1/0; a2d not on the declarationOnly path 1/0; a2e unexported-member rule off 1/1; a3 clodule walker restored
+1/1; a4 two-arg leaf not suppressing 4/1; a4b suppressing without the arg compare 2/0; a5 TS2589 beside TS2615
+1/1; a5b never TS2589 at the alias site 1/0; a6 nested chain re-transcribed 1/1. Final md5s Checker
+`47c83bbd…`, RelationHeadSuppression `3b330c5f…` — the orchestrator's AFTER arm matched both.
+
+**PRE-EXISTING DIVERGENCES FOUND, NOT TOUCHED**: the CLI on REAL libs prints 0 errors for
+`new BigInt64Array([1, 2, 3])` where tsgo prints 3× TS2769 (a real-lib gap, separate from the corpus lib set);
+`type Rec<T> = [Rec<Rec<T>>, T]; type Y = Rec<number>` is ours-only TS2589 (tsgo silent); a generic
+`T extends readonly unknown[]` assigned to `[...T]`/`string[]` is silent here (tsgo TS2322 + readonly chain);
+the object-member position `{ a: ro }` prints an `every`-property chain where tsgo prints TS4104.
+
+**A HARNESS LESSON THAT COST A BUILD**: a Python edit script with a `SyntaxError` runs NOTHING — the
+declarationOnly-whitelist addition was silently absent until a pin went red on the "fixed" binary. Verify each
+scripted edit landed by grep, never by the script's earlier steps.
+
+**WHAT REMAINS (58)**: display/chain-content ~19; F1 silent 4; F2-residue 6; ORDER-model 5; TS2683-residue 3;
+JS emit 3; the `downlevelIteration` TS5102 pair and `pathsValidation5`'s order (both (LEGACY.1) questions);
+the three M2 partials (JS `exports.p` typing after `module.exports = X`); `controlFlowInstanceof`'s three
+`instanceof` residues (sized in the (P18.101) brief: the `Function`-typed RHS should narrow by `{}` and drop
+`null`; the non-overlapping class should give an INTERSECTION the join then reduces; a checkJs `@constructor`
+instance type); the rest singletons.
+
 ### Round (P18.100) — (LEGACY.0b) step 15: the F8 span/width family, ten of ten, and the tsc-6 mirror's expectations are FILES (2026-09-14)
 
 **Three commits** (`656ceaa41` feat, `735758798` test, this docs commit). **Suite 19,315 → 19,344 / 0 / 90**,
@@ -706,80 +788,6 @@ round's blast-radius question from an argument into a measurement — but it mus
 `Path.readText()`'s **UTF-16 BOM** handling or two fixtures read as false regressions, which is
 exactly what its first run did.
 
-### Round (P18.91) — F6d: TypeScript 7 reports TS2303 at EVERY alias declaration on the cycle, and the detector was already there (2026-09-14)
-
-**Suite 19,139 → 19,153 / 0 / 180** — `tsgoPendingBaselines` 165 → **155** and skipped 190 →
-**180**, both −10, with all ten subtests verified PRESENT and PASSED in the XMLs (two of them
-carry a `(target=es2015)` variation suffix and do NOT match the obvious test-name pattern — a
-first pass "found" only eight and that reads exactly like two vanished subtests). +14 pins. Grid
-8×`added=0 removed=0`; `cost_gate.py` exit 0, all 20 counters +0.00%; `huge_methods.py
---fail-over 0` exit 0 (862 classes, 0 over); warning-clean (7,305-byte log, `w=0 e=0`, no `-q`,
-positive control produced exactly 1 `w:` line). **10 of 10, the family is empty. (LEGACY.0) stays
-OPEN** on (0b-7).
-
-**THE FAMILY WAS PICKED ON A BLAST-RADIUS MEASUREMENT, NOT ON SIZE.** F6d is 10 rows against F2
-duplicate-identifier's 15, and it was chosen because **TS2303 appears in ZERO active baselines**
-where F2's TS2300 appears in **80** — the same "provably cannot redden a green baseline on its
-own axis" property that carried (P18.90). The risk was inverted, though: this round ADDS a
-diagnostic, so false positives elsewhere were the exposure and the grid was briefed as a real
-gate rather than a control.
-
-**THE RULE.** tsgo's `resolveAlias` (checker.go ~16199) wraps alias resolution in
-`pushTypeResolution`/`popTypeResolution`; a detected cycle marks the whole resolution SUFFIX
-false, so **every frame from the cycle start upward emits** — i.e. TypeScript 7 reports TS2303
-once per alias DECLARATION the cycle passes through, each named after its own symbol and anchored
-at its own declaration, where tsc 6 reported exactly one. This is the third member of the "tsgo
-reports at ALL declarations" family, after F2's TS2300-at-both-duplicate-declarations.
-
-**THE DESIGN QUESTION THE BRIEF ASKED WAS ANSWERED "NEITHER".** The brief offered emit-from-
-`resolveAlias` versus collect-and-emit-from-a-pass. Measured, this checker already had **FOUR**
-walkers owning the four cycle shapes, and each needed the same one-line generalisation:
-`checkCircularImportAlias` lost its `break // TypeScript only reports on the first import in the
-cycle`; `checkCircularExportEqualsImportAlias` now reports at every cycle MEMBER with two rows
-each (self-import + `export = self`) and **shed tsc 6's `findEntry` entry-point heuristic
-entirely (−38 lines)**; `checkExportAsNamespaceSelfCycle` reports the `export = N` half beside
-the `export as namespace N` half; and 16.4ee (`checkUnresolvedInImportEquals`) now reports each
-`export {Foo}` / `export {Bar as Foo}` / `export default Foo` re-export, every one of which is a
-second alias declaration. Three emitters folded into one `emitTS2303At`.
-
-**SPANS AND NAMES MEASURED OFF tsgo, NOT DERIVED.** An export SPECIFIER squiggles the whole
-specifier and is named by its **exported** name (`default` for `export {Foo as default}`); an
-`export default Foo` squiggles the whole statement and is named by the **expression**.
-
-**THE FOUR WALKERS ARE PERFECTLY DISJOINT — MEASURED WITH THE PassLab, AND THE FIRST MEASUREMENT
-WAS DEAD.** One `disable` per run over four fixtures: each walker is the SOLE emitter of its
-shape, none redundant, no double emission, nothing deletable. The first attempt read "no effect"
-on all three — **a dead lab, because the probe script `cd`s into the fixture directory and
-`PassLab` loads from the process CWD**, and a dead lab prints exactly what three redundant passes
-would. Round 860's entry is the `diagnose()` twin of this; the CWD form is now in CLAUDE.md.
-
-**A PREDICTION REFUTED, AND IT IS THE INTERESTING ONE.** `declarationEmitUnknownImport{,2}` were
-predicted residue and closed anyway — and tsgo's TS2303 there is **not a cycle at all**:
-`declare const V; import Foo = V; export {Foo}` draws two TS2303 on legal-looking code, and
-moving the `export` ABOVE the import silences it. That is order-dependent, an artifact of tsgo's
-own resolution stack rather than a rule. It closed because this repo already modelled that
-behaviour at 16.4ee and merely lacked the export-side row.
-
-**ABLATION — 9 arms, all discriminating, `tests` identical at 3,177 in every arm**: a1 report
-only the first member of an entity-name cycle **3 RED**; a2 only the first member of a require
-cycle **5**; a3 drop the `export = self` half **8**; a4 drop the `export = N` half **2**; a5 drop
-the re-export rows **5**; a6 name a specifier by its LOCAL name **1**; a7 anchor a specifier at
-`name` rather than the whole specifier **1**; a8 read the span end off `Node.end` **0 → 1**; a8b
-(a8's control) drop the trailing-`;` inclusion **10**. **a8's zero was investigated rather than
-shrugged at**: a8b proves the replaced code is load-bearing, and the attribution is that
-`Identifier.end` — the end of the token AFTER the identifier — coincides with the correct span
-whenever the next token is `;` **or EOF**, which was true of every fixture in hand. Adding a
-following `declare const` to the `export default` pin (tsgo re-measured: still `(2,1)` width 18)
-made a8 discriminate. The patcher asserts its anchor occurs exactly once and **refused a1's first
-anchor**, which occurred twice — the guard working.
-
-**LEFT UNDONE DELIBERATELY**: tightening `aliasStatementSpanEnd`'s parameter from `Node?` to
-`Expression` (dropping a dead `null ->` branch) moves the bytecode, so it was reverted to keep
-every gate and every ablation arm referring to ONE binary; the class files on disk are
-bytecode-identical to what was gated. `pushTypeGetTypeOfAlias` — the 11th TS2303 row, running the
-OTHER way (tsgo TS2309, ours TS2303 from the B438d pin) — is untouched, still pending, and
-unaffected by all three ablations.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1110,7 +1118,29 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-15 LANDED 2026-09-14 ((P18.85)-(P18.100) notes) — pending 66, skipped 90,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-16 LANDED 2026-09-15 ((P18.85)-(P18.101) notes) — pending 58, skipped 83,
+  suite 19,370/0. **(P18.101) closed 7 rows and matched the TS2309 half of 3 more, picked by THEME rather than by
+  F-letter — rows where OURS reports what tsgo does not on plain `.ts`, or prints the wrong HEAD** (TS2346 retired:
+  zero tsgo call sites; tsgo's value-exports-only TS2309 rule; a fixture-specific TS2300 pin walker deleted; TS4104/
+  excessive-complexity head suppression; TS2615 no longer paired with TS2589; the `bigintWithLib` pinDiag chains
+  re-transcribed). **THREE OF SIX "MECHANISMS" WERE tsc-6 TRANSCRIPTIONS** (a `pinDiag` wipe-and-pin walker, a
+  one-fixture walker, a paired emission) — before designing a fix for a pending row, run the PassLab `disable
+  <pass>` preview on the emitter `--passTiming` names; a row that goes to 0 mismatches was never an engine
+  question. **THE DECOMPOSED RESIDUE (58)**: display/chain-content ~19; F1 silent 4; F2-residue 6; ORDER-model 5;
+  TS2683-residue 3; JS emit 3; the two (LEGACY.1) questions (`downlevelIteration` TS5102 ×2, `pathsValidation5`
+  order); the three M2 partials (TypeScript 7 types `exports.p` after `module.exports = X` as a property access
+  on X's type — one family); `controlFlowInstanceof`'s three `instanceof` residues (sized in the (P18.101) brief:
+  a `Function`-typed RHS narrows by `{}` and drops `null`; a non-overlapping class gives an INTERSECTION the join
+  reduces; a checkJs `@constructor` instance type); `nodeNextPackageSelfName*` ×2, `tslib*MissingHelper` ×2 +
+  `esModuleInteropTslibHelpers` (one tslib-helper-lookup mechanism, 3 rows), `isolatedDeclarations*` ×2; the rest
+  singletons — SIZE BY MECHANISM, expect ≤6 per round. **PICK AND SIZE WITH `bash scripts/corpus-screen.sh`** and
+  grep the 21 tsc-6 MIRRORED BASELINE FILES for every code a round will move — AND grep the hand-written test
+  SOURCES for the codes in their ASSERTIONS ((P18.101) lost a suite run to five countdown pins whose NAMES named
+  no code). **A KNOWN FOLLOW-ON**: three hand-written pins differ from tsgo in CODE because our relation CHAIN line
+  names the type parameter / undistributed intersection where tsgo names its constraint / one distributed
+  constituent — that chain SOURCE DISPLAY is its own family. The 21 TS-1 rows stay LEDGERED.
+  **BLOCKED-PENDING-USER, still open**: the fourth "harness artifact ⇒ fall back to tsc" arm ((P18.86)).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-15 LANDED 2026-09-14 ((P18.85)-(P18.100) notes) — pending 66, skipped 90,
   suite 19,344/0. **(P18.100) closed the whole F8 span/width family, 10 of 10 in seven mechanisms** (file-less
   ORDER is the formatter comparator — options before globals; TS1356 on the assigned name; TS2447 on the operator;
   TS4032 over the expando assignment; TS1092 over the `@template` list; a pretty zero-width `~`; astral characters

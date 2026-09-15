@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **195,100** lines (**+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **195,124** lines (**+24 at (P18.101)** — ~150 deleted (TS2346 gate + helpers, a one-fixture TS2300 walker), ~175 for tsgo's TS2309 rule; **+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,20 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.101) — OURS-ONLY ROWS ON PLAIN TS: SEVEN CLOSED, THREE TS2309 HALVES MATCHED, AND THREE OF SIX "MECHANISMS" WERE tsc-6 TRANSCRIPTIONS, 19,370 / 0 / 83 (2026-09-15).**
+Pending 66 -> **58** (7 removed, 3 entries rewritten to a measured residue), skipped -7, +26 pins, 9 modules
+asserted. Picked by THEME — rows where ours reports what tsgo 7.0.2 does not, or prints the wrong head — sized
+with one screen run per candidate. TS2346 has ZERO tsgo call sites and is retired; TS2309 is tsgo's
+value-exports-or-shadowed-namespace rule with no `.d.ts` skip and no JS guard (an alias to an UNEXPORTED namespace
+member had to be classified tsgo's way — the screen caught the one green baseline it moved); the TS2300 at an
+`export { Sub }` specifier was a one-fixture pin walker (deleted); `RelationHeadSuppression` gained tsgo's two-arg
+leaves (TS4104 / TS2859 / TS2321); TS2615 is no longer paired with TS2589; `bigintWithLib`'s triplicated chain
+was HARDCODED in a `pinDiag` walker whose engine cannot answer the fixture (re-transcribed, said so). **The full
+suite read FIVE reds, all pre-existing pins asserting tsc 6's form of the changed rules** — re-pointed after a
+tsgo measurement each; their NAMES named no code, so a source grep could not have found them. Thirteen arms, all
+discriminating (a2b: the JS `exports.p` gate is load-bearing on 5 green baselines). cost_gate 20/20 +0.00%, grid
+8×0/0 + emit 78/78 (controls, counted), huge_methods exit 0 (871 classes), warning-clean, screen errors 3,084/0,
+emit 5,688/0.
 **(P18.100) — THE F8 SPAN/WIDTH FAMILY, TEN OF TEN IN SEVEN MECHANISMS, AND THE tsc-6 MIRROR'S EXPECTATIONS ARE FILES, 19,344 / 0 / 90 (2026-09-14).**
 Pending 76 -> **66**, skipped -10, +29 pins, 9 modules asserted. File-less ORDER was not emission
 order but the test-support comparator sorting by code — tsgo ranks an OPTIONS diagnostic before a
@@ -83,25 +97,3 @@ general keep moved 14 green TS baselines and is refused. One BLIND pin repaired 
 Ablation 12 arms, all discriminating. JS emit is down to 3 singletons. cost_gate 20/20 +0.00%
 and the grid/`--outDir` control both COUNTED controls; huge_methods exit 0 (869 classes);
 warning-clean; screen emit 5,688/0, errors 3,050/0.
-**(P18.96) — THE CommonJS EXPORT-PATTERN ASSIGNMENT (7) AND F10's CONSTRUCT-SIGNATURE CHAIN (4), AND THE F-LETTERS ARE NOT FAMILIES, 19,240 / 0 / 128 (2026-09-14).**
-Pending 114 -> **103**, skipped -11, 9 modules asserted. **The primary is one rule and it is SEVEN
-rows, not six**: tsgo converts an exported binding pattern into a destructuring ASSIGNMENT with
-each leaf substituted to `exports.<name>`, and its own comment gives the reason — that preserves
-native destructuring and therefore the ITERATOR SEMANTICS of an array pattern, where TypeScript 6
-flattened. A row filed as an unrelated singleton was the same mechanism plus a printer half
-(`Emitter.emitObjectLiteral` dropped a property's leading comment in its single-line branch).
-**The secondary landed too, and the chain loses TWO links, not one**: tsgo has ZERO call sites for
-`Types of construct signatures are incompatible.` — the message survives in its table unreferenced.
-**Blast radius measured at zero for both**, on the changed binary over the unchanged population.
-Ablation 12 arms, all discriminating; **a4's double zero is attributed and is the reusable
-finding** — below ES2018 the object-rest downlevel has ALREADY rewritten the declaration before
-the CommonJS transform sees it, so a `target` conjunct there can never decide anything, while
-dropping the gate that DOES refuse it moves 41 baselines. A blind pin was found by its own
-ablation and repaired, and two structural pins that used the removed shape as a VEHICLE were
-re-vehicled rather than weakened. **The durable output is the decomposition of the remaining
-103**: F6 "top code differs" is 38 rows and **~32 distinct code pairs, largest cluster 2**, so
-every estimate phrased in the ledger's F-letters overstates the work — and the letters hide
-cross-family clusters (TS2880 split across two, TS1003 across two). JS-emit residue is 3 groups
-plus 8 singletons, and `emitBOM` turns out to be a SCANNER bug. Grid and `--outDir` + `diff -r`
-both CONTROLS and both counted; the corpus and its screen were the gates. cost_gate 20/20 +0.00%,
-huge_methods exit 0 (867 classes), warning-clean, screen 8,727 / 0.
