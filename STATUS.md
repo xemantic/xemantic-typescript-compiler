@@ -1,7 +1,7 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **195,132** lines (**+8 at (P18.103)**: code −6, KDoc +14, the `alwaysStrict: false` arms; unchanged at (P18.102), which deleted **249** lines of dead System-module code from `Transformer.kt`, 17,862 → 17,613 — the first (LEGACY.1) removal; **+24 at (P18.101)** — ~150 deleted (TS2346 gate + helpers, a one-fixture TS2300 walker), ~175 for tsgo's TS2309 rule; **+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
+extraction):** `Checker.kt` **195,132** lines (unchanged at (P18.104), which lifted the tsconfig option-position scan into `CompilerOptions.kt` for both paths; **+8 at (P18.103)**: code −6, KDoc +14, the `alwaysStrict: false` arms; unchanged at (P18.102), which deleted **249** lines of dead System-module code from `Transformer.kt`, 17,862 → 17,613 — the first (LEGACY.1) removal; **+24 at (P18.101)** — ~150 deleted (TS2346 gate + helpers, a one-fixture TS2300 walker), ~175 for tsgo's TS2309 rule; **+93 at (P18.100)**, anchor rules; **+333 at (P18.99)**, a SEMANTIC change — two new JSDoc walkers; **+79 at (P18.98)**, a SEMANTIC parity change — four tsgo mechanisms; **+81 at (P18.94)** — union DISPLAY sites routed through the (P18.85) comparator; **-28 at (P18.93)**, a SEMANTIC parity change (duplicate members reported at every declaration) that DELETES three tsc-6 narrowings and the TS6200 amalgamation; **+78 at (P18.92)**, a SEMANTIC parity change (TS2683/TS7009 in JS files) that also RETIRES tsc-6 walker B424; **+26 at (P18.91)**, a SEMANTIC parity change (TS2303 at every alias declaration); **+101 at (P18.90)** — a SEMANTIC parity change (the F3 last-overload rule), not an extraction; **+1,992 at (P18.85)**, which is tsc's stable type ordering wired into `getUnionType` plus its display half — a SEMANTIC change, and it also adds an ELEVENTH file, `StableTypeOrdering.kt` (634 lines), a pure comparator with ZERO ambient surface; earlier: **192,433** (**−8,100 across (P18.53)-(P18.66)**; steps 10a-10d and 10b-iii are SEMANTIC changes and ADD 85, 86, 14, 33 and 139, not extractions, and the (CHK.\*) parity rounds since — (P18.68)/(P18.70)/(P18.71) — add a further ~446 for the same reason; 191,070 when
 the metric was created, and the (P18.9)-(P18.37) checker-parity arc ADDED ~5,200 in between, which
 are fixes and pins rather than extractions — so the file is now BELOW where the metric started
 WITH that work still in it). TEN collaborators extracted: `TypeInterner`, `Relation`+`Ternary`
@@ -19,6 +19,14 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.104) — (LEGACY.1) STEP (d1): DEPRECATION AND REMOVED-OPTION ROWS ANCHOR AT THE tsconfig TOKEN ON BOTH PATHS, FROM ONE SCANNER, 19,402 / 0 / 83 (2026-09-15).**
+tsgo's rule measured over 18 projects: TS5107/TS5108 at the VALUE, TS5101/TS5102 at the KEY, root config only,
+`extends`/CLI options at the root's `compilerOptions` key, file-less without it. The project path had no
+positions at all and the harness path had two asymmetries of its own; `tsconfigOptionPositionsOf` +
+`tsconfigAnchorFor` now serve both. 20 pins (16 in `-project`), five arms all discriminating — the errors screen
+is a real gate here (`pathMappingInheritedBaseUrl` moves under two arms); cost_gate 20/20 +0.00%; huge_methods
+exit 0 (872 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. Residue: the scanner is a text scan and
+records a commented-out option. (d2), the interop flags' behaviour, is next.
 **(P18.103) — (LEGACY.1) STEP (c): TypeScript 7 BINDS EVERY FILE STRICT, SO `alwaysStrict: false` WAS FOUR DEAD ARMS AND ONE MISSING DIAGNOSTIC, 19,382 / 0 / 83 (2026-09-15).**
 Six configurations measured on tsgo (LSP diagnostics + emitted JS): TS1101 at a `with` and `"use strict"` in
 every file whatever the flags say; the Go binder has no `inStrictMode`. The Emitter suppression, the
@@ -65,18 +73,3 @@ grep missed it because the mirror's expectations are FILES, not class source —
 annotation. Ablation 10 arms, all discriminating; 20 of 29 pins red pre-change, the rest exactly the
 controls. cost_gate 20/20 +0.00%, grid 8×0/0 + emit 78/78 (controls), huge_methods exit 0 (871
 classes), warning-clean, screen errors 3,077/0, emit 5,688/0.
-**(P18.99) — TS2880 UNCONDITIONAL, THE `@typedef` NAME HAS *TWO* EMITTERS, AND TS2749 LANDS IN TEN NESTED JSDoc POSITIONS, 19,315 / 0 / 100 (2026-09-14).**
-Pending 84 -> **76** (9 closed, 1 re-sized), skipped -9, +23 pins, 9 modules asserted. TS2880
-lost its `ignoreDeprecations` gate AND a module-kind gate the brief did not name, anchors on the
-`assert` key (width 6), and a side-effect `import "x" assert {…}` had been parsed and DROPPED. The
-brief's anchor rule for a nameless `@typedef` was off by one character in every probe: tsgo's
-REPARSER reports one character BEFORE the zero-width name (every JS file) and its JSDoc parser adds a
-second row at the current token for checkJs files only — read off the harness baselines, since the
-CLI stops at syntactic errors. TS2749 for a value in a nested JSDoc type position was sized wider
-than briefed and all ten positions landed on a measured zero, with the index-signature wording
-(TS1268/TS1337) and a keyword type argument closed on the way. `jsEnumCrossFileExport` is REFUSED
-with two named blockers (a QUALIFIED expando name needs tsgo's JSDoc-namespace declarations; a
-newline-wide range renders as an empty squiggle line). Ablation 12 arms, all discriminating; 18 of 23
-pins red on the pre-change binary, the rest exactly the controls. cost_gate 20/20 +0.00% and the
-grid 8×0/0 + emit 78/78 — controls, counted (tsc's sources hold no `assert` clause and no JSDoc
-type); huge_methods exit 0 (871 classes); warning-clean; screen errors 3,067/0, emit 5,688/0.

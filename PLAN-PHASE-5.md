@@ -25,6 +25,49 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.104) — (LEGACY.1) step (d1): every deprecation and removed-option row now anchors where tsgo anchors it, on both paths, from ONE scanner (2026-09-15)
+
+**Three commits** (`ef8ba8b6e` fix, `6b182b7e3` test, this docs commit). **Suite 19,382 → 19,402 / 0 / 83** (+20 pins:
+16 in `-project`, 4 in core), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — and the errors
+screen is a REAL gate here: `pathMappingInheritedBaseUrl` (an embedded tsconfig with `extends`) moves under two of the
+five arms; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (872 classes — the lifted
+scanner is the 872nd); grid 8×`added=0 removed=0` and emit 78/78 — controls (no profile sets a removed option);
+warning-clean over all four compile tasks (2,883-byte log, `w=0`). `Checker.kt` unchanged (195,132);
+`CompilerOptions.kt` +60, `TsConfigLoader.kt` +16, `TypeScriptCompiler.kt` +13. **(d1) is LANDED; (d2) — the
+interop flags' BEHAVIOUR — is the next round; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE RULE, MEASURED ON 18 PROJECTS (`program.go:762-800`).** TS5107/TS5108 anchor at the option's VALUE token
+(`false` width 5, `"amd"` width 5 with its quotes), TS5101/TS5102 at the KEY (`"downlevelIteration"` width 20);
+both are looked up in the ROOT config's object literal only — an option that arrives through `extends` or the CLI
+but is not written in the root anchors at the root's `"compilerOptions"` key (width 17), and with no such key the
+row is file-less; the extended file is NEVER named, and a root override hides the parent's row entirely. CRLF is
+not a column; extra spaces move the anchor to the token. `typeScriptVersion` is honoured from a real
+`tsconfig.json` (it is an `applyDirective` key on the loader path), so a `-project` fixture can pin tsgo's
+TS5108/TS5102 byte for byte.
+
+**WHAT WAS WRONG BEFORE, AND IT WAS THREE ASYMMETRIES, NOT ONE.** The (P18.103) finding — the project path
+populates no positions — was under-scoped: the KEY ladder (TS5101/TS5102) was file-less on the project path too, and
+on the HARNESS path the key ladder had no `compilerOptions`-key fallback while the value ladder trusted an
+EXTENDED file's position. One implementation now serves both: `CompilerOptions.tsconfigOptionPositionsOf` (the
+harness's block scan, lifted, with the extended files' positions dropped before the root is scanned) called by
+`TsConfigLoader.load` on the root text it already read (no second `Vfs` read — the `-project` cost pins count
+`tsconfig.json` reads), and `TypeScriptCompiler.tsconfigAnchorFor` for both ladders. All 18 CLI rows went from
+` - error TS…` to tsgo's file/line/column exactly.
+
+**PINS AND ABLATION.** 20 pins; stash-ablation 16 red, the four greens exactly the named `control -` pins, and both
+project controls redden under an arm (A3, A1), so none is blind. Five arms, each discriminating (project reds /
+core reds / errors-screen mismatches): A1 value ladder at the KEY 11/1/**17**; A2 loader records nothing 14/0/0; A3
+the deepest parent's text scanned instead of the root's 4/0/0; A4 harness keeps merging extended positions 0/1/**1**;
+A5 key ladder without the `compilerOptions` fallback 1/1/**1**. Final md5s `CompilerOptionsKt 223d4939`,
+`TsConfigLoader cc4325a7`, `TypeScriptCompiler 14886808`, `Checker f1cf432e` — the orchestrator's AFTER arm matched
+all four.
+
+**RESIDUE, RECORDED IN THE SCANNER'S KDoc.** The shared scanner is a TEXT scan: a commented-out `// "alwaysStrict":
+true` is recorded (last write wins) and — on the HARNESS path, where the same scan also APPLIES options — honoured,
+where tsgo parses JSONC. Pre-existing on the harness path; now shared rather than one-sided. And the agent's own
+first census ("the corpus has zero `extends` fixtures", taken over the GENERATED Kotlin) was false — the screen
+reads CASE files, and four carry an embedded tsconfig with `extends`.
+
 ### Round (P18.103) — (LEGACY.1) step (c): TypeScript 7 binds EVERY file strict, so `alwaysStrict: false` was four dead arms and one missing diagnostic (2026-09-15)
 
 **Three commits** (`e81d07381` refactor, `75b3baa97` test, this docs commit). **Suite 19,370 → 19,382 / 0 / 83**
@@ -626,79 +669,6 @@ CONTROLS here. **And the `--outDir` + `diff -r` emit-mode control read 78 files 
 a change that moved 12 baselines** — real well-formed code contains no instantiation expression,
 no `;`-recovered object literal and no `new new X`. For an emit family the corpus EMIT CHANNEL is
 the gate and the `--outDir` diff is a control; the grid is a gate for rule 1 only.
-
-### Round (P18.94) — the ORDER family: 13 of 18, and FIVE of the "model gaps" were reach rows (2026-09-14)
-
-**Suite 19,192 → 19,200 / 0 / 151** — `tsgoPendingBaselines` 139 → **126** and skipped 164 →
-**151**, both −13, plus +8 pins. Grid 8×`added=0 removed=0`; `cost_gate.py` exit 0, all 20
-counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (867 classes, 0 over); warning-clean
-(`w=0 e=0`, no `-q`, positive control 1 `w:` line); corpus screen **3,046 subtests / 0
-mismatches**. Two commits (`251343657`, `ae7f950d7`). **(LEGACY.0) stays OPEN** on (0b-10).
-
-**THE ORCHESTRATOR'S OWN DECOMPOSITION WAS WRONG IN BOTH DIRECTIONS, AND THE MEASUREMENT SAID SO.**
-The round was briefed with a read-only (A) reach / (B) model-gap split taken off the ledger
-reasons. It is **three** groups, not two, and **five of the nine "model gaps" were reachable**:
-`mappedTypeIndexedAccess` (tsc's mapper comparison reduces to the key literals the walker already
-holds), `mappedTypeGenericWithKnownKeys` (we printed the WRITTEN order, so the node comparator
-served it) and both JSDoc rows. Two of the briefed reach attributions were also wrong — the
-argument-position TS2820 and the indirect-discriminant row are **the same two sites**, so one arm
-fixes both. **The cheap discriminator, now in CLAUDE.md: one scratch run — if rewriting the
-SOURCE union's order changes the output, the display reads nodes and the fix is a sort; if it
-does not, the TYPE is wrong.**
-
-**A THIRD GROUP NOBODY HAD: tsc-6 TRANSCRIPTION (3 rows).** Two are hardcoded pin walkers whose
-strings were copied from tsc-6 baselines. The third is the find of the round:
-`baseClassImprovedMismatchErrors` did not merely hold a stale string — it **actively rewrote**
-`() => string | number` into `() => number | string`, i.e. it had been converting TypeScript 7's
-answer into TypeScript 6's for this entire arc. **Deleted, not re-transcribed**: the engine's own
-answer is tsgo's.
-
-**THE SCREEN'S SECOND USE IS NOW ITS MAIN ONE.** Baseline 3,033/0; after all 13 fixes,
-**3,033/0 — not one green baseline moved**, on the family with the highest display blast radius
-left. Every closed row was verified individually through `--include`, with the 5 holdouts as the
-positive control that the `--include` path was live. And every ablation arm reports its screen
-mismatch as well as its pin reds, which is what makes the six ZERO-PIN arms attributable: each is
-a corpus-unique hardcoded walker or a checkJs/real-lib-gated shape unreachable from `diagnose()`,
-and each moves **precisely one** baseline.
-
-**A BLIND PIN FOUND BY ITS OWN ABLATION** (the second commit). The round's first TS2353 pin
-passed, asserted tsgo's answer, and read as coverage — and arm a3 left it **green** while moving
-a corpus baseline. More than one emitter owns TS2353 and the argument-position one already
-agreed, so the pin was asserting the right answer from the wrong site. Repaired with the
-discriminated-union shape; the old fixture is kept and renamed to say what it actually tests.
-
-**A RECORDED REASON WAS ALSO WRONG.** `typeParameterDiamond4`'s ledger entry blamed a type
-parameter "minted without its symbol"; measured, the comparator orders a type-parameter union
-CORRECTLY in one function scope (`Zed | Alpha` → `Alpha | Zed`, byte-identical to tsgo, in both
-written orders). The variable is an ENCLOSING-scope type parameter and is degraded enough that
-the ordinary var-decl reader emits **nothing at all** — so the ORDER row sits on a resolution
-gap. Two more holdouts are not ORDER rows at all and were reclassified:
-`namespaceDisambiguationInUnion`'s union display is now CORRECT and its residue is the chain
-PICKER (tsc's `typeRelatedToSomeType` names the LAST constituent for a union target with no
-discriminant match), and `pathsValidation5` is a summary SORT between a `tsconfig.json` row and a
-source file's.
-
-**ABLATION — 12 arms, all discriminating, a distinct class md5 each**, and every arm moves
-EXACTLY its own baseline and nothing else: a1 Omit keys descending; a2 discriminant walkers
-unsorted; a3 TS2353 `kept` unsorted; a4 B169 receiver unsorted; a5 the old
-keyword/literal/type-parameter buckets; a6 the tsc-6 `fn`-chain rewrite restored; a7 switch
-allowed-set unsorted; a8 B298 constituents unsorted; a9 `Record` key union unsorted; a10
-keyRemapping symbol-first; a11 `complicated…` re-transcribed back; a12 JSDoc allowed unsorted.
-
-**AN OPERATIONAL FAILURE, AND IT WAS THE ORCHESTRATOR'S.** Four suite runs were lost to
-`EOFException` on several modules, a `NoSuchFileException: …/in-progress-results-generic.bin`, a
-14m35s run and one KIR `24 console channels` timeout — **because the orchestrator ran `./gradlew`
-while the agent's suite was in flight**, having read an agent stop-notification as "the agent is
-finished" when the agent was still working. CLAUDE.md's rule is *one gradle invocation at a time
-per **BOX**, not per agent*, and it was violated by the actor enforcing it. Two further
-self-inflicted costs in the same stretch: a `./gradlew --stop` reached a LATER invocation's
-daemon (`Gradle build daemon has been stopped: stop command received` mid-run), and a
-`pgrep -f 'GradleWrapperMain'` **killed the issuing shell** because the pattern matched its own
-command line — both already documented in CLAUDE.md, both walked into anyway. **The KIR timeout
-is not a regression**: the fixture is seven straight-line `console.*` calls with no loop, and it
-passes in isolation (159 KIR tests, 0 failures). Its deadline is a 2-minute wall clock around a
-SPAWNED CHILD, so memory pressure presents as "the generated program did not terminate", which
-reads exactly like an infinite loop in the compiler's output.
 
 ## QUEUE
 
@@ -1401,7 +1371,7 @@ CLAUDE.md § "AI agent mission".
     reads the flag), `Checker.kt:29451`, `:25470-25472` `spineWithStrictActive` (always active), `:25600-25605`
     `explicitNonStrict`'s disjunct; keep every `== true` read and the parse/report; delete the two negative controls
     `Inv4SpineBatch11Test.kt:131`, `Inv4SpineBatch9Test.kt:256`; watch TS1101 (`with`) now always firing.
-  - [ ] (d) INHERITS from (c): on the PROJECT path `tsconfigOptionPositions` is never populated, so every `addDeprecation` row prints file-less where tsgo anchors at the tsconfig VALUE — fix it once for the family. `esModuleInterop: false` + `allowSyntheticDefaultImports: false` — the no-interop `else` arms in
+  - [ ] (d) — (d1) the anchoring LANDED 2026-09-15 ((P18.104), `ef8ba8b6e`: one scanner for both paths, TS5107/5108 at the VALUE, TS5101/5102 at the KEY, root config only, `extends` → the root's `compilerOptions` key; residue: it is a TEXT scan and records a commented-out option); **(d2) REMAINS — the behaviour**: `esModuleInterop: false` + `allowSyntheticDefaultImports: false` — the no-interop `else` arms in
     `Transformer.kt:3082-3397` (12 sites), `NameResolver.kt:446`, `Checker.kt:51353-51356, 51438-51442, 52216-52217`,
     the `…ExplicitlyFalse` fields; **a BEHAVIOUR change at the default**: `allowSyntheticDefaultImports` defaults
     `false` today (`CompilerOptions.kt:199`) and must become interop-derived as tsgo's — land the flip and the arm

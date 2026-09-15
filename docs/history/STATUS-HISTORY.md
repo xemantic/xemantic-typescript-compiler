@@ -3709,3 +3709,18 @@ discriminating. cost_gate 20/20 +0.00% (a gate here), grid 8×0/0 (a real gate f
 unresolved names per profile, no suggestion appeared), emit control 78/78, huge_methods exit 0
 (869 classes), warning-clean, screen errors 3,058/0, emit 5,688/0. The gate chain was killed once
 for low memory by three idle build daemons (11.5 GB) — stopped, re-run clean.
+**(P18.99) — TS2880 UNCONDITIONAL, THE `@typedef` NAME HAS *TWO* EMITTERS, AND TS2749 LANDS IN TEN NESTED JSDoc POSITIONS, 19,315 / 0 / 100 (2026-09-14).**
+Pending 84 -> **76** (9 closed, 1 re-sized), skipped -9, +23 pins, 9 modules asserted. TS2880
+lost its `ignoreDeprecations` gate AND a module-kind gate the brief did not name, anchors on the
+`assert` key (width 6), and a side-effect `import "x" assert {…}` had been parsed and DROPPED. The
+brief's anchor rule for a nameless `@typedef` was off by one character in every probe: tsgo's
+REPARSER reports one character BEFORE the zero-width name (every JS file) and its JSDoc parser adds a
+second row at the current token for checkJs files only — read off the harness baselines, since the
+CLI stops at syntactic errors. TS2749 for a value in a nested JSDoc type position was sized wider
+than briefed and all ten positions landed on a measured zero, with the index-signature wording
+(TS1268/TS1337) and a keyword type argument closed on the way. `jsEnumCrossFileExport` is REFUSED
+with two named blockers (a QUALIFIED expando name needs tsgo's JSDoc-namespace declarations; a
+newline-wide range renders as an empty squiggle line). Ablation 12 arms, all discriminating; 18 of 23
+pins red on the pre-change binary, the rest exactly the controls. cost_gate 20/20 +0.00% and the
+grid 8×0/0 + emit 78/78 — controls, counted (tsc's sources hold no `assert` clause and no JSDoc
+type); huge_methods exit 0 (871 classes); warning-clean; screen errors 3,067/0, emit 5,688/0.

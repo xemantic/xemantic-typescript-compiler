@@ -1,3 +1,76 @@
+### Round (P18.94) — the ORDER family: 13 of 18, and FIVE of the "model gaps" were reach rows (2026-09-14)
+
+**Suite 19,192 → 19,200 / 0 / 151** — `tsgoPendingBaselines` 139 → **126** and skipped 164 →
+**151**, both −13, plus +8 pins. Grid 8×`added=0 removed=0`; `cost_gate.py` exit 0, all 20
+counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (867 classes, 0 over); warning-clean
+(`w=0 e=0`, no `-q`, positive control 1 `w:` line); corpus screen **3,046 subtests / 0
+mismatches**. Two commits (`251343657`, `ae7f950d7`). **(LEGACY.0) stays OPEN** on (0b-10).
+
+**THE ORCHESTRATOR'S OWN DECOMPOSITION WAS WRONG IN BOTH DIRECTIONS, AND THE MEASUREMENT SAID SO.**
+The round was briefed with a read-only (A) reach / (B) model-gap split taken off the ledger
+reasons. It is **three** groups, not two, and **five of the nine "model gaps" were reachable**:
+`mappedTypeIndexedAccess` (tsc's mapper comparison reduces to the key literals the walker already
+holds), `mappedTypeGenericWithKnownKeys` (we printed the WRITTEN order, so the node comparator
+served it) and both JSDoc rows. Two of the briefed reach attributions were also wrong — the
+argument-position TS2820 and the indirect-discriminant row are **the same two sites**, so one arm
+fixes both. **The cheap discriminator, now in CLAUDE.md: one scratch run — if rewriting the
+SOURCE union's order changes the output, the display reads nodes and the fix is a sort; if it
+does not, the TYPE is wrong.**
+
+**A THIRD GROUP NOBODY HAD: tsc-6 TRANSCRIPTION (3 rows).** Two are hardcoded pin walkers whose
+strings were copied from tsc-6 baselines. The third is the find of the round:
+`baseClassImprovedMismatchErrors` did not merely hold a stale string — it **actively rewrote**
+`() => string | number` into `() => number | string`, i.e. it had been converting TypeScript 7's
+answer into TypeScript 6's for this entire arc. **Deleted, not re-transcribed**: the engine's own
+answer is tsgo's.
+
+**THE SCREEN'S SECOND USE IS NOW ITS MAIN ONE.** Baseline 3,033/0; after all 13 fixes,
+**3,033/0 — not one green baseline moved**, on the family with the highest display blast radius
+left. Every closed row was verified individually through `--include`, with the 5 holdouts as the
+positive control that the `--include` path was live. And every ablation arm reports its screen
+mismatch as well as its pin reds, which is what makes the six ZERO-PIN arms attributable: each is
+a corpus-unique hardcoded walker or a checkJs/real-lib-gated shape unreachable from `diagnose()`,
+and each moves **precisely one** baseline.
+
+**A BLIND PIN FOUND BY ITS OWN ABLATION** (the second commit). The round's first TS2353 pin
+passed, asserted tsgo's answer, and read as coverage — and arm a3 left it **green** while moving
+a corpus baseline. More than one emitter owns TS2353 and the argument-position one already
+agreed, so the pin was asserting the right answer from the wrong site. Repaired with the
+discriminated-union shape; the old fixture is kept and renamed to say what it actually tests.
+
+**A RECORDED REASON WAS ALSO WRONG.** `typeParameterDiamond4`'s ledger entry blamed a type
+parameter "minted without its symbol"; measured, the comparator orders a type-parameter union
+CORRECTLY in one function scope (`Zed | Alpha` → `Alpha | Zed`, byte-identical to tsgo, in both
+written orders). The variable is an ENCLOSING-scope type parameter and is degraded enough that
+the ordinary var-decl reader emits **nothing at all** — so the ORDER row sits on a resolution
+gap. Two more holdouts are not ORDER rows at all and were reclassified:
+`namespaceDisambiguationInUnion`'s union display is now CORRECT and its residue is the chain
+PICKER (tsc's `typeRelatedToSomeType` names the LAST constituent for a union target with no
+discriminant match), and `pathsValidation5` is a summary SORT between a `tsconfig.json` row and a
+source file's.
+
+**ABLATION — 12 arms, all discriminating, a distinct class md5 each**, and every arm moves
+EXACTLY its own baseline and nothing else: a1 Omit keys descending; a2 discriminant walkers
+unsorted; a3 TS2353 `kept` unsorted; a4 B169 receiver unsorted; a5 the old
+keyword/literal/type-parameter buckets; a6 the tsc-6 `fn`-chain rewrite restored; a7 switch
+allowed-set unsorted; a8 B298 constituents unsorted; a9 `Record` key union unsorted; a10
+keyRemapping symbol-first; a11 `complicated…` re-transcribed back; a12 JSDoc allowed unsorted.
+
+**AN OPERATIONAL FAILURE, AND IT WAS THE ORCHESTRATOR'S.** Four suite runs were lost to
+`EOFException` on several modules, a `NoSuchFileException: …/in-progress-results-generic.bin`, a
+14m35s run and one KIR `24 console channels` timeout — **because the orchestrator ran `./gradlew`
+while the agent's suite was in flight**, having read an agent stop-notification as "the agent is
+finished" when the agent was still working. CLAUDE.md's rule is *one gradle invocation at a time
+per **BOX**, not per agent*, and it was violated by the actor enforcing it. Two further
+self-inflicted costs in the same stretch: a `./gradlew --stop` reached a LATER invocation's
+daemon (`Gradle build daemon has been stopped: stop command received` mid-run), and a
+`pgrep -f 'GradleWrapperMain'` **killed the issuing shell** because the pattern matched its own
+command line — both already documented in CLAUDE.md, both walked into anyway. **The KIR timeout
+is not a regression**: the fixture is seven straight-line `console.*` calls with no loop, and it
+passes in isolation (159 KIR tests, 0 failures). Its deadline is a 2-minute wall clock around a
+SPAWNED CHILD, so memory pressure presents as "the generated program did not terminate", which
+reads exactly like an infinite loop in the compiler's output.
+
 ### Round (P18.93) — the corpus SCREEN is committed, and F2 duplicate-identifier lands 12 of 18 with three tsc-6 narrowings deleted (2026-09-14)
 
 **Two commits. Part 0** (`f917b1f6b`): `scripts/corpus-screen.sh` + `CorpusScreenMain.kt`.
