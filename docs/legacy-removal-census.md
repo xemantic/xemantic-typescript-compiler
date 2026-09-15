@@ -99,7 +99,7 @@ Function ranges: TS1250 family `80735-80875` (141 lines); TS18028 family `80496-
 ### 2b. `module: AMD/UMD/System`
 
 The transforms and `outFile` bundling were deleted 2026-07-02 (`RemovedModuleKindsTest.kt`).
-Residue: `Transformer.kt:5964-6070` `buildSystemDynamicImport`/`rewriteSystemDynExpr`/
+Residue — **the two `Transformer.kt` clusters below were DELETED 2026-09-15 ((P18.102), commit `ba18310a5`, −249 lines, closed by a repo-wide reference census); the `Checker.kt`/`TypeScriptCompiler.kt` arms remain step (f)**: `Transformer.kt:5964-6070` `buildSystemDynamicImport`/`rewriteSystemDynExpr`/
 `rewriteSystemDynStmt` (107 lines, DEAD — every occurrence of both names lies inside the
 range); `Transformer.kt:16315-16461` `stripVarDeclsFromStatement`/`collectVarNamesFromStmts`/
 `collectVarNamesFromStmt` (~147 lines, DEAD — all 31 occurrences inside `16323-16450`;

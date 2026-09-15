@@ -3675,3 +3675,21 @@ cross-family clusters (TS2880 split across two, TS1003 across two). JS-emit resi
 plus 8 singletons, and `emitBOM` turns out to be a SCANNER bug. Grid and `--outDir` + `diff -r`
 both CONTROLS and both counted; the corpus and its screen were the gates. cost_gate 20/20 +0.00%,
 huge_methods exit 0 (867 classes), warning-clean, screen 8,727 / 0.
+**(P18.97) — THE JS-EMIT RESIDUE: SEVEN MECHANISMS, 11 ROWS, AND THE HOIST KEYWORD IS A *SCOPE* PROPERTY, 19,260 / 0 / 117 (2026-09-14).**
+Pending 103 -> **92**, skipped -11, +20 pins, 9 modules asserted. Briefed as five mechanisms / 9
+rows, landed seven / 11 — the agent sized the two singletons it was told to report on and landed
+both on a measured zero. **The finding came from the red arms**: tsgo decides the enum/namespace
+`var <name>;` hoist with a PER-SCOPE first-declaration map (functions, classes, every variable
+declarator, in source order) and its keyword by the SCOPE (`let` anywhere but the SourceFile, a
+dotted inner inheriting its outer's); ablating the keyword rule moves **40** baselines and the
+per-scope reset **29** — the old file-level name sets had matched them by coincidence — and a
+CaseClause must gate its recording on the subtree containing TypeScript syntax, as tsgo's early
+return does. The other six: `declare import` never emits (a tsc-6 special case deleted); `import
+I = M` in a plain block prints `var I = M;`; a setter's return type is never printed, and its
+object-literal twin was a PARSER gap invisible to every gate; `emitBOM` prepended nothing before
+and the harness's round-375 mojibake branch went with the pristine artefact; a body-less `global`
+recovery emits nothing; and a source-written `export {}` is kept in place in a JS file only — the
+general keep moved 14 green TS baselines and is refused. One BLIND pin repaired by its own arm.
+Ablation 12 arms, all discriminating. JS emit is down to 3 singletons. cost_gate 20/20 +0.00%
+and the grid/`--outDir` control both COUNTED controls; huge_methods exit 0 (869 classes);
+warning-clean; screen emit 5,688/0, errors 3,050/0.

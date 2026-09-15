@@ -25,6 +25,43 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.102) — (LEGACY.1) steps (a)+(b): the dead System-module helpers, −249 lines, and why this round left (LEGACY.0)'s tail (2026-09-15)
+
+**Two commits** (`ba18310a5` refactor, this docs commit). **Suite 19,370 → 19,370 / 0 / 83**, 9 modules asserted;
+corpus screen emit **5,688 / 0** (the instrument for a Transformer change — `--noEmit` skips the transformer) and
+errors 3,084 / 0; `cost_gate.py` exit 0, 20/20 +0.00% (a control by construction); `huge_methods.py --fail-over 0`
+exit 0 (871 classes — the JIT census is the one gate a compiled-code deletion can move, and it did not); grid
+8×`added=0 removed=0` and emit 78/78 — CONTROLS, counted (every profile is `module: commonjs`/esnext);
+warning-clean (2,236-byte log, both compile tasks executed, `w=0`). `Transformer.kt` **17,862 → 17,613 (−249)**;
+`Checker.kt` unchanged at 195,124. **(LEGACY.1) (a) and (b) are CHECKED OFF; (c)-(k) stay open; (LEGACY.0) stays
+OPEN** on (0b-17).
+
+**WHY (LEGACY.1) AND NOT (0b-17).** (LEGACY.0) is in its long tail — 58 singletons closing at ≤6 per round, most
+of them display or JS/JSDoc shapes — while (LEGACY.1) serves the owner's 2026-09-12 directive directly (legacy
+code for TS7-removed features may be deleted), moves the shrinkage metric, and owns the two questions parked in
+(LEGACY.0)'s residue (`downlevelIteration`'s TS5102 pair, `pathsValidation5`'s order). The WORK ORDER addendum
+allows the pick when it is said and the successor named: successor is (LEGACY.1)(c) `alwaysStrict: false`, then
+(d); (0b-17) resumes after, or interleaves when a theme with ≥5 rows is visible.
+
+**WHAT LANDED.** (a) `buildSystemDynamicImport` / `rewriteSystemDynExpr` / `rewriteSystemDynStmt` (107 lines) and
+(b) `stripVarDeclsFromStatement` / `collectVarNamesFromStmts` / `collectVarNamesFromStmt` (142 lines);
+`collectBoundNames` stays with its 34 live callers and regains its orphaned KDoc, which had been sitting above the
+deleted cluster as a doubled comment — which is why the item's "~147 lines" was 142. **The proof is a repo-wide
+reference census, not the compile**: mutually recursive helpers compile with or without a caller, so every
+occurrence of the six names was shown to lie inside its own cluster (outside `Transformer.kt` only the queue item
+and the census doc name them), and `javap -p` on the final class carries none of the six. Helpers the dead code
+called (`isDynamicImportCall`, `syntheticId`, `extractIdentifierName`, …) all keep live users.
+
+**WHAT THE ITEM HAD WRONG, AND WHAT (f) INHERITS.** Its line numbers were stale by ~300 lines (the brief warned).
+**`module: system` is NOT folded onto CommonJS today**: `Transformer.kt`'s `useCJS` admits only
+CommonJS/None/nodenext/`.cts`/`.cjs`, so System, AMD and UMD pass module statements through UNTRANSFORMED (what
+`RemovedModuleKindsTest`'s KDoc records) — tsgo's `emitter.go:98-99` fold is a ROUTING change and is step (f)'s,
+together with `TypeScriptCompiler.kt`'s System arms (TS5107 `:530`, the classic derivation `:765`, TS5071 `:784`,
+TS5095 `:955-956`, the top-level-await parser flag `:1143`/`:3064`) and `Transformer.kt`'s `wrapCallsWithZero`
+parameter, which is never passed `false` anywhere — a System-only residue of its own. No pin was added: dead-code
+deletion has no positive to pin, and the CJS-output pin the brief suggested would have pinned a behaviour that does
+not exist yet.
+
 ### Round (P18.101) — (LEGACY.0b) step 16: ours-only rows on plain TS — seven landed, and three of the six "mechanisms" were tsc-6 transcriptions (2026-09-15)
 
 **Three commits** (`9e3bb73a0` feat, `01d76cf2c` test, this docs commit). **Suite 19,344 → 19,370 / 0 / 83**,
@@ -702,91 +739,6 @@ the NAME again 1/1; a12 interface path keeps per-member naming 1/1.
 TS6200 **0/0** in BOTH arms of all eight profiles, and cronstrue/marked byte-identical — a
 duplicate class member is a hard error nobody checks in. The corpus, the screen and the pins did
 the work.
-
-### Round (P18.92) — TS2683 in JS files: the skip was standing in for a GATE BUG, and 3 of 4 "cascades" were four separate families (2026-09-14)
-
-**Suite 19,153 → 19,170 / 0 / 176** — `tsgoPendingBaselines` 155 → **151** and skipped 180 →
-**176**, both −4, plus +17 pins. Grid 8×`added=0 removed=0`; `cost_gate.py` exit 0, all 20
-counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (862 classes, 0 over); warning-clean
-(7,306-byte log, `w=0 e=0`, no `-q`, positive control produced exactly 1 `w:` line). **4 of 7
-rows; the 3 holdouts each have a NAMED mechanism and a rewritten, greppable `TS2683-residue:`
-reason. (LEGACY.0) stays OPEN** on (0b-8).
-
-**THIS ROUND'S FAMILY WAS PICKED THE SAME WAY AS THE LAST TWO AND CAME OUT DIFFERENTLY, WHICH IS
-THE POINT.** (P18.90)/(P18.91) each chose a family whose code appears in ZERO active baselines,
-making a regression on that axis structurally impossible. TS2683 is in **17** active baselines
-(the ranking said 18; re-measured, 17) and the changed gate is exposed to **133 active baselines
-involving a `.js` file** — so the brief demanded the exposure measurement BEFORE any code, with
-explicit permission to scope down. It was needed: the round landed 4 rows, not 7.
-
-**THE CASCADE HYPOTHESIS WAS REFUTED FOR 3 OF 4.** The four "top code differs" rows were expected
-to be one mechanism — tsgo emits TS2683, `this` becomes `any`, our downstream member error
-disappears. Only `inexistentPropertyInsideToStringType` is that. `jsFunctionWithPrototype…` KEEPS
-its TS2339 in tsgo; `controlFlowInstanceof` is two ours-only **`.ts`** rows plus a missing JS one;
-`jsdocFunctionClassPropertiesDeclaration` is a JSDoc-`@param` typing gap. **A shared diagnostic
-code is no more a family than a shared first-differing line** — the third distinct way this arc
-has mis-grouped rows, after (P18.87)'s and (P18.88)'s.
-
-**THE LOCALISATION WAS RIGHT, THE NAME IN OUR OWN COMMENT WAS WRONG.** The gate is
-`spineItSetup`, not `spineNaSetup` — `Checker.kt:8583`'s comment misnames it (`spineNa` is
-TS7009). Archive entry B438b is the record of why the skip existed: under tsc 6, `allowJs`/
-`checkJs` inferred `this` from JSDoc `@this`, prototype assignment and IIFE context, so a bare
-`this` in a JS file was not implicit-any the way a `.ts` one is.
-
-**AND THE SKIP TURNED OUT TO BE STANDING IN FOR A GATE BUG.** tsgo's `GetStrictOptionValue` is
-`options.Strict != TSFalse` — **TypeScript 7 defaults every strict sub-option ON unless
-`strict:false` is explicit, and an explicit sub-option `false` WINS over that default.** Our
-`spineItRunActive` was `noImplicitThis || strict || !strictExplicitlyFalse`, which reproduces the
-default but NOT the explicit-false half; the one fixture in 133 that separated them
-(`noParameterReassignmentJSIIFE`) was being protected by the JS skip instead of by its own
-explicit `@noImplicitThis: false`. Both halves of B438b's justification dissolve under
-TypeScript 7. Landed: the JS skip becomes `(!spineIsJsLike || options.checkJs)`, and both run
-gates become tsgo's exact spelling. **Scoped deliberately: 2 sites changed, 28 left on the old
-`X || options.strict` idiom** — changing 29 unmeasured sites would be reckless, and the drift is
-now a CLAUDE.md entry rather than a silent inconsistency.
-
-**THE CORPUS DID NOT CATCH THE ROUND'S ONE REAL MISTAKE — THE NEGATIVE CONTROL DID.** Dropping
-the JS skip wholesale emits TS2683 under `allowJs` WITHOUT `checkJs`, where tsgo is silent. No
-corpus baseline sees it, because such a fixture has no errors baseline at all. The brief asked
-for three negative controls (a `.d.ts`, a JS file with `checkJs` off, a typed `this`) and the
-second one is what fired.
-
-**A SECOND CONTROL WAS VACUOUS AND WAS FIXED RATHER THAN TRUSTED.** The `.d.ts` negative control
-had no `this` in its fixture, so it read 0 RED for a reason unrelated to the guard. Probed
-properly, a `.d.ts` *carrying a function body* does emit when the guard is dropped — **and tsgo
-emits TS2683 there too** (beside TS1183), so our `.d.ts` guard is NOT tsgo-faithful. That pin is
-now named `residue - …` per the countdown rule and records tsgo's row.
-
-**ALSO LANDED, ALL IN SERVICE OF THE 7 ROWS**: the TS7009 sibling family took the identical two
-changes (same gate, same bug — CLAUDE.md's add-it-to-both-of-a-pair rule); tsc-6 walker **B424
-`checkJsConstructorThisReads` RETIRED** (−2,641 chars, superseded by TS2683, archive records it
-as corpus-exhaustive to one fixture); a new `checkDeclarationOnlySpineFamilies` driver, because
-`emitDeclarationOnly` takes the `declarationOnly` whitelist path where `checkSpine` never runs —
-which is what actually blocked the two `jsDeclarationsGlobalFileConstFunction` rows, not anything
-`this`-shaped; and named-function-expression self-reference TS7009.
-
-**ABLATION — 10 arms, 9 discriminating, `tests` identical at 17 in every arm**: a1 restore the
-B438b JS skip **5 RED**; a2 drop the `checkJs` half **1**; a3 restore the pre-round run gate
-**1**; a4 emit in `.d.ts` too **1**; a5 drop the declarationOnly dispatch **1**; a6 B432 names
-the constructor again **1**; a7 adopt an enclosing `FunctionDeclaration`'s name **0 —
-UNDISCRIMINATED**; a7b (a7's control) delete the self-reference leg **1**; a8 declarationOnly
-driver drops the TS7009 family **1**; a9 restore the JS skip on TS7009 **3**. a7's zero is
-ATTRIBUTED: the `FunctionDeclaration -> return false` arm is a **redundant guard**, because a
-function declaration's name reaches the symbol-table path below and emits the same TS7009 for the
-same node.
-
-**THE GRID IS A CONTROL, COUNTED NOT ASSUMED** ((CHK.124)): TS2683 = 0 **and** TS7009 = 0 in BOTH
-arms of all eight profiles, and **no profile sets `checkJs`, `allowJs` or `emitDeclarationOnly`**,
-so the changed path is structurally unreachable there. cronstrue and marked byte-identical
-(marked is the live-emitter control: 4 pre-existing TS2683 rows in `.ts`, unchanged). The corpus
-was the gate.
-
-**A REUSABLE INSTRUMENT CAME OUT OF IT**: a **28-second** full-active-corpus harness (a Java
-driver calling `TypeScriptCompiler().compile` + `toErrorBaseline()` over all 2,789 active errors
-subtests, outside Gradle) that read **0 mismatches of 2,789** after every step. It turns a family
-round's blast-radius question from an argument into a measurement — but it must reproduce
-`Path.readText()`'s **UTF-16 BOM** handling or two fixtures read as false regressions, which is
-exactly what its first run did.
 
 ## QUEUE
 
@@ -1481,9 +1433,9 @@ CLAUDE.md § "AI agent mission".
   configuration is already dropped by `usesUnsupportedOption`/`tsconfigInTestUsesRemovedFeature`, active count 0 —
   verified over the 8,837 generated tests), grid 8×0/0, cost_gate, huge_methods, `Checker.kt` line count in
   STATUS.md. ONE FAMILY PER COMMIT, in this order:
-  - [ ] (a) DEAD System dynamic-import rewriter `Transformer.kt:5964-6070` (`buildSystemDynamicImport`/
+  - [x] (a) LANDED 2026-09-15 ((P18.102), `ba18310a5`, −107 lines, closed by a reference census) — DEAD System dynamic-import rewriter `Transformer.kt:5964-6070` (`buildSystemDynamicImport`/
     `rewriteSystemDyn*`, 107 lines, zero callers) — risk nil.
-  - [ ] (b) DEAD System var-hoist helpers `Transformer.kt:16315-16461` (`stripVarDeclsFromStatement`,
+  - [x] (b) LANDED 2026-09-15 ((P18.102), −142 lines; `collectBoundNames` stays) — DEAD System var-hoist helpers `Transformer.kt:16315-16461` (`stripVarDeclsFromStatement`,
     `collectVarNamesFromStmt(s)`, ~147 lines, zero callers; `collectBoundNames` at 16463 STAYS) — risk nil.
   - [ ] (c) `alwaysStrict: false` — `Emitter.kt:229-231` (`"use strict"` suppression; tsgo's `usestrict.go` never
     reads the flag), `Checker.kt:29451`, `:25470-25472` `spineWithStrictActive` (always active), `:25600-25605`
