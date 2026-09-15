@@ -137,6 +137,8 @@ outFile is set"), `:1908-1923`, `:2079`, `:2468-2473`; `CompilerOptions.kt:205, 
 
 ### 2f. `alwaysStrict: false`, `esModuleInterop: false`, `allowSyntheticDefaultImports: false`
 
+**DONE 2026-09-15 — all three: `alwaysStrict` at (P18.103) (`e81d07381`), `esModuleInterop` and `allowSyntheticDefaultImports` at (P18.105) (`5bbbffe8e`). The boolean options are deleted; what stays is the `…ExplicitlyFalse` markers and `TypeScriptCompiler.kt`'s TS5107/TS5108 rows (now value-anchored on both paths since (P18.104)). Corrections to the rows below: `alwaysStrict` HAD no diagnostic row and gained one; the synthetic default is not "interop-derived" but a property of the target (`canHaveSyntheticDefault`); the System disjunct of `suppressDefaultReexportError` is step (f)'s.**
+
 `alwaysStrict` — **DONE 2026-09-15 ((P18.103), `e81d07381`); the "all three have the diagnostic at `:523-526`" claim was wrong, `alwaysStrict` had none and gained one**: `Emitter.kt:229-231` (the `"use strict"` prologue suppression),
 `Checker.kt:25470-25472` `spineWithStrictActive` (TS1101), `:29451`, `:25600-25605`
 `explicitNonStrict`; the `== true` reads at `:53571, 71484, 25612, 25619, 25623` stay;

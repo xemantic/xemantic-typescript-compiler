@@ -3724,3 +3724,18 @@ newline-wide range renders as an empty squiggle line). Ablation 12 arms, all dis
 pins red on the pre-change binary, the rest exactly the controls. cost_gate 20/20 +0.00% and the
 grid 8×0/0 + emit 78/78 — controls, counted (tsc's sources hold no `assert` clause and no JSDoc
 type); huge_methods exit 0 (871 classes); warning-clean; screen errors 3,067/0, emit 5,688/0.
+**(P18.100) — THE F8 SPAN/WIDTH FAMILY, TEN OF TEN IN SEVEN MECHANISMS, AND THE tsc-6 MIRROR'S EXPECTATIONS ARE FILES, 19,344 / 0 / 90 (2026-09-14).**
+Pending 76 -> **66**, skipped -10, +29 pins, 9 modules asserted. File-less ORDER was not emission
+order but the test-support comparator sorting by code — tsgo ranks an OPTIONS diagnostic before a
+checker GLOBAL, now decided by our `start` marker convention; the related TS1356 anchors on a
+nameless function's ASSIGNED name (measured over 8 parents — the brief said "keyword"); TS2447 on the
+operator token; TS4032 over the whole expando assignment; TS1092 over the reparsed `@template` LIST
+(five shapes, and `comment.text` runs two characters past `*/`); the pretty renderer prints one `~`
+for a zero-width span; and astral characters are padded by RUNE in tsgo's harness while its regexp
+scanner splits a non-BMP rune into surrogates — one row a tsgo-vs-tsc-6 divergence. `pathsValidation5`
+REFUSED with the count: its tsconfig-first order protects 7 green `baseUrl`/`node` baselines tsgo
+never runs, a (LEGACY.1) question. **The suite's one red was the tsc-6 mirror again**, and the agent's
+grep missed it because the mirror's expectations are FILES, not class source — third counted
+annotation. Ablation 10 arms, all discriminating; 20 of 29 pins red pre-change, the rest exactly the
+controls. cost_gate 20/20 +0.00%, grid 8×0/0 + emit 78/78 (controls), huge_methods exit 0 (871
+classes), warning-clean, screen errors 3,077/0, emit 5,688/0.

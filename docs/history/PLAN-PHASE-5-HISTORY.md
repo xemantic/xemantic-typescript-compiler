@@ -1,3 +1,72 @@
+### Round (P18.95) — the screen gains the EMIT channel, and three printer rules close 12 JS-emit rows (2026-09-14)
+
+**Three commits** (`1f5b13d2a` Part 0, `bb846ff1e` Part 1, `12592cc55` a blind-control repair).
+**Suite 19,200 → 19,214 / 0 / 139** — `tsgoPendingBaselines` 126 → **114**, skipped −12, tests
++14, **9 modules asserted present**. `cost_gate.py` exit 0, all 20 counters +0.00%;
+`huge_methods.py --fail-over 0` exit 0 (867 classes); warning-clean (7,300-byte log, `w=0 e=0`,
+no `-q`, positive control 1 `w:` line); **corpus screen 8,716 subtests / 0 mismatches over BOTH
+channels**. **(LEGACY.0) stays OPEN** on (0b-11).
+
+**PART 0 — THE SCREEN NOW SEES EMITTED BYTES, WHICH IS WHY THIS FAMILY HAD BEEN DEFERRED FIVE
+ROUNDS.** JS emit was the largest pending family and had NO blast-radius instrument: the (P18.93)
+screen covered only the errors subtests. It now runs both channels — **errors 3,046 and emit
+5,670, 8,716 in ~70 s against a ~4-minute `jvmTest`**. Both go through the suite's own helpers
+(`errorsMatchBaseline`; `toBaseline(casesDir)` + `sameAs`), so `stripDtsSection`, the CRLF
+normalisation, the UTF-16 BOM decode and the conformance `casesDir` provenance are the suite's by
+construction rather than reproduced — and the `casesDir` is RECOVERED from the generated source,
+not defaulted, because 34 emit subtests pass one. **Floors are PER CHANNEL** (2,800 / 5,200): one
+combined number is satisfied by a healthy channel while its sibling has collapsed. **The emit
+channel is nearly TWICE the errors one — 5,692 against 3,160 — so this round's own brief
+under-counted it** (it said ~3,100).
+
+**THE ORCHESTRATOR'S DECOMPOSITION WAS WRONG THREE WAYS, AND ONE WOULD HAVE MIS-ROUTED SIX ROWS
+INTO ANOTHER ARC.** (i) The instantiation-expression group is ONE rule of FIVE rows, not "~4, may
+be two" — and it absorbs a row filed as a singleton. `newOperator` is NOT in it (it is tsc's
+`parenthesizeExpressionOfNew`, which ADDS a paren). (ii) The trailing-comma group is 6, not 5,
+and three of the six are not object-literal fixtures at all — a `{ return 0; }` BLOCK recovered
+INTO an object literal is the same shape. (iii) **The destructuring group is NOT a target-gating
+question and does not belong with (LEGACY.1)**: the brief hypothesised TypeScript 7's removal of
+`downlevelIteration`/ES5, and `downlevelLetConst13(target=es2015)` refutes it by itself — in ONE
+file at ONE target the top-level exported bindings keep their pattern (`[exports.bar1] = [1];`)
+while the namespace-level ones are lowered. All six are one MODULE-TRANSFORM rule.
+
+**WHAT LANDED: THREE PRINTER RULES, 12 ROWS.** (1) An instantiation expression `expr<T>` prints
+as its operand, BARE — the parser's synthetic paren exists for checker squiggles and is not in
+the source, so it is stripped at PRINT time, leaving every transform decision untouched; an
+author's paren is a separate node and survives, which is the whole content of
+`instanceofOnInstantiationExpression`. Its JSDoc half was a **tsc-6 transcription — (P18.94)'s
+third group again — and was DELETED, not re-transcribed.** (2) A recovered `;` is a separator
+like any other, so a `;` before `}` is a TRAILING separator; the branch wrote
+`hasTrailingComma = false` unconditionally where its `hadComma` sibling decides on
+`token == CloseBrace`. (3) tsc's `parenthesizeExpressionOfNew`.
+
+**THE SCREEN PAID FOR ITSELF INSIDE THE FIRST HOUR, ON A SEMANTIC BUG.** The first cut of rule 1
+stripped the paren unconditionally and **moved two green baselines**: a `<T>` argument list ENDS
+an optional chain, so `a?.b<c>.d` must print `(a?.b).d` — dropping it changes what the program
+means. Nothing downstream can re-derive it (the transform turns the chain into a conditional, and
+synthesized nodes carry no `parent`), so the parser marks it where it already knows:
+`instantiationTerminatesChain`. **A synthetic paren is not uniformly cosmetic**, and this one was
+caught before any commit.
+
+**ABLATION — 8 arms, one mistake each, all discriminating**, every arm with a distinct
+`Emitter.class`/`Parser.class` md5: a1 paren never stripped 4 pins / **5 screen**; a2 the
+first cut (chain mark ignored) 2/**2**; a3 the mark also set on the value-position catch-all 3/4;
+a4 `;` recovery writes `false` 2/**6**; a5 writes `true` unconditionally **0 → 1**/1; a6 `new`
+never parenthesizes 1/1; a7 the leftmost walk descends into an author's paren 1/**0**; a8 any
+`new` leftmost parenthesized 1/**0**. **a5 read 0 RED and was REPAIRED** (the third commit): its
+control `{ a; b; c }` cannot see the mistake, because there the loop's `else` runs last and
+overwrites the flag — the separating shape is a `;` with NO closing brace after it, which no
+hand-written fixture reaches by accident. **a7/a8's zero SCREEN counts are attributed**:
+`new (new D).x` and `new new D().x` appear nowhere in the ~13k baselines, so the pins are the
+only instrument for the two halves of `newLeftmostExpression`, which is exactly why they exist.
+
+**THE GATES HAD TO BE LABELLED, AND THE EMIT-MODE CONTROL IS ITSELF BLIND.** `--noEmit` skips the
+transformer (round 738's `skipEmitOutputs`), so `cost_gate.py` and 7 of the 8 profile arms are
+CONTROLS here. **And the `--outDir` + `diff -r` emit-mode control read 78 files IDENTICAL across
+a change that moved 12 baselines** — real well-formed code contains no instantiation expression,
+no `;`-recovered object literal and no `new new X`. For an emit family the corpus EMIT CHANNEL is
+the gate and the `--outDir` diff is a control; the grid is a gate for rule 1 only.
+
 ### Round (P18.94) — the ORDER family: 13 of 18, and FIVE of the "model gaps" were reach rows (2026-09-14)
 
 **Suite 19,192 → 19,200 / 0 / 151** — `tsgoPendingBaselines` 139 → **126** and skipped 164 →

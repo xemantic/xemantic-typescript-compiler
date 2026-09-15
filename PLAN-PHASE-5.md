@@ -25,6 +25,63 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.105) — (LEGACY.1) step (d2): TypeScript 7 reads neither interop flag, the synthetic default is a property of the TARGET, and (d) is closed (2026-09-15)
+
+**Three commits** (`5bbbffe8e` refactor, `4b9d3931f` test, this docs commit). **Suite 19,402 → 19,427 / 0 / 83** (+25
+pins: 11 in `-project`, 14 in core), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — a
+CONTROL, counted: the 7 explicit-`false` case files are `usesUnsupportedOption`-dropped, the 9 active
+`export =`-with-default-import cases all target `.ts` files (none the `.d.ts` shape the flip changes), tsgo's
+`submodule*` layers carry no `.diff` for any of them, and the only active TS2595/TS2616 baselines are unmoved;
+`cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (872 classes); grid 8×`added=0
+removed=0` and emit 78/78 — controls (every profile is `module: NodeNext`); warning-clean over four compile tasks.
+`Checker.kt` 195,132 → **195,082** (−50), `Transformer.kt` −79 net, `NameResolver.kt` −20, `CompilerOptions.kt`
++37/−. **(LEGACY.1)(d) is CHECKED OFF in both halves; (e) `moduleResolution: classic/node10` is next; (LEGACY.0)
+stays OPEN** on (0b-17).
+
+**THE MEASUREMENT.** In `typescript-go-repo` the two fields are read in exactly ONE non-test place each —
+`program.go:862-868`'s `createRemovedOptionDiagnostic` — and the checker says so at `checker.go:14478` ("with
+`esModuleInterop` (always enabled)"); `canHaveSyntheticDefault` (`:14744-14800`) has no option gate at all. 45
+scratch projects — five module families (`commonjs`, `esnext`, `esnext`+bundler, `nodenext` CJS-scoped,
+`nodenext` under `"type": "module"`) × the {unset, false, true}² matrix — over 8 targets and 4 import forms:
+**every cell is byte-identical on diagnostics AND emit except the TS5108 row** (explicit-false cells read through
+the LSP, since the CLI stops at the options row). TS1259, TS2497, TS2617, TS2596 and TS2598 have no emitter left
+in tsgo; TS2595-vs-TS2616 is chosen by the `module` OPTION (`isEs2015OrHigher`), not the importer's file format,
+and the helpers are keyed on import SHAPE alone.
+
+**WHAT LANDED.** Dead and deleted: the 12 no-interop `else` arms of the Transformer, the TS1259 (+TS2594)
+emitter, the TS2617/2596/2598 emitter and its ambient arm, `NameResolver`'s interop gate, the explicit-false
+conjuncts in the synthetic-default gate, `checkNamespaceImportSyntheticDefaultCall`, `cjsDefaultNsShapes`,
+`needsEsmHelpers` and `suppressDefaultReexportError`, and the boolean options `esModuleInterop` /
+`allowSyntheticDefaultImports` themselves — no reader can survive. **Changed at the default**: the tsc-6
+`allowSyntheticDefaultImports` model is replaced by tsgo's `canHaveSyntheticDefault`, a property of the TARGET
+(node16+: ESM importer + CJS target; a `.d.ts` unless it declares a default or an `__esModule` marker; a `.ts`
+with an `export =`; JS with no ESM syntax and no `__esModule`), so a `.d.ts` with named exports is now
+default-importable (was TS1192) and an explicit `true` no longer blanket-skips TS1192 on a `.ts` module; and the
+TS2595/TS2616 choice keys on `module` at both the file and the ambient site (nodenext CJS-scoped importers read
+TS2595 as tsgo). Survive: the two `…ExplicitlyFalse` markers (read only by (d1)'s TS5107/TS5108 rows) and the
+System disjunct of `suppressDefaultReexportError` ((f)'s).
+
+**WHERE THE ITEM WAS WRONG.** "The `…ExplicitlyFalse` fields go" — they stay, the options go.
+"`allowSyntheticDefaultImports` becomes interop-DERIVED" — tsgo derives nothing; neither field is read, the
+synthetic default is the target's property. It missed that an explicit `true` was ALSO honoured here (the
+blanket TS1192 skip), and that the ambient path and the TS2595 gate were format-keyed where tsgo keys on the
+option.
+
+**PINS AND ABLATION.** 25 pins; stash-ablation 22 red, the three greens exactly the two named controls and the
+`__esModule`-marker pin (which arm A1b reddens). Seven arms, each discriminating (core / project reds; screens
+0/0 on all): A1 synthetic default back to the old rule 1/5; A1b `.d.ts` always synthetic 1/0; A2 Transformer
+`require` on the marker 2/2; A3 NameResolver gated 1/0; A4 TS1259 restored 3/4; A5 TS2617 restored 1/2; A6
+TS2595 choice by file format 1/1. Final md5s Checker `339e2ff3`, Transformer `e4cbd570`, NameResolver
+`4edc18ae`, CompilerOptions `9fc43bb9` — the orchestrator's AFTER arm matched all four.
+
+**PRE-EXISTING DIVERGENCES THE MATRIX EXPOSED, none of this family**: TS1192 prints the specifier where tsgo
+prints the resolved extension-less path; a bare `node_modules` `export =` package is never named-import-checked
+(`checkDefaultImports` resolves no bare specifier under commonjs — tsgo TS2616/2595); nodenext ESM-scope
+extensionless imports read TS2834 where tsgo reads TS2835, and we still resolve them; TS1203 is not reported for
+an `export =` in a `"type": "module"`-scoped `.ts` under nodenext; the JS half of `canHaveSyntheticDefault`
+tests exports only (tsgo also counts an `import` as ESM syntax); and `es6ExportEqualsInterop`'s wipe-and-pin
+walker still re-emits nine TS2497 rows for an `@Ignore`d pending baseline ((LEGACY.0b)).
+
 ### Round (P18.104) — (LEGACY.1) step (d1): every deprecation and removed-option row now anchors where tsgo anchors it, on both paths, from ONE scanner (2026-09-15)
 
 **Three commits** (`ef8ba8b6e` fix, `6b182b7e3` test, this docs commit). **Suite 19,382 → 19,402 / 0 / 83** (+20 pins:
@@ -600,75 +657,6 @@ object-rest target refusal was expected to be load-bearing and measured redundan
 lines** across all 413 rows, and 0 files with an exported destructuring); the emit-mode `--outDir`
 + `diff -r` is a CONTROL and was counted (78/78 files, 0 differing); `cost_gate.py` is a CONTROL
 for the emit half and a GATE for F10. The corpus and its screen were the gates.
-
-### Round (P18.95) — the screen gains the EMIT channel, and three printer rules close 12 JS-emit rows (2026-09-14)
-
-**Three commits** (`1f5b13d2a` Part 0, `bb846ff1e` Part 1, `12592cc55` a blind-control repair).
-**Suite 19,200 → 19,214 / 0 / 139** — `tsgoPendingBaselines` 126 → **114**, skipped −12, tests
-+14, **9 modules asserted present**. `cost_gate.py` exit 0, all 20 counters +0.00%;
-`huge_methods.py --fail-over 0` exit 0 (867 classes); warning-clean (7,300-byte log, `w=0 e=0`,
-no `-q`, positive control 1 `w:` line); **corpus screen 8,716 subtests / 0 mismatches over BOTH
-channels**. **(LEGACY.0) stays OPEN** on (0b-11).
-
-**PART 0 — THE SCREEN NOW SEES EMITTED BYTES, WHICH IS WHY THIS FAMILY HAD BEEN DEFERRED FIVE
-ROUNDS.** JS emit was the largest pending family and had NO blast-radius instrument: the (P18.93)
-screen covered only the errors subtests. It now runs both channels — **errors 3,046 and emit
-5,670, 8,716 in ~70 s against a ~4-minute `jvmTest`**. Both go through the suite's own helpers
-(`errorsMatchBaseline`; `toBaseline(casesDir)` + `sameAs`), so `stripDtsSection`, the CRLF
-normalisation, the UTF-16 BOM decode and the conformance `casesDir` provenance are the suite's by
-construction rather than reproduced — and the `casesDir` is RECOVERED from the generated source,
-not defaulted, because 34 emit subtests pass one. **Floors are PER CHANNEL** (2,800 / 5,200): one
-combined number is satisfied by a healthy channel while its sibling has collapsed. **The emit
-channel is nearly TWICE the errors one — 5,692 against 3,160 — so this round's own brief
-under-counted it** (it said ~3,100).
-
-**THE ORCHESTRATOR'S DECOMPOSITION WAS WRONG THREE WAYS, AND ONE WOULD HAVE MIS-ROUTED SIX ROWS
-INTO ANOTHER ARC.** (i) The instantiation-expression group is ONE rule of FIVE rows, not "~4, may
-be two" — and it absorbs a row filed as a singleton. `newOperator` is NOT in it (it is tsc's
-`parenthesizeExpressionOfNew`, which ADDS a paren). (ii) The trailing-comma group is 6, not 5,
-and three of the six are not object-literal fixtures at all — a `{ return 0; }` BLOCK recovered
-INTO an object literal is the same shape. (iii) **The destructuring group is NOT a target-gating
-question and does not belong with (LEGACY.1)**: the brief hypothesised TypeScript 7's removal of
-`downlevelIteration`/ES5, and `downlevelLetConst13(target=es2015)` refutes it by itself — in ONE
-file at ONE target the top-level exported bindings keep their pattern (`[exports.bar1] = [1];`)
-while the namespace-level ones are lowered. All six are one MODULE-TRANSFORM rule.
-
-**WHAT LANDED: THREE PRINTER RULES, 12 ROWS.** (1) An instantiation expression `expr<T>` prints
-as its operand, BARE — the parser's synthetic paren exists for checker squiggles and is not in
-the source, so it is stripped at PRINT time, leaving every transform decision untouched; an
-author's paren is a separate node and survives, which is the whole content of
-`instanceofOnInstantiationExpression`. Its JSDoc half was a **tsc-6 transcription — (P18.94)'s
-third group again — and was DELETED, not re-transcribed.** (2) A recovered `;` is a separator
-like any other, so a `;` before `}` is a TRAILING separator; the branch wrote
-`hasTrailingComma = false` unconditionally where its `hadComma` sibling decides on
-`token == CloseBrace`. (3) tsc's `parenthesizeExpressionOfNew`.
-
-**THE SCREEN PAID FOR ITSELF INSIDE THE FIRST HOUR, ON A SEMANTIC BUG.** The first cut of rule 1
-stripped the paren unconditionally and **moved two green baselines**: a `<T>` argument list ENDS
-an optional chain, so `a?.b<c>.d` must print `(a?.b).d` — dropping it changes what the program
-means. Nothing downstream can re-derive it (the transform turns the chain into a conditional, and
-synthesized nodes carry no `parent`), so the parser marks it where it already knows:
-`instantiationTerminatesChain`. **A synthetic paren is not uniformly cosmetic**, and this one was
-caught before any commit.
-
-**ABLATION — 8 arms, one mistake each, all discriminating**, every arm with a distinct
-`Emitter.class`/`Parser.class` md5: a1 paren never stripped 4 pins / **5 screen**; a2 the
-first cut (chain mark ignored) 2/**2**; a3 the mark also set on the value-position catch-all 3/4;
-a4 `;` recovery writes `false` 2/**6**; a5 writes `true` unconditionally **0 → 1**/1; a6 `new`
-never parenthesizes 1/1; a7 the leftmost walk descends into an author's paren 1/**0**; a8 any
-`new` leftmost parenthesized 1/**0**. **a5 read 0 RED and was REPAIRED** (the third commit): its
-control `{ a; b; c }` cannot see the mistake, because there the loop's `else` runs last and
-overwrites the flag — the separating shape is a `;` with NO closing brace after it, which no
-hand-written fixture reaches by accident. **a7/a8's zero SCREEN counts are attributed**:
-`new (new D).x` and `new new D().x` appear nowhere in the ~13k baselines, so the pins are the
-only instrument for the two halves of `newLeftmostExpression`, which is exactly why they exist.
-
-**THE GATES HAD TO BE LABELLED, AND THE EMIT-MODE CONTROL IS ITSELF BLIND.** `--noEmit` skips the
-transformer (round 738's `skipEmitOutputs`), so `cost_gate.py` and 7 of the 8 profile arms are
-CONTROLS here. **And the `--outDir` + `diff -r` emit-mode control read 78 files IDENTICAL across
-a change that moved 12 baselines** — real well-formed code contains no instantiation expression,
-no `;`-recovered object literal and no `new new X`. For an emit family the corpus EMIT CHANNEL is
-the gate and the `--outDir` diff is a control; the grid is a gate for rule 1 only.
 
 ## QUEUE
 
@@ -1371,7 +1359,7 @@ CLAUDE.md § "AI agent mission".
     reads the flag), `Checker.kt:29451`, `:25470-25472` `spineWithStrictActive` (always active), `:25600-25605`
     `explicitNonStrict`'s disjunct; keep every `== true` read and the parse/report; delete the two negative controls
     `Inv4SpineBatch11Test.kt:131`, `Inv4SpineBatch9Test.kt:256`; watch TS1101 (`with`) now always firing.
-  - [ ] (d) — (d1) the anchoring LANDED 2026-09-15 ((P18.104), `ef8ba8b6e`: one scanner for both paths, TS5107/5108 at the VALUE, TS5101/5102 at the KEY, root config only, `extends` → the root's `compilerOptions` key; residue: it is a TEXT scan and records a commented-out option); **(d2) REMAINS — the behaviour**: `esModuleInterop: false` + `allowSyntheticDefaultImports: false` — the no-interop `else` arms in
+  - [x] (d) CLOSED 2026-09-15 — (d2) the behaviour LANDED ((P18.105), `5bbbffe8e`: neither flag is read anywhere in tsgo, the synthetic default is tsgo's `canHaveSyntheticDefault` — a property of the TARGET — and TS2595/TS2616 key on the `module` option; the options are deleted, the `…ExplicitlyFalse` markers stay for the diagnostic rows; six pre-existing import divergences recorded in the note); (d1) the anchoring LANDED 2026-09-15 ((P18.104), `ef8ba8b6e`: one scanner for both paths, TS5107/5108 at the VALUE, TS5101/5102 at the KEY, root config only, `extends` → the root's `compilerOptions` key; residue: it is a TEXT scan and records a commented-out option); **(d2) REMAINS — the behaviour**: `esModuleInterop: false` + `allowSyntheticDefaultImports: false` — the no-interop `else` arms in
     `Transformer.kt:3082-3397` (12 sites), `NameResolver.kt:446`, `Checker.kt:51353-51356, 51438-51442, 52216-52217`,
     the `…ExplicitlyFalse` fields; **a BEHAVIOUR change at the default**: `allowSyntheticDefaultImports` defaults
     `false` today (`CompilerOptions.kt:199`) and must become interop-derived as tsgo's — land the flip and the arm
