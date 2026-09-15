@@ -288,7 +288,7 @@ class TypeScriptCompiler {
             tsconfigPos = tsconfigPos,
             diagnostics = diagnostics,
         )
-        cpcCheckModuleAndLibOptions(parsed = parsed, options = options, diagnostics = diagnostics)
+        cpcCheckModuleAndLibOptions(parsed = parsed, options = options, tsconfigPos = tsconfigPos, diagnostics = diagnostics)
         cpcCheckProjectShapeOptions(parsed = parsed, options = options, diagnostics = diagnostics)
 
         // Paths validation diagnostics (TS5061/5062/5063/5064/5066/5090)
@@ -326,6 +326,27 @@ class TypeScriptCompiler {
      * the `ignoreDeprecations` validation (TS5103) and the three local emitters that
      * only this run uses.
      */
+    /**
+     * (LEGACY.1)(d) Where a deprecation / removed-option row for [tsconfigKey] is
+     * anchored — tsgo's `createDiagnosticForOption` (`program.go:784`), measured on
+     * tsgo 7.0.2 over one-line, multi-line, CRLF and `extends` configs:
+     *
+     * - the option is written in the ROOT `tsconfig.json`: its own token there (the
+     *   VALUE for TS5107/TS5108, the KEY for TS5101/TS5102 — the caller picks);
+     * - the option is set but not written in the root (inherited through `extends`,
+     *   or a command-line / harness directive) and the root has a `"compilerOptions"`
+     *   key: THAT key, in the root file (`createCompilerOptionsDiagnostic`);
+     * - no `compilerOptions` anywhere in the root: file-less.
+     *
+     * tsgo consults only the root's object literal, so `{ "extends": "./base.json",
+     * "compilerOptions": {} }` reports `base.json`'s `alwaysStrict: false` at
+     * `tsconfig.json(1,29)`; both producers of [tsconfigPos] record the ROOT file's
+     * positions only ([tsconfigOptionPositionsOf]), which is what makes this a
+     * two-step fallback rather than a file comparison.
+     */
+    fun tsconfigAnchorFor(tsconfigKey: String?, tsconfigPos: Map<String, TsconfigOptionPosition>): TsconfigOptionPosition? =
+        tsconfigKey?.let { tsconfigPos[it] ?: tsconfigPos["compileroptionskey"] }
+
     private fun cpcCheckDeprecatedOptions(
         options: CompilerOptions,
         fileName: String,
@@ -360,26 +381,6 @@ class TypeScriptCompiler {
             return ign >= deprecationVersion // lexicographic comparison works for "X.Y" format
         }
 
-        /**
-         * (LEGACY.1)(d) Where a deprecation / removed-option row for [tsconfigKey] is
-         * anchored — tsgo's `createDiagnosticForOption` (`program.go:784`), measured on
-         * tsgo 7.0.2 over one-line, multi-line, CRLF and `extends` configs:
-         *
-         * - the option is written in the ROOT `tsconfig.json`: its own token there (the
-         *   VALUE for TS5107/TS5108, the KEY for TS5101/TS5102 — the caller picks);
-         * - the option is set but not written in the root (inherited through `extends`,
-         *   or a command-line / harness directive) and the root has a `"compilerOptions"`
-         *   key: THAT key, in the root file (`createCompilerOptionsDiagnostic`);
-         * - no `compilerOptions` anywhere in the root: file-less.
-         *
-         * tsgo consults only the root's object literal, so `{ "extends": "./base.json",
-         * "compilerOptions": {} }` reports `base.json`'s `alwaysStrict: false` at
-         * `tsconfig.json(1,29)`; both producers of [tsconfigPos] record the ROOT file's
-         * positions only ([tsconfigOptionPositionsOf]), which is what makes this a
-         * two-step fallback rather than a file comparison.
-         */
-        fun tsconfigAnchorFor(tsconfigKey: String?, tsconfigPos: Map<String, TsconfigOptionPosition>): TsconfigOptionPosition? =
-            tsconfigKey?.let { tsconfigPos[it] ?: tsconfigPos["compileroptionskey"] }
 
         // TS5101/TS5102: Deprecated/removed options — point to KEY position in tsconfig.
         // Logic (simulatedVersion is always set, defaults to "6.0"):
@@ -542,9 +543,12 @@ class TypeScriptCompiler {
         if (options.module == ModuleKind.UMD) addDeprecation("module=UMD", tsconfigKey = "module")
         if (options.module == ModuleKind.System) addDeprecation("module=System", tsconfigKey = "module")
         if (options.module == ModuleKind.None) addDeprecation("module=None", tsconfigKey = "module")
-        // Module resolution deprecations — node10 gets migration URL chain
+        // Module resolution removed values — tsgo's `program.go:854/870`: `Classic` (its
+        // spelling) and `node10`, the latter also for the enum-map alias `node`; node10
+        // gets the migration URL chain on the 6.0 ladder. (LEGACY.1)(e): reported, then
+        // IGNORED — `CompilerOptions.effectiveModuleResolution` derives the real kind.
         when (options.moduleResolution?.lowercase()) {
-            "classic" -> addDeprecation("moduleResolution=classic", tsconfigKey = "moduleresolution")
+            "classic" -> addDeprecation("moduleResolution=Classic", tsconfigKey = "moduleresolution")
             "node", "node10" -> addDeprecation("moduleResolution=node10", tsconfigKey = "moduleresolution", withMigrationUrl = true)
         }
         // Boolean option deprecations (explicitly set to false)
@@ -774,29 +778,17 @@ class TypeScriptCompiler {
     private fun cpcCheckModuleAndLibOptions(
         parsed: ParsedSource,
         options: CompilerOptions,
+        tsconfigPos: Map<String, TsconfigOptionPosition>,
         diagnostics: MutableList<Diagnostic>,
     ) {
-        // TS5070: resolveJsonModule with classic moduleResolution
-        // Classic is the default for module=none/amd/umd/system
-        var emitted5070 = false
-        val effectiveModuleRes = options.moduleResolution?.lowercase() ?: run {
-            val mod = options.effectiveModule
-            if (mod == ModuleKind.None || mod == ModuleKind.AMD || mod == ModuleKind.UMD || mod == ModuleKind.System) "classic"
-            else null
-        }
-        if (options.resolveJsonModule && effectiveModuleRes == "classic") {
-            diagnostics.add(Diagnostic(
-                message = "Option '--resolveJsonModule' cannot be specified when 'moduleResolution' is set to 'classic'.",
-                category = DiagnosticCategory.Error,
-                code = 5070,
-            ))
-            emitted5070 = true
-        }
+        // (LEGACY.1)(e) TS5070 (`resolveJsonModule` with `moduleResolution: classic`) is
+        // gone with the classic resolution: TypeScript 7 has no such resolution and tsgo has
+        // no emitter for the message. (TS5071 below is (LEGACY.1)(f)'s — `module`
+        // none/system/umd — and tsgo has no emitter for it either.)
 
         // TS5071: resolveJsonModule with module=none/system/umd
         // Also fires when moduleResolution=bundler (which implies resolveJsonModule)
-        // TS5071 is mutually exclusive with TS5070 — don't emit both
-        if (!emitted5070) {
+        run {
             val effectiveResolveJson = options.resolveJsonModule || options.moduleResolution?.lowercase() == "bundler"
             if (effectiveResolveJson) {
                 val effModule = options.effectiveModule
@@ -968,41 +960,50 @@ class TypeScriptCompiler {
             }
         }
 
-        // TS5095: moduleResolution=bundler with incompatible module
-        if (options.moduleResolution?.lowercase() == "bundler") {
-            val effModule = options.effectiveModule
-            if (effModule == ModuleKind.None || effModule == ModuleKind.AMD ||
-                effModule == ModuleKind.UMD || effModule == ModuleKind.System) {
-                diagnostics.add(Diagnostic(
-                    message = "Option 'bundler' can only be used when 'module' is set to 'preserve', 'commonjs', or 'es2015' or later.",
-                    category = DiagnosticCategory.Error,
-                    code = 5095,
-                ))
-            }
+        // (LEGACY.1)(e) The option-interaction rows of tsgo's `program.go:1146-1175`, read
+        // off the DERIVED resolution (`GetModuleResolutionKind()`) — so a `module: amd`
+        // program with no `moduleResolution` at all is a Bundler program and gets TS5095,
+        // exactly as tsgo prints it — and anchored as `createOptionValueDiagnostic` does:
+        // at the named option's VALUE when it is written in the root config, else at the
+        // root's `"compilerOptions"` key. Measured on the 42-cell matrix of 2026-09-15.
+        val effRes = options.effectiveModuleResolution
+        val effModule = options.effectiveModule
+        fun optionValueRow(tsconfigKey: String, code: Int, message: String) {
+            val pos = tsconfigAnchorFor(tsconfigKey, tsconfigPos)
+            diagnostics.add(Diagnostic(
+                message = message,
+                category = DiagnosticCategory.Error,
+                code = code,
+                fileName = pos?.fileName,
+                line = pos?.valueLine,
+                character = pos?.valueCharacter,
+                start = pos?.valueStart,
+                length = pos?.valueLength,
+            ))
         }
-
-        // TS5110: module must match moduleResolution for nodenext/node16/node18/node20
-        val modRes = options.moduleResolution?.lowercase()
-        if (modRes in setOf("nodenext", "node16", "node18", "node20")) {
-            val expectedModule = when (modRes) {
-                "nodenext" -> ModuleKind.NodeNext
-                "node18" -> ModuleKind.Node18
-                "node20" -> ModuleKind.Node20
-                else -> ModuleKind.Node16
-            }
-            val displayModRes = when (modRes) {
-                "nodenext" -> "NodeNext"
-                "node18" -> "Node18"
-                "node20" -> "Node20"
-                else -> "Node16"
-            }
-            if (options.module != expectedModule) {
-                diagnostics.add(Diagnostic(
-                    message = "Option 'module' must be set to '$displayModRes' when option 'moduleResolution' is set to '$displayModRes'.",
-                    category = DiagnosticCategory.Error,
-                    code = 5110,
-                ))
-            }
+        // TS5095: Bundler resolution with a module kind that is neither non-node ESM
+        // (ES2015…ESNext), `preserve` nor `commonjs` — tsgo's `emitModuleKindIsNonNodeESM`.
+        val nonNodeEsm = effModule.ordinal in ModuleKind.ES2015.ordinal..ModuleKind.ESNext.ordinal
+        if (effRes == ModuleResolutionKind.Bundler && !nonNodeEsm &&
+            effModule != ModuleKind.Preserve && effModule != ModuleKind.CommonJS) {
+            optionValueRow("moduleresolution", 5095,
+                "Option 'bundler' can only be used when 'module' is set to 'preserve', 'commonjs', or 'es2015' or later.")
+        }
+        val moduleIsNode = effModule == ModuleKind.Node16 || effModule == ModuleKind.Node18 ||
+            effModule == ModuleKind.Node20 || effModule == ModuleKind.NodeNext
+        if (moduleIsNode && !effRes.isNode16OrNodeNext) {
+            // TS5109: a node module kind whose (explicit, non-node) resolution does not match —
+            // reachable only through an explicit `bundler`, since an unset/removed value derives
+            // the node kind. `ModuleKindToModuleResolutionKind` names Node16/NodeNext only;
+            // node18/node20 fall to its "Node16" default.
+            val wanted = if (effModule == ModuleKind.NodeNext) "NodeNext" else "Node16"
+            optionValueRow("moduleresolution", 5109,
+                "Option 'moduleResolution' must be set to '$wanted' (or left unspecified) when option 'module' is set to '${effModule.name}'.")
+        } else if (effRes.isNode16OrNodeNext && !moduleIsNode) {
+            // TS5110: an explicit node16/nodenext resolution with a non-node module kind.
+            val display = if (effRes == ModuleResolutionKind.NodeNext) "NodeNext" else "Node16"
+            optionValueRow("module", 5110,
+                "Option 'module' must be set to '$display' when option 'moduleResolution' is set to '$display'.")
         }
     }
 
@@ -3354,12 +3355,19 @@ private fun extractRelativeImports(
                 probeDir = if (nextSlash < 0) "" else probeDir.substring(0, nextSlash)
             }
         }
-        // Classic-resolution fallback: walk up from the importing file's directory looking
-        // for `<dir>/<specifier>.{ts,tsx,d.ts}` (NO `/node_modules/` segment). This matches
-        // TypeScript's classic resolution algorithm which probes ancestor directories
-        // directly. Required for `@moduleResolution: classic` fixtures that place files
-        // like `c:/file4.ts` and import `"file4"` from c:/root/folder2/file2.ts (walks
-        // c:/root/folder2/, c:/root/, c:/, finds at c:/file4.ts).
+        // Ancestor-directory fallback for a bare specifier: walk up from the importing file's
+        // directory looking for `<dir>/<specifier>.{ts,tsx,d.ts}` (NO `/node_modules/`
+        // segment). This was written as TypeScript's CLASSIC resolution algorithm, and no
+        // TypeScript 7 resolution probes an ancestor directory for a bare specifier —
+        // (LEGACY.1)(e) measured its deletion: it is LOAD-BEARING for two active emit
+        // baselines (`pathMappingBasedModuleResolution4_node`, `..7_node`), whose dependency
+        // edges it supplies where the `baseUrl` block above does not — a RELATIVE `baseUrl`
+        // (`"."`, `"../"`) is probed un-anchored (`./folder2/file2.ts` is never a program
+        // file name) and a `paths` target anchored on such a `baseUrl` misses the same way.
+        // So this is the relative-`baseUrl` edge fallback of the emit ORDER, not a
+        // resolution; it goes with (LEGACY.1)(g) — `baseUrl` is a removed option in
+        // TypeScript 7 (TS5108) and tsgo's file order for both fixtures is recorded in the
+        // (P18.106) note — and must not be deleted before it.
         if (!found && !specifier.startsWith("./") && !specifier.startsWith("../")) {
             var probeDir = dir
             while (probeDir.isNotEmpty()) {

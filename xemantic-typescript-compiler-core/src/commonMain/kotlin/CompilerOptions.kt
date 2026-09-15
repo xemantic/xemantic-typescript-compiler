@@ -86,6 +86,21 @@ enum class ModuleKind {
 }
 
 /**
+ * (LEGACY.1)(e) TypeScript 7's module resolutions — the only three that EXIST there.
+ * tsgo's `core.ModuleResolutionKind` still carries `Classic` and `Node10` as PARSE values
+ * (so `"classic"`, `"node"` and `"node10"` are accepted and reported TS5108 *has been
+ * removed*), but no algorithm answers to either: `GetModuleResolutionKind()`
+ * (`compileroptions.go:223-237`) folds both, together with an unset value, into the
+ * kind DERIVED from the emit module kind. See [CompilerOptions.effectiveModuleResolution].
+ */
+enum class ModuleResolutionKind {
+    Node16, NodeNext, Bundler;
+
+    /** tsgo's `ModuleResolutionKindNode16 <= kind && kind <= ModuleResolutionKindNodeNext`. */
+    val isNode16OrNodeNext: Boolean get() = this == Node16 || this == NodeNext
+}
+
+/**
  * Tracks the position of a compiler option in a tsconfig.json file,
  * used for emitting positioned deprecation diagnostics.
  * Stores both KEY position (for TS5101/TS5102) and VALUE position (for TS5107).
@@ -372,6 +387,37 @@ data class CompilerOptions(
         get() = module ?: when {
             effectiveTarget >= ScriptTarget.ES2015 -> ModuleKind.ES2015
             else -> ModuleKind.CommonJS
+        }
+
+    /**
+     * (LEGACY.1)(e) tsgo 7.0.2's `GetModuleResolutionKind()` (`compileroptions.go:223-237`),
+     * the ONE derivation every consumer of the module resolution reads — the checker's
+     * import walkers, the `tslib` lookups, the `import()`-type walker and the
+     * `TypeScriptCompiler` option checks (TS5095 / TS5109 / TS5110) alike.
+     *
+     * An explicit `node16` / `nodenext` / `bundler` answers itself. Everything else —
+     * UNSET, the removed `classic` / `node` / `node10` (which `cpcCheckDeprecatedOptions`
+     * reports TS5108 and which tsgo then IGNORES), and any spelling tsgo's option map does
+     * not have — derives from the emit module kind: `Node16` for the `node16`/`node18`/
+     * `node20` module kinds, `NodeNext` for `nodenext`, and **`Bundler`** for every other,
+     * `commonjs` and an unset `module` included. There is no classic and no node10
+     * resolution in TypeScript 7.
+     *
+     * Measured (2026-09-15, 42 scratch projects × 8 specifier shapes, `--traceResolution`
+     * plus the LSP's rows): the `classic` / `node` / `node10` cells are byte-identical to
+     * the `unset` cell of the same `module` on every resolved file and every checker row,
+     * differing only by the TS5108 row (`node` prints `node10`, tsgo's enum-map alias).
+     */
+    val effectiveModuleResolution: ModuleResolutionKind
+        get() = when (moduleResolution?.lowercase()) {
+            "node16" -> ModuleResolutionKind.Node16
+            "nodenext" -> ModuleResolutionKind.NodeNext
+            "bundler" -> ModuleResolutionKind.Bundler
+            else -> when (effectiveModule) {
+                ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> ModuleResolutionKind.Node16
+                ModuleKind.NodeNext -> ModuleResolutionKind.NodeNext
+                else -> ModuleResolutionKind.Bundler
+            }
         }
 }
 

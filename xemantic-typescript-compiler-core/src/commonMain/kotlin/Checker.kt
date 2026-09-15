@@ -49786,18 +49786,10 @@ class Checker(
                 }
                 if (isMultiFile) {
                     val isRelative = moduleName.startsWith("./") || moduleName.startsWith("../")
-                    // Determine effective module resolution to distinguish node vs classic
-                    val moduleRes = options.moduleResolution?.lowercase()
-                    val effectiveModuleRes = moduleRes ?: run {
-                        when (options.module) {
-                            ModuleKind.CommonJS -> "node10"
-                            ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> "node16"
-                            ModuleKind.NodeNext -> "nodenext"
-                            ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"
-                            else -> "node10"
-                        }
-                    }
-                    val isClassicResolution = effectiveModuleRes !in setOf("node", "node10", "node16", "nodenext", "bundler")
+                    // (LEGACY.1)(e) the ONE derivation, tsgo's `GetModuleResolutionKind()`:
+                    // Node16 / NodeNext / Bundler — there is no classic and no node10
+                    // resolution in TypeScript 7, so no arm below distinguishes one.
+                    val effectiveModuleRes = options.effectiveModuleResolution
                     // B98.r105: TS5097 / TS2846 — a relative import specifier carrying a
                     // TS-only file extension. A `.ts`/`.tsx` extension needs
                     // `allowImportingTsExtensions` (or `rewriteRelativeImportExtensions`, which
@@ -49912,7 +49904,7 @@ class Checker(
                     // specifiers are exempt. ESM detection via isESModuleFormat consults
                     // the nearest package.json `"type"` (so a `"type":"module"` root makes
                     // a plain `.ts` ESM); a CJS-mode nodenext `.ts` allows extensionless.
-                    if (isRelative && effectiveModuleRes in setOf("node16", "nodenext") &&
+                    if (isRelative && effectiveModuleRes.isNode16OrNodeNext &&
                         !moduleName.endsWith(".json") && isESModuleFormat(options, fileName)) {
                         val lastSeg = moduleName.substringAfterLast('/')
                         if (lastSeg.isNotEmpty() && !lastSeg.contains('.')) {
@@ -49957,26 +49949,6 @@ class Checker(
                                 emitTS2882(specifier, moduleName, source, fileName)
                             }
                         }
-                    } else if (isClassicResolution && options.paths.isNullOrEmpty() && options.baseUrl == null && options.rootDirs.isNullOrEmpty()) {
-                        // For classic/AMD/System/UMD module resolution, emit TS2792 in multi-file
-                        // when the module can't be resolved. Skip when paths/baseUrl/rootDirs are
-                        // configured since those require complex path remapping that our simple
-                        // resolver can't model (rootDirs virtually merges multiple source roots,
-                        // so a specifier like `./project/file3` in one root can resolve to
-                        // `../generated/src/project/file3.ts` in another).
-                        // Skip .json imports (handled by TS5070 resolveJsonModule+classic incompatibility).
-                        if (!moduleName.endsWith(".json")) {
-                            val resolved = if (isRelative) {
-                                // For relative specifiers, resolve strictly relative to the importing file's dir
-                                // (no fallback to global resolution that ignores directory context)
-                                resolveModuleSpecifierStrictRelative(moduleName, fileName)
-                            } else {
-                                resolveModuleSpecifier(moduleName, null)
-                            }
-                            if (resolved == null && moduleName !in ambientModuleNames && moduleName !in dtsFileBaseNames) {
-                                emitTS2307(specifier, moduleName, source, fileName)
-                            }
-                        }
                     } else if (!options.moduleSuffixes.isNullOrEmpty() && isRelative && !moduleName.endsWith(".json")) {
                         // Node resolution with moduleSuffixes: relative imports only resolve to a
                         // file whose name matches one of the configured suffixes. If none match,
@@ -49986,7 +49958,7 @@ class Checker(
                         }
                     } else if (isRelative && !moduleName.endsWith(".json")
                         && options.module in ES_MODULE_KINDS
-                        && options.moduleResolution == null
+                        && effectiveModuleRes == ModuleResolutionKind.Bundler
                         && options.paths.isNullOrEmpty()
                         && options.baseUrl == null
                         && options.rootDirs.isNullOrEmpty()
@@ -49994,13 +49966,17 @@ class Checker(
                         && options.moduleSuffixes.isNullOrEmpty()
                     ) {
                         // 17.214: ES module kinds (module: ES6 / ES2015 / ES2020 /
-                        // ESNext / Preserve) with no explicit moduleResolution and no
+                        // ESNext / Preserve) under Bundler resolution ((LEGACY.1)(e): the
+                        // TypeScript 7 default — unset, or the removed `classic`/`node10`) and no
                         // path/root configuration: relative specifiers must resolve
                         // strictly within the compilation. When no file matches and
                         // no ambient module / .d.ts shadows it, emit TS2307. Narrow
-                        // gate intentionally — bundler/node16/nodenext/commonjs all
-                        // use richer resolution rules our resolver doesn't model.
-                        if (resolveModuleSpecifierStrictRelative(moduleName, fileName) == null
+                        // gate intentionally — node16/nodenext use richer resolution
+                        // rules our resolver doesn't model. (LEGACY.1)(e): the probe is
+                        // the index-aware one B98's commonjs arm uses — Bundler resolves
+                        // `./dir` to `dir/index.ts` (measured in every ES cell of tsgo's
+                        // matrix), and the strict probe read a false TS2307 for it.
+                        if (resolveRelativeIncludingIndex(moduleName, fileName) == null
                             && moduleName !in ambientModuleNames
                             && moduleName !in dtsFileBaseNames
                         ) {
@@ -50008,15 +49984,16 @@ class Checker(
                         }
                     } else if (isRelative && !moduleName.endsWith(".json")
                         && options.module == ModuleKind.CommonJS
-                        && options.moduleResolution == null
+                        && effectiveModuleRes == ModuleResolutionKind.Bundler
                         && options.paths.isNullOrEmpty()
                         && options.baseUrl == null
                         && options.rootDirs.isNullOrEmpty()
                         && options.rootDir == null
                         && options.moduleSuffixes.isNullOrEmpty()
                     ) {
-                        // B98: relative specifier under DEFAULT node resolution with an
-                        // explicit `@module: commonjs` and no path/root config. The target
+                        // B98: relative specifier under Bundler resolution ((LEGACY.1)(e): the
+                        // TypeScript 7 default) with an explicit `@module: commonjs` and no
+                        // path/root config. The target
                         // must resolve within the compilation — a direct file OR a directory
                         // index (`./foo/index.ts`). When nothing matches and no ambient module
                         // / .d.ts shadows it, emit TS2307. Index-aware resolution
@@ -50053,7 +50030,7 @@ class Checker(
                                 emitTS2307(specifier, moduleName, source, fileName)
                             }
                         }
-                    } else if (isRelative && effectiveModuleRes == "bundler" && moduleName.endsWith("/")
+                    } else if (isRelative && effectiveModuleRes == ModuleResolutionKind.Bundler && moduleName.endsWith("/")
                         && !moduleName.endsWith(".json")
                         && options.paths.isNullOrEmpty()
                         && options.baseUrl == null
@@ -50107,7 +50084,7 @@ class Checker(
                                 emitTS2307(specifier, moduleName, source, fileName)
                             }
                         }
-                    } else if (!isRelative && effectiveModuleRes == "nodenext"
+                    } else if (!isRelative && effectiveModuleRes == ModuleResolutionKind.NodeNext
                         && moduleName !in ambientModuleNames
                         && !hasNodeModulesPackage(moduleName)
                         && moduleName in dtsFileBaseNames
@@ -50144,7 +50121,7 @@ class Checker(
                     // exports and dedent3 has `"exports": null` — both keep the index fallback and
                     // resolve). Object-form exports / wildcard / directory targets are NOT modeled —
                     // suppressed for FP-safety.
-                    else if (!isRelative && effectiveModuleRes == "nodenext"
+                    else if (!isRelative && effectiveModuleRes == ModuleResolutionKind.NodeNext
                         && !moduleName.contains("/")
                         && !moduleName.contains(":")
                         && moduleName !in ambientModuleNames
@@ -50161,7 +50138,7 @@ class Checker(
                     // only — a literal `@s/p` directory under `@types` does NOT count).
                     // Gated to explicit typeRoots config so ordinary scoped-package corpus
                     // tests never reach this branch.
-                    else if (!isRelative && !isClassicResolution
+                    else if (!isRelative
                         && moduleName.startsWith("@")
                         && moduleName.count { it == '/' } == 1
                         && options.typeRoots != null
@@ -50176,7 +50153,7 @@ class Checker(
                     // that's NOT an ambient module / .d.ts / node_modules package: TypeScript emits
                     // TS2591 with the @types/node hint. Narrow to known node-builtin names so we
                     // don't FP on arbitrary unresolved bare specifiers under multi-file node mode.
-                    else if (!isRelative && !isClassicResolution
+                    else if (!isRelative
                         && moduleName !in ambientModuleNames
                         && moduleName !in dtsFileBaseNames
                         && !hasNodeModulesPackage(moduleName)
@@ -50184,62 +50161,39 @@ class Checker(
                     ) {
                         emitTS2307(specifier, moduleName, source, fileName)
                     }
-                    // B98.r107: a SINGLE-SEGMENT bare specifier (e.g. `"server"`, `"a"`) under
-                    // the DEFAULT (module == null) or ES-module-kind node10 resolution with NO
-                    // path/baseUrl/rootDirs/moduleSuffixes config CANNOT resolve to a plain
-                    // sibling source file — under node10 a bare specifier resolves only via
-                    // node_modules / an ambient `declare module "X"`. Our `resolveModuleSpecifier`
-                    // wrongly matches such a name to a sibling `.ts` by basename, so nothing fires;
-                    // TypeScript emits TS2307. The narrow gating keeps the FP surface tiny relative
-                    // to the reverted blanket B98.r2 attempt: single-segment-only (no `/` → excludes
-                    // scoped `@scope/pkg` and path-mapped specifiers), no `:` (excludes `node:` and
-                    // other protocol forms), non-classic, no node_modules package, no ambient module,
-                    // not a node builtin. The `.d.ts` rule is NODE_MODULES-AWARE: a plain SIBLING
-                    // `.d.ts` (e.g. `a.d.ts` next to `b.ts`) is NOT bare-resolvable under node10 —
-                    // only a `.d.ts` under `node_modules/`/`@types/` is — so `bareDtsResolvableInNodeModules`
-                    // (not the over-broad `dtsFileBaseNames` set) gates the suppression; this lets the
-                    // sibling-`.d.ts` shape (`es6ExportAssignment3`) fire while keeping real node_modules
-                    // typings suppressed. Under classic/AMD/System the earlier classic branch already
-                    // owns bare-specifier TS2307.
-                    else if (!isRelative && !isClassicResolution
+                    // B98.r107 + B98.r168, ONE arm since (LEGACY.1)(e): a SINGLE-SEGMENT bare
+                    // specifier (e.g. `"server"`, `"a"`) under Bundler resolution — TypeScript 7's
+                    // default (unset, or the removed `classic`/`node10`) and an explicit `bundler`
+                    // (cachedModuleResolution6/7) are the SAME kind there — with NO
+                    // path/baseUrl/rootDirs/moduleSuffixes config CANNOT resolve to a plain sibling
+                    // source file: a bare specifier resolves only via node_modules / an ambient
+                    // `declare module "X"`. Our `resolveModuleSpecifier` wrongly matches such a
+                    // name to a sibling `.ts` by basename, so nothing fires; TypeScript emits
+                    // TS2307. The narrow gating keeps the FP surface tiny relative to the reverted
+                    // blanket B98.r2 attempt: single-segment-only (no `/` → excludes scoped
+                    // `@scope/pkg` and path-mapped specifiers), no `:` (excludes `node:` and other
+                    // protocol forms), no node_modules package, no ambient module, not a node
+                    // builtin. The `.d.ts` rule is NODE_MODULES-AWARE: a plain SIBLING `.d.ts`
+                    // (e.g. `a.d.ts` next to `b.ts`) is NOT bare-resolvable — only a `.d.ts` under
+                    // `node_modules/`/`@types/` is — so `bareDtsResolvableInNodeModules` (not the
+                    // over-broad `dtsFileBaseNames` set) gates the suppression; this lets the
+                    // sibling-`.d.ts` shape (`es6ExportAssignment3`) fire while keeping real
+                    // node_modules typings suppressed. The module-kind gate is r107's verbatim; the
+                    // two CommonJS suppressions now also cover an explicit `bundler` + `commonjs`
+                    // program, where r168 had none — conservative, and what tsgo resolves anyway.
+                    else if (!isRelative && effectiveModuleRes == ModuleResolutionKind.Bundler
                         && !moduleName.startsWith("/")
                         && !moduleName.contains("/")
                         && !moduleName.contains(":")
                         && (options.module == null || options.module in ES_MODULE_KINDS
-                            // B524: also EXPLICIT commonjs (default node10). The extra
-                            // suppressions below cover the B98.r2 FP cases that previously
-                            // made this case intractable: untyped node_modules `.js`
-                            // (bareModulePackageInAnyInput) + symlinked packages whose target
-                            // is a real `<pkg>/index.{ts,tsx,d.ts}` dir (bareModuleSymlinkTargetDir).
+                            // B524: also EXPLICIT commonjs. The extra suppressions below cover
+                            // the B98.r2 FP cases that previously made this case intractable:
+                            // untyped node_modules `.js` (bareModulePackageInAnyInput) + symlinked
+                            // packages whose target is a real `<pkg>/index.{ts,tsx,d.ts}` dir
+                            // (bareModuleSymlinkTargetDir).
                             || (options.module == ModuleKind.CommonJS
                                 && !bareModulePackageInAnyInput(moduleName)
                                 && !bareModuleSymlinkTargetDir(moduleName)))
-                        && options.moduleResolution == null
-                        && options.paths.isNullOrEmpty()
-                        && options.baseUrl == null
-                        && options.rootDirs.isNullOrEmpty()
-                        && options.rootDir == null
-                        && options.moduleSuffixes.isNullOrEmpty()
-                        && moduleName !in ambientModuleNames
-                        && !bareDtsResolvableInNodeModules(moduleName)
-                        && !hasNodeModulesPackage(moduleName)
-                        && moduleName !in NODE_BUILTIN_MODULES
-                    ) {
-                        emitTS2307(specifier, moduleName, source, fileName)
-                    }
-                    // B98.r168: a SINGLE-SEGMENT bare specifier under EXPLICIT `@moduleResolution:
-                    // bundler` (cachedModuleResolution6/7). Bundler resolves bare specifiers via
-                    // node_modules (like node) but allows extensionless paths; a single-segment bare
-                    // name with no node_modules package / ambient module / bare-`.d.ts` / node builtin
-                    // cannot resolve, so TypeScript emits TS2307. Mirrors the B98.r107 default-null
-                    // gate above with identical FP-safe guards (single-segment-only, no `/`/`:`, no
-                    // path/baseUrl/rootDirs/moduleSuffixes config). `effectiveModuleRes == "bundler"`
-                    // can only be reached when `moduleResolution` is EXPLICITLY bundler (the default
-                    // fallback never yields "bundler"), so this is disjoint from the r107 gate.
-                    else if (!isRelative && effectiveModuleRes == "bundler"
-                        && !moduleName.startsWith("/")
-                        && !moduleName.contains("/")
-                        && !moduleName.contains(":")
                         && options.paths.isNullOrEmpty()
                         && options.baseUrl == null
                         && options.rootDirs.isNullOrEmpty()
@@ -50263,7 +50217,7 @@ class Checker(
                     //      `<spec>.json` → TS2307: TypeScript never appends `.json` to an
                     //      extensionless specifier (resolveJsonModule applies to literal
                     //      `.json` specifiers only), so the present JSON file cannot satisfy it.
-                    else if (!isRelative && options.resolveJsonModule && !isClassicResolution
+                    else if (!isRelative && options.resolveJsonModule
                         && !moduleName.startsWith("/")
                         && !moduleName.contains("/")
                         && !moduleName.contains(":")
@@ -50868,22 +50822,9 @@ class Checker(
         val length = moduleName.length + 2 // +2 for quotes
         val (line, character) = getLineAndCharacterOfPosition(source, start)
 
-        // TS2792 fires when moduleResolution is not node-based (classic, or default for
-        // system/amd/es2015/esnext modules) — suggests switching to nodenext
-        val moduleRes = options.moduleResolution?.lowercase()
-        val effectiveModuleRes = moduleRes ?: run {
-            // Default moduleResolution based on module option
-            when (options.module) {
-                ModuleKind.CommonJS -> "node10"
-                ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> "node16"
-                ModuleKind.NodeNext -> "nodenext"
-                // System and AMD use classic resolution
-                ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"
-                // ES module kinds (es2015, es2020, esnext) and null/none: default to node10 in TS6+
-                else -> "node10"
-            }
-        }
-        val isNodeResolution = effectiveModuleRes in setOf("node", "node10", "node16", "nodenext", "bundler")
+        // (LEGACY.1)(e) TS2792 (*Did you mean to set the 'moduleResolution' option to
+        // 'nodenext'*) was the classic-resolution wording; TypeScript 7 has no classic
+        // resolution and no emitter for it — every resolution is node-based there.
         val code: Int
         val message: String
         // 17.210: When the unresolved module specifier names a Node.js
@@ -50893,18 +50834,13 @@ class Checker(
         // @types/node". The diagnostic uses "name" not "module" to match
         // baseline format.
         val barenameForNodeCheck = moduleName.removePrefix("node:")
-        val isNodeBuiltin = isNodeResolution && (
-            moduleName.startsWith("node:") || barenameForNodeCheck in NODE_BUILTIN_MODULES
-        )
+        val isNodeBuiltin = moduleName.startsWith("node:") || barenameForNodeCheck in NODE_BUILTIN_MODULES
         if (isNodeBuiltin) {
             code = 2591
             message = "Cannot find name '$moduleName'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig."
-        } else if (isNodeResolution) {
+        } else {
             code = 2307
             message = "Cannot find module '$moduleName' or its corresponding type declarations."
-        } else {
-            code = 2792
-            message = "Cannot find module '$moduleName'. Did you mean to set the 'moduleResolution' option to 'nodenext', or to add aliases to the 'paths' option?"
         }
         diagnostics.add(Diagnostic(
             message = message,
@@ -51598,12 +51534,18 @@ class Checker(
      *  checkDefaultImports B235 branch (bundler/node modes + type:module package); a
      *  star re-export or unresolvable spec bails. */
     private fun checkDynamicImportNamespaceMembers() {
-        if (!(options.effectiveModule.isNodeNext || options.moduleResolution?.lowercase() == "bundler")) return
+        // (LEGACY.1)(e) the former whole-program `isNodeNext || bundler` RESOLUTION gate was a
+        // proxy, wrong in both directions — measured on tsgo 7.0.2 with `const ns = await
+        // import("esm")` against a `"type": "module"` package: `ns.default` is TS2339 under
+        // `module: esnext` with NO `moduleResolution` (the gate said skip) and SILENT under
+        // `module: commonjs` with an explicit `bundler` (the gate said check). What decides it
+        // is the IMPORTER's emit format — the same rule as B235's default import.
         val isMultiFile = binderResults.size > 1 || isMultiFileSource
         if (!isMultiFile) return
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            if (!isESModuleFormat(options, fileName)) continue
             val source = result.sourceFile.text
             val nsVars = mutableMapOf<String, Pair<String, Set<String>>>()
             for (stmt in result.sourceFile.statements) {
@@ -51884,8 +51826,15 @@ class Checker(
                 // type:module package — a CJS-format node_modules target keeps the
                 // pre-existing skip (synthetic default legal → never resolved here).
                 var nmEsmTarget = false
+                // (LEGACY.1)(e) the former `isNodeNext || bundler` RESOLUTION gate was a proxy,
+                // and wrong in both directions — measured on tsgo 7.0.2: `import d from "esm"`
+                // against a `"type": "module"` package is TS1192 under `module: esnext` with
+                // NO `moduleResolution` at all (the gate said silent) and SILENT under
+                // `module: commonjs` with an explicit `bundler` (the gate said TS1192). What
+                // decides it is the IMPORTER's emit format (tsgo's usage mode): an ESM importer
+                // gets no synthetic default from an ESM target, a CommonJS one does.
                 if (resolvedFile == null && !moduleName.startsWith(".") && !moduleName.startsWith("/") &&
-                    (options.effectiveModule.isNodeNext || options.moduleResolution?.lowercase() == "bundler")) {
+                    isESModuleFormat(options, fileName)) {
                     val nm = resolveBareNodeModulesAnyPrefix(moduleName, fileName)
                     if (nm != null && nodeModulesPackageTypeIsModule(nm)) {
                         resolvedFile = nm
@@ -93757,31 +93706,14 @@ interface DataView {
 
     private fun checkImportHelpersWithoutTslib() {
         if (!options.importHelpers) return
-        // Check if tslib is available in the compilation files
-        // With classic/AMD/System resolution, tslib.d.ts in root is found.
-        // With node/nodenext resolution, tslib must be in node_modules/tslib/.
-        val moduleRes = options.moduleResolution?.lowercase()
-        val effectiveModuleRes = moduleRes ?: run {
-            when (options.module) {
-                ModuleKind.CommonJS -> "node10"
-                ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> "node16"
-                ModuleKind.NodeNext -> "nodenext"
-                ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"
-                else -> "node10"
-            }
-        }
-        val isClassicResolution = effectiveModuleRes == "classic"
+        // Check if tslib is available in the compilation files: tslib must be in
+        // node_modules/tslib/ — (LEGACY.1)(e) TypeScript 7 has no classic resolution, so
+        // the former "a root tslib.d.ts is found under classic/AMD/System" rule is gone.
         // Check for ambient module "tslib" declaration — counts as found regardless of resolution
         val hasAmbientTslib = binderResults.any { result ->
             result.sourceFile.statements.any { stmt ->
                 stmt is ModuleDeclaration && (stmt.name as? StringLiteralNode)?.text == "tslib"
             }
-        }
-        // 16.4do: Classic resolution (AMD/System/UMD) does NOT search node_modules
-        // — only accepts tslib.d.ts in the root/baseUrl, which is visible to ALL files.
-        val hasClassicRootTslib = isClassicResolution && binderResults.any { result ->
-            val fn = result.sourceFile.fileName
-            fn.contains("tslib") && !(fn.contains("node_modules") || fn.contains("node-modules"))
         }
         // B98.r163: tslib availability is PER-FILE, not program-wide. A `node_modules/tslib`
         // install only satisfies files BELOW its enclosing directory (nearest-enclosing
@@ -93790,8 +93722,7 @@ interface DataView {
         // fires TS2354 (tslibNotFoundDifferentModules). A ROOT `/node_modules/tslib`
         // (baseDir "/") is an ancestor of everything, so it satisfies all files as before.
         fun tslibResolvableFor(fileName: String): Boolean {
-            if (hasAmbientTslib || hasClassicRootTslib) return true
-            if (isClassicResolution) return false
+            if (hasAmbientTslib) return true
             return binderResults.any { result ->
                 val tfn = result.sourceFile.fileName
                 if (!tfn.contains("tslib")) return@any false
@@ -94009,18 +93940,8 @@ interface DataView {
      */
     private fun checkMissingTslibHelpers() {
         if (!options.importHelpers) return
-        // Find tslib file in compilation — use same resolution logic as checkImportHelpersWithoutTslib
-        val moduleRes = options.moduleResolution?.lowercase()
-        val effectiveModuleRes = moduleRes ?: run {
-            when (options.module) {
-                ModuleKind.CommonJS -> "node10"
-                ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> "node16"
-                ModuleKind.NodeNext -> "nodenext"
-                ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"
-                else -> "node10"
-            }
-        }
-        val isClassicResolution2 = effectiveModuleRes == "classic"
+        // Find tslib file in compilation — the same node_modules-only rule as
+        // checkImportHelpersWithoutTslib ((LEGACY.1)(e): no classic resolution exists).
         // Check for ambient module "tslib" declaration — counts as found regardless of resolution
         val ambientTslibResult = binderResults.firstOrNull { result ->
             result.sourceFile.statements.any { stmt ->
@@ -94033,8 +93954,6 @@ interface DataView {
         // per-install dedup keying (see resolveTslibDedupKey).
         val allTslibResults: List<BinderResult> = if (ambientTslibResult != null) {
             listOf(ambientTslibResult)
-        } else if (isClassicResolution2) {
-            binderResults.filter { it.sourceFile.fileName.contains("tslib") }
         } else {
             binderResults.filter { result ->
                 val fn = result.sourceFile.fileName
@@ -188358,34 +188277,26 @@ interface DataView {
                             }
                         }
                         if (isNodeBuiltin && !isAmbientSpec) {
-                            val moduleRes = options.moduleResolution?.lowercase()
-                            val effRes = moduleRes ?: when (options.module) {
-                                ModuleKind.CommonJS -> "node10"
-                                ModuleKind.Node16, ModuleKind.Node18, ModuleKind.Node20 -> "node16"
-                                ModuleKind.NodeNext -> "nodenext"
-                                ModuleKind.System, ModuleKind.AMD, ModuleKind.UMD -> "classic"
-                                else -> "node10"
-                            }
-                            val isNodeRes = effRes in setOf("node", "node10", "node16", "nodenext", "bundler")
-                            if (isNodeRes) {
-                                val targetFile = resolveModuleSpecifierRelative(bareSpec, fileName)
-                                    ?: resolveModuleSpecifier(bareSpec, null)
-                                if (targetFile == null && !hasNodeModulesPackage(bareSpec)) {
-                                    emitTS2307(litNode, bareSpec, source, fileName)
-                                }
+                            // (LEGACY.1)(e) every TypeScript 7 resolution is node-based; the
+                            // former classic exclusion is gone with the classic resolution.
+                            val targetFile = resolveModuleSpecifierRelative(bareSpec, fileName)
+                                ?: resolveModuleSpecifier(bareSpec, null)
+                            if (targetFile == null && !hasNodeModulesPackage(bareSpec)) {
+                                emitTS2307(litNode, bareSpec, source, fileName)
                             }
                         }
                         // B227: TS2307 for a RELATIVE import-type specifier that doesn't
                         // resolve — `b: import('./b').B` with no ./b in the compilation.
                         // Mirrors the B98.r1 import-declaration gate exactly: explicit
-                        // `@module: commonjs` + default moduleResolution + no path/root
-                        // config, index-aware resolution fails, no ambient module, no
-                        // untyped JS sibling, no @ts-ignore above.
+                        // `@module: commonjs` + Bundler resolution ((LEGACY.1)(e): the
+                        // TypeScript 7 default — unset, or the removed `classic`/`node10`) +
+                        // no path/root config, index-aware resolution fails, no ambient
+                        // module, no untyped JS sibling, no @ts-ignore above.
                         val isRelativeSpec = bareSpec.startsWith("./") || bareSpec.startsWith("../")
                         if (isRelativeSpec && !isAmbientSpec
                             && !isJsLikeFileName(fileName) && !isDtsFile(fileName)
                             && options.module == ModuleKind.CommonJS
-                            && options.moduleResolution == null
+                            && options.effectiveModuleResolution == ModuleResolutionKind.Bundler
                             && options.paths.isNullOrEmpty()
                             && options.baseUrl == null
                             && options.rootDirs.isNullOrEmpty()
