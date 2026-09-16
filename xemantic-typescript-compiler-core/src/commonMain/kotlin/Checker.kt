@@ -130645,6 +130645,13 @@ interface DataView {
             // `Function` members on the MISS path only — tsc's `getPropertyOfType`
             // augmentation (checker.ts ~15907), which never widens the apparent type.
             functionObjectMemberType(expr, objectType, apparentType, propName)?.let { return it }
+            // (CHK.135): tsc's `getApplicableIndexInfoForName` on the property-lookup MISS
+            // path (checker.ts `checkPropertyAccessExpressionOrQualifiedName`) — a receiver
+            // carrying a string/number INDEX SIGNATURE answers the index's VALUE type for a
+            // name no declared member supplies. Round 479's `cmamIndexSignatureProvides`
+            // already grants such a name EXISTENCE (no TS2339); this is the other half, the
+            // TYPE, which fell through to the `anyType` tail below.
+            applicableIndexTypeForName(apparentType, propName)?.let { return it }
         }
         // Fallback: try namespace/module lookup for property access
         val objExpr = expr.expression
@@ -131149,6 +131156,18 @@ interface DataView {
         if (indexExpr is StringLiteralNode) {
             val prop = getPropertyOfType(objectType, indexExpr.text)
             if (prop != null) return getTypeOfSymbol(prop)
+            // (CHK.135) tsc's `getApplicableIndexInfoForName` — the SAME helper the
+            // property-access miss path uses, so the two sites cannot drift. It adds the
+            // NUMBER leg for a numeric-literal key (`r["0"]` on `{ [x: number]: string }`
+            // is `string`, not `any` — tsc's `isApplicableIndexType`); its STRING leg is
+            // the answer the `StringLike` block below already gives for a `Type.Object`
+            // receiver (whose apparent type is itself), so it pre-empts nothing, and a
+            // non-object receiver answers null and falls through to that block unchanged.
+            // Measured against tsgo 7.0.2 on `{ [x: string]: string; [y: number]: number }`:
+            // `e["0"]` is `number` and `e["k"]` is `string` in both, which is exactly this
+            // preference order (tsc's `findApplicableIndexInfo` prefers the applicable
+            // non-string info over the string one).
+            applicableIndexTypeForName(objectType, indexExpr.text)?.let { return it }
         }
         // Numeric literal key: arr[0] → resolve for tuple types
         if (indexExpr is NumericLiteralNode && objectType is Type.Object) {
@@ -151580,6 +151599,30 @@ interface DataView {
     private fun cmamIndexSignatureProvides(m: Type.Object, propName: String): Boolean =
         m.stringIndexInfo != null ||
             (m.numberIndexInfo != null && isNumericLiteralName(propName))
+
+    /**
+     * (CHK.135) tsc's `getApplicableIndexInfoForName(type, name)` — the VALUE type an
+     * index signature on [t] supplies for the property name [propName], or null when none
+     * applies. The applicability rule is [cmamIndexSignatureProvides]'s, deliberately
+     * shared so the EXISTENCE half (round 479, no TS2339) and the TYPE half can never
+     * disagree: a STRING index signature supplies every name, a NUMBER one only a
+     * numeric-literal name (tsc's `isApplicableIndexType`, whose `target === numberType &&
+     * isNumericLiteralName(source.value)` leg is exactly that). An exact NUMBER match wins
+     * over the string index for a numeric name, as `findApplicableIndexInfo` does.
+     *
+     * The NUMBER leg is MEASURED-DEAD at the property-access call site and live only at
+     * the element-access one — `o.0` is not writable, so a property name can never be a
+     * numeric literal — and it is kept there deliberately rather than split out, because
+     * (CHK.45)'s invariant is that the EXISTENCE and TYPE halves of the index rule are ONE
+     * rule: two hand-written conditions would be free to drift, and getting the numeric
+     * half wrong is a silent false negative in either half.
+     */
+    private fun applicableIndexTypeForName(t: Type, propName: String): Type? {
+        if (t !is Type.Object) return null
+        resolveStructuredTypeMembers(t)
+        if (t.numberIndexInfo != null && isNumericLiteralName(propName)) return t.numberIndexInfo!!.type
+        return t.stringIndexInfo?.type
+    }
 
     private fun cmamGeneralReceiverType(
         objectExpr: Expression,
