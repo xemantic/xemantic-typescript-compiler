@@ -1007,9 +1007,7 @@ internal class KirFileLowering(
         if (constructorsByDeclaration.containsKey(owner)) {
             refuse(tsFile, member, "constructor overloads are out of the spike subset")
         }
-        member.parameters.firstOrNull { it.modifiers.isNotEmpty() }?.let {
-            refuse(tsFile, it, "parameter properties are out of the spike subset")
-        }
+        declareParameterProperties(owner, irClass, member)
         val constructor = irClass.addConstructor {
             isPrimary = true
             returnType = irClass.defaultType
@@ -1020,6 +1018,62 @@ internal class KirFileLowering(
         constructorsByDeclaration[owner] = constructor
     }
 
+    /**
+     * `constructor(public x: number)` — one MEMBER and one parameter, in one
+     * token sequence (`docs/kir-design.md` §7 records the expansion; it was
+     * refused outright until (KIR.LOWER.4)).
+     *
+     * Only the field is declared here; the assignment is a prologue statement
+     * that [defineConstructor] emits after the instance initializers, which is
+     * where TypeScript puts it too — after the field initializers a class body
+     * declares and before the constructor's own statements.
+     *
+     * A parameter is a parameter PROPERTY exactly when it carries an
+     * accessibility modifier or `readonly`, which is TypeScript's own rule. A
+     * parameter carrying some OTHER modifier is not one, and refusing it here
+     * rather than treating it as ordinary keeps the backend's habit of naming
+     * what it does not understand.
+     */
+    private fun declareParameterProperties(
+        owner: ClassDeclaration,
+        irClass: IrClass,
+        member: Constructor
+    ) {
+        for (parameter in member.parameters) {
+            if (parameter.modifiers.isEmpty()) continue
+            if (parameter.modifiers.none { it in PARAMETER_PROPERTY_MODIFIERS }) {
+                refuse(
+                    tsFile, parameter,
+                    "a parameter carrying ${parameter.modifiers.joinToString()} is not a " +
+                        "parameter property this backend understands"
+                )
+            }
+            if (parameter.dotDotDotToken) {
+                refuse(tsFile, parameter, "a rest parameter cannot be a parameter property")
+            }
+            val name = parameter.name as? Identifier
+                ?: refuse(tsFile, parameter, "a parameter property needs a plain name")
+            val declared = facts.typeOf(parameter) ?: refuse(
+                tsFile, parameter,
+                "the checker gave no type for parameter property '${name.text}'"
+            )
+            val optional = parameter.questionToken || parameter.initializer != null
+            val field = irClass.addField {
+                this.name = Name.identifier(kotlinName(name.text))
+                type = erase(parameter, declared).let { if (optional) it.makeNullable() else it }
+                // PUBLIC for [declareField]'s reason: a subclass reads its
+                // base's field directly, and a JVM private one is invisible
+                // there. TypeScript's `private` is a COMPILE-time rule the
+                // checker has already enforced.
+                visibility = DescriptorVisibilities.PUBLIC
+                isStatic = false
+                isFinal = false
+                origin = builder.generatedOrigin
+            }
+            tables.parameterFields.getOrPut(owner) { LinkedHashMap() }[name.text] = field
+        }
+    }
+
     private fun defaultConstructor(owner: ClassDeclaration, irClass: IrClass) {
         val constructor = irClass.addConstructor {
             isPrimary = true
@@ -1028,6 +1082,47 @@ internal class KirFileLowering(
             origin = builder.generatedOrigin
         }
         constructorsByDeclaration[owner] = constructor
+    }
+
+    /**
+     * `this.x = x` for every parameter property, in declaration order.
+     *
+     * The parameter is read from the IR constructor's own slot rather than
+     * through the name scope: [bindParameters] has bound the ordinary
+     * parameters into the scope by then, but the pairing that matters here is
+     * POSITIONAL — the nth TypeScript parameter is the nth regular IR one — and
+     * reading it by position is what keeps a shadowing local in the body from
+     * ever reaching the store.
+     */
+    private fun appendParameterPropertyStores(
+        declaration: ClassDeclaration,
+        tsConstructor: Constructor,
+        statements: MutableList<IrStatement>
+    ) {
+        val table = tables.parameterFields[declaration] ?: return
+        val constructor = constructorsByDeclaration.getValue(declaration)
+        val regular = constructor.parameters.filter { it.kind == IrParameterKind.Regular }
+        tsConstructor.parameters.forEachIndexed { index, parameter ->
+            val name = (parameter.name as? Identifier)?.text ?: return@forEachIndexed
+            val field = table[name] ?: return@forEachIndexed
+            val slot = regular.getOrNull(index) ?: refuse(
+                tsFile, parameter,
+                "no constructor slot for parameter property '$name'"
+            )
+            statements.add(
+                IrSetFieldImpl(
+                    UNDEFINED,
+                    UNDEFINED,
+                    field.symbol,
+                    frame.thisReceiver?.let { scope.irGet(it) }
+                        ?: refuse(tsFile, parameter, "a constructor with no `this`"),
+                    coerce(parameter, scope.irGet(slot), field.type),
+                    irBuiltIns.unitType,
+                    null,
+                    null
+                )
+            )
+        }
     }
 
     private fun dispatchReceiver(function: IrFunction, irClass: IrClass): IrValueParameter =
@@ -1318,6 +1413,16 @@ internal class KirFileLowering(
             } else {
                 statements.add(scope.irDelegatingConstructorCall(anyConstructor))
             }
+            // (KIR.LOWER.4) The PARAMETER-PROPERTY prologue — `constructor(public
+            // x: number)` assigning its own parameter to its own field.
+            //
+            // BEFORE the instance initializers, and that order is measured
+            // rather than chosen: tsgo 7.0.2 emits `this.x = x` above
+            // `this.a = this.x + 1` for `class C { a = this.x + 1;
+            // constructor(public x: number) {} }`, so a field initializer may
+            // READ a parameter property and gets its value. The other order
+            // compiles and quietly reads a zero.
+            tsConstructor?.let { appendParameterPropertyStores(declaration, it, statements) }
             statements.add(
                 IrInstanceInitializerCallImpl(
                     UNDEFINED, UNDEFINED, irClass.symbol, irBuiltIns.unitType
@@ -1733,11 +1838,11 @@ internal class KirFileLowering(
      * puts out of scope.
      */
     private fun variableType(name: Expression, initializer: Expression?): Type {
-        val declared = (name as? Identifier)?.let { facts.typeOf(it) }
+        val declared = (name as? Identifier)?.let { checkedTypeOf(it) }
         if (declared != null && !declared.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown)) {
             return declared
         }
-        val fromInitializer = initializer?.let { facts.typeOf(it) }
+        val fromInitializer = initializer?.let { checkedTypeOf(it) }
         return fromInitializer ?: declared
             ?: refuse(tsFile, name, "the checker gave no type for this declaration")
     }
@@ -1922,7 +2027,7 @@ internal class KirFileLowering(
             refuse(
                 tsFile, statement,
                 "`for…of` is lowered for an ARRAY subject only; this one is " +
-                    (facts.typeOf(subject)?.let { facts.render(it) } ?: "untyped")
+                    (checkedTypeOf(subject)?.let { facts.render(it) } ?: "untyped")
             )
         }
         val list = statement.initializer as? VariableDeclarationList
@@ -2002,7 +2107,7 @@ internal class KirFileLowering(
         val body = mutableListOf<IrStatement>()
         scopes.addLast(HashMap())
         val elementType = elementTypeOverride
-            ?: facts.typeOf(declaration.name)?.let { erase(declaration, it) }
+            ?: checkedTypeOf(declaration.name)?.let { erase(declaration, it) }
             ?: types.anyNullable
         val read = {
             scope.irCall(get).apply {
@@ -2406,7 +2511,7 @@ internal class KirFileLowering(
     }
 
     private fun lowerConditional(node: ConditionalExpression): IrExpression {
-        val type = erase(node, facts.typeOf(node)
+        val type = erase(node, checkedTypeOf(node)
             ?: refuse(tsFile, node, "the checker gave no type for this conditional"))
         return scope.irWhen(
             type,
@@ -2532,7 +2637,7 @@ internal class KirFileLowering(
      * could not have it, and not a new licence.
      */
     private fun isNumericSum(node: Node): Boolean {
-        val type = facts.typeOf(node as? Expression ?: return false) ?: return false
+        val type = checkedTypeOf(node as? Expression ?: return false) ?: return false
         return types.map(type) == types.double
     }
 
@@ -2603,7 +2708,7 @@ internal class KirFileLowering(
      * choice for `typeof`, made for the same reason, is in `jsTypeOf`.
      */
     private fun nullRendersAsUndefined(node: Expression): Boolean {
-        val type = facts.typeOf(node) ?: return false
+        val type = checkedTypeOf(node) ?: return false
         val members = (type as? Type.Union)?.types ?: listOf(type)
         var undefined = false
         for (member in members) {
@@ -2747,7 +2852,7 @@ internal class KirFileLowering(
      * type and throw exactly where JavaScript takes the other branch.
      */
     private fun shortCircuit(node: BinaryExpression): IrExpression {
-        val declared = erase(node, facts.typeOf(node)
+        val declared = erase(node, checkedTypeOf(node)
             ?: refuse(tsFile, node, "the checker gave no type for this expression"))
         val leftValue = lowerExpression(node.left)
         // The result of `a && b` is an OPERAND, so its type is what the two
@@ -2757,7 +2862,7 @@ internal class KirFileLowering(
         // cannot reach the declared type, the block is `Any?` and the
         // information is recovered by the cast at the use site, as everywhere
         // else union erasure loses one.
-        val rightType = facts.typeOf(node.right)?.let { types.map(it) }
+        val rightType = checkedTypeOf(node.right)?.let { types.map(it) }
         val armsFit = coercionFor(leftValue.type, declared, irBuiltIns) != Coercion.IMPOSSIBLE &&
             (rightType == null || coercionFor(rightType, declared, irBuiltIns) != Coercion.IMPOSSIBLE)
         val type = if (armsFit) declared else types.anyNullable
@@ -3042,15 +3147,36 @@ internal class KirFileLowering(
                 instanceOwnerOf(target)?.let { accessorFor(it, target.name.text, write = true) }
                 != null
             ) {
-                val setter = accessorFor(
-                    instanceOwnerOf(target)!!, target.name.text, write = true
-                )!!
+                val owner = instanceOwnerOf(target)!!
+                val setter = accessorFor(owner, target.name.text, write = true)!!
                 scope.irCall(setter).apply {
-                    arguments[0] = receiverOf(target)
+                    arguments[0] = receiverOf(target, owner)
                     arguments[1] = value(
                         setter.parameters.first { it.kind == IrParameterKind.Regular }.type
                     )
                 }
+            } else if (
+                instanceOwnerOf(target)?.let { fieldIn(it, target.name.text) } != null
+            ) {
+                // (KIR.LOWER.4), the write half — and the half that is a
+                // CORRECTNESS blocker rather than a performance one: before this
+                // line `this.x = x` in a constructor emitted `jsSet(this, "x",
+                // box(x))`, which is reflection on the JVM and THROWS on
+                // Kotlin/Native, so a class with a constructor was unrunnable
+                // there. Read and write must agree about which member table
+                // they speak to, so the two consult ONE predicate ([fieldIn]).
+                val owner = instanceOwnerOf(target)!!
+                val field = fieldIn(owner, target.name.text)!!
+                IrSetFieldImpl(
+                    UNDEFINED,
+                    UNDEFINED,
+                    field.symbol,
+                    receiverOf(target, owner),
+                    value(field.type),
+                    irBuiltIns.unitType,
+                    null,
+                    null
+                )
             } else if (isPropertyBag(target.expression)) {
                 scope.irCall(intrinsics.jsObjectSet).apply {
                     arguments[0] = lowerExpression(target.expression)
@@ -3227,6 +3353,29 @@ internal class KirFileLowering(
                 bindArguments(node, target.parameters, offset = 1)
             }
         }
+        // (KIR.LOWER.3) A method call whose RECEIVER's class is known although
+        // the checker typed the receiver `any` — `bodies[i].step()`, and the
+        // local such an element read is bound to.
+        //
+        // Reached only once the checker's own signature has failed to name a
+        // declaration, so nothing it already resolved is re-decided here; and
+        // the owner is the one [instanceOwnerOf] names, which for this
+        // population is the class the local's SLOT holds. Without it the field
+        // reads of such a receiver were direct while its method calls still went
+        // through `jsInvoke` — reflection in the same loop the fields had just
+        // left, which is the half-fix that looks finished.
+        if (callee is PropertyAccessExpression && !callee.questionDotToken) {
+            instanceOwnerOf(callee)?.let { owner ->
+                methodInChain(owner, callee.name.text, node.arguments.size)?.let { target ->
+                    if (target.parameters.any { it.kind == IrParameterKind.DispatchReceiver }) {
+                        return scope.irCall(target.symbol).apply {
+                            arguments[0] = receiverOf(callee, owner)
+                            bindArguments(node, target.parameters, offset = 1)
+                        }
+                    }
+                }
+            }
+        }
         if (callee is PropertyAccessExpression && isPropertyBag(callee.expression)) {
             // A method of a property bag is a PROPERTY whose value is a
             // function — read it, then call it, exactly as JavaScript does.
@@ -3378,7 +3527,7 @@ internal class KirFileLowering(
         // unknown library member (`Math.max`), which must keep saying so
         // rather than be lowered as a call of the member's own value.
         if (callee !is PropertyAccessExpression) {
-            facts.typeOf(callee)?.let { types.map(it) }?.let { types.functionArity(it) }
+            checkedTypeOf(callee)?.let { types.map(it) }?.let { types.functionArity(it) }
                 ?.let { arity -> return lowerFunctionValueCall(node, arity) }
             // A callee whose erasure did not say its arity, but which the
             // checker says IS callable: a union of function types, whose two
@@ -3386,7 +3535,7 @@ internal class KirFileLowering(
             // erasure. JavaScript calls either with whatever the site supplies,
             // so the runtime performs that adaptation rather than the lowering
             // refusing the shape at the centre of most callback code.
-            facts.typeOf(callee)?.takeIf { isCallableType(it) }?.let {
+            checkedTypeOf(callee)?.takeIf { isCallableType(it) }?.let {
                 return lowerDynamicCall(node)
             }
         }
@@ -3429,7 +3578,7 @@ internal class KirFileLowering(
 
     private fun lowerNew(node: NewExpression): IrExpression {
         // `new Map()` — a library type this backend gives a runtime class.
-        facts.typeOf(node)?.let { types.map(it) }?.let { intrinsics.runtimeClassOf(it) }
+        checkedTypeOf(node)?.let { types.map(it) }?.let { intrinsics.runtimeClassOf(it) }
             ?.let { owner ->
                 val given = node.arguments ?: emptyList()
                 // `new Array(…)` is not a constructor call: its ONE-ARGUMENT
@@ -3597,7 +3746,26 @@ internal class KirFileLowering(
         if (isPropertyBag(node.expression)) return lowerBagRead(node)
         instanceOwnerOf(node)?.let { owner ->
             accessorFor(owner, node.name.text, write = false)?.let { getter ->
-                return scope.irCall(getter).apply { arguments[0] = receiverOf(node) }
+                return scope.irCall(getter).apply { arguments[0] = receiverOf(node, owner) }
+            }
+            // (KIR.LOWER.4) A NAMED FIELD OUTRANKS THE DYNAMIC FALLBACK BELOW.
+            //
+            // `this` types as `any` here (`docs/kir-design.md` §7 contradiction
+            // 1), so before this line every `this.x` in every class reached
+            // [isDynamicReceiver] and compiled to `jsGet(this, "x")` — a
+            // REFLECTIVE read standing beside a real `public double x`, and on
+            // Kotlin/Native a `JsTypeError: dynamic member read is not
+            // supported`. The owner is known exactly (it is the enclosing class
+            // for a `this` receiver), so the field is NAMED and not guessed;
+            // where it is absent — an expando member no `PropertyDeclaration`
+            // declares — this answers null and the bag route below still runs,
+            // which is the refusal discipline `docs/kir-lowering.md` §8 asks
+            // for rather than an exception to it.
+            fieldIn(owner, node.name.text)?.let { field ->
+                return IrGetFieldImpl(
+                    UNDEFINED, UNDEFINED, field.symbol, field.type,
+                    receiverOf(node, owner), null, null
+                )
             }
         }
         runtimeClassOf(node.expression)?.let { owner ->
@@ -4450,6 +4618,60 @@ internal class KirFileLowering(
     }
 
     /**
+     * The checker's type for [node], with the ONE recovery this backend makes.
+     *
+     * Every receiver classification in this file asks HERE rather than asking
+     * `facts.typeOf` directly, and the reason is a measured oracle gap rather
+     * than a preference: a `let` declared in a `for` HEADER types as `any`
+     * (`docs/kir-design.md` §7 contradiction 4, still true), so `bodies[i]` —
+     * whose index is that variable — answers `any` while its receiver is
+     * plainly `Particle[]`. Measured against tsgo 7.0.2, which types the same
+     * access `Particle`; measured here, the difference is every member access
+     * on the result becoming a reflective `jsGet`.
+     *
+     * A recorded answer that is not `any`/`unknown` ALWAYS wins, so this can
+     * never override the oracle — it only fills a hole the oracle left, which
+     * is the same shape as §7 contradiction 4's own recovery and not a second
+     * type system.
+     */
+    private fun checkedTypeOf(node: Expression): Type? {
+        val recorded = facts.typeOf(node)
+        if (recorded != null && !recorded.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown)) {
+            return recorded
+        }
+        if (node is ElementAccessExpression) {
+            elementTypeOfArrayReceiver(node)?.let { return it }
+        }
+        return recorded
+    }
+
+    /**
+     * `T` for an `a[i]` whose receiver is an `Array<T>` and whose index is not
+     * a string — the one answer [checkedTypeOf] recovers.
+     *
+     * Its four refusals are what keep it from inventing an answer the checker
+     * would not have given. An OPTIONAL access (`a?.[i]`) is refused by the
+     * element read itself, so typing it would be a claim about a shape nothing
+     * lowers. A TUPLE is excluded because its slot type is a function of the
+     * INDEX, which is exactly the thing that had no type. A STRING-typed or
+     * string-literal index names a MEMBER (`a["length"]` is a `number`) rather
+     * than an element. And a receiver with anything but one resolved type
+     * argument is not an array instantiation there is an element type to read.
+     */
+    private fun elementTypeOfArrayReceiver(node: ElementAccessExpression): Type? {
+        if (node.questionDotToken) return null
+        if (node.argumentExpression is StringLiteralNode) return null
+        val index = facts.typeOf(node.argumentExpression)
+        if (index != null &&
+            !index.flags.hasAny(TypeFlags.NumberLike or TypeFlags.Any or TypeFlags.Unknown)
+        ) return null
+        val receiver = facts.typeOf(node.expression) as? Type.Reference ?: return null
+        if (receiver.tupleElementTypes != null) return null
+        if (receiver.target.symbol?.name !in ARRAY_TARGET_NAMES) return null
+        return receiver.resolvedTypeArguments?.singleOrNull()
+    }
+
+    /**
      * Did the checker decline to say what this receiver is?
      *
      * `any` and `unknown` erase to `Any?`, and so does a union whose members
@@ -4457,7 +4679,7 @@ internal class KirFileLowering(
      * dispatch on, which is exactly when the runtime must dispatch instead.
      */
     private fun isDynamicReceiver(node: Expression): Boolean {
-        val type = facts.typeOf(node) ?: return false
+        val type = checkedTypeOf(node) ?: return false
         val erased = types.map(type) ?: return false
         return erased.isErasedAny(irBuiltIns)
     }
@@ -4485,14 +4707,14 @@ internal class KirFileLowering(
      * member table, and it does not — the non-nullish part is compared exactly.
      */
     private fun receiverErasesTo(node: Expression, primitive: IrType): Boolean {
-        val type = facts.typeOf(node) ?: return false
+        val type = checkedTypeOf(node) ?: return false
         val erased = types.map(type) ?: return false
         return erased == primitive || erased == primitive.makeNullable()
     }
 
     /** Does this expression's checked type erase to the runtime's property bag? */
     private fun isPropertyBag(node: Expression): Boolean {
-        val type = facts.typeOf(node) ?: return false
+        val type = checkedTypeOf(node) ?: return false
         val erased = types.map(type) ?: return false
         return erased.classifierOrNull == intrinsics.jsObjectClass
     }
@@ -4558,7 +4780,7 @@ internal class KirFileLowering(
         }
         val name = nested as? Identifier
             ?: refuse(tsFile, element, "cannot lower this binding element")
-        val declaredType = facts.typeOf(nested)?.let { erase(element, it) } ?: value.type
+        val declaredType = checkedTypeOf(nested)?.let { erase(element, it) } ?: value.type
         // A per-element DEFAULT — `{ maxDepth = 1000 }` — applies where the
         // member is absent, which in this runtime is where it reads null. Its
         // omission is not a diagnostic anywhere: the program simply runs with a
@@ -4738,7 +4960,7 @@ internal class KirFileLowering(
     )
 
     private fun elementAccessRefusal(node: ElementAccessExpression): String {
-        val type = facts.typeOf(node.expression)
+        val type = checkedTypeOf(node.expression)
         return "element access on '${type?.let { facts.render(it) } ?: "an untyped receiver"}'" +
             " is out of the spike subset"
     }
@@ -4784,7 +5006,7 @@ internal class KirFileLowering(
      */
     private fun isFunctionValued(expression: Expression): Boolean {
         if (expression is ArrowFunction || expression is FunctionExpression) return true
-        val type = facts.typeOf(expression) ?: return false
+        val type = checkedTypeOf(expression) ?: return false
         val erased = types.map(type) ?: return false
         if (types.functionArity(erased) != null) return true
         if (erased.classifierOrNull == intrinsics.jsVarargFunctionClass) return true
@@ -4793,14 +5015,14 @@ internal class KirFileLowering(
     }
 
     private fun runtimeClassOf(receiver: Expression): IrClassSymbol? {
-        val type = facts.typeOf(receiver) ?: return null
+        val type = checkedTypeOf(receiver) ?: return null
         val erased = types.map(type) ?: return null
         return intrinsics.runtimeClassOf(erased)
     }
 
     /** The value with the type the checker recorded for THIS node — `!` and `as`. */
     private fun coerceToRecordedType(node: Expression, value: IrExpression): IrExpression {
-        val type = facts.typeOf(node)
+        val type = checkedTypeOf(node)
             ?: refuse(tsFile, node, "the checker gave no type for this assertion")
         return coerce(node, value, erase(node, type))
     }
@@ -4816,18 +5038,37 @@ internal class KirFileLowering(
      */
     private fun resolveField(node: PropertyAccessExpression): IrField {
         val owner = ownerClassOf(node)
-        // Up the BASE CHAIN: a subclass's method reads a field its base
-        // declares, and looking only at the receiver's own class would report a
-        // property the program plainly has as absent.
-        tables.classChain(owner).forEach { current ->
-            current.members.filterIsInstance<PropertyDeclaration>()
-                .firstOrNull { (it.name as? Identifier)?.text == node.name.text }
-                ?.let { return fields.getValue(it) }
-        }
-        refuse(
+        return fieldIn(owner, node.name.text) ?: refuse(
             tsFile, node,
             "class '${owner.name?.text}' declares no property '${node.name.text}'"
         )
+    }
+
+    /**
+     * The generated FIELD [name] names on [owner]'s chain, or null.
+     *
+     * Up the BASE CHAIN: a subclass's method reads a field its base declares,
+     * and looking only at the receiver's own class would report a property the
+     * program plainly has as absent.
+     *
+     * Answering NULL rather than refusing is what makes it usable as EVIDENCE
+     * as well as as a resolution — see [lowerPropertyRead], where a named field
+     * is what outranks the dynamic fallback and a missing one is what lets an
+     * expando member keep going through the bag.
+     */
+    private fun fieldIn(owner: ClassDeclaration, name: String): IrField? {
+        tables.classChain(owner).forEach { current ->
+            current.members.filterIsInstance<PropertyDeclaration>()
+                .firstOrNull { (it.name as? Identifier)?.text == name }
+                ?.let { return fields[it] }
+            // A PARAMETER PROPERTY declares a member with no
+            // `PropertyDeclaration` to find it by, so its own table is
+            // consulted at the same rung — a member is a member however it was
+            // spelled, and a reader that knew only one spelling would report
+            // `this.x` as absent for half the classes real TypeScript writes.
+            tables.parameterFields[current]?.get(name)?.let { return it }
+        }
+        return null
     }
 
     /** The getter or setter [name] resolves to on [owner]'s chain, or null. */
@@ -4853,10 +5094,39 @@ internal class KirFileLowering(
         if (receiver is Identifier && (receiver.text == "this" || receiver.text == "super")) {
             return frame.ownerClass
         }
-        val type = facts.typeOf(receiver) ?: return null
+        val type = checkedTypeOf(receiver) ?: return localReceiverClass(receiver)
         val symbol = (type as? Type.Object)?.symbol
         val declaration = symbol?.valueDeclaration ?: symbol?.declarations?.firstOrNull()
         return (declaration as? ClassDeclaration)?.takeIf { it in classes }
+            ?: localReceiverClass(receiver)
+    }
+
+    /**
+     * The generated class a LOCAL's slot holds, where the checker did not say.
+     *
+     * The one thing the lowering knows that the oracle does not, and it knows
+     * it for a reason rather than by guessing: [variableType] types a local
+     * from its INITIALIZER when the declaration's own type is `any`
+     * (`docs/kir-design.md` §7 contradiction 4), so `const bi = bodies[i]` gets
+     * a `Particle` SLOT while the checker still types every later mention of
+     * `bi` as `any` — and the slot's type is what the value HAS at run time, so
+     * a member access on it is a field access whatever the name was typed as.
+     *
+     * Restricted to an IDENTIFIER deliberately: a receiver is classified BEFORE
+     * it is lowered, so the only expression whose value may be inspected here
+     * is one that reads a slot, with no effects to run twice.
+     *
+     * Consulted only where the checker answered `any`/nothing, so it can only
+     * REFINE: a local whose slot is `Any?` answers null exactly as before.
+     */
+    private fun localReceiverClass(receiver: Expression): ClassDeclaration? {
+        val name = receiver as? Identifier ?: return null
+        if (name.text == "this" || name.text == "super") return null
+        val recorded = facts.typeOf(name)
+        if (recorded != null && !recorded.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown)) {
+            return null
+        }
+        return lookup(name.text)?.let { generatedClassOf(it.type) }
     }
 
     private fun ownerClassOf(node: PropertyAccessExpression): ClassDeclaration {
@@ -4865,18 +5135,23 @@ internal class KirFileLowering(
             return frame.ownerClass
                 ?: refuse(tsFile, node, "`this` outside a class member")
         }
-        val receiverType = facts.typeOf(receiver)
-            ?: refuse(tsFile, node, "the checker gave no type for this receiver")
+        val receiverType = checkedTypeOf(receiver)
+            ?: return localReceiverClass(receiver)
+                ?: refuse(tsFile, node, "the checker gave no type for this receiver")
         val symbol = (receiverType as? Type.Object)?.symbol
         val declaration = symbol?.valueDeclaration ?: symbol?.declarations?.firstOrNull()
         return declaration as? ClassDeclaration
+            ?: localReceiverClass(receiver)
             ?: refuse(
                 tsFile, node,
                 "property access on '${facts.render(receiverType)}' is out of the spike subset"
             )
     }
 
-    private fun receiverOf(node: PropertyAccessExpression): IrExpression {
+    private fun receiverOf(
+        node: PropertyAccessExpression,
+        owner: ClassDeclaration? = null
+    ): IrExpression {
         val receiver = node.expression
         // `super.x` reads THIS object; what `super` changes is which member is
         // selected, and that is the call's `superQualifierSymbol`, not the value.
@@ -4884,7 +5159,15 @@ internal class KirFileLowering(
             return frame.thisReceiver?.let { scope.irGet(it) }
                 ?: refuse(tsFile, node, "`this` outside a class member")
         }
-        return lowerExpression(receiver)
+        val value = lowerExpression(receiver)
+        // A FIELD or ACCESSOR receiver must carry the OWNER's JVM type, and the
+        // value need not already: an element read answers the runtime array's
+        // `Any?` whatever the checker says the element is, so `ps[0].x` built a
+        // `getfield` on `java.lang.Object` — verified bytecode that dies at the
+        // first execution with `NoSuchFieldError`, which is a wrong PROGRAM and
+        // not a slow one. The cast is what the checker's own answer pays for.
+        val target = owner?.let { classes[it] }?.defaultType ?: return value
+        return coerce(receiver, value, target)
     }
 
     private fun org.jetbrains.kotlin.ir.expressions.IrFunctionAccessExpression.bindArguments(
@@ -5119,6 +5402,27 @@ internal class KirFileLowering(
 
         /** IR offsets this backend has no source position for. */
         const val UNDEFINED = -1
+
+        /**
+         * The library targets whose single type argument IS an element type.
+         *
+         * Spelled here and in `ErasedTypes.isArrayLike` for opposite purposes:
+         * there to say a `T[]` and a `U[]` are ONE JVM shape, here to say what
+         * a read out of one answers. The erasure keeps no element type; this
+         * is the TypeScript type, which still carries it.
+         */
+        val ARRAY_TARGET_NAMES = setOf("Array", "ReadonlyArray")
+
+        /**
+         * What makes a constructor parameter a parameter PROPERTY.
+         *
+         * TypeScript's own rule: an accessibility modifier or `readonly`.
+         * Nothing else on a parameter declares a member.
+         */
+        val PARAMETER_PROPERTY_MODIFIERS = setOf(
+            ModifierFlag.Public, ModifierFlag.Private, ModifierFlag.Protected,
+            ModifierFlag.Readonly,
+        )
 
         val KOTLIN_HARD_KEYWORDS = setOf(
             "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if",

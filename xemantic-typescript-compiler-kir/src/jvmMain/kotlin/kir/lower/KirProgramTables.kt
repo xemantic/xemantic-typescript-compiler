@@ -127,6 +127,17 @@ internal class KirProgramTables(
      */
     val runtimeSuperclasses = IdentityHashMap<ClassDeclaration, IrClassSymbol>()
 
+    /**
+     * The fields a constructor's PARAMETER PROPERTIES declare, in order.
+     *
+     * Separate from [fields] because there is no `PropertyDeclaration` to key
+     * by: `constructor(public x: number)` declares a member and a parameter in
+     * one token sequence, and only the `Parameter` exists. Kept per class and
+     * INSERTION-ORDERED, because the prologue that assigns them must run in
+     * declaration order — which is what TypeScript's own desugaring does.
+     */
+    val parameterFields = IdentityHashMap<ClassDeclaration, LinkedHashMap<String, IrField>>()
+
     /** Static fields and methods, by owner and member name. */
     val staticFields = IdentityHashMap<ClassDeclaration, MutableMap<String, IrField>>()
     val staticMethods = IdentityHashMap<ClassDeclaration, MutableMap<String, IrSimpleFunction>>()
