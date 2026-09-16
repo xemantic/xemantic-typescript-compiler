@@ -25,6 +25,67 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.115) — (LEGACY.0b) step 18: four rows in two mechanisms, and the signature-rendering family REFUSED with its exposure counted (2026-09-16)
+
+**Three commits** (`67a6e5f8b` fix, `2f59f3c23` test, this docs commit). **Suite 19,604 → 19,616 / 0 / 73** (+12
+pins; skipped −4, the closed rows), 9 modules asserted; corpus screen errors **3,094 / 0** and emit 5,688 / 0 — the
+errors channel run after EACH mechanism and a GATE on three of four arms; `cost_gate.py` exit 0, 20/20 +0.00%;
+`huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls;
+warning-clean with an injected positive control. `Checker.kt` UNTOUCHED (194,474); `TypeScriptCompiler.kt` 6,558 →
+**6,718**; `tsgoPendingBaselines` 52 → **48**. **(LEGACY.0) stays OPEN** on (0b-19).
+
+**M2 — self-name resolution must FAIL when the project root is ambiguous (2 rows).** tsgo's
+`tryLoadInputFileForPath` (`module/resolver.go:890`) reverse-maps an `exports` entry pointing under
+`outDir`/`declarationDir` back onto a source file, which needs a project root (`rootDir`, else the config file's
+directory); with none it raises TS2209 **and returns unresolved**. We raised TS2209 and resolved the import anyway,
+so the ordinary TS2307 never followed. **The brief suggested a `-project` pin and was wrong**: `package.json` is
+never a program input under `ProjectCompiler`, so this walker is structurally unreachable from a real project
+(measured: 0 diagnostics on a real directory with the same shape) — which also means the new TS2307 carries no
+real-project false-positive risk, and the pins belong in core.
+
+**M3 — `isolatedDeclarations`: TS9025 on the WHOLE PARAMETER vs TS9011 on the INITIALIZER (2 rows).** tsgo's
+`createParameterError` picks TS9025 when declaration emit would have to add `undefined` implicitly, which is
+`strictNullChecks` + an initializer + NOT OPTIONAL — and `isOptionalParameter` makes an initialized parameter
+optional exactly when **no later parameter is required**. **That clause is the entire discriminator and the brief
+never names it**: `f(p = bar())` is TS9011 at `bar()` while `f(p = bar(), v: number)` is TS9025 at `p = bar()`,
+same initializer, same position — so the brief's "tsgo anchors on the inner arrow's first parameter" was right
+about the symptom and wrong about the cause; it is not about the arrow and it applies at top level too. A failure
+NESTED inside the initializer keeps its own TS9013, which is why the rule is wired to the two top-level emission
+sites only. **M3b**: tsgo's declaration transform has no whole-file JS skip, so `allowJs` + `isolatedDeclarations`
+still reports the family in a `.js` file; our blanket skip is gone, and exactly one corpus case combines the two
+options, which bounds it.
+
+**M1 — REFUSED, and the brief's reading of it was wrong.** tsgo does NOT preserve each literal's own source quote
+style: the fixture's TARGET is single-quoted in source too (`callback: (x: 'hi')`) and renders `"hi"`. The
+mechanism is **type-node REUSE** — tsgo prints the SOURCE TEXT of a parameter's written annotation when the
+rendered signature's declaration is a function-like WITH A BODY (arrow, function expression, an inferred `const`),
+and renders structurally otherwise. Three measured counter-examples pin that boundary: an interface
+`MethodSignature` (`overloadOnConstInheritance2`, ACTIVE and GREEN, source `(x: 'bar')` rendering `(x: "bar")`), a
+`FunctionTypeNode` annotation, and an instantiated generic alias. Reuse is VERBATIM, so it is not a quote rule at
+all: it keeps a type ALIAS unresolved, a keyword alias, a generic spelling and even a backslash escape. Cost:
+`typeToString` renders from a `Type` and has neither the declaring file's source nor a tight end for a `TypeNode`,
+so this is a display-layer change — **exposure counted: 186 tsgo baselines render an annotated-parameter signature,
+94 of them active subtests (66 with a one-parameter signature), all currently GREEN and gated by the corpus alone
+((PARITY.1))**. Both pending reasons now carry the rule, its counter-examples and that count.
+
+**PINS AND ABLATION.** 12 pins (5 positive, 7 controls); stash-ablation 5 of 5 non-controls red, all controls
+green, on a before-arm whose Checker and TypeScriptCompiler md5s are (P18.114)'s recorded finals. Four arms, each
+reddening a disjoint set — and **two of the seven "negative controls" are each the SOLE detector of their own
+over-broad rule** (a2's later-required-parameter clause, a3's `strictNullChecks` gate, the latter being the one arm
+the corpus cannot see at all).
+
+**A TRAP WORTH CARRYING.** `TypeScriptCompiler.class` is NOT the class that carries edits to
+`TypeScriptCompiler.kt`'s top-level private functions — those compile into **`TypeScriptCompilerKt.class`**, and
+the enclosing class's md5 moves only through `LineNumberTable` shifts. An arm that substitutes on the same line
+therefore leaves `TypeScriptCompiler.class` byte-identical while behaving differently, which reads exactly like a
+build that did not land. Quote `TypeScriptCompilerKt.class` for such a change. Two more from the same round:
+**tsgo's CLI cannot adjudicate M2** (TS2209 is a program-level diagnostic that stops it before semantic
+diagnostics, and a scratch `-p` run prints nothing at all because a present `tsconfig.json` takes the
+config-directory branch — the harness fixtures have none, which is why the row exists), so the authority is tsgo's
+own `.errors.txt.diff` layer; and two attempts to bound M1's blast radius by simulation produced unusable numbers
+(0 and 8, at least 3 of the 8 false on inspection) — **the defensible figure is the exposure count, not a
+simulated mover count**.
+
 ### Round (P18.114) — (LEGACY.0b) step 17: the JS CommonJS `exports` model — four rows, and the errors screen was a GATE on five of six arms (2026-09-16)
 
 **Three commits** (`0871e6fa1` feat, `59230e9af` test, this docs commit). **Suite 19,586 → 19,604 / 0 / 77** (+18
@@ -497,63 +558,6 @@ CompilerOptionsKt `79ec25fb` — the orchestrator's AFTER arm matched all four.
 row; and tsgo's `GetResolveJsonModule` derives from the module kind (effectively default-on under Bundler), not
 modelled. The other six differing cells are (P18.105)'s TS2834-for-TS2835 ESM-importer divergence.
 
-### Round (P18.105) — (LEGACY.1) step (d2): TypeScript 7 reads neither interop flag, the synthetic default is a property of the TARGET, and (d) is closed (2026-09-15)
-
-**Three commits** (`5bbbffe8e` refactor, `4b9d3931f` test, this docs commit). **Suite 19,402 → 19,427 / 0 / 83** (+25
-pins: 11 in `-project`, 14 in core), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — a
-CONTROL, counted: the 7 explicit-`false` case files are `usesUnsupportedOption`-dropped, the 9 active
-`export =`-with-default-import cases all target `.ts` files (none the `.d.ts` shape the flip changes), tsgo's
-`submodule*` layers carry no `.diff` for any of them, and the only active TS2595/TS2616 baselines are unmoved;
-`cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (872 classes); grid 8×`added=0
-removed=0` and emit 78/78 — controls (every profile is `module: NodeNext`); warning-clean over four compile tasks.
-`Checker.kt` 195,132 → **195,082** (−50), `Transformer.kt` −79 net, `NameResolver.kt` −20, `CompilerOptions.kt`
-+37/−. **(LEGACY.1)(d) is CHECKED OFF in both halves; (e) `moduleResolution: classic/node10` is next; (LEGACY.0)
-stays OPEN** on (0b-17).
-
-**THE MEASUREMENT.** In `typescript-go-repo` the two fields are read in exactly ONE non-test place each —
-`program.go:862-868`'s `createRemovedOptionDiagnostic` — and the checker says so at `checker.go:14478` ("with
-`esModuleInterop` (always enabled)"); `canHaveSyntheticDefault` (`:14744-14800`) has no option gate at all. 45
-scratch projects — five module families (`commonjs`, `esnext`, `esnext`+bundler, `nodenext` CJS-scoped,
-`nodenext` under `"type": "module"`) × the {unset, false, true}² matrix — over 8 targets and 4 import forms:
-**every cell is byte-identical on diagnostics AND emit except the TS5108 row** (explicit-false cells read through
-the LSP, since the CLI stops at the options row). TS1259, TS2497, TS2617, TS2596 and TS2598 have no emitter left
-in tsgo; TS2595-vs-TS2616 is chosen by the `module` OPTION (`isEs2015OrHigher`), not the importer's file format,
-and the helpers are keyed on import SHAPE alone.
-
-**WHAT LANDED.** Dead and deleted: the 12 no-interop `else` arms of the Transformer, the TS1259 (+TS2594)
-emitter, the TS2617/2596/2598 emitter and its ambient arm, `NameResolver`'s interop gate, the explicit-false
-conjuncts in the synthetic-default gate, `checkNamespaceImportSyntheticDefaultCall`, `cjsDefaultNsShapes`,
-`needsEsmHelpers` and `suppressDefaultReexportError`, and the boolean options `esModuleInterop` /
-`allowSyntheticDefaultImports` themselves — no reader can survive. **Changed at the default**: the tsc-6
-`allowSyntheticDefaultImports` model is replaced by tsgo's `canHaveSyntheticDefault`, a property of the TARGET
-(node16+: ESM importer + CJS target; a `.d.ts` unless it declares a default or an `__esModule` marker; a `.ts`
-with an `export =`; JS with no ESM syntax and no `__esModule`), so a `.d.ts` with named exports is now
-default-importable (was TS1192) and an explicit `true` no longer blanket-skips TS1192 on a `.ts` module; and the
-TS2595/TS2616 choice keys on `module` at both the file and the ambient site (nodenext CJS-scoped importers read
-TS2595 as tsgo). Survive: the two `…ExplicitlyFalse` markers (read only by (d1)'s TS5107/TS5108 rows) and the
-System disjunct of `suppressDefaultReexportError` ((f)'s).
-
-**WHERE THE ITEM WAS WRONG.** "The `…ExplicitlyFalse` fields go" — they stay, the options go.
-"`allowSyntheticDefaultImports` becomes interop-DERIVED" — tsgo derives nothing; neither field is read, the
-synthetic default is the target's property. It missed that an explicit `true` was ALSO honoured here (the
-blanket TS1192 skip), and that the ambient path and the TS2595 gate were format-keyed where tsgo keys on the
-option.
-
-**PINS AND ABLATION.** 25 pins; stash-ablation 22 red, the three greens exactly the two named controls and the
-`__esModule`-marker pin (which arm A1b reddens). Seven arms, each discriminating (core / project reds; screens
-0/0 on all): A1 synthetic default back to the old rule 1/5; A1b `.d.ts` always synthetic 1/0; A2 Transformer
-`require` on the marker 2/2; A3 NameResolver gated 1/0; A4 TS1259 restored 3/4; A5 TS2617 restored 1/2; A6
-TS2595 choice by file format 1/1. Final md5s Checker `339e2ff3`, Transformer `e4cbd570`, NameResolver
-`4edc18ae`, CompilerOptions `9fc43bb9` — the orchestrator's AFTER arm matched all four.
-
-**PRE-EXISTING DIVERGENCES THE MATRIX EXPOSED, none of this family**: TS1192 prints the specifier where tsgo
-prints the resolved extension-less path; a bare `node_modules` `export =` package is never named-import-checked
-(`checkDefaultImports` resolves no bare specifier under commonjs — tsgo TS2616/2595); nodenext ESM-scope
-extensionless imports read TS2834 where tsgo reads TS2835, and we still resolve them; TS1203 is not reported for
-an `export =` in a `"type": "module"`-scoped `.ts` under nodenext; the JS half of `canHaveSyntheticDefault`
-tests exports only (tsgo also counts an `import` as ESM syntax); and `es6ExportEqualsInterop`'s wipe-and-pin
-walker still re-emits nine TS2497 rows for an `@Ignore`d pending baseline ((LEGACY.0b)).
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -884,7 +888,26 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-17 LANDED 2026-09-16 ((P18.85)-(P18.114) notes) — pending 52, skipped 77,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-18 LANDED 2026-09-16 ((P18.85)-(P18.115) notes) — pending 48, skipped 73,
+  suite 19,616/0. **(P18.115) closed 4 rows in two mechanisms** (self-name resolution must FAIL when the project
+  root is ambiguous, so TS2307 follows TS2209; `isolatedDeclarations` reports TS9025 on the WHOLE PARAMETER when
+  no later parameter is required, TS9011 on the initializer otherwise, and has no whole-file JS skip) **and
+  REFUSED the signature-rendering family with its exposure counted**: tsgo REUSES a parameter's written type node
+  verbatim when the rendered signature's declaration is a function-like WITH A BODY — not a quote rule; it keeps
+  an alias unresolved and an escape intact — and 186 tsgo baselines / 94 active subtests render such a signature,
+  so it is a display-layer change gated by the corpus alone. **THE RESIDUE (48)**: display/chain-content ~19
+  (including those 2); F6-code ~16, which is ~16 MECHANISMS (size by mechanism, never by letter — (P18.96));
+  F2-duplicate 6 (four mechanisms, (P18.93) — the 6203-vs-6204 rule must be read off the BASELINES, 54 active
+  TS6203 + 7 TS6204); ORDER-model 3 ((P18.94)); JS emit 3; TS2683-residue 3; F0-related 2; F7-count 2; the
+  `downlevelIteration` TS5102 pair, which closes by moving `simulatedVersion` to `"7.0"` — an OWNER decision that
+  would redden nothing ((LEGACY.1)); `pathsValidation5`'s summary order; and the singletons.
+  **NEXT CLUSTERS BY MECHANISM**: the 6203-vs-6204 related-span rule (3 rows, read it off the baselines);
+  TS7009-from-the-callee-type, whose two blockers (P18.114) named (a third mechanism — the module's own exports
+  object — and a class-merged-with-function gap that costs `constructorOverloads4`); and the F0 `related TS2751
+  Circularity originates in type at this location` pair. **PICK AND SIZE WITH `bash scripts/corpus-screen.sh`**,
+  grep the 21 tsc-6 MIRRORED BASELINE FILES and the hand-written test ASSERTIONS for every code a round will move,
+  and set `noImplicitAny` in any JS scratch reproduction ((P18.114)).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-17 LANDED 2026-09-16 ((P18.85)-(P18.114) notes) — pending 52, skipped 77,
   suite 19,604/0. **(P18.114) closed the JS CommonJS `exports` model, 4 rows** (an `export =` collapses the
   `exports` receiver onto its target, order-independently; `exports` is UNBOUND without one of tsgo's four
   CommonJS indicators, of which a bare `require(…)` call is one). **TWO INSTRUMENT FACTS FROM IT**: the errors

@@ -3827,3 +3827,12 @@ the TS2488 gate keeps its target conjunct for (j), the option's parse and row st
 found and re-pointed), two arms; screens 3,084/0 + 5,688/0 and grid 8×0/0 + emit 78/78 counted controls;
 cost_gate 20/20 +0.00% (real — a pass went); huge_methods exit 0 (874 classes); warning-clean. (j) `target:
 ES5/ES3` is next and high-risk; (g) stays blocked on the embedded-tsconfig skip decision.
+**(P18.110) — (LEGACY.1) STEP (j1): TS1250/TS1251 AND TS18028 HAVE NO REACHABLE EMITTER IN TypeScript 7 — BOTH FAMILIES DELETED, −285 LINES, 19,538 / 0 / 83 (2026-09-15).**
+The three Go references to the TS1250 family are one uncalled binder function's `return` statements; TS18028 has
+none. Four tsgo cells at a written es5: 0 rows, byte-identical to es2015, where ours printed 8 per file regardless
+of strictness. Both families deleted by reference census (TS1251 shares the emitter and went too);
+`PrivateIdentifierTargetGateTest` deleted as a tsc-6 countdown. **The corpus cannot see the family in either
+direction** (0 active es5/es3 subtests — a first census read 557 off `@target: es5, es2015` lists whose only
+active variation is es2015), so the 17 pins are the gate; two arms partition them exactly. cost_gate 20/20
++0.00%; huge_methods exit 0 (874 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. (j2)-(j4) remain,
+high risk; (g) stays blocked on the embedded-tsconfig skip decision.

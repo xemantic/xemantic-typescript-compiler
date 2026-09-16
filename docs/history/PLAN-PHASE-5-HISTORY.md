@@ -1,3 +1,60 @@
+### Round (P18.105) — (LEGACY.1) step (d2): TypeScript 7 reads neither interop flag, the synthetic default is a property of the TARGET, and (d) is closed (2026-09-15)
+
+**Three commits** (`5bbbffe8e` refactor, `4b9d3931f` test, this docs commit). **Suite 19,402 → 19,427 / 0 / 83** (+25
+pins: 11 in `-project`, 14 in core), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — a
+CONTROL, counted: the 7 explicit-`false` case files are `usesUnsupportedOption`-dropped, the 9 active
+`export =`-with-default-import cases all target `.ts` files (none the `.d.ts` shape the flip changes), tsgo's
+`submodule*` layers carry no `.diff` for any of them, and the only active TS2595/TS2616 baselines are unmoved;
+`cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (872 classes); grid 8×`added=0
+removed=0` and emit 78/78 — controls (every profile is `module: NodeNext`); warning-clean over four compile tasks.
+`Checker.kt` 195,132 → **195,082** (−50), `Transformer.kt` −79 net, `NameResolver.kt` −20, `CompilerOptions.kt`
++37/−. **(LEGACY.1)(d) is CHECKED OFF in both halves; (e) `moduleResolution: classic/node10` is next; (LEGACY.0)
+stays OPEN** on (0b-17).
+
+**THE MEASUREMENT.** In `typescript-go-repo` the two fields are read in exactly ONE non-test place each —
+`program.go:862-868`'s `createRemovedOptionDiagnostic` — and the checker says so at `checker.go:14478` ("with
+`esModuleInterop` (always enabled)"); `canHaveSyntheticDefault` (`:14744-14800`) has no option gate at all. 45
+scratch projects — five module families (`commonjs`, `esnext`, `esnext`+bundler, `nodenext` CJS-scoped,
+`nodenext` under `"type": "module"`) × the {unset, false, true}² matrix — over 8 targets and 4 import forms:
+**every cell is byte-identical on diagnostics AND emit except the TS5108 row** (explicit-false cells read through
+the LSP, since the CLI stops at the options row). TS1259, TS2497, TS2617, TS2596 and TS2598 have no emitter left
+in tsgo; TS2595-vs-TS2616 is chosen by the `module` OPTION (`isEs2015OrHigher`), not the importer's file format,
+and the helpers are keyed on import SHAPE alone.
+
+**WHAT LANDED.** Dead and deleted: the 12 no-interop `else` arms of the Transformer, the TS1259 (+TS2594)
+emitter, the TS2617/2596/2598 emitter and its ambient arm, `NameResolver`'s interop gate, the explicit-false
+conjuncts in the synthetic-default gate, `checkNamespaceImportSyntheticDefaultCall`, `cjsDefaultNsShapes`,
+`needsEsmHelpers` and `suppressDefaultReexportError`, and the boolean options `esModuleInterop` /
+`allowSyntheticDefaultImports` themselves — no reader can survive. **Changed at the default**: the tsc-6
+`allowSyntheticDefaultImports` model is replaced by tsgo's `canHaveSyntheticDefault`, a property of the TARGET
+(node16+: ESM importer + CJS target; a `.d.ts` unless it declares a default or an `__esModule` marker; a `.ts`
+with an `export =`; JS with no ESM syntax and no `__esModule`), so a `.d.ts` with named exports is now
+default-importable (was TS1192) and an explicit `true` no longer blanket-skips TS1192 on a `.ts` module; and the
+TS2595/TS2616 choice keys on `module` at both the file and the ambient site (nodenext CJS-scoped importers read
+TS2595 as tsgo). Survive: the two `…ExplicitlyFalse` markers (read only by (d1)'s TS5107/TS5108 rows) and the
+System disjunct of `suppressDefaultReexportError` ((f)'s).
+
+**WHERE THE ITEM WAS WRONG.** "The `…ExplicitlyFalse` fields go" — they stay, the options go.
+"`allowSyntheticDefaultImports` becomes interop-DERIVED" — tsgo derives nothing; neither field is read, the
+synthetic default is the target's property. It missed that an explicit `true` was ALSO honoured here (the
+blanket TS1192 skip), and that the ambient path and the TS2595 gate were format-keyed where tsgo keys on the
+option.
+
+**PINS AND ABLATION.** 25 pins; stash-ablation 22 red, the three greens exactly the two named controls and the
+`__esModule`-marker pin (which arm A1b reddens). Seven arms, each discriminating (core / project reds; screens
+0/0 on all): A1 synthetic default back to the old rule 1/5; A1b `.d.ts` always synthetic 1/0; A2 Transformer
+`require` on the marker 2/2; A3 NameResolver gated 1/0; A4 TS1259 restored 3/4; A5 TS2617 restored 1/2; A6
+TS2595 choice by file format 1/1. Final md5s Checker `339e2ff3`, Transformer `e4cbd570`, NameResolver
+`4edc18ae`, CompilerOptions `9fc43bb9` — the orchestrator's AFTER arm matched all four.
+
+**PRE-EXISTING DIVERGENCES THE MATRIX EXPOSED, none of this family**: TS1192 prints the specifier where tsgo
+prints the resolved extension-less path; a bare `node_modules` `export =` package is never named-import-checked
+(`checkDefaultImports` resolves no bare specifier under commonjs — tsgo TS2616/2595); nodenext ESM-scope
+extensionless imports read TS2834 where tsgo reads TS2835, and we still resolve them; TS1203 is not reported for
+an `export =` in a `"type": "module"`-scoped `.ts` under nodenext; the JS half of `canHaveSyntheticDefault`
+tests exports only (tsgo also counts an `import` as ESM syntax); and `es6ExportEqualsInterop`'s wipe-and-pin
+walker still re-emits nine TS2497 rows for an `@Ignore`d pending baseline ((LEGACY.0b)).
+
 ### Round (P18.104) — (LEGACY.1) step (d1): every deprecation and removed-option row now anchors where tsgo anchors it, on both paths, from ONE scanner (2026-09-15)
 
 **Three commits** (`ef8ba8b6e` fix, `6b182b7e3` test, this docs commit). **Suite 19,382 → 19,402 / 0 / 83** (+20 pins:
