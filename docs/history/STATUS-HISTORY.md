@@ -3819,3 +3819,11 @@ discriminate, `transformOrder` had no observable. Screens 3,084/0 + 5,688/0 and 
 counted controls (0 live test sources mention outFile); cost_gate 20/20 +0.00%; huge_methods exit 0 (874
 classes); warning-clean with an injected positive control. (g) is BLOCKED-PENDING-USER: 28 active embedded-tsconfig
 `baseUrl` baselines tsgo never ran.
+**(P18.109) — (LEGACY.1) STEP (i): TS2802 IS *LIB*-GATED IN TypeScript 7, NOT TARGET-GATED — THE `downlevelIteration` BLOCK WAS WRONG BOTH WAYS AND IS GONE, −243 LINES, 19,527 / 0 / 83 (2026-09-15).**
+16 cells on tsgo: a written `target: es5` checks and emits byte-identically to es2015 (its default lib reaches
+es2015, so `Iterable` exists), 0 TS2802; TS2802 fires only when `lib` excludes es2015, at any target. Our block
+fired where tsgo is silent and was silent where tsgo fires; deleted with its seven functions by reference census,
+the TS2488 gate keeps its target conjunct for (j), the option's parse and row stay. 21 pins (one blind NodeList pin
+found and re-pointed), two arms; screens 3,084/0 + 5,688/0 and grid 8×0/0 + emit 78/78 counted controls;
+cost_gate 20/20 +0.00% (real — a pass went); huge_methods exit 0 (874 classes); warning-clean. (j) `target:
+ES5/ES3` is next and high-risk; (g) stays blocked on the embedded-tsconfig skip decision.

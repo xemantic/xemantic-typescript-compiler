@@ -25,6 +25,70 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.114) — (LEGACY.0b) step 17: the JS CommonJS `exports` model — four rows, and the errors screen was a GATE on five of six arms (2026-09-16)
+
+**Three commits** (`0871e6fa1` feat, `59230e9af` test, this docs commit). **Suite 19,586 → 19,604 / 0 / 77** (+18
+pins; skipped −4, the closed rows), 9 modules asserted; corpus screen errors **3,090 / 0** and emit 5,688 / 0, run
+after EACH mechanism — **and this is the rare round where that screen is a GATE rather than a control: five of six
+ablation arms are caught by it alone** (the profiles carry no `.js` file, so the grid is the control);
+`cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0
+removed=0` and emit 78/78; warning-clean with an injected positive control. `Checker.kt` 194,194 → **194,474**;
+`tsgoPendingBaselines` 56 → **52**. **(LEGACY.0) stays OPEN** on (0b-18).
+
+**THE MECHANISM, READ OUT OF tsgo AND THEN MEASURED.** `binder.go:declareCommonJSVariable` declares `exports` as a
+file LOCAL flagged `SymbolFlagsModuleExports`, and `checker.go:16513` types a symbol so named as
+`getTypeOfSymbol(resolveExternalModuleSymbol(fileSymbol))` — which an `export =` COLLAPSES onto its target, with
+`module` being `{ exports: <that type> }` (`:16517`). So in a `.js` file that is not an ES module and binds neither
+name, a single top-level `module.exports = X` makes the exported surface X's type and every one-level `exports.p` /
+`module.exports.p` is a property access on it. **ORDER IS IRRELEVANT** — the brief hedged "subsequent (or
+preceding)" and the PRECEDING case is the corpus's common one. `checkJsCommonJsExportEqualsAccess` replaces
+**B438d, deleted**, which emitted a TS2303 `Circular definition of import alias` **tsgo never produces** and
+rendered the receiver as the expando shape. `module.exports = require("./y.js")` needed its own leg
+(`jsCjsRequireNamespaceShape`): `getTypeOfExpression` answers `any` there, so the specifier is resolved and the
+required file's **VALUE** exports are collected from the AST — an `export declare type` declares no value member,
+which IS the row — displayed as `typeof import("<resolved path>")`, and it refuses an `export =`, a star
+re-export, an ambient module or an import-fed re-export rather than risk an under-collected member set.
+**M2**: `checkJsUnboundExportsIdentifier` reports TS2304 `Cannot find name 'exports'` wherever a `.js` file
+references the name with no CommonJS indicator — tsgo's four being a `module.exports =`, a **ONE-LEVEL**
+`exports.p =` (so `exports.a.b.c = 0` indicates nothing, which is that row), an `Object.defineProperty(exports, …)`
+and — **the one the brief did not list** — a `require(…)` CALL anywhere in the file (`binder.go:928`); an
+ES-module `.js` file never binds `exports` either. B427 gained two guards so it cannot double-report.
+
+**M3 BUILT, MEASURED, REVERTED — and the two blockers are the finding.** tsgo reports TS7009 whenever the callee
+TYPE has call signatures and no construct signature (12 shapes measured); our leg reaches only a bare `Identifier`
+resolving to a `SymbolFlags.Function`. The general rule fixed 6 of the 12 shapes and was still reverted, because
+(a) it does **not** close `commonjsAccessExports` — `new exports.Cls()` needs `exports.Cls` to type as
+`() => void`, and our `exports` object has no member table when there is no `export =`, a THIRD mechanism — and
+(b) it **costs a green baseline**: `constructorOverloads4` grows an ours-only TS7009 at `new M.Function(...)`
+because `getTypeOfExpression` answers the function half of a **class merged with a function** and never sees the
+construct signature. So TS7009-from-the-callee-type is blocked on a class/function merge gap, not on its own
+condition.
+
+**WHERE THE BRIEF WAS WRONG — FIVE PLACES, ALL FOUND BY MEASUREMENT**, and one is a trap worth carrying:
+**`isJSLiteralType` (`utilities.go:1730`) returns false only under `noImplicitAny`**, so with `strict: false` tsgo
+is silent for every missing member of an object-literal `export =` and the shipped binary APPEARS to contradict its
+own baseline layer — the harness has the flag on. **A scratch project modelling a JS baseline must set
+`noImplicitAny`**, or a real row reads as "the baseline is wrong"; we report in both regimes, an unmodelled
+suppression. Also: `jsExportAssignmentNonMutableLocation` is `@emitDeclarationOnly` and needed the walker on the
+whitelist path, which the brief never mentions; `jsExportMemberMergedWithModuleAugmentation3` is a separate
+sub-rule, not "the same family"; `jsFileCompilationBindDeepExportsAssignment` IS the same binder mechanism from the
+other side and fell out cleanly; and `jsExpandoObjectDefineProperty` is genuinely unrelated (an
+`Object.defineProperty` on a plain local, no `exports` anywhere) and keeps its entry.
+
+**PINS AND ABLATION, AND THE ROUND'S REUSABLE LESSON.** 18 pins (7 controls); stash-ablation **9 of 9 non-control
+pins red, all 7 controls green**, on a before-arm whose Checker md5 is (P18.113)'s recorded final — the receipt
+that the stash restored HEAD. Six arms; **two pins were added BECAUSE the arms found them missing**: a2 (the
+`emitDeclarationOnly` dispatch) read 0 pin reds and 1 screen mismatch, and a6 (B427's `export =` guard) read 0 and
+0 — a measured redundant guard *on the corpus* that is load-bearing on the pinned shape. Both now redden exactly
+one pin. Final md5 Checker `4b132263` — the orchestrator's AFTER arm matched.
+
+**RESIDUES, MEASURED, NONE CORPUS-REACHABLE**: a SCALAR `export =` displays `number` where tsgo prints `1` (round
+781's law — `getTypeOfExpression` answers the base primitive for a literal node); a CLASS `export =` and a
+two-`module.exports=` file (tsgo unions the declarations) are refused by the table-completeness gate;
+`module.exports = exports` is a pre-existing ours-only TS2309; and tsgo reports TS2304 for `exports` in a **`.ts`
+file** too, which is a much larger population here (`exports` is in `KNOWN_GLOBALS`) and is pinned unmoved by a
+negative control.
+
 ### Round (P18.113) — (LEGACY.1) step (j4): the target option surface — three parity fixes, and the COLLAPSE refused with a measurement in both directions (2026-09-16)
 
 **Three commits** (`dc71e22db` fix, `730dd9bd1` test, this docs commit). **Suite 19,566 → 19,586 / 0 / 81** (+20
@@ -490,49 +554,6 @@ an `export =` in a `"type": "module"`-scoped `.ts` under nodenext; the JS half o
 tests exports only (tsgo also counts an `import` as ESM syntax); and `es6ExportEqualsInterop`'s wipe-and-pin
 walker still re-emits nine TS2497 rows for an `@Ignore`d pending baseline ((LEGACY.0b)).
 
-### Round (P18.104) — (LEGACY.1) step (d1): every deprecation and removed-option row now anchors where tsgo anchors it, on both paths, from ONE scanner (2026-09-15)
-
-**Three commits** (`ef8ba8b6e` fix, `6b182b7e3` test, this docs commit). **Suite 19,382 → 19,402 / 0 / 83** (+20 pins:
-16 in `-project`, 4 in core), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — and the errors
-screen is a REAL gate here: `pathMappingInheritedBaseUrl` (an embedded tsconfig with `extends`) moves under two of the
-five arms; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (872 classes — the lifted
-scanner is the 872nd); grid 8×`added=0 removed=0` and emit 78/78 — controls (no profile sets a removed option);
-warning-clean over all four compile tasks (2,883-byte log, `w=0`). `Checker.kt` unchanged (195,132);
-`CompilerOptions.kt` +60, `TsConfigLoader.kt` +16, `TypeScriptCompiler.kt` +13. **(d1) is LANDED; (d2) — the
-interop flags' BEHAVIOUR — is the next round; (LEGACY.0) stays OPEN** on (0b-17).
-
-**THE RULE, MEASURED ON 18 PROJECTS (`program.go:762-800`).** TS5107/TS5108 anchor at the option's VALUE token
-(`false` width 5, `"amd"` width 5 with its quotes), TS5101/TS5102 at the KEY (`"downlevelIteration"` width 20);
-both are looked up in the ROOT config's object literal only — an option that arrives through `extends` or the CLI
-but is not written in the root anchors at the root's `"compilerOptions"` key (width 17), and with no such key the
-row is file-less; the extended file is NEVER named, and a root override hides the parent's row entirely. CRLF is
-not a column; extra spaces move the anchor to the token. `typeScriptVersion` is honoured from a real
-`tsconfig.json` (it is an `applyDirective` key on the loader path), so a `-project` fixture can pin tsgo's
-TS5108/TS5102 byte for byte.
-
-**WHAT WAS WRONG BEFORE, AND IT WAS THREE ASYMMETRIES, NOT ONE.** The (P18.103) finding — the project path
-populates no positions — was under-scoped: the KEY ladder (TS5101/TS5102) was file-less on the project path too, and
-on the HARNESS path the key ladder had no `compilerOptions`-key fallback while the value ladder trusted an
-EXTENDED file's position. One implementation now serves both: `CompilerOptions.tsconfigOptionPositionsOf` (the
-harness's block scan, lifted, with the extended files' positions dropped before the root is scanned) called by
-`TsConfigLoader.load` on the root text it already read (no second `Vfs` read — the `-project` cost pins count
-`tsconfig.json` reads), and `TypeScriptCompiler.tsconfigAnchorFor` for both ladders. All 18 CLI rows went from
-` - error TS…` to tsgo's file/line/column exactly.
-
-**PINS AND ABLATION.** 20 pins; stash-ablation 16 red, the four greens exactly the named `control -` pins, and both
-project controls redden under an arm (A3, A1), so none is blind. Five arms, each discriminating (project reds /
-core reds / errors-screen mismatches): A1 value ladder at the KEY 11/1/**17**; A2 loader records nothing 14/0/0; A3
-the deepest parent's text scanned instead of the root's 4/0/0; A4 harness keeps merging extended positions 0/1/**1**;
-A5 key ladder without the `compilerOptions` fallback 1/1/**1**. Final md5s `CompilerOptionsKt 223d4939`,
-`TsConfigLoader cc4325a7`, `TypeScriptCompiler 14886808`, `Checker f1cf432e` — the orchestrator's AFTER arm matched
-all four.
-
-**RESIDUE, RECORDED IN THE SCANNER'S KDoc.** The shared scanner is a TEXT scan: a commented-out `// "alwaysStrict":
-true` is recorded (last write wins) and — on the HARNESS path, where the same scan also APPLIES options — honoured,
-where tsgo parses JSONC. Pre-existing on the harness path; now shared rather than one-sided. And the agent's own
-first census ("the corpus has zero `extends` fixtures", taken over the GENERATED Kotlin) was false — the screen
-reads CASE files, and four carry an embedded tsconfig with `extends`.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -863,7 +884,24 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-16 LANDED 2026-09-15 ((P18.85)-(P18.101) notes) — pending 58, skipped 83,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-17 LANDED 2026-09-16 ((P18.85)-(P18.114) notes) — pending 52, skipped 77,
+  suite 19,604/0. **(P18.114) closed the JS CommonJS `exports` model, 4 rows** (an `export =` collapses the
+  `exports` receiver onto its target, order-independently; `exports` is UNBOUND without one of tsgo's four
+  CommonJS indicators, of which a bare `require(…)` call is one). **TWO INSTRUMENT FACTS FROM IT**: the errors
+  screen was a GATE on five of six arms (it is a control only when the family has no active baselines — count
+  first), and **a scratch project modelling a JS baseline must set `noImplicitAny`**, because `isJSLiteralType`
+  makes tsgo silent for an object-literal `export =` without it and the binary then appears to contradict its own
+  baseline. **THE RESIDUE (52)**: display/chain-content ~19 (7 type-DISPLAY + 1 chain-CONTENT, the `Object` hint,
+  the suggestion tie-break); F6-code 18 but ~18 MECHANISMS (size by mechanism, never by letter — (P18.96));
+  F2-duplicate 6 (four mechanisms, (P18.93)); ORDER-model 3 ((P18.94)); JS emit 3; TS2683-residue 3; F0-related 2;
+  F7-count 2; the `downlevelIteration` TS5102 pair, which closes by moving `simulatedVersion` to `"7.0"` — an
+  OWNER decision that would redden nothing ((LEGACY.1)); `pathsValidation5`'s summary order; and the singletons.
+  **NEXT CLUSTER BY MECHANISM**: `nodeNextPackageSelfName*` ×2 (nodenext self-name resolution),
+  `isolatedDeclarations*` ×2, `duplicateIdentifierRelatedSpans*`+`exportAsNamespace_augment` ×3 (the 6203-vs-6204
+  rule, which (P18.93) says must be read off the BASELINES), and the TS7009-from-the-callee-type family, whose two
+  blockers (P18.114) named. **PICK AND SIZE WITH `bash scripts/corpus-screen.sh`** and grep the 21 tsc-6 MIRRORED
+  BASELINE FILES plus the hand-written test ASSERTIONS for every code a round will move.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-16 LANDED 2026-09-15 ((P18.85)-(P18.101) notes) — pending 58, skipped 83,
   suite 19,370/0. **(P18.101) closed 7 rows and matched the TS2309 half of 3 more, picked by THEME rather than by
   F-letter — rows where OURS reports what tsgo does not on plain `.ts`, or prints the wrong HEAD** (TS2346 retired:
   zero tsgo call sites; tsgo's value-exports-only TS2309 rule; a fixture-specific TS2300 pin walker deleted; TS4104/

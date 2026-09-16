@@ -1,3 +1,46 @@
+### Round (P18.104) — (LEGACY.1) step (d1): every deprecation and removed-option row now anchors where tsgo anchors it, on both paths, from ONE scanner (2026-09-15)
+
+**Three commits** (`ef8ba8b6e` fix, `6b182b7e3` test, this docs commit). **Suite 19,382 → 19,402 / 0 / 83** (+20 pins:
+16 in `-project`, 4 in core), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — and the errors
+screen is a REAL gate here: `pathMappingInheritedBaseUrl` (an embedded tsconfig with `extends`) moves under two of the
+five arms; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (872 classes — the lifted
+scanner is the 872nd); grid 8×`added=0 removed=0` and emit 78/78 — controls (no profile sets a removed option);
+warning-clean over all four compile tasks (2,883-byte log, `w=0`). `Checker.kt` unchanged (195,132);
+`CompilerOptions.kt` +60, `TsConfigLoader.kt` +16, `TypeScriptCompiler.kt` +13. **(d1) is LANDED; (d2) — the
+interop flags' BEHAVIOUR — is the next round; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE RULE, MEASURED ON 18 PROJECTS (`program.go:762-800`).** TS5107/TS5108 anchor at the option's VALUE token
+(`false` width 5, `"amd"` width 5 with its quotes), TS5101/TS5102 at the KEY (`"downlevelIteration"` width 20);
+both are looked up in the ROOT config's object literal only — an option that arrives through `extends` or the CLI
+but is not written in the root anchors at the root's `"compilerOptions"` key (width 17), and with no such key the
+row is file-less; the extended file is NEVER named, and a root override hides the parent's row entirely. CRLF is
+not a column; extra spaces move the anchor to the token. `typeScriptVersion` is honoured from a real
+`tsconfig.json` (it is an `applyDirective` key on the loader path), so a `-project` fixture can pin tsgo's
+TS5108/TS5102 byte for byte.
+
+**WHAT WAS WRONG BEFORE, AND IT WAS THREE ASYMMETRIES, NOT ONE.** The (P18.103) finding — the project path
+populates no positions — was under-scoped: the KEY ladder (TS5101/TS5102) was file-less on the project path too, and
+on the HARNESS path the key ladder had no `compilerOptions`-key fallback while the value ladder trusted an
+EXTENDED file's position. One implementation now serves both: `CompilerOptions.tsconfigOptionPositionsOf` (the
+harness's block scan, lifted, with the extended files' positions dropped before the root is scanned) called by
+`TsConfigLoader.load` on the root text it already read (no second `Vfs` read — the `-project` cost pins count
+`tsconfig.json` reads), and `TypeScriptCompiler.tsconfigAnchorFor` for both ladders. All 18 CLI rows went from
+` - error TS…` to tsgo's file/line/column exactly.
+
+**PINS AND ABLATION.** 20 pins; stash-ablation 16 red, the four greens exactly the named `control -` pins, and both
+project controls redden under an arm (A3, A1), so none is blind. Five arms, each discriminating (project reds /
+core reds / errors-screen mismatches): A1 value ladder at the KEY 11/1/**17**; A2 loader records nothing 14/0/0; A3
+the deepest parent's text scanned instead of the root's 4/0/0; A4 harness keeps merging extended positions 0/1/**1**;
+A5 key ladder without the `compilerOptions` fallback 1/1/**1**. Final md5s `CompilerOptionsKt 223d4939`,
+`TsConfigLoader cc4325a7`, `TypeScriptCompiler 14886808`, `Checker f1cf432e` — the orchestrator's AFTER arm matched
+all four.
+
+**RESIDUE, RECORDED IN THE SCANNER'S KDoc.** The shared scanner is a TEXT scan: a commented-out `// "alwaysStrict":
+true` is recorded (last write wins) and — on the HARNESS path, where the same scan also APPLIES options — honoured,
+where tsgo parses JSONC. Pre-existing on the harness path; now shared rather than one-sided. And the agent's own
+first census ("the corpus has zero `extends` fixtures", taken over the GENERATED Kotlin) was false — the screen
+reads CASE files, and four carry an embedded tsconfig with `extends`.
+
 ### Round (P18.103) — (LEGACY.1) step (c): TypeScript 7 binds EVERY file strict, so `alwaysStrict: false` was four dead arms and one missing diagnostic (2026-09-15)
 
 **Three commits** (`e81d07381` refactor, `75b3baa97` test, this docs commit). **Suite 19,370 → 19,382 / 0 / 83**
