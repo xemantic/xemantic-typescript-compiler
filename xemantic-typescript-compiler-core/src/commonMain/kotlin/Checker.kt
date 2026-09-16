@@ -740,12 +740,15 @@ class Checker(
     private var deepInstantiationBailed: Boolean = false
 
     /**
-     * B98.r26/r28: set of `<tslibInstallKey>|<helperName>` pairs already reported missing via
-     * TS2343. The `__awaiter`/`__generator` missing-helper error fires exactly ONCE per resolved
-     * tslib install (key from [resolveTslibDedupKey]) — a single shared /node_modules/tslib dedups
-     * program-wide (`tslibMissingHelper`), while distinct per-package installs each report
-     * (`tslibMultipleMissingHelper`). Declared before init so it is non-null while the check
-     * pipeline runs.
+     * Set of `<fileName>|<helperName>` pairs already reported missing via TS2343. tsgo's
+     * `checkExternalEmitHelpers` records the requested helpers on the SOURCE FILE's links
+     * (`sourceFileLinks.requestedExternalEmitHelpers`, `checker.go:28346`), so a missing helper
+     * is reported ONCE PER FILE, at its first site, whatever tslib install the file resolves
+     * to — `tslibMissingHelper` (one shared install, two files, two rows) and
+     * `tslibMultipleMissingHelper` (two installs, three files, one `__awaiter` row each) both
+     * say so. ((LEGACY.1)(j3), 2026-09-16: the former per-INSTALL key — `__awaiter` once per
+     * resolved tslib — lost the second file's row in both.) Declared before init so it is
+     * non-null while the check pipeline runs.
      */
     private val reportedMissingTslibHelpers: MutableSet<String> = mutableSetOf()
 
@@ -93332,7 +93335,7 @@ interface DataView {
         }
         // B98.r163: tslib availability is PER-FILE, not program-wide. A `node_modules/tslib`
         // install only satisfies files BELOW its enclosing directory (nearest-enclosing
-        // node_modules walk, mirroring resolveTslibDedupKey). So a tslib under
+        // node_modules walk). So a tslib under
         // `/package1/node_modules` does NOT satisfy a file in `/package2` — that file still
         // fires TS2354 (tslibNotFoundDifferentModules). A ROOT `/node_modules/tslib`
         // (baseDir "/") is an ancestor of everything, so it satisfies all files as before.
@@ -93362,20 +93365,25 @@ interface DataView {
         // UNBOUND helper beside its `tslib` import — a defect in a removed configuration
         // this compiler does not copy; measured 2026-09-15.)
         val needsEsmHelpers = em.foldsToCommonJS || em.isNodeNext
-        // Class extends helpers needed when target < ES2015 ([CompilerOptions.defaultedTarget])
-        val needsExtendsHelper = options.defaultedTarget <= ScriptTarget.ES5
+        // (LEGACY.1)(j3): the `__extends` arm (`class B extends A` below ES2015) is GONE —
+        // tsgo has no ES5 class lowering and its checker never requests `__extends` at any
+        // target (`checker/types.go:114-137` has no such flag; measured on 30 cells 2026-09-16).
         // Decorator helpers always needed when experimentalDecorators is set
         val needsDecoratorHelper = options.experimentalDecorators
-        // B98: an `async function` needs the __awaiter helper when target < ES2017.
+        // B98: an `async function` needs the __awaiter helper when target < ES2017 — tsgo's
+        // `languageVersion < LanguageFeatureMinimumTarget.AsyncFunctions` (`checker.go:2727`),
+        // read on [CompilerOptions.defaultedTarget], the checker's language version ((j3);
+        // the former `effectiveTarget` read answered the same on every input, since both map
+        // an unset target to ES2024 and a written es5 lands below ES2017 either way).
         // Under importHelpers with no resolvable tslib, that syntax fires TS2354.
-        val needsAwaiterHelper = options.effectiveTarget < ScriptTarget.ES2017 &&
+        val needsAwaiterHelper = options.defaultedTarget < ScriptTarget.ES2017 &&
             binderResults.any { result ->
                 !isDtsFile(result.sourceFile.fileName) &&
                     result.sourceFile.statements.any { it is FunctionDeclaration &&
                         ModifierFlag.Async in it.modifiers && !it.asteriskToken }
             }
 
-        if (!needsEsmHelpers && !needsExtendsHelper && !needsDecoratorHelper && !needsAwaiterHelper) return
+        if (!needsEsmHelpers && !needsDecoratorHelper && !needsAwaiterHelper) return
 
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -93445,25 +93453,8 @@ interface DataView {
                         }
                     }
                     is ClassDeclaration -> {
-                        var emittedForClass = false
-                        // Class extends with target < ES2015 needs __extends helper (module files only)
-                        if (needsExtendsHelper && isModule) {
-                            val heritageClauses = stmt.heritageClauses
-                            if (heritageClauses != null) {
-                                for (clause in heritageClauses) {
-                                    if (clause.token == SyntaxKind.ExtendsKeyword && clause.types.isNotEmpty()) {
-                                        val spanStart = clause.pos
-                                        val firstType = clause.types.first()
-                                        val typeEnd = expressionTrueEnd(firstType.expression)
-                                        val spanLen = typeEnd - spanStart
-                                        emitTS2354(spanStart, spanLen, source, fileName)
-                                        emittedForClass = true
-                                    }
-                                }
-                            }
-                        }
-                        // Decorators need __decorate helper (module files only) — skip if already emitted
-                        if (!emittedForClass && needsDecoratorHelper && isModule) {
+                        // Decorators need __decorate helper (module files only)
+                        if (needsDecoratorHelper && isModule) {
                             checkDecoratorHelperOnClass(stmt, source, fileName)
                         }
                     }
@@ -93471,7 +93462,7 @@ interface DataView {
                         // B98: a top-level `async function` (non-generator) needs __awaiter
                         // when target < ES2017. With importHelpers and no resolvable tslib,
                         // TypeScript reports TS2354 at the function NAME. Module files only
-                        // (mirrors the __extends/__decorate gating) — bounds the FP surface
+                        // (mirrors the __decorate gating) — bounds the FP surface
                         // to the single no-tslib async fixture.
                         if (needsAwaiterHelper && isModule &&
                             ModifierFlag.Async in stmt.modifiers && !stmt.asteriskToken
@@ -93555,6 +93546,21 @@ interface DataView {
      * Check for TS2343: "This syntax requires an imported helper named '__X' which does
      * not exist in 'tslib'. Consider upgrading your version of 'tslib'."
      * Fires when importHelpers=true, tslib IS found, but the required helper is not exported.
+     *
+     * (LEGACY.1)(j3), 2026-09-16: the helpers this walker may name are exactly those tsgo's
+     * `checkExternalEmitHelpers` can be asked for (`checker/types.go:114-137`, callers at
+     * `checker.go:2724-13035`). The ES5-only arms — `__extends` (class heritage),
+     * `__generator` (async functions and async generators at es5), `__makeTemplateObject`
+     * (tagged templates) and `__assign` (object spread) — are GONE: no `ExternalEmitHelpers`
+     * flag exists for `__extends`, `__generator` or `__assign` (the tsgo checker never spells
+     * those names), `MakeTemplateObject` has a flag and NO caller, and `__assign` is emitted
+     * by tsgo's object-spread lowering below ES2018 without ever being checked.
+     * Measured over 30 cells (3 tslib flavours x 5 targets x 2 module kinds): tsgo names
+     * none of the four at any target, including a written es5. What survives is exactly
+     * tsgo's table — `__rest` (< ES2018), `__awaiter` (< ES2017 in tsgo; see the arm),
+     * `__asyncGenerator`/`__await`/`__asyncDelegator`/`__asyncValues`, `__decorate`/
+     * `__metadata`/`__param`, `__exportStar`/`__importStar`/`__importDefault` and the
+     * class-private-field helpers.
      */
     private fun checkMissingTslibHelpers() {
         if (!options.importHelpers) return
@@ -93566,25 +93572,17 @@ interface DataView {
                 stmt is ModuleDeclaration && (stmt.name as? StringLiteralNode)?.text == "tslib"
             }
         }
-        // ALL candidate tslib module files (a multi-package program may have several distinct
-        // node_modules/tslib installs — `tslibMultipleMissingHelper`). The first is used for the
-        // (identical-across-installs) export set; each file resolves to its OWN nearest tslib for
-        // per-install dedup keying (see resolveTslibDedupKey).
-        val allTslibResults: List<BinderResult> = if (ambientTslibResult != null) {
-            listOf(ambientTslibResult)
-        } else {
-            binderResults.filter { result ->
-                val fn = result.sourceFile.fileName
-                (fn.contains("node_modules") || fn.contains("node-modules")) && fn.contains("tslib")
-            }
-        }
-        val tslibResult = allTslibResults.firstOrNull() ?: return
+        // The first tslib module file supplies the export set (a multi-package program may
+        // hold several node_modules/tslib installs — `tslibMultipleMissingHelper` — with
+        // identical exports).
+        val tslibResult = ambientTslibResult ?: binderResults.firstOrNull { result ->
+            val fn = result.sourceFile.fileName
+            (fn.contains("node_modules") || fn.contains("node-modules")) && fn.contains("tslib")
+        } ?: return
         // Get what tslib exports
         val tslibExports = getTslibExports(tslibResult.sourceFile)
 
-        val isEs5Target = options.defaultedTarget <= ScriptTarget.ES5
         val hasDecorators = options.experimentalDecorators || options.emitDecoratorMetadata
-        val hasAmbientTslib = ambientTslibResult != null
 
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -93593,47 +93591,10 @@ interface DataView {
             val isModule = isModuleFile(result.sourceFile.statements)
             if (!isModule) continue
             val source = result.sourceFile.text
-            // Per-program-wide-per-tslib-install dedup key: TS2343 for a given helper fires ONCE
-            // per resolved tslib install (verified against `tslibMissingHelper` — one shared
-            // /node_modules/tslib → one report — vs `tslibMultipleMissingHelper` — two installs →
-            // one report each).
-            val tslibKey = resolveTslibDedupKey(fileName, allTslibResults, hasAmbientTslib)
-
             for (stmt in result.sourceFile.statements) {
-                checkStmtForMissingHelper(stmt, source, fileName, tslibExports, isEs5Target, hasDecorators, tslibKey)
+                checkStmtForMissingHelper(stmt, source, fileName, tslibExports, hasDecorators)
             }
         }
-    }
-
-    /**
-     * Returns a dedup key identifying which tslib install [fileName] resolves to. For node
-     * resolution this is the nearest enclosing `<dir>/node_modules/tslib` (so files under
-     * `/package1` and `/package2` get distinct keys when each has its own install). Ambient /
-     * classic tslib applies program-wide → a single shared key.
-     */
-    private fun resolveTslibDedupKey(
-        fileName: String,
-        candidates: List<BinderResult>,
-        hasAmbientTslib: Boolean,
-    ): String {
-        if (hasAmbientTslib) return "ambient"
-        var best = ""
-        var bestLen = -1
-        for (tr in candidates) {
-            val tfn = tr.sourceFile.fileName
-            val nmIdx = tfn.lastIndexOf("/node_modules/")
-            if (nmIdx < 0) {
-                // classic resolution (tslib not under node_modules) → program-wide fallback key.
-                if (bestLen < 0) best = tfn
-                continue
-            }
-            val baseDir = tfn.substring(0, nmIdx + 1) // e.g. "/package1/"
-            if (fileName.startsWith(baseDir) && baseDir.length > bestLen) {
-                best = tfn
-                bestLen = baseDir.length
-            }
-        }
-        return if (best.isEmpty()) "global" else best
     }
 
     private fun checkStmtForMissingHelper(
@@ -93641,9 +93602,7 @@ interface DataView {
         source: String,
         fileName: String,
         tslibExports: Set<String>,
-        isEs5Target: Boolean,
         hasDecorators: Boolean,
-        tslibKey: String = "global",
     ) {
         when (stmt) {
             is ExportDeclaration -> {
@@ -93659,25 +93618,8 @@ interface DataView {
                 }
             }
             is ClassDeclaration -> {
-                // class B extends A → needs __extends (ES5 only)
-                if (isEs5Target && stmt.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword && it.types.isNotEmpty() } == true) {
-                    if ("__extends" !in tslibExports) {
-                        // Span: position of "extends X" (the heritage clause text)
-                        val extendsClause = stmt.heritageClauses.first { it.token == SyntaxKind.ExtendsKeyword }
-                        val extendsType = extendsClause.types.first()
-                        // Find "extends" keyword position: it's before the expression
-                        val extendsPos = extendsClause.pos
-                        // Span: from "extends" to end of expression name
-                        val ident = extendsType.expression as? Identifier
-                        val exprEnd = if (ident != null) {
-                            ident.pos + ident.text.length
-                        } else {
-                            source.indexOf(')', extendsType.expression.pos) + 1
-                        }
-                        val spanLen = exprEnd - extendsPos
-                        emitTS2343("__extends", extendsPos, spanLen.coerceAtLeast(1), source, fileName)
-                    }
-                }
+                // ((LEGACY.1)(j3): the `class B extends A` → `__extends` arm is gone — tsgo
+                // never requests it, at any target.)
                 // @dec class C → needs __decorate and __metadata
                 if (hasDecorators && stmt.decorators?.isNotEmpty() == true) {
                     val decorator = stmt.decorators.first()
@@ -93697,22 +93639,31 @@ interface DataView {
                 checkClassMembersForPrivateFields(stmt.members, source, fileName, tslibExports)
             }
             is VariableStatement -> {
-                // Walk variable declarations for spread/rest patterns
-                for (decl in stmt.declarationList.declarations) {
-                    checkExprForMissingHelper(decl.initializer, source, fileName, tslibExports, isEs5Target)
-                    checkBindingForMissingHelper(decl.name, source, fileName, tslibExports)
+                // Walk variable declarations for rest patterns (`__rest`) below ES2018 — tsgo's
+                // `languageVersion < LanguageFeatureMinimumTarget.ObjectSpreadRest` on every
+                // binding element (`checker.go:5801`); (j3) added the bound, the walk used to
+                // report at every target. ((j3): the initializer walk for `{ ...o }` →
+                // `__assign` and `` tag`x` `` → `__makeTemplateObject` is gone — tsgo never
+                // requests either.)
+                if (options.defaultedTarget < ScriptTarget.ES2018) {
+                    for (decl in stmt.declarationList.declarations) {
+                        checkBindingForMissingHelper(decl.name, source, fileName, tslibExports)
+                    }
                 }
             }
             is FunctionDeclaration -> {
                 // Object-rest binding pattern in a parameter (`function f({ a, ...rest }) {}`) needs
-                // __rest below ES2018 (where object rest/spread became native) — mirrors the
-                // transformer's `< ES2018` downlevel gate.
-                if (options.effectiveTarget < ScriptTarget.ES2018) {
+                // __rest below ES2018 (where object rest/spread became native) — tsgo's
+                // `languageVersion < LanguageFeatureMinimumTarget.ObjectSpreadRest`
+                // (`checker.go:5801`), read on the checker's language version ((j3), same
+                // answer on every input as the former `effectiveTarget` read).
+                if (options.defaultedTarget < ScriptTarget.ES2018) {
                     for (p in stmt.parameters) {
                         checkBindingForMissingHelper(p.name, source, fileName, tslibExports)
                     }
                 }
-                // async function * f() → needs __asyncGenerator, __await, and __generator (ES5)
+                // async function * f() → needs __asyncGenerator and __await ((j3): the es5
+                // `__generator` companion is gone — tsgo never requests it)
                 if (ModifierFlag.Async in stmt.modifiers && stmt.asteriskToken) {
                     // TypeScript reports the diagnostic at the function name position (not the '*')
                     val namePos = stmt.name?.pos
@@ -93724,9 +93675,6 @@ interface DataView {
                         if ("__await" !in tslibExports) {
                             emitTS2343("__await", namePos, nameLen, source, fileName)
                         }
-                        if (isEs5Target && "__generator" !in tslibExports) {
-                            emitTS2343("__generator", namePos, nameLen, source, fileName)
-                        }
                     }
                     // Walk body for yield* statements
                     stmt.body?.let {
@@ -93734,27 +93682,16 @@ interface DataView {
                     }
                 } else if (ModifierFlag.Async in stmt.modifiers) {
                     // B98.r26: plain `async function f()` (non-generator) → needs __awaiter
-                    // (and __generator at ES5). Reported at the function NAME position. Per-program
-                    // dedup (`reportedMissingTslibHelpers`) mirrors TypeScript's bitmask — the
-                    // __awaiter-missing error fires ONCE total, at the first async construct.
+                    // ((j3): the es5 `__generator` companion is gone). Reported at the function
+                    // NAME position; [emitTS2343] dedups per (file, helper) as tsgo does.
                     val namePos = stmt.name?.pos
                     if (namePos != null) {
                         val nameLen = stmt.name.text.length
-                        val awaiterKey = "$tslibKey|__awaiter"
-                        if ("__awaiter" !in tslibExports && awaiterKey !in reportedMissingTslibHelpers) {
-                            reportedMissingTslibHelpers.add(awaiterKey)
+                        if ("__awaiter" !in tslibExports) {
                             emitTS2343("__awaiter", namePos, nameLen, source, fileName)
-                        }
-                        val generatorKey = "$tslibKey|__generator"
-                        if (isEs5Target && "__generator" !in tslibExports && generatorKey !in reportedMissingTslibHelpers) {
-                            reportedMissingTslibHelpers.add(generatorKey)
-                            emitTS2343("__generator", namePos, nameLen, source, fileName)
                         }
                     }
                 }
-            }
-            is ExpressionStatement -> {
-                checkExprForMissingHelper(stmt.expression, source, fileName, tslibExports, isEs5Target)
             }
             else -> {}
         }
@@ -94144,64 +94081,6 @@ interface DataView {
         }
     }
 
-    private fun checkExprForMissingHelper(
-        expr: Expression?,
-        source: String,
-        fileName: String,
-        tslibExports: Set<String>,
-        isEs5Target: Boolean,
-    ) {
-        if (expr == null) return
-        when (expr) {
-            is TaggedTemplateExpression -> {
-                // id`template` → needs __makeTemplateObject (ES5 only)
-                if (isEs5Target && "__makeTemplateObject" !in tslibExports) {
-                    val tagStart = expr.tag.pos
-                    val template = expr.template
-                    val templateEnd = when (template) {
-                        is NoSubstitutionTemplateLiteralNode -> template.pos + template.text.length + 2
-                        else -> template.end // fallback
-                    }
-                    val spanLen = templateEnd - tagStart
-                    emitTS2343("__makeTemplateObject", tagStart, spanLen.coerceAtLeast(1), source, fileName)
-                }
-            }
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is SpreadAssignment -> {
-                            // { ...o } → needs __assign (ES5 only)
-                            if (isEs5Target && "__assign" !in tslibExports) {
-                                // Span: position of "..." + name
-                                val spreadPos = prop.pos
-                                val spreadExpr = prop.expression
-                                val endPos = if (spreadExpr is Identifier) {
-                                    spreadExpr.pos + spreadExpr.text.length
-                                } else {
-                                    spreadExpr.pos + 1
-                                }
-                                val spanLen = endPos - spreadPos
-                                emitTS2343("__assign", spreadPos, spanLen.coerceAtLeast(1), source, fileName)
-                            }
-                        }
-                        // round 42 iter17: recurse into PropertyAssignment values so nested
-                        // ObjectLiteral with `...` spread inside `{ a: { ...o } }` is reached.
-                        is PropertyAssignment -> checkExprForMissingHelper(prop.initializer, source, fileName, tslibExports, isEs5Target)
-                        else -> {}
-                    }
-                }
-            }
-            // round 42 iter17: wrapper unwrap so `({...o})` / `(...) as T` etc. still
-            // trigger the TaggedTemplate / SpreadAssignment helper detection.
-            is ParenthesizedExpression -> checkExprForMissingHelper(expr.expression, source, fileName, tslibExports, isEs5Target)
-            is AsExpression -> checkExprForMissingHelper(expr.expression, source, fileName, tslibExports, isEs5Target)
-            is TypeAssertionExpression -> checkExprForMissingHelper(expr.expression, source, fileName, tslibExports, isEs5Target)
-            is SatisfiesExpression -> checkExprForMissingHelper(expr.expression, source, fileName, tslibExports, isEs5Target)
-            is NonNullExpression -> checkExprForMissingHelper(expr.expression, source, fileName, tslibExports, isEs5Target)
-            else -> {}
-        }
-    }
-
     private fun checkBindingForMissingHelper(
         binding: Expression,
         source: String,
@@ -94300,6 +94179,9 @@ interface DataView {
     }
 
     private fun emitTS2343(helperName: String, spanStart: Int, spanLen: Int, source: String, fileName: String) {
+        // tsgo reports a missing helper ONCE PER FILE, at its first site
+        // (`sourceFileLinks.requestedExternalEmitHelpers`, `checker.go:28346`).
+        if (!reportedMissingTslibHelpers.add("$fileName|$helperName")) return
         val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
         diagnostics.add(Diagnostic(
             message = "This syntax requires an imported helper named '$helperName' which does not exist in 'tslib'. Consider upgrading your version of 'tslib'.",

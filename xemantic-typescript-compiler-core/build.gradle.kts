@@ -1227,20 +1227,6 @@ val tsgoPendingBaselines = listOf(
         "'\"ignoreDeprecations\": \"6."
     ),
     TsgoPendingBaseline(
-        "tslibMissingHelper.errors.txt",
-        "F6 top code differs (tsgo TS2343 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "/package2/index.ts(2,16): error TS2343: This syntax requires an imported helper named " +
-        "'__awaiter' which does not exist in 'tslib'. Consider upgrading  | ours: ==== " +
-        "/package2/index.ts (0 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "tslibMultipleMissingHelper.errors.txt",
-        "F6 top code differs (tsgo TS2343 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "/package1/other.ts(2,23): error TS2343: This syntax requires an imported helper named " +
-        "'__awaiter' which does not exist in 'tslib'. Consider upgrading  | ours: ==== " +
-        "/package1/other.ts (1 errors) ===="
-    ),
-    TsgoPendingBaseline(
         "typeParameterWithInvalidConstraintType.errors.txt",
         "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
         "TS2751 typeParameterWithInvalidConstraintType.ts:4:17: Circularity originates in type " +
