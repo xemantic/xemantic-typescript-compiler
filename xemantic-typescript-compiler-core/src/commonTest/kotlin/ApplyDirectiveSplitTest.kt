@@ -135,9 +135,23 @@ class ApplyDirectiveSplitTest {
         assert(o.targetExplicitlySet)
     }
 
+    /**
+     * **RE-POINTED by (LEGACY.1)(j4) (2026-09-16)**, and it was a COUNTDOWN: the arm used
+     * to answer `base` itself for a value [ScriptTarget.fromString] could not read. In
+     * TypeScript 7 an argument tsgo's `targetOptionMap` has no entry for — `es3`, `es4`,
+     * a typo — is TS6046 at the VALUE, so the arm must RECORD it. What is unchanged, and
+     * is the half this pin was really guarding, is that the option itself stays UNSET.
+     */
     @Test
-    fun `run 1 - an unparseable target leaves the options untouched`() {
-        assert(applyDirective(base, "target", "es-nosuch") === base)
+    fun `run 1 - an unparseable target records the invalid value and leaves the target unset`() {
+        val o = applyDirective(base, "target", "es-nosuch")
+        assert(o !== base)
+        assert(o.targetValueInvalid)
+        assert(!o.targetExplicitlySet)
+        assert(o.target == base.target)
+        // an EMPTY value is not an invalid ARGUMENT — nothing was written, so the arm
+        // still answers the very same instance
+        assert(applyDirective(base, "target", "") === base)
     }
 
     @Test

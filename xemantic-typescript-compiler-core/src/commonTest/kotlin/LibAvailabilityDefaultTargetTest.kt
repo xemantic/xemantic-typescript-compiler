@@ -32,9 +32,9 @@ import kotlin.test.Test
 
 /**
  * (CHK.17) round 944 — **lib availability is decided from [CompilerOptions.defaultedTarget], and
- * an UNSET `target` is the LATEST standard there, not `ES3`.**
+ * an UNSET `target` is the LATEST standard there, not the enum's zero value.**
  *
- * [CompilerOptions.target] defaults to [ScriptTarget.ES3], which is indistinguishable from
+ * [CompilerOptions.target] defaults to the enum's zero value, which is indistinguishable from
  * "the user named no target"; tsc's `getEmitScriptTarget` maps an unset target to
  * `LatestStandard` and `getDefaultLibFileName` picks the default lib from THAT. So a
  * project with no `target` in its tsconfig used to be given the es5 lib and told
@@ -47,6 +47,15 @@ import kotlin.test.Test
  * the safety of the change: `effectiveTarget` maps es5 UP to ES2015 and would have
  * deleted every genuine TS2550/TS2583 (round 941 refused it at TS18028 for the same
  * reason).
+ *
+ * **(LEGACY.1)(j4), 2026-09-16 — the GATE half took a THIRD notion.** Measured against
+ * tsgo 7.0.2, the availability gate compares against
+ * [RealLibResolver.defaultLibEsLevel] of `defaultedTarget` and not against
+ * `defaultedTarget` itself, because below ES2015 the default lib FILE (`lib.d.ts`)
+ * reaches es2015 through `dom`: a written `es5` answers every es2015 name and still
+ * reports every es2016+ one. The lib SET half and the accessor half are untouched, and
+ * `ES3` has left [ScriptTarget] entirely (it is TS6046 in TypeScript 7). One pin below
+ * was re-pointed for it; `TargetOptionSurfaceTest` carries the measurement.
  */
 class LibAvailabilityDefaultTargetTest {
 
@@ -136,15 +145,22 @@ class LibAvailabilityDefaultTargetTest {
         }
     }
 
-    // An es2015-era global: the ONE shape that separates `defaultedTarget` from
-    // `effectiveTarget`, because effectiveTarget maps an explicit es5 UP to ES2015 and
-    // would make `Reflect` resolve for a program that asked for es5.
+    // An es2015-era global. **RE-POINTED by (LEGACY.1)(j4) (2026-09-16)**: this pin used
+    // to assert TS2583 at a written `es5`, on the reasoning that `defaultedTarget` must
+    // keep the es5 lib — and that was a COUNTDOWN. tsgo 7.0.2 reports NOTHING here: the
+    // ES5 default lib file is `lib.d.ts`, whose `dom` reference opens
+    // `/// <reference lib="es2015" />`, so `Reflect` exists (measured with `--listFiles`
+    // and the LSP). What decides the availability GATE is therefore
+    // [RealLibResolver.defaultLibEsLevel] of `defaultedTarget`, not `defaultedTarget`
+    // itself; the notion is still not [CompilerOptions.effectiveTarget], which the
+    // `defaultedTarget` pins above keep separating. `TargetOptionSurfaceTest` owns the
+    // new claim and its es2017 bound.
     private val reflect = "const p: object | null = Reflect.getPrototypeOf({});"
 
     @Test
-    fun `an explicit es5 target still reports an es2015 global`() {
+    fun `an explicit es5 target resolves an es2015 global from the default lib`() {
         diagnose(reflect, directives = "$realLibs\n// @target: es5") should {
-            have(any { it.code == 2583 })
+            have(none { it.code == 2583 })
         }
     }
 
