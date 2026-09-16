@@ -3836,3 +3836,13 @@ direction** (0 active es5/es3 subtests — a first census read 557 off `@target:
 active variation is es2015), so the 17 pins are the gate; two arms partition them exactly. cost_gate 20/20
 +0.00%; huge_methods exit 0 (874 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. (j2)-(j4) remain,
 high risk; (g) stays blocked on the embedded-tsconfig skip decision.
+**(P18.111) — (LEGACY.1) STEP (j2): tsgo HAS EXACTLY *ONE* `< ES2015` CHECKER GATE — SEVEN OF OURS DELETED, FOUR RE-KEYED ON THE LIB, ONE UN-SUPPRESSED, ONE KEPT, 19,551 / 0 / 83 (2026-09-16).**
+tsgo honours a written es5 in its 29 `languageVersion` reads, but only one is `< ES2015` (TS2318 for a rest-only
+binding pattern — kept and pinned in both directions). Measured gate by gate at a written es5: TS18045, TS2396,
+TS2659, TS2340/`checkSuperPropertyAccessES5`, the TS1501 `u`/`y` rows, the es5 parameter-scope hoist with its
+`bodyVarRefs` leg, and a raw-target pin arm have no tsgo emitter and are gone; the TS2461/TS2488 forks and the
+never-destructure gate read the LIB in tsgo and are re-keyed (`uplevelIterationLib()`) — deleting them would have
+inverted `lib: ["es5"]` projects; TS18027's lower bound was wrongly suppressing. 24 pins, eleven arms all
+discriminating, every tsc-6 pin re-vehicled; screens 3,084/0 + 5,688/0 and grid 8×0/0 + emit 78/78 counted
+controls; cost_gate 20/20 +0.00%; huge_methods exit 0 (874 classes); spine closure audit clean; warning-clean.
+`Checker.kt` −183. (j3) tslib arms and (j4) the option surface remain; (g) stays blocked.

@@ -25,6 +25,64 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.116) — (LEGACY.0b) step 19: the duplicate-identifier follow-on index is per merge CALL, and (P18.93)'s irreconcilable source was two functions away (2026-09-16)
+
+**Three commits** (`4a5ff342f` fix, `5a0476564` test, this docs commit). **Suite 19,616 → 19,625 / 0 / 70** (+9 pins;
+skipped −3), 9 modules asserted; corpus screen errors **3,097 / 0** and emit 5,688 / 0 — a REAL gate on all three
+arms, which move 3, 3 and 2 baselines, so neither half of the rule is corpus-invisible; `cost_gate.py` exit 0, 20/20
++0.00%; `huge_methods.py --fail-over 0` exit 0 (**875** classes — the new nested type); grid 8×`added=0 removed=0`
+and emit 78/78 — controls; warning-clean with an injected positive control. `Checker.kt` 194,474 → **194,535**;
+`tsgoPendingBaselines` 48 → **45**. **(LEGACY.0) stays OPEN** on (0b-20).
+
+**THE RULE, AND WHY (P18.93) COULD NOT RECONCILE IT.** The first related node of each
+`addDuplicateDeclarationError` **CALL** is TS6203 `'{0}' was also declared here.` and the rest of THAT CALL's nodes
+are TS6204 `and here.` — so N declarations of ONE symbol (one call) give `[6203, 6204, …]` while N separate files
+or augmentations (N−1 calls of one node each) give all TS6203. (P18.93) read the `if` correctly
+(`len(relatedInformation) == 0 → 6203`) and drew the wrong inference, because the missing step is two functions
+away: `lookupOrIssueError` compares through `ast.CompareDiagnostics`, **whose last comparison is
+`compareRelatedInfo`**, so the probe a second call builds — carrying an EMPTY related list — no longer compares
+equal to the diagnostic the first call decorated. The lookup **MISSES**, a second diagnostic is issued at the same
+location and again starts empty (hence 6203), and `compactAndMergeRelatedInfos` (`compiler/program.go:1444`) later
+folds every `EqualDiagnosticsNoRelatedInfo` pair and unions their lists. So "several calls accrete onto one
+diagnostic" — which this brief also asserted — is false; they accrete at the END, after the codes are chosen.
+
+**VERIFIED MECHANICALLY, AND THE POPULATION FIGURE IN THE BRIEF WAS WRONG.** Over tsgo's adopted baselines
+(`submodule/**/*.errors.txt`): **128 files** carry the family (121 with 6203, 9 with 6204), **317 family
+diagnostics**, and **every one matches `6203 6204*` repeated — 0 unexplained**; the only shapes are `[6203]`×310,
+`[6203,6203]`×5, `[6203,6204,6204]`×1 and `[6203,6204,6204,6204]`×1. The brief's "151 (142 + 9)" is a SUM over all
+directories that double-counts the `.diff` layer; the union is 128. **And 11 diagnostics in that population carry a
+TS6204 that is NOT this family** — three other tsgo producers with their own leading codes (`TS1347`/`[1348,6204]`,
+`TS2459`/`[2728,6204,6204]`, `TS2528`/`[6204]`) — so a verification script filtered by CODE reads the last as a bare
+6204 and declares the rule broken: **the discriminator is the call's LEADING code, not the follow-on.**
+
+**WHAT CHANGED.** All three `if (idx == 0) 6203 else 6204` sites now go through one helper indexing WITHIN each
+call: the cross-file hub emitter (B93) and the module-augmentation emitter (B92d) were WRONG (each `other` is its
+own merge call), and the lib-shadow emitter (B61.1) was RIGHT — the lib files are declarations of one merged symbol
+— and now records why.
+
+**M2 REFUSED, AND THE TRAP IS WORTH THE ROUND.** The orchestrator found both TS2751 rows' baselines under
+`submodule/` and asked for a re-check; that was the BASE baseline, which every case has (`submodule/` IS
+`tsgoBaselinesDir`). **The LAYER is decided by which directory the `.diff` lives in**, and both live under
+`submoduleTriaged/` and are named in `testdata/submoduleTriaged.txt`, whose header reads *"known diffs that we
+intend to fix"* — a tsgo DEFECT we must not follow. Both reasons are rewritten with the measurement and the trap.
+
+**PINS AND ABLATION.** 9 pins (6 positive, 3 controls), every expectation transcribed from tsgo's baselines and
+re-confirmed against the live binary, asserting message, code, file, line, column and width of every related row
+(the lib rows assert a NULL line — tsgo's `--:--`). **Both witnesses are pinned deliberately**: the three-file
+all-6203 shape and the merged-lib `[6203,6204,6204]` shape, the second pair being green on both arms BY DESIGN
+because it is the sole detector of the over-broad "always 6203" rule the first witness alone invites. Arms a1
+(index globally) and a2 (always 6203) redden **disjoint pin sets and disjoint baselines**, which is what makes the
+per-call index a rule rather than a coincidence. Final md5 Checker `12f7cab3` — the orchestrator's AFTER arm
+matched.
+
+**THREE HARNESS TRAPS THE ROUND HIT**, all now recorded: **`--include` is a SUBSTRING, not a regex**, so an
+alternation pattern silently compares the UNCHANGED population and reads as a clean pass — the tell is the subtest
+COUNT; **`rm -rf build/test-results/jvmTest` at the repo root deletes nothing** (the XMLs are per-module; the root
+path is a pre-split leftover), which once summed 1,574 STALE tests and reported 0 failures for a run that had just
+failed one; and a control that asserts an ABSENCE is worth less than one asserting the neighbour's real answer —
+a pin claiming no TS6204 in a TS2728 fixture went red because we already produce tsgo's `[TS2728, TS6204]` there,
+and re-pointing it made it prove the change did not spill into the other producer.
+
 ### Round (P18.115) — (LEGACY.0b) step 18: four rows in two mechanisms, and the signature-rendering family REFUSED with its exposure counted (2026-09-16)
 
 **Three commits** (`67a6e5f8b` fix, `2f59f3c23` test, this docs commit). **Suite 19,604 → 19,616 / 0 / 73** (+12
@@ -503,61 +561,6 @@ project path. **What (g)/(h) inherit**: the ten `baseUrl == null` conjuncts are 
 `foldsToCommonJS`); `TypeScriptCompiler.kt:~2515` still reads `outFile != null && effectiveModule == None` — the
 last None/outFile coupling, in (h)'s range.
 
-### Round (P18.106) — (LEGACY.1) step (e): there is no "classic" resolution in TypeScript 7 — one derivation replaces five copies, and a removed value turned out to have live corpus coverage (2026-09-15)
-
-**Three commits** (`963a03381` refactor, `d1b475798` test, this docs commit). **Suite 19,427 → 19,465 / 0 / 83** (+38
-pins: 12 in `-project`, 26 in core), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — and
-this time the errors screen is a REAL gate: **17 active baselines carry `node10`/`node` in an EMBEDDED tsconfig**
-(`moduleResolutionWithSuffixes_*`, `moduleResolutionWithExtensions_withPaths`), which `usesUnsupportedOption` never
-sees, and arms a1/a11 move exactly those 17; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0`
-exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls (every profile is NodeNext under both
-rules); warning-clean over four compile tasks. `Checker.kt` 195,082 → **194,993** (−89); three files 222 +/257 −.
-**(LEGACY.1)(e) is CHECKED OFF; (f) `module: AMD/UMD/System` is next; (LEGACY.0) stays OPEN** on (0b-17).
-
-**THE MEASUREMENT.** 42 cells (`moduleResolution` × `module`) over seven specifier shapes whose candidates export
-distinguishable literal types, tsgo read through `--traceResolution` and the LSP: the `classic` / `node` / `node10`
-cells are byte-identical to the `unset` cell of the same `module` on every resolved file and every checker row bar
-the TS5108 row (`node` is an enum alias of `node10`, `enummaps.go:150`, and reports as `node10`; `classic` reports
-as `Classic`). tsgo's `GetModuleResolutionKind` (`compileroptions.go:223`) derives Node16 / NodeNext / **Bundler**
-from the emit module kind for unset AND for every removed value. **TS5070 and TS2792 have no emitter anywhere in
-tsgo** (message tables only), TS5095 fires for the DERIVED bundler under `amd`/`system`, TS5109 exists
-(`bundler`×`nodenext`), and TS5110's `node18`/`node20` resolution VALUES were an invention of ours.
-
-**WHAT LANDED.** `CompilerOptions.effectiveModuleResolution` (a new enum `Node16 | NodeNext | Bundler`) replaces
-FIVE string-typed tsc-6 derivation copies in `Checker.kt` and the one in `TypeScriptCompiler.kt`. Deleted: the
-classic TS2792/TS2307 arm, `!isClassicResolution` on four arms, TS5070, the "classic root tslib" rule and
-`checkMissingTslibHelpers`' classic branch, the import-type walker's classic exclusion; r107 and r168 merged into
-ONE Bundler arm; the 17.214 ES-kind strict probe (a pre-existing false TS2307 on `./dir` the derivation was
-carrying into four more cells) replaced by `resolveRelativeIncludingIndex`; and **two `isNodeNext || bundler` gates
-that were importer-FORMAT questions** (B235's default import, `checkDynamicImportNamespaceMembers`) now read
-`isESModuleFormat` — measured, the resolution never decided them and they were wrong in both directions.
-TS5095/TS5109/TS5110 are keyed on the derived kind and value-anchored ((P18.104)'s scanner). **Kept, re-labelled
-for (g)**: the emit-order ancestor walk at `TypeScriptCompiler.kt:~3357` — deleting it moved two green EMIT
-baselines (`pathMappingBasedModuleResolution4_node`/`7_node`); it is the relative-`baseUrl` edge fallback of the
-emit ORDER, and tsgo's `--listFiles` order for those fixtures differs from ours anyway, so (g) moves both whatever
-it does.
-
-**WHERE THE ITEM WAS WRONG.** `ModuleResolver.kt` has no `moduleResolution` read at all — the project path never
-resolved differently across the seven values (42/42 probe rows unchanged before and after); the whole family was
-the checker's string copies plus the option rows. The derivation was five functions, not one to "unify"; TS5109
-did not exist; and of the ten `baseUrl == null` guards (e) deleted NONE — but the three re-keyed arms (17.214,
-B98, B227) and the merged Bundler arm now sit under a `Bundler` test that tsgo's `baseUrl`-less world makes
-unconditional, so under (g) four of those conjuncts simplify to `true` first.
-
-**PINS AND ABLATION.** 38 pins, every expectation tsgo's; stash-ablation project 12/12 red, core 19/23 with the four
-greens the named controls (two pins named as controls discriminated and were renamed). Twelve arms, each
-discriminating (core / project reds; errors screen): a1 removed values derive Node16 3/4/**17**; a2 TS2792 back
-2/0/0; a3 TS5070 back 1/4/0; a4 `classic` spelling 2/2/0; a5 TS5095 on the raw value 1/2/0; a6 TS5109 deleted
-1/1/0; a7 classic root-tslib back 1/0/0; a8 import-type exclusion back 1/0/0; a9 importer gates → resolution
-4/0/0; a10 Bundler arms on the raw value 4/0/0; a11 `node` spelled `node` 1/1/**17**; a12 ES-kind strict probe
-back 1/1/0. Final md5s Checker `c4d2f171`, TypeScriptCompiler `590a8c01`, CompilerOptions `69187447`,
-CompilerOptionsKt `79ec25fb` — the orchestrator's AFTER arm matched all four.
-
-**WHAT (f) INHERITS.** TS5071 (`TypeScriptCompiler.kt:~792`) has no tsgo emitter and now SURFACES on every
-`*×system` cell where TS5070 used to mask it — five of the eleven cells still differing from tsgo are that one
-row; and tsgo's `GetResolveJsonModule` derives from the module kind (effectively default-on under Bundler), not
-modelled. The other six differing cells are (P18.105)'s TS2834-for-TS2835 ESM-importer divergence.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -888,7 +891,24 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-18 LANDED 2026-09-16 ((P18.85)-(P18.115) notes) — pending 48, skipped 73,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-19 LANDED 2026-09-16 ((P18.85)-(P18.116) notes) — pending 45, skipped 70,
+  suite 19,625/0. **(P18.116) closed the duplicate-identifier related-span family, 3 rows**: the follow-on index is
+  per merge CALL, not per diagnostic, and (P18.93) could not reconcile it because the missing step is two functions
+  away (`lookupOrIssueError` compares related info, so a second call MISSES the lookup, issues a second diagnostic
+  that again starts empty, and `compactAndMergeRelatedInfos` folds them at the end). Verified over 128 baselines /
+  317 diagnostics with 0 unexplained. **It also REFUSED the TS2751 pair as a tsgo DEFECT** — the layer is decided by
+  which directory the `.diff` lives in (`submoduleTriaged/`), NOT by the base baseline every case has under
+  `submodule/`. **THE RESIDUE (45)**: display/chain-content ~19 (incl. the 2 signature-rendering rows (P18.115)
+  refused with a 186-baseline exposure count); F6-code ~16, which is ~16 MECHANISMS (size by mechanism, never by
+  letter — (P18.96)); F2-duplicate 3 (`dynamicNamesErrors` needs tsgo's FOURTH TS2300 emitter `lateBindMember`,
+  `methodSignatureHandledDeclarationKindForSymbol` a differing-KIND interface merge, `parameterPropertyInConstructor2`
+  a Constructor arm); ORDER-model 3 ((P18.94)); JS emit 3; TS2683-residue 3; F7-count 2; the `downlevelIteration`
+  TS5102 pair, which closes by moving `simulatedVersion` to `"7.0"` — an OWNER decision that would redden nothing;
+  `pathsValidation5`'s summary order; the 2 REFUSED TS2751 rows (tsgo defects, do not re-open); and the singletons.
+  **NEXT CLUSTERS**: TS7009-from-the-callee-type (two blockers named at (P18.114)); the F2 trio above; the F1-silent
+  pair. **PICK AND SIZE WITH `bash scripts/corpus-screen.sh`** — and note `--include` is a SUBSTRING, so verify one
+  row group per invocation and read the subtest COUNT, not just the mismatch count.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-18 LANDED 2026-09-16 ((P18.85)-(P18.115) notes) — pending 48, skipped 73,
   suite 19,616/0. **(P18.115) closed 4 rows in two mechanisms** (self-name resolution must FAIL when the project
   root is ambiguous, so TS2307 follows TS2209; `isolatedDeclarations` reports TS9025 on the WHOLE PARAMETER when
   no later parameter is required, TS9011 on the initializer otherwise, and has no whole-file JS skip) **and
