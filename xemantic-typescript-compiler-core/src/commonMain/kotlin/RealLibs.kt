@@ -195,7 +195,42 @@ object RealLibResolver {
         ScriptTarget.ES2017 -> "lib.es2017.full.d.ts"
         ScriptTarget.ES2016 -> "lib.es2016.full.d.ts"
         ScriptTarget.ES2015 -> "lib.es6.d.ts" // tsc: not lib.es2015.full.d.ts (breaking change)
-        ScriptTarget.ES5, ScriptTarget.ES3 -> "lib.d.ts"
+        ScriptTarget.ES5 -> "lib.d.ts"
+    }
+
+    /**
+     * (LEGACY.1)(j4) The highest cumulative `esNNNN` level the DEFAULT lib set of
+     * [target] actually REACHES — the numeric model [Checker.libFeatureAvailable] and
+     * [Checker.libProvidesGlobalAt] compare an introducing version against when the
+     * `lib` option is empty. Derived from [defaultLibFileName]'s table and NOT from
+     * the target, because the two part company below ES2015:
+     *
+     * `lib.d.ts` (the ES5/ES3 default) references `es5`, **`dom`**, `webworker.importscripts`
+     * and `scripthost`, and `lib.dom.d.ts` opens with `/// <reference lib="es2015" />`,
+     * so a written `es5` project loads the whole es2015 set. Measured on tsgo 7.0.2
+     * (2026-09-16, `--listFiles` + LSP over 12 shapes x {default lib, `lib:["es5"]`,
+     * `lib:["es2015"]`} x {es5, es2015, unset}): at the DEFAULT lib a written `es5`
+     * answers `Array.from`, `Object.assign`, `Map`, `Set`, `Symbol`, `Promise`,
+     * `String.prototype.includes` and `Iterable` exactly as `es2015` does and reports
+     * NOTHING, while `Array.prototype.includes` (es2016) and `Object.entries` (es2017)
+     * are missing at `es5` and at `es2015` alike. Reading the raw target there cost
+     * **six ours-only TS2550 rows** on that fixture.
+     *
+     * This is NOT [CompilerOptions.effectiveTarget]. The two agree on every input the
+     * enum can produce — that is an arithmetic coincidence of one shared `<= ES5` step
+     * — but they answer different questions: `effectiveTarget` is the syntax level the
+     * EMITTER lowers to (tsgo has no ES5 transformer, so a written es5 emits as es2015),
+     * this is which lib FILES the program loads. An `esNNNN` added to the enum above
+     * ES2024 changes this table and not that one.
+     *
+     * An explicit `lib` bypasses this entirely and keeps answering the names it lists —
+     * (LEGACY.1)(i)/(j2) pin TS2802 and the TS2461/TS2488 forks on `lib: ["es5"]`, where
+     * tsgo's answer is identical at es5, es2015 and an unset target (measured).
+     */
+    fun defaultLibEsLevel(target: ScriptTarget): ScriptTarget = when (target) {
+        // lib.d.ts -> lib.dom.d.ts -> /// <reference lib="es2015" />
+        ScriptTarget.ES5 -> ScriptTarget.ES2015
+        else -> target
     }
 
     /**

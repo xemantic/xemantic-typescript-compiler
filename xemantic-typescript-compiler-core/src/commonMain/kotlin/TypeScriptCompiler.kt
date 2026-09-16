@@ -517,13 +517,17 @@ class TypeScriptCompiler {
                 messageChain = chain,
             ))
         }
-        // Target deprecations — only when target is explicitly set
-        // ES3 was deprecated in 5.0 (TS5107), will stop functioning in 5.5
+        // Target deprecations — only when target is explicitly set.
         // (LEGACY.0b) `es3` is no longer a `target` VALUE in TypeScript 7 — tsgo's
         // `targetOptionMap` has no entry for it — so it is an invalid ARGUMENT (TS6046 at the
         // value) rather than a removed option. `es5` IS still in the map (flagged deprecated,
         // which is why it is filtered out of the message) and keeps the TS5107/TS5108 ladder.
-        if (options.targetExplicitlySet && options.target == ScriptTarget.ES3) {
+        // (LEGACY.1)(j4) 2026-09-16: keyed on [CompilerOptions.targetValueInvalid] rather than
+        // on a `ScriptTarget.ES3` member, because tsgo's mechanism is that the value is NOT IN
+        // THE MAP — which also leaves the option UNSET (measured: at `"target": "ES3"` tsgo
+        // loads `lib.es2025.full.d.ts`, reports no checker row and emits natively) and which
+        // covers every other unknown spelling (`"es4"` read TS6046 there and NOTHING here).
+        if (options.targetValueInvalid) {
             val pos = tsconfigPos["target"]
             diagnostics.add(Diagnostic(
                 message = "Argument for '--target' option must be: 'es6', 'es2015', 'es2016', " +

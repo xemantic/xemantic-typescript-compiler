@@ -25,12 +25,23 @@
 
 package com.xemantic.typescript.compiler
 
+/**
+ * The `target` VALUES tsgo 7.0.2's `targetOptionMap` (`commandlineparser.go`) still has an
+ * entry for. **`ES3` IS DELIBERATELY ABSENT** ((LEGACY.1)(j4), 2026-09-16): TypeScript 7
+ * deleted it from that map, so `"target": "ES3"` is an INVALID ARGUMENT — TS6046 at the
+ * VALUE, after which the option is UNSET and the program checks and emits at the latest
+ * standard (measured on tsgo: `lib.es2025.full.d.ts`, no checker row, native ESM emit).
+ * Being unknown to [fromString] is what PRODUCES that row, so do not re-add the member.
+ *
+ * `ES5` by contrast IS still in tsgo's map, flagged deprecated — a KNOWN-but-removed value,
+ * reported TS5107/TS5108 at the value and then honoured by the checker's `languageVersion`
+ * — so it stays, and (LEGACY.1)(j1)-(j3)'s pins depend on it.
+ */
 enum class ScriptTarget {
-    ES3, ES5, ES2015, ES2016, ES2017, ES2018, ES2019, ES2020, ES2021, ES2022, ES2023, ES2024, ESNext;
+    ES5, ES2015, ES2016, ES2017, ES2018, ES2019, ES2020, ES2021, ES2022, ES2023, ES2024, ESNext;
 
     companion object {
         fun fromString(value: String): ScriptTarget? = when (value.lowercase()) {
-            "es3" -> ES3
             "es5" -> ES5
             "es6", "es2015" -> ES2015
             "es2016" -> ES2016
@@ -166,8 +177,17 @@ data class TsconfigOptionPosition(
 )
 
 data class CompilerOptions(
-    val target: ScriptTarget = ScriptTarget.ES3,
+    val target: ScriptTarget = ScriptTarget.ES5,
     val targetExplicitlySet: Boolean = false,
+    /**
+     * (LEGACY.1)(j4) The written `target` names no value in tsgo's option map (`es3`, or
+     * any other spelling [ScriptTarget.fromString] does not know). tsgo reports TS6046 at
+     * the VALUE and leaves the option UNSET, so [targetExplicitlySet] stays false and every
+     * target question answers the default — which is why this is a marker beside the option
+     * rather than a [ScriptTarget] member. `TypeScriptCompiler.cpcCheckDeprecatedOptions`
+     * is its one reader.
+     */
+    val targetValueInvalid: Boolean = false,
     val module: ModuleKind? = null,
     val strict: Boolean = false,
     /** True when `// @strict: false` was explicitly set (not just defaulting to false). */
@@ -354,14 +374,42 @@ data class CompilerOptions(
     val packageJsonTypes: Map<String, Boolean> = emptyMap(),
 ) {
 
+    /**
+     * The syntax level the **EMITTER** lowers to. An UNSET target answers ES2024 (our top
+     * standard; tsc's `getEmitScriptTarget` answers its LatestStandard), so emit keeps
+     * native class fields / async / spread; an EXPLICIT `es5` answers **ES2015**.
+     *
+     * **WHY THE ES5→ES2015 MAP IS THE MODEL OF TSGO'S MISSING ES5 TRANSFORMER, not a tsc-6
+     * residue** ((LEGACY.1)(j4), 2026-09-16). TypeScript 7 ships no ES5 lowering at all:
+     * measured over 12 shapes (class fields + a private field, array/object spread, object
+     * and array rest destructuring, async + async generators, generators, `for…of`,
+     * tagged templates, optional chaining + `??`, `**`, arrows, `let`/`const`, a derived
+     * class), tsgo's emit at a written `es5` is **BYTE-IDENTICAL to its emit at `es2015`**,
+     * 12 files of 12, and differs from an unset target. That is exactly what this map makes
+     * our 63 emit-side readers produce — `Transformer.kt`'s lowest comparison is
+     * `< ES2016`, and there is no `< ES2015` gate anywhere in the emitter.
+     *
+     * **THE COLLAPSE ONTO [defaultedTarget] IS REFUSED, BY MEASUREMENT.** The queue item
+     * asks for one notion ("their whole reason was the explicit-ES5 split"); the split is
+     * now the model above, and both directions of the collapse were built and run:
+     *  - ONE notion valued the WRITTEN target (this property deleted): the strict-reserved
+     *    binding rows go silent at a written es5 — 2 → 0 TS12xx on a script declaring
+     *    `var public` / `var yield`, where tsgo reports them at every target (it binds
+     *    every file strict). See `Checker`'s `spineStrictFileIsStrict`.
+     *  - ONE notion valued the EMIT target ([defaultedTarget] deleted): a written es5 opens
+     *    the TS2318 rest-only-binding-pattern gate that tsgo keeps SHUT there
+     *    (`checker.go:17879` reads `languageVersion`, the written target — (LEGACY.1)(j2)
+     *    pinned it both ways), and [effectiveModule] stops defaulting to CommonJS at a
+     *    written es5, which tsgo does.
+     * So the two notions have disjoint, non-empty, measured constituencies. `TargetOptionSurfaceTest`
+     * pins that they differ at an explicit es5 and agree everywhere else.
+     *
+     * **NOT the lib dimension either**: which lib FILES load is a third question, answered by
+     * [RealLibResolver.defaultLibEsLevel] of [defaultedTarget]. It happens to be the same
+     * function as this one today — an arithmetic coincidence of one shared `<= ES5` step —
+     * and it lives beside the file-name table it is derived from so the two cannot drift.
+     */
     val effectiveTarget: ScriptTarget
-        // tsc getEmitScriptTarget: an UNSET target (or ES3) maps to LatestStandard (ES2025).
-        // We use ES2024 (our top standard target) for an unset target — so emit keeps native
-        // class fields / async / spread (useDefineForClassFields ≥ ES2022 → true). An EXPLICIT
-        // ES3/ES5 still maps to ES2015 (legacy downlevel). **This is the EMIT dimension ONLY**:
-        // every CHECKER question — lib availability (round 944) and the `target < ES2015`
-        // downlevel gates (round 945) — is [defaultedTarget], which differs from this one at
-        // an explicit es3/es5 and agrees with it everywhere else.
         get() = when {
             !targetExplicitlySet -> ScriptTarget.ES2024
             target <= ScriptTarget.ES5 -> ScriptTarget.ES2015
@@ -369,28 +417,26 @@ data class CompilerOptions(
         }
 
     /**
-     * The target every **checker** question is decided against — tsc's own
-     * `getEmitScriptTarget`, which is the single notion its whole checker reads
-     * (`var languageVersion = getEmitScriptTarget(compilerOptions)`).
+     * The **WRITTEN language version** — tsgo's `GetEmitScriptTarget`, the single notion
+     * its whole checker reads (`languageVersion`). An unset target answers our top
+     * standard, ES2024 (tsgo's LatestStandard); an explicit `es5` answers **ES5**.
      *
-     * Two consumer families, landed one round apart and measured separately because
-     * their divergences have OPPOSITE signs:
-     *  - **lib availability** ((CHK.17), round 944): which default lib set is loaded,
-     *    whether a later-lib global resolves (TS2583/TS2585), whether a later-lib
-     *    interface member is filtered out of its interface (TS2550). Reading the raw
-     *    target there was a FALSE-POSITIVE family — 3 rows over the pristine sweep.
-     *  - **the `target < ES2015` DOWNLEVEL gates** ((CHK.21), round 945; 23 lines): TS1250, TS2802,
-     *    TS2737, TS1501/TS1503, TS2659/TS2660, TS2340/TS2855, TS2396, TS18045, TS2318,
-     *    the TS2488/TS2461 message fork and the tslib-helper checks. Reading the raw
-     *    target there was a FALSE-NEGATIVE family — 4 pristine-only TS2488 rows, because
-     *    an unset target read as ES3 SUPPRESSED checks tsc runs at its default.
-     *    **(LEGACY.1)(j1)/(j2), 2026-09-15: most of that family is GONE, gate by gate against
-     *    tsgo at a written es5** — TypeScript 7's checker keeps NO `< ES2015` rule except
-     *    the TS2318 rest-only binding pattern (`checker.go:17879`); the TS2488/TS2461 fork
-     *    and the never-destructure TS2488 read the LIB (`Checker.uplevelIterationLib`), TS18027
-     *    keeps only its ES2022 upper bound, and TS1250/TS18028/TS18045/TS2659/TS2340/TS2396
-     *    and the `u`/`y` TS1501 rows have no tsgo emitter. What still reads this for a
-     *    `< ES2015` decision: that one TS2318 gate, and the (j3) tslib arms.
+     * **WHAT STILL READS IT FOR A `< ES2015` DECISION, after (LEGACY.1)(j1)-(j3) swept the
+     * family gate by gate against tsgo at a written es5: exactly ONE site** — the TS2318
+     * rest-only binding pattern (`checker.go:17879`, `checkGlobalIterableRestOnlyBindingPattern`),
+     * which tsgo keeps SHUT at a written es5 and which is pinned both ways by
+     * `TargetGatesRemovedTest`. Every other `defaultedTarget` comparison in the checker is
+     * `< ES2017` / `< ES2018` / `< ES2020` / `>= ES2022`, i.e. a bound BOTH notions fall the
+     * same side of, so this property and [effectiveTarget] are interchangeable there and the
+     * label is the only thing that carries the reason.
+     *
+     * Its other two consumers are structural rather than comparative: the **lib SET**
+     * ([RealLibResolver.defaultLibFileName] / `bindLibFiles` / `libDeclIndex`, (CHK.17)
+     * round 944 — reading the raw target there was a false-positive family, 3 rows over the
+     * pristine sweep), and the **module default** ([effectiveModule], whose `>= ES2015` test
+     * tsgo also takes on the written target). The numeric LIB-AVAILABILITY model is a step
+     * further out: it compares against [RealLibResolver.defaultLibEsLevel] of this value,
+     * because below ES2015 the default lib FILE reaches es2015 through `dom`.
      *
      * (Round 944 introduced this as `libTarget`; the name was renamed in round 945 when
      * the second family joined, because it no longer names its only consumer.)
@@ -405,32 +451,27 @@ data class CompilerOptions(
      * the `(target=es5)` variation is skipped by the generator and tsgo has no baseline
      * for it — so the two strict-mode determinations are the only raw readers left.)
      *
-     * tsc's definition, read off the pinned sources (`utilities.ts` `_computedOptions`):
-     * `const target = options.target === ES3 ? undefined : options.target;
-     * return target ?? ScriptTarget.LatestStandard`. It picks the default lib from THAT
-     * (`getDefaultLibFileName`: unset -> `lib.es2025.full.d.ts`) and it is also the
-     * `languageVersion` its checker compares against ES2015 everywhere. Our top standard
-     * target is ES2024, so an unset target answers ES2024 here — the same value
-     * [effectiveTarget] already gives the emitter, which is what makes the two
-     * dimensions agree for a project that names no target.
+     * tsgo's definition (`compileroptions.go`): `options.Target`, else `LatestStandard`.
+     * Our top standard target is ES2024, so an unset target answers ES2024 here — the same
+     * value [effectiveTarget] gives the emitter, which is what makes the two dimensions
+     * agree for a project that names no target. `ES3` is no longer expressible at all:
+     * (LEGACY.1)(j4) took it out of [ScriptTarget], because in TypeScript 7 `"ES3"` is an
+     * invalid ARGUMENT (TS6046) after which the option is UNSET.
      *
-     * **Not [effectiveTarget]**: that maps an EXPLICIT `es3`/`es5` UP to ES2015, which
-     * would hand an `@target: es5` program the ES2015 lib and delete every genuine
-     * TS2550/TS2583 it is supposed to get. Round 941 met the identical fork at TS18028
-     * and refused `effectiveTarget` for the same reason. The downlevel gates refuse it
-     * for the MIRROR reason: an explicit `es5` mapped up to ES2015 would OPEN every
-     * `target < ES2015` gate that tsc keeps shut for that program — manufacturing false
-     * positives (and flipping TS2461 to TS2488) on exactly the projects the gates exist
-     * for. **Not the raw [target]**
-     * either: its `ES3` zero value is indistinguishable from "the user said nothing",
-     * which is what made `Cannot find name 'AsyncIterableIterator'. Do you need to
-     * change your target library?` fire on a tsconfig with no `target` at all.
+     * **Not [effectiveTarget], and the two may NOT be collapsed** — that maps an explicit
+     * `es5` UP to ES2015, which would open TS2318 where tsgo keeps it shut and would stop
+     * [effectiveModule] defaulting to CommonJS there. The refusal is measured in both
+     * directions; the numbers are in [effectiveTarget]'s KDoc and pinned by
+     * `TargetOptionSurfaceTest`.
      *
-     * An EXPLICIT `es3` stays ES3 here where tsc 6 answers LatestStandard for it too
-     * (it dropped ES3 as a target). Neither instrument can observe that — the corpus
-     * skips every explicit es3/es5 config (`usesUnsupportedOption`) and no pristine
-     * fixture sets `@target: es3` — and keeping it raw is consistent with the
-     * `target <= ES5` gates beside it.
+     * **Not the raw [target]** either: before the enum lost `ES3` its zero value was
+     * indistinguishable from "the user said nothing", which is what made `Cannot find name
+     * 'AsyncIterableIterator'. Do you need to change your target library?` fire on a
+     * tsconfig with no `target` at all. The zero value is `ES5` now and [targetExplicitlySet]
+     * is still what separates the two cases — the two surviving raw readers
+     * (`spineStrictFileIsExprStrict`, `spineDelIsStrict`, both `>= ES2015` strict-mode
+     * determinations that are CORRECT only while an unset target reads below ES2015) are
+     * unaffected by that move.
      */
     /** (CHK.134) tsc's `getStrictOptionValue(options, "strictBindCallApply")`. */
     val effectiveStrictBindCallApply: Boolean
@@ -439,9 +480,23 @@ data class CompilerOptions(
     val defaultedTarget: ScriptTarget
         get() = if (targetExplicitlySet) target else ScriptTarget.ES2024
 
+    /**
+     * tsgo's `GetEmitModuleKind` (`compileroptions.go`): the written `module`, else
+     * `ES2015` at `GetEmitScriptTarget() >= ES2015` and `CommonJS` below it.
+     *
+     * **The `else` arm is NOT dead and the notion here is [defaultedTarget], not
+     * [effectiveTarget]** ((LEGACY.1)(j4), 2026-09-16 — the queue item said the opposite
+     * and was measured wrong). `GetEmitScriptTarget` answers the WRITTEN target, so at a
+     * written `es5` with no `module` tsgo defaults to **CommonJS**: measured over a
+     * two-file ESM program, tsgo emits `Object.defineProperty(exports, "__esModule", …)`
+     * + `require("./b")` at es5 and native `import`/`export` at es2015 and at an unset
+     * target, while reading `effectiveTarget` here emitted ESM in all three. It is the one
+     * place in this file where the ES5→ES2015 emit map must NOT be applied: the module
+     * FORMAT is chosen from what the user wrote, the syntax LEVEL inside it is not.
+     */
     val effectiveModule: ModuleKind
         get() = module ?: when {
-            effectiveTarget >= ScriptTarget.ES2015 -> ModuleKind.ES2015
+            defaultedTarget >= ScriptTarget.ES2015 -> ModuleKind.ES2015
             else -> ModuleKind.CommonJS
         }
 
@@ -923,8 +978,15 @@ private fun applyDirectiveArms1(
 ): CompilerOptions? {
     return when (key) {
         "target" -> {
-            val target = ScriptTarget.fromString(value.split(",")[0].trim())
-            if (target != null) options.copy(target = target, targetExplicitlySet = true) else options
+            val written = value.split(",")[0].trim()
+            val target = ScriptTarget.fromString(written)
+            when {
+                target != null -> options.copy(target = target, targetExplicitlySet = true)
+                // (LEGACY.1)(j4) tsgo: an argument its `targetOptionMap` lacks (`es3`, a
+                // typo) is TS6046 at the value and the option stays UNSET.
+                written.isNotEmpty() -> options.copy(targetValueInvalid = true)
+                else -> options
+            }
         }
 
         "module" -> {

@@ -9743,7 +9743,13 @@ class Checker(
         // 65c3. B68.2: TS2484 — `export { x }` inside namespace re-exports a name
         // already exported from a sibling/merged block of the same namespace.
         pass("checkExportConflictInNamespace") { checkExportConflictInNamespace() }
-        // 65d. Check BigInt exponentiation under target<ES2016 (TS2791)
+        // 65d. Check BigInt exponentiation under target<ES2016 (TS2791).
+        // (LEGACY.1)(j4) KEPT on [CompilerOptions.effectiveTarget] and MEASURED equivalent:
+        // tsgo's condition is `languageVersion < ES2016` (the WRITTEN target), and the two
+        // notions part company only at an explicit es3/es5 — where [effectiveTarget] answers
+        // ES2015, which is `< ES2016` exactly as ES5 is. Measured on tsgo at a written es5,
+        // es2015 and unset (2026-09-16): TS2737+TS2791 at es5 and es2015, silent at unset —
+        // the same three-way split this gate produces, on either notion.
         if (options.effectiveTarget < ScriptTarget.ES2016) {
             pass("checkBigIntExponentiation") { checkBigIntExponentiation() }
         }
@@ -25744,6 +25750,17 @@ class Checker(
                     options.alwaysStrict != true && options.strictExplicitlyFalse
                 strictReservedExplicitNonStrict =
                     explicitNonStrict && !spineFileIsModule && !hasUseStrict
+                // (LEGACY.1)(j4): this disjunct KEEPS [CompilerOptions.effectiveTarget]
+                // and the choice is MEASURED, not inherited. TypeScript 7 binds every file
+                // STRICT (tsgo reports TS1212 for `var public` at a written es5, at es2015
+                // and at an unset target alike, 2026-09-16), so the arm that agrees with
+                // tsgo on the largest population is the one that is TRUE everywhere —
+                // which `effectiveTarget` is, its ES5→ES2015 map making the comparison
+                // vacuously true now that ES3 has left the enum. Re-pointing it at
+                // [CompilerOptions.defaultedTarget] makes a written es5 NON-strict and
+                // silently drops the strict-reserved binding rows (measured: 2 → 0 on a
+                // script declaring `var public` / `var yield`, where tsgo reports 4).
+                // The EXPRESSION sibling below keeps the RAW target deliberately.
                 spineStrictFileIsStrict = if (explicitNonStrict) {
                     spineFileIsModule || hasUseStrict
                 } else {
@@ -57528,14 +57545,17 @@ interface DataView {
     }
 
     /** B237: does the active lib config provide the global [name] introduced at [intro]?
-     *  Empty @lib = the DEFAULT lib derives from the target (lib.es5+dom for es5, …), so
-     *  availability is `options.defaultedTarget >= intro` — [CompilerOptions.defaultedTarget], NOT the
-     *  raw target, because an UNSET target is tsc's LATEST standard and not `ES3`
-     *  ((CHK.17) round 944). An explicit @lib provides the name via a cumulative full
-     *  es-version >= intro or the name's dotted home sub-library. */
+     *  Empty @lib = the DEFAULT lib derives from the target, so availability is the
+     *  level that lib set REACHES — [RealLibResolver.defaultLibEsLevel] of
+     *  [CompilerOptions.defaultedTarget], NOT the raw target (an UNSET target is tsc's
+     *  LATEST standard and not `ES3`, (CHK.17) round 944) and NOT `defaultedTarget`
+     *  itself: below ES2015 the default lib file is `lib.d.ts`, whose `dom` reference
+     *  pulls in the whole es2015 set, so a written `es5` answers every es2015 global
+     *  ((LEGACY.1)(j4), measured on tsgo 7.0.2). An explicit @lib provides the name via a
+     *  cumulative full es-version >= intro or the name's dotted home sub-library. */
     private fun libProvidesGlobalAt(name: String, intro: ScriptTarget): Boolean {
         if (options.noLib) return false
-        if (options.lib.isEmpty()) return options.defaultedTarget >= intro
+        if (options.lib.isEmpty()) return RealLibResolver.defaultLibEsLevel(options.defaultedTarget) >= intro
         val introNum = intro.name.removePrefix("ES").toIntOrNull() ?: return true
         return options.lib.any { l0 ->
             val l = l0.lowercase()
@@ -57561,14 +57581,16 @@ interface DataView {
     }
 
     /** B238: is a lib FEATURE introduced at [intro] available under the active config?
-     *  Empty @lib → the default lib derives from the target (`options.defaultedTarget >= intro`
-     *  — [CompilerOptions.defaultedTarget], NOT the raw target: an UNSET target is tsc's LATEST
-     *  standard, not `ES3`, (CHK.17) round 944).
+     *  Empty @lib → the default lib derives from the target, so the bound is
+     *  [RealLibResolver.defaultLibEsLevel] of [CompilerOptions.defaultedTarget] — NOT the
+     *  raw target (an UNSET target is tsc's LATEST standard, not `ES3`, (CHK.17) round
+     *  944) and NOT `defaultedTarget` itself, whose ES5/ES3 values name a lib FILE
+     *  (`lib.d.ts`) that reaches es2015 through `dom` ((LEGACY.1)(j4)).
      *  Explicit @lib → any entry whose BASE es-version (dotted entries count their
      *  prefix level — conservative towards suppression) is >= intro provides it. */
     internal fun libFeatureAvailable(intro: ScriptTarget): Boolean {
         if (options.noLib) return false
-        if (options.lib.isEmpty()) return options.defaultedTarget >= intro
+        if (options.lib.isEmpty()) return RealLibResolver.defaultLibEsLevel(options.defaultedTarget) >= intro
         val introNum = if (intro == ScriptTarget.ESNext) 9999
             else intro.name.removePrefix("ES").toIntOrNull() ?: return true
         return options.lib.any { l0 ->
@@ -74934,6 +74956,11 @@ interface DataView {
     private fun checkTopLevelAwaitTargetGate() {
         // (LEGACY.1)(f) [ModuleKind.allowsTopLevelAwait] is tsgo's case list; the removed
         // System is IN it (a live tsgo arm keyed on the written kind, measured 2026-09-15).
+        // (LEGACY.1)(j4) KEPT on [CompilerOptions.effectiveTarget] and MEASURED equivalent:
+        // tsgo compares the WRITTEN target against ES2017, and ES5 and ES2015 — the only
+        // inputs on which the two notions differ — are both below it. Measured at a written
+        // es5 and at es2015 with `module: esnext` (2026-09-16): TS1378 on both, and on
+        // neither at an unset target.
         if (!options.effectiveModule.allowsTopLevelAwait || options.effectiveTarget >= ScriptTarget.ES2017) return
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
