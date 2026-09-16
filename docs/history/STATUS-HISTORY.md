@@ -3846,3 +3846,14 @@ inverted `lib: ["es5"]` projects; TS18027's lower bound was wrongly suppressing.
 discriminating, every tsc-6 pin re-vehicled; screens 3,084/0 + 5,688/0 and grid 8×0/0 + emit 78/78 counted
 controls; cost_gate 20/20 +0.00%; huge_methods exit 0 (874 classes); spine closure audit clean; warning-clean.
 `Checker.kt` −183. (j3) tslib arms and (j4) the option surface remain; (g) stays blocked.
+**(P18.112) — (LEGACY.1) STEP (j3): tsgo's CHECKER NEVER SPELLS `__extends`, `__generator` OR `__assign` — AND ITS HELPER TABLE EXPOSED TWO TARGET-FREE DEFECTS IN THE SAME EMITTER, 19,566 / 0 / 81 (2026-09-16).**
+`checkExternalEmitHelpers` is tsgo's one TS2354/TS2343 emitter and its callers request helpers by flag (`__rest`
+< ES2018, `__awaiter` < ES2017, the async-generator trio < ES2018, decorators and interop at any target); the four
+ES5 helpers are requested by nobody. Measured over 30 cells, ours named `__extends` in the six es5 ones; all four
+arms deleted with `isEs5Target` and the `checkExprForMissingHelper` walk. The same table then fixed two defects
+that are not about the target: the variable `__rest` walk's missing ES2018 bound, and TS2343's dedup per tslib
+INSTALL where tsgo dedups per `(file, helper)` — which closed **two pending rows** (58 → 56 pending, skipped −2).
+15 pins, eight arms; the dedup arm is the ONE place the errors screen was a gate (all 35 active `@importHelpers`
+subtests are es2015+). cost_gate 20/20 +0.00%; huge_methods exit 0 (874 classes); grid 8×0/0 + emit 78/78
+(controls); warning-clean. Found and left for a queue item: on a real project the tslib check is dead in one
+direction and a false TS2354 in the other, because `node_modules/tslib` is never in the program.

@@ -25,6 +25,57 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.117) — (CHK.135) re-scoped by measurement: the mapped aliases were fine, the INDEX SIGNATURE read was not (2026-09-16)
+
+**Three commits** (`a5ca1510a` fix, `3364e10c2` test, this docs commit). **Suite 19,625 → 19,637 / 0 / 70** (+12
+pins), 9 modules asserted; corpus screen errors **3,097 / 0** and emit 5,688 / 0 — **the screen was the round's real
+gate and is what caught the refused half**; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0`
+exit 0 (875 classes); grid 8×`added=0 removed=0` and emit 78/78. `Checker.kt` 194,535 → **194,578** (+43); no other
+source file touched. `tsgoPendingBaselines` unchanged at 45 (no entry is this shape — both plausible mapped-type
+rows were re-run and still mismatch). **(CHK.135) stays OPEN on its mapped-type half; (LEGACY.0) stays OPEN** on
+(0b-20).
+
+**THE ITEM'S FRAMING WAS WRONG AND THE ORCHESTRATOR'S RE-SCOPING WAS ONLY HALF RIGHT.** (CHK.135) says "`Record<K,V>`
+AND OTHER LIB MAPPED ALIASES RESOLVE TO BARE `any`"; measured against tsgo, `Partial`, `Pick`, `Readonly`, `Omit`, a
+user homomorphic mapped type **and `Record` with a literal-union key** are ALL already correct. The orchestrator
+re-scoped it to "the index signature" — right, but it is **four mechanisms, not one**, and **element access already
+worked** for every hand-written index signature. What was broken: **PROPERTY access** (nine shapes — plain,
+interface-, class-, alias- and inheritance-declared, a declared member still winning, an optional index value) and
+**a numeric-named string key** (`o["0"]` typed as the base `string` and so never reached a NUMBER index).
+
+**THE READER.** `computeRawTypeOfPropertyAccess`'s miss path runs `getPropertyOfType` → the tuple-array leg
+((CHK.94)) → the function-object leg ((CHK.134)) → **`return anyType`** — the index signatures were never consulted
+for the TYPE. Round 479's `cmamIndexSignatureProvides` had already granted such a name EXISTENCE, which is exactly
+why the symptom was SILENCE rather than TS2339. One helper now serves both halves — `applicableIndexTypeForName`,
+tsc's `getApplicableIndexInfoForName`, **sharing its applicability test with round 479's existence check so the two
+cannot drift** — read at the property-access miss and at `elementAccessResultType`'s string-literal branch. The
+NUMBER-wins-for-a-numeric-name preference was measured on a both-indexes receiver (`e["0"]`→number, `e["k"]`→string,
+`e[0]`→number, `e.k`→string) and is identical in both compilers.
+
+**THE MAPPED-TYPE HALF WAS BUILT, PRICED AND REFUSED.** Giving a mapped type over `string`/`number` an index
+signature (tsc's `addMemberForKeyTypeWorker`) closes six more shapes and costs **THREE corpus baselines**. Two are
+`[P in keyof T]` over a generic `T` where our `keyof` degrades to `string` ((INC.25)) and are gateable; the third,
+`Record2<string,S>` → `Record2<"a",S>`, needs tsgo's ALIAS-VARIANCE probe (`relater.go:3391`:
+`source.alias.symbol == target.alias.symbol` → `getAliasVariances` → `relateVariances`), and a blanket same-alias
+shortcut **deletes five measured true positives**. CLAUDE.md records global variance analysis as a measured dead
+end (round 336, ~263 regressions), so this half is blocked on machinery the round could not build — recorded, not
+hand-waved.
+
+**THE GRID IS A CONTROL HERE, AND THE ARM PROVED IT.** The brief asserted the grid would be a gate "for the first
+time in many rounds" because the 8 profiles contain 59 index signatures. Arm a1 makes the property-access consult
+answer a deliberately WRONG type and **moves zero rows on all eight profiles**: those signatures are DECLARED, never
+dot-read in a position any diagnostic observes. So the round's only gate is its own pins — (CHK.124)'s law and
+(PARITY.1)'s blindness in one measurement, and the strongest argument in the round for having ablated at all.
+
+**PINS AND ABLATION.** 12 pins (9 positive, 3 controls); stash-ablation 9 of 9 non-controls red and 3 of 3 controls
+green against (P18.116)'s recorded final binary. Two arms redden disjoint sets of 7 and 2, summing to the pristine
+nine. Final md5 Checker `00ce58bc`, and a `javap -c -p` diff over 1,040,129 lines proves it bytecode-identical to
+the binary every screen and grid arm was taken on ((CHK.57)).
+
+**RESIDUE, RECORDED**: a WRITE through an index signature (`o.x = "s"`) is still silent; `noUncheckedIndexedAccess`
+is parsed and consulted by the spine but neither new call site adds tsgo's `| undefined` under it; and the whole
+mapped-type half above.
+
 ### Round (P18.116) — (LEGACY.0b) step 19: the duplicate-identifier follow-on index is per merge CALL, and (P18.93)'s irreconcilable source was two functions away (2026-09-16)
 
 **Three commits** (`4a5ff342f` fix, `5a0476564` test, this docs commit). **Suite 19,616 → 19,625 / 0 / 70** (+9 pins;
@@ -498,68 +549,6 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 `outFile` conjunct was hiding it in one cell); TS5011 is never reported here, and TS7 defaults `rootDir` to the
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
-
-### Round (P18.107) — (LEGACY.1) step (f): amd/umd/system fold onto CommonJS as a PROPERTY of the kind, three of nine arms were deletable, and the corpus is a counted control (2026-09-15)
-
-**Three commits** (`3f5aeea85` refactor, `4556f254d` test, this docs commit). **Suite 19,465 → 19,487 / 0 / 83** (+22
-pins: 17 in the rewritten `RemovedModuleKindsTest`, 6 in the new `-project` class, net of the pins it replaced), 9
-modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS, counted: 283 case files name
-`amd|umd|system` in a directive and 3 in an embedded tsconfig, and every one is dropped, so **no active subtest runs
-under a removed kind and the hand-written pins are the whole gate**; `cost_gate.py` exit 0, 20/20 +0.00%;
-`huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls;
-`-externals` 290 / 0 as the `export as namespace` control; warning-clean over four compile tasks. `Checker.kt`
-194,993 → **194,996** (+3: deleted behaviour, added KDoc); main total +217/−183 (the `wrapCallsWithZero` threading
-alone is 108 pass-throughs). **(LEGACY.1)(f) is CHECKED OFF; (g) `baseUrl` is next; (LEGACY.0) stays OPEN** on
-(0b-17).
-
-**THE MEASUREMENT.** 240 cells (20 programs × 6 kinds × 2 targets), emit through `--outDir` and checker rows through
-the LSP (the tsgo CLI stops at the option rows). tsgo reports `TS5108 Option 'module=AMD|UMD|System' has been
-removed` at the value, beside (e)'s TS5095, and then EMITS: the amd/umd/system output is byte-identical to the
-commonjs output of the same program in **17 of 20** programs at both targets. The three exceptions are tsgo's
-own, in a removed configuration, and were recorded rather than copied: `system` keeps the leading comments of
-enums/namespaces (`runtimesyntax.go:308/450`), and `importHelpers` without tslib emits `require("tslib")` and then
-UNBOUND `__exportStar`/`__importDefault` calls with no TS2354 — broken JavaScript. Checker rows: amd/umd equal
-commonjs in every program; **system differs on exactly three LIVE arms keyed on the WRITTEN kind** (TS1218 on
-`export =`, top-level `await` allowed, `import.meta` allowed). TS5071 has no emitter anywhere in tsgo; a `.json`
-import resolves under every kind (`GetResolveJsonModule` is on under the derived Bundler).
-
-**WHAT LANDED.** The fold is a PROPERTY, not a parse — `ModuleKind.foldsToCommonJS` (CommonJS | AMD | UMD | System)
-admitted by the Transformer's `useCJS` and the Emitter's `.mts` override, while the WRITTEN kind survives for the
-TS5107/TS5108 rows, TS2725's message (`with module AMD`) and TS2441 (tsgo `< ES2015`, now `foldsToCommonJS`).
-Deleted, each measured: TS5071; the AMD/UMD/System exemption of TS2882 (tsgo reports it); the System suppression
-of the default-re-export TS2305; the `__exportStar`/System tslib exemptions (now `foldsToCommonJS || isNodeNext`);
-and the `wrapCallsWithZero` parameter (never passed `false` — 3 declarations, 108 pass-throughs, two KDoc blocks).
-Folded: three explicit-commonjs unresolved-import arms (17.214/B524/B227) and `commonjsMode` admit the removed
-kinds, as tsgo's rows do. The top-level-await list is unified into `ModuleKind.allowsTopLevelAwait` — **System
-STAYS in it** (a live tsgo arm) — read by the checker gate and both parser-flag sites. `export as namespace` (all
-~38 UMD hits) untouched. On the final binary `fold_check.py` reads **120 of 120 removed-kind cells byte-identical
-to our own commonjs cell** on emit and rows; every remaining divergence from tsgo in those cells is one the
-commonjs cell carries too.
-
-**WHERE THE ITEM WAS WRONG.** "14 Checker arms" — after (d2)/(e) nine sites remained and only THREE were deletable
-behaviour; TS2725, TS2441 and the TLA list are live tsgo arms on the written kind. "Parse to the CommonJS-equivalent
-behaviour" — tsgo keeps the written kind through the checker (`GetEmitModuleKind` returns it) and folds only at
-`getModuleTransformer`. The `resolveJsonModule` derivation needed no code. `wrapCallsWithZero` had no observable
-and so no ablation arm — undiscriminated by construction, recorded.
-
-**PINS AND ABLATION.** 23 pins; stash-ablation core 8/17 red, project 3/6 red — the greens are the seven named
-controls and two pre-existing option-row pins, plus ONE harness TS2882 pin that was green on both arms (a second
-harness emitter serves the row) and was renamed a control, the project-path pin being the discriminator. Nine
-arms, each reddening a disjoint set (core / project reds; screens 0/0 on all): a1 routing back to `== CommonJS`
-3/2; a2 TS5071 back 1/1; a3 TS2882 exemption back 0/1; a4 System TS2305 suppression back 1/0; a5 tslib
-exemptions back 1/0; a6 explicit-commonjs arms back 2/0; a7 System dropped from `allowsTopLevelAwait` 1/0; a9
-TS2441 narrowed 1/0; a10 TS2725 loses the removed names 1/0. Final md5s Checker `988428d0`, TypeScriptCompiler
-`80651a67`, Transformer `0b9d3bc1`, CompilerOptions `b408f37b`, CompilerOptionsKt `ebd9fe8c`, Emitter `73f58dd7` —
-the orchestrator's AFTER arm matched all six.
-
-**PRE-EXISTING GAPS THE MATRIX FOUND IN THE *COMMONJS* CELL — (LEGACY.0b)/ledger, not (LEGACY.1)**: TS1378/TS1432 are
-never reported for a non-TLA module kind (tsgo's default branch); TS1343 `import.meta` has no emitter; TS2354
-anchors at line 3 where tsgo anchors at the first helper site; `data.json` is not copied to `outDir`;
-`exports.string name =` for a string-literal export name (tsgo `exports["string name"]`); TS2307 for a missing
-import is never reported on the PROJECT path; an `export as namespace` global reads as TS2304 in a script on the
-project path. **What (g)/(h) inherit**: the ten `baseUrl == null` conjuncts are untouched (three now sit under
-`foldsToCommonJS`); `TypeScriptCompiler.kt:~2515` still reads `outFile != null && effectiveModule == None` — the
-last None/outFile coupling, in (h)'s range.
 
 ## QUEUE
 
@@ -1397,7 +1386,18 @@ CLAUDE.md § "AI agent mission".
   value, the ABSENCE of TS5107 and TS5095, and the derived emit (a `module: none` project with `target: es2020`
   emits as ES2020 in tsgo — verify), with an `@Filename: tsconfig.json` harness pin and a `-project` twin.
 
-- [ ] **(CHK.135) `Record<K, V>` AND OTHER LIB MAPPED ALIASES RESOLVE TO BARE `any` (found by (P18.84): three MISSING
+- [ ] **(CHK.135) RE-SCOPED AND HALF-LANDED 2026-09-16 ((P18.117), `a5ca1510a`): the premise is FALSE — `Partial`,
+  `Pick`, `Readonly`, `Omit`, a user homomorphic mapped type and `Record` with a LITERAL-UNION key are all already
+  correct. What was broken is the INDEX-SIGNATURE READ, in four mechanisms of which two landed (PROPERTY access in
+  nine shapes, and a numeric-named string key reaching a NUMBER index); element access already worked.
+  **WHAT REMAINS**: (a) a mapped type over `string`/`number` must contribute an index signature (tsc's
+  `addMemberForKeyTypeWorker`) — BUILT and REFUSED at three corpus baselines, of which two are gateable
+  (`[P in keyof T]` over a generic `T`, our `keyof` degrading to `string`, (INC.25)) and one needs tsgo's
+  ALIAS-VARIANCE probe (`relater.go:3391`), where a blanket same-alias shortcut deletes five measured true
+  positives and CLAUDE.md's round-336 entry records global variance as a dead end; (b) a WRITE through an index
+  signature is silent; (c) `noUncheckedIndexedAccess` is parsed but neither new call site adds tsgo's
+  `| undefined`. **The grid is a CONTROL for this family, measured**: an arm answering a deliberately wrong type
+  moves zero rows on all 8 profiles, because tsc's 59 index signatures are declared and never dot-read. ORIGINAL: `Record<K, V>` AND OTHER LIB MAPPED ALIASES RESOLVE TO BARE `any` (found by (P18.84): three MISSING
   rows at a plain `const r: Record<string, number> = …` declaration, and it is why `reduce(cb, {} as Record<…>)`
   selects the `initialValue: T` overload — not a contextual-typing defect).** CLAUDE.md's (EXT.11b) entry records
   the same fact from the externals side. Measure against tsgo: `Record`, `Partial`, `Pick`, `Readonly`, `Required`,

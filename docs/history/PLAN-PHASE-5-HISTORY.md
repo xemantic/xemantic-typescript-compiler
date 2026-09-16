@@ -1,3 +1,65 @@
+### Round (P18.107) — (LEGACY.1) step (f): amd/umd/system fold onto CommonJS as a PROPERTY of the kind, three of nine arms were deletable, and the corpus is a counted control (2026-09-15)
+
+**Three commits** (`3f5aeea85` refactor, `4556f254d` test, this docs commit). **Suite 19,465 → 19,487 / 0 / 83** (+22
+pins: 17 in the rewritten `RemovedModuleKindsTest`, 6 in the new `-project` class, net of the pins it replaced), 9
+modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS, counted: 283 case files name
+`amd|umd|system` in a directive and 3 in an embedded tsconfig, and every one is dropped, so **no active subtest runs
+under a removed kind and the hand-written pins are the whole gate**; `cost_gate.py` exit 0, 20/20 +0.00%;
+`huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls;
+`-externals` 290 / 0 as the `export as namespace` control; warning-clean over four compile tasks. `Checker.kt`
+194,993 → **194,996** (+3: deleted behaviour, added KDoc); main total +217/−183 (the `wrapCallsWithZero` threading
+alone is 108 pass-throughs). **(LEGACY.1)(f) is CHECKED OFF; (g) `baseUrl` is next; (LEGACY.0) stays OPEN** on
+(0b-17).
+
+**THE MEASUREMENT.** 240 cells (20 programs × 6 kinds × 2 targets), emit through `--outDir` and checker rows through
+the LSP (the tsgo CLI stops at the option rows). tsgo reports `TS5108 Option 'module=AMD|UMD|System' has been
+removed` at the value, beside (e)'s TS5095, and then EMITS: the amd/umd/system output is byte-identical to the
+commonjs output of the same program in **17 of 20** programs at both targets. The three exceptions are tsgo's
+own, in a removed configuration, and were recorded rather than copied: `system` keeps the leading comments of
+enums/namespaces (`runtimesyntax.go:308/450`), and `importHelpers` without tslib emits `require("tslib")` and then
+UNBOUND `__exportStar`/`__importDefault` calls with no TS2354 — broken JavaScript. Checker rows: amd/umd equal
+commonjs in every program; **system differs on exactly three LIVE arms keyed on the WRITTEN kind** (TS1218 on
+`export =`, top-level `await` allowed, `import.meta` allowed). TS5071 has no emitter anywhere in tsgo; a `.json`
+import resolves under every kind (`GetResolveJsonModule` is on under the derived Bundler).
+
+**WHAT LANDED.** The fold is a PROPERTY, not a parse — `ModuleKind.foldsToCommonJS` (CommonJS | AMD | UMD | System)
+admitted by the Transformer's `useCJS` and the Emitter's `.mts` override, while the WRITTEN kind survives for the
+TS5107/TS5108 rows, TS2725's message (`with module AMD`) and TS2441 (tsgo `< ES2015`, now `foldsToCommonJS`).
+Deleted, each measured: TS5071; the AMD/UMD/System exemption of TS2882 (tsgo reports it); the System suppression
+of the default-re-export TS2305; the `__exportStar`/System tslib exemptions (now `foldsToCommonJS || isNodeNext`);
+and the `wrapCallsWithZero` parameter (never passed `false` — 3 declarations, 108 pass-throughs, two KDoc blocks).
+Folded: three explicit-commonjs unresolved-import arms (17.214/B524/B227) and `commonjsMode` admit the removed
+kinds, as tsgo's rows do. The top-level-await list is unified into `ModuleKind.allowsTopLevelAwait` — **System
+STAYS in it** (a live tsgo arm) — read by the checker gate and both parser-flag sites. `export as namespace` (all
+~38 UMD hits) untouched. On the final binary `fold_check.py` reads **120 of 120 removed-kind cells byte-identical
+to our own commonjs cell** on emit and rows; every remaining divergence from tsgo in those cells is one the
+commonjs cell carries too.
+
+**WHERE THE ITEM WAS WRONG.** "14 Checker arms" — after (d2)/(e) nine sites remained and only THREE were deletable
+behaviour; TS2725, TS2441 and the TLA list are live tsgo arms on the written kind. "Parse to the CommonJS-equivalent
+behaviour" — tsgo keeps the written kind through the checker (`GetEmitModuleKind` returns it) and folds only at
+`getModuleTransformer`. The `resolveJsonModule` derivation needed no code. `wrapCallsWithZero` had no observable
+and so no ablation arm — undiscriminated by construction, recorded.
+
+**PINS AND ABLATION.** 23 pins; stash-ablation core 8/17 red, project 3/6 red — the greens are the seven named
+controls and two pre-existing option-row pins, plus ONE harness TS2882 pin that was green on both arms (a second
+harness emitter serves the row) and was renamed a control, the project-path pin being the discriminator. Nine
+arms, each reddening a disjoint set (core / project reds; screens 0/0 on all): a1 routing back to `== CommonJS`
+3/2; a2 TS5071 back 1/1; a3 TS2882 exemption back 0/1; a4 System TS2305 suppression back 1/0; a5 tslib
+exemptions back 1/0; a6 explicit-commonjs arms back 2/0; a7 System dropped from `allowsTopLevelAwait` 1/0; a9
+TS2441 narrowed 1/0; a10 TS2725 loses the removed names 1/0. Final md5s Checker `988428d0`, TypeScriptCompiler
+`80651a67`, Transformer `0b9d3bc1`, CompilerOptions `b408f37b`, CompilerOptionsKt `ebd9fe8c`, Emitter `73f58dd7` —
+the orchestrator's AFTER arm matched all six.
+
+**PRE-EXISTING GAPS THE MATRIX FOUND IN THE *COMMONJS* CELL — (LEGACY.0b)/ledger, not (LEGACY.1)**: TS1378/TS1432 are
+never reported for a non-TLA module kind (tsgo's default branch); TS1343 `import.meta` has no emitter; TS2354
+anchors at line 3 where tsgo anchors at the first helper site; `data.json` is not copied to `outDir`;
+`exports.string name =` for a string-literal export name (tsgo `exports["string name"]`); TS2307 for a missing
+import is never reported on the PROJECT path; an `export as namespace` global reads as TS2304 in a script on the
+project path. **What (g)/(h) inherit**: the ten `baseUrl == null` conjuncts are untouched (three now sit under
+`foldsToCommonJS`); `TypeScriptCompiler.kt:~2515` still reads `outFile != null && effectiveModule == None` — the
+last None/outFile coupling, in (h)'s range.
+
 ### Round (P18.106) — (LEGACY.1) step (e): there is no "classic" resolution in TypeScript 7 — one derivation replaces five copies, and a removed value turned out to have live corpus coverage (2026-09-15)
 
 **Three commits** (`963a03381` refactor, `d1b475798` test, this docs commit). **Suite 19,427 → 19,465 / 0 / 83** (+38
