@@ -1194,7 +1194,15 @@ CLAUDE.md § "AI agent mission".
   construction), `cost_gate.py`. Guard: `cloneTypeScriptRepo`'s KDoc (`build.gradle.kts:240-256`) still says
   "never pin to the tsgo submodule sha" — rewrite it to the new policy in the same commit.
 
-- [ ] **(LEGACY.1) — STEP (k)'s WORDING PLAN IS CONFIRMED BY MEASUREMENT 2026-09-13 ((P18.87)): tsgo's
+- [ ] **(LEGACY.1) — ALL SUB-STEPS LANDED 2026-09-15/16 ((P18.102)-(P18.113)) EXCEPT (g), WHICH IS
+  BLOCKED-PENDING-USER: (a)+(b) dead System helpers, (c) `alwaysStrict: false`, (d1) the tsconfig anchor,
+  (d2) the interop flags, (e) `moduleResolution`, (f) the module-kind fold, (h) `outFile`, (i)
+  `downlevelIteration`, (j1)-(j4) the target surface, (k) the closing audit — ~1,800 lines of behaviour
+  deleted or re-keyed, every family measured against tsgo 7.0.2 FIRST, and four of them found the item wrong
+  in the DANGEROUS direction (a gate that was tsgo's own, message forks that read the lib rather than the
+  target, a 'dead' parameter whose deletion would have inverted emit, and a notion collapse that would have
+  inverted the emitter at a written es5). **WHAT REMAINS: (g) alone** — its ANCHORING half landed at (d1);
+  its behaviour half needs the owner decision recorded on the (g) line. ORIGINAL: STEP (k)'S WORDING PLAN IS CONFIRMED BY MEASUREMENT 2026-09-13 ((P18.87)): tsgo's
   `createRemovedOptionDiagnostic` emits TS5102/TS5108 with exactly our sentences for every option TS7 KEEPS but
   refuses, and TS5023 is a DISJOINT population (an option DELETED from tsgo's table is merely *unknown*, reported at
   the NAME with no ladder, so neither `ignoreDeprecations` nor `@typeScriptVersion` silences it); `target: "ES3"` is a
@@ -1276,12 +1284,37 @@ CLAUDE.md § "AI agent mission".
     26 rows), `effectiveModule`'s dead `else` (`:353`); convert `LibAvailabilityDefaultTargetTest` (6 of 14),
     `RealLibResolverTest`, `RealLibSnapshotTest`; bump `inc50-scratch*` to es2020; keep `usesUnsupportedOption`
     dropping es3/es5 (a readmitted case would need a pristine baseline this compiler can no longer produce).
-  - [ ] (k) housekeeping — leave `usesUnsupportedOption`/`tsconfigInTestUsesRemovedFeature` as they are; NOT in scope:
-    `target=ES3` (unparseable in tsgo, TS5023-shaped), `module=None`, `out`, the 5.0/5.5 removals (`charset`,
-    `keyofStringsOnly`, `noImplicitUseStrict`, `noStrictGenericChecks`, `suppress*`, `importsNotUsedAsValues`,
-    `preserveValueImports`), `strictBindCallApply: false`, `export as namespace`.
+  - [x] (k) CLOSED 2026-09-16 (doc-only; the arc measured three of its claims STALE). `usesUnsupportedOption` and
+    `tsconfigInTestUsesRemovedFeature` are unchanged, as the item says — but the arc's own receipts correct it:
+    **`target=ES3` is NOT "unparseable, TS5023-shaped"** — tsgo reports **TS6046** at the VALUE and then leaves the
+    target unset, which (j4) implemented ((P18.113)); **`module=None` is the SAME shape and is a live ours-only
+    defect**, measured 2026-09-16 and queued as (LEGACY.2) below; and `strictBindCallApply: false` is not a TS7
+    removal at all ((CHK.134) — tsc's own sources set it). Confirmed still out of scope and untouched: `out` and the
+    5.0/5.5 removals (`charset`, `keyofStringsOnly`, `noImplicitUseStrict`, `noStrictGenericChecks`, `suppress*`,
+    `importsNotUsedAsValues`, `preserveValueImports` — all still parsed, all TS5023-shaped in tsgo) and
+    `export as namespace` (the UMD GLOBAL, which feeds the externals module and is not `module: UMD`).
   Family totals: ~730 lines of `Checker.kt` + ~90 of `CompilerOptions.kt` for `target`, ~254 dead lines in
   `Transformer.kt`, ~40 (resolution), ~80 (`baseUrl`), ~50 (`outFile`), 229 (`downlevelIteration`).
+
+- [ ] **(LEGACY.2) `module: "none"` IS AN INVALID ARGUMENT IN TypeScript 7, NOT A DEPRECATED VALUE — MEASURED
+  2026-09-16 (the (LEGACY.1)(k) closing audit), TWO OURS-ONLY ROWS ON EVERY SUCH PROJECT, AND THE MECHANISM IS
+  ALREADY BUILT.** `none` sits in tsgo's `commandLineOptionDeprecated` set beside `amd`/`system`/`umd`
+  (`tsoptions/commandlineoption.go:194`) but NOT in its module enum map (`enummaps.go`), so tsgo answers
+  `tsconfig.json(1,30): error TS6046: Argument for '--module' option must be: 'commonjs', 'es6', 'es2015',
+  'es2020', 'es2022', 'esnext', 'node16', 'node18', 'node20', 'nodenext', 'preserve'.` at the VALUE and then
+  leaves the option UNSET (the kind derives from the target). We print `TS5107 Option 'module=None' is
+  deprecated…` at the same column PLUS an invented `TS5095` — the second row is a CONSEQUENCE: with the value
+  refused and the option unset, the derived resolution is no longer Bundler-with-a-bad-module and TS5095 cannot
+  fire. **(P18.113) built exactly this mechanism for `ScriptTarget.ES3`** (`CompilerOptions.targetValueInvalid`
+  + the value-anchored TS6046 emitter, which its note records as reusable for any future removed VALUE), so the
+  work is: a `moduleValueInvalid` twin, `ModuleKind.None` out of `fromString` (keep the enum member — it is the
+  "unset" sentinel that `effectiveModule` and tsgo's own `ModuleKindNone` test read), and the TS5107 arm for
+  `module=None` retired. **Gate shape**: the corpus reach is the `@module: none` directives
+  (`usesUnsupportedOption` drops them — count it) and any EMBEDDED tsconfig naming it ((P18.106)'s law: the
+  embedded form is NOT dropped, and (P18.107) counted 3 such cases for amd/umd/system), so screen both channels
+  after the change; the 8 profiles are NodeNext, so the grid is a control. Pin the TS6046 row byte-exact at the
+  value, the ABSENCE of TS5107 and TS5095, and the derived emit (a `module: none` project with `target: es2020`
+  emits as ES2020 in tsgo — verify), with an `@Filename: tsconfig.json` harness pin and a `-project` twin.
 
 - [ ] **(CHK.135) `Record<K, V>` AND OTHER LIB MAPPED ALIASES RESOLVE TO BARE `any` (found by (P18.84): three MISSING
   rows at a plain `const r: Record<string, number> = …` declaration, and it is why `reduce(cb, {} as Record<…>)`
