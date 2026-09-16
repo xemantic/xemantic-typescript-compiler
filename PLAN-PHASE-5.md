@@ -25,6 +25,63 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.120) — (LEGACY.0b) step 20: the last three F2 duplicate-identifier rows, and a class over-reach only a hand-written pin could see (2026-09-16)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,672 → 19,694 / 0 / 67** — the skip count falling 70 → 67
+IS the receipt that the three rows are now ACTIVE tests; `tsgoPendingBaselines` **46 → 43**, `docs/logical-parity.md`
+45 → 42 pending. `cost_gate.py` exit 0 (max +0.15%, unchanged from (P18.119) — this round moves no counter),
+`huge_methods.py --fail-over 0` exit 0 over 875 classes, corpus screen **3,100 / 0 errors and 5,688 / 0 emit**, and
+the 8-profile grid `added=0 removed=0` on all eight with 78 emit files byte-identical. `Checker.kt` 194,675 →
+194,706.
+
+**THE THREE MECHANISMS, ALL LANDED.** (M1) An INTERFACE's duplicate group reports TS2300 at every member whatever
+its binder visibility, named by the first binder-VISIBLE member's written spelling where the group has one. (M2) A
+name declared as a METHOD in one merged `interface` block and as a PROPERTY in another is TS2300 at every
+declaration, with no TS2717 and no TS2687 — `checkCrossInterfacePropertyConflict` had been emitting tsc-6's answer
+(TS2717 + TS6203 at the later property). (M3) `checkConstructorOverloadCompatibility` reports at the OVERLOAD's own
+parameter property as well as the implementation's, de-duplicated by position. A fourth, separable fix rides along
+with its own arm: a computed member squiggles its OWN written spelling (`emitDuplicate2300` had an
+`else -> name.length` default), which (P18.93)'s entry already warned couples a row's NAME to its SPAN.
+
+**ONE OF THE THREE RECORDED REASONS WAS WRONG, AND THE BRIEF INHERITED IT.** The pending reason (and this
+orchestrator's brief, which located it in the Go source) named `lateBindMember` — `checker.go:15918`, emitting at
+`:15962` — as the emitter behind `dynamicNamesErrors`. It is real and it is NOT that emitter: measured over ~25
+scratch shapes, its conflict branch names rows by the RESOLVED member name and fires only when late-bound members'
+symbol FLAGS conflict (a method beside a non-method, two getters, two setters). These rows come from
+`checkObjectTypeForDuplicateDeclarations` / `reportMergeSymbolError`, which is exactly why one row is named `'1'`
+and another `'[c0]'` — a rule built from `lateBindMember` would have named all four `'1'`. Fourth instance in this
+arc of "a recorded reason is a previous round's hypothesis"; the discriminator remains one scratch run.
+
+**AND THE ROUND'S REAL LESSON IS AN OVER-REACH THE SCREEN COULD NOT SEE.** "Un-gate the late-bound TS2300" holds
+for an INTERFACE and is FALSE for a CLASS, where tsgo's answer is ORDER-DEPENDENT: two late keys, or late-then-
+early, are TS2300 at both, while `class { p: number; [K]: string }` is **TS2717 alone** — measured across four
+spellings of the ordinary member (initialized, un-initialized, `declare`d, `!`-asserted), all four silent. The
+class un-gating was BUILT, measured as a two-row false positive, and reverted; the class walker keeps round 938's
+gate with the measurement in its KDoc. **The only instrument that saw it was an existing hand-written pin** — the
+corpus screen read 3,097 / 0 on that throwaway build, and the grid is a measured CONTROL for this whole family
+(an instrumented build counted admissions **0 / 0 / 0** on all eight profiles against 4 / 1 / 3 on the scratch
+fixtures, with the instrumentation then reverted and the restored class md5 `cmp`-identical).
+
+**TWO COUNTDOWN PINS FELL, BOTH ASSERTING PRISTINE'S ANSWER**, both in `DuplicateMemberDeclarationTest` (a
+late-bound duplicate is TS2717 and "deliberately NOT TS2300"; two late-bound keys emit exactly ONE TS2717). Both
+were RE-MEASURED against tsgo and re-pointed with name, column and squiggle asserted — never weakened — and the
+class KDoc corrected. A third pin that reads like a countdown is not one: `a late-bound duplicate in a CLASS is
+TS2717 and not TS2300` is tsgo-correct, and it is what caught the over-reach. Of the 21 tsc-6 MIRRORED baseline
+files only `reachabilityChecksNoCrash1` carries these codes, and its rows are parse-recovery `'(Missing)'` at an
+explicit zero span — untouched.
+
+**PINS AND ABLATION.** `TsgoStep20Test`, 22 cases (7 controls, 2 named `residue - …`), each asserting the full
+message, code, category, file, line, character, length AND the row count — the count IS the rule for a
+report-at-every-declaration family. Five arms redden 13 distinct non-control pins; **a3 (dropping the TS2687
+suppression) reddens 1 pin and moves the screen by NOTHING**, i.e. that half of M2 has no corpus witness at all and
+its pin is its only instrument — a screen-only gate would have called it redundant.
+
+**RESIDUES**, all measured against tsgo and none a regression: a class group of two late keys, or late-then-early;
+a late-bound group whose members' KINDS conflict (tsgo names those by the resolved name from the second emitter);
+the M2 conflict across a `class`/`interface` merge and inside ONE declaration; the general parameter-property
+member table, which also makes `class { p: number; constructor(public p: string) {} }` TS2300-at-both **plus
+TS2403** — the TS2403-vs-TS2717 split is its own round; and two pre-existing TS2717 gaps this round did not touch.
+
 ### Round (P18.119) — (CHK.136): a `for`-header binding and a `for…in` binding typed `any`, which is (KIR.LOWER.3)'s root cause from the other end (2026-09-16)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,652 → 19,672 / 0 / 70**; `cost_gate.py` exit 0 with a
@@ -529,46 +586,6 @@ arms must be re-measured at a written es5 (tsgo has no ES5 class lowering) befor
 `defaultedTarget < ES2015` readers left in `Checker.kt` are the KEPT TS2318 gate and (j3)'s two, and
 `effectiveTarget`'s ES5→ES2015 map is observable only through the emitter and the lib.
 
-### Round (P18.110) — (LEGACY.1) step (j1): TS1250/TS1251 and TS18028 — three Go references that are one dead function's `return`s, −285 lines (2026-09-15)
-
-**Three commits** (`df7516a6b` refactor, `880f6f77b` test, this docs commit). **Suite 19,527 → 19,538 / 0 / 83** (+17
-pins, −5 with the deleted `PrivateIdentifierTargetGateTest`, −1 re-pointed), 9 modules asserted; corpus screen errors
-3,084 / 0 and emit 5,688 / 0 — CONTROLS, counted: **0 active subtests compile at an es5/es3 target** (a first census
-read 557 because `@target: es5, es2015` lists exist whose only ACTIVE variation is es2015 — refine before quoting),
-and the 12 that carry an embedded es5/ES3 config carry it in a NESTED file the harness never applies; `cost_gate.py`
-exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit
-78/78 — controls; warning-clean with an injected positive control. `Checker.kt` 194,753 → **194,468** (−285).
-**(j1) is LANDED — the (j) line stays open on (j2)-(j4), HIGH risk; (g) stays BLOCKED-PENDING-USER; (LEGACY.0) stays
-OPEN** on (0b-17).
-
-**THE MEASUREMENT.** The three non-table Go references to the TS1250 family are the three `return` statements of
-ONE binder function, `getStrictModeBlockScopeFunctionDeclarationMessage` (`binder.go:1379-1388`), which nothing
-calls — tsc 6's `languageVersion < ES2015` gate was never ported — so reachability is nil whatever a written es5
-answers; TS18028 has zero references outside the message table. Four tsgo cells (es5/es2015 × strict unset/true),
-each with a script, a `"use strict"` file and a module holding block functions in `if`/`for`/class bodies and every
-`#private` shape: **0 rows of either code at es5, byte-identical to es2015** (the CLI stops at `TS5108
-target=ES5`; the LSP was read). Ours before: 8 rows per file at es5 — 2×TS1250, 1×TS1251, 5×TS18028 — regardless
-of `strict`, the prologue or the module kind, exactly tsc 6.
-
-**WHAT LANDED.** Both pass registrations, `checkPrivateIdentifiersTarget` with its two walkers and
-`sourceIdentifierLength`, `checkBlockScopedFunctionDeclarations` with its two walkers — **TS1251 shares that
-emitter and went with it, unnamed by the item** — each shown by a repo-wide reference census to have callers only
-inside the two families (the sole outside mention is a historical round-945 ablation driver anchored on the
-deleted `pass(…)`, left as is). `checkWeakMapWeakSetCollision` (TS18027) untouched; the option surface,
-`CompilerTestSupport.kt`'s `DOWNLEVEL_ES5` KDoc and `LibAvailabilityDefaultTargetTest`'s history comment left for
-(j2)/(j4). At `// @target: es5` the harness now reads EMPTY under `@ignoreDeprecations` and exactly `[TS5107]`
-without it.
-
-**PINS AND ABLATION.** 17 pins; stash-ablation 14 red, the three greens exactly the named controls (es2015, unset, and
-the es5 lib's TS2550 — a (j4) fact kept visible). Two arms partition the non-control pins exactly: a1 the TS1250
-family re-inserted 10/0/0, a2 the TS18028 family re-inserted 7/0/0 — screens 0/0 on BOTH live arms, i.e. the
-corpus cannot see this change in either direction and the pins are the whole gate. Final md5 Checker `880d8e56`
-— the orchestrator's AFTER arm matched.
-
-**WHAT (j2)-(j4) INHERIT.** `DownlevelGateDefaultTargetTest`'s six remaining explicit-es5 pins (TS18045, TS2659,
-TS1501) are (j2)'s countdowns; the harness at `// @target: es3` prints TS6046 and then still CHECKS at ES3 — (j4)'s
-surface question; and the standing 6.0-default TS5107 vs tsgo's TS5108 is the `@typeScriptVersion` owner decision.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -899,7 +916,29 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-19 LANDED 2026-09-16 ((P18.85)-(P18.116) notes) — pending 45, skipped 70,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-20 LANDED 2026-09-16 ((P18.85)-(P18.120) notes) — pending 42, skipped 67,
+  suite 19,694/0. **(P18.120) closed the LAST THREE F2 duplicate-identifier rows, three distinct mechanisms**: an
+  INTERFACE's duplicate group reports at every member whatever its binder visibility (named by the first
+  binder-VISIBLE member's written spelling); a method-vs-property name across MERGED interface blocks is TS2300 at
+  every declaration with no TS2717 and no TS2687; a constructor overload's OWN parameter property is reported
+  beside the implementation's. A computed member now squiggles its own written spelling. **THE RECORDED REASON WAS
+  WRONG ON THE FIRST ROW** — `lateBindMember` is a real emitter and not that one (it names rows by the RESOLVED
+  name and fires only on a late-bound KIND conflict), so treat every remaining reason as a hypothesis. **AND THE
+  OBVIOUS GENERALISATION IS A MEASURED FALSE POSITIVE**: un-gating late-bound TS2300 holds for an interface and NOT
+  for a class, where tsgo is order-dependent (`class { p; [K] }` is TS2717 ALONE); it was built, measured and
+  reverted, and the ONLY instrument that saw it was a hand-written pin — the corpus screen read 0 and the grid is a
+  measured CONTROL for this family (admissions 0 on all eight profiles). **THE RESIDUE (42)**: display/chain-content
+  ~19 (incl. the 2 signature-rendering rows (P18.115) refused with a 186-baseline exposure count); F6-code ~16,
+  which is ~16 MECHANISMS (size by mechanism, never by letter — (P18.96)); ORDER-model 3 ((P18.94)); JS emit 3;
+  TS2683-residue 3; F7-count 2; the `downlevelIteration` TS5102 pair, which closes by moving `simulatedVersion` to
+  `"7.0"` — an OWNER decision that would redden nothing; `pathsValidation5`'s summary order; the 2 REFUSED TS2751
+  rows (tsgo defects, do not re-open); and the singletons. **NEXT CLUSTERS**: TS7009-from-the-callee-type (two
+  blockers named at (P18.114), a third — the module's own exports object — and a class-merged-with-function gap
+  that costs `constructorOverloads4`); the F1-silent pair; the TS2403-vs-TS2717 split (P18.120) named, which is
+  what the general parameter-property member table needs. **PICK AND SIZE WITH `bash scripts/corpus-screen.sh`**,
+  and count the ACTIVE subtests carrying each code first — the screen is a gate or a control per family, never by
+  default.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-19 LANDED 2026-09-16 ((P18.85)-(P18.116) notes) — pending 45, skipped 70,
   suite 19,625/0. **(P18.116) closed the duplicate-identifier related-span family, 3 rows**: the follow-on index is
   per merge CALL, not per diagnostic, and (P18.93) could not reconcile it because the missing step is two functions
   away (`lookupOrIssueError` compares related info, so a second call MISSES the lookup, issues a second diagnostic

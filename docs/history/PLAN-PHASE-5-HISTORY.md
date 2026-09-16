@@ -46,6 +46,46 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
+### Round (P18.110) — (LEGACY.1) step (j1): TS1250/TS1251 and TS18028 — three Go references that are one dead function's `return`s, −285 lines (2026-09-15)
+
+**Three commits** (`df7516a6b` refactor, `880f6f77b` test, this docs commit). **Suite 19,527 → 19,538 / 0 / 83** (+17
+pins, −5 with the deleted `PrivateIdentifierTargetGateTest`, −1 re-pointed), 9 modules asserted; corpus screen errors
+3,084 / 0 and emit 5,688 / 0 — CONTROLS, counted: **0 active subtests compile at an es5/es3 target** (a first census
+read 557 because `@target: es5, es2015` lists exist whose only ACTIVE variation is es2015 — refine before quoting),
+and the 12 that carry an embedded es5/ES3 config carry it in a NESTED file the harness never applies; `cost_gate.py`
+exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit
+78/78 — controls; warning-clean with an injected positive control. `Checker.kt` 194,753 → **194,468** (−285).
+**(j1) is LANDED — the (j) line stays open on (j2)-(j4), HIGH risk; (g) stays BLOCKED-PENDING-USER; (LEGACY.0) stays
+OPEN** on (0b-17).
+
+**THE MEASUREMENT.** The three non-table Go references to the TS1250 family are the three `return` statements of
+ONE binder function, `getStrictModeBlockScopeFunctionDeclarationMessage` (`binder.go:1379-1388`), which nothing
+calls — tsc 6's `languageVersion < ES2015` gate was never ported — so reachability is nil whatever a written es5
+answers; TS18028 has zero references outside the message table. Four tsgo cells (es5/es2015 × strict unset/true),
+each with a script, a `"use strict"` file and a module holding block functions in `if`/`for`/class bodies and every
+`#private` shape: **0 rows of either code at es5, byte-identical to es2015** (the CLI stops at `TS5108
+target=ES5`; the LSP was read). Ours before: 8 rows per file at es5 — 2×TS1250, 1×TS1251, 5×TS18028 — regardless
+of `strict`, the prologue or the module kind, exactly tsc 6.
+
+**WHAT LANDED.** Both pass registrations, `checkPrivateIdentifiersTarget` with its two walkers and
+`sourceIdentifierLength`, `checkBlockScopedFunctionDeclarations` with its two walkers — **TS1251 shares that
+emitter and went with it, unnamed by the item** — each shown by a repo-wide reference census to have callers only
+inside the two families (the sole outside mention is a historical round-945 ablation driver anchored on the
+deleted `pass(…)`, left as is). `checkWeakMapWeakSetCollision` (TS18027) untouched; the option surface,
+`CompilerTestSupport.kt`'s `DOWNLEVEL_ES5` KDoc and `LibAvailabilityDefaultTargetTest`'s history comment left for
+(j2)/(j4). At `// @target: es5` the harness now reads EMPTY under `@ignoreDeprecations` and exactly `[TS5107]`
+without it.
+
+**PINS AND ABLATION.** 17 pins; stash-ablation 14 red, the three greens exactly the named controls (es2015, unset, and
+the es5 lib's TS2550 — a (j4) fact kept visible). Two arms partition the non-control pins exactly: a1 the TS1250
+family re-inserted 10/0/0, a2 the TS18028 family re-inserted 7/0/0 — screens 0/0 on BOTH live arms, i.e. the
+corpus cannot see this change in either direction and the pins are the whole gate. Final md5 Checker `880d8e56`
+— the orchestrator's AFTER arm matched.
+
+**WHAT (j2)-(j4) INHERIT.** `DownlevelGateDefaultTargetTest`'s six remaining explicit-es5 pins (TS18045, TS2659,
+TS1501) are (j2)'s countdowns; the harness at `// @target: es3` prints TS6046 and then still CHECKS at ES3 — (j4)'s
+surface question; and the standing 6.0-default TS5107 vs tsgo's TS5108 is the `@typeScriptVersion` owner decision.
+
 ### Round (P18.109) — (LEGACY.1) step (i): TS2802 is LIB-gated in TypeScript 7, not target-gated — the `downlevelIteration` block was wrong in both directions and is gone, −243 lines (2026-09-15)
 
 **Three commits** (`f52af89ce` refactor, `f94418c1a` test, this docs commit). **Suite 19,506 → 19,527 / 0 / 83** (+21

@@ -1,5 +1,18 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.115) — (LEGACY.0b) STEP 18: FOUR ROWS IN TWO MECHANISMS, AND THE SIGNATURE-RENDERING FAMILY REFUSED WITH ITS EXPOSURE COUNTED, 19,616 / 0 / 73 (2026-09-16).**
+Self-name resolution must FAIL when the project root is ambiguous — tsgo raises TS2209 and returns unresolved, so
+TS2307 follows; we raised the first and resolved anyway. `isolatedDeclarations` reports TS9025 on the WHOLE
+PARAMETER when declaration emit must add `undefined` implicitly, which turns on a clause the brief never named —
+an initialized parameter is optional exactly when NO LATER PARAMETER IS REQUIRED — and tsgo has no whole-file JS
+skip. Pending 52 → **48**. The signature-rendering rows were REFUSED: tsgo reuses a parameter's written type node
+VERBATIM (an alias stays unresolved, an escape stays intact) when the rendered signature's declaration is a
+function-like with a body — not the quote rule the brief guessed — and 186 baselines / 94 active subtests render
+such a signature. 12 pins, four arms; **two "negative controls" are each the sole detector of their own over-broad
+rule**, and one arm is invisible to the corpus entirely. A trap now recorded: top-level private functions of
+`TypeScriptCompiler.kt` compile into `TypeScriptCompilerKt.class`, so the enclosing class's md5 can read as "the
+build did not land". cost_gate 20/20 +0.00%; huge_methods exit 0 (874 classes); grid 8×0/0 + emit 78/78.
+
 **(P18.114) — (LEGACY.0b) STEP 17: THE JS CommonJS `exports` MODEL — FOUR ROWS, AND THE ERRORS SCREEN WAS A *GATE* ON FIVE OF SIX ARMS, 19,604 / 0 / 77 (2026-09-16).**
 tsgo declares `exports` as a file local whose type an `export =` COLLAPSES onto its target, so a one-level
 `exports.p` is a property access on it — read or write, before or after the assignment, order irrelevant — and
