@@ -1047,15 +1047,6 @@ val tsgoPendingBaselines = listOf(
         "| ours: nothing"
     ),
     TsgoPendingBaseline(
-        "jsExportAssignmentNonMutableLocation.errors.txt",
-        "(P18.101) M2 PARTIAL: the TS2309 at `module.exports = {…}` (file.js(4,1), the assignment " +
-        "EXPRESSION, under emitDeclarationOnly) now matches. RESIDUE: tsgo's file.js(8,9) TS2551 " +
-        "`Property 'customSymbol2' does not exist on type '{ customSymbol: symbol; }'. Did you " +
-        "mean 'customSymbol'?` — TypeScript 7 types `exports.p = …` AFTER a `module.exports = X` " +
-        "as a property access on X's type, where this binder still declares it as an export " +
-        "member (silent here). layer `submodule`."
-    ),
-    TsgoPendingBaseline(
         "jsExportMemberMergedWithModuleAugmentation.errors.txt",
         "F6 top code differs (tsgo TS2671,TS2749 / ours TS2741); layer `submodule`. tsgo: " +
         "/index.ts(3,16): error TS2671: Cannot augment module './test' because it resolves to a " +
@@ -1069,24 +1060,10 @@ val tsgoPendingBaselines = listOf(
         "non-module entity. | ours: /index.ts(4,16): error TS2300: Duplicate identifier 'a'."
     ),
     TsgoPendingBaseline(
-        "jsExportMemberMergedWithModuleAugmentation3.errors.txt",
-        "(P18.101) M2 PARTIAL: the TS2309 at `module.exports = require(\"./y.js\")` (/x.js(2,1)) " +
-        "now matches. RESIDUE: tsgo's /x.js(1,16) TS2339 `Property 'x' does not exist on type " +
-        "'typeof import(\"/y\")'` — `module.exports.x = 1` BEFORE the `module.exports = require(…)` " +
-        "is a property write on the re-exported module's type in TypeScript 7, an export " +
-        "declaration here. Same family as pushTypeGetTypeOfAlias's residue. layer `submodule`."
-    ),
-    TsgoPendingBaseline(
         "jsExtendsImplicitAny.errors.txt",
         "F6 top code differs (tsgo TS8026 / ours TS2314); layer `submodule`. tsgo: /b.js(5,17): " +
         "error TS8026: Expected A<T> type arguments; provide these with an '@extends' tag. | " +
         "ours: /b.js(4,15): error TS2314: Generic type 'A<T>' requires 1 type argument(s)."
-    ),
-    TsgoPendingBaseline(
-        "jsFileCompilationBindDeepExportsAssignment.errors.txt",
-        "F6 top code differs (tsgo TS2304 / ours TS2339); layer `submodule`. tsgo: a.js(1,1): " +
-        "error TS2304: Cannot find name 'exports'. | ours: a.js(1,9): error TS2339: Property " +
-        "'a' does not exist on type 'typeof import(\"a\")'."
     ),
     TsgoPendingBaseline(
         "jsdocFunctionClassPropertiesDeclaration.errors.txt",
@@ -1208,15 +1185,6 @@ val tsgoPendingBaselines = listOf(
             "SEVEN green baselines whose tsconfig rows stay first — all seven are baseUrl / " +
             "moduleResolution=node cases tsgo 7 does not run (no baseline under " +
             "typescript-go-repo/testdata), so their order is a (LEGACY.1) question, not a rule.",
-    ),
-    TsgoPendingBaseline(
-        "pushTypeGetTypeOfAlias.errors.txt",
-        "(P18.101) M2 PARTIAL: the TS2309 at `module.exports = function () {}` (bar.js(1,1)) now " +
-        "matches. RESIDUE: tsgo reads `exports.blah` / `exports.someProp` after a `module.exports " +
-        "= fn` as property accesses on `() => void` — two TS2339 at (2,9) and (2,24) — where this " +
-        "checker declares `blah` as an export alias (a false TS2303 `Circular definition of " +
-        "import alias 'blah'` at (2,1)) and types the receiver `{ (): void; blah: any; }`. Same " +
-        "mechanism as jsExportAssignmentNonMutableLocation's residue. layer `submodule`."
     ),
     TsgoPendingBaseline(
         "sourceMapValidationVarInDownLevelGenerator(target=es2015).errors.txt",

@@ -8099,6 +8099,11 @@ class Checker(
         // full check — `emitDeclarationOnly` does not switch it off
         // (jsExportAssignmentNonMutableLocation reports it at `module.exports = {…}`).
         checkExportAssignmentConflicts()
+        // (LEGACY.0b step 17): the `export=`-collapsed `exports` receiver is an ORDINARY
+        // checker answer in TypeScript 7 (there is no declaration-only CHECKING mode), so
+        // tsgo reports its TS2339/TS2551 under `emitDeclarationOnly` as well — measured on
+        // jsExportAssignmentNonMutableLocation, whose whole fixture is emitDeclarationOnly.
+        checkJsCommonJsExportEqualsAccess()
         // B439: TS2564 strict-property-initialization fires in emitDeclarationOnly too
         // (tsc reports it there — e.g. jsDeclarationsInheritedTypes). The walker is
         // self-contained and well-guarded (skips any/optional/declare/static/abstract/
@@ -8739,9 +8744,13 @@ class Checker(
         // B532: TS2741 for a checkJs `self['X'] = self['X'] || {}` re-bind where X is a
         // top-level empty-object var with expando members (the `{}` RHS misses them).
         pass("checkJsSelfElementAccessExpandoMissing") { checkJsSelfElementAccessExpandoMissing() }
-        // B438d: TS2303 + TS2339 for a checkJs CJS callable-exports module that aliases one
-        // export member to an undeclared other (`module.exports=fn; exports.X=exports.Y`).
-        pass("checkJsCjsExpandoAliasReads") { checkJsCjsExpandoAliasReads() }
+        // (LEGACY.0b step 17): TS2339/TS2551 for a member absent from a checkJs CJS module's
+        // `export=` target — after `module.exports = X` every `exports.p` is a property
+        // access on X's type (tsgo `declareCommonJSVariable` + `checker.go:16513`).
+        pass("checkJsCommonJsExportEqualsAccess") { checkJsCommonJsExportEqualsAccess() }
+        // (LEGACY.0b step 17): TS2304 for `exports` in a `.js` file with NO CommonJS module
+        // indicator — tsgo synthesizes the local only when the binder saw one.
+        pass("checkJsUnboundExportsIdentifier") { checkJsUnboundExportsIdentifier() }
         // B441: TS2323 for a checkJs CJS export property declared by BOTH an `E.X = …`
         // assignment AND an `Object.defineProperty(E, "X", …)` where `E` is the local bound
         // to `module.exports` (ensureNoCrashExportAssignmentDefineProperrtyPotentialMerge).
@@ -34476,6 +34485,14 @@ class Checker(
                 }
             }
             if (esModule || exportsShadowed) continue
+            // (LEGACY.0b step 17): with no CommonJS module indicator `exports` is not BOUND,
+            // so the reference is TS2304 (`checkJsUnboundExportsIdentifier`) and there is no
+            // receiver for a member to be missing from.
+            if (!jsCommonJsExportsIsBound(sf)) continue
+            // …and once a `module.exports = X` exists the receiver is X, which
+            // `checkJsCommonJsExportEqualsAccess` owns — this walker's `typeof import(…)`
+            // display is the shape of a module with NO export=.
+            if (jsFileHasExportEquals(sf)) continue
             // Collect the set of DECLARED exports + detect an opaque export shape.
             val created = HashSet<String>()
             var opaque = false
@@ -34655,103 +34672,366 @@ class Checker(
     }
 
     /**
-     * B438d (pushTypeGetTypeOfAlias, TS2303 + TS2339): a checkJs CJS module whose exports
-     * object is a callable function (`module.exports = function () {}`) and which then aliases
-     * one export member to another (`exports.blah = exports.someProp`). tsc models the member
-     * assignment as an alias `blah → someProp`; since `someProp` is never independently
-     * declared, resolving the alias is circular → TS2303 "Circular definition of import alias
-     * 'blah'." on the LHS, AND the RHS read `exports.someProp` accesses a property absent from
-     * the module's expando shape `{ (): void; blah: any; }` → TS2339 on `someProp`.
+     * (LEGACY.0b step 17, tsgo 7.0.2) A `.js` CommonJS module's `exports` identifier IS the
+     * module's RESOLVED external-module surface, so after a `module.exports = X` the exported
+     * surface is **X's type** and every `exports.p` / `module.exports.p` is a PROPERTY ACCESS
+     * on X rather than a declaration of a new export member.
      *
-     * Dedicated walker (the B427 deep-reads walker BAILS here — `module.exports = <fn>` is an
-     * opaque non-object shape; the `.js` checkPropertyAccess skip suppresses the generic path;
-     * and no CJS-expando alias-symbol model exists for TS2303). FP firewall: gated to the
-     * corpus-unique shape (`module.exports = <FunctionExpression>` PLUS ≥1 `exports.X =
-     * exports.Y`). TS2339 fires only for an undeclared RHS member; TS2303 only for an alias
-     * whose target is not independently declared.
+     * tsgo: `binder.go:declareCommonJSVariable` declares `exports` as a file local carrying
+     * `SymbolFlagsModuleExports`, and `checker.go:16513` types such a symbol named `exports`
+     * as `getTypeOfSymbol(resolveExternalModuleSymbol(fileSymbol))` — which an `export=`
+     * collapses onto its target. So a member absent from X is TS2339 (TS2551 with a spelling
+     * suggestion), at the member NAME.
+     *
+     * MEASURED against tsgo 7.0.2 over 29 scratch shapes: the rule is ORDER-INDEPENDENT (an
+     * `exports.p =` BEFORE the `module.exports =` reports identically), fires for a WRITE as
+     * well as a read, and holds for a function / arrow / class / object-literal / scalar /
+     * `require(…)` right-hand side alike. It is JS-ONLY: in a `.ts` file `exports` is not
+     * bound at all (tsgo reports TS2304 there, a standing divergence this walker does not
+     * touch). `module.exports = exports` is not an `export=` (tsgo `GetAssignmentDeclarationKind`
+     * excludes an `exports` right-hand side), and two `module.exports =` declarations make
+     * tsgo union them — not modelled, so the walker bails.
+     *
+     * Replaces B438d (`checkJsCjsExpandoAliasReads`), a tsc-6 pin walker that emitted a
+     * TS2303 `Circular definition of import alias` tsgo never produces and rendered the
+     * receiver as the expando shape `{ (): void; blah: any; }`.
      */
-    private fun checkJsCjsExpandoAliasReads() {
+    private fun checkJsCommonJsExportEqualsAccess() {
         if (!options.checkJs) return
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val sf = result.sourceFile
-            var esModule = false
-            var exportsShadowed = false
-            for (stmt in sf.statements) when (stmt) {
-                is ImportDeclaration, is ExportDeclaration, is ExportAssignment,
-                is ImportEqualsDeclaration -> esModule = true
-                is FunctionDeclaration -> if (stmt.name?.text == "exports") exportsShadowed = true
-                is VariableStatement -> stmt.declarationList.declarations.forEach {
-                    if ((it.name as? Identifier)?.text == "exports") exportsShadowed = true
-                }
-                else -> {}
-            }
-            if (esModule || exportsShadowed) continue
-            // The export object must be a callable function: `module.exports = <FunctionExpression>`.
-            var moduleExportsFn: FunctionExpression? = null
+            if (jsCjsExportsUnavailable(sf)) continue
+            // The single `module.exports = X` export= declaration.
+            var exportEquals: Expression? = null
+            var multiple = false
             for (stmt in sf.statements) {
                 val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
                 if (bin.operator != SyntaxKind.Equals) continue
                 val lhs = bin.left as? PropertyAccessExpression ?: continue
-                if ((lhs.expression as? Identifier)?.text == "module" && lhs.name.text == "exports") {
-                    moduleExportsFn = bin.right as? FunctionExpression
-                }
+                if ((lhs.expression as? Identifier)?.text != "module" || lhs.name.text != "exports") continue
+                if ((bin.right as? Identifier)?.text == "exports") continue
+                if (exportEquals != null) multiple = true
+                exportEquals = bin.right
             }
-            val fnExpr = moduleExportsFn ?: continue
-            // Collect declared export members and independently-declared ones (RHS not exports.*).
-            val declared = LinkedHashSet<String>()
-            val independentlyDeclared = HashSet<String>()
-            val aliasAssignments = ArrayList<Triple<PropertyAccessExpression, PropertyAccessExpression, String>>() // (lhs, rhsAccess, rhsName)
-            for (stmt in sf.statements) {
-                val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
-                if (bin.operator != SyntaxKind.Equals) continue
-                val lhs = bin.left as? PropertyAccessExpression ?: continue
-                if ((lhs.expression as? Identifier)?.text != "exports") continue
-                val x = lhs.name.text
-                declared.add(x)
-                val rhs = bin.right
-                if (rhs is PropertyAccessExpression && (rhs.expression as? Identifier)?.text == "exports") {
-                    aliasAssignments.add(Triple(lhs, rhs, rhs.name.text))
-                } else {
-                    independentlyDeclared.add(x)  // `exports.X = <concrete>`
-                }
-            }
-            if (aliasAssignments.isEmpty()) continue
-            // Build the expando display: `{ (): void; <member>: any; … }`.
-            val paramStr = fnExpr.parameters.joinToString(", ") { p ->
-                val nm = (p.name as? Identifier)?.text ?: "_"
-                val t = p.type?.let { formatTypeForDisplay(it) } ?: if (p.dotDotDotToken) "any[]" else "any"
-                (if (p.dotDotDotToken) "..." else "") + nm + (if (p.questionToken) "?" else "") + ": " + t
-            }
-            val retStr = if (blockHasValueReturn(fnExpr.body.statements)) "any" else "void"
-            val display = "{ " + (listOf("($paramStr): $retStr") + declared.map { "$it: any" }).joinToString("; ") + "; }"
+            val rhs = exportEquals ?: continue
+            if (multiple) continue
             val source = sf.text
-            for ((lhs, rhsAccess, rhsName) in aliasAssignments) {
-                // TS2303: circular alias when the target member is not independently declared.
-                if (rhsName !in independentlyDeclared) {
-                    val xName = lhs.name.text
-                    val start = lhs.expression.pos
-                    val length = "exports.$xName".length
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Circular definition of import alias '$xName'.",
-                        category = DiagnosticCategory.Error, code = 2303,
-                        fileName = fileName, line = line, character = character, start = start, length = length,
-                    ))
+            val savedLocals = currentFileLocals
+            val savedFile = currentCheckFileName
+            currentFileLocals = result.locals
+            currentCheckFileName = fileName
+            try {
+                // `module.exports = require("./y.js")` re-exports the required module's
+                // NAMESPACE, which this type engine does not build — collect its VALUE
+                // exports from the AST and display `typeof import("<resolved-sans-ext>")`.
+                val reqShape = jsCjsRequireNamespaceShape(rhs, fileName)
+                val targetType: Type?
+                val targetProps: List<Symbol>
+                val memberNames: Set<String>
+                val display: String
+                if (reqShape != null) {
+                    targetType = null
+                    targetProps = emptyList()
+                    memberNames = reqShape.first
+                    display = reqShape.second
+                } else {
+                    // The DISPLAY is the export= target's own type — tsgo prints `1` and `"x"`
+                    // for a scalar right-hand side, so the apparent (wrapper) type is read for
+                    // MEMBERSHIP only and never for the message.
+                    val rawType = getTypeOfExpression(rhs)
+                    val apparent = getApparentType(rawType)
+                    if (apparent is Type.Object && apparent.properties == null) {
+                        // Round 833: a target's member table is LAZY, so read it only after
+                        // resolution or the verdict depends on who walked first.
+                        resolveStructuredTypeMembers(apparent)
+                    }
+                    // A target whose member table we cannot read tells us nothing (CHK.45).
+                    if (!jsCjsExportTargetTableComplete(apparent)) continue
+                    targetType = apparent
+                    targetProps = (apparent as? Type.Object)?.properties ?: emptyList()
+                    memberNames = targetProps.map { it.name }.toSet()
+                    display = typeToString(rawType)
                 }
-                // TS2339: the RHS member read does not exist on the expando shape.
-                if (rhsName !in declared && rhsName !in RUNTIME_PROPERTIES) {
-                    val np = rhsAccess.name.pos
+                for (stmt in sf.statements) jsCjsExportAccessWalk(stmt) { acc ->
+                    val recv = acc.expression
+                    val isExportsRecv = (recv as? Identifier)?.text == "exports" ||
+                        (recv is PropertyAccessExpression &&
+                            (recv.expression as? Identifier)?.text == "module" && recv.name.text == "exports")
+                    if (!isExportsRecv) return@jsCjsExportAccessWalk
+                    val name = acc.name.text
+                    if (name in memberNames) return@jsCjsExportAccessWalk
+                    if (targetType != null) {
+                        if (getPropertyOfType(targetType, name) != null) return@jsCjsExportAccessWalk
+                        if (jsCjsExportTargetHasStringIndex(targetType)) return@jsCjsExportAccessWalk
+                    }
+                    val np = acc.name.pos
+                    if (np < 0) return@jsCjsExportAccessWalk
                     val (line, character) = getLineAndCharacterOfPosition(source, np)
+                    val suggestion = getSpellingSuggestionFromNames(name, memberNames)
+                    val related = if (suggestion != null) {
+                        val decl: Node? = targetProps.find { it.name == suggestion }
+                            ?.let { it.valueDeclaration ?: it.declarations.firstOrNull() }
+                        val declPos = when (decl) {
+                            null -> -1
+                            is PropertyAssignment -> (decl.name as? Identifier)?.pos ?: decl.pos
+                            is ShorthandPropertyAssignment -> decl.name.pos
+                            is MethodDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
+                            else -> decl.pos
+                        }
+                        if (declPos >= 0 && !isLibFileName(fileName)) {
+                            val (dl, dc) = getLineAndCharacterOfPosition(source, declPos)
+                            listOf(Diagnostic(
+                                message = "'$suggestion' is declared here.",
+                                category = DiagnosticCategory.Message, code = 2728,
+                                fileName = fileName, line = dl, character = dc,
+                                start = declPos, length = suggestion.length,
+                            ))
+                        } else emptyList()
+                    } else emptyList()
                     diagnostics.add(Diagnostic(
-                        message = "Property '$rhsName' does not exist on type '$display'.",
-                        category = DiagnosticCategory.Error, code = 2339,
-                        fileName = fileName, line = line, character = character, start = np, length = rhsName.length,
+                        message = if (suggestion != null)
+                            "Property '$name' does not exist on type '$display'. Did you mean '$suggestion'?"
+                        else "Property '$name' does not exist on type '$display'.",
+                        category = DiagnosticCategory.Error, code = if (suggestion != null) 2551 else 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = np, length = name.length,
+                        relatedInformation = related,
                     ))
                 }
+            } finally {
+                currentFileLocals = savedLocals
+                currentCheckFileName = savedFile
             }
         }
+    }
+
+    /**
+     * (LEGACY.0b step 17, tsgo 7.0.2) `exports` is NOT an ambient global — it is a file LOCAL
+     * that tsgo's binder synthesizes only for a `.js` file carrying a CommonJS module
+     * indicator (`binder.go:declareCommonJSVariable`, called under
+     * `IsSourceFile(node) && IsInJSFile(node) && file.CommonJSModuleIndicator != nil`). With
+     * no indicator the name resolves to nothing → **TS2304 `Cannot find name 'exports'`** at
+     * every reference.
+     *
+     * The indicator is set by exactly four things (`GetAssignmentDeclarationKind` +
+     * `bindCallExpression`): a `module.exports = X`, an `exports.p = X` /
+     * `module.exports.p = X` — **one level only**, so `exports.a.b.c = 0` sets NOTHING and is
+     * the whole of jsFileCompilationBindDeepExportsAssignment — an
+     * `Object.defineProperty(exports | module.exports, …)` call, and a `require(…)` CALL
+     * anywhere in the file. `setCommonJSModuleIndicator` additionally REFUSES a file that is
+     * already an EXTERNAL module, so an ES-module `.js` file never binds `exports` either
+     * (measured: `export const a = 1; const z = exports` is TS2304 on tsgo).
+     *
+     * JS-ONLY, deliberately: `declareCommonJSVariable` is gated on `IsInJSFile`, so tsgo
+     * reports TS2304 for `exports` in a `.ts` file too — that population is much larger than
+     * this round's and is left as a recorded divergence.
+     */
+    private fun checkJsUnboundExportsIdentifier() {
+        if (!options.checkJs) return
+        for (result in checkedResults) {
+            val fileName = result.sourceFile.fileName
+            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
+            val sf = result.sourceFile
+            if (jsCommonJsExportsIsBound(sf)) continue
+            val source = sf.text
+            jsExportsValueRefs(sf) { id ->
+                val (line, character) = getLineAndCharacterOfPosition(source, id.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot find name 'exports'.",
+                    category = DiagnosticCategory.Error, code = 2304,
+                    fileName = fileName, line = line, character = character,
+                    start = id.pos, length = "exports".length,
+                ))
+            }
+        }
+    }
+
+    /**
+     * tsgo `setCommonJSModuleIndicator` + `declareCommonJSVariable`: is the synthesized
+     * `exports` local in scope in this `.js` file? False only when the file is an ES module,
+     * carries no indicator, or binds the name itself (a real binding wins).
+     */
+    private fun jsCommonJsExportsIsBound(sf: SourceFile): Boolean {
+        var esModule = false
+        var indicator = false
+        var bound = false
+        fun scan(node: Node) {
+            when (node) {
+                is ImportDeclaration, is ExportDeclaration, is ExportAssignment -> esModule = true
+                is ImportEqualsDeclaration -> esModule = true
+                is CallExpression -> {
+                    // `require(<anything>)` — tsgo's `IsRequireCall(node, false)`.
+                    if ((node.expression as? Identifier)?.text == "require" &&
+                        node.arguments.size == 1) indicator = true
+                    // `Object.defineProperty(exports | module.exports, …)`.
+                    val callee = node.expression
+                    if (callee is PropertyAccessExpression && callee.name.text == "defineProperty" &&
+                        (callee.expression as? Identifier)?.text == "Object" && node.arguments.size == 3 &&
+                        jsIsExportsOrModuleExports(node.arguments[0])) indicator = true
+                }
+                is BinaryExpression -> {
+                    if (node.operator == SyntaxKind.Equals) {
+                        val lhs = node.left
+                        if (lhs is PropertyAccessExpression) {
+                            // `module.exports = X`, except `module.exports = exports`.
+                            if (jsIsExportsOrModuleExports(lhs) &&
+                                (node.right as? Identifier)?.text != "exports" &&
+                                (lhs.expression as? Identifier)?.text == "module") indicator = true
+                            // `exports.p = X` / `module.exports.p = X` — ONE level only.
+                            if (jsIsExportsOrModuleExports(lhs.expression)) indicator = true
+                        } else if (lhs is ElementAccessExpression && jsIsExportsOrModuleExports(lhs.expression)) {
+                            indicator = true
+                        }
+                    }
+                }
+                is VariableDeclaration -> if (bindingPatternNames(node.name).contains("exports")) bound = true
+                is Parameter -> if (bindingPatternNames(node.name).contains("exports")) bound = true
+                is FunctionDeclaration -> if (node.name?.text == "exports") bound = true
+                is ClassDeclaration -> if (node.name?.text == "exports") bound = true
+                else -> {}
+            }
+            forEachChild(node) { scan(it) }
+        }
+        scan(sf)
+        return bound || (indicator && !esModule)
+    }
+
+    /** A top-level `module.exports = X` (tsgo's `JSDeclarationKindModuleExports`). */
+    private fun jsFileHasExportEquals(sf: SourceFile): Boolean {
+        for (stmt in sf.statements) {
+            val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+            if (bin.operator != SyntaxKind.Equals) continue
+            val lhs = bin.left as? PropertyAccessExpression ?: continue
+            if ((lhs.expression as? Identifier)?.text != "module" || lhs.name.text != "exports") continue
+            if ((bin.right as? Identifier)?.text == "exports") continue
+            return true
+        }
+        return false
+    }
+
+    /** `exports` or `module.exports` as an expression. */
+    private fun jsIsExportsOrModuleExports(e: Expression?): Boolean = when (e) {
+        is Identifier -> e.text == "exports"
+        is PropertyAccessExpression ->
+            (e.expression as? Identifier)?.text == "module" && e.name.text == "exports"
+        else -> false
+    }
+
+    /**
+     * Every `exports` IDENTIFIER used as a VALUE — a member NAME (`o.exports`), a property
+     * key and a declaration name are not references to the binding.
+     */
+    private fun jsExportsValueRefs(sf: SourceFile, onRef: (Identifier) -> Unit) {
+        fun walk(node: Node) {
+            if (node is Identifier && node.text == "exports") {
+                val parent = node.parent
+                val isMemberName = parent is PropertyAccessExpression && parent.name === node
+                val isQualified = parent is QualifiedName && parent.right === node
+                if (!isMemberName && !isQualified) onRef(node)
+                return
+            }
+            forEachChild(node) { walk(it) }
+        }
+        for (stmt in sf.statements) walk(stmt)
+    }
+
+    /**
+     * (LEGACY.0b step 17) The NAMESPACE shape of `module.exports = require("<spec>")`:
+     * tsgo's `export=` target there is the required module's own symbol, so a
+     * `module.exports.p` is a property access on `typeof import("<resolved-sans-ext>")` and
+     * a TYPE-ONLY export (`export declare type x = 1`) is NOT a member of it
+     * (jsExportMemberMergedWithModuleAugmentation3). Returns `(value export names, display)`
+     * or null when the specifier does not resolve to a program file, or when the resolved
+     * file carries a shape whose value surface this AST walk cannot enumerate EXACTLY — an
+     * `export =`, a star re-export, an ambient module or an `import`-fed re-export — because
+     * an under-collected member set is a false positive with no second gate.
+     */
+    private fun jsCjsRequireNamespaceShape(rhs: Expression, fileName: String): Pair<Set<String>, String>? {
+        val call = rhs as? CallExpression ?: return null
+        if ((call.expression as? Identifier)?.text != "require") return null
+        val spec = (call.arguments.singleOrNull() as? StringLiteralNode)?.text ?: return null
+        val resolved = resolveModuleSpecifierRelativeJsAware(spec, fileName)
+            ?: resolveModuleSpecifier(spec)
+            ?: resolveImportTargetFallback(spec, fileName)
+            ?: return null
+        val tf = fileResults[resolved]?.sourceFile ?: return null
+        val names = LinkedHashSet<String>()
+        for (stmt in tf.statements) when (stmt) {
+            is ExportAssignment -> return null
+            is ImportDeclaration, is ImportEqualsDeclaration -> return null
+            is ExportDeclaration -> {
+                if (stmt.moduleSpecifier != null) return null
+                val clause = stmt.exportClause as? NamedExports ?: return null
+                for (e in clause.elements) names.add(e.name.text)
+            }
+            is ModuleDeclaration -> return null
+            is ClassDeclaration -> if (ModifierFlag.Export in stmt.modifiers) stmt.name?.let { names.add(it.text) }
+            is FunctionDeclaration -> if (ModifierFlag.Export in stmt.modifiers) stmt.name?.let { names.add(it.text) }
+            is EnumDeclaration -> if (ModifierFlag.Export in stmt.modifiers) names.add(stmt.name.text)
+            is VariableStatement -> if (ModifierFlag.Export in stmt.modifiers) {
+                for (d in stmt.declarationList.declarations) names.addAll(bindingPatternNames(d.name))
+            }
+            // A type-only export declares no VALUE member of the namespace object.
+            is InterfaceDeclaration, is TypeAliasDeclaration -> {}
+            else -> {}
+        }
+        val base = resolved.removeSuffix(".d.cts").removeSuffix(".d.cjs").removeSuffix(".d.mts")
+            .removeSuffix(".d.ts").removeSuffix(".cts").removeSuffix(".mts").removeSuffix(".cjs")
+            .removeSuffix(".mjs").removeSuffix(".tsx").removeSuffix(".jsx")
+            .removeSuffix(".ts").removeSuffix(".js")
+        return names to "typeof import(\"$base\")"
+    }
+
+    /**
+     * True when the receiver type's member table is readable, i.e. when a MISSING member is
+     * evidence of an error rather than of an unfinished resolution (CHK.45's positive-evidence
+     * rule). A callable/constructable anonymous type, an object literal, a class's static
+     * side, a primitive/literal and a module namespace all qualify; `any`/`unknown`/`error`
+     * and anything whose table is still null do not.
+     */
+    private fun jsCjsExportTargetTableComplete(t: Type): Boolean = when {
+        t === anyType || t === errorType || t === unknownType -> false
+        t is Type.Union || t is Type.Intersection -> false
+        t is Type.Reference -> false
+        t is Type.Object -> t.properties != null ||
+            !t.callSignatures.isNullOrEmpty() || !t.constructSignatures.isNullOrEmpty()
+        else -> true
+    }
+
+    /** A string index signature supplies every member name, so nothing can be missing. */
+    private fun jsCjsExportTargetHasStringIndex(t: Type): Boolean =
+        (t as? Type.Object)?.stringIndexInfo != null
+
+    /**
+     * tsgo `setCommonJSModuleIndicator` refuses a file that already has an EXTERNAL module
+     * indicator, so `exports`/`module` are never declared in an ES-module `.js` file; and a
+     * local binding of either name shadows the synthesized one.
+     */
+    private fun jsCjsExportsUnavailable(sf: SourceFile): Boolean {
+        for (stmt in sf.statements) when (stmt) {
+            is ImportDeclaration, is ExportDeclaration, is ExportAssignment,
+            is ImportEqualsDeclaration -> return true
+            is FunctionDeclaration -> if (stmt.name?.text == "exports" || stmt.name?.text == "module") return true
+            is ClassDeclaration -> if (stmt.name?.text == "exports" || stmt.name?.text == "module") return true
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                val n = (d.name as? Identifier)?.text
+                if (n == "exports" || n == "module") return true
+            }
+            else -> {}
+        }
+        return false
+    }
+
+    /** Every `<recv>.<name>` access in a statement, function bodies included. */
+    private fun jsCjsExportAccessWalk(node: Node, onAccess: (PropertyAccessExpression) -> Unit) {
+        if (node is PropertyAccessExpression) {
+            // The `module.exports` of a `module.exports = …` / `module.exports.p = …` LHS is
+            // the DECLARATION, not an access on the exported surface.
+            onAccess(node)
+        }
+        forEachChild(node) { jsCjsExportAccessWalk(it, onAccess) }
     }
 
     /**
