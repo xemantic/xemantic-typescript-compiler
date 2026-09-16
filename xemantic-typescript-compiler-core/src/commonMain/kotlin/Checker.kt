@@ -46560,14 +46560,28 @@ class Checker(
     }
 
     /**
-     * B61.6: For interfaces split across multiple declarations in the same file, detect
-     * when one declaration's property name (e.g. `bold: string`) conflicts with another
-     * declaration's method signature (e.g. `bold(): string`). Emit TS2717 + TS6203 at
-     * the later-declared property name pointing back to the method.
+     * A member name declared as a METHOD in one declaration of a merged container and as a
+     * PROPERTY in another: TS2300 at EVERY declaration of the name.
      *
-     * Limited to a narrow case: one method declaration + one property declaration with
-     * the same name across two interface declarations of the same name. More complex
-     * merges (multiple methods, mixed accessor forms) defer.
+     * **(LEGACY.0b) step 20 REPLACED this walker's diagnostic, not merely its scope.** As
+     * B61.6 it emitted TS2717 + TS6203 at the later property, read off tsc 6. TypeScript 7
+     * reports neither: method-vs-property is a binder merge CONFLICT
+     * (`MethodExcludes`/`PropertyExcludes` overlap), so the two never become one symbol,
+     * `checkVariableLikeDeclaration`'s subsequent-declaration branch never runs, and what
+     * fires is `reportMergeSymbolError` -> `addDuplicateDeclarationErrorsForSymbols`, which
+     * walks BOTH symbols' declaration lists. Measured against tsgo 7.0.2 on eight shapes:
+     * method-then-property, property-then-method and `b: () => string` beside `b(): string`
+     * are all TS2300 at every declaration; property-beside-property keeps TS2717 alone (a
+     * different walker, untouched here); method-beside-method is an overload set and is
+     * silent; and a three-declaration group reports at all three. The merged TS2687 beside
+     * it is suppressed for the same reason — there is no merged symbol whose modifiers
+     * could disagree — which `interface G { b(): string }` + `interface G { b?: string }`
+     * witnesses (tsgo: TS2300 x2 and no TS2687; before this it was TS2687 x2 + TS2717).
+     *
+     * Scope stated rather than hidden: the conflict is keyed on INTERFACE declarations, so a
+     * `class C { m() {} }` merged with an `interface C { m: string }` — which tsgo also
+     * reports — is a residue, and so is the same conflict inside ONE declaration where this
+     * compiler's per-container walkers see methods and properties in separate scans.
      */
     private fun checkCrossInterfacePropertyConflict(
         statements: List<Statement>,
@@ -46579,82 +46593,36 @@ class Checker(
             .groupBy { it.name.text }
         for ((_, decls) in byName) {
             if (decls.size < 2) continue
-            // Collect members from each declaration; map name → list of (decl_idx, ClassElement)
-            val membersByName = mutableMapOf<String, MutableList<Pair<Int, ClassElement>>>()
-            for ((idx, decl) in decls.withIndex()) {
+            // name -> every method/property member declaring it, in source order
+            val membersByName = mutableMapOf<String, MutableList<ClassElement>>()
+            for (decl in decls) {
                 for (m in decl.members) {
-                    val nm = getMemberNameText(when (m) {
+                    val nameNode = when (m) {
                         is PropertyDeclaration -> m.name
                         is MethodDeclaration -> m.name
                         else -> continue
-                    }) ?: continue
-                    membersByName.getOrPut(nm) { mutableListOf() }.add(idx to m)
+                    }
+                    val nm = getMemberNameText(nameNode) ?: continue
+                    // Call and construct signatures carry the synthetic "" / "new" names.
+                    if (nm.isEmpty() || nm == "new") continue
+                    membersByName.getOrPut(nm) { mutableListOf() }.add(m)
                 }
             }
-            // For each name with members from multiple declarations, check for method-vs-property conflict
             for ((memberName, items) in membersByName) {
                 if (items.size < 2) continue
-                // Find first method and first property
-                val firstMethod = items.firstOrNull { it.second is MethodDeclaration }
-                val firstProperty = items.firstOrNull { it.second is PropertyDeclaration }
-                if (firstMethod == null || firstProperty == null) continue
-                // Skip if call signatures (special "" name) — those are handled differently
-                if (memberName.isEmpty() || memberName == "new") continue
-                // Only emit when method comes first (in source order) and property is later
-                val methodIdx = firstMethod.first
-                val propIdx = firstProperty.first
-                if (methodIdx >= propIdx) continue
-                val methodDecl = firstMethod.second as MethodDeclaration
-                val propDecl = firstProperty.second as PropertyDeclaration
-                // Build type strings
-                val methodReturnType = methodDecl.type?.let { typeNodeToSimpleString(it) } ?: "any"
-                val methodParams = methodDecl.parameters.joinToString(", ") { p ->
-                    val pname = (p.name as? Identifier)?.text ?: "_"
-                    val ptype = p.type?.let { typeNodeToSimpleString(it) } ?: "any"
-                    "$pname: $ptype"
+                if (items.none { it is MethodDeclaration }) continue
+                if (items.none { it is PropertyDeclaration }) continue
+                val nameNodes = items.mapNotNull { m ->
+                    when (m) {
+                        is PropertyDeclaration -> m.name
+                        is MethodDeclaration -> m.name
+                        else -> null
+                    }
                 }
-                val methodTypeStr = "($methodParams) => $methodReturnType"
-                val propTypeStr = propDecl.type?.let { typeNodeToSimpleString(it) } ?: "any"
-                if (methodTypeStr == propTypeStr) continue
-                // Emit TS2717 at the property name with TS6203 pointing to the method name
-                val propName = propDecl.name
-                val propStart = propName.pos
-                val propLength = when (propName) {
-                    is Identifier -> propName.text.length
-                    is StringLiteralNode -> propName.text.length + 2
-                    is NumericLiteralNode -> propName.text.length
-                    else -> memberName.length
+                val groupName = writtenMemberName(nameNodes.first(), memberName)
+                for (nameNode in nameNodes) {
+                    emitDuplicate2300(groupName, nameNode, source, fileName)
                 }
-                val (line, character) = getLineAndCharacterOfPosition(source, propStart)
-                val methodName = methodDecl.name
-                val methodStart = methodName.pos
-                val methodLength = when (methodName) {
-                    is Identifier -> methodName.text.length
-                    is StringLiteralNode -> methodName.text.length + 2
-                    is NumericLiteralNode -> methodName.text.length
-                    else -> memberName.length
-                }
-                val (methodLine, methodChar) = getLineAndCharacterOfPosition(source, methodStart)
-                diagnostics.add(Diagnostic(
-                    message = "Subsequent property declarations must have the same type.  Property '$memberName' must be of type '$methodTypeStr', but here has type '$propTypeStr'.",
-                    category = DiagnosticCategory.Error,
-                    code = 2717,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = propStart,
-                    length = propLength,
-                    relatedInformation = listOf(Diagnostic(
-                        message = "'$memberName' was also declared here.",
-                        category = DiagnosticCategory.Message,
-                        code = 6203,
-                        fileName = fileName,
-                        line = methodLine,
-                        character = methodChar,
-                        start = methodStart,
-                        length = methodLength,
-                    )),
-                ))
             }
         }
     }
@@ -47339,6 +47307,13 @@ class Checker(
                 // members are compared — static members live on the static side and have no
                 // interface partner (so a static-vs-instance same-name pair must NOT trip this).
                 val memberSigs = mutableMapOf<String, MutableList<Pair<String, NameNode>>>()
+                // (LEGACY.0b) step 20: a name declared as a METHOD in one declaration and as
+                // a PROPERTY in another never becomes ONE merged symbol in TypeScript 7, so
+                // there are no "all declarations" whose modifiers could disagree — tsgo
+                // reports TS2300 at every declaration (see
+                // [checkCrossInterfacePropertyConflict]) and no TS2687. Measured: `interface
+                // G { b(): string }` + `interface G { b?: string }` is TS2300 x2 there.
+                val memberIsMethod = mutableMapOf<String, MutableSet<Boolean>>()
                 for (d in group) {
                     val members: List<ClassElement> = when (val s = d.stmt) {
                         is InterfaceDeclaration -> s.members
@@ -47369,9 +47344,11 @@ class Checker(
                         }
                         val sig = "$vis|${ModifierFlag.Readonly in modifiers}|$optional"
                         memberSigs.getOrPut(text) { mutableListOf() }.add(sig to nameNode)
+                        memberIsMethod.getOrPut(text) { mutableSetOf() }.add(m is MethodDeclaration)
                     }
                 }
                 for ((memberName, entries) in memberSigs) {
+                    if (memberIsMethod[memberName]?.size == 2) continue
                     if (entries.size >= 2 && entries.map { it.first }.distinct().size > 1) {
                         for ((_, nameNode) in entries) {
                             val start = nameNode.pos
@@ -48052,20 +48029,28 @@ class Checker(
         val byName = props.groupBy { it.name }
         for ((memberName, group) in byName) {
             if (group.size >= 2) {
-                // Round 938 — (CHK.5)(b): TS2300 and TS2687 are the BINDER's duplicate
-                // checks and a LATE-BOUND key never reaches them. `dynamicNamesErrors`'
-                // pristine baseline is the measurement: `interface T0 { [c0]: number;
-                // 1: number }` is a duplicate by name and gets NOTHING, while its
-                // late-bound sibling T3 gets TS2717 alone. TS2717 below is ungated,
-                // because that one IS the checker's re-declaration check.
+                // (LEGACY.0b) step 20 — SUPERSEDES round 938's (CHK.5)(b) gate for TS2300.
+                // That gate kept a LATE-BOUND key (`[c0]` where `const c0 = "1"`) out of
+                // TS2300 because PRISTINE tsc reports nothing for one; under the 2026-09-12
+                // owner directive tsgo 7.0.2 is the only target and it DOES report, at every
+                // declaration of the group (`dynamicNamesErrors`' four rows). The gate
+                // survives for TS2687 alone, whose per-member NAMING rule diverges from ours
+                // already (tsgo prints each member's OWN spelling there, measured) and which
+                // is a separate row.
                 val binderDuplicate = group.all { it.binderVisible }
-                // (LEGACY.0b) step 8: one name for the whole group, the FIRST member's
-                // written spelling — the same rule as the class walker beside it, and the
-                // same reason (tsgo hands one `symbolToString` result to every `c.error`).
-                // `duplicateStringNamedProperty1` is the baseline: `{ "artist": string;
-                // artist: string }` is `'"artist"'` at BOTH members, not `'artist'`.
-                val groupName = writtenMemberName(group[0].nameNode, group[0].display)
-                if (binderDuplicate) for (prop in group) {
+                // (LEGACY.0b) step 8: one name for the whole group — and step 20 measured
+                // WHICH member supplies it once a late-bound key can be in the group: the
+                // FIRST BINDER-VISIBLE one if the group has any, else the first member.
+                // tsgo reaches the same answer through two different emitters (an
+                // early+late merge names the surviving EARLY symbol, an all-late group names
+                // its late symbol's first declaration), and all 20 measured shapes agree:
+                // `{ [c0]: number; 1: number }` is `'1'` at BOTH, `{ [c0]: number; [c1]:
+                // string }` is `'[c0]'` at both, `{ [k1]: number; ab: string }` is `'ab'`.
+                // `duplicateStringNamedProperty1` is the all-early baseline: `{ "artist":
+                // string; artist: string }` is `'"artist"'` at BOTH members.
+                val namer = group.firstOrNull { it.binderVisible } ?: group[0]
+                val groupName = writtenMemberName(namer.nameNode, namer.display)
+                for (prop in group) {
                     emitDuplicate2300(groupName, prop.nameNode, source, fileName)
                 }
                 // TS2687: when same-named duplicate property declarations differ in their
@@ -48308,10 +48293,19 @@ class Checker(
                 else -> group
             }
 
-            // Round 938 — (CHK.5)(b): TS2300 is the BINDER's duplicate check, so a
-            // LATE-BOUND key does not reach it (`dynamicNamesErrors`' pristine baseline —
-            // see [duplicateScanComputedKey]); TS2717 below is the checker's
-            // re-declaration check and is deliberately NOT gated the same way.
+            // Round 938 — (CHK.5)(b), RE-MEASURED at (LEGACY.0b) step 20 and KEPT for a
+            // CLASS, where its sibling in [checkDuplicateInterfaceMembers] was retired.
+            // Under the tsgo-only directive the interface walker's gate was wrong — tsgo
+            // reports TS2300 for a late-bound key in an interface AND in a type literal, in
+            // either declaration order — but a CLASS is measurably different and tsgo's own
+            // answer there is ORDER-DEPENDENT: with `const K = "p"`, `class { [K]: string;
+            // p: number }` and `class { [K]: string; [K2]: number }` are TS2300 at both
+            // members while `class { p: number; [K]: string }` is TS2717 ALONE (four
+            // spellings measured — initialized, un-initialized, `declare`d and `!`-asserted,
+            // all four silent). No rule over this walker's group reproduces that without a
+            // model of which symbol tsgo's merge clones, so the class side keeps the
+            // conservative gate and the two shapes above are a stated RESIDUE. TS2717 below
+            // is the checker's re-declaration check and is deliberately NOT gated.
             if (group.all { it.binderVisible }) {
                 // (LEGACY.0b) step 8: every row of a group carries the SAME name — the one
                 // tsgo renders from the SYMBOL, which is its FIRST declaration's written
@@ -48566,15 +48560,16 @@ class Checker(
      * collide) exactly as the pre-938 arm did; the display is the key AS WRITTEN, which is
      * what tsc prints.
      *
-     * **THE KEY IS NOT ENOUGH — A CALLER MUST ALSO ASK [computedKeyIsBinderVisible], AND
-     * THE CORPUS IS WHAT SAYS SO.** `dynamicNamesErrors`' baseline is the measurement:
-     * `interface T0 { [c0]: number; 1: number }` with `const c0 = "1"` is a duplicate by
-     * NAME and pristine tsc reports **nothing at all** for it, while
-     * `interface T3 { [c0]: number; [c1]: string }` gets TS2717 and **no TS2300**. A
-     * LITERAL computed name is bound statically, so it reaches the binder's duplicate
-     * check; a LATE-BOUND one is resolved by the checker and only ever reaches the
-     * re-declaration check. tsc 7.0.2 emits TS2300 for both (measured on five scratch
-     * shapes) — that is a tsgo divergence and this compiler follows pristine tsc.
+     * **WHETHER THE KEY IS ENOUGH IS NOW A PER-CONTAINER QUESTION — see
+     * [memberNameIsBinderVisible].** `dynamicNamesErrors`' baseline is the measurement and
+     * (LEGACY.0b) step 20 re-took it against tsgo 7.0.2, the only compatibility target:
+     * `interface T0 { [c0]: number; 1: number }` with `const c0 = "1"` is TS2300 at BOTH
+     * members (named `'1'`, the ordinary member's spelling) and
+     * `interface T3 { [c0]: number; [c1]: string }` is TS2300 at both (named `'[c0]'`)
+     * beside its TS2717. PRISTINE tsc reports neither, which is what round 938 read and
+     * what the gate below used to encode. A CLASS is measurably different there and keeps
+     * the gate — the note on [checkDuplicateClassMembers]' own `binderVisible` test has the
+     * four spellings that say so.
      */
     private fun duplicateScanComputedKey(cpn: ComputedPropertyName): Pair<String, String>? {
         val e = cpn.expression
@@ -48601,11 +48596,17 @@ class Checker(
         return txt(cpn.expression)?.let { "[$it]" }
     }
 
-    /** Round 938 — (CHK.5)(b): true when a member name is one the BINDER can see, i.e. is
-     *  eligible for TS2300 / TS2687. Everything but a computed name is; a computed one is
-     *  only when it spells a literal ([computedLiteralKey]), never when it LATE-BINDS
-     *  through a const or an enum member. See [duplicateScanComputedKey]'s note for the
-     *  `dynamicNamesErrors` baseline this is read from. */
+    /** Round 938 — (CHK.5)(b): true when a member name is one the BINDER can see.
+     *  Everything but a computed name is; a computed one is only when it spells a literal
+     *  ([computedLiteralKey]), never when it LATE-BINDS through a const or an enum member.
+     *
+     *  (LEGACY.0b) step 20 split its two readers. It is still the TS2300 GATE in
+     *  [checkDuplicateClassMembers] (tsgo's class answer is order-dependent in a way no
+     *  rule here reproduces) and still the TS2687 gate in [checkDuplicateInterfaceMembers];
+     *  in that walker's TS2300 it is now the NAMING test instead — the group's name is the
+     *  first binder-visible member's written spelling, because a late-bound key that merges
+     *  with an ordinary member is reported under the ORDINARY name. See
+     *  [duplicateScanComputedKey]'s note for the measurements. */
     private fun memberNameIsBinderVisible(name: Node): Boolean =
         name !is ComputedPropertyName || computedLiteralKey(name) != null
 
@@ -48645,6 +48646,13 @@ class Checker(
             // because its group is named `"artist"` — the one thing that went wrong when
             // the two quantities were allowed to share a source.
             is Identifier -> node.text.length
+            // (LEGACY.0b) step 20: a COMPUTED member name squiggles its OWN written
+            // spelling, which the `name.length` fallback below gets wrong for every group
+            // whose name comes from a different member — measured against tsgo 7.0.2,
+            // `interface { a: number; ["a"]: string }` is `Duplicate identifier 'a'` with a
+            // FIVE-character squiggle at the `["a"]` member. Same law as the `artist` note
+            // above, one node kind over.
+            is ComputedPropertyName -> computedKeyWrittenText(node)?.length ?: name.length
             else -> name.length
         },
     ) {
@@ -135215,30 +135223,53 @@ interface DataView {
             // incompatible signature. Mirror the method-overload behavior.
             break
         }
-        // 17.211: TS2300 for duplicate parameter-property names across an
-        // overload + impl pair. Only the IMPL position is squiggled (matches
-        // TypeScript's baseline behavior: second declaration gets the
-        // diagnostic).
+        // 17.211: TS2300 for duplicate parameter-property names across an overload + impl
+        // pair — a parameter property declares a class FIELD, so the same name declared by
+        // two constructor signatures declares it twice.
+        //
+        // **(LEGACY.0b) step 20 made it report at EVERY declaring parameter.** It used to
+        // squiggle the IMPL position alone, read off tsc 6; TypeScript 7 puts parameter
+        // properties in the same per-container name table as ordinary members
+        // (`checkObjectTypeForDuplicateDeclarations` walks every constructor, body-less
+        // overloads included, and `reportDuplicateMemberErrors` then reports at each) — so
+        // `parameterPropertyInConstructor2`'s (3,24) row is the overload's own parameter.
+        // Measured on tsgo 7.0.2: a THREE-signature group reports at all three, and an
+        // overload whose partner is NOT a parameter property reports nothing (one
+        // declaration is not a duplicate). The `seen` set is what keeps a name declared by
+        // several overloads from emitting the impl's row once per overload — a defect of
+        // the old shape that tsgo's diagnostic de-duplication hid from its own baselines.
+        //
+        // Residue, measured and deliberately left: tsgo ALSO groups a parameter property
+        // with an ordinary member of the same class (`class { p: number; constructor(public
+        // p: string) {} }` is TS2300 at both plus TS2403), which needs parameter properties
+        // in [checkDuplicateClassMembers]' table and the TS2403-vs-TS2717 split beside it.
+        val seenDuplicateParamProps = mutableSetOf<Int>()
+        fun emitParamPropDuplicate(nameNode: Identifier) {
+            if (!seenDuplicateParamProps.add(nameNode.pos)) return
+            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
+            diagnostics.add(Diagnostic(
+                message = "Duplicate identifier '${nameNode.text}'.",
+                category = DiagnosticCategory.Error,
+                code = 2300,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = nameNode.pos,
+                length = nameNode.text.length,
+            ))
+        }
         for (overload in overloads) {
-            val overloadPropNames = overload.parameters
-                .filter { isParameterProperty(it) && it.name is Identifier }
-                .map { (it.name as Identifier).text }
-                .toSet()
+            val overloadProps = overload.parameters
+                .filter { isParameterProperty(it) }
+                .mapNotNull { it.name as? Identifier }
+            if (overloadProps.isEmpty()) continue
             for (implParam in impl.parameters) {
                 if (!isParameterProperty(implParam)) continue
                 val implName = implParam.name as? Identifier ?: continue
-                if (implName.text !in overloadPropNames) continue
-                val (line, character) = getLineAndCharacterOfPosition(source, implName.pos)
-                diagnostics.add(Diagnostic(
-                    message = "Duplicate identifier '${implName.text}'.",
-                    category = DiagnosticCategory.Error,
-                    code = 2300,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = implName.pos,
-                    length = implName.text.length,
-                ))
+                val partners = overloadProps.filter { it.text == implName.text }
+                if (partners.isEmpty()) continue
+                for (partner in partners) emitParamPropDuplicate(partner)
+                emitParamPropDuplicate(implName)
             }
         }
     }

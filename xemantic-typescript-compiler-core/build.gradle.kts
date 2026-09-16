@@ -892,18 +892,6 @@ val tsgoPendingBaselines = listOf(
         "exist on type '{}'`. layer `submoduleAccepted`."
     ),
     TsgoPendingBaseline(
-        "dynamicNamesErrors.errors.txt",
-        "F2-residue: a LATE-BOUND computed member name (`[c0]`, a const-initialised key). "
-            + "(LEGACY.0b) step 8 gave the class and interface walkers tsgo's report-at-every-"
-            + "declaration rule, which closed the fixture's plain-name groups; these four rows "
-            + "are gated out one level earlier by `memberNameIsBinderVisible` (round 938, "
-            + "(CHK.5)(b)), read off pristine, where TS2300 is the BINDER's check and a "
-            + "late-bound key never reaches it. TypeScript 7 has a FOURTH TS2300 emitter for "
-            + "exactly this — `lateBindMember`, checker.go:15962 — so the gate, not the "
-            + "report-at-every-declaration rule, is what is left. Its blast radius is every "
-            + "computed member name, not this family.",
-    ),
-    TsgoPendingBaseline(
         "elidedJSImport1.errors.txt",
         "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
         "caller.js(2,8): error TS18042: 'TruffleContract' is a type and cannot be imported in " +
@@ -1044,18 +1032,6 @@ val tsgoPendingBaselines = listOf(
         "Argument of type 'number[]' is not assignable to parameter of type 'number'."
     ),
     TsgoPendingBaseline(
-        "methodSignatureHandledDeclarationKindForSymbol.errors.txt",
-        "F2-residue: a CROSS-DECLARATION interface MERGE (`interface Foo` declared twice), "
-            + "so it is served by `checkCrossInterfacePropertyConflict` and not by either "
-            + "walker (LEGACY.0b) step 8 changed. tsgo reports TS2300 at BOTH `bold(): string` "
-            + "and `bold: string` and NO TS2717, for the step-8 reason one function over: "
-            + "method-vs-property is a binder merge CONFLICT, so the property gets a fresh "
-            + "symbol and `checkVariableLikeDeclaration`'s secondary-declaration branch never "
-            + "runs. We emit the TS2717 and neither TS2300. The merge path is otherwise "
-            + "CORRECT (property-vs-property across two declarations is TS2717 alone in tsgo "
-            + "too — measured), so the delta is the differing-KIND case alone.",
-    ),
-    TsgoPendingBaseline(
         "mixinPrivateAndProtected.errors.txt",
         "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: The " +
         "intersection 'mixB.(Anonymous class) & A' was reduced to 'never' because property " +
@@ -1122,19 +1098,6 @@ val tsgoPendingBaselines = listOf(
         "currently GREEN and gated by the corpus alone ((PARITY.1)). tsgo: Argument of type " +
         "'(x: 'bye') => number' | ours: '(x: \"bye\") => number'; both sides' chain sub-lines " +
         "are double-quoted in tsgo too."
-    ),
-    TsgoPendingBaseline(
-        "parameterPropertyInConstructor2.errors.txt",
-        "F2-residue: a constructor PARAMETER PROPERTY in an OVERLOAD signature. tsgo puts "
-            + "parameter properties in the same per-container name table as ordinary members "
-            + "(`checkPropertyOrAccessor(param, 1, false)`) and walks EVERY constructor "
-            + "including body-less overloads, so `constructor(public names: string);` at (3,24) "
-            + "and its implementation's `public names` at (4,24) are both TS2300. "
-            + "`checkDuplicateClassMembers` has no Constructor arm at all — the (4,24) row we "
-            + "do emit comes from another site — so closing this means MERGING parameter "
-            + "properties into that table, which also makes `{ p: number; constructor(public "
-            + "p: string) }` TS2300-at-both plus TS2403 (measured), i.e. a change with its own "
-            + "blast radius and its own double-emission question.",
     ),
     TsgoPendingBaseline(
         "pathsValidation5.errors.txt",
