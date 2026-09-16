@@ -3788,3 +3788,13 @@ blanket-skips TS1192) and TS2595/TS2616 keyed on `module`. 25 pins, seven arms a
 3,084/0 + 5,688/0 a counted control (the reachable fixtures are dropped or target `.ts`); cost_gate 20/20 +0.00%;
 huge_methods exit 0 (872 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. `Checker.kt` −50. Six
 pre-existing import divergences recorded for (LEGACY.0b)/(e).
+**(P18.106) — (LEGACY.1) STEP (e): NO "classic" RESOLUTION EXISTS IN TypeScript 7 — ONE DERIVATION REPLACES FIVE, AND A REMOVED VALUE HAD LIVE CORPUS COVERAGE, 19,465 / 0 / 83 (2026-09-15).**
+42 cells measured on tsgo: classic/node/node10 equal the unset cell bar the TS5108 row, unset derives
+Node16/NodeNext/Bundler from the module kind; TS5070 and TS2792 have no emitter in tsgo. Five string-typed
+derivation copies in the Checker and one in TypeScriptCompiler become `effectiveModuleResolution`; the classic
+family, TS5070 and the classic root-tslib rule are deleted; TS5109 added; two importer-format gates that had
+been keyed on resolution fixed in both directions. **The errors screen was a real gate**: 17 active baselines carry
+`node10`/`node` in an EMBEDDED tsconfig `usesUnsupportedOption` never sees, and two arms move exactly them. 38
+pins, twelve arms all discriminating; cost_gate 20/20 +0.00%; huge_methods exit 0 (874 classes); grid 8×0/0 +
+emit 78/78 (controls); warning-clean. `Checker.kt` −89. (f) inherits TS5071 (no tsgo emitter, now visible on
+`*×system`); (g) inherits a load-bearing emit-order ancestor walk.

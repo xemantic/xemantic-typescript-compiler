@@ -25,6 +25,54 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.111) — (LEGACY.1) step (j2): tsgo has exactly ONE `< ES2015` checker gate — seven of ours deleted, four re-keyed on the lib, one un-suppressed, one kept (2026-09-16)
+
+**Three commits** (`e8b2f8a6d` refactor, `03fed2cdf` test, this docs commit). **Suite 19,538 → 19,551 / 0 / 83**, 9
+modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS ((P18.110)'s census stands: 0 active
+es5/es3 subtests; every one of the eleven live arms read 0/0 too, so the pins are the whole gate); `cost_gate.py` exit
+0, 20/20 +0.00% (a real gate — spine handlers changed); `huge_methods.py --fail-over 0` exit 0 (874 classes); grid
+8×`added=0 removed=0` and emit 78/78 — controls; `spine_closure_audit.py` clean (a `PropertyDeclaration` enter arm
+was edited); warning-clean with an injected positive control. `Checker.kt` 194,468 → **194,285** (−183).
+**(j1)+(j2) are LANDED — the (j) line stays open on (j3) tslib ES5 arms and (j4) the option surface; (g) stays
+BLOCKED-PENDING-USER; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE MEASUREMENT, AND WHY THE ITEM'S "delete the remaining gates" WAS WRONG IN BOTH DIRECTIONS.** tsgo's
+`GetEmitScriptTarget` returns the WRITTEN target and its checker reads `languageVersion` 24 + 5 times — so a written
+es5 is reported by TS5108 and then HONOURED by every version-gated rule — **but exactly one of those reads is
+`< ES2015`** (`checker.go:17879`, the rest-only binding pattern's iterable type; `LanguageFeatureMinimumTarget`
+bottoms out at ES2016). Twenty sites measured one by one at a written es5 (LSP; es2015 and `lib: ["es5"]` controls):
+seven families have NO tsgo emitter and went — TS18045 (`accessor`) with `spineCheckAccessorModifier`; TS2396
+(`arguments` + rest in a script, where tsgo prints strict-always TS1100); TS2659's three arms (tsgo has TS2660
+only); TS2340 and the 107-line `checkSuperPropertyAccessES5` (tsgo's TS2855 has no version conjunct); the TS1501
+`u`/`y` rows (tsgo's regexp table starts at ES2018 — a gate the `< ES2015` grep MISSED, it compares against a
+table); the es5 hoist of body names into the parameter scope and the `bodyVarRefs` TS2373/TS2454 leg (tsgo answers
+TS2304 at every target: a parameter initializer sees parameters only, 8 + 34 threading sites); and the raw
+`options.target < ES2015` corpus-pin arm. **Four were MIS-NOTIONED, not dead**: the three TS2461-vs-TS2488 message
+forks and the never-destructure gate read the LIB in tsgo (`iterableExists`), now `Checker.uplevelIterationLib()` —
+deleting them would have made `lib: ["es5"]` projects print TS2488 where tsgo prints TS2461. **One was wrongly
+SUPPRESSING**: TS18027's `< ES2015` lower bound (tsgo fires at es5; the ES2022 upper bound is tsgo's). **One is
+tsgo's own and is KEPT, re-labelled and pinned in both directions** so a later round cannot blanket-delete it:
+TS2318 for a rest-only binding pattern. The three raw-target strict-mode determinations are not `< ES2015` gates and
+were left.
+
+**PINS AND ABLATION.** `TargetGatesRemovedTest` 24 pins (17 non-control + 7 controls, two of them the KEPT-gate pins);
+stash-ablation 25 red across the touched classes. Eleven arms, each reddening a disjoint non-empty set (a1 TS18045
+3; a2 TS2396 4; a3 the hoist 6; a4 TS2659 5; a5 `bodyVarRefs` 3; a6 TS2340 1; a7 TS1501 2; a8 the iterable-operand
+conjunct 1; a9 TS18027's bound 1; a10 the never-destructure gate 3; a11 the three forks 3), screens 0/0 on all. The
+tsc-6 pins were re-vehicled rather than weakened: `Inv4SpineAccessorModifierTest` deleted, its deep-chain twin now
+`Inv4SpinePropertyDeclarationDeepChainTest` on TS1166 through the same enter arm; the hoist pins in four classes
+re-pointed to tsgo's TS2304; `M04ArgsCollision`/`M04ObjLitSuper` reach pins onto TS1215/TS2660; (P18.109)'s named
+residue now asserts tsgo's TS2488. Final md5 Checker `1c4b6e1a` — the orchestrator's AFTER arm matched.
+
+**STANDING DIVERGENCES FOUND, TARGET-INDEPENDENT, NOT TOUCHED**: no TS2373 for a body FUNCTION declaration referenced
+from a parameter initializer; the dedicated empty-array for-of emitter adds an ours-only `Type 'undefined'` TS2488
+beside the correct `Type 'never'` row under `strict`, and prints TS2461 at `lib: ["es5"]` where tsgo prints nothing;
+`for (const x of {})` / `of number` reports nothing here with the default lib (tsgo TS2488); TS1100 is printed only
+under `strict` where tsgo, strict-always, prints it in every file ((LEGACY.0b)). **(j3)/(j4) inherit**: the tslib
+arms must be re-measured at a written es5 (tsgo has no ES5 class lowering) before deletion; after (j2) the only
+`defaultedTarget < ES2015` readers left in `Checker.kt` are the KEPT TS2318 gate and (j3)'s two, and
+`effectiveTarget`'s ES5→ES2015 map is observable only through the emitter and the lib.
+
 ### Round (P18.110) — (LEGACY.1) step (j1): TS1250/TS1251 and TS18028 — three Go references that are one dead function's `return`s, −285 lines (2026-09-15)
 
 **Three commits** (`df7516a6b` refactor, `880f6f77b` test, this docs commit). **Suite 19,527 → 19,538 / 0 / 83** (+17
@@ -460,88 +508,6 @@ TS5095 `:955-956`, the top-level-await parser flag `:1143`/`:3064`) and `Transfo
 parameter, which is never passed `false` anywhere — a System-only residue of its own. No pin was added: dead-code
 deletion has no positive to pin, and the CJS-output pin the brief suggested would have pinned a behaviour that does
 not exist yet.
-
-### Round (P18.101) — (LEGACY.0b) step 16: ours-only rows on plain TS — seven landed, and three of the six "mechanisms" were tsc-6 transcriptions (2026-09-15)
-
-**Three commits** (`9e3bb73a0` feat, `01d76cf2c` test, this docs commit). **Suite 19,344 → 19,370 / 0 / 83**,
-9 modules asserted — `tsgoPendingBaselines` 66 → **58** (7 removed, 3 entries REWRITTEN to a measured residue),
-skipped −7, +26 pins (`TsgoStep16OursOnlyTest`). The full run read **FIVE reds, all pre-existing pins in other
-classes encoding tsc 6's answer for the very rules this round changed** (below) — re-pointed after a tsgo
-measurement each, never weakened. Screen **errors 3,084 / 0 and emit 5,688 / 0** on the final binary, all seven
-closed rows `--include`d and 0, the three partial rows showing exactly their recorded residues. `cost_gate.py`
-exit 0, all 20 counters +0.00%; `huge_methods.py --fail-over 0` exit 0 (871 classes); grid 8×`added=0 removed=0` and the emit-mode control
-78/78 — CONTROLS, counted (tsc's 78 sources carry none of these shapes: 46 `Cannot find name` rows per profile);
-warning-clean (2,236-byte log, `w=0`, no `-q`). `Checker.kt` 195,100 → **195,124** (+24: ~150 deleted, ~175 for the
-tsgo TS2309 rule and its KDoc). **(LEGACY.0) stays OPEN** on (0b-17).
-
-**THE PICK.** Sized from the pending list's recorded reasons plus one screen run per candidate (~30 s each):
-the theme was rows where OUR compiler reports what tsgo 7.0.2 does not on plain `.ts` sources, or prints the
-wrong HEAD for a right verdict — the false-positive class that hurts the embeddable-checker leg most. Seven
-mechanisms over eight rows; one row (`prettyFileWithErrorsAndTabs`) already read 0 on the screen and was a free
-entry removal.
-
-**SEVEN MECHANISMS, AND THREE WERE NOT MECHANISMS.** *M1* TS2346 `Call target does not contain any signatures.`
-has ZERO call sites in tsgo (only the message-table entry) — the 16.4db gate in `checkConstraintsInStatements`
-and its three helpers are deleted; exactly one live baseline carried the code. *M2* TS2309 is tsgo's
-`checkExternalModuleExports` (checker.go:5672): the OTHER exports must include a VALUE — resolved through the alias
-(`export { E } from`, `export import`, `export * as ns`, and a TYPE-ONLY clause of a value target too, since tsgo's
-`getSymbolFlags` runs without `excludeTypeOnlyMeanings`), an unresolvable alias counting as a value (tsc's
-`unknownSymbol` is a `Property`), `export default` counting, `export *` / interface / type alias / a
-NON-instantiated namespace not — OR `hasShadowedNamespace`; there is NO `.d.ts` skip and NO JS guard, and the JS
-half (`module.exports = X` beside `exports.p = …`) anchors on the assignment EXPRESSION. The first build moved ONE
-green baseline (`importDeclWithExportModifierAndExportAssignment`): this binder puts every namespace-body member
-into `exports`, exported or not, so an alias to an UNEXPORTED member had to be classified tsgo's way
-(`isUnexportedNamespaceMember`) — the screen found it, a 20-shape probe matrix had not. `incompatibleExports1`
-closes; `jsExportAssignmentNonMutableLocation`, `pushTypeGetTypeOfAlias` and `jsExportMemberMergedWithModuleAugmentation3`
-(not in the brief) now MATCH their TS2309 row and keep their entries for named residues (TS2551 / a false
-ours-only TS2303 / a TS2339 — TypeScript 7 types `exports.p` after `module.exports = X` as a property access on
-X's type). The first of those was also silent for a SECOND reason: it is an `emitDeclarationOnly` case and the
-pass was missing from the `initDeclarationOnlyPasses` whitelist. *M3* the TS2300 at `export { Sub }` inside
-`declare namespace exports` came from `checkExportEqualsCloduleReExport` — a hardcoded pin walker written for
-this ONE fixture — deleted with its registration; the PassLab preview (`disable checkExportEqualsCloduleReExport`)
-read 0 mismatches before a line was touched. *M4* `RelationHeadSuppression.parseTwoArgLeaf`: tsgo's
-`reportRelationError` (relater.go:4794-4806) also drops the head when chain[0] is TS4104 readonly / TS2859
-excessive complexity / TS2321 excessive stack depth **and BOTH args match the head's** — no
-conversion/interface exclusion for this arm (that conjunct now applies to the missing-property leaf only);
-`variadicTuples1` (head `T` ≠ leaf `readonly unknown[]`) is the natural negative control and stays a chain.
-*M5* both TS2589 and TS2615 came from ONE site of `init:buildFileLocalTypeMaps` (B57.3c paired them — a tsc-6
-transcription); now `if circular → TS2615 else TS2589` at the alias and annotation sites. tsgo evidence:
-`recursiveMappedTypes` carries both codes at DIFFERENT nodes and no baseline pairs them. *M6* the triplicated
-TS2769 leaf in `bigintWithLib` was HARDCODED in `checkBigintWithLib`, a `pinDiag` walker that wipes the file and
-re-pins tsc 6's chain; disabling it shows the engine cannot answer the fixture (the corpus lib set lacks the
-bigint typed-array overloads — ten TS2339s), so the six chains were RE-TRANSCRIBED to tsgo's, with a KDoc saying
-so. *M7* free. *M8* (`controlFlowInstanceof`'s three `instanceof` residues) not attempted — out of budget.
-
-**THE FIVE SUITE REDS.** All five were pre-existing pins in OTHER classes asserting tsc 6's form for exactly the rules this round changed, and tsgo agreed with every rule on re-measurement: `ReadonlyTupleTest` expected two TS2345 heads carrying the readonly line and now gets two bare TS4104 heads (tsgo `(6,44)`/`(6,52)`); `ArrayLiteralSpreadElementTest` ×2 asserted the spread's TYPE through the TS2345 vehicle M4 removed — re-vehicled through the TS4104 head; `Inv3GlobalsForFileTest`'s `the mirrored TS2346 super-call gate keeps firing` was a countdown for M1 (tsgo: TS2315 `Type 'Base' is not generic.` alone) — re-pointed to `none { 2346 }` + the TS2315 row, and its sibling `none { 2346 }` pin is now vacuous on every binary (flagged, left); `DefensiveCatchRemovalBatch3Test`'s `an infinitely expanding alias still bails with TS2589` measures TS2615 alone on tsgo — re-pointed, the bail (which sets `mappedTypeCircularInfo`) is still what the pin observes. The agent's first grep of the class SOURCES could not have found these: they name no code the round touched in their test names, only in their assertions — the full suite is the only instrument.
-
-**PINS AND ABLATION.** 26 pins; stash-ablation 16 RED / 9 green on the pre-change sources — six of the nine
-greens were satisfied trivially by tsc 6's count-everything TS2309 rule and are discriminated by their own arms
-(a2b/a2c/a2e/a2x/a4b); one M5 control was BLIND at the alias site (served by the annotation site, arm a5b 0/0) and
-was re-pointed at `type X = Foo<"true", {}>` (tsgo `(2,10)`), now red under a5b. Thirteen arms, all
-discriminating (pin reds / errors-screen mismatches over 3,084): a1 TS2346 restored 2/1; a2 interface counts
-2/1; a2x namespace never a value 2/1; **a2b JS half without the `exports.p` gate 1/5** (five green baselines
-move — the gate is load-bearing even though the JS target rows themselves are pending); a2c shadow half off
-1/0; a2d not on the declarationOnly path 1/0; a2e unexported-member rule off 1/1; a3 clodule walker restored
-1/1; a4 two-arg leaf not suppressing 4/1; a4b suppressing without the arg compare 2/0; a5 TS2589 beside TS2615
-1/1; a5b never TS2589 at the alias site 1/0; a6 nested chain re-transcribed 1/1. Final md5s Checker
-`47c83bbd…`, RelationHeadSuppression `3b330c5f…` — the orchestrator's AFTER arm matched both.
-
-**PRE-EXISTING DIVERGENCES FOUND, NOT TOUCHED**: the CLI on REAL libs prints 0 errors for
-`new BigInt64Array([1, 2, 3])` where tsgo prints 3× TS2769 (a real-lib gap, separate from the corpus lib set);
-`type Rec<T> = [Rec<Rec<T>>, T]; type Y = Rec<number>` is ours-only TS2589 (tsgo silent); a generic
-`T extends readonly unknown[]` assigned to `[...T]`/`string[]` is silent here (tsgo TS2322 + readonly chain);
-the object-member position `{ a: ro }` prints an `every`-property chain where tsgo prints TS4104.
-
-**A HARNESS LESSON THAT COST A BUILD**: a Python edit script with a `SyntaxError` runs NOTHING — the
-declarationOnly-whitelist addition was silently absent until a pin went red on the "fixed" binary. Verify each
-scripted edit landed by grep, never by the script's earlier steps.
-
-**WHAT REMAINS (58)**: display/chain-content ~19; F1 silent 4; F2-residue 6; ORDER-model 5; TS2683-residue 3;
-JS emit 3; the `downlevelIteration` TS5102 pair and `pathsValidation5`'s order (both (LEGACY.1) questions);
-the three M2 partials (JS `exports.p` typing after `module.exports = X`); `controlFlowInstanceof`'s three
-`instanceof` residues (sized in the (P18.101) brief: the `Function`-typed RHS should narrow by `{}` and drop
-`null`; the non-overlapping class should give an INTERSECTION the join then reduces; a checkJs `@constructor`
-instance type); the rest singletons.
 
 ## QUEUE
 
@@ -1270,7 +1236,7 @@ CLAUDE.md § "AI agent mission".
   - [x] (i) LANDED 2026-09-15 ((P18.109), `f52af89ce`, −243 lines: TS2802 is LIB-gated in tsgo — it fires only when `lib` excludes es2015, at ANY target, and never at a written es5 whose default lib reaches es2015 — so the whole target-gated block was wrong in both directions and is deleted; the TS2488 sibling gate keeps its target conjunct for (j); parse, `downlevelIterationExplicitlySet` and the TS5101/5102 row kept; (j) inherits `checkIntersectionNeverArrayDestructure`'s target return and `spineIterableOperandActive`'s conjunct) — `downlevelIteration` — `Checker.kt:9861-9863`, `:161374`, the whole TS2802 block `187638-187866` (229
     lines, seven single-caller functions); KEEP `TypeScriptCompiler.kt:457-458`'s TS5101 at the 6.0 default; run the
     four active subtests by name. Must precede or accompany (j).
-  - [ ] (j) **(j1) LANDED 2026-09-15 ((P18.110), `df7516a6b`, −285 lines: the three Go references to TS1250 are one uncalled binder function's `return`s, TS18028 has none; TS1251 went with the TS1250 emitter; `PrivateIdentifierTargetGateTest` deleted; the corpus cannot see the family in either direction — 0 active es5/es3 subtests — so the 17 pins are the gate). (j2)-(j4) REMAIN, HIGH risk: land (j2) alone; the six explicit-es5 pins left in `DownlevelGateDefaultTargetTest` are its countdowns.** `target: ES5`/ES3, split: (j1) the two dead diagnostics TS1250 (`Checker.kt:9149-9151` + `80735-80875`,
+  - [ ] (j) **(j2) LANDED 2026-09-16 ((P18.111), `e8b2f8a6d`, −183 lines: tsgo honours a written es5 in its 29 `languageVersion` reads but only ONE of them is `< ES2015` (TS2318, rest-only pattern — KEPT and pinned both ways); seven families deleted (TS18045, TS2396, TS2659, TS2340/`checkSuperPropertyAccessES5`, TS1501 `u`/`y`, the es5 hoist + `bodyVarRefs`, the raw-target pin arm), the TS2461/TS2488 forks and the never-destructure gate re-keyed on the LIB (`uplevelIterationLib()`), TS18027's lower bound dropped; (j3)/(j4) REMAIN — re-measure the tslib arms at a written es5 first).** **(j1) LANDED 2026-09-15 ((P18.110), `df7516a6b`, −285 lines: the three Go references to TS1250 are one uncalled binder function's `return`s, TS18028 has none; TS1251 went with the TS1250 emitter; `PrivateIdentifierTargetGateTest` deleted; the corpus cannot see the family in either direction — 0 active es5/es3 subtests — so the 17 pins are the gate). (j2)-(j4) REMAIN, HIGH risk: land (j2) alone; the six explicit-es5 pins left in `DownlevelGateDefaultTargetTest` are its countdowns.** `target: ES5`/ES3, split: (j1) the two dead diagnostics TS1250 (`Checker.kt:9149-9151` + `80735-80875`,
     141 lines) and TS18028 (`:9152-9163` + `80496-80514, 80616-80733`, 137 lines), deleting
     `PrivateIdentifierTargetGateTest` and `DownlevelGateDefaultTargetTest:120`; (j2) the remaining `< ES2015` checker
     gates — `:25445` (TS18045, `spineCheckAccessorModifier` 29307-29328), `:25513`, `:27416` + the `es5HoistBody`
