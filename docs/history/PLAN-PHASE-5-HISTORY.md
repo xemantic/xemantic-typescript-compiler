@@ -46,6 +46,54 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
+### Round (P18.111) — (LEGACY.1) step (j2): tsgo has exactly ONE `< ES2015` checker gate — seven of ours deleted, four re-keyed on the lib, one un-suppressed, one kept (2026-09-16)
+
+**Three commits** (`e8b2f8a6d` refactor, `03fed2cdf` test, this docs commit). **Suite 19,538 → 19,551 / 0 / 83**, 9
+modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS ((P18.110)'s census stands: 0 active
+es5/es3 subtests; every one of the eleven live arms read 0/0 too, so the pins are the whole gate); `cost_gate.py` exit
+0, 20/20 +0.00% (a real gate — spine handlers changed); `huge_methods.py --fail-over 0` exit 0 (874 classes); grid
+8×`added=0 removed=0` and emit 78/78 — controls; `spine_closure_audit.py` clean (a `PropertyDeclaration` enter arm
+was edited); warning-clean with an injected positive control. `Checker.kt` 194,468 → **194,285** (−183).
+**(j1)+(j2) are LANDED — the (j) line stays open on (j3) tslib ES5 arms and (j4) the option surface; (g) stays
+BLOCKED-PENDING-USER; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE MEASUREMENT, AND WHY THE ITEM'S "delete the remaining gates" WAS WRONG IN BOTH DIRECTIONS.** tsgo's
+`GetEmitScriptTarget` returns the WRITTEN target and its checker reads `languageVersion` 24 + 5 times — so a written
+es5 is reported by TS5108 and then HONOURED by every version-gated rule — **but exactly one of those reads is
+`< ES2015`** (`checker.go:17879`, the rest-only binding pattern's iterable type; `LanguageFeatureMinimumTarget`
+bottoms out at ES2016). Twenty sites measured one by one at a written es5 (LSP; es2015 and `lib: ["es5"]` controls):
+seven families have NO tsgo emitter and went — TS18045 (`accessor`) with `spineCheckAccessorModifier`; TS2396
+(`arguments` + rest in a script, where tsgo prints strict-always TS1100); TS2659's three arms (tsgo has TS2660
+only); TS2340 and the 107-line `checkSuperPropertyAccessES5` (tsgo's TS2855 has no version conjunct); the TS1501
+`u`/`y` rows (tsgo's regexp table starts at ES2018 — a gate the `< ES2015` grep MISSED, it compares against a
+table); the es5 hoist of body names into the parameter scope and the `bodyVarRefs` TS2373/TS2454 leg (tsgo answers
+TS2304 at every target: a parameter initializer sees parameters only, 8 + 34 threading sites); and the raw
+`options.target < ES2015` corpus-pin arm. **Four were MIS-NOTIONED, not dead**: the three TS2461-vs-TS2488 message
+forks and the never-destructure gate read the LIB in tsgo (`iterableExists`), now `Checker.uplevelIterationLib()` —
+deleting them would have made `lib: ["es5"]` projects print TS2488 where tsgo prints TS2461. **One was wrongly
+SUPPRESSING**: TS18027's `< ES2015` lower bound (tsgo fires at es5; the ES2022 upper bound is tsgo's). **One is
+tsgo's own and is KEPT, re-labelled and pinned in both directions** so a later round cannot blanket-delete it:
+TS2318 for a rest-only binding pattern. The three raw-target strict-mode determinations are not `< ES2015` gates and
+were left.
+
+**PINS AND ABLATION.** `TargetGatesRemovedTest` 24 pins (17 non-control + 7 controls, two of them the KEPT-gate pins);
+stash-ablation 25 red across the touched classes. Eleven arms, each reddening a disjoint non-empty set (a1 TS18045
+3; a2 TS2396 4; a3 the hoist 6; a4 TS2659 5; a5 `bodyVarRefs` 3; a6 TS2340 1; a7 TS1501 2; a8 the iterable-operand
+conjunct 1; a9 TS18027's bound 1; a10 the never-destructure gate 3; a11 the three forks 3), screens 0/0 on all. The
+tsc-6 pins were re-vehicled rather than weakened: `Inv4SpineAccessorModifierTest` deleted, its deep-chain twin now
+`Inv4SpinePropertyDeclarationDeepChainTest` on TS1166 through the same enter arm; the hoist pins in four classes
+re-pointed to tsgo's TS2304; `M04ArgsCollision`/`M04ObjLitSuper` reach pins onto TS1215/TS2660; (P18.109)'s named
+residue now asserts tsgo's TS2488. Final md5 Checker `1c4b6e1a` — the orchestrator's AFTER arm matched.
+
+**STANDING DIVERGENCES FOUND, TARGET-INDEPENDENT, NOT TOUCHED**: no TS2373 for a body FUNCTION declaration referenced
+from a parameter initializer; the dedicated empty-array for-of emitter adds an ours-only `Type 'undefined'` TS2488
+beside the correct `Type 'never'` row under `strict`, and prints TS2461 at `lib: ["es5"]` where tsgo prints nothing;
+`for (const x of {})` / `of number` reports nothing here with the default lib (tsgo TS2488); TS1100 is printed only
+under `strict` where tsgo, strict-always, prints it in every file ((LEGACY.0b)). **(j3)/(j4) inherit**: the tslib
+arms must be re-measured at a written es5 (tsgo has no ES5 class lowering) before deletion; after (j2) the only
+`defaultedTarget < ES2015` readers left in `Checker.kt` are the KEPT TS2318 gate and (j3)'s two, and
+`effectiveTarget`'s ES5→ES2015 map is observable only through the emitter and the lib.
+
 ### Round (P18.110) — (LEGACY.1) step (j1): TS1250/TS1251 and TS18028 — three Go references that are one dead function's `return`s, −285 lines (2026-09-15)
 
 **Three commits** (`df7516a6b` refactor, `880f6f77b` test, this docs commit). **Suite 19,527 → 19,538 / 0 / 83** (+17

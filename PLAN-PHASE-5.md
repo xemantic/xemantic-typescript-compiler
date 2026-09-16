@@ -25,6 +25,62 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.121) — (LEGACY.0b) step 21: three mechanisms whose emitters we already had, two rows closed, one REFUSED with the decisive control (2026-09-16)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,694 → 19,706 / 0 / 65**; `tsgoPendingBaselines` 42 → 40,
+`docs/logical-parity.md` 40 pending; corpus screen **3,102 / 0 errors and 5,688 / 0 emit**; `cost_gate.py` exit 0
+with every counter unchanged from (P18.119)'s reading; `huge_methods.py --fail-over 0` exit 0 over 875 classes; the
+8-profile grid `added=0 removed=0` on all eight with 78 emit files byte-identical. `Checker.kt` 194,706 → 194,764
+(+58 net: a 61-line pass DELETED, ~119 added).
+
+**THE ROUND WAS PICKED ON ONE PROPERTY — WE ALREADY EMITTED ALL THREE CODES** (`grep -ac 'code = 2671'` / `6205` /
+`8026` read 1 / 2 / 1), so none of the three was a missing feature and each was a gate that did not fire. That
+framing held and is worth reusing: **before adding an emitter for a code this compiler already emits, find the
+existing one and read its gate** — (P18.94)'s law is that two emitters for one code let a value pin assert the right
+answer from the wrong site.
+
+**M3 — TS8026, LANDED, and it retired a whole tsc-6 pass.** `checkHeritageTypeArgCount`'s gate was
+`if (hasGoverningExtendsTag(...)) return` — ANY governing `@augments`/`@extends` tag suppressed TS8026 and handed
+the row to `checkJsDocExtendsTags`, which reported TS2314 at the TAG. tsgo suppresses only when the tag supplies a
+VALID count, reports at the HERITAGE EXPRESSION when it does not, and genuinely BINDS a correct tag
+(`@augments A<number>` makes `new E().x.toUpperCase()` a TS2339 on `number`) — all three measured, and the first
+two readings of `missingAugmentsTag` were wrong in opposite directions. The tsc-6 pass is deleted; **the PassLab
+measured its retirement at 0 screen mismatches before it was removed**, i.e. its only live consumer was the ignored
+row.
+
+**M1 — TS2671, HALF LANDED, and the ladder is the reusable part.** `checkModuleAugmentationOfNonModuleEntity` was
+gated on ambient `export = V` with no JavaScript leg; tsgo's guard is one flag after following `export =`
+(`Namespace` means merge, else TS2671). One shared predicate now serves the emitter AND
+`collectModuleAugmentations`, which SKIPS the merge — tsgo's own control flow, error INSTEAD of merging, which is
+what removes the ours-only TS2300 pair. `jsExportMemberMergedWithModuleAugmentation2` closes;
+`…MergedWithModuleAugmentation` does NOT, because it is two mechanisms and the second is a TS2749 on an import
+that binds a value only. **The first ladder worked in a scratch project and resolved NOTHING in the corpus**:
+`resolveModuleSpecifier` / `augmentationTargetFile` deliberately do not strip `.js`, and the corpus harness has no
+crawl to supply `moduleResolutions` ((CHK.30)) — the screen caught it, the `-project` fixture said the feature
+worked. Use `augmentationTargetFileJsAware`, the legs the B553 walker has always used.
+
+**M2 — TS6205, REFUSED, and the control that settled it is worth more than the row.** tsgo's predicate is
+`len(list) > 1 && Every(unreferenced)` and **we already emit TS6205 for the all-unused case on the right line** —
+only the multi-line span differs. The other two classes in the fixture reference their parameter through
+`/** @type {T} */ this.p;`, so no aggregation rule can reach them; tsgo treats them as all-unused only because a
+bare `this.p;` declares no property there, which is why it ALSO emits two TS2339 rows the ledger never mentioned.
+**Decisive control: with `T` referenced from a `@param {T}` tag instead, tsgo DROPS TS6205 and reports
+per-parameter TS6196** — so the aggregation predicate is sound and the JS-expando semantics are the blocker (10
+candidate case files carry the bare-`this.X;` shape; its own round). Incidental: tsgo's per-parameter code for a
+CLASS type parameter is **TS6196, which we already emit** — the ledger's "ours TS6133" was a scratch-project
+artefact, so that line was wrong about our own output as well as about the mechanism.
+
+**PINS AND ABLATION.** `TsgoStep21Test`, 12 cases (6 assertions, 6 controls); **all 6 non-controls RED against the
+pre-change binary and all 6 controls green**. Two arms attribute disjointly (the M3 suppression reverted → the 2
+arity pins; the M1 predicate forced false → the 3 M1 pins), and the round records honestly that the
+`no TS2314 at the tag` pin is discriminated by the HEAD arm and by the PassLab measurement rather than by arm A,
+which reverts the suppression without restoring the deleted pass.
+
+**ONE MORE GAP, MEASURED AND OUT OF SCOPE**: tsgo has TS8027 (`Expected {base}-{min} type arguments…`) for a base
+with DEFAULTED parameters and we emit it nowhere — `checkHeritageTypeArgCount` returns early on
+`minRequired != maxTotal`. Zero corpus baselines carry it, and tsgo's own rendering of it looks like a formatting
+defect (`Expected P<T, U>-1 type arguments`), so it is recorded rather than queued.
+
 ### Round (P18.120) — (LEGACY.0b) step 20: the last three F2 duplicate-identifier rows, and a class over-reach only a hand-written pin could see (2026-09-16)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,672 → 19,694 / 0 / 67** — the skip count falling 70 → 67
@@ -538,54 +594,6 @@ at esnext where tsgo is silent.
 untouched; after (j3) the only `defaultedTarget <= ES5` / `< ES2015` reader left in `Checker.kt` is (j2)'s KEPT
 TS2318 gate, and this family's only `effectiveTarget` mentions are comments.
 
-### Round (P18.111) — (LEGACY.1) step (j2): tsgo has exactly ONE `< ES2015` checker gate — seven of ours deleted, four re-keyed on the lib, one un-suppressed, one kept (2026-09-16)
-
-**Three commits** (`e8b2f8a6d` refactor, `03fed2cdf` test, this docs commit). **Suite 19,538 → 19,551 / 0 / 83**, 9
-modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS ((P18.110)'s census stands: 0 active
-es5/es3 subtests; every one of the eleven live arms read 0/0 too, so the pins are the whole gate); `cost_gate.py` exit
-0, 20/20 +0.00% (a real gate — spine handlers changed); `huge_methods.py --fail-over 0` exit 0 (874 classes); grid
-8×`added=0 removed=0` and emit 78/78 — controls; `spine_closure_audit.py` clean (a `PropertyDeclaration` enter arm
-was edited); warning-clean with an injected positive control. `Checker.kt` 194,468 → **194,285** (−183).
-**(j1)+(j2) are LANDED — the (j) line stays open on (j3) tslib ES5 arms and (j4) the option surface; (g) stays
-BLOCKED-PENDING-USER; (LEGACY.0) stays OPEN** on (0b-17).
-
-**THE MEASUREMENT, AND WHY THE ITEM'S "delete the remaining gates" WAS WRONG IN BOTH DIRECTIONS.** tsgo's
-`GetEmitScriptTarget` returns the WRITTEN target and its checker reads `languageVersion` 24 + 5 times — so a written
-es5 is reported by TS5108 and then HONOURED by every version-gated rule — **but exactly one of those reads is
-`< ES2015`** (`checker.go:17879`, the rest-only binding pattern's iterable type; `LanguageFeatureMinimumTarget`
-bottoms out at ES2016). Twenty sites measured one by one at a written es5 (LSP; es2015 and `lib: ["es5"]` controls):
-seven families have NO tsgo emitter and went — TS18045 (`accessor`) with `spineCheckAccessorModifier`; TS2396
-(`arguments` + rest in a script, where tsgo prints strict-always TS1100); TS2659's three arms (tsgo has TS2660
-only); TS2340 and the 107-line `checkSuperPropertyAccessES5` (tsgo's TS2855 has no version conjunct); the TS1501
-`u`/`y` rows (tsgo's regexp table starts at ES2018 — a gate the `< ES2015` grep MISSED, it compares against a
-table); the es5 hoist of body names into the parameter scope and the `bodyVarRefs` TS2373/TS2454 leg (tsgo answers
-TS2304 at every target: a parameter initializer sees parameters only, 8 + 34 threading sites); and the raw
-`options.target < ES2015` corpus-pin arm. **Four were MIS-NOTIONED, not dead**: the three TS2461-vs-TS2488 message
-forks and the never-destructure gate read the LIB in tsgo (`iterableExists`), now `Checker.uplevelIterationLib()` —
-deleting them would have made `lib: ["es5"]` projects print TS2488 where tsgo prints TS2461. **One was wrongly
-SUPPRESSING**: TS18027's `< ES2015` lower bound (tsgo fires at es5; the ES2022 upper bound is tsgo's). **One is
-tsgo's own and is KEPT, re-labelled and pinned in both directions** so a later round cannot blanket-delete it:
-TS2318 for a rest-only binding pattern. The three raw-target strict-mode determinations are not `< ES2015` gates and
-were left.
-
-**PINS AND ABLATION.** `TargetGatesRemovedTest` 24 pins (17 non-control + 7 controls, two of them the KEPT-gate pins);
-stash-ablation 25 red across the touched classes. Eleven arms, each reddening a disjoint non-empty set (a1 TS18045
-3; a2 TS2396 4; a3 the hoist 6; a4 TS2659 5; a5 `bodyVarRefs` 3; a6 TS2340 1; a7 TS1501 2; a8 the iterable-operand
-conjunct 1; a9 TS18027's bound 1; a10 the never-destructure gate 3; a11 the three forks 3), screens 0/0 on all. The
-tsc-6 pins were re-vehicled rather than weakened: `Inv4SpineAccessorModifierTest` deleted, its deep-chain twin now
-`Inv4SpinePropertyDeclarationDeepChainTest` on TS1166 through the same enter arm; the hoist pins in four classes
-re-pointed to tsgo's TS2304; `M04ArgsCollision`/`M04ObjLitSuper` reach pins onto TS1215/TS2660; (P18.109)'s named
-residue now asserts tsgo's TS2488. Final md5 Checker `1c4b6e1a` — the orchestrator's AFTER arm matched.
-
-**STANDING DIVERGENCES FOUND, TARGET-INDEPENDENT, NOT TOUCHED**: no TS2373 for a body FUNCTION declaration referenced
-from a parameter initializer; the dedicated empty-array for-of emitter adds an ours-only `Type 'undefined'` TS2488
-beside the correct `Type 'never'` row under `strict`, and prints TS2461 at `lib: ["es5"]` where tsgo prints nothing;
-`for (const x of {})` / `of number` reports nothing here with the default lib (tsgo TS2488); TS1100 is printed only
-under `strict` where tsgo, strict-always, prints it in every file ((LEGACY.0b)). **(j3)/(j4) inherit**: the tslib
-arms must be re-measured at a written es5 (tsgo has no ES5 class lowering) before deletion; after (j2) the only
-`defaultedTarget < ES2015` readers left in `Checker.kt` are the KEPT TS2318 gate and (j3)'s two, and
-`effectiveTarget`'s ES5→ES2015 map is observable only through the emitter and the lib.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -916,7 +924,31 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-20 LANDED 2026-09-16 ((P18.85)-(P18.120) notes) — pending 42, skipped 67,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-21 LANDED 2026-09-16 ((P18.85)-(P18.121) notes) — pending 40, skipped 65,
+  suite 19,706/0. **(P18.121) closed 2 rows of 4 and REFUSED one with the decisive control**, on a cluster picked
+  because **we already emitted all three codes** — so each was a gate that did not fire, never a missing feature.
+  TS8026: the heritage arity gate suppressed on ANY governing `@augments` tag where tsgo suppresses only on a VALID
+  count and reports at the HERITAGE EXPRESSION, which retired a tsc-6 pass (`checkJsDocExtendsTags`) the PassLab
+  first measured at 0 screen mismatches. TS2671: one shared predicate now serves the emitter AND
+  `collectModuleAugmentations`, which SKIPS the merge — tsgo's control flow, error INSTEAD of merging — closing
+  `…Augmentation2`; `…Augmentation` stays, because it is two mechanisms and the second is a TS2749 on an import
+  binding a value only. **TS6205 REFUSED**: we already emit it for the all-unused case and the aggregation
+  predicate is sound; the blocker is that a bare `/** @type {T} */ this.p;` declares no property here, which tsgo's
+  own TS2339 rows show — the control is that referencing `T` from a `@param` tag makes tsgo drop TS6205 for
+  per-parameter TS6196, **which we also already emit**, so that ledger line was wrong about our output too. **AND A
+  LADDER THAT WORKS IN A `-project` FIXTURE CAN RESOLVE NOTHING IN THE CORPUS** ((CHK.30)): use
+  `augmentationTargetFileJsAware`. **THE RESIDUE (40)**: display/chain-content ~19 (incl. the 2 signature-rendering
+  rows (P18.115) refused with a 186-baseline exposure count); F6-code ~14, which is ~14 MECHANISMS (size by
+  mechanism, never by letter — (P18.96)); ORDER-model 3 ((P18.94)); JS emit 3; TS2683-residue 3; F7-count 2; the
+  `downlevelIteration` TS5102 pair, which closes by moving `simulatedVersion` to `"7.0"` — an OWNER decision that
+  would redden nothing; `pathsValidation5`'s summary order; the 2 REFUSED TS2751 rows (tsgo defects, do not
+  re-open); and the singletons. **NEXT CLUSTERS**: the bare-`this.X;` JS-expando property declaration, which
+  (P18.121) sized at **10 candidate case files** and which unblocks TS6205; TS7009-from-the-callee-type (three
+  blockers now: the two (P18.114) named, plus the module's own exports object, plus a class-merged-with-function
+  gap that costs `constructorOverloads4`); the TS2749-on-a-value-only-import half of `…Augmentation`; and the
+  TS2403-vs-TS2717 split (P18.120) named. **PICK AND SIZE WITH `bash scripts/corpus-screen.sh`**, and count the
+  ACTIVE subtests carrying each code first — the screen is a gate or a control per family, never by default.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-20 LANDED 2026-09-16 ((P18.85)-(P18.120) notes) — pending 42, skipped 67,
   suite 19,694/0. **(P18.120) closed the LAST THREE F2 duplicate-identifier rows, three distinct mechanisms**: an
   INTERFACE's duplicate group reports at every member whatever its binder visibility (named by the first
   binder-VISIBLE member's written spelling); a method-vs-property name across MERGED interface blocks is TS2300 at

@@ -1,5 +1,18 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.116) — (LEGACY.0b) STEP 19: THE DUPLICATE-IDENTIFIER FOLLOW-ON INDEX IS PER MERGE *CALL*, AND THE IRRECONCILABLE SOURCE WAS TWO FUNCTIONS AWAY, 19,625 / 0 / 70 (2026-09-16).**
+The first related node of each `addDuplicateDeclarationError` call is TS6203 and the rest of that call's nodes are
+TS6204, so N declarations of one symbol give `[6203, 6204, …]` and N separate files give all TS6203. (P18.93) read
+the `if` correctly and inferred wrongly: `lookupOrIssueError` compares through `CompareDiagnostics`, whose last
+comparison is the RELATED LIST, so a second call misses the lookup, issues a second diagnostic that again starts
+empty, and `compactAndMergeRelatedInfos` folds them only at the end. Verified over 128 baselines and 317
+diagnostics with **0 unexplained** — and 11 diagnostics in that population carry a TS6204 from three OTHER
+producers, so the discriminator is the call's LEADING code. Pending 48 → **45**. The TS2751 pair is REFUSED as a
+tsgo defect: the layer is the directory of the `.diff`, not the base baseline every case has. 9 pins with BOTH
+witnesses pinned (the second pair green on both arms by design, being the sole detector of an over-broad rule);
+two arms with disjoint pin sets AND disjoint baselines. cost_gate 20/20 +0.00%; huge_methods exit 0 (875 classes);
+grid 8×0/0 + emit 78/78 (controls); warning-clean.
+
 **(P18.115) — (LEGACY.0b) STEP 18: FOUR ROWS IN TWO MECHANISMS, AND THE SIGNATURE-RENDERING FAMILY REFUSED WITH ITS EXPOSURE COUNTED, 19,616 / 0 / 73 (2026-09-16).**
 Self-name resolution must FAIL when the project root is ambiguous — tsgo raises TS2209 and returns unresolved, so
 TS2307 follows; we raised the first and resolved anyway. `isolatedDeclarations` reports TS9025 on the WHOLE
