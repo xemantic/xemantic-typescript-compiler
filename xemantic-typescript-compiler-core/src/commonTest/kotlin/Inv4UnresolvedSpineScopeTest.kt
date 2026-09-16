@@ -239,12 +239,14 @@ class Inv4UnresolvedSpineScopeTest {
     }
 
     @Test
-    fun `sub-ES2015 target hoists body vars into parameter defaults`() {
+    fun `a body var referenced from a parameter default audits clean at a written es5 - no hoist at any target`() {
+        // (LEGACY.1)(j2): the sub-ES2015 hoist collect is gone from the parameter scope;
+        // the legacy and spine scope models must still agree at es5 (tsgo: TS2304 for `b`).
         auditClean(
             """
             function f(a = b) { var b = 1; return a + b }
             """,
-            directives = "// @target: es5",
+            directives = DOWNLEVEL_ES5,
         )
     }
 

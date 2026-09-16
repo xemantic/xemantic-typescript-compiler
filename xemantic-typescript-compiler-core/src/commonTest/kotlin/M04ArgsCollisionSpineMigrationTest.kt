@@ -30,7 +30,10 @@ import com.xemantic.kotlin.test.should
 import kotlin.test.Test
 
 /**
- * (M0.4, round 638): pins for the checkArgumentsCollision (TS2396/TS1215)
+ * (M0.4, round 638): pins for the checkArgumentsCollision (TS1215; its TS2396
+ * leg — `arguments` beside a rest parameter in a script below ES2015 — was
+ * deleted by (LEGACY.1)(j2), tsgo has no such emitter, so every reach pin
+ * here rides the TS1215 module vehicle since 2026-09-15)
  * spine migration — the simplest downward context of the migrated passes
  * (one CONSTANT-per-file isModule boolean + per-construct declare gates),
  * but a WIDER reach than the gIdx walker: arrows / fn-expressions /
@@ -48,14 +51,18 @@ class M04ArgsCollisionSpineMigrationTest {
     // ── the emitter's gates ────────────────────────────────────────────────
 
     @Test
-    fun `TS2396 - a param named arguments alongside a rest param in a non-module`() {
+    fun `TS2396 is gone - arguments beside a rest param in a script is silent at a written es5`() {
+        // (LEGACY.1)(j2): tsgo has no TS2396 emitter; at a written es5 it reports TS1100
+        // (`Invalid use of 'arguments' in strict mode.`, its strict-always binder — a
+        // (LEGACY.0b) row) and nothing else. Measured 2026-09-15.
         diagnose(
             """
             function f(arguments: string, ...rest: any[]) {}
             """,
             directives = DOWNLEVEL_ES5,
         ) should {
-            have(any { it.code == 2396 && it.message == "Duplicate identifier 'arguments'. Compiler uses 'arguments' to initialize rest parameters." })
+            have(none { it.code == 2396 })
+            have(none { it.code == 1215 })
         }
     }
 
@@ -83,14 +90,14 @@ class M04ArgsCollisionSpineMigrationTest {
     }
 
     @Test
-    fun `TS2396 - the REST param itself named arguments`() {
+    fun `TS1215 - the REST param itself named arguments`() {
         diagnose(
             """
+            export {};
             function f(...arguments: any[]) {}
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(any { it.code == 2396 })
+            have(any { it.code == 1215 })
         }
     }
 
@@ -98,28 +105,29 @@ class M04ArgsCollisionSpineMigrationTest {
     fun `negative control - a declare function is never param-checked`() {
         diagnose(
             """
+            export {};
             declare function f(arguments: string, ...rest: any[]): void;
             """
         ) should {
-            have(none { it.code == 2396 })
+            have(none { it.code == 1215 })
         }
     }
 
     // ── class members: declaration vs expression asymmetries ──────────────
 
     @Test
-    fun `TS2396 - class method and constructor params fire`() {
+    fun `TS1215 - class method and constructor params fire`() {
         diagnose(
             """
+            export {};
             class C {
                 constructor(arguments: string, ...r: any[]) {}
                 m(arguments: string, ...r: any[]) {}
             }
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(any { it.code == 2396 && it.line == 2 })
-            have(any { it.code == 2396 && it.line == 3 })
+            have(any { it.code == 1215 && it.line == 3 })
+            have(any { it.code == 1215 && it.line == 4 })
         }
     }
 
@@ -127,12 +135,13 @@ class M04ArgsCollisionSpineMigrationTest {
     fun `negative control - a declare class member is never param-checked`() {
         diagnose(
             """
+            export {};
             declare class C {
                 m(arguments: string, ...r: any[]): void;
             }
             """
         ) should {
-            have(none { it.code == 2396 })
+            have(none { it.code == 1215 })
         }
     }
 
@@ -165,16 +174,16 @@ class M04ArgsCollisionSpineMigrationTest {
     }
 
     @Test
-    fun `TS2396 - class-expression method params fire`() {
+    fun `TS1215 - class-expression method params fire`() {
         diagnose(
             """
+            export {};
             const C = class {
                 m(arguments: string, ...r: any[]) {}
             };
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(any { it.code == 2396 })
+            have(any { it.code == 1215 })
         }
     }
 
@@ -209,16 +218,16 @@ class M04ArgsCollisionSpineMigrationTest {
     // ── object-literal members, arrows, fn-expressions ─────────────────────
 
     @Test
-    fun `TS2396 - object-literal method and setter params fire`() {
+    fun `TS1215 - object-literal method and setter params fire`() {
         diagnose(
             """
+            export {};
             const o = {
                 m(arguments: string, ...r: any[]) {},
             };
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(any { it.code == 2396 })
+            have(any { it.code == 1215 })
         }
     }
 
@@ -237,32 +246,32 @@ class M04ArgsCollisionSpineMigrationTest {
     }
 
     @Test
-    fun `TS2396 - arrow and function-expression params fire`() {
+    fun `TS1215 - arrow and function-expression params fire`() {
         diagnose(
             """
+            export {};
             const g = (arguments: string, ...r: any[]) => {};
             const h = function (arguments: string, ...r: any[]) {};
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(any { it.code == 2396 && it.line == 1 })
-            have(any { it.code == 2396 && it.line == 2 })
+            have(any { it.code == 1215 && it.line == 2 })
+            have(any { it.code == 1215 && it.line == 3 })
         }
     }
 
     // ── namespaces ─────────────────────────────────────────────────────────
 
     @Test
-    fun `TS2396 - a function inside a non-declare namespace fires`() {
+    fun `TS1215 - a function inside a non-declare namespace fires`() {
         diagnose(
             """
+            export {};
             namespace N {
                 export function f(arguments: string, ...r: any[]) {}
             }
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(any { it.code == 2396 })
+            have(any { it.code == 1215 })
         }
     }
 
@@ -288,10 +297,11 @@ class M04ArgsCollisionSpineMigrationTest {
     fun `frozen - an if CONDITION is never walked`() {
         diagnose(
             """
+            export {};
             if (((arguments: string, ...r: any[]) => 1)("x")) {}
             """
         ) should {
-            have(none { it.code == 2396 })
+            have(none { it.code == 1215 })
         }
     }
 
@@ -299,15 +309,15 @@ class M04ArgsCollisionSpineMigrationTest {
     fun `frozen - a for HEAD is never walked - body is`() {
         diagnose(
             """
+            export {};
             for (let g = (arguments: string, ...r: any[]) => 1; ; ) {
                 const h = (arguments: string, ...r: any[]) => 2;
                 break;
             }
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(none { it.code == 2396 && it.line == 1 })
-            have(any { it.code == 2396 && it.line == 2 })
+            have(none { it.code == 1215 && it.line == 2 })
+            have(any { it.code == 1215 && it.line == 3 })
         }
     }
 
@@ -315,13 +325,13 @@ class M04ArgsCollisionSpineMigrationTest {
     fun `frozen - a ternary CONDITION is never walked but its branches are`() {
         diagnose(
             """
+            export {};
             const x = ((arguments: string, ...r: any[]) => 1) ? 1 : 2;
             const y = 1 ? ((arguments: string, ...r: any[]) => 1) : 2;
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(none { it.code == 2396 && it.line == 1 })
-            have(any { it.code == 2396 && it.line == 2 })
+            have(none { it.code == 1215 && it.line == 2 })
+            have(any { it.code == 1215 && it.line == 3 })
         }
     }
 
@@ -329,6 +339,7 @@ class M04ArgsCollisionSpineMigrationTest {
     fun `frozen - a switch SUBJECT is never walked but clause bodies are`() {
         diagnose(
             """
+            export {};
             declare const n: number;
             switch (((arguments: string, ...r: any[]) => 1)("x")) {
                 case 1:
@@ -336,31 +347,31 @@ class M04ArgsCollisionSpineMigrationTest {
                     break;
             }
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(none { it.code == 2396 && it.line == 2 })
-            have(any { it.code == 2396 && it.line == 4 })
+            have(none { it.code == 1215 && it.line == 3 })
+            have(any { it.code == 1215 && it.line == 5 })
         }
     }
 
     @Test
-    fun `TS2396 - template spans and typeof operands are walked`() {
+    fun `TS1215 - template spans and typeof operands are walked`() {
         diagnose(
             """
+            export {};
             const s = `x${"$"}{(arguments: string, ...r: any[]) => 1}`;
             const t = typeof ((arguments: string, ...r: any[]) => 1);
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(any { it.code == 2396 && it.line == 1 })
-            have(any { it.code == 2396 && it.line == 2 })
+            have(any { it.code == 1215 && it.line == 2 })
+            have(any { it.code == 1215 && it.line == 3 })
         }
     }
 
     @Test
-    fun `TS2396 - try-finally bodies and labeled statements are walked`() {
+    fun `TS1215 - try-finally bodies and labeled statements are walked`() {
         diagnose(
             """
+            export {};
             try {
                 const a = (arguments: string, ...r: any[]) => 1;
             } finally {
@@ -368,9 +379,8 @@ class M04ArgsCollisionSpineMigrationTest {
             }
             lbl: (function (arguments: string, ...r: any[]) {})();
             """,
-            directives = DOWNLEVEL_ES5,
         ) should {
-            have(count { it.code == 2396 } == 3)
+            have(count { it.code == 1215 } == 3)
         }
     }
 

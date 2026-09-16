@@ -140,16 +140,20 @@ class DownlevelIterationRemovedTest {
 
     /**
      * tsgo reports `TS2488 Type 'never' must have a '[Symbol.iterator]()' method that returns an
-     * iterator.` at es5 too (its lib has `Iterable`). Ours refuses below ES2015 — the tsc-6
-     * array-likeness leg, (LEGACY.1)(j)'s — and before this round `downlevelIteration: true`
-     * happened to OPEN the gate, matching tsgo by accident in that one cell. The option no
-     * longer changes the answer, so both cells are silent; the (j) round re-points this pin.
+     * iterator.` at es5 too (its lib has `Iterable`). Until (LEGACY.1)(j2) ours refused below
+     * ES2015 — the tsc-6 array-likeness leg — and `downlevelIteration: true` happened to OPEN
+     * the gate, matching tsgo by accident in that one cell; (P18.109) pinned that silence as a
+     * `residue`. (j2) replaced the target conjunct by tsgo's lib condition
+     * (`Checker.uplevelIterationLib`), so every es5 cell now answers tsgo's row and the option
+     * still changes nothing (2026-09-15).
      */
     @Test
-    fun `residue - a never array destructure at es5 stays silent whatever downlevelIteration says`() {
-        diagnose(neverDestructure, es5True) should { have(none { it.code == 2488 }) }
-        diagnose(neverDestructure, es5False) should { have(none { it.code == 2488 }) }
-        diagnose(neverDestructure, es5) should { have(none { it.code == 2488 }) }
+    fun `a never array destructure at es5 reports TS2488 whatever downlevelIteration says`() {
+        for (directives in listOf(es5True, es5False, es5)) {
+            val rows = diagnose(neverDestructure, directives).filter { it.code == 2488 }
+            assert(rows.size == 1)
+            assert(rows.single().message == "Type 'never' must have a '[Symbol.iterator]()' method that returns an iterator.")
+        }
     }
 
     /** tsgo at es2015 / unset: exactly this row, whatever the option says. */

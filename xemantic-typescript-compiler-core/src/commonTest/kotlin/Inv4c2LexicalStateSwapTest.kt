@@ -188,15 +188,16 @@ class Inv4c2LexicalStateSwapTest {
     }
 
     @Test
-    fun `param default referencing a body local is suppressed below ES2015`() {
-        // let/const downlevel to hoisted var — the legacy ES5 pre-collect stays.
+    fun `param default referencing a body local is TS2304 at a written es5 too`() {
+        // (LEGACY.1)(j2): the legacy ES5 pre-collect is gone — tsgo reports
+        // `Cannot find name 'bodyLet'` at a written es5 exactly as at es2015.
         diagnose(
             """
             function f(a = bodyLet) { let bodyLet = 1; return a; }
             """,
-            directives = "// @strict: true\n// @target: es5",
+            directives = DOWNLEVEL_ES5,
         ) should {
-            have(none { it.code == 2304 })
+            have(any { it.code == 2304 && it.message.contains("'bodyLet'") })
         }
     }
 

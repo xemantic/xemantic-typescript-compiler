@@ -31,7 +31,7 @@ import kotlin.test.Test
 
 /**
  * INV.4(b) batch 10 (round 519): TS2373 parameter-initializer forward
- * references (plus the ES5 hoisted-body-var TS2454 companion) migrated onto
+ * references (the ES5 hoisted-body-var TS2454 companion left with (LEGACY.1)(j2)) migrated onto
  * the check spine from the deleted `checkParamInitForwardRef` /
  * `walkForParamInitForwardRef` walk family. `checkForwardRefsInParams` (with
  * `findForwardParamRefs` / `findForwardParamRefsInBlock` /
@@ -110,9 +110,10 @@ class Inv4SpineBatch10Test {
     }
 
     @Test
-    fun `ES5 hoisted body var referenced from a param initializer fires TS2373 and TS2454`() {
-        // Unset @target keeps the raw checker target below ES2015, enabling
-        // the hoisted-body-var leg (params share the fn scope with vars).
+    fun `a body var referenced from a param initializer is TS2304 at a written es5 - the ES5 TS2373 and TS2454 leg is gone`() {
+        // (LEGACY.1)(j2): tsgo resolves a parameter initializer against the parameters
+        // alone at every target — `Cannot find name 'b'` at a written es5 (2026-09-15);
+        // the tsc-6 hoisted-body-var leg (TS2373 + a TS2454 companion) had no emitter to mirror.
         diagnose(
             """
             function f(a = b) {
@@ -121,8 +122,9 @@ class Inv4SpineBatch10Test {
             """,
             directives = DOWNLEVEL_ES5,
         ) should {
-            have(any { it.code == 2373 })
-            have(any { it.code == 2454 })
+            have(none { it.code == 2373 })
+            have(none { it.code == 2454 })
+            have(any { it.code == 2304 && it.message == "Cannot find name 'b'." })
         }
     }
 

@@ -43,7 +43,11 @@ import kotlin.test.Test
  * therefore collected SIX false positives from the one small file this class pins:
  * TS1250, TS1501, TS1503, TS2659, TS2737 and TS18045. (TS1250 has since left the compiler
  * altogether — (LEGACY.1)(j1), 2026-09-15: TypeScript 7 never emits it at any target, so its
- * explicit-es5 pin below is gone and `TargetGatedDiagnosticsRemovedTest` pins the silence.)
+ * explicit-es5 pin below is gone and `TargetGatedDiagnosticsRemovedTest` pins the silence.
+ * (LEGACY.1)(j2), the same day, did the same for TS18045, TS2659 and the `u`/`y` rows of
+ * TS1501 — tsgo has no emitter for any of them — so their explicit-es5 pins are gone too and
+ * `TargetGatesRemovedTest` pins those silences; the es2017 pins below (TS2737, TS1503) are the
+ * `< ES2020`/`< ES2018` gates tsgo still carries.)
  *
  * The oracle for that: across the whole pristine baseline corpus, **every** TS2737 (4
  * baselines), TS18045 (5), TS1250 (7) and TS2802 (10) comes from a fixture with an
@@ -104,36 +108,6 @@ class DownlevelGateDefaultTargetTest {
     fun `an explicit es2017 target still refuses a bigint literal`() {
         diagnose("const b = 1n;", directives = "// @target: es2017") should {
             have(any { it.code == 2737 })
-        }
-    }
-
-    @Test
-    fun `an explicit es5 target still refuses an accessor property`() {
-        diagnose(
-            "class C { accessor p: number = 1; }",
-            directives = "// @target: es5\n// @ignoreDeprecations: 6.0",
-        ) should {
-            have(any { it.code == 18045 })
-        }
-    }
-
-    @Test
-    fun `an explicit es5 target still refuses super in an object-literal method`() {
-        diagnose(
-            "var o = { m() { super.toString(); } };",
-            directives = "// @target: es5\n// @ignoreDeprecations: 6.0",
-        ) should {
-            have(any { it.code == 2659 })
-        }
-    }
-
-    @Test
-    fun `an explicit es5 target still refuses a sticky regular-expression flag`() {
-        diagnose(
-            "const r = /a/y;",
-            directives = "// @target: es5\n// @ignoreDeprecations: 6.0",
-        ) should {
-            have(any { it.code == 1501 })
         }
     }
 

@@ -39,7 +39,9 @@ import kotlin.test.Test
  * PRESERVE, class-member bodies + property initializers set it from the
  * containing class's `extends` clause, objlit method/accessor bodies set
  * TRUE. Emissions happen ONLY at object-literal properties: method/accessor
- * bodies draw TS2659 when target < ES2015; a PropertyAssignment whose
+ * bodies drew TS2659 when target < ES2015 until (LEGACY.1)(j2) deleted that
+ * arm (tsgo has no TS2659 emitter — their reach pins ride TS2660 since
+ * 2026-09-15); a PropertyAssignment whose
  * initializer is a FunctionExpression draws TS2660 unconditionally, an
  * ArrowFunction initializer only when !superValid — all via the BOUNDED
  * findObjLitSuperRefs leaf, which never descends nested object literals,
@@ -238,22 +240,24 @@ class M04ObjLitSuperSpineMigrationTest {
         }
     }
 
-    // ── TS2659: target below ES2015 ────────────────────────────────────────
+    // ── TS2659 is GONE ((LEGACY.1)(j2)): tsgo has no emitter, a method's super is silent at es5 ──
 
     @Test
-    fun `TS2659 - object literal method at an explicit es5 target`() {
+    fun `TS2659 is gone - object literal method at a written es5 target is silent`() {
+        // tsgo 7.0.2 at a written es5: no row for `super` in an object-literal method
+        // (measured 2026-09-15); TS2660 stays a PropertyAssignment-only emission.
         val ds = diagnose(
             """
             const o = { m() { return super.x; } };
             """,
             directives = DOWNLEVEL_ES5,
         )
-        assert(ds.count { it.code == 2659 } == 1)
+        assert(ds.count { it.code == 2659 } == 0)
         assert(ds.count { it.code == 2660 } == 0)
     }
 
     @Test
-    fun `TS2659 - get and set accessor bodies`() {
+    fun `TS2659 is gone - get and set accessor bodies are silent at a written es5`() {
         val ds = diagnose(
             """
             const o = {
@@ -263,7 +267,8 @@ class M04ObjLitSuperSpineMigrationTest {
             """,
             directives = DOWNLEVEL_ES5,
         )
-        assert(ds.count { it.code == 2659 } == 2)
+        assert(ds.count { it.code == 2659 } == 0)
+        assert(ds.count { it.code == 2660 } == 0)
     }
 
     @Test
@@ -291,54 +296,51 @@ class M04ObjLitSuperSpineMigrationTest {
     }
 
     @Test
-    fun `TS2659 and TS2660 mix in one literal`() {
+    fun `TS2659 is gone - only the fn-expr property's TS2660 survives in a mixed literal at es5`() {
         val ds = diagnose(
             """
             const o = { m() { return super.a; }, p: function() { return super.b; } };
             """,
             directives = DOWNLEVEL_ES5,
         )
-        assert(ds.count { it.code == 2659 } == 1)
+        assert(ds.count { it.code == 2659 } == 0)
         assert(ds.count { it.code == 2660 } == 1)
     }
 
     // ── the bounded leaf's frozen coverage ─────────────────────────────────
 
     @Test
-    fun `TS2659 - leaf reaches through binary chains`() {
+    fun `TS2660 - leaf reaches through binary chains`() {
         val ds = diagnose(
             """
-            const o = { m() { return 1 + super.x; } };
+            const o = { p: function() { return 1 + super.x; } };
             """,
-            directives = DOWNLEVEL_ES5,
         )
-        assert(ds.count { it.code == 2659 } == 1)
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
-    fun `TS2659 - leaf statement coverage - if while var return`() {
+    fun `TS2660 - leaf statement coverage - if while var return`() {
         val ds = diagnose(
             """
-            const o = { m() {
+            const o = { p: function() {
                 if (super.a) { super.b; }
                 while (super.c) { }
                 const v = super.d;
             } };
             """,
-            directives = DOWNLEVEL_ES5,
         )
-        assert(ds.count { it.code == 2659 } == 4)
+        assert(ds.count { it.code == 2660 } == 4)
     }
 
     @Test
-    fun `TS2659 - leaf call callee and arguments`() {
+    fun `TS2660 - leaf call callee and arguments`() {
         val ds = diagnose(
             """
-            const o = { m() { super.f(super.g); } };
+            const o = { p: function() { super.f(super.g); } };
             """,
-            directives = DOWNLEVEL_ES5,
         )
-        assert(ds.count { it.code == 2659 } == 2)
+        assert(ds.count { it.code == 2660 } == 2)
     }
 
     @Test
@@ -393,25 +395,23 @@ class M04ObjLitSuperSpineMigrationTest {
     }
 
     @Test
-    fun `TS2659 - a for-in head expression is walked`() {
+    fun `TS2660 - a for-in head expression is walked`() {
         val ds = diagnose(
             """
-            for (const k in { m() { return super.x; } }) { }
+            for (const k in { p: function() { return super.x; } }) { }
             """,
-            directives = DOWNLEVEL_ES5,
         )
-        assert(ds.count { it.code == 2659 } == 1)
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
-    fun `TS2659 - a for-of head expression is walked`() {
+    fun `TS2660 - a for-of head expression is walked`() {
         val ds = diagnose(
             """
-            for (const v of [{ m() { return super.x; } }]) { }
+            for (const v of [{ p: function() { return super.x; } }]) { }
             """,
-            directives = DOWNLEVEL_ES5,
         )
-        assert(ds.count { it.code == 2659 } == 1)
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test

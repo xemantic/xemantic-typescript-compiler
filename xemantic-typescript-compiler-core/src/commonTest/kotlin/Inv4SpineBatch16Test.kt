@@ -269,16 +269,17 @@ class Inv4SpineBatch16Test {
     }
 
     @Test
-    fun `es5 target hoists body vars into parameter defaults`() {
-        // Below ES2015 let/const downlevels to hoisted var — a param default
-        // referencing a body local is suppressed (legacy ES5-hoist collect).
+    fun `a written es5 target does NOT hoist body vars into parameter defaults - TS2304 as at every target`() {
+        // (LEGACY.1)(j2): the legacy sub-ES2015 hoist collect is gone — tsgo resolves a
+        // parameter initializer against the parameters alone at a written es5 exactly as
+        // at es2015 (`Cannot find name 'later'`, measured 2026-09-15).
         diagnose(
             """
             function f(x = later) { var later = 1; }
             """,
-            directives = "// @strict: false\n// @target: es5",
+            directives = "// @strict: false\n// @target: es5\n// @ignoreDeprecations: 6.0",
         ) should {
-            have(none { it.code == 2304 })
+            have(any { it.code == 2304 && it.message == "Cannot find name 'later'." })
         }
     }
 
