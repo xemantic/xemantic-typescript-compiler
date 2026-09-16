@@ -1,5 +1,18 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.114) — (LEGACY.0b) STEP 17: THE JS CommonJS `exports` MODEL — FOUR ROWS, AND THE ERRORS SCREEN WAS A *GATE* ON FIVE OF SIX ARMS, 19,604 / 0 / 77 (2026-09-16).**
+tsgo declares `exports` as a file local whose type an `export =` COLLAPSES onto its target, so a one-level
+`exports.p` is a property access on it — read or write, before or after the assignment, order irrelevant — and
+`exports` is UNBOUND in a `.js` file with none of tsgo's four CommonJS indicators (a bare `require(…)` call being
+one the brief missed). B438d, which emitted a TS2303 tsgo never produces, is deleted. Pending 56 → **52**.
+TS7009-from-the-callee-type was BUILT, fixed 6 of 12 shapes, and was REVERTED on two measurements: it does not
+close its row (a third mechanism — the module's own exports object) and it costs a green baseline through a
+class/function merge gap. 18 pins, 9 of 9 non-controls red; **two pins were added because the ARMS found them
+missing**, which is the round's lesson. A trap for every future JS round: `isJSLiteralType` makes tsgo silent
+without `noImplicitAny`, so a scratch project must set it or the binary appears to contradict its own baseline.
+cost_gate 20/20 +0.00%; huge_methods exit 0 (874 classes); grid 8×0/0 + emit 78/78 (controls — no `.js` in the
+profiles); warning-clean.
+
 **(P18.64) — (INV.0) STEP 10c: HERITAGE AND QUALIFIED NAMES, AND THE RESOLVER THE ITEM NAMED WAS NOT THE ONE THAT MATTERED, 18,541 / 0 / 3 (2026-09-10).**
 The item pointed at `NameResolver.resolveHeritageBaseSymbol`; **it was given the consult and
 NOTHING MOVED.** A base type's MEMBERS come from `Checker.getTypeFromBaseTypeExpression` — a

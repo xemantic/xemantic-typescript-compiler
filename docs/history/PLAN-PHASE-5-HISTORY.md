@@ -46,6 +46,55 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
+### Round (P18.109) — (LEGACY.1) step (i): TS2802 is LIB-gated in TypeScript 7, not target-gated — the `downlevelIteration` block was wrong in both directions and is gone, −243 lines (2026-09-15)
+
+**Three commits** (`f52af89ce` refactor, `f94418c1a` test, this docs commit). **Suite 19,506 → 19,527 / 0 / 83** (+21
+pins: 14 core, 7 `-project`), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS,
+counted: 2 active cases carry `@downlevelIteration` (only their es2015 variation is active), 3 an embedded
+`"target": "es5"` in a NESTED config the harness never applies, 4 an embedded `"ES3"` — no active baseline
+compiles at es5 with an iteration shape, so the pins are the whole gate; `cost_gate.py` exit 0, 20/20 +0.00% (a real
+gate — a checker pass was deleted); `huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0`
+and emit 78/78 — controls; warning-clean with an injected positive control; `spine_closure_audit.py` clean.
+`Checker.kt` 194,996 → **194,753** (−243). **(LEGACY.1)(i) is CHECKED OFF; (g) stays BLOCKED-PENDING-USER; (j)
+`target: ES5/ES3` is the next open step and is HIGH-risk by the item's own label; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE MEASUREMENT, AND IT FIT NEITHER OF THE BRIEF'S TWO OUTCOMES.** 16 cells (target es5 / es2015 / unset ×
+`downlevelIteration` unset / true / false × `lib` default / `[es5]` / `noLib`) over twelve iteration shapes, LSP
+diagnostics + `--outDir` emit. At a written `es5` — whatever the option says — tsgo's checker rows and emit are
+byte-identical to es2015: ES2015-native `for…of`, generators and spreads, no `__values`/`__read`/`__spreadArray`
+helper, **0 TS2802**. TS2802 fires only when `lib` excludes es2015 — three rows on the typed-array shapes — **at
+ANY target, es2015 included**. The mechanism (`checker.go:6084-6164`): `getIteratedTypeOrElementType` takes the
+iterable protocol whenever the global `Iterable` type exists; there is no language-version conjunct and the option
+is read nowhere but the TS5102 row (three references: parser, field, `program.go:874`). At a written es5 the default
+lib is `lib.d.ts`, whose `lib.dom.d.ts` references es2015 (`--listFiles` confirms), so `Iterable` exists. Our block
+was tsc 6's TARGET rule — it fired at a written es5 where tsgo is silent (two false `IArguments` rows per cell)
+and stayed silent under `lib: ["es5"]` at es2015 where tsgo reports.
+
+**WHAT LANDED.** The pass registration, the seven single-caller `checkDownlevelIteration*` functions (228 lines)
+and `TYPED_ARRAY_CONSTRUCTORS` deleted, each shown by a repo-wide reference census to have no other caller; the
+TS2488 sibling gate keeps its `defaultedTarget < ES2015` conjunct for (j) and drops the option read; the boolean
+`downlevelIteration` is deleted (no reader survives); the parse, `downlevelIterationExplicitlySet` and the
+TS5101/TS5102 row stay. Emit byte-identical before/after in all 16 cells.
+
+**WHERE THE ITEM (AND THE BRIEF) WERE WRONG.** Line numbers stale by ~730. "Four active subtests pin the 6.0 line" —
+the two `…has expected errors` halves are `@Ignore`d in `tsgoPendingBaselines` (the TS5102 pair), only the
+`…compiles` halves run. "7 embedded es5 cases, all with tsgo baselines" — 3 es5 (nested, inert) + 4 ES3. And
+TS2802 is neither dead nor target-gated: it is LIB-gated — a rule (j4) must carry when it rebuilds the es5 lib
+set (`Array.from` at a written es5 is TS2550 here and clean in tsgo for the same reason).
+
+**PINS AND ABLATION.** 21 pins; stash-ablation core 7/14 red, project 2/7 red, every `control -` green; a NodeList
+pin was BLIND on the first run (declared through `declare const`, while the old block keyed on `new NodeList()`)
+and was re-pointed. Two arms: a1 the block re-inserted target-gated 7/4/0; a2 the TS2488 gate re-reading the
+option 1/0/0 — the boolean's deletion is structural (a read no longer compiles). Final md5s Checker `420f4469`,
+CompilerOptions `13810fb9`, TypeScriptCompiler `a307c9cc` — the orchestrator's AFTER arm matched all three.
+
+**WHAT (j) INHERITS.** `checkIntersectionNeverArrayDestructure`'s `defaultedTarget < ES2015` return — tsgo reports
+TS2488 there at a written es5 (the one pin named `residue -`); `spineIterableOperandActive`'s target conjunct
+(`spineForOfNonIterableActive` is already lib-shaped); and what tsgo DOES at a written es5 — TS5108 at the value,
+default lib `lib.d.ts` → dom → es2015, checker rows and emit identical to es2015. Recorded residues, none of
+this round's: `lib: ["es5"]` typed-array iteration (tsgo TS2802 at any target), `arguments` spread (tsgo
+TS2495/TS2461), `[..."str"]` (TS2461) — ours silent in all three.
+
 ### Round (P18.107) — (LEGACY.1) step (f): amd/umd/system fold onto CommonJS as a PROPERTY of the kind, three of nine arms were deletable, and the corpus is a counted control (2026-09-15)
 
 **Three commits** (`3f5aeea85` refactor, `4556f254d` test, this docs commit). **Suite 19,465 → 19,487 / 0 / 83** (+22

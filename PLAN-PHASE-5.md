@@ -25,6 +25,54 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.119) — (CHK.136): a `for`-header binding and a `for…in` binding typed `any`, which is (KIR.LOWER.3)'s root cause from the other end (2026-09-16)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,652 → 19,672 / 0 / 70**; `cost_gate.py` exit 0 with a
+max delta of **+0.15%** (`typeOfExpr.distinct`, moving WITH `calls` on a bit-identical `spine.nodes` — the opposite
+of (CHK.68)'s memo-blowup signature, which is inflated calls beside a flat population); `huge_methods.py
+--fail-over 0` exit 0 over 875 core classes; the corpus screen 3,097 / 0 errors and 5,688 / 0 emit; **the 8-profile
+grid is a REAL gate here and reads `added=0 removed=0` on all eight plus 78 emit files byte-identical**, which is
+the round's headline number, not a control. `Checker.kt` 194,578 → 194,675.
+
+**THE MEASUREMENT FIRST.** On an 11-line fixture (`strict`, `target es2020`) tsgo 7.0.2 reports **7 rows and we
+reported 2**: inside `for (let i = 0; i < nums.length; i++)`, each of `const bad: string = i`, `nums[i]` and
+`i + 1` is a missing TS2322, `for (const k in {a:1})` loses its `string`, and a header binding with a STRING
+initializer loses it too — so the gap is not number-specific. `for-of` and an ordinary `let` were already correct,
+which is exactly why every earlier probe of this area read healthy.
+
+**THE CAUSE, AND IT EXPLAINS THE ASYMMETRY.** A `ForStatement`'s initializer is a `VariableDeclarationList` whose
+parent is the LOOP, not a `VariableStatement` — and both `spineArithLeaveNode` and `spineCtaM3StatementAnchor` test
+that parent, so the binding was recorded by NOTHING, for an ANNOTATED declarator as much as an inferred one.
+`ctaSpineEnter` has had a `ForOfStatement` arm since (CHK.29); nobody ever added the other two loop forms.
+`ctaForHeaderBindings` and `ctaForInBinding` register against the LOOP's own nodeId, so the scope covers the
+condition and the incrementor as well as the body and pops at the loop's leave — a header binding cannot leak past
+its loop, which is a pin and an ablation arm rather than an argument.
+
+**THE TYPE HALF IS SHARED STRUCTURALLY, NOT COPIED.** `cvdaInferredLocalType` answers the type the ordinary
+statement recorder WOULD record (the (WIDEN.1) const rule, the round-460 ambiguous-name refusal, the round-573
+foreign-type-parameter refusal, the void/nullish gates) and the header arm calls it, so CLAUDE.md's standing
+"add a rule to both halves of a pair" law is enforced by construction here instead of by discipline.
+
+**AND THAT SPLIT BROKE A (JIT.1) PARTITION PIN, WHICH IS THE ROUND'S REUSABLE LESSON.** Extracting the type half
+left `cvdaRecordInferredLocalType` a **39-bytecode delegating wrapper**, and `HugeMethodLimitTest` pins that every
+part of the `checkVarDeclAssignability` split carries a real share of the body (floor 250) — the suite caught it,
+nothing else could. The repair is to INLINE the one-line record at its single call site and rename the split part,
+never to lower the pin's bound: a split part is a claim that the monolith's run lives there, so when the run moves
+the NAME moves with it. Lowering the floor would have converted the partition into a delegation and made the
+assertion vacuous for every later round.
+
+**PINS AND ABLATION.** 20 cases in `ForHeaderBindingTypeTest` — inferred / element-access / arithmetic /
+non-numeric / annotated / `var` / multi-declarator / closure-captured headers, `for…in` over an object literal, an
+array, a tuple and a `Record`, four scope-leak controls, and four REFUSAL pins (a binding-pattern head, a `for…in`
+over a type parameter, a header with no initializer stay `any`). Four arms: a1 header off → 8 red, a2 `for…in` off
+→ 4 red, a3 pristine → 12 red, a4 an UNSCOPED write → the 2 scope pins, which is what found and repaired two blind
+scope pins. **RESIDUES**: a BINDING-PATTERN header stays `any`; a `for…in` over a TYPE PARAMETER stays `any`; a
+`for…in` over an ARRAY answers `string`, which is tsgo's answer and not `string | number`.
+
+**Instrument note**: the grid's before arm is the agent's pre-change snapshot, and its `MemberResolver.class` md5
+differs from the after arm's although that source is untouched — a build-layout artefact, not a behaviour one. What
+makes the arm valid as a BEFORE is that it reproduces HEAD's known row counts exactly (46 per profile, 94 harness).
+
 ### Round (P18.118) — (KIR.LOWER.3)+(KIR.LOWER.4): the lowering's bag fallback, and two defects the items do not name (2026-09-16)
 
 **Three commits** (`8b0d914d7` perf, `e933fe4d6` test, this docs commit). **Suite 19,637 → 19,652 / 0 / 70**, with
@@ -520,55 +568,6 @@ corpus cannot see this change in either direction and the pins are the whole gat
 **WHAT (j2)-(j4) INHERIT.** `DownlevelGateDefaultTargetTest`'s six remaining explicit-es5 pins (TS18045, TS2659,
 TS1501) are (j2)'s countdowns; the harness at `// @target: es3` prints TS6046 and then still CHECKS at ES3 — (j4)'s
 surface question; and the standing 6.0-default TS5107 vs tsgo's TS5108 is the `@typeScriptVersion` owner decision.
-
-### Round (P18.109) — (LEGACY.1) step (i): TS2802 is LIB-gated in TypeScript 7, not target-gated — the `downlevelIteration` block was wrong in both directions and is gone, −243 lines (2026-09-15)
-
-**Three commits** (`f52af89ce` refactor, `f94418c1a` test, this docs commit). **Suite 19,506 → 19,527 / 0 / 83** (+21
-pins: 14 core, 7 `-project`), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS,
-counted: 2 active cases carry `@downlevelIteration` (only their es2015 variation is active), 3 an embedded
-`"target": "es5"` in a NESTED config the harness never applies, 4 an embedded `"ES3"` — no active baseline
-compiles at es5 with an iteration shape, so the pins are the whole gate; `cost_gate.py` exit 0, 20/20 +0.00% (a real
-gate — a checker pass was deleted); `huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0`
-and emit 78/78 — controls; warning-clean with an injected positive control; `spine_closure_audit.py` clean.
-`Checker.kt` 194,996 → **194,753** (−243). **(LEGACY.1)(i) is CHECKED OFF; (g) stays BLOCKED-PENDING-USER; (j)
-`target: ES5/ES3` is the next open step and is HIGH-risk by the item's own label; (LEGACY.0) stays OPEN** on (0b-17).
-
-**THE MEASUREMENT, AND IT FIT NEITHER OF THE BRIEF'S TWO OUTCOMES.** 16 cells (target es5 / es2015 / unset ×
-`downlevelIteration` unset / true / false × `lib` default / `[es5]` / `noLib`) over twelve iteration shapes, LSP
-diagnostics + `--outDir` emit. At a written `es5` — whatever the option says — tsgo's checker rows and emit are
-byte-identical to es2015: ES2015-native `for…of`, generators and spreads, no `__values`/`__read`/`__spreadArray`
-helper, **0 TS2802**. TS2802 fires only when `lib` excludes es2015 — three rows on the typed-array shapes — **at
-ANY target, es2015 included**. The mechanism (`checker.go:6084-6164`): `getIteratedTypeOrElementType` takes the
-iterable protocol whenever the global `Iterable` type exists; there is no language-version conjunct and the option
-is read nowhere but the TS5102 row (three references: parser, field, `program.go:874`). At a written es5 the default
-lib is `lib.d.ts`, whose `lib.dom.d.ts` references es2015 (`--listFiles` confirms), so `Iterable` exists. Our block
-was tsc 6's TARGET rule — it fired at a written es5 where tsgo is silent (two false `IArguments` rows per cell)
-and stayed silent under `lib: ["es5"]` at es2015 where tsgo reports.
-
-**WHAT LANDED.** The pass registration, the seven single-caller `checkDownlevelIteration*` functions (228 lines)
-and `TYPED_ARRAY_CONSTRUCTORS` deleted, each shown by a repo-wide reference census to have no other caller; the
-TS2488 sibling gate keeps its `defaultedTarget < ES2015` conjunct for (j) and drops the option read; the boolean
-`downlevelIteration` is deleted (no reader survives); the parse, `downlevelIterationExplicitlySet` and the
-TS5101/TS5102 row stay. Emit byte-identical before/after in all 16 cells.
-
-**WHERE THE ITEM (AND THE BRIEF) WERE WRONG.** Line numbers stale by ~730. "Four active subtests pin the 6.0 line" —
-the two `…has expected errors` halves are `@Ignore`d in `tsgoPendingBaselines` (the TS5102 pair), only the
-`…compiles` halves run. "7 embedded es5 cases, all with tsgo baselines" — 3 es5 (nested, inert) + 4 ES3. And
-TS2802 is neither dead nor target-gated: it is LIB-gated — a rule (j4) must carry when it rebuilds the es5 lib
-set (`Array.from` at a written es5 is TS2550 here and clean in tsgo for the same reason).
-
-**PINS AND ABLATION.** 21 pins; stash-ablation core 7/14 red, project 2/7 red, every `control -` green; a NodeList
-pin was BLIND on the first run (declared through `declare const`, while the old block keyed on `new NodeList()`)
-and was re-pointed. Two arms: a1 the block re-inserted target-gated 7/4/0; a2 the TS2488 gate re-reading the
-option 1/0/0 — the boolean's deletion is structural (a read no longer compiles). Final md5s Checker `420f4469`,
-CompilerOptions `13810fb9`, TypeScriptCompiler `a307c9cc` — the orchestrator's AFTER arm matched all three.
-
-**WHAT (j) INHERITS.** `checkIntersectionNeverArrayDestructure`'s `defaultedTarget < ES2015` return — tsgo reports
-TS2488 there at a written es5 (the one pin named `residue -`); `spineIterableOperandActive`'s target conjunct
-(`spineForOfNonIterableActive` is already lib-shaped); and what tsgo DOES at a written es5 — TS5108 at the value,
-default lib `lib.d.ts` → dom → es2015, checker rows and emit identical to es2015. Recorded residues, none of
-this round's: `lib: ["es5"]` typed-array iteration (tsgo TS2802 at any target), `arguments` spread (tsgo
-TS2495/TS2461), `[..."str"]` (TS2461) — ours silent in all three.
 
 ## QUEUE
 
@@ -1406,6 +1405,17 @@ CLAUDE.md § "AI agent mission".
   value, the ABSENCE of TS5107 and TS5095, and the derived emit (a `module: none` project with `target: es2020`
   emits as ES2020 in tsgo — verify), with an `@Filename: tsconfig.json` harness pin and a `-project` twin.
 
+- [x] **(CHK.136) CLOSED 2026-09-16 ((P18.119) note) — A `for`-HEADER BINDING AND A `for…in` BINDING TYPED `any`,
+  which is the CHECKER-side root cause (KIR.LOWER.3) measured from the other end ((P18.118) note). tsgo reported 7
+  rows on an 11-line fixture where we reported 2. A `ForStatement`'s initializer is a `VariableDeclarationList`
+  whose parent is the LOOP, not a `VariableStatement`, and both `spineArithLeaveNode` and
+  `spineCtaM3StatementAnchor` test that parent — so the binding was never recorded at all, for an ANNOTATED header
+  binding as much as an inferred one; `ctaSpineEnter` has had a `ForOfStatement` arm since (CHK.29), which is why
+  `for-of` and an ordinary `let` always worked. `ctaForHeaderBindings` and `ctaForInBinding` register against the
+  LOOP's own nodeId, so the scope covers the condition and incrementor and pops at the loop's leave. The type half
+  is `cvdaInferredLocalType`, shared structurally with the ordinary statement recorder so the widening and refusal
+  rules cannot drift. **RESIDUES**: a BINDING-PATTERN header stays `any`; a `for…in` over a TYPE PARAMETER stays
+  `any`; a `for…in` over an ARRAY answers `string` (tsgo's answer) and never `string | number`.**
 - [ ] **(CHK.135) RE-SCOPED AND HALF-LANDED 2026-09-16 ((P18.117), `a5ca1510a`): the premise is FALSE — `Partial`,
   `Pick`, `Readonly`, `Omit`, a user homomorphic mapped type and `Record` with a LITERAL-UNION key are all already
   correct. What was broken is the INDEX-SIGNATURE READ, in four mechanisms of which two landed (PROPERTY access in
