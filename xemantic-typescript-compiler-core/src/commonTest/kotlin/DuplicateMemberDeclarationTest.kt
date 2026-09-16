@@ -49,12 +49,13 @@ import org.intellij.lang.annotations.Language
  * **(ii) THE DIAGNOSTIC, AND WHERE THE TWO REFERENCES PART.** The duplicate SCANS are AST
  * scans beside the member-BUILDING sites round 937 levelled, and they carried an older,
  * narrower copy of the same `when` — B451's law one site further on. They now ask one namer,
- * so a NO-SUBSTITUTION TEMPLATE spelling and every LATE-BOUND key reach them. But TS2300 and
- * TS2687 are the BINDER's duplicate checks and a late-bound key never reaches those:
- * `dynamicNamesErrors`' PRISTINE baseline is the measurement — `interface T0 { [c0]: number;
- * 1: number }` with `const c0 = "1"` is a duplicate by name and gets NOTHING, while its
- * late-bound sibling `T3` gets TS2717 alone. tsc 7.0.2 emits TS2300 for both; that is a tsgo
- * divergence and this compiler follows pristine tsc (CLAUDE.md's standing directive).
+ * so a NO-SUBSTITUTION TEMPLATE spelling and every LATE-BOUND key reach them. Round 938 then
+ * gated TS2300/TS2687 out for a late-bound key, reading `dynamicNamesErrors`' PRISTINE
+ * baseline, where `interface T0 { [c0]: number; 1: number }` gets NOTHING. **(LEGACY.0b) step
+ * 20 retired that gate for an INTERFACE** under the tsgo-only directive — tsgo reports TS2300
+ * at every member of the group — and kept it for a CLASS, whose tsgo answer is order-dependent
+ * in a way no rule over the walker's group reproduces. The two pins below carry tsgo's
+ * measured rows; `TsgoStep20Test` is the family's own class.
  *
  * NOT pinned, deliberately (round 765 — a known-open gap is a countdown, not a guard), each
  * measured this round with tsc's answer and recorded in (CHK.5)(b): a MERGED-interface
@@ -214,11 +215,23 @@ class DuplicateMemberDeclarationTest {
     }
 
     @Test
-    fun `a late-bound duplicate is TS2717 and deliberately NOT TS2300`() {
-        // `dynamicNamesErrors`' pristine baseline: a duplicate by late-bound NAME is invisible
-        // to the binder's duplicate check and reaches only the re-declaration check.
+    fun `a late-bound duplicate in an interface is TS2300 at both members and TS2717`() {
+        // RE-POINTED at (LEGACY.0b) step 20. This pin asserted PRISTINE's answer — no TS2300
+        // for a duplicate by late-bound NAME — which was right for round 938 and is not the
+        // compatibility target. tsgo 7.0.2 on this exact fixture, measured:
+        //   t.ts(2,17): TS2300: Duplicate identifier 'p'.
+        //   t.ts(2,28): TS2300: Duplicate identifier 'p'.
+        //   t.ts(2,28): TS2717: … Property '[K]' must be of type 'number', …
+        // The ORDINARY member supplies the TS2300 name and the computed member squiggles its
+        // own three characters; TS2717 keeps naming the offending member as written.
         val d = check(k + "interface Dup { p: number; [K]: string }")
-        assert(d.none { it.code == 2300 })
+        val dup = d.filter { it.code == 2300 }
+        assert(dup.size == 2)
+        assert(dup.all { it.message == "Duplicate identifier 'p'." })
+        assert(dup[0].character == 17)
+        assert(dup[0].length == 1)
+        assert(dup[1].character == 28)
+        assert(dup[1].length == 3)
         assert(d.count { it.code == 2717 } == 1)
         assert(d.first { it.code == 2717 }.message ==
             "Subsequent property declarations must have the same type.  Property '[K]' must be of type 'number', but here has type 'string'.")
@@ -239,7 +252,15 @@ class DuplicateMemberDeclarationTest {
             "const K = \"p\";\nconst K2 = \"p\";\ninterface I { [K]: number; [K2]: string }"
         )
         assert(d.count { it.code == 2717 } == 1)
-        assert(d.none { it.code == 2300 })
+        // RE-POINTED at (LEGACY.0b) step 20 — tsgo 7.0.2 on this exact fixture:
+        //   t.ts(3,15): TS2300: Duplicate identifier '[K]'.
+        //   t.ts(3,28): TS2300: Duplicate identifier '[K]'.
+        // With no ordinary member in the group the FIRST key's written spelling names it.
+        val dup = d.filter { it.code == 2300 }
+        assert(dup.size == 2)
+        assert(dup.all { it.message == "Duplicate identifier '[K]'." })
+        assert(dup[0].character == 15)
+        assert(dup[1].character == 28)
     }
 
     @Test
