@@ -3725,6 +3725,82 @@ class Checker(
         return out
     }
 
+    /**
+     * (P18.119) The `for` STATEMENT HEADER's binding names and types, or null.
+     *
+     * A `ForStatement`'s initializer is a [VariableDeclarationList] whose parent is
+     * the loop, NOT a [VariableStatement] — so every declaration recorder in this
+     * checker skips it ([spineArithLeaveNode]'s arm tests that parent explicitly,
+     * and the cta statement anchor's closure lists `VARIABLE_STATEMENT`). Measured
+     * against tsgo 7.0.2, that left EVERY `for (let i = 0; …)` index typed `any`
+     * inside its own loop, for an ANNOTATED header binding as much as an inferred
+     * one: `for (let i = 0; i < n; i++) { const bad: string = i }` was silent where
+     * both references report TS2322, and `nums[i]` was `any` with it — which is the
+     * root cause (KIR.LOWER.3) measured from the other end.
+     *
+     * The types are exactly what the ordinary statement recorder would answer:
+     * [cvdaInferredLocalType] for an un-annotated declarator (so the (WIDEN.1)
+     * const rule, the round-460 ambiguous-name refusal, the round-573 foreign
+     * type-parameter refusal and the void/nullish gates all hold verbatim), and the
+     * resolved annotation for an annotated one. A declarator this cannot type keeps
+     * its pre-existing `anyType` — a BINDING PATTERN head is refused outright.
+     *
+     * Registered against the loop's OWN nodeId, so the narrowing frame one arm down
+     * scopes it to the condition and incrementor as well as the body, and pops it at
+     * the loop's leave: a header binding cannot leak to the rest of the function.
+     */
+    private fun ctaForHeaderBindings(node: ForStatement): List<Pair<String, Type>>? {
+        val list = node.initializer as? VariableDeclarationList ?: return null
+        if (list.declarations.isEmpty()) return null
+        val out = ArrayList<Pair<String, Type>>(2)
+        val top = ctaFrames.last()
+        withCtaFrameLocals(top) {
+            for (d in list.declarations) {
+                val nm = d.name as? Identifier ?: continue
+                val ann = d.type
+                val t = if (ann != null) {
+                    getTypeFromTypeNode(ann).takeIf { it !== anyType && it !== errorType }
+                } else {
+                    cvdaInferredLocalType(d, nm, top.typeParams)
+                }
+                if (t != null) out.add(nm.text to t)
+            }
+        }
+        if (out.isEmpty()) return null
+        return out
+    }
+
+    /**
+     * (P18.119) The `for…in` binding's name and type, or null.
+     *
+     * tsc's answer is `string` for every ordinary subject — measured against tsgo
+     * 7.0.2 over an array, a tuple, a `Record<string, T>` and an object literal with
+     * two keys, all `string`, never `string | number` and never a literal union. The
+     * ONE subject that differs is a TYPE PARAMETER, where tsc answers
+     * `Extract<keyof T, string>`; this checker cannot spell that, so such a subject
+     * is REFUSED and keeps its pre-existing `any` rather than reporting the right
+     * row with the wrong type in it.
+     *
+     * The ASSIGNMENT head (`for (k in o)`, no declaration list) is refused too: `k`
+     * is an existing binding there, and overriding its recorded type would be a
+     * claim about a declaration this loop does not make.
+     *
+     * Scoped to the BODY, exactly as (CHK.29) scopes the `for…of` binding — the
+     * subject expression is evaluated before the binding exists.
+     */
+    private fun ctaForInBinding(node: ForInStatement): List<Pair<String, Type>>? {
+        val list = node.initializer as? VariableDeclarationList ?: return null
+        val d = list.declarations.singleOrNull() ?: return null
+        val nm = (d.name as? Identifier)?.text ?: return null
+        if (d.type != null) return null
+        var refused = false
+        withCtaFrameLocals(ctaFrames.last()) {
+            refused = typeContainsUnresolvedTypeParam(getTypeOfExpression(node.expression))
+        }
+        if (refused) return null
+        return listOf(nm to stringType)
+    }
+
     private fun ctaSpineEnter(node: Node) {
         // (cta-m3i): compute the legacy IfStatement arms' narrowing verdict at
         // the If's enter under the frame maps (exact, incl. nested ifs).
@@ -3750,6 +3826,17 @@ class Checker(
         if (node is ForOfStatement && !spineIsDts) {
             val bodyId = (node.statement as NodeBase).nodeId
             if (bodyId >= 0) ctaForOfBinding(node)?.let { ctaM3NarrowThen[bodyId] = it }
+        }
+        // (P18.119) the `for…in` binding, on the same mechanism, scoped to the body.
+        if (node is ForInStatement && !spineIsDts) {
+            val bodyId = (node.statement as NodeBase).nodeId
+            if (bodyId >= 0) ctaForInBinding(node)?.let { ctaM3NarrowThen[bodyId] = it }
+        }
+        // (P18.119) the `for` HEADER's bindings, registered against the LOOP itself so
+        // the frame below scopes them to the condition and incrementor too.
+        if (node is ForStatement && !spineIsDts) {
+            val forId = (node as NodeBase).nodeId
+            if (forId >= 0) ctaForHeaderBindings(node)?.let { ctaM3NarrowThen[forId] = it }
         }
         // (cta-m3i): a registered then node gets the NARROWING frame — the
         // legacy wrapper's localTypes copy + write + narrowedDeclared entry.
@@ -59853,14 +59940,14 @@ interface DataView {
                 // overwrites it, so the const-ness gate has to be repeated here or the
                 // literal the other site preserved is widened away again.
                 // (CHK.85)(b): a `let` widens an enum MEMBER to its enum here as
-                // [cvdaRecordInferredLocalType] does — `getWidenedLiteralType` alone left
+                // [cvdaInferredLocalType] does — `getWidenedLiteralType` alone left
                 // `let variance = m & Out ? … : undefined` (tsc's own checker.ts) recorded
                 // as the MEMBER union, which the `|=` assignment arm then kept (a `number`
                 // relates to a member here) and the TS2367 read reported against
                 // `VarianceFlags.Bivariant`; tsc's declared type is `VarianceFlags |
                 // undefined`. A `const` keeps the members ((REL.2) round 783).
                 // (CHK.93): a const-ASSERTED initializer is regular and never widens
-                // ([cvdaRecordInferredLocalType]'s rule, repeated here for the same
+                // ([cvdaInferredLocalType]'s rule, repeated here for the same
                 // reason the const-ness gate is).
                 currentLocalTypes[declName!!] =
                     if ((WIDEN1_CONST_KEEPS_LITERAL && isConst) ||
@@ -103317,7 +103404,7 @@ interface DataView {
      * is recorded into [currentLocalTypes] with its [bindingElementType] answer. Round
      * 464b's rules survive it: first-decl-wins (an absent name only), a round-460
      * ambiguous name stays `any`, a function-shaped member is refused, and an inferred
-     * type carrying a FOREIGN type parameter is refused as [cvdaRecordInferredLocalType]
+     * type carrying a FOREIGN type parameter is refused as [cvdaInferredLocalType]
      * refuses it (round 573). What it adds: every ARRAY / tuple pattern, every default,
      * nested pattern and union receiver, which round 464b's object-only, top-level-only,
      * non-union recorder left `any` at this reader.
@@ -103397,7 +103484,7 @@ interface DataView {
         val typeAnnotation = decl.type
         CtaSections.atB(CtaSections.B_UNANNOT)
         if (typeAnnotation == null) {
-            cvdaRecordInferredLocalType(decl, name, typeParams)
+            cvdaInferredLocalType(decl, name, typeParams)?.let { currentLocalTypes[name.text] = it }
             return
         }
 
@@ -103889,11 +103976,20 @@ interface DataView {
      * records its initializer's (WIDEN.1-gated) inferred type into
      * [currentLocalTypes] and the check ends. The block returned unconditionally
      * in the monolith, so nothing crosses back and the bare `return`s stay bare.
+     *
+     * (P18.119) It answers the type rather than recording it, so that the `for`-HEADER
+     * binding arm ([ctaForHeaderBindings]) and the ordinary statement recorder cannot
+     * drift: CLAUDE.md's standing rule that a rule added to one of a pair must be added
+     * to the other, made structural. The one-line record stays at the (JIT.1)(c) call
+     * site, so this is still the WHOLE of the split's `B_UNANNOT` part and not a
+     * delegating wrapper over it — `HugeMethodLimitTest` pins that every part of the
+     * partition carries a real share of the body. A binding this refuses keeps its
+     * pre-existing `anyType`.
      */
-    private fun cvdaRecordInferredLocalType(
+    private fun cvdaInferredLocalType(
         decl: VariableDeclaration, name: Identifier, typeParams: Set<String>
-    ) {
-        val init = decl.initializer ?: return
+    ): Type? {
+        val init = decl.initializer ?: return null
         // (WIDEN.1) round 781: a `const` binding keeps its initializer's LITERAL type
         // (tsc `getWidenedLiteralTypeForInitializer` — see [varDeclIsImmutableBinding]).
         // The literal has to be read off the AST: `getTypeOfExpression` answers the
@@ -103915,7 +104011,7 @@ interface DataView {
         // Round 460: a name with ≥2 block-scoped declarations stays anyType — recording
         // THIS declaration's inferred type would make later reads (possibly governed by
         // a DIFFERENT block's binding) resolve to the wrong type.
-        if (name.text in ambiguousBlockLocalNames) return
+        if (name.text in ambiguousBlockLocalNames) return null
         if (inferred !== anyType && inferred !== errorType &&
             !inferred.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
             // Round 573 (the round-570 B136 discipline, var-decl channel): an
@@ -103969,8 +104065,9 @@ interface DataView {
                 // members widens per constituent, for the same reason.
                 else -> widenEnumMemberTypes(inferred)
             }
-            currentLocalTypes[name.text] = widened
+            return widened
         }
+        return null
     }
 
     /**
@@ -113840,7 +113937,7 @@ interface DataView {
                     decl.initializer?.let { init ->
                         val raw = rawTypeOfInitializer(init)
                         // (CHK.85)(b) S3: the SYMBOL half of the (REL.2) round-783 const
-                        // rule. The LOCAL half ([cvdaRecordInferredLocalType]) keeps an
+                        // rule. The LOCAL half ([cvdaInferredLocalType]) keeps an
                         // enum MEMBER for a `const`, exactly as tsc's
                         // `getWidenedLiteralTypeForInitializer` does under
                         // `NodeFlags.Constant`; this half — what a FILE-level const answers

@@ -471,10 +471,17 @@ class HugeMethodLimitTest {
      * statement sequence, so each helper holds one contiguous run of the
      * committed `CtaSections` level-B partition and hands a return signal back;
      * the behavioural gate for those signals is `CvdaSplitTest`.
+     *
+     * (P18.119) The `B_UNANNOT` part was renamed `cvdaRecordInferredLocalType` ->
+     * `cvdaInferredLocalType` when it was made to ANSWER the inferred type instead of
+     * recording it (the `for`-header binding arm needs the same rules). The one-line
+     * record stayed at the call site deliberately: a name kept here for a 39-bytecode
+     * delegating wrapper would have turned this partition into a delegation and made
+     * the share assertion below vacuous.
      */
     private val cvdaSplitParts = setOf(
         "cvdaPrologueWalkers",
-        "cvdaRecordInferredLocalType",
+        "cvdaInferredLocalType",
         "cvdaEarlyInitGates",
         "cvdaNestedInitTargets",
         "cvdaMidGates",

@@ -50,7 +50,7 @@ import kotlin.test.Test
  *   appearing NEXT TO the specific diagnostic that was supposed to replace it**,
  *   which is why the pins below assert a COUNT rather than a presence
  *   wherever a doubled diagnostic is possible;
- * * two regions (`cvdaRecordInferredLocalType`, `cvdaElaborateMismatch`) held
+ * * two regions (`cvdaInferredLocalType`, `cvdaElaborateMismatch`) held
  *   blocks that returned unconditionally, so their bare `return`s stay bare and
  *   the caller returns straight after the call — for the first of the two that
  *   seam is COMPILER-ENFORCED (the entry's `typeAnnotation` is smart-cast
@@ -120,7 +120,7 @@ class CvdaSplitTest {
         assert(d[0].code == 2820)
     }
 
-    // ---------------------------------------- cvdaRecordInferredLocalType
+    // ---------------------------------------- cvdaInferredLocalType
 
     @Test
     fun `unannotated arm - a const records its initializer's LITERAL type so a literal-union target accepts it`() {
