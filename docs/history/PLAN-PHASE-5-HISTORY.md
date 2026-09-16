@@ -1,3 +1,51 @@
+### Round (P18.108) — (LEGACY.1) step (h): `outFile` was already inert on the project path — six harness-only arms deleted, the reference-directive edges kept as tsgo's program order (2026-09-15)
+
+**Three commits** (`0c956db1a` refactor, `aaef62990` test, this docs commit). **Suite 19,487 → 19,506 / 0 / 83** (+19
+pins: 13 core, 6 `-project`), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS,
+counted: 91 case files carry `@outFile` and one an embedded `"outFile"`, all dropped, **0 live generated test
+sources mention `outfile`**, so the hand-written pins are the whole gate; `cost_gate.py` exit 0, 20/20 +0.00%;
+`huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls;
+warning-clean with an INJECTED positive control (one `USELESS_CAST` file read exactly one `w:`, then 0).
+`TypeScriptCompiler.kt` 6,566 → **6,553**; `Checker.kt` untouched (194,996, md5 `988428d0` before and after).
+**(LEGACY.1)(h) is CHECKED OFF; (g) is BLOCKED-PENDING-USER on its behaviour half (below the (f) line); (i)
+`downlevelIteration` is next; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE MEASUREMENT.** 34 scratch projects (`outFile` × `module` ∈ {unset, commonjs, esnext, system, amd, none} ×
+`/// <reference path>` × `declaration`, plus controls): tsgo reports `TS5102 Option 'outFile' has been removed…`
+at the quoted KEY (width 9, beside TS5011) and compiles PER FILE — never a `bundle.js`, nothing stray; the
+`--listFiles` order is `b a m n` with a reference directive and `a b m n` without, **in the control cells too**,
+so the reference edges are program order and not an `outFile` artefact; `module: none` is TS6046 (not a TS7
+value); `out` is TS5023; `incremental` + `outFile` has no TS5074 (tsgo's rule is `ConfigFilePath == ""`, no
+`outFile` read); TS6082 sits in tsgo's message table with ZERO emitters, and ours had none either. tsgo's
+remaining `OutFile` reads: the report, TS5011's option name, the `${configDir}` substitution, the parse.
+
+**WHAT LANDED.** On the project path the option was already inert (the bundling concatenation went 2026-07-02);
+the six live arms were reachable only through the harness/core API — the single-file output named after
+`outFile`, `commonSourceDir`'s outFile skip (a flattened `/out/x.js` layout), the outFile-only topological
+transform order, the `.js`/`.jsx` input admission without `outDir`, the `module: none` + `outFile` pure-JS drop
+(the last None/outFile coupling (f) named), and TS5074's `outFile == null` conjunct — all deleted. **Kept and
+re-labelled**: `extractRelativeImports`' reference-path edges; the item's "only used when outFile is set" was a
+STALE comment — they feed `sortedTsFiles` on every emitting build and reproduce tsgo's order. Parse, `out` and
+the TS5101/TS5102 row untouched.
+
+**WHERE THE ITEM WAS WRONG.** "`ReferenceDirectiveCrawlTest` may be `transformOrder`'s single pin" — it pins
+program ENTRY, and `transformOrder` had NO observable at all: arm a3 is undiscriminated BY CONSTRUCTION (emit
+order is `sortedTsFiles` in both arms and a per-file transform reads no other file's transform) and is recorded
+as such. TS5074's conjunct was not in the item and IS an `outFile` arm. "~50 lines" was 13 net lines of code.
+
+**PINS.** 13 core pins, six red on the pre-change binary and seven named controls; **all six `-project` pins were
+green on both arms and are named `control -` with the KDoc saying why** — the project path never reached an
+`outFile` arm, so they are the tsgo-shaped receipt (key-anchored row at both versions, per-file emit equal to the
+plain cell byte for byte, `b a m n`), not discriminators. Five of six arms discriminate (a1 2/0, a2 1/0, a4 1/0,
+a5 1/0, a6 1/0; screens 8,772/0 on every arm). Final md5s TypeScriptCompiler `741209dd`, Checker `988428d0` —
+the orchestrator's AFTER arm matched both.
+
+**PRE-EXISTING DIVERGENCES THE MATRIX FOUND ON THE PROJECT PATH, none of them `outFile`'s (ledger / (LEGACY.0b))**:
+TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` guard keeps it silent (the deleted
+`outFile` conjunct was hiding it in one cell); TS5011 is never reported here, and TS7 defaults `rootDir` to the
+config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
+under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
+
 ### Round (P18.107) — (LEGACY.1) step (f): amd/umd/system fold onto CommonJS as a PROPERTY of the kind, three of nine arms were deletable, and the corpus is a counted control (2026-09-15)
 
 **Three commits** (`3f5aeea85` refactor, `4556f254d` test, this docs commit). **Suite 19,465 → 19,487 / 0 / 83** (+22

@@ -3857,3 +3857,16 @@ INSTALL where tsgo dedups per `(file, helper)` — which closed **two pending ro
 subtests are es2015+). cost_gate 20/20 +0.00%; huge_methods exit 0 (874 classes); grid 8×0/0 + emit 78/78
 (controls); warning-clean. Found and left for a queue item: on a real project the tslib check is dead in one
 direction and a false TS2354 in the other, because `node_modules/tslib` is never in the program.
+**(P18.113) — (LEGACY.1) STEP (j4): THE TARGET OPTION SURFACE — THREE PARITY FIXES, AND THE NOTION *COLLAPSE* REFUSED WITH BOTH DIRECTIONS MEASURED, 19,586 / 0 / 81 (2026-09-16). (j) IS CLOSED.**
+tsgo's emit at a written es5 is byte-identical to its es2015 emit (12 shapes of 12) while its CHECKER honours the
+written value — so `effectiveTarget`/`defaultedTarget` are tsgo's own split, not a tsc-6 residue: collapsing onto
+the written target silences the strict-reserved binding rows, onto the emit target it opens (j2)'s kept TS2318
+gate and changes the module default. Refused, pinned, both KDocs rewritten to tsgo's reason. Landed instead: the
+es5 DEFAULT lib now reaches es2015 as tsgo's does (6 ours-only TS2550 gone; the explicit-`lib` path and (i)/(j2)'s
+pins untouched), ES3 is an invalid ARGUMENT after which the target is unset (ES3 out of the enum, TS6046 keyed on
+an unknown-value marker, emit byte-identical to tsgo, `es4` now reports), and `effectiveModule`'s `else` — which
+the item calls dead — was LIVE and mis-notioned (tsgo defaults a written-es5 project to CommonJS where we emitted
+ESM). 20 pins, six arms, one of them a real errors-screen gate; cost_gate 20/20 +0.00%; huge_methods exit 0 (874
+classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. **Flagged, not edited**: `inc50-stability-lib.sh` pins
+`target: ES5`, so (INC.50)'s three stability rates need re-measurement. (LEGACY.1) now has only (g) — blocked on
+the owner — and (k).

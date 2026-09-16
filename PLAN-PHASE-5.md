@@ -25,6 +25,74 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.118) — (KIR.LOWER.3)+(KIR.LOWER.4): the lowering's bag fallback, and two defects the items do not name (2026-09-16)
+
+**Three commits** (`8b0d914d7` perf, `e933fe4d6` test, this docs commit). **Suite 19,637 → 19,652 / 0 / 70**, with
+the KIR module at **174** (159 corpus programs + 15 pins); `cost_gate.py` 20/20 +0.00% and the corpus screen
+3,097 / 0 are CONTROLS — **the four checker classes are BYTE-IDENTICAL to (P18.117)'s gated binary, so the
+8-profile grid is inapplicable by construction and that comparison is its receipt**; `huge_methods.py --fail-over 0`
+run over **both** core (875 classes) and the **KIR module** (113) — the default census is `-core`-only and this
+round added compiled code elsewhere, which is exactly the blind spot CLAUDE.md's (JIT.1) entry warns about;
+warning-clean with an injected positive control; `JsRuntime.kt` untouched, so the native-runtime generator is not
+engaged. **This round left the checker-parity lane for the KIR JVM-backend leg**, because these two items are the
+largest measured performance lever and a native-arm correctness blocker and they share one mechanism. **Both
+LANDED; (LEGACY.0) stays OPEN** on (0b-20), and the checker gap below is a new (CHK.\*) candidate.
+
+**THE SHARED MECHANISM.** The lowering asks for a receiver's type, does not get one, and falls back to the dynamic
+property bag — reflection on the JVM, a throw on Kotlin/Native. Everything here is measured as BYTECODE SHAPE
+(`javap -p -c | grep -c 'jsGet\|jsSet\|jsInvoke'`), never as wall time, as (KIR.LOWER.3) demands.
+
+**(KIR.LOWER.3), and the item's headline is wrong.** An element access does NOT generally lose its element type:
+`arr[0]`, `t[0]`, `arr[j]` for an ordinary `let j` and `arr[p]` for a parameter all type correctly today. What is
+lost is the **INDEX**, when it is a `for`-HEADER `let` — which types `any` (design-doc contradiction 4) — so
+`elementAccessResultType`'s NumberLike test never fires and `bodies[i]` falls through. **The loss is in the
+CHECKER**, measured against tsgo: inside `for (let i = 0; …)`, `const a: string = i`, `nums[i]` and `nums[i + 0]`
+are silent here and TS2322 in tsgo — **three missing true positives from one cause** — while `nums[Number(i)]` and
+an index declared outside the header report in both. **(P18.117)'s index-signature work does not reach it.** The
+checker was deliberately NOT changed: making `arr[i]` real in every loop of every program is (CHK.50) at maximum
+blast radius and belongs to a checker round with the core suite and the grid as its gates. KIR recovers locally
+instead — one funnel `checkedTypeOf` that all 22 Expression-typed receiver classifications pass through, with a
+single recovery answering `Array<T>`'s `T` where the checker answered `any` (refusing an optional access, a tuple
+— whose slot is a function of the index — a string index, and anything without exactly one resolved type argument),
+plus a PAIRED leg classifying later reads of the name from the local's own IR slot, because the checker still types
+every mention of `bi` as `any`. 2 dynamic ops → 0.
+
+**(KIR.LOWER.4), and the item understates it.** It names the WRITE; every `this` member **READ** was equally
+broken, in methods as well as constructors, because `lowerPropertyRead` and `assignToTarget` both consulted
+`isDynamicReceiver` (true for `this`, contradiction 1) BEFORE resolving the field on the owner chain — which they
+were already able to do. So `this.x` was `jsGet(this, "x")` standing beside a real `public double x`, and "a class
+with a constructor is unrunnable on the native arm" is really "a class with any `this` member access is". One
+predicate `fieldIn(owner, name)` — answering null rather than refusing, so it is usable as EVIDENCE — is consulted
+on both paths ahead of the bag, so the two cannot drift; an expando no `PropertyDeclaration` declares still takes
+the bag. Parameter properties expand per `kir-design.md` §7, with the store prologue **above** the instance
+initializers, measured off tsgo's own emit (the other order compiles and quietly prints 1 instead of 6). 4 ops → 0;
+`constructor(public x, public y)` goes from a REFUSED COMPILE to 0.
+
+**TWO DEFECTS NEITHER ITEM NAMES, BOTH FIXED, AND THE FIRST IS THE ROUND'S SHARPEST LESSON.** `ps[0].x` already
+chose the field path but kept the runtime array's `Any?`, so the emitted `getfield` named `java.lang.Object` and
+the program **died at the first run with `NoSuchFieldError`** — a fixture with **ZERO dynamic ops that does not
+run**, which is exactly what a shape-only pin waves through; `receiverOf` now coerces to the owner's type, and
+every mechanism here has a BEHAVIOUR case beside its SHAPE case for that reason. And once the field route landed,
+method calls on the same receiver still went through `jsInvoke` — reflection in the loop the fields had just left —
+so a leg over `methodInChain` closes it, and **the pin's counter had to count `jsInvoke` too**: with only reads and
+writes counted, that half-fix read 0.
+
+**PINS AND ABLATION.** 15 cases (7 shape, 5 behaviour, 3 controls); all 12 non-controls redden under at least one
+of **eight** arms and the three controls never do. a1 (the element-type recovery) and a2 (the local IR slot) are a
+round-927 PAIR — identical red sets, neither redundant: one types the slot, the other classifies the read of the
+name. a3 (the field predicate answering null) reddens 11 pins AND the `smol-toml` corpus program. One negative
+control had to be replaced: `bag["a"] = 1` read 0 because an element access on a bag uses
+`jsIndexGet`/`jsIndexSet`, which the item's instrument does not count — the working control is an `any`-typed
+PARAMETER. Final md5s `KirFileLowering` `251747ba`, `KirProgramTables` `45c13217` — the orchestrator's snapshot
+matched both.
+
+**WHAT REMAINS**: the CHECKER gap above (a `for`-header binding types `any`; a (CHK.\*) item, expect (CHK.50)'s
+radius); `localReceiverClass` is identifier-only by design, so `f().x` still takes the bag; `methodInChain` demands
+an exact parameter count, so a call omitting an optional parameter still reaches `jsInvoke`; **the native claim is
+mechanical, not measured** — no `jsSet` is emitted for a declared `this` member any more, so the `JsTypeError`
+cannot fire, but no native build was run and someone should bank it with `scripts/kir-native.sh`; and a write
+through an `any` alias of a generated class still throws, pre-existing and untouched.
+
 ### Round (P18.117) — (CHK.135) re-scoped by measurement: the mapped aliases were fine, the INDEX SIGNATURE read was not (2026-09-16)
 
 **Three commits** (`a5ca1510a` fix, `3364e10c2` test, this docs commit). **Suite 19,625 → 19,637 / 0 / 70** (+12
@@ -501,54 +569,6 @@ TS2488 there at a written es5 (the one pin named `residue -`); `spineIterableOpe
 default lib `lib.d.ts` → dom → es2015, checker rows and emit identical to es2015. Recorded residues, none of
 this round's: `lib: ["es5"]` typed-array iteration (tsgo TS2802 at any target), `arguments` spread (tsgo
 TS2495/TS2461), `[..."str"]` (TS2461) — ours silent in all three.
-
-### Round (P18.108) — (LEGACY.1) step (h): `outFile` was already inert on the project path — six harness-only arms deleted, the reference-directive edges kept as tsgo's program order (2026-09-15)
-
-**Three commits** (`0c956db1a` refactor, `aaef62990` test, this docs commit). **Suite 19,487 → 19,506 / 0 / 83** (+19
-pins: 13 core, 6 `-project`), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 — CONTROLS,
-counted: 91 case files carry `@outFile` and one an embedded `"outFile"`, all dropped, **0 live generated test
-sources mention `outfile`**, so the hand-written pins are the whole gate; `cost_gate.py` exit 0, 20/20 +0.00%;
-`huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls;
-warning-clean with an INJECTED positive control (one `USELESS_CAST` file read exactly one `w:`, then 0).
-`TypeScriptCompiler.kt` 6,566 → **6,553**; `Checker.kt` untouched (194,996, md5 `988428d0` before and after).
-**(LEGACY.1)(h) is CHECKED OFF; (g) is BLOCKED-PENDING-USER on its behaviour half (below the (f) line); (i)
-`downlevelIteration` is next; (LEGACY.0) stays OPEN** on (0b-17).
-
-**THE MEASUREMENT.** 34 scratch projects (`outFile` × `module` ∈ {unset, commonjs, esnext, system, amd, none} ×
-`/// <reference path>` × `declaration`, plus controls): tsgo reports `TS5102 Option 'outFile' has been removed…`
-at the quoted KEY (width 9, beside TS5011) and compiles PER FILE — never a `bundle.js`, nothing stray; the
-`--listFiles` order is `b a m n` with a reference directive and `a b m n` without, **in the control cells too**,
-so the reference edges are program order and not an `outFile` artefact; `module: none` is TS6046 (not a TS7
-value); `out` is TS5023; `incremental` + `outFile` has no TS5074 (tsgo's rule is `ConfigFilePath == ""`, no
-`outFile` read); TS6082 sits in tsgo's message table with ZERO emitters, and ours had none either. tsgo's
-remaining `OutFile` reads: the report, TS5011's option name, the `${configDir}` substitution, the parse.
-
-**WHAT LANDED.** On the project path the option was already inert (the bundling concatenation went 2026-07-02);
-the six live arms were reachable only through the harness/core API — the single-file output named after
-`outFile`, `commonSourceDir`'s outFile skip (a flattened `/out/x.js` layout), the outFile-only topological
-transform order, the `.js`/`.jsx` input admission without `outDir`, the `module: none` + `outFile` pure-JS drop
-(the last None/outFile coupling (f) named), and TS5074's `outFile == null` conjunct — all deleted. **Kept and
-re-labelled**: `extractRelativeImports`' reference-path edges; the item's "only used when outFile is set" was a
-STALE comment — they feed `sortedTsFiles` on every emitting build and reproduce tsgo's order. Parse, `out` and
-the TS5101/TS5102 row untouched.
-
-**WHERE THE ITEM WAS WRONG.** "`ReferenceDirectiveCrawlTest` may be `transformOrder`'s single pin" — it pins
-program ENTRY, and `transformOrder` had NO observable at all: arm a3 is undiscriminated BY CONSTRUCTION (emit
-order is `sortedTsFiles` in both arms and a per-file transform reads no other file's transform) and is recorded
-as such. TS5074's conjunct was not in the item and IS an `outFile` arm. "~50 lines" was 13 net lines of code.
-
-**PINS.** 13 core pins, six red on the pre-change binary and seven named controls; **all six `-project` pins were
-green on both arms and are named `control -` with the KDoc saying why** — the project path never reached an
-`outFile` arm, so they are the tsgo-shaped receipt (key-anchored row at both versions, per-file emit equal to the
-plain cell byte for byte, `b a m n`), not discriminators. Five of six arms discriminate (a1 2/0, a2 1/0, a4 1/0,
-a5 1/0, a6 1/0; screens 8,772/0 on every arm). Final md5s TypeScriptCompiler `741209dd`, Checker `988428d0` —
-the orchestrator's AFTER arm matched both.
-
-**PRE-EXISTING DIVERGENCES THE MATRIX FOUND ON THE PROJECT PATH, none of them `outFile`'s (ledger / (LEGACY.0b))**:
-TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` guard keeps it silent (the deleted
-`outFile` conjunct was hiding it in one cell); TS5011 is never reported here, and TS7 defaults `rootDir` to the
-config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
-under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
 ## QUEUE
 
@@ -2965,7 +2985,7 @@ CLAUDE.md § "AI agent mission".
   diagnostic channel that notices, so the gate is a `-project` fixture over a `Vfs` plus
   `output.programFiles`, never a green corpus (whose harness materialises no directory at all).
 
-- [ ] **(KIR.LOWER.3) AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
+- [x] **(KIR.LOWER.3) LANDED 2026-09-16 ((P18.118), `8b0d914d7`): the headline is WRONG — an element access does not generally lose its element type; the INDEX does, when it is a `for`-HEADER `let`, and that loss is in the CHECKER (three missing true positives against tsgo in one fixture, a new (CHK.*) candidate with (CHK.50)'s radius). KIR recovers locally through one `checkedTypeOf` funnel plus a paired local-slot leg; 2 dynamic ops -> 0. Residue: a non-identifier receiver (`f().x`) still takes the bag. ORIGINAL: AN ELEMENT ACCESS `a[i]` LOSES THE ELEMENT TYPE, SO EVERY MEMBER
   ACCESS ON THE RESULT GOES THROUGH THE DYNAMIC BAG — MEASURED **30.7 s -> 0.94 s (33x)** ON
   ONE n-BODY BY ADDING ONE ANNOTATION (2026-08-27, the scriptc head-to-head).** `const bi =
   bodies[i]` where `bodies: Particle[]` gives the local a type the lowering reads as the bag,
@@ -2982,7 +3002,7 @@ CLAUDE.md § "AI agent mission".
   Pin it as a SHAPE assertion (count the dynamic ops in the emitted bytecode), never as a
   wall figure.
 
-- [ ] **(KIR.LOWER.4) `this.<member> = e` IN A CONSTRUCTOR LOWERS TO `jsSet`, WHICH IS
+- [x] **(KIR.LOWER.4) LANDED 2026-09-16 ((P18.118), `8b0d914d7`): it understates the defect — every `this` member READ was broken too, in methods as well as constructors, both paths consulting `isDynamicReceiver` before resolving the field they could already resolve. One `fieldIn` predicate now serves read and write; parameter properties expand per §7 with the store prologue ABOVE the initializers (measured off tsgo — the other order prints the wrong answer). 4 ops -> 0; `constructor(public x)` from a refused compile to 0. The native claim is MECHANICAL, not measured: run `scripts/kir-native.sh` on a class with a constructor to bank it. ORIGINAL: `this.<member> = e` IN A CONSTRUCTOR LOWERS TO `jsSet`, WHICH IS
   REFLECTION ON THE JVM AND **THROWS** ON KOTLIN/NATIVE — AND PARAMETER PROPERTIES ARE
   REFUSED OUTRIGHT, WHERE `docs/kir-design.md` §7 SAYS THEY EXPAND TO A FIELD-ASSIGNMENT
   PROLOGUE (2026-08-27).** Measured: `class Particle { x: number = 0; constructor(x: number)
