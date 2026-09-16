@@ -1245,7 +1245,14 @@ class TypeScriptCompiler {
         }
 
         if (options.isolatedDeclarations) {
-            diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, file.fileName, file.content))
+            diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(
+                sourceFile,
+                file.fileName,
+                file.content,
+                // (LEGACY.0b step 18) see the multi-file site — tsgo's `GetStrictOptionValue`.
+                strictNullChecks = !options.strictExplicitlyFalse &&
+                    !options.strictNullChecksExplicitlyFalse,
+            ))
         }
 
         val transformer = Transformer(options, checker)
@@ -1595,7 +1602,15 @@ class TypeScriptCompiler {
             for ((tsFileName, sourceFile) in parsedSourceFiles) {
                 val original = parsed.files.firstOrNull { it.fileName == tsFileName }?.content
                     ?: continue
-                diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, tsFileName, original))
+                diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(
+                    sourceFile,
+                    tsFileName,
+                    original,
+                    // (LEGACY.0b step 18) tsgo's `GetStrictOptionValue` spelling — the same
+                    // one `Checker.strictNullChecks` carries; it decides TS9025-vs-TS9011.
+                    strictNullChecks = !options.strictExplicitlyFalse &&
+                        !options.strictNullChecksExplicitlyFalse,
+                ))
                 diagnostics.addAll(
                     emitIsolatedDeclarationsAugmentImports(sourceFile, tsFileName, original, augmenterMap)
                 )
@@ -2933,6 +2948,13 @@ private fun checkMissingTypesReferenceExports(files: List<SourceFileEntry>): Lis
  * entry '.' in file 'package.json'. Supply the `rootDir` compiler option to disambiguate."
  * FP-safe: gated on node16+ module + outDir-without-rootDir-without-composite + exactly one
  * non-declaration source file + a real self-name import + an exports value referencing outDir.
+ *
+ * (LEGACY.0b step 18) AND the resolution then FAILS: tsgo's `tryLoadInputFileForPath`
+ * (`internal/module/resolver.go`) answers `unresolved()` on exactly this branch, so every
+ * self-name specifier in that file also carries TS2307 "Cannot find module '<spec>' or its
+ * corresponding type declarations." anchored on the string literal (quotes included). The
+ * `rootDir`/`composite`/config-directory cases take the other branch of tsgo's `if` and
+ * resolve, which is why this walker's own early returns are the negative control.
  */
 private fun checkAmbiguousSelfNameExportRoot(files: List<SourceFileEntry>, options: CompilerOptions): List<Diagnostic> {
     val diags = mutableListOf<Diagnostic>()
@@ -2956,15 +2978,39 @@ private fun checkAmbiguousSelfNameExportRoot(files: List<SourceFileEntry>, optio
         val exportsVal = extractJsonExportsValue(json) ?: continue
         if (!exportsVal.contains(outDirNorm)) continue  // exports must point under outDir
         val nameEsc = Regex.escape(name)
-        val hasSelfImport = Regex("""(?:\bfrom\s+|\bimport\s*\(\s*)(["'])$nameEsc(?:/[^"']*)?\1""")
-            .containsMatchIn(srcFiles[0].content)
-        if (!hasSelfImport) continue
+        val selfImports = Regex("""(?:\bfrom\s+|\bimport\s*\(\s*)(["'])$nameEsc(?:/[^"']*)?\1""")
+            .findAll(srcFiles[0].content).toList()
+        if (selfImports.isEmpty()) continue
         diags.add(Diagnostic(
             message = "The project root is ambiguous, but is required to resolve export map entry '.' in file '$base'. Supply the `rootDir` compiler option to disambiguate.",
             category = DiagnosticCategory.Error,
             code = 2209,
             fileName = null,
         ))
+        // (LEGACY.0b step 18) tsgo's `tryLoadInputFileForPath` (module/resolver.go:890) returns
+        // `unresolved()` — NOT `continueSearching()` — on the same branch that raises TS2209, so
+        // the self-name specifier genuinely resolves to NOTHING and the ordinary TS2307 follows at
+        // the specifier. We used to report the ambiguity and resolve the import anyway, which is
+        // the "too permissive" half of the pair. The general TS2307 machinery cannot reach this
+        // shape (its bare-specifier leg demands Bundler resolution and a single-segment name, and
+        // `@this/package` is neither), so the refusal is emitted from the walker that decided it.
+        val srcName = srcFiles[0].fileName
+        val srcText = srcFiles[0].content
+        for (m in selfImports) {
+            val quoteStart = m.groups[1]!!.range.first
+            val spec = srcText.substring(quoteStart + 1, m.range.last)
+            val (ln, ch) = lineAndCharacterAt(srcText, quoteStart)
+            diags.add(Diagnostic(
+                message = "Cannot find module '$spec' or its corresponding type declarations.",
+                category = DiagnosticCategory.Error,
+                code = 2307,
+                fileName = srcName,
+                line = ln,
+                character = ch,
+                start = quoteStart,
+                length = m.range.last - quoteStart + 1,
+            ))
+        }
     }
     return diags
 }
@@ -3880,10 +3926,14 @@ private fun emitIsolatedDeclarationsDiagnostics(
     sourceFile: SourceFile,
     fileName: String,
     source: String,
+    strictNullChecks: Boolean,
 ): List<Diagnostic> {
-    val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
-        fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
-    if (isJsFile) return emptyList()
+    // (LEGACY.0b step 18) tsgo runs the declaration transform over a `.js` file too — a
+    // program with `allowJs` + `isolatedDeclarations` (itself TS5053) still reports the
+    // family there (`isolatedDeclarationsAllowJs`: `export var y;` in a `.js` file is TS9010
+    // with its TS9027 related, exactly as its `.ts` sibling). The blanket JS skip this
+    // replaces was a whole-file suppression with no counterpart in tsgo; only ONE corpus case
+    // combines the two options, so the screen is the instrument that bounds it.
     val isDtsFile = fileName.endsWith(".d.ts") || fileName.endsWith(".d.mts") ||
         fileName.endsWith(".d.cts")
     if (isDtsFile) return emptyList()
@@ -4062,9 +4112,9 @@ private fun emitIsolatedDeclarationsDiagnostics(
                             // defaults fire TS9007 (and inner param-name TS9011
                             // where applicable).
                             if (init is ArrowFunction) {
-                                emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results)
+                                emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results, strictNullChecks)
                             } else if (init is FunctionExpression) {
-                                emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results)
+                                emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results, strictNullChecks)
                             }
                         }
                         // TS9007 for arrow/FE initializer when the variable has
@@ -4093,9 +4143,9 @@ private fun emitIsolatedDeclarationsDiagnostics(
                 emitIsolatedDeclClassComputedNameDiags(stmt, fileName, source, results)
                 emitIsolatedDeclClassPropertyTs9012(stmt, fileName, source, results)
                 emitIsolatedDeclClassMethodTs9008(stmt, fileName, source, results)
-                emitIsolatedDeclClassMethodParamChecks(stmt, fileName, source, results)
+                emitIsolatedDeclClassMethodParamChecks(stmt, fileName, source, results, strictNullChecks)
                 emitIsolatedDeclClassAccessor(stmt, fileName, source, results)
-                emitIsolatedDeclClassPropertyFnExprParamChecks(stmt, fileName, source, results)
+                emitIsolatedDeclClassPropertyFnExprParamChecks(stmt, fileName, source, results, strictNullChecks)
             }
             is FunctionDeclaration -> {
                 val fnName = stmt.name
@@ -4105,7 +4155,7 @@ private fun emitIsolatedDeclarationsDiagnostics(
                     emitIsolatedDeclFnDeclMissingReturn(stmt, fnName, fileName, source, results)
                 }
                 if (isExported) {
-                    emitIsolatedDeclFnDeclParamChecks(stmt, fileName, source, results)
+                    emitIsolatedDeclFnDeclParamChecks(stmt, fileName, source, results, strictNullChecks)
                 }
             }
             is ExportAssignment -> {
@@ -4308,8 +4358,84 @@ private fun emitIsolatedDeclFnDeclParamChecks(
     fileName: String,
     source: String,
     results: MutableList<Diagnostic>,
+    strictNullChecks: Boolean,
 ) {
-    emitIsolatedDeclParamsCheck(fn.parameters, fileName, source, results)
+    emitIsolatedDeclParamsCheck(fn.parameters, fileName, source, results, strictNullChecks)
+}
+
+/**
+ * (LEGACY.0b step 18) tsgo's `requiresAddingImplicitUndefined`
+ * (`internal/checker/emitresolver.go`) for a PARAMETER: under `strictNullChecks`, a
+ * parameter that carries an INITIALIZER and is not itself optional requires declaration emit
+ * to add `| undefined` — and `isOptionalParameter` makes an initialized parameter optional
+ * only when its index is at or past `getMinArgumentCount`, i.e. when NO LATER PARAMETER IS
+ * REQUIRED. That last clause is the whole discriminator and it is not obvious: measured
+ * against tsgo 7.0.2, `f(p = bar())` reports TS9011 at the initializer while
+ * `f(p = bar(), v: number)` reports TS9025 at the whole parameter, same initializer.
+ *
+ * `declaredParameterTypeContainsUndefined` is not modelled because every caller has already
+ * skipped a parameter carrying a type annotation.
+ */
+private fun isolatedDeclParamRequiresAddingUndefined(
+    params: List<Parameter>,
+    index: Int,
+    strictNullChecks: Boolean,
+): Boolean {
+    if (!strictNullChecks) return false
+    val p = params[index]
+    if (p.initializer == null || p.questionToken || p.dotDotDotToken) return false
+    for (i in index + 1 until params.size) {
+        val q = params[i]
+        if (q.isCommentPlaceholder || q.dotDotDotToken) continue
+        if (!q.questionToken && q.initializer == null) return true
+    }
+    return false
+}
+
+/**
+ * (LEGACY.0b step 18) tsgo's `createParameterError`
+ * (`internal/transformers/declarations/diagnostics.go`): when the declaration transform fails
+ * ON THE PARAMETER ITSELF and the parameter requires adding implicit undefined, the row is
+ * TS9025 anchored on the WHOLE parameter rather than TS9011 on its initializer. A failure on
+ * an expression NESTED inside the initializer (an object-literal value, an `as const`
+ * element) keeps its own TS9013 at that expression — measured, `f(p = { a: bar() }, v:
+ * number)` is TS9013 at `bar()` in tsgo even though `p` requires adding undefined.
+ */
+private fun emitIsolatedDeclTs9025(
+    param: Parameter,
+    paramName: Identifier,
+    fileName: String,
+    source: String,
+    results: MutableList<Diagnostic>,
+) {
+    val initializer = param.initializer
+    // `Node.end` overshoots by one token (CLAUDE.md), so the parameter's true end is its
+    // initializer's true end.
+    val end = if (initializer != null) isolatedDeclExprTrueEnd(initializer) else paramName.pos + paramName.text.length
+    val length = (end - param.pos).coerceAtLeast(1)
+    val (line, character) = positionToLineCharacter(source, param.pos)
+    val (pnLine, pnChar) = positionToLineCharacter(source, paramName.pos)
+    results.add(Diagnostic(
+        message = "Declaration emit for this parameter requires implicitly adding undefined to its type. " +
+            "This is not supported with --isolatedDeclarations.",
+        category = DiagnosticCategory.Error,
+        code = 9025,
+        fileName = fileName,
+        line = line,
+        character = character,
+        start = param.pos,
+        length = length,
+        relatedInformation = listOf(Diagnostic(
+            message = "Add a type annotation to the parameter ${paramName.text}.",
+            category = DiagnosticCategory.Message,
+            code = 9028,
+            fileName = fileName,
+            line = pnLine,
+            character = pnChar,
+            start = paramName.pos,
+            length = paramName.text.length,
+        )),
+    ))
 }
 
 private fun emitIsolatedDeclParamsCheck(
@@ -4317,8 +4443,9 @@ private fun emitIsolatedDeclParamsCheck(
     fileName: String,
     source: String,
     results: MutableList<Diagnostic>,
+    strictNullChecks: Boolean,
 ) {
-    for (param in params) {
+    for ((index, param) in params.withIndex()) {
         if (param.type != null) continue
         val paramName = param.name as? Identifier ?: continue
         val default = param.initializer
@@ -4333,7 +4460,18 @@ private fun emitIsolatedDeclParamsCheck(
             )
             continue
         }
-        emitIsolatedDeclParamDefaultClassify(default, paramName, isTopLevel = true, fileName, source, results)
+        emitIsolatedDeclParamDefaultClassify(
+            default,
+            paramName,
+            isTopLevel = true,
+            fileName,
+            source,
+            results,
+            addUndefinedFor = param.takeIf {
+                isolatedDeclParamRequiresAddingUndefined(params, index, strictNullChecks)
+            },
+            strictNullChecks = strictNullChecks,
+        )
     }
 }
 
@@ -4344,13 +4482,15 @@ private fun emitIsolatedDeclParamDefaultClassify(
     fileName: String,
     source: String,
     results: MutableList<Diagnostic>,
+    addUndefinedFor: Parameter?,
+    strictNullChecks: Boolean,
 ) {
     if (isIsolatedDeclTriviallyDeclarable(expr)) return
     // Function expressions don't get TS9011/TS9013 on themselves (TS9007 separately
     // covers missing return types). But their PARAMETER DEFAULTS still need
     // declarability checking — recurse into the inner params.
     if (expr is ArrowFunction) {
-        emitIsolatedDeclParamsCheck(expr.parameters, fileName, source, results)
+        emitIsolatedDeclParamsCheck(expr.parameters, fileName, source, results, strictNullChecks)
         return
     }
     if (expr is FunctionExpression) {
@@ -4361,7 +4501,7 @@ private fun emitIsolatedDeclParamDefaultClassify(
         if (expr.type == null) {
             emitIsolatedDeclTs9007ForFnExprParamDefault(expr, paramName, fileName, source, results)
         }
-        emitIsolatedDeclParamsCheck(expr.parameters, fileName, source, results)
+        emitIsolatedDeclParamsCheck(expr.parameters, fileName, source, results, strictNullChecks)
         return
     }
     when {
@@ -4369,7 +4509,10 @@ private fun emitIsolatedDeclParamDefaultClassify(
             for (prop in expr.properties) {
                 if (prop !is PropertyAssignment) continue
                 val v = prop.initializer
-                emitIsolatedDeclParamDefaultClassify(v, paramName, isTopLevel = false, fileName, source, results)
+                emitIsolatedDeclParamDefaultClassify(
+                    v, paramName, isTopLevel = false, fileName, source, results,
+                    addUndefinedFor = null, strictNullChecks = strictNullChecks,
+                )
             }
         }
         expr is AsExpression -> {
@@ -4381,31 +4524,44 @@ private fun emitIsolatedDeclParamDefaultClassify(
                 val inner = expr.expression
                 if (inner is ArrayLiteralExpression) {
                     for (el in inner.elements) {
-                        emitIsolatedDeclParamDefaultClassify(el, paramName, isTopLevel = false, fileName, source, results)
+                        emitIsolatedDeclParamDefaultClassify(
+                            el, paramName, isTopLevel = false, fileName, source, results,
+                            addUndefinedFor = null, strictNullChecks = strictNullChecks,
+                        )
                     }
                 } else if (inner is ObjectLiteralExpression) {
                     for (prop in inner.properties) {
                         if (prop !is PropertyAssignment) continue
                         val v = prop.initializer
-                        emitIsolatedDeclParamDefaultClassify(v, paramName, isTopLevel = false, fileName, source, results)
+                        emitIsolatedDeclParamDefaultClassify(
+                            v, paramName, isTopLevel = false, fileName, source, results,
+                            addUndefinedFor = null, strictNullChecks = strictNullChecks,
+                        )
                     }
                 }
                 // `1 as const` etc. — literal inner, no emission needed
             } else {
                 // `expr as T` for non-const T → top-level: TS9011 on the T (type annotation)
                 if (isTopLevel) {
-                    emitIsolatedDeclTs9011(
-                        squiggleStart = t.pos,
-                        squiggleLength = isolatedDeclTypeNodeLength(t),
-                        paramName = paramName,
-                        fileName = fileName,
-                        source = source,
-                        results = results,
-                    )
+                    if (addUndefinedFor != null) {
+                        emitIsolatedDeclTs9025(addUndefinedFor, paramName, fileName, source, results)
+                    } else {
+                        emitIsolatedDeclTs9011(
+                            squiggleStart = t.pos,
+                            squiggleLength = isolatedDeclTypeNodeLength(t),
+                            paramName = paramName,
+                            fileName = fileName,
+                            source = source,
+                            results = results,
+                        )
+                    }
                 } else {
                     emitIsolatedDeclTs9013(expr, paramName, fileName, source, results)
                 }
             }
+        }
+        isTopLevel && addUndefinedFor != null -> {
+            emitIsolatedDeclTs9025(addUndefinedFor, paramName, fileName, source, results)
         }
         isTopLevel -> {
             val end = isolatedDeclExprTrueEnd(expr)
@@ -4438,6 +4594,7 @@ private fun emitIsolatedDeclClassPropertyFnExprParamChecks(
     fileName: String,
     source: String,
     results: MutableList<Diagnostic>,
+    strictNullChecks: Boolean,
 ) {
     for (member in stmt.members) {
         if (member !is PropertyDeclaration) continue
@@ -4446,8 +4603,10 @@ private fun emitIsolatedDeclClassPropertyFnExprParamChecks(
         if (name.text.startsWith("#")) continue
         val init = member.initializer
         when (init) {
-            is ArrowFunction -> emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results)
-            is FunctionExpression -> emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results)
+            is ArrowFunction ->
+                emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results, strictNullChecks)
+            is FunctionExpression ->
+                emitIsolatedDeclParamsCheck(init.parameters, fileName, source, results, strictNullChecks)
             else -> {}
         }
     }
@@ -5651,11 +5810,12 @@ private fun emitIsolatedDeclClassMethodParamChecks(
     fileName: String,
     source: String,
     results: MutableList<Diagnostic>,
+    strictNullChecks: Boolean,
 ) {
     for (member in stmt.members) {
         if (member !is MethodDeclaration) continue
         if (member.body == null) continue
-        emitIsolatedDeclParamsCheck(member.parameters, fileName, source, results)
+        emitIsolatedDeclParamsCheck(member.parameters, fileName, source, results, strictNullChecks)
     }
 }
 

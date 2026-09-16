@@ -1010,20 +1010,6 @@ val tsgoPendingBaselines = listOf(
         "Property 'tag' is missing in type 'Runtype<any>' but required in type 'Num'."
     ),
     TsgoPendingBaseline(
-        "isolatedDeclarationsAddUndefined.errors.txt",
-        "F6 top code differs (tsgo TS9025 / ours TS9011); layer `submoduleAccepted`. tsgo: " +
-        "file2.ts(4,27): error TS9025: Declaration emit for this parameter requires implicitly " +
-        "adding undefined to its type. This is not supported with --isola | ours: " +
-        "file2.ts(4,38): error TS9011: Parameter must have an explicit type annotation with " +
-        "--isolatedDeclarations."
-    ),
-    TsgoPendingBaseline(
-        "isolatedDeclarationsAllowJs.errors.txt",
-        "F6 top code differs (tsgo TS9010 / ours -); layer `submodule`. tsgo: file2.js(1,12): " +
-        "error TS9010: Variable must have an explicit type annotation with " +
-        "--isolatedDeclarations. | ours: ==== file2.js (0 errors) ===="
-    ),
-    TsgoPendingBaseline(
         "jsDeclarationEmitExportedClassWithExtends.errors.txt",
         "RECLASSIFIED (LEGACY.0b step 2) F9 -> source-echo PATH: the annotated-source header spells a doubled separator; layer `submoduleAccepted`. tsgo: ==== " +
         "node_modules/lit-element/development/lit-element.d.ts (0 errors) ==== | ours: ==== " +
@@ -1133,32 +1119,46 @@ val tsgoPendingBaselines = listOf(
             "'@param' tag has name 'rest', but there is no parameter with that name.",
     ),
     TsgoPendingBaseline(
-        "nodeNextPackageSelfNameWithOutDir.errors.txt",
-        "F6 top code differs (tsgo TS2307 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "index.ts(1,21): error TS2307: Cannot find module '@this/package' or its corresponding " +
-        "type declarations. | ours: ==== index.ts (0 errors) ===="
-    ),
-    TsgoPendingBaseline(
-        "nodeNextPackageSelfNameWithOutDirDeclDir.errors.txt",
-        "F6 top code differs (tsgo TS2307 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "index.ts(1,21): error TS2307: Cannot find module '@this/package' or its corresponding " +
-        "type declarations. | ours: ==== index.ts (0 errors) ===="
-    ),
-    TsgoPendingBaseline(
         "overloadOnConstNoAnyImplementation2.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
-        "overloadOnConstNoAnyImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
-        "'bye') => number' is not assignable to parameter of type '(x: \"hi\")  | ours: " +
-        "overloadOnConstNoAnyImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
-        "\"bye\") => number' is not assignable to parameter of type '(x: \"hi\") "
+        "REFUSED with a measurement (LEGACY.0b step 18): the mechanism is tsgo's type-NODE " +
+        "REUSE, not quote preservation. tsgo prints the SOURCE TEXT of a parameter's written " +
+        "annotation whenever the rendered signature's declaration is a function-like with a " +
+        "BODY (arrow / function expression / an inferred `const`), and renders structurally " +
+        "otherwise — measured: an interface MethodSignature (`overloadOnConstInheritance2`, " +
+        "ACTIVE and GREEN, source `(x: 'bar')` rendered `(x: \"bar\")`), a FunctionTypeNode " +
+        "annotation (`declare const h: (x: 'e') => number` renders `\"e\"`) and an " +
+        "instantiated generic alias (`Func<T,U>`) all render structurally. Reuse is VERBATIM, " +
+        "so it also keeps a type ALIAS unresolved (`(x: Al)` where we print `(x: \"zz\")`), a " +
+        "keyword alias (`(x: Nm)` for `number`) and a generic spelling (`Array<string>`), and " +
+        "even a backslash escape (`'it\\'s'`). COST: `typeToString` renders from a `Type` and " +
+        "has neither the declaring file's source nor a tight end for a `TypeNode` (only " +
+        "`AsExpression` carries `tightEnd`), so it is a display-layer change; exposure is 186 " +
+        "tsgo errors baselines rendering an annotated-parameter signature, 94 of them " +
+        "subtests in the live generated tree (66 with a one-parameter signature), all " +
+        "currently GREEN and gated by the corpus alone ((PARITY.1)). tsgo: Argument of type " +
+        "'(x: 'bye') => number' | ours: '(x: \"bye\") => number'; both sides' chain sub-lines " +
+        "are double-quoted in tsgo too."
     ),
     TsgoPendingBaseline(
         "overloadOnConstNoStringImplementation2.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
-        "overloadOnConstNoStringImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
-        "'bye') => number' is not assignable to parameter of type '(x: \"hi | ours: " +
-        "overloadOnConstNoStringImplementation2.ts(18,9): error TS2345: Argument of type '(x: " +
-        "\"bye\") => number' is not assignable to parameter of type '(x: \"hi"
+        "REFUSED with a measurement (LEGACY.0b step 18): the mechanism is tsgo's type-NODE " +
+        "REUSE, not quote preservation. tsgo prints the SOURCE TEXT of a parameter's written " +
+        "annotation whenever the rendered signature's declaration is a function-like with a " +
+        "BODY (arrow / function expression / an inferred `const`), and renders structurally " +
+        "otherwise — measured: an interface MethodSignature (`overloadOnConstInheritance2`, " +
+        "ACTIVE and GREEN, source `(x: 'bar')` rendered `(x: \"bar\")`), a FunctionTypeNode " +
+        "annotation (`declare const h: (x: 'e') => number` renders `\"e\"`) and an " +
+        "instantiated generic alias (`Func<T,U>`) all render structurally. Reuse is VERBATIM, " +
+        "so it also keeps a type ALIAS unresolved (`(x: Al)` where we print `(x: \"zz\")`), a " +
+        "keyword alias (`(x: Nm)` for `number`) and a generic spelling (`Array<string>`), and " +
+        "even a backslash escape (`'it\\'s'`). COST: `typeToString` renders from a `Type` and " +
+        "has neither the declaring file's source nor a tight end for a `TypeNode` (only " +
+        "`AsExpression` carries `tightEnd`), so it is a display-layer change; exposure is 186 " +
+        "tsgo errors baselines rendering an annotated-parameter signature, 94 of them " +
+        "subtests in the live generated tree (66 with a one-parameter signature), all " +
+        "currently GREEN and gated by the corpus alone ((PARITY.1)). tsgo: Argument of type " +
+        "'(x: 'bye') => number' | ours: '(x: \"bye\") => number'; both sides' chain sub-lines " +
+        "are double-quoted in tsgo too."
     ),
     TsgoPendingBaseline(
         "parameterPropertyInConstructor2.errors.txt",
