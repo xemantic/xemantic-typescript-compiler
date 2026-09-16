@@ -9557,7 +9557,6 @@ class Checker(
         // B437d: TS1098+TS1139 for an empty type-param list `<` in a JSDoc @param type.
         pass("checkJsDocEmptyTypeParamList") { checkJsDocEmptyTypeParamList() }
         pass("checkJsDocBareGenericTags") { checkJsDocBareGenericTags() }
-        pass("checkJsDocExtendsTags") { checkJsDocExtendsTags() }
         // 72a4i (B260): use-before-declaration in decorators + default-mode TS7006 for decorated params
         pass("checkDecoratorUseBeforeDeclaration") { checkDecoratorUseBeforeDeclaration() }
         // B354: uncalled-decorator arity (TS1329) + decorator return-type (TS1270/TS1271).
@@ -12193,6 +12192,13 @@ class Checker(
             // (CHK.82)(2) The rule has ONE home — [augmentationMergesSymbol] — so this
             // merge and [augmentationDeclaredExportNames] (the TS2305 suppression) ask
             // the same question of the same block.
+            // (P18.121) tsgo reports TS2671 INSTEAD of merging when the target's `export =`
+            // resolves to a non-module entity (`checker.go:1447`'s `else`). Skipping the merge
+            // here is what removes the duplicate-identifier pair such an augmentation used to
+            // manufacture against the JS file's own exports.
+            val jsAugTarget = targetFile ?: augmentationTargetFileJsAware(specifier, declaringFileName)
+            if (jsAugTarget != null && jsWholeModuleExportIsNonModuleEntity(jsAugTarget)) continue
+
             fun shouldAugmentSymbol(augSymbol: Symbol): Boolean =
                 augmentationMergesSymbol(body, augSymbol)
 
@@ -58327,10 +58333,14 @@ interface DataView {
         // In JS files, use TS8026 instead of TS2314 for heritage clauses without type args
         val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx")
         if (isJsFile && providedCount == 0) {
-            // If a governing `@augments`/`@extends <base>` JSDoc tag precedes this class, the
-            // tag SUPPLIES the type arguments — TS8026 is suppressed and checkJsDocExtendsTags
-            // owns the TS2314 at the tag position instead (jsExtendsImplicitAny).
-            if (hasGoverningExtendsTag(source, name, start)) return
+            // tsgo 7.0.2: an `@augments`/`@extends <base>` JSDoc tag SUPPLIES the heritage type
+            // arguments (measured: a tag supplying `A<number>` types the base's `T` as `number`),
+            // so a tag whose count is VALID silences this row. A tag with the WRONG count — and a
+            // missing tag alike — is reported HERE, on the `extends` expression, and NEVER at the
+            // tag: all three rows of `jsExtendsImplicitAny` are TS8026 anchored on the heritage
+            // name. `minRequired == maxTotal` is already established above, so maxTotal is the
+            // only valid count; a null answer (no governing tag) compares unequal and emits.
+            if (governingExtendsTagArgCount(source, name, start) == info.maxTotal) return
             diagnostics.add(Diagnostic(
                 message = "Expected ${info.displayName} type arguments; provide these with an '@extends' tag.",
                 category = DiagnosticCategory.Error,
@@ -177640,79 +177650,43 @@ interface DataView {
     }
 
     /**
-     * Is the heritage base `baseName` at [beforePos] governed by an `@augments`/`@extends`
-     * JSDoc tag? Scans backward to the nearest preceding `/** ... */` block and tests whether
-     * it carries a tag naming exactly this base. Used to suppress TS8026 in favor of the tag's
-     * own TS2314 (checkJsDocExtendsTags).
+     * The type-argument COUNT supplied by a governing `@augments`/`@extends <baseName>` JSDoc
+     * tag preceding [beforePos] in a JS file, or null when no such tag governs the heritage
+     * clause. Scans backward to the nearest preceding JSDoc comment and reads the tag naming
+     * exactly this base; a bare tag with no angle brackets, and an empty argument list, both
+     * answer 0.
+     *
+     * tsgo 7.0.2 BINDS those arguments — measured, a tag supplying `A<number>` gives the base's
+     * `T` the type `number` — so the count decides only whether the arity row is SILENCED, and
+     * the row itself is always anchored on the `extends` expression (TS8026), never on the tag.
+     * TypeScript 6 reported TS2314 at the tag instead; that mechanism is retired.
      */
-    private fun hasGoverningExtendsTag(source: String, baseName: String, beforePos: Int): Boolean {
+    private fun governingExtendsTagArgCount(source: String, baseName: String, beforePos: Int): Int? {
         val closeIdx = srcLastIndexOf(source, "*/", beforePos.coerceIn(0, source.length))
-        if (closeIdx < 0) return false
+        if (closeIdx < 0) return null
         val openIdx = srcLastIndexOf(source, "/**", closeIdx)
-        if (openIdx < 0) return false
+        if (openIdx < 0) return null
         val block = source.substring(openIdx, closeIdx + 2)
-        return Regex("""@(?:augments|extends)\s+""" + Regex.escape(baseName) + """\b""").containsMatchIn(block)
-    }
-
-    /**
-     * JS files: an `@augments`/`@extends <Base>` JSDoc tag SUPPLIES heritage type arguments for the
-     * following class. When the arg count in the tag does not match the base's required type-param
-     * count, tsc emits TS2314 at the TAG position (the base name, or the whole `Base<...>` span when
-     * args are present), NOT TS8026 at the `extends` clause (jsExtendsImplicitAny). The companion
-     * suppression lives in checkHeritageTypeArgCount via hasGoverningExtendsTag.
-     */
-    private fun checkJsDocExtendsTags() {
-        if (!options.checkJs) return
-        if (!(options.noImplicitAny || options.strict)) return
-        val jsdocBlock = Regex("""/\*\*[\s\S]*?\*/""")
-        val tag = Regex("""@(?:augments|extends)\s+([A-Za-z_$][A-Za-z0-9_$]*)""")
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            for (block in jsdocBlock.findAll(source)) {
-                val m = tag.find(block.value) ?: continue
-                val nameGroup = m.groups[1] ?: continue
-                val baseName = nameGroup.value
-                val nameRel = nameGroup.range.first
-                // Compute the provided type-arg count and the full tag span (name [+ <...>]).
-                var spanEndRel = nameGroup.range.last + 1
-                var providedCount = 0
-                var j = spanEndRel
-                while (j < block.value.length && block.value[j].isWhitespace()) j++
-                if (j < block.value.length && block.value[j] == '<') {
-                    var depth = 0
-                    var k = j
-                    while (k < block.value.length) {
-                        when (block.value[k]) {
-                            '<' -> depth++
-                            '>' -> { depth--; if (depth == 0) { k++; break } }
-                        }
-                        k++
-                    }
-                    spanEndRel = k
-                    val inner = block.value.substring(j + 1, (spanEndRel - 1).coerceAtLeast(j + 1))
-                    if (inner.isNotBlank()) {
-                        var d = 0; var cnt = 1
-                        for (c in inner) when (c) { '<' -> d++; '>' -> d--; ',' -> if (d == 0) cnt++ }
-                        providedCount = cnt
-                    }
-                }
-                val info = getTypeParamInfo(baseName) ?: continue
-                if (info.maxTotal == 0) continue
-                if (info.minRequired != info.maxTotal) continue
-                if (providedCount == info.maxTotal) continue
-                val start = block.range.first + nameRel
-                val length = spanEndRel - nameRel
-                val (line, ch) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "Generic type '${info.displayName}' requires ${info.maxTotal} type argument(s).",
-                    category = DiagnosticCategory.Error, code = 2314,
-                    fileName = fileName, line = line, character = ch,
-                    start = start, length = length,
-                ))
+        val m = Regex("""@(?:augments|extends)\s+""" + Regex.escape(baseName) + """\b""")
+            .find(block) ?: return null
+        var j = m.range.last + 1
+        while (j < block.length && block[j].isWhitespace()) j++
+        if (j >= block.length || block[j] != '<') return 0
+        var depth = 0
+        var k = j
+        while (k < block.length) {
+            when (block[k]) {
+                '<' -> depth++
+                '>' -> { depth--; if (depth == 0) { k++; break } }
             }
+            k++
         }
+        val inner = block.substring(j + 1, (k - 1).coerceAtLeast(j + 1))
+        if (inner.isBlank()) return 0
+        var d = 0
+        var cnt = 1
+        for (c in inner) when (c) { '<' -> d++; '>' -> d--; ',' -> if (d == 0) cnt++ }
+        return cnt
     }
 
     private fun checkJsDocNongenericInstantiation() {
@@ -190590,16 +190564,20 @@ interface DataView {
 
     /**
      * B553: a checkJs CJS `module.exports = { name: "<lit>" }` JS module exports `name` (typed
-     * `string` from the literal); a cross-file `declare module "./X"` augmentation that ALSO
-     * declares `export const/var name: T` is a DUPLICATE → TS2300 at BOTH the augmentation decl
-     * and the CJS object-literal key (symmetric TS6203). Additionally, since the JS export wins
-     * (`name` is `string`), an `import { name } from "./X"; name.<method>()` where <method> is
-     * absent from `string`'s apparent type → TS2551 (+ TS2728). Purely ADDITIVE: a CJS import
-     * resolves to `any` today (B152/B153 `.js` skip is NOT un-gated), so the general paths emit
-     * nothing. FP firewall (corpus-unique, jsExportMemberMergedWithModuleAugmentation2): the
-     * augmentation member must be `export const/var` (a VALUE re-declaration — an `interface`
-     * legally merges with a JS class export, base sibling excluded) AND the CJS target must be
-     * `module.exports = {objLit}` with a matching STRING-LITERAL-valued key.
+     * `string` from the literal). Since the JS export wins, an `import { name } from "./X";
+     * name.<method>()` where <method> is absent from `string`'s apparent type → TS2551
+     * (+ TS2728). Purely ADDITIVE: a CJS import resolves to `any` today (B152/B153 `.js` skip is
+     * NOT un-gated), so the general paths emit nothing. FP firewall (corpus-unique,
+     * jsExportMemberMergedWithModuleAugmentation2): the augmentation member must be
+     * `export const/var` (a VALUE re-declaration — an `interface` legally merges with a JS class
+     * export, base sibling excluded) AND the CJS target must be `module.exports = {objLit}` with
+     * a matching STRING-LITERAL-valued key.
+     *
+     * (P18.121) The TS2300 PAIR this walker also used to emit is RETIRED — see the comment at
+     * its former site. TypeScript 6 merged the augmentation and reported the collision; tsgo
+     * 7.0.2 refuses the augmentation outright with TS2671 and never creates the second
+     * declaration. The `conflicted` set it populated is still computed, because it is what
+     * selects the imports PIECE 2 reports on.
      */
     private fun checkCjsExportAugmentationConflict() {
         if (!options.checkJs) return
@@ -190629,9 +190607,15 @@ interface DataView {
                         flags != SyntaxKind.VarKeyword) continue
                     for (d in bs.declarationList.declarations) {
                         val n = d.name as? Identifier ?: continue
-                        val cjsNode = cjsStringExports[n.text] ?: continue
-                        emitAugReexportDup(n.text, n, augFile, augSource, cjsNode,
-                            targetFile, targetResult.sourceFile.text, 2300)
+                        if (n.text !in cjsStringExports) continue
+                        // (P18.121) The TS2300 PAIR this walker used to emit here is retired:
+                        // tsgo reports TS2671 at the augmentation's module name INSTEAD of
+                        // merging (`checker.go:1447`), so there is no second declaration left to
+                        // collide with. The two conditions coincide by construction — this
+                        // walker already requires `module.exports = {objLit}`, which is exactly
+                        // a non-module `export =` target — so the row is never merely moved, it
+                        // is replaced. PIECE 2 below is UNCHANGED and still correct: the JS
+                        // export still wins, so `a` is `string` and `a.toFixed()` is TS2551.
                         conflicted.add(n.text)
                     }
                 }
@@ -191017,6 +191001,75 @@ interface DataView {
     }
 
     /**
+     * (P18.121) TS2671, the JavaScript half: is [targetFileName] a JS file whose WHOLE-MODULE
+     * `module.exports = <expr>` assignment resolves to a non-module entity?
+     *
+     * tsgo 7.0.2 follows the target module's `export =` and then tests one flag:
+     * `mainModule.Flags & SymbolFlagsNamespace != 0` decides MERGE, and the `else` branch is
+     * TS2671 (`checker.go:1447`). A JS `module.exports = X` IS that `export =`, and an object
+     * literal, a class and a function all lack the Namespace flag — measured, tsgo reports
+     * TS2671 for all three and stays SILENT for a file exporting through `exports.a = …`,
+     * which is a real ValueModule. That asymmetry is the whole rule: it is the WHOLE-MODULE
+     * assignment that destroys the namespace meaning, not the presence of JS exports.
+     *
+     * Deliberately UNDER-approximating on the right-hand side: only the shapes measured above
+     * answer true, so `module.exports = require("./other")` (which resolves to another module,
+     * i.e. a genuine namespace) and every shape not yet measured keep today's behaviour. Failing
+     * this way loses a diagnostic; failing the other way REFUSES a legal augmentation and takes
+     * its merged members with it.
+     *
+     * ONE home for the question, because two callers must not drift: the merge in
+     * [collectModuleAugmentations] SKIPS such a target — that is tsgo's own control flow, the
+     * error is reported INSTEAD of merging, which is what removes the duplicate-identifier pair
+     * this augmentation used to manufacture — and [checkModuleAugmentationOfNonModuleEntity]
+     * reports the row.
+     */
+    /**
+     * (P18.121) The augmentation-target ladder for the TS2671 JavaScript leg, JS-AWARE.
+     *
+     * `resolveModuleSpecifier` and `augmentationTargetFile` deliberately do NOT strip a `.js`
+     * extension, and a CJS target IS a `.js` file — so a ladder built from those two alone
+     * resolves `./test` to nothing and the row silently never fires. It still WORKED in a
+     * scratch project, because there the crawl's own `moduleResolutions` answers ((CHK.30));
+     * the corpus harness materialises no directory and has no crawl, so only the JS-aware legs
+     * reach the target. That asymmetry is why this must be screened on the corpus and not on a
+     * project fixture. Same two legs, in the same order, that the B553 walker has always used.
+     */
+    private fun augmentationTargetFileJsAware(spec: String, declaringFile: String): String? =
+        resolveRelativeIncludingIndex(spec, declaringFile)
+            ?: resolveAugmentationTargetFile(spec, declaringFile)
+            ?: augmentationTargetFile(spec, declaringFile)
+
+    private fun jsWholeModuleExportIsNonModuleEntity(targetFileName: String): Boolean {
+        if (!isJsLikeFileName(targetFileName) || isDtsFile(targetFileName)) return false
+        val sf = fileResults[targetFileName]?.sourceFile ?: return false
+        var rhs: Expression? = null
+        for (stmt in sf.statements) {
+            val bin = (stmt as? ExpressionStatement)?.expression as? BinaryExpression ?: continue
+            if (bin.operator != SyntaxKind.Equals) continue
+            val lhs = bin.left as? PropertyAccessExpression ?: continue
+            if ((lhs.expression as? Identifier)?.text != "module" || lhs.name.text != "exports") continue
+            if ((bin.right as? Identifier)?.text == "exports") return false // `module.exports = exports`
+            if (rhs != null) return false // more than one whole-module assignment — not modelled
+            rhs = bin.right
+        }
+        val target = rhs ?: return false
+        return when (target) {
+            is ObjectLiteralExpression -> true
+            is FunctionExpression -> true
+            is ArrowFunction -> true
+            is ClassExpression -> true
+            // An identifier naming a class or function DECLARED in the same file. Anything else
+            // (a `require(...)` alias, an import, an unresolved name) is left alone.
+            is Identifier -> sf.statements.any { st ->
+                (st is ClassDeclaration && st.name?.text == target.text) ||
+                    (st is FunctionDeclaration && st.name?.text == target.text)
+            }
+            else -> false
+        }
+    }
+
+    /**
      * B90.1: TS2671 "Cannot augment module 'X' because it resolves to a non-module
      * entity." An ambient module defined with `export = V` where V is a value-only
      * entity (a `var`/`function` with no namespace/class/interface/enum/module
@@ -191063,7 +191116,12 @@ interface DataView {
                         continue
                     }
                 }
-                if (!ambientModuleExportEqualsIsValueOnly(specifier, augFile)) continue
+                // (P18.121) The JavaScript half: a `module.exports = <non-module>` target. Resolved
+                // through the same ladder the merge uses, so the row and the skipped merge cannot
+                // disagree about which file the specifier names.
+                val jsTarget = augmentationTargetFileJsAware(specifier, augFile)
+                val jsNonModule = jsTarget != null && jsWholeModuleExportIsNonModuleEntity(jsTarget)
+                if (!jsNonModule && !ambientModuleExportEqualsIsValueOnly(specifier, augFile)) continue
                 val (line, character) = getLineAndCharacterOfPosition(augSource, nameNode.pos)
                 diagnostics.add(Diagnostic(
                     message = "Cannot augment module '$specifier' because it resolves to a non-module entity.",

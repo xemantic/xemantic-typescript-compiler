@@ -985,22 +985,17 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "jsExportMemberMergedWithModuleAugmentation.errors.txt",
-        "F6 top code differs (tsgo TS2671,TS2749 / ours TS2741); layer `submodule`. tsgo: " +
-        "/index.ts(3,16): error TS2671: Cannot augment module './test' because it resolves to a " +
-        "non-module entity. | ours: /index.ts(11,7): error TS2741: Property 'x' is missing in " +
-        "type '{ b: string; }' but required in type 'Abcde'."
-    ),
-    TsgoPendingBaseline(
-        "jsExportMemberMergedWithModuleAugmentation2.errors.txt",
-        "F6 top code differs (tsgo TS2671 / ours TS2300); layer `submodule`. tsgo: " +
-        "/index.ts(3,16): error TS2671: Cannot augment module './test' because it resolves to a " +
-        "non-module entity. | ours: /index.ts(4,16): error TS2300: Duplicate identifier 'a'."
-    ),
-    TsgoPendingBaseline(
-        "jsExtendsImplicitAny.errors.txt",
-        "F6 top code differs (tsgo TS8026 / ours TS2314); layer `submodule`. tsgo: /b.js(5,17): " +
-        "error TS8026: Expected A<T> type arguments; provide these with an '@extends' tag. | " +
-        "ours: /b.js(4,15): error TS2314: Generic type 'A<T>' requires 1 type argument(s)."
+        "PARTIAL since (P18.121): the TS2671 row now MATCHES tsgo, at /index.ts(3,16), and the " +
+        "TS2741 it used to carry is gone — the augmentation is refused rather than merged. The " +
+        "residue is a SECOND mechanism this row needs and its sibling (…Augmentation2, closed) " +
+        "did not: an import from a CJS `module.exports = {objLit}` JS file binds a VALUE ONLY, " +
+        "so tsgo reports /index.ts(11,10) TS2749 `'Abcde' refers to a value, but is being used " +
+        "as a type here. Did you mean 'typeof Abcde'?` where we still resolve `Abcde` as a type " +
+        "and report /index.ts(11,20) TS2353 `Object literal may only specify known properties, " +
+        "and 'b' does not exist in type 'Abcde'.` The fixture's own comment states the rule " +
+        "(\"the type meaning from /test.js does not propagate through the object literal " +
+        "export\"). Needs the value-only-import change plus its TS2353 suppression; NOT an " +
+        "augmentation question."
     ),
     TsgoPendingBaseline(
         "jsdocFunctionClassPropertiesDeclaration.errors.txt",
@@ -1133,9 +1128,20 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "unusedTypeParameters_templateTag2.errors.txt",
-        "F6 top code differs (tsgo TS2339 / ours TS6133); layer `submodule`. tsgo: /a.js(2,3): " +
-        "error TS6205: All type parameters are unused. | ours: /a.js(3,4): error TS6133: 'V' is " +
-        "declared but its value is never read."
+        "REFUSED (P18.121) with a measurement: this row needs TWO mechanisms, not the TS6205 " +
+        "aggregation alone. tsgo's rule is `len(list) > 1 && Every(unreferenced)` -> one row at " +
+        "`rangeOfTypeParameters` (checker.go:7277), and we ALREADY emit TS6205 for the " +
+        "all-unused class (C2) — what is missing there is only the multi-line SPAN. C1 and C3 " +
+        "reference their T through `/** @type {T} */ this.p;`, so no aggregation rule can " +
+        "report them: they become all-unused for tsgo ONLY because a bare `this.p;` does NOT " +
+        "declare a property there, which is why tsgo also emits /a.js(9,14) and (26,14) TS2339 " +
+        "`Property 'p' does not exist on type 'C1<T, V>'`. Measured directly: with T referenced " +
+        "from a `@param {T}` tag instead, tsgo drops TS6205 and reports per-parameter TS6196 — " +
+        "so the aggregation predicate is fine and the JS-expando semantics are the blocker. " +
+        "That change (a bare `this.p;` with a `@type` tag stops declaring) has 10 candidate " +
+        "case files carrying the shape and needs its own round. Note also that tsgo's " +
+        "per-parameter code for a CLASS type parameter is TS6196, which we already emit; the " +
+        "TS6133 in the pristine baseline is the tsc-6 answer."
     ),
 )
 
