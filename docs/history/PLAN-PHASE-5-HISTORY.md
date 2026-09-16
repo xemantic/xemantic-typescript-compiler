@@ -1,3 +1,48 @@
+### Round (P18.103) — (LEGACY.1) step (c): TypeScript 7 binds EVERY file strict, so `alwaysStrict: false` was four dead arms and one missing diagnostic (2026-09-15)
+
+**Three commits** (`e81d07381` refactor, `75b3baa97` test, this docs commit). **Suite 19,370 → 19,382 / 0 / 83**
+(+14 pins, −2 deleted tsc-6 controls), 9 modules asserted; corpus screen errors 3,084 / 0 and emit 5,688 / 0 —
+CONTROLS, counted: zero active subtests carry `alwaysstrict=false` (33 carry `true`), and the 11 active `with`
+baselines with no strict directive were already reporting TS1101; `cost_gate.py` exit 0, 20/20 +0.00%;
+`huge_methods.py --fail-over 0` exit 0 (871 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls
+(every profile sets `alwaysStrict: true`); warning-clean (2,236-byte log, `w=0`). `Checker.kt` 195,124 →
+**195,132** (code −6, KDoc +14), `Emitter.kt` +2, `TypeScriptCompiler.kt` +6. **(LEGACY.1)(c) CHECKED OFF; (d)
+next; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE MEASUREMENT THAT LICENSED IT.** Six configurations on tsgo 7.0.2 (`with` in a script, a module file; TS1101
+read through the LSP because the CLI stops at the options row — yet still EMITS): `alwaysStrict: false`,
+`alwaysStrict: false` + `strict: false`, `strict: false` alone, nothing set, `alwaysStrict: true` ± `strict:
+false` ALL report TS1101 (+TS2410) at the `with` and emit `"use strict"` into BOTH files; the only trace of the
+option is `TS5108 Option 'alwaysStrict=false' has been removed` anchored at the tsconfig VALUE. In the Go
+source `AlwaysStrict` has three references — the parser, the field, `program.go:858`'s removed-option row —
+and the binder has NO `inStrictMode`: `checkStrictModeWithStatement` fires unconditionally. **So tsgo is not
+"ignoring an explicit false", it is strict-ALWAYS** — `strict: false` alone gives it three TS1212 rows on
+`var let/yield/interface` where ours gives 0, which makes the SURVIVING `explicitNonStrict` disjunct a tsc-6
+residue too. That one moves the corpus's `@strict: false` baselines and is (LEGACY.0b) territory, recorded in
+the pin class's KDoc, deliberately not landed here.
+
+**WHAT LANDED.** Deleted: the Emitter's `alwaysStrict == false` suppression of the `"use strict"` prologue, the
+`spineWithStrictActive` field and its gate around TS1101 (now unconditional; `javap -p` has 0 hits), the
+`explicitNonStrict` disjunct on the explicit false, and the TS1344 early return. Kept: every `== true` read and
+the parse. **Added — the item said "keep its removed-option diagnostic" and there was none**: neither
+`TypeScriptCompiler.kt` nor the census's `:523-526` mentioned `alwaysStrict` (only the two interop flags had the
+row); one `addDeprecation("alwaysStrict=false", …)` line beside them now prints TS5107 at the 6.0 default and
+TS5108 under `@typeScriptVersion: 7.0`, value-anchored as tsgo — without it an explicit `false` would have been
+silently ignored. The two negative controls in `Inv4SpineBatch11Test`/`Inv4SpineBatch9Test` are deleted, not
+re-pointed (their positive twins live in the same classes).
+
+**PINS AND ABLATION.** `AlwaysStrictRemovedTest`, 14 pins (9 + 5 controls); stash-ablation 8 of 13 red, exactly
+the non-controls (the TS1212 pin was added after that run and measured directly: 0 rows on the pre-change
+binary). Five arms, each reddening a disjoint set: a1 Emitter suppression 3/0; a2 TS1101 gate 2/0; a3
+`explicitNonStrict` disjunct 1/0; a4 TS1344 return 1/0; a5 the added deprecation row 2/0 — screens 0/0 on every
+arm. Final md5s Checker `f1cf432e`, Emitter `116cf3b5`, TypeScriptCompiler `918c9612`; the orchestrator's AFTER
+arm matched all three.
+
+**WHAT (d) INHERITS.** On the PROJECT path (`TsConfigLoader`) `tsconfigOptionPositions` is never populated, so
+every `addDeprecation` row — the new one and the `esModuleInterop=false` sibling alike — prints FILE-LESS
+(` - error TS5107`) where tsgo anchors at `tsconfig.json(1,98)` on the value; only the embedded-tsconfig harness
+path carries positions, which is what the 7.0 pin exercises. A family-wide anchoring gap, not (c)'s.
+
 ### Round (P18.102) — (LEGACY.1) steps (a)+(b): the dead System-module helpers, −249 lines, and why this round left (LEGACY.0)'s tail (2026-09-15)
 
 **Two commits** (`ba18310a5` refactor, this docs commit). **Suite 19,370 → 19,370 / 0 / 83**, 9 modules asserted;

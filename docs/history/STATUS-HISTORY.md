@@ -3808,3 +3808,14 @@ namespace` untouched (`-externals` 290/0). **The corpus is a counted control her
 a removed kind — so the 23 pins are the whole gate; nine arms all discriminating. cost_gate 20/20 +0.00%;
 huge_methods exit 0 (874 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. Seven pre-existing
 commonjs-cell gaps found for the ledger.
+**(P18.108) — (LEGACY.1) STEP (h): `outFile` WAS ALREADY INERT ON THE PROJECT PATH — SIX HARNESS-ONLY ARMS DELETED, THE REFERENCE EDGES KEPT AS tsgo's PROGRAM ORDER, 19,506 / 0 / 83 (2026-09-15).**
+34 scratch projects on tsgo: TS5102 at the quoted key, per-file emit, `--listFiles` order decided by
+`/// <reference path>` edges with and WITHOUT `outFile`, no TS6082 emitter, TS5074 without an outFile read. The
+six arms only the harness reached are deleted (the single-file name, the flattened layout, the topological
+transform order, the no-outDir `.js` admission, the None/outFile drop, TS5074's conjunct); the item's
+"reference-directive ordering only used when outFile is set" was a stale comment and the edges stay. 19 pins —
+the six `-project` ones green on both arms and named controls (the tsgo-shaped receipt); five of six arms
+discriminate, `transformOrder` had no observable. Screens 3,084/0 + 5,688/0 and grid 8×0/0 + emit 78/78 all
+counted controls (0 live test sources mention outFile); cost_gate 20/20 +0.00%; huge_methods exit 0 (874
+classes); warning-clean with an injected positive control. (g) is BLOCKED-PENDING-USER: 28 active embedded-tsconfig
+`baseUrl` baselines tsgo never ran.
