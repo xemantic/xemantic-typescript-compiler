@@ -892,34 +892,6 @@ val tsgoPendingBaselines = listOf(
         "exist on type '{}'`. layer `submoduleAccepted`."
     ),
     TsgoPendingBaseline(
-        "duplicateIdentifierRelatedSpans1.errors.txt",
-        "F2-residue: the 6203-vs-6204 selection for an N-WAY CROSS-FILE duplicate. tsgo's "
-            + "`addDuplicateDeclarationError` (checker.go:14158) decides leading-vs-follow-on "
-            + "from the diagnostic's EXISTING related list — empty gives TS6203, non-empty "
-            + "TS6204 — and we decide it by index. That rule reproduces the ACTIVE "
-            + "`promiseDefinitionTest` / `recursiveComplicatedClasses` shape "
-            + "`[6203,6204,6204,…]` (ONE symbol with N declarations, so one call), and NOT "
-            + "the all-TS6203 shape these three want (N separate FILES, i.e. several merge "
-            + "calls accreting onto one diagnostic through `lookupOrIssueError`, which by "
-            + "that rule would give 6204 from the second on). tsgo's source and its own "
-            + "baselines do not reconcile here, so the rule must be read off the BASELINES; "
-            + "exposure is 54 active TS6203 and 7 active TS6204 rows.",
-    ),
-    TsgoPendingBaseline(
-        "duplicateIdentifierRelatedSpans_moduleAugmentation.errors.txt",
-        "F2-residue: the 6203-vs-6204 selection for an N-WAY CROSS-FILE duplicate. tsgo's "
-            + "`addDuplicateDeclarationError` (checker.go:14158) decides leading-vs-follow-on "
-            + "from the diagnostic's EXISTING related list — empty gives TS6203, non-empty "
-            + "TS6204 — and we decide it by index. That rule reproduces the ACTIVE "
-            + "`promiseDefinitionTest` / `recursiveComplicatedClasses` shape "
-            + "`[6203,6204,6204,…]` (ONE symbol with N declarations, so one call), and NOT "
-            + "the all-TS6203 shape these three want (N separate FILES, i.e. several merge "
-            + "calls accreting onto one diagnostic through `lookupOrIssueError`, which by "
-            + "that rule would give 6204 from the second on). tsgo's source and its own "
-            + "baselines do not reconcile here, so the rule must be read off the BASELINES; "
-            + "exposure is 54 active TS6203 and 7 active TS6204 rows.",
-    ),
-    TsgoPendingBaseline(
         "dynamicNamesErrors.errors.txt",
         "F2-residue: a LATE-BOUND computed member name (`[c0]`, a const-initialised key). "
             + "(LEGACY.0b) step 8 gave the class and interface walkers tsgo's report-at-every-"
@@ -965,20 +937,6 @@ val tsgoPendingBaselines = listOf(
         "does not exist on type 'typeof Foo'."
     ),
     TsgoPendingBaseline(
-        "exportAsNamespace_augment.errors.txt",
-        "F2-residue: the 6203-vs-6204 selection for an N-WAY CROSS-FILE duplicate. tsgo's "
-            + "`addDuplicateDeclarationError` (checker.go:14158) decides leading-vs-follow-on "
-            + "from the diagnostic's EXISTING related list — empty gives TS6203, non-empty "
-            + "TS6204 — and we decide it by index. That rule reproduces the ACTIVE "
-            + "`promiseDefinitionTest` / `recursiveComplicatedClasses` shape "
-            + "`[6203,6204,6204,…]` (ONE symbol with N declarations, so one call), and NOT "
-            + "the all-TS6203 shape these three want (N separate FILES, i.e. several merge "
-            + "calls accreting onto one diagnostic through `lookupOrIssueError`, which by "
-            + "that rule would give 6204 from the second on). tsgo's source and its own "
-            + "baselines do not reconcile here, so the rule must be read off the BASELINES; "
-            + "exposure is 54 active TS6203 and 7 active TS6204 rows.",
-    ),
-    TsgoPendingBaseline(
         "exportAssignmentMembersVisibleInAugmentation.errors.txt",
         "F6 top code differs (tsgo TS4060 / ours TS2304,TS2664); layer `submoduleTriaged`. " +
         "tsgo: /a.ts(3,26): error TS4060: Return type of exported function has or is using " +
@@ -999,9 +957,14 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "incorrectRecursiveMappedTypeConstraint.errors.txt",
-        "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
-        "TS2751 incorrectRecursiveMappedTypeConstraint.ts:3:10: Circularity originates in type " +
-        "at this location. | ours: nothing"
+        "F0 rows tsgo emits that ours does not: a related TS2751 `Circularity originates in " +
+        "type at this location.` on incorrectRecursiveMappedTypeConstraint.ts:3:10. REFUSED (LEGACY.0b) step 19 and it must " +
+        "stay refused: the divergence LAYER is `submoduleTriaged` — the `.diff` for this " +
+        "baseline lives in testdata/baselines/reference/submoduleTriaged/compiler/, whose " +
+        "header reads \"known diffs that we intend to fix\", i.e. a tsgo DEFECT. (The " +
+        "base `.errors.txt` under submodule/ is the adopted baseline every case has; it " +
+        "is NOT the layer, and reading it as one is what made this row look targetable.) " +
+        "tsgo attaches it at TS2313 x2. | ours: nothing"
     ),
     TsgoPendingBaseline(
         "invariantGenericErrorElaboration.errors.txt",
@@ -1196,9 +1159,14 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "typeParameterWithInvalidConstraintType.errors.txt",
-        "F0 rows tsgo emits that ours does not; layer `submoduleTriaged`. tsgo: !!! related " +
-        "TS2751 typeParameterWithInvalidConstraintType.ts:4:17: Circularity originates in type " +
-        "at this location. | ours: nothing"
+        "F0 rows tsgo emits that ours does not: a related TS2751 `Circularity originates in " +
+        "type at this location.` on typeParameterWithInvalidConstraintType.ts:4:17. REFUSED (LEGACY.0b) step 19 and it must " +
+        "stay refused: the divergence LAYER is `submoduleTriaged` — the `.diff` for this " +
+        "baseline lives in testdata/baselines/reference/submoduleTriaged/compiler/, whose " +
+        "header reads \"known diffs that we intend to fix\", i.e. a tsgo DEFECT. (The " +
+        "base `.errors.txt` under submodule/ is the adopted baseline every case has; it " +
+        "is NOT the layer, and reading it as one is what made this row look targetable.) " +
+        "tsgo attaches it at TS2313. | ours: nothing"
     ),
     TsgoPendingBaseline(
         "unusedTypeParameters_templateTag2.errors.txt",

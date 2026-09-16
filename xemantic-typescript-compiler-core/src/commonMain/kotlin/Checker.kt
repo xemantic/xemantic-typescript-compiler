@@ -46594,16 +46594,17 @@ class Checker(
             val libFiles = LIB_SHADOWED_CLASS_LIB_FILES[name.text] ?: continue
             val nameStart = name.pos
             val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
-            val relatedInfos = libFiles.mapIndexed { idx, libFile ->
-                Diagnostic(
-                    message = if (idx == 0) "'${name.text}' was also declared here." else "and here.",
-                    category = DiagnosticCategory.Message,
-                    code = if (idx == 0) 6203 else 6204,
-                    fileName = libFile,
-                    line = null,
-                    character = null,
-                )
-            }
+            // The lib declarations all belong to ONE merged symbol, so tsgo makes a SINGLE
+            // `addDuplicateDeclarationError` call carrying every one of them: leading TS6203
+            // then TS6204 for the rest. See [duplicateCallRelatedInfos] for why that index is
+            // per CALL (`recursiveComplicatedClasses` is this shape's witness).
+            val relatedInfos = duplicateCallRelatedInfos(
+                listOf(libFiles.map { libFile ->
+                    DuplicateRelatedTarget(
+                        name = name.text, fileName = libFile, line = null, character = null,
+                    )
+                })
+            )
             diagnostics.add(Diagnostic(
                 message = "Duplicate identifier '${name.text}'.",
                 category = DiagnosticCategory.Error,
@@ -189596,24 +189597,81 @@ interface DataView {
     }
 
     /**
+     * One node a duplicate-declaration diagnostic can point at, for
+     * [duplicateCallRelatedInfos].
+     */
+    private class DuplicateRelatedTarget(
+        val name: String,
+        val fileName: String?,
+        val line: Int?,
+        val character: Int?,
+        val start: Int? = null,
+        val length: Int? = null,
+    )
+
+    /**
+     * (LEGACY.0b) step 19: builds the related-information list of a duplicate-declaration
+     * diagnostic from the merge CALLS that contributed to it.
+     *
+     * tsgo's `addDuplicateDeclarationError` (checker.go:14158) reads
+     * `leading = len(err.RelatedInformation()) == 0`, which looks like a per-DIAGNOSTIC
+     * index and is not one, because `lookupOrIssueError` finds an existing diagnostic
+     * through `ast.CompareDiagnostics` — whose LAST comparison is `compareRelatedInfo`.
+     * A probe built for the second call carries an empty related list, so it no longer
+     * compares equal to the diagnostic the first call already decorated: the lookup MISSES
+     * and a SECOND diagnostic is issued at the same location, again starting empty.
+     * `SortAndDeduplicateDiagnostics` -> `compactAndMergeRelatedInfos` (program.go:1444)
+     * then folds every diagnostic that is `EqualDiagnosticsNoRelatedInfo` into one and
+     * unions their related lists.
+     *
+     * So the leading-vs-follow-on index is **per CALL, not per diagnostic**: the first
+     * related node of each call is TS6203 `'{0}' was also declared here.` and the rest of
+     * THAT call's nodes are TS6204 `and here.`. Verified mechanically against every tsgo
+     * baseline carrying such a row — 128 files, 317 diagnostics, 0 unexplained.
+     *
+     * The two witnesses that fix the rule, both tsgo baselines:
+     *  - `recursiveComplicatedClasses`: ONE symbol (the merged lib `Symbol`) with three
+     *    declarations, so ONE call -> `[6203, 6204, 6204]` (see [checkClassShadowsLibType],
+     *    which passes its lib files as a single call);
+     *  - `duplicateIdentifierRelatedSpans1`: `Foo` declared in three separate FILES, so the
+     *    binder merges pairwise and makes TWO calls of one node each -> `[6203, 6203]`.
+     *
+     * [calls] is one element per merge call, in call order.
+     */
+    private fun duplicateCallRelatedInfos(
+        calls: List<List<DuplicateRelatedTarget>>,
+    ): List<Diagnostic> = calls.flatMap { nodes ->
+        nodes.mapIndexed { idx, t ->
+            Diagnostic(
+                message = if (idx == 0) "'${t.name}' was also declared here." else "and here.",
+                category = DiagnosticCategory.Message,
+                code = if (idx == 0) 6203 else 6204,
+                fileName = t.fileName, line = t.line, character = t.character,
+                start = t.start, length = t.length,
+            )
+        }
+    }
+
+    /**
      * Emit a cross-file duplicate-identifier conflict with the HUB model (B93): the first
      * declaration in [ordered] (source-processing order) is the hub. The hub's diagnostic
-     * relates to each other declaration — TS6203 for the first, TS6204 for the rest. Each
-     * other declaration relates back to the hub with a single TS6203.
+     * relates to each other declaration and each other declaration relates back to the hub;
+     * EVERY one of those related rows is TS6203, for the reason [duplicateCallRelatedInfos]
+     * records — one merge CALL per other declaration, each carrying a single related node.
      */
     private fun emitCrossFileHubDuplicates(ordered: List<CrossFileDupDecl>, code: Int, message: String) {
         if (ordered.size < 2) return
         fun related(targets: List<CrossFileDupDecl>): List<Diagnostic> =
-            targets.mapIndexed { idx, other ->
+            duplicateCallRelatedInfos(targets.map { other ->
                 val (ol, oc) = getLineAndCharacterOfPosition(other.source, other.nameNode.pos)
-                Diagnostic(
-                    message = if (idx == 0) "'${other.name}' was also declared here." else "and here.",
-                    category = DiagnosticCategory.Message,
-                    code = if (idx == 0) 6203 else 6204,
-                    fileName = other.fileName, line = ol, character = oc,
-                    start = other.nameNode.pos, length = other.name.length,
+                listOf(
+                    DuplicateRelatedTarget(
+                        name = other.name, fileName = other.fileName,
+                        line = ol, character = oc,
+                        start = other.nameNode.pos, length = other.name.length,
+                    )
                 )
-            }
+            })
         fun emitOne(decl: CrossFileDupDecl, rel: List<Diagnostic>) {
             val (line, ch) = getLineAndCharacterOfPosition(decl.source, decl.nameNode.pos)
             diagnostics.add(Diagnostic(
@@ -190201,16 +190259,19 @@ interface DataView {
 
         fun emit2451(decl: Decl, related: List<Decl>) {
             val (line, ch) = getLineAndCharacterOfPosition(decl.source, decl.nameNode.pos)
-            val rel = related.mapIndexed { idx, other ->
+            // Each augmentation re-declaration is a SEPARATE merge into the target module's
+            // symbol, i.e. one call carrying one related node — so every row is TS6203.
+            // See [duplicateCallRelatedInfos].
+            val rel = duplicateCallRelatedInfos(related.map { other ->
                 val (ol, oc) = getLineAndCharacterOfPosition(other.source, other.nameNode.pos)
-                Diagnostic(
-                    message = if (idx == 0) "'${decl.name}' was also declared here." else "and here.",
-                    category = DiagnosticCategory.Message,
-                    code = if (idx == 0) 6203 else 6204,
-                    fileName = other.fileName, line = ol, character = oc,
-                    start = other.nameNode.pos, length = other.name.length,
+                listOf(
+                    DuplicateRelatedTarget(
+                        name = other.name, fileName = other.fileName,
+                        line = ol, character = oc,
+                        start = other.nameNode.pos, length = other.name.length,
+                    )
                 )
-            }
+            })
             diagnostics.add(Diagnostic(
                 message = "Cannot redeclare block-scoped variable '${decl.name}'.",
                 category = DiagnosticCategory.Error, code = 2451,
