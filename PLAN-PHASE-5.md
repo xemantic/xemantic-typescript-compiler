@@ -25,6 +25,53 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.112) — (LEGACY.1) step (j3): tsgo's checker never spells `__extends`, `__generator` or `__assign` — and its helper table exposed two target-free defects in the same emitter (2026-09-16)
+
+**Three commits** (`293799770` refactor, `6f8bdeab9` test, this docs commit). **Suite 19,551 → 19,566 / 0 / 81**
+(+15 pins; **skipped −2** — the two pending rows the dedup fix closed), 9 modules asserted; corpus screen errors
+**3,086 / 0** and emit 5,688 / 0; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (874
+classes); grid 8×`added=0 removed=0` and emit 78/78 — controls; warning-clean with an injected positive control.
+`Checker.kt` 194,285 → **194,167** (−118); `tsgoPendingBaselines` 58 → **56**. **(j3) is LANDED — the (j) line stays
+open on (j4) the option surface; (g) stays BLOCKED-PENDING-USER; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE TABLE.** `checkExternalEmitHelpers` (`checker.go:28333`) is tsgo's ONE emitter of TS2354/TS2343, and every
+caller requests helpers by flag: `__rest` below ES2018 (`:5801`, `:12587`), `__awaiter` below ES2017 (`:2727`), the
+`__await`/`__asyncGenerator`/`__asyncValues` family below ES2018 (`:2724`, `:10942`, `:4029`), the legacy-decorator
+and CommonJS-interop helpers at ANY target, the private-field and disposable families below ES2022/ESNext.
+**`__extends`, `__generator` and `__assign` appear nowhere in tsgo's checker** (tsgo's own object-spread lowering
+imports `__assign` below ES2018 and never CHECKS it) and `__makeTemplateObject` has a flag with no caller. Measured
+over 30 cells — tslib absent / exporting nothing / exporting only `__awaiter`, × es5/es2015/es2016/es2017/esnext ×
+commonjs/esnext, 13 shapes each, read through the LSP because the CLI stops at TS5108 and emits nothing at es5:
+tsgo names none of the four in any cell; ours named `__extends` in the six es5 cells.
+
+**WHAT LANDED.** The four ES5 arms deleted with `isEs5Target` (17 references), `needsExtendsHelper` and the whole
+`checkExprForMissingHelper` walk — a reference census leaves every one of those names comment-only. Kept with
+tsgo's bound: `needsAwaiterHelper` (< ES2017), the parameter `__rest` (< ES2018), the async-generator pair,
+`needsEsmHelpers`, decorators; the two kept target reads are re-keyed to `defaultedTarget`, provably identical on
+every input. **And the same table found two defects that have nothing to do with the target**: the VARIABLE-form
+`__rest` walk carried no ES2018 bound (tsgo gates every binding element), and TS2343 deduplicated per tslib
+INSTALL where tsgo dedups per `(file, helper)` — that granularity was the entire cause of two pending rows, which
+close here.
+
+**PINS AND ABLATION.** 15 pins; stash-ablation 10 red (one pin's red was a FIXTURE defect — a `+ """…"""`
+concatenation defeating `trimIndent` — fixed rather than accepted, our anchor having been right). Eight arms with
+disjoint red sets; **a8, the dedup arm, is the one arm in this round where the errors screen is a GATE** (it
+reddens both newly-closed baselines) — the other seven are controls, because all 35 active `@importHelpers`
+subtests are es2015+ and every es5 configuration is a `usesUnsupportedOption` skip. Final md5 Checker `59adfcb4` —
+the orchestrator's AFTER arm matched.
+
+**STANDING DIVERGENCES FOUND, OUT OF SCOPE, WORTH A QUEUE ITEM.** On a real PROJECT `node_modules/tslib` is never
+in the program (the crawl prunes it), so `checkMissingTslibHelpers` is dead there — 0 TS2343 — and
+`checkImportHelpersWithoutTslib` prints a **false TS2354 on every real project that HAS tslib installed**, where
+tsgo resolves the package through the module resolver; TS2354 is missing for `import d from`, `export * from`,
+async generators, `for await` and object rest (the `esModuleInteropTslibHelpers` pending row is that family); and
+the `__awaiter` TS2343 arm has no < ES2017 bound while the async-generator pair has no < ES2018 one, so both fire
+at esnext where tsgo is silent.
+
+**WHAT (j4) INHERITS.** `ScriptTarget.ES3/ES5`, `effectiveTarget`'s ES5→ES2015 map and the ES3 default are
+untouched; after (j3) the only `defaultedTarget <= ES5` / `< ES2015` reader left in `Checker.kt` is (j2)'s KEPT
+TS2318 gate, and this family's only `effectiveTarget` mentions are comments.
+
 ### Round (P18.111) — (LEGACY.1) step (j2): tsgo has exactly ONE `< ES2015` checker gate — seven of ours deleted, four re-keyed on the lib, one un-suppressed, one kept (2026-09-16)
 
 **Three commits** (`e8b2f8a6d` refactor, `03fed2cdf` test, this docs commit). **Suite 19,538 → 19,551 / 0 / 83**, 9
@@ -471,43 +518,6 @@ arm matched all three.
 every `addDeprecation` row — the new one and the `esModuleInterop=false` sibling alike — prints FILE-LESS
 (` - error TS5107`) where tsgo anchors at `tsconfig.json(1,98)` on the value; only the embedded-tsconfig harness
 path carries positions, which is what the 7.0 pin exercises. A family-wide anchoring gap, not (c)'s.
-
-### Round (P18.102) — (LEGACY.1) steps (a)+(b): the dead System-module helpers, −249 lines, and why this round left (LEGACY.0)'s tail (2026-09-15)
-
-**Two commits** (`ba18310a5` refactor, this docs commit). **Suite 19,370 → 19,370 / 0 / 83**, 9 modules asserted;
-corpus screen emit **5,688 / 0** (the instrument for a Transformer change — `--noEmit` skips the transformer) and
-errors 3,084 / 0; `cost_gate.py` exit 0, 20/20 +0.00% (a control by construction); `huge_methods.py --fail-over 0`
-exit 0 (871 classes — the JIT census is the one gate a compiled-code deletion can move, and it did not); grid
-8×`added=0 removed=0` and emit 78/78 — CONTROLS, counted (every profile is `module: commonjs`/esnext);
-warning-clean (2,236-byte log, both compile tasks executed, `w=0`). `Transformer.kt` **17,862 → 17,613 (−249)**;
-`Checker.kt` unchanged at 195,124. **(LEGACY.1) (a) and (b) are CHECKED OFF; (c)-(k) stay open; (LEGACY.0) stays
-OPEN** on (0b-17).
-
-**WHY (LEGACY.1) AND NOT (0b-17).** (LEGACY.0) is in its long tail — 58 singletons closing at ≤6 per round, most
-of them display or JS/JSDoc shapes — while (LEGACY.1) serves the owner's 2026-09-12 directive directly (legacy
-code for TS7-removed features may be deleted), moves the shrinkage metric, and owns the two questions parked in
-(LEGACY.0)'s residue (`downlevelIteration`'s TS5102 pair, `pathsValidation5`'s order). The WORK ORDER addendum
-allows the pick when it is said and the successor named: successor is (LEGACY.1)(c) `alwaysStrict: false`, then
-(d); (0b-17) resumes after, or interleaves when a theme with ≥5 rows is visible.
-
-**WHAT LANDED.** (a) `buildSystemDynamicImport` / `rewriteSystemDynExpr` / `rewriteSystemDynStmt` (107 lines) and
-(b) `stripVarDeclsFromStatement` / `collectVarNamesFromStmts` / `collectVarNamesFromStmt` (142 lines);
-`collectBoundNames` stays with its 34 live callers and regains its orphaned KDoc, which had been sitting above the
-deleted cluster as a doubled comment — which is why the item's "~147 lines" was 142. **The proof is a repo-wide
-reference census, not the compile**: mutually recursive helpers compile with or without a caller, so every
-occurrence of the six names was shown to lie inside its own cluster (outside `Transformer.kt` only the queue item
-and the census doc name them), and `javap -p` on the final class carries none of the six. Helpers the dead code
-called (`isDynamicImportCall`, `syntheticId`, `extractIdentifierName`, …) all keep live users.
-
-**WHAT THE ITEM HAD WRONG, AND WHAT (f) INHERITS.** Its line numbers were stale by ~300 lines (the brief warned).
-**`module: system` is NOT folded onto CommonJS today**: `Transformer.kt`'s `useCJS` admits only
-CommonJS/None/nodenext/`.cts`/`.cjs`, so System, AMD and UMD pass module statements through UNTRANSFORMED (what
-`RemovedModuleKindsTest`'s KDoc records) — tsgo's `emitter.go:98-99` fold is a ROUTING change and is step (f)'s,
-together with `TypeScriptCompiler.kt`'s System arms (TS5107 `:530`, the classic derivation `:765`, TS5071 `:784`,
-TS5095 `:955-956`, the top-level-await parser flag `:1143`/`:3064`) and `Transformer.kt`'s `wrapCallsWithZero`
-parameter, which is never passed `false` anywhere — a System-only residue of its own. No pin was added: dead-code
-deletion has no positive to pin, and the CJS-output pin the brief suggested would have pinned a behaviour that does
-not exist yet.
 
 ## QUEUE
 
@@ -1236,7 +1246,7 @@ CLAUDE.md § "AI agent mission".
   - [x] (i) LANDED 2026-09-15 ((P18.109), `f52af89ce`, −243 lines: TS2802 is LIB-gated in tsgo — it fires only when `lib` excludes es2015, at ANY target, and never at a written es5 whose default lib reaches es2015 — so the whole target-gated block was wrong in both directions and is deleted; the TS2488 sibling gate keeps its target conjunct for (j); parse, `downlevelIterationExplicitlySet` and the TS5101/5102 row kept; (j) inherits `checkIntersectionNeverArrayDestructure`'s target return and `spineIterableOperandActive`'s conjunct) — `downlevelIteration` — `Checker.kt:9861-9863`, `:161374`, the whole TS2802 block `187638-187866` (229
     lines, seven single-caller functions); KEEP `TypeScriptCompiler.kt:457-458`'s TS5101 at the 6.0 default; run the
     four active subtests by name. Must precede or accompany (j).
-  - [ ] (j) **(j2) LANDED 2026-09-16 ((P18.111), `e8b2f8a6d`, −183 lines: tsgo honours a written es5 in its 29 `languageVersion` reads but only ONE of them is `< ES2015` (TS2318, rest-only pattern — KEPT and pinned both ways); seven families deleted (TS18045, TS2396, TS2659, TS2340/`checkSuperPropertyAccessES5`, TS1501 `u`/`y`, the es5 hoist + `bodyVarRefs`, the raw-target pin arm), the TS2461/TS2488 forks and the never-destructure gate re-keyed on the LIB (`uplevelIterationLib()`), TS18027's lower bound dropped; (j3)/(j4) REMAIN — re-measure the tslib arms at a written es5 first).** **(j1) LANDED 2026-09-15 ((P18.110), `df7516a6b`, −285 lines: the three Go references to TS1250 are one uncalled binder function's `return`s, TS18028 has none; TS1251 went with the TS1250 emitter; `PrivateIdentifierTargetGateTest` deleted; the corpus cannot see the family in either direction — 0 active es5/es3 subtests — so the 17 pins are the gate). (j2)-(j4) REMAIN, HIGH risk: land (j2) alone; the six explicit-es5 pins left in `DownlevelGateDefaultTargetTest` are its countdowns.** `target: ES5`/ES3, split: (j1) the two dead diagnostics TS1250 (`Checker.kt:9149-9151` + `80735-80875`,
+  - [ ] (j) **(j3) LANDED 2026-09-16 ((P18.112), `293799770`, −118 lines: tsgo's checker spells `__extends`/`__generator`/`__assign` NOWHERE and `__makeTemplateObject`'s flag has no caller, so all four arms went with `isEs5Target` and `needsExtendsHelper`; the same table fixed two target-free defects — the variable `__rest` walk's missing ES2018 bound and TS2343's dedup granularity, which closed `tslibMissingHelper` and `tslibMultipleMissingHelper`. Residues for a future item: on a real PROJECT the tslib check is dead in one direction and a FALSE TS2354 in the other, because `node_modules/tslib` is never in the program). (j4) is all that REMAINS of (j).** **(j2) LANDED 2026-09-16 ((P18.111), `e8b2f8a6d`, −183 lines: tsgo honours a written es5 in its 29 `languageVersion` reads but only ONE of them is `< ES2015` (TS2318, rest-only pattern — KEPT and pinned both ways); seven families deleted (TS18045, TS2396, TS2659, TS2340/`checkSuperPropertyAccessES5`, TS1501 `u`/`y`, the es5 hoist + `bodyVarRefs`, the raw-target pin arm), the TS2461/TS2488 forks and the never-destructure gate re-keyed on the LIB (`uplevelIterationLib()`), TS18027's lower bound dropped; (j3)/(j4) REMAIN — re-measure the tslib arms at a written es5 first).** **(j1) LANDED 2026-09-15 ((P18.110), `df7516a6b`, −285 lines: the three Go references to TS1250 are one uncalled binder function's `return`s, TS18028 has none; TS1251 went with the TS1250 emitter; `PrivateIdentifierTargetGateTest` deleted; the corpus cannot see the family in either direction — 0 active es5/es3 subtests — so the 17 pins are the gate). (j2)-(j4) REMAIN, HIGH risk: land (j2) alone; the six explicit-es5 pins left in `DownlevelGateDefaultTargetTest` are its countdowns.** `target: ES5`/ES3, split: (j1) the two dead diagnostics TS1250 (`Checker.kt:9149-9151` + `80735-80875`,
     141 lines) and TS18028 (`:9152-9163` + `80496-80514, 80616-80733`, 137 lines), deleting
     `PrivateIdentifierTargetGateTest` and `DownlevelGateDefaultTargetTest:120`; (j2) the remaining `< ES2015` checker
     gates — `:25445` (TS18045, `spineCheckAccessorModifier` 29307-29328), `:25513`, `:27416` + the `es5HoistBody`

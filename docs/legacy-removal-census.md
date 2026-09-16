@@ -53,6 +53,8 @@ are lib-keyed (`checker.go:1677, 11536, 13842, 13861`) — out of scope.
 
 ### 2a. `target` ES5/ES3 (~730 lines of `Checker.kt` + ~90 of `CompilerOptions.kt`)
 
+**(j3) DONE 2026-09-16 ((P18.112), `293799770`, −118 lines): rows 93271 (`needsExtendsHelper`) and 93502 (`isEs5Target`, 17 refs) done — tsgo's `checkExternalEmitHelpers` never requests `__extends`/`__generator`/`__assign`/`__makeTemplateObject`. Only (j4) remains of (j).**
+
 **(j2) DONE 2026-09-16 ((P18.111), `e8b2f8a6d`, −183 lines) — and "delete the remaining `< ES2015` gates" was wrong both ways: tsgo has exactly one such gate (TS2318, checker.go:17879, KEPT), the TS2461/TS2488 forks are LIB-keyed in tsgo (re-keyed, not deleted), TS18027's lower bound was wrongly suppressing (dropped), and the TS1501 `u`/`y` rows were a gate the `< ES2015` grep missed. Rows 25445, 25464, 25513, 27416, 64685/64809, 79083-79127, 80517, 89620, 148248, 177479 done; 38551 KEPT re-labelled; 93271/93502 remain for (j3).**
 
 **(j1) DONE 2026-09-15 ((P18.110), `df7516a6b`, −285 lines): the TS1250/TS1251 family and the TS18028 family are deleted — the receipt "TS1250's emitter is dead code, TS18028 has zero references" held exactly (the three Go references are one uncalled function's returns). (j2)-(j4) remain open.**

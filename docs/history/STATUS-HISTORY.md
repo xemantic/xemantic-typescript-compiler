@@ -3798,3 +3798,13 @@ been keyed on resolution fixed in both directions. **The errors screen was a rea
 pins, twelve arms all discriminating; cost_gate 20/20 +0.00%; huge_methods exit 0 (874 classes); grid 8×0/0 +
 emit 78/78 (controls); warning-clean. `Checker.kt` −89. (f) inherits TS5071 (no tsgo emitter, now visible on
 `*×system`); (g) inherits a load-bearing emit-order ancestor walk.
+**(P18.107) — (LEGACY.1) STEP (f): amd/umd/system FOLD ONTO CommonJS AS A *PROPERTY* OF THE KIND, THREE OF NINE ARMS WERE DELETABLE, 19,487 / 0 / 83 (2026-09-15).**
+240 cells on tsgo (emit via `--outDir`, rows via the LSP): the removed kinds emit byte-identically to commonjs in
+17 of 20 programs (three tsgo residues in a removed configuration, recorded not copied) and check identically
+except System's three live arms (TS1218, top-level await, `import.meta`), which stay. `ModuleKind.foldsToCommonJS`
+replaces the untransformed pass-through; TS5071 (no tsgo emitter), the TS2882 exemption, the System TS2305
+suppression, the tslib exemptions and the never-`false` `wrapCallsWithZero` parameter are deleted; `export as
+namespace` untouched (`-externals` 290/0). **The corpus is a counted control here** — no active subtest runs under
+a removed kind — so the 23 pins are the whole gate; nine arms all discriminating. cost_gate 20/20 +0.00%;
+huge_methods exit 0 (874 classes); grid 8×0/0 + emit 78/78 (controls); warning-clean. Seven pre-existing
+commonjs-cell gaps found for the ledger.

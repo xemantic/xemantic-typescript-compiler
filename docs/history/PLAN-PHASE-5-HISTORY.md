@@ -1,3 +1,40 @@
+### Round (P18.102) — (LEGACY.1) steps (a)+(b): the dead System-module helpers, −249 lines, and why this round left (LEGACY.0)'s tail (2026-09-15)
+
+**Two commits** (`ba18310a5` refactor, this docs commit). **Suite 19,370 → 19,370 / 0 / 83**, 9 modules asserted;
+corpus screen emit **5,688 / 0** (the instrument for a Transformer change — `--noEmit` skips the transformer) and
+errors 3,084 / 0; `cost_gate.py` exit 0, 20/20 +0.00% (a control by construction); `huge_methods.py --fail-over 0`
+exit 0 (871 classes — the JIT census is the one gate a compiled-code deletion can move, and it did not); grid
+8×`added=0 removed=0` and emit 78/78 — CONTROLS, counted (every profile is `module: commonjs`/esnext);
+warning-clean (2,236-byte log, both compile tasks executed, `w=0`). `Transformer.kt` **17,862 → 17,613 (−249)**;
+`Checker.kt` unchanged at 195,124. **(LEGACY.1) (a) and (b) are CHECKED OFF; (c)-(k) stay open; (LEGACY.0) stays
+OPEN** on (0b-17).
+
+**WHY (LEGACY.1) AND NOT (0b-17).** (LEGACY.0) is in its long tail — 58 singletons closing at ≤6 per round, most
+of them display or JS/JSDoc shapes — while (LEGACY.1) serves the owner's 2026-09-12 directive directly (legacy
+code for TS7-removed features may be deleted), moves the shrinkage metric, and owns the two questions parked in
+(LEGACY.0)'s residue (`downlevelIteration`'s TS5102 pair, `pathsValidation5`'s order). The WORK ORDER addendum
+allows the pick when it is said and the successor named: successor is (LEGACY.1)(c) `alwaysStrict: false`, then
+(d); (0b-17) resumes after, or interleaves when a theme with ≥5 rows is visible.
+
+**WHAT LANDED.** (a) `buildSystemDynamicImport` / `rewriteSystemDynExpr` / `rewriteSystemDynStmt` (107 lines) and
+(b) `stripVarDeclsFromStatement` / `collectVarNamesFromStmts` / `collectVarNamesFromStmt` (142 lines);
+`collectBoundNames` stays with its 34 live callers and regains its orphaned KDoc, which had been sitting above the
+deleted cluster as a doubled comment — which is why the item's "~147 lines" was 142. **The proof is a repo-wide
+reference census, not the compile**: mutually recursive helpers compile with or without a caller, so every
+occurrence of the six names was shown to lie inside its own cluster (outside `Transformer.kt` only the queue item
+and the census doc name them), and `javap -p` on the final class carries none of the six. Helpers the dead code
+called (`isDynamicImportCall`, `syntheticId`, `extractIdentifierName`, …) all keep live users.
+
+**WHAT THE ITEM HAD WRONG, AND WHAT (f) INHERITS.** Its line numbers were stale by ~300 lines (the brief warned).
+**`module: system` is NOT folded onto CommonJS today**: `Transformer.kt`'s `useCJS` admits only
+CommonJS/None/nodenext/`.cts`/`.cjs`, so System, AMD and UMD pass module statements through UNTRANSFORMED (what
+`RemovedModuleKindsTest`'s KDoc records) — tsgo's `emitter.go:98-99` fold is a ROUTING change and is step (f)'s,
+together with `TypeScriptCompiler.kt`'s System arms (TS5107 `:530`, the classic derivation `:765`, TS5071 `:784`,
+TS5095 `:955-956`, the top-level-await parser flag `:1143`/`:3064`) and `Transformer.kt`'s `wrapCallsWithZero`
+parameter, which is never passed `false` anywhere — a System-only residue of its own. No pin was added: dead-code
+deletion has no positive to pin, and the CJS-output pin the brief suggested would have pinned a behaviour that does
+not exist yet.
+
 ### Round (P18.101) — (LEGACY.0b) step 16: ours-only rows on plain TS — seven landed, and three of the six "mechanisms" were tsc-6 transcriptions (2026-09-15)
 
 **Three commits** (`9e3bb73a0` feat, `01d76cf2c` test, this docs commit). **Suite 19,344 → 19,370 / 0 / 83**,
