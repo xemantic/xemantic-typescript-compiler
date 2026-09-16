@@ -384,6 +384,13 @@ data class CompilerOptions(
      *    the TS2488/TS2461 message fork and the tslib-helper checks. Reading the raw
      *    target there was a FALSE-NEGATIVE family — 4 pristine-only TS2488 rows, because
      *    an unset target read as ES3 SUPPRESSED checks tsc runs at its default.
+     *    **(LEGACY.1)(j1)/(j2), 2026-09-15: most of that family is GONE, gate by gate against
+     *    tsgo at a written es5** — TypeScript 7's checker keeps NO `< ES2015` rule except
+     *    the TS2318 rest-only binding pattern (`checker.go:17879`); the TS2488/TS2461 fork
+     *    and the never-destructure TS2488 read the LIB (`Checker.uplevelIterationLib`), TS18027
+     *    keeps only its ES2022 upper bound, and TS1250/TS18028/TS18045/TS2659/TS2340/TS2396
+     *    and the `u`/`y` TS1501 rows have no tsgo emitter. What still reads this for a
+     *    `< ES2015` decision: that one TS2318 gate, and the (j3) tslib arms.
      *
      * (Round 944 introduced this as `libTarget`; the name was renamed in round 945 when
      * the second family joined, because it no longer names its only consumer.)
@@ -393,8 +400,10 @@ data class CompilerOptions(
      * `spineDelIsStrict` / `spineStrictFileIsExprStrict` — is a MIS-TRANSCRIPTION of
      * tsc's nested rule that is CORRECT only while the raw target reads ES3 at an unset
      * target: flipping those makes every file strict. They keep the raw target
-     * deliberately, and so does `checkOperationsAvailableOnPromisedType`, a per-fixture
-     * baseline pin rather than a semantic gate.
+     * deliberately. (`checkOperationsAvailableOnPromisedType`, a per-fixture baseline pin,
+     * used to be the third raw reader; (LEGACY.1)(j2) deleted its `target < ES2015` arm —
+     * the `(target=es5)` variation is skipped by the generator and tsgo has no baseline
+     * for it — so the two strict-mode determinations are the only raw readers left.)
      *
      * tsc's definition, read off the pinned sources (`utilities.ts` `_computedOptions`):
      * `const target = options.target === ES3 ? undefined : options.target;

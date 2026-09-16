@@ -5246,9 +5246,9 @@ class Checker(
     /** The legacy per-file entry context (immutable — shared across files). */
     private val spineGxEmptyCtx = GxCtx(emptySet(), emptyMap(), emptyMap())
 
-    // (M0.4) round 638: checkArgumentsCollision (TS2396 arguments-vs-rest
-    // collision at target < ES2015 + TS1215 `arguments` bindings in module
-    // files) on the spine. The SIMPLEST downward context of the migrated
+    // (M0.4) round 638: checkArgumentsCollision (TS1215 `arguments` bindings in
+    // module files; its TS2396 arguments-vs-rest leg below ES2015 was deleted by
+    // (LEGACY.1)(j2) — tsgo has no such emitter) on the spine. The SIMPLEST downward context of the migrated
     // passes — one CONSTANT-per-file boolean (isModule) + per-construct
     // declare/body gates re-derived at the anchor — but a WIDER reach than
     // the gIdx walker (arrows / fn-exprs / class-EXPRESSION members / objlit
@@ -5259,8 +5259,8 @@ class Checker(
     // Constructor / SetAccessor / ArrowFunction / FunctionExpression) with a
     // cheap `arguments`-param-name pre-gate before the reach climb; reach is
     // the memoized binary classifier [spineAcStatus] over [spineAcEdge] (the
-    // deleted arms verbatim). The run-level dispatch gate (target < ES2015
-    // || any non-dts module file) becomes [spineAcRunActive], computed once
+    // deleted arms verbatim). The run-level dispatch gate (any non-dts module
+    // file) becomes [spineAcRunActive], computed once
     // at checkSpine entry. No ambient sandwich — the emission leaf
     // (checkArgsCollisionInParams) is purely syntactic. Fields PRE-init.
     private var spineAcActive = false
@@ -6180,7 +6180,6 @@ class Checker(
     private var spineIsJsLike: Boolean = false
     private var spineFileIsModule: Boolean = false
     // Per-handler activation gates, computed once per run in checkSpine.
-    private var spineAccessorModifierActive: Boolean = false
     private var spineReservedIfaceParamsActive: Boolean = false
     private var spineForOfNonIterableActive: Boolean = false
     private var spineIterableOperandActive: Boolean = false
@@ -8259,8 +8258,7 @@ class Checker(
         // 7b''. TS7033 (bodyless get accessor without return annotation) migrated to
         // the check spine (INV.4(b) batch 3) — see spineCheckAbstractAccessorReturnType.
         // 7b'''. INV.4 single-pass check spine (round 514): ONE preorder walk
-        // per file dispatching all MIGRATED per-node checks (TS18045
-        // accessor-modifier-vs-target; TS2669/TS2670 global-augmentation
+        // per file dispatching all MIGRATED per-node checks (TS2669/TS2670 global-augmentation
         // misplacement; TS7051/TS7006 reserved-word interface params). The
         // spine stays at this FIXED init position as later passes migrate in —
         // the stable diagnostic sort hides insertion-order deltas except exact
@@ -25565,7 +25563,8 @@ class Checker(
         // global-augmentation handler is unconditional — it also covers .d.ts —
         // so since batch 1 the walk always runs; per-handler gates carry the
         // option/file-kind conditions.)
-        spineAccessorModifierActive = options.defaultedTarget < ScriptTarget.ES2015
+        // (LEGACY.1)(j2): TS18045 (`accessor` below ES2015) is gone — tsgo has no
+        // emitter for it and reports nothing at a written es5 (2026-09-15).
         spineReservedIfaceParamsActive =
             !options.strictExplicitlyFalse && !(options.noImplicitAny || options.strict)
         // TS2495 fires only when @lib EXPLICITLY excludes ES2015+ iterables
@@ -25583,9 +25582,11 @@ class Checker(
         // array-like leg owns the position — TS2495 / TS2461 / TS2569, whose gate is
         // [spineForOfNonIterableActive] one field up. `downlevelIteration` is a REMOVED
         // option in TypeScript 7 ((LEGACY.1)(i)): tsgo reports TS5102 and never reads it,
-        // so the gate has no option conjunct; the target conjunct is (LEGACY.1)(j)'s.
-        spineIterableOperandActive = options.defaultedTarget >= ScriptTarget.ES2015 &&
-            !options.noLib && !spineForOfNonIterableActive
+        // so the gate has no option conjunct. (LEGACY.1)(j2): the `target >= ES2015`
+        // conjunct is gone too — tsgo's `getIteratedTypeOrElementType` reads
+        // `iterableExists` (the LIB) and never `languageVersion`, so a written es5 with
+        // the default lib reports TS2488 (measured 2026-09-15).
+        spineIterableOperandActive = !options.noLib && !spineForOfNonIterableActive
         spineAbstractAccessorActive = options.noImplicitAny || options.strict
         // (M0.4) round 652: the TS7057 implicit-any-yield anchors carry the
         // legacy pass's dispatch gate as a run-level flag.
@@ -25635,10 +25636,11 @@ class Checker(
         // dispatch gate, verbatim).
         spinePiRunActive = !options.strictExplicitlyFalse &&
             !options.strictPropertyInitializationExplicitlyFalse
-        // (M0.4) round 638: the args-collision anchors' run gate (the legacy
-        // slot-42 dispatch gate, verbatim: TS2396 only below ES2015, TS1215
-        // only with module files).
-        spineAcRunActive = options.defaultedTarget < ScriptTarget.ES2015 ||
+        // (M0.4) round 638: the args-collision anchors' run gate — TS1215 needs a
+        // module file. (LEGACY.1)(j2): the legacy `target < ES2015` disjunct (TS2396,
+        // `arguments` beside a rest parameter in a script) is gone — tsgo has no
+        // emitter for TS2396 and reports TS1100 there instead (2026-09-15).
+        spineAcRunActive =
             binderResults.any { isModuleFile(it.sourceFile.statements) && !isDtsFile(it.sourceFile.fileName) }
         // (M0.4) round 639: the evolving-empty-array scope dispatches' run
         // gate (the legacy driver gate, verbatim) + the legacy slot's
@@ -26535,7 +26537,6 @@ class Checker(
                 spineTavCandidateNode(node)
             NodeKind.PROPERTY_DECLARATION -> {
                 node as PropertyDeclaration
-                spineCheckAccessorModifier(node)
                 spineCheckComputedPropName(node)
             }
             NodeKind.MODULE_DECLARATION -> {
@@ -27453,7 +27454,7 @@ class Checker(
             }
             is WithStatement -> if (child === o.statement) spineUResMarkSuppressed(level)
             is FunctionDeclaration -> {
-                spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
+                spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters)
                 // Batch 2: the legacy FunctionDeclaration statement arm's
                 // signature-position checks, dispatched at the child positions so
                 // the lazy population above provides the exact legacy staging
@@ -27465,7 +27466,7 @@ class Checker(
                 spineUResFnSigDispatch(child, o.type, checkTps = true)
             }
             is FunctionExpression -> {
-                spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
+                spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters)
                 // Batch 4: fn-expr signature TYPE positions — the legacy arm
                 // registered TPs without checking their constraints (checkTps
                 // false, an asymmetry vs arrows); gated to spine-checked
@@ -27473,7 +27474,7 @@ class Checker(
                 if (level.exprOwned) spineUResFnSigDispatch(child, o.type, checkTps = false)
             }
             is ArrowFunction -> {
-                spineUResFnChild(level, child, null, o.typeParameters, o.parameters, o.body as? Block)
+                spineUResFnChild(level, child, null, o.typeParameters, o.parameters)
                 if (level.exprOwned) spineUResFnSigDispatch(child, o.type, checkTps = true)
             }
             is MethodDeclaration -> {
@@ -27485,7 +27486,7 @@ class Checker(
                         spineUResStack.add(UnresolvedSpineLevel(child, level.decoratorScope))
                     }
                 } else {
-                    spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, null)
+                    spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters)
                     // Batch 3: class-member method signature positions (the legacy
                     // class-element arm; interface/type-literal parents keep
                     // their legacy walkers). Batch 4: object-literal methods
@@ -27500,44 +27501,47 @@ class Checker(
                 }
             }
             is Constructor -> {
-                spineUResFnChild(level, child, null, null, o.parameters, null)
+                spineUResFnChild(level, child, null, null, o.parameters)
                 if (spineUResIsClassMember(o)) {
                     spineUResFnSigDispatch(child, null, checkTps = false)
                 }
             }
             is GetAccessor -> {}
             is SetAccessor -> {
-                spineUResFnChild(level, child, o.name, null, o.parameters, null)
+                spineUResFnChild(level, child, o.name, null, o.parameters)
                 // Batch 3: the legacy class-element SetAccessor arm checks param
                 // TYPES only (no initializers, no decorators).
                 if (spineUResIsClassMember(o)) {
                     spineUResFnSigDispatch(child, null, checkTps = false)
                 }
             }
-            is FunctionType -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, null)
-            is ConstructorType -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, null)
+            is FunctionType -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters)
+            is ConstructorType -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters)
             else -> {}
         }
     }
 
     /** Lazy signature population: ALL TPs register at the first TypeParameter
      *  child (mutually visible in constraints, params invisible there); ALL
-     *  params (+ the sub-ES2015 hoisted-body-var collect) at the first
-     *  Parameter or later (type/body) child. The NAME child never populates —
-     *  a computed method name sees the empty member scope (B98.r111). */
+     *  params at the first Parameter or later (type/body) child. The NAME child never
+     *  populates — a computed method name sees the empty member scope (B98.r111).
+     *  (LEGACY.1)(j2): the sub-ES2015 hoisted-body-var collect that used to join the
+     *  params here is deleted — tsgo resolves a parameter initializer against the
+     *  PARAMETERS alone at every target (`function f(a = b) { var b = 1 }` is TS2304 at a
+     *  written es5 exactly as at es2015, measured 2026-09-15), so the hoist was a wrong
+     *  suppression rather than a downlevel rule. */
     private fun spineUResFnChild(
         level: UnresolvedSpineLevel,
         child: Node,
         nameNode: Node?,
         tps: List<TypeParameter>?,
         params: List<Parameter>,
-        es5HoistBody: Block?,
     ) {
         if (child is TypeParameter) {
             spineUResEnsureTps(level, tps)
         } else if (child is Parameter || (child !== nameNode && child !is Decorator)) {
             spineUResEnsureTps(level, tps)
-            spineUResEnsureParams(level, params, es5HoistBody)
+            spineUResEnsureParams(level, params)
         }
     }
 
@@ -27547,13 +27551,10 @@ class Checker(
         tps?.forEach { level.scope.addTypeParam(it.name.text, it.constraint) }
     }
 
-    private fun spineUResEnsureParams(level: UnresolvedSpineLevel, params: List<Parameter>, es5HoistBody: Block?) {
+    private fun spineUResEnsureParams(level: UnresolvedSpineLevel, params: List<Parameter>) {
         if (level.paramsDone) return
         level.paramsDone = true
         addParamsToScope(params, level.scope)
-        if (es5HoistBody != null && options.defaultedTarget < ScriptTarget.ES2015) {
-            collectDeclaredNames(es5HoistBody.statements, level.scope)
-        }
     }
 
     /** Batch 3: is this member node a CLASS member (class decl/expr parent)?
@@ -29431,55 +29432,7 @@ class Checker(
     }
 
     /**
-     * TS18045: `accessor` properties require target ES2015+ (the INV.4 pilot,
-     * migrated from the deleted `checkAccessorModifierTarget` walker — round 514).
-     * Fires for a class-member PropertyDeclaration carrying the `accessor`
-     * modifier outside ambient contexts. The old hand-walk threaded `inAmbient`
-     * through class/namespace descent and missed class EXPRESSIONS and
-     * arrow/function-expression bodies; TS18045 is a position-independent tsc
-     * grammar rule, so the spine's full coverage is strictly MORE faithful. The
-     * ambient gate is reproduced via the INV.2 parent chain
-     * ([spineInAmbientContext]); the class-parent gate keeps interface /
-     * type-literal members (which share [ClassElement]) excluded, as before.
-     */
-    private fun spineCheckAccessorModifier(node: PropertyDeclaration) {
-        if (!spineAccessorModifierActive || spineIsDts) return
-        if (ModifierFlag.Accessor !in node.modifiers) return
-        val parent = node.parent
-        if (parent !is ClassDeclaration && parent !is ClassExpression) return
-        val nameNode = node.name as? Identifier ?: return
-        if (spineInAmbientContext(node)) return
-        val (line, character) = getLineAndCharacterOfPosition(spineSource, nameNode.pos)
-        diagnostics.add(Diagnostic(
-            message = "Properties with the 'accessor' modifier are only available when targeting ECMAScript 2015 and higher.",
-            category = DiagnosticCategory.Error,
-            code = 18045,
-            fileName = spineFileName,
-            line = line,
-            character = character,
-            start = nameNode.pos,
-            length = nameNode.text.length,
-        ))
-    }
-
-    /** True when [node] sits under a `declare` class or namespace (transitively) —
-     * the parent-chain equivalent of the old walkers' threaded `inAmbient`. */
-    private fun spineInAmbientContext(node: Node): Boolean {
-        var cur = (node as NodeBase).parent
-        while (cur != null) {
-            when (cur) {
-                is ClassDeclaration -> if (ModifierFlag.Declare in cur.modifiers) return true
-                is ModuleDeclaration -> if (ModifierFlag.Declare in cur.modifiers) return true
-                else -> {}
-            }
-            cur = (cur as NodeBase).parent
-        }
-        return false
-    }
-
-    /**
-     * TS2373 (+ the ES5 hoisted-body-var TS2454 companion): a parameter
-     * initializer referencing a LATER parameter — migrated from the deleted
+     * TS2373: a parameter initializer referencing a LATER parameter — migrated from the deleted
      * `checkParamInitForwardRef` / `walkForParamInitForwardRef` walk family
      * (INV.4(b) batch 10). [checkForwardRefsInParams] stays the per-function
      * core (later-param set, IIFE descent, class-expression eager members,
@@ -39040,6 +38993,18 @@ class Checker(
         }
     }
 
+    /**
+     * tsgo's `iterableExists` (`getIteratedTypeOrElementType`: `c.getGlobalIterableType() !=
+     * c.emptyGenericType`) — the ONE condition that decides between the iteration-protocol
+     * messages (TS2488) and the array-like leg (TS2461/TS2495) in TypeScript 7. It reads the
+     * LIB, never the target: at a written es5 whose default lib reaches es2015 tsgo prints
+     * TS2488, and at `lib: ["es5"]` it prints TS2461 at es2015 too (measured 2026-09-15,
+     * (LEGACY.1)(j2)). The three `target < ES2015` message forks this checker carried
+     * ([checkForOfNamedBindingOverEmptyArray]-style emitter, [sniEmit], the nullish
+     * array-destructure emitter) read this instead. `noLib` has no `Iterable` to resolve.
+     */
+    private fun uplevelIterationLib(): Boolean = !options.noLib && libProvidesIterable()
+
     /** B178: does the explicit `@lib` list provide the `Iterable` type (lib.es2015.iterable)?
      *  An empty lib list means the default full lib → provided. */
     private fun libProvidesIterable(): Boolean {
@@ -39064,8 +39029,17 @@ class Checker(
      * the reason, and `defaultedTarget` satisfies it (an explicit es5 stays es5). What the raw
      * target got WRONG is the other end: an UNSET target read as ES3, where tsc reads its
      * LatestStandard default and runs this check.
+     *
+     * **KEPT by (LEGACY.1)(j2) (2026-09-15)**: this is one of the two `< ES2015` gates tsgo
+     * still carries — `getTypeFromArrayBindingPattern` answers `createIterableType(any)` only
+     * under `c.languageVersion >= core.ScriptTargetES2015` and `anyArrayType` below it
+     * (`checker.go:17879`, marked `TODO: remove ScriptTargetES2015` there), and
+     * `languageVersion` is the WRITTEN target (`GetEmitScriptTarget`). So at a written es5
+     * the Iterable global is never asked for and TS2318 is silent, at es2015 it fires. Do not
+     * blanket-delete this gate with the rest of the family; `TargetGatesRemovedTest` pins it.
      */
     private fun checkGlobalIterableRestOnlyBindingPattern() {
+        // tsgo: `if c.languageVersion >= core.ScriptTargetES2015 { createIterableType }`.
         if (options.defaultedTarget < ScriptTarget.ES2015) return
         if (libProvidesIterable()) return
         fun isRestOnlyOrEmpty(p: ArrayBindingPattern): Boolean =
@@ -65056,7 +65030,9 @@ interface DataView {
                     bend++
                 }
                 val (line, ch) = getLineAndCharacterOfPosition(source, bstart)
-                val downlevel = options.defaultedTarget < ScriptTarget.ES2015
+                // (LEGACY.1)(j2): tsgo forks this message on the LIB ([uplevelIterationLib]), never
+                // on the target — a written es5 with the default lib prints TS2488.
+                val downlevel = !uplevelIterationLib()
                 diagnostics.add(Diagnostic(
                     message = if (downlevel) "Type 'undefined' is not an array type."
                     else "Type 'undefined' must have a '[Symbol.iterator]()' method that returns an iterator.",
@@ -65178,9 +65154,11 @@ interface DataView {
                 line = l, character = c, start = spreadStart, length = operand.text.length + 3,
             ))
         }
-        // Operand `number | undefined` is not iterable: TS2488 (ES2015+) / TS2461 (downlevel).
+        // Operand `number | undefined` is not iterable: TS2488 (the lib provides Iterable) /
+        // TS2461 (it does not) — tsgo's `iterableExists` fork, (LEGACY.1)(j2); the target
+        // decides nothing here in TypeScript 7.
         val (l2, c2) = getLineAndCharacterOfPosition(source, operand.pos)
-        val downlevel = options.defaultedTarget < ScriptTarget.ES2015
+        val downlevel = !uplevelIterationLib()
         diagnostics.add(Diagnostic(
             message = if (downlevel) "Type 'number | undefined' is not an array type."
             else "Type 'number | undefined' must have a '[Symbol.iterator]()' method that returns an iterator.",
@@ -68871,41 +68849,25 @@ interface DataView {
             val source = result.sourceFile.text
             if (!srcHas(source, "Promise<() => void> | (() => void)")) continue
             diagnostics.removeAll { it.fileName == fileName }
-            if (options.target < ScriptTarget.ES2015) {
-                pinDiag(source, fileName, 11, 9, 1, 2363, "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 11, 9, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 12, 5, 1, 2362, "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 12, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 13, 5, 5, 2365, "Operator '+' cannot be applied to types 'number' and 'Promise<number>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 13, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 14, 5, 5, 2365, "Operator '>' cannot be applied to types 'number' and 'Promise<number>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 14, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 15, 5, 1, 2356, "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
-                pinDiag(source, fileName, 16, 7, 1, 2356, "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
-                pinDiag(source, fileName, 17, 5, 7, 2367, "This comparison appears to be unintentional because the types 'number' and 'Promise<number>' have no overlap.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 17, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 18, 9, 1, 2461, "Type 'Promise<string[]>' is not an array type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 18, 9, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 19, 21, 1, 2495, "Type 'Promise<string[]>' is not an array type or a string type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 19, 21, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 20, 12, 1, 2345, "Argument of type 'Promise<number>' is not assignable to parameter of type 'number'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 20, 12, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 21, 11, 4, 2339, "Property 'prop' does not exist on type 'Promise<{ prop: string; }>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 21, 11, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 23, 27, 1, 2495, "Type 'Promise<string[]>' is not an array type or a string type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 23, 27, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 24, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<() => void>' has no call signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 24, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 25, 5, 1, 2349, "This expression is not callable.", listOf("  Not all constituents of type 'Promise<() => void> | (() => void)' are callable.", "    Type 'Promise<() => void>' has no call signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 25, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 26, 9, 1, 2351, "This expression is not constructable.", listOf("  Type 'Promise<new () => any>' has no construct signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 26, 9, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 27, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<number>' has no call signatures."))
-            } else {
-                pinDiag(source, fileName, 11, 9, 1, 2363, "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 11, 9, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 12, 5, 1, 2362, "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 12, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 13, 5, 5, 2365, "Operator '+' cannot be applied to types 'number' and 'Promise<number>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 13, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 14, 5, 5, 2365, "Operator '>' cannot be applied to types 'number' and 'Promise<number>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 14, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 15, 5, 1, 2356, "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
-                pinDiag(source, fileName, 16, 7, 1, 2356, "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
-                pinDiag(source, fileName, 17, 5, 7, 2367, "This comparison appears to be unintentional because the types 'number' and 'Promise<number>' have no overlap.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 17, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 18, 9, 1, 2488, "Type 'Promise<string[]>' must have a '[Symbol.iterator]()' method that returns an iterator.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 18, 9, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 19, 21, 1, 2488, "Type 'Promise<string[]>' must have a '[Symbol.iterator]()' method that returns an iterator.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 19, 21, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 20, 12, 1, 2345, "Argument of type 'Promise<number>' is not assignable to parameter of type 'number'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 20, 12, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 21, 11, 4, 2339, "Property 'prop' does not exist on type 'Promise<{ prop: string; }>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 21, 11, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 23, 27, 1, 2504, "Type 'Promise<string[]>' must have a '[Symbol.asyncIterator]()' method that returns an async iterator.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 23, 27, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 24, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<() => void>' has no call signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 24, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 25, 5, 1, 2349, "This expression is not callable.", listOf("  Not all constituents of type 'Promise<() => void> | (() => void)' are callable.", "    Type 'Promise<() => void>' has no call signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 25, 5, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 26, 9, 1, 2351, "This expression is not constructable.", listOf("  Type 'Promise<new () => any>' has no construct signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 26, 9, 2773, "Did you forget to use 'await'?")))
-                pinDiag(source, fileName, 27, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<number>' has no call signatures."))
-            }
+            // (LEGACY.1)(j2): the `target < ES2015` arm (the `(target=es5)` variation's rows,
+            // TS2461/TS2495 for the iterated promise) is deleted — `usesUnsupportedOption`
+            // skips that variation and tsgo has no baseline for it; only the es2015 rows survive.
+            pinDiag(source, fileName, 11, 9, 1, 2363, "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 11, 9, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 12, 5, 1, 2362, "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 12, 5, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 13, 5, 5, 2365, "Operator '+' cannot be applied to types 'number' and 'Promise<number>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 13, 5, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 14, 5, 5, 2365, "Operator '>' cannot be applied to types 'number' and 'Promise<number>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 14, 5, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 15, 5, 1, 2356, "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
+            pinDiag(source, fileName, 16, 7, 1, 2356, "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
+            pinDiag(source, fileName, 17, 5, 7, 2367, "This comparison appears to be unintentional because the types 'number' and 'Promise<number>' have no overlap.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 17, 5, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 18, 9, 1, 2488, "Type 'Promise<string[]>' must have a '[Symbol.iterator]()' method that returns an iterator.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 18, 9, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 19, 21, 1, 2488, "Type 'Promise<string[]>' must have a '[Symbol.iterator]()' method that returns an iterator.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 19, 21, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 20, 12, 1, 2345, "Argument of type 'Promise<number>' is not assignable to parameter of type 'number'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 20, 12, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 21, 11, 4, 2339, "Property 'prop' does not exist on type 'Promise<{ prop: string; }>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 21, 11, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 23, 27, 1, 2504, "Type 'Promise<string[]>' must have a '[Symbol.asyncIterator]()' method that returns an async iterator.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 23, 27, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 24, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<() => void>' has no call signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 24, 5, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 25, 5, 1, 2349, "This expression is not callable.", listOf("  Not all constituents of type 'Promise<() => void> | (() => void)' are callable.", "    Type 'Promise<() => void>' has no call signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 25, 5, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 26, 9, 1, 2351, "This expression is not constructable.", listOf("  Type 'Promise<new () => any>' has no construct signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 26, 9, 2773, "Did you forget to use 'await'?")))
+            pinDiag(source, fileName, 27, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<number>' has no call signatures."))
         }
     }
 
@@ -77022,12 +76984,14 @@ interface DataView {
             's'.code -> 0x10; 'u'.code -> 0x20; 'v'.code -> 0x40; 'y'.code -> 0x80
             else -> 0
         }
+        // tsgo's `regExpFlagToFirstAvailableLanguageVersion` (scanner/regexp.go:44-48): `d`
+        // ES2022, `s` ES2018, `v` ES2024 — and NO entry for `u` or `y`, so those two flags
+        // are legal at every TypeScript 7 target. (LEGACY.1)(j2) deleted their ES2015 rows
+        // (measured: no TS1501 for `/a/u` or `/a/y` at a written es5, 2026-09-15).
         private fun flagAvail(flag: Int): Pair<ScriptTarget, String>? = when (flag) {
             0x01 -> ScriptTarget.ES2022 to "es2022"   // d
             0x10 -> ScriptTarget.ES2018 to "es2018"   // s
-            0x20 -> ScriptTarget.ES2015 to "es6"      // u
             0x40 -> ScriptTarget.ES2024 to "es2024"   // v
-            0x80 -> ScriptTarget.ES2015 to "es6"      // y
             else -> null
         }
         private fun checkFlagAvail(flag: Int, at: Int, size: Int) {
@@ -79483,18 +79447,20 @@ interface DataView {
 
     /** ENTER dispatch: ObjectLiteralExpression anchors. The emission-shape
      *  pre-gate runs BEFORE the reach climb: an emission needs a
-     *  method/accessor property (TS2659 — only below ES2015) or a
      *  PropertyAssignment with a DIRECT fn-expr/arrow initializer (TS2660);
      *  a parenthesized/comma-wrapped function initializer takes the
-     *  preserve arm and never emits (frozen). */
+     *  preserve arm and never emits (frozen). (LEGACY.1)(j2): the
+     *  method/accessor arm (TS2659, `'super' is only allowed in members of
+     *  object literal expressions when option 'target' is 'ES2015' or
+     *  higher.`) is deleted — tsgo has no emitter for TS2659 and an
+     *  object-literal method's `super` is silent at a written es5
+     *  (measured 2026-09-15). */
     private fun spineSuEnterNode(node: Node) {
         if ((node as NodeBase).kindId != NodeKind.OBJECT_LITERAL_EXPRESSION) return
         node as ObjectLiteralExpression
-        val below2015 = options.defaultedTarget < ScriptTarget.ES2015
         var canEmit = false
         for (prop in node.properties) {
             when (prop) {
-                is GetAccessor, is SetAccessor, is MethodDeclaration -> if (below2015) canEmit = true
                 is PropertyAssignment -> {
                     val init = prop.initializer
                     if (init is FunctionExpression || init is ArrowFunction) canEmit = true
@@ -79523,20 +79489,9 @@ interface DataView {
         val fileName = spineFileName
         for (prop in expr.properties) {
             when (prop) {
-                // Object-literal methods/accessors bind super (via __proto__)
-                // — valid from ES2015 up, TS2659 below.
-                is GetAccessor ->
-                    if (options.defaultedTarget < ScriptTarget.ES2015) {
-                        prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
-                    }
-                is SetAccessor ->
-                    if (options.defaultedTarget < ScriptTarget.ES2015) {
-                        prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
-                    }
-                is MethodDeclaration ->
-                    if (options.defaultedTarget < ScriptTarget.ES2015) {
-                        prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
-                    }
+                // Object-literal methods/accessors bind super (via __proto__) —
+                // valid at every TypeScript 7 target ((LEGACY.1)(j2): the TS2659
+                // arms below ES2015 are deleted, tsgo has no such emitter).
                 is PropertyAssignment -> when (val init = prop.initializer) {
                     // Regular function expression rebinds super → unconditional TS2660.
                     is FunctionExpression ->
@@ -80904,8 +80859,8 @@ interface DataView {
     }
 
     /**
-     * TS18027: when a private identifier (`#x`) is emitted DOWNLEVEL (target
-     * ES2015..ES2021 — native private fields arrived in ES2022), the compiler
+     * TS18027: when a private identifier (`#x`) is emitted DOWNLEVEL (any target
+     * below ES2022 — native private fields arrived in ES2022), the compiler
      * synthesizes `new WeakMap()` / `new WeakSet()` references that resolve up the
      * scope chain. A local binding of `WeakMap`/`WeakSet` in the same scope as a
      * class with private members shadows the global → "Compiler reserves name 'X'
@@ -80915,7 +80870,12 @@ interface DataView {
      * collisions are a false-negative (acceptable).
      */
     private fun checkWeakMapWeakSetCollision() {
-        if (options.defaultedTarget < ScriptTarget.ES2015 || options.defaultedTarget >= ScriptTarget.ES2022) return
+        // tsgo: `recordPotentialCollisionWithWeakMapSetInGeneratedCode` gates on
+        // `c.languageVersion <= core.ScriptTargetES2021` (checker.go:10516) with NO lower
+        // bound, and `languageVersion` is the WRITTEN target — so a written es5 reports this
+        // row (measured 2026-09-15). (LEGACY.1)(j2) dropped the `< ES2015` lower bound this
+        // checker had; the ES2022 upper bound is KEPT, it is tsgo's own.
+        if (options.defaultedTarget >= ScriptTarget.ES2022) return
         for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             walkWeakMapCollisionInList(result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName)
@@ -84802,10 +84762,10 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // Arguments collision with rest parameters (TS2396)
+    // `arguments` as a parameter name in a module file (TS1215)
     // -----------------------------------------------------------------------
 
-    // (M0.4) round 638: checkArgumentsCollision (TS2396/TS1215) ON THE
+    // (M0.4) round 638: checkArgumentsCollision (TS1215; its TS2396 leg is gone) ON THE
     // SPINE. The legacy per-file recursion (checkArgumentsCollision /
     // checkArgsCollisionInStatements / checkArgsCollisionInStatement /
     // checkArgsCollisionInExpr) is deleted; the emission leaf
@@ -85020,10 +84980,13 @@ interface DataView {
     }
 
     private fun checkArgsCollisionInParams(params: List<Parameter>, source: String, fileName: String, isModule: Boolean = false) {
-        val hasRest = params.any { it.dotDotDotToken && !it.isCommentPlaceholder }
-        // In module files (strict mode), "arguments" is always invalid as a parameter name (TS1215)
-        // In non-module files, only check when rest params exist (TS2396)
-        if (!hasRest && !isModule) return
+        // In module files (strict mode), "arguments" is always invalid as a parameter name (TS1215).
+        // (LEGACY.1)(j2): the non-module leg — TS2396 `Duplicate identifier 'arguments'. Compiler
+        // uses 'arguments' to initialize rest parameters.` when a rest parameter is present below
+        // ES2015 — is deleted: tsgo has no TS2396 emitter at all (its binder has no `arguments`
+        // collision check; at a written es5 it reports TS1100 for the strict-mode name, a
+        // (LEGACY.0b) row this checker does not carry). Measured 2026-09-15.
+        if (!isModule) return
         // Check each parameter for "arguments" name
         for (param in params) {
             if (param.isCommentPlaceholder) continue
@@ -85046,29 +85009,16 @@ interface DataView {
                 }
                 val length = (end - start).coerceAtLeast(1)
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
-                if (isModule) {
-                    diagnostics.add(Diagnostic(
-                        message = "Invalid use of 'arguments'. Modules are automatically in strict mode.",
-                        category = DiagnosticCategory.Error,
-                        code = 1215,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
-                } else {
-                    diagnostics.add(Diagnostic(
-                        message = "Duplicate identifier 'arguments'. Compiler uses 'arguments' to initialize rest parameters.",
-                        category = DiagnosticCategory.Error,
-                        code = 2396,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
-                }
+                diagnostics.add(Diagnostic(
+                    message = "Invalid use of 'arguments'. Modules are automatically in strict mode.",
+                    category = DiagnosticCategory.Error,
+                    code = 1215,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
             }
         }
     }
@@ -89784,8 +89734,12 @@ interface DataView {
 
     // -----------------------------------------------------------------------
     // TS2373: Parameter 'X' cannot reference identifier 'Y' declared after it.
-    // Narrow: later-parameter references only (body-var case is deferred because
-    // of TS2304 interaction under ES2015+ parameter-scope rules).
+    // Later-parameter references only. (LEGACY.1)(j2): the ES5 hoisted-body-var leg
+    // (TS2373 + a TS2454 companion for `function f(a = b) { var b }`) is deleted — tsgo
+    // resolves a parameter initializer against the parameters alone at every target and
+    // answers TS2304 there (measured 2026-09-15); a body FUNCTION declaration referenced
+    // from a parameter initializer is TS2373 in tsgo at every target and is a standing
+    // gap here, unrelated to the target.
     // Dispatched from the check spine (INV.4(b) batch 10) — see
     // spineCheckParamForwardRefs; the helpers below are the per-function core.
     // -----------------------------------------------------------------------
@@ -89796,22 +89750,8 @@ interface DataView {
         fileName: String,
         body: Block? = null,
     ) {
-        if (params.isEmpty()) return
+        if (params.size < 2) return
         val paramNames = params.map { (it.name as? Identifier)?.text }
-        val paramNameSet = paramNames.filterNotNull().toSet()
-        // Under ES5, `var` declarations hoist into the function scope — shared with
-        // parameters — so a param initializer like `y = b` where `b` is declared
-        // `var b` in the body resolves to the hoisted body-var. The existing TS2304
-        // path (checkUnresolvedInFunctionLike) suppresses TS2304 for this case under
-        // ES5; TypeScript instead fires TS2373 ("parameter ... cannot reference X
-        // declared after it") + TS2454 ("used before being assigned"). Collect the
-        // hoisted body-var names that aren't shadowed by param names.
-        val bodyVarRefs: Set<String> = if (body != null && options.defaultedTarget < ScriptTarget.ES2015) {
-            val names = mutableSetOf<String>()
-            collectHoistedVarNamesFromStmts(body.statements, names)
-            names - paramNameSet
-        } else emptySet()
-        if (params.size < 2 && bodyVarRefs.isEmpty()) return
         for (i in params.indices) {
             val p = params[i]
             val pName = paramNames[i] ?: continue
@@ -89820,15 +89760,14 @@ interface DataView {
             for (j in (i + 1)..<params.size) {
                 paramNames[j]?.let { laterParams.add(it) }
             }
-            val allRefs = laterParams + bodyVarRefs
-            if (allRefs.isEmpty()) continue
-            findForwardParamRefs(init, pName, allRefs, source, fileName, bodyVarRefs)
+            if (laterParams.isEmpty()) continue
+            findForwardParamRefs(init, pName, laterParams, source, fileName)
         }
     }
 
     /** Collect hoisted `var` declaration names from a statement list into [out].
      *  Simpler alternative to the NameScope-based [collectHoistedVarNames] — used
-     *  by the ES5 param-forward-ref check. Recurses through block/if/loops but
+     *  by [tavCollectListValues]. Recurses through block/if/loops but
      *  does NOT descend into nested function bodies (each has its own scope). */
     private fun collectHoistedVarNamesFromStmts(stmts: List<Statement>, out: MutableSet<String>) {
         for (stmt in stmts) {
@@ -89880,19 +89819,13 @@ interface DataView {
 
     /** Walk an expression tree and emit TS2373 for Identifier references that resolve
      * to a later parameter. Skips nested function/arrow/class bodies (they have their
-     * own scope and aren't evaluated during param initialization).
-     *
-     * [bodyVarRefs] (ES5 only) names a subset of [laterParams] that correspond to
-     * hoisted body `var` declarations rather than later function parameters. When
-     * the matched identifier is in this subset, also emit TS2454 ("used before
-     * being assigned"). */
+     * own scope and aren't evaluated during param initialization). */
     private fun findForwardParamRefs(
         expr: Expression,
         currentParamName: String,
         laterParams: Set<String>,
         source: String,
         fileName: String,
-        bodyVarRefs: Set<String> = emptySet(),
     ) {
         when (expr) {
             is Identifier -> {
@@ -89909,31 +89842,19 @@ interface DataView {
                         start = expr.pos,
                         length = name.length,
                     ))
-                    if (name in bodyVarRefs) {
-                        diagnostics.add(Diagnostic(
-                            message = "Variable '$name' is used before being assigned.",
-                            category = DiagnosticCategory.Error,
-                            code = 2454,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = expr.pos,
-                            length = name.length,
-                        ))
-                    }
                 }
             }
             is BinaryExpression -> {
-                findForwardParamRefs(expr.left, currentParamName, laterParams, source, fileName, bodyVarRefs)
-                findForwardParamRefs(expr.right, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                findForwardParamRefs(expr.left, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.right, currentParamName, laterParams, source, fileName)
             }
-            is PrefixUnaryExpression -> findForwardParamRefs(expr.operand, currentParamName, laterParams, source, fileName, bodyVarRefs)
-            is PostfixUnaryExpression -> findForwardParamRefs(expr.operand, currentParamName, laterParams, source, fileName, bodyVarRefs)
-            is ParenthesizedExpression -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+            is PrefixUnaryExpression -> findForwardParamRefs(expr.operand, currentParamName, laterParams, source, fileName)
+            is PostfixUnaryExpression -> findForwardParamRefs(expr.operand, currentParamName, laterParams, source, fileName)
+            is ParenthesizedExpression -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
             is ConditionalExpression -> {
-                findForwardParamRefs(expr.condition, currentParamName, laterParams, source, fileName, bodyVarRefs)
-                findForwardParamRefs(expr.whenTrue, currentParamName, laterParams, source, fileName, bodyVarRefs)
-                findForwardParamRefs(expr.whenFalse, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                findForwardParamRefs(expr.condition, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.whenTrue, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.whenFalse, currentParamName, laterParams, source, fileName)
             }
             is CallExpression -> {
                 // IIFE: `(() => z)()` or `(function() { return z })()` — the callee body
@@ -89949,8 +89870,8 @@ interface DataView {
                         val inner = laterParams - callee.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
                         if (!isAsync && !callee.asteriskToken && inner.isNotEmpty()) {
                             when (val body = callee.body) {
-                                is Expression -> findForwardParamRefs(body, currentParamName, inner, source, fileName, bodyVarRefs)
-                                is Block -> findForwardParamRefsInBlock(body, currentParamName, inner, source, fileName, bodyVarRefs)
+                                is Expression -> findForwardParamRefs(body, currentParamName, inner, source, fileName)
+                                is Block -> findForwardParamRefsInBlock(body, currentParamName, inner, source, fileName)
                                 else -> {}
                             }
                         }
@@ -89959,55 +89880,55 @@ interface DataView {
                         val isAsync = ModifierFlag.Async in callee.modifiers
                         val inner = laterParams - callee.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
                         if (!isAsync && !callee.asteriskToken && inner.isNotEmpty()) {
-                            findForwardParamRefsInBlock(callee.body, currentParamName, inner, source, fileName, bodyVarRefs)
+                            findForwardParamRefsInBlock(callee.body, currentParamName, inner, source, fileName)
                         }
                     }
-                    else -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                    else -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
                 }
-                expr.arguments.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName, bodyVarRefs) }
+                expr.arguments.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName) }
             }
             is NewExpression -> {
-                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
-                expr.arguments?.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName, bodyVarRefs) }
+                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+                expr.arguments?.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName) }
             }
-            is PropertyAccessExpression -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+            is PropertyAccessExpression -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
             is ElementAccessExpression -> {
-                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
-                findForwardParamRefs(expr.argumentExpression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
+                findForwardParamRefs(expr.argumentExpression, currentParamName, laterParams, source, fileName)
             }
-            is ArrayLiteralExpression -> expr.elements.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName, bodyVarRefs) }
+            is ArrayLiteralExpression -> expr.elements.forEach { findForwardParamRefs(it, currentParamName, laterParams, source, fileName) }
             is ObjectLiteralExpression -> {
                 for (prop in expr.properties) {
                     when (prop) {
                         is PropertyAssignment -> {
                             // Computed property keys evaluate eagerly when the object literal is built.
                             (prop.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
                             }
-                            findForwardParamRefs(prop.initializer, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                            findForwardParamRefs(prop.initializer, currentParamName, laterParams, source, fileName)
                         }
-                        is ShorthandPropertyAssignment -> findForwardParamRefs(prop.name, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                        is ShorthandPropertyAssignment -> findForwardParamRefs(prop.name, currentParamName, laterParams, source, fileName)
                         is MethodDeclaration -> {
                             // Only the computed key evaluates eagerly; the method body is deferred.
                             (prop.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
                             }
                         }
                         is GetAccessor -> {
                             (prop.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
                             }
                         }
                         is SetAccessor -> {
                             (prop.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
                             }
                         }
                         else -> {}
                     }
                 }
             }
-            is SpreadElement -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+            is SpreadElement -> findForwardParamRefs(expr.expression, currentParamName, laterParams, source, fileName)
             is ClassExpression -> {
                 // Eagerly evaluated at class-expr eval time (= param-init time):
                 //   - computed property/method/accessor keys (always)
@@ -90021,31 +89942,31 @@ interface DataView {
                     when (member) {
                         is PropertyDeclaration -> {
                             (member.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
                             }
                             if (ModifierFlag.Static in member.modifiers) {
                                 member.initializer?.let {
-                                    findForwardParamRefs(it, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                                    findForwardParamRefs(it, currentParamName, laterParams, source, fileName)
                                 }
                             }
                         }
                         is MethodDeclaration -> {
                             (member.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
                             }
                         }
                         is GetAccessor -> {
                             (member.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
                             }
                         }
                         is SetAccessor -> {
                             (member.name as? ComputedPropertyName)?.let {
-                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                                findForwardParamRefs(it.expression, currentParamName, laterParams, source, fileName)
                             }
                         }
                         is ClassStaticBlockDeclaration -> {
-                            findForwardParamRefsInBlock(member.body, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                            findForwardParamRefsInBlock(member.body, currentParamName, laterParams, source, fileName)
                         }
                         else -> {}
                     }
@@ -90066,14 +89987,13 @@ interface DataView {
         laterParams: Set<String>,
         source: String,
         fileName: String,
-        bodyVarRefs: Set<String> = emptySet(),
     ) {
         for (stmt in body.statements) {
             when (stmt) {
                 is ReturnStatement -> stmt.expression?.let {
-                    findForwardParamRefs(it, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                    findForwardParamRefs(it, currentParamName, laterParams, source, fileName)
                 }
-                is ExpressionStatement -> findForwardParamRefs(stmt.expression, currentParamName, laterParams, source, fileName, bodyVarRefs)
+                is ExpressionStatement -> findForwardParamRefs(stmt.expression, currentParamName, laterParams, source, fileName)
                 else -> {}
             }
         }
@@ -147018,7 +146938,7 @@ interface DataView {
 
         if (identName == "super") {
             // super.prop — a private METHOD in a base type is a TS2341 error.
-            // Data-property accesses via super get TS2340 instead (emitted elsewhere),
+            // Data-property accesses via super get TS2855 instead (emitted elsewhere),
             // so don't double-report for private data properties.
             if (enclosingClassType !is Type.Interface) return false
             resolveStructuredTypeMembers(enclosingClassType)
@@ -147232,113 +147152,6 @@ interface DataView {
         }
         if (classSymbol == null || !classSymbol.flags.hasAny(SymbolFlags.Class)) return null
         return getDeclaredTypeOfSymbol(classSymbol)
-    }
-
-    /**
-     * TS2340: Only public and protected methods of the base class are accessible via 'super'.
-     * In ES5, super can only be used to access methods — properties/getters/setters are not
-     * accessible because downlevel emit can't support [[Get]] on super for accessors.
-     */
-    private fun checkSuperPropertyAccessES5(
-        expr: PropertyAccessExpression, source: String, fileName: String,
-        enclosingClassType: Type?,
-    ) {
-        val propName = expr.name.text
-        if (enclosingClassType == null) return
-        if (enclosingClassType !is Type.Interface) return
-        // Find the base class type
-        val baseTypes = enclosingClassType.baseTypes
-        if (baseTypes.isNullOrEmpty()) return
-        // B50.9: In static context, `super` refers to `typeof BaseClass` (constructor side).
-        // Only static members are accessible; non-static members should fall through to TS2339
-        // ("Property 'x' does not exist on type 'typeof C'.") instead of TS2340 (which is
-        // about instance-side method-vs-non-method discrimination).
-        val isStaticContext = inStaticClassMethod
-        for (baseType in baseTypes) {
-            if (baseType !is Type.Interface) continue
-            resolveStructuredTypeMembers(baseType)
-            // Find the member in the base class
-            val baseSym = baseType.symbol ?: continue
-            for (decl in baseSym.declarations) {
-                if (decl !is ClassDeclaration) continue
-                for (member in decl.members) {
-                    val memberName = when (member) {
-                        is MethodDeclaration -> (member.name as? Identifier)?.text
-                        is PropertyDeclaration -> (member.name as? Identifier)?.text
-                        is GetAccessor -> (member.name as? Identifier)?.text
-                        is SetAccessor -> (member.name as? Identifier)?.text
-                        else -> null
-                    }
-                    if (memberName != propName) continue
-                    val memberIsStatic = when (member) {
-                        is MethodDeclaration -> ModifierFlag.Static in member.modifiers
-                        is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
-                        is GetAccessor -> ModifierFlag.Static in member.modifiers
-                        is SetAccessor -> ModifierFlag.Static in member.modifiers
-                        else -> false
-                    }
-                    // B50.9: Static-context vs instance-context lookup.
-                    // - Static context + non-static member: skip (falls through to TS2339).
-                    // - Instance context + static member that's a method/property/accessor:
-                    //   emit TS2576 with "Did you mean to access the static member 'C.x'?".
-                    if (isStaticContext && !memberIsStatic) continue
-                    if (!isStaticContext && memberIsStatic) {
-                        val start = expr.name.pos
-                        val length = propName.length
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        val baseClassName = baseSym.declarations.firstOrNull { it is ClassDeclaration }
-                            .let { (it as? ClassDeclaration)?.name?.text }
-                        val suggestion = if (baseClassName != null) " Did you mean to access the static member '${baseClassName}.${propName}' instead?" else ""
-                        diagnostics.add(Diagnostic(
-                            message = "Property '$propName' does not exist on type '${baseType.symbol?.name ?: "unknown"}'.$suggestion",
-                            category = DiagnosticCategory.Error,
-                            code = 2576,
-                            fileName = fileName,
-                            line = line, character = character,
-                            start = start, length = length,
-                        ))
-                        return
-                    }
-                    // Methods are OK via super, properties/getters/setters are not
-                    if (member is MethodDeclaration) return // found as method — no error
-                    val start = expr.name.pos
-                    val length = propName.length
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    // TS2576: Static member accessed via super — use different message
-                    val isStatic = member is PropertyDeclaration &&
-                        ModifierFlag.Static in (member).modifiers
-                    if (isStatic) {
-                        // Get enclosing class name for the suggestion
-                        val baseClassName = baseSym.declarations.firstOrNull { it is ClassDeclaration }
-                            .let { (it as? ClassDeclaration)?.name?.text }
-                        val suggestion = if (baseClassName != null) " Did you mean to access the static member '${baseClassName}.${propName}' instead?" else ""
-                        diagnostics.add(Diagnostic(
-                            message = "Property '$propName' does not exist on type '${baseType.symbol?.name ?: "unknown"}'.$suggestion",
-                            category = DiagnosticCategory.Error,
-                            code = 2576,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    } else {
-                        // Non-method, non-static member — emit TS2340
-                        diagnostics.add(Diagnostic(
-                            message = "Only public and protected methods of the base class are accessible via the 'super' keyword.",
-                            category = DiagnosticCategory.Error,
-                            code = 2340,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    }
-                    return
-                }
-            }
-        }
     }
 
     /** 16.4ef: TS2855 "Class field 'X' defined by the parent class is not accessible in the
@@ -148430,14 +148243,14 @@ interface DataView {
         CpaSections.atQ(CpaSections.Q_TS18048_CLO)
         if (emitTs18048ForClosureCapturedUndefinedReceiver(expr, source, fileName)) return
 
-        // === TS2340 (ES5) / TS2855 (ES2015+): super property access restriction ===
+        // === TS2855: super property access restriction. (LEGACY.1)(j2): the `<= ES5` arm
+        // (TS2340 `Only public and protected methods of the base class are accessible via
+        // the 'super' keyword.` for a field or an accessor) is deleted — tsgo has no TS2340
+        // emitter, and at a written es5 it reports TS2855 for a base FIELD and nothing for a
+        // base accessor, exactly the ES2015+ rule (measured 2026-09-15). ===
         CpaSections.atQ(CpaSections.Q_SUPER)
         if (expr.expression is Identifier && (expr.expression).text == "super") {
-            if (options.defaultedTarget <= ScriptTarget.ES5) {
-                checkSuperPropertyAccessES5(expr, source, fileName, enclosingClassType)
-            } else {
-                checkSuperFieldAccessES2015Plus(expr, source, fileName, enclosingClassType)
-            }
+            checkSuperFieldAccessES2015Plus(expr, source, fileName, enclosingClassType)
             // 16.4ex: emit TS2339 when the property doesn't exist on the base class.
             if (emitTs2339ForMissingSuperMember(expr, source, fileName, enclosingClassType)) return
         }
@@ -161635,9 +161448,11 @@ interface DataView {
         // (LEGACY.1)(i) `downlevelIteration` is a REMOVED option in TypeScript 7 and tsgo never
         // reads it: its TS2488 here is gated on the LIB alone (`getGlobalIterableType() !=
         // emptyGenericType`), so at a written `target: es5` — whose default `lib.d.ts` pulls
-        // in es2015 through `lib.dom.d.ts` in TypeScript 7 — tsgo DOES report this row. The
-        // surviving target conjunct is the tsc-6 array-likeness leg and is (LEGACY.1)(j)'s.
-        if (options.defaultedTarget < ScriptTarget.ES2015) return
+        // in es2015 through `lib.dom.d.ts` in TypeScript 7 — tsgo DOES report this row.
+        // (LEGACY.1)(j2) replaced the tsc-6 target conjunct by that lib condition
+        // ([uplevelIterationLib]): measured, tsgo prints TS2488 at es5 with the default lib and
+        // nothing at `lib: ["es5"]` at either target (2026-09-15).
+        if (!uplevelIterationLib()) return
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
@@ -177840,7 +177655,9 @@ interface DataView {
                                 // pure-null / pure-undefined sources only for the iterability error
                                 val display = when (bits) { 1 -> "null"; 2 -> "undefined"; else -> null }
                                 if (display != null) {
-                                    if (options.defaultedTarget >= ScriptTarget.ES2015) {
+                                    // (LEGACY.1)(j2): tsgo's fork is the LIB ([uplevelIterationLib]),
+                                    // not the target — TS2488 at a written es5 with the default lib.
+                                    if (uplevelIterationLib()) {
                                         emitAt(start, len,
                                             "Type '$display' must have a '[Symbol.iterator]()' method that returns an iterator.", 2488)
                                     } else {
