@@ -5571,6 +5571,19 @@ class Checker(
     /** Reusable ascent buffer for [spineExStatus]. */
     private val spineExChain = ArrayList<Node>()
 
+    // ── (LEGACY.0b) J1/J2: the JavaScript class EXPANDO MEMBER MODEL ─────
+    // Per-file, lazily built, keyed by file name; see [jsClassAccessAdmitted].
+    /** The file the three maps below describe, or null when none is built. */
+    private var jsExpandoModelFile: String? = null
+    /** Named ClassDeclarations of [jsExpandoModelFile] (first wins, as
+     *  [collectNamedClassDecls]). */
+    private var jsExpandoModelClasses: Map<String, ClassDeclaration> = emptyMap()
+    /** `<ClassName>` → the names its `X.p = …` assignments declare on its STATIC side. */
+    private var jsExpandoModelStatics: Map<String, Set<String>> = emptyMap()
+    /** class name + static-ness → the member-name closure, or null where the
+     *  `extends` chain could not be modelled. */
+    private val jsExpandoModelClosures = HashMap<String, Set<String>?>()
+
     // ── (M0.4) round 645: checkStrictModeIdentifiers on the spine ──────────
     // The TS1100 restricted-name binding + TS2630 eval inc/dec + TS1215
     // module-file restricted-name + top-level `var eval` TS2300/TS6203
@@ -8900,10 +8913,6 @@ class Checker(
         // assignment AND an `Object.defineProperty(E, "X", …)` where `E` is the local bound
         // to `module.exports` (ensureNoCrashExportAssignmentDefineProperrtyPotentialMerge).
         pass("checkJsCjsExportObjectRedeclare") { checkJsCjsExportObjectRedeclare() }
-        // B428: TS2339 for reading `this.<X>` in a checkJs class constructor that uses
-        // `Object.defineProperty(this, "X", …)` — tsc does NOT (yet) treat that as a
-        // property declaration, so `this.X` does not exist on the class type.
-        pass("checkJsObjectDefinePropertyThisReads") { checkJsObjectDefinePropertyThisReads() }
         // B433: TS2339 for `X.<undeclared>` where X is a local function-valued binding
         // augmented by Object.defineProperty(X,…) in a checkJs file.
         pass("checkJsObjectDefinePropertyLocalFnReads") { checkJsObjectDefinePropertyLocalFnReads() }
@@ -34334,81 +34343,6 @@ class Checker(
                 node.elseStatement?.let { collectAmbientThisPropWrites(it, onWrite) }
             }
             else -> {}
-        }
-    }
-
-    /**
-     * B428: TS2339 for reading `this.<X>` inside a checkJs class constructor that
-     * defines members via `Object.defineProperty(this, "X", …)`. TypeScript does NOT
-     * (yet) recognize an `Object.defineProperty(this, …)` call as a property
-     * declaration on the class, so a subsequent `this.X` read (e.g. as the first
-     * argument of a further `Object.defineProperty(this.X, …)`) does not exist on the
-     * class instance type → TS2339 "Property 'X' does not exist on type '<Class>'.".
-     *
-     * FP firewall (corpus-EXHAUSTIVE): runs ONLY for a class whose constructor body
-     * contains at least one `Object.defineProperty(this, …)` call — the single corpus
-     * file with that shape is the intended target. The "declared" set (class
-     * field/method/accessor names + `this.X = …` constructor writes) is excluded;
-     * `Object.defineProperty`-defined names are deliberately NOT declared (matching
-     * tsc), so reading such a name fires. The `.js` `checkPropertyAccess` skip
-     * (B152/B153) stays intact — this is a dedicated walker, like B419/B424/B427.
-     */
-    private fun checkJsObjectDefinePropertyThisReads() {
-        if (!options.checkJs) return
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
-            val classes = LinkedHashMap<String, ClassDeclaration>()
-            collectNamedClassDecls(result.sourceFile.statements, classes)
-            if (classes.isEmpty()) continue
-            val source = result.sourceFile.text
-            for (cls in classes.values) {
-                val clsName = cls.name?.text ?: continue
-                val ctorBody = cls.members.filterIsInstance<Constructor>().firstOrNull()?.body ?: continue
-                // Gate: the constructor must use `Object.defineProperty(this, …)`.
-                var hasDefinePropThis = false
-                for (stmt in ctorBody.statements) {
-                    val call = (stmt as? ExpressionStatement)?.expression as? CallExpression ?: continue
-                    val callee = call.expression as? PropertyAccessExpression ?: continue
-                    if ((callee.expression as? Identifier)?.text == "Object" &&
-                        callee.name.text == "defineProperty" &&
-                        (call.arguments.firstOrNull() as? Identifier)?.text == "this"
-                    ) { hasDefinePropThis = true; break }
-                }
-                if (!hasDefinePropThis) continue
-                // Declared members: class-body fields/methods/accessors + `this.X = …` writes.
-                val declared = HashSet<String>()
-                for (m in cls.members) {
-                    val nm: NameNode? = when (m) {
-                        is PropertyDeclaration -> m.name
-                        is MethodDeclaration -> m.name
-                        is GetAccessor -> m.name
-                        is SetAccessor -> m.name
-                        else -> null
-                    }
-                    nm?.let { nameTextOrNull(it) }?.let { declared.add(it) }
-                }
-                val writes = LinkedHashMap<String, MutableList<Expression>>()
-                collectConstructorThisAssignments(ctorBody.statements, writes)
-                declared.addAll(writes.keys)
-                // Fire on `this.X` reads of an undeclared X.
-                walkAccessesNoFnBoundary(ctorBody) { acc, _ ->
-                    val pa = acc as? PropertyAccessExpression ?: return@walkAccessesNoFnBoundary
-                    if ((pa.expression as? Identifier)?.text != "this") return@walkAccessesNoFnBoundary
-                    val nameId = pa.name
-                    val n = nameId.text
-                    if (n in declared || n in RUNTIME_PROPERTIES) return@walkAccessesNoFnBoundary
-                    val pos = nameId.pos
-                    if (pos < 0) return@walkAccessesNoFnBoundary
-                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
-                    diagnostics.add(Diagnostic(
-                        message = "Property '$n' does not exist on type '$clsName'.",
-                        category = DiagnosticCategory.Error, code = 2339,
-                        fileName = fileName, line = line, character = character,
-                        start = pos, length = n.length,
-                    ))
-                }
-            }
         }
     }
 
@@ -70786,6 +70720,238 @@ interface DataView {
             hops++
         }
         return null
+    }
+
+    /**
+     * (LEGACY.0b) J1/J2 — THE JAVASCRIPT CLASS EXPANDO MEMBER MODEL, and the three
+     * receiver families it makes checkable.
+     *
+     * [jsAccessReceiverIsExpandoImmune] admits an access whose receiver CANNOT carry a
+     * JavaScript expando member. This is the other half: a receiver that CAN carry one,
+     * whose whole set we are able to COMPUTE, so the access is decidable after all.
+     * Measured against tsgo 7.0.2, a JavaScript class's instance members are its class
+     * body's plus every `this.X = …` / `this['X'] = …` ASSIGNMENT written in a member
+     * body, a member initializer or an ARROW nested in one — and nothing else: a bare
+     * `this.X;`, a compound `this.X += 1`, a parenthesized `(this.X) = 1`, an
+     * `Object.defineProperty(this, 'X', …)`, a `this[k] = 1` with a non-literal key and
+     * a `this.X = …` written inside a nested non-arrow `function` all leave `X` ABSENT
+     * and tsgo reports it. The static side is the class body's static members plus the
+     * file's `ClassName.p = …` assignments.
+     *
+     * Returns null when [expr] is not such an access (the caller then falls back to the
+     * immunity test), true to ADMIT it, and false to REFUSE — the latter exactly when
+     * the name IS an expando member, because no member table in this checker knows one
+     * and every downstream emitter would report a member that exists. Refusing also
+     * preserves [checkClassFieldSuperAccessJs], which owns TS2855/TS2565 for precisely
+     * those names and runs as its own pass, outside this funnel.
+     *
+     * Three receiver families are decidable and they are the ones whose CLASS is decided
+     * without a type: `this.` and `super.`, resolved SYNTACTICALLY up the parent chain, and
+     * the STATIC side reached through the class's own NAME, where the identifier must also
+     * RESOLVE to that declaration (the index is keyed by name, so a same-named local would
+     * otherwise decide an unrelated receiver). Stated residues, each measured against tsgo,
+     * which reports and we stay silent: an instance-typed VARIABLE (`const h = new Holder();
+     * h.missing`), a JavaScript OBJECT LITERAL, and a class whose `extends` base is not a
+     * resolvable [ClassDeclaration] of the same file. One more is a GENERAL gap this merely
+     * makes reachable from JavaScript: tsgo answers the static side's spelling suggestion
+     * (`TS2551 … Did you mean 'known'?`) where we answer TS2339, and the same fixture in a
+     * `.ts` file diverges identically.
+     */
+    private fun jsClassAccessAdmitted(expr: PropertyAccessExpression, fileName: String): Boolean? {
+        val recv = expr.expression as? Identifier ?: return null
+        if (expr.name.text.isEmpty()) return null
+        val index = jsExpandoClassIndex(fileName) ?: return null
+        val isSuper = recv.text == "super"
+        if (!isSuper && recv.text != "this") {
+            // (LEGACY.0b) J2: the STATIC side reached through the class's own NAME. The
+            // identifier must RESOLVE to that class declaration — the index is keyed by
+            // name, and a same-named local would otherwise decide an unrelated receiver.
+            val cls = index[recv.text] ?: return null
+            val sym = lookupPerFileForNode(recv, recv.text) ?: return null
+            if (!sym.flags.hasAny(SymbolFlags.Class)) return null
+            if (sym.valueDeclaration !== cls) return null
+            val staticNames = jsClassMemberClosure(cls, true, index, fileName) ?: return null
+            return expr.name.text !in staticNames
+        }
+        val binder = jsClassThisBinder(expr) ?: return null
+        val owner = binder.first
+        val target = if (isSuper) {
+            val baseName = extendsBaseIdentifierName(owner) ?: return null
+            index[baseName] ?: return null
+        } else owner
+        val names = jsClassMemberClosure(target, binder.second, index, fileName) ?: return null
+        return expr.name.text !in names
+    }
+
+    /** The class whose `this` [node] refers to, and whether the context is STATIC.
+     *  An ARROW is transparent (it keeps the enclosing `this`); an ordinary
+     *  `function` rebinds it, so the answer is null there — tsgo agrees, reporting
+     *  TS2683 for a `this` inside a nested function of a JavaScript class. Null for
+     *  a class EXPRESSION, a heritage/computed-name position and file level. */
+    private fun jsClassThisBinder(node: Node): Pair<ClassDeclaration, Boolean>? {
+        var cur: Node? = (node as NodeBase).parent
+        var hops = 0
+        while (cur != null && hops < OWNING_FILE_ASCENT_CAP) {
+            val c = cur
+            when (c) {
+                is ArrowFunction -> {}
+                is FunctionDeclaration -> return null
+                is FunctionExpression -> return null
+                is SourceFile -> return null
+                is ClassDeclaration -> return null
+                is ClassExpression -> return null
+                is Constructor ->
+                    return (c.parent as? ClassDeclaration)?.let { it to false }
+                is ClassStaticBlockDeclaration ->
+                    return (c.parent as? ClassDeclaration)?.let { it to true }
+                is MethodDeclaration ->
+                    return (c.parent as? ClassDeclaration)
+                        ?.let { it to (ModifierFlag.Static in c.modifiers) }
+                is GetAccessor ->
+                    return (c.parent as? ClassDeclaration)
+                        ?.let { it to (ModifierFlag.Static in c.modifiers) }
+                is SetAccessor ->
+                    return (c.parent as? ClassDeclaration)
+                        ?.let { it to (ModifierFlag.Static in c.modifiers) }
+                is PropertyDeclaration ->
+                    return (c.parent as? ClassDeclaration)
+                        ?.let { it to (ModifierFlag.Static in c.modifiers) }
+                else -> {}
+            }
+            cur = (c as? NodeBase)?.parent
+            hops++
+        }
+        return null
+    }
+
+    /** [fileName]'s named-class index, built once per file. Null when the file is
+     *  not one this checker walked. */
+    private fun jsExpandoClassIndex(fileName: String): Map<String, ClassDeclaration>? {
+        if (jsExpandoModelFile != fileName) jsBuildExpandoModel(fileName)
+        return if (jsExpandoModelFile == fileName) jsExpandoModelClasses else null
+    }
+
+    private fun jsBuildExpandoModel(fileName: String) {
+        jsExpandoModelFile = null
+        jsExpandoModelClasses = emptyMap()
+        jsExpandoModelStatics = emptyMap()
+        jsExpandoModelClosures.clear()
+        val sf = checkedResults.firstOrNull { it.sourceFile.fileName == fileName }?.sourceFile ?: return
+        val classes = LinkedHashMap<String, ClassDeclaration>()
+        collectNamedClassDecls(sf.statements, classes)
+        val statics = HashMap<String, MutableSet<String>>()
+        jsCollectStaticExpandoWrites(sf.statements, statics)
+        jsExpandoModelFile = fileName
+        jsExpandoModelClasses = classes
+        jsExpandoModelStatics = statics
+    }
+
+    /** Collect every `X.p = …` assignment of a statement list, recursing into the
+     *  same containers [collectNamedClassDecls] does plus class member bodies —
+     *  over-collecting is the SAFE direction here, because the set only ever
+     *  SUPPRESSES a diagnostic. */
+    private fun jsCollectStaticExpandoWrites(
+        stmts: List<Statement>, out: MutableMap<String, MutableSet<String>>,
+    ) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is Block -> jsCollectStaticExpandoWrites(stmt.statements, out)
+                is ModuleDeclaration ->
+                    (stmt.body as? ModuleBlock)?.let { jsCollectStaticExpandoWrites(it.statements, out) }
+                is FunctionDeclaration ->
+                    stmt.body?.let { jsCollectStaticExpandoWrites(it.statements, out) }
+                is IfStatement -> {
+                    jsCollectStaticExpandoWrites(listOf(stmt.thenStatement), out)
+                    stmt.elseStatement?.let { jsCollectStaticExpandoWrites(listOf(it), out) }
+                }
+                is TryStatement -> {
+                    jsCollectStaticExpandoWrites(stmt.tryBlock.statements, out)
+                    stmt.catchClause?.block?.statements?.let { jsCollectStaticExpandoWrites(it, out) }
+                    stmt.finallyBlock?.statements?.let { jsCollectStaticExpandoWrites(it, out) }
+                }
+                is ClassDeclaration -> for (m in stmt.members) {
+                    val body = when (m) {
+                        is Constructor -> m.body
+                        is MethodDeclaration -> m.body
+                        is GetAccessor -> m.body
+                        is SetAccessor -> m.body
+                        is ClassStaticBlockDeclaration -> m.body
+                        else -> null
+                    }
+                    body?.let { jsCollectStaticExpandoWrites(it.statements, out) }
+                }
+                else -> {}
+            }
+            jsCollectStaticExpandoWrite((stmt as? ExpressionStatement)?.expression, out)
+        }
+    }
+
+    private fun jsCollectStaticExpandoWrite(e: Expression?, out: MutableMap<String, MutableSet<String>>) {
+        var cur: Expression? = e
+        while (cur is BinaryExpression) {
+            if (cur.operator == SyntaxKind.Equals) {
+                val lhs = cur.left
+                if (lhs is PropertyAccessExpression) {
+                    val root = lhs.expression
+                    if (root is Identifier) out.getOrPut(root.text) { HashSet() }.add(lhs.name.text)
+                } else if (lhs is ElementAccessExpression) {
+                    val root = lhs.expression
+                    val arg = lhs.argumentExpression
+                    if (root is Identifier && arg is StringLiteralNode) {
+                        out.getOrPut(root.text) { HashSet() }.add(arg.text)
+                    }
+                }
+            }
+            cur = cur.right
+        }
+    }
+
+    /** Every member name a JavaScript class's INSTANCE (or STATIC, per [isStatic])
+     *  side carries, UNIONED over the `extends` chain. Null — refuse — when a base
+     *  cannot be resolved to a [ClassDeclaration] of the same file: `class D extends
+     *  anyThing` gives its instances every member, and `class D extends Imported`
+     *  needs the imported declaration's own expando set. */
+    private fun jsClassMemberClosure(
+        cls: ClassDeclaration, isStatic: Boolean,
+        index: Map<String, ClassDeclaration>, fileName: String,
+    ): Set<String>? {
+        val key = (cls.name?.text ?: return null) + if (isStatic) " static" else " instance"
+        if (jsExpandoModelFile == fileName && jsExpandoModelClosures.containsKey(key)) {
+            return jsExpandoModelClosures[key]
+        }
+        val out = HashSet<String>()
+        var cur: ClassDeclaration? = cls
+        val seen = HashSet<Int>()
+        var ok = true
+        while (cur != null) {
+            val c = cur
+            if (!seen.add(c.nodeId)) { ok = false; break }
+            for (m in c.members) {
+                val nm: NameNode?
+                val memberIsStatic: Boolean
+                when (m) {
+                    is PropertyDeclaration -> { nm = m.name; memberIsStatic = ModifierFlag.Static in m.modifiers }
+                    is MethodDeclaration -> { nm = m.name; memberIsStatic = ModifierFlag.Static in m.modifiers }
+                    is GetAccessor -> { nm = m.name; memberIsStatic = ModifierFlag.Static in m.modifiers }
+                    is SetAccessor -> { nm = m.name; memberIsStatic = ModifierFlag.Static in m.modifiers }
+                    else -> { nm = null; memberIsStatic = false }
+                }
+                if (nm == null || memberIsStatic != isStatic) continue
+                nameTextOrNull(nm)?.let { out.add(it) }
+            }
+            if (isStatic) c.name?.text?.let { n -> jsExpandoModelStatics[n]?.let { out.addAll(it) } }
+            else out.addAll(collectClassInstanceFields(c).keys)
+            val hasExtends = c.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true
+            if (!hasExtends) break
+            val baseName = extendsBaseIdentifierName(c)
+            if (baseName == null) { ok = false; break }
+            val base = index[baseName]
+            if (base == null) { ok = false; break }
+            cur = base
+        }
+        val answer = if (ok) out else null
+        if (jsExpandoModelFile == fileName) jsExpandoModelClosures[key] = answer
+        return answer
     }
 
     // -----------------------------------------------------------------------
@@ -148988,7 +149154,15 @@ interface DataView {
         // spine it holds the LAST file's value — reading it here would suppress rows in a
         // `.ts` file whenever the program's final file happened to be JavaScript, which is
         // a silent loss no gate in this repo prints. See [jsAccessReceiverIsExpandoImmune].
-        if (isJsLikeFileName(fileName) && !jsAccessReceiverIsExpandoImmune(expr.expression)) return
+        if (isJsLikeFileName(fileName)) {
+            // (LEGACY.0b) J1/J2: a `this.`/`super.` receiver whose class's expando set
+            // this checker CAN compute is decidable after all — see
+            // [jsClassAccessAdmitted]. Everything else falls back to the immunity test.
+            val jsClassAdmitted = jsClassAccessAdmitted(expr, fileName)
+            if (jsClassAdmitted != null) {
+                if (!jsClassAdmitted) return
+            } else if (!jsAccessReceiverIsExpandoImmune(expr.expression)) return
+        }
         // (ENGINE.2) round 787: level Q. Non-recursive, so it keeps the
         // `depth != 1 => return` shape; a nested invocation would be counted in
         // `invocationsQNested` (a pin asserts it stays 0). See [CpaSections].
@@ -153684,9 +153858,24 @@ interface DataView {
                     if (!isThisAccess) return
                     val chainResult = lookupInstanceMemberInResolvableChain(classDecl, propName)
                     if (chainResult != false) return
+                    // (LEGACY.0b) J4: a GENERIC class's instance type displays with its own
+                    // type parameters — `C1<T, V>`, tsc's `ClassName<A, B, C>` format, which
+                    // the B15.1 site below has always used and this one did not. The axis is
+                    // the CONSTRUCTOR and nothing to do with JavaScript: measured against
+                    // tsgo 7.0.2, `this.missing` in a method / getter / setter / property
+                    // initializer already rendered `A<T>` here (they reach
+                    // [cmamEmitMissingProperty], whose member table has resolved), and only
+                    // the constructor — whose table has not, so it lands on this fallback —
+                    // rendered the bare `A`. A JSDoc `@template` list is the same thing by
+                    // another spelling: the parser makes it the class's own
+                    // `typeParameters` ([Parser.parseJSDocTemplateTypeParams]).
+                    val ctorTps = classDecl.typeParameters
+                    val ctorClassName = if (!ctorTps.isNullOrEmpty())
+                        "${ctorClassSym.name}<${ctorTps.joinToString(", ") { it.name.text }}>"
+                    else ctorClassSym.name
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
-                        message = "Property '$propName' does not exist on type '${ctorClassSym.name}'.",
+                        message = "Property '$propName' does not exist on type '$ctorClassName'.",
                         category = DiagnosticCategory.Error, code = 2339,
                         fileName = fileName, line = line, character = character,
                         start = diagStart, length = diagLength,
