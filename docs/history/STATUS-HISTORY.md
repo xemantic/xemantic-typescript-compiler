@@ -1,3 +1,15 @@
+**(P18.126) — (KIR.LOWER.5): A DYNAMIC `new`, AND THE LOADER SHAPE RUNS END TO END, 19,807 / 0 / 65 (2026-09-17).**
+The KIR module goes 223 -> 242. A pure `export * from` barrel, a namespace import, a `for...in`, a dynamic
+construction and a METHOD CALL on what was constructed now run together, at one construction operation and zero
+dynamic reads — the method call being the half that says the value is a real instance rather than a bag. It took
+four rounds ((P18.122) storage, (P18.124) the namespace object, (P18.125) barrel enumeration, this one
+construction); the library is not on this box, so it is a claim about the SHAPE. **The brief's "one arm" would have
+been a silent wrong answer**: a class's value and a function's value are the same carrier, so routing `new` at it
+answers a function's return value (measured). The mechanism is a constructor carrier; everything else is a type
+error, with a plain function a stated divergence from node. A mirror defect closed on the way: CALLING a class used
+to silently construct. Nothing reaches reflection. 19 pins, 18 red against the parent, six arms — one of which
+reddens two pins from the two previous rounds, which is the receipt that all three are one mechanism.
+
 **(P18.125) — THE TWO EXPORT GAPS ARE ONE CAPABILITY, 19,788 / 0 / 65 (2026-09-17).**
 The KIR module goes 211 -> 223. A module symbol's export table IS the target file's `locals`, which is wrong for an
 enumeration three ways: a star re-export contributes nothing, a renaming specifier is keyed by the DECLARED name,

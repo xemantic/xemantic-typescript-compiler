@@ -1,3 +1,59 @@
+### Round (P18.121) — (LEGACY.0b) step 21: three mechanisms whose emitters we already had, two rows closed, one REFUSED with the decisive control (2026-09-16)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,694 → 19,706 / 0 / 65**; `tsgoPendingBaselines` 42 → 40,
+`docs/logical-parity.md` 40 pending; corpus screen **3,102 / 0 errors and 5,688 / 0 emit**; `cost_gate.py` exit 0
+with every counter unchanged from (P18.119)'s reading; `huge_methods.py --fail-over 0` exit 0 over 875 classes; the
+8-profile grid `added=0 removed=0` on all eight with 78 emit files byte-identical. `Checker.kt` 194,706 → 194,764
+(+58 net: a 61-line pass DELETED, ~119 added).
+
+**THE ROUND WAS PICKED ON ONE PROPERTY — WE ALREADY EMITTED ALL THREE CODES** (`grep -ac 'code = 2671'` / `6205` /
+`8026` read 1 / 2 / 1), so none of the three was a missing feature and each was a gate that did not fire. That
+framing held and is worth reusing: **before adding an emitter for a code this compiler already emits, find the
+existing one and read its gate** — (P18.94)'s law is that two emitters for one code let a value pin assert the right
+answer from the wrong site.
+
+**M3 — TS8026, LANDED, and it retired a whole tsc-6 pass.** `checkHeritageTypeArgCount`'s gate was
+`if (hasGoverningExtendsTag(...)) return` — ANY governing `@augments`/`@extends` tag suppressed TS8026 and handed
+the row to `checkJsDocExtendsTags`, which reported TS2314 at the TAG. tsgo suppresses only when the tag supplies a
+VALID count, reports at the HERITAGE EXPRESSION when it does not, and genuinely BINDS a correct tag
+(`@augments A<number>` makes `new E().x.toUpperCase()` a TS2339 on `number`) — all three measured, and the first
+two readings of `missingAugmentsTag` were wrong in opposite directions. The tsc-6 pass is deleted; **the PassLab
+measured its retirement at 0 screen mismatches before it was removed**, i.e. its only live consumer was the ignored
+row.
+
+**M1 — TS2671, HALF LANDED, and the ladder is the reusable part.** `checkModuleAugmentationOfNonModuleEntity` was
+gated on ambient `export = V` with no JavaScript leg; tsgo's guard is one flag after following `export =`
+(`Namespace` means merge, else TS2671). One shared predicate now serves the emitter AND
+`collectModuleAugmentations`, which SKIPS the merge — tsgo's own control flow, error INSTEAD of merging, which is
+what removes the ours-only TS2300 pair. `jsExportMemberMergedWithModuleAugmentation2` closes;
+`…MergedWithModuleAugmentation` does NOT, because it is two mechanisms and the second is a TS2749 on an import
+that binds a value only. **The first ladder worked in a scratch project and resolved NOTHING in the corpus**:
+`resolveModuleSpecifier` / `augmentationTargetFile` deliberately do not strip `.js`, and the corpus harness has no
+crawl to supply `moduleResolutions` ((CHK.30)) — the screen caught it, the `-project` fixture said the feature
+worked. Use `augmentationTargetFileJsAware`, the legs the B553 walker has always used.
+
+**M2 — TS6205, REFUSED, and the control that settled it is worth more than the row.** tsgo's predicate is
+`len(list) > 1 && Every(unreferenced)` and **we already emit TS6205 for the all-unused case on the right line** —
+only the multi-line span differs. The other two classes in the fixture reference their parameter through
+`/** @type {T} */ this.p;`, so no aggregation rule can reach them; tsgo treats them as all-unused only because a
+bare `this.p;` declares no property there, which is why it ALSO emits two TS2339 rows the ledger never mentioned.
+**Decisive control: with `T` referenced from a `@param {T}` tag instead, tsgo DROPS TS6205 and reports
+per-parameter TS6196** — so the aggregation predicate is sound and the JS-expando semantics are the blocker (10
+candidate case files carry the bare-`this.X;` shape; its own round). Incidental: tsgo's per-parameter code for a
+CLASS type parameter is **TS6196, which we already emit** — the ledger's "ours TS6133" was a scratch-project
+artefact, so that line was wrong about our own output as well as about the mechanism.
+
+**PINS AND ABLATION.** `TsgoStep21Test`, 12 cases (6 assertions, 6 controls); **all 6 non-controls RED against the
+pre-change binary and all 6 controls green**. Two arms attribute disjointly (the M3 suppression reverted → the 2
+arity pins; the M1 predicate forced false → the 3 M1 pins), and the round records honestly that the
+`no TS2314 at the tag` pin is discriminated by the HEAD arm and by the PassLab measurement rather than by arm A,
+which reverts the suppression without restoring the deleted pass.
+
+**ONE MORE GAP, MEASURED AND OUT OF SCOPE**: tsgo has TS8027 (`Expected {base}-{min} type arguments…`) for a base
+with DEFAULTED parameters and we emit it nowhere — `checkHeritageTypeArgCount` returns early on
+`minRequired != maxTotal`. Zero corpus baselines carry it, and tsgo's own rendering of it looks like a formatting
+defect (`Expected P<T, U>-1 type arguments`), so it is recorded rather than queued.
+
 ### Round (P18.120) — (LEGACY.0b) step 20: the last three F2 duplicate-identifier rows, and a class over-reach only a hand-written pin could see (2026-09-16)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,672 → 19,694 / 0 / 67** — the skip count falling 70 → 67
