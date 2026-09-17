@@ -169,9 +169,18 @@ class TsgoStep22Test {
             """,
             jsdocDirectives, "a.js",
         )
-        assert(d.size == 1)
-        assert(d[0].code == 6205)
-        assert(d[0].message == "All type parameters are unused.")
+        // RE-POINTED at (LEGACY.0b) step 25. This used to assert `d.size == 1`, which was a
+        // COUNTDOWN: tsgo reports the TS2339 beside the TS6205 here
+        // (`unusedTypeParameters_templateTag2`, now byte-identical), and step 25's J1/J4
+        // deliver it. The pin's own subject — the dropped `@type` tag, i.e. that `T` is NOT
+        // referenced — is unchanged and is what the TS6205 row asserts.
+        assert(d.count { it.code == 6205 } == 1)
+        assert(d.single { it.code == 6205 }.message == "All type parameters are unused.")
+        assert(d.any {
+            it.code == 2339 && it.line == 8 && it.character == 14 && it.length == 1 &&
+                it.message == "Property 'p' does not exist on type 'C1<T, V>'."
+        })
+        assert(d.size == 2)
     }
 
     @Test
@@ -271,13 +280,18 @@ class TsgoStep22Test {
             """,
             jsdocDirectives, "a.js",
         )
-        assert(d.size == 1)
-        val r = d[0]
-        assert(r.code == 6205)
+        // RE-POINTED at (LEGACY.0b) step 25, same countdown as above: the TS2339 tsgo
+        // reports for `this.p` now fires. The pin's subject is the TS6205 list SPAN.
+        val r = d.single { it.code == 6205 }
         assert(r.message == "All type parameters are unused.")
         assert(r.line == 2)
         assert(r.character == 3)
         assert(r.length == 30)
+        assert(d.any {
+            it.code == 2339 && it.line == 8 && it.character == 14 && it.length == 1 &&
+                it.message == "Property 'p' does not exist on type 'D1<T, V>'."
+        })
+        assert(d.size == 2)
     }
 
     /**

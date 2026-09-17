@@ -308,11 +308,13 @@ class TsgoStep24Test {
 
     @Test
     fun `negative control - the Object defineProperty walker's row is emitted exactly once`() {
-        // B428's dedicated walker exists BECAUSE the family was off for `.js`. Opening the
-        // cpa half without the firewall makes the general path emit the same row a second
-        // time — the corpus caught it as `jsCheckObjectDefineThisNoCrash`. The receiver is a
-        // JavaScript class, so the firewall refuses the general path and the walker keeps
-        // sole ownership.
+        // B428's dedicated walker existed BECAUSE the family was off for `.js`. Opening the
+        // cpa half without the firewall made the general path emit the same row a second
+        // time — the corpus caught it as `jsCheckObjectDefineThisNoCrash`. RE-POINTED at
+        // (LEGACY.0b) step 25: the JavaScript class expando model now decides this access,
+        // reproduces the row byte-for-byte, and the walker is RETIRED (measured with the
+        // PassLab — disabling it on the landed binary leaves the errors screen 3,102 / 0), so
+        // the ASSERTION is unchanged and only its owner moved.
         val d = diagnose(
             """
             // @Filename: /a.js
