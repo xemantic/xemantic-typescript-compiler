@@ -317,9 +317,18 @@ val typeScriptGoCommit = "2bd066d87f5bafd315be9f40889d0a60b9e58e0b" // tag types
  * `adopted`, `new` and `deleted` do not move by one — is the receipt that the widening
  * removed only PRISTINE-pinned subtests and lost no tsgo answer; a gradeable case caught by
  * the rule would have shown up as `adopted` falling.
+ *
+ * RE-MEASURED AGAIN 2026-09-17 at (P18.133), which taught the same predicate to follow a root
+ * `tsconfig.json`'s `extends` chain: **`keptTsc` 3 -> 1, `adopted` / `new` / `deleted` unmoved.**
+ * The drop is **2 subtests from ONE case** — `pathMappingInheritedBaseUrl`, whose `baseUrl` is
+ * inherited from `/other/tsconfig.base.json` and which contributes BOTH an `.errors.txt` and a
+ * `.js` baseline, each in this bucket because tsgo has no artifact for the case at all. An
+ * independent scan of every case file writing `"extends"` confirms it is the ONLY one the walk
+ * newly reaches, so the 2 is one case x two baselines rather than two cases; expecting `3 -> 2`
+ * is the natural mistake here, and the bucket counts BASELINES, not cases.
  */
 val tsgoExpectedDeleted = 9
-val tsgoExpectedKeptTsc = 3
+val tsgoExpectedKeptTsc = 1
 val tsgoExpectedNew = 23
 val tsgoExpectedAdopted = 8765
 
@@ -853,14 +862,6 @@ val tsgoPendingBaselines = listOf(
         "JS emit; layer `submoduleAccepted`. tsgo: //// [file3.ts] | ours: //// [file1.js]"
     ),
     TsgoPendingBaseline(
-        "blockScopedBindingsInDownlevelGenerator(target=es2015).errors.txt",
-        "F6 top code differs (tsgo TS5102 / ours TS5101); layer `submoduleAccepted`. tsgo: " +
-        "error TS5102: Option 'downlevelIteration' has been removed. Please remove it from your " +
-        "configuration. | ours: error TS5101: Option 'downlevelIteration' is deprecated and " +
-        "will stop functioning in TypeScript 7.0. Specify compilerOption " +
-        "'\"ignoreDeprecations\": \"6."
-    ),
-    TsgoPendingBaseline(
         "classFieldSuperNotAccessibleJs.errors.txt",
         "NARROWED to ONE ROW (LEGACY.0b) step 25 — our answer is a SUBSET of tsgo's, " +
         "byte-identical on the five rows we emit. (P18.131)'s J1 gave the property-access " +
@@ -1126,14 +1127,6 @@ val tsgoPendingBaselines = listOf(
             "SEVEN green baselines whose tsconfig rows stay first — all seven are baseUrl / " +
             "moduleResolution=node cases tsgo 7 does not run (no baseline under " +
             "typescript-go-repo/testdata), so their order is a (LEGACY.1) question, not a rule.",
-    ),
-    TsgoPendingBaseline(
-        "sourceMapValidationVarInDownLevelGenerator(target=es2015).errors.txt",
-        "F6 top code differs (tsgo TS5102 / ours TS5101); layer `submoduleAccepted`. tsgo: " +
-        "error TS5102: Option 'downlevelIteration' has been removed. Please remove it from your " +
-        "configuration. | ours: error TS5101: Option 'downlevelIteration' is deprecated and " +
-        "will stop functioning in TypeScript 7.0. Specify compilerOption " +
-        "'\"ignoreDeprecations\": \"6."
     ),
     TsgoPendingBaseline(
         "typeParameterWithInvalidConstraintType.errors.txt",
@@ -1842,16 +1835,63 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
         //     `usesUnsupportedOption` above and by nothing here, whatever value it gives.
         //
         //     Only a file NAMED exactly tsconfig.json counts (that is tsgo's own basename test);
-        //     tsconfig1.json etc. are plain source-echo files.
+        //     tsconfig1.json etc. are plain source-echo files — but see the `extends` walk below,
+        //     which is how a file that is NOT so named still reaches this rule.
+        //
+        //     (P18.133) THE ROOT'S `extends` CHAIN IS FOLLOWED, and one case needed it.
+        //     `pathMappingInheritedBaseUrl` writes `"baseUrl": "."` in `/other/tsconfig.base.json`
+        //     and `{ "extends": "../other/tsconfig.base.json", … }` in `/project/tsconfig.json`,
+        //     so the BASENAME scan above sees a root config that sets none of the four while the
+        //     effective options plainly set `baseUrl`. tsgo's own skip reads the RESOLVED options
+        //     (`SkipUnsupportedCompilerOptions` runs after the harness has built them) and so does
+        //     see it — which is why the case has no tsgo artifact of any kind, and why keeping it
+        //     pinned PRISTINE TypeScript 6's TS5101 through (LEGACY.0b)'s *absent, no `.diff` ->
+        //     keep tsc's* leg. That is the population the owner approved dropping at (LEGACY.1)(g);
+        //     this is the same rule reading one more file, not a wider one.
+        //
+        //     Measured 2026-09-17: it is the ONLY case in the corpus whose `baseUrl` /
+        //     `moduleResolution` lives in a config the basename scan cannot reach —
+        //     `tsgoExpectedKeptTsc` moves 3 -> 2 and `adopted` / `new` / `deleted` do not move,
+        //     which is the receipt that exactly one pristine-pinned subtest left and nothing
+        //     gradeable did.
+        //
+        //     The walk is deliberately conservative in three ways. The DIRECTIVE EXEMPTION still
+        //     applies across the whole chain (a directive overrides whatever any config in it
+        //     resolved, so it stays `usesUnsupportedOption`'s to judge). A target that is not a
+        //     section of the test is simply not followed — an `extends` naming a package under
+        //     `node_modules` has no body here and must not be guessed at. And the walk carries a
+        //     visited set, because `extends` may cycle and a test is free to write one.
         fun tsconfigInTestUsesRemovedFeature(source: String, directives: Map<String, String>): Boolean {
             val sections = Regex("""(?im)^\s*//\s*@filename:\s*(\S+)\s*$""").findAll(source).toList()
+
+            // `a/./b`, `a/../b` and a leading `/` folded away, so a section name and an `extends`
+            // target resolved against a config's own directory compare as the same string.
+            fun normalizePath(path: String): String {
+                val out = ArrayList<String>()
+                for (part in path.replace('\\', '/').split('/')) {
+                    when {
+                        part.isEmpty() || part == "." -> {}
+                        part == ".." -> if (out.isNotEmpty()) out.removeAt(out.size - 1)
+                        else -> out.add(part)
+                    }
+                }
+                return out.joinToString("/")
+            }
+
+            val bodyOf = HashMap<String, String>()
+            val roots = ArrayList<String>()
             for ((i, m) in sections.withIndex()) {
-                if (!m.groupValues[1].substringAfterLast('/').equals("tsconfig.json", ignoreCase = true)) continue
+                val name = m.groupValues[1]
                 val start = m.range.last + 1
                 val end = if (i + 1 < sections.size) sections[i + 1].range.first else source.length
-                val body = source.substring(start, end)
-                // A directive overrides the embedded value, so it is the directive filter's to judge.
-                fun overridden(directive: String) = directives[directive]?.isNotBlank() == true
+                val key = normalizePath(name)
+                bodyOf[key] = source.substring(start, end)
+                if (name.substringAfterLast('/').equals("tsconfig.json", ignoreCase = true)) roots.add(key)
+            }
+
+            // A directive overrides the embedded value, so it is the directive filter's to judge.
+            fun overridden(directive: String) = directives[directive]?.isNotBlank() == true
+            fun bodyUsesRemovedFeature(body: String): Boolean {
                 if (!overridden("module") &&
                     Regex("""(?i)"module"\s*:\s*"(amd|umd|system)"""").containsMatchIn(body)) return true
                 if (!overridden("outfile") &&
@@ -1860,6 +1900,35 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                     Regex("""(?i)"baseUrl"\s*:\s*"[^"]*"""").containsMatchIn(body)) return true
                 if (!overridden("moduleresolution") &&
                     Regex("""(?i)"moduleResolution"\s*:\s*"(node|node10|classic)"""").containsMatchIn(body)) return true
+                return false
+            }
+
+            // `"extends"` is a string, or since TypeScript 5.0 an array of them.
+            fun extendsTargetsOf(body: String): List<String> {
+                val one = Regex("""(?i)"extends"\s*:\s*"([^"]+)"""").find(body)
+                if (one != null) return listOf(one.groupValues[1])
+                val many = Regex("""(?i)"extends"\s*:\s*\[([^\]]*)\]""").find(body) ?: return emptyList()
+                return Regex(""""([^"]+)"""").findAll(many.groupValues[1]).map { it.groupValues[1] }.toList()
+            }
+
+            for (root in roots) {
+                val seen = HashSet<String>()
+                val worklist = ArrayList<String>()
+                worklist.add(root)
+                while (worklist.isNotEmpty()) {
+                    val current = worklist.removeAt(worklist.size - 1)
+                    if (!seen.add(current)) continue                 // `extends` may cycle.
+                    val body = bodyOf[current] ?: continue           // not a file this test writes.
+                    if (bodyUsesRemovedFeature(body)) return true
+                    val dir = current.substringBeforeLast('/', "")
+                    for (target in extendsTargetsOf(body)) {
+                        val combined = if (dir.isEmpty()) target else "$dir/$target"
+                        val resolved = normalizePath(combined)
+                        worklist.add(resolved)
+                        // tsc lets `extends` omit the extension.
+                        if (!resolved.endsWith(".json", ignoreCase = true)) worklist.add("$resolved.json")
+                    }
+                }
             }
             return false
         }

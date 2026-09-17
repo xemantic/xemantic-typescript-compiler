@@ -262,13 +262,29 @@ class TypeScriptCompiler {
         // Helper to look up tsconfig.json position for a given option key (lowercase)
         val tsconfigPos = options.tsconfigOptionPositions
 
-        // The simulated TypeScript version (from @typeScriptVersion test directive), if any.
-        // When >= stopFunctioningVersion, options emit "removed" (TS5102/TS5108) instead of "deprecated".
-        // Default (no @typeScriptVersion): use "6.0" — the version that generated the test baselines.
-        // This means:
-        //   - 5.0-era options (stopped at 5.5): "6.0" >= "5.5" → TS5102 (removed)
-        //   - 6.0-era options (stopped at 7.0): "6.0" < "7.0" → TS5101 (deprecated)
-        val simulatedVersion = options.simulatedTypeScriptVersion ?: "6.0"
+        // The simulated TypeScript version (from the `@typeScriptVersion` test directive), if any.
+        // When >= stopFunctioningVersion, options emit "removed" (TS5102/TS5108) instead of
+        // "deprecated" (TS5101/TS5107), and `ignoreDeprecations` stops silencing them.
+        //
+        // (P18.133) The default is **"7.0"** — the compatibility target. TypeScript 7 has no
+        // "deprecated, will stop functioning" notion AT ALL: `Option_0_is_deprecated_…` (5101)
+        // and `Option_0_1_is_deprecated_…` (5107) survive only in tsgo's generated message
+        // table and are constructed NOWHERE (measured: zero references outside
+        // `diagnostics_generated.go`), and across tsgo's whole baseline corpus TS5101 and TS5107
+        // occur ONLY as lines its diffs DELETE (60 and 2; zero added). The one emitter is
+        // `createRemovedOptionDiagnostic` (`program.go:803`), which answers 5102 at the KEY when
+        // the option carries no value and 5108 at the VALUE when it does.
+        //
+        // The correctness argument is stronger than "tsgo says so": (LEGACY.1)(a)-(k) already
+        // deleted every one of these options' behaviour, so at the old "6.0" default this
+        // compiler told a user an option "will stop functioning in TypeScript 7.0" and offered
+        // `ignoreDeprecations` to silence it — while the option was ALREADY inert and silencing
+        // restored nothing.
+        //
+        // An explicit `@typeScriptVersion` still wins, which is what keeps the seven corpus cases
+        // that set one (3x `5.0`, 1x `5.5`, 3x `6.0`) on the ladder their baselines were taken at,
+        // and is pinned by `SimulatedVersionDefaultTest`.
+        val simulatedVersion = options.simulatedTypeScriptVersion ?: "7.0"
 
         // (JIT.1)(e) round 816: the option-validation runs. Each is a CONTIGUOUS
         // region of the pre-split body, moved verbatim with its own explanatory
@@ -323,7 +339,8 @@ class TypeScriptCompiler {
     /**
      * (JIT.1)(e) round 816 — the TS5101/TS5102/TS5107/TS5108 deprecated- and
      * removed-option diagnostics, moved verbatim out of [compileParsedCore]. Holds
-     * the `ignoreDeprecations` validation (TS5103) and the three local emitters that
+     * the `ignoreDeprecations` validity filter ((P18.133) retired its TS5103 row) and the
+     * three local emitters that
      * only this run uses.
      */
     /**
@@ -354,26 +371,27 @@ class TypeScriptCompiler {
         simulatedVersion: String,
         diagnostics: MutableList<Diagnostic>,
     ) {
-        // Valid ignoreDeprecations values. An invalid value causes TS5103 and is treated as unset.
+        // Valid `ignoreDeprecations` values. An invalid one is treated as UNSET.
+        //
+        // (P18.133) The TS5103 `Invalid value for '--ignoreDeprecations'.` row that used to be
+        // emitted here is RETIRED: TypeScript 7 has no emitter for it. Its message survives in
+        // tsgo's generated table (`diagnostics_generated.go:2355`) and is constructed nowhere —
+        // zero references outside that file — and tsgo's own baselines carry the code zero times.
+        // Measured directly: `{ "compilerOptions": { "ignoreDeprecations": "banana" } }` produces
+        // NO output at all from `tools/tsgo-7.0.2/lib/tsc`. The option is still PARSED there
+        // (`tsoptions/declscompiler.go:1197` declares it, `parsinghelpers.go:287` reads the
+        // string into the options struct) and then consulted by nothing, so an invalid value is
+        // simply accepted and silences nothing.
+        //
+        // **The validity FILTER below is not part of that retirement and must stay.** The
+        // suppression test is a lexicographic `ign >= deprecationVersion`, under which
+        // `"banana" >= "6.0"` is TRUE — so dropping the filter along with the diagnostic would
+        // make a garbage `ignoreDeprecations` start SILENCING the explicit-6.0 ladder, which is
+        // neither what tsgo does nor what tsc 6 did. Mapping an invalid value to `null` keeps
+        // "accepted, suppresses nothing", which is exactly tsgo's observable behaviour.
         val validIgnoreDeprecationsValues = setOf("5.0", "6.0")
-        val effectiveIgnoreDeprecations: String? = if (options.ignoreDeprecations != null &&
-            options.ignoreDeprecations !in validIgnoreDeprecationsValues) {
-            // Emit TS5103 for invalid ignoreDeprecations value
-            val pos = tsconfigPos["ignoredeprecations"]
-            diagnostics.add(Diagnostic(
-                message = "Invalid value for '--ignoreDeprecations'.",
-                category = DiagnosticCategory.Error,
-                code = 5103,
-                fileName = pos?.fileName,
-                line = pos?.valueLine,
-                character = pos?.valueCharacter,
-                start = pos?.valueStart,
-                length = pos?.valueLength,
-            ))
-            null // treat as unset
-        } else {
-            options.ignoreDeprecations
-        }
+        val effectiveIgnoreDeprecations: String? =
+            options.ignoreDeprecations?.takeIf { it in validIgnoreDeprecationsValues }
 
         // Helper to compare version strings like "5.0", "6.0"
         fun isDeprecationSuppressed(deprecationVersion: String): Boolean {
@@ -383,9 +401,13 @@ class TypeScriptCompiler {
 
 
         // TS5101/TS5102: Deprecated/removed options — point to KEY position in tsconfig.
-        // Logic (simulatedVersion is always set, defaults to "6.0"):
+        // Logic (simulatedVersion is always set; (P18.133) it defaults to "7.0"):
         // - simulatedVersion < stopFunctioningVersion: option is still deprecated → emit TS5101
         // - simulatedVersion >= stopFunctioningVersion: option is now removed → emit TS5102 (ignoreDeprecations ignored)
+        // At the DEFAULT the second branch is the one taken by every caller, because every
+        // `stopFunctioningVersion` here is "7.0" — which is TypeScript 7's whole answer for these
+        // options. The first branch survives for an explicit `@typeScriptVersion` below 7.0,
+        // which is what keeps the corpus cases that set one on the ladder their baselines used.
         fun addDeprecation5101(
             optionDesc: String,
             tsconfigKey: String? = null,
@@ -397,7 +419,9 @@ class TypeScriptCompiler {
              * COMPUTED suggestion instead — `baseUrl`'s is `Use '"paths"…' instead.`
              * (TS5106, `program.go:822-833`). Defaults to [messageChain] so every other
              * caller keeps today's behaviour at both versions, which is what keeps this
-             * round from moving any output at the `"6.0"` default of [simulatedVersion].
+             * caller keeps the TypeScript 6 wording on the deprecated branch. (P18.133) moved
+             * the default of [simulatedVersion] to `"7.0"`, so this chain is now the SHIPPED one
+             * for `baseUrl` and the `messageChain` default serves the explicit-6.0 ladder only.
              */
             removedMessageChain: List<String> = messageChain,
             deprecationVersion: String = "6.0",
@@ -471,9 +495,9 @@ class TypeScriptCompiler {
                 length = pos?.keyLength,
             ))
         }
-        // baseUrl. At the `"6.0"` default of `simulatedVersion` this is TS5101 with the
-        // TypeScript 6 migration URL, unchanged; at `"7.0"` it is tsgo's TS5102 carrying the
-        // COMPUTED `paths` suggestion instead of the URL ((LEGACY.1)(g), `program.go:822-833`).
+        // baseUrl. (P18.133) At the shipped `"7.0"` default this is tsgo's TS5102 carrying the
+        // COMPUTED `paths` suggestion ((LEGACY.1)(g), `program.go:822-833`); an explicit
+        // `@typeScriptVersion` below 7.0 still gives TS5101 with the TypeScript 6 migration URL.
         if (options.baseUrl != null) addDeprecation5101("baseUrl", tsconfigKey = "baseurl",
             messageChain = listOf("  Visit https://aka.ms/ts6 for migration information."),
             removedMessageChain = baseUrlPathsSuggestion(
@@ -500,7 +524,7 @@ class TypeScriptCompiler {
 
         // TS5107/TS5108: Deprecated/removed options — point to VALUE position in tsconfig.
         // Only moduleResolution=node10 gets the migration URL chain from tsconfig.
-        // Logic (simulatedVersion is always set, defaults to "6.0"):
+        // Logic (simulatedVersion is always set; (P18.133) it defaults to "7.0"):
         // - simulatedVersion < version (stopFunctioningVersion): option is deprecated → emit TS5107
         // - simulatedVersion >= version: option is removed → emit TS5108 (ignoreDeprecations ignored)
         fun addDeprecation(optionDesc: String, tsconfigKey: String? = null, version: String = "7.0", deprecationVersion: String = "6.0", withMigrationUrl: Boolean = false) {
@@ -563,6 +587,25 @@ class TypeScriptCompiler {
         if (options.module == ModuleKind.AMD) addDeprecation("module=AMD", tsconfigKey = "module")
         if (options.module == ModuleKind.UMD) addDeprecation("module=UMD", tsconfigKey = "module")
         if (options.module == ModuleKind.System) addDeprecation("module=System", tsconfigKey = "module")
+        // (P18.133) **`module=None` DIVERGES FROM tsgo AND IS DELIBERATELY LEFT ALONE.** It is not
+        // a removed option there at all: `none` is absent from tsgo's `moduleOptionMap`
+        // (`tsoptions/enummaps.go:171`, whose keys are commonjs/amd/system/umd/es6/es2015/es2020/
+        // es2022/esnext/node16/node18/node20/nodenext/preserve) and `createRemovedOptionDiagnostic`
+        // has no `ModuleKindNone` case, so tsgo answers the out-of-map ARGUMENT diagnostic:
+        //
+        //     tsconfig.json(1,34): error TS6046: Argument for '--module' option must be: 'commonjs', 'es6', …
+        //
+        // i.e. the (LEGACY.1)(j4) `targetValueInvalid` mechanism one option over — report TS6046 at
+        // the VALUE and leave the option UNSET. Building that needs a `moduleValueInvalid` flag
+        // beside the target one and changes what `effectiveModule` derives, which is a separate
+        // round; this line is left on the shared ladder so it stays uniform with its siblings
+        // rather than being frozen at a "will stop functioning in TypeScript 7.0" sentence that a
+        // 7.0 default contradicts. The divergence predates this round and is not widened by it:
+        // the row was wrong (TS5107) before and is wrong (TS5108) now. It has ZERO active corpus
+        // coverage — `usesUnsupportedOption` does not skip `module: none`, but none of the eight
+        // `@module: none` case files generates a subtest and tsgo's testdata holds no
+        // `moduleNone*` baseline of any kind — so only `RemovedModuleKindsTest`'s `residue -` pin
+        // records it.
         if (options.module == ModuleKind.None) addDeprecation("module=None", tsconfigKey = "module")
         // Module resolution removed values — tsgo's `program.go:854/870`: `Classic` (its
         // spelling) and `node10`, the latter also for the enum-map alias `node`; node10
@@ -3163,6 +3206,21 @@ internal fun baseUrlPathsSuggestion(baseUrl: String, configFileName: String?): L
     // `GetRelativePathFromFile(config, baseUrl)` after tsgo has absolutized `baseUrl`
     // against the config directory — for a RELATIVE value that round-trips to the value
     // itself, normalized, so only an absolute one needs the two-sided walk.
+    //
+    // (P18.133) **That round trip assumes `baseUrl` was written in the ROOT config, and an
+    // INHERITED one breaks it.** tsgo absolutizes against the file that DECLARED the option
+    // and then takes the path relative to the root config, so a `baseUrl: "."` inherited
+    // through `extends` from `../other/tsconfig.base.json` suggests `../other/` + a star
+    // segment where this function suggests `./` + one. Measured on tools/tsgo-7.0.2/lib/tsc,
+    // both directions, and pinned by `BaseUrlRemovedTest`'s `residue -` pin together with its
+    // same-directory control, which is where we DO agree. The corpus case that would have shown
+    // it, `pathMappingInheritedBaseUrl`, is dropped by `tsconfigInTestUsesRemovedFeature`'s
+    // `extends` walk: its baseline is PRISTINE TypeScript 6's TS5101 and tsgo has no artifact for
+    // the case at all, so it could never have closed. Every root-declared value is byte-correct.
+    // Closing this needs provenance that
+    // `CompilerOptions.baseUrl` — a bare `String` — does not carry, so it is a round of its
+    // own rather than a line here. It became VISIBLE only when the default moved, because
+    // below `"7.0"` this chain is not the one that renders.
     // Rooted the way tsgo's `GetEncodedRootLength` counts it, not the way
     // `PathUtil.isAbsolute` does: that one serves MODULE SPECIFIERS, where a bare `c:/…`
     // is not a thing, and widening it would change resolution. A DOS drive matters here
