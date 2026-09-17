@@ -6550,6 +6550,27 @@ class Checker(
     /** B181: the intrinsic string-mapping utility type names (string-only domains). */
     private val STRING_MAPPING_INTRINSICS = setOf("Uppercase", "Lowercase", "Capitalize", "Uncapitalize")
 
+    /**
+     * (CHK.138) round (P18.128) — the four names tsgo's
+     * `checkClassForStaticPropertyNameConflicts` (`checker.go:4389`) refuses as a class's
+     * STATIC member, because the constructor function is a `Function` and already has them.
+     *
+     * `prototype` is deliberately NOT in this set: it is tsgo's OTHER TS2699 emitter
+     * (`checker.go:3172`) with a different gate — no `useDefineForClassFields` condition,
+     * and a TS2300 companion for the method form that none of these four has. See
+     * [checkStaticPrototypeMembers].
+     */
+    private val FUNCTION_BUILTIN_STATIC_NAMES = setOf("name", "length", "caller", "arguments")
+
+    /**
+     * (CHK.137) round (P18.128) — the alias-hop budget of [newCalleeVarHoldsClassValue].
+     *
+     * Four is `MemberNames.LATE_BIND_ALIAS_HOPS`' shape for the same job one seam over: it
+     * terminates a `const a = b; const b = a` cycle, which is what the budget is FOR, and a
+     * real alias chain is one or two hops.
+     */
+    private val NEW_CALLEE_CLASS_VALUE_HOPS = 4
+
     /** B171: the lib typed-array constructor names (none is an ArrayBuffer). */
     private val TYPED_ARRAY_NAMES = setOf(
         "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
@@ -46097,6 +46118,30 @@ class Checker(
     }
 
     /**
+     * (CHK.138) round (P18.128) — whether `useDefineForClassFields` is in force, which
+     * is the ENTIRE gate on the [FUNCTION_BUILTIN_STATIC_NAMES] half of
+     * [checkStaticPrototypeMembers] and applies to none of the `prototype` half.
+     *
+     * tsgo's `GetUseDefineForClassFields` (`core/compileroptions.go:342`) reads the
+     * written option and otherwise defaults from the target, so the whole `name` /
+     * `length` / `caller` / `arguments` family is SILENT at ES2022 and above —
+     * including at an UNSET target, which defaults to the latest standard. Measured
+     * over the 2x2 of (es2020, es2022) x (unset, `useDefineForClassFields: true`);
+     * an unset target is clean in tsgo 7.0.2 and so is `es2022`.
+     *
+     * The notion is [CompilerOptions.defaultedTarget] and NOT `effectiveTarget`: this
+     * is a CHECKER question, and CLAUDE.md's rule is that every checker question reads
+     * the defaulted target. The two differ only for a written es3/es5, which TypeScript
+     * 7 refuses outright (TS5107/TS5108), so no program can observe the difference —
+     * but the checker-side notion is the one that is right for the reason, and the
+     * `Transformer`'s own same-shaped getter deliberately keeps `effectiveTarget`
+     * because ITS question is an emit one.
+     */
+    private val useDefineForClassFields: Boolean
+        get() = options.useDefineForClassFields
+            ?: (options.defaultedTarget >= ScriptTarget.ES2022)
+
+    /**
      * B98.r82: A `static prototype` member of a class conflicts with the implicit
      * `Function.prototype` of the constructor function. Emits TS2699 at the member
      * name for any static member named `prototype` (property OR method form), plus an
@@ -46104,11 +46149,61 @@ class Checker(
      * METHOD (the field form `static prototype;` gets only TS2699 — matches TS).
      * FP-safe: a `static prototype` is never valid TypeScript, so any class with this
      * shape already carries these diagnostics in its baseline.
+     *
+     * ## (CHK.138), round (P18.128) — the OTHER four names, and an ambient gate
+     *
+     * tsgo has **two** emitters for TS2699 and this walker is both of them. They share
+     * the ambient gate and differ in everything else, which is why the `when` below
+     * keeps them apart rather than unifying them:
+     *
+     *  - `checker.go:3172`, inside `checkObjectTypeForDuplicateDeclarations`, is the
+     *    `prototype` one. Reached under `if !nodeInAmbientContext`, with NO
+     *    `useDefineForClassFields` gate — so it fires at every target. Its TS2300
+     *    companion for the METHOD form comes from a different mechanism (the class's
+     *    implicit static `prototype` in the TYPE), which is why only `prototype` has one:
+     *    `class C { static name() {} }` is TS2699 ALONE in tsgo (measured).
+     *  - `checker.go:4389`, `checkClassForStaticPropertyNameConflicts`, is the
+     *    `name` / `length` / `caller` / `arguments` one. Called from `checkClassLikeDeclaration`
+     *    under the same `!nodeInAmbientContext`, and returns immediately when
+     *    [useDefineForClassFields] is true — which is why the family is invisible at an
+     *    unset target and was therefore invisible to every `diagnose()` pin ever written.
+     *
+     * **The ambient gate is an ours-only FALSE POSITIVE this round closes, not new
+     * parity**: `declare class C { static prototype: number }` and the same inside a
+     * `declare namespace` / `declare module "m"` were TS2699 here and are silent in
+     * tsgo 7.0.2 (three measured shapes). `spineDupIdFinish` already skips a `.d.ts`
+     * whole, so what was left uncovered was exactly a `declare` in an ordinary `.ts`.
+     *
+     * **The name is read through [MemberNames.declaredMemberName] rather than
+     * `(name as? Identifier)?.text`**, which is tsgo's `getEffectivePropertyNameForPropertyNameNode`
+     * and closes three more measured misses at once: `static "prototype"`, a computed
+     * `static [k]` for `const k = "prototype"`, and `static [E.N]` for a `const enum`
+     * member valued `"name"` (which is the spelling the conformance fixture
+     * `staticPropertyNameConflicts` is built out of). The TS2300 companion then has to
+     * carry the **WRITTEN** name, not the cooked one — tsgo prints
+     * `Duplicate identifier '[k]'` for the computed method form — so the span from
+     * [MemberNames.writtenMemberNameSpan] is sliced out of the source for the message
+     * as well as used for the squiggle.
+     *
+     * **NOT closed here, measured and recorded**: this walker reaches a top-level class
+     * and a class in a namespace body and NOTHING else, so a class EXPRESSION
+     * (`const C = class { static prototype = 1 }`), a class in a function body and a
+     * class in a method body are all missed — by BOTH halves, i.e. it is a pre-existing
+     * reach gap of the `prototype` rule that the new family merely inherits, and
+     * widening the reach is a different change with its own blast radius.
      */
-    private fun checkStaticPrototypeMembers(statements: List<Statement>, source: String, fileName: String) {
+    private fun checkStaticPrototypeMembers(
+        statements: List<Statement>,
+        source: String,
+        fileName: String,
+        ambient: Boolean = false,
+    ) {
         for (stmt in statements) {
             when (stmt) {
                 is ClassDeclaration -> {
+                    // tsgo gates BOTH emitters on `!nodeInAmbientContext`; a `declare`
+                    // on the class itself, or on any enclosing module, is that context.
+                    if (ambient || ModifierFlag.Declare in stmt.modifiers) continue
                     val className = stmt.name?.text ?: "(Anonymous class)"
                     for (member in stmt.members) {
                         val isStatic: Boolean
@@ -46120,38 +46215,49 @@ class Checker(
                             is SetAccessor -> { isStatic = ModifierFlag.Static in member.modifiers; nameNode = member.name }
                             else -> { isStatic = false; nameNode = null }
                         }
-                        if (!isStatic) continue
-                        val id = nameNode as? Identifier ?: continue
-                        if (id.text != "prototype") continue
-                        val start = id.pos
+                        if (!isStatic || nameNode == null) continue
+                        val memberName = memberNamer.declaredMemberName(nameNode) ?: continue
+                        val isPrototype = memberName == "prototype"
+                        if (!isPrototype &&
+                            (memberName !in FUNCTION_BUILTIN_STATIC_NAMES || useDefineForClassFields)
+                        ) continue
+                        val span = memberNamer.writtenMemberNameSpan(nameNode, source)
+                        val start = span?.first ?: nameNode.pos
+                        val length = span?.let { it.second - it.first } ?: memberName.length
                         val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        if (member is MethodDeclaration) {
+                        if (isPrototype && member is MethodDeclaration) {
+                            // The written name, not the cooked one: tsgo prints
+                            // `Duplicate identifier '[k]'` for a computed `static [k]()`.
+                            val written = span?.let { source.substring(it.first, it.second) } ?: memberName
                             diagnostics.add(Diagnostic(
-                                message = "Duplicate identifier 'prototype'.",
+                                message = "Duplicate identifier '$written'.",
                                 category = DiagnosticCategory.Error,
                                 code = 2300,
                                 fileName = fileName,
                                 line = line,
                                 character = character,
                                 start = start,
-                                length = 9,
+                                length = length,
                             ))
                         }
                         diagnostics.add(Diagnostic(
-                            message = "Static property 'prototype' conflicts with built-in property 'Function.prototype' of constructor function '$className'.",
+                            message = "Static property '$memberName' conflicts with built-in property 'Function.$memberName' of constructor function '$className'.",
                             category = DiagnosticCategory.Error,
                             code = 2699,
                             fileName = fileName,
                             line = line,
                             character = character,
                             start = start,
-                            length = 9,
+                            length = length,
                         ))
                     }
                 }
                 is ModuleDeclaration -> {
                     val body = stmt.body
-                    if (body is ModuleBlock) checkStaticPrototypeMembers(body.statements, source, fileName)
+                    if (body is ModuleBlock) checkStaticPrototypeMembers(
+                        body.statements, source, fileName,
+                        ambient = ambient || ModifierFlag.Declare in stmt.modifiers,
+                    )
                 }
                 else -> {}
             }
@@ -140712,7 +140818,22 @@ interface DataView {
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
                         val name = decl.name as? Identifier ?: continue
-                        val type = decl.type ?: continue
+                        val type = decl.type
+                        if (type == null) {
+                            // (CHK.137) round (P18.128) — the INFERRED alias of an abstract
+                            // class, `const c = AbstractCls`. It was previously covered here
+                            // only by accident, and by the WRONG diagnostic: the 17.170
+                            // emitter reported TS2351 "not constructable" at the callee where
+                            // tsgo reports TS2511 at the whole `new` expression. Closing that
+                            // false positive would have left this shape SILENT on genuinely
+                            // erroneous code, so the abstractness rule — a different family
+                            // and a different span — has to see the inferred spelling too.
+                            // The ANNOTATED spelling (`const c: typeof AbstractCls`) is the
+                            // `type != null` arm below and is unchanged.
+                            val init = decl.initializer as? Identifier ?: continue
+                            if (init.text in abstractClasses) out.add(name.text)
+                            continue
+                        }
                         if (typeNodeIsAbstractConstructible(type, abstractClasses, typeAliases)) {
                             out.add(name.text)
                         }
@@ -159256,6 +159377,67 @@ interface DataView {
     /**
      * Check argument types for a NewExpression against the construct signature.
      */
+    /**
+     * (CHK.137) round (P18.128) — does this variable symbol hold a CLASS VALUE (`true`),
+     * an INSTANCE (`false`), or is it undecidable from the declaration (`null`)?
+     *
+     * Asked by [checkSingleNewExpressionTypes] and by nothing else. It exists because
+     * (CHK.73) makes the checker's own answer useless for the question: a class value and
+     * an instance of that class have the SAME type here, so `new c()` cannot be decided by
+     * reading construct signatures off it in either direction.
+     *
+     * **`null` is the answer whenever anything is unclear, and every `null` falls through
+     * to the pre-existing behaviour.** In particular an ANNOTATED declaration answers null:
+     * `const c: typeof Cls = Cls` is already correct today (the annotation types it as the
+     * static side, so the emitter never sees an instance interface) and `declare const i: Cls`
+     * is already the correct TS2351 — neither needs this, and claiming either would be a
+     * syntactic guess overriding a type the program actually wrote.
+     *
+     * The initializer ladder is the one the KIR lowering's `variableType` uses for the same
+     * quirk, plus one hop form the backend does not need:
+     *  - an `Identifier` — follow it, up to [NEW_CALLEE_CLASS_VALUE_HOPS] hops, so
+     *    `const a = Cls; const c = a` is decided (a real shape: a re-export alias chain);
+     *  - a `ClassExpression` — holds a class;
+     *  - a `NewExpression` — holds an instance, which is the FALSE-NEGATIVE half;
+     *  - anything else — null.
+     *
+     * **A `let` reassigned between two classes is still `true`, and that is correct rather
+     * than lucky**: every declaration considered must agree, so `let c = A; c = B` answers
+     * true from its declaration and both assignments store a class. A `let` whose
+     * declarations disagree, or that has more than one declaration of mixed kind, answers
+     * null and is left alone.
+     *
+     * The hop budget terminates the walk on a cycle (`const a = b; const b = a`, which the
+     * program is free to write and which no other guard here would stop).
+     */
+    private fun newCalleeVarHoldsClassValue(sym: Symbol, hops: Int = NEW_CALLEE_CLASS_VALUE_HOPS): Boolean? {
+        if (hops <= 0) return null
+        val decls = sym.declarations.filterIsInstance<VariableDeclaration>()
+        if (decls.isEmpty() || decls.size != sym.declarations.size) return null
+        var verdict: Boolean? = null
+        for (decl in decls) {
+            if (decl.type != null) return null
+            val answer = when (val init = decl.initializer) {
+                null -> return null
+                is ClassExpression -> true
+                is NewExpression -> false
+                is Identifier -> {
+                    val target = globals[init.text] ?: return null
+                    when {
+                        target.flags.hasAny(SymbolFlags.Class) -> true
+                        target.flags.hasAny(SymbolFlags.Variable) &&
+                            !target.flags.hasAny(SymbolFlags.Function or SymbolFlags.Module or SymbolFlags.Enum or SymbolFlags.Alias) ->
+                            newCalleeVarHoldsClassValue(target, hops - 1) ?: return null
+                        else -> return null
+                    }
+                }
+                else -> return null
+            }
+            if (verdict == null) verdict = answer else if (verdict != answer) return null
+        }
+        return verdict
+    }
+
     private fun checkSingleNewExpressionTypes(expr: NewExpression, source: String, fileName: String) {
         // (M3.0/ANY.1) round 837 — TS2347 "Untyped function calls may not accept type
         // arguments." tsc's `resolveUntypedCall` is reached from `resolveNewExpression` as
@@ -159614,6 +159796,66 @@ interface DataView {
                         }
                     }
                 }
+            }
+        }
+        // (CHK.137) round (P18.128) — a variable that HOLDS A CLASS is constructable, and a
+        // variable that holds an INSTANCE is not, and this checker's type cannot tell them
+        // apart. Both directions are decided HERE, above the construct-signature read, and
+        // the read is what is wrong for both of them.
+        //
+        // The cause is (CHK.73): **a class VALUE types as its INSTANCE type**. So for
+        // `class Cls {}; const c = Cls`, `c`'s type is the instance interface, which has no
+        // construct signatures — and the 17.170 emitter below read that as "not
+        // constructable" and reported an ours-only TS2351 on legal code (tsgo 7.0.2: clean).
+        // The SAME artifact hides the mirror defect: a class that DECLARES a constructor
+        // registers a construct signature on that instance type, so `const i = new Cls(); new i()`
+        // for such a class reached `signatures.isEmpty() == false` and was SILENT where both
+        // references report TS2351. One modelling quirk, a false positive and a false
+        // negative, and a fixture that varies only the class's constructor swaps which one
+        // you see — which is why the two are closed in one place.
+        //
+        // **Decided from the DECLARATION, syntactically, because the TYPE is the thing that
+        // cannot be trusted here** — the same move (KIR.LOWER.6) had to make in the backend
+        // for the same reason ((P18.127): `variableType` declines the checker's answer for a
+        // class-value initializer). [newCalleeVarHoldsClassValue] answers null wherever it
+        // cannot tell, and a null falls through to exactly the pre-existing behaviour, so the
+        // change is confined to the population the artifact damages.
+        //
+        // **The population is narrower than it looks and the narrowing is load-bearing.**
+        // `globals[...]` is read rather than `currentFileLocals` because that is the gate the
+        // 17.170 emitter already uses: a MODULE file's locals are not in `globals`
+        // (INV.3(d)), so the false positive was SCRIPT-FILE-ONLY — a bare `export {}` makes
+        // it vanish, measured — and widening to per-file locals here would put a NEW
+        // diagnostic into every module file, which is a different change. The
+        // `symbol.flags.hasAny(Class)` test on the callee TYPE keeps a genuine
+        // `interface Ctor { new (): X }` variable out: that one has a real construct
+        // signature and is not a (CHK.73) casualty at all.
+        run {
+            val ce = expr.expression as? Identifier ?: return@run
+            val sym = globals[ce.text] ?: return@run
+            if (!sym.flags.hasAny(SymbolFlags.Variable)) return@run
+            if (sym.flags.hasAny(
+                    SymbolFlags.Class or SymbolFlags.Function or SymbolFlags.Module or
+                        SymbolFlags.Enum or SymbolFlags.Alias
+                )
+            ) return@run
+            val ti = calleeType as? Type.Interface ?: return@run
+            if (ti.symbol?.flags?.hasAny(SymbolFlags.Class) != true) return@run
+            when (newCalleeVarHoldsClassValue(sym)) {
+                true -> return   // holds the class itself — constructable, say nothing
+                false -> {
+                    val typeName = ti.symbol?.name ?: typeToString(ti)
+                    val (line, character) = getLineAndCharacterOfPosition(source, ce.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not constructable.",
+                        category = DiagnosticCategory.Error, code = 2351,
+                        fileName = fileName, line = line, character = character,
+                        start = ce.pos, length = ce.text.length,
+                        messageChain = listOf("  Type '$typeName' has no construct signatures."),
+                    ))
+                    return
+                }
+                null -> {}
             }
         }
         // B497: the args-required early return was moved BELOW the union-callee branch
