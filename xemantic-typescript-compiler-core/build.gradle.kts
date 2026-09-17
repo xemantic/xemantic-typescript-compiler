@@ -853,10 +853,24 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "classFieldSuperNotAccessibleJs.errors.txt",
-        "F6 top code differs (tsgo TS2339,TS7053 / ours TS2855); layer `submoduleAccepted`. " +
+        "PARTIALLY CLOSED (LEGACY.0b) step 22 — our answer is now a SUBSET of tsgo's, " +
+        "byte-identical on every row we emit. A bare `this.justProp;` / " +
+        "`this['literalElementAccess'];` no longer DECLARES a JS class field " +
+        "(`ast.IsExpandoPropertyDeclaration` is `IsBinaryExpression` alone), so the two " +
+        "wrong TS2855 rows at (26,22) and (29,22) are gone and the two CORRECT ones for " +
+        "`roots` and `foo` — both real assignments — stay. The residue is ONE family and " +
+        "it is not JS-expando-specific: TS2339 / TS7053 for a missing member in a `.js` " +
+        "FILE. `cpaSpineLeave` opens with `if (spineIsDts || spineIsJsLike) return`, so the " +
+        "whole property-access-check family is off for every `.js` file — measured, we are " +
+        "silent even for a receiver whose type is a TypeScript CLASS or INTERFACE declared " +
+        "in a `.ts` file. Flipping that gate to `checkJs` was BUILT and measured: it " +
+        "delivers none of the four missing rows here, adds a false TS2339 on the legal " +
+        "`this.foo = 10` inside the accessor initializer, and moves ONE currently-green " +
+        "baseline (`classFieldSuperAccessibleJs1`, a false TS2339 on the legal expando " +
+        "static `C.blah2 = 456`) — i.e. the family needs the JS expando member model in the " +
+        "cpa member tables plus `super.`/`this.` receiver legs, which is its own arc. " +
         "tsgo: index.js(7,14): error TS2339: Property 'justProp' does not exist on type " +
-        "'YaddaBase'. | ours: index.js(26,22): error TS2855: Class field 'justProp' defined by " +
-        "the parent class is not accessible in the child class via super."
+        "'YaddaBase'. | ours: (nothing)"
     ),
     TsgoPendingBaseline(
         "commonjsAccessExports.errors.txt",
@@ -1128,20 +1142,22 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "unusedTypeParameters_templateTag2.errors.txt",
-        "REFUSED (P18.121) with a measurement: this row needs TWO mechanisms, not the TS6205 " +
-        "aggregation alone. tsgo's rule is `len(list) > 1 && Every(unreferenced)` -> one row at " +
-        "`rangeOfTypeParameters` (checker.go:7277), and we ALREADY emit TS6205 for the " +
-        "all-unused class (C2) — what is missing there is only the multi-line SPAN. C1 and C3 " +
-        "reference their T through `/** @type {T} */ this.p;`, so no aggregation rule can " +
-        "report them: they become all-unused for tsgo ONLY because a bare `this.p;` does NOT " +
-        "declare a property there, which is why tsgo also emits /a.js(9,14) and (26,14) TS2339 " +
-        "`Property 'p' does not exist on type 'C1<T, V>'`. Measured directly: with T referenced " +
-        "from a `@param {T}` tag instead, tsgo drops TS6205 and reports per-parameter TS6196 — " +
-        "so the aggregation predicate is fine and the JS-expando semantics are the blocker. " +
-        "That change (a bare `this.p;` with a `@type` tag stops declaring) has 10 candidate " +
-        "case files carrying the shape and needs its own round. Note also that tsgo's " +
-        "per-parameter code for a CLASS type parameter is TS6196, which we already emit; the " +
-        "TS6133 in the pristine baseline is the tsc-6 answer."
+        "PARTIALLY CLOSED (LEGACY.0b) step 22 — our answer is now a SUBSET of tsgo's, " +
+        "byte-identical on every row we emit, MULTI-LINE SQUIGGLES INCLUDED. Three " +
+        "mechanisms landed, all three needed: a bare `this.p;` declares nothing " +
+        "(`ast.IsExpandoPropertyDeclaration` = `IsBinaryExpression`); a JSDoc `@type` above " +
+        "such a statement is DROPPED by the reparser (`reparser.go:369` takes an " +
+        "ExpressionStatement host only for an assignment-shaped BinaryExpression), so C1's " +
+        "and C3's `T` stops being referenced; and TS6205's anchor is tsgo's " +
+        "`rangeOfTypeParameters` over the DECLARATION's whole list — so the SPAN half " +
+        "(P18.121) suspected WAS needed (the column moves 4 -> 3 and the span is one wider " +
+        "at each end) and the per-TAG aggregation we used to do is wrong (measured: " +
+        "`@template T,V` used plus `@template X,Y` unused is two TS6196 rows, not one " +
+        "TS6205). We now emit exactly tsgo's three TS6205 rows at (2,3), (13,3) and (20,3). " +
+        "The residue is the SAME family as `classFieldSuperNotAccessibleJs`: TS2339 " +
+        "`Property 'p' does not exist on type 'C1<T, V>'` at (8,14) and (25,14), which " +
+        "needs the property-access-check family to run in a `.js` file at all. " +
+        "tsgo: /a.js(8,14): error TS2339 | ours: (nothing)"
     ),
 )
 

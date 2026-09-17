@@ -18873,14 +18873,34 @@ class Checker(
     }
 
     /**
-     * The `<…>` span of a whole type-parameter list, TypeScript 7's anchor for TS6205
-     * (tsgo `rangeOfTypeParameters`: the list's own range widened by one on each side, i.e.
-     * the angle brackets). Answers null for a list that has none — JSDoc `@template`
-     * parameters, whose anchor is the tag.
+     * The whole type-parameter list's span, TypeScript 7's anchor for TS6205 — tsgo
+     * `rangeOfTypeParameters` (`utilities.go:1531`):
+     * `[list.Pos() - 1, skipTrivia(text, list.End()) + 1)`.
+     *
+     * For a written `<…>` list that is exactly the angle brackets, which is why the
+     * first branch walks back to `<` and forward to `>`.
+     *
+     * (LEGACY.0b) For a JSDoc `@template` list the same formula applies to the REPARSED
+     * list, whose `Pos` is the first `@template` tag's `@` and whose `End` is the last
+     * declared name — so the span starts one character BEFORE the `@` and ends one
+     * character past the first non-whitespace after the last name, which for a
+     * conventional JSDoc block is the ` *` of the closing line. It spans several source
+     * lines and several tags: tsgo aggregates over the DECLARATION's whole list, never
+     * per tag (measured — `@template T,V` used plus `@template X,Y` unused is two
+     * per-parameter TS6196 rows, not one TS6205).
      */
     private fun typeParameterListSpan(source: String, typeParams: List<TypeParameter>): Pair<Int, Int>? {
         val first = typeParams.firstOrNull() ?: return null
-        if (first.fromJSDoc) return null
+        if (first.fromJSDoc) {
+            val tagPos = typeParams.minOf { if (it.jsDocTagPos >= 0) it.jsDocTagPos else Int.MAX_VALUE }
+            if (tagPos == Int.MAX_VALUE || tagPos <= 0) return null
+            var after = typeParams.maxOf { it.end }.coerceIn(0, source.length)
+            while (after < source.length && (source[after] == ' ' || source[after] == '\t' ||
+                    source[after] == '\r' || source[after] == '\n')) after++
+            val close = (after + 1).coerceAtMost(source.length)
+            val open = tagPos - 1
+            return if (close > open) open to close else null
+        }
         var open = first.pos.coerceIn(0, source.length)
         while (open > 0 && source[open - 1] != '<') open--
         if (open == 0) return null
@@ -18923,47 +18943,13 @@ class Checker(
                 return
             }
         }
-        // For JSDoc-derived type params, group by tag start so we can decide between
-        // the full-tag span (single-id tag, or all siblings unused) and per-identifier
-        // span (multi-id tag with mixed used/unused).
-        val tagSiblingCount = mutableMapOf<Int, Int>()
-        val tagUnusedCount = mutableMapOf<Int, Int>()
-        val tagSpanEnd = mutableMapOf<Int, Int>()
-        for (tp in typeParams) {
-            if (tp.fromJSDoc && tp.jsDocTagPos >= 0) {
-                tagSiblingCount[tp.jsDocTagPos] = (tagSiblingCount[tp.jsDocTagPos] ?: 0) + 1
-                tagSpanEnd[tp.jsDocTagPos] = tp.jsDocTagEnd
-                if (tp.name.text !in scope.referencedNames) {
-                    tagUnusedCount[tp.jsDocTagPos] = (tagUnusedCount[tp.jsDocTagPos] ?: 0) + 1
-                }
-            }
-        }
-        // TS6205: when a multi-id JSDoc tag has ALL identifiers unused, emit a single
-        // "All type parameters are unused." with the full tag span, and skip the
-        // per-identifier TS6133 emissions for those declarations.
-        val coveredByTs6205 = mutableSetOf<Int>()
-        for ((tagPos, sibs) in tagSiblingCount) {
-            val unused = tagUnusedCount[tagPos] ?: 0
-            val tagEnd = tagSpanEnd[tagPos] ?: continue
-            if (sibs >= 2 && unused == sibs && tagEnd > tagPos) {
-                val (line, character) = getLineAndCharacterOfPosition(source, tagPos)
-                diagnostics.add(Diagnostic(
-                    message = "All type parameters are unused.",
-                    category = DiagnosticCategory.Error,
-                    code = 6205,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = tagPos,
-                    length = tagEnd - tagPos,
-                ))
-                coveredByTs6205.add(tagPos)
-            }
-        }
+        // (LEGACY.0b) There is no PER-TAG aggregation: tsgo's `checkUnusedTypeParameters`
+        // aggregates over the declaration's whole type-parameter list and otherwise emits
+        // one row per unused parameter, so a `@template X,Y` whose siblings on another tag
+        // are used is two TS6196 rows (measured against tsgo 7.0.2).
         for (decl in scope.declarations) {
             if (decl.name in scope.referencedNames) continue
             val tp = decl.declNode as TypeParameter
-            if (tp.fromJSDoc && tp.jsDocTagPos in coveredByTs6205) continue
             // (LEGACY.0b) TypeScript 7 reports EVERY unused type parameter on the type
             // parameter NODE itself (tsgo `checkUnusedTypeParameters`:
             // `NewDiagnosticForNode(typeParameter, …)`) — never on the enclosing `<…>`
@@ -19362,9 +19348,29 @@ class Checker(
         }
     }
 
+    /**
+     * True when a JSDoc `@type` tag written above [stmt] is REPARSED into a real type
+     * annotation, i.e. when it can reference a type parameter at all.
+     *
+     * (LEGACY.0b) TypeScript 7's reparser (`reparser.go:369`) attaches a `@type` tag to an
+     * ExpressionStatement host ONLY when the expression is a BinaryExpression whose
+     * `GetAssignmentDeclarationKind` is not None — an `=` whose left is an access
+     * expression (`utilities.go:1526`). On any other expression statement — a bare
+     * `this.p;`, a call, a compound assignment — the tag is dropped, so a JSDoc `@type {T}`
+     * comment written above `this.p;` does NOT make `T` referenced. Every other statement
+     * kind keeps its tag (a VariableStatement declarator, a `return`, a parenthesized
+     * expression).
+     */
+    private fun jsDocTypeTagIsReparsed(stmt: Statement): Boolean {
+        if (stmt !is ExpressionStatement) return true
+        val bin = stmt.expression as? BinaryExpression ?: return false
+        if (bin.operator != SyntaxKind.Equals) return false
+        return bin.left is PropertyAccessExpression || bin.left is ElementAccessExpression
+    }
+
     /** Recursively collect type refs from statements (for unused type param detection). */
     private fun collectTypeRefsInStatement(stmt: Statement, scope: UnusedScope) {
-        collectTypeRefsFromJSDoc(stmt.leadingComments, scope)
+        if (jsDocTypeTagIsReparsed(stmt)) collectTypeRefsFromJSDoc(stmt.leadingComments, scope)
         when (stmt) {
             is VariableStatement -> {
                 for (decl in stmt.declarationList.declarations) {
@@ -34229,7 +34235,7 @@ class Checker(
                         ))
                     }
                     // TS2339: `this.<prop>.<member>` reads vs the declared type.
-                    walkAccessesNoFnBoundary(body) { acc ->
+                    walkAccessesNoFnBoundary(body) { acc, _ ->
                         val pa = acc as? PropertyAccessExpression ?: return@walkAccessesNoFnBoundary
                         val recv = pa.expression as? PropertyAccessExpression ?: return@walkAccessesNoFnBoundary
                         if ((recv.expression as? Identifier)?.text != "this") return@walkAccessesNoFnBoundary
@@ -34328,7 +34334,7 @@ class Checker(
                 collectConstructorThisAssignments(ctorBody.statements, writes)
                 declared.addAll(writes.keys)
                 // Fire on `this.X` reads of an undeclared X.
-                walkAccessesNoFnBoundary(ctorBody) { acc ->
+                walkAccessesNoFnBoundary(ctorBody) { acc, _ ->
                     val pa = acc as? PropertyAccessExpression ?: return@walkAccessesNoFnBoundary
                     if ((pa.expression as? Identifier)?.text != "this") return@walkAccessesNoFnBoundary
                     val nameId = pa.name
@@ -34400,7 +34406,7 @@ class Checker(
             val fnExpr = fnBindings[x] ?: continue
             val typeDisplay = buildExpandoFnTypeDisplay(fnExpr, props)
             for (s in stmts) {
-                walkAccessesNoFnBoundary(s) { acc ->
+                walkAccessesNoFnBoundary(s) { acc, _ ->
                     val pa = acc as? PropertyAccessExpression ?: return@walkAccessesNoFnBoundary
                     if ((pa.expression as? Identifier)?.text != x) return@walkAccessesNoFnBoundary
                     val nameId = pa.name
@@ -34630,7 +34636,7 @@ class Checker(
                 .removeSuffix(".mjs").removeSuffix(".cjs").removeSuffix(".jsx").removeSuffix(".js")
             val source = sf.text
             for (stmt in sf.statements) {
-                walkAccessesNoFnBoundary(stmt) { acc ->
+                walkAccessesNoFnBoundary(stmt) { acc, _ ->
                     val recvOfAcc = when (acc) {
                         is PropertyAccessExpression -> acc.expression
                         is ElementAccessExpression -> acc.expression
@@ -36185,7 +36191,7 @@ class Checker(
                         is PropertyDeclaration -> member.initializer
                         else -> null
                     }
-                    walkAccessesNoFnBoundary(body) { acc ->
+                    walkAccessesNoFnBoundary(body) { acc, _ ->
                         val recv = when (acc) {
                             is PropertyAccessExpression -> acc.expression
                             is ElementAccessExpression -> acc.expression
@@ -36246,8 +36252,17 @@ class Checker(
     /** Map of a class's INSTANCE-FIELD names → display name (quoted for
      *  string-literal-keyed fields), EXCLUDING prototype members (methods,
      *  get/set accessors, `accessor` auto-properties). Fields come from explicit
-     *  PropertyDeclarations and from `this.X =`/`this.X;`/`this['X']` expando
-     *  references anywhere in the class member bodies. */
+     *  PropertyDeclarations and from `this.X = …` / `this['X'] = …` expando
+     *  ASSIGNMENTS anywhere in the class member bodies.
+     *
+     *  (LEGACY.0b) A bare `this.X;` / `this['X'];` expression statement declares
+     *  NOTHING in TypeScript 7 — `ast.IsExpandoPropertyDeclaration` is
+     *  `IsBinaryExpression(node)` alone (utilities.go:4523) and the binder reaches
+     *  `bindThisPropertyAssignment` only from the `KindBinaryExpression` arm — even
+     *  when the statement carries a `@type` tag, because the reparser attaches a
+     *  JSDoc `@type` to an ExpressionStatement only when its expression is an
+     *  assignment-shaped BinaryExpression (reparser.go:369). tsc 6 declared it,
+     *  which is why this used to collect every `this.X` reference. */
     private fun collectClassInstanceFields(cls: ClassDeclaration): Map<String, String> {
         val protoNames = HashSet<String>()
         val fields = LinkedHashMap<String, String>()
@@ -36276,7 +36291,8 @@ class Checker(
                 is PropertyDeclaration -> member.initializer
                 else -> null
             }
-            walkAccessesNoFnBoundary(body) { acc ->
+            walkAccessesNoFnBoundary(body) { acc, isAssignmentTarget ->
+                if (!isAssignmentTarget) return@walkAccessesNoFnBoundary
                 val recv = when (acc) {
                     is PropertyAccessExpression -> acc.expression
                     is ElementAccessExpression -> acc.expression
@@ -36304,8 +36320,15 @@ class Checker(
      *  PropertyAccess/ElementAccess node, descending through arrow functions and
      *  all control flow but NOT into nested non-arrow functions, methods, or
      *  classes (which rebind `this`/`super`). Conservative: an unhandled node
-     *  kind is a false-negative (a missed diagnostic), never a false-positive. */
-    private fun walkAccessesNoFnBoundary(node: Node?, onAccess: (Expression) -> Unit) {
+     *  kind is a false-negative (a missed diagnostic), never a false-positive.
+     *
+     *  The second callback argument is true exactly at the LEFT-HAND SIDE of an
+     *  `=` assignment, i.e. at the one position TypeScript 7 treats as a JS
+     *  expando-property DECLARATION (tsgo `GetAssignmentDeclarationKind`: the
+     *  operator must be `=` and the left must be an access expression — see
+     *  [collectClassInstanceFields]). A receiver or an index argument nested
+     *  inside that left-hand side is still reported with `false`. */
+    private fun walkAccessesNoFnBoundary(node: Node?, onAccess: (Expression, Boolean) -> Unit) {
         when (node) {
             null -> {}
             is Block -> node.statements.forEach { waStmt(it, onAccess) }
@@ -36315,14 +36338,29 @@ class Checker(
         }
     }
 
-    private fun waExpr(e: Expression?, onAccess: (Expression) -> Unit) {
+    private fun waExpr(e: Expression?, onAccess: (Expression, Boolean) -> Unit) {
         e ?: return
         when (e) {
-            is PropertyAccessExpression -> { onAccess(e); waExpr(e.expression, onAccess) }
-            is ElementAccessExpression -> { onAccess(e); waExpr(e.expression, onAccess); waExpr(e.argumentExpression, onAccess) }
+            is PropertyAccessExpression -> { onAccess(e, false); waExpr(e.expression, onAccess) }
+            is ElementAccessExpression -> { onAccess(e, false); waExpr(e.expression, onAccess); waExpr(e.argumentExpression, onAccess) }
             is CallExpression -> { waExpr(e.expression, onAccess); e.arguments.forEach { waExpr(it, onAccess) } }
             is NewExpression -> { waExpr(e.expression, onAccess); e.arguments?.forEach { waExpr(it, onAccess) } }
-            is BinaryExpression -> { waExpr(e.left, onAccess); waExpr(e.right, onAccess) }
+            is BinaryExpression -> {
+                // (LEGACY.0b) An `=` whose left is an access expression is the ONE shape
+                // TypeScript 7 reads as a JS expando-property declaration; report that
+                // access with the assignment-target flag and descend into its own
+                // receiver / index argument as ordinary (non-declaring) accesses.
+                val lhs = e.left
+                if (e.operator == SyntaxKind.Equals && lhs is PropertyAccessExpression) {
+                    onAccess(lhs, true); waExpr(lhs.expression, onAccess)
+                } else if (e.operator == SyntaxKind.Equals && lhs is ElementAccessExpression) {
+                    onAccess(lhs, true)
+                    waExpr(lhs.expression, onAccess); waExpr(lhs.argumentExpression, onAccess)
+                } else {
+                    waExpr(e.left, onAccess)
+                }
+                waExpr(e.right, onAccess)
+            }
             is ConditionalExpression -> { waExpr(e.condition, onAccess); waExpr(e.whenTrue, onAccess); waExpr(e.whenFalse, onAccess) }
             is ParenthesizedExpression -> waExpr(e.expression, onAccess)
             is PrefixUnaryExpression -> waExpr(e.operand, onAccess)
@@ -36351,7 +36389,7 @@ class Checker(
         }
     }
 
-    private fun waStmt(s: Statement?, onAccess: (Expression) -> Unit) {
+    private fun waStmt(s: Statement?, onAccess: (Expression, Boolean) -> Unit) {
         s ?: return
         when (s) {
             is ExpressionStatement -> waExpr(s.expression, onAccess)
