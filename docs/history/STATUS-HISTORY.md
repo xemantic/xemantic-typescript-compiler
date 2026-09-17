@@ -1,5 +1,18 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.124) — (LIB.7): A NAMESPACE IMPORT HAS A RUNTIME OBJECT, 19,758 / 0 / 65 (2026-09-17).**
+The KIR module goes 194 -> 211. **The brief asked the wrong question**: it framed the round as a choice between two
+shapes of module object, and a 21-shape characterisation found the object is needed for 4 of them while the other
+17 need a qualified reference that costs nothing at run time — a round that built only the object would have
+shipped every namespace-imported member as a reflective read, which the ablation prices exactly. The structural
+finding is that the CHECKER is silent about a namespace member: it answers the module's whole export table and
+answers nothing for a member or a call signature, so three gaps sit behind one refusal. The object is a final
+`JsObject` subclass with generated protocol members and a lazy singleton, one per IMPORTING file because the IR
+verifier refuses a cross-file declaration; its exports are reached through accessors and stay LIVE, which is the
+argument against an eager bag — an ES module's exports are live bindings and a bag is a copy. A renamed export is
+now REFUSED rather than silently mis-answered, a defect this round's own fix introduced and its sweep caught.
+17 pins, 4 arms; `huge_methods` over the KIR module as well as core; the grid inapplicable by construction.
+
 **(P18.123) — (LEGACY.0b) STEP 22: ONLY AN ASSIGNMENT DECLARES A JS EXPANDO, 19,741 / 0 / 65 (2026-09-17).**
 Three faces of one rule: only `=` with an access LHS declares (so `this.c += 1` and a parenthesized target do not),
 the reparser drops a `@type` tag above a non-declaration statement, and the unused-type-parameter aggregation is

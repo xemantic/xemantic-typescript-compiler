@@ -25,6 +25,70 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.129) — a nested `function` lands; the CLASS half is REFUSED because a nested class's identity is PER INVOCATION (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,881 → 19,918 / 0 / 65**, the KIR module **276 → 313**;
+`huge_methods.py --fail-over 0` over BOTH core (875) and the KIR module (114, `lowerCall` **unchanged at 4,620** —
+the first design's call arm was removed with the redesign); `cost_gate.py` exit 0 and the core corpus screen
+8,790 / 0 are CONTROLS, and **the 8-profile grid is inapplicable by construction — `Checker.class` is
+BYTE-IDENTICAL to (P18.128)'s landed binary**. Neither the checker nor `JsRuntime.kt` was touched, so no generator
+run was owed.
+
+**THE GAP WAS UNTESTED RATHER THAN INCOMPLETE, WHICH IS WHY IT SURVIVED.** Censused before briefing: **not one of
+the 59 KIR corpus fixtures declared a `function` inside a function body**, and `18-var-scoping.ts` reaches for
+`const innerFn = function () {}` — the EXPRESSION form, which works. Of 41 characterised shapes, **39 refused**.
+This round adds `30-nested-functions.ts` + its `.expected` to the corpus, so the hole that let the gap survive is
+closed by a spawned-child behaviour gate rather than by a note.
+
+**THE TWO DESIGNS WERE NOT A FREE CHOICE, AND ONLY BUILDING THE WRONG ONE SHOWED IT.** The obvious design — a real
+local `IrSimpleFunction`, so a direct call costs no dynamic op, mirroring (KIR.LOWER.6) for a top-level function —
+compiled, and **the refusal MOVED** rather than disappearing: `the checker gave no signature for this declaration`.
+A nested declaration is never BOUND (B83.5: `Binder.bindStatement` recurses into a `SourceFile`'s own list and a
+`ModuleBlock`'s and nothing else), so `signatureOf` answers null and a parameter has no symbol to type. **The
+expression form needs neither** — every slot is `Any?` and every name comes from the syntax — which is exactly why
+`const innerFn = function () {}` has always worked. Measured price of reusing it: **one `jsCall` per call** where a
+top-level function's call is direct, and **zero** in a value position. Unblocking that is a BINDER change, not a
+backend one.
+
+**HOISTING IS NOT `frame.hoisted`, AND tsgo's OWN DIAGNOSTIC SETTLES IT.** That table is function-scoped `var`; a
+`function` in a block is BLOCK-scoped in a module — reading one after its block closes is TS2304 in tsgo, measured.
+So the slot is a block-scoped local and hoisting is per STATEMENT LIST, wired at all eight list sites (function
+body, block, switch — hoisted once over the union of every clause — catch, two lambda bodies, and the constructor's
+pre- and post-`super` halves). **The load-bearing subtlety**: the SLOT is always created at the top, but the LAMBDA
+can only be built there when the body reads nothing the list itself declares, or a capture is out of scope —
+`mentionsAny` is that conservative test, and arm a3 (hoist everything) reddens exactly the 8 capture pins while a1
+(never hoist) reddens exactly the 5 hoisting pins.
+
+**THE CLASS HALF IS REFUSED, AND THE REFUSAL ANSWERS THE QUESTION NO EARLIER ROUND HAD TO: A NESTED CLASS'S
+CARRIER CANNOT BE A STATIC.** Measured in node: `function outer() { class P {} ; return P }` gives
+`outer() !== outer()`, and an instance from one invocation is **not `instanceof`** another's `P` — identity is per
+INVOCATION, where (KIR.LOWER.5)/(KIR.LOWER.6)'s carrier is a lazy per-file static. Landing it needs five mechanisms
+against M1's one (a local `IrClass` built mid-body, its own `extends` ordering within the list, the (P18.122) bag
+protocol, the `super` chain, a per-invocation carrier), so it is refused with that price and a NAMED refusal
+message replacing the generic one.
+
+**PINS AND ABLATION.** `KirNestedDeclarationTest`, **36 pins, 940 lines**, every shape pin asserting `compiled`
+first and every refusal asserting the MESSAGE. **39 of 40 RED** against the pre-change lowering; the one green is a
+declared CONTROL asserting the expression form's own pre-existing behaviour. Nine arms. **a1 and a4 are a
+round-927 PAIR** — two mistakes at two layers with one observable, recorded rather than claimed — and **a8 is a
+MEASURED REDUNDANT guard**: under `strict` tsgo refuses a bare `this` in a nested `function` (TS2683) and the only
+ways to give one a receiver are refused by this backend anyway, so no valid program can observe the choice; kept
+because it is the right semantics and free. **Three countdown pins were re-pointed** against measured answers,
+never edited to whatever the code prints.
+
+**THREE THINGS THAT DID NOT WORK, AND THE SECOND IS THE REUSABLE ONE.** The typed design above, built and
+abandoned. **The first hoisting test scanned the whole declaration NODE — whose own name is in the "declared here"
+set — so EVERY nested function deferred and a call above it read `undefined`**; that is arm a4, and it reads
+identically to a1, which is why the pair is recorded rather than split. And a scripted slice edit re-appended its
+own end anchor and duplicated a signature line onto itself, producing 20 unresolved-reference errors hundreds of
+lines from the edit — **the tell was that every unresolved name EXISTED**.
+
+**RESIDUES, each a loud refusal or a pinned divergence**: the CLASS half; the one `jsCall` per nested call (a
+binder question); a NON-capturing nested function is one object across invocations where node says two — inherited
+from the expression form, with a control pin proving it is not new; a capturing body called above its own
+declaration throws `JsTypeError` where node throws `ReferenceError` (both fail, and node's is the TDZ, so no
+correct program is affected); and a nested generator or `async` refuses, as everywhere in this subset.
+
 ### Round (P18.128) — (CHK.137)+(CHK.138): two gaps that were five, and a "measured redundant guard" that was only redundant below ES2022 (2026-09-17)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,840 → 19,881 / 0 / 65**; corpus screen **3,102 / 0
@@ -575,54 +639,6 @@ a late-bound group whose members' KINDS conflict (tsgo names those by the resolv
 the M2 conflict across a `class`/`interface` merge and inside ONE declaration; the general parameter-property
 member table, which also makes `class { p: number; constructor(public p: string) {} }` TS2300-at-both **plus
 TS2403** — the TS2403-vs-TS2717 split is its own round; and two pre-existing TS2717 gaps this round did not touch.
-
-### Round (P18.119) — (CHK.136): a `for`-header binding and a `for…in` binding typed `any`, which is (KIR.LOWER.3)'s root cause from the other end (2026-09-16)
-
-**Three commits** (fix, test, this docs commit). **Suite 19,652 → 19,672 / 0 / 70**; `cost_gate.py` exit 0 with a
-max delta of **+0.15%** (`typeOfExpr.distinct`, moving WITH `calls` on a bit-identical `spine.nodes` — the opposite
-of (CHK.68)'s memo-blowup signature, which is inflated calls beside a flat population); `huge_methods.py
---fail-over 0` exit 0 over 875 core classes; the corpus screen 3,097 / 0 errors and 5,688 / 0 emit; **the 8-profile
-grid is a REAL gate here and reads `added=0 removed=0` on all eight plus 78 emit files byte-identical**, which is
-the round's headline number, not a control. `Checker.kt` 194,578 → 194,675.
-
-**THE MEASUREMENT FIRST.** On an 11-line fixture (`strict`, `target es2020`) tsgo 7.0.2 reports **7 rows and we
-reported 2**: inside `for (let i = 0; i < nums.length; i++)`, each of `const bad: string = i`, `nums[i]` and
-`i + 1` is a missing TS2322, `for (const k in {a:1})` loses its `string`, and a header binding with a STRING
-initializer loses it too — so the gap is not number-specific. `for-of` and an ordinary `let` were already correct,
-which is exactly why every earlier probe of this area read healthy.
-
-**THE CAUSE, AND IT EXPLAINS THE ASYMMETRY.** A `ForStatement`'s initializer is a `VariableDeclarationList` whose
-parent is the LOOP, not a `VariableStatement` — and both `spineArithLeaveNode` and `spineCtaM3StatementAnchor` test
-that parent, so the binding was recorded by NOTHING, for an ANNOTATED declarator as much as an inferred one.
-`ctaSpineEnter` has had a `ForOfStatement` arm since (CHK.29); nobody ever added the other two loop forms.
-`ctaForHeaderBindings` and `ctaForInBinding` register against the LOOP's own nodeId, so the scope covers the
-condition and the incrementor as well as the body and pops at the loop's leave — a header binding cannot leak past
-its loop, which is a pin and an ablation arm rather than an argument.
-
-**THE TYPE HALF IS SHARED STRUCTURALLY, NOT COPIED.** `cvdaInferredLocalType` answers the type the ordinary
-statement recorder WOULD record (the (WIDEN.1) const rule, the round-460 ambiguous-name refusal, the round-573
-foreign-type-parameter refusal, the void/nullish gates) and the header arm calls it, so CLAUDE.md's standing
-"add a rule to both halves of a pair" law is enforced by construction here instead of by discipline.
-
-**AND THAT SPLIT BROKE A (JIT.1) PARTITION PIN, WHICH IS THE ROUND'S REUSABLE LESSON.** Extracting the type half
-left `cvdaRecordInferredLocalType` a **39-bytecode delegating wrapper**, and `HugeMethodLimitTest` pins that every
-part of the `checkVarDeclAssignability` split carries a real share of the body (floor 250) — the suite caught it,
-nothing else could. The repair is to INLINE the one-line record at its single call site and rename the split part,
-never to lower the pin's bound: a split part is a claim that the monolith's run lives there, so when the run moves
-the NAME moves with it. Lowering the floor would have converted the partition into a delegation and made the
-assertion vacuous for every later round.
-
-**PINS AND ABLATION.** 20 cases in `ForHeaderBindingTypeTest` — inferred / element-access / arithmetic /
-non-numeric / annotated / `var` / multi-declarator / closure-captured headers, `for…in` over an object literal, an
-array, a tuple and a `Record`, four scope-leak controls, and four REFUSAL pins (a binding-pattern head, a `for…in`
-over a type parameter, a header with no initializer stay `any`). Four arms: a1 header off → 8 red, a2 `for…in` off
-→ 4 red, a3 pristine → 12 red, a4 an UNSCOPED write → the 2 scope pins, which is what found and repaired two blind
-scope pins. **RESIDUES**: a BINDING-PATTERN header stays `any`; a `for…in` over a TYPE PARAMETER stays `any`; a
-`for…in` over an ARRAY answers `string`, which is tsgo's answer and not `string | number`.
-
-**Instrument note**: the grid's before arm is the agent's pre-change snapshot, and its `MemberResolver.class` md5
-differs from the after arm's although that source is untouched — a build-layout artefact, not a behaviour one. What
-makes the arm valid as a BEFORE is that it reproduces HEAD's known row counts exactly (46 per profile, 94 harness).
 
 ## QUEUE
 
@@ -3190,6 +3206,22 @@ CLAUDE.md § "AI agent mission".
   and re-types NOTHING — so (P18.127)'s backend workaround stands. It forced a THIRD mechanism: closing the FP
   would have left an abstract-class alias silent on erroneous code, so the TS2511 family learned the INFERRED
   alias spelling beside the annotated one.**
+- [ ] **(KIR.LOWER.7) A CLASS DECLARED INSIDE A BODY — REFUSED BY NAME 2026-09-17 with its price measured
+  ((P18.129) note), and the refusal ANSWERS the question the three carrier rounds never had to: a nested class's
+  identity is PER INVOCATION.** Measured in node: `function outer() { class P {} ; return P }` gives
+  `outer() !== outer()`, and an instance from one invocation is NOT `instanceof` another's `P` — so
+  (KIR.LOWER.5)/(KIR.LOWER.6)'s lazy per-file static is the WRONG carrier here, which is also what forced the
+  nested FUNCTION's slot to be a local. **Five mechanisms against the function half's one**: a local `IrClass`
+  built mid-body (the shell/declare/link/define passes are file-top-level by construction), its own `extends`
+  ordering within the statement list, the (P18.122) bag protocol over its own slots, the `super` chain, and a
+  per-invocation carrier — each needing its own pins. 14 shapes are characterised and pinned as named refusals in
+  `KirNestedDeclarationTest`, so the round starts from a measured table rather than a probe.
+- [ ] **(KIR.BIND.1) A NESTED FUNCTION COSTS ONE `jsCall` PER CALL WHERE A TOP-LEVEL ONE IS DIRECT, AND THE
+  UNBLOCKER IS IN THE *BINDER*, NOT THE BACKEND (measured 2026-09-17 by (P18.129), which BUILT the typed design
+  and watched the refusal MOVE rather than disappear).** A declaration nested in a body is never bound (B83.5), so
+  `CheckedFacts.signatureOf` answers null and a parameter has no symbol to type — a typed local `IrSimpleFunction`
+  needs both. The expression-form lowering needs neither, which is why it works and why it is what shipped. The
+  shape pin in `KirNestedDeclarationTest` is what will say the price moved; a value position already costs zero.
 - [ ] **(KIR.NATIVE.2) A TYPESCRIPT PROGRAM THAT DECLARES ITS OWN `function main()` FAILS THE
   NATIVE BUILD WITH "the lowering produced no entry point" (2026-08-27).**
   `KirNativePlugin.kt:149` picks the generated entry with `singleOrNull { name == "main" }`,

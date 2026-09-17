@@ -46,6 +46,54 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
+### Round (P18.119) — (CHK.136): a `for`-header binding and a `for…in` binding typed `any`, which is (KIR.LOWER.3)'s root cause from the other end (2026-09-16)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,652 → 19,672 / 0 / 70**; `cost_gate.py` exit 0 with a
+max delta of **+0.15%** (`typeOfExpr.distinct`, moving WITH `calls` on a bit-identical `spine.nodes` — the opposite
+of (CHK.68)'s memo-blowup signature, which is inflated calls beside a flat population); `huge_methods.py
+--fail-over 0` exit 0 over 875 core classes; the corpus screen 3,097 / 0 errors and 5,688 / 0 emit; **the 8-profile
+grid is a REAL gate here and reads `added=0 removed=0` on all eight plus 78 emit files byte-identical**, which is
+the round's headline number, not a control. `Checker.kt` 194,578 → 194,675.
+
+**THE MEASUREMENT FIRST.** On an 11-line fixture (`strict`, `target es2020`) tsgo 7.0.2 reports **7 rows and we
+reported 2**: inside `for (let i = 0; i < nums.length; i++)`, each of `const bad: string = i`, `nums[i]` and
+`i + 1` is a missing TS2322, `for (const k in {a:1})` loses its `string`, and a header binding with a STRING
+initializer loses it too — so the gap is not number-specific. `for-of` and an ordinary `let` were already correct,
+which is exactly why every earlier probe of this area read healthy.
+
+**THE CAUSE, AND IT EXPLAINS THE ASYMMETRY.** A `ForStatement`'s initializer is a `VariableDeclarationList` whose
+parent is the LOOP, not a `VariableStatement` — and both `spineArithLeaveNode` and `spineCtaM3StatementAnchor` test
+that parent, so the binding was recorded by NOTHING, for an ANNOTATED declarator as much as an inferred one.
+`ctaSpineEnter` has had a `ForOfStatement` arm since (CHK.29); nobody ever added the other two loop forms.
+`ctaForHeaderBindings` and `ctaForInBinding` register against the LOOP's own nodeId, so the scope covers the
+condition and the incrementor as well as the body and pops at the loop's leave — a header binding cannot leak past
+its loop, which is a pin and an ablation arm rather than an argument.
+
+**THE TYPE HALF IS SHARED STRUCTURALLY, NOT COPIED.** `cvdaInferredLocalType` answers the type the ordinary
+statement recorder WOULD record (the (WIDEN.1) const rule, the round-460 ambiguous-name refusal, the round-573
+foreign-type-parameter refusal, the void/nullish gates) and the header arm calls it, so CLAUDE.md's standing
+"add a rule to both halves of a pair" law is enforced by construction here instead of by discipline.
+
+**AND THAT SPLIT BROKE A (JIT.1) PARTITION PIN, WHICH IS THE ROUND'S REUSABLE LESSON.** Extracting the type half
+left `cvdaRecordInferredLocalType` a **39-bytecode delegating wrapper**, and `HugeMethodLimitTest` pins that every
+part of the `checkVarDeclAssignability` split carries a real share of the body (floor 250) — the suite caught it,
+nothing else could. The repair is to INLINE the one-line record at its single call site and rename the split part,
+never to lower the pin's bound: a split part is a claim that the monolith's run lives there, so when the run moves
+the NAME moves with it. Lowering the floor would have converted the partition into a delegation and made the
+assertion vacuous for every later round.
+
+**PINS AND ABLATION.** 20 cases in `ForHeaderBindingTypeTest` — inferred / element-access / arithmetic /
+non-numeric / annotated / `var` / multi-declarator / closure-captured headers, `for…in` over an object literal, an
+array, a tuple and a `Record`, four scope-leak controls, and four REFUSAL pins (a binding-pattern head, a `for…in`
+over a type parameter, a header with no initializer stay `any`). Four arms: a1 header off → 8 red, a2 `for…in` off
+→ 4 red, a3 pristine → 12 red, a4 an UNSCOPED write → the 2 scope pins, which is what found and repaired two blind
+scope pins. **RESIDUES**: a BINDING-PATTERN header stays `any`; a `for…in` over a TYPE PARAMETER stays `any`; a
+`for…in` over an ARRAY answers `string`, which is tsgo's answer and not `string | number`.
+
+**Instrument note**: the grid's before arm is the agent's pre-change snapshot, and its `MemberResolver.class` md5
+differs from the after arm's although that source is untouched — a build-layout artefact, not a behaviour one. What
+makes the arm valid as a BEFORE is that it reproduces HEAD's known row counts exactly (46 per profile, 94 harness).
+
 ### Round (P18.118) — (KIR.LOWER.3)+(KIR.LOWER.4): the lowering's bag fallback, and two defects the items do not name (2026-09-16)
 
 **Three commits** (`8b0d914d7` perf, `e933fe4d6` test, this docs commit). **Suite 19,637 → 19,652 / 0 / 70**, with
