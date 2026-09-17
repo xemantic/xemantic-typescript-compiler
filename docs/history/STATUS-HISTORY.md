@@ -1,5 +1,17 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.123) — (LEGACY.0b) STEP 22: ONLY AN ASSIGNMENT DECLARES A JS EXPANDO, 19,741 / 0 / 65 (2026-09-17).**
+Three faces of one rule: only `=` with an access LHS declares (so `this.c += 1` and a parenthesized target do not),
+the reparser drops a `@type` tag above a non-declaration statement, and the unused-type-parameter aggregation is
+over the declaration's whole list rather than per tag. **No row closed — both are PARTIAL, and that is the
+finding.** Both are now strict SUBSETS of tsgo's output, byte-identical on every row we emit. Two corrections worth
+carrying: **(P18.121)'s recorded "the aggregation predicate is already correct" was false and had been copied
+forward into this round's brief**, and **the sequel does not follow** — a declaration rule only REMOVES rows, so
+the missing-property half of both residues is a separate whole-family gap (the property-access check is OFF for
+every `.js` file, even where the receiver's type comes from a `.ts` declaration). The naive gate flip was built and
+refused on a measurement. 15 pins, 3 arms; the census is 11 case files of which only 3 are JS, which is what bounds
+the risk.
+
 **(P18.122) — (LIB.6) THE NOMINAL HALF: A GENERATED CLASS IS NOW A `JsObject`, 19,726 / 0 / 65 (2026-09-17).**
 The KIR module goes 174 -> 194. A class instance could not reach an interface-typed slot, which the queue recorded
 as the only thing between a real library and a running program on the JVM backend. **The item's recorded failure

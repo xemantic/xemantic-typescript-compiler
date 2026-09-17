@@ -25,6 +25,72 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.128) — (CHK.137)+(CHK.138): two gaps that were five, and a "measured redundant guard" that was only redundant below ES2022 (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,840 → 19,881 / 0 / 65**; corpus screen **3,102 / 0
+errors** (run SEVEN times — once landed and once per ablation arm, which is the per-mechanism attribution) and
+**5,688 / 0 emit**; `cost_gate.py` exit 0 (max +0.15%, and `globals.lookups` +0.04% is the new declaration probe,
+accounted); `huge_methods.py --fail-over 0` exit 0 over 875 classes; the 8-profile grid `added=0 removed=0` on all
+eight with 78 emit files byte-identical. `Checker.kt` 195,036 → 195,278 (+255/−13).
+
+**M1 (CHK.137) IS A SYMMETRIC FP/FN PAIR, NOT A FALSE POSITIVE.** The cause is the one the brief predicted —
+(CHK.73), a class VALUE types as its INSTANCE type — but the SAME artifact hides a false NEGATIVE, and **a fixture
+that varies only whether the class writes `constructor() {}` swaps which one you see**: a declared constructor puts
+a construct signature on the instance type, so `signatures.isEmpty()` is false, the emitter is never reached, and
+`const i = new Cls(); new i()` goes silent where tsgo reports. Both directions now agree with tsgo.
+
+**AND THE FP IS SCRIPT-FILE-ONLY, WHICH ALMOST LOST THE ROUND: A MATRIX WRITTEN THE OBVIOUS WAY — WITH `export`s —
+READS COMPLETELY CLEAN.** A bare `export {}` makes it vanish, because the emitter reads `globals[…]` and INV.3(d)
+keeps a module file's locals out of `globals`. The first 10-case matrix measured nothing and the defect was nearly
+reported unreproducible. **Any (CHK.73)-adjacent probe must be run in a SCRIPT file.**
+
+**M1b — A THIRD MECHANISM THE FIX FORCED.** Closing the FP would have left
+`abstract class Cls; const c = Cls; new c()` SILENT on erroneous code: it had been caught by the false positive, at
+the right position with the WRONG CODE (TS2351 for TS2511). `collectTypeofAbstractVars` learned the INFERRED alias
+spelling beside the annotated one, which is a real widening of a family with **4 active corpus subtests**.
+
+**M2 (CHK.138) IS THREE DEFECTS, AND ONE POINTS THE OPPOSITE WAY TO THE QUEUE ITEM.** tsgo has TWO emitters and
+they are NOT interchangeable: `prototype` fires at every target, while `name`/`length`/`caller`/`arguments` are
+gated on `useDefineForClassFields` — so **an UNSET target is silent** (it defaults above ES2022) and every pin must
+name a target or it is vacuous. Beside the missing four-name family we had an **ours-only FALSE POSITIVE**
+(`declare class C { static prototype: number }` and the same in `declare namespace`/`declare module` — we had no
+ambient gate at all, `spineDupIdFinish` skipping a whole `.d.ts` but not a `declare` in a `.ts`), and a NAME-READ
+defect: `static "prototype"` and a computed `static [k]` were missed because the name was
+`(name as? Identifier)?.text`. **And the TS2300 companion must carry the WRITTEN name** — tsgo prints
+`Duplicate identifier '[k]'`, not `'prototype'`.
+
+**AN INDEPENDENT RECEIPT FOR M2, BECAUSE THE CORPUS CANNOT GIVE ONE.** `staticPropertyNameConflicts` is a
+conformance fixture whose every variation names a target `usesUnsupportedOption` skips, so it is in NO active
+subtest; reconstructed from its pristine baseline it reads **20 of its 60 TS2699 rows and ZERO false positives**.
+The 40 missing are two PRE-EXISTING refusals deliberately not widened (30 a computed key that is a dotted path
+through an `as const` object literal, which `MemberNames` refuses BY NAME as (CHK.5) late binding; 10 the
+class-expression reach gap). Final agreement over the round's own 74 shapes: **65**, with the 9 divergences each
+attributed — 3 pre-existing M1 misses, 5 the reach gap, and 1 an `es5` config **tsgo refuses outright and then
+checks nothing at all**, i.e. the (LEGACY.1) removed-option family.
+
+**THE ROUND FIRED (P18.127)'s COUNTDOWN, AND THE LESSON IS ABOUT THE PREMISE RATHER THAN THE PIN.** That round
+recorded a **measured redundant guard** — `.name` placed last in the static-member block — on the grounds that
+"tsgo refuses `static name` outright and our accepting it is a separate gap". Closing the gap reddened it. **The
+premise was only ever true BELOW ES2022**: tsgo ACCEPTS `static name` at ES2022 and above, which is also the
+default, so the ordering is reachable by a valid program. Repaired by RE-POINTING (the pin now runs at ES2022 on a
+one-case tsconfig override, with a new sibling pinning the sub-ES2022 refusal by message), never by editing the
+assertion — **and the guard is now LIVE rather than redundant.** A "measured redundant" verdict is a claim about a
+configuration as much as about a shape.
+
+**PINS AND ABLATION.** `TsgoStep23Test`, 40 pins, 40 green; **23 RED** against a stash-ablated HEAD whose rebuild
+reproduced HEAD's committed `Checker.class` md5 exactly — which is the control that the arm really was the
+pre-change binary. Six arms, each uniquely attributable; a6 (dropping the `useDefineForClassFields` gate) is what
+makes the three target controls discriminating rather than blind. One pin is green pre-change **for the wrong
+reason** (the family did not exist) and is red under the ambient arm, so it is recorded as discriminating that
+mechanism rather than claimed for its own.
+
+**THREE INSTRUMENT TRAPS, ALL PAID FOR IN THIS ROUND.** `Diagnostic.character` is **1-based** here, and calibrating
+against a sibling pin in another class (0-based, `.js` fixture, different helper) cost 12 of 40 pins on the first
+run — after correction all fifteen asserted columns are tsgo's own column VERBATIM, so that first run was in fact a
+full span-parity receipt. Counting "active corpus subtests carrying code X" by sanitised test NAME reads **0 for
+every code** and looks like no coverage; the generator references the baseline PATH. And a KIR refusal assertion
+that reads `stderr` reads EMPTY for a compile that never ran — the diagnostics are in `report`.
+
 ### Round (P18.127) — (KIR.LOWER.6): the values existed and TWO OF THEM WERE WRONG, which the missing arm was hiding (2026-09-17)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,807 → 19,840 / 0 / 65**, the KIR module **242 → 275**;
@@ -557,74 +623,6 @@ scope pins. **RESIDUES**: a BINDING-PATTERN header stays `any`; a `for…in` ove
 **Instrument note**: the grid's before arm is the agent's pre-change snapshot, and its `MemberResolver.class` md5
 differs from the after arm's although that source is untouched — a build-layout artefact, not a behaviour one. What
 makes the arm valid as a BEFORE is that it reproduces HEAD's known row counts exactly (46 per profile, 94 harness).
-
-### Round (P18.118) — (KIR.LOWER.3)+(KIR.LOWER.4): the lowering's bag fallback, and two defects the items do not name (2026-09-16)
-
-**Three commits** (`8b0d914d7` perf, `e933fe4d6` test, this docs commit). **Suite 19,637 → 19,652 / 0 / 70**, with
-the KIR module at **174** (159 corpus programs + 15 pins); `cost_gate.py` 20/20 +0.00% and the corpus screen
-3,097 / 0 are CONTROLS — **the four checker classes are BYTE-IDENTICAL to (P18.117)'s gated binary, so the
-8-profile grid is inapplicable by construction and that comparison is its receipt**; `huge_methods.py --fail-over 0`
-run over **both** core (875 classes) and the **KIR module** (113) — the default census is `-core`-only and this
-round added compiled code elsewhere, which is exactly the blind spot CLAUDE.md's (JIT.1) entry warns about;
-warning-clean with an injected positive control; `JsRuntime.kt` untouched, so the native-runtime generator is not
-engaged. **This round left the checker-parity lane for the KIR JVM-backend leg**, because these two items are the
-largest measured performance lever and a native-arm correctness blocker and they share one mechanism. **Both
-LANDED; (LEGACY.0) stays OPEN** on (0b-20), and the checker gap below is a new (CHK.\*) candidate.
-
-**THE SHARED MECHANISM.** The lowering asks for a receiver's type, does not get one, and falls back to the dynamic
-property bag — reflection on the JVM, a throw on Kotlin/Native. Everything here is measured as BYTECODE SHAPE
-(`javap -p -c | grep -c 'jsGet\|jsSet\|jsInvoke'`), never as wall time, as (KIR.LOWER.3) demands.
-
-**(KIR.LOWER.3), and the item's headline is wrong.** An element access does NOT generally lose its element type:
-`arr[0]`, `t[0]`, `arr[j]` for an ordinary `let j` and `arr[p]` for a parameter all type correctly today. What is
-lost is the **INDEX**, when it is a `for`-HEADER `let` — which types `any` (design-doc contradiction 4) — so
-`elementAccessResultType`'s NumberLike test never fires and `bodies[i]` falls through. **The loss is in the
-CHECKER**, measured against tsgo: inside `for (let i = 0; …)`, `const a: string = i`, `nums[i]` and `nums[i + 0]`
-are silent here and TS2322 in tsgo — **three missing true positives from one cause** — while `nums[Number(i)]` and
-an index declared outside the header report in both. **(P18.117)'s index-signature work does not reach it.** The
-checker was deliberately NOT changed: making `arr[i]` real in every loop of every program is (CHK.50) at maximum
-blast radius and belongs to a checker round with the core suite and the grid as its gates. KIR recovers locally
-instead — one funnel `checkedTypeOf` that all 22 Expression-typed receiver classifications pass through, with a
-single recovery answering `Array<T>`'s `T` where the checker answered `any` (refusing an optional access, a tuple
-— whose slot is a function of the index — a string index, and anything without exactly one resolved type argument),
-plus a PAIRED leg classifying later reads of the name from the local's own IR slot, because the checker still types
-every mention of `bi` as `any`. 2 dynamic ops → 0.
-
-**(KIR.LOWER.4), and the item understates it.** It names the WRITE; every `this` member **READ** was equally
-broken, in methods as well as constructors, because `lowerPropertyRead` and `assignToTarget` both consulted
-`isDynamicReceiver` (true for `this`, contradiction 1) BEFORE resolving the field on the owner chain — which they
-were already able to do. So `this.x` was `jsGet(this, "x")` standing beside a real `public double x`, and "a class
-with a constructor is unrunnable on the native arm" is really "a class with any `this` member access is". One
-predicate `fieldIn(owner, name)` — answering null rather than refusing, so it is usable as EVIDENCE — is consulted
-on both paths ahead of the bag, so the two cannot drift; an expando no `PropertyDeclaration` declares still takes
-the bag. Parameter properties expand per `kir-design.md` §7, with the store prologue **above** the instance
-initializers, measured off tsgo's own emit (the other order compiles and quietly prints 1 instead of 6). 4 ops → 0;
-`constructor(public x, public y)` goes from a REFUSED COMPILE to 0.
-
-**TWO DEFECTS NEITHER ITEM NAMES, BOTH FIXED, AND THE FIRST IS THE ROUND'S SHARPEST LESSON.** `ps[0].x` already
-chose the field path but kept the runtime array's `Any?`, so the emitted `getfield` named `java.lang.Object` and
-the program **died at the first run with `NoSuchFieldError`** — a fixture with **ZERO dynamic ops that does not
-run**, which is exactly what a shape-only pin waves through; `receiverOf` now coerces to the owner's type, and
-every mechanism here has a BEHAVIOUR case beside its SHAPE case for that reason. And once the field route landed,
-method calls on the same receiver still went through `jsInvoke` — reflection in the loop the fields had just left —
-so a leg over `methodInChain` closes it, and **the pin's counter had to count `jsInvoke` too**: with only reads and
-writes counted, that half-fix read 0.
-
-**PINS AND ABLATION.** 15 cases (7 shape, 5 behaviour, 3 controls); all 12 non-controls redden under at least one
-of **eight** arms and the three controls never do. a1 (the element-type recovery) and a2 (the local IR slot) are a
-round-927 PAIR — identical red sets, neither redundant: one types the slot, the other classifies the read of the
-name. a3 (the field predicate answering null) reddens 11 pins AND the `smol-toml` corpus program. One negative
-control had to be replaced: `bag["a"] = 1` read 0 because an element access on a bag uses
-`jsIndexGet`/`jsIndexSet`, which the item's instrument does not count — the working control is an `any`-typed
-PARAMETER. Final md5s `KirFileLowering` `251747ba`, `KirProgramTables` `45c13217` — the orchestrator's snapshot
-matched both.
-
-**WHAT REMAINS**: the CHECKER gap above (a `for`-header binding types `any`; a (CHK.\*) item, expect (CHK.50)'s
-radius); `localReceiverClass` is identifier-only by design, so `f().x` still takes the bag; `methodInChain` demands
-an exact parameter count, so a call omitting an optional parameter still reaches `jsInvoke`; **the native claim is
-mechanical, not measured** — no `jsSet` is emitted for a declared `this` member any more, so the `JsTypeError`
-cannot fire, but no native build was run and someone should bank it with `scripts/kir-native.sh`; and a write
-through an `any` alias of a generated class still throws, pre-existing and untouched.
 
 ## QUEUE
 
@@ -3171,15 +3169,27 @@ CLAUDE.md § "AI agent mission".
   CALL refuses too); `f.length`/`Cls.length` (deliberately not half-answered); `(f as any).name`; an ABSENT member
   of a class value (refusing is deliberate — `undefined` would be a silent wrong answer for a real static); a
   GENERIC function at the erasure; and cross-file carrier identity ((P18.124)'s inherited divergence).**
-- [ ] **(CHK.138) WE ACCEPT `static name` ON A CLASS AND tsgo REFUSES IT WITH TS2699 — `Static property 'name'
-  conflicts with built-in property 'Function.name'` (found 2026-09-17 by (P18.127) while pinning a carrier's
-  `.name`, and it is why that pin's guard is a MEASURED redundant one: no valid program can reach the ordering it
-  guards).** Small and ours-only-silent rather than ours-only-noisy, i.e. a MISSING diagnostic. Size the active
-  corpus for TS2699 before starting — it may be a one-fixture family like TS6205 was ((P18.121)).
-- [ ] **(CHK.137) AN OURS-ONLY TS2351 ON A CLASS HELD IN A `const` — `class Cls {}; const c = Cls; new c()` is
-  "This expression is not constructable" here and **0 errors in tsgo 7.0.2** (measured 2026-09-17 by (P18.126)
-  while building its negative controls).** Small, and it is a FALSE POSITIVE on legal code, so it is worth a
-  round on its own terms rather than as a backend unblocker — the backend reaches the same shape through `any`.
+- [x] **(CHK.138) CLOSED 2026-09-17 ((P18.128) note) — THREE defects, one pointing the OPPOSITE way to this item.
+  tsgo has two TS2699 emitters and they are not interchangeable: `prototype` fires at every target while
+  `name`/`length`/`caller`/`arguments` are gated on `useDefineForClassFields`, so **an UNSET target is silent** (it
+  defaults above ES2022) and every pin must name a target or it is vacuous. Beside the missing four-name family we
+  had an **ours-only FALSE POSITIVE** on an ambient `declare class` (no ambient gate at all) and a NAME-READ defect
+  that missed `static "prototype"` and a computed `static [k]` — whose TS2300 companion must carry the WRITTEN
+  name. Independent receipt, since the corpus cannot give one (every variation of the conformance fixture names a
+  skipped target): reconstructed from its pristine baseline it reads **20 of 60 TS2699 rows with ZERO false
+  positives**, the 40 missing being two PRE-EXISTING refusals deliberately not widened.
+  **RESIDUES**: the walker reaches a top-level class and a namespace body only, so a class EXPRESSION and a class
+  in a function or method body are missed by BOTH halves — a pre-existing `prototype` reach gap the new family
+  inherits, pinned as two `residue - …` cases; and the `as const` dotted computed key stays a (CHK.5) refusal.**
+- [x] **(CHK.137) CLOSED 2026-09-17 ((P18.128) note) — and it was a SYMMETRIC PAIR, not a false positive: the same
+  (CHK.73) artifact (a class VALUE types as its INSTANCE type) hides a false NEGATIVE, and a fixture that varies
+  only whether the class writes `constructor() {}` swaps which one you see. **The FP is SCRIPT-FILE-ONLY** — a bare
+  `export {}` makes it vanish, because the emitter reads `globals[…]` and INV.3(d) keeps a module file's locals
+  out; a matrix written with `export`s reads completely clean, which nearly lost the round. The fix asks the
+  DECLARATION rather than the type, answers `null` (fall through to the old behaviour) wherever it cannot decide,
+  and re-types NOTHING — so (P18.127)'s backend workaround stands. It forced a THIRD mechanism: closing the FP
+  would have left an abstract-class alias silent on erroneous code, so the TS2511 family learned the INFERRED
+  alias spelling beside the annotated one.**
 - [ ] **(KIR.NATIVE.2) A TYPESCRIPT PROGRAM THAT DECLARES ITS OWN `function main()` FAILS THE
   NATIVE BUILD WITH "the lowering produced no entry point" (2026-08-27).**
   `KirNativePlugin.kt:149` picks the generated entry with `singleOrNull { name == "main" }`,
