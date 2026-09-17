@@ -60,6 +60,8 @@ import com.xemantic.typescript.compiler.GetAccessor
 import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.IfStatement
+import com.xemantic.typescript.compiler.ExportSpecifier
+import com.xemantic.typescript.compiler.NamedExports
 import com.xemantic.typescript.compiler.ImportDeclaration
 import com.xemantic.typescript.compiler.ImportEqualsDeclaration
 import com.xemantic.typescript.compiler.InterfaceDeclaration
@@ -111,6 +113,8 @@ import com.xemantic.typescript.compiler.forEachChild
 import com.xemantic.typescript.compiler.kir.emit.IrProgramBuilder
 import com.xemantic.typescript.compiler.kir.emit.irDouble
 import com.xemantic.typescript.compiler.SourceFile
+import com.xemantic.typescript.compiler.Symbol
+import com.xemantic.typescript.compiler.SymbolFlags
 import com.xemantic.typescript.compiler.kir.front.CheckedFacts
 import com.xemantic.typescript.compiler.kir.refuse
 import org.jetbrains.kotlin.backend.common.lower.DeclarationIrBuilder
@@ -227,6 +231,19 @@ internal class KirFileLowering(
     private val functions get() = tables.functions
     /** One generated class per distinct object-literal name LIST — [shapeClassFor]. */
     private val shapeClasses = LinkedHashMap<List<String>, ShapeClass>()
+
+    /**
+     * (LIB.7) One generated MODULE-NAMESPACE object per imported module, by the
+     * checker's module symbol — see [namespaceObjectFor].
+     *
+     * Per FILE rather than program-wide, so `import * as ns` in two files mints
+     * two objects. They answer from the same accessors, so every value they
+     * report is the same live binding; what differs from an ES module namespace
+     * object is only their IDENTITY, which nothing in this subset observes
+     * — and the alternative costs a cross-file declaration, which is the one
+     * thing the IR verifier refuses (`KirProgramTables.ModuleVariable`).
+     */
+    private val namespaceObjects = java.util.IdentityHashMap<Symbol, IrSimpleFunction>()
 
     /** What makes a generated shape class's name unique across FILES. */
     private val shapeFilePrefix: String =
@@ -2478,6 +2495,13 @@ internal class KirFileLowering(
                     scope.irCall(variable.getter.symbol, variable.field.type)
                 }
             }
+            // (LIB.7) The alias of a namespace import in a VALUE position —
+            // `for (const k in ns)`, `Object.keys(ns)`, `ns[key]`. Last,
+            // because a QUALIFIED reference never needs the object at all: it
+            // reaches the declaration directly and pays nothing.
+            ?: moduleSymbolOf(node)?.let { symbol ->
+                scope.irCall(namespaceObjectFor(symbol).symbol, intrinsics.jsObjectType)
+            }
             ?: refuse(tsFile, node, "cannot lower the reference '${node.text}'")
     }
 
@@ -2493,6 +2517,383 @@ internal class KirFileLowering(
         val symbol = facts.nameAt(node) ?: return null
         val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
         return (declaration as? VariableDeclaration)?.let { tables.moduleVariables[it] }
+    }
+
+    /**
+     * (LIB.7) The MODULE a name refers to, where that name is a namespace import.
+     *
+     * `import * as ns from "./m"` gives `ns` no runtime declaration at all —
+     * `Symbol.declarations` is EMPTY for it — so neither [lookup] nor
+     * [moduleFieldFor] can answer, which is what produced *cannot lower the
+     * reference 'ns'* for every use of a namespace import. What the checker DOES
+     * give is the module's own export TABLE, hung on the alias symbol together
+     * with `SymbolFlags.Module`, and each entry's declaration is the node in the
+     * DECLARING file that the declare pass already generated for.
+     *
+     * So a qualified reference is resolved exactly as an unqualified imported
+     * one is: through the declaration the checker names, with the import itself
+     * contributing nothing at runtime.
+     *
+     * A local of the same name is asked first, because it shadows the import;
+     * and a symbol with no exports is refused rather than treated as an empty
+     * module, since that is also what a `export * from` barrel looks like here
+     * (the checker resolves a star re-export at LOOKUP time and does not
+     * populate the barrel's own export table).
+     */
+    private fun moduleSymbolOf(node: Expression): Symbol? {
+        val name = node as? Identifier ?: return null
+        if (lookup(name.text) != null) return null
+        val symbol = facts.nameAt(name) ?: return null
+        if (!symbol.flags.hasAny(SymbolFlags.Module)) return null
+        val exports = symbol.exports?.takeIf { it.isNotEmpty() } ?: return null
+        // The export table is keyed by the name the module DECLARED, which is
+        // the name an importer sees for every export but a RENAMED one:
+        // `export { inner as outer }` is keyed `inner`, so `ns.outer` would
+        // find nothing and `Object.keys(ns)` would report `inner` — a silently
+        // WRONG answer where the refusal below is a loud one. (INC.51)'s trap,
+        // one table over: `ExportSpecifier.propertyName` is the local name and
+        // `.name` is what the importer sees, and they differ exactly here.
+        renamedExportOf(exports)?.let { specifier ->
+            refuse(
+                tsFile, node,
+                "cannot lower a namespace import of a module that RENAMES an export " +
+                    "(`export { ${specifier.propertyName?.text} as ${specifier.name.text} }`) " +
+                    "— its export table is keyed by the declared name"
+            )
+        }
+        return symbol
+    }
+
+    /** A renaming `export { x as y }` in the module [exports] came from, or null. */
+    private fun renamedExportOf(exports: Map<String, Symbol>): ExportSpecifier? {
+        val file = exports.values.firstNotNullOfOrNull { export ->
+            val target = export.target ?: export
+            (target.valueDeclaration ?: target.declarations.firstOrNull())
+                ?.let { sourceFileOf(it) }
+        } ?: return null
+        return file.statements.filterIsInstance<ExportDeclaration>()
+            .mapNotNull { it.exportClause as? NamedExports }
+            .flatMap { it.elements }
+            .firstOrNull { !it.isTypeOnly && it.propertyName != null }
+    }
+
+    /** The [SourceFile] a node belongs to — the parents `indexSourceFile` stamped. */
+    private fun sourceFileOf(node: Node): SourceFile? {
+        var current: Node? = node
+        while (current != null) {
+            if (current is SourceFile) return current
+            current = (current as? NodeBase)?.parent
+        }
+        return null
+    }
+
+    /**
+     * The declaration `ns.member` names, where `ns` is a namespace import.
+     *
+     * An export that is itself an alias — `export { x } from "./other"` — is
+     * followed to its target, which is the same hop [CheckedFacts] makes for a
+     * free name.
+     */
+    private fun namespaceMemberDeclaration(node: PropertyAccessExpression): Node? {
+        val exports = moduleSymbolOf(node.expression)?.exports ?: return null
+        val symbol = exports[node.name.text] ?: return null
+        val target = symbol.target ?: symbol
+        return target.valueDeclaration ?: target.declarations.firstOrNull()
+    }
+
+    /** `ns.constant` — the declaring file's slot, through its accessor. */
+    private fun namespaceVariableRead(node: PropertyAccessExpression): IrExpression? {
+        val declaration = namespaceMemberDeclaration(node) as? VariableDeclaration ?: return null
+        val variable = tables.moduleVariables[declaration] ?: return null
+        // Through the GETTER even when the module is this very file, so that the
+        // read is a LIVE one in both directions: `export let counter` mutated by
+        // its own module must be seen by an importer, which is what an ES module
+        // binding is and what a copied value would not be.
+        return scope.irCall(variable.getter.symbol, variable.field.type)
+    }
+
+    /**
+     * (LIB.7) The accessor for this module's NAMESPACE OBJECT, built on first use.
+     *
+     * ## Why a generated class rather than a bag filled at module-init time
+     *
+     * The obvious shape — allocate a `JsObject` and `set` every export into it
+     * when the module initializes — duplicates state, and an ES module's
+     * exports are LIVE BINDINGS: `ns.counter` read after the module's own
+     * `bump()` must answer the new value, where a copy answers the old one.
+     * That is a wrong answer and not an untidiness. It also makes the object's
+     * contents a function of module-init ORDER, which this backend deliberately
+     * tolerates being cyclic (`KirProgramLowering.initializationOrder`), and it
+     * forces every export to be materialised whether or not anything reads it.
+     *
+     * So the object holds NO values. It is the shape (P18.122) chose for a
+     * lowered `class` and (round 3.3) chose for an object literal, one
+     * mechanism further out: a `JsObject` subclass whose `get`/`has` are a
+     * `when` over the module's exported names, each arm calling the declaring
+     * file's own ACCESSOR — the getter that exists precisely because the IR
+     * verifier refuses a cross-file field read. Nothing about assignability
+     * changes, because the value IS a `JsObject`; `typeof` answers `"object"`;
+     * and nothing reaches reflection, because every arm is a direct call.
+     *
+     * ## What the spill machinery does here
+     *
+     * `keys()` spills, exactly as a shape class's does, so that `for…in`,
+     * `Object.keys` and `JSON.stringify` enumerate the exports in declaration
+     * order. [buildNamespaceGet] is deliberately NOT gated on `shapeActive()`,
+     * so a read stays LIVE after that spill and the spilled copy is only ever
+     * the enumeration's. A WRITE (`ns.x = 1`) lands in the bag and is then
+     * shadowed by `get` — which no program can observe, because assigning to a
+     * namespace import is TS2540 and `delete` on one is TS2704.
+     *
+     * A type-only export contributes nothing, as it contributes nothing in
+     * JavaScript. An `enum` export is likewise absent, because an enum has no
+     * runtime object in this backend at all (`KirProgramTables.enumMembers`) —
+     * a stated divergence rather than a silent one.
+     */
+    private fun namespaceObjectFor(symbol: Symbol): IrSimpleFunction =
+        namespaceObjects.getOrPut(symbol) { buildNamespaceObject(symbol) }
+
+    /**
+     * One export's runtime VALUE, as the namespace object must answer it.
+     *
+     * Null for an export this backend gives no value — an interface, a type
+     * alias, an enum — which is then absent from `get`, `has` and `keys`.
+     */
+    private fun namespaceExportValue(declaration: Node?): IrExpression? = when (declaration) {
+        is VariableDeclaration -> tables.moduleVariables[declaration]?.let { variable ->
+            scope.irCall(variable.getter.symbol, variable.field.type)
+        }
+        // A function export is a function VALUE, which JavaScript makes by
+        // capturing the declaration — the same forwarder a static method read
+        // as a value already produces.
+        is FunctionDeclaration -> functions[declaration]?.let { staticMethodValue(it) }
+        // A class export is a function value too — `typeof C` is `"function"`
+        // in JavaScript — and the one it forwards to is the constructor.
+        is ClassDeclaration -> constructorValue(declaration)
+        else -> null
+    }
+
+    /** A lowered class's CONSTRUCTOR as a function value — [staticMethodValue]'s twin. */
+    private fun constructorValue(owner: ClassDeclaration): IrExpression? {
+        val irClass = classes[owner] ?: return null
+        val constructor = constructorsByDeclaration[owner] ?: return null
+        val parameters = constructor.parameters.filter { it.kind == IrParameterKind.Regular }
+        val lambda = builder.irFactory.buildFun {
+            name = SpecialNames.ANONYMOUS
+            returnType = types.anyNullable
+            visibility = DescriptorVisibilities.LOCAL
+            modality = Modality.FINAL
+            origin = IrDeclarationOrigin.LOCAL_FUNCTION_FOR_LAMBDA
+        }
+        lambda.parent = frame.irFunction
+        val forwarded = parameters.mapIndexed { index, parameter ->
+            lambda.addValueParameter(
+                Name.identifier("p$index"), types.anyNullable, builder.generatedOrigin
+            ) to parameter
+        }
+        inFunction(lambda, types.anyNullable, null, null) {
+            val construction = IrConstructorCallImpl(
+                UNDEFINED, UNDEFINED, irClass.defaultType, constructor.symbol,
+                typeArgumentsCount = 0, constructorTypeArgumentsCount = 0,
+            ).apply {
+                forwarded.forEachIndexed { index, (slot, parameter) ->
+                    arguments[index] = coerceErased(tsFile, scope.irGet(slot), parameter.type)
+                }
+            }
+            lambda.body = blockBodyOf(
+                listOf(scope.irReturn(coerceErased(tsFile, construction, types.anyNullable)))
+            )
+        }
+        return IrFunctionExpressionImpl(
+            UNDEFINED, UNDEFINED, types.function(parameters.size), lambda,
+            IrStatementOrigin.LAMBDA
+        )
+    }
+
+    private fun buildNamespaceObject(symbol: Symbol): IrSimpleFunction {
+        // The exports this backend can give a runtime value, in the order the
+        // binder recorded them — which is declaration order, and therefore the
+        // order `Object.keys` must report.
+        val exported = (symbol.exports ?: emptyMap<String, Symbol>()).mapNotNull { (name, export) ->
+            val target = export.target ?: export
+            val declaration = target.valueDeclaration ?: target.declarations.firstOrNull()
+            when (declaration) {
+                is VariableDeclaration ->
+                    if (tables.moduleVariables.containsKey(declaration)) name to declaration
+                    else null
+                is FunctionDeclaration ->
+                    if (functions.containsKey(declaration)) name to declaration else null
+                is ClassDeclaration ->
+                    if (classes.containsKey(declaration)) name to declaration else null
+                else -> null
+            }
+        }
+        val index = namespaceObjects.size
+        val irClass = builder.irFactory.buildClass {
+            // Named after the FILE for the reason a shape class is: two files
+            // minting `JsNamespace0` would clash in one package, and a JVM
+            // class clash surfaces as a mangled program rather than an error.
+            this.name = Name.identifier("JsNamespace_${shapeFilePrefix}_$index")
+            visibility = DescriptorVisibilities.PUBLIC
+            // FINAL: nothing extends it, which is what lets the JIT devirtualize
+            // `get` at a monomorphic call site.
+            modality = Modality.FINAL
+            origin = builder.generatedOrigin
+        }
+        irClass.parent = irFile
+        irClass.createThisReceiverParameter()
+        irClass.superTypes = listOf(intrinsics.jsObjectType)
+        irFile.declarations.add(irClass)
+        val constructor = irClass.addConstructor {
+            isPrimary = true
+            returnType = irClass.defaultType
+            visibility = DescriptorVisibilities.PUBLIC
+            origin = builder.generatedOrigin
+        }
+        constructor.body = blockBodyOf(
+            listOf(
+                IrDelegatingConstructorCallImpl(
+                    UNDEFINED, UNDEFINED, irBuiltIns.unitType,
+                    intrinsics.jsObjectConstructor, typeArgumentsCount = 0,
+                ),
+                IrInstanceInitializerCallImpl(
+                    UNDEFINED, UNDEFINED, irClass.symbol, irBuiltIns.unitType
+                ),
+            )
+        )
+        buildNamespaceGet(irClass, exported)
+        buildNamespaceHas(irClass, exported)
+        buildShapeKeys(shapeOverride(irClass, "keys", intrinsics.jsArrayType, emptyList()))
+        buildNamespaceSpill(irClass, exported)
+        return namespaceAccessor(irClass, constructor, index)
+    }
+
+    /**
+     * The LAZY singleton accessor: one object per module per file.
+     *
+     * Lazy rather than initialized by the declaring module's init, because a
+     * file with nothing to run has no module init at all and because a module
+     * CYCLE makes init order a question this object need not have an answer to
+     * — it holds no values, so there is nothing for an order to get wrong.
+     */
+    private fun namespaceAccessor(
+        irClass: IrClass,
+        constructor: IrConstructor,
+        index: Int,
+    ): IrSimpleFunction {
+        val field = builder.irFactory.buildField {
+            this.name = Name.identifier("nsObject\$$shapeFilePrefix\$$index")
+            type = types.anyNullable
+            visibility = DescriptorVisibilities.PUBLIC
+            isStatic = true
+            isFinal = false
+            origin = builder.generatedOrigin
+        }
+        field.parent = irFile
+        irFile.declarations.add(field)
+        return moduleAccessor(
+            "nsObject\$$shapeFilePrefix\$$index\$get", intrinsics.jsObjectType
+        ) { function ->
+            inFunction(function, intrinsics.jsObjectType, null, null) {
+                val read: () -> IrExpression = {
+                    IrGetFieldImpl(
+                        UNDEFINED, UNDEFINED, field.symbol, types.anyNullable, null, null, null
+                    )
+                }
+                val allocate = IrSetFieldImpl(
+                    UNDEFINED, UNDEFINED, field.symbol, null,
+                    IrConstructorCallImpl(
+                        UNDEFINED, UNDEFINED, irClass.defaultType, constructor.symbol,
+                        typeArgumentsCount = 0, constructorTypeArgumentsCount = 0,
+                    ),
+                    irBuiltIns.unitType, null, null,
+                )
+                function.body = blockBodyOf(
+                    listOf(
+                        org.jetbrains.kotlin.ir.expressions.impl.IrWhenImpl(
+                            UNDEFINED, UNDEFINED, irBuiltIns.unitType
+                        ).apply {
+                            branches.add(
+                                org.jetbrains.kotlin.ir.expressions.impl.IrBranchImpl(
+                                    UNDEFINED, UNDEFINED,
+                                    scope.irEqualsNull(read()),
+                                    IrBlockImpl(
+                                        UNDEFINED, UNDEFINED, irBuiltIns.unitType, null,
+                                        listOf(allocate)
+                                    ),
+                                )
+                            )
+                        },
+                        scope.irReturn(bagCast(read(), intrinsics.jsObjectType)),
+                    )
+                )
+            }
+        }
+    }
+
+    /** `override fun get(name)` over the module's exports — always LIVE. */
+    private fun buildNamespaceGet(irClass: IrClass, exported: List<Pair<String, Node>>) {
+        val function = shapeOverride(
+            irClass, "get", types.anyNullable, listOf("name" to types.string)
+        )
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        inFunction(function, types.anyNullable, null, null) {
+            val arms = exported.mapNotNull { (declared, declaration) ->
+                namespaceExportValue(declaration)?.let { value ->
+                    shapeIf(function, name, declared, shapeReturn(function, value))
+                }
+            }
+            // No `shapeActive()` guard, unlike every other generated `get` in
+            // this backend: these arms read through accessors rather than from
+            // fields, so a spill cannot make them stale and must not switch
+            // them off.
+            function.body = blockBodyOf(
+                arms + shapeReturn(function, shapeBagCall(function, "bagGet", self, listOf(name)))
+            )
+        }
+    }
+
+    /** `override fun has(name)` — true for an export, else the bag's answer. */
+    private fun buildNamespaceHas(irClass: IrClass, exported: List<Pair<String, Node>>) {
+        val function = shapeOverride(
+            irClass, "has", irBuiltIns.booleanType, listOf("name" to types.string)
+        )
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        val arms = exported.map { (declared, _) ->
+            shapeIf(
+                function, name, declared,
+                shapeReturn(
+                    function,
+                    IrConstImpl.boolean(UNDEFINED, UNDEFINED, irBuiltIns.booleanType, true)
+                )
+            )
+        }
+        function.body = blockBodyOf(
+            arms + shapeReturn(function, shapeBagCall(function, "bagHas", self, listOf(name)))
+        )
+    }
+
+    /** `override fun spill()` — what makes `keys()` enumerate the exports. */
+    private fun buildNamespaceSpill(irClass: IrClass, exported: List<Pair<String, Node>>) {
+        val function = shapeOverride(irClass, "spill", irBuiltIns.unitType, emptyList())
+        val self = function.parameters[0]
+        inFunction(function, irBuiltIns.unitType, null, null) {
+            function.body = blockBodyOf(
+                exported.mapNotNull { (declared, declaration) ->
+                    namespaceExportValue(declaration)?.let { value ->
+                        shapeBagCall(
+                            function, "spillSlot", self, emptyList(),
+                            listOf(
+                                IrConstImpl.string(UNDEFINED, UNDEFINED, types.string, declared),
+                                value,
+                            )
+                        )
+                    }
+                }
+            )
+        }
     }
 
     private fun lookup(name: String): IrValueDeclaration? {
@@ -3301,6 +3702,20 @@ internal class KirFileLowering(
                 bindArguments(node, target.parameters, offset = 0)
             }
         }
+        // (LIB.7) `ns.f(…)` — the checker offers NO signature for a member of a
+        // namespace import (measured: `signatureCount == 0`), so the arm above
+        // cannot fire however ordinary the call is. The declaration is reached
+        // through the module's export table instead, and the call is then the
+        // same direct call a named import produces.
+        (callee as? PropertyAccessExpression)
+            ?.takeIf { !it.questionDotToken }
+            ?.let { access -> namespaceMemberDeclaration(access) as? FunctionDeclaration }
+            ?.let { functions[it] }
+            ?.let { target ->
+                return scope.irCall(target.symbol).apply {
+                    bindArguments(node, target.parameters, offset = 0)
+                }
+            }
         // `this.m(…)` and `super.m(…)` are resolved from the enclosing class's
         // CHAIN by name, not from the checker's signature: measured, both
         // receivers type as `any` here, so the callee offers no signatures at
@@ -3742,6 +4157,14 @@ internal class KirFileLowering(
 
     /** The generated class a callee expression NAMES, or null. */
     private fun classDeclarationOf(callee: Expression): ClassDeclaration? {
+        // (LIB.7) `new ns.C()`, where the checker resolves no construct
+        // signature at all for a namespace member — so this is not a fallback
+        // here but the only answer.
+        (callee as? PropertyAccessExpression)?.let { access ->
+            (namespaceMemberDeclaration(access) as? ClassDeclaration)
+                ?.takeIf { it in classes }
+                ?.let { return it }
+        }
         val name = callee as? Identifier ?: return null
         val symbol = facts.nameAt(name) ?: return null
         val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
@@ -3750,6 +4173,13 @@ internal class KirFileLowering(
 
     private fun lowerPropertyRead(node: PropertyAccessExpression): IrExpression {
         if (node.questionDotToken) return lowerOptionalRead(node)
+        // (LIB.7) FIRST, for the reason the static-class arm below it is first:
+        // the receiver names a MODULE rather than a value, so every arm that
+        // reasons about a receiver's type would reason about the wrong thing —
+        // and the checker types a namespace import `any`, which would send it
+        // to the dynamic fallback and make an imported constant a reflective
+        // read of an object that does not exist.
+        namespaceVariableRead(node)?.let { return it }
         staticOwnerOf(node)?.let { owner ->
             tables.classChain(owner).forEach { current ->
                 tables.staticFields[current]?.get(node.name.text)?.let { field ->
