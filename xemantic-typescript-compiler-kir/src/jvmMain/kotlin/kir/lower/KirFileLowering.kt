@@ -283,6 +283,58 @@ internal class KirFileLowering(
     private val functionValues =
         java.util.IdentityHashMap<IrSimpleFunction, IrSimpleFunction>()
 
+    /**
+     * (P18.129) The slot holding a nested `function`'s value, by declaration.
+     *
+     * A `function` declared inside a function body or a block reached NEITHER
+     * declaration table — the declare pass walks a file's TOP-LEVEL statements
+     * only — so every reference to one refused at *cannot lower the reference*.
+     * Censused for round (P18.129): not one of the 59 corpus fixtures declares
+     * one, which is why the gap survived; `18-var-scoping.ts` reaches for
+     * `const innerFn = function () {}`, the EXPRESSION form, which has worked
+     * since the first closures landed.
+     *
+     * ## Why the EXPRESSION form's lowering, and not a local IR function
+     *
+     * Measured, and it is a CHECKER fact rather than a preference: a nested
+     * declaration is never BOUND (CLAUDE.md's B83.5 — `Binder.bindStatement`
+     * recurses into a `SourceFile`'s own statement list and a `ModuleBlock`'s
+     * and into nothing else), so `CheckedFacts.signatureOf` answers **null**
+     * for it and `facts.typeOf(parameter)` has no symbol to ask about. A real
+     * local IR function needs both — a declared return type and an erased type
+     * per parameter — so that route is shut until the binder changes. The
+     * expression form needs NEITHER: every slot is `Any?` and every name comes
+     * from the syntax, which is exactly why `const innerFn = function () {}`
+     * has always worked. The price is that each call is a `jsCall` rather than
+     * a direct one, which is the price the expression form has always paid.
+     *
+     * ## Why a VARIABLE and not a static
+     *
+     * (KIR.LOWER.6) gave a top-level function a LAZY STATIC carrier, which is
+     * what makes `f === f` true. A nested one cannot have one: measured against
+     * `node`, `function outer() { function g() {} ; return g }` answers
+     * **`outer() !== outer()`** — a declaration inside a body mints a fresh
+     * function object per invocation, because its closure is per invocation —
+     * while two reads WITHIN one invocation are the same object. One local
+     * variable per invocation is exactly that, and it is registered in the
+     * block's own scope so [lookup] answers every reference to it, a value
+     * position included, with no new arm anywhere.
+     */
+    private val localFunctionSlots =
+        java.util.IdentityHashMap<FunctionDeclaration, IrVariable>()
+
+    /**
+     * (P18.129) The nested functions whose value was built at the TOP already.
+     *
+     * The complement — a body that [hoistLocalFunctions] had to defer — is
+     * filled when its own declaration statement is reached, and this is what
+     * keeps the two from both firing and building the lambda twice.
+     */
+    private val hoistedLocalFunctions =
+        java.util.Collections.newSetFromMap(
+            java.util.IdentityHashMap<FunctionDeclaration, Boolean>()
+        )
+
     /** What makes a generated shape class's name unique across FILES. */
     private val shapeFilePrefix: String =
         kotlinName(tsFile.fileName.substringAfterLast('/').substringBeforeLast('.'))
@@ -1621,9 +1673,7 @@ internal class KirFileLowering(
             }
             val superCall = bodyStatements.getOrNull(superIndex)
                 ?.let { (it as? ExpressionStatement)?.expression as? CallExpression }
-            bodyStatements.take(maxOf(superIndex, 0)).forEach { statement ->
-                lowerStatement(statement, statements)
-            }
+            lowerStatements(bodyStatements.take(maxOf(superIndex, 0)), statements)
             val runtimeBase = tables.runtimeSuperclasses[declaration]
             if (base == null && runtimeBase != null) {
                 val arguments = superCall?.arguments ?: emptyList()
@@ -1708,8 +1758,10 @@ internal class KirFileLowering(
                     UNDEFINED, UNDEFINED, irClass.symbol, irBuiltIns.unitType
                 )
             )
-            bodyStatements.drop(maxOf(superIndex, 0) + if (superCall != null) 1 else 0)
-                .forEach { statement -> lowerStatement(statement, statements) }
+            lowerStatements(
+                bodyStatements.drop(maxOf(superIndex, 0) + if (superCall != null) 1 else 0),
+                statements
+            )
             scopes.removeLast()
             constructor.body = functionBodyOf(statements)
         }
@@ -1754,7 +1806,7 @@ internal class KirFileLowering(
         val lowered = mutableListOf<IrStatement>()
         scopes.addLast(HashMap())
         bindParameters(function, parameters, body, lowered)
-        statements.forEach { lowerStatement(it, lowered) }
+        lowerStatements(statements, lowered)
         scopes.removeLast()
         return functionBodyOf(lowered)
     }
@@ -1902,6 +1954,171 @@ internal class KirFileLowering(
 
     // ---- statements --------------------------------------------------------
 
+    /**
+     * (P18.129) One statement LIST — its hoisted functions first, then itself.
+     *
+     * A `function` declaration is HOISTED: it is callable above its own textual
+     * position, which a `const` holding a function expression is not, so the two
+     * forms are not interchangeable however alike their lowering is. In a module
+     * — and every file this backend compiles is checked as one — a declaration
+     * inside a BLOCK is block-scoped, which `tsgo` agrees with: reading one
+     * after its block closes is TS2304, measured, so hoisting to the top of the
+     * list it appears in is the whole of the rule and no function-wide `var`-
+     * style hoisting is needed.
+     *
+     * Two passes, because they answer different questions. Every SHELL is built
+     * first, so two nested functions can call each other and one can call
+     * itself — a body lowered before its neighbour's shell existed would refuse
+     * at *cannot lower the reference*. Each BODY is then lowered at its own
+     * TEXTUAL position, which is what makes CAPTURE work: `let acc` declared
+     * above the function is in [scopes] by the time the body asks for it, and
+     * lowering the body at the top instead would put every capture out of
+     * scope.
+     */
+    private fun lowerStatements(statements: List<Statement>, out: MutableList<IrStatement>) {
+        hoistLocalFunctions(statements, out)
+        statements.forEach { lowerStatement(it, out) }
+    }
+
+    /**
+     * [lowerStatements]' first pass: one SLOT per nested `function`, at the top.
+     *
+     * The slot is a mutable local holding `null`, registered in the block's own
+     * scope — so every later reference, a call and a value position alike, is
+     * answered by [lookup] exactly as a `const` holding a function expression
+     * is, and an inner `helper` shadowing a top-level one wins because the
+     * block chain is asked first.
+     *
+     * ## Where the lambda is BUILT decides whether the name is really hoisted
+     *
+     * A function declaration is callable ABOVE its own textual position and a
+     * `const` is not, which is the one way the two forms are not
+     * interchangeable however alike their lowering is. Filling the slot HERE is
+     * what gives that — but the lambda closes over the enclosing scope, and at
+     * the top of the list nothing the list itself declares exists yet, so a
+     * body that reads one of those names has to wait for its own textual
+     * position. [mentionsAny] is that test, and it is conservative in the
+     * direction that only ever costs hoisting: a body merely NAMING one of them
+     * defers too.
+     *
+     * A body that defers is still reachable from every ORDER `node` accepts:
+     * two nested functions calling each other, and one calling itself, are
+     * reads of a slot that exists from the top and is filled before either is
+     * invoked. What a deferred body does NOT survive is being CALLED above its
+     * own declaration — and that is a program `node` throws a `ReferenceError`
+     * for anyway, because the name it closes over is in its temporal dead zone.
+     */
+    private fun hoistLocalFunctions(
+        statements: List<Statement>,
+        out: MutableList<IrStatement>
+    ) {
+        val nested = statements.filterIsInstance<FunctionDeclaration>()
+            .filter { it !in functions && it.body != null }
+        if (nested.isEmpty()) return
+        val declaredHere = namesDeclaredIn(statements)
+        // Every slot first, so a body lowered below can already see its
+        // neighbour's — mutual recursion is two reads of two slots.
+        nested.forEach { declaration -> out.add(localFunctionSlot(declaration)) }
+        nested.forEach { declaration ->
+            // The declaration's own PARAMETERS and BODY, never the whole node:
+            // its own NAME is in [declaredHere] by construction, and scanning
+            // it would defer every nested function there is — measured, a
+            // helper reading only its own parameter refused to hoist and
+            // `const a = helper(1)` above it read `undefined`.
+            val reads = declaration.parameters + listOfNotNull(declaration.body)
+            if (reads.none { mentionsAny(it, declaredHere) }) {
+                hoistedLocalFunctions.add(declaration)
+                out.add(assignLocalFunction(declaration))
+            }
+        }
+    }
+
+    /**
+     * The slot itself: `var <name>: Any? = null`, bound in the block's scope.
+     *
+     * Deliberately NOT [hoistedVariable]: that one is the FUNCTION-scoped `var`
+     * table, and a function declaration in a block is BLOCK-scoped in a module —
+     * `tsgo` agrees, measured: reading one after its block closes is TS2304, so
+     * no function-wide hoisting is owed and putting it in `frame.hoisted` would
+     * make it outlive its block.
+     */
+    private fun localFunctionSlot(declaration: FunctionDeclaration): IrVariable {
+        val name = declaration.name
+            ?: refuse(tsFile, declaration, "cannot lower an anonymous nested function")
+        if (declaration.asteriskToken || ModifierFlag.Async in declaration.modifiers) {
+            refuse(tsFile, declaration, "generators and `async` are out of the spike subset")
+        }
+        val variable = buildVariable(
+            frame.irFunction as IrDeclarationParent,
+            UNDEFINED,
+            UNDEFINED,
+            builder.generatedOrigin,
+            Name.identifier(kotlinName(name.text)),
+            types.anyNullable,
+            isVar = true,
+        )
+        variable.initializer = scope.irNull()
+        localFunctionSlots[declaration] = variable
+        scopes.last()[name.text] = variable
+        return variable
+    }
+
+    /** Fills a slot with the function value — the EXPRESSION form's own lowering. */
+    private fun assignLocalFunction(declaration: FunctionDeclaration): IrStatement {
+        val slot = localFunctionSlots.getValue(declaration)
+        val body = declaration.body!!
+        return scope.irSet(
+            slot,
+            coerce(
+                declaration,
+                // `this` is NOT inherited: a `function` declaration binds its
+                // own in JavaScript, which is the whole difference between it
+                // and an arrow, so one reading `this` refuses rather than
+                // silently taking the enclosing method's receiver.
+                lowerFunctionValue(declaration, declaration.parameters, body, inheritThis = false),
+                types.anyNullable
+            )
+        )
+    }
+
+    /** The names [statements] BINDS — what a hoisted body may not yet read. */
+    private fun namesDeclaredIn(statements: List<Statement>): Set<String> {
+        val names = HashSet<String>()
+        statements.forEach { statement ->
+            when (statement) {
+                is VariableStatement -> statement.declarationList.declarations.forEach {
+                    collectNames(it.name, names)
+                }
+                is FunctionDeclaration -> statement.name?.let { names.add(it.text) }
+                is ClassDeclaration -> statement.name?.let { names.add(it.text) }
+                else -> {}
+            }
+        }
+        return names
+    }
+
+    /** Every identifier under [node] — over-approximate for a binding pattern. */
+    private fun collectNames(node: Node, into: MutableSet<String>) {
+        if (node is Identifier) into.add(node.text)
+        forEachChild(node) { child -> collectNames(child, into) }
+    }
+
+    /** Does [node]'s subtree spell any of [names]? Over-approximate on purpose. */
+    private fun mentionsAny(node: Node, names: Set<String>): Boolean {
+        if (names.isEmpty()) return false
+        var found = false
+        fun visit(current: Node) {
+            if (found) return
+            if (current is Identifier && current.text in names) {
+                found = true
+                return
+            }
+            forEachChild(current) { child -> visit(child) }
+        }
+        visit(node)
+        return found
+    }
+
     private fun lowerStatement(statement: Statement, out: MutableList<IrStatement>) {
         when (statement) {
             is VariableStatement -> lowerVariables(statement, out)
@@ -1919,7 +2136,7 @@ internal class KirFileLowering(
             is Block -> {
                 scopes.addLast(HashMap())
                 val inner = mutableListOf<IrStatement>()
-                statement.statements.forEach { lowerStatement(it, inner) }
+                lowerStatements(statement.statements, inner)
                 scopes.removeLast()
                 out.add(IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, inner))
             }
@@ -1957,7 +2174,23 @@ internal class KirFileLowering(
             // takes, and it emits nothing here for the same reason the ordinary
             // emitter emits nothing for it.
             is EmptyStatement, is NotEmittedStatement -> {}
-            is FunctionDeclaration, is ClassDeclaration, is EnumDeclaration,
+            // (P18.129) A nested `function` was SHELLED by [hoistLocalFunctions]
+            // at the top of this list; its body is lowered HERE, where the
+            // locals it closes over are in scope. A top-level one emits nothing
+            // — pass 1 already defined it — and so does every other declaration.
+            // (P18.129) A nested `function` whose body could not be built at
+            // the top of its list — it reads something the list itself declares
+            // — is built HERE, where those locals are in scope. One whose body
+            // WAS hoisted emits nothing, and neither does a top-level
+            // declaration, which pass 1 already defined.
+            is FunctionDeclaration -> {
+                if (statement in localFunctionSlots &&
+                    statement !in hoistedLocalFunctions
+                ) {
+                    out.add(assignLocalFunction(statement))
+                }
+            }
+            is ClassDeclaration, is EnumDeclaration,
             is InterfaceDeclaration, is TypeAliasDeclaration,
             is ImportDeclaration, is ExportDeclaration, is ImportEqualsDeclaration -> {}
             // `export default X` where X is a NAME emits nothing: the importing
@@ -2549,6 +2782,20 @@ internal class KirFileLowering(
         val matched = temporary("matched", types.boolean, scope.irBoolean(false), mutable = true)
         outer.add(subject)
         outer.add(matched)
+        // (P18.129) Every clause of a `switch` shares one block scope, so a
+        // `function` declared in any of them is hoisted ONCE, above the loop the
+        // clauses are lowered into — a `case` may call a helper a later `case`
+        // declares, exactly as it may inside one block.
+        hoistLocalFunctions(
+            clauses.flatMap { clause ->
+                when (clause) {
+                    is CaseClause -> clause.statements
+                    is DefaultClause -> clause.statements
+                    else -> emptyList()
+                }
+            },
+            outer
+        )
         val loop = IrDoWhileLoopImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null)
         loops.addLast(LoopFrame(loop, loop))
         val body = mutableListOf<IrStatement>()
@@ -2639,7 +2886,7 @@ internal class KirFileLowering(
                 statements.add(value)
                 scopes.last()[name.text] = value
             }
-            clause.block.statements.forEach { lowerStatement(it, statements) }
+            lowerStatements(clause.block.statements, statements)
             scopes.removeLast()
             catches.add(
                 org.jetbrains.kotlin.ir.expressions.impl.IrCatchImpl(
@@ -2780,7 +3027,37 @@ internal class KirFileLowering(
             ?: moduleExportsOf(node)?.let { exports ->
                 scope.irCall(namespaceObjectFor(exports).symbol, intrinsics.jsObjectType)
             }
+            ?: nestedDeclarationRefusal(node)
             ?: refuse(tsFile, node, "cannot lower the reference '${node.text}'")
+    }
+
+    /**
+     * (P18.129) The named refusal for a CLASS declared inside a body or block.
+     *
+     * The FUNCTION half of that family landed this round; the class half did
+     * not, and the generic *cannot lower the reference* says nothing about
+     * which. Measured against `node`, what it would take is a per-INVOCATION
+     * class and not a per-file one: `function outer() { class P {} ; return P }`
+     * answers **`outer() !== outer()`**, and an instance of one invocation's
+     * `P` is **not** `instanceof` another's — so (KIR.LOWER.5)/(KIR.LOWER.6)'s
+     * lazy STATIC carrier is the wrong shape for it, and the declare/shell/
+     * define passes it would need are top-level by construction.
+     *
+     * Never fires for a name the tables DO hold, and never for one this file
+     * resolves some other way — every rung above it in [lowerIdentifier] is
+     * asked first.
+     */
+    private fun nestedDeclarationRefusal(node: Identifier): IrExpression? {
+        val symbol = facts.nameAt(node) ?: return null
+        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+        if (declaration !is ClassDeclaration || declaration in classes) return null
+        refuse(
+            tsFile, node,
+            "a `class` declared inside a function body or a block is out of the spike " +
+                "subset: '${node.text}' reaches no declaration table, and its identity is " +
+                "per INVOCATION rather than per file, so the lazy static a top-level class " +
+                "value uses is the wrong carrier for it"
+        )
     }
 
     /**
@@ -4953,7 +5230,7 @@ internal class KirFileLowering(
             scopes.last()[text] = local
         }
         if (body is Block) {
-            body.statements.forEach { lowerStatement(it, lowered) }
+            lowerStatements(body.statements, lowered)
             if (body.statements.lastOrNull() !is ReturnStatement) {
                 lowered.add(scope.irReturn(scope.irNull()))
             }
@@ -4987,7 +5264,7 @@ internal class KirFileLowering(
             val lowered = mutableListOf<IrStatement>()
             scopes.addLast(HashMap())
             bindParameters(lambda, parameters, body, lowered)
-            body.statements.forEach { lowerStatement(it, lowered) }
+            lowerStatements(body.statements, lowered)
             scopes.removeLast()
             if (body.statements.lastOrNull() !is ReturnStatement) {
                 lowered.add(scope.irReturn(scope.irNull()))
