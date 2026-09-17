@@ -177,17 +177,46 @@ class OutFileRemovedTest {
         assert(r.diagnostics.count { it.code == 5074 } == 1)
     }
 
-    // ── the option row survives: TS5101 at the 6.0 default and tsgo's TS5102 at 7.0 ───────
+    // ── the option row survives: tsgo's TS5102 at the shipped default, TS5101 at an explicit 6.0 ─
     //
     // Stash-ablation 2026-09-15 on the pre-change binary: RED — the single-file name, the
     // no-outDir `.js` admission, the `module: none` drop, the outDir layout, the TS5074
     // conjunct and the 7.0 row's name half (6 of 13); the seven `control -` pins are green on
     // both arms by design. The topological transform order has no observable and so no pin.
 
+    /**
+     * (P18.133) Measured on `tools/tsgo-7.0.2/lib/tsc` over
+     * `{ "compilerOptions": { "outFile": "./out.js" } }`:
+     *
+     *     tsconfig.json(1,24): error TS5102: Option 'outFile' has been removed. Please remove it from your configuration.
+     *
+     * `createRemovedOptionDiagnostic("outFile", "", "")` — an empty value, so the KEY ladder and
+     * no `Use '…' instead.` chain (only `baseUrl` computes one).
+     */
     @Test
-    fun `control - outFile reports TS5101 at the 6 0 default`() {
+    fun `outFile is tsgo's TS5102 at the shipped default`() {
         val r = compile(
             """
+            // @outFile: bundle.js
+            var d: number = 1;
+            """
+        )
+        val row = r.diagnostics.single { it.code == 5101 || it.code == 5102 }
+        assert(row.code == 5102)
+        assert(row.message == "Option 'outFile' has been removed. Please remove it from your configuration.")
+        assert(row.messageChain.isEmpty())
+    }
+
+    /**
+     * Control: an EXPLICIT `@typeScriptVersion` below `7.0` still selects the TypeScript 6
+     * deprecation ladder. This is what an ablation restoring `?: "6.0"` cannot redden, and so
+     * what separates "the default moved" from "the ladder was deleted".
+     */
+    @Test
+    fun `control - an explicit typeScriptVersion 6 0 keeps outFile on the TS5101 ladder`() {
+        val r = compile(
+            """
+            // @typeScriptVersion: 6.0
             // @outFile: bundle.js
             var d: number = 1;
             """

@@ -46,7 +46,7 @@ import kotlin.test.Test
  * DISTINCT string-literal type and a wrong-typed `const` names it in its TS2322 message.
  *
  * Two facts about this compiler's own output the pins state rather than hide: at the
- * `"6.0"` default of `simulatedVersion` the removed-option row is TS5107, tsgo's TS5108
+ * (P18.133) `"7.0"` default of `simulatedVersion` the removed-option row is tsgo's TS5108; TS5107
  * needs `"typeScriptVersion": "7.0"` ((LEGACY.1)'s BLOCKED-PENDING-USER default); and the
  * `pkg` fixture lists its `types` condition first, so every mode resolves it to
  * `types.d.ts` (measured — the `import`/`require` conditions never win).
@@ -151,14 +151,14 @@ class ProjectModuleResolutionRemovedTest {
 
     // ── the removed-option rows, value-anchored as tsgo's ────────────────────────────
 
-    /** tsgo: `tsconfig.json(1,C)` under `"classic"`, width 9 — and at the 6.0 default the row is TS5107 with tsgo's spelling `Classic`. */
+    /** tsgo: `tsconfig.json(1,C)` under `"classic"`, width 9, with tsgo's spelling `Classic` — (P18.133) TS5108 at the shipped default, TS5107 at an explicit `typeScriptVersion` below 7.0. */
     @Test
-    fun `classic reports one TS5107 at its quoted value and nothing else moves`() {
+    fun `classic reports one TS5108 at its quoted value and nothing else moves`() {
         val (json, rows) = cell("commonjs", "classic")
         val removed = rows.filter { it.code in optionCodes }
         assert(removed.size == 1)
         val row = removed[0]
-        assert(row.code == 5107)
+        assert(row.code == 5108)
         assert(row.message.contains("'moduleResolution=Classic'"))
         assert(row.file == "tsconfig.json")
         assert(row.line == 1)
@@ -223,7 +223,7 @@ class ProjectModuleResolutionRemovedTest {
         assert(row.line == 1)
         assert(row.character == column(json, "\"compilerOptions\""))
         assert(row.length == 17)
-        assert(rows.count { it.code == 5107 && it.message.contains("module=AMD") } == 1)
+        assert(rows.count { it.code == 5108 && it.message.contains("module=AMD") } == 1)
     }
 
     /** tsgo: an explicit removed value beside `amd` anchors TS5095 at THAT value (`classic`, `node10` cells: `(14,25)` in the matrix). */

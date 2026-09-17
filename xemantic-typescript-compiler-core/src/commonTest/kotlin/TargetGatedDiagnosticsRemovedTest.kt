@@ -55,15 +55,17 @@ import kotlin.test.Test
  * The `@target: es5` directive is where a written es5 target is still expressible on the harness
  * path (`usesUnsupportedOption` drops every es3/es5 directive from the corpus — 0 active subtests
  * at either target, 12 carry an EMBEDDED nested tsconfig the harness never applies — so these pins
- * are the only gate). Without `@ignoreDeprecations` the harness prints the `"6.0"`-default TS5107
- * row for the target itself; tsgo's TS5108 is a tsconfig-value row the harness has no position for.
+ * are the only gate). (P18.133) At the shipped `"7.0"` default the harness prints tsgo's own
+ * TS5108 row for the target itself, file-less because the harness has no tsconfig position for it,
+ * and NOTHING silences it; [DOWNLEVEL_ES5]'s `@typeScriptVersion: 6.0` is what keeps it out of the
+ * exact-list pins here, and the three pins below own the row itself at both versions.
  * Pins named `control -` were GREEN on the pre-change binary too and state the tsgo-shaped answer;
  * every other pin was RED on it (stash-ablated 2026-09-15).
  */
 class TargetGatedDiagnosticsRemovedTest {
 
     private val es5 = DOWNLEVEL_ES5
-    private val es5NoStrict = "// @target: es5\n// @ignoreDeprecations: 6.0"
+    private val es5NoStrict = "// @target: es5\n// @typeScriptVersion: 6.0\n// @ignoreDeprecations: 6.0"
     private val es3 = "// @strict: true\n// @target: es3\n// @ignoreDeprecations: 6.0"
     private val es2015 = "// @strict: true\n// @target: es2015"
 
@@ -193,18 +195,52 @@ class TargetGatedDiagnosticsRemovedTest {
         assert(d.isEmpty())
     }
 
-    /** Without `@ignoreDeprecations` the harness's own `"6.0"`-default row for the target is the
-     *  ONLY thing left — before this round it sat beside four checker rows. */
+    /**
+     * (P18.133) At the shipped default the target's own option row is the ONLY thing left —
+     * before (LEGACY.1) it sat beside four checker rows — and it is tsgo's, byte for byte.
+     * Measured on `tools/tsgo-7.0.2/lib/tsc` over `{ "compilerOptions": { "target": "ES5" } }`:
+     *
+     *     tsconfig.json(1,34): error TS5108: Option 'target=ES5' has been removed. Please remove it from your configuration.
+     */
     @Test
-    fun `an es5 target without ignoreDeprecations reports exactly the deprecated-option row`() {
+    fun `an es5 target reports exactly tsgo's removed-option row and nothing else`() {
         val d = diagnose(everyShape, "// @strict: true\n// @target: es5")
         val codes = d.map { it.code }
-        assert(codes == listOf(5107))
+        assert(codes == listOf(5108))
         val message = d.single().message
+        assert(message == "Option 'target=ES5' has been removed. Please remove it from your configuration.")
+    }
+
+    /**
+     * (P18.133) `ignoreDeprecations` cannot reach that row: TypeScript 7 parses the option and
+     * consults it NOWHERE (`tsoptions/parsinghelpers.go:287` is its only write; no reader), so
+     * our removed branch returns above `isDeprecationSuppressed`. Measured — tsgo answers the
+     * SAME row for `{ "target": "ES5", "ignoreDeprecations": "5.0" }`, and for `"6.0"`/`"7.0"`
+     * and an invalid value alike.
+     */
+    @Test
+    fun `ignoreDeprecations does not silence the removed-option row at the shipped default`() {
+        val d = diagnose(everyShape, "// @strict: true\n// @target: es5\n// @ignoreDeprecations: 6.0")
+        assert(d.map { it.code } == listOf(5108))
+    }
+
+    /**
+     * Control, and the reason [DOWNLEVEL_ES5] carries a version directive: an EXPLICIT
+     * `@typeScriptVersion` below `7.0` still selects the TypeScript 6 deprecation ladder,
+     * where `ignoreDeprecations` silences as it always did. Without this the new default is
+     * pinned only by the pins above, and an ablation restoring `?: "6.0"` would redden them
+     * while nothing said the 6.0 ladder still works.
+     */
+    @Test
+    fun `control - an explicit typeScriptVersion 6 0 keeps the deprecated-option row`() {
+        val d = diagnose(everyShape, "// @strict: true\n// @target: es5\n// @typeScriptVersion: 6.0")
+        assert(d.map { it.code } == listOf(5107))
         assert(
-            message == "Option 'target=ES5' is deprecated and will stop functioning in TypeScript 7.0. " +
+            d.single().message ==
+                "Option 'target=ES5' is deprecated and will stop functioning in TypeScript 7.0. " +
                 "Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error."
         )
+        assert(diagnose(everyShape, es5).isEmpty())
     }
 
     // ── controls ─────────────────────────────────────────────────────────────────────────────

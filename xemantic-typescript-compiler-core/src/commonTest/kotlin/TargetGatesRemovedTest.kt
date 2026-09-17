@@ -56,7 +56,11 @@ import kotlin.test.Test
  *    not tsgo's rule at ANY target — it resolves a parameter initializer against the parameters
  *    alone and answers TS2304. **DELETED**, each pinned as tsgo's exact answer at es5.
  *
- * `@ignoreDeprecations: 6.0` ([DOWNLEVEL_ES5]) keeps TS5107 out of the exact-list assertions.
+ * [DOWNLEVEL_ES5]'s `@typeScriptVersion: 6.0` + `@ignoreDeprecations: 6.0` keep the TARGET's own
+ * option row out of the exact-list assertions. (P18.133) Both directives are load-bearing now:
+ * at the shipped `"7.0"` default that row is tsgo's unsilenceable TS5108, so an explicit
+ * version is the only thing that puts the fixture back on the silenceable 6.0 ladder. It is
+ * plumbing, not subject — `simulatedVersion` reaches no rule any pin here measures.
  * The corpus cannot see any of this — 0 active subtests compile at es5 ((P18.110)'s census) —
  * so these pins are the whole gate; every non-control pin was RED on the pre-change binary.
  */

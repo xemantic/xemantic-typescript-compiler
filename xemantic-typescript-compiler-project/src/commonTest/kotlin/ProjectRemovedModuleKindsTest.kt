@@ -43,7 +43,7 @@ import kotlin.test.Test
  * `amd` / `umd` / `system` emit is byte-identical to the `commonjs` emit of the same
  * program, TS2882 fires under every kind, a `.json` import resolves and is emitted under
  * every kind, and TS5071 has no emitter anywhere in tsgo. At the `"6.0"` default of
- * `simulatedVersion` the option row is TS5107; tsgo's TS5108 needs
+ * (P18.133) `"7.0"` default of `simulatedVersion` the option row is tsgo's TS5108; TS5107 needs
  * `"typeScriptVersion": "7.0"` ((LEGACY.1)'s BLOCKED-PENDING-USER default).
  */
 class ProjectRemovedModuleKindsTest {
@@ -116,12 +116,12 @@ class ProjectRemovedModuleKindsTest {
 
     /** tsgo: `tsconfig.json(1,C)` under the quoted value, width = value length + 2; the row beside it is (e)'s TS5095 for the derived Bundler. */
     @Test
-    fun `a removed module kind reports TS5107 at its quoted value beside TS5095 and nothing else`() {
+    fun `a removed module kind reports TS5108 at its quoted value beside TS5095 and nothing else`() {
         for ((kind, spelled) in removedKinds) {
             val c = cell(kind)
             val option = c.rows.filter { it.code in optionCodes }
-            assert(option.map { it.code }.sorted() == listOf(5095, 5107))
-            val row = option.single { it.code == 5107 }
+            assert(option.map { it.code }.sorted() == listOf(5095, 5108))
+            val row = option.single { it.code == 5108 }
             assert(row.message.contains("'module=$spelled'"))
             assert(row.file == "tsconfig.json")
             assert(row.line == 1)

@@ -38,8 +38,9 @@ import kotlin.test.Test
  * unset, `true` and `false`, at `target: es5`, `es2015` and unset alike.
  *
  * **Every expected value is tsgo 7.0.2's.** At the `"6.0"` default of `simulatedVersion` the
- * row is TS5101 at the same anchor (and a written `target: es5` is TS5107 at its quoted VALUE);
- * tsgo's TS5102/TS5108 wording needs `"typeScriptVersion": "7.0"` ((LEGACY.1)'s
+ * (P18.133) the shipped default IS `"7.0"`, so tsgo's TS5102/TS5108 wording is what this
+ * compiler prints; an explicit `"typeScriptVersion"` below 7.0 gives TS5101 at the same anchor
+ * (and a written `target: es5` TS5107 at its quoted VALUE). Superseded note ((LEGACY.1)'s
  * BLOCKED-PENDING-USER default).
  *
  * The discriminating pins are the TS2802 ones: before this round a written `"target": "es5"`
@@ -134,13 +135,13 @@ class ProjectDownlevelIterationRemovedTest {
 
     // ── the option row, key-anchored as tsgo's ───────────────────────────────────────────────
 
-    /** tsgo: TS5102 under `"downlevelIteration"` (20 characters, quotes included); at the 6.0 default the code is TS5101. */
+    /** tsgo: TS5102 under `"downlevelIteration"` (20 characters, quotes included) — (P18.133) the shipped default; at an explicit `typeScriptVersion` below 7.0 the code is TS5101. */
     @Test
-    fun `control - downlevelIteration reports TS5101 at its quoted key for true and for false`() {
+    fun `downlevelIteration reports TS5102 at its quoted key for true and for false`() {
         for (value in listOf("true", "false")) {
             val c = cell("\"target\": \"es2015\"", "\"downlevelIteration\": $value")
             val row = c.rows.single()
-            assert(row.code == 5101)
+            assert(row.code == 5102)
             assert(row.file == "tsconfig.json")
             assert(row.line == 1)
             assert(row.character == column(c.json, "\"downlevelIteration\""))

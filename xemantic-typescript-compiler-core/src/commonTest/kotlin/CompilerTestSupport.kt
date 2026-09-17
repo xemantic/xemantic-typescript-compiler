@@ -49,12 +49,31 @@ import org.intellij.lang.annotations.Language
  * zero value to open the gate for them, i.e. on the false positive; they were re-pointed
  * here, which restores the exact population each was written to measure.
  *
- * `@ignoreDeprecations` keeps TS5107 ("Option 'target=ES5' is deprecated") out of the
- * result — every re-pointed pin counts one code, so it would not have mattered, but a
- * later exact-list assertion would trip over it.
+ * The two trailing directives keep the TARGET's own option row out of the result — every
+ * re-pointed pin counts one code, so it would not have mattered, but a later exact-list
+ * assertion would trip over it. **Both are needed, and (P18.133) is why.** Since the default
+ * of `simulatedVersion` moved to `"7.0"`, `target: es5` is tsgo's unsilenceable
+ * `TS5108: Option 'target=ES5' has been removed.` — `ignoreDeprecations` is read NOWHERE in
+ * TypeScript 7 (measured: it is parsed into tsgo's options struct and never consulted), so on
+ * the removed branch our emitters return BEFORE `isDeprecationSuppressed`. An explicit
+ * `@typeScriptVersion: 6.0` is now the only thing that puts these fixtures back on the
+ * deprecation ladder, where `@ignoreDeprecations: 6.0` can silence TS5107 as before.
+ *
+ * That is pure plumbing and cannot perturb what these pins measure: `simulatedVersion` is read
+ * in exactly one place, `TypeScriptCompiler.cpcCheckDeprecatedOptions`, and reaches nothing but
+ * the TS5101/TS5102/TS5107/TS5108 rows. The shipped default is pinned by
+ * `SimulatedVersionDefaultTest`, and the option row itself by `TargetOptionSurfaceTest` and
+ * `TargetGatedDiagnosticsRemovedTest` — never here.
+ *
+ * Ablation (P18.133) a2, dropping the `@typeScriptVersion: 6.0` and leaving the pre-round
+ * two-directive form: **27 RED** — 15 in `TargetGatesRemovedTest`, 12 in
+ * `TslibHelpersRemovedTest`, 2 in `TargetGatedDiagnosticsRemovedTest`. So the directive is
+ * load-bearing rather than tidying. Measured in the same arm: the five `Inv4*` / `M04*`
+ * consumers and `DownlevelIterationRemovedTest` stay GREEN, because none of them counts the
+ * whole diagnostic list — they were never exposed to the target's own row.
  */
 internal const val DOWNLEVEL_ES5: String =
-    "// @strict: true\n// @target: es5\n// @ignoreDeprecations: 6.0"
+    "// @strict: true\n// @target: es5\n// @typeScriptVersion: 6.0\n// @ignoreDeprecations: 6.0"
 
 internal fun diagnose(
     @Language("typescript") source: String,

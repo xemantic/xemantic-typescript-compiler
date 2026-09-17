@@ -39,7 +39,9 @@ import kotlin.test.Test
  *    (`program.go:995`) and exempts an ABSOLUTE substitution as well as a relative one.
  *
  * WHAT THIS COMPILER DOES ABOUT THE ROW ITSELF is unchanged at the `"6.0"` default of
- * `simulatedVersion`: TS5101 at the KEY with the TypeScript 6 migration URL. The TS5102 form
+ * `simulatedVersion` — which (P18.133) moved to `"7.0"`, making the TS5102 form below the
+ * SHIPPED one; at an explicit version below 7.0 it is TS5101 at the KEY with the TypeScript 6
+ * migration URL. The TS5102 form
  * — code, wording and computed chain — is reachable only through `@typeScriptVersion: 7.0`
  * until a later round moves that default, which is why every 7.0 pin below names it.
  *
@@ -210,18 +212,96 @@ class BaseUrlRemovedTest {
     }
 
     /**
-     * Control, and the reason `removedMessageChain` defaults to `messageChain`: at the `"6.0"`
-     * default this round moves NOTHING. The row stays TS5101 with the TypeScript 6 migration
-     * URL — green on both arms of the chain ablation by design.
+     * Control, and the reason `removedMessageChain` defaults to `messageChain`: an EXPLICIT
+     * `@typeScriptVersion` below `7.0` still selects the TypeScript 6 ladder, where the row is
+     * TS5101 with the migration URL — green on both arms of the chain ablation by design.
+     *
+     * (P18.133) This was `"at the 6 0 default"` until the default moved to `"7.0"`; the
+     * assertion never changed, because `baseUrlRow` has always set the directive explicitly.
+     * The name did.
      */
     @Test
-    fun `control - at the 6 0 default baseUrl is still TS5101 with the migration URL`() {
+    fun `control - at an explicit 6 0 baseUrl is still TS5101 with the migration URL`() {
         val row = baseUrlRow("./src", "6.0")
         assert(row.code == 5101)
         assert(row.message == "Option 'baseUrl' is deprecated and will stop functioning in " +
             "TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.")
         assert(row.messageChain == listOf("  Visit https://aka.ms/ts6 for migration information."))
     }
+
+    /**
+     * **residue — this asserts an answer tsgo does NOT give, deliberately.** (P18.133)
+     *
+     * When `baseUrl` is INHERITED through `extends`, tsgo absolutizes it against the file that
+     * DECLARED it and only then takes the path relative to the ROOT config, so the computed
+     * suggestion names the declaring directory. [baseUrlPathsSuggestion] instead round-trips the
+     * WRITTEN value against the root config's own directory, which is right for a root-declared
+     * `baseUrl` and wrong for an inherited one. Measured on `tools/tsgo-7.0.2/lib/tsc` over the
+     * two-directory shape this pin compiles — `/other/base.json` writing `"baseUrl": "."` and
+     * `/foo/tsconfig.json` extending it — tsgo answers
+     * `foo/tsconfig.json(1,36): error TS5102: Option 'baseUrl' has been removed. Please remove it
+     * from your configuration.` with a chain naming `..`, then `/other`, then a star segment,
+     * where this compiler names the root's own directory instead. (The literal chain text is
+     * spelled out only in the assertion below: written here it would open a nested comment.)
+     *
+     * The code, the anchor and the message are tsgo's; only the chain's path differs, which is
+     * why (P18.132)'s nine measured values are all still byte-correct — every one of them is
+     * declared in the ROOT config.
+     *
+     * Closing it needs provenance that `CompilerOptions.baseUrl`, a bare `String`, does not
+     * carry: the declaring file is known while `extends` is being resolved and is thrown away
+     * before the option reaches the diagnostic. That is a round of its own, not a line in the
+     * helper.
+     *
+     * It became visible only when (P18.133) moved the default — below `"7.0"` this chain is not
+     * the one that renders — and the corpus case that would have shown it,
+     * `pathMappingInheritedBaseUrl`, is now dropped by `tsconfigInTestUsesRemovedFeature`'s
+     * `extends` walk, because its baseline is PRISTINE TypeScript 6's TS5101 and tsgo has no
+     * artifact for the case at all. So this pin is the only live record.
+     */
+    @Test
+    fun `residue - an inherited baseUrl computes the chain against the root and not the declaring file`() {
+        val row = diagnose(
+            """
+            // @Filename: /other/base.json
+            { "compilerOptions": { "baseUrl": "." } }
+
+            // @Filename: /foo/tsconfig.json
+            { "extends": "../other/base.json", "compilerOptions": { "strict": true } }
+
+            // @filename: /foo/a.ts
+            export const a = 1;
+            """,
+        ).single { it.code == 5101 || it.code == 5102 }
+        assert(row.code == 5102)
+        assert(row.message == "Option 'baseUrl' has been removed. Please remove it from your configuration.")
+        // tsgo, measured: the DECLARING directory. Ours: the root's own.
+        assert(row.messageChain == listOf("""  Use '"paths": {"*": ["./*"]}' instead."""))
+    }
+
+    /**
+     * Control for the residue above, and the reason it is narrow: when the extended config sits
+     * in the SAME directory as the root there is nothing to diverge about, and we agree with tsgo
+     * exactly — measured, `foo/tsconfig.json(1,29)` with the same chain this asserts.
+     */
+    @Test
+    fun `control - an inherited baseUrl from the same directory matches tsgo exactly`() {
+        val row = diagnose(
+            """
+            // @Filename: /foo/base.json
+            { "compilerOptions": { "baseUrl": "." } }
+
+            // @Filename: /foo/tsconfig.json
+            { "extends": "./base.json", "compilerOptions": { "strict": true } }
+
+            // @filename: /foo/a.ts
+            export const a = 1;
+            """,
+        ).single { it.code == 5101 || it.code == 5102 }
+        assert(row.code == 5102)
+        assert(row.messageChain == listOf("""  Use '"paths": {"*": ["./*"]}' instead."""))
+    }
+
 
     // ── the helper itself, over the values a fixture cannot reach ─────────────────────────
 

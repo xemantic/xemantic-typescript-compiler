@@ -80,7 +80,7 @@ class InteropFalseRemovedTest {
         val r = compile("// @module: commonjs\n// @esModuleInterop: false", exportEqualsProject)
         assert(r.diagnostics.none { it.code == 1259 })
         assert(r.diagnostics.none { it.code == 2594 })
-        assert(r.diagnostics.single { it.code == 5107 }.message.contains("esModuleInterop=false"))
+        assert(r.diagnostics.single { it.code == 5108 }.message.contains("esModuleInterop=false"))
         assert(r.js("d.js").contains("const cjs_1 = __importDefault(require(\"./cjs\"));"))
         assert(r.js("d.js").contains("var __importDefault ="))
     }
@@ -138,7 +138,7 @@ class InteropFalseRemovedTest {
     fun `allowSyntheticDefaultImports false - the default import of an export-equals module is legal`() {
         val r = compile("// @module: commonjs\n// @allowSyntheticDefaultImports: false", exportEqualsProject)
         assert(r.diagnostics.none { it.code == 1259 })
-        assert(r.diagnostics.single { it.code == 5107 }.message.contains("allowSyntheticDefaultImports=false"))
+        assert(r.diagnostics.single { it.code == 5108 }.message.contains("allowSyntheticDefaultImports=false"))
         assert(r.js("d.js").contains("__importDefault(require(\"./cjs\"))"))
     }
 
@@ -215,7 +215,7 @@ class InteropFalseRemovedTest {
             """,
         )
         assert(r.diagnostics.single { it.code == 1192 }.message == "Module '\"esm\"' has no default export.")
-        assert(r.diagnostics.none { it.code == 5107 })
+        assert(r.diagnostics.none { it.code == 5107 || it.code == 5108 })
     }
 
     /** Control: a real `export default` is a real default, and so it was before. */

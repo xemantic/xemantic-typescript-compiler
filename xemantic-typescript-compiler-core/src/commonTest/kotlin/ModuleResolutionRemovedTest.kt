@@ -158,12 +158,28 @@ class ModuleResolutionRemovedTest {
 
     // ── the removed-option rows: tsgo's spelling ──────────────────────────────────────
 
+    /**
+     * (P18.133) tsgo spells the value `Classic`, not the written `classic`. Measured:
+     *
+     *     tsconfig.json(1,44): error TS5108: Option 'moduleResolution=Classic' has been removed. Please remove it from your configuration.
+     */
     @Test
     fun `classic reports its removed value as tsgo spells it - Classic`() {
         val d = diagnose("export const a = 1;", directives = "// @strict: true\n// @module: commonjs\n// @moduleResolution: classic")
+        val row = d.singleOrNull { it.code == 5108 }
+        assert(row != null)
+        assert(row.message.contains("'moduleResolution=Classic'"))
+        assert(d.none { it.code == 5107 })
+    }
+
+    /** Control: an EXPLICIT `@typeScriptVersion` below `7.0` still selects the TS5107 ladder. */
+    @Test
+    fun `control - an explicit typeScriptVersion 6 0 keeps the classic row on the TS5107 ladder`() {
+        val d = diagnose("export const a = 1;", directives = "// @strict: true\n// @module: commonjs\n// @moduleResolution: classic\n// @typeScriptVersion: 6.0")
         val row = d.singleOrNull { it.code == 5107 }
         assert(row != null)
         assert(row.message.contains("'moduleResolution=Classic'"))
+        assert(d.none { it.code == 5108 })
     }
 
     /** tsgo: `error TS5108: Option 'moduleResolution=Classic' has been removed. Please remove it from your configuration.` */

@@ -40,7 +40,7 @@ import kotlin.test.Test
  * **Every expected value is tsgo 7.0.2's**, measured 2026-09-15 on 34 scratch projects
  * (`outFile: "bundle.js"` × `module` ∈ {unset, commonjs, esnext, system, amd, none} ×
  * reference directives × `declaration`) through `tsc -p . --outDir --listFiles`. At the
- * `"6.0"` default of `simulatedVersion` the row is TS5101 at the same anchor; tsgo's TS5102
+ * (P18.133) `"7.0"` default of `simulatedVersion` the row is tsgo's TS5102; TS5101 at the same anchor
  * wording needs `"typeScriptVersion": "7.0"` ((LEGACY.1)'s BLOCKED-PENDING-USER default).
  * `out` is an UNKNOWN option in tsgo (TS5023) and deliberately never sets `outFile`.
  *
@@ -127,12 +127,12 @@ class ProjectOutFileRemovedTest {
 
     // ── the option row, key-anchored as tsgo's ─────────────────────────────────────────────
 
-    /** tsgo: `tsconfig.json(1,C): error TS5102` under `"outFile"`, squiggle width 9 (`"outFile"` with its quotes); at the 6.0 default the code is TS5101 and nothing else is reported. */
+    /** tsgo: `tsconfig.json(1,C): error TS5102` under `"outFile"`, squiggle width 9 (`"outFile"` with its quotes) — (P18.133) the shipped default; at an explicit `typeScriptVersion` below 7.0 the code is TS5101. Nothing else is reported either way. */
     @Test
-    fun `control - outFile reports TS5101 at its quoted key and nothing else`() {
+    fun `outFile reports TS5102 at its quoted key and nothing else`() {
         val c = cell("\"outFile\": \"bundle.js\"")
         val row = c.rows.single()
-        assert(row.code == 5101)
+        assert(row.code == 5102)
         assert(row.file == "tsconfig.json")
         assert(row.line == 1)
         assert(row.character == column(c.json, "\"outFile\""))

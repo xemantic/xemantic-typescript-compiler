@@ -164,13 +164,35 @@ class AlwaysStrictRemovedTest {
     // ── The removed-option report — the ONE thing the explicit false still does ──
 
     /**
-     * At the harness's 6.0 default the report is the deprecation line, exactly as for
-     * its two siblings `esModuleInterop=false` / `allowSyntheticDefaultImports=false`
-     * (tsc 6.0.3 lists all three in one `checkDeprecations("6.0", "7.0", …)` block).
+     * (P18.133) At the shipped default the report is tsgo's removed-option line, exactly as for
+     * its two siblings `esModuleInterop=false` / `allowSyntheticDefaultImports=false` (tsgo
+     * emits all three from `createRemovedOptionDiagnostic`, `program.go:858-870`). Measured:
+     *
+     *     tsconfig.json(1,40): error TS5108: Option 'alwaysStrict=false' has been removed. Please remove it from your configuration.
      */
     @Test
-    fun `alwaysStrict false is reported as a deprecated option at the 6 0 default`() {
+    fun `alwaysStrict false is tsgo's removed-option row at the shipped default`() {
         val diagnostics = diagnose("var x = 1;", directives = "// @alwaysStrict: false")
+        val row = diagnostics.singleOrNull { it.code == 5108 }
+        assert(row != null)
+        assert(
+            row.message == "Option 'alwaysStrict=false' has been removed. " +
+                "Please remove it from your configuration.",
+        )
+        diagnostics should { have(none { it.code == 5107 }) }
+    }
+
+    /**
+     * Control: an EXPLICIT `@typeScriptVersion` below `7.0` still selects the TypeScript 6
+     * deprecation ladder (tsc 6.0.3 lists all three siblings in one
+     * `checkDeprecations("6.0", "7.0", …)` block), where `ignoreDeprecations` silences.
+     */
+    @Test
+    fun `control - an explicit typeScriptVersion 6 0 keeps the deprecated-option line`() {
+        val diagnostics = diagnose(
+            "var x = 1;",
+            directives = "// @typeScriptVersion: 6.0\n// @alwaysStrict: false",
+        )
         val row = diagnostics.singleOrNull { it.code == 5107 }
         assert(row != null)
         assert(
@@ -179,6 +201,11 @@ class AlwaysStrictRemovedTest {
                 "'\"ignoreDeprecations\": \"6.0\"' to silence this error.",
         )
         diagnostics should { have(none { it.code == 5108 }) }
+        val silenced = diagnose(
+            "var x = 1;",
+            directives = "// @typeScriptVersion: 6.0\n// @alwaysStrict: false\n// @ignoreDeprecations: 6.0",
+        )
+        silenced should { have(none { it.code == 5107 || it.code == 5108 }) }
     }
 
     /**

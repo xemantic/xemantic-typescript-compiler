@@ -144,15 +144,25 @@ class RemovedModuleKindsTest {
         assert(!a.contains("require("))
     }
 
-    // ── the option row: TS5107 at the 6.0 default, tsgo's TS5108 under 7.0 ───────────
+    // ── the option row: tsgo's TS5108 at the shipped default, TS5107 at an explicit 6.0 ────
 
     @Test
-    fun `a removed module kind reports TS5107 at the 6 0 default and still emits`() {
+    fun `a removed module kind reports tsgo's TS5108 at the shipped default and still emits`() {
         for ((kind, spelled) in listOf("amd" to "AMD", "umd" to "UMD", "system" to "System")) {
             val result = compileWith(kind, twoFile)
-            assert(result.diagnostics.count { it.code == 5107 && it.message.contains("'module=$spelled'") } == 1)
-            assert(result.diagnostics.none { it.code == 5108 })
+            assert(result.diagnostics.count { it.code == 5108 && it.message.contains("'module=$spelled'") } == 1)
+            assert(result.diagnostics.none { it.code == 5107 })
             assert(result.jsOutputs.size == 2)
+        }
+    }
+
+    /** Control: an EXPLICIT `@typeScriptVersion` below `7.0` still selects the TS5107 ladder. */
+    @Test
+    fun `control - an explicit typeScriptVersion 6 0 keeps a removed module kind on the TS5107 ladder`() {
+        for ((kind, spelled) in listOf("amd" to "AMD", "umd" to "UMD", "system" to "System")) {
+            val d = compileWith(kind, twoFile, extra = "\n// @typeScriptVersion: 6.0").diagnostics
+            assert(d.count { it.code == 5107 && it.message.contains("'module=$spelled'") } == 1)
+            assert(d.none { it.code == 5108 })
         }
     }
 
@@ -167,6 +177,37 @@ class RemovedModuleKindsTest {
             assert(d.none { it.code == 5107 })
         }
     }
+
+    /**
+     * **residue — this asserts an answer tsgo does NOT give, deliberately.** (P18.133)
+     * `module: none` is not a removed option in TypeScript 7; it is not a `module` VALUE at all.
+     * tsgo's `moduleOptionMap` (`tsoptions/enummaps.go:171`) has no `none` key and
+     * `createRemovedOptionDiagnostic` has no `ModuleKindNone` case, so tsgo answers the
+     * out-of-map ARGUMENT diagnostic at the VALUE and leaves the option unset — measured over
+     * `{ "compilerOptions": { "module": "None" } }`:
+     *
+     *     tsconfig.json(1,34): error TS6046: Argument for '--module' option must be: 'commonjs', 'es6', …
+     *
+     * where its three siblings above are
+     *
+     *     tsconfig.json(1,34): error TS5108: Option 'module=AMD' has been removed. Please remove it from your configuration.
+     *
+     * This compiler keeps `module=None` on the shared removed-option ladder, so the row moved
+     * TS5107 → TS5108 with its siblings when the default moved: **wrong before, wrong now, not
+     * widened by (P18.133)**. Closing it is the (LEGACY.1)(j4) `targetValueInvalid` mechanism one
+     * option over — a `moduleValueInvalid` flag plus a change to what `effectiveModule` derives
+     * from an unset option — which is a round of its own. The family has no active corpus
+     * coverage at all (none of the eight `@module: none` case files generates a subtest, and
+     * tsgo's testdata holds no `moduleNone*` baseline), so this pin is its only record.
+     */
+    @Test
+    fun `residue - module none is TS5108 here where tsgo answers TS6046`() {
+        val d = compileWith("none", "export const a = 1;").diagnostics
+        val row = d.single { it.code == 5108 }
+        assert(row.message == "Option 'module=None' has been removed. Please remove it from your configuration.")
+        assert(d.none { it.code == 6046 })
+    }
+
 
     // ── TS5071 has no emitter in tsgo ─────────────────────────────────────────────────
 

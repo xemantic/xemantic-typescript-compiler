@@ -62,7 +62,11 @@ import kotlin.test.Test
  * answers identically on every input (both map an unset target to ES2024 and a written es5
  * lands below ES2017/ES2018 either way).
  *
- * `@ignoreDeprecations: 6.0` ([DOWNLEVEL_ES5]) keeps TS5107 out of the exact-list assertions.
+ * [DOWNLEVEL_ES5]'s `@typeScriptVersion: 6.0` + `@ignoreDeprecations: 6.0` keep the TARGET's own
+ * option row out of the exact-list assertions. (P18.133) Both directives are load-bearing now:
+ * at the shipped `"7.0"` default that row is tsgo's unsilenceable TS5108, so an explicit
+ * version is the only thing that puts the fixture back on the silenceable 6.0 ladder. It is
+ * plumbing, not subject — `simulatedVersion` reaches no rule any pin here measures.
  * The corpus is a CONTROL here: every `@importHelpers` case at es5 is a `usesUnsupportedOption`
  * skip (35 active subtests carry the option, all at es2015+), so these pins are the whole
  * gate; every non-control pin was RED on the pre-change binary.

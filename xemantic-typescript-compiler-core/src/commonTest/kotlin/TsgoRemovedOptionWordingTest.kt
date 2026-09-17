@@ -45,8 +45,8 @@ import kotlin.test.Test
  *   `downlevelIteration`, `target=ES5`, `module=AMD`, `moduleResolution=Classic`,
  *   `esModuleInterop=false`, …) keeps the `has been removed` wording — tsgo's
  *   `createRemovedOptionDiagnostic` emits exactly TS5102 / TS5108, which is what this
- *   compiler already produces. Which VERSION reaches that wording by default is
- *   `simulatedVersion`, owned by (LEGACY.1).
+ *   compiler already produces. (P18.133) `simulatedVersion` now DEFAULTS to `"7.0"`, so that
+ *   wording is the shipped one; `SimulatedVersionDefaultTest` owns the default itself.
  *
  * `target: ES3` is a third thing again: `es3` is not a `target` VALUE in TypeScript 7's
  * enum map at all, so it is an invalid ARGUMENT — TS6046 at the value.
@@ -71,6 +71,22 @@ class TsgoRemovedOptionWordingTest {
         const a = 1;
         """,
         directives = "// @typeScriptVersion: $version",
+    )
+
+    /** The same fixture with NO version directive, i.e. at the shipped default. */
+    private fun configAtDefault(body: String) = diagnose(
+        """
+        // @Filename: /foo/tsconfig.json
+        {
+            "compilerOptions": {
+        $body
+            }
+        }
+
+        // @filename: /foo/a.ts
+        const a = 1;
+        """,
+        directives = "",
     )
 
     /** An option TypeScript 7 deleted from its table is TS5023 at the option NAME. */
@@ -129,18 +145,26 @@ class TsgoRemovedOptionWordingTest {
 
     /**
      * Negative control — an option TypeScript 7 still HAS keeps the `has been removed` /
-     * deprecation ladder rather than becoming TS5023. Whether the default `simulatedVersion`
-     * should make that TS5102 instead of TS5101 is (LEGACY.1)'s owner-gated question; what is
-     * pinned here is only that the option is not treated as unknown.
+     * deprecation ladder rather than becoming TS5023, at BOTH versions. (P18.133) settled which
+     * code the default reaches: `"7.0"`, so TS5102 — asserted on the default arm here, while the
+     * explicit-6.0 arm keeps TS5101.
      */
     @Test
     fun `negative control - an option TypeScript 7 still has is never TS5023`() {
-        val diagnostics = config(
+        val atSix = config(
             """        "outFile": "dist.js",
         "strict": true""",
             "6.0",
         )
-        diagnostics should { have(none { it.code == 5023 }) }
-        assert(diagnostics.any { it.code == 5101 || it.code == 5102 })
+        atSix should { have(none { it.code == 5023 }) }
+        assert(atSix.count { it.code == 5101 } == 1)
+        assert(atSix.none { it.code == 5102 })
+        val atDefault = configAtDefault(
+            """        "outFile": "dist.js",
+        "strict": true"""
+        )
+        atDefault should { have(none { it.code == 5023 }) }
+        assert(atDefault.count { it.code == 5102 } == 1)
+        assert(atDefault.none { it.code == 5101 })
     }
 }

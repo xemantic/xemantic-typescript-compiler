@@ -55,8 +55,8 @@ import kotlin.test.Test
  * a TS1192 message here spells the specifier (`Module '"esm"' …`) where tsgo spells the
  * resolved path without its extension — a pre-existing (LEGACY.0b) display divergence
  * outside this family, so the TS1192 pins check the message's shape and not its path;
- * and at the `"6.0"` default of `simulatedVersion` the removed-option row is TS5107,
- * not tsgo's TS5108 ((LEGACY.1)'s BLOCKED-PENDING-USER default) — its anchoring is
+ * and (P18.133) at the `"7.0"` default of `simulatedVersion` the removed-option row IS
+ * tsgo's TS5108 (TS5107 only under an explicit older version) — its anchoring is
  * [ProjectTsconfigOptionAnchorTest]'s subject, so here the row is only counted.
  */
 class ProjectInteropRemovedTest {

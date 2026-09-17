@@ -212,7 +212,7 @@ class TargetOptionSurfaceTest {
         // the option is UNSET afterwards, so the LATEST standard lib is loaded and the
         // es2015 member resolves — tsgo: `lib.es2025.full.d.ts`, no checker row
         d should { have(none { it.code == 2550 }) }
-        d should { have(none { it.code == 5107 }) }
+        d should { have(none { it.code == 5107 || it.code == 5108 }) }
     }
 
     @Test
@@ -223,11 +223,20 @@ class TargetOptionSurfaceTest {
         }
     }
 
+    /**
+     * (P18.133) `es5` is still IN tsgo's `targetOptionMap`, so it is a KNOWN value that was
+     * removed — TS5108 at the shipped default — and never the TS6046 that `es3`/`es4` get for
+     * not being in the map at all. That distinction is the whole point of this pin and it
+     * survives the default move; only the code on the removed ladder changed.
+     */
     @Test
-    fun `control - es5 keeps its deprecation ladder and is not TS6046`() {
+    fun `control - es5 keeps its removed-option ladder and is not TS6046`() {
         val d = diagnose("export const q = 1;", directives = "// @target: es5")
-        d should { have(any { it.code == 5107 }) }
+        d should { have(any { it.code == 5108 }) }
         d should { have(none { it.code == 6046 }) }
+        val atSix = diagnose("export const q = 1;", directives = "// @typeScriptVersion: 6.0\n// @target: es5")
+        atSix should { have(any { it.code == 5107 }) }
+        atSix should { have(none { it.code == 6046 }) }
     }
 
     @Test

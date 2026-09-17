@@ -59,8 +59,10 @@ import kotlin.test.Test
  *
  * The `@target: es5` directive is where a written es5 target is still expressible on the harness
  * path (`usesUnsupportedOption` drops it from the corpus, so these pins are its only gate here).
- * At the `"6.0"` default of `simulatedVersion` the option row is TS5101; tsgo's TS5102 wording
- * needs `@typeScriptVersion: 7.0` ((LEGACY.1)'s BLOCKED-PENDING-USER default). Pins named
+ * (P18.133) The shipped default of `simulatedVersion` is now `"7.0"`, so the option row IS
+ * tsgo's TS5102 and `ignoreDeprecations` no longer silences it; an explicit
+ * `@typeScriptVersion: 6.0` is what selects the old TS5101 ladder, and [DOWNLEVEL_ES5] carries
+ * one so the TARGET's row stays out of these fixtures. Pins named
  * `control -` were GREEN on the pre-change binary too and state the tsgo-shaped answer; every
  * other pin was RED on it (stash-ablated 2026-09-15).
  */
@@ -172,20 +174,70 @@ class DownlevelIterationRemovedTest {
 
     // ── the option row survives, at both versions, for both written values ───────────────────
 
+    /**
+     * (P18.133) At the shipped default this is tsgo's row, byte for byte. Measured on
+     * `tools/tsgo-7.0.2/lib/tsc` over `{ "compilerOptions": { "downlevelIteration": true } }`:
+     *
+     *     tsconfig.json(1,24): error TS5102: Option 'downlevelIteration' has been removed. Please remove it from your configuration.
+     *
+     * This is the one family of the thirteen the ACTIVE corpus also gates: the two
+     * `(target=es2015)` generator baselines that were `tsgoPendingBaselines` entries until this
+     * round, and the only kept-but-refused option whose `+` lines appear in tsgo's own diffs
+     * (23 of them, all this row).
+     */
     @Test
-    fun `control - a written downlevelIteration true reports TS5101 exactly once at the 6 0 default`() {
+    fun `a written downlevelIteration true is tsgo's TS5102 exactly once at the shipped default`() {
         val rows = diagnose("const a = 1;", "// @strict: true\n// @downlevelIteration: true")
-        val row = rows.single { it.code == 5101 }
-        assert(row.message == "Option 'downlevelIteration' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.")
-        assert(rows.none { it.code == 5102 || it.code == 5023 })
+        val row = rows.single { it.code == 5102 }
+        assert(row.message == "Option 'downlevelIteration' has been removed. Please remove it from your configuration.")
+        assert(rows.none { it.code == 5101 || it.code == 5023 })
     }
 
     /** tsgo: `!options.DownlevelIteration.IsUnknown()` — a written `false` is reported exactly like `true`. */
     @Test
-    fun `control - a written downlevelIteration false is reported exactly like true`() {
+    fun `a written downlevelIteration false is reported exactly like true`() {
         val rows = diagnose("const a = 1;", "// @strict: true\n// @downlevelIteration: false")
-        assert(rows.count { it.code == 5101 } == 1)
+        assert(rows.count { it.code == 5102 } == 1)
+        assert(rows.none { it.code == 5101 || it.code == 5023 })
+    }
+
+    /**
+     * Control: an EXPLICIT `@typeScriptVersion` below `7.0` still selects the TypeScript 6
+     * deprecation ladder, and there `ignoreDeprecations` still silences. Without this pin the
+     * shipped default is pinned by nothing an ablation could distinguish — restoring
+     * `?: "6.0"` would redden the two pins above while leaving no statement that the explicit
+     * ladder survives ((INC.16): a mode every pin installs is a default pinned by nothing).
+     */
+    @Test
+    fun `control - an explicit typeScriptVersion 6 0 keeps the TS5101 ladder and its suppression`() {
+        val rows = diagnose("const a = 1;", "// @strict: true\n// @typeScriptVersion: 6.0\n// @downlevelIteration: true")
+        val row = rows.single { it.code == 5101 }
+        assert(row.message == "Option 'downlevelIteration' is deprecated and will stop functioning in TypeScript 7.0. Specify compilerOption '\"ignoreDeprecations\": \"6.0\"' to silence this error.")
         assert(rows.none { it.code == 5102 || it.code == 5023 })
+        val silenced = diagnose(
+            "const a = 1;",
+            "// @strict: true\n// @typeScriptVersion: 6.0\n// @downlevelIteration: true\n// @ignoreDeprecations: 6.0",
+        )
+        assert(silenced.none { it.code == 5101 || it.code == 5102 || it.code == 5023 })
+    }
+
+    /**
+     * (P18.133) … and at the shipped default it does NOT. `ignoreDeprecations` is parsed by
+     * TypeScript 7 and read NOWHERE (`tsoptions/parsinghelpers.go:287` is its only write),
+     * which is why the removed branch returns above `isDeprecationSuppressed`. Measured: tsgo
+     * prints the same TS5102 row for `"ignoreDeprecations"` of `"5.0"`, `"6.0"`, `"7.0"` and an
+     * invalid value alike.
+     */
+    @Test
+    fun `ignoreDeprecations does not silence the removed row at the shipped default`() {
+        for (ign in listOf("5.0", "6.0")) {
+            val rows = diagnose(
+                "const a = 1;",
+                "// @strict: true\n// @downlevelIteration: true\n// @ignoreDeprecations: $ign",
+            )
+            assert(rows.count { it.code == 5102 } == 1)
+            assert(rows.none { it.code == 5101 })
+        }
     }
 
     /** tsgo: `Option 'downlevelIteration' has been removed. Please remove it from your configuration.` */

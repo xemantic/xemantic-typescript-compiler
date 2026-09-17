@@ -121,7 +121,7 @@ class TsconfigAnchorSharedScanTest {
             """,
             directives = "// @downlevelIteration: true",
         )
-        val row = diagnostics.singleOrNull { it.code == 5101 }
+        val row = diagnostics.singleOrNull { it.code == 5102 }
         assert(row != null)
         assert(row.fileName == "/foo/tsconfig.json")
         assert(row.line == 1)
@@ -132,7 +132,7 @@ class TsconfigAnchorSharedScanTest {
     /** Control — with no tsconfig anywhere the same directive stays file-less, as `tsc --downlevelIteration` is. */
     @Test
     fun `control - a directive-set option with no tsconfig at all stays file-less`() {
-        val row = diagnose("const a = 1;", directives = "// @downlevelIteration: true").singleOrNull { it.code == 5101 }
+        val row = diagnose("const a = 1;", directives = "// @downlevelIteration: true").singleOrNull { it.code == 5102 }
         assert(row != null)
         assert(row.fileName == null)
         assert(row.line == null)

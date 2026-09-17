@@ -66,18 +66,19 @@ class CpcSplitTest {
     // ── cpcCheckDeprecatedOptions ───────────────────────────────────────────
 
     @Test
-    fun `deprecated-options run - baseUrl reports TS5101 exactly once`() {
+    fun `deprecated-options run - baseUrl reports TS5102 exactly once`() {
         val d = compile(
             """
             // @baseUrl: ./src
             export const x = 1;
             """
         ).diagnostics
-        assert(d.count { it.code == 5101 } == 1)
+        assert(d.count { it.code == 5102 } == 1)
+        assert(d.none { it.code == 5101 })
     }
 
     @Test
-    fun `deprecated-options run - an explicit ES5 target reports TS5107`() {
+    fun `deprecated-options run - an explicit ES5 target reports TS5108`() {
         // The SECOND half of the same run (`addDeprecation`, TS5107/TS5108) —
         // a separate arm, so dropping either half of the region is visible.
         val d = compile(
@@ -86,22 +87,30 @@ class CpcSplitTest {
             export const x = 1;
             """
         ).diagnostics
-        assert(d.count { it.code == 5107 } == 1)
+        assert(d.count { it.code == 5108 } == 1)
+        assert(d.none { it.code == 5107 })
     }
 
+    /**
+     * (P18.133) The vehicle needs an explicit `@typeScriptVersion: 6.0` now: at the shipped
+     * `"7.0"` default both emitters return on the REMOVED branch, which sits above
+     * `isDeprecationSuppressed`, so `ignoreDeprecations` reaches nothing and this pin would
+     * measure an empty mechanism. Re-selecting the vehicle rather than weakening the
+     * assertion keeps the split boundary — `effectiveIgnoreDeprecations` and
+     * `isDeprecationSuppressed` are declared INSIDE this run and read by its emitters —
+     * exactly as pinned.
+     */
     @Test
-    fun `deprecated-options run - ignoreDeprecations 6_0 suppresses the baseUrl report`() {
-        // `effectiveIgnoreDeprecations` and `isDeprecationSuppressed` are declared
-        // INSIDE this run and read by its emitters — the boundary keeps them
-        // together, and this is the pin that says so.
+    fun `deprecated-options run - ignoreDeprecations 6_0 suppresses the baseUrl report on the 6 0 ladder`() {
         val d = compile(
             """
+            // @typeScriptVersion: 6.0
             // @baseUrl: ./src
             // @ignoreDeprecations: 6.0
             export const x = 1;
             """
         ).diagnostics
-        assert(d.none { it.code == 5101 })
+        assert(d.none { it.code == 5101 || it.code == 5102 })
     }
 
     // ── cpcCheckEmitOptionConflicts ─────────────────────────────────────────
@@ -312,7 +321,7 @@ class CpcSplitTest {
             export const x = 1;
             """
         ).diagnostics
-        assert(d.count { it.code == 5101 } == 1)
+        assert(d.count { it.code == 5102 } == 1)
         assert(d.count { it.code == 5069 } == 1)
         assert(d.count { it.code == 5053 } == 1)
         assert(d.count { it.code == 6054 } == 1)
