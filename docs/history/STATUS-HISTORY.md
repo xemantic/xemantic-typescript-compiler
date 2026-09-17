@@ -1,3 +1,15 @@
+**(P18.127) — (KIR.LOWER.6): A NAMED FUNCTION OR CLASS AS A VALUE, 19,840 / 0 / 65 (2026-09-17).**
+The KIR module goes 242 -> 275. `[1,2].map(f)` for a top-level named `f` REFUSED — passing a named function as a
+callback — and 21 of 33 characterised shapes refused with it. **The brief's premise was half wrong in the way that
+matters**: the values already existed and TWO of them were defective, both predating the arm and both hidden by the
+refusal — a function value minted a fresh forwarder per read, so `C.m === C.m` compiled and printed `false`, and a
+rest-parameter function read as a value took the fixed-arity forwarder and threw at run time. The arm alone would
+have shipped both into the commonest shape in the language. The lesson generalises: when a refusal is removed, the
+values behind it have never been exercised — audit them rather than assuming the refusal was the only gap. Both
+carriers are now lazy statics, identity holds across the namespace object too, and `.name` is answered on the
+carrier with no reflection in either spelling. 33 pins, 28 red against the parent, eight arms; the 33 pins are the
+only gate this work has, since the checker is untouched.
+
 **(P18.126) — (KIR.LOWER.5): A DYNAMIC `new`, AND THE LOADER SHAPE RUNS END TO END, 19,807 / 0 / 65 (2026-09-17).**
 The KIR module goes 223 -> 242. A pure `export * from` barrel, a namespace import, a `for...in`, a dynamic
 construction and a METHOD CALL on what was constructed now run together, at one construction operation and zero

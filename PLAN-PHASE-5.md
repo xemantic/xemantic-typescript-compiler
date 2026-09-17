@@ -25,6 +25,54 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.132) — (LEGACY.1)(g): `baseUrl` deleted, and the item's own skip rule would have thrown away a gradeable tsgo answer (2026-09-17)
+
+**OWNER DECISION.** Both halves of the (g) proposal were approved in session: widen the embedded-tsconfig skip,
+and follow tsgo 7.0.2 rather than pristine. (g) was the last unlanded sub-step of (LEGACY.1), so **(LEGACY.1) is
+CLOSED**. Suite **19,885 / 0 / 64** (9 modules), errors screen 3,061 / 0 and emit 5,646 / 0, cost gate +0.04% max,
+`huge_methods --fail-over 0` clean, warning gate clean with a live positive control, 8-profile grid 8 x 0/0 and
+EMIT 78 vs 78 byte-identical.
+
+**WHY IT WAS BLOCKED, AND WHAT THE MEASUREMENT SAID.** 27 active subtests set `baseUrl` in an EMBEDDED tsconfig,
+and tsgo has **no output of any kind** for a single one of them — not a baseline, not a `.diff`, nothing anywhere
+in `typescript-go-repo/testdata` — so (LEGACY.0b)'s *absent, no `.diff` -> keep tsc's* leg pins all 27 to PRISTINE
+TypeScript 6, which the 2026-09-12 directive says is not a reference. Deleting `baseUrl`'s behaviour would have
+moved them toward an answer no reference has. The same census says embedded `moduleResolution: node/node10/classic`
+is 18 cases with **1** tsgo answer, and embedded `target: es3/es5` is 9 cases with **7** — which is why `target`
+stays in and the other two come out. The receipt that the widening lost nothing gradeable is a COUNT, not an
+argument: `tsgoExpectedKeptTsc` **87 -> 3** while `adopted`, `new` and `deleted` are byte-identical.
+
+**THE BRIEF WAS WRONG IN THE DANGEROUS DIRECTION, AND THE AGENT CAUGHT IT.** Its embedded-only rule would have
+deleted `maxNodeModuleJsDepthDefaultsToZero` — the one gradeable case in the `moduleResolution` family. tsgo's
+harness LOADS an embedded tsconfig (`GetConfigNameFromFileName`, basename match) and seeds its options from it
+*before* `SetOptionsFromTestConfig` applies the directives, so a **directive OVERRIDES the embedded value**; that
+case writes `"moduleResolution": "node"` embedded and `// @moduleResolution: bundler` as a directive, so tsgo
+resolved Bundler and ran it. The shipped predicate exempts any option a directive names, which is exactly the
+disqualifier that keeps `target` out. Two further corrections to the item: the `baseUrl == null` conjuncts are
+EIGHT, not ten; and under the corrected rule `target` would skip NONE of its nine anyway.
+
+**TS5090 STAYS, AND ITS PREDICATE CHANGED TWICE.** The item recorded it as "goes only if tsgo has no such path
+(verify)". tsgo emits it at `program.go:995` and does NOT gate it on `baseUrl`, so dropping our
+`result.baseUrl == null` conjunct ENLARGES the population — and tsgo additionally exempts ABSOLUTE substitutions,
+which we did not. Landing only the first change manufactures false positives; both landed, and the second is
+pinned by a fixture that fails without it (ablation a2: 4 RED — POSIX root, DOS drive, bare dot, backslash).
+
+**TS5102's CHAIN IS COMPUTED, AND IT WAS MEASURED RATHER THAN REASONED.** tsgo appends TS5106
+`Use '"paths": {"*": ["./src/*"]}' instead.`, derived from the config path, and prints the row ALONE and file-less
+when there is no config file. Nine `baseUrl` values were run through `tools/tsgo-7.0.2/lib/tsc` to fix the
+rendering. The 6.0-default branch is untouched by construction (`removedMessageChain` defaults to `messageChain`),
+so this round moves no output at today's default — it exists so **(P18.133)** can move the default safely.
+
+**TWO MEASUREMENT TRAPS WORTH CARRYING.** tsgo's CLI SHORT-CIRCUITS after a config error: with `baseUrl` set it
+prints TS5102 and not one semantic row, even for an obvious type error elsewhere — so "the import is now
+unresolved" is not gradeable against its CLI. And TS5090 is HARNESS-ONLY here (`applyTsconfigOptions` raises it,
+`TsConfigLoader` does not), so a real project is silent where tsgo reports; pre-existing, recorded, not chased.
+
+**PINS**: `BaseUrlRemovedTest`, 15 pins, six ablation arms plus a both-green control. Arm a4 (restore
+`NameResolver`'s baseUrl leg) read 0 RED and is recorded as a MEASURED REDUNDANT guard rather than a blind pin —
+a4b and a4c are what establish that (a4b proves the fixture reaches the fallback; a4c proves the restored leg
+resolves the same file), which is the round-902 dead-arm discipline applied to a zero.
+
 ### Round (P18.131) — the JavaScript expando MEMBER model: a ledger row CLOSED, a tsc-6 walker RETIRED, and the display half was never a JavaScript question (2026-09-17)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,918 → 19,954 / 0 / 64** (+23 pins; skipped 65 → **64**, which is the receipt for the closed ledger row); `huge_methods.py --fail-over 0` 875 classes / 17,906 methods / **0 over**, with **`cpaSpineLeave` unchanged at 7,898** — every line of new code went into helpers, which is what last round's CLAUDE.md entry exists to force. `cost_gate.py` exit 0 with every delta unchanged from (P18.119)'s standing reading (max +0.15%). Corpus **errors 3,103 / 0** (the REAL gate) and **emit 5,688 / 0**. **The 8-profile grid is a REAL gate this round and reads 8 × `added=0 removed=0`** with 0 differing emitted files — it grades J4, whose change is TypeScript-visible, and controls J1/J2, which short-circuit on the file name.
@@ -1425,8 +1473,10 @@ CLAUDE.md § "AI agent mission".
   construction), `cost_gate.py`. Guard: `cloneTypeScriptRepo`'s KDoc (`build.gradle.kts:240-256`) still says
   "never pin to the tsgo submodule sha" — rewrite it to the new policy in the same commit.
 
-- [ ] **(LEGACY.1) — ALL SUB-STEPS LANDED 2026-09-15/16 ((P18.102)-(P18.113)) EXCEPT (g), WHICH IS
-  BLOCKED-PENDING-USER: (a)+(b) dead System helpers, (c) `alwaysStrict: false`, (d1) the tsconfig anchor,
+- [x] **(LEGACY.1) CLOSED 2026-09-17 — EVERY SUB-STEP LANDED ((P18.102)-(P18.113), (g) at (P18.132)).
+  The last one needed an owner decision and got it; what remains of the TS7-removal arc is (LEGACY.2)
+  (`module: "none"` is an invalid ARGUMENT, mechanism already built) and the `simulatedVersion` default,
+  which (P18.133) moves. PREVIOUS HEAD — ALL SUB-STEPS LANDED 2026-09-15/16 ((P18.102)-(P18.113)) EXCEPT (g): (a)+(b) dead System helpers, (c) `alwaysStrict: false`, (d1) the tsconfig anchor,
   (d2) the interop flags, (e) `moduleResolution`, (f) the module-kind fold, (h) `outFile`, (i)
   `downlevelIteration`, (j1)-(j4) the target surface, (k) the closing audit — ~1,800 lines of behaviour
   deleted or re-keyed, every family measured against tsgo 7.0.2 FIRST, and four of them found the item wrong
@@ -1487,7 +1537,7 @@ CLAUDE.md § "AI agent mission".
     80400-80401, 93224, 93268-93269, 93473, 93569, 187545, 188800-188802), `TypeScriptCompiler.kt:513-515, 750, 769,
     933-934`; `RemovedModuleKindsTest` keeps its 5107 pin and gains a 7.0 sibling asserting 5108; `Checker.kt`'s 38
     `UMD` hits are mostly `export as namespace` — leave them.
-  - [ ] (g) **BLOCKED-PENDING-USER on its BEHAVIOUR half, measured 2026-09-15 after (f)**: **28 ACTIVE corpus baselines set `baseUrl` in an EMBEDDED tsconfig and tsgo 7 has a baseline for NONE of them** (`pathsValidation1-4`, `pathMappingBasedModuleResolution_*`, `declarationEmitMonorepoBaseUrl`, `pathMappingInheritedBaseUrl`, `requireOfJsonFileWithoutResolveJsonModuleAndPathMapping`, …) — `tsconfigInTestUsesRemovedFeature` is deliberately narrow and does not drop `baseUrl` (nor embedded `moduleResolution: node/node10`, 16 cases with 1 tsgo baseline, nor embedded `target: es5`, 7 cases all WITH tsgo baselines). Deleting `baseUrl`'s anchoring therefore moves up to 28 green baselines with no tsgo answer to follow, which no gate can grade. PROPOSAL (a test-generation-pipeline change, so an owner decision): widen `tsconfigInTestUsesRemovedFeature` to `baseUrl` and `moduleResolution: node/node10/classic` — the same rule the directive skip already applies, extended to the embedded form, which is what the TS7-only directive implies; the alternative is 28+16 `LogicalParityDivergence` entries pinning tsc-6 behaviour tsgo refuses. Until decided, (g) may land ONLY the parts that move none of them: the TS5102 wording with tsgo's computed `Use '"paths": {"*": ["./<rel>/*"]}' instead.` chain (`program.go:824-833`), key-anchored ((P18.104)), and the four `baseUrl == null` conjuncts (e)/(f) made unconditional. `baseUrl` — `TypeScriptCompiler.kt:3259-3270` (bare lookup), the anchoring parameter through `:3061,
+  - [x] (g) LANDED 2026-09-17 ((P18.132) note) — **the owner approved BOTH halves of the PROPOSAL below**, so the widening and the deletion landed together: `tsconfigInTestUsesRemovedFeature` now covers the embedded `baseUrl` and `moduleResolution: node/node10/classic` forms (NOT `target`), `baseUrl`'s module-resolution behaviour is deleted, TS5102 carries tsgo's computed `paths` chain and TS5090 is un-gated. `tsgoExpectedKeptTsc` **87 -> 3** with `adopted`/`new`/`deleted` byte-identical, which is the receipt that only PRISTINE-pinned subtests left. **THE ITEM'S OWN RULE WOULD HAVE DELETED A GRADEABLE tsgo ANSWER**: tsgo's harness LOADS an embedded tsconfig and then lets the `// @directive`s OVERRIDE it, so an embedded-only regex drops `maxNodeModuleJsDepthDefaultsToZero` (embedded `node`, directive `bundler`), which tsgo RAN — the shipped predicate exempts an option a directive names. Two further corrections: the conjuncts are EIGHT not ten, and under the correct rule `target` would skip NONE of its nine (three carry an overriding `@target: es2015`, four write `ES3`, an invalid ARGUMENT), so leaving it out is right for a second reason. ORIGINAL: (g) **was BLOCKED-PENDING-USER on its BEHAVIOUR half, measured 2026-09-15 after (f)**: **28 ACTIVE corpus baselines set `baseUrl` in an EMBEDDED tsconfig and tsgo 7 has a baseline for NONE of them** (`pathsValidation1-4`, `pathMappingBasedModuleResolution_*`, `declarationEmitMonorepoBaseUrl`, `pathMappingInheritedBaseUrl`, `requireOfJsonFileWithoutResolveJsonModuleAndPathMapping`, …) — `tsconfigInTestUsesRemovedFeature` is deliberately narrow and does not drop `baseUrl` (nor embedded `moduleResolution: node/node10`, 16 cases with 1 tsgo baseline, nor embedded `target: es5`, 7 cases all WITH tsgo baselines). Deleting `baseUrl`'s anchoring therefore moves up to 28 green baselines with no tsgo answer to follow, which no gate can grade. PROPOSAL (a test-generation-pipeline change, so an owner decision): widen `tsconfigInTestUsesRemovedFeature` to `baseUrl` and `moduleResolution: node/node10/classic` — the same rule the directive skip already applies, extended to the embedded form, which is what the TS7-only directive implies; the alternative is 28+16 `LogicalParityDivergence` entries pinning tsc-6 behaviour tsgo refuses. Until decided, (g) may land ONLY the parts that move none of them: the TS5102 wording with tsgo's computed `Use '"paths": {"*": ["./<rel>/*"]}' instead.` chain (`program.go:824-833`), key-anchored ((P18.104)), and the four `baseUrl == null` conjuncts (e)/(f) made unconditional. `baseUrl` — `TypeScriptCompiler.kt:3259-3270` (bare lookup), the anchoring parameter through `:3061,
     3145-3155, 3335-3360` (`paths` SURVIVES and keeps anchoring on the tsconfig dir), `NameResolver.kt:604-609`; the
     ten `&& options.baseUrl == null` guards simplify to true; TS5090 (`CompilerOptions.kt:1319-1350`) goes only if
     tsgo has no such path (verify); the 7.0 diagnostic needs tsgo's COMPUTED chain `Use '"paths": {"*":
