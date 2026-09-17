@@ -46,6 +46,57 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
+### Round (P18.117) — (CHK.135) re-scoped by measurement: the mapped aliases were fine, the INDEX SIGNATURE read was not (2026-09-16)
+
+**Three commits** (`a5ca1510a` fix, `3364e10c2` test, this docs commit). **Suite 19,625 → 19,637 / 0 / 70** (+12
+pins), 9 modules asserted; corpus screen errors **3,097 / 0** and emit 5,688 / 0 — **the screen was the round's real
+gate and is what caught the refused half**; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0`
+exit 0 (875 classes); grid 8×`added=0 removed=0` and emit 78/78. `Checker.kt` 194,535 → **194,578** (+43); no other
+source file touched. `tsgoPendingBaselines` unchanged at 45 (no entry is this shape — both plausible mapped-type
+rows were re-run and still mismatch). **(CHK.135) stays OPEN on its mapped-type half; (LEGACY.0) stays OPEN** on
+(0b-20).
+
+**THE ITEM'S FRAMING WAS WRONG AND THE ORCHESTRATOR'S RE-SCOPING WAS ONLY HALF RIGHT.** (CHK.135) says "`Record<K,V>`
+AND OTHER LIB MAPPED ALIASES RESOLVE TO BARE `any`"; measured against tsgo, `Partial`, `Pick`, `Readonly`, `Omit`, a
+user homomorphic mapped type **and `Record` with a literal-union key** are ALL already correct. The orchestrator
+re-scoped it to "the index signature" — right, but it is **four mechanisms, not one**, and **element access already
+worked** for every hand-written index signature. What was broken: **PROPERTY access** (nine shapes — plain,
+interface-, class-, alias- and inheritance-declared, a declared member still winning, an optional index value) and
+**a numeric-named string key** (`o["0"]` typed as the base `string` and so never reached a NUMBER index).
+
+**THE READER.** `computeRawTypeOfPropertyAccess`'s miss path runs `getPropertyOfType` → the tuple-array leg
+((CHK.94)) → the function-object leg ((CHK.134)) → **`return anyType`** — the index signatures were never consulted
+for the TYPE. Round 479's `cmamIndexSignatureProvides` had already granted such a name EXISTENCE, which is exactly
+why the symptom was SILENCE rather than TS2339. One helper now serves both halves — `applicableIndexTypeForName`,
+tsc's `getApplicableIndexInfoForName`, **sharing its applicability test with round 479's existence check so the two
+cannot drift** — read at the property-access miss and at `elementAccessResultType`'s string-literal branch. The
+NUMBER-wins-for-a-numeric-name preference was measured on a both-indexes receiver (`e["0"]`→number, `e["k"]`→string,
+`e[0]`→number, `e.k`→string) and is identical in both compilers.
+
+**THE MAPPED-TYPE HALF WAS BUILT, PRICED AND REFUSED.** Giving a mapped type over `string`/`number` an index
+signature (tsc's `addMemberForKeyTypeWorker`) closes six more shapes and costs **THREE corpus baselines**. Two are
+`[P in keyof T]` over a generic `T` where our `keyof` degrades to `string` ((INC.25)) and are gateable; the third,
+`Record2<string,S>` → `Record2<"a",S>`, needs tsgo's ALIAS-VARIANCE probe (`relater.go:3391`:
+`source.alias.symbol == target.alias.symbol` → `getAliasVariances` → `relateVariances`), and a blanket same-alias
+shortcut **deletes five measured true positives**. CLAUDE.md records global variance analysis as a measured dead
+end (round 336, ~263 regressions), so this half is blocked on machinery the round could not build — recorded, not
+hand-waved.
+
+**THE GRID IS A CONTROL HERE, AND THE ARM PROVED IT.** The brief asserted the grid would be a gate "for the first
+time in many rounds" because the 8 profiles contain 59 index signatures. Arm a1 makes the property-access consult
+answer a deliberately WRONG type and **moves zero rows on all eight profiles**: those signatures are DECLARED, never
+dot-read in a position any diagnostic observes. So the round's only gate is its own pins — (CHK.124)'s law and
+(PARITY.1)'s blindness in one measurement, and the strongest argument in the round for having ablated at all.
+
+**PINS AND ABLATION.** 12 pins (9 positive, 3 controls); stash-ablation 9 of 9 non-controls red and 3 of 3 controls
+green against (P18.116)'s recorded final binary. Two arms redden disjoint sets of 7 and 2, summing to the pristine
+nine. Final md5 Checker `00ce58bc`, and a `javap -c -p` diff over 1,040,129 lines proves it bytecode-identical to
+the binary every screen and grid arm was taken on ((CHK.57)).
+
+**RESIDUE, RECORDED**: a WRITE through an index signature (`o.x = "s"`) is still silent; `noUncheckedIndexedAccess`
+is parsed and consulted by the spine but neither new call site adds tsgo's `| undefined` under it; and the whole
+mapped-type half above.
+
 ### Round (P18.116) — (LEGACY.0b) step 19: the duplicate-identifier follow-on index is per merge CALL, and (P18.93)'s irreconcilable source was two functions away (2026-09-16)
 
 **Three commits** (`4a5ff342f` fix, `5a0476564` test, this docs commit). **Suite 19,616 → 19,625 / 0 / 70** (+9 pins;

@@ -1,5 +1,19 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.122) — (LIB.6) THE NOMINAL HALF: A GENERATED CLASS IS NOW A `JsObject`, 19,726 / 0 / 65 (2026-09-17).**
+The KIR module goes 174 -> 194. A class instance could not reach an interface-typed slot, which the queue recorded
+as the only thing between a real library and a running program on the JVM backend. **The item's recorded failure
+was three rounds stale** — (P18.118) made its `IllegalArgumentException` unreachable — and re-measuring over 14
+shapes found two failure modes: a compile-time refusal for 10, and for the 3 reached through `Any?` a
+`ClassCastException` at ZERO dynamic ops, which is the silent one. **Neither of the item's two designs was
+chosen**: the 158-edge interface closure is refused on three costs its own census does not price, and the "cheap"
+shape does not work (a statically-bag method call never reaches the reflective fallback, and a type test shadows
+it). What landed is the answer the backend had already written down for object literals — extend `JsObject`,
+override the protocol over one's own slots, chain to the base through `super`, and answer a method call through a
+generated `when` rather than reflection. All 14 shapes run at `dynamicOps = 0`. 20 pins, 6 arms; `huge_methods` run
+over the KIR module as well as core, since the default census is core-only; the grid is inapplicable by
+construction and that byte-identity is its receipt.
+
 **(P18.121) — (LEGACY.0b) STEP 21: THREE MECHANISMS WHOSE EMITTERS WE ALREADY HAD, 19,706 / 0 / 65 (2026-09-16).**
 The cluster was picked on one property — `Checker.kt` already emitted all three codes — so each row was a gate that
 did not fire rather than a missing feature, and the first job was to find the existing emitter. TS8026: the

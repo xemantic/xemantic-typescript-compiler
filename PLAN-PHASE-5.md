@@ -25,6 +25,69 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.127) — (KIR.LOWER.6): the values existed and TWO OF THEM WERE WRONG, which the missing arm was hiding (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,807 → 19,840 / 0 / 65**, the KIR module **242 → 275**;
+`huge_methods.py --fail-over 0` over BOTH core (875) and the KIR module (114, `lowerCall` unchanged at 4,620,
+`lowerNew` at 1,085, `lowerPropertyRead` 973); `cost_gate.py` exit 0 and the core corpus screen 8,790 / 0 are
+CONTROLS, and **the 8-profile grid is inapplicable by construction — `Checker.class` is BYTE-IDENTICAL to
+(P18.125)'s landed binary**. `JsRuntime.kt` was touched; the generator was re-run by the agent AND independently by
+the orchestrator (exit 0, every anchor matched exactly once, all 12 `java.` hits inside comments). No native build.
+
+**THE GAP IS ORDINARY CODE**: `lowerIdentifier` had an arm for a local, a module field and the intrinsic names and
+**none for a generated FUNCTION or CLASS**, so `[1,2].map(f)` for a top-level named `f` REFUSED — passing a named
+function as a callback, which is everywhere in real TypeScript. 21 of the 33 characterised shapes refused.
+
+**AND THE BRIEF'S PREMISE — "the values already exist, only the arm is missing" — WAS HALF WRONG IN THE WAY THAT
+MATTERS: TWO OF THE THREE VALUES WERE DEFECTIVE, AND BOTH DEFECTS PREDATE THE ARM.** `C.m === C.m` **compiled, ran
+and printed `false`** (a fresh forwarder per read); a rest-parameter function read as a value took the FIXED-ARITY
+forwarder and **compiled and then threw `ClassCastException: Double cannot be cast to JsArray`**. Both were
+reachable through `ns.f` and `C.m` before this round and neither had a pin. **The arm alone would have shipped both
+into the commonest shape in the language** — which is the round's reusable lesson: when a refusal is removed, the
+values behind it have never been exercised, so audit them rather than assuming the refusal was the only gap.
+
+**THE CARRIER QUESTION, ANSWERED IN BOTH DIRECTIONS.** A bare `Cls` produces a `JsConstructor` and a bare `f` a
+`FunctionN` — deliberately different, for (KIR.LOWER.5)'s measured reason — and **it is the SAME OBJECT the
+namespace object hands out** (`Cls === ns.Cls` and `bump === ns.bump` both `true`, pinned), because both paths go
+through the same memoizing builders. Both carriers are now lazy statics, which is what makes identity hold by
+construction rather than by accident. Scope of that claim is ONE FILE: two files taking a class's value mint two
+carriers, (P18.124)'s stated divergence inherited unchanged.
+
+**`.name` IS ANSWERED ON THE CARRIER AND REACHES NO REFLECTION, MEASURED BOTH WAYS.** A qualified `Cls.name`/
+`f.name` is a string CONSTANT (`jsGet == 0`, pinned); a dynamic `(Cls as any).name` is answered by a new `jsGet`
+arm placed ABOVE `else -> reflectiveGet`, where it previously reached reflection and threw (a Kotlin `public val`
+is a private field behind a getter, found under neither spelling). Every other member of a class value, and every
+member of a function value, now refuse BY NAME. **The brief predicted the qualified read reached reflection and it
+does not** — it refuses one layer earlier at `staticOwnerOf`; the `any`-typed read is the site that did.
+
+**A SECOND HALF THE ARM FORCED, AND IT IS A CHECKER QUIRK REACHED FOR THE FIRST TIME.** `variableType` must DECLINE
+the checker's answer for a class-value initializer, because this checker types a class value as its INSTANCE type
+((CHK.73)) — without it the field erases to `program.Cls` and storing the carrier is `cannot coerce JsConstructor
+to program.Cls`. Answered syntactically, precisely because the checker's type is the thing that cannot be trusted
+here; arm a3 is what measures it.
+
+**PINS AND ABLATION.** `KirDeclaredValueTest`, **33 cases, 857 lines**; **28 RED against the pre-change binary**,
+the 5 green being four refusal controls and one **measured REDUNDANT guard** (a class declaring its own
+`static name` — the static-field arm answers it on both arms, and tsgo refuses such a program outright with
+TS2699, so no valid program reaches the ordering). Eight arms, one injected mistake each, dry-run and
+anchor-count-1 asserted, `cmp`-verified on BOTH files per arm — a7 is runtime-only and its lowering md5 equals the
+final one, which is the cross-check. A countdown pin in `KirDynamicNewTest` was **re-pointed onto a shape that
+still refuses** (a class declared in a function body) rather than edited to whatever the new code prints.
+
+**TWO PINS HAD TO BE RE-SELECTED, AND THE FIRST IS THE SHARPER LESSON: THE REST-PARAMETER DEFECT IS UNREACHABLE
+THROUGH `map` IN VALID TYPESCRIPT** (tsgo rejects it, TS2345), so a pin written on the obvious fixture would have
+been a claim about a program no reference compiles. The pin is `(a: number, ...xs: any[])`, which tsgo accepts and
+node answers for.
+
+**WHAT REMAINS IN THIS FAMILY**, each a loud refusal or a stated divergence and all pinned: a function or class
+declared inside a BODY reaches neither table and its CALL refuses too, so that is a closure capability rather than
+a value-arm gap; `f.length`/`Cls.length` are deliberately not half-answered, since `length` has a dynamic half a
+`FunctionN` cannot carry and answering only the qualified spelling would make the two disagree; `(f as any).name`
+refuses where node answers; an ABSENT member of a class value refuses where node says `undefined`, deliberately,
+because the carrier holds no statics and `undefined` would be a SILENT wrong answer for a real static; a generic
+function in a value position refuses at the erasure. **And a checker gap found in passing: we accept
+`static name`, which tsgo refuses with TS2699.**
+
 ### Round (P18.126) — (KIR.LOWER.5): a dynamic `new`, and the LOADER SHAPE runs end to end (2026-09-17)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,788 → 19,807 / 0 / 65**, the KIR module **223 → 242**;
@@ -562,57 +625,6 @@ an exact parameter count, so a call omitting an optional parameter still reaches
 mechanical, not measured** — no `jsSet` is emitted for a declared `this` member any more, so the `JsTypeError`
 cannot fire, but no native build was run and someone should bank it with `scripts/kir-native.sh`; and a write
 through an `any` alias of a generated class still throws, pre-existing and untouched.
-
-### Round (P18.117) — (CHK.135) re-scoped by measurement: the mapped aliases were fine, the INDEX SIGNATURE read was not (2026-09-16)
-
-**Three commits** (`a5ca1510a` fix, `3364e10c2` test, this docs commit). **Suite 19,625 → 19,637 / 0 / 70** (+12
-pins), 9 modules asserted; corpus screen errors **3,097 / 0** and emit 5,688 / 0 — **the screen was the round's real
-gate and is what caught the refused half**; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0`
-exit 0 (875 classes); grid 8×`added=0 removed=0` and emit 78/78. `Checker.kt` 194,535 → **194,578** (+43); no other
-source file touched. `tsgoPendingBaselines` unchanged at 45 (no entry is this shape — both plausible mapped-type
-rows were re-run and still mismatch). **(CHK.135) stays OPEN on its mapped-type half; (LEGACY.0) stays OPEN** on
-(0b-20).
-
-**THE ITEM'S FRAMING WAS WRONG AND THE ORCHESTRATOR'S RE-SCOPING WAS ONLY HALF RIGHT.** (CHK.135) says "`Record<K,V>`
-AND OTHER LIB MAPPED ALIASES RESOLVE TO BARE `any`"; measured against tsgo, `Partial`, `Pick`, `Readonly`, `Omit`, a
-user homomorphic mapped type **and `Record` with a literal-union key** are ALL already correct. The orchestrator
-re-scoped it to "the index signature" — right, but it is **four mechanisms, not one**, and **element access already
-worked** for every hand-written index signature. What was broken: **PROPERTY access** (nine shapes — plain,
-interface-, class-, alias- and inheritance-declared, a declared member still winning, an optional index value) and
-**a numeric-named string key** (`o["0"]` typed as the base `string` and so never reached a NUMBER index).
-
-**THE READER.** `computeRawTypeOfPropertyAccess`'s miss path runs `getPropertyOfType` → the tuple-array leg
-((CHK.94)) → the function-object leg ((CHK.134)) → **`return anyType`** — the index signatures were never consulted
-for the TYPE. Round 479's `cmamIndexSignatureProvides` had already granted such a name EXISTENCE, which is exactly
-why the symptom was SILENCE rather than TS2339. One helper now serves both halves — `applicableIndexTypeForName`,
-tsc's `getApplicableIndexInfoForName`, **sharing its applicability test with round 479's existence check so the two
-cannot drift** — read at the property-access miss and at `elementAccessResultType`'s string-literal branch. The
-NUMBER-wins-for-a-numeric-name preference was measured on a both-indexes receiver (`e["0"]`→number, `e["k"]`→string,
-`e[0]`→number, `e.k`→string) and is identical in both compilers.
-
-**THE MAPPED-TYPE HALF WAS BUILT, PRICED AND REFUSED.** Giving a mapped type over `string`/`number` an index
-signature (tsc's `addMemberForKeyTypeWorker`) closes six more shapes and costs **THREE corpus baselines**. Two are
-`[P in keyof T]` over a generic `T` where our `keyof` degrades to `string` ((INC.25)) and are gateable; the third,
-`Record2<string,S>` → `Record2<"a",S>`, needs tsgo's ALIAS-VARIANCE probe (`relater.go:3391`:
-`source.alias.symbol == target.alias.symbol` → `getAliasVariances` → `relateVariances`), and a blanket same-alias
-shortcut **deletes five measured true positives**. CLAUDE.md records global variance analysis as a measured dead
-end (round 336, ~263 regressions), so this half is blocked on machinery the round could not build — recorded, not
-hand-waved.
-
-**THE GRID IS A CONTROL HERE, AND THE ARM PROVED IT.** The brief asserted the grid would be a gate "for the first
-time in many rounds" because the 8 profiles contain 59 index signatures. Arm a1 makes the property-access consult
-answer a deliberately WRONG type and **moves zero rows on all eight profiles**: those signatures are DECLARED, never
-dot-read in a position any diagnostic observes. So the round's only gate is its own pins — (CHK.124)'s law and
-(PARITY.1)'s blindness in one measurement, and the strongest argument in the round for having ablated at all.
-
-**PINS AND ABLATION.** 12 pins (9 positive, 3 controls); stash-ablation 9 of 9 non-controls red and 3 of 3 controls
-green against (P18.116)'s recorded final binary. Two arms redden disjoint sets of 7 and 2, summing to the pristine
-nine. Final md5 Checker `00ce58bc`, and a `javap -c -p` diff over 1,040,129 lines proves it bytecode-identical to
-the binary every screen and grid arm was taken on ((CHK.57)).
-
-**RESIDUE, RECORDED**: a WRITE through an index signature (`o.x = "s"`) is still silent; `noUncheckedIndexedAccess`
-is parsed and consulted by the spine but neither new call site adds tsgo's `| undefined` under it; and the whole
-mapped-type half above.
 
 ## QUEUE
 
@@ -3147,14 +3159,23 @@ CLAUDE.md § "AI agent mission".
   constructs through prototypes this backend does not have). The mirror defect closed too: CALLING a class used to
   silently CONSTRUCT. Nothing reaches reflection, and the carrier is a lazy static so `ns.C === ns.C` holds by
   construction rather than by the accident that a non-capturing lambda is a JVM singleton.**
-- [ ] **(KIR.LOWER.6) A GENERATED CLASS OR FUNCTION NAME IN A *VALUE* POSITION REFUSES — `lowerIdentifier` has an
-  arm for neither, so `const c: any = Cls`, `typeof Cls`, `make(Cls)`, `{ Cls }`, `Cls.name` and — the one that
-  makes this ordinary rather than exotic — **`[1,2].map(f)` for a top-level named `f`** all refuse (found and
-  sized 2026-09-17 by (P18.126), deliberately out of its scope because the namespace object already gives the
-  loader its value).** `namespaceExportValue` already maps BOTH declaration kinds, so the shape is that helper
-  plus a `Cls.name` answer on the carrier — today a `jsGet` there would reach `reflectiveGet`, which is the
-  (KIR.LOWER.3) hazard. Expect a BEHAVIOUR case beside every shape case: the op counter reads 0 for a program that
-  never compiled ((P18.118)/(P18.124)).
+- [x] **(KIR.LOWER.6) CLOSED 2026-09-17 ((P18.127) note) — a named FUNCTION or CLASS in a value position is
+  lowered, so `[1,2].map(f)` works; 21 of 33 characterised shapes refused before. **THE VALUES ALREADY EXISTED AND
+  TWO OF THEM WERE WRONG, both predating the arm and both hidden BY the refusal**: `C.m === C.m` compiled and
+  printed `false` (a fresh forwarder per read), and a REST-parameter function read as a value took the fixed-arity
+  forwarder and threw `ClassCastException` at run time. Both carriers are now lazy statics and identity holds by
+  construction, including across the namespace object (`Cls === ns.Cls`). `.name` is answered on the carrier and
+  reaches NO reflection in either spelling; every other member refuses BY NAME. A class-value initializer needs
+  `variableType` to DECLINE the checker's answer, since this checker types a class value as its INSTANCE type
+  ((CHK.73)). **RESIDUES, all pinned**: a function or class declared inside a BODY (a closure capability — its
+  CALL refuses too); `f.length`/`Cls.length` (deliberately not half-answered); `(f as any).name`; an ABSENT member
+  of a class value (refusing is deliberate — `undefined` would be a silent wrong answer for a real static); a
+  GENERIC function at the erasure; and cross-file carrier identity ((P18.124)'s inherited divergence).**
+- [ ] **(CHK.138) WE ACCEPT `static name` ON A CLASS AND tsgo REFUSES IT WITH TS2699 — `Static property 'name'
+  conflicts with built-in property 'Function.name'` (found 2026-09-17 by (P18.127) while pinning a carrier's
+  `.name`, and it is why that pin's guard is a MEASURED redundant one: no valid program can reach the ordering it
+  guards).** Small and ours-only-silent rather than ours-only-noisy, i.e. a MISSING diagnostic. Size the active
+  corpus for TS2699 before starting — it may be a one-fixture family like TS6205 was ((P18.121)).
 - [ ] **(CHK.137) AN OURS-ONLY TS2351 ON A CLASS HELD IN A `const` — `class Cls {}; const c = Cls; new c()` is
   "This expression is not constructable" here and **0 errors in tsgo 7.0.2** (measured 2026-09-17 by (P18.126)
   while building its negative controls).** Small, and it is a FALSE POSITIVE on legal code, so it is worth a
