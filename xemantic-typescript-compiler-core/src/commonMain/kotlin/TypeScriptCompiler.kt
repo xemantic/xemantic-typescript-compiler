@@ -390,6 +390,16 @@ class TypeScriptCompiler {
             optionDesc: String,
             tsconfigKey: String? = null,
             messageChain: List<String> = emptyList(),
+            /**
+             * (LEGACY.1)(g) The chain of the REMOVED (TS5102) row, which is not always the
+             * deprecated (TS5101) one. TypeScript 6 pointed every removed option at one
+             * migration URL; TypeScript 7 never emits TS5101 at all and gives some options a
+             * COMPUTED suggestion instead — `baseUrl`'s is `Use '"paths"…' instead.`
+             * (TS5106, `program.go:822-833`). Defaults to [messageChain] so every other
+             * caller keeps today's behaviour at both versions, which is what keeps this
+             * round from moving any output at the `"6.0"` default of [simulatedVersion].
+             */
+            removedMessageChain: List<String> = messageChain,
             deprecationVersion: String = "6.0",
             stopFunctioningVersion: String = "7.0",
             withMigrationUrl: Boolean = true,
@@ -406,7 +416,7 @@ class TypeScriptCompiler {
                     character = pos?.keyCharacter,
                     start = pos?.keyStart,
                     length = pos?.keyLength,
-                    messageChain = messageChain,
+                    messageChain = removedMessageChain,
                 ))
                 return
             }
@@ -461,9 +471,15 @@ class TypeScriptCompiler {
                 length = pos?.keyLength,
             ))
         }
-        // baseUrl deprecation (TS5101 with migration URL)
+        // baseUrl. At the `"6.0"` default of `simulatedVersion` this is TS5101 with the
+        // TypeScript 6 migration URL, unchanged; at `"7.0"` it is tsgo's TS5102 carrying the
+        // COMPUTED `paths` suggestion instead of the URL ((LEGACY.1)(g), `program.go:822-833`).
         if (options.baseUrl != null) addDeprecation5101("baseUrl", tsconfigKey = "baseurl",
-            messageChain = listOf("  Visit https://aka.ms/ts6 for migration information."))
+            messageChain = listOf("  Visit https://aka.ms/ts6 for migration information."),
+            removedMessageChain = baseUrlPathsSuggestion(
+                options.baseUrl,
+                tsconfigAnchorFor("baseurl", tsconfigPos)?.fileName,
+            ))
         // Options deprecated in TypeScript 5.0 (TS5101 with "will stop functioning in 5.5")
         // These use deprecationVersion="5.0" and stopFunctioningVersion="5.5"
         // Note: no migration URL chain for these options
@@ -2155,7 +2171,6 @@ class TypeScriptCompiler {
                     sourceFile, file.fileName, allTsFileNames, options.moduleSuffixes,
                     includeReferencePathDeps = true,
                     paths = options.paths,
-                    baseUrl = options.baseUrl,
                     tsconfigDir = computedTsconfigDir,
                     rootDirs = options.rootDirs,
                     symlinkMap = parsed.symlinkMap,
@@ -2167,7 +2182,6 @@ class TypeScriptCompiler {
                     sourceFile, file.fileName, allTsFileNames, options.moduleSuffixes,
                     includeReferencePathDeps = false,
                     paths = options.paths,
-                    baseUrl = options.baseUrl,
                     tsconfigDir = computedTsconfigDir,
                     rootDirs = options.rootDirs,
                     symlinkMap = parsed.symlinkMap,
@@ -3108,6 +3122,85 @@ fun computeParserFlags(fileName: String, content: String, options: CompilerOptio
     )
 }
 
+// (LEGACY.1)(g) tsgo's COMPUTED message chain for the removed `baseUrl` option —
+// `program.go:822-833`, rendered through `Use_0_instead` (TS5106, category Message,
+// `diagnostics_generated.go:2361`). Verbatim:
+//
+//     relative := GetRelativePathFromFile(configFilePath(), options.BaseUrl, …)
+//     if !(hasPrefix(relative, "./") || hasPrefix(relative, "../")) { relative = "./" + relative }
+//     suggestion := CombinePaths(relative, "*")
+//     useInstead = `"paths": {"*": [` + json.Marshal(suggestion) + `]}`
+//
+// so for a config at `<dir>/tsconfig.json` with `"baseUrl": "./src"` the rendered line is
+//
+//     Use '"paths": ⟨star-key⟩: ["./src/⟨star⟩"]⟩' instead.
+//
+// (spelled with ⟨⟩ because the literal contains a slash-star, which opens a NESTED Kotlin
+// block comment — see CLAUDE.md; `TsgoRemovedOptionWordingTest` carries the real bytes).
+//
+// MEASURED against `tools/tsgo-7.0.2/lib/tsc` 2026-09-17, one row per written value:
+//   "." and ""      -> ./⟨star⟩          (an EMPTY baseUrl still reports: tsgo tests
+//                                          `BaseUrl != ""` AFTER absolutization, so `""`
+//                                          IS the config directory)
+//   "src", "./src", "./src/"  -> ./src/⟨star⟩
+//   ".."            -> ./../⟨star⟩       (`..` alone is not prefixed `../`, so it gets `./`)
+//   "../sibling"    -> ../sibling/⟨star⟩
+//   "/abs/path"     -> the `../`-walk from the config directory to it
+//
+// tsgo guards the whole chain on `configFilePath() != ""`: with `--baseUrl` on the command
+// line and no config file it emits the TS5102 row ALONE (measured). [configFileName] is null
+// in exactly that case here, because [tsconfigOptionPositions] is empty without a tsconfig.
+//
+// STATED DIVERGENCE: an ABSOLUTE `baseUrl` under a config whose own path is RELATIVE (only
+// the corpus harness's `@Filename: tsconfig.json`) cannot reproduce tsgo's `../`-walk, since
+// the walk needs the config's absolute location. It is unreachable: tsgo's harness SKIPS
+// every case whose resolved options set `baseUrl` (`harnessutil.go:1221`), so no baseline
+// can hold that pair, and a real project's config path is always absolute.
+internal fun baseUrlPathsSuggestion(baseUrl: String, configFileName: String?): List<String> {
+    if (configFileName == null) return emptyList()
+    val configDir = PathUtil.dirname(configFileName)
+    val written = baseUrl.trim()
+    // `GetRelativePathFromFile(config, baseUrl)` after tsgo has absolutized `baseUrl`
+    // against the config directory — for a RELATIVE value that round-trips to the value
+    // itself, normalized, so only an absolute one needs the two-sided walk.
+    // Rooted the way tsgo's `GetEncodedRootLength` counts it, not the way
+    // `PathUtil.isAbsolute` does: that one serves MODULE SPECIFIERS, where a bare `c:/…`
+    // is not a thing, and widening it would change resolution. A DOS drive matters here
+    // because `baseUrl: c:/root` is a real corpus shape. `normalize` has already folded
+    // every backslash to a forward slash, so only the two forward-slash forms are tested.
+    val normalized = PathUtil.normalize(written)
+    val rooted = normalized.startsWith("/") ||
+        (normalized.length > 2 && normalized[1] == ':' && normalized[2] == '/')
+    val relative = if (rooted) {
+        relativeDirPath(configDir, normalized)
+    } else {
+        if (normalized == ".") "" else normalized
+    }
+    val prefixed = if (relative.startsWith("./") || relative.startsWith("../")) relative else "./$relative"
+    // `CombinePaths(prefixed, "*")`
+    val star = "*"
+    val suggestion = if (prefixed.endsWith("/")) prefixed + star else "$prefixed/$star"
+    // `json.Marshal` of a Go string: quoted, with `\` and `"` escaped.
+    val quoted = "\"" + suggestion.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+    return listOf("  Use '\"paths\": {\"$star\": [$quoted]}' instead.")
+}
+
+/**
+ * The path from [fromDir] to [to], both already normalized, using `../` to climb — the
+ * part of tsgo's `GetRelativePathFromDirectory` this compiler needs and
+ * [PathUtil.relativeTo] does not do (it answers [to] unchanged when it is not below
+ * [fromDir]). Case-sensitive, which matches the corpus harness and every Vfs here.
+ */
+private fun relativeDirPath(fromDir: String, to: String): String {
+    fun segments(p: String) = p.split('/').filter { it.isNotEmpty() }
+    val from = segments(fromDir)
+    val target = segments(to)
+    var common = 0
+    while (common < from.size && common < target.size && from[common] == target[common]) common++
+    val up = List(from.size - common) { ".." }
+    return (up + target.drop(common)).joinToString("/")
+}
+
 /**
  * (INC.57) The `/// <reference path="…"/>` matcher, compiled ONCE.
  *
@@ -3127,7 +3220,6 @@ private fun extractRelativeImports(
     moduleSuffixes: List<String>? = null,
     includeReferencePathDeps: Boolean = false,
     paths: Map<String, List<String>> = emptyMap(),
-    baseUrl: String? = null,
     tsconfigDir: String? = null,
     rootDirs: List<String>? = null,
     symlinkMap: Map<String, String> = emptyMap(),
@@ -3215,12 +3307,12 @@ private fun extractRelativeImports(
         // For non-relative specifiers, try `paths` mapping first. When a pattern matches
         // (e.g. "@speedy/*/testing" matches "@speedy/folder1/testing" with wildcard
         // capturing "folder1"), substitute the wildcard into each substitution and
-        // resolve against tsconfig dir + baseUrl. If the resolved file is in
+        // resolve against the tsconfig dir. If the resolved file is in
         // allTsFileNames, record the dep and continue. This is essential for
         // dependency ordering when paths-mapped imports refer to files that need to
         // be emitted before the importer.
         if (!specifier.startsWith("./") && !specifier.startsWith("../") && paths.isNotEmpty()) {
-            val mapped = resolvePathsMapping(specifier, paths, baseUrl, tsconfigDir, allTsFileNames)
+            val mapped = resolvePathsMapping(specifier, paths, tsconfigDir, allTsFileNames)
             if (mapped != null) {
                 deps.add(mapped)
                 continue
@@ -3328,28 +3420,13 @@ private fun extractRelativeImports(
                 }
             }
         }
-        // For bare specifiers that didn't resolve via the standard candidates list, try
-        // baseUrl-anchored lookup first (when set): "<baseUrl>/<specifier>.ts" / .tsx / .d.ts.
-        // This is required for tsconfig-style projects with `baseUrl` that import via
-        // non-relative paths (e.g. `import {x} from "folder2/file2"` with `baseUrl: c:/root`
-        // resolves to c:/root/folder2/file2.ts). Path-mapping via `paths` was already tried
-        // above; this branch is the bare baseUrl fallback.
-        if (!found && !specifier.startsWith("./") && !specifier.startsWith("../") && !baseUrl.isNullOrEmpty()) {
-            val baseDir = baseUrl.trimEnd('/')
-            val probes = listOf(
-                "$baseDir/$specifier.ts",
-                "$baseDir/$specifier.tsx",
-                "$baseDir/$specifier.d.ts",
-                "$baseDir/$specifier/index.ts",
-                "$baseDir/$specifier/index.tsx",
-                "$baseDir/$specifier/index.d.ts",
-            )
-            val match = probes.firstOrNull { it in allTsFileNames }
-            if (match != null) {
-                deps.add(match)
-                found = true
-            }
-        }
+        // (LEGACY.1)(g) The bare-`baseUrl` fallback that used to sit here — probing
+        // `<baseUrl>/<specifier>.{ts,tsx,d.ts}` and its `/index` forms — is DELETED.
+        // TypeScript 7 removed `baseUrl` and honours it NOWHERE: the only non-test read
+        // of `options.BaseUrl` left in tsgo is the TS5102 diagnostic it raises
+        // (`program.go:822`), plus the `${configDir}` substitution at parse time; the
+        // `// No more tryLoadModuleUsingBaseUrl.` comment at `module/resolver.go:1231`
+        // is where its resolution leg used to be.
         // For bare specifiers that didn't resolve via the standard candidates list, walk up
         // from the current file's directory looking for node_modules/<specifier>.ts / .tsx / .d.ts.
         // This is required for test fixtures that set up @Filename: /src/node_modules/<X>.ts and
@@ -3368,37 +3445,9 @@ private fun extractRelativeImports(
                 )
                 val match = probes.firstOrNull { it in allTsFileNames }
                 if (match != null) {
-                    deps.add(match)
-                    found = true
-                    break
-                }
-                val nextSlash = probeDir.lastIndexOf('/')
-                probeDir = if (nextSlash < 0) "" else probeDir.substring(0, nextSlash)
-            }
-        }
-        // Ancestor-directory fallback for a bare specifier: walk up from the importing file's
-        // directory looking for `<dir>/<specifier>.{ts,tsx,d.ts}` (NO `/node_modules/`
-        // segment). This was written as TypeScript's CLASSIC resolution algorithm, and no
-        // TypeScript 7 resolution probes an ancestor directory for a bare specifier —
-        // (LEGACY.1)(e) measured its deletion: it is LOAD-BEARING for two active emit
-        // baselines (`pathMappingBasedModuleResolution4_node`, `..7_node`), whose dependency
-        // edges it supplies where the `baseUrl` block above does not — a RELATIVE `baseUrl`
-        // (`"."`, `"../"`) is probed un-anchored (`./folder2/file2.ts` is never a program
-        // file name) and a `paths` target anchored on such a `baseUrl` misses the same way.
-        // So this is the relative-`baseUrl` edge fallback of the emit ORDER, not a
-        // resolution; it goes with (LEGACY.1)(g) — `baseUrl` is a removed option in
-        // TypeScript 7 (TS5108) and tsgo's file order for both fixtures is recorded in the
-        // (P18.106) note — and must not be deleted before it.
-        if (!found && !specifier.startsWith("./") && !specifier.startsWith("../")) {
-            var probeDir = dir
-            while (probeDir.isNotEmpty()) {
-                val probes = listOf(
-                    "$probeDir/$specifier.ts",
-                    "$probeDir/$specifier.tsx",
-                    "$probeDir/$specifier.d.ts",
-                )
-                val match = probes.firstOrNull { it in allTsFileNames }
-                if (match != null) {
+                    // No `found = true`: this is the LAST leg since (LEGACY.1)(g) deleted the
+                    // ancestor-directory fallback that used to read it, and the compiler's
+                    // never-read-assignment warning is what says so.
                     deps.add(match)
                     break
                 }
@@ -3406,13 +3455,21 @@ private fun extractRelativeImports(
                 probeDir = if (nextSlash < 0) "" else probeDir.substring(0, nextSlash)
             }
         }
+        // (LEGACY.1)(g) The ancestor-directory fallback for a bare specifier that used to
+        // sit here — walking up from the importing file's directory probing
+        // `<dir>/<specifier>.{ts,tsx,d.ts}` with NO `node_modules` segment, i.e. TypeScript's
+        // CLASSIC algorithm — is DELETED. (LEGACY.1)(e) kept it only because it supplied the
+        // emit-ORDER edges of `pathMappingBasedModuleResolution4_node` and `..7_node`, whose
+        // relative `baseUrl` made both the `baseUrl` probe above and the `paths` anchor miss.
+        // Both cases are gone: they set `baseUrl` in an embedded tsconfig, tsgo answers
+        // neither, and (LEGACY.1)(g) widened `tsconfigInTestUsesRemovedFeature` to skip them.
     }
     return deps
 }
 
 /**
  * Resolves a non-relative import specifier against the `paths` compiler-options
- * mapping (with optional baseUrl + tsconfig dir anchoring). Returns the first
+ * mapping, anchored on the tsconfig's own directory. Returns the first
  * substituted candidate that exists in `allTsFileNames`, or null if no pattern
  * matches or no substitution resolves to a known file. Handles literal patterns
  * (no `*`) as well as single-wildcard patterns (e.g. `@speedy/*/testing`).
@@ -3420,26 +3477,24 @@ private fun extractRelativeImports(
  * Substitutions may have an explicit extension (e.g. `*/dist/index.ts`) — in
  * which case the candidate is used as-is — or no extension, in which case `.ts`,
  * `.tsx`, `.mts`, `.cts` and `/index.ts` variants are tried.
+ *
+ * (LEGACY.1)(g) `paths` SURVIVES TypeScript 7 and is the migration target `baseUrl`
+ * was removed IN FAVOUR OF — tsgo's own TS5102 chain says so, offering a star
+ * pattern whose substitution is the old `baseUrl` directory. What went is the
+ * `baseUrl` ANCHOR (a literal example is in [baseUrlPathsSuggestion]'s KDoc, which
+ * is a line comment because a KDoc cannot carry one): tsgo
+ * resolves every substitution against the config file's directory
+ * (`module/resolver.go` has no `BaseUrl` read at all), so that is the only anchor
+ * left here. Do not re-introduce one — a `paths` substitution is documented as
+ * relative to the tsconfig, and TS5090 below enforces exactly that.
  */
 private fun resolvePathsMapping(
     specifier: String,
     paths: Map<String, List<String>>,
-    baseUrl: String?,
     tsconfigDir: String?,
     allTsFileNames: Set<String>,
 ): String? {
-    // Compute the anchor directory: tsconfigDir + baseUrl (if any).
-    // When baseUrl is "." or unset, anchor is tsconfigDir.
-    val anchor: String = run {
-        val b = baseUrl?.trim()?.removePrefix("./")?.trimEnd('/')
-        when {
-            tsconfigDir.isNullOrEmpty() && b.isNullOrEmpty() -> ""
-            tsconfigDir.isNullOrEmpty() -> b!!
-            b.isNullOrEmpty() || b == "." -> tsconfigDir
-            b.startsWith("/") -> b
-            else -> "$tsconfigDir/$b"
-        }
-    }
+    val anchor: String = tsconfigDir.orEmpty()
 
     for ((pattern, substitutions) in paths) {
         val starIdx = pattern.indexOf('*')

@@ -50431,7 +50431,6 @@ class Checker(
                         && options.module in ES_MODULE_KINDS
                         && effectiveModuleRes == ModuleResolutionKind.Bundler
                         && options.paths.isNullOrEmpty()
-                        && options.baseUrl == null
                         && options.rootDirs.isNullOrEmpty()
                         && options.rootDir == null
                         && options.moduleSuffixes.isNullOrEmpty()
@@ -50457,7 +50456,6 @@ class Checker(
                         && options.module?.foldsToCommonJS == true
                         && effectiveModuleRes == ModuleResolutionKind.Bundler
                         && options.paths.isNullOrEmpty()
-                        && options.baseUrl == null
                         && options.rootDirs.isNullOrEmpty()
                         && options.rootDir == null
                         && options.moduleSuffixes.isNullOrEmpty()
@@ -50504,7 +50502,6 @@ class Checker(
                     } else if (isRelative && effectiveModuleRes == ModuleResolutionKind.Bundler && moduleName.endsWith("/")
                         && !moduleName.endsWith(".json")
                         && options.paths.isNullOrEmpty()
-                        && options.baseUrl == null
                         && options.rootDirs.isNullOrEmpty()
                         && options.rootDir == null
                         && options.moduleSuffixes.isNullOrEmpty()
@@ -50614,7 +50611,6 @@ class Checker(
                         && moduleName.count { it == '/' } == 1
                         && options.typeRoots != null
                         && options.paths.isNullOrEmpty()
-                        && options.baseUrl == null
                         && moduleName !in ambientModuleNames
                         && !scopedResolvableForImport(moduleName)
                     ) {
@@ -50636,7 +50632,7 @@ class Checker(
                     // specifier (e.g. `"server"`, `"a"`) under Bundler resolution — TypeScript 7's
                     // default (unset, or the removed `classic`/`node10`) and an explicit `bundler`
                     // (cachedModuleResolution6/7) are the SAME kind there — with NO
-                    // path/baseUrl/rootDirs/moduleSuffixes config CANNOT resolve to a plain sibling
+                    // path/rootDirs/moduleSuffixes config CANNOT resolve to a plain sibling
                     // source file: a bare specifier resolves only via node_modules / an ambient
                     // `declare module "X"`. Our `resolveModuleSpecifier` wrongly matches such a
                     // name to a sibling `.ts` by basename, so nothing fires; TypeScript emits
@@ -50666,7 +50662,6 @@ class Checker(
                                 && !bareModulePackageInAnyInput(moduleName)
                                 && !bareModuleSymlinkTargetDir(moduleName)))
                         && options.paths.isNullOrEmpty()
-                        && options.baseUrl == null
                         && options.rootDirs.isNullOrEmpty()
                         && options.rootDir == null
                         && options.moduleSuffixes.isNullOrEmpty()
@@ -50693,7 +50688,6 @@ class Checker(
                         && !moduleName.contains("/")
                         && !moduleName.contains(":")
                         && options.paths.isNullOrEmpty()
-                        && options.baseUrl == null
                         && options.rootDirs.isNullOrEmpty()
                         && options.rootDir == null
                         && options.moduleSuffixes.isNullOrEmpty()
@@ -50741,11 +50735,10 @@ class Checker(
             // Walks all statements collecting StringLiteralNode args of `import(...)` calls; for each
             // RELATIVE specifier the index-aware resolver can't find, emits TS2307. Bare specifiers
             // are deliberately NOT checked (the B98.r2 dead-end — node_modules/untyped-.js/symlink
-            // FPs). Gated to no path/baseUrl/rootDirs config + !noResolve to bound the FP surface;
+            // FPs). Gated to no path/rootDirs config + !noResolve to bound the FP surface;
             // applies to single-file too (where a relative target can never resolve).
             if (!options.noResolve
                 && options.paths.isNullOrEmpty()
-                && options.baseUrl == null
                 && options.rootDirs.isNullOrEmpty()
                 && options.rootDir == null
                 && options.moduleSuffixes.isNullOrEmpty()
@@ -188958,7 +188951,6 @@ interface DataView {
                             && options.module?.foldsToCommonJS == true
                             && options.effectiveModuleResolution == ModuleResolutionKind.Bundler
                             && options.paths.isNullOrEmpty()
-                            && options.baseUrl == null
                             && options.rootDirs.isNullOrEmpty()
                             && options.rootDir == null
                             && options.moduleSuffixes.isNullOrEmpty()

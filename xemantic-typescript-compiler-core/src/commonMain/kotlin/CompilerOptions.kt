@@ -1306,6 +1306,53 @@ private fun scanCompilerOptionsBlock(json: String): CompilerOptionsBlockScan? {
 }
 
 /**
+ * tsgo's `tspath.PathIsRelative` (`internal/tspath/path.go:904`): a bare `.` or `..`, or a
+ * path starting `./`, `../`, `.\` or `..\`.
+ *
+ * (LEGACY.1)(g) The `startsWith("./") || startsWith("../")` test this replaces was a false
+ * POSITIVE on all four of the shapes it omits — measured one per row through
+ * `tools/tsgo-7.0.2/lib/tsc`, which reports NO TS5090 for any of them.
+ */
+internal fun pathSubstitutionIsRelative(sub: String): Boolean =
+    sub == "." || sub == ".." ||
+        sub.startsWith("./") || sub.startsWith(".\\") ||
+        sub.startsWith("../") || sub.startsWith("..\\")
+
+/**
+ * tsgo's `tspath.PathIsAbsolute` — `GetEncodedRootLength(path) != 0`
+ * (`internal/tspath/path.go:66, 168`): a POSIX or UNC root, a DOS drive (`c:`, `c:/`), an
+ * untitled `^/` path, or a URL with a scheme.
+ *
+ * (LEGACY.1)(g) Ours had NO absolute arm at all, so a POSIX-rooted, a DOS-drive and a
+ * `file:` URL substitution (each ending in a star segment) all read as non-relative and
+ * reported TS5090 where tsgo is silent — measured one per row, and spelled in prose here
+ * only because a slash-star opens a NESTED Kotlin block comment (see CLAUDE.md);
+ * `BaseUrlRemovedTest` carries the literals. It is load-bearing precisely BECAUSE the
+ * `baseUrl` gate on the TS5090 block went: that gate used to hide the gap on every project
+ * that set `baseUrl`, which is most of the `paths`-using corpus.
+ */
+internal fun pathSubstitutionIsRooted(sub: String): Boolean {
+    if (sub.isEmpty()) return false
+    val c0 = sub[0]
+    // POSIX or UNC: "/", "\", "//server", "\\server"
+    if (c0 == '/' || c0 == '\\') return true
+    // DOS: "c:" (but not "c:d"), "c:/", "c:\"
+    if (sub.length >= 2 && sub[1] == ':' &&
+        ((c0 in 'a'..'z') || (c0 in 'A'..'Z'))
+    ) {
+        if (sub.length == 2) return true
+        val c2 = sub[2]
+        if (c2 == '/' || c2 == '\\') return true
+    }
+    // Untitled: "^/"
+    if (c0 == '^' && sub.length > 1 && sub[1] == '/') return true
+    // URL: a scheme separator followed by an authority that is itself terminated.
+    val schemeEnd = sub.indexOf("://")
+    if (schemeEnd != -1 && sub.indexOf('/', schemeEnd + 3) != -1) return true
+    return false
+}
+
+/**
  * The `(key, value)` positions of every option in [json]'s `compilerOptions` block that
  * the compiler models (the [allowedTsconfigOptions] subset), keyed by the LOWERCASED
  * option name, plus the synthetic `compileroptionskey` entry pointing at the
@@ -1557,8 +1604,12 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
         result = result.copy(paths = parsedPaths)
     }
 
-    // TS5090: Non-relative paths without baseUrl
-    if (result.baseUrl == null && parsedPaths.isNotEmpty() && pathsKeyIdx >= 0) {
+    // TS5090. tsgo emits it from `program.go:995`, inside the loop over `options.Paths`,
+    // and it is NOT gated on `baseUrl` — measured: a project setting BOTH `baseUrl` and a
+    // non-relative substitution gets the TS5102 baseUrl row AND this one. (LEGACY.1)(g)
+    // dropped the `result.baseUrl == null` conjunct that used to stand here: with `baseUrl`
+    // honoured nowhere it could only suppress a true positive.
+    if (parsedPaths.isNotEmpty() && pathsKeyIdx >= 0) {
         val pathsBraceStart = compilerOptionsBlock.indexOf('{', pathsKeyIdx + "\"paths\"".length)
         if (pathsBraceStart >= 0) {
             var d = 1
@@ -1577,7 +1628,7 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
                 val itemPattern = Regex(""""([^"]*)"""")
                 for (itemMatch in itemPattern.findAll(arrayContent)) {
                     val sub = itemMatch.groupValues[1]
-                    if (!sub.startsWith("./") && !sub.startsWith("../")) {
+                    if (!pathSubstitutionIsRelative(sub) && !pathSubstitutionIsRooted(sub)) {
                         val absPos = pathsBlockOffset + arrayStartInBlock + itemMatch.range.first
                         val lineCol = computeLineAndColumn(json, absPos)
                         pathsDiagnostics.add(Diagnostic(

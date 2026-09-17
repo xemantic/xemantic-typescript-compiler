@@ -568,7 +568,8 @@ internal class NameResolver(
      * Simple module specifier resolution: strip leading `./` and append `.ts` / try `.ts`.
      * This is a simplified version for the test suite where module specifiers
      * are relative paths within the same test compilation unit.
-     * Also supports baseUrl-relative non-relative specifiers (e.g., "defs/cc" with baseUrl "/proj").
+     * (LEGACY.1)(g) The baseUrl-relative leg for a non-relative specifier is GONE:
+     * TypeScript 7 removed the option and resolves nothing through it.
      */
     fun resolveModuleSpecifier(specifier: String, contextNode: Node? = null): String? {
         // Perf (round 432): pure function of the specifier ([fileResults]/[options] are
@@ -598,13 +599,6 @@ internal class NameResolver(
         if (isRelative) {
             candidates.add("$baseName.d.ts")
             candidates.add("./$baseName.d.ts")
-        }
-        // For non-relative specifiers, also try baseUrl-prefixed paths
-        if (!isRelative && options.baseUrl != null) {
-            val baseUrl = options.baseUrl.trimEnd('/')
-            candidates.add("$baseUrl/$baseName")
-            candidates.add("$baseUrl/$baseName.ts")
-            candidates.add("$baseUrl/$baseName.tsx")
         }
         for (candidate in candidates) {
             if (candidate in fileResults) return candidate

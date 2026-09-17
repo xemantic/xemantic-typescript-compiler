@@ -297,8 +297,10 @@ val typeScriptGoCommit = "2bd066d87f5bafd315be9f40889d0a60b9e58e0b" // tag types
  *  - [tsgoExpectedDeleted]: tsc has the baseline, tsgo RAN the case (a `.diff` records it)
  *    and emitted nothing — the subtest is DELETED.
  *  - [tsgoExpectedKeptTsc]: tsgo has no baseline AND no `.diff`, i.e. it never ran that
- *    configuration at all (`baseUrl`/`paths` monorepo cases, its own `skippedEmitTests`) —
- *    the tsc baseline is KEPT so the subtest survives.
+ *    configuration at all — the tsc baseline is KEPT so the subtest survives. This is the
+ *    bucket that pins PRISTINE TypeScript 6, so it is the one (LEGACY.1) shrinks: 87 -> 3
+ *    at (g), when [tsconfigInTestUsesRemovedFeature] learned tsgo's embedded-`baseUrl` /
+ *    embedded-`moduleResolution` skips.
  *  - [tsgoExpectedNew]: tsgo emits a baseline where tsc had none — a NEW subtest.
  *  - [tsgoExpectedAdopted]: every subtest served from the tsgo root (the other two buckets'
  *    complement); a control, so that "adopted collapsed to zero" cannot read as green.
@@ -308,9 +310,16 @@ val typeScriptGoCommit = "2bd066d87f5bafd315be9f40889d0a60b9e58e0b" // tag types
  * `coAndContraVariantInferences5.errors.txt` did not exist — (LEGACY.0a) moved to
  * `4d4f005c`, which already carries it, so one of the 24 landed a round early. The
  * projected corpus size is unaffected (the base moved by the same one).
+ *
+ * RE-MEASURED 2026-09-17 at (LEGACY.1)(g), which widened [tsconfigInTestUsesRemovedFeature]
+ * to the embedded `baseUrl` / `moduleResolution` forms: `keptTsc` 87 -> 3 and the other
+ * THREE are byte-identical. That the whole 84-subtest drop lands in `keptTsc` — and that
+ * `adopted`, `new` and `deleted` do not move by one — is the receipt that the widening
+ * removed only PRISTINE-pinned subtests and lost no tsgo answer; a gradeable case caught by
+ * the rule would have shown up as `adopted` falling.
  */
 val tsgoExpectedDeleted = 9
-val tsgoExpectedKeptTsc = 87
+val tsgoExpectedKeptTsc = 3
 val tsgoExpectedNew = 23
 val tsgoExpectedAdopted = 8765
 
@@ -1796,29 +1805,61 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                 isFalse("alwaysstrict")
         }
 
-        // 2b. tsgo's SkipUnsupportedCompilerOptions runs on the harness-PARSED options, so a
-        //     tsconfig.json EMBEDDED in the test (`@filename: .../tsconfig.json`) BYPASSES the
-        //     directive-based filter above — tsgo itself still runs such tests (its compiler then
-        //     rejects the option at config-load), but our baselines are pinned to PRISTINE tsc,
-        //     so keeping them would pin removed-feature behavior.
-        //     DELIBERATELY NARROWER than usesUnsupportedOption (2026-07-02, user-approved): only
-        //     the options whose implementation was physically REMOVED from this compiler are
-        //     checked — `module: amd/umd/system` (the UMD/System/AMD transforms are deleted) and
-        //     `outFile` (the bundling concat is deleted). tsconfig-in-test `target: es5`,
-        //     `moduleResolution: node10`, and `baseUrl` are NOT checked: ~55 active tests use them
-        //     INCIDENTALLY while pinning still-relevant behavior (paths mapping, suffix
-        //     resolution, declaration emit) that this compiler handles gracefully.
-        //     Only a file NAMED exactly tsconfig.json counts (the harness loads it as project
-        //     config); tsconfig1.json etc. are plain source-echo files.
-        fun tsconfigInTestUsesRemovedFeature(source: String): Boolean {
+        // 2b. A tsconfig.json EMBEDDED in the test (`@filename: .../tsconfig.json`) is LOADED by
+        //     tsgo's harness — `GetConfigNameFromFileName` (harnessutil.go:1198) matches the
+        //     BASENAME, and `CompileFiles` (harnessutil.go:87-108) seeds `compilerOptions` from
+        //     it and only THEN lets `SetOptionsFromTestConfig` apply the `// @directive`s. So the
+        //     options `SkipUnsupportedCompilerOptions` sees are `embedded tsconfig, DIRECTIVES
+        //     OVERRIDING`, and the directive-level filter above — which reads directives alone —
+        //     cannot see the embedded half. This predicate is that missing half.
+        //
+        //     (LEGACY.1)(g), owner decision 2026-09-17: extended from `module: amd/umd/system` +
+        //     `outFile` to `baseUrl` and `moduleResolution: node/node10/classic`, because
+        //     TypeScript 7 is the only compatibility target and tsgo answers NONE of those cases
+        //     — measured over all of `typescript-go-repo/testdata`: 32 case files set `baseUrl` in
+        //     an embedded tsconfig and tsgo has output for 0; 18 set a removed `moduleResolution`
+        //     and tsgo has output for exactly 1. Keeping them pins PRISTINE TypeScript 6
+        //     behaviour through (LEGACY.0b)'s *absent, no `.diff` -> keep tsc's* leg, which the
+        //     2026-09-12 directive says is not a reference. `baseUrl` matches ANY string value
+        //     including `""`: tsgo's test is `BaseUrl != ""` AFTER absolutization against the
+        //     config dir, so an empty `baseUrl` is the config dir and still skips (and still
+        //     reports TS5102 — measured through `tools/tsgo-7.0.2/lib/tsc`).
+        //
+        //     `target: es3/es5` is deliberately NOT checked, and the reason is MEASURED rather
+        //     than incidental: 9 case files set it in an embedded tsconfig and tsgo answered 7.
+        //     Under the directive rule below it would in fact skip NONE of the nine — three carry
+        //     an overriding `@target: es2015` and four write `"ES3"`, which TypeScript 7 rejects
+        //     as an invalid ARGUMENT (TS6046) leaving the target UNSET rather than ES5 — so
+        //     adding it would be a no-op today. It stays out because the owner scoped it out and
+        //     because a no-op rule is a trap for the next reader, not a safety net.
+        //
+        //     THE DIRECTIVE EXEMPTION IS LOAD-BEARING, not a nicety: `maxNodeModuleJsDepth-
+        //     DefaultsToZero` sets `"moduleResolution": "node"` in its embedded tsconfig AND
+        //     `// @moduleResolution: bundler` as a directive, so tsgo resolves Bundler, RAN it,
+        //     and our corpus serves that subtest from tsgo's own baseline. An embedded-only regex
+        //     would delete a gradeable tsgo answer — the very disqualifier that keeps `target`
+        //     out. A directive that names the option is therefore checked by
+        //     `usesUnsupportedOption` above and by nothing here, whatever value it gives.
+        //
+        //     Only a file NAMED exactly tsconfig.json counts (that is tsgo's own basename test);
+        //     tsconfig1.json etc. are plain source-echo files.
+        fun tsconfigInTestUsesRemovedFeature(source: String, directives: Map<String, String>): Boolean {
             val sections = Regex("""(?im)^\s*//\s*@filename:\s*(\S+)\s*$""").findAll(source).toList()
             for ((i, m) in sections.withIndex()) {
                 if (!m.groupValues[1].substringAfterLast('/').equals("tsconfig.json", ignoreCase = true)) continue
                 val start = m.range.last + 1
                 val end = if (i + 1 < sections.size) sections[i + 1].range.first else source.length
                 val body = source.substring(start, end)
-                if (Regex("""(?i)"module"\s*:\s*"(amd|umd|system)"""").containsMatchIn(body)) return true
-                if (Regex("""(?i)"outFile"\s*:\s*"[^"]+"""").containsMatchIn(body)) return true
+                // A directive overrides the embedded value, so it is the directive filter's to judge.
+                fun overridden(directive: String) = directives[directive]?.isNotBlank() == true
+                if (!overridden("module") &&
+                    Regex("""(?i)"module"\s*:\s*"(amd|umd|system)"""").containsMatchIn(body)) return true
+                if (!overridden("outfile") &&
+                    Regex("""(?i)"outFile"\s*:\s*"[^"]+"""").containsMatchIn(body)) return true
+                if (!overridden("baseurl") &&
+                    Regex("""(?i)"baseUrl"\s*:\s*"[^"]*"""").containsMatchIn(body)) return true
+                if (!overridden("moduleresolution") &&
+                    Regex("""(?i)"moduleResolution"\s*:\s*"(node|node10|classic)"""").containsMatchIn(body)) return true
             }
             return false
         }
@@ -2037,12 +2078,12 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                 // tsgo set-B (see the tsgoSkippedTests / usesUnsupportedOption definitions above):
                 // (1) whole-file skip for tsgo's hardcoded skippedTests list.
                 if (name in tsgoSkippedTests) continue
-                // (1b) whole-file skip when a tsconfig.json EMBEDDED in the test sets a
-                //      removed-module/outFile option (bypasses the directive-based filter — see
-                //      tsconfigInTestUsesRemovedFeature above). Drops exactly 4 tests as of
-                //      2026-07-02: deprecatedCompilerOptions2/6, tsconfigMapOptionsAreCaseInsensitive,
-                //      outFileIsDeprecated.
-                if (tsconfigInTestUsesRemovedFeature(source)) continue
+                // (1b) whole-file skip when a tsconfig.json EMBEDDED in the test sets an option
+                //      tsgo's harness refuses, with a `// @directive` of the same name exempting it
+                //      (tsgo lets the directive override) — see tsconfigInTestUsesRemovedFeature
+                //      above. (LEGACY.1)(g) widened it from `module`/`outFile` to `baseUrl` and
+                //      `moduleResolution`; the four buckets asserted below record what moved.
+                if (tsconfigInTestUsesRemovedFeature(source, directives)) continue
                 // (2) whole-CONFIG skip (errors AND emit) when the bare config's fixed directives
                 //     resolve to a tsgo-removed option. Unlike the previous heuristic (which dropped
                 //     only the JS-emit subtest and KEPT the error baseline for ES3/ES5/AMD/System/UMD),
