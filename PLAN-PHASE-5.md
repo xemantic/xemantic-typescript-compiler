@@ -25,6 +25,56 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.133) — the `simulatedVersion` default moves to 7.0: TypeScript 6's deprecation ladder is gone, and the census that sized it was blind to its largest group (2026-09-17)
+
+**OWNER DECISION**, approved in the same session as (LEGACY.1)(g) and sequenced after it, because (g) is what gave
+TS5102 tsgo's computed `paths` chain. One line — `TypeScriptCompiler.kt`'s `?: "6.0"` becomes `?: "7.0"` — and
+everything else is consequence. Suite **19,903 / 0 / 62** (+18 tests, −2 skipped), errors screen 3,062 / 0, emit
+5,645 / 0, cost gate +0.04% max, `huge_methods --fail-over 0` exit 0, warning gate clean with a live positive
+control, 8-profile grid 8 x 0/0 and EMIT 78 vs 78 byte-identical.
+
+**THE MEASUREMENT.** Across tsgo's whole baseline corpus, TS5101 and TS5107 appear **only** as lines tsgo DELETES
+(60 and 2 occurrences, every one on the `-` side of an accepted diff); TS5102's 46 `+` lines are all
+`downlevelIteration`. TypeScript 7 has no "deprecated, will stop functioning" notion at all —
+`createRemovedOptionDiagnostic` (`program.go:803-876`) emits TS5102 (unvalued, KEY-anchored) or TS5108 (valued,
+VALUE-anchored) and nothing else, and `ignoreDeprecations` is parsed into its options struct and read NOWHERE.
+**The correctness argument is stronger than the parity one**: (LEGACY.1) already deleted every one of these
+options' behaviour, so at the old default we told a user an option "will stop functioning in TypeScript 7.0" and
+offered a flag to silence it while the option was ALREADY inert and silencing restored nothing.
+
+**THE BRIEF'S CENSUS WAS BLIND TO ITS LARGEST GROUP, AND THE MECHANISM GENERALISES.** It censused the at-risk pins
+by DIAGNOSTIC CODE, so it could not see the nine classes that use `@ignoreDeprecations: 6.0` to keep the option row
+*out* — `DOWNLEVEL_ES5`, one shared `CompilerTestSupport` constant, is behind 29 of the 41 first-run failures and
+none was predicted. **A census by code cannot see a pin that depends on a code NOT being emitted.** The repair
+gives the constant an explicit version, which preserves every exact-list assertion instead of weakening one; its
+ablation reddens 27 tests, so it is load-bearing rather than tidying.
+
+**TS5103 IS RETIRED AND ITS VALIDITY FILTER IS KEPT — the two are not the same thing.** tsgo has no TS5103
+emitter (the message exists only in its generated table; `ignoreDeprecations: "banana"` produces no tsgo output at
+all), but the FILTER must stay, because `"banana" >= "6.0"` is lexicographically true: dropping it would make a
+garbage value start SILENCING the explicit-6.0 ladder.
+
+**`module=None` IS NOT ONE OF THESE FAMILIES — the brief said thirteen and it is twelve.** `none` is absent from
+tsgo's module map and `createRemovedOptionDiagnostic` has no case for it; tsgo answers TS6046, an invalid ARGUMENT.
+Refusal taken: it stays on the shared ladder (wrong before as TS5107, wrong now as TS5108 — not widened), recorded
+at the emitter and by a `residue -` pin. That is **(LEGACY.2)**, whose mechanism (P18.113) already built.
+
+**A THIRD CORPUS ROW MOVED, AND ITS FILING IS THE ROUND'S REUSABLE LESSON.** `pathMappingInheritedBaseUrl` was
+first added to `tsgoPendingBaselines`; its baseline is PRISTINE's TS5101, so the row **can never close** —
+implementing tsgo's answer moves us FURTHER from it. A pending entry means "a tsgo-TARGET answer we do not produce
+YET", so an un-closeable row mis-states what the baseline is and the build's `pendingByBaseline` check cannot see
+it. It is instead the population (P18.132) drops, and it escaped only because its `baseUrl` lives in
+`/other/tsconfig.base.json` — not a file named `tsconfig.json`, so the basename scan missed it where tsgo's
+RESOLVED-options skip does not. `tsconfigInTestUsesRemovedFeature` now follows a root config's `extends` chain
+(array and extension-omitted forms, cycle-guarded, an unresolvable target not guessed at), and it is the corpus's
+ONLY such case. **`keptTsc` 3 -> 1, not 3 -> 2, because the bucket counts BASELINES and that one case contributes
+two** (`.errors.txt` and `.js`) — now recorded in the constant's KDoc.
+
+**THE FINDING BEHIND IT IS KEPT AS A MEASURED PAIR** in `BaseUrlRemovedTest`: an `extends`-inherited `baseUrl`
+makes tsgo compute the chain against the DECLARING file where we round-trip the written value against the ROOT
+config, with a same-directory control proving the fixture reaches the chain and that root-declared values agree
+exactly. Closing it needs provenance `CompilerOptions.baseUrl` — a bare `String` — does not carry.
+
 ### Round (P18.132) — (LEGACY.1)(g): `baseUrl` deleted, and the item's own skip rule would have thrown away a gradeable tsgo answer (2026-09-17)
 
 **OWNER DECISION.** Both halves of the (g) proposal were approved in session: widen the embedded-tsconfig skip,
@@ -1001,8 +1051,11 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-25 LANDED 2026-09-17 ((P18.85)-(P18.131) notes) — pending **40 → 39**,
-  skipped 64, suite 19,954/0. **(P18.131) CLOSED THE FIRST ROW OF THIS FAMILY** and narrowed the other from 4
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-25 LANDED 2026-09-17 ((P18.85)-(P18.131) notes) — pending **40 → 37**,
+  skipped 62, suite 19,903/0. **(P18.133) CLOSED THE TWO `downlevelIteration` ROWS** by moving
+  `simulatedVersion`'s default to `"7.0"` (owner decision), and (P18.132) dropped a third row from the corpus
+  entirely rather than ledgering it — `pathMappingInheritedBaseUrl`, whose baseline is PRISTINE's TS5101 and so
+  could never have closed. PREVIOUS HEAD: pending **40 → 39**, skipped 64, suite 19,954/0. **(P18.131) CLOSED THE FIRST ROW OF THIS FAMILY** and narrowed the other from 4
   missing rows to 1. J1 gave the property-access funnel a JavaScript class EXPANDO MEMBER MODEL
   (`jsClassAccessAdmitted`: null = fall through to step 24's immunity test, ADMIT, or REFUSE because the name IS
   an expando member; the class resolved SYNTACTICALLY, the name set unioned over `extends`, null when a base is

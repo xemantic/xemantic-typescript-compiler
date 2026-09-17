@@ -1,3 +1,16 @@
+**(P18.128) — (CHK.137)+(CHK.138): TWO GAPS THAT WERE FIVE, 19,881 / 0 / 65 (2026-09-17).**
+The first is a SYMMETRIC pair rather than a false positive: the same artifact that makes a class value type as its
+instance type hides a false NEGATIVE too, and a fixture that varies only whether the class declares a constructor
+swaps which one you see. **And it is script-file-only** — a bare `export {}` makes it vanish, so a matrix written
+the obvious way reads completely clean and nearly lost the round. Closing it forced a third mechanism, since the
+false positive had been masking an abstract-class error at the right position with the wrong code. The second is
+three defects including an ours-only FALSE POSITIVE pointing the opposite way to its own queue item, and its
+reference has TWO emitters with different target gates, so an unset target is silent and every pin must name one.
+Its receipt had to be independent of the corpus, which carries one subtest: a conformance fixture reconstructed
+from its pristine baseline reads 20 of 60 rows with zero false positives. 40 pins, 23 red against the parent, six
+arms. **The round also fired the previous round's countdown and corrected its premise**: a guard recorded as
+measured-redundant was only redundant below ES2022, so it is now live.
+
 **(P18.127) — (KIR.LOWER.6): A NAMED FUNCTION OR CLASS AS A VALUE, 19,840 / 0 / 65 (2026-09-17).**
 The KIR module goes 242 -> 275. `[1,2].map(f)` for a top-level named `f` REFUSED — passing a named function as a
 callback — and 21 of 33 characterised shapes refused with it. **The brief's premise was half wrong in the way that
