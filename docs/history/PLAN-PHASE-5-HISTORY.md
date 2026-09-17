@@ -46,6 +46,65 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
+### Round (P18.113) — (LEGACY.1) step (j4): the target option surface — three parity fixes, and the COLLAPSE refused with a measurement in both directions (2026-09-16)
+
+**Three commits** (`dc71e22db` fix, `730dd9bd1` test, this docs commit). **Suite 19,566 → 19,586 / 0 / 81** (+20
+pins), 9 modules asserted; corpus screen errors 3,086 / 0 and emit 5,688 / 0 — run after EACH piece, not only at the
+end, because the lib change is the one piece of this arc with real corpus reach; `cost_gate.py` exit 0, 20/20
++0.00%; `huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls;
+warning-clean with an injected positive control. `Checker.kt` 194,167 → **194,194** (2 code lines, the rest KDoc),
+`CompilerOptions.kt` +62, `RealLibs.kt` +35, `TypeScriptCompiler.kt` +4. **(j4) is the last of (j), so THE (j) LINE
+CLOSES; (LEGACY.1) now has only (g), BLOCKED-PENDING-USER, and (k) housekeeping; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE COLLAPSE IS REFUSED, AND BOTH DIRECTIONS WERE BUILT TO SAY SO.** The item's premise — "their whole reason was
+the explicit-ES5 split" — is now inverted: that split is the MODEL of tsgo's missing ES5 transformer. Measured over
+12 lowering shapes, **tsgo's emit at a written es5 is byte-identical to its emit at es2015, 12 files of 12**, and
+differs from an unset target, while its CHECKER honours the written es5. Arm **c1** (keep the written target only)
+loses the strict-reserved BINDING rows at es5 — CLI 2 → 0 on `var public` / `var yield`, where tsgo reports four at
+EVERY target, being strict-always — and **c2** (keep the emit target only) opens (j2)'s KEPT TS2318 gate at es5,
+stops the module default being CommonJS and moves the es5 lib file set: 3 and 8 pin reds, disjoint and non-empty.
+Both KDocs are rewritten to tsgo's reason (checker = the written language version, `checker.go`, 29 reads of which
+exactly one is `< ES2015`, (P18.111); emitter = no ES5 path exists) in place of the tsc-6 history they carried, and
+the refusal itself is pinned.
+
+**THE THREE PARITY FIXES.** (1) **The es5 default lib**: tsgo's `lib.d.ts` reaches es2015 through `lib.dom.d.ts`, so
+a written es5 has the whole es2015 surface and tsgo reports NOTHING there, where we printed **6 ours-only TS2550**;
+`RealLibResolver.defaultLibEsLevel` (ES5 → ES2015) now feeds the **EMPTY-`lib` branch only**, so the explicit-`lib`
+path is untouched and (i)/(j2)'s TS2802 and TS2461/TS2488 pins are unmoved — at `lib: ["es5"]` ours goes 16 → 15
+rows against tsgo's 15, and tsgo's answer there is identical at es5, es2015 and unset. The es2017 bound is pinned
+and load-bearing (arm a1b). (2) **ES3**: tsgo's option map has no ES3 entry, so it is an INVALID ARGUMENT (TS6046 at
+the value) after which the option is UNSET; `ScriptTarget.ES3` leaves the enum and `fromString`, TS6046 keys on a
+`targetValueInvalid` marker — being unknown to the map IS the mechanism — our ES3 emit becomes byte-identical to
+tsgo's with five ours-only rows gone, and `target: "es4"`, silent here before, now reports. (3) **`effectiveModule`'s
+`else` is NOT dead** — the item calls it dead and it is live and mis-notioned: tsgo defaults a written-es5 project
+with no `module` to CommonJS (`Object.defineProperty(exports, "__esModule", …)`) where we emitted ESM; reading
+`defaultedTarget` makes all three targets emit byte-identically to tsgo. The three Checker sites reading the emit
+notion are ALL KEPT, each against tsgo's own condition: `:9747` and `:74937` are equivalent on either notion
+(ES5 and ES2015 are both below their bounds), and `:25750` is the arm that agrees with tsgo's strict-always answer.
+
+**PINS AND ABLATION.** 20 pins (8 controls); stash-ablation 10 red plus one structural (the new helper does not
+exist on the pre-change binary). Six arms — two lib bounds, the ES3 marker, `effectiveModule`, and the two collapse
+directions — of which **only the ES3 arm's errors screen is a gate** (it moves four `deprecatedCompilerOptions`
+baselines); the rest are counted controls. Final md5s Checker `0474dc18`, CompilerOptions `f87d79a6`,
+CompilerOptionsKt `18467963`, RealLibResolver `7c28b321`, TypeScriptCompiler `1a6d9620` — the orchestrator's AFTER
+arm matched all five. Two countdown pins were re-pointed AGAINST tsgo rather than to whatever the new code prints.
+
+**A MEASUREMENT INSTRUMENT THIS ROUND MOVED, DELIBERATELY NOT EDITED.** `scripts/inc50-stability-lib.sh:105` pins
+`"target": "ES5"`, and CLAUDE.md's incremental-stability rates (cronstrue 50% / tsc 67% / marked 72%, (INC.50)) were
+taken with it — **this round changes that fixture's default lib level**, so those three rates need a deliberate
+re-measurement rather than a silent script edit. Flagged in CLAUDE.md beside the rates; `many-small-2400-cjs*` is
+already es2020 and `usesUnsupportedOption` is a plain string test, independent of the enum.
+
+**STANDING DIVERGENCES FOUND, ALL TARGET-INDEPENDENT (identical at es5, es2015 and unset), so none moved by this
+round**: at `lib: ["es5"]` three rows differ in CODE only (`Object.assign` ours TS2339 / tsgo TS2550 — the
+lib-suggestion upgrade misses that member; `Iterable` TS2583 / TS2304; `Generator` TS2314 / TS2304, our es5 set
+still having `Generator`); **the es2018.asynciterable island** — tsgo's every default lib pulls it in through `dom`,
+so `AsyncIterable` exists at es5…es2017 where our numeric model reports TS2583, and the general fix is to ask the
+RESOLVED lib set rather than a numeric bound, a bigger item than (j4); TS2791 is missing here at every target;
+the strict-reserved binding rows are 2 where tsgo prints 4; and 5 of 12 emit files differ from tsgo at es5 AND
+es2015 alike — es2015-era lowering, with this round's property preserved (our es5 emit ≡ our es2015 emit, as
+tsgo's are).
+
 ### Round (P18.112) — (LEGACY.1) step (j3): tsgo's checker never spells `__extends`, `__generator` or `__assign` — and its helper table exposed two target-free defects in the same emitter (2026-09-16)
 
 **Three commits** (`293799770` refactor, `6f8bdeab9` test, this docs commit). **Suite 19,551 → 19,566 / 0 / 81**

@@ -25,6 +25,66 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.123) — (LEGACY.0b) step 22: only an ASSIGNMENT declares a JS expando, and the brief's own premise about the sequel was false (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,726 → 19,741 / 0 / 65**; `tsgoPendingBaselines`
+unchanged at 40 with **2 entries REWRITTEN** — both rows are PARTIALLY closed, not closed; corpus screen **3,102 /
+0 errors and 5,688 / 0 emit**; `cost_gate.py` exit 0 (deltas unchanged from (P18.119)'s reading, max +0.15%);
+`huge_methods.py --fail-over 0` exit 0 over 875 classes; the 8-profile grid `added=0 removed=0` on all eight with
+78 emit files byte-identical. `Checker.kt` 194,764 → 194,802 (+97/−59).
+
+**THE MECHANISM HAS THREE FACES AND THE BRIEF NAMED ONE.** `ast.IsExpandoPropertyDeclaration` really is
+`IsBinaryExpression(node)`, and `GetAssignmentDeclarationKind` additionally demands the operator be **`=`** and the
+left be an ACCESS expression — so `this.a = 1` and `this['d'] = 2` declare while `this.b;`, `this['e'];`,
+`this.c += 1` and **`(this.f) = 3`** do not; the parenthesized target is the one no reading would have predicted.
+Second face: **the REPARSER drops a JSDoc `@type` above a non-declaration statement** (`reparser.go:369` takes an
+`ExpressionStatement` host only when its expression is assignment-shaped), so `/** @type {T} */ this.p;`
+references nothing while the same tag on an assignment, a `let`, a `return` or a parenthesized expression does.
+Ours declared on all of them — `collectClassInstanceFields`' KDoc said so in as many words.
+
+**THE THIRD FACE IS THAT (P18.121)'s RECORDED MEASUREMENT — WHICH THIS ORCHESTRATOR'S BRIEF REPEATED AS FACT — WAS
+WRONG.** "The TS6205 aggregation predicate is already correct" is false: tsgo aggregates over the DECLARATION's
+whole type-parameter list and never per tag, so `@template T,V` (used) beside `@template X,Y` (unused) is **two
+TS6196 rows** where we emitted one TS6205 over the second tag. **And the SPAN half was needed after all** —
+`rangeOfTypeParameters` is `[list.Pos()-1, skipTrivia(end)+1)`, which moves the column 4 → 3 and widens the squiggle
+at both ends. The per-tag loop is deleted; `TypeParameter.jsDocTagEnd` now has ZERO readers, that loop having been
+its only consumer. Fifth instance in this arc of a recorded reason being a previous round's hypothesis — and the
+first where the hypothesis had already been copied forward into a brief.
+
+**THE BRIEF'S BIGGEST ERROR IS THE SEQUEL, AND IT IS THE ROUND'S REUSABLE LESSON: "the TS2339 follows directly once
+the declaration stops" DOES NOT FOLLOW AT ALL.** A declaration rule only ever REMOVES rows; the TS2339 half is a
+separate, whole-family gap — `cpaSpineLeave` opens `if (spineIsDts || spineIsJsLike) return`, so **the entire
+property-access-check family is off for every `.js` file**, measured silent even where the receiver's type is a
+TypeScript class declared in a `.ts` file (3 missing rows in one 9-line probe). The naive gate flip
+(`spineIsJsLike && !options.checkJs`) was BUILT and REFUSED on a measurement: it delivers none of the six rows the
+two pending entries need, adds a false TS2339 on a legal `this.foo = 10` in an accessor initializer, and moves one
+currently-green baseline (`classFieldSuperAccessibleJs1`, a false row on the legal expando static `C.blah2 = 456`).
+That family needs the JS expando member model inside the cpa member tables plus `super.`/`this.` receiver legs —
+its own arc.
+
+**BOTH ROWS ARE NOW STRICT SUBSETS OF tsgo's, BYTE-IDENTICAL ON EVERY ROW WE EMIT.** R1 emits tsgo's three TS6205
+rows at (2,3)/(13,3)/(20,3) — multi-line squiggles included — where it used to emit three TS6196 plus one TS6205 at
+the wrong column; R2's two wrong TS2855 rows are gone and its two correct ones are byte-identical. R2 is **four
+changes, not one**: `this['literalElementAccess'];` is the same mechanism's element-access twin and tsgo's answer
+carries a TS7053 with a two-line chain. The firing emitter was identified by PassLab ablation with a positive
+control (`disable checkClassFieldSuperAccessJs` → 0 rows), so the `.ts`-side TS2855 emitter never fires in a JS
+file and no third emitter was added.
+
+**SIZING AND ABLATION.** The census is **11 case files** carrying a bare `this.X;`, of which only **3 are JS** —
+the rest are TypeScript, where the recorder is never reached, and that 3 is what bounds the risk. Each of the five
+named green baselines was verified explicitly on both channels. 15 pins; three arms, each reverting one mechanism,
+redden 7 / 3 / 5 with no pin green on all three; four distinct class md5s and the post-restore rebuild identical to
+the landed value.
+
+**RESIDUES AND LEADS.** R1 keeps TS2339 at (8,14)/(25,14) and R2 keeps 3×TS2339 + 1×TS7053, all of them the cpa
+family above. **Pre-existing and newly measured**: under `allowJs` WITHOUT `checkJs` tsgo is silent for the whole
+fixture and we still emit two TS2855 rows, because `checkClassFieldSuperAccessJs` is gated on the file EXTENSION
+rather than on `checkJs` ((P18.92)'s hazard) — recorded as an explicit `residue - …` pin rather than patched, since
+the honest fix is a file-level "an unchecked JS file reports nothing" gate. `Checker.kt:34337` is an existing
+TS2339-for-`this.X`-in-a-JS-class emitter gated on the constructor carrying an `Object.defineProperty(this, …)`:
+a lead for that arc, deliberately not widened. And tsgo emits a TS2322 for `/** @type {T} */ this.p = null` that we
+do not — a pre-existing expando-TYPING gap, unreachable from all three mechanisms.
+
 ### Round (P18.122) — (LIB.6) the NOMINAL half: the item's failure was three rounds stale, its own design does not work, and the backend had already answered the question once (2026-09-17)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,706 → 19,726 / 0 / 65**, the KIR module **174 → 194**;
@@ -555,65 +615,6 @@ two-`module.exports=` file (tsgo unions the declarations) are refused by the tab
 file** too, which is a much larger population here (`exports` is in `KNOWN_GLOBALS`) and is pinned unmoved by a
 negative control.
 
-### Round (P18.113) — (LEGACY.1) step (j4): the target option surface — three parity fixes, and the COLLAPSE refused with a measurement in both directions (2026-09-16)
-
-**Three commits** (`dc71e22db` fix, `730dd9bd1` test, this docs commit). **Suite 19,566 → 19,586 / 0 / 81** (+20
-pins), 9 modules asserted; corpus screen errors 3,086 / 0 and emit 5,688 / 0 — run after EACH piece, not only at the
-end, because the lib change is the one piece of this arc with real corpus reach; `cost_gate.py` exit 0, 20/20
-+0.00%; `huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls;
-warning-clean with an injected positive control. `Checker.kt` 194,167 → **194,194** (2 code lines, the rest KDoc),
-`CompilerOptions.kt` +62, `RealLibs.kt` +35, `TypeScriptCompiler.kt` +4. **(j4) is the last of (j), so THE (j) LINE
-CLOSES; (LEGACY.1) now has only (g), BLOCKED-PENDING-USER, and (k) housekeeping; (LEGACY.0) stays OPEN** on (0b-17).
-
-**THE COLLAPSE IS REFUSED, AND BOTH DIRECTIONS WERE BUILT TO SAY SO.** The item's premise — "their whole reason was
-the explicit-ES5 split" — is now inverted: that split is the MODEL of tsgo's missing ES5 transformer. Measured over
-12 lowering shapes, **tsgo's emit at a written es5 is byte-identical to its emit at es2015, 12 files of 12**, and
-differs from an unset target, while its CHECKER honours the written es5. Arm **c1** (keep the written target only)
-loses the strict-reserved BINDING rows at es5 — CLI 2 → 0 on `var public` / `var yield`, where tsgo reports four at
-EVERY target, being strict-always — and **c2** (keep the emit target only) opens (j2)'s KEPT TS2318 gate at es5,
-stops the module default being CommonJS and moves the es5 lib file set: 3 and 8 pin reds, disjoint and non-empty.
-Both KDocs are rewritten to tsgo's reason (checker = the written language version, `checker.go`, 29 reads of which
-exactly one is `< ES2015`, (P18.111); emitter = no ES5 path exists) in place of the tsc-6 history they carried, and
-the refusal itself is pinned.
-
-**THE THREE PARITY FIXES.** (1) **The es5 default lib**: tsgo's `lib.d.ts` reaches es2015 through `lib.dom.d.ts`, so
-a written es5 has the whole es2015 surface and tsgo reports NOTHING there, where we printed **6 ours-only TS2550**;
-`RealLibResolver.defaultLibEsLevel` (ES5 → ES2015) now feeds the **EMPTY-`lib` branch only**, so the explicit-`lib`
-path is untouched and (i)/(j2)'s TS2802 and TS2461/TS2488 pins are unmoved — at `lib: ["es5"]` ours goes 16 → 15
-rows against tsgo's 15, and tsgo's answer there is identical at es5, es2015 and unset. The es2017 bound is pinned
-and load-bearing (arm a1b). (2) **ES3**: tsgo's option map has no ES3 entry, so it is an INVALID ARGUMENT (TS6046 at
-the value) after which the option is UNSET; `ScriptTarget.ES3` leaves the enum and `fromString`, TS6046 keys on a
-`targetValueInvalid` marker — being unknown to the map IS the mechanism — our ES3 emit becomes byte-identical to
-tsgo's with five ours-only rows gone, and `target: "es4"`, silent here before, now reports. (3) **`effectiveModule`'s
-`else` is NOT dead** — the item calls it dead and it is live and mis-notioned: tsgo defaults a written-es5 project
-with no `module` to CommonJS (`Object.defineProperty(exports, "__esModule", …)`) where we emitted ESM; reading
-`defaultedTarget` makes all three targets emit byte-identically to tsgo. The three Checker sites reading the emit
-notion are ALL KEPT, each against tsgo's own condition: `:9747` and `:74937` are equivalent on either notion
-(ES5 and ES2015 are both below their bounds), and `:25750` is the arm that agrees with tsgo's strict-always answer.
-
-**PINS AND ABLATION.** 20 pins (8 controls); stash-ablation 10 red plus one structural (the new helper does not
-exist on the pre-change binary). Six arms — two lib bounds, the ES3 marker, `effectiveModule`, and the two collapse
-directions — of which **only the ES3 arm's errors screen is a gate** (it moves four `deprecatedCompilerOptions`
-baselines); the rest are counted controls. Final md5s Checker `0474dc18`, CompilerOptions `f87d79a6`,
-CompilerOptionsKt `18467963`, RealLibResolver `7c28b321`, TypeScriptCompiler `1a6d9620` — the orchestrator's AFTER
-arm matched all five. Two countdown pins were re-pointed AGAINST tsgo rather than to whatever the new code prints.
-
-**A MEASUREMENT INSTRUMENT THIS ROUND MOVED, DELIBERATELY NOT EDITED.** `scripts/inc50-stability-lib.sh:105` pins
-`"target": "ES5"`, and CLAUDE.md's incremental-stability rates (cronstrue 50% / tsc 67% / marked 72%, (INC.50)) were
-taken with it — **this round changes that fixture's default lib level**, so those three rates need a deliberate
-re-measurement rather than a silent script edit. Flagged in CLAUDE.md beside the rates; `many-small-2400-cjs*` is
-already es2020 and `usesUnsupportedOption` is a plain string test, independent of the enum.
-
-**STANDING DIVERGENCES FOUND, ALL TARGET-INDEPENDENT (identical at es5, es2015 and unset), so none moved by this
-round**: at `lib: ["es5"]` three rows differ in CODE only (`Object.assign` ours TS2339 / tsgo TS2550 — the
-lib-suggestion upgrade misses that member; `Iterable` TS2583 / TS2304; `Generator` TS2314 / TS2304, our es5 set
-still having `Generator`); **the es2018.asynciterable island** — tsgo's every default lib pulls it in through `dom`,
-so `AsyncIterable` exists at es5…es2017 where our numeric model reports TS2583, and the general fix is to ask the
-RESOLVED lib set rather than a numeric bound, a bigger item than (j4); TS2791 is missing here at every target;
-the strict-reserved binding rows are 2 where tsgo prints 4; and 5 of 12 emit files differ from tsgo at es5 AND
-es2015 alike — es2015-era lowering, with this round's property preserved (our es5 emit ≡ our es2015 emit, as
-tsgo's are).
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -944,7 +945,28 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-21 LANDED 2026-09-16 ((P18.85)-(P18.121) notes) — pending 40, skipped 65,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-22 LANDED 2026-09-17 ((P18.85)-(P18.123) notes) — pending 40 (UNCHANGED, 2
+  rewritten), skipped 65, suite 19,741/0. **(P18.123) landed the JS-expando DECLARATION rule and closed NO row —
+  both are PARTIAL, and that is the finding**: only an ASSIGNMENT declares (`=` and an access LHS, so `this.c += 1`
+  and `(this.f) = 3` do not), the REPARSER drops a `@type` tag above a non-declaration statement, and the TS6205
+  aggregation is over the DECLARATION's whole type-parameter list rather than per tag. Both rows are now strict
+  SUBSETS of tsgo's, byte-identical on every row we emit. **(P18.121)'s recorded "the aggregation predicate is
+  already correct" was FALSE and this queue had copied it forward into a brief** — re-derive before quoting.
+  **AND THE SEQUEL DOES NOT FOLLOW**: a declaration rule only REMOVES rows, so the TS2339 half of both residues is
+  a separate whole-family gap — `cpaSpineLeave` returns on `spineIsJsLike`, i.e. the property-access family is OFF
+  for every `.js` file, even where the receiver's type comes from a `.ts` declaration. The naive gate flip was
+  BUILT and REFUSED (delivers none of the 6 rows, adds a false row on legal code, moves a green baseline).
+  **THE RESIDUE (40)**: display/chain-content ~19; F6-code ~14 (~14 MECHANISMS — size by mechanism, never by
+  letter); ORDER-model 3; JS emit 3; TS2683-residue 3; F7-count 2; the `downlevelIteration` TS5102 pair, which
+  closes by moving `simulatedVersion` to `"7.0"` — an OWNER decision that would redden nothing;
+  `pathsValidation5`'s summary order; the 2 REFUSED TS2751 rows (tsgo defects); and the singletons.
+  **NEXT CLUSTERS**: the **JS property-access family** above, which is now the single largest lever in this ledger
+  (it owns both (P18.123) residues, the TS7009-from-the-callee-type family and part of the TS2683 residue) and
+  needs the JS expando member model inside the cpa member tables plus `super.`/`this.` receiver legs — its own
+  arc, and `Checker.kt:34337` is its lead; then the TS2749-on-a-value-only-import half of
+  `jsExportMemberMergedWithModuleAugmentation`; then the TS2403-vs-TS2717 split ((P18.120)). **PICK AND SIZE WITH
+  `bash scripts/corpus-screen.sh`**, and count the ACTIVE subtests carrying each code first.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-21 LANDED 2026-09-16 ((P18.85)-(P18.121) notes) — pending 40, skipped 65,
   suite 19,706/0. **(P18.121) closed 2 rows of 4 and REFUSED one with the decisive control**, on a cluster picked
   because **we already emitted all three codes** — so each was a gate that did not fire, never a missing feature.
   TS8026: the heritage arity gate suppressed on ANY governing `@augments` tag where tsgo suppresses only on a VALID

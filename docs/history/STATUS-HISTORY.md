@@ -1,5 +1,21 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.118) — (KIR.LOWER.3)+(KIR.LOWER.4): THE LOWERING'S BAG FALLBACK, AND TWO DEFECTS THE ITEMS DO NOT NAME, 19,652 / 0 / 70 (2026-09-16).**
+The first round of this session outside the checker-parity lane, taken because these two are the largest measured
+KIR performance lever and a native-arm blocker sharing one mechanism: the lowering asks for a receiver's type, does
+not get one, and falls back to the dynamic bag. Measured as BYTECODE SHAPE. (LOWER.3)'s headline is wrong — an
+element access keeps its type; the INDEX loses it when it is a `for`-header `let`, and that is a CHECKER gap (three
+missing true positives against tsgo), deliberately NOT fixed here because it is (CHK.50) at maximum radius; KIR
+recovers locally, 2 ops → 0. (LOWER.4) understates itself — every `this` member READ was broken too, both paths
+consulting `isDynamicReceiver` before resolving a field they could already resolve; 4 ops → 0 and parameter
+properties go from a refused compile to 0, with the store prologue above the initializers (measured off tsgo's
+emit; the other order prints the wrong answer). **Two defects neither item names**: `ps[0].x` emitted a `getfield`
+on `java.lang.Object` and died with `NoSuchFieldError` at ZERO dynamic ops — the shape a shape-only pin waves
+through, which is why every mechanism now has a behaviour case — and method calls still reached `jsInvoke` in the
+loop the fields had just left. 15 cases, 8 arms; KIR module 174/0; `huge_methods` run over the KIR module as well
+as core, since the default census is core-only; the grid is inapplicable (checker classes byte-identical) and that
+comparison is the receipt.
+
 **(P18.117) — (CHK.135) RE-SCOPED: THE MAPPED ALIASES WERE FINE, THE *INDEX-SIGNATURE READ* WAS NOT, 19,637 / 0 / 70 (2026-09-16).**
 The item claims `Record` and other lib mapped aliases resolve to `any`; measured, every one of them is already
 correct, including `Record` with a literal-union key. The real gap was `computeRawTypeOfPropertyAccess`'s miss path
