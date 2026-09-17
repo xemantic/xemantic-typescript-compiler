@@ -2115,6 +2115,31 @@ public fun jsGet(receiver: Any?, name: String): Any? = when (receiver) {
     is String -> if (name == "length") jsStrLength(receiver) else null
     is JsMap -> if (name == "size") receiver.size else null
     is JsSet -> if (name == "size") receiver.size else null
+    // (KIR.LOWER.6) A lowered class read through an `any`. `name` is the one
+    // standard member this backend can answer exactly, and the carrier already
+    // holds it; everything else is refused BY NAME rather than reflected at,
+    // because `reflectiveGet` on a `JsConstructor` finds a Kotlin property's
+    // private field and its `getName` accessor under neither spelling and
+    // reports a type the program never wrote. `length` is deliberately absent:
+    // `required` is the count this backend cannot leave `undefined`, which is
+    // not the constructor's declared arity.
+    is JsConstructor ->
+        if (name == "name") receiver.name
+        else throw JsTypeError(
+            "'$name' is not a member of the class ${receiver.name}; this backend gives a " +
+                "class value only 'name'"
+        )
+    // The same, for a FUNCTION value. Its JavaScript `name` and `length` are
+    // properties of the DECLARATION, and a `FunctionN` carries neither — so a
+    // read is refused with the word `function` rather than reflected at, where
+    // `reflectiveGet` would name a JVM lambda (`MainKt$$Lambda/0x…`). A
+    // qualified `f.name` is answered by the LOWERING, from the declaration.
+    is Function<*> -> throw JsTypeError(
+        "'$name' is not a member of a function value; this backend gives one no properties"
+    )
+    is JsVarargFunction -> throw JsTypeError(
+        "'$name' is not a member of a function value; this backend gives one no properties"
+    )
     else -> reflectiveGet(receiver, name)
 }
 

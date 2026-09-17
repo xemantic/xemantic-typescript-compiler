@@ -268,6 +268,21 @@ internal class KirFileLowering(
     private val constructorValues =
         java.util.IdentityHashMap<ClassDeclaration, IrSimpleFunction>()
 
+    /**
+     * (KIR.LOWER.6) One FUNCTION-VALUE accessor per lowered function — see
+     * [functionValue].
+     *
+     * [constructorValues]' twin, per FILE for its reason, and keyed by the IR
+     * function rather than by the declaration so that a function and a STATIC
+     * METHOD read as a value share one carrier per target — which is what makes
+     * `f === f` and `C.m === C.m` `true`, as they are in JavaScript. Before
+     * this each read built its own `IrFunctionExpression`, and two of them
+     * compile to two anonymous classes with two singleton instances: measured,
+     * `C.m === C.m` was `false`.
+     */
+    private val functionValues =
+        java.util.IdentityHashMap<IrSimpleFunction, IrSimpleFunction>()
+
     /** What makes a generated shape class's name unique across FILES. */
     private val shapeFilePrefix: String =
         kotlinName(tsFile.fileName.substringAfterLast('/').substringBeforeLast('.'))
@@ -1013,8 +1028,213 @@ internal class KirFileLowering(
         return null
     }
 
+    /**
+     * (KIR.LOWER.6) A lowered FUNCTION as a VALUE — [constructorValue]'s twin.
+     *
+     * `C.m` read as a value, `ns.f`, and a bare `f` in a value position are the
+     * same question and now share one carrier per target: a `FunctionN`
+     * forwarder allocated ONCE, lazily, into a static field.
+     *
+     * The laziness is the mechanism, not a cost saving. [forwardingLambda]
+     * builds a fresh `IrFunctionExpression` each time it is called, and two of
+     * those compile to two anonymous JVM classes with two singleton instances —
+     * so before this, `C.m === C.m` was **false** where JavaScript says `true`
+     * (measured), and `f === ns.f` would have been too. One accessor per target
+     * makes both `true` by construction rather than by the accident that a
+     * non-capturing Kotlin lambda is a JVM singleton — (KIR.LOWER.5)'s reason
+     * for [constructorValue], one carrier over.
+     *
+     * The value is still a `FunctionN`, so `jsCall`, `jsTypeOf` and every
+     * coercion see exactly what they saw before; only its IDENTITY changes.
+     */
+    private fun functionValue(target: IrSimpleFunction): IrExpression {
+        val accessor = functionValues.getOrPut(target) { buildFunctionValue(target) }
+        return scope.irCall(accessor.symbol, accessor.returnType)
+    }
+
+    /** [functionValue]'s lazy singleton accessor — [buildConstructorValue]'s twin. */
+    private fun buildFunctionValue(target: IrSimpleFunction): IrSimpleFunction {
+        val regular = target.parameters.filter { it.kind == IrParameterKind.Regular }
+        // (KIR.LOWER.6) A REST parameter decides the CARRIER, not just the body.
+        //
+        // Its erased type is `JsArray`, so a fixed-arity forwarder would hand
+        // it whatever the caller passed positionally — and that coercion is a
+        // `checkcast`. Measured before this: `function f(...xs: number[])`
+        // handed to `[1,2].map(f)` COMPILED and then died with
+        // `ClassCastException: Double cannot be cast to JsArray`, which is the
+        // (P18.118) class of defect — zero dynamic operations and a program
+        // that does not run. `JsVarargFunction` is the carrier whose arity is
+        // decided by the CALL rather than by the declaration, which is exactly
+        // what a rest parameter means, and `jsCall` has packed for it since
+        // `mitt`. The bug predates the value arm: `ns.f` and `C.m` read as
+        // values took the same forwarder.
+        val restIndex = regular.indexOfFirst { it in restParameters }
+        if (restIndex >= 0) return buildVarargFunctionValue(target, regular, restIndex)
+        val arity = regular.size
+        val valueType = types.function(arity)
+        val index = functionValues.size
+        val slot = "fnValue\$$shapeFilePrefix\$$index"
+        val field = builder.irFactory.buildField {
+            this.name = Name.identifier(slot)
+            type = types.anyNullable
+            visibility = DescriptorVisibilities.PUBLIC
+            isStatic = true
+            isFinal = false
+            origin = builder.generatedOrigin
+        }
+        field.parent = irFile
+        irFile.declarations.add(field)
+        return moduleAccessor("$slot\$get", valueType) { function ->
+            inFunction(function, valueType, null, null) {
+                val read: () -> IrExpression = {
+                    IrGetFieldImpl(
+                        UNDEFINED, UNDEFINED, field.symbol, types.anyNullable, null, null, null
+                    )
+                }
+                val allocate = IrSetFieldImpl(
+                    UNDEFINED, UNDEFINED, field.symbol, null,
+                    forwardingLambda(target),
+                    irBuiltIns.unitType, null, null,
+                )
+                function.body = blockBodyOf(
+                    listOf(
+                        org.jetbrains.kotlin.ir.expressions.impl.IrWhenImpl(
+                            UNDEFINED, UNDEFINED, irBuiltIns.unitType
+                        ).apply {
+                            branches.add(
+                                org.jetbrains.kotlin.ir.expressions.impl.IrBranchImpl(
+                                    UNDEFINED, UNDEFINED,
+                                    scope.irEqualsNull(read()),
+                                    IrBlockImpl(
+                                        UNDEFINED, UNDEFINED, irBuiltIns.unitType, null,
+                                        listOf(allocate)
+                                    ),
+                                )
+                            )
+                        },
+                        scope.irReturn(bagCast(read(), valueType)),
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * (KIR.LOWER.6) [buildFunctionValue] for a target with a REST parameter.
+     *
+     * The same lazy static, carrying a `JsVarargFunction` instead of a
+     * `FunctionN`: every actual argument arrives as one array, the fixed
+     * parameters are read out of it positionally and the rest slot takes the
+     * remainder — `jsVarargFixed`/`jsVarargRest`, the two helpers a variadic
+     * function EXPRESSION has used since `mitt`, now on the forwarding side.
+     */
+    private fun buildVarargFunctionValue(
+        target: IrSimpleFunction,
+        regular: List<IrValueParameter>,
+        restIndex: Int,
+    ): IrSimpleFunction {
+        val valueType = intrinsics.jsVarargFunctionType
+        val index = functionValues.size
+        val slot = "fnValue\$$shapeFilePrefix\$$index"
+        val field = builder.irFactory.buildField {
+            this.name = Name.identifier(slot)
+            type = types.anyNullable
+            visibility = DescriptorVisibilities.PUBLIC
+            isStatic = true
+            isFinal = false
+            origin = builder.generatedOrigin
+        }
+        field.parent = irFile
+        irFile.declarations.add(field)
+        return moduleAccessor("$slot\$get", valueType) { function ->
+            inFunction(function, valueType, null, null) {
+                val read: () -> IrExpression = {
+                    IrGetFieldImpl(
+                        UNDEFINED, UNDEFINED, field.symbol, types.anyNullable, null, null, null
+                    )
+                }
+                val carrier = scope.irCall(intrinsics.jsVarargFunction, valueType).apply {
+                    arguments[0] = scope.irInt(restIndex)
+                    arguments[1] = varargForwardingLambda(target, regular, restIndex)
+                }
+                val allocate = IrSetFieldImpl(
+                    UNDEFINED, UNDEFINED, field.symbol, null, carrier,
+                    irBuiltIns.unitType, null, null,
+                )
+                function.body = blockBodyOf(
+                    listOf(
+                        org.jetbrains.kotlin.ir.expressions.impl.IrWhenImpl(
+                            UNDEFINED, UNDEFINED, irBuiltIns.unitType
+                        ).apply {
+                            branches.add(
+                                org.jetbrains.kotlin.ir.expressions.impl.IrBranchImpl(
+                                    UNDEFINED, UNDEFINED,
+                                    scope.irEqualsNull(read()),
+                                    IrBlockImpl(
+                                        UNDEFINED, UNDEFINED, irBuiltIns.unitType, null,
+                                        listOf(allocate)
+                                    ),
+                                )
+                            )
+                        },
+                        scope.irReturn(bagCast(read(), valueType)),
+                    )
+                )
+            }
+        }
+    }
+
+    /** `JsVarargFunction.impl`: `(arguments) -> f(arguments[0], …, rest)`. */
+    private fun varargForwardingLambda(
+        target: IrSimpleFunction,
+        regular: List<IrValueParameter>,
+        restIndex: Int,
+    ): IrExpression {
+        val lambda = builder.irFactory.buildFun {
+            name = SpecialNames.ANONYMOUS
+            returnType = types.anyNullable
+            visibility = DescriptorVisibilities.LOCAL
+            modality = Modality.FINAL
+            origin = IrDeclarationOrigin.LOCAL_FUNCTION_FOR_LAMBDA
+        }
+        lambda.parent = frame.irFunction
+        val packed = lambda.addValueParameter(
+            Name.identifier("\$arguments"), intrinsics.jsArrayType, builder.generatedOrigin
+        )
+        inFunction(lambda, types.anyNullable, null, null) {
+            val call = scope.irCall(target.symbol).apply {
+                regular.forEachIndexed { index, parameter ->
+                    val slot = if (index == restIndex) {
+                        scope.irCall(intrinsics.jsVarargRest).apply {
+                            arguments[0] = scope.irGet(packed)
+                            arguments[1] = scope.irInt(restIndex)
+                        }
+                    } else {
+                        // Past the end is `undefined`, which is what JavaScript
+                        // passes for a missing argument.
+                        scope.irCall(intrinsics.jsVarargFixed).apply {
+                            arguments[0] = scope.irGet(packed)
+                            arguments[1] = scope.irInt(index)
+                        }
+                    }
+                    arguments[index] = coerceErased(tsFile, slot, parameter.type)
+                }
+            }
+            lambda.body = blockBodyOf(
+                listOf(scope.irReturn(coerceErased(tsFile, call, types.anyNullable)))
+            )
+        }
+        return IrFunctionExpressionImpl(
+            UNDEFINED, UNDEFINED,
+            irBuiltIns.functionN(1).symbol
+                .typeWith(intrinsics.jsArrayType, types.anyNullable),
+            lambda,
+            IrStatementOrigin.LAMBDA
+        )
+    }
+
     /** `C.m` as a value: a lambda of `m`'s arity that forwards to it. */
-    private fun staticMethodValue(target: IrSimpleFunction): IrExpression {
+    private fun forwardingLambda(target: IrSimpleFunction): IrExpression {
         val parameters = target.parameters.filter { it.kind == IrParameterKind.Regular }
         val lambda = builder.irFactory.buildFun {
             name = SpecialNames.ANONYMOUS
@@ -1902,9 +2122,41 @@ internal class KirFileLowering(
         if (declared != null && !declared.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown)) {
             return declared
         }
+        // (KIR.LOWER.6) THIS CHECKER TYPES A CLASS USED AS A VALUE AS ITS
+        // INSTANCE TYPE ((CHK.73), and (CHK.137) is the false positive it
+        // produces at a `new`), so the initializer fallback below would type
+        // `const c: any = Cls` as `Cls` — and then refuse to store the class's
+        // `JsConstructor` carrier in a slot erased to `program.Cls`. Before
+        // this round that was unreachable, because a class name in a value
+        // position refused one step earlier.
+        //
+        // The declared `any` is the honest answer and the only one the value
+        // fits. Answered SYNTACTICALLY, from the declaration the name resolves
+        // to, because the checker's own type is exactly what cannot be trusted
+        // here.
+        if (declared != null && initializer is Identifier && isClassValue(initializer)) {
+            return declared
+        }
         val fromInitializer = initializer?.let { checkedTypeOf(it) }
         return fromInitializer ?: declared
             ?: refuse(tsFile, name, "the checker gave no type for this declaration")
+    }
+
+    /** The generated FUNCTION this expression NAMES, read as a value, or null. */
+    private fun functionDeclarationValueOf(node: Expression): FunctionDeclaration? {
+        val name = node as? Identifier ?: return null
+        if (lookup(name.text) != null) return null
+        val symbol = facts.nameAt(name) ?: return null
+        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+        return (declaration as? FunctionDeclaration)?.takeIf { it in functions }
+    }
+
+    /** Does this name refer to a generated CLASS, read as a value? */
+    private fun isClassValue(node: Identifier): Boolean {
+        if (lookup(node.text) != null) return false
+        val symbol = facts.nameAt(node) ?: return false
+        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+        return declaration is ClassDeclaration && declaration in classes
     }
 
     private fun lowerReturn(statement: ReturnStatement): IrExpression {
@@ -2518,6 +2770,9 @@ internal class KirFileLowering(
                     scope.irCall(variable.getter.symbol, variable.field.type)
                 }
             }
+            // (KIR.LOWER.6) A generated FUNCTION or CLASS named in a VALUE
+            // position — `[1,2].map(f)`, `make(Cls)`, `typeof Cls`, `{ Cls }`.
+            ?: declaredValueOf(node)
             // (LIB.7) The alias of a namespace import in a VALUE position —
             // `for (const k in ns)`, `Object.keys(ns)`, `ns[key]`. Last,
             // because a QUALIFIED reference never needs the object at all: it
@@ -2540,6 +2795,48 @@ internal class KirFileLowering(
         val symbol = facts.nameAt(node) ?: return null
         val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
         return (declaration as? VariableDeclaration)?.let { tables.moduleVariables[it] }
+    }
+
+    /**
+     * (KIR.LOWER.6) The runtime VALUE of a generated FUNCTION or CLASS named in
+     * a VALUE position, or null.
+     *
+     * `[1, 2].map(f)` is what makes this ordinary rather than exotic: passing a
+     * named function as a callback is everywhere in real TypeScript, and before
+     * this every one of `[1,2].map(f)`, `const c: any = Cls`, `typeof Cls`,
+     * `make(Cls)`, `{ Cls }` and `new (Cls as any)()` refused at *cannot lower
+     * the reference*. [namespaceExportValue] already mapped both declaration
+     * kinds to a value for a module namespace object, so the values existed —
+     * what was missing was the arm that reaches them for a name in the file
+     * being lowered.
+     *
+     * ## The two carriers are deliberately different
+     *
+     * A function's value is a `FunctionN` ([functionValue]) and a class's is a
+     * `JsConstructor` ([constructorValue]), because (KIR.LOWER.5) measured what
+     * one carrier for both costs: a dynamic `new` has nothing but the value to
+     * go on, so `new found["bump"]()` would CALL a function export and answer
+     * its return value where JavaScript makes an object. Both are LAZY STATICS,
+     * so `f === f`, `Cls === Cls` and `Cls === ns.Cls` are `true` within a file
+     * exactly as they are in JavaScript.
+     *
+     * ## What is deliberately NOT answered
+     *
+     * A function or class declared INSIDE a function body or a block reaches
+     * neither table — the declare pass walks a file's TOP-LEVEL statements only
+     * — so this answers null for one and the caller refuses. The refusal is the
+     * honest end of `docs/kir-lowering.md` §8: lowering such a declaration is a
+     * closure question this backend has not answered, and a value that silently
+     * named some outer binding of the same name would be the wrong answer.
+     */
+    private fun declaredValueOf(node: Identifier): IrExpression? {
+        val symbol = facts.nameAt(node) ?: return null
+        val declaration = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+        return when (declaration) {
+            is FunctionDeclaration -> functions[declaration]?.let { functionValue(it) }
+            is ClassDeclaration -> constructorValue(declaration)
+            else -> null
+        }
     }
 
     /**
@@ -2682,7 +2979,7 @@ internal class KirFileLowering(
         // A function export is a function VALUE, which JavaScript makes by
         // capturing the declaration — the same forwarder a static method read
         // as a value already produces.
-        is FunctionDeclaration -> functions[declaration]?.let { staticMethodValue(it) }
+        is FunctionDeclaration -> functions[declaration]?.let { functionValue(it) }
         // A class export is a function value too — `typeof C` is `"function"`
         // in JavaScript — and the one it forwards to is the constructor.
         is ClassDeclaration -> constructorValue(declaration)
@@ -2692,7 +2989,7 @@ internal class KirFileLowering(
     /**
      * (KIR.LOWER.5) A lowered class as a VALUE — `JsConstructor`, not a lambda.
      *
-     * [staticMethodValue]'s twin, and deliberately NOT the same carrier as it.
+     * [functionValue]'s twin, and deliberately NOT the same carrier as it.
      * Before this, a class's value was a `FunctionN` that constructed when
      * invoked; so was an ordinary function's, and a dynamic `new` has nothing
      * but the value to go on. `new (allLocales as any)[property]()` would then
@@ -4342,13 +4639,31 @@ internal class KirFileLowering(
             // no receiver to capture for a static, so the lambda is a plain
             // forwarder of the same arity, which is what every other function
             // value in this backend already is.
-            staticMethodInChain(owner, node.name.text)?.let { return staticMethodValue(it) }
+            staticMethodInChain(owner, node.name.text)?.let { return functionValue(it) }
+            // (KIR.LOWER.6) `Cls.name` is the class's declared name — LAST, so
+            // a class that declares its own `static name` keeps it, which is
+            // what JavaScript does too. A constant, so it reaches neither
+            // reflection nor the `JsConstructor` carrier; `jsGet`'s own arm is
+            // what answers the same read through an `any`.
+            if (node.name.text == "name") {
+                owner.name?.text?.let { return scope.irString(it) }
+            }
             refuse(
                 tsFile, node,
                 "class '${owner.name?.text}' declares no static '${node.name.text}'"
             )
         }
         enumMemberValue(node)?.let { return it }
+        // (KIR.LOWER.6) `f.name` where `f` NAMES a generated function — the
+        // declaration's own name, as a constant. Only for a name that resolves
+        // to a `FunctionDeclaration`: a variable HOLDING a function value is a
+        // different question (JavaScript infers a name from the assignment,
+        // which this backend does not model), and it keeps refusing.
+        if (node.name.text == "name") {
+            functionDeclarationValueOf(node.expression)?.let { declaration ->
+                declaration.name?.text?.let { return scope.irString(it) }
+            }
+        }
         if (isStringReceiver(node.expression)) {
             val target = intrinsics.stringMember(node.name.text, 0)
                 ?: refuse(
