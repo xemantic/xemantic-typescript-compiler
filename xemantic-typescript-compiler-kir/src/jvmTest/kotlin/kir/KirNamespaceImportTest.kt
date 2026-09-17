@@ -449,11 +449,13 @@ class KirNamespaceImportTest {
      * The LIBRARY shape, mechanically — `cronstrue`'s `allLocalesLoader.ts`.
      *
      * That loader is `for (const property in allLocales) { locales[property] =
-     * new (allLocales as any)[property]() }` over a namespace import. Half of
-     * it runs here: the enumeration, and reading each export back as the
-     * function value JavaScript says a class is. The other half — constructing
-     * through a dynamic callee — is refused by `lowerNew` for ANY dynamic
-     * callee and is pinned as a residue below.
+     * new (allLocales as any)[property]() }` over a namespace import of a PURE
+     * `export * from` BARREL — which is why the import here goes through one,
+     * (LIB.8) being what made that shape lowerable at all. Half of the loader
+     * runs: the enumeration, and reading each export back as the function value
+     * JavaScript says a class is. The other half — constructing through a
+     * dynamic callee — is refused by `lowerNew` for ANY dynamic callee and is
+     * pinned as a residue below.
      *
      * `cronstrue` itself is NOT on this box, so this is a claim about the
      * SHAPE and not about the library.
@@ -465,8 +467,9 @@ class KirNamespaceImportTest {
                 export class En { name(): string { return "en"; } }
                 export class Fr { name(): string { return "fr"; } }
             """,
+            "allLocales.ts" to "export * from './locales'",
             "main.ts" to """
-                import * as allLocales from './locales'
+                import * as allLocales from './allLocales'
                 const found: any = allLocales;
                 for (const property in allLocales) {
                     console.log(property + "=" + typeof found[property])
@@ -479,18 +482,38 @@ class KirNamespaceImportTest {
         assert(lowered.stdout == "En=function\nFr=function\n")
     }
 
-    // ---- M3: a RENAMED export is refused rather than answered wrongly ------
+    // ---- M3: a RENAMED export answers by the name an IMPORTER sees --------
 
     /**
-     * `export { inner as outer }` — the export table is keyed by the DECLARED
-     * name, so `ns.outer` finds nothing and `Object.keys` reports `inner`.
+     * `export { inner as outer }` — `ns.outer` reads, and `Object.keys` reports
+     * `outer`.
      *
-     * Both are silently WRONG answers, which is why the module is refused
-     * instead. The pair with the pin below is the mechanism: a non-renaming
-     * `export { inner }` keys correctly and must keep working.
+     * (P18.124) REFUSED this module: the checker's export table is the file's
+     * `locals`, keyed by the DECLARED name, so `ns.outer` found nothing and
+     * `Object.keys(ns)` reported `inner` — (INC.51)'s two-spellings-one-symbol
+     * trap one table over, `ExportSpecifier.propertyName` being the local and
+     * `.name` what the importer sees. (LIB.8) re-keys it at the source, in
+     * `Checker.exportedSymbolsThroughStars`, and the expectation here is tsgo
+     * 7.0.2's own, measured by running the same program under `node`.
      */
     @Test
-    fun `a module that renames an export is refused, loudly`() {
+    fun `a renamed export reads and enumerates by its exported name`() {
+        val lowered = lower(
+            "m.ts" to """const inner: string = "R"; export { inner as outer };""",
+            "main.ts" to """
+                import * as ns from './m'
+                console.log(ns.outer)
+                console.log(Object.keys(ns).join(","))
+            """,
+        )
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "R\nouter\n")
+    }
+
+    /** The SHAPE half: a renamed export is still a RESOLVED reference. */
+    @Test
+    fun `a renamed export costs no runtime dispatch`() {
         val lowered = lower(
             "m.ts" to """const inner: string = "R"; export { inner as outer };""",
             "main.ts" to """
@@ -498,9 +521,32 @@ class KirNamespaceImportTest {
                 console.log(ns.outer)
             """,
         )
-        assert(!lowered.compiled)
-        assert(lowered.report.contains("RENAMES an export"))
-        assert(lowered.report.contains("export { inner as outer }"))
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "R\n")
+        assert(lowered.dynamicOps == 0)
+    }
+
+    /**
+     * The DECLARED name is no longer visible — the other half of the re-keying.
+     *
+     * `ns.inner` is TS2339 in both references, and before this it was the ONLY
+     * name that worked; a pin on `outer` alone cannot see that `inner` stopped
+     * being an export, which is what makes the enumeration the assertion.
+     */
+    @Test
+    fun `negative control - a renamed export hides its declared name`() {
+        val lowered = lower(
+            "m.ts" to """const inner: string = "R"; export { inner as outer };""",
+            "main.ts" to """
+                import * as ns from './m'
+                const dynamic: any = ns;
+                console.log(typeof dynamic["inner"])
+                console.log(typeof dynamic["outer"])
+            """,
+        )
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "undefined\nstring\n")
     }
 
     @Test
@@ -517,31 +563,282 @@ class KirNamespaceImportTest {
         assert(lowered.stdout == "R\ninner\n")
     }
 
-    // ---- what is still refused, recorded rather than claimed ---------------
-
     /**
-     * residue — a `export * from` BARREL has an EMPTY export table here.
+     * A module-PRIVATE local is not a namespace property.
      *
-     * The checker resolves a star re-export at LOOKUP time
-     * (`resolveExportedSymbolThroughStars`) and does not populate the barrel
-     * module's own `exports`, so there is nothing for a namespace object to be
-     * built over. That is the one thing between this round and `cronstrue`'s
-     * `allLocales.ts`, which is a pure barrel — and it is a CHECKER question,
-     * not a backend one.
+     * The third way the `locals` table was wrong for an enumeration, and the
+     * one no renaming fixture shows: `secret` is in that table and is exported
+     * by nothing, so before this it was a key of `Object.keys(ns)`.
      */
     @Test
-    fun `residue - a namespace import of a re-export barrel is still refused`() {
+    fun `negative control - a module-private local is not a namespace property`() {
+        val lowered = lower(
+            "m.ts" to """
+                const secret: string = "S";
+                export const shown: string = "V" + secret;
+            """,
+            "main.ts" to """
+                import * as ns from './m'
+                console.log(Object.keys(ns).join(","))
+                const dynamic: any = ns;
+                console.log(typeof dynamic["secret"])
+            """,
+        )
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "shown\nundefined\n")
+    }
+
+    // ---- M1: a `export * from` BARREL enumerates and resolves ---------------
+
+    /**
+     * The shape `cronstrue`'s `allLocales.ts` is: a PURE re-export barrel.
+     *
+     * (P18.124) refused it with *cannot lower the reference 'ns'*, because the
+     * checker resolves a star re-export at LOOKUP time
+     * (`resolveExportedSymbolThroughStars`) and never populates the barrel
+     * module's own `exports` — which IS its file's `locals`, and a pure barrel
+     * declares none. `Checker.exportedSymbolsThroughStars` is the ENUMERATION
+     * companion that answers instead.
+     *
+     * Expectations measured under tsgo 7.0.2 + `node`.
+     */
+    @Test
+    fun `a namespace import of a re-export barrel resolves its members`() {
         val lowered = lower(
             "a.ts" to module,
             "b.ts" to "export * from './a'",
             "main.ts" to """
                 import * as ns from './b'
                 console.log(ns.alpha)
+                console.log(ns.bump())
+                console.log(new ns.Cls().describe())
             """,
         )
-        assert(!lowered.compiled)
-        assert(lowered.report.contains("cannot lower the reference 'ns'"))
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "A\n1\ncls:cls\n")
     }
+
+    /**
+     * The SHAPE half: a barrel's members are RESOLVED references, not lookups.
+     *
+     * `(P18.118)`'s law — `compiled` first, because [lower] reports ZERO dynamic
+     * operations for a program that never compiled, so the count alone is
+     * satisfied by the very refusal this pin exists to have closed.
+     */
+    @Test
+    fun `a barrel's qualified members cost no runtime dispatch`() {
+        val lowered = lower(
+            "a.ts" to module,
+            "b.ts" to "export * from './a'",
+            "main.ts" to """
+                import * as ns from './b'
+                console.log(ns.alpha)
+                console.log(ns.bump())
+            """,
+        )
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "A\n1\n")
+        assert(lowered.dynamicOps == 0)
+    }
+
+    /** A barrel ENUMERATES, which is the half `cronstrue`'s loader needs. */
+    @Test
+    fun `a namespace import of a re-export barrel enumerates its members`() {
+        val lowered = lower(
+            "a.ts" to module,
+            "b.ts" to "export * from './a'",
+            "main.ts" to """
+                import * as ns from './b'
+                console.log(Object.keys(ns).join(","))
+            """,
+        )
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        // tsgo answers `Cls,alpha,bump,counter`: an ES module namespace object
+        // SORTS its keys. This backend reports declaration order, which is
+        // (P18.124)'s stated divergence and not this round's.
+        assert(lowered.stdout == "alpha,counter,bump,Cls\n")
+    }
+
+    /**
+     * A barrel that ALSO declares its own exports — the shape that was a SILENT
+     * WRONG ANSWER rather than a refusal.
+     *
+     * Its `locals` table is non-empty, so `moduleSymbolOf`'s "empty means
+     * refuse" guard passed and the starred names came back `null` at run time:
+     * measured before this round, `ns.alpha + ns.ownV` printed `nullOWN`. That
+     * is the failure direction every gate in this repo is blind to.
+     */
+    @Test
+    fun `a barrel with its own exports resolves both halves`() {
+        val lowered = lower(
+            "m.ts" to module,
+            "barrel.ts" to """
+                export * from './m'
+                export const ownV: string = "OWN";
+            """,
+            "main.ts" to """
+                import * as ns from './barrel'
+                ns.bump()
+                console.log(ns.counter)
+                console.log(ns.alpha + ns.ownV)
+                console.log(Object.keys(ns).join(","))
+            """,
+        )
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.dynamicOps == 0)
+        assert(lowered.stdout == "1\nAOWN\nalpha,counter,bump,Cls,ownV\n")
+    }
+
+    /** A barrel's exports are LIVE BINDINGS too — the design pin, one hop out. */
+    @Test
+    fun `a barrel whose exports change reads them through the namespace`() {
+        val lowered = lower(
+            "a.ts" to module,
+            "b.ts" to "export * from './a'",
+            "main.ts" to """
+                import * as ns from './b'
+                ns.bump()
+                ns.bump()
+                console.log(ns.counter)
+                const dynamic: any = ns;
+                console.log(dynamic["counter"])
+            """,
+        )
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "2\n2\n")
+    }
+
+    /** A barrel over a BARREL — the chain, not one hop. */
+    @Test
+    fun `a nested barrel resolves through both hops`() {
+        val lowered = lower(
+            "a.ts" to "export const alpha: string = \"A\";",
+            "inner.ts" to """
+                export * from './a'
+                export const midv: string = "M";
+            """,
+            "barrel.ts" to "export * from './inner'",
+            "main.ts" to """
+                import * as ns from './barrel'
+                console.log(ns.alpha + ns.midv)
+                console.log(Object.keys(ns).join(","))
+            """,
+        )
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.dynamicOps == 0)
+        assert(lowered.stdout == "AM\nalpha,midv\n")
+    }
+
+    /** A star-export CYCLE terminates, and both files' names are reachable. */
+    @Test
+    fun `a star-export cycle resolves both files`() {
+        val lowered = lower(
+            "a.ts" to """
+                export * from './b'
+                export const av: string = "A";
+            """,
+            "b.ts" to """
+                export * from './a'
+                export const bv: string = "B";
+            """,
+            "main.ts" to """
+                import * as ns from './a'
+                console.log(ns.av + ns.bv)
+            """,
+        )
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "AB\n")
+    }
+
+    /**
+     * `export { x as default }` — the name an importer sees is `default`.
+     *
+     * (P18.124) refused this through the same renamed-export guard. tsgo
+     * enumerates `default,plain` and answers `X` for `ns.default`.
+     */
+    @Test
+    fun `an as-default export answers under the name default`() {
+        val lowered = lower(
+            "m.ts" to """
+                const x: string = "X";
+                export { x as default };
+                export const plain: string = "P";
+            """,
+            "main.ts" to """
+                import * as ns from './m'
+                console.log(Object.keys(ns).join(","))
+                const dynamic: any = ns;
+                console.log(dynamic["default"] + dynamic["plain"])
+            """,
+        )
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "default,plain\nXP\n")
+    }
+
+    /**
+     * A star re-export does NOT carry `default` — ES semantics.
+     *
+     * The negative control for the arm above: without it a barrel of a module
+     * with a default export would grow a `default` key that tsgo does not have.
+     */
+    @Test
+    fun `negative control - a star re-export does not carry default`() {
+        val lowered = lower(
+            "a.ts" to """
+                const x: string = "X";
+                export { x as default };
+                export const plain: string = "P";
+            """,
+            "barrel.ts" to "export * from './a'",
+            "main.ts" to """
+                import * as ns from './barrel'
+                console.log(Object.keys(ns).join(","))
+            """,
+        )
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "plain\n")
+    }
+
+    /**
+     * An UNKNOWABLE export set is REFUSED, not answered from the locals table.
+     *
+     * The only honest answer a backend can give there is a loud one: a short
+     * namespace object is the silent wrong answer this round exists to remove,
+     * so the refusal is the mechanism and not a shortfall.
+     *
+     * The fixture is a barrel chain PAST the walk's depth bound, because that
+     * is the one unknowable case this harness can reach: a bare specifier and a
+     * missing target are both TS2307 and an `export =` target is TS2498, so the
+     * checker stops all three before any backend sees them. A bare specifier
+     * that RESOLVES (a package with types) is the case a real library hits, and
+     * it needs a `node_modules`, which this harness has none of.
+     */
+    @Test
+    fun `a barrel chain past the depth bound is refused, loudly`() {
+        val hops = 70
+        val files = mutableListOf<Pair<String, String>>()
+        files += "leaf.ts" to "export const deep: string = \"D\";"
+        // hop0 stars the leaf, hopN stars hop(N-1) — so `main` is 71 hops out.
+        files += "hop0.ts" to "export * from './leaf'"
+        for (i in 1 until hops) files += "hop$i.ts" to "export * from './hop${i - 1}'"
+        files += "main.ts" to """
+            import * as ns from './hop${hops - 1}'
+            console.log(ns.deep)
+        """
+        val lowered = lower(*files.toTypedArray())
+        assert(!lowered.compiled)
+        assert(lowered.report.contains("export set is not knowable"))
+    }
+
+    // ---- what is still refused, recorded rather than claimed ---------------
 
     /**
      * residue — `new (x as any)()` is refused for ANY dynamic callee.
