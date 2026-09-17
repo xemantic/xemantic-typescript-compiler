@@ -110,6 +110,9 @@ public fun jsTypeOf(value: Any?): String = when (value) {
     is String -> "string"
     is java.math.BigInteger -> "bigint"
     is Function<*> -> "function"
+    // A lowered class's value, which is a `function` in JavaScript — the
+    // carrier is not a `FunctionN`, so it needs its own arm here.
+    is JsConstructor -> "function"
     else -> "object"
 }
 
@@ -1219,6 +1222,95 @@ public fun jsCall(callee: Any?, vararg arguments: Any?): Any? {
         null -> throw JsTypeError("undefined is not a function")
         else -> throw JsTypeError("${jsToString(callee)} is not a function")
     }
+}
+
+/**
+ * A lowered CLASS as a runtime value — what `typeof C` calls a `function`.
+ *
+ * ## Why a carrier rather than the forwarding lambda this replaces
+ *
+ * A class's value used to be a `FunctionN` that constructed when invoked, which
+ * is indistinguishable at run time from the `FunctionN` an ordinary function
+ * export is. A dynamic `new` has nothing but the value to go on — `new
+ * (allLocales as any)[property]()` is the whole point — so with one carrier for
+ * both, `new` on a plain function would have CALLED it and returned whatever it
+ * returns, where JavaScript makes an object. That is the silent wrong answer
+ * this type exists to make impossible: [jsNew] constructs only what is a
+ * `JsConstructor`, and everything else is a `TypeError` naming the value.
+ *
+ * ## What it costs
+ *
+ * Nothing that reaches reflection. [impl] is a lambda whose body is a DIRECT
+ * `IrConstructorCall` — the shape `JsVarargFunction` already uses one mechanism
+ * over — and the lowering allocates one carrier per class, lazily, into a
+ * static field, so `ns.C === ns.C` stays `true` as it is in JavaScript.
+ *
+ * ## Calling one without `new`
+ *
+ * A `JsConstructor` is not a `Function<*>`, so it falls to [jsCall]'s `else`
+ * and throws a `TypeError` — which is what a JavaScript engine does for
+ * `C()` on a class, and what the forwarding lambda silently did NOT do.
+ *
+ * ## Why the argument COUNT is carried
+ *
+ * JavaScript passes `undefined` for a missing argument, and this backend can
+ * honour that only where the parameter's ERASED type is nullable. Where it is
+ * not — `constructor(x: string)` erases `x` to a non-null `String` — the
+ * coercion is a `checkcast` and `undefined` reaches it as a JVM
+ * `NullPointerException` whose message names Kotlin rather than the program.
+ * [required] is the smallest count at which no such parameter is left
+ * unwritten, so [jsNew] refuses EXACTLY the counts that would have thrown, with
+ * a message that says which class and how many. A constructor whose parameters
+ * are all optional has [required] `0` and is constructed with none, as
+ * JavaScript does.
+ *
+ * @property name the class's TypeScript name, for the messages that quote it.
+ * @property required how many arguments this backend cannot leave `undefined`.
+ * @property impl the construction, taking every actual argument as one array —
+ *   so a surplus argument is dropped, exactly as JavaScript does and as
+ *   `JsVarargFunction` already does for a call.
+ */
+public class JsConstructor(
+    public val name: String,
+    public val required: Int,
+    public val impl: (JsArray) -> Any?,
+) {
+
+    override fun toString(): String = "class $name"
+
+}
+
+/** Builds a [JsConstructor]; what the lowering emits for a class VALUE. */
+public fun jsConstructor(name: String, required: Int, impl: (JsArray) -> Any?): JsConstructor =
+    JsConstructor(name, required, impl)
+
+/**
+ * `new callee(…)` where the callee's type was not known — [jsCall]'s twin.
+ *
+ * The callee is the only evidence there is, so the decision is made on what it
+ * IS. A `JsConstructor` constructs; everything else is a `TypeError`, which is
+ * what JavaScript answers for `new 1()`, `new null()`, `new "s"()`, `new {}()`
+ * and `new (() => {})()` alike.
+ *
+ * **One stated divergence**: JavaScript also constructs from a plain `function`
+ * declaration, giving an object with that function's prototype. This backend
+ * has no prototypes, so there is nothing to construct — and answering the
+ * function's RETURN VALUE would be a wrong answer rather than a missing
+ * feature. It refuses loudly instead.
+ */
+public fun jsNew(callee: Any?, vararg arguments: Any?): Any? = when (callee) {
+    is JsConstructor ->
+        if (arguments.size < callee.required) throw JsTypeError(
+            "class ${callee.name} cannot be constructed with ${arguments.size} " +
+                "argument(s): this backend needs ${callee.required}"
+        ) else callee.impl(JsArray(arguments.toList()))
+    null -> throw JsTypeError("undefined is not a constructor")
+    // BEFORE the general arm: `jsToString` of a function value is its JVM
+    // lambda's identity (`program.MainKt$$Lambda/0x…@4aa298b7`), which names an
+    // implementation detail where a JavaScript engine names the expression. The
+    // word is what `JsVarargFunction.toString` already answers.
+    is Function<*> -> throw JsTypeError("function is not a constructor")
+    else -> throw JsTypeError("${jsToString(callee)} is not a constructor")
 }
 
 /**

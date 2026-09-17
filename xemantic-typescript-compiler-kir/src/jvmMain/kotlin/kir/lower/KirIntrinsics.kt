@@ -313,6 +313,28 @@ internal class KirIntrinsics(
     /** A call of a value whose erasure did not say its arity — `jsCall(f, …)`. */
     val jsCall: IrSimpleFunctionSymbol by lazy { runtime("jsCall") }
 
+    // ---- (KIR.LOWER.5) the dynamic `new` ----------------------------------
+
+    /**
+     * `jsNew(callee, …)` — construction of a value whose type was not known.
+     *
+     * [jsCall]'s twin, and separate from it for the reason the runtime's own
+     * KDoc gives: calling and constructing are different operations in
+     * JavaScript, and a single entry point could not tell a class's value from
+     * an ordinary function's.
+     */
+    val jsNew: IrSimpleFunctionSymbol by lazy { runtime("jsNew") }
+
+    /** The carrier a lowered class's VALUE is — see `JsRuntime.JsConstructor`. */
+    val jsConstructorClass: IrClassSymbol by lazy {
+        builder.referenceClass(irFile, "$runtimePackage.JsConstructor")
+    }
+
+    val jsConstructorType: IrType by lazy { jsConstructorClass.owner.defaultType }
+
+    /** `jsConstructor(name, impl)` — builds one. */
+    val jsConstructor: IrSimpleFunctionSymbol by lazy { runtime("jsConstructor") }
+
     // ---- (LIB.6) the bag's member-CALL protocol ----------------------------
 
     /** `JsObject.invokeMember(name, arguments)` — see the runtime's KDoc. */

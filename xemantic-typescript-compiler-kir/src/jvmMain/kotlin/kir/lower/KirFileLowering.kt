@@ -192,6 +192,7 @@ import org.jetbrains.kotlin.ir.util.constructors
 import org.jetbrains.kotlin.ir.util.createThisReceiverParameter
 import org.jetbrains.kotlin.ir.util.defaultType
 import org.jetbrains.kotlin.ir.util.render
+import org.jetbrains.kotlin.ir.util.isNullable
 import org.jetbrains.kotlin.name.Name
 import org.jetbrains.kotlin.name.SpecialNames
 import java.util.IdentityHashMap
@@ -253,6 +254,19 @@ internal class KirFileLowering(
      */
     private val namespaceObjects =
         java.util.IdentityHashMap<Map<String, Symbol>, IrSimpleFunction>()
+
+    /**
+     * (KIR.LOWER.5) One `JsConstructor` accessor per lowered class — see
+     * [constructorValue].
+     *
+     * Per FILE, for [namespaceObjects]' reason: the static field the carrier is
+     * cached in belongs to the file that declares it, and a cross-file field
+     * read is the one thing the IR verifier refuses. Two files that both take a
+     * class's value therefore mint two carriers, which no program in this
+     * subset can observe — `C === C` is asked within one file.
+     */
+    private val constructorValues =
+        java.util.IdentityHashMap<ClassDeclaration, IrSimpleFunction>()
 
     /** What makes a generated shape class's name unique across FILES. */
     private val shapeFilePrefix: String =
@@ -2675,10 +2689,101 @@ internal class KirFileLowering(
         else -> null
     }
 
-    /** A lowered class's CONSTRUCTOR as a function value — [staticMethodValue]'s twin. */
+    /**
+     * (KIR.LOWER.5) A lowered class as a VALUE — `JsConstructor`, not a lambda.
+     *
+     * [staticMethodValue]'s twin, and deliberately NOT the same carrier as it.
+     * Before this, a class's value was a `FunctionN` that constructed when
+     * invoked; so was an ordinary function's, and a dynamic `new` has nothing
+     * but the value to go on. `new (allLocales as any)[property]()` would then
+     * have CALLED a function export and answered its return value, where
+     * JavaScript makes an object — a silent wrong answer in the one shape whose
+     * whole point is that the callee is not statically known. The carrier is
+     * what lets [lowerDynamicNew] separate the two, and what makes `C()` on a
+     * class the `TypeError` JavaScript says it is rather than a construction.
+     *
+     * The carrier is allocated ONCE, lazily, into a static field — the shape
+     * `namespaceAccessor` already uses — because `ns.C === ns.C` is `true` in
+     * JavaScript and was true here only by the accident that a non-capturing
+     * Kotlin lambda compiles to a singleton.
+     *
+     * Nothing reaches reflection: the body is a direct `IrConstructorCall`, and
+     * arguments arrive as one array so that a missing one is `undefined` and a
+     * surplus one is dropped — JavaScript's own rule, and `JsVarargFunction`'s.
+     */
     private fun constructorValue(owner: ClassDeclaration): IrExpression? {
-        val irClass = classes[owner] ?: return null
-        val constructor = constructorsByDeclaration[owner] ?: return null
+        if (classes[owner] == null || constructorsByDeclaration[owner] == null) return null
+        val accessor = constructorValues.getOrPut(owner) { buildConstructorValue(owner) }
+        return scope.irCall(accessor.symbol, intrinsics.jsConstructorType)
+    }
+
+    /** [constructorValue]'s lazy singleton accessor — [namespaceAccessor]'s twin. */
+    private fun buildConstructorValue(owner: ClassDeclaration): IrSimpleFunction {
+        val irClass = classes.getValue(owner)
+        val constructor = constructorsByDeclaration.getValue(owner)
+        val declared = owner.name?.text ?: irClass.name.asString()
+        val index = constructorValues.size
+        val slot = "ctorValue\$$shapeFilePrefix\$$index"
+        val field = builder.irFactory.buildField {
+            this.name = Name.identifier(slot)
+            type = types.anyNullable
+            visibility = DescriptorVisibilities.PUBLIC
+            isStatic = true
+            isFinal = false
+            origin = builder.generatedOrigin
+        }
+        field.parent = irFile
+        irFile.declarations.add(field)
+        return moduleAccessor("$slot\$get", intrinsics.jsConstructorType) { function ->
+            inFunction(function, intrinsics.jsConstructorType, null, null) {
+                val read: () -> IrExpression = {
+                    IrGetFieldImpl(
+                        UNDEFINED, UNDEFINED, field.symbol, types.anyNullable, null, null, null
+                    )
+                }
+                val allocate = IrSetFieldImpl(
+                    UNDEFINED, UNDEFINED, field.symbol, null,
+                    scope.irCall(intrinsics.jsConstructor, intrinsics.jsConstructorType).apply {
+                        arguments[0] = scope.irString(declared)
+                        // The smallest count at which no NON-NULLABLE erased
+                        // parameter is left `undefined` — see `JsConstructor`.
+                        arguments[1] = scope.irInt(
+                            constructor.parameters
+                                .filter { it.kind == IrParameterKind.Regular }
+                                .indexOfLast { !it.type.isNullable() } + 1
+                        )
+                        arguments[2] = constructionLambda(irClass, constructor)
+                    },
+                    irBuiltIns.unitType, null, null,
+                )
+                function.body = blockBodyOf(
+                    listOf(
+                        org.jetbrains.kotlin.ir.expressions.impl.IrWhenImpl(
+                            UNDEFINED, UNDEFINED, irBuiltIns.unitType
+                        ).apply {
+                            branches.add(
+                                org.jetbrains.kotlin.ir.expressions.impl.IrBranchImpl(
+                                    UNDEFINED, UNDEFINED,
+                                    scope.irEqualsNull(read()),
+                                    IrBlockImpl(
+                                        UNDEFINED, UNDEFINED, irBuiltIns.unitType, null,
+                                        listOf(allocate)
+                                    ),
+                                )
+                            )
+                        },
+                        scope.irReturn(bagCast(read(), intrinsics.jsConstructorType)),
+                    )
+                )
+            }
+        }
+    }
+
+    /** `JsConstructor.impl`: `(arguments) -> Cls(arguments[0], …)`. */
+    private fun constructionLambda(
+        irClass: IrClass,
+        constructor: IrConstructor,
+    ): IrExpression {
         val parameters = constructor.parameters.filter { it.kind == IrParameterKind.Regular }
         val lambda = builder.irFactory.buildFun {
             name = SpecialNames.ANONYMOUS
@@ -2688,18 +2793,22 @@ internal class KirFileLowering(
             origin = IrDeclarationOrigin.LOCAL_FUNCTION_FOR_LAMBDA
         }
         lambda.parent = frame.irFunction
-        val forwarded = parameters.mapIndexed { index, parameter ->
-            lambda.addValueParameter(
-                Name.identifier("p$index"), types.anyNullable, builder.generatedOrigin
-            ) to parameter
-        }
+        val packed = lambda.addValueParameter(
+            Name.identifier("\$arguments"), intrinsics.jsArrayType, builder.generatedOrigin
+        )
         inFunction(lambda, types.anyNullable, null, null) {
             val construction = IrConstructorCallImpl(
                 UNDEFINED, UNDEFINED, irClass.defaultType, constructor.symbol,
                 typeArgumentsCount = 0, constructorTypeArgumentsCount = 0,
             ).apply {
-                forwarded.forEachIndexed { index, (slot, parameter) ->
-                    arguments[index] = coerceErased(tsFile, scope.irGet(slot), parameter.type)
+                parameters.forEachIndexed { index, parameter ->
+                    // Past the end is `undefined`, which is what `jsVarargFixed`
+                    // answers and what JavaScript passes for a missing argument.
+                    val slot = scope.irCall(intrinsics.jsVarargFixed).apply {
+                        arguments[0] = scope.irGet(packed)
+                        arguments[1] = scope.irInt(index)
+                    }
+                    arguments[index] = coerceErased(tsFile, slot, parameter.type)
                 }
             }
             lambda.body = blockBodyOf(
@@ -2707,7 +2816,10 @@ internal class KirFileLowering(
             )
         }
         return IrFunctionExpressionImpl(
-            UNDEFINED, UNDEFINED, types.function(parameters.size), lambda,
+            UNDEFINED, UNDEFINED,
+            irBuiltIns.functionN(1).symbol
+                .typeWith(intrinsics.jsArrayType, types.anyNullable),
+            lambda,
             IrStatementOrigin.LAMBDA
         )
     }
@@ -4083,11 +4195,13 @@ internal class KirFileLowering(
             // here, so the callee's own symbol is asked instead: the implicit
             // constructor is a property of the class, not of the signature list.
             ?: classDeclarationOf(node.expression)
-            ?: refuse(
-                tsFile, node,
-                if (signature == null) "the checker resolved no constructor for this `new`"
-                else "cannot lower `new` on a non-class"
-            )
+            // (KIR.LOWER.5) No construct signature AND no class: the callee's
+            // type was `any`, which is the ONE shape no static arm can ever
+            // answer — the checker rejects `new e()` for anything else that is
+            // not constructable (TS2351). So construct on what the value turns
+            // out to be, exactly as `lowerCall` already calls on one.
+            ?: if (signature == null) return lowerDynamicNew(node)
+            else refuse(tsFile, node, "cannot lower `new` on a non-class")
         val constructor = constructorsByDeclaration[owner]
             ?: refuse(tsFile, node, "cannot lower `new` on a class this backend did not generate")
         val irClass = classes.getValue(owner)
@@ -4106,6 +4220,35 @@ internal class KirFileLowering(
                 this.arguments[index] =
                     coerce(argument, lowerExpression(argument), parameter.type)
             }
+        }
+    }
+
+    /**
+     * (KIR.LOWER.5) `new e(…)` where the checker resolved no constructor.
+     *
+     * The callee's type was `any` — `new (allLocales as any)[property]()` is
+     * the shape a locale loader is written in — so there is no declaration to
+     * reach and the construction is decided by what the VALUE turns out to be.
+     * `jsNew` constructs a `JsConstructor` (which is what [constructorValue]
+     * makes a lowered class) and throws a `TypeError` for everything else, so a
+     * number, a string, a bag, an arrow or a plain function refuses the way
+     * JavaScript refuses rather than answering something.
+     *
+     * The callee still has to LOWER. That is what keeps a `new` on a library
+     * type this backend does not model a COMPILE refusal — `new WeakMap()`
+     * resolves a construct signature and never reaches here at all, and a class
+     * name this backend cannot give a value refuses at the reference.
+     */
+    private fun lowerDynamicNew(node: NewExpression): IrExpression {
+        val given = node.arguments ?: emptyList()
+        return scope.irCall(intrinsics.jsNew, types.anyNullable).apply {
+            arguments[0] = coerce(
+                node.expression, lowerExpression(node.expression), types.anyNullable
+            )
+            arguments[1] = scope.irVararg(
+                irBuiltIns.anyNType,
+                given.map { coerce(it, lowerExpression(it), types.anyNullable) }
+            )
         }
     }
 
