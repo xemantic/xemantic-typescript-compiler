@@ -214,6 +214,11 @@ class CorpusTest {
         assertCorpusProgram("29-array-construction")
     }
 
+    @Test
+    fun `30 nested functions`() {
+        assertCorpusProgram("30-nested-functions")
+    }
+
     private fun assertCorpusProgram(name: String) {
         val source = resource("$name.ts")
         val expected = resource("$name.expected")

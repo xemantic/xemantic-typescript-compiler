@@ -804,7 +804,7 @@ class KirDeclaredValueTest {
      * unrelated gate.
      */
     @Test
-    fun `negative control - a function declared in a body is refused`() {
+    fun `a function declared in a body is a callback`() {
         val lowered = lower(
             "main.ts" to """
                 function outer(): string {
@@ -814,11 +814,21 @@ class KirDeclaredValueTest {
                 console.log(outer())
             """,
         )
-        assert(!lowered.compiled)
-        assert(lowered.report.contains("cannot lower the reference 'g'"))
+        assert(lowered.compiled)
+        assert(lowered.stdout == "2,3\n")
     }
 
-    /** negative control — the same for a CLASS declared in a body; node: `function`. */
+    /**
+     * negative control — the same for a CLASS declared in a body; node: `function`.
+     *
+     * RE-POINTED by (P18.129) against the measured answer rather than edited to
+     * whatever the new code prints. It used to assert *cannot lower the
+     * reference 'Local'*, which is the message every unresolvable name gets;
+     * that round landed the FUNCTION half of this family and gave the class
+     * half a refusal that NAMES it, so the message asserted here is the named
+     * one. The refusal itself is unchanged, and the sibling above — which used
+     * to be this pin's twin for a function — is now a positive pin.
+     */
     @Test
     fun `negative control - a class declared in a body is refused`() {
         val lowered = lower(
@@ -832,7 +842,12 @@ class KirDeclaredValueTest {
             """,
         )
         assert(!lowered.compiled)
-        assert(lowered.report.contains("cannot lower the reference 'Local'"))
+        assert(
+            lowered.report.contains(
+                "a `class` declared inside a function body or a block is out of the spike subset"
+            )
+        )
+        assert(lowered.report.contains("'Local'"))
     }
 
     /**

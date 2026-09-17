@@ -630,7 +630,16 @@ class KirDynamicNewTest {
             """,
         )
         assert(!lowered.compiled)
-        assert(lowered.report.contains("cannot lower the reference 'Local'"))
+        // RE-POINTED by (P18.129): the refusal is unchanged and its MESSAGE is
+        // not. That round landed the nested-FUNCTION half of this family and
+        // gave the class half a refusal naming the capability, where this used
+        // to read the generic *cannot lower the reference 'Local'*.
+        assert(
+            lowered.report.contains(
+                "a `class` declared inside a function body or a block is out of the spike subset"
+            )
+        )
+        assert(lowered.report.contains("'Local'"))
     }
 
 }

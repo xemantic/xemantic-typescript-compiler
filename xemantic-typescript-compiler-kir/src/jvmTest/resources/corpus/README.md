@@ -36,6 +36,7 @@ debugger.
 | 27 | the array members that take a CALLBACK, and the arguments JavaScript gives it — `(element, index, array)`, not the element alone; plus `find`/`findIndex`/`some`/`every`/`at`/`reverse`, where `at(-1)` counts from the end and `every` is true for an empty array |
 | 28 | a member call on a GUARDED receiver whose recorded type is still the nullish union — `getTypeOfExpression` never flow-narrows, so the receiver's member table is chosen from its NON-NULLISH shape |
 | 29 | `new Array(…)`, whose ONE-ARGUMENT numeric form is a LENGTH and not an element — `new Array(5)` has five holes where `new Array("5")` has one string |
+| 30 | a `function` declared inside a BODY or a BLOCK — HOISTING (a helper is callable above its own textual position, which `const f = function () {}` is not), capture of a parameter / a written `let` / a `var`, an ESCAPING closure two invocations do not share, recursion and MUTUAL recursion, a declaration in a loop block, shadowing a top-level name, two siblings sharing one capture, and the rest / defaulted / overloaded parameter shapes |
 
 Note in 09 that an out-of-range read prints `null` where a JS engine prints
 `undefined`: design doc §3.1 maps both TypeScript `null` and `undefined` onto
@@ -51,6 +52,6 @@ use site instead, where union erasure already pays it.
 Deliberately absent, and each is its own milestone: `any`, generics,
 `async`, modules/imports, getters/setters, `==`.
 
-Programs 17 to 29 take their `.expected` from `node`, which runs a `.ts`
+Programs 17 to 30 take their `.expected` from `node`, which runs a `.ts`
 file directly — so the oracle is a JavaScript engine rather than this
 author's reading of the specification.
