@@ -451,11 +451,11 @@ class KirNamespaceImportTest {
      * That loader is `for (const property in allLocales) { locales[property] =
      * new (allLocales as any)[property]() }` over a namespace import of a PURE
      * `export * from` BARREL — which is why the import here goes through one,
-     * (LIB.8) being what made that shape lowerable at all. Half of the loader
-     * runs: the enumeration, and reading each export back as the function value
-     * JavaScript says a class is. The other half — constructing through a
-     * dynamic callee — is refused by `lowerNew` for ANY dynamic callee and is
-     * pinned as a residue below.
+     * (LIB.8) being what made that shape lowerable at all. What this pin owns
+     * is the NAMESPACE half — the enumeration, and reading each export back as
+     * the function value JavaScript says a class is. The construction half
+     * landed with (KIR.LOWER.5) and is pinned end to end by
+     * `KirDynamicNewTest`.
      *
      * `cronstrue` itself is NOT on this box, so this is a claim about the
      * SHAPE and not about the library.
@@ -838,30 +838,34 @@ class KirNamespaceImportTest {
         assert(lowered.report.contains("export set is not knowable"))
     }
 
-    // ---- what is still refused, recorded rather than claimed ---------------
+    // ---- the residue this class recorded, now closed -----------------------
 
     /**
-     * residue — `new (x as any)()` is refused for ANY dynamic callee.
+     * (KIR.LOWER.5) CLOSED — a dynamic `new` through the namespace CONSTRUCTS.
      *
-     * `cronstrue`'s loader spells its construction that way, and this backend
-     * has no dynamic `new` at all: `lowerNew` resolves a class declaration or
-     * refuses. The namespace object already answers the class export as a
-     * function value, so what is missing is one arm in `lowerNew`, not anything
-     * about modules.
+     * This was `residue - a dynamic new is still refused` in (P18.124) and
+     * (P18.125): `lowerNew` resolved a class declaration or refused, so
+     * `new (ns as any)[key]()` refused for every dynamic callee and the loader
+     * shape ran only as far as reading its classes back. It is re-pointed here
+     * against the MEASURED answer rather than deleted, because what this class
+     * is entitled to claim about the namespace half is exactly that the value
+     * it hands out is constructible; `KirDynamicNewTest` owns the construction
+     * itself, including every way a non-constructible callee must fail.
      */
     @Test
-    fun `residue - a dynamic new is still refused`() {
+    fun `a dynamic new through the namespace object constructs the class`() {
         val lowered = lower(
             "m.ts" to module,
             "main.ts" to """
                 import * as ns from './m'
                 const key: string = "Cls";
                 const made: any = new (ns as any)[key]();
-                console.log(made)
+                console.log(made.describe())
             """,
         )
-        assert(!lowered.compiled)
-        assert(lowered.report.contains("`new`"))
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "cls:cls\n")
     }
 
 }
