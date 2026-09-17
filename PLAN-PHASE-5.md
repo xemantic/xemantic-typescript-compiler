@@ -25,6 +25,73 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.124) — (LIB.7): the namespace import needed a runtime object for 4 of 21 shapes and a QUALIFIED REFERENCE for the other 17 (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,741 → 19,758 / 0 / 65**, the KIR module **194 → 211**;
+`huge_methods.py --fail-over 0` run over BOTH core (875 classes) and the **KIR module** (113, largest
+`lowerCall` at 4,620 after taking a 9-line arm), since this round adds 430 lines of compiled code outside the
+default core-only census; `cost_gate.py` exit 0 and the core corpus screen 8,790 / 0 are CONTROLS, and **the
+8-profile grid is inapplicable by construction — `Checker.class` is BYTE-IDENTICAL to (P18.123)'s landed binary
+(`8b302f30…`)**. The checker was not touched, and neither was `JsRuntime.kt` (0-line diff), so the native-runtime
+generator is not engaged.
+
+**THE BRIEF ASKED THE WRONG QUESTION, AND THE CHARACTERISATION SWEEP IS WHAT CAUGHT IT.** It framed the round as a
+choice between two shapes of module OBJECT. Measured over 21 shapes rather than the briefed five, **the object is
+needed for 4 of them and the other 17 need a QUALIFIED REFERENCE that needs no object at all** — and a round that
+had built only the object would have shipped every namespace-imported member as a REFLECTIVE read, which the
+round's own ablation prices exactly: with the reference arm removed and the object present, the same fixture still
+compiles and prints the right answer through **`dynamicOps = 2`**, i.e. (KIR.LOWER.3)'s 33x hazard one mechanism
+over. "Is an object the thing this item needs" was the question the brief did not ask.
+
+**THE CHECKER IS SILENT ABOUT A NAMESPACE MEMBER, AND THAT IS THE ROUND'S STRUCTURAL FINDING.** A one-line probe on
+`facts` settled it in a single run: `facts.nameAt(ns)` DOES answer (`ValueModule|NamespaceModule`, `declarations`
+empty, `exports` = the module's own table with every entry resolved into the declaring file), while
+**`facts.memberAt(ns.alpha)` is null and `facts.callAt(ns.bump())` reads `signatureCount = 0`**. So `lowerCall`'s
+existing `functions[fact.signature?.declaration]` arm can NEVER fire for `ns.f()`, however ordinary the call is —
+three distinct gaps behind one refusal message, where the item and the brief both read one.
+
+**WHAT LANDED.** (M1) A qualified reference resolves to the DECLARATION and costs nothing at run time — three arms,
+and the read arm must sit FIRST in `lowerPropertyRead`, above every arm that reasons about a receiver TYPE, because
+the checker types `ns` as `any` and the dynamic fallback would otherwise claim it. (M2) The namespace OBJECT is a
+final `JsObject` subclass with generated `get`/`has`/`keys`/`spill` and a lazily-allocated singleton, one per
+(importing file, module) — per IMPORTER because a namespace object built into the imported file would be a
+cross-file declaration, which is what the IR verifier refuses ((P18.122)); the exports are reached through shared
+accessors, so every value is identical and LIVE and only the object's identity is per-file. (M3) A RENAMED export
+(`export { inner as outer }`) is REFUSED rather than answered wrongly.
+
+**THE DESIGN DECISION IS DECIDED BY CORRECTNESS, NOT TIDINESS: AN ES MODULE'S EXPORTS ARE *LIVE BINDINGS* AND AN
+EAGER BAG IS A COPY.** The pin that separates the two designs is `a module whose exports change reads them through
+the namespace` — it prints `2\n2\n` here and a bag would print the pre-init value. The bag additionally makes
+module-init ORDER decide whether the entries exist at all. **And the one place where reusing (P18.122)'s machinery
+verbatim would have been WRONG is the `keys()`/`get` asymmetry**: enumeration spills (`buildShapeKeys` verbatim) and
+`get` is deliberately NOT `shapeActive()`-gated, because its arms read through accessors rather than fields — a
+namespace that spilled AND answered from the spill would freeze every live binding at the first `for…in`.
+
+**M3 IS A DEFECT THIS ROUND'S OWN FIX INTRODUCED, CAUGHT BY THE SWEEP.** The checker's export table is keyed by the
+DECLARED name, so `export { inner as outer }` made `ns.outer` answer `null` and `Object.keys(ns)` report `inner` —
+a loud refusal turned into a silent wrong answer, (INC.51)'s two-spellings-one-symbol trap one table over. Refused
+with the offending specifier named; the non-renaming `export { inner }` keys correctly and both are pinned as a pair.
+
+**A SHAPE PIN CAN BE SATISFIED BY A REFUSAL — THE INSTRUMENT'S ZERO HAS TWO CAUSES.** The helper reports
+`dynamicOps = 0` for a program that never compiled, so the first version of both shape pins would have been
+VACUOUSLY GREEN under the M1-off arm. Strengthened to assert `compiled` first — and the strengthened pin then
+reddened on `compiled` rather than on the count, so a THIRD pin (a qualified READ with no `new` in it) had to be
+added before M1's actual shape claim was measured at all. (P18.118)'s law in a new costume.
+
+**PINS AND ABLATION.** `KirNamespaceImportTest`, 17 cases (15 non-residue, all RED against the pre-change binary;
+2 named `residue - …`). Four arms — pre-change, M1 off, M2 off, M3 off — redden 15 / 3 / 10 / 1, each generated by a
+script asserting exactly ONE occurrence of the text it removes, every restore `cmp`-verified on both files, and the
+post-restore rebuild identical to the landed md5 at 211 / 0.
+
+**WHAT THE LIBRARY NEEDS NEXT, AND NONE OF IT IS A NAMESPACE QUESTION**: a DYNAMIC `new` (`lowerNew` resolves a
+class declaration or refuses, so `new (x as any)()` refuses for any dynamic callee — one arm, and it is what
+`cronstrue`'s `new (allLocales as any)[property]()` is blocked on); **`export * from` in the CHECKER** (a barrel
+module symbol's `exports` table is EMPTY — the checker resolves a star re-export at LOOKUP time and never populates
+the table, so the enumeration does not exist); the renamed export above; and `in`, which is not lowered at all, so
+the generated `has` override has no consumer yet and is kept for protocol completeness. **`cronstrue` is not on
+this box**, so the claim is MECHANICAL and stated as such: the SHAPE of `allLocalesLoader.ts` runs at
+`dynamicOps = 0`; its construction half and its barrel half are the two residues.
+
 ### Round (P18.123) — (LEGACY.0b) step 22: only an ASSIGNMENT declares a JS expando, and the brief's own premise about the sequel was false (2026-09-17)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,726 → 19,741 / 0 / 65**; `tsgoPendingBaselines`
@@ -550,70 +617,6 @@ config-directory branch — the harness fixtures have none, which is why the row
 own `.errors.txt.diff` layer; and two attempts to bound M1's blast radius by simulation produced unusable numbers
 (0 and 8, at least 3 of the 8 false on inspection) — **the defensible figure is the exposure count, not a
 simulated mover count**.
-
-### Round (P18.114) — (LEGACY.0b) step 17: the JS CommonJS `exports` model — four rows, and the errors screen was a GATE on five of six arms (2026-09-16)
-
-**Three commits** (`0871e6fa1` feat, `59230e9af` test, this docs commit). **Suite 19,586 → 19,604 / 0 / 77** (+18
-pins; skipped −4, the closed rows), 9 modules asserted; corpus screen errors **3,090 / 0** and emit 5,688 / 0, run
-after EACH mechanism — **and this is the rare round where that screen is a GATE rather than a control: five of six
-ablation arms are caught by it alone** (the profiles carry no `.js` file, so the grid is the control);
-`cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0
-removed=0` and emit 78/78; warning-clean with an injected positive control. `Checker.kt` 194,194 → **194,474**;
-`tsgoPendingBaselines` 56 → **52**. **(LEGACY.0) stays OPEN** on (0b-18).
-
-**THE MECHANISM, READ OUT OF tsgo AND THEN MEASURED.** `binder.go:declareCommonJSVariable` declares `exports` as a
-file LOCAL flagged `SymbolFlagsModuleExports`, and `checker.go:16513` types a symbol so named as
-`getTypeOfSymbol(resolveExternalModuleSymbol(fileSymbol))` — which an `export =` COLLAPSES onto its target, with
-`module` being `{ exports: <that type> }` (`:16517`). So in a `.js` file that is not an ES module and binds neither
-name, a single top-level `module.exports = X` makes the exported surface X's type and every one-level `exports.p` /
-`module.exports.p` is a property access on it. **ORDER IS IRRELEVANT** — the brief hedged "subsequent (or
-preceding)" and the PRECEDING case is the corpus's common one. `checkJsCommonJsExportEqualsAccess` replaces
-**B438d, deleted**, which emitted a TS2303 `Circular definition of import alias` **tsgo never produces** and
-rendered the receiver as the expando shape. `module.exports = require("./y.js")` needed its own leg
-(`jsCjsRequireNamespaceShape`): `getTypeOfExpression` answers `any` there, so the specifier is resolved and the
-required file's **VALUE** exports are collected from the AST — an `export declare type` declares no value member,
-which IS the row — displayed as `typeof import("<resolved path>")`, and it refuses an `export =`, a star
-re-export, an ambient module or an import-fed re-export rather than risk an under-collected member set.
-**M2**: `checkJsUnboundExportsIdentifier` reports TS2304 `Cannot find name 'exports'` wherever a `.js` file
-references the name with no CommonJS indicator — tsgo's four being a `module.exports =`, a **ONE-LEVEL**
-`exports.p =` (so `exports.a.b.c = 0` indicates nothing, which is that row), an `Object.defineProperty(exports, …)`
-and — **the one the brief did not list** — a `require(…)` CALL anywhere in the file (`binder.go:928`); an
-ES-module `.js` file never binds `exports` either. B427 gained two guards so it cannot double-report.
-
-**M3 BUILT, MEASURED, REVERTED — and the two blockers are the finding.** tsgo reports TS7009 whenever the callee
-TYPE has call signatures and no construct signature (12 shapes measured); our leg reaches only a bare `Identifier`
-resolving to a `SymbolFlags.Function`. The general rule fixed 6 of the 12 shapes and was still reverted, because
-(a) it does **not** close `commonjsAccessExports` — `new exports.Cls()` needs `exports.Cls` to type as
-`() => void`, and our `exports` object has no member table when there is no `export =`, a THIRD mechanism — and
-(b) it **costs a green baseline**: `constructorOverloads4` grows an ours-only TS7009 at `new M.Function(...)`
-because `getTypeOfExpression` answers the function half of a **class merged with a function** and never sees the
-construct signature. So TS7009-from-the-callee-type is blocked on a class/function merge gap, not on its own
-condition.
-
-**WHERE THE BRIEF WAS WRONG — FIVE PLACES, ALL FOUND BY MEASUREMENT**, and one is a trap worth carrying:
-**`isJSLiteralType` (`utilities.go:1730`) returns false only under `noImplicitAny`**, so with `strict: false` tsgo
-is silent for every missing member of an object-literal `export =` and the shipped binary APPEARS to contradict its
-own baseline layer — the harness has the flag on. **A scratch project modelling a JS baseline must set
-`noImplicitAny`**, or a real row reads as "the baseline is wrong"; we report in both regimes, an unmodelled
-suppression. Also: `jsExportAssignmentNonMutableLocation` is `@emitDeclarationOnly` and needed the walker on the
-whitelist path, which the brief never mentions; `jsExportMemberMergedWithModuleAugmentation3` is a separate
-sub-rule, not "the same family"; `jsFileCompilationBindDeepExportsAssignment` IS the same binder mechanism from the
-other side and fell out cleanly; and `jsExpandoObjectDefineProperty` is genuinely unrelated (an
-`Object.defineProperty` on a plain local, no `exports` anywhere) and keeps its entry.
-
-**PINS AND ABLATION, AND THE ROUND'S REUSABLE LESSON.** 18 pins (7 controls); stash-ablation **9 of 9 non-control
-pins red, all 7 controls green**, on a before-arm whose Checker md5 is (P18.113)'s recorded final — the receipt
-that the stash restored HEAD. Six arms; **two pins were added BECAUSE the arms found them missing**: a2 (the
-`emitDeclarationOnly` dispatch) read 0 pin reds and 1 screen mismatch, and a6 (B427's `export =` guard) read 0 and
-0 — a measured redundant guard *on the corpus* that is load-bearing on the pinned shape. Both now redden exactly
-one pin. Final md5 Checker `4b132263` — the orchestrator's AFTER arm matched.
-
-**RESIDUES, MEASURED, NONE CORPUS-REACHABLE**: a SCALAR `export =` displays `number` where tsgo prints `1` (round
-781's law — `getTypeOfExpression` answers the base primitive for a literal node); a CLASS `export =` and a
-two-`module.exports=` file (tsgo unions the declarations) are refused by the table-completeness gate;
-`module.exports = exports` is a pre-existing ours-only TS2309; and tsgo reports TS2304 for `exports` in a **`.ts`
-file** too, which is a much larger population here (`exports` is in `KNOWN_GLOBALS`) and is pinned unmoved by a
-negative control.
 
 ## QUEUE
 
@@ -6002,13 +6005,21 @@ CLAUDE.md § "AI agent mission".
   invisible through a bag-typed slot; a REST-parameter method is left out of `invokeMember`; and a `void` bag
   member call throws from `adaptingCall`'s `Any?` typing, which is pre-existing. `cronstrue` is NOT on this box, so
   the library claim is mechanical; (LIB.7)'s namespace import is the next wall.**
-- [ ] **(LIB.7) A NAMESPACE IMPORT HAS NO RUNTIME OBJECT — `import * as ns from "./m"` refuses
-  with `cannot lower the reference 'ns'`.** `cronstrue`'s ALL-LOCALES entry point
-  (`cronstrue-i18n.ts`) needs it: `allLocalesLoader.ts` does `for (var property in allLocales)`
-  and `new (allLocales as any)[property]()`. The English entry point does not, which is why
-  (LIB.4) got past it. Needs a module NAMESPACE object — a `JsObject` whose properties are the
-  module's exports — built once per imported module and reachable as a value.
-
+- [x] **(LIB.7) LANDED 2026-09-17 ((P18.124) note) — A NAMESPACE IMPORT NOW HAS A RUNTIME OBJECT, AND A
+  QUALIFIED REFERENCE NEEDS NONE. Measured over 21 shapes: the OBJECT is needed for 4 of them and the other 17 need
+  a qualified reference that costs nothing at run time — a round that built only the object would have shipped
+  every namespace-imported member as a REFLECTIVE read (the ablation prices it at `dynamicOps = 2` where 0 is
+  right). **The structural finding is that the CHECKER is silent about a namespace member**: `nameAt(ns)` answers
+  with the module's whole export table, while `memberAt(ns.alpha)` is null and `callAt(ns.f())` reads
+  `signatureCount = 0`, so three distinct gaps sit behind one refusal message. The object is a final `JsObject`
+  subclass with generated `get`/`has`/`keys`/`spill` and a lazy singleton, one per IMPORTING FILE because the IR
+  verifier refuses a cross-file declaration; its exports are reached through shared accessors, so they stay LIVE —
+  which is the whole argument against the eager bag, since an ES module's exports are live bindings and a bag is a
+  copy. `keys()` spills and `get` deliberately does NOT, or the first `for…in` would freeze every binding.
+  **RESIDUES**: `export { x as y }` is REFUSED rather than answered wrongly (the checker's table is keyed by the
+  DECLARED name, so it silently mis-answered — a defect this round's own fix introduced and its 21-shape sweep
+  caught); `export * from` barrels enumerate nothing, which is CHECKER-side; a dynamic `new` refuses; and `in` is
+  not lowered, so the generated `has` has no consumer yet.**
 - [ ] **(CHK.69) AN ASSIGNMENT *BEFORE* A `var`'s DECLARATION DOES NOT COUNT TOWARD DEFINITE
   ASSIGNMENT — a two-function repro, ours-only against tsgo 7.0.2.**
   ```ts

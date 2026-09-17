@@ -1,5 +1,18 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.119) — (CHK.136): A `for`-HEADER BINDING AND A `for…in` BINDING TYPED `any`, 19,672 / 0 / 70 (2026-09-16).**
+tsgo reports 7 rows on an 11-line fixture where we reported 2. A `ForStatement`'s initializer is a
+`VariableDeclarationList` whose parent is the LOOP, not a `VariableStatement`, and both recorders test that parent —
+so every `for`-header binding was recorded by NOTHING and typed `any` inside its own loop, annotated or not, while
+`for-of` (a (CHK.29) arm) and an ordinary `let` were correct, which is why every earlier probe read healthy. It is
+also the CHECKER-side root cause (P18.118) measured from the backend: `nums[i]` was `any` because `i` was. The two
+recorders register against the loop's own nodeId, so the scope covers the condition and incrementor and pops at the
+leave; the type half is shared structurally with the statement recorder so the rules cannot drift. **The 8-profile
+grid is the gate and reads `added=0 removed=0` on all eight, with 78 emit files byte-identical**; cost gate max
++0.15% on `typeOfExpr.distinct`, moving with `calls` on a flat `spine.nodes`. 20 pins, 4 arms; the split briefly
+left a 39-bytecode delegating wrapper that `HugeMethodLimitTest`'s partition pin caught — repaired by inlining it,
+never by lowering the bound.
+
 **(P18.118) — (KIR.LOWER.3)+(KIR.LOWER.4): THE LOWERING'S BAG FALLBACK, AND TWO DEFECTS THE ITEMS DO NOT NAME, 19,652 / 0 / 70 (2026-09-16).**
 The first round of this session outside the checker-parity lane, taken because these two are the largest measured
 KIR performance lever and a native-arm blocker sharing one mechanism: the lowering asks for a receiver's type, does

@@ -46,6 +46,70 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
+### Round (P18.114) — (LEGACY.0b) step 17: the JS CommonJS `exports` model — four rows, and the errors screen was a GATE on five of six arms (2026-09-16)
+
+**Three commits** (`0871e6fa1` feat, `59230e9af` test, this docs commit). **Suite 19,586 → 19,604 / 0 / 77** (+18
+pins; skipped −4, the closed rows), 9 modules asserted; corpus screen errors **3,090 / 0** and emit 5,688 / 0, run
+after EACH mechanism — **and this is the rare round where that screen is a GATE rather than a control: five of six
+ablation arms are caught by it alone** (the profiles carry no `.js` file, so the grid is the control);
+`cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0
+removed=0` and emit 78/78; warning-clean with an injected positive control. `Checker.kt` 194,194 → **194,474**;
+`tsgoPendingBaselines` 56 → **52**. **(LEGACY.0) stays OPEN** on (0b-18).
+
+**THE MECHANISM, READ OUT OF tsgo AND THEN MEASURED.** `binder.go:declareCommonJSVariable` declares `exports` as a
+file LOCAL flagged `SymbolFlagsModuleExports`, and `checker.go:16513` types a symbol so named as
+`getTypeOfSymbol(resolveExternalModuleSymbol(fileSymbol))` — which an `export =` COLLAPSES onto its target, with
+`module` being `{ exports: <that type> }` (`:16517`). So in a `.js` file that is not an ES module and binds neither
+name, a single top-level `module.exports = X` makes the exported surface X's type and every one-level `exports.p` /
+`module.exports.p` is a property access on it. **ORDER IS IRRELEVANT** — the brief hedged "subsequent (or
+preceding)" and the PRECEDING case is the corpus's common one. `checkJsCommonJsExportEqualsAccess` replaces
+**B438d, deleted**, which emitted a TS2303 `Circular definition of import alias` **tsgo never produces** and
+rendered the receiver as the expando shape. `module.exports = require("./y.js")` needed its own leg
+(`jsCjsRequireNamespaceShape`): `getTypeOfExpression` answers `any` there, so the specifier is resolved and the
+required file's **VALUE** exports are collected from the AST — an `export declare type` declares no value member,
+which IS the row — displayed as `typeof import("<resolved path>")`, and it refuses an `export =`, a star
+re-export, an ambient module or an import-fed re-export rather than risk an under-collected member set.
+**M2**: `checkJsUnboundExportsIdentifier` reports TS2304 `Cannot find name 'exports'` wherever a `.js` file
+references the name with no CommonJS indicator — tsgo's four being a `module.exports =`, a **ONE-LEVEL**
+`exports.p =` (so `exports.a.b.c = 0` indicates nothing, which is that row), an `Object.defineProperty(exports, …)`
+and — **the one the brief did not list** — a `require(…)` CALL anywhere in the file (`binder.go:928`); an
+ES-module `.js` file never binds `exports` either. B427 gained two guards so it cannot double-report.
+
+**M3 BUILT, MEASURED, REVERTED — and the two blockers are the finding.** tsgo reports TS7009 whenever the callee
+TYPE has call signatures and no construct signature (12 shapes measured); our leg reaches only a bare `Identifier`
+resolving to a `SymbolFlags.Function`. The general rule fixed 6 of the 12 shapes and was still reverted, because
+(a) it does **not** close `commonjsAccessExports` — `new exports.Cls()` needs `exports.Cls` to type as
+`() => void`, and our `exports` object has no member table when there is no `export =`, a THIRD mechanism — and
+(b) it **costs a green baseline**: `constructorOverloads4` grows an ours-only TS7009 at `new M.Function(...)`
+because `getTypeOfExpression` answers the function half of a **class merged with a function** and never sees the
+construct signature. So TS7009-from-the-callee-type is blocked on a class/function merge gap, not on its own
+condition.
+
+**WHERE THE BRIEF WAS WRONG — FIVE PLACES, ALL FOUND BY MEASUREMENT**, and one is a trap worth carrying:
+**`isJSLiteralType` (`utilities.go:1730`) returns false only under `noImplicitAny`**, so with `strict: false` tsgo
+is silent for every missing member of an object-literal `export =` and the shipped binary APPEARS to contradict its
+own baseline layer — the harness has the flag on. **A scratch project modelling a JS baseline must set
+`noImplicitAny`**, or a real row reads as "the baseline is wrong"; we report in both regimes, an unmodelled
+suppression. Also: `jsExportAssignmentNonMutableLocation` is `@emitDeclarationOnly` and needed the walker on the
+whitelist path, which the brief never mentions; `jsExportMemberMergedWithModuleAugmentation3` is a separate
+sub-rule, not "the same family"; `jsFileCompilationBindDeepExportsAssignment` IS the same binder mechanism from the
+other side and fell out cleanly; and `jsExpandoObjectDefineProperty` is genuinely unrelated (an
+`Object.defineProperty` on a plain local, no `exports` anywhere) and keeps its entry.
+
+**PINS AND ABLATION, AND THE ROUND'S REUSABLE LESSON.** 18 pins (7 controls); stash-ablation **9 of 9 non-control
+pins red, all 7 controls green**, on a before-arm whose Checker md5 is (P18.113)'s recorded final — the receipt
+that the stash restored HEAD. Six arms; **two pins were added BECAUSE the arms found them missing**: a2 (the
+`emitDeclarationOnly` dispatch) read 0 pin reds and 1 screen mismatch, and a6 (B427's `export =` guard) read 0 and
+0 — a measured redundant guard *on the corpus* that is load-bearing on the pinned shape. Both now redden exactly
+one pin. Final md5 Checker `4b132263` — the orchestrator's AFTER arm matched.
+
+**RESIDUES, MEASURED, NONE CORPUS-REACHABLE**: a SCALAR `export =` displays `number` where tsgo prints `1` (round
+781's law — `getTypeOfExpression` answers the base primitive for a literal node); a CLASS `export =` and a
+two-`module.exports=` file (tsgo unions the declarations) are refused by the table-completeness gate;
+`module.exports = exports` is a pre-existing ours-only TS2309; and tsgo reports TS2304 for `exports` in a **`.ts`
+file** too, which is a much larger population here (`exports` is in `KNOWN_GLOBALS`) and is pinned unmoved by a
+negative control.
+
 ### Round (P18.113) — (LEGACY.1) step (j4): the target option surface — three parity fixes, and the COLLAPSE refused with a measurement in both directions (2026-09-16)
 
 **Three commits** (`dc71e22db` fix, `730dd9bd1` test, this docs commit). **Suite 19,566 → 19,586 / 0 / 81** (+20
