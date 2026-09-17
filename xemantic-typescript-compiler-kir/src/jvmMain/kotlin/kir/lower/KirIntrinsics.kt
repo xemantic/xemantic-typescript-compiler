@@ -313,6 +313,23 @@ internal class KirIntrinsics(
     /** A call of a value whose erasure did not say its arity — `jsCall(f, …)`. */
     val jsCall: IrSimpleFunctionSymbol by lazy { runtime("jsCall") }
 
+    // ---- (LIB.6) the bag's member-CALL protocol ----------------------------
+
+    /** `JsObject.invokeMember(name, arguments)` — see the runtime's KDoc. */
+    val jsObjectInvokeMember: IrSimpleFunctionSymbol by lazy {
+        runtimeMember(jsObjectClass, "invokeMember", 2)
+            ?: error("JsObject.invokeMember is missing")
+    }
+
+    /** `jsArgs(vararg values)` — the argument array [jsObjectInvokeMember] takes. */
+    val jsArgs: IrSimpleFunctionSymbol by lazy { runtime("jsArgs") }
+
+    /** `jsArgument(arguments, index)` — one slot, `undefined` past the end. */
+    val jsArgument: IrSimpleFunctionSymbol by lazy { runtime("jsArgument") }
+
+    /** `jsBagMemberCall(receiver, name, arguments)` — the base's own body. */
+    val jsBagMemberCall: IrSimpleFunctionSymbol by lazy { runtime("jsBagMemberCall") }
+
     /**
      * The same call, specialized to a small argument COUNT — `jsCall2(f, a, b)`.
      *

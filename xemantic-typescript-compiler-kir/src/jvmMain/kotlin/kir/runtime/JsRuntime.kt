@@ -121,7 +121,11 @@ public fun jsToString(value: Any?): String = when (value) {
     is String -> value
     is Boolean -> if (value) "true" else "false"
     is JsArray -> value.joinToJsString()
-    is JsObject -> "[object Object]"
+    // `value.toString()` rather than the constant: `JsObject.toString()` IS
+    // that constant, so a plain bag and a generated shape are unchanged, while
+    // a lowered TypeScript class that DECLARES `toString()` keeps being
+    // consulted — which it was before such a class became a `JsObject`.
+    is JsObject -> value.toString()
     is java.math.BigInteger -> value.toString()
     else -> value.toString()
 }
@@ -620,6 +624,24 @@ public open class JsObject {
 
     /** `name in object`. */
     public open fun has(name: String): Boolean = properties.containsKey(name)
+
+    /**
+     * A member CALL on this object: `o.m(…)`, where `o`'s type was a bag.
+     *
+     * A bag's "method" is a PROPERTY whose value is a function, which is what
+     * the default body does and what the lowering emitted directly before this
+     * existed. It is an open member rather than an expression at the call site
+     * because a generated class has real JVM METHODS and no such property: it
+     * overrides this with a `when (name)` over its own chain, so the call is a
+     * monomorphic virtual call and a name compare rather than reflection.
+     *
+     * Through [jsCall] in the default body, not `invoke`, for the reason the
+     * lowering's own comment gives: the stored function has whatever arity its
+     * DECLARATION had while the call site supplies whatever TypeScript's
+     * optional parameters allow, and JavaScript pads the difference.
+     */
+    public open fun invokeMember(name: String, arguments: Array<out Any?>): Any? =
+        jsCall(get(name), *arguments)
 
     /**
      * `delete object.name`, whose result is `true` for a configurable property.
@@ -2055,7 +2077,13 @@ public fun jsInvoke(receiver: Any?, name: String, vararg arguments: Any?): Any? 
         is Boolean -> if (name == "toString") jsToString(receiver)
         else throw JsTypeError("'$name' is not a Boolean member this runtime provides")
         is JsArray -> jsInvokeOnArray(receiver, name, arguments)
-        is JsObject -> jsCall(receiver.get(name), *arguments)
+        // NOT `jsCall(receiver.get(name), …)`, which is only the BAG half: a
+        // lowered TypeScript class is a `JsObject` too, and its members are JVM
+        // methods rather than properties holding functions. `invokeMember`'s
+        // default body IS the bag half, so this arm is unchanged for a bag and
+        // reaches a real method for a class — where falling through to
+        // `reflectiveInvoke` is unreachable, because `is JsObject` shadows it.
+        is JsObject -> receiver.invokeMember(name, arguments)
         else -> reflectiveInvoke(receiver, name, arguments)
     }
 
@@ -2129,6 +2157,41 @@ private fun jsInvokeOnArray(receiver: JsArray, name: String, arguments: Array<ou
         else -> throw JsTypeError("'$name' is not an Array member this runtime provides")
     }
 }
+
+/**
+ * One argument of an [JsObject.invokeMember] call, or `undefined` past the end.
+ *
+ * JavaScript pads a short argument list rather than failing, so a generated
+ * `invokeMember` override reads every slot through this instead of indexing —
+ * `o.m()` on a two-parameter method is ordinary TypeScript once a parameter is
+ * optional.
+ */
+public fun jsArgument(arguments: Array<out Any?>, index: Int): Any? =
+    if (index < arguments.size) arguments[index] else null
+
+/**
+ * The argument array of an [JsObject.invokeMember] call.
+ *
+ * A `vararg` here rather than on `invokeMember` itself, so that the OVERRIDE a
+ * generated class declares has exactly the parameter the base declares — a
+ * `vararg` in one and a plain array in the other is the same JVM descriptor
+ * and a different IR signature, which is the kind of divergence nothing here
+ * would notice until the override silently stopped being one.
+ */
+public fun jsArgs(vararg values: Any?): Array<out Any?> = values
+
+/**
+ * [JsObject.invokeMember]'s default behaviour, callable from an override.
+ *
+ * A generated `invokeMember` ends by falling back to the BAG reading — the
+ * member may be a property holding a function even on an object that also has
+ * real methods, because anything can be assigned onto a JavaScript object. The
+ * body is `jsCall(receiver.get(name), *arguments)`, which is the base's own;
+ * it is a function rather than a `super` call because a spread of an array into
+ * a `vararg` is IR the lowering has no other reason to build.
+ */
+public fun jsBagMemberCall(receiver: JsObject, name: String, arguments: Array<out Any?>): Any? =
+    jsCall(receiver.get(name), *arguments)
 
 private fun jsMemberOfArray(receiver: JsArray, name: String): Any? =
     // An index written as a property (`a["0"]`) is still an index.

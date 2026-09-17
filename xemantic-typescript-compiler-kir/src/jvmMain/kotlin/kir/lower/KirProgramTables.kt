@@ -119,6 +119,18 @@ internal class KirProgramTables(
     val superclasses = IdentityHashMap<ClassDeclaration, ClassDeclaration>()
 
     /**
+     * (LIB.6) The property-bag protocol a lowered class carries, by member name.
+     *
+     * PROGRAM-wide for the reason the rest of this table is: a class's `get`
+     * falls back to its BASE's, and the base may be declared in another file —
+     * where reaching its FIELD directly is not merely untidy but invalid IR
+     * ("Access to a field declared in another file"), exactly as it is for the
+     * module variables above. So the chain is walked through these functions
+     * and never through the fields they answer from.
+     */
+    val bagProtocols = IdentityHashMap<ClassDeclaration, MutableMap<String, IrSimpleFunction>>()
+
+    /**
      * The RUNTIME class a `class X extends Y` names — `class D extends Date`.
      *
      * Separate from [superclasses] because there is no `ClassDeclaration` to

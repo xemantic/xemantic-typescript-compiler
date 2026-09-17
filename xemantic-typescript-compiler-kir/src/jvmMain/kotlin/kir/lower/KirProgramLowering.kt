@@ -80,6 +80,12 @@ internal class KirProgramLowering(
         lowerings.forEach { (_, lowering) -> lowering.declareShells() }
         lowerings.forEach { (_, lowering) -> lowering.declareAll() }
         lowerings.forEach { (_, lowering) -> lowering.linkOverrides() }
+        // (LIB.6) After every declare pass and before any define pass, for the
+        // same reason `linkOverrides` sits here: the bag protocol a class gets
+        // carries its whole inheritance CHAIN's fields and methods, and a base
+        // may be declared in a file lowered later than the class extending it.
+        lowerings.forEach { (_, lowering) -> lowering.declareBagProtocols() }
+        lowerings.forEach { (_, lowering) -> lowering.defineBagProtocols() }
         lowerings.forEach { (_, lowering) -> lowering.defineAll() }
         // Every file's module init, in DEPENDENCY order, called by one `main`.
         // JavaScript runs a module's body once, on first import, dependencies

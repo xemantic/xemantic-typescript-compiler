@@ -161,6 +161,11 @@ import org.jetbrains.kotlin.ir.expressions.IrExpression
 import org.jetbrains.kotlin.ir.expressions.IrStatementOrigin
 import org.jetbrains.kotlin.ir.expressions.IrLoop
 import org.jetbrains.kotlin.ir.expressions.impl.IrBlockImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrCallImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrTypeOperatorCallImpl
+import org.jetbrains.kotlin.ir.expressions.IrTypeOperator
+import org.jetbrains.kotlin.ir.expressions.impl.IrConstImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrFunctionExpressionImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrBreakImpl
 import org.jetbrains.kotlin.ir.expressions.impl.IrConstructorCallImpl
@@ -710,10 +715,18 @@ internal class KirFileLowering(
     private fun declareClass(declaration: ClassDeclaration) {
         val irClass = classes.getValue(declaration)
         val base = superclassOf(declaration)
+        // (LIB.6) A class with no base of its own is a `JsObject`, exactly as a
+        // generated object-literal SHAPE already is — which is what lets an
+        // instance reach a slot whose type is an interface, a type alias or a
+        // type literal, since every one of those erases to the bag. Nothing
+        // about assignability is changed by it, which is the whole reason this
+        // shape was chosen over changing what an object type erases to: see
+        // `JsObject`'s own KDoc. A class extending a RUNTIME base (`extends
+        // Date`) cannot — the JVM has one superclass — and is the residue.
         irClass.superTypes = listOf(
             base?.let { classes.getValue(it).defaultType }
                 ?: tables.runtimeSuperclasses[declaration]?.owner?.defaultType
-                ?: irBuiltIns.anyType
+                ?: intrinsics.jsObjectType
         )
         base?.let { tables.superclasses[declaration] = it }
 
@@ -855,7 +868,7 @@ internal class KirFileLowering(
         val declaredType = facts.memberTypeOf(member)
             ?: refuse(tsFile, member, "the checker gave no type for property '${name.text}'")
         val field = irClass.addField {
-            this.name = Name.identifier(kotlinName(name.text))
+            this.name = Name.identifier(memberName(name.text))
             type = erase(member, declaredType)
             // PUBLIC, not private: a subclass's method reads its base's field
             // directly (there is no accessor to go through), and a JVM private
@@ -886,7 +899,7 @@ internal class KirFileLowering(
         }
         val static = ModifierFlag.Static in member.modifiers
         val function = irClass.addFunction {
-            this.name = Name.identifier(kotlinName(name.text))
+            this.name = Name.identifier(memberName(name.text))
             returnType = declaredReturnType(member)
             visibility = DescriptorVisibilities.PUBLIC
             // OPEN so a subclass may override it — see [declareClassShell].
@@ -1059,7 +1072,7 @@ internal class KirFileLowering(
             )
             val optional = parameter.questionToken || parameter.initializer != null
             val field = irClass.addField {
-                this.name = Name.identifier(kotlinName(name.text))
+                this.name = Name.identifier(memberName(name.text))
                 type = erase(parameter, declared).let { if (optional) it.makeNullable() else it }
                 // PUBLIC for [declareField]'s reason: a subclass reads its
                 // base's field directly, and a JVM private one is invisible
@@ -1409,6 +1422,13 @@ internal class KirFileLowering(
                             }
                         }
                     }
+                )
+            } else if (isBagBacked(declaration)) {
+                // (LIB.6) — the root of a bag-backed chain delegates to
+                // `JsObject()`, whose no-argument constructor is what makes the
+                // property table exist.
+                statements.add(
+                    scope.irDelegatingConstructorCall(intrinsics.jsObjectConstructor.owner)
                 )
             } else {
                 statements.add(scope.irDelegatingConstructorCall(anyConstructor))
@@ -3387,7 +3407,27 @@ internal class KirFileLowering(
             // one argument. JavaScript pads the missing one with `undefined`,
             // and doing so here is the difference between running that library
             // and refusing it.
-            return adaptingCall(node) { coerce(callee, lowerBagRead(callee), types.anyNullable) }
+            // (LIB.6) Through `invokeMember` rather than reading the property
+            // and calling it: a lowered CLASS is a `JsObject` too, and its
+            // members are JVM methods rather than properties holding function
+            // values. `JsObject.invokeMember`'s own body is exactly the read
+            // and the `jsCall`, so a genuine bag is unchanged, while a class
+            // instance sitting in an interface-typed slot reaches its method.
+            return scope.irCall(intrinsics.jsObjectInvokeMember, types.anyNullable).apply {
+                arguments[0] = coerce(
+                    callee.expression, lowerExpression(callee.expression), intrinsics.jsObjectType
+                )
+                arguments[1] = scope.irString(callee.name.text)
+                arguments[2] = scope.irCall(
+                    intrinsics.jsArgs,
+                    irBuiltIns.arrayClass.typeWith(types.anyNullable)
+                ).apply {
+                    arguments[0] = scope.irVararg(
+                        irBuiltIns.anyNType,
+                        node.arguments.map { coerce(it, lowerExpression(it), types.anyNullable) }
+                    )
+                }
+            }
         }
         // A NUMBER's members, for the same reason a string's are: Kotlin's
         // `Double.toString()` prints `6.0` where JavaScript prints `6`.
@@ -4397,10 +4437,12 @@ internal class KirFileLowering(
      * censused population deletes nothing at all, so the cold path is allowed to
      * be the simple one.
      */
-    private fun buildShapeDelete(irClass: IrClass) {
-        val function = shapeOverride(
-            irClass, "delete", irBuiltIns.booleanType, listOf("name" to types.string)
+    private fun buildShapeDelete(irClass: IrClass) =
+        buildShapeDelete(
+            shapeOverride(irClass, "delete", irBuiltIns.booleanType, listOf("name" to types.string))
         )
+
+    private fun buildShapeDelete(function: IrSimpleFunction) {
         val self = function.parameters[0]
         val name = function.parameters[1]
         function.body = blockBodyOf(listOf(
@@ -4410,8 +4452,10 @@ internal class KirFileLowering(
     }
 
     /** `override fun keys() { spillNow(); return bagKeys() }` — order via the spill. */
-    private fun buildShapeKeys(irClass: IrClass) {
-        val function = shapeOverride(irClass, "keys", intrinsics.jsArrayType, emptyList())
+    private fun buildShapeKeys(irClass: IrClass) =
+        buildShapeKeys(shapeOverride(irClass, "keys", intrinsics.jsArrayType, emptyList()))
+
+    private fun buildShapeKeys(function: IrSimpleFunction) {
         val self = function.parameters[0]
         function.body = blockBodyOf(listOf(
             shapeBagCall(function, "spillNow", self, emptyList()),
@@ -4435,6 +4479,448 @@ internal class KirFileLowering(
                 )
             }
         )
+    }
+
+
+    // ---- (LIB.6) the bag protocol on a lowered CLASS -----------------------
+
+    /**
+     * Is this class's chain rooted in a class that extends the property bag?
+     *
+     * The one thing that decides it is whether the ROOT extends a RUNTIME base
+     * — `class TomlDate extends Date` — because the JVM gives a class one
+     * superclass and the runtime one wins. Everything else is bag-backed, which
+     * is what lets an instance reach an interface-typed slot.
+     */
+    private fun isBagBacked(declaration: ClassDeclaration): Boolean =
+        tables.runtimeSuperclasses[tables.classChain(declaration).last()] == null
+
+    /** [isBagBacked] for an erased type, or false when it is not a lowered class. */
+    private fun isBagBackedType(type: IrType): Boolean =
+        generatedClassOf(type)?.let { isBagBacked(it) } == true
+
+    /**
+     * Pass 1c: DECLARES the property bag's protocol on every bag-backed class.
+     *
+     * Split from [defineBagProtocols] because a class's override falls back to
+     * its BASE's — `super.get(name)` — and a base may be declared in a file
+     * lowered later than the class extending it. Reaching the base's FIELD
+     * instead would be shorter and is not merely untidy: Kotlin's IR verifier
+     * refuses "Access to a field declared in another file", which is the same
+     * constraint `KirProgramTables.ModuleVariable` exists for.
+     *
+     * The shape being built is the one `JsObject`'s KDoc describes for an
+     * object literal, and the reason it is worth building rather than falling
+     * back to reflection is the same: a monomorphic virtual `get` at a call
+     * site whose name is a constant folds to a field read, where
+     * `Class.getFields()` plus `Field.get` is what `(KIR.LOWER.3)` measured at
+     * 33x on one n-body.
+     */
+    fun declareBagProtocols() {
+        tsFile.statements.filterIsInstance<ClassDeclaration>().forEach { declaration ->
+            if (!isBagBacked(declaration)) return@forEach
+            val irClass = classes[declaration] ?: return@forEach
+            val table = tables.bagProtocols.getOrPut(declaration) { mutableMapOf() }
+            if (ownBagSlots(declaration).isNotEmpty()) {
+                table["get"] =
+                    bagOverride(irClass, "get", types.anyNullable, listOf("name" to types.string))
+                table["set"] = bagOverride(
+                    irClass, "set", irBuiltIns.unitType,
+                    listOf("name" to types.string, "value" to types.anyNullable)
+                )
+                table["has"] = bagOverride(
+                    irClass, "has", irBuiltIns.booleanType, listOf("name" to types.string)
+                )
+                table["spill"] = bagOverride(irClass, "spill", irBuiltIns.unitType, emptyList())
+            }
+            if (ownBagMethods(declaration).isNotEmpty()) {
+                table["invokeMember"] = bagOverride(
+                    irClass, "invokeMember", types.anyNullable,
+                    listOf(
+                        "name" to types.string,
+                        "arguments" to irBuiltIns.arrayClass.typeWith(types.anyNullable),
+                    )
+                )
+            }
+            // `delete` and `keys` SPILL first, and the ROOT of a chain is the
+            // one place to say so: the override is inherited, and `spillNow`
+            // dispatches `spill` VIRTUALLY, so a subclass's own slots move too.
+            // Without them a `delete` would remove nothing while the field
+            // still answered — a silent wrong value, which is the failure mode
+            // this whole protocol exists to avoid. Unconditional, because
+            // whether any class BELOW this root declares a slot is not knowable
+            // from the root.
+            if (tables.superclasses[declaration] == null) {
+                table["delete"] = bagOverride(
+                    irClass, "delete", irBuiltIns.booleanType, listOf("name" to types.string)
+                )
+                table["keys"] = bagOverride(irClass, "keys", intrinsics.jsArrayType, emptyList())
+            }
+        }
+    }
+
+    /** Pass 1d: fills those bodies, once every file has declared its own. */
+    fun defineBagProtocols() {
+        tsFile.statements.filterIsInstance<ClassDeclaration>().forEach { declaration ->
+            val table = tables.bagProtocols[declaration] ?: return@forEach
+            val slots = ownBagSlots(declaration)
+            table["get"]?.let { buildClassGet(declaration, it, slots) }
+            table["set"]?.let { buildClassSet(declaration, it, slots) }
+            table["has"]?.let { buildClassHas(declaration, it, slots) }
+            table["spill"]?.let { buildClassSpill(declaration, it, slots) }
+            table["invokeMember"]?.let {
+                buildClassInvokeMember(declaration, it, ownBagMethods(declaration))
+            }
+            table["delete"]?.let { buildShapeDelete(it) }
+            table["keys"]?.let { buildShapeKeys(it) }
+        }
+    }
+
+    /**
+     * The instance FIELDS this class itself declares, in JavaScript order.
+     *
+     * Its parameter properties before its declared ones, which is the order the
+     * constructor assigns them in and therefore the order `Object.keys` must
+     * report. A base's slots are NOT here: they are reached through the base's
+     * own protocol member, which is what keeps the chain legal across files.
+     */
+    private fun ownBagSlots(declaration: ClassDeclaration): Map<String, IrField> {
+        val slots = LinkedHashMap<String, IrField>()
+        tables.parameterFields[declaration]?.forEach { (name, field) -> slots[name] = field }
+        declaration.members.filterIsInstance<PropertyDeclaration>().forEach { member ->
+            if (ModifierFlag.Static in member.modifiers) return@forEach
+            val name = (member.name as? Identifier)?.text ?: return@forEach
+            fields[member]?.let { slots[name] = it }
+        }
+        return slots
+    }
+
+    /**
+     * The instance METHODS this class itself declares.
+     *
+     * A REST parameter is left out deliberately: its JVM slot takes the runtime
+     * array the caller built, while this protocol is handed a flat argument
+     * list, and inventing the packing here would be a second, silent copy of a
+     * rule the call sites already own. Such a member falls through to the bag,
+     * which answers `undefined` — wrong at the call rather than wrong quietly
+     * in the middle of it.
+     */
+    private fun ownBagMethods(declaration: ClassDeclaration): Map<String, IrSimpleFunction> {
+        val found = LinkedHashMap<String, IrSimpleFunction>()
+        declaration.members.filterIsInstance<MethodDeclaration>().forEach { member ->
+            if (ModifierFlag.Static in member.modifiers) return@forEach
+            if (member.body == null) return@forEach
+            val name = (member.name as? Identifier)?.text ?: return@forEach
+            if (name in found) return@forEach
+            val function = methods[member] ?: return@forEach
+            if (function.parameters.any { it in restParameters }) return@forEach
+            found[name] = function
+        }
+        return found
+    }
+
+    /**
+     * The nearest ANCESTOR carrying this protocol member, and its class.
+     *
+     * Nearest and not merely "some", because the `super` call it feeds is
+     * `invokespecial`, whose resolution starts at the direct superclass and
+     * walks up — naming a farther ancestor while a nearer one overrides would
+     * be a call the JVM redirects, i.e. an override silently skipped.
+     */
+    private fun inheritedProtocol(
+        declaration: ClassDeclaration,
+        name: String,
+    ): Pair<ClassDeclaration, IrSimpleFunction>? {
+        var current = tables.superclasses[declaration]
+        while (current != null) {
+            tables.bagProtocols[current]?.get(name)?.let { return current to it }
+            current = tables.superclasses[current]
+        }
+        return null
+    }
+
+    /**
+     * `super.<name>(…)`, or the bag helper when the base IS the bag.
+     *
+     * NON-virtual, for the reason `super.m()` is: an override that reached its
+     * own implementation again would recurse forever.
+     */
+    private fun bagSuperCall(
+        declaration: ClassDeclaration,
+        function: IrSimpleFunction,
+        name: String,
+        bagHelper: String,
+        forwarded: List<IrValueParameter>,
+    ): IrExpression {
+        val self = function.parameters[0]
+        val inherited = inheritedProtocol(declaration, name)
+            ?: return shapeBagCall(function, bagHelper, self, forwarded)
+        val (owner, target) = inherited
+        return IrCallImpl(
+            UNDEFINED, UNDEFINED, target.returnType, target.symbol, typeArgumentsCount = 0,
+        ).apply {
+            superQualifierSymbol = classes.getValue(owner).symbol
+            arguments[0] = IrGetValueImpl(UNDEFINED, UNDEFINED, self.type, self.symbol)
+            forwarded.forEachIndexed { index, parameter ->
+                arguments[index + 1] =
+                    IrGetValueImpl(UNDEFINED, UNDEFINED, parameter.type, parameter.symbol)
+            }
+        }
+    }
+
+    /** `override fun get(name)` over this class's slots, then its base's. */
+    private fun buildClassGet(
+        declaration: ClassDeclaration,
+        function: IrSimpleFunction,
+        slots: Map<String, IrField>,
+    ) {
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        val guarded = slots.map { (declared, field) ->
+            shapeIf(function, name, declared, shapeReturn(function, fieldRead(field, self)))
+        }
+        function.body = blockBodyOf(
+            listOf(shapeActiveGuard(function, self, guarded)) +
+                shapeReturn(
+                    function,
+                    bagSuperCall(declaration, function, "get", "bagGet", listOf(name))
+                )
+        )
+    }
+
+    /** `override fun set(name, value)` — the same chain, writing instead. */
+    private fun buildClassSet(
+        declaration: ClassDeclaration,
+        function: IrSimpleFunction,
+        slots: Map<String, IrField>,
+    ) {
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        val value = function.parameters[2]
+        val guarded = slots.map { (declared, field) ->
+            val read: IrExpression = IrGetValueImpl(UNDEFINED, UNDEFINED, value.type, value.symbol)
+            // The slot's JVM type is the DECLARED one — `Double`, `String`, a
+            // lowered class — while the bag protocol speaks `Any?`, so the
+            // narrowing is a real `checkcast` and an unbox. It is the cast
+            // union erasure already pays at every use site, and the same proof
+            // pays for it: the program type-checked.
+            val stored = if (field.type.isErasedAny(irBuiltIns)) read
+            else bagCast(read, field.type)
+            shapeIf(
+                function, name, declared,
+                IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, listOf(
+                    IrSetFieldImpl(
+                        UNDEFINED, UNDEFINED, field.symbol,
+                        IrGetValueImpl(UNDEFINED, UNDEFINED, self.type, self.symbol),
+                        stored,
+                        irBuiltIns.unitType,
+                    ),
+                    shapeReturn(function, unitValue()),
+                ))
+            )
+        }
+        function.body = blockBodyOf(
+            listOf(shapeActiveGuard(function, self, guarded)) +
+                shapeReturn(
+                    function,
+                    bagSuperCall(declaration, function, "set", "bagSet", listOf(name, value))
+                )
+        )
+    }
+
+    /** `override fun has(name)` — true for a declared slot, else the base's answer. */
+    private fun buildClassHas(
+        declaration: ClassDeclaration,
+        function: IrSimpleFunction,
+        slots: Map<String, IrField>,
+    ) {
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        val guarded = slots.keys.map { declared ->
+            shapeIf(
+                function, name, declared,
+                shapeReturn(
+                    function,
+                    IrConstImpl.boolean(UNDEFINED, UNDEFINED, irBuiltIns.booleanType, true)
+                )
+            )
+        }
+        function.body = blockBodyOf(
+            listOf(shapeActiveGuard(function, self, guarded)) +
+                shapeReturn(
+                    function,
+                    bagSuperCall(declaration, function, "has", "bagHas", listOf(name))
+                )
+        )
+    }
+
+    /**
+     * `override fun spill()` — the BASE's slots first, then this class's.
+     *
+     * The order is `Object.keys` order, and JavaScript's is the order the
+     * slots were first assigned: a base's constructor runs before the derived
+     * one's. A name declared in both is spilled twice, which is right — the
+     * second write keeps the first's position and takes the derived value,
+     * which is exactly what re-assigning a property does.
+     */
+    private fun buildClassSpill(
+        declaration: ClassDeclaration,
+        function: IrSimpleFunction,
+        slots: Map<String, IrField>,
+    ) {
+        val self = function.parameters[0]
+        val inherited = inheritedProtocol(declaration, "spill")
+        val prefix = if (inherited == null) emptyList()
+        else listOf(bagSuperCall(declaration, function, "spill", "spill", emptyList()))
+        function.body = blockBodyOf(
+            prefix + slots.map { (declared, field) ->
+                shapeBagCall(
+                    function, "spillSlot", self, emptyList(),
+                    listOf(
+                        IrConstImpl.string(UNDEFINED, UNDEFINED, types.string, declared),
+                        fieldRead(field, self),
+                    )
+                )
+            }
+        )
+    }
+
+    /**
+     * `override fun invokeMember(name, arguments)` over this class's methods.
+     *
+     * The `when` compares the TYPESCRIPT name, not the JVM one: a member called
+     * `get` is mangled to `get$` by [memberName] so that it does not silently
+     * override the bag's own, and a program calling `o.get()` through a slot
+     * typed as an interface must still reach it.
+     *
+     * A `void` method answers `null`, because JavaScript's answer to a call
+     * that returns nothing is `undefined` and §3.1 maps that onto `null` — a
+     * `Unit` instance reaching a caller expecting a value is the one shape that
+     * would be wrong in a way no type says.
+     */
+    private fun buildClassInvokeMember(
+        declaration: ClassDeclaration,
+        function: IrSimpleFunction,
+        members: Map<String, IrSimpleFunction>,
+    ) {
+        val self = function.parameters[0]
+        val name = function.parameters[1]
+        val argumentArray = function.parameters[2]
+        val arms = members.map { (declared, target) ->
+            val regular = target.parameters.filter { it.kind == IrParameterKind.Regular }
+            val call = IrCallImpl(
+                UNDEFINED, UNDEFINED, target.returnType, target.symbol, typeArgumentsCount = 0,
+            ).apply {
+                arguments[0] = IrGetValueImpl(UNDEFINED, UNDEFINED, self.type, self.symbol)
+                regular.forEachIndexed { index, parameter ->
+                    val slot: IrExpression = IrCallImpl(
+                        UNDEFINED, UNDEFINED, types.anyNullable, intrinsics.jsArgument,
+                        typeArgumentsCount = 0,
+                    ).apply {
+                        this.arguments[0] = IrGetValueImpl(
+                            UNDEFINED, UNDEFINED, argumentArray.type, argumentArray.symbol
+                        )
+                        this.arguments[1] =
+                            IrConstImpl.int(UNDEFINED, UNDEFINED, irBuiltIns.intType, index)
+                    }
+                    arguments[index + 1] =
+                        if (parameter.type.isErasedAny(irBuiltIns)) slot
+                        else bagCast(slot, parameter.type)
+                }
+            }
+            val answer: IrStatement =
+                if (target.returnType == irBuiltIns.unitType) {
+                    IrBlockImpl(UNDEFINED, UNDEFINED, irBuiltIns.unitType, null, listOf(
+                        call,
+                        shapeReturn(function, bagNull()),
+                    ))
+                } else {
+                    shapeReturn(function, call)
+                }
+            shapeIf(function, name, declared, answer)
+        }
+        val inherited = inheritedProtocol(declaration, "invokeMember")
+        val fallback = if (inherited != null) {
+            bagSuperCall(
+                declaration, function, "invokeMember", "invokeMember",
+                listOf(name, argumentArray)
+            )
+        } else {
+            // The BAG half, which a lowered class has as well: anything can be
+            // assigned onto a JavaScript object, so a name the class does not
+            // declare may still hold a function. This is `JsObject`'s own body.
+            IrCallImpl(
+                UNDEFINED, UNDEFINED, types.anyNullable, intrinsics.jsBagMemberCall,
+                typeArgumentsCount = 0,
+            ).apply {
+                arguments[0] = IrGetValueImpl(UNDEFINED, UNDEFINED, self.type, self.symbol)
+                arguments[1] = IrGetValueImpl(UNDEFINED, UNDEFINED, name.type, name.symbol)
+                arguments[2] = IrGetValueImpl(
+                    UNDEFINED, UNDEFINED, argumentArray.type, argumentArray.symbol
+                )
+            }
+        }
+        function.body = blockBodyOf(arms + shapeReturn(function, fallback))
+    }
+
+    /**
+     * A `checkcast` built WITHOUT a function frame.
+     *
+     * The protocol passes run between the declare and define passes, where
+     * `scope` — which belongs to the function currently being lowered — does
+     * not exist: reaching for it throws `no function frame`. The node is the
+     * same one `irAs` produces.
+     */
+    private fun bagCast(value: IrExpression, target: IrType): IrExpression =
+        IrTypeOperatorCallImpl(
+            UNDEFINED, UNDEFINED, target, IrTypeOperator.CAST, target, value
+        )
+
+    /** `null`, for the same frame-free reason as [bagCast]. */
+    private fun bagNull(): IrExpression =
+        IrConstImpl.constNull(UNDEFINED, UNDEFINED, irBuiltIns.nothingNType)
+
+    /**
+     * [shapeOverride] for a lowered class rather than a shape: OPEN, not FINAL.
+     *
+     * A shape class is final and a lowered TypeScript class is not, so its
+     * protocol members have to be overridable — a subclass declares its own and
+     * ends by calling this one through `super`.
+     */
+    private fun bagOverride(
+        irClass: IrClass,
+        name: String,
+        returnType: IrType,
+        valueParameters: List<Pair<String, IrType>>,
+    ): IrSimpleFunction {
+        val base = intrinsics.runtimeMember(intrinsics.jsObjectClass, name, valueParameters.size)
+            ?: error("JsObject.$name/${valueParameters.size} is missing")
+        val function = irClass.addFunction {
+            this.name = Name.identifier(name)
+            this.returnType = returnType
+            visibility = DescriptorVisibilities.PUBLIC
+            modality = Modality.OPEN
+            origin = builder.generatedOrigin
+        }
+        function.parameters = listOf(dispatchReceiver(function, irClass)) +
+            valueParameters.map { (parameterName, parameterType) ->
+                builder.irFactory.createValueParameter(
+                    startOffset = UNDEFINED,
+                    endOffset = UNDEFINED,
+                    origin = builder.generatedOrigin,
+                    kind = IrParameterKind.Regular,
+                    name = Name.identifier(parameterName),
+                    type = parameterType,
+                    isAssignable = false,
+                    symbol = org.jetbrains.kotlin.ir.symbols.impl.IrValueParameterSymbolImpl(),
+                    varargElementType = null,
+                    isCrossinline = false,
+                    isNoinline = false,
+                    isHidden = false,
+                ).also { it.parent = function }
+            }
+        function.overriddenSymbols = listOf(base)
+        return function
     }
 
     /** An override of a `JsObject` member, with its dispatch receiver first. */
@@ -5257,8 +5743,23 @@ internal class KirFileLowering(
         // reason the nominal half is expressible without touching the erasure:
         // every object type still erases to `JsObject`, and a shape instance IS
         // one. `coercionFor` decides on classifiers alone and cannot see it.
-        if (isShapeType(value.type) && target.classifierOrNull == intrinsics.jsObjectClass) {
+        //
+        // (LIB.6) extends the same rule to a lowered CLASS, which now extends
+        // `JsObject` too — that widening is the whole of the storage half: it
+        // is what puts `new en()` into a slot declared `Locale`.
+        if (target.classifierOrNull == intrinsics.jsObjectClass &&
+            (isShapeType(value.type) || isBagBackedType(value.type))
+        ) {
             return value
+        }
+        // …and the NARROWING mirror, for an `as` back out of such a slot. A
+        // `checkcast` and not a silent reinterpretation: the checker's own
+        // assertion is what justifies it, exactly as it justifies narrowing out
+        // of `Any`.
+        if (value.type.classifierOrNull == intrinsics.jsObjectClass &&
+            isBagBackedType(target)
+        ) {
+            return scope.irAs(value, target)
         }
         return coerceErased(node, value, target)
     }
@@ -5382,6 +5883,25 @@ internal class KirFileLowering(
     private fun kotlinName(name: String): String =
         if (name in KOTLIN_HARD_KEYWORDS) "$name$" else name
 
+    /**
+     * The JVM name of a class MEMBER — [kotlinName], plus the bag protocol.
+     *
+     * (LIB.6) makes every lowered class a [JsObject], so a TypeScript member
+     * called `get`, `keys` or `spill` would ACCIDENTALLY override the bag
+     * protocol rather than collide with it — which the JVM would accept and
+     * which would silently make the object answer its own field chain for a
+     * name the program meant as its own method. So such a member is mangled the
+     * way a Kotlin hard keyword already is, with a `$` suffix.
+     *
+     * Nothing observable depends on the spelling: every call site resolves
+     * through the same IR symbol, and the dynamic paths key on the TYPESCRIPT
+     * name — [buildClassInvokeMember]'s `when` compares the unmangled string.
+     * `toString` is deliberately NOT in the set: it MUST keep overriding, and
+     * `jsToString` consults it.
+     */
+    private fun memberName(name: String): String =
+        if (name in BAG_PROTOCOL_NAMES) "$name$" else kotlinName(name)
+
     /** The value of a numeric literal, in every base TypeScript spells one in. */
     private fun numericValue(node: NumericLiteralNode): Double {
         val text = node.text.replace("_", "")
@@ -5428,6 +5948,21 @@ internal class KirFileLowering(
             "as", "break", "class", "continue", "do", "else", "false", "for", "fun", "if",
             "in", "interface", "is", "null", "object", "package", "return", "super", "this",
             "throw", "true", "try", "typealias", "typeof", "val", "var", "when", "while",
+        )
+
+        /**
+         * The member names `JsObject` owns — see [memberName].
+         *
+         * Every name a generated class would otherwise override by accident,
+         * and nothing else: `toString` is absent on purpose, because a class
+         * that declares one MUST override it (`jsToString` consults it), and
+         * `equals`/`hashCode` are `Any`'s rather than the bag's and were
+         * already in this position before (LIB.6).
+         */
+        val BAG_PROTOCOL_NAMES = setOf(
+            "get", "set", "has", "delete", "keys", "spill", "spillNow", "spillSlot",
+            "shapeActive", "bagGet", "bagSet", "bagHas", "bagDelete", "bagKeys",
+            "invokeMember",
         )
 
     }
