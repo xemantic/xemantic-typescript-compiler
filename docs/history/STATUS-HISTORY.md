@@ -1,5 +1,18 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.117) — (CHK.135) RE-SCOPED: THE MAPPED ALIASES WERE FINE, THE *INDEX-SIGNATURE READ* WAS NOT, 19,637 / 0 / 70 (2026-09-16).**
+The item claims `Record` and other lib mapped aliases resolve to `any`; measured, every one of them is already
+correct, including `Record` with a literal-union key. The real gap was `computeRawTypeOfPropertyAccess`'s miss path
+returning `anyType` without consulting the index signatures — round 479 had granted such a name EXISTENCE and never
+a TYPE, which is why the symptom was silence rather than TS2339. One helper (tsc's `getApplicableIndexInfoForName`)
+now serves the property-access miss and the numeric-named-key leg, sharing its applicability test with the
+existence check so the halves cannot drift; nine shapes move. **The mapped-type half was BUILT, priced at three
+corpus baselines and REFUSED** — one of them needs tsgo's alias-variance probe, where a blanket shortcut deletes
+five true positives and round 336 records the general machinery as a dead end. **And the grid is a CONTROL here,
+proved by an arm**: a deliberately wrong answer moves zero rows on all 8 profiles, so the 12 pins are the round's
+only gate. cost_gate 20/20 +0.00%; huge_methods exit 0 (875 classes); screen 3,097/0 + 5,688/0; warning-clean.
+Residue: writes through an index signature, and `noUncheckedIndexedAccess`'s `| undefined`.
+
 **(P18.116) — (LEGACY.0b) STEP 19: THE DUPLICATE-IDENTIFIER FOLLOW-ON INDEX IS PER MERGE *CALL*, AND THE IRRECONCILABLE SOURCE WAS TWO FUNCTIONS AWAY, 19,625 / 0 / 70 (2026-09-16).**
 The first related node of each `addDuplicateDeclarationError` call is TS6203 and the rest of that call's nodes are
 TS6204, so N declarations of one symbol give `[6203, 6204, …]` and N separate files give all TS6203. (P18.93) read

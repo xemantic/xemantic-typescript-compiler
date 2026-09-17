@@ -25,6 +25,73 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.122) — (LIB.6) the NOMINAL half: the item's failure was three rounds stale, its own design does not work, and the backend had already answered the question once (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,706 → 19,726 / 0 / 65**, the KIR module **174 → 194**;
+`huge_methods.py --fail-over 0` run over BOTH core (875 classes) and the **KIR module** (113, largest 4,424) —
+the default census is core-only and this round added 546 lines of compiled code outside it, exactly the (JIT.1)
+blind spot; `cost_gate.py` exit 0 and the core corpus screen 8,790 / 0 are CONTROLS, and **the 8-profile grid is
+inapplicable by construction — `Checker.class` is BYTE-IDENTICAL to (P18.121)'s landed binary (`5dc1b815…`), which
+is that comparison's receipt**. The checker was not touched. `docs/kir-structural-typing.md` § 7's verdict is
+superseded by this round and the doc is left for its measurements.
+
+**THE ITEM'S RECORDED FAILURE IS GONE, AND WHAT REPLACED IT IS WORSE IN ONE FAMILY.** (LIB.6) records an
+`IllegalArgumentException` from `reflectiveSet`; (P18.118) made `this.x = …` a direct field store, so that path is
+UNREACHABLE and `cronstrue`'s exact shape now **refuses at compile time** (`cannot coerce program.En to …JsObject`).
+Re-measured over 14 shapes: **10 refuse at compile time** (local, parameter, return, class field, field
+initializer, alias, inline literal, property-only interface, interface-extends-interface) and **3 COMPILE, read
+`dynamicOps=0` AND throw `ClassCastException` at run time** (array element, `Map` value, object-literal property —
+every one reached through `Any?`). So there were two failure modes and the silent one is the dangerous one:
+(P18.118)'s "a zero-dynamic-op fixture can still fail to run", one mechanism over, which is why every case landed
+here carries a BEHAVIOUR assertion beside its SHAPE assertion.
+
+**THE DECISION WAS NOT BETWEEN THE ITEM'S TWO DESIGNS.** (1) minting JVM interfaces + the 158-edge closure is
+REFUSED, and not on the closure size: the closure needs an assignability oracle at LOWERING time and the checker is
+gone by then; `JsObject` is not merely the erasure but the whole dynamic protocol (`get`/`set`/`has`/`delete`/
+`keys`/`spill` plus the `is JsObject` arms of nine runtime members), all of which stop working for an
+interface-typed value; and a plain bag can never implement a minted interface, so literals that reach interface
+slots TODAY would become refusals. (2) — the item's own "cheap" shape — **does not work, in two independent places
+read off the source**: a method call on a STATICALLY-BAG receiver never reaches `jsInvoke` (`isPropertyBag` fires
+first and emits `bag.get(name)` + `jsCall`), and `jsInvoke`'s `is JsObject` arm SHADOWS the reflective fallback the
+design depends on. A third candidate the item never names — erase an own-structural type to `Any?` — needs no
+runtime change and fixes all 14 shapes, and is refused on a measurement: it demotes every bag member read from a
+virtual `JsObject.get` to a static `jsGet` `when`, handing back `docs/perf/kir-backend-levers.md` § 2a's whole prize.
+
+**WHAT LANDED IS THE ANSWER THE BACKEND HAD ALREADY WRITTEN DOWN FOR OBJECT LITERALS** — `JsObject`'s own KDoc: *the
+subclass is a `JsObject`, so nothing about assignability changes; that is the whole reason this shape was chosen
+over changing what an object type ERASES to*. Applied to a `class`: it extends `JsObject`, overrides
+`get`/`set`/`has`/`spill` over its OWN slots and chains to its base's through `super`, and answers method calls
+through a new `JsObject.invokeMember(name, args)` whose per-class override is a `when` over its own methods — a
+monomorphic virtual call and a name compare, **not** reflection. `instanceof` is unchanged (a `checkcast` on the
+generated class); what moves are the runtime's `is JsObject` arms, every one toward the JS-correct answer
+(`"[object Object]"`, `Object.keys`/`for…in`/`JSON.stringify` enumerating own fields). One moved the WRONG way and
+is fixed in the same commit — `jsToString`'s arm was a constant, so a class declaring its own `toString()` would
+have stopped being consulted. A member whose name collides with the protocol is mangled, and `invokeMember`'s
+`when` keys on the TYPESCRIPT name. All 14 shapes now compile, run, print the right answer at `dynamicOps = 0`.
+
+**FOUR THINGS THAT DID NOT WORK, AND THE FIRST IS THE REUSABLE ONE.** The first cut FLATTENED the inheritance chain
+into each class's `get`, which the IR verifier refuses (*Access to a field declared in another file*) — the same
+constraint `KirProgramTables.ModuleVariable` exists for; the chain must go through `super`, which forces the pass
+into declare-all-then-define-all sub-passes, and **only the CROSS-FILE pin saw it** (every single-file case was
+green). `scope` does not exist between those sub-passes, so `irAs`/`irNull` are hand-built. **The mangling pin was
+BLIND on its first version** (arm a4 read 0 RED): a TypeScript `get(k: string): string` has descriptor
+`(String)String` and is simply NOT an override of `JsObject.get(String)Object` — only an exactly matching
+descriptor collides. And a `$`-spelling fallback added to `reflectiveGet`/`Set`/`Invoke` was REVERTED, because
+`scripts/kir_native_runtime.py` anchors on those three bodies verbatim and refuses the edit.
+
+**PINS AND ABLATION.** `KirNominalSlotTest`, 20 cases, 622 lines; 17 of 20 red in at least one of **six** arms
+(storage, field protocol, call protocol, mangling, display, the bag method-call route), each arm's restore
+`cmp`-verified and the final class md5s identical to the pre-ablation landed build. a2 and a3 each redden a
+PRE-EXISTING `KirReceiverShapeTest` control as well, which is the receipt that the two protocols are one mechanism
+with (P18.118)'s work rather than a parallel one.
+
+**RESIDUES, PINNED SO CLOSING THEM IS A VISIBLE CHANGE**: a class extending a RUNTIME base (`extends Date`) still
+refuses a bag slot (one JVM superclass); an ACCESSOR is invisible through a bag-typed slot and reads `null`; a
+method with a REST parameter is deliberately left out of `invokeMember`. Pre-existing and separately recorded: a
+`void` bag member call throws `NullPointerException` from `adaptingCall`'s `Any?` typing — the parent binary fails
+identically. **`cronstrue` is not on this box**, so the library claim is MECHANICAL: every shape its failure was
+recorded from now compiles and runs, and the queue's own next wall is (LIB.7)'s namespace import, not started.
+
 ### Round (P18.121) — (LEGACY.0b) step 21: three mechanisms whose emitters we already had, two rows closed, one REFUSED with the decisive control (2026-09-16)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,694 → 19,706 / 0 / 65**; `tsgoPendingBaselines` 42 → 40,
@@ -546,53 +613,6 @@ RESOLVED lib set rather than a numeric bound, a bigger item than (j4); TS2791 is
 the strict-reserved binding rows are 2 where tsgo prints 4; and 5 of 12 emit files differ from tsgo at es5 AND
 es2015 alike — es2015-era lowering, with this round's property preserved (our es5 emit ≡ our es2015 emit, as
 tsgo's are).
-
-### Round (P18.112) — (LEGACY.1) step (j3): tsgo's checker never spells `__extends`, `__generator` or `__assign` — and its helper table exposed two target-free defects in the same emitter (2026-09-16)
-
-**Three commits** (`293799770` refactor, `6f8bdeab9` test, this docs commit). **Suite 19,551 → 19,566 / 0 / 81**
-(+15 pins; **skipped −2** — the two pending rows the dedup fix closed), 9 modules asserted; corpus screen errors
-**3,086 / 0** and emit 5,688 / 0; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (874
-classes); grid 8×`added=0 removed=0` and emit 78/78 — controls; warning-clean with an injected positive control.
-`Checker.kt` 194,285 → **194,167** (−118); `tsgoPendingBaselines` 58 → **56**. **(j3) is LANDED — the (j) line stays
-open on (j4) the option surface; (g) stays BLOCKED-PENDING-USER; (LEGACY.0) stays OPEN** on (0b-17).
-
-**THE TABLE.** `checkExternalEmitHelpers` (`checker.go:28333`) is tsgo's ONE emitter of TS2354/TS2343, and every
-caller requests helpers by flag: `__rest` below ES2018 (`:5801`, `:12587`), `__awaiter` below ES2017 (`:2727`), the
-`__await`/`__asyncGenerator`/`__asyncValues` family below ES2018 (`:2724`, `:10942`, `:4029`), the legacy-decorator
-and CommonJS-interop helpers at ANY target, the private-field and disposable families below ES2022/ESNext.
-**`__extends`, `__generator` and `__assign` appear nowhere in tsgo's checker** (tsgo's own object-spread lowering
-imports `__assign` below ES2018 and never CHECKS it) and `__makeTemplateObject` has a flag with no caller. Measured
-over 30 cells — tslib absent / exporting nothing / exporting only `__awaiter`, × es5/es2015/es2016/es2017/esnext ×
-commonjs/esnext, 13 shapes each, read through the LSP because the CLI stops at TS5108 and emits nothing at es5:
-tsgo names none of the four in any cell; ours named `__extends` in the six es5 cells.
-
-**WHAT LANDED.** The four ES5 arms deleted with `isEs5Target` (17 references), `needsExtendsHelper` and the whole
-`checkExprForMissingHelper` walk — a reference census leaves every one of those names comment-only. Kept with
-tsgo's bound: `needsAwaiterHelper` (< ES2017), the parameter `__rest` (< ES2018), the async-generator pair,
-`needsEsmHelpers`, decorators; the two kept target reads are re-keyed to `defaultedTarget`, provably identical on
-every input. **And the same table found two defects that have nothing to do with the target**: the VARIABLE-form
-`__rest` walk carried no ES2018 bound (tsgo gates every binding element), and TS2343 deduplicated per tslib
-INSTALL where tsgo dedups per `(file, helper)` — that granularity was the entire cause of two pending rows, which
-close here.
-
-**PINS AND ABLATION.** 15 pins; stash-ablation 10 red (one pin's red was a FIXTURE defect — a `+ """…"""`
-concatenation defeating `trimIndent` — fixed rather than accepted, our anchor having been right). Eight arms with
-disjoint red sets; **a8, the dedup arm, is the one arm in this round where the errors screen is a GATE** (it
-reddens both newly-closed baselines) — the other seven are controls, because all 35 active `@importHelpers`
-subtests are es2015+ and every es5 configuration is a `usesUnsupportedOption` skip. Final md5 Checker `59adfcb4` —
-the orchestrator's AFTER arm matched.
-
-**STANDING DIVERGENCES FOUND, OUT OF SCOPE, WORTH A QUEUE ITEM.** On a real PROJECT `node_modules/tslib` is never
-in the program (the crawl prunes it), so `checkMissingTslibHelpers` is dead there — 0 TS2343 — and
-`checkImportHelpersWithoutTslib` prints a **false TS2354 on every real project that HAS tslib installed**, where
-tsgo resolves the package through the module resolver; TS2354 is missing for `import d from`, `export * from`,
-async generators, `for await` and object rest (the `esModuleInteropTslibHelpers` pending row is that family); and
-the `__awaiter` TS2343 arm has no < ES2017 bound while the async-generator pair has no < ES2018 one, so both fire
-at esnext where tsgo is silent.
-
-**WHAT (j4) INHERITS.** `ScriptTarget.ES3/ES5`, `effectiveTarget`'s ES5→ES2015 map and the ES3 default are
-untouched; after (j3) the only `defaultedTarget <= ES5` / `< ES2015` reader left in `Checker.kt` is (j2)'s KEPT
-TS2318 gate, and this family's only `effectiveTarget` mentions are comments.
 
 ## QUEUE
 
@@ -5944,20 +5964,22 @@ CLAUDE.md § "AI agent mission".
   `docs/kir-library-readiness.md` § "UPDATE 2026-08-28" has the table and the five defects the
   arc surfaced, four of them silent wrong answers invisible to every gate in this repo.
 
-- [ ] **(LIB.6) THE NOMINAL HALF — A CLASS INSTANCE CANNOT REACH AN INTERFACE-TYPED SLOT, AND IT
-  IS THE ONLY THING BETWEEN `cronstrue` AND A RUNNING PROGRAM.** An `interface` erases to the
-  property bag and a `class` is a nominal JVM class, so `i18n: Locale = new en()` fails at run
-  time with an `IllegalArgumentException` from `reflectiveSet`. `docs/kir-structural-typing.md`
-  already MEASURED the plan — candidate (1), each interface a JVM interface and each class
-  implementing every interface it is structurally assignable to, **158 closure edges on tsc's own
-  sources, max fan-out 9** — and it was never built because § 7 priced the dynamic half at 12x
-  and it was taken first. **A cheaper shape exists and should be priced against it before
-  starting**: make a generated class EXTEND `JsObject` (it is `open`, has a no-arg constructor,
-  and the shape classes already do exactly this) and route a bag-receiver METHOD call through
-  `jsInvoke`, whose reflective fallback already finds a real JVM method. That is two changes
-  rather than a whole-program closure, and it changes what `instanceof` and the spill machinery
-  see — which is why it is a decision rather than a rung.
-
+- [x] **(LIB.6) CLOSED 2026-09-17 ((P18.122) note) — A GENERATED CLASS EXTENDS `JsObject` AND OVERRIDES THE BAG
+  PROTOCOL OVER ITS OWN SLOTS, CHAINING TO ITS BASE'S THROUGH `super`; a method call answers through a new
+  `JsObject.invokeMember`, a monomorphic virtual call and a name compare rather than reflection. All 14 measured
+  shapes compile, run and print the right answer at `dynamicOps = 0`. **NEITHER OF THE ITEM'S TWO DESIGNS WAS
+  CHOSEN**: the 158-edge interface closure is refused on three costs its census does not price (an assignability
+  oracle is needed at LOWERING time, where the checker is gone; `JsObject` is the whole dynamic protocol and not
+  merely the erasure; a plain bag can never implement a minted interface, so literals that work today would start
+  refusing), and the item's "cheap" shape DOES NOT WORK — a statically-bag method call never reaches `jsInvoke`,
+  and `is JsObject` shadows the reflective fallback it depends on. A third candidate (erase to `Any?`) fixes all 14
+  shapes with no runtime change and is refused on § 2a's measured prize. **AND THE ITEM'S RECORDED FAILURE WAS
+  THREE ROUNDS STALE**: (P18.118) made the `IllegalArgumentException` unreachable, leaving a compile-time refusal
+  for 10 shapes and, for the 3 reached through `Any?`, a `ClassCastException` at ZERO dynamic ops.
+  **RESIDUES**: a class extending a RUNTIME base still refuses a bag slot (one JVM superclass); an ACCESSOR is
+  invisible through a bag-typed slot; a REST-parameter method is left out of `invokeMember`; and a `void` bag
+  member call throws from `adaptingCall`'s `Any?` typing, which is pre-existing. `cronstrue` is NOT on this box, so
+  the library claim is mechanical; (LIB.7)'s namespace import is the next wall.**
 - [ ] **(LIB.7) A NAMESPACE IMPORT HAS NO RUNTIME OBJECT — `import * as ns from "./m"` refuses
   with `cannot lower the reference 'ns'`.** `cronstrue`'s ALL-LOCALES entry point
   (`cronstrue-i18n.ts`) needs it: `allLocalesLoader.ts` does `for (var property in allLocales)`

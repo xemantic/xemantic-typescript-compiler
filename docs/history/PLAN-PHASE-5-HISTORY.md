@@ -46,6 +46,53 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
+### Round (P18.112) — (LEGACY.1) step (j3): tsgo's checker never spells `__extends`, `__generator` or `__assign` — and its helper table exposed two target-free defects in the same emitter (2026-09-16)
+
+**Three commits** (`293799770` refactor, `6f8bdeab9` test, this docs commit). **Suite 19,551 → 19,566 / 0 / 81**
+(+15 pins; **skipped −2** — the two pending rows the dedup fix closed), 9 modules asserted; corpus screen errors
+**3,086 / 0** and emit 5,688 / 0; `cost_gate.py` exit 0, 20/20 +0.00%; `huge_methods.py --fail-over 0` exit 0 (874
+classes); grid 8×`added=0 removed=0` and emit 78/78 — controls; warning-clean with an injected positive control.
+`Checker.kt` 194,285 → **194,167** (−118); `tsgoPendingBaselines` 58 → **56**. **(j3) is LANDED — the (j) line stays
+open on (j4) the option surface; (g) stays BLOCKED-PENDING-USER; (LEGACY.0) stays OPEN** on (0b-17).
+
+**THE TABLE.** `checkExternalEmitHelpers` (`checker.go:28333`) is tsgo's ONE emitter of TS2354/TS2343, and every
+caller requests helpers by flag: `__rest` below ES2018 (`:5801`, `:12587`), `__awaiter` below ES2017 (`:2727`), the
+`__await`/`__asyncGenerator`/`__asyncValues` family below ES2018 (`:2724`, `:10942`, `:4029`), the legacy-decorator
+and CommonJS-interop helpers at ANY target, the private-field and disposable families below ES2022/ESNext.
+**`__extends`, `__generator` and `__assign` appear nowhere in tsgo's checker** (tsgo's own object-spread lowering
+imports `__assign` below ES2018 and never CHECKS it) and `__makeTemplateObject` has a flag with no caller. Measured
+over 30 cells — tslib absent / exporting nothing / exporting only `__awaiter`, × es5/es2015/es2016/es2017/esnext ×
+commonjs/esnext, 13 shapes each, read through the LSP because the CLI stops at TS5108 and emits nothing at es5:
+tsgo names none of the four in any cell; ours named `__extends` in the six es5 cells.
+
+**WHAT LANDED.** The four ES5 arms deleted with `isEs5Target` (17 references), `needsExtendsHelper` and the whole
+`checkExprForMissingHelper` walk — a reference census leaves every one of those names comment-only. Kept with
+tsgo's bound: `needsAwaiterHelper` (< ES2017), the parameter `__rest` (< ES2018), the async-generator pair,
+`needsEsmHelpers`, decorators; the two kept target reads are re-keyed to `defaultedTarget`, provably identical on
+every input. **And the same table found two defects that have nothing to do with the target**: the VARIABLE-form
+`__rest` walk carried no ES2018 bound (tsgo gates every binding element), and TS2343 deduplicated per tslib
+INSTALL where tsgo dedups per `(file, helper)` — that granularity was the entire cause of two pending rows, which
+close here.
+
+**PINS AND ABLATION.** 15 pins; stash-ablation 10 red (one pin's red was a FIXTURE defect — a `+ """…"""`
+concatenation defeating `trimIndent` — fixed rather than accepted, our anchor having been right). Eight arms with
+disjoint red sets; **a8, the dedup arm, is the one arm in this round where the errors screen is a GATE** (it
+reddens both newly-closed baselines) — the other seven are controls, because all 35 active `@importHelpers`
+subtests are es2015+ and every es5 configuration is a `usesUnsupportedOption` skip. Final md5 Checker `59adfcb4` —
+the orchestrator's AFTER arm matched.
+
+**STANDING DIVERGENCES FOUND, OUT OF SCOPE, WORTH A QUEUE ITEM.** On a real PROJECT `node_modules/tslib` is never
+in the program (the crawl prunes it), so `checkMissingTslibHelpers` is dead there — 0 TS2343 — and
+`checkImportHelpersWithoutTslib` prints a **false TS2354 on every real project that HAS tslib installed**, where
+tsgo resolves the package through the module resolver; TS2354 is missing for `import d from`, `export * from`,
+async generators, `for await` and object rest (the `esModuleInteropTslibHelpers` pending row is that family); and
+the `__awaiter` TS2343 arm has no < ES2017 bound while the async-generator pair has no < ES2018 one, so both fire
+at esnext where tsgo is silent.
+
+**WHAT (j4) INHERITS.** `ScriptTarget.ES3/ES5`, `effectiveTarget`'s ES5→ES2015 map and the ES3 default are
+untouched; after (j3) the only `defaultedTarget <= ES5` / `< ES2015` reader left in `Checker.kt` is (j2)'s KEPT
+TS2318 gate, and this family's only `effectiveTarget` mentions are comments.
+
 ### Round (P18.111) — (LEGACY.1) step (j2): tsgo has exactly ONE `< ES2015` checker gate — seven of ours deleted, four re-keyed on the lib, one un-suppressed, one kept (2026-09-16)
 
 **Three commits** (`e8b2f8a6d` refactor, `03fed2cdf` test, this docs commit). **Suite 19,538 → 19,551 / 0 / 83**, 9
