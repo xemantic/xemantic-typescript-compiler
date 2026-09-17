@@ -62,6 +62,7 @@ import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.IfStatement
 import com.xemantic.typescript.compiler.ExportSpecifier
 import com.xemantic.typescript.compiler.NamedExports
+import com.xemantic.typescript.compiler.NamespaceImport
 import com.xemantic.typescript.compiler.ImportDeclaration
 import com.xemantic.typescript.compiler.ImportEqualsDeclaration
 import com.xemantic.typescript.compiler.InterfaceDeclaration
@@ -233,8 +234,15 @@ internal class KirFileLowering(
     private val shapeClasses = LinkedHashMap<List<String>, ShapeClass>()
 
     /**
-     * (LIB.7) One generated MODULE-NAMESPACE object per imported module, by the
-     * checker's module symbol — see [namespaceObjectFor].
+     * (LIB.7) One generated MODULE-NAMESPACE object per imported module, keyed by
+     * the IDENTITY of its export map — see [namespaceObjectFor].
+     *
+     * (LIB.8) keys by the map rather than by the checker's module symbol because
+     * the export set is now the checker's own per-file memo
+     * (`Checker.exportedSymbolsThroughStars`), which hands back the SAME instance
+     * for every alias of one module — so identity is the stable key, and an
+     * `IdentityHashMap` is also what keeps a `Map<String, Symbol>` key from being
+     * hashed deeply (round 471's hazard, one container over).
      *
      * Per FILE rather than program-wide, so `import * as ns` in two files mints
      * two objects. They answer from the same accessors, so every value they
@@ -243,7 +251,8 @@ internal class KirFileLowering(
      * — and the alternative costs a cross-file declaration, which is the one
      * thing the IR verifier refuses (`KirProgramTables.ModuleVariable`).
      */
-    private val namespaceObjects = java.util.IdentityHashMap<Symbol, IrSimpleFunction>()
+    private val namespaceObjects =
+        java.util.IdentityHashMap<Map<String, Symbol>, IrSimpleFunction>()
 
     /** What makes a generated shape class's name unique across FILES. */
     private val shapeFilePrefix: String =
@@ -2499,8 +2508,8 @@ internal class KirFileLowering(
             // `for (const k in ns)`, `Object.keys(ns)`, `ns[key]`. Last,
             // because a QUALIFIED reference never needs the object at all: it
             // reaches the declaration directly and pays nothing.
-            ?: moduleSymbolOf(node)?.let { symbol ->
-                scope.irCall(namespaceObjectFor(symbol).symbol, intrinsics.jsObjectType)
+            ?: moduleExportsOf(node)?.let { exports ->
+                scope.irCall(namespaceObjectFor(exports).symbol, intrinsics.jsObjectType)
             }
             ?: refuse(tsFile, node, "cannot lower the reference '${node.text}'")
     }
@@ -2520,72 +2529,65 @@ internal class KirFileLowering(
     }
 
     /**
-     * (LIB.7) The MODULE a name refers to, where that name is a namespace import.
+     * (LIB.7/LIB.8) The exports a name makes visible, where that name is a
+     * NAMESPACE IMPORT — keyed by the name an IMPORTER sees.
      *
      * `import * as ns from "./m"` gives `ns` no runtime declaration at all —
      * `Symbol.declarations` is EMPTY for it — so neither [lookup] nor
      * [moduleFieldFor] can answer, which is what produced *cannot lower the
-     * reference 'ns'* for every use of a namespace import. What the checker DOES
-     * give is the module's own export TABLE, hung on the alias symbol together
-     * with `SymbolFlags.Module`, and each entry's declaration is the node in the
-     * DECLARING file that the declare pass already generated for.
+     * reference 'ns'* for every use of a namespace import. Each entry's
+     * declaration is the node in the DECLARING file that the declare pass has
+     * already generated for, so a qualified reference is resolved exactly as an
+     * unqualified imported one is, with the import contributing nothing at run
+     * time.
      *
-     * So a qualified reference is resolved exactly as an unqualified imported
-     * one is: through the declaration the checker names, with the import itself
-     * contributing nothing at runtime.
+     * ## Why the checker's own `exports` table is not the answer
      *
-     * A local of the same name is asked first, because it shadows the import;
-     * and a symbol with no exports is refused rather than treated as an empty
-     * module, since that is also what a `export * from` barrel looks like here
-     * (the checker resolves a star re-export at LOOKUP time and does not
-     * populate the barrel's own export table).
+     * (LIB.8), measured: `Checker.createModuleSymbol` sets
+     * `moduleSymbol.exports = targetResult.locals`, so that table is the target
+     * file's LOCALS, and it is wrong for a namespace in three separate ways —
+     * a `export * from` barrel contributes NOTHING to it (the checker resolves
+     * a star re-export at LOOKUP time), a renaming `export { inner as outer }`
+     * is keyed `inner` ((INC.51)'s two-spellings-one-symbol trap), and a
+     * module-private `const` is in it. `CheckedFacts.namespaceExportsAt` is the
+     * capability that answers instead, walked by the checker during its own
+     * check and therefore able to follow the star chain.
+     *
+     * A local of the same name is asked first, because it shadows the import.
+     * A namespace import whose export set is NOT KNOWABLE is REFUSED rather
+     * than answered from the locals table, because the alternative is a
+     * silently short namespace object; a Module-flagged name that is not an
+     * import alias keeps the old table, which is all this backend ever had for
+     * one.
      */
-    private fun moduleSymbolOf(node: Expression): Symbol? {
+    private fun moduleExportsOf(node: Expression): Map<String, Symbol>? {
         val name = node as? Identifier ?: return null
         if (lookup(name.text) != null) return null
         val symbol = facts.nameAt(name) ?: return null
         if (!symbol.flags.hasAny(SymbolFlags.Module)) return null
-        val exports = symbol.exports?.takeIf { it.isNotEmpty() } ?: return null
-        // The export table is keyed by the name the module DECLARED, which is
-        // the name an importer sees for every export but a RENAMED one:
-        // `export { inner as outer }` is keyed `inner`, so `ns.outer` would
-        // find nothing and `Object.keys(ns)` would report `inner` — a silently
-        // WRONG answer where the refusal below is a loud one. (INC.51)'s trap,
-        // one table over: `ExportSpecifier.propertyName` is the local name and
-        // `.name` is what the importer sees, and they differ exactly here.
-        renamedExportOf(exports)?.let { specifier ->
+        facts.namespaceExportsAt(name)?.let { return it }
+        if (namespaceImportOf(name.text) != null) {
             refuse(
                 tsFile, node,
-                "cannot lower a namespace import of a module that RENAMES an export " +
-                    "(`export { ${specifier.propertyName?.text} as ${specifier.name.text} }`) " +
-                    "— its export table is keyed by the declared name"
+                "cannot lower the namespace import '${name.text}': its module's export " +
+                    "set is not knowable — an `export * from` target is a bare specifier, " +
+                    "does not resolve, is outside the program, or is an `export =` module"
             )
         }
-        return symbol
+        return symbol.exports?.takeIf { it.isNotEmpty() }
     }
 
-    /** A renaming `export { x as y }` in the module [exports] came from, or null. */
-    private fun renamedExportOf(exports: Map<String, Symbol>): ExportSpecifier? {
-        val file = exports.values.firstNotNullOfOrNull { export ->
-            val target = export.target ?: export
-            (target.valueDeclaration ?: target.declarations.firstOrNull())
-                ?.let { sourceFileOf(it) }
-        } ?: return null
-        return file.statements.filterIsInstance<ExportDeclaration>()
-            .mapNotNull { it.exportClause as? NamedExports }
-            .flatMap { it.elements }
-            .firstOrNull { !it.isTypeOnly && it.propertyName != null }
-    }
-
-    /** The [SourceFile] a node belongs to — the parents `indexSourceFile` stamped. */
-    private fun sourceFileOf(node: Node): SourceFile? {
-        var current: Node? = node
-        while (current != null) {
-            if (current is SourceFile) return current
-            current = (current as? NodeBase)?.parent
+    /**
+     * This file's `import * as <name> from "..."`, or null.
+     *
+     * A purely SYNTACTIC question about the file being lowered, which is what
+     * separates "the checker could not name this module's exports" (a refusal)
+     * from "this Module-flagged name is not an import at all" (the old table).
+     */
+    private fun namespaceImportOf(name: String): ImportDeclaration? =
+        tsFile.statements.filterIsInstance<ImportDeclaration>().firstOrNull {
+            (it.importClause?.namedBindings as? NamespaceImport)?.name?.text == name
         }
-        return null
-    }
 
     /**
      * The declaration `ns.member` names, where `ns` is a namespace import.
@@ -2595,7 +2597,7 @@ internal class KirFileLowering(
      * free name.
      */
     private fun namespaceMemberDeclaration(node: PropertyAccessExpression): Node? {
-        val exports = moduleSymbolOf(node.expression)?.exports ?: return null
+        val exports = moduleExportsOf(node.expression) ?: return null
         val symbol = exports[node.name.text] ?: return null
         val target = symbol.target ?: symbol
         return target.valueDeclaration ?: target.declarations.firstOrNull()
@@ -2650,8 +2652,8 @@ internal class KirFileLowering(
      * runtime object in this backend at all (`KirProgramTables.enumMembers`) —
      * a stated divergence rather than a silent one.
      */
-    private fun namespaceObjectFor(symbol: Symbol): IrSimpleFunction =
-        namespaceObjects.getOrPut(symbol) { buildNamespaceObject(symbol) }
+    private fun namespaceObjectFor(exports: Map<String, Symbol>): IrSimpleFunction =
+        namespaceObjects.getOrPut(exports) { buildNamespaceObject(exports) }
 
     /**
      * One export's runtime VALUE, as the namespace object must answer it.
@@ -2710,11 +2712,15 @@ internal class KirFileLowering(
         )
     }
 
-    private fun buildNamespaceObject(symbol: Symbol): IrSimpleFunction {
+    private fun buildNamespaceObject(exports: Map<String, Symbol>): IrSimpleFunction {
         // The exports this backend can give a runtime value, in the order the
-        // binder recorded them — which is declaration order, and therefore the
-        // order `Object.keys` must report.
-        val exported = (symbol.exports ?: emptyMap<String, Symbol>()).mapNotNull { (name, export) ->
+        // checker's own export walk reports them — which is the file's
+        // declaration order, with a `export * from` barrel's names spliced in at
+        // the star statement. A real ES module namespace object SORTS its keys
+        // (measured: node answers `Cls,alpha,bump,counter` for a module that
+        // declares them in the other order), which is a STATED divergence and
+        // (P18.124)'s, not this round's.
+        val exported = exports.mapNotNull { (name, export) ->
             val target = export.target ?: export
             val declaration = target.valueDeclaration ?: target.declarations.firstOrNull()
             when (declaration) {

@@ -6005,6 +6005,9 @@ class Checker(
                 return typeCaptureFollowImportAlias(resolved)
             }
 
+            override fun namespaceImportExports(alias: Identifier): Map<String, Symbol>? =
+                namespaceImportTargetFile(alias)?.let { exportedSymbolsThroughStars(it) }
+
             override fun isAssignableTo(source: Type, target: Type): Boolean =
                 isTypeAssignableTo(source, target)
 
@@ -6900,6 +6903,28 @@ class Checker(
 
     /** M5 (round 481): top-level memo for [resolveExportedVarDeclThroughStars]. */
     private val starExportVarDeclCache = HashMap<String, VariableDeclaration?>()
+
+    /**
+     * (LIB.8) Per-file memo for [exportedSymbolsThroughStars]; a stored NULL means
+     * "unknowable" exactly as [moduleStarExportsCache]'s does, so membership is
+     * tested with containsKey. Only the OUTERMOST call stores, per the visited-set
+     * gotcha [getModuleExportsFollowingStars] documents: a sub-result computed
+     * during another file's walk is incomplete for the member itself. Declared
+     * before `init` for the reason every cache above it is.
+     */
+    private val exportedSymbolsStarCache: MutableMap<String, Map<String, Symbol>?> = mutableMapOf()
+
+    /**
+     * (LIB.8) The files [exportedSymbolsThroughStars] is CURRENTLY computing.
+     *
+     * A bare `export *` descends through [collectExportedSymbolsFollowingStars],
+     * which carries its own visited set; a NAMED re-export (`export { a as b }
+     * from "./x"`) asks a DIFFERENT question about its target — what does it
+     * export under `a` — which that visited set cannot answer, so it goes back
+     * through the memoized entry. This set is what makes that terminate, and a
+     * re-entrant ask answers "unknowable" rather than a partial map.
+     */
+    private val exportedSymbolsInProgress: MutableSet<String> = mutableSetOf()
 
     /**
      * (WARM.15) round 868: the per-file index the four `export *` barrel walks
@@ -53449,6 +53474,215 @@ class Checker(
             out.addAll(sub)
         }
         return out
+    }
+
+
+    /**
+     * (LIB.8) The ENUMERATION companion to [resolveExportedSymbolThroughStars]:
+     * every name [file] makes visible to an IMPORTER, mapped to the Symbol that
+     * declares it — `export * from` chains FOLLOWED and renaming specifiers
+     * re-keyed.
+     *
+     * ## Why it exists beside the module symbol's own `exports`
+     *
+     * [createModuleSymbol] sets `moduleSymbol.exports = targetResult.locals`, so
+     * that table is the file's LOCALS. Three consequences, all measured:
+     *
+     *  * a star re-export contributes NOTHING to it (the checker resolves one at
+     *    LOOKUP time, through [resolveExportedSymbolThroughStars]), so a pure
+     *    barrel enumerates as EMPTY and a barrel that also declares its own
+     *    exports enumerates as those alone;
+     *  * it is keyed by the DECLARED name, so `export { inner as outer }` is
+     *    keyed `inner` — (INC.51)'s two-spellings-one-symbol trap one table over,
+     *    `ExportSpecifier.propertyName` being the local and `.name` what the
+     *    importer sees;
+     *  * it holds names the file does NOT export at all, a module-private
+     *    `const` among them.
+     *
+     * A by-NAME lookup is unharmed by any of that — it asks about a name it
+     * already has. An ENUMERATION is not, which is why this is a separate
+     * question rather than a widening of the existing resolver, and why it is
+     * read by no existing consumer.
+     *
+     * ## What NULL means, and what ABSENCE means
+     *
+     * NULL is [getModuleExportsFollowingStars]'s "unknowable": some `export *`
+     * target is a bare specifier, does not resolve, is not in the program, or is
+     * an `export =` module. A caller must not read that as "no exports" — the
+     * distinction is the whole reason the star half cannot be silent.
+     *
+     * An exported NAME whose symbol this cannot name is ABSENT from the map
+     * instead, which is deliberately the same omission the module symbol's own
+     * table makes today (`export default <expr>` names no declaration). So the
+     * own-export half is no weaker than the status quo, and only the star half
+     * is new.
+     *
+     * Cycle-guarded and depth-bounded exactly like its by-name sibling; memoized
+     * per top-level file only.
+     */
+    internal fun exportedSymbolsThroughStars(file: SourceFile): Map<String, Symbol>? {
+        val key = file.fileName
+        if (exportedSymbolsStarCache.containsKey(key)) return exportedSymbolsStarCache[key]
+        if (!exportedSymbolsInProgress.add(key)) return null
+        val outermost = exportedSymbolsInProgress.size == 1
+        val result = try {
+            collectExportedSymbolsFollowingStars(file, mutableSetOf(), 0)
+        } finally {
+            exportedSymbolsInProgress.remove(key)
+        }
+        // Only the OUTERMOST call stores: a result reached while another file was
+        // in progress may have answered `null` to a re-entrant ask that a
+        // standalone walk would have answered.
+        if (outermost) exportedSymbolsStarCache[key] = result
+        return result
+    }
+
+    private fun collectExportedSymbolsFollowingStars(
+        file: SourceFile, visited: MutableSet<String>, depth: Int,
+    ): Map<String, Symbol>? {
+        if (!visited.add(file.fileName)) return emptyMap() // cycle back-edge
+        if (depth > 64) return null // defensive bound -> unknowable
+        val locals = fileResults[file.fileName]?.locals ?: return null
+        val out = LinkedHashMap<String, Symbol>()
+        // Bare `export * from` FIRST, so that an own export of the same spelling
+        // overwrites it below — measured against tsgo, which reports the own
+        // value with no diagnostic where two STARS of one name are TS2308 (and
+        // excluded from the namespace by both compilers, our TS2308 stopping the
+        // program before any backend sees it).
+        for (stmt in file.statements) {
+            if (stmt !is ExportDeclaration) continue
+            if (stmt.exportClause != null) continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val target = starReExportTargetFile(spec, file.fileName) ?: return null
+            val sub = collectExportedSymbolsFollowingStars(target, visited, depth + 1) ?: return null
+            // A star re-export carries every name but `default`, which is what
+            // makes `export { x as default }` a property of the OWN file only.
+            for ((name, symbol) in sub) if (name != "default") out[name] = symbol
+        }
+        for (stmt in file.statements) {
+            when (stmt) {
+                is VariableStatement -> if (ModifierFlag.Export in stmt.modifiers) {
+                    for (decl in stmt.declarationList.declarations) {
+                        // (CHK.99) every leaf a binding pattern BINDS is an export.
+                        for (name in bindingPatternNames(decl.name)) {
+                            locals[name]?.let { out[name] = it }
+                        }
+                    }
+                }
+                is FunctionDeclaration -> if (ModifierFlag.Export in stmt.modifiers) {
+                    exportedDeclarationEntry(stmt.name?.text, stmt.modifiers, locals, out)
+                }
+                is ClassDeclaration -> if (ModifierFlag.Export in stmt.modifiers) {
+                    exportedDeclarationEntry(stmt.name?.text, stmt.modifiers, locals, out)
+                }
+                is InterfaceDeclaration -> if (ModifierFlag.Export in stmt.modifiers) {
+                    exportedDeclarationEntry(stmt.name.text, stmt.modifiers, locals, out)
+                }
+                is TypeAliasDeclaration -> if (ModifierFlag.Export in stmt.modifiers) {
+                    exportedDeclarationEntry(stmt.name.text, stmt.modifiers, locals, out)
+                }
+                is EnumDeclaration -> if (ModifierFlag.Export in stmt.modifiers) {
+                    exportedDeclarationEntry(stmt.name.text, stmt.modifiers, locals, out)
+                }
+                is ModuleDeclaration -> if (ModifierFlag.Export in stmt.modifiers) {
+                    exportedDeclarationEntry((stmt.name as? Identifier)?.text, stmt.modifiers, locals, out)
+                }
+                is ExportDeclaration -> {
+                    val fromSpec = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                    when (val clause = stmt.exportClause) {
+                        is NamedExports -> for (specifier in clause.elements) {
+                            // `.name` is what the importer sees, `.propertyName`
+                            // the local it was declared as — they differ exactly
+                            // for `x as y`, and keying by the wrong one is a
+                            // silently WRONG answer rather than a missing one.
+                            val exported = specifier.name.text
+                            val declared = specifier.propertyName?.text ?: exported
+                            val symbol = if (fromSpec == null) locals[declared] else {
+                                // `export { a as b } from "./x"` asks a question
+                                // about ANOTHER file, which this walk's visited
+                                // set cannot answer; the memoized entry can, and
+                                // [exportedSymbolsInProgress] is what stops it
+                                // looping back here.
+                                starReExportTargetFile(fromSpec, file.fileName)
+                                    ?.let { exportedSymbolsThroughStars(it) }?.get(declared)
+                            }
+                            symbol?.let { out[exported] = it }
+                        }
+                        // `export * as ns from "./x"` exposes only `ns`, a direct local.
+                        is NamespaceExport -> locals[clause.name.text]?.let { out[clause.name.text] = it }
+                        else -> {}
+                    }
+                }
+                else -> {}
+            }
+        }
+        return out
+    }
+
+    /** One `export`ed declaration's entry, keyed `default` when it carries that modifier. */
+    private fun exportedDeclarationEntry(
+        name: String?,
+        modifiers: Set<ModifierFlag>,
+        locals: SymbolTable,
+        out: MutableMap<String, Symbol>,
+    ) {
+        val symbol = (name?.let { locals[it] } ?: locals["default"]) ?: return
+        out[if (ModifierFlag.Default in modifiers) "default" else (name ?: return)] = symbol
+    }
+
+    /**
+     * The file a `export … from "<spec>"` names, or null when the set of names it
+     * contributes is UNKNOWABLE — a bare specifier, an unresolvable path, a file
+     * outside the program, or an `export =` module. [collectExportsFollowingStars]'s
+     * own ladder, extracted verbatim so the two cannot drift.
+     */
+    private fun starReExportTargetFile(spec: String, fromFile: String): SourceFile? {
+        if (!spec.startsWith("./") && !spec.startsWith("../")) return null
+        val resolved = resolveModuleSpecifierRelative(spec, fromFile)
+            ?: (if (spec.endsWith(".js")) resolveModuleSpecifierRelative(spec.removeSuffix(".js"), fromFile) else null)
+            ?: (if (spec.endsWith(".jsx")) resolveModuleSpecifierRelative(spec.removeSuffix(".jsx"), fromFile) else null)
+            ?: return null
+        val target = fileResults[resolved]?.sourceFile ?: return null
+        if (target.statements.any { it is ExportAssignment && it.isExportEquals }) return null
+        return target
+    }
+
+    /**
+     * (LIB.8) The file a NAMESPACE IMPORT's alias names, or null when [alias] is
+     * not one at this position.
+     *
+     * A local of the same name shadows the import, and answers null here because
+     * it carries no `Alias` flag — which is the shadow rule for free rather than
+     * a second copy of it.
+     */
+    private fun namespaceImportTargetFile(alias: Identifier): SourceFile? {
+        val symbol = spineScopeLookup(alias.text) ?: return null
+        if (!symbol.flags.hasAny(SymbolFlags.Alias)) return null
+        for (decl in symbol.declarations) {
+            val imported = when (decl) {
+                is ImportDeclaration -> decl
+                is NamespaceImport -> {
+                    // A namespace-import alias may be declared with the clause
+                    // rather than the statement; the parents `indexSourceFile`
+                    // stamped are what reach the specifier from either.
+                    var parent: Node? = decl.parent
+                    while (parent != null && parent !is ImportDeclaration) {
+                        parent = (parent as? NodeBase)?.parent
+                    }
+                    parent
+                }
+                else -> null
+            } ?: continue
+            if (imported.importClause?.namedBindings !is NamespaceImport) continue
+            val spec = (imported.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val contextFile = currentCheckFileName
+            val targetFile = resolveModuleSpecifier(spec, imported)
+                ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: resolveImportTargetFallback(spec, contextFile)
+                ?: continue
+            return fileResults[targetFile]?.sourceFile
+        }
+        return null
     }
 
     /**

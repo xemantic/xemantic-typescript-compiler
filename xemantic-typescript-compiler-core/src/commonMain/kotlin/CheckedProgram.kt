@@ -164,6 +164,24 @@ interface CheckedLens {
     fun typeReferenceSymbol(node: TypeReference): Symbol? = null
 
     /**
+     * (LIB.8) Every name a NAMESPACE IMPORT's alias makes visible, keyed by the
+     * name an IMPORTER sees — `export * from` chains FOLLOWED and a renaming
+     * `export { x as y }` re-keyed to `y`. Null when [alias] is not a namespace
+     * import's alias at this position (a LOCAL of the same name shadows it), or
+     * when the set is UNKNOWABLE because some star target is a bare specifier,
+     * does not resolve, is not in the program, or is an `export =` module — a
+     * distinction a consumer must not read as "no exports".
+     *
+     * The module symbol's own `exports` cannot answer this, in three separate
+     * ways that a by-NAME lookup never feels: it IS the target file's `locals`,
+     * so a star re-export contributes nothing to it, a renaming specifier is
+     * keyed by the DECLARED name, and a module-private `const` is in it.
+     * Defaulted so a test double implementing this interface keeps compiling;
+     * the checker's own lens overrides it.
+     */
+    fun namespaceImportExports(alias: Identifier): Map<String, Symbol>? = null
+
+    /**
      * Is [source] assignable to [target]?
      *
      * The backend needs this for a reason unrelated to diagnostics: TypeScript

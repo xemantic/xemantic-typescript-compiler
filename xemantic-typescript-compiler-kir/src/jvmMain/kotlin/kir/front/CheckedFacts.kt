@@ -43,6 +43,7 @@ import com.xemantic.typescript.compiler.SetAccessor
 import com.xemantic.typescript.compiler.Signature
 import com.xemantic.typescript.compiler.SourceFile
 import com.xemantic.typescript.compiler.Symbol
+import com.xemantic.typescript.compiler.SymbolFlags
 import com.xemantic.typescript.compiler.Type
 import java.util.IdentityHashMap
 
@@ -95,6 +96,7 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
     private val constructions = IdentityHashMap<NewExpression, Signature?>()
     private val members = IdentityHashMap<PropertyAccessExpression, Symbol>()
     private val names = IdentityHashMap<Identifier, Symbol>()
+    private val namespaceExports = IdentityHashMap<Identifier, Map<String, Symbol>>()
     private val parameterTypes = IdentityHashMap<Parameter, Type>()
     private val declaredSignatures = IdentityHashMap<Node, Signature>()
     private val declaredMemberTypes = IdentityHashMap<Node, Type>()
@@ -128,6 +130,19 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
 
     /** What the free name [node] refers to at its own position. */
     public fun nameAt(node: Identifier): Symbol? = names[node]
+
+    /**
+     * (LIB.8) Every name a NAMESPACE IMPORT alias makes visible, keyed by the name
+     * an IMPORTER sees — stars followed, a renaming `export { x as y }` re-keyed.
+     *
+     * Asked of the lens rather than read off the module symbol's own `exports`,
+     * because that table IS the target file's `locals`: a star re-export
+     * contributes nothing to it, a renaming specifier is keyed by the DECLARED
+     * name, and a module-private `const` is in it. Null both for a name that is
+     * not a namespace alias and for a module whose export set is UNKNOWABLE, and
+     * the consumer must refuse on the second rather than build an empty object.
+     */
+    public fun namespaceExportsAt(node: Identifier): Map<String, Symbol>? = namespaceExports[node]
 
     /** A parameter's type, taken through `typeOfSymbol` and not `declaredTypeOf`. */
     public fun typeOf(parameter: Parameter): Type? = parameterTypes[parameter]
@@ -179,7 +194,13 @@ public class CheckedFacts internal constructor() : CheckedNodeSink {
                     // alias: the backend reaches its generated declaration
                     // through this symbol, and an alias's own declaration is the
                     // import specifier, which it generated nothing for.
-                    names[node] = lens.aliasTarget(symbol) ?: symbol
+                    val named = lens.aliasTarget(symbol) ?: symbol
+                    names[node] = named
+                    // (LIB.8) Only a MODULE-flagged name pays for the export walk,
+                    // which is what keeps this off every identifier in the program.
+                    if (named.flags.hasAny(SymbolFlags.Module)) {
+                        lens.namespaceImportExports(node)?.let { namespaceExports[node] = it }
+                    }
                 }
             }
             else -> {}
