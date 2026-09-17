@@ -112,11 +112,21 @@ class KirDeclaredValueTest {
         }
     """.trimIndent() + "\n"
 
-    private fun lower(vararg files: Pair<String, String>): Lowered {
+    /**
+     * Round (P18.128) — the ES2022 tsconfig, used by exactly ONE case.
+     *
+     * `useDefineForClassFields` is in force at ES2022 and above, and that is the entire
+     * gate on tsgo's `checkClassForStaticPropertyNameConflicts`: a class declaring its own
+     * `static name` is TS2699 at [tsconfig]'s ES2020 and a perfectly valid program here.
+     * The one pin that needs such a program says so at its own site.
+     */
+    private val tsconfigEs2022 = tsconfig.replace("\"ES2020\"", "\"ES2022\"")
+
+    private fun lower(vararg files: Pair<String, String>, config: String = tsconfig): Lowered {
         val project = Files.createTempDirectory("xtsc-kir-declared-value")
         val output = Files.createTempDirectory("xtsc-kir-declared-value-out")
         try {
-            project.resolve("tsconfig.json").writeText(tsconfig)
+            project.resolve("tsconfig.json").writeText(config)
             files.forEach { (relative, text) ->
                 val target = project.resolve("src/$relative")
                 target.parent.createDirectories()
@@ -717,27 +727,64 @@ class KirDeclaredValueTest {
     }
 
     /**
-     * A class DECLARING its own `static name` keeps it — a MEASURED REDUNDANT
-     * GUARD, recorded rather than claimed.
+     * A class DECLARING its own `static name` keeps it — and round (P18.128) turned this
+     * from a MEASURED REDUNDANT guard into a LIVE one, by closing the gap its own KDoc
+     * named.
      *
-     * The `name` answer is placed LAST in the static-member block, after the
-     * static FIELD and static METHOD searches, which is what JavaScript would
-     * do. It can never be reached by a valid program: tsgo refuses
-     * `static name` outright (TS2699, *Static property 'name' conflicts with
-     * built-in property 'Function.name'*), and our checker accepting it is a
-     * separate gap. The ordering is free and kept; this says what it is.
+     * The `name` answer is placed LAST in the static-member block, after the static FIELD
+     * and static METHOD searches, which is what JavaScript would do. (P18.127) recorded
+     * the ordering as unreachable because "tsgo refuses `static name` outright (TS2699)
+     * and our checker accepting it is a separate gap" — **and that was only ever true
+     * BELOW ES2022.** tsgo's gate is `useDefineForClassFields`, so at ES2022 and above,
+     * which is also the default at an unset target, `class Cls { static name = "own" }`
+     * is a perfectly valid program in both references and its own field is what `Cls.name`
+     * must answer. The ordering is therefore reachable, and this is the pin for it.
+     *
+     * (CHK.138) closed the checker gap in the same round, which is why the fixture had to
+     * move to [tsconfigEs2022]: at the class's ordinary ES2020 the program is now TS2699
+     * here as well, and the sibling below pins that.
      */
     @Test
-    fun `a class declaring its own static name keeps it - tsgo refuses the program`() {
+    fun `a class declaring its own static name keeps it at ES2022`() {
+        val lowered = lower(
+            "main.ts" to """
+                class Cls { static name: string = "own" }
+                console.log(Cls.name)
+            """,
+            config = tsconfigEs2022,
+        )
+        assert(lowered.compiled)
+        assert(lowered.exitCode == 0)
+        assert(lowered.stdout == "own\n")
+    }
+
+    /**
+     * …and BELOW ES2022 the same program is refused, which is (CHK.138) landing in round
+     * (P18.128). The pair is what says the ordering guard above is reached by a valid
+     * program and only by a valid one.
+     */
+    @Test
+    fun `a class declaring its own static name is refused below ES2022`() {
         val lowered = lower(
             "main.ts" to """
                 class Cls { static name: string = "own" }
                 console.log(Cls.name)
             """,
         )
-        assert(lowered.compiled)
-        assert(lowered.exitCode == 0)
-        assert(lowered.stdout == "own\n")
+        assert(!lowered.compiled)
+        // A refused COMPILE puts its diagnostics in `report`; `stderr` is the generated
+        // program's, and a program that never compiled never ran, so it is empty.
+        assert(
+            lowered.report.contains(
+                "TS2699"
+            )
+        )
+        assert(
+            lowered.report.contains(
+                "Static property 'name' conflicts with built-in property 'Function.name' " +
+                    "of constructor function 'Cls'."
+            )
+        )
     }
 
     // ---- what is still refused, and loudly ---------------------------------
