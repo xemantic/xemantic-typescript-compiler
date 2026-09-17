@@ -602,22 +602,35 @@ class KirDynamicNewTest {
      * at the callee, so the dynamic arm cannot turn a missing reference into a
      * run-time error.
      *
-     * `Cls` in a VALUE position is a gap of its own (`lowerIdentifier` has no
-     * arm for a generated class or function name), measured in this round and
-     * deliberately out of it: what this pins is that the dynamic `new` does not
-     * paper over it.
+     * RE-POINTED by (KIR.LOWER.6), against the measured answer rather than
+     * edited to whatever the new code prints. This test used to hold a
+     * TOP-LEVEL `class Cls {}; const c: any = Cls; new c().describe()` and
+     * assert *cannot lower the reference 'Cls'* — a countdown on the gap
+     * (P18.126) had just found and left out of its own scope. That gap is now
+     * closed: the same fixture compiles and prints `d`, which
+     * `KirDeclaredValueTest` pins positively.
+     *
+     * What still cannot be lowered, and so is the honest subject here, is a
+     * class declared INSIDE a function body: the declare pass walks a file's
+     * TOP-LEVEL statements only, so such a declaration reaches neither
+     * `tables.classes` nor `tables.functions` and a name for it refuses. The
+     * point the original made survives intact — the dynamic `new` does not
+     * paper over a callee the lowering could not build.
      */
     @Test
     fun `negative control - a new whose callee cannot be lowered still refuses`() {
         val lowered = lower(
             "main.ts" to """
-                class Cls { describe(): string { return "d"; } }
-                const c: any = Cls;
-                console.log(new c().describe())
+                function outer(): string {
+                    class Local { describe(): string { return "d"; } }
+                    const c: any = Local;
+                    return new c().describe();
+                }
+                console.log(outer())
             """,
         )
         assert(!lowered.compiled)
-        assert(lowered.report.contains("cannot lower the reference 'Cls'"))
+        assert(lowered.report.contains("cannot lower the reference 'Local'"))
     }
 
 }
