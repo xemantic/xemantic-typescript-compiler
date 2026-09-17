@@ -25,6 +25,82 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.130) — the JavaScript property-access family: the four gates are TWO PAIRS, and the expando rule is the opposite of the obvious one (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,918 → 19,931 / 0 / 65** (+13 pins), 9 modules;
+`huge_methods.py --fail-over 0` 875 classes / 17,901 methods / **0 over the limit**; `cost_gate.py` exit 0 with
+every delta unchanged from (P18.119)'s standing reading (max +0.15%) — this round moves no counter, because both
+mechanisms short-circuit on `isJsLikeFileName` and every profile file is TypeScript. **The corpus errors screen is
+the REAL gate — 153 of the 2,898 active error subtests carry a `.js` file — and it reads 3,102 / 0**, with emit
+5,688 / 0. The **8-profile grid is a CONTROL by construction** and reads 8 × `added=0 removed=0` with 0 differing
+emitted files; `MemberResolver.class`'s md5 moved and is BYTECODE-IDENTICAL (`javap -c -p` minus `line`, 3,615
+lines both arms). Pending baselines **40, UNCHANGED**.
+
+**THE FOUR GATES ARE TWO ENTER/LEAVE PAIRS, NOT FOUR GATES**, and characterising them is what split the round.
+`ccetSpineEnter`/`ccetSpineLeave` own per-call checking (TS2345/2349/2351/2554/7009); `cpaSpineEnter`/`cpaSpineLeave`
+own property access (TS2339/TS7053/TS2576). Opening a LEAVE alone checks every body under the FILE-LEVEL ambient;
+opening an ENTER alone leaks frames — so the pair is the unit of decision. Measured on the all-four arm:
+
+| pair | screen cost of opening | of which false rows on legal code | needed ledger rows delivered |
+|---|---|---|---|
+| ccet | **3** | a duplicated TS2349; **3 false TS2351** on `new B()` where `B extends` a `.d.ts` class; 1 false TS2345 against a JSDoc `@overload` set | **0 of 6** |
+| cpa  | **2** | a false TS2339 on the legal expando static `C.blah2 = 456`; a duplicated TS2339 (B428's dedicated walker exists *because* this family was off) | **6 of 6** |
+
+So **ccet is refused with numbers** and only cpa was opened.
+
+**THE BRIEF'S EXPANDO RULE WAS EXACTLY BACKWARDS, AND THE COUNTER-MEASUREMENT IS THE ROUND'S FINDING.** The obvious
+model — "an assignment DECLARES, so suppress the assignment's LHS" — is false: measured against tsgo 7.0.2,
+`c.expandoOnTsClass = 1`, `c.x += 1` and `(c.y) = 7` are all **TS2339** when the receiver's type is declared in
+TypeScript, while `JsCls.staticExpando = 3` and `g.f1 = 1` are silent. Only the **static side of a JavaScript class
+or function** declares. And the reverse arm prices the naive opening: on a 19-line JavaScript file whose class
+carries five ordinary expando fields, the ungated family invents **TEN rows tsgo does not report** — reads and
+writes, instance and static, including a `this.p = v` written in a method rather than the constructor, and even
+`this.inCtor = 1` read back through a variable. So what ships is a **WHITELIST, not a suppression list**:
+`jsAccessReceiverIsExpandoImmune` admits an access only when every declaration of the receiver's type lives in a
+`.ts`/`.d.ts` file. Over eight adversarial probes, **every row we now emit in a `.js` file is a row tsgo emits, at
+tsgo's position, with tsgo's message** — zero false positives.
+
+**AND THE BRIEF'S "narrowest slice" IS DISJOINT FROM THE LEDGER, WHICH IS WORTH SAYING PLAINLY.** It read as though
+the trusted-receiver slice would advance the two pending entries; it delivers **none of their six rows**, because
+every one of those receivers (`YaddaBase`, `C1`, `C3`) is JavaScript-declared. Both entries stay byte-identical and
+still strict SUBSETS — re-verified, `classFieldSuperNotAccessibleJs` emits 2 of tsgo's 6 with no `+` line, and the
+four missing rows are exactly what the firewall refuses (three on `YaddaBase`, one a TS7053 element access).
+
+**THREE PLACEMENT FACTS, EACH FOUND BY BUILDING THE WRONG THING FIRST.** (i) `cmamEmitMissingProperty` is **not**
+the funnel — TS2339 has **85 emission sites across 69 functions**, and a guard there left `super.*` and most
+`cmam*` routes emitting; the per-access funnel `checkSinglePropertyAccess` is the one place that covers every route
+and every code, so a route added later inherits the firewall. (ii) The guard keys on the **FILE NAME**, not on
+`spineIsJsLike`: that field is set per file inside `checkSpine` and never cleared, so after the spine it holds the
+LAST file's value — reading it there would have suppressed `.ts` rows whenever a program's final file is JavaScript,
+a silent loss no gate in this repo prints, and the grid is precisely the control for that direction. (iii) The
+**element-access funnel stays closed**, for a reason that has nothing to do with JavaScript: `recv['missing']` is
+TS7053 with a two-line chain at the receiver in tsgo and TS2339 at the index here, and **the same fixture in a `.ts`
+file diverges identically** — opening it would propagate a wrong code and span into a second file kind rather than
+deliver a row.
+
+**A (JIT.1) WARNING THIS ROUND SURFACES: `cpaSpineLeave` IS AT 7,898 OF 8,000 BYTECODES** — ~100 of headroom on one
+of the six hottest spine handlers (617 ms warm). The census is still 0-over, and the next round to add to that
+handler must split it rather than grow it.
+
+**PINS AND ABLATION.** `TsgoStep24Test`, **13 pins**: 7 positives, all RED against the pre-change binary, and 6
+declared controls (`allowJs` without `checkJs`; a JavaScript class instance receiver, i.e. the stated residue; a
+static expando; an element access on a `.ts` receiver; the `Object.defineProperty` row emitted **exactly once**; an
+unaffected `.ts` file). Four arms: a1 (revert the two gate flips) 7 RED, a2 (firewall always admits) 3 RED — the
+three residue/duplication controls, which is how the whitelist is shown to be load-bearing — a3 (give the element
+funnel the immunity test) 1 RED. Countdown grep: none of the 21 tsc-6 mirrored baseline case files carries a `.js`
+file or `@allowJs`/`@checkJs`, so the mirrors are structurally out of reach; all 17 JavaScript-fixture classes
+carrying a residue marker ran green (120 at-risk classes, 1,135 tests, 0 failures).
+
+**RESIDUES, all stated rather than hidden** — each needs the expando member model itself: a JavaScript class
+instance, the static side of a JavaScript class or function, and a JavaScript object literal. The decomposition
+that closes them is now a table in (LEGACY.0)'s head (J1-J7), including two things this round found that no queue
+item named: a `declare class` receiver is silent **in a `.ts` file too** (J6), and an unchecked JavaScript file
+still leaks a TS7006 (J7).
+
+**WHAT DID NOT WORK.** The `cmamEmitMissingProperty` placement above. And a scripted edit inserted a
+`private const val` immediately before an existing one, **orphaning that one's KDoc onto the new constant** — caught
+by reading the final diff, by no gate.
+
 ### Round (P18.129) — a nested `function` lands; the CLASS half is REFUSED because a nested class's identity is PER INVOCATION (2026-09-17)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,881 → 19,918 / 0 / 65**, the KIR module **276 → 313**;
@@ -583,63 +659,6 @@ with DEFAULTED parameters and we emit it nowhere — `checkHeritageTypeArgCount`
 `minRequired != maxTotal`. Zero corpus baselines carry it, and tsgo's own rendering of it looks like a formatting
 defect (`Expected P<T, U>-1 type arguments`), so it is recorded rather than queued.
 
-### Round (P18.120) — (LEGACY.0b) step 20: the last three F2 duplicate-identifier rows, and a class over-reach only a hand-written pin could see (2026-09-16)
-
-**Three commits** (fix, test, this docs commit). **Suite 19,672 → 19,694 / 0 / 67** — the skip count falling 70 → 67
-IS the receipt that the three rows are now ACTIVE tests; `tsgoPendingBaselines` **46 → 43**, `docs/logical-parity.md`
-45 → 42 pending. `cost_gate.py` exit 0 (max +0.15%, unchanged from (P18.119) — this round moves no counter),
-`huge_methods.py --fail-over 0` exit 0 over 875 classes, corpus screen **3,100 / 0 errors and 5,688 / 0 emit**, and
-the 8-profile grid `added=0 removed=0` on all eight with 78 emit files byte-identical. `Checker.kt` 194,675 →
-194,706.
-
-**THE THREE MECHANISMS, ALL LANDED.** (M1) An INTERFACE's duplicate group reports TS2300 at every member whatever
-its binder visibility, named by the first binder-VISIBLE member's written spelling where the group has one. (M2) A
-name declared as a METHOD in one merged `interface` block and as a PROPERTY in another is TS2300 at every
-declaration, with no TS2717 and no TS2687 — `checkCrossInterfacePropertyConflict` had been emitting tsc-6's answer
-(TS2717 + TS6203 at the later property). (M3) `checkConstructorOverloadCompatibility` reports at the OVERLOAD's own
-parameter property as well as the implementation's, de-duplicated by position. A fourth, separable fix rides along
-with its own arm: a computed member squiggles its OWN written spelling (`emitDuplicate2300` had an
-`else -> name.length` default), which (P18.93)'s entry already warned couples a row's NAME to its SPAN.
-
-**ONE OF THE THREE RECORDED REASONS WAS WRONG, AND THE BRIEF INHERITED IT.** The pending reason (and this
-orchestrator's brief, which located it in the Go source) named `lateBindMember` — `checker.go:15918`, emitting at
-`:15962` — as the emitter behind `dynamicNamesErrors`. It is real and it is NOT that emitter: measured over ~25
-scratch shapes, its conflict branch names rows by the RESOLVED member name and fires only when late-bound members'
-symbol FLAGS conflict (a method beside a non-method, two getters, two setters). These rows come from
-`checkObjectTypeForDuplicateDeclarations` / `reportMergeSymbolError`, which is exactly why one row is named `'1'`
-and another `'[c0]'` — a rule built from `lateBindMember` would have named all four `'1'`. Fourth instance in this
-arc of "a recorded reason is a previous round's hypothesis"; the discriminator remains one scratch run.
-
-**AND THE ROUND'S REAL LESSON IS AN OVER-REACH THE SCREEN COULD NOT SEE.** "Un-gate the late-bound TS2300" holds
-for an INTERFACE and is FALSE for a CLASS, where tsgo's answer is ORDER-DEPENDENT: two late keys, or late-then-
-early, are TS2300 at both, while `class { p: number; [K]: string }` is **TS2717 alone** — measured across four
-spellings of the ordinary member (initialized, un-initialized, `declare`d, `!`-asserted), all four silent. The
-class un-gating was BUILT, measured as a two-row false positive, and reverted; the class walker keeps round 938's
-gate with the measurement in its KDoc. **The only instrument that saw it was an existing hand-written pin** — the
-corpus screen read 3,097 / 0 on that throwaway build, and the grid is a measured CONTROL for this whole family
-(an instrumented build counted admissions **0 / 0 / 0** on all eight profiles against 4 / 1 / 3 on the scratch
-fixtures, with the instrumentation then reverted and the restored class md5 `cmp`-identical).
-
-**TWO COUNTDOWN PINS FELL, BOTH ASSERTING PRISTINE'S ANSWER**, both in `DuplicateMemberDeclarationTest` (a
-late-bound duplicate is TS2717 and "deliberately NOT TS2300"; two late-bound keys emit exactly ONE TS2717). Both
-were RE-MEASURED against tsgo and re-pointed with name, column and squiggle asserted — never weakened — and the
-class KDoc corrected. A third pin that reads like a countdown is not one: `a late-bound duplicate in a CLASS is
-TS2717 and not TS2300` is tsgo-correct, and it is what caught the over-reach. Of the 21 tsc-6 MIRRORED baseline
-files only `reachabilityChecksNoCrash1` carries these codes, and its rows are parse-recovery `'(Missing)'` at an
-explicit zero span — untouched.
-
-**PINS AND ABLATION.** `TsgoStep20Test`, 22 cases (7 controls, 2 named `residue - …`), each asserting the full
-message, code, category, file, line, character, length AND the row count — the count IS the rule for a
-report-at-every-declaration family. Five arms redden 13 distinct non-control pins; **a3 (dropping the TS2687
-suppression) reddens 1 pin and moves the screen by NOTHING**, i.e. that half of M2 has no corpus witness at all and
-its pin is its only instrument — a screen-only gate would have called it redundant.
-
-**RESIDUES**, all measured against tsgo and none a regression: a class group of two late keys, or late-then-early;
-a late-bound group whose members' KINDS conflict (tsgo names those by the resolved name from the second emitter);
-the M2 conflict across a `class`/`interface` merge and inside ONE declaration; the general parameter-property
-member table, which also makes `class { p: number; constructor(public p: string) {} }` TS2300-at-both **plus
-TS2403** — the TS2403-vs-TS2717 split is its own round; and two pre-existing TS2717 gaps this round did not touch.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -970,27 +989,56 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-22 LANDED 2026-09-17 ((P18.85)-(P18.123) notes) — pending 40 (UNCHANGED, 2
-  rewritten), skipped 65, suite 19,741/0. **(P18.123) landed the JS-expando DECLARATION rule and closed NO row —
-  both are PARTIAL, and that is the finding**: only an ASSIGNMENT declares (`=` and an access LHS, so `this.c += 1`
-  and `(this.f) = 3` do not), the REPARSER drops a `@type` tag above a non-declaration statement, and the TS6205
-  aggregation is over the DECLARATION's whole type-parameter list rather than per tag. Both rows are now strict
-  SUBSETS of tsgo's, byte-identical on every row we emit. **(P18.121)'s recorded "the aggregation predicate is
-  already correct" was FALSE and this queue had copied it forward into a brief** — re-derive before quoting.
-  **AND THE SEQUEL DOES NOT FOLLOW**: a declaration rule only REMOVES rows, so the TS2339 half of both residues is
-  a separate whole-family gap — `cpaSpineLeave` returns on `spineIsJsLike`, i.e. the property-access family is OFF
-  for every `.js` file, even where the receiver's type comes from a `.ts` declaration. The naive gate flip was
-  BUILT and REFUSED (delivers none of the 6 rows, adds a false row on legal code, moves a green baseline).
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-23 LANDED 2026-09-17 ((P18.85)-(P18.130) notes) — pending 40 (UNCHANGED),
+  skipped 65, suite 19,931/0. **(P18.130) OPENED THE PROPERTY-ACCESS FAMILY FOR `.js` FILES AND CLOSED NO ROW,
+  and the two facts behind that are the whole finding.** (i) The four gates are TWO ENTER/LEAVE PAIRS: `ccet*`
+  (per-call: TS2345/2349/2351/2554/7009) costs **3 screen mismatches** and delivers **0 of the 6 ledger rows**, so
+  it stays SHUT; `cpa*` (property access) costs 2 and delivers 6 of 6. (ii) **The expando rule is the opposite of
+  the obvious one** — measured against tsgo, `c.expando = 1`, `c.x += 1` and `(c.y) = 7` are all TS2339 when the
+  receiver's type is TypeScript-declared, and only the STATIC side of a JS class or function declares; the ungated
+  family invents **10 rows tsgo does not report** on a 19-line file. So what shipped is a WHITELIST
+  (`jsAccessReceiverIsExpandoImmune`: every declaration of the receiver's type in a `.ts`/`.d.ts` file), every row
+  it emits byte-identical to tsgo over 8 probes — and it is DISJOINT from the ledger, whose six rows all have
+  JS-declared receivers. Three placement facts: TS2339 has **85 emission sites in 69 functions**, so the guard
+  belongs at the per-access funnel; it must key on the FILE NAME, because `spineIsJsLike` holds the LAST file's
+  value after the spine; and the ELEMENT-ACCESS funnel stays closed because TS7053-vs-TS2339 is a **general**
+  divergence that a `.ts` fixture reproduces.
   **THE RESIDUE (40)**: display/chain-content ~19; F6-code ~14 (~14 MECHANISMS — size by mechanism, never by
   letter); ORDER-model 3; JS emit 3; TS2683-residue 3; F7-count 2; the `downlevelIteration` TS5102 pair, which
   closes by moving `simulatedVersion` to `"7.0"` — an OWNER decision that would redden nothing;
   `pathsValidation5`'s summary order; the 2 REFUSED TS2751 rows (tsgo defects); and the singletons.
-  **NEXT CLUSTERS**: the **JS property-access family** above, which is now the single largest lever in this ledger
-  (it owns both (P18.123) residues, the TS7009-from-the-callee-type family and part of the TS2683 residue) and
-  needs the JS expando member model inside the cpa member tables plus `super.`/`this.` receiver legs — its own
-  arc, and `Checker.kt:34337` is its lead; then the TS2749-on-a-value-only-import half of
-  `jsExportMemberMergedWithModuleAugmentation`; then the TS2403-vs-TS2717 split ((P18.120)). **PICK AND SIZE WITH
-  `bash scripts/corpus-screen.sh`**, and count the ACTIVE subtests carrying each code first.
+  **THE JS ARC, DECOMPOSED BY (P18.130) — a next round starts from this table, not from a probe**:
+  - **J1 JS class INSTANCE expando closure** — delivers 3 of `classFieldSuperNotAccessibleJs`'s 4 rows. Reuse
+    `collectClassInstanceFields` (measured correct, and it walks method/getter/initializer bodies) as a
+    per-property suppression set UNIONED over the `extends` chain, refusing when a base name resolves to no
+    `ClassDeclaration`. **Must dedupe against `checkJsObjectDefinePropertyThisReads` (B428)** or
+    `jsCheckObjectDefineThisNoCrash` double-emits — (P18.130)'s arm a2 reproduces that exactly.
+  - **J2 JS class/function STATIC expando closure** — a file-level scan of `X.p = …` where `X` names a class or
+    function declaration; `L.n = {}` then `L.n.deep = 2` must BOTH go silent (the expando object accumulates).
+  - **J3 TS7053 for element access** — unblocks the element funnel in `.js` AND closes a general `.ts` divergence:
+    tsgo's chain is `Element implicitly has an 'any' type…` + `Property 'x' does not exist on type 'T'.`, anchored
+    at the whole access.
+  - **J4 JSDoc `@template` in a class's type display** — `C1<T, V>` vs our `C1`; the ONLY thing between J1/J2 and
+    closing `unusedTypeParameters_templateTag2`, whose positions and codes are already exact.
+  - **J5 the ccet pair**, three independent sub-items: the TS2349 double-emission's ownership; a JS class with no
+    ctor extending a `.d.ts` class has no construct signature (3 false TS2351); JSDoc `@overload` sets are not
+    modelled (1 false TS2345). The TS7009-from-the-callee-type residue is NOT gated by this — it is silent in
+    `.ts` too.
+  - **J6 a `declare class` receiver** (NEW, pre-existing, and **not a JavaScript question**): tsgo reports an
+    absent member on one and we are silent **in a `.ts` file too**. Uninvestigated.
+  - **J7 an unchecked JS file should report nothing** — `allowJs` without `checkJs` still leaks a TS7006, and
+    (P18.123) recorded a TS2855 twin; several walkers key on the EXTENSION rather than on `checkJs` ((P18.92)).
+  **THEN**: the TS2749-on-a-value-only-import half of `jsExportMemberMergedWithModuleAugmentation`; then the
+  TS2403-vs-TS2717 split ((P18.120)). **PICK AND SIZE WITH `bash scripts/corpus-screen.sh`**, and count the ACTIVE
+  subtests carrying each code first (153 of 2,898 carry a `.js` file, so the errors screen is a REAL gate for
+  anything in this arc while the 8-profile grid is a CONTROL).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-22 LANDED 2026-09-17 ((P18.85)-(P18.123) notes) — pending 40 (UNCHANGED, 2
+  rewritten), skipped 65, suite 19,741/0. **(P18.123) landed the JS-expando DECLARATION rule and closed NO row —
+  both are PARTIAL**: only an ASSIGNMENT declares (`=` and an access LHS, so `this.c += 1` and `(this.f) = 3` do
+  not), the REPARSER drops a `@type` tag above a non-declaration statement, and the TS6205 aggregation is over the
+  DECLARATION's whole type-parameter list rather than per tag. Both rows are strict SUBSETS of tsgo's.
+  **(P18.121)'s recorded "the aggregation predicate is already correct" was FALSE and this queue had copied it
+  forward into a brief** — re-derive before quoting.
   PREVIOUS HEAD: (0a) + (0b) STEPS 1-21 LANDED 2026-09-16 ((P18.85)-(P18.121) notes) — pending 40, skipped 65,
   suite 19,706/0. **(P18.121) closed 2 rows of 4 and REFUSED one with the decisive control**, on a cluster picked
   because **we already emitted all three codes** — so each was a gate that did not fire, never a missing feature.

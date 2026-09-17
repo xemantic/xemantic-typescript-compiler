@@ -1,3 +1,16 @@
+**(P18.125) — THE TWO EXPORT GAPS ARE ONE CAPABILITY, 19,788 / 0 / 65 (2026-09-17).**
+The KIR module goes 211 -> 223. A module symbol's export table IS the target file's `locals`, which is wrong for an
+enumeration three ways: a star re-export contributes nothing, a renaming specifier is keyed by the DECLARED name,
+and it holds names the file does not export at all. Keying by the name an importer sees makes the first two one
+walk and the third fall out free. **The brief's failure mode was wrong in the direction that matters**: "a barrel
+enumerates nothing" holds only for a PURE barrel, where the guard refuses loudly; a barrel with its own exports and
+a star CYCLE both have a non-empty table, so the guard passed and the starred names came back null at run time —
+a silent wrong answer, found by sweeping ten shapes rather than the six briefed. The capability is ADDITIVE and
+that is measured, not argued: it has one non-test caller, and an arm that puts a mistake inside it moves 0 of 8,790
+corpus subtests, which is also why a green grid here is a control. 18 core pins asserting symbol IDENTITY, 12 new
+KIR pins, two countdown pins re-pointed; five arms. The library now needs exactly one more thing, a dynamic
+construction, queued as (KIR.LOWER.5).
+
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
 **(P18.124) — (LIB.7): A NAMESPACE IMPORT HAS A RUNTIME OBJECT, 19,758 / 0 / 65 (2026-09-17).**

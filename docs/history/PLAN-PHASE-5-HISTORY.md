@@ -1,3 +1,60 @@
+### Round (P18.120) — (LEGACY.0b) step 20: the last three F2 duplicate-identifier rows, and a class over-reach only a hand-written pin could see (2026-09-16)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,672 → 19,694 / 0 / 67** — the skip count falling 70 → 67
+IS the receipt that the three rows are now ACTIVE tests; `tsgoPendingBaselines` **46 → 43**, `docs/logical-parity.md`
+45 → 42 pending. `cost_gate.py` exit 0 (max +0.15%, unchanged from (P18.119) — this round moves no counter),
+`huge_methods.py --fail-over 0` exit 0 over 875 classes, corpus screen **3,100 / 0 errors and 5,688 / 0 emit**, and
+the 8-profile grid `added=0 removed=0` on all eight with 78 emit files byte-identical. `Checker.kt` 194,675 →
+194,706.
+
+**THE THREE MECHANISMS, ALL LANDED.** (M1) An INTERFACE's duplicate group reports TS2300 at every member whatever
+its binder visibility, named by the first binder-VISIBLE member's written spelling where the group has one. (M2) A
+name declared as a METHOD in one merged `interface` block and as a PROPERTY in another is TS2300 at every
+declaration, with no TS2717 and no TS2687 — `checkCrossInterfacePropertyConflict` had been emitting tsc-6's answer
+(TS2717 + TS6203 at the later property). (M3) `checkConstructorOverloadCompatibility` reports at the OVERLOAD's own
+parameter property as well as the implementation's, de-duplicated by position. A fourth, separable fix rides along
+with its own arm: a computed member squiggles its OWN written spelling (`emitDuplicate2300` had an
+`else -> name.length` default), which (P18.93)'s entry already warned couples a row's NAME to its SPAN.
+
+**ONE OF THE THREE RECORDED REASONS WAS WRONG, AND THE BRIEF INHERITED IT.** The pending reason (and this
+orchestrator's brief, which located it in the Go source) named `lateBindMember` — `checker.go:15918`, emitting at
+`:15962` — as the emitter behind `dynamicNamesErrors`. It is real and it is NOT that emitter: measured over ~25
+scratch shapes, its conflict branch names rows by the RESOLVED member name and fires only when late-bound members'
+symbol FLAGS conflict (a method beside a non-method, two getters, two setters). These rows come from
+`checkObjectTypeForDuplicateDeclarations` / `reportMergeSymbolError`, which is exactly why one row is named `'1'`
+and another `'[c0]'` — a rule built from `lateBindMember` would have named all four `'1'`. Fourth instance in this
+arc of "a recorded reason is a previous round's hypothesis"; the discriminator remains one scratch run.
+
+**AND THE ROUND'S REAL LESSON IS AN OVER-REACH THE SCREEN COULD NOT SEE.** "Un-gate the late-bound TS2300" holds
+for an INTERFACE and is FALSE for a CLASS, where tsgo's answer is ORDER-DEPENDENT: two late keys, or late-then-
+early, are TS2300 at both, while `class { p: number; [K]: string }` is **TS2717 alone** — measured across four
+spellings of the ordinary member (initialized, un-initialized, `declare`d, `!`-asserted), all four silent. The
+class un-gating was BUILT, measured as a two-row false positive, and reverted; the class walker keeps round 938's
+gate with the measurement in its KDoc. **The only instrument that saw it was an existing hand-written pin** — the
+corpus screen read 3,097 / 0 on that throwaway build, and the grid is a measured CONTROL for this whole family
+(an instrumented build counted admissions **0 / 0 / 0** on all eight profiles against 4 / 1 / 3 on the scratch
+fixtures, with the instrumentation then reverted and the restored class md5 `cmp`-identical).
+
+**TWO COUNTDOWN PINS FELL, BOTH ASSERTING PRISTINE'S ANSWER**, both in `DuplicateMemberDeclarationTest` (a
+late-bound duplicate is TS2717 and "deliberately NOT TS2300"; two late-bound keys emit exactly ONE TS2717). Both
+were RE-MEASURED against tsgo and re-pointed with name, column and squiggle asserted — never weakened — and the
+class KDoc corrected. A third pin that reads like a countdown is not one: `a late-bound duplicate in a CLASS is
+TS2717 and not TS2300` is tsgo-correct, and it is what caught the over-reach. Of the 21 tsc-6 MIRRORED baseline
+files only `reachabilityChecksNoCrash1` carries these codes, and its rows are parse-recovery `'(Missing)'` at an
+explicit zero span — untouched.
+
+**PINS AND ABLATION.** `TsgoStep20Test`, 22 cases (7 controls, 2 named `residue - …`), each asserting the full
+message, code, category, file, line, character, length AND the row count — the count IS the rule for a
+report-at-every-declaration family. Five arms redden 13 distinct non-control pins; **a3 (dropping the TS2687
+suppression) reddens 1 pin and moves the screen by NOTHING**, i.e. that half of M2 has no corpus witness at all and
+its pin is its only instrument — a screen-only gate would have called it redundant.
+
+**RESIDUES**, all measured against tsgo and none a regression: a class group of two late keys, or late-then-early;
+a late-bound group whose members' KINDS conflict (tsgo names those by the resolved name from the second emitter);
+the M2 conflict across a `class`/`interface` merge and inside ONE declaration; the general parameter-property
+member table, which also makes `class { p: number; constructor(public p: string) {} }` TS2300-at-both **plus
+TS2403** — the TS2403-vs-TS2717 split is its own round; and two pre-existing TS2717 gaps this round did not touch.
+
 ### Round (P18.108) — (LEGACY.1) step (h): `outFile` was already inert on the project path — six harness-only arms deleted, the reference-directive edges kept as tsgo's program order (2026-09-15)
 
 **Three commits** (`0c956db1a` refactor, `aaef62990` test, this docs commit). **Suite 19,487 → 19,506 / 0 / 83** (+19
