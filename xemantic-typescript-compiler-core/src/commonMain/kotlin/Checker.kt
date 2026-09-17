@@ -2582,7 +2582,13 @@ class Checker(
     }
 
     private fun cpaSpineEnter(node: Node) {
-        if (spineIsDts || spineIsJsLike) return
+        // (LEGACY.0b) The property-access family runs in a CHECKED JavaScript file.
+        // An unchecked one (`allowJs` without `checkJs`) still returns here — the
+        // file is in the program and reports nothing ((P18.92)). What keeps this
+        // safe is NOT this gate but [jsAccessReceiverIsExpandoImmune], which refuses
+        // every absent-member emission whose receiver could carry JS expando
+        // members; see its KDoc for the measurement.
+        if (spineIsDts || (spineIsJsLike && !options.checkJs)) return
         val parent = (node as NodeBase).parent
         // Frame pushes at fn-like body Block enters (class members through a
         // ClassDeclaration only — objlit members are tier 2).
@@ -2778,7 +2784,13 @@ class Checker(
     }
 
     private fun cpaSpineLeave(node: Node) {
-        if (spineIsDts || spineIsJsLike) return
+        // (LEGACY.0b) The property-access family runs in a CHECKED JavaScript file.
+        // An unchecked one (`allowJs` without `checkJs`) still returns here — the
+        // file is in the program and reports nothing ((P18.92)). What keeps this
+        // safe is NOT this gate but [jsAccessReceiverIsExpandoImmune], which refuses
+        // every absent-member emission whose receiver could carry JS expando
+        // members; see its KDoc for the measurement.
+        if (spineIsDts || (spineIsJsLike && !options.checkJs)) return
         // (ENGINE.2) round 787: level P's window. Opened here rather than around
         // each anchor block because the ONLY `checkPropertyAccessInExpr` calls in
         // this handler are the four anchors (`cpaApplyDeclRecordings` makes none),
@@ -56202,6 +56214,10 @@ class Checker(
          */
         private const val EXPORT_FINGERPRINT_NODE_BUDGET = 2_000_000
 
+        /** (LEGACY.0b) Ascent bound for [owningSourceFileName]. A real parent chain is
+         *  a few dozen links; the cap only stops a malformed one from spinning. */
+        private const val OWNING_FILE_ASCENT_CAP = 4096
+
         /** (INC.46) The fold's seed and step — [LexDefer]'s (INC.16) shape. */
         private const val FINGERPRINT_SEED = 1125899906842597L
 
@@ -70703,6 +70719,74 @@ interface DataView {
     internal fun isJsLikeFileName(fileName: String): Boolean =
         fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
             fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
+
+    /**
+     * (LEGACY.0b) THE JAVASCRIPT EXPANDO FIREWALL — the one thing that makes the
+     * property-access family safe to run in a `.js` file at all.
+     *
+     * A JavaScript declaration's members include everything an assignment puts on it:
+     * tsgo's binder turns `X.p = v` on a class or function declaration, and
+     * `this.p = v` inside a class member, into real symbols on that declaration's type
+     * (`GetAssignmentDeclarationKind` + `bindThisPropertyAssignment`). NOTHING in this
+     * checker's member tables knows that, so every such member reads as ABSENT.
+     * Measured on a 19-line JavaScript file whose class carries five ordinary expando
+     * fields, the ungated family invents TEN rows tsgo does not report — reads and
+     * writes alike, instance side and static side, including a `this.p = v` written in
+     * a method rather than in the constructor.
+     *
+     * So an access is admitted only when its receiver CANNOT carry one: a type every
+     * declaration of which lives in a `.ts`/`.d.ts` file. Such a type gains nothing
+     * from an assignment even when the assignment is written in JavaScript — measured,
+     * `c.expando = 1` on an imported `.ts` class is `TS2339` under tsgo 7.0.2 — so its
+     * member table is as complete here as it is in a TypeScript file. That is
+     * (CHK.45)'s rule with the JavaScript half spelled out: ALL-MISSING carries no
+     * witness of its own, and a table built from TypeScript syntax alone is the
+     * witness.
+     *
+     * It is deliberately CONSERVATIVE and what it costs is stated rather than hidden:
+     * tsgo reports an absent member on a JavaScript object literal, on a JavaScript
+     * class instance whose expando set lacks the name, and on the static side of a
+     * JavaScript class or function, and every one of those stays silent here. Closing
+     * that residue needs the expando member model itself, which is the rest of this
+     * arc — see `docs/legacy-removal-census.md`.
+     */
+    private fun jsAccessReceiverIsExpandoImmune(receiver: Expression): Boolean {
+        val type = getTypeOfExpression(receiver) as? Type.Object ?: return false
+        val decls = jsExpandoImmunityDeclarations(type)
+        if (decls.isEmpty()) return false
+        for (decl in decls) {
+            val declFile = owningSourceFileName(decl) ?: return false
+            if (isJsLikeFileName(declFile)) return false
+        }
+        return true
+    }
+
+    /** The declarations [jsAccessReceiverIsExpandoImmune] judges. A `Type.Reference`'s
+     *  OWN symbol carries no declaration where its TARGET's does (CLAUDE.md: an absent
+     *  declaration is not evidence of an anonymous type), and an anonymous object type
+     *  is minted symbol-less and carries only [Type.Object.declaredAt]. */
+    private fun jsExpandoImmunityDeclarations(type: Type.Object): List<Node> {
+        val viaTarget = (type as? Type.Reference)?.target?.symbol?.declarations
+        if (!viaTarget.isNullOrEmpty()) return viaTarget
+        val own = type.symbol?.declarations
+        if (!own.isNullOrEmpty()) return own
+        return type.declaredAt?.let { listOf(it) } ?: emptyList()
+    }
+
+    /** The `fileName` of the [SourceFile] at the top of [node]'s parent chain, or null
+     *  for a synthesized or un-indexed node (INV.2(a): `indexSourceFile` stamps the
+     *  chain; a `copy()` or a Transformer-minted node keeps none). Bounded by
+     *  [OWNING_FILE_ASCENT_CAP] so a malformed chain cannot spin. */
+    private fun owningSourceFileName(node: Node): String? {
+        var cur: Node? = node
+        var hops = 0
+        while (cur != null && hops < OWNING_FILE_ASCENT_CAP) {
+            if (cur is SourceFile) return cur.fileName
+            cur = (cur as? NodeBase)?.parent
+            hops++
+        }
+        return null
+    }
 
     // -----------------------------------------------------------------------
     // (M0.4) round 625: checkImplicitThis (TS2683/TS7041/TS7017) ON THE SPINE.
@@ -148895,6 +148979,16 @@ interface DataView {
         expr: PropertyAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
+        // (LEGACY.0b) THE JAVASCRIPT EXPANDO FIREWALL, at the per-access funnel: in a
+        // `.js` file this family runs ONLY for a receiver that cannot carry a JS
+        // expando member. Placed here rather than at the ~60 `cmam*` emission sites so
+        // that a route added later inherits it, and above everything else so that no
+        // row of any code escapes it. The test is the FILE NAME and not `spineIsJsLike`:
+        // that field is set per file inside `checkSpine` and never cleared, so after the
+        // spine it holds the LAST file's value — reading it here would suppress rows in a
+        // `.ts` file whenever the program's final file happened to be JavaScript, which is
+        // a silent loss no gate in this repo prints. See [jsAccessReceiverIsExpandoImmune].
+        if (isJsLikeFileName(fileName) && !jsAccessReceiverIsExpandoImmune(expr.expression)) return
         // (ENGINE.2) round 787: level Q. Non-recursive, so it keeps the
         // `depth != 1 => return` shape; a nested invocation would be counted in
         // `invocationsQNested` (a pin asserts it stays 0). See [CpaSections].
@@ -154393,6 +154487,17 @@ interface DataView {
         expr: ElementAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
+        // (LEGACY.0b) The ELEMENT-ACCESS funnel stays closed for a `.js` file, and the
+        // reason is a divergence that has nothing to do with JavaScript: for
+        // `recv['missing']` tsgo reports TS7053 with a two-line chain anchored at the
+        // RECEIVER, and this checker reports TS2339 anchored at the index — measured,
+        // the same fixture written in a `.ts` file diverges identically, so it is a
+        // pre-existing general gap. Opening the funnel here would propagate a wrong
+        // code and a wrong span into a second file kind rather than deliver a row, so
+        // JavaScript element accesses keep exactly their pre-(LEGACY.0b) behaviour
+        // until TS7053 is modelled. The property-access half is admitted through
+        // [jsAccessReceiverIsExpandoImmune]; see its KDoc.
+        if (isJsLikeFileName(fileName)) return
         emitTs1804xForNullishElementAccessReceiver(expr, source, fileName)
         val arg = expr.argumentExpression
         // 17.93: TS2538 "Type 'null'/'undefined' cannot be used as an index type." for
