@@ -46,6 +46,64 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
+### Round (P18.116) — (LEGACY.0b) step 19: the duplicate-identifier follow-on index is per merge CALL, and (P18.93)'s irreconcilable source was two functions away (2026-09-16)
+
+**Three commits** (`4a5ff342f` fix, `5a0476564` test, this docs commit). **Suite 19,616 → 19,625 / 0 / 70** (+9 pins;
+skipped −3), 9 modules asserted; corpus screen errors **3,097 / 0** and emit 5,688 / 0 — a REAL gate on all three
+arms, which move 3, 3 and 2 baselines, so neither half of the rule is corpus-invisible; `cost_gate.py` exit 0, 20/20
++0.00%; `huge_methods.py --fail-over 0` exit 0 (**875** classes — the new nested type); grid 8×`added=0 removed=0`
+and emit 78/78 — controls; warning-clean with an injected positive control. `Checker.kt` 194,474 → **194,535**;
+`tsgoPendingBaselines` 48 → **45**. **(LEGACY.0) stays OPEN** on (0b-20).
+
+**THE RULE, AND WHY (P18.93) COULD NOT RECONCILE IT.** The first related node of each
+`addDuplicateDeclarationError` **CALL** is TS6203 `'{0}' was also declared here.` and the rest of THAT CALL's nodes
+are TS6204 `and here.` — so N declarations of ONE symbol (one call) give `[6203, 6204, …]` while N separate files
+or augmentations (N−1 calls of one node each) give all TS6203. (P18.93) read the `if` correctly
+(`len(relatedInformation) == 0 → 6203`) and drew the wrong inference, because the missing step is two functions
+away: `lookupOrIssueError` compares through `ast.CompareDiagnostics`, **whose last comparison is
+`compareRelatedInfo`**, so the probe a second call builds — carrying an EMPTY related list — no longer compares
+equal to the diagnostic the first call decorated. The lookup **MISSES**, a second diagnostic is issued at the same
+location and again starts empty (hence 6203), and `compactAndMergeRelatedInfos` (`compiler/program.go:1444`) later
+folds every `EqualDiagnosticsNoRelatedInfo` pair and unions their lists. So "several calls accrete onto one
+diagnostic" — which this brief also asserted — is false; they accrete at the END, after the codes are chosen.
+
+**VERIFIED MECHANICALLY, AND THE POPULATION FIGURE IN THE BRIEF WAS WRONG.** Over tsgo's adopted baselines
+(`submodule/**/*.errors.txt`): **128 files** carry the family (121 with 6203, 9 with 6204), **317 family
+diagnostics**, and **every one matches `6203 6204*` repeated — 0 unexplained**; the only shapes are `[6203]`×310,
+`[6203,6203]`×5, `[6203,6204,6204]`×1 and `[6203,6204,6204,6204]`×1. The brief's "151 (142 + 9)" is a SUM over all
+directories that double-counts the `.diff` layer; the union is 128. **And 11 diagnostics in that population carry a
+TS6204 that is NOT this family** — three other tsgo producers with their own leading codes (`TS1347`/`[1348,6204]`,
+`TS2459`/`[2728,6204,6204]`, `TS2528`/`[6204]`) — so a verification script filtered by CODE reads the last as a bare
+6204 and declares the rule broken: **the discriminator is the call's LEADING code, not the follow-on.**
+
+**WHAT CHANGED.** All three `if (idx == 0) 6203 else 6204` sites now go through one helper indexing WITHIN each
+call: the cross-file hub emitter (B93) and the module-augmentation emitter (B92d) were WRONG (each `other` is its
+own merge call), and the lib-shadow emitter (B61.1) was RIGHT — the lib files are declarations of one merged symbol
+— and now records why.
+
+**M2 REFUSED, AND THE TRAP IS WORTH THE ROUND.** The orchestrator found both TS2751 rows' baselines under
+`submodule/` and asked for a re-check; that was the BASE baseline, which every case has (`submodule/` IS
+`tsgoBaselinesDir`). **The LAYER is decided by which directory the `.diff` lives in**, and both live under
+`submoduleTriaged/` and are named in `testdata/submoduleTriaged.txt`, whose header reads *"known diffs that we
+intend to fix"* — a tsgo DEFECT we must not follow. Both reasons are rewritten with the measurement and the trap.
+
+**PINS AND ABLATION.** 9 pins (6 positive, 3 controls), every expectation transcribed from tsgo's baselines and
+re-confirmed against the live binary, asserting message, code, file, line, column and width of every related row
+(the lib rows assert a NULL line — tsgo's `--:--`). **Both witnesses are pinned deliberately**: the three-file
+all-6203 shape and the merged-lib `[6203,6204,6204]` shape, the second pair being green on both arms BY DESIGN
+because it is the sole detector of the over-broad "always 6203" rule the first witness alone invites. Arms a1
+(index globally) and a2 (always 6203) redden **disjoint pin sets and disjoint baselines**, which is what makes the
+per-call index a rule rather than a coincidence. Final md5 Checker `12f7cab3` — the orchestrator's AFTER arm
+matched.
+
+**THREE HARNESS TRAPS THE ROUND HIT**, all now recorded: **`--include` is a SUBSTRING, not a regex**, so an
+alternation pattern silently compares the UNCHANGED population and reads as a clean pass — the tell is the subtest
+COUNT; **`rm -rf build/test-results/jvmTest` at the repo root deletes nothing** (the XMLs are per-module; the root
+path is a pre-split leftover), which once summed 1,574 STALE tests and reported 0 failures for a run that had just
+failed one; and a control that asserts an ABSENCE is worth less than one asserting the neighbour's real answer —
+a pin claiming no TS6204 in a TS2728 fixture went red because we already produce tsgo's `[TS2728, TS6204]` there,
+and re-pointing it made it prove the change did not spill into the other producer.
+
 ### Round (P18.115) — (LEGACY.0b) step 18: four rows in two mechanisms, and the signature-rendering family REFUSED with its exposure counted (2026-09-16)
 
 **Three commits** (`67a6e5f8b` fix, `2f59f3c23` test, this docs commit). **Suite 19,604 → 19,616 / 0 / 73** (+12

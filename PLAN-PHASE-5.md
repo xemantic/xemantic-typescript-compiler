@@ -25,6 +25,66 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.126) — (KIR.LOWER.5): a dynamic `new`, and the LOADER SHAPE runs end to end (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,788 → 19,807 / 0 / 65**, the KIR module **223 → 242**;
+`huge_methods.py --fail-over 0` over BOTH core (875) and the KIR module (114, `lowerCall` unchanged at 4,620 and
+`lowerNew` 1,085); `cost_gate.py` exit 0 and the core corpus screen 8,790 / 0 are CONTROLS, and **the 8-profile
+grid is inapplicable by construction — `Checker.class` is BYTE-IDENTICAL to (P18.125)'s landed binary
+(`58ca693b…`)**. `JsRuntime.kt` WAS touched and the generator was re-run by the agent AND independently by the
+orchestrator: **every anchor matched exactly once and every `java.`/`System.err` hit in the generated file is
+inside a comment**. No native build was run.
+
+**THE LOADER SHAPE NOW RUNS END TO END, AND IT IS A CLAIM ABOUT THE SHAPE**: a pure `export * from` barrel →
+`import * as` → `for…in` → `locales[p] = new found[p]()` → **a method call on what was constructed**, printing
+`en,fr` at `jsNew = 1` and `jsGet = 0`. The method call is the half that says the value is a real instance rather
+than a bag. `cronstrue` is not on this box — measured three rounds running — so this is the shape of
+`allLocalesLoader.ts`, not the library, and it took (P18.122)'s storage, (P18.124)'s namespace object,
+(P18.125)'s barrel enumeration and this round's construction to get there.
+
+**THE BRIEF SAID "ONE CONSTRUCTION ARM BESIDE `jsCall`" AND THE ARM ALONE IS A SILENT WRONG ANSWER.**
+`constructorValue`'s value is a `FunctionN` lambda whose body CONSTRUCTS — so invoking it *is* constructing, and
+an ordinary function export's value (`staticMethodValue`) is the SAME CARRIER and does not. A dynamic `new` has
+only the value to go on, so routing it at the old value makes `new found["bump"]()` answer the function's RETURN
+VALUE: arm a2 measures exactly that, printing **`7`** for a function export and **`3`** for an arrow. **The carrier
+is the mechanism, not the arm.** `JsConstructor(name, required, impl)` — `JsVarargFunction`'s shape one mechanism
+over — is what `jsNew` accepts, and everything else is a `JsTypeError`.
+
+**WHAT A NON-CONSTRUCTIBLE CALLEE DOES, MEASURED AGAINST `node`**: a number, a string, a bag, an arrow, `null` and
+`undefined` all throw a TypeError in both. A plain FUNCTION is a **stated divergence** — node constructs it through
+prototypes, this backend has none, and answering the return value would be a wrong answer, so it refuses loudly.
+The mirror direction was a live defect this round closed: `found["Cls"]()` — CALLING a class — used to **silently
+CONSTRUCT** and is now `JsTypeError: class Cls is not a function`, which is node's answer too.
+
+**NOTHING REACHES REFLECTION**, and the pin says so structurally: `impl` is a lambda whose body is a direct
+`IrConstructorCall`, asserted as exactly one `new … // class program/Cls` in the bytecode. The carrier is allocated
+ONCE into a lazy static field (`namespaceAccessor`'s shape), so `ns.C === ns.C` stays true — **it was true before
+only by the accident that a non-capturing Kotlin lambda is a JVM singleton**, which arm a5 is what measures.
+
+**THE `required` GUARD CONVERTS A CRASH INTO A DIAGNOSIS AND INTRODUCES NO DIVERGENCE.** Too few arguments for a
+non-nullable parameter was a JVM `NullPointerException: null cannot be cast to non-null type kotlin.String`
+(measured); it is now a named `JsTypeError`. It refuses EXACTLY the counts that already crashed, because `Any?` to
+a non-null type is a `Coercion.CAST` — an OPTIONAL parameter is unaffected and still prints its default.
+
+**PINS AND ABLATION.** `KirDynamicNewTest`, 19 cases; **18 RED against the pre-change binary**, the 2 green being
+`!compiled` controls that are correctly true on both arms. Six arms, each a single injected mistake with an
+exactly-one-occurrence assertion and a `cmp`-verified restore; a4 (dropping `jsTypeOf`'s constructor arm) reddens
+**two PRE-EXISTING (P18.124)/(P18.125) pins** as well, which is the receipt that the three rounds are one
+mechanism. The countdown `residue - a dynamic new is still refused` was **re-pointed against the measured answer,
+not deleted**, and its KDoc records what it used to say.
+
+**A NEGATIVE CONTROL WRITTEN THE OBVIOUS WAY WOULD HAVE CREDITED THE GATE WITH UNTESTED COVERAGE.** Two fixtures
+for the `signature == null` gate were wrong before the third: `new WeakMap()` and a `declare class` both COMPILE
+AND RUN (the backend models them), and `new Object()` refuses one layer earlier at *cannot map the type* and never
+reaches `lowerNew`. An interface CONSTRUCT SIGNATURE on a parameter is the shape that reaches it — and asserting
+the MESSAGE rather than `!compiled` is what makes that arm discriminate at all.
+
+**TWO FINDINGS THE BRIEF DID NOT NAME, BOTH RECORDED AND OUT OF SCOPE.** A generated CLASS or FUNCTION name in a
+VALUE position REFUSES — `lowerIdentifier` has no arm for either — so `const c: any = Cls`, `typeof Cls`,
+`make(Cls)`, `{ Cls }`, `Cls.name` and **`[1,2].map(f)` for a top-level named `f`** all refuse; that is the natural
+sequel and `namespaceExportValue` already maps both declaration kinds. And a CHECKER false positive:
+`class Cls {}; const c = Cls; new c()` is an ours-only TS2351 where tsgo reports nothing.
+
 ### Round (P18.125) — the two export gaps are ONE capability, and the brief's "a barrel refuses" was true only of the PURE case (2026-09-17)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,758 → 19,788 / 0 / 65**, the KIR module **211 → 223**;
@@ -553,64 +613,6 @@ the binary every screen and grid arm was taken on ((CHK.57)).
 **RESIDUE, RECORDED**: a WRITE through an index signature (`o.x = "s"`) is still silent; `noUncheckedIndexedAccess`
 is parsed and consulted by the spine but neither new call site adds tsgo's `| undefined` under it; and the whole
 mapped-type half above.
-
-### Round (P18.116) — (LEGACY.0b) step 19: the duplicate-identifier follow-on index is per merge CALL, and (P18.93)'s irreconcilable source was two functions away (2026-09-16)
-
-**Three commits** (`4a5ff342f` fix, `5a0476564` test, this docs commit). **Suite 19,616 → 19,625 / 0 / 70** (+9 pins;
-skipped −3), 9 modules asserted; corpus screen errors **3,097 / 0** and emit 5,688 / 0 — a REAL gate on all three
-arms, which move 3, 3 and 2 baselines, so neither half of the rule is corpus-invisible; `cost_gate.py` exit 0, 20/20
-+0.00%; `huge_methods.py --fail-over 0` exit 0 (**875** classes — the new nested type); grid 8×`added=0 removed=0`
-and emit 78/78 — controls; warning-clean with an injected positive control. `Checker.kt` 194,474 → **194,535**;
-`tsgoPendingBaselines` 48 → **45**. **(LEGACY.0) stays OPEN** on (0b-20).
-
-**THE RULE, AND WHY (P18.93) COULD NOT RECONCILE IT.** The first related node of each
-`addDuplicateDeclarationError` **CALL** is TS6203 `'{0}' was also declared here.` and the rest of THAT CALL's nodes
-are TS6204 `and here.` — so N declarations of ONE symbol (one call) give `[6203, 6204, …]` while N separate files
-or augmentations (N−1 calls of one node each) give all TS6203. (P18.93) read the `if` correctly
-(`len(relatedInformation) == 0 → 6203`) and drew the wrong inference, because the missing step is two functions
-away: `lookupOrIssueError` compares through `ast.CompareDiagnostics`, **whose last comparison is
-`compareRelatedInfo`**, so the probe a second call builds — carrying an EMPTY related list — no longer compares
-equal to the diagnostic the first call decorated. The lookup **MISSES**, a second diagnostic is issued at the same
-location and again starts empty (hence 6203), and `compactAndMergeRelatedInfos` (`compiler/program.go:1444`) later
-folds every `EqualDiagnosticsNoRelatedInfo` pair and unions their lists. So "several calls accrete onto one
-diagnostic" — which this brief also asserted — is false; they accrete at the END, after the codes are chosen.
-
-**VERIFIED MECHANICALLY, AND THE POPULATION FIGURE IN THE BRIEF WAS WRONG.** Over tsgo's adopted baselines
-(`submodule/**/*.errors.txt`): **128 files** carry the family (121 with 6203, 9 with 6204), **317 family
-diagnostics**, and **every one matches `6203 6204*` repeated — 0 unexplained**; the only shapes are `[6203]`×310,
-`[6203,6203]`×5, `[6203,6204,6204]`×1 and `[6203,6204,6204,6204]`×1. The brief's "151 (142 + 9)" is a SUM over all
-directories that double-counts the `.diff` layer; the union is 128. **And 11 diagnostics in that population carry a
-TS6204 that is NOT this family** — three other tsgo producers with their own leading codes (`TS1347`/`[1348,6204]`,
-`TS2459`/`[2728,6204,6204]`, `TS2528`/`[6204]`) — so a verification script filtered by CODE reads the last as a bare
-6204 and declares the rule broken: **the discriminator is the call's LEADING code, not the follow-on.**
-
-**WHAT CHANGED.** All three `if (idx == 0) 6203 else 6204` sites now go through one helper indexing WITHIN each
-call: the cross-file hub emitter (B93) and the module-augmentation emitter (B92d) were WRONG (each `other` is its
-own merge call), and the lib-shadow emitter (B61.1) was RIGHT — the lib files are declarations of one merged symbol
-— and now records why.
-
-**M2 REFUSED, AND THE TRAP IS WORTH THE ROUND.** The orchestrator found both TS2751 rows' baselines under
-`submodule/` and asked for a re-check; that was the BASE baseline, which every case has (`submodule/` IS
-`tsgoBaselinesDir`). **The LAYER is decided by which directory the `.diff` lives in**, and both live under
-`submoduleTriaged/` and are named in `testdata/submoduleTriaged.txt`, whose header reads *"known diffs that we
-intend to fix"* — a tsgo DEFECT we must not follow. Both reasons are rewritten with the measurement and the trap.
-
-**PINS AND ABLATION.** 9 pins (6 positive, 3 controls), every expectation transcribed from tsgo's baselines and
-re-confirmed against the live binary, asserting message, code, file, line, column and width of every related row
-(the lib rows assert a NULL line — tsgo's `--:--`). **Both witnesses are pinned deliberately**: the three-file
-all-6203 shape and the merged-lib `[6203,6204,6204]` shape, the second pair being green on both arms BY DESIGN
-because it is the sole detector of the over-broad "always 6203" rule the first witness alone invites. Arms a1
-(index globally) and a2 (always 6203) redden **disjoint pin sets and disjoint baselines**, which is what makes the
-per-call index a rule rather than a coincidence. Final md5 Checker `12f7cab3` — the orchestrator's AFTER arm
-matched.
-
-**THREE HARNESS TRAPS THE ROUND HIT**, all now recorded: **`--include` is a SUBSTRING, not a regex**, so an
-alternation pattern silently compares the UNCHANGED population and reads as a clean pass — the tell is the subtest
-COUNT; **`rm -rf build/test-results/jvmTest` at the repo root deletes nothing** (the XMLs are per-module; the root
-path is a pre-split leftover), which once summed 1,574 STALE tests and reported 0 failures for a run that had just
-failed one; and a control that asserts an ABSENCE is worth less than one asserting the neighbour's real answer —
-a pin claiming no TS6204 in a TS2728 fixture went red because we already produce tsgo's `[TS2728, TS6204]` there,
-and re-pointing it made it prove the change did not spill into the other producer.
 
 ## QUEUE
 
@@ -3134,14 +3136,29 @@ CLAUDE.md § "AI agent mission".
   and the same answer is available here. **A class with a constructor is unrunnable on the
   native arm until this lands**, which is why the n-body fixture needed a factory function.
 
-- [ ] **(KIR.LOWER.5) A DYNAMIC `new` IS REFUSED — `lowerNew` resolves a CLASS DECLARATION or refuses, so
-  `new (x as any)()` refuses for ANY dynamic callee, and it is the LAST thing between `cronstrue`'s all-locales
-  loader and a running program (sized 2026-09-17 by (P18.124) and (P18.125), each of which closed one of the other
-  two blockers and pinned this one as a named residue in `KirNamespaceImportTest`).** The namespace object already
-  answers a class export as a FUNCTION VALUE (`typeof` reads `"function"`, as JavaScript says), so the shape the
-  loader needs — `new (allLocales as any)[property]()` — has its receiver and its callee already lowered; what is
-  missing is one construction arm beside `jsCall`. Expect the round to be small and its pins to need a BEHAVIOUR
-  case beside every shape case: the op counter reads 0 for a program that never compiled ((P18.118)/(P18.124)).
+- [x] **(KIR.LOWER.5) CLOSED 2026-09-17 ((P18.126) note) — a dynamic `new` constructs, and THE FULL LOADER SHAPE
+  RUNS END TO END: a pure `export * from` barrel → `import * as` → `for…in` → `new found[p]()` → a METHOD CALL on
+  what was constructed, at `jsNew = 1` and `jsGet = 0`. It took (P18.122)'s storage, (P18.124)'s namespace object,
+  (P18.125)'s barrel enumeration and this round's construction; `cronstrue` is not on this box, so it is a claim
+  about the SHAPE. **THE ARM ALONE WOULD HAVE BEEN A SILENT WRONG ANSWER** — `constructorValue`'s value is a
+  lambda that CONSTRUCTS and an ordinary function export's value is the SAME CARRIER, so routing `new` at the old
+  value answers a function's RETURN VALUE (measured: `7`). The mechanism is a `JsConstructor` carrier that `jsNew`
+  accepts and everything else is a `JsTypeError`, with a plain function a STATED divergence from node (which
+  constructs through prototypes this backend does not have). The mirror defect closed too: CALLING a class used to
+  silently CONSTRUCT. Nothing reaches reflection, and the carrier is a lazy static so `ns.C === ns.C` holds by
+  construction rather than by the accident that a non-capturing lambda is a JVM singleton.**
+- [ ] **(KIR.LOWER.6) A GENERATED CLASS OR FUNCTION NAME IN A *VALUE* POSITION REFUSES — `lowerIdentifier` has an
+  arm for neither, so `const c: any = Cls`, `typeof Cls`, `make(Cls)`, `{ Cls }`, `Cls.name` and — the one that
+  makes this ordinary rather than exotic — **`[1,2].map(f)` for a top-level named `f`** all refuse (found and
+  sized 2026-09-17 by (P18.126), deliberately out of its scope because the namespace object already gives the
+  loader its value).** `namespaceExportValue` already maps BOTH declaration kinds, so the shape is that helper
+  plus a `Cls.name` answer on the carrier — today a `jsGet` there would reach `reflectiveGet`, which is the
+  (KIR.LOWER.3) hazard. Expect a BEHAVIOUR case beside every shape case: the op counter reads 0 for a program that
+  never compiled ((P18.118)/(P18.124)).
+- [ ] **(CHK.137) AN OURS-ONLY TS2351 ON A CLASS HELD IN A `const` — `class Cls {}; const c = Cls; new c()` is
+  "This expression is not constructable" here and **0 errors in tsgo 7.0.2** (measured 2026-09-17 by (P18.126)
+  while building its negative controls).** Small, and it is a FALSE POSITIVE on legal code, so it is worth a
+  round on its own terms rather than as a backend unblocker — the backend reaches the same shape through `any`.
 - [ ] **(KIR.NATIVE.2) A TYPESCRIPT PROGRAM THAT DECLARES ITS OWN `function main()` FAILS THE
   NATIVE BUILD WITH "the lowering produced no entry point" (2026-08-27).**
   `KirNativePlugin.kt:149` picks the generated entry with `singleOrNull { name == "main" }`,

@@ -1,5 +1,17 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.121) — (LEGACY.0b) STEP 21: THREE MECHANISMS WHOSE EMITTERS WE ALREADY HAD, 19,706 / 0 / 65 (2026-09-16).**
+The cluster was picked on one property — `Checker.kt` already emitted all three codes — so each row was a gate that
+did not fire rather than a missing feature, and the first job was to find the existing emitter. TS8026: the
+heritage arity gate suppressed on ANY governing `@augments` tag where tsgo suppresses only on a VALID count and
+anchors at the heritage expression; a tsc-6 pass retired, its removal first measured at 0 screen mismatches with
+the PassLab. TS2671: one shared predicate now serves the emitter and the augmentation collector, which SKIPS the
+merge — tsgo's own control flow, error instead of merging — which is what removes the ours-only duplicate pair.
+TS6205 REFUSED with the decisive control: we already emit it, the aggregation predicate is sound, and the blocker
+is that a bare `/** @type {T} */ this.p;` declares no property here. Pending baselines 42 -> 40. **A resolution
+ladder that works in a `-project` fixture can resolve NOTHING in the corpus** — the screen caught that, the fixture
+did not.
+
 **(P18.120) — (LEGACY.0b) STEP 20: THE LAST THREE F2 DUPLICATE-IDENTIFIER ROWS, 19,694 / 0 / 67 (2026-09-16).**
 Three distinct mechanisms, all landed: an INTERFACE's duplicate group reports at every member whatever its binder
 visibility; a method-vs-property name across MERGED interface blocks is TS2300 at every declaration with no TS2717
