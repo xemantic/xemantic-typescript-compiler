@@ -1,5 +1,17 @@
 **(P18.63) — (INV.0) STEP 10b: THE VALUE SPACE, AND THE HALF THAT HAD TO BE REFUSED, 18,536 / 0 / 3 (2026-09-10).**
 
+**(P18.120) — (LEGACY.0b) STEP 20: THE LAST THREE F2 DUPLICATE-IDENTIFIER ROWS, 19,694 / 0 / 67 (2026-09-16).**
+Three distinct mechanisms, all landed: an INTERFACE's duplicate group reports at every member whatever its binder
+visibility; a method-vs-property name across MERGED interface blocks is TS2300 at every declaration with no TS2717
+and no TS2687 (the walker had been emitting tsc-6's answer); and a constructor overload's own parameter property is
+reported beside the implementation's. The skip count falling 70 → 67 is the receipt that the rows are now ACTIVE
+tests; `tsgoPendingBaselines` 46 → 43. **The recorded reason was wrong on the first row** — `lateBindMember` is a
+real emitter and not that one — and **the obvious generalisation is a measured false positive**: un-gating
+late-bound TS2300 holds for an interface and not for a class, where tsgo is order-dependent, so it was built,
+measured and reverted. The only instrument that saw that over-reach was a hand-written pin: the corpus screen read
+0 and the grid is a measured CONTROL here (admissions 0 on all eight profiles, 4/1/3 on the scratch fixtures). Two
+countdown pins asserting pristine's answer fell and were re-measured against tsgo, never weakened.
+
 **(P18.119) — (CHK.136): A `for`-HEADER BINDING AND A `for…in` BINDING TYPED `any`, 19,672 / 0 / 70 (2026-09-16).**
 tsgo reports 7 rows on an 11-line fixture where we reported 2. A `ForStatement`'s initializer is a
 `VariableDeclarationList` whose parent is the LOOP, not a `VariableStatement`, and both recorders test that parent —

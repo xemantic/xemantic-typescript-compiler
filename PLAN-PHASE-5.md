@@ -25,6 +25,61 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.125) — the two export gaps are ONE capability, and the brief's "a barrel refuses" was true only of the PURE case (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,758 → 19,788 / 0 / 65**, the KIR module **211 → 223**;
+corpus screen **3,102 / 0 errors and 5,688 / 0 emit** after EACH mechanism (a REAL gate this round — the checker
+was touched); `cost_gate.py` exit 0 with every delta unchanged from (P18.119)'s reading; `huge_methods.py
+--fail-over 0` exit 0 over 875 classes; the 8-profile grid `added=0 removed=0` on all eight with 78 emit files
+byte-identical. `Checker.kt` 194,802 → 195,036 (+234, −0).
+
+**THE MECHANISM IS ONE LINE AND THE BRIEF NAMED A THIRD OF IT.** `Checker.createModuleSymbol` (`Checker.kt:14461`)
+sets `moduleSymbol.exports = targetResult.locals` — **the module symbol's export table IS the target file's
+`locals`**. So it is wrong for an enumeration in three ways: a star re-export contributes nothing (M1, briefed); a
+renaming specifier is keyed by the DECLARED name (M2, briefed); and **it holds names the file does not export at
+all** — a module-private `const` was a key of `Object.keys(ns)`, which no one had noticed and which falls out of
+the fix for free.
+
+**AND THE BRIEF'S FAILURE MODE WAS WRONG IN THE DIRECTION THAT MATTERS.** "A barrel leaves the table EMPTY" is true
+only of a PURE barrel, where `moduleSymbolOf`'s `takeIf { it.isNotEmpty() }` guard refuses loudly. A barrel that
+also declares its own exports, and a star CYCLE, both have a non-empty `locals` — so the guard PASSED and the
+starred names came back **`null` at run time**. (P18.124) recorded this family as a loud refusal; it is a loud
+refusal for the pure case and a **silent wrong answer** for the mixed one, which is the half every gate here is
+blind to and the half a round implementing only the brief would have left. The 10-shape sweep is what found it.
+
+**M1 AND M2 ARE ONE WALK, BECAUSE KEYING BY THE NAME AN IMPORTER SEES *IS* BOTH.** `exportedSymbolsThroughStars`
+answers `Map<String, Symbol>?` with the by-name sibling's cycle/depth discipline and memo shape; stars first, own
+exports SHADOWING them (which is what tsgo does — s10); a star carries every name **but `default`**; `null` means
+UNKNOWABLE and a name whose symbol cannot be named is ABSENT, deliberately the same omission today's table makes,
+so only the star half is new. **One deviation from the sibling is load-bearing**: the NAMED re-export arm asks a
+different question of its target, which the star walk's visited set answers `emptyMap`, so it goes through the
+memoized entry and terminates on a separate in-progress set.
+
+**THE ADDITIVE CLAIM IS MEASURED, NOT ARGUED.** The capability has exactly one non-test caller (the checker's own
+lens override), the exposure is a DEFAULTED `CheckedLens` member that no other implementor overrides, and **arm a1
+puts a mistake INSIDE the star half and the corpus screen reads 0 mismatches over 8,790 subtests** — which is also
+why a green grid here is a CONTROL rather than coverage. The externals module (the largest lens consumer) reads
+290 / 0 unchanged.
+
+**PINS AND ABLATION.** A new core class of 18 pins asserting SYMBOL IDENTITY against the declaring file's binder
+locals — not just name sets — and each barrel pin also asserts what the LOCALS table says, so the divergence is
+recorded in the test rather than only in prose; the KIR class goes 17 → 29 with **two countdown pins re-pointed**
+against measured answers (both were (P18.124)'s own refusals, converted from `residue - …` to positive pins) and
+the loader-shape pin strengthened to import through a REAL barrel. Five arms; a0 (pre-change) reddens all 18 core
+pins by COMPILE FAILURE, which is the strongest form of red a capability pin can have, and 15 of 29 KIR pins.
+
+**WHAT THE LIBRARY STILL NEEDS IS ONE THING**: the DYNAMIC `new` (`lowerNew` resolves a class declaration or
+refuses), pinned as a named residue and deliberately out of scope. The barrel shape now enumerates at
+`dynamicOps = 0`; `cronstrue` is not on this box, so that is a claim about the SHAPE, as (P18.124)'s was.
+
+**THREE THINGS WORTH CARRYING.** A real ES module namespace object **SORTS** its keys and we ship declaration
+order — a pre-existing stated divergence, values unaffected, now recorded in the KDoc and in the pins'
+expectations so it reads as a decision. An AMBIGUOUS star (TS2308) is a TYPE ERROR in both compilers and never
+reaches the backend, so no ambiguity rule was needed. And **the unknowable-star pin could not be written the
+obvious way**: a bare package specifier, a missing target and an `export =` target are all reported by the CHECKER
+first (TS2307/TS2307/TS2498), so the program never lowers — the only unknowable case this harness can reach is the
+DEPTH BOUND, and the pin is a 70-hop barrel chain, stated in its KDoc rather than left as an untested guard.
+
 ### Round (P18.124) — (LIB.7): the namespace import needed a runtime object for 4 of 21 shapes and a QUALIFIED REFERENCE for the other 17 (2026-09-17)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,741 → 19,758 / 0 / 65**, the KIR module **194 → 211**;
@@ -556,67 +611,6 @@ path is a pre-split leftover), which once summed 1,574 STALE tests and reported 
 failed one; and a control that asserts an ABSENCE is worth less than one asserting the neighbour's real answer —
 a pin claiming no TS6204 in a TS2728 fixture went red because we already produce tsgo's `[TS2728, TS6204]` there,
 and re-pointing it made it prove the change did not spill into the other producer.
-
-### Round (P18.115) — (LEGACY.0b) step 18: four rows in two mechanisms, and the signature-rendering family REFUSED with its exposure counted (2026-09-16)
-
-**Three commits** (`67a6e5f8b` fix, `2f59f3c23` test, this docs commit). **Suite 19,604 → 19,616 / 0 / 73** (+12
-pins; skipped −4, the closed rows), 9 modules asserted; corpus screen errors **3,094 / 0** and emit 5,688 / 0 — the
-errors channel run after EACH mechanism and a GATE on three of four arms; `cost_gate.py` exit 0, 20/20 +0.00%;
-`huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls;
-warning-clean with an injected positive control. `Checker.kt` UNTOUCHED (194,474); `TypeScriptCompiler.kt` 6,558 →
-**6,718**; `tsgoPendingBaselines` 52 → **48**. **(LEGACY.0) stays OPEN** on (0b-19).
-
-**M2 — self-name resolution must FAIL when the project root is ambiguous (2 rows).** tsgo's
-`tryLoadInputFileForPath` (`module/resolver.go:890`) reverse-maps an `exports` entry pointing under
-`outDir`/`declarationDir` back onto a source file, which needs a project root (`rootDir`, else the config file's
-directory); with none it raises TS2209 **and returns unresolved**. We raised TS2209 and resolved the import anyway,
-so the ordinary TS2307 never followed. **The brief suggested a `-project` pin and was wrong**: `package.json` is
-never a program input under `ProjectCompiler`, so this walker is structurally unreachable from a real project
-(measured: 0 diagnostics on a real directory with the same shape) — which also means the new TS2307 carries no
-real-project false-positive risk, and the pins belong in core.
-
-**M3 — `isolatedDeclarations`: TS9025 on the WHOLE PARAMETER vs TS9011 on the INITIALIZER (2 rows).** tsgo's
-`createParameterError` picks TS9025 when declaration emit would have to add `undefined` implicitly, which is
-`strictNullChecks` + an initializer + NOT OPTIONAL — and `isOptionalParameter` makes an initialized parameter
-optional exactly when **no later parameter is required**. **That clause is the entire discriminator and the brief
-never names it**: `f(p = bar())` is TS9011 at `bar()` while `f(p = bar(), v: number)` is TS9025 at `p = bar()`,
-same initializer, same position — so the brief's "tsgo anchors on the inner arrow's first parameter" was right
-about the symptom and wrong about the cause; it is not about the arrow and it applies at top level too. A failure
-NESTED inside the initializer keeps its own TS9013, which is why the rule is wired to the two top-level emission
-sites only. **M3b**: tsgo's declaration transform has no whole-file JS skip, so `allowJs` + `isolatedDeclarations`
-still reports the family in a `.js` file; our blanket skip is gone, and exactly one corpus case combines the two
-options, which bounds it.
-
-**M1 — REFUSED, and the brief's reading of it was wrong.** tsgo does NOT preserve each literal's own source quote
-style: the fixture's TARGET is single-quoted in source too (`callback: (x: 'hi')`) and renders `"hi"`. The
-mechanism is **type-node REUSE** — tsgo prints the SOURCE TEXT of a parameter's written annotation when the
-rendered signature's declaration is a function-like WITH A BODY (arrow, function expression, an inferred `const`),
-and renders structurally otherwise. Three measured counter-examples pin that boundary: an interface
-`MethodSignature` (`overloadOnConstInheritance2`, ACTIVE and GREEN, source `(x: 'bar')` rendering `(x: "bar")`), a
-`FunctionTypeNode` annotation, and an instantiated generic alias. Reuse is VERBATIM, so it is not a quote rule at
-all: it keeps a type ALIAS unresolved, a keyword alias, a generic spelling and even a backslash escape. Cost:
-`typeToString` renders from a `Type` and has neither the declaring file's source nor a tight end for a `TypeNode`,
-so this is a display-layer change — **exposure counted: 186 tsgo baselines render an annotated-parameter signature,
-94 of them active subtests (66 with a one-parameter signature), all currently GREEN and gated by the corpus alone
-((PARITY.1))**. Both pending reasons now carry the rule, its counter-examples and that count.
-
-**PINS AND ABLATION.** 12 pins (5 positive, 7 controls); stash-ablation 5 of 5 non-controls red, all controls
-green, on a before-arm whose Checker and TypeScriptCompiler md5s are (P18.114)'s recorded finals. Four arms, each
-reddening a disjoint set — and **two of the seven "negative controls" are each the SOLE detector of their own
-over-broad rule** (a2's later-required-parameter clause, a3's `strictNullChecks` gate, the latter being the one arm
-the corpus cannot see at all).
-
-**A TRAP WORTH CARRYING.** `TypeScriptCompiler.class` is NOT the class that carries edits to
-`TypeScriptCompiler.kt`'s top-level private functions — those compile into **`TypeScriptCompilerKt.class`**, and
-the enclosing class's md5 moves only through `LineNumberTable` shifts. An arm that substitutes on the same line
-therefore leaves `TypeScriptCompiler.class` byte-identical while behaving differently, which reads exactly like a
-build that did not land. Quote `TypeScriptCompilerKt.class` for such a change. Two more from the same round:
-**tsgo's CLI cannot adjudicate M2** (TS2209 is a program-level diagnostic that stops it before semantic
-diagnostics, and a scratch `-p` run prints nothing at all because a present `tsconfig.json` takes the
-config-directory branch — the harness fixtures have none, which is why the row exists), so the authority is tsgo's
-own `.errors.txt.diff` layer; and two attempts to bound M1's blast radius by simulation produced unusable numbers
-(0 and 8, at least 3 of the 8 false on inspection) — **the defensible figure is the exposure count, not a
-simulated mover count**.
 
 ## QUEUE
 
@@ -3140,6 +3134,14 @@ CLAUDE.md § "AI agent mission".
   and the same answer is available here. **A class with a constructor is unrunnable on the
   native arm until this lands**, which is why the n-body fixture needed a factory function.
 
+- [ ] **(KIR.LOWER.5) A DYNAMIC `new` IS REFUSED — `lowerNew` resolves a CLASS DECLARATION or refuses, so
+  `new (x as any)()` refuses for ANY dynamic callee, and it is the LAST thing between `cronstrue`'s all-locales
+  loader and a running program (sized 2026-09-17 by (P18.124) and (P18.125), each of which closed one of the other
+  two blockers and pinned this one as a named residue in `KirNamespaceImportTest`).** The namespace object already
+  answers a class export as a FUNCTION VALUE (`typeof` reads `"function"`, as JavaScript says), so the shape the
+  loader needs — `new (allLocales as any)[property]()` — has its receiver and its callee already lowered; what is
+  missing is one construction arm beside `jsCall`. Expect the round to be small and its pins to need a BEHAVIOUR
+  case beside every shape case: the op counter reads 0 for a program that never compiled ((P18.118)/(P18.124)).
 - [ ] **(KIR.NATIVE.2) A TYPESCRIPT PROGRAM THAT DECLARES ITS OWN `function main()` FAILS THE
   NATIVE BUILD WITH "the lowering produced no entry point" (2026-08-27).**
   `KirNativePlugin.kt:149` picks the generated entry with `singleOrNull { name == "main" }`,
@@ -6016,7 +6018,10 @@ CLAUDE.md § "AI agent mission".
   verifier refuses a cross-file declaration; its exports are reached through shared accessors, so they stay LIVE —
   which is the whole argument against the eager bag, since an ES module's exports are live bindings and a bag is a
   copy. `keys()` spills and `get` deliberately does NOT, or the first `for…in` would freeze every binding.
-  **RESIDUES**: `export { x as y }` is REFUSED rather than answered wrongly (the checker's table is keyed by the
+  **TWO RESIDUES CLOSED 2026-09-17 ((P18.125)): the barrel enumeration and the renamed export, which are ONE
+  capability — `Checker.exportedSymbolsThroughStars` keyed by the name an IMPORTER sees. That round also found
+  the mixed barrel and the star CYCLE were SILENT wrong answers rather than refusals, and that the table leaked
+  module-private locals. ORIGINAL RESIDUES: `export { x as y }` is REFUSED rather than answered wrongly (the checker's table is keyed by the
   DECLARED name, so it silently mis-answered — a defect this round's own fix introduced and its 21-shape sweep
   caught); `export * from` barrels enumerate nothing, which is CHECKER-side; a dynamic `new` refuses; and `in` is
   not lowered, so the generated `has` has no consumer yet.**

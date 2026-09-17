@@ -46,6 +46,67 @@ TS5074 is reported in a tsconfig context where tsgo's `ConfigFilePath == ""` gua
 config dir so tsgo writes `out/src/a.js` where we flatten to `out/a.js`; the project path writes no `.d.ts`
 under `declaration`/`emitDeclarationOnly`; and it never emits an `allowJs` `.js` input.
 
+### Round (P18.115) — (LEGACY.0b) step 18: four rows in two mechanisms, and the signature-rendering family REFUSED with its exposure counted (2026-09-16)
+
+**Three commits** (`67a6e5f8b` fix, `2f59f3c23` test, this docs commit). **Suite 19,604 → 19,616 / 0 / 73** (+12
+pins; skipped −4, the closed rows), 9 modules asserted; corpus screen errors **3,094 / 0** and emit 5,688 / 0 — the
+errors channel run after EACH mechanism and a GATE on three of four arms; `cost_gate.py` exit 0, 20/20 +0.00%;
+`huge_methods.py --fail-over 0` exit 0 (874 classes); grid 8×`added=0 removed=0` and emit 78/78 — controls;
+warning-clean with an injected positive control. `Checker.kt` UNTOUCHED (194,474); `TypeScriptCompiler.kt` 6,558 →
+**6,718**; `tsgoPendingBaselines` 52 → **48**. **(LEGACY.0) stays OPEN** on (0b-19).
+
+**M2 — self-name resolution must FAIL when the project root is ambiguous (2 rows).** tsgo's
+`tryLoadInputFileForPath` (`module/resolver.go:890`) reverse-maps an `exports` entry pointing under
+`outDir`/`declarationDir` back onto a source file, which needs a project root (`rootDir`, else the config file's
+directory); with none it raises TS2209 **and returns unresolved**. We raised TS2209 and resolved the import anyway,
+so the ordinary TS2307 never followed. **The brief suggested a `-project` pin and was wrong**: `package.json` is
+never a program input under `ProjectCompiler`, so this walker is structurally unreachable from a real project
+(measured: 0 diagnostics on a real directory with the same shape) — which also means the new TS2307 carries no
+real-project false-positive risk, and the pins belong in core.
+
+**M3 — `isolatedDeclarations`: TS9025 on the WHOLE PARAMETER vs TS9011 on the INITIALIZER (2 rows).** tsgo's
+`createParameterError` picks TS9025 when declaration emit would have to add `undefined` implicitly, which is
+`strictNullChecks` + an initializer + NOT OPTIONAL — and `isOptionalParameter` makes an initialized parameter
+optional exactly when **no later parameter is required**. **That clause is the entire discriminator and the brief
+never names it**: `f(p = bar())` is TS9011 at `bar()` while `f(p = bar(), v: number)` is TS9025 at `p = bar()`,
+same initializer, same position — so the brief's "tsgo anchors on the inner arrow's first parameter" was right
+about the symptom and wrong about the cause; it is not about the arrow and it applies at top level too. A failure
+NESTED inside the initializer keeps its own TS9013, which is why the rule is wired to the two top-level emission
+sites only. **M3b**: tsgo's declaration transform has no whole-file JS skip, so `allowJs` + `isolatedDeclarations`
+still reports the family in a `.js` file; our blanket skip is gone, and exactly one corpus case combines the two
+options, which bounds it.
+
+**M1 — REFUSED, and the brief's reading of it was wrong.** tsgo does NOT preserve each literal's own source quote
+style: the fixture's TARGET is single-quoted in source too (`callback: (x: 'hi')`) and renders `"hi"`. The
+mechanism is **type-node REUSE** — tsgo prints the SOURCE TEXT of a parameter's written annotation when the
+rendered signature's declaration is a function-like WITH A BODY (arrow, function expression, an inferred `const`),
+and renders structurally otherwise. Three measured counter-examples pin that boundary: an interface
+`MethodSignature` (`overloadOnConstInheritance2`, ACTIVE and GREEN, source `(x: 'bar')` rendering `(x: "bar")`), a
+`FunctionTypeNode` annotation, and an instantiated generic alias. Reuse is VERBATIM, so it is not a quote rule at
+all: it keeps a type ALIAS unresolved, a keyword alias, a generic spelling and even a backslash escape. Cost:
+`typeToString` renders from a `Type` and has neither the declaring file's source nor a tight end for a `TypeNode`,
+so this is a display-layer change — **exposure counted: 186 tsgo baselines render an annotated-parameter signature,
+94 of them active subtests (66 with a one-parameter signature), all currently GREEN and gated by the corpus alone
+((PARITY.1))**. Both pending reasons now carry the rule, its counter-examples and that count.
+
+**PINS AND ABLATION.** 12 pins (5 positive, 7 controls); stash-ablation 5 of 5 non-controls red, all controls
+green, on a before-arm whose Checker and TypeScriptCompiler md5s are (P18.114)'s recorded finals. Four arms, each
+reddening a disjoint set — and **two of the seven "negative controls" are each the SOLE detector of their own
+over-broad rule** (a2's later-required-parameter clause, a3's `strictNullChecks` gate, the latter being the one arm
+the corpus cannot see at all).
+
+**A TRAP WORTH CARRYING.** `TypeScriptCompiler.class` is NOT the class that carries edits to
+`TypeScriptCompiler.kt`'s top-level private functions — those compile into **`TypeScriptCompilerKt.class`**, and
+the enclosing class's md5 moves only through `LineNumberTable` shifts. An arm that substitutes on the same line
+therefore leaves `TypeScriptCompiler.class` byte-identical while behaving differently, which reads exactly like a
+build that did not land. Quote `TypeScriptCompilerKt.class` for such a change. Two more from the same round:
+**tsgo's CLI cannot adjudicate M2** (TS2209 is a program-level diagnostic that stops it before semantic
+diagnostics, and a scratch `-p` run prints nothing at all because a present `tsconfig.json` takes the
+config-directory branch — the harness fixtures have none, which is why the row exists), so the authority is tsgo's
+own `.errors.txt.diff` layer; and two attempts to bound M1's blast radius by simulation produced unusable numbers
+(0 and 8, at least 3 of the 8 false on inspection) — **the defensible figure is the exposure count, not a
+simulated mover count**.
+
 ### Round (P18.114) — (LEGACY.0b) step 17: the JS CommonJS `exports` model — four rows, and the errors screen was a GATE on five of six arms (2026-09-16)
 
 **Three commits** (`0871e6fa1` feat, `59230e9af` test, this docs commit). **Suite 19,586 → 19,604 / 0 / 77** (+18
