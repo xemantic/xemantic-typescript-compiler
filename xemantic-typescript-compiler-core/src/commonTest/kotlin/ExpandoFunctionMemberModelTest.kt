@@ -401,4 +401,33 @@ class ExpandoFunctionMemberModelTest {
             ) == "Type '{ (): void; a: number; b: number; }' is not assignable to type 'boolean'."
         )
     }
+
+    /**
+     * (P18.137) THE SAME COUNT FOR THE SECOND HOST KIND, AND IT IS GUARDED BY A
+     * DIFFERENT MECHANISM — which is why it is a pin and not a duplicate.
+     *
+     * A `const`-bound function-expression host
+     * (`Checker.attachVariableExpandoMembers`) is in NO B431 candidate set at all:
+     * `spineExSetup` puts every `VariableStatement` name in its `merged` exclusion. So
+     * `Checker.plantExpandoMembers` deliberately does NOT mark such a type in
+     * `expandoAttachedTypeIds` — marking it would SHUT the only emitter it has — and
+     * what keeps the count at one here is simply that B431 never fires. The pin above
+     * covers the marked half; this one covers the unmarked half, in the same NESTED
+     * read position, so the pair brackets both mechanisms.
+     */
+    @Test
+    fun `an absent member on a const bound expando host is reported exactly once`() {
+        val d = diagnose(
+            """
+            const zzzC = () => {};
+            zzzC.px = 1;
+            function zzzRead(): void { zzzC.zzzProbe; }
+            """
+        )
+        assert(ts2339(d).size == 1)
+        assert(
+            ts2339(d).single().message ==
+                "Property 'zzzProbe' does not exist on type '{ (): void; px: number; }'."
+        )
+    }
 }

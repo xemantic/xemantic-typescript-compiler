@@ -90,15 +90,22 @@ import kotlin.test.Test
  * EMPTY for a function that plainly has expandos — so such a function would render its
  * bare SIGNATURE where tsgo renders the members. Collector first.
  *
- * ### 3. WHAT THIS DOES NOT CLOSE
+ * ### 3. WHAT THIS DOES NOT CLOSE — **ALL OF IT IS NOW CLOSED, BY (P18.137)**
  *
- * The item's own headline shape — a function receiver read at FILE level, or a
- * `const f = () => {}`, or a function-typed PARAMETER — is still silent, because
- * B431's candidate set is top-level uniquely-named `FunctionDeclaration`s and its
- * emission requires a nested read. Those pins are here as REFUSALS, named as such,
- * so the residue is a recorded decision rather than an absence someone has to
- * rediscover. Closing them needs expando members modelled on the function TYPE,
- * which is a different piece of work — the item keeps it.
+ * This section used to read: *the item's own headline shape — a function receiver
+ * read at FILE level, or a `const f = () => {}`, or a function-typed PARAMETER — is
+ * still silent, because B431's candidate set is top-level uniquely-named
+ * `FunctionDeclaration`s and its emission requires a nested read … closing them needs
+ * expando members modelled on the function TYPE, which is a different piece of work.*
+ *
+ * That prediction was right and the work has landed. (P18.136) put the members on a
+ * `FunctionDeclaration`'s type, (P18.137) added the `const`-bound function-expression
+ * host and opened ROUTE (B) — `Checker.cmamCallSignatureReceiverReportable`, the
+ * identifier-receiver branch — so a `const`-bound arrow receiver and a function-typed
+ * PARAMETER receiver both report, byte-identically to `tools/tsgo-7.0.2/lib/tsc` and
+ * through a funnel that is NOT B431. The two pins below are re-pointed to tsgo's
+ * measured answer rather than to whatever the new code prints, and they are no longer
+ * residues, which is why they no longer carry the name.
  */
 class ExpandoReceiverDisplayTest {
 
@@ -282,7 +289,8 @@ class ExpandoReceiverDisplayTest {
         )
     }
 
-    // --- 3. the residue, pinned as refusals ---------------------------------
+    // --- 3. what was the residue — every pin here is now CLOSED, and each says
+    //        which round closed it and against which tsgo measurement --------
 
     /**
      * (CHK.124) CLOSED — this pin shipped for one round as
@@ -322,25 +330,52 @@ class ExpandoReceiverDisplayTest {
         assert(d.any { it.code == 1003 })
     }
 
-    /** **residue - an arrow/`const` receiver is not a B431 candidate at all.** */
+    /**
+     * (P18.137) CLOSED — this pin shipped as
+     * `residue - an arrow-initialized const receiver is silent`, and its own KDoc said
+     * why: an arrow/`const` receiver is in no B431 candidate set at all, because
+     * `spineExSetup` puts every `VariableStatement` name in its `merged` exclusion.
+     *
+     * That is still true, and it is no longer the whole story: the read is now served
+     * by ROUTE (B) — `Checker.cmamCallSignatureReceiverReportable` — a different funnel
+     * entirely, which is exactly why `Checker.plantExpandoMembers` must NOT mark a
+     * variable host in `expandoAttachedTypeIds`. Re-measured against
+     * `tools/tsgo-7.0.2/lib/tsc` on this fixture's own text: `a.ts(2,24): error TS2339:
+     * Property 'zzzProbe' does not exist on type '() => void'.` — the same line, the
+     * same 1-based column and the same message this asserts.
+     */
     @Test
-    fun `residue - an arrow-initialized const receiver is silent`() {
+    fun `an arrow-initialized const receiver reports`() {
         val d = diagnose(
             """
             const ZzzF = () => {};
             function zzzG() { ZzzF.zzzProbe; }
             """
         )
-        assert(t2339(d).isEmpty())
+        assert(
+            t2339(d).single().message ==
+                "Property 'zzzProbe' does not exist on type '() => void'."
+        )
+        assert(t2339(d).single().line == 2)
+        assert(t2339(d).single().character == 24)
     }
 
-    /** **residue - a function-typed PARAMETER receiver is silent.** */
+    /**
+     * (P18.137) CLOSED — the PARAMETER half of the same re-point, and the commonest
+     * receiver of all in real TypeScript. Re-measured against
+     * `tools/tsgo-7.0.2/lib/tsc` on this fixture's own text (with the name lengthened
+     * by one character, so tsgo's column reads 43 for our 42 — the SAME token).
+     */
     @Test
-    fun `residue - a function-typed parameter receiver is silent`() {
+    fun `a function-typed parameter receiver reports`() {
         val d = diagnose(
             "function zzzG(zzzCb: () => void) { zzzCb.zzzProbe; }"
         )
-        assert(t2339(d).isEmpty())
+        assert(
+            t2339(d).single().message ==
+                "Property 'zzzProbe' does not exist on type '() => void'."
+        )
+        assert(t2339(d).single().character == 42)
     }
 
     // --- 1b. (CHK.127) an object literal is a HARD STOP for the collector ----

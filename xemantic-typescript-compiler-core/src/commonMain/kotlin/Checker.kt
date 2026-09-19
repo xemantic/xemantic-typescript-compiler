@@ -114689,7 +114689,15 @@ interface DataView {
                         // (CHK.93): a const-asserted initializer never widens (regular).
                         if (constAssertedInitializerKeeps(init, raw)) return raw
                         val inferred = inferTypeFromInitializerType(raw)
-                        if (inferred !== anyType && inferred !== errorType) return inferred
+                        if (inferred !== anyType && inferred !== errorType) {
+                            // (P18.137) (CHK.124) step 2a — `const f = () => {}; f.ok = 1`
+                            // gives `f` the members tsgo's binder declares. This is AFTER
+                            // the widening deliberately: [widenType]'s `Type.Object` arm
+                            // returns the instance untouched only while `members` is null,
+                            // and REBUILDS the object once a table is present.
+                            if (inferred is Type.Object) attachVariableExpandoMembers(symbol, inferred)
+                            return inferred
+                        }
                     }
                 } finally {
                     if (pushed) inferenceNamespaceStack.removeLast()
@@ -115076,6 +115084,35 @@ interface DataView {
         // A merged host is tsgo's `typeof <name>` case and is refused whole.
         for (d in symbol.declarations) if (d !is FunctionDeclaration) return
         val writes = expandoWritesForHost(funcDecls) ?: return
+        // A `FunctionDeclaration` host's read is B431's — see [expandoAttachedTypeIds].
+        plantExpandoMembers(symbol, writes, fnType, ownedByB431 = true)
+    }
+
+    /**
+     * (CHK.124) The shared planting body of the two attachment points —
+     * [attachExpandoMembers] for a `FunctionDeclaration` host and
+     * [attachVariableExpandoMembers] for a `const`-bound function-expression one.
+     *
+     * The three orderings inside it are load-bearing rather than tidy and are stated in
+     * [attachExpandoMembers]' own KDoc: the member TABLE is planted before any member
+     * TYPE is computed (a right-hand side may read the host's own members, which would
+     * otherwise resolve a null table and permanently mask this one — round 833), every
+     * member is seeded `anyType` so a genuine cycle degrades instead of recursing, and
+     * the member type is written at MINT time, ungated.
+     *
+     * [ownedByB431] is the one thing the two callers disagree about, and it is not a
+     * detail: a `FunctionDeclaration` host's READ belongs to [spineExEnterNode], so the
+     * type is marked and route (B) refuses it; a VARIABLE host is in no B431 candidate
+     * set at all (`spineExSetup` puts every `VariableStatement` name in its `merged`
+     * exclusion), so marking one would SHUT the only emitter it has and silence
+     * `const f = () => {}; f.ok = 1; f.nope` — a row tsgo reports.
+     */
+    private fun plantExpandoMembers(
+        symbol: Symbol,
+        writes: ExpandoHostWrites,
+        fnType: Type.Object,
+        ownedByB431: Boolean,
+    ) {
         if (!expandoAttachInProgress.add(symbol.id)) return
         try {
             val order = writes.membersInSourceOrder()
@@ -115093,13 +115130,109 @@ interface DataView {
             }
             fnType.members = members
             fnType.properties = propSyms
-            expandoAttachedTypeIds.add(fnType.id)
+            if (ownedByB431) expandoAttachedTypeIds.add(fnType.id)
             for ((i, m) in order.withIndex()) {
                 expandoMemberType(writes.rhs[m] ?: continue)?.let { symbolTypes[propSyms[i].id] = it }
             }
         } finally {
             expandoAttachInProgress.remove(symbol.id)
         }
+    }
+
+    /**
+     * (P18.137) (CHK.124) step 2a — THE EXPANDO MEMBERS OF A `const`-BOUND
+     * FUNCTION-EXPRESSION HOST.
+     *
+     * tsgo's binder host predicate (`binder.go` `getInitializerSymbol`) takes a
+     * `VariableDeclaration` whose initializer `IsExpandoInitializer` — a
+     * `FunctionExpression` or an `ArrowFunction` — and, in a TypeScript file, only when
+     * the binding is `const`. Every boundary below was measured against
+     * `tools/tsgo-7.0.2/lib/tsc`, not inferred from that source:
+     *
+     * ```ts
+     * const ca = () => {};      ca.m = 1;  const r: string = ca.m;  // TS2322 — a host
+     * const cb = function(){};  cb.m = 1;  const r: string = cb.m;  // TS2322 — a host
+     * let  lc = () => {};       lc.m = 1;  //  TS2339 at the WRITE — `let` is not a host
+     * var  vd = () => {};       vd.m = 1;  //  TS2339 at the WRITE — `var` is not either
+     * const ce: () => void = function(){}; ce.m = 1;  // TS2339 — ANNOTATED is not a host
+     * ```
+     *
+     * The annotated case needs no clause here and that is worth saying rather than
+     * relying on: tsgo's binder DOES declare onto the function-expression's own symbol,
+     * but the variable's type is the ANNOTATION, so no access ever reaches those
+     * members — and in this checker [getTypeOfVariableOrProperty] returns from
+     * `decl.type` several statements above this call, so the same answer falls out
+     * structurally.
+     *
+     * **WHY THE ATTACHMENT POINT IS HERE AND NOT [getTypeOfFunction].** An arrow's or a
+     * function expression's `Type.Object` is minted FRESH by
+     * [getTypeOfArrowFunction]/[getTypeOfFunctionExpression] on every call — there is no
+     * per-node memo for an expression type (round 737) — so the instance that reaches a
+     * reader is the one `getTypeOfSymbol` stored in `symbolTypes`, which is the one this
+     * call site returns. Attaching at the expression builder instead would mutate an
+     * instance nobody else can see, and (CHK.102)'s sharing hazard does not arise for
+     * the same reason: the instance is reachable only from this variable's own
+     * resolution.
+     *
+     * **`properties` IS `emptyList()`, NOT NULL, ON AN ARROW TYPE** — the expression
+     * builders plant it — so the round-833 "a re-entrant reader already planted a table"
+     * guard must be an EMPTINESS test here where [attachExpandoMembers] can use a
+     * null test. Getting that wrong is silent: the attach simply never happens.
+     *
+     * Scope, matching [expandoWritesForHost]'s: the declaration's container must be a
+     * `SourceFile` or a `ModuleBlock`, which is also the only population that reaches
+     * here at all — a body-local `const` is never BOUND (B83.5) and so has no symbol.
+     * JavaScript files are refused whole, as step 1 refuses them.
+     */
+    private fun attachVariableExpandoMembers(symbol: Symbol, fnType: Type.Object) {
+        // A re-entrant reader already planted a real table (round 833) — leave it alone.
+        if (fnType.members != null || !fnType.properties.isNullOrEmpty()) return
+        if (fnType.callSignatures.isNullOrEmpty()) return
+        val decl = symbol.valueDeclaration as? VariableDeclaration ?: return
+        if (symbol.declarations.any { it !== decl }) return
+        if (decl.type != null) return
+        if (!varDeclIsImmutableBinding(decl)) return
+        val init = decl.initializer
+        if (init !is ArrowFunction && init !is FunctionExpression) return
+        val name = (decl.name as? Identifier)?.text ?: return
+        val writes = expandoWritesForVariableHost(decl, name) ?: return
+        // A VARIABLE host is in NO B431 candidate set, so route (B) must stay OPEN for
+        // it — see [plantExpandoMembers].
+        plantExpandoMembers(symbol, writes, fnType, ownedByB431 = false)
+    }
+
+    /**
+     * (P18.137) The expando writes a `const`-bound function-expression host collects, or
+     * null when there are none.
+     *
+     * Deliberately the SAME container scan as [expandoWritesForHost] — one
+     * [expandoContainerWrites] memo, one [collectExpandoDecls] — so the two host kinds
+     * can never disagree about what a write declares ((P18.134)'s rule, which is why
+     * route (A) reuses B431's collector rather than re-deriving it).
+     */
+    private fun expandoWritesForVariableHost(decl: VariableDeclaration, name: String): ExpandoHostWrites? {
+        val list = (decl as NodeBase).parent as? VariableDeclarationList ?: return null
+        val stmt = (list as NodeBase).parent as? VariableStatement ?: return null
+        val container = (stmt as NodeBase).parent
+        val statements: List<Statement>
+        val fileName: String
+        val containerPos: Int
+        when (container) {
+            is SourceFile -> {
+                statements = container.statements
+                fileName = container.fileName
+                containerPos = container.pos
+            }
+            is ModuleBlock -> {
+                statements = container.statements
+                fileName = owningSourceFileName(decl) ?: return null
+                containerPos = container.pos
+            }
+            else -> return null
+        }
+        if (isJsLikeFileName(fileName)) return null
+        val found = expandoContainerWrites("$fileName\u0000$containerPos", statements)[name] ?: return null
+        return if (found.names.isEmpty()) null else found
     }
 
     /**
@@ -115167,7 +115300,22 @@ interface DataView {
         statements: List<Statement>,
     ): Map<String, ExpandoHostWrites> = expandoContainerMemo.getOrPut(key) {
         val cands = HashSet<String>()
-        for (st in statements) if (st is FunctionDeclaration) st.name?.text?.let { cands.add(it) }
+        for (st in statements) when (st) {
+            is FunctionDeclaration -> st.name?.text?.let { cands.add(it) }
+            // (P18.137) the second host kind: a `const` bound to a function expression
+            // or an arrow, un-annotated. The two share this scan so they cannot
+            // disagree about what a write declares; a name that turns out not to be a
+            // host simply never has its entry read.
+            is VariableStatement -> if (st.declarationList.flags == SyntaxKind.ConstKeyword) {
+                for (d in st.declarationList.declarations) {
+                    if (d.type != null) continue
+                    val di = d.initializer
+                    if (di !is ArrowFunction && di !is FunctionExpression) continue
+                    (d.name as? Identifier)?.text?.let { cands.add(it) }
+                }
+            }
+            else -> {}
+        }
         if (cands.isEmpty()) return@getOrPut emptyMap()
         val declared = HashMap<String, ExpandoHostWrites>()
         for (c in cands) declared[c] = ExpandoHostWrites()
@@ -152781,6 +152929,95 @@ interface DataView {
     }
 
     /**
+     * (P18.137) (CHK.124) step 2 — MAY THE IDENTIFIER-RECEIVER ROUTE REPORT A MISSING
+     * MEMBER ON A **CALL-SIGNATURE-BEARING** TYPE?
+     *
+     * [cmamCheckResolvedObjectType]'s empty-`properties` branch had exactly one emission,
+     * B63.33's `'{}'` case, and it REQUIRES `callSignatures.isNullOrEmpty()` — so every
+     * function-typed identifier receiver fell through to a bare `return` and a whole class
+     * of missing members was unchecked. Measured against `tools/tsgo-7.0.2/lib/tsc` on one
+     * eleven-line file, four real errors were lost:
+     *
+     * ```ts
+     * declare const zq: () => void;      zq.nope1;   // TS2339 '() => void'
+     * declare const zp: { (): void };    zp.nope2;   // TS2339 '() => void'
+     * interface ZC { (): void }
+     * declare const zi: ZC;              zi.nope3;   // TS2339 'ZC'
+     * const zf = () => {}; zf.ok = 1;    zf.nope5;   // TS2339 '{ (): void; ok: number; }'
+     * ```
+     *
+     * (P18.134) refused to open it because `const f = () => {}; f.bar = 1` would have
+     * become a FALSE POSITIVE with no expando member model; (P18.136) built that model for
+     * `FunctionDeclaration` hosts and [attachVariableExpandoMembers] supplies the other
+     * half, so the blocker is gone.
+     *
+     * ### The double-emission guard, and how it is MEASURED
+     *
+     * **The crux of this change is not emitting — it is not emitting TWICE.** B431's spine
+     * anchor ([spineExEnterNode]) already owns the read for its own candidate set, and its
+     * rules (the reach classifier, the shadow chain, its own `RUNTIME_PROPERTIES`
+     * exemption) are what the corpus gates. Its candidates are TOP-LEVEL
+     * `FunctionDeclaration`s, so the refusal here is exactly "the receiver's type is a
+     * function DECLARATION's type": [getTypeOfFunction] sets `fnType.symbol` to the host
+     * symbol, whose declarations are all `FunctionDeclaration`s. Built without it, that
+     * really does double — `function g(){}` + `g.nope` emitted the identical row twice at
+     * `2:14`, which the pin `an absent member on an expando host is reported exactly once`
+     * asserts for every host kind admitted here.
+     *
+     * A VARIABLE host is in no B431 candidate set at all (`spineExSetup` puts every
+     * `VariableStatement` name in its `merged` exclusion), which is why
+     * [plantExpandoMembers] does NOT mark one in [expandoAttachedTypeIds]: this route is
+     * the only emitter it has.
+     *
+     * The refusal costs the IMPORTED-function row (`import { g } from "./m"; g.nope`,
+     * which B431 cannot reach either) — a LOST row, not a false positive, and exactly the
+     * answer today's binary gives.
+     *
+     * ### The positive evidence demanded, clause by clause
+     *
+     * (CHK.45)'s invariant: an all-missing verdict needs POSITIVE evidence the member
+     * table is complete, because a "no" from an incomplete table is B153.
+     *
+     *  - **call signatures, and no construct signatures.** The call signatures are the
+     *    evidence that this is a function type rather than a table that failed to fill.
+     *    A construct-signature receiver is a class static side or a `new`-able interface,
+     *    whose members this path does not model — refused, i.e. today's answer.
+     *  - **no index signature**, which legitimately supplies the name
+     *    ([cmamIndexSignatureProvides]).
+     *  - **no base types**, for a `Type.Interface` and through a `Type.Reference`'s
+     *    target alike: an inherited member is one this empty table would report absent.
+     *  - `propName` neither empty (a dangling dot is TS1003, round 917) nor a
+     *    `RUNTIME_PROPERTIES` member — `call`/`bind`/`apply`/`length`/`name`/`prototype`/
+     *    `toString` on a bare `() => void` are silent in both compilers, measured.
+     *
+     * ### What the instruments said
+     *
+     * The eight profiles are the GATE for this round and not a control: unlike
+     * (P18.134)/(P18.136), whose shapes tsc's own sources do not contain, a function-typed
+     * `const`/parameter/call signature is everywhere there (1,062 function-type
+     * annotations in the compiler profile alone). Measured on the arm with NO guard at all
+     * — the maximally exposed one — the grid reads 8 x `added=0 removed=0` with the 78
+     * emitted files byte-identical, and the corpus screen moves exactly ONE baseline
+     * (`isolatedDeclarationErrors`, whose two `const`-bound arrow hosts are precisely what
+     * [attachVariableExpandoMembers] models). That is the false-positive direction
+     * answered on 1.2M lines of correct TypeScript.
+     */
+    private fun cmamCallSignatureReceiverReportable(objectType: Type.Object, propName: String): Boolean {
+        if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return false
+        if (objectType.callSignatures.isNullOrEmpty()) return false
+        if (!objectType.constructSignatures.isNullOrEmpty()) return false
+        if (cmamIndexSignatureProvides(objectType, propName)) return false
+        // B431 owns every read whose receiver is a function DECLARATION's type.
+        if (objectType.symbol?.declarations?.any { it is FunctionDeclaration } == true) return false
+        val baseTypes = when (objectType) {
+            is Type.Reference -> objectType.target.baseTypes
+            is Type.Interface -> objectType.baseTypes
+            else -> null
+        }
+        return baseTypes.isNullOrEmpty()
+    }
+
+    /**
      * (CHK.45) Does an index signature on [m] legitimately supply [propName]?
      *
      * The same test the narrowed-single-Object emission a few lines below already
@@ -154225,6 +154462,20 @@ interface DataView {
                     message = "Property '$propName' does not exist on type '{}'.",
                     category = DiagnosticCategory.Error, code = 2339,
                     fileName = fileName, line = line, character = character,
+                    start = diagStart, length = diagLength,
+                ))
+                return
+            }
+            // (P18.137) (CHK.124) STEP 2 — ROUTE (B) OPENS FOR A CALL-SIGNATURE-BEARING
+            // RECEIVER. See [cmamCallSignatureReceiverReportable] for the whole rule and
+            // for what the double-emission guard is.
+            if (cmamCallSignatureReceiverReportable(objectType, propName)) {
+                val displayFn = typeToString(displayTypeOverride ?: objectType)
+                val (lineFn, characterFn) = getLineAndCharacterOfPosition(source, diagStart)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$propName' does not exist on type '$displayFn'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = fileName, line = lineFn, character = characterFn,
                     start = diagStart, length = diagLength,
                 ))
                 return
