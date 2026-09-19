@@ -7500,6 +7500,13 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val canonicalEnumSymCache = HashMap<Int, Symbol>()
 
+    /** (P18.134): memo for [cmamExpandoDeclaringHost], keyed by
+     *  `"<file>\u0000<container pos>\u0000<function name>"`. The answer is a pure
+     *  function of the AST, so it carries none of round 776's program-order hazard; the
+     *  FILE must be in the key because a node position is per file (round 787's nodeId
+     *  trap one quantity over). Declared before `init` per the init-order trap. */
+    private val cmamExpandoHostMemo = HashMap<String, Boolean>()
+
     /** (CHK.97): memo for [combineUnionSignatures], keyed by the UNION's `Type.id`.
      *  INV.5(a) interns unions by their member-id list, so the key is exact. A NULL
      *  answer (the combination is refused) is memoized too — it is as expensive to
@@ -152369,13 +152376,130 @@ interface DataView {
             return !cmamIndexSignatureProvides(m, propName)
         }
         if (m is Type.Object) {
-            if (m.symbol != null) return false
+            if (m.symbol != null) return cmamPlainFunctionTypeTrusted(m, propName)
             resolveStructuredTypeMembers(m)
             if (cmamIndexSignatureProvides(m, propName)) return false
             return !m.callSignatures.isNullOrEmpty() || !m.constructSignatures.isNullOrEmpty() ||
                 !m.members.isNullOrEmpty()
         }
         return false
+    }
+
+    /**
+     * (P18.134) MAY WE BELIEVE THE **ABSENCE** OF A PROPERTY ON A *SYMBOL-CARRYING*
+     * FUNCTION TYPE?
+     *
+     * [cmamAllMissingTrustedMember]'s `Type.Object` arm refused every symbol-carrying
+     * type outright, and that one line was the whole difference between two shapes that
+     * are otherwise identical: `declare const o: { m: () => void }` reported (the type is
+     * anonymous, so `symbol == null`) while `declare const o: { m: typeof g }` with `g` a
+     * `function` DECLARATION was silent — the declaration's symbol rides on the type.
+     * Measured against `tools/tsgo-7.0.2/lib/tsc`, the silent half is a lost diagnostic in
+     * five shapes at once, including the corpus's own `contextualReturnTypeOfIIFE2`
+     * (`declare namespace app { function foo(): void }` + `app.foo.bar`), whose two TS2339
+     * rows are the TypeScript 6 -> 7 change: tsgo's binder DECLARES expando properties
+     * onto the host symbol and a **namespace-qualified** head declares at no hop, so the
+     * write is an error rather than a declaration.
+     *
+     * ### The evidence this asks for, and why each clause is here
+     *
+     * (CHK.45)'s invariant is that an ALL-MISSING verdict needs POSITIVE evidence the
+     * member table is complete, because a "no" from an incomplete table is B153. For a
+     * function type the table's true contents are its EXPANDO exports, and this model has
+     * no expando member synthesis at all — `function g(){} g.px = 1` leaves `typeof g` the
+     * bare signature here where tsgo gives it `px`. So the evidence demanded is:
+     *
+     *  - every declaration of the symbol is a `FunctionDeclaration`. This is a SYNTACTIC
+     *    pre-gate and it runs FIRST, so that no other symbol-carrying type is newly
+     *    resolved by the line below (round 833: both member tables are lazy, and forcing a
+     *    resolution earlier makes a later verdict depend on who walked first). Measured,
+     *    it is what refuses a function MERGED with a namespace — `declare namespace A {
+     *    function foo(): void; namespace foo { const px: number } }` — whose members live
+     *    on the namespace and not on this table, and a CLASS static side (`typeof C`),
+     *    whose statics do. Both are lost rows (tsgo reports `typeof foo` / `typeof C`) and
+     *    neither is a false positive; widening to them needs a member model, not a wider
+     *    gate.
+     *  - call or construct signatures, and an EMPTY resolved `members`/`properties` — the
+     *    positive evidence that this is a plain function type with nothing on it, rather
+     *    than a table we failed to fill.
+     *  - [cmamIndexSignatureProvides], exactly as the anonymous leg below applies it.
+     *  - no expando declaration for the host, [cmamExpandoDeclaringHost].
+     *
+     * ### The expando guard FIRES — measured, not argued (round 902's dead-arm law)
+     *
+     * Built WITHOUT it and run through the CLI, `function g(){} g.px = 1; declare const o:
+     * { m: typeof g }; o.m.px` emitted `Property 'px' does not exist on type '() => void'.`
+     * where tsgo emits **TS2565** *Property 'px' is used before being assigned* — i.e.
+     * tsgo says the property EXISTS and we invented its absence. Three more cells of the
+     * same arm were false positives for the same reason (a write inside a file-scope `if`
+     * block, an `g["px"] = 1` element access, and a write inside the enclosing NAMESPACE
+     * body), and every one of them goes silent with the guard in. It is therefore a guard
+     * with four attributable cells, not a precaution.
+     *
+     * The one cell where it deliberately under-refuses is a NUMERIC index write (`g[0] =
+     * 1`), which declares `0` and not `px`: tsgo reports the later `px` read against `{
+     * (): void; 0: number; }` and we report it against `() => void`. That display
+     * divergence is PRE-EXISTING and reached identically through B431 today
+     * (`function g(){} g[0] = 1; g.px` diverges the same way on an unmodified binary), so
+     * refusing it here would cost a true row and leave the two routes inconsistent.
+     */
+    private fun cmamPlainFunctionTypeTrusted(m: Type.Object, propName: String): Boolean {
+        val sym = m.symbol ?: return false
+        val decls = sym.declarations
+        if (decls.isEmpty()) return false
+        for (d in decls) if (d !is FunctionDeclaration) return false
+        resolveStructuredTypeMembers(m)
+        if (cmamIndexSignatureProvides(m, propName)) return false
+        if (m.callSignatures.isNullOrEmpty() && m.constructSignatures.isNullOrEmpty()) return false
+        if (!m.members.isNullOrEmpty() || !m.properties.isNullOrEmpty()) return false
+        for (d in decls) if (cmamExpandoDeclaringHost(d as FunctionDeclaration)) return false
+        return true
+    }
+
+    /**
+     * (P18.134) Does [decl] carry an expando declaration, i.e. is `typeof <decl>` a type
+     * whose member set this model does not have?
+     *
+     * The rule is B431's own — [collectExpandoDecls], deliberately REUSED rather than
+     * re-derived, so the route (A) receiver (`o.m.px`, a property-access chain) and the
+     * route (B) one (`g.px`, a bare identifier, [spineExEnterNode]) can never disagree
+     * about what declares a member. Measured against tsgo 7.0.2, that collector's rule is
+     * tsgo's `getInitializerSymbol` rule on every cell reachable from here: a file-scope
+     * write declares (including inside an `if`/`while`/`for`/plain block), a
+     * STRING-literal or no-substitution-template element access declares, a write inside a
+     * NESTED function does NOT (tsgo reports the later read, and so do we — the one cell
+     * where being conservative would LOSE a row), and a COMPUTED index does not.
+     *
+     * The scan is scoped to the declaration's own CONTAINER, not to its file: a bare
+     * `foo.px = 1` inside the enclosing `namespace A { export function foo(): void {} }`
+     * declares `px`, and a file-statement scan misses it — measured as a false positive on
+     * exactly that shape before the container walk existed. A container this cannot name
+     * (a function body, a block) answers TRUE, i.e. refuses: an undecidable host is not
+     * positive evidence of anything.
+     *
+     * Memoized on `(file, container position, name)` — a pure function of the AST, so it
+     * carries none of round 776's program-order hazard, and the key must name the file
+     * because a node position is per file.
+     */
+    private fun cmamExpandoDeclaringHost(decl: FunctionDeclaration): Boolean {
+        val name = decl.name?.text ?: return true
+        val container = (decl as NodeBase).parent
+        val statements: List<Statement>
+        val containerPos: Int
+        when (container) {
+            is SourceFile -> { statements = container.statements; containerPos = container.pos }
+            is ModuleBlock -> { statements = container.statements; containerPos = container.pos }
+            else -> return true
+        }
+        val fileName = owningSourceFileName(decl) ?: return true
+        val key = "$fileName\u0000$containerPos\u0000$name"
+        cmamExpandoHostMemo[key]?.let { return it }
+        val declared = HashMap<String, HashSet<String>>()
+        declared[name] = HashSet()
+        for (stmt in statements) collectExpandoDecls(stmt, setOf(name), declared)
+        val answer = declared[name]?.isNotEmpty() == true
+        cmamExpandoHostMemo[key] = answer
+        return answer
     }
 
     /**

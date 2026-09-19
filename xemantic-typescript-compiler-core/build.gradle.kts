@@ -897,12 +897,6 @@ val tsgoPendingBaselines = listOf(
         "'map(...).size' are incompatible between these types."
     ),
     TsgoPendingBaseline(
-        "contextualReturnTypeOfIIFE2.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer " +
-        "`submoduleAccepted`. tsgo: contextualReturnTypeOfIIFE2.ts(5,9): error TS2339: Property " +
-        "'bar' does not exist on type '() => void'. | ours: nothing"
-    ),
-    TsgoPendingBaseline(
         "controlFlowInstanceof.errors.txt",
         "TS2683-residue: the `uglify.js(5,23)` TS2683 row is CORRECT since (LEGACY.0b step " +
         "7); the residue is THREE other mechanisms and none is implicit-`this`. Ours-only: " +
