@@ -61,16 +61,34 @@ import kotlin.test.Test
  * both references there, so admitting either would turn an AGREE row into a lost
  * diagnostic.
  *
- * ### 2. THE DISPLAY DEPENDS ON WHETHER THE FUNCTION HAS EXPANDOS AT ALL
+ * ### 2. THE DISPLAY IS WHATEVER THE TYPE SAYS
  *
- * B431 rendered `typeof $name` unconditionally. Both references name a function
- * with NO expando member by its SIGNATURE — `() => void`, `<T>(zzzX: T) => T` — and
- * one that carries expandos as `typeof $name`.
+ * B431 rendered `typeof $name` unconditionally. Both references name a function with
+ * NO expando member by its SIGNATURE — `() => void`, `<T>(zzzX: T) => T` — which is
+ * the half that still holds.
  *
- * **THE ORDER OF THE TWO FIXES IS LOAD-BEARING.** Before the collector was widened,
- * `F["tag"] = 1` and `` `${F.tag = 1}` `` left `declared` EMPTY for a function that
- * plainly has expandos — so the display rule alone would have renamed exactly those
- * to their signature and turned two AGREE rows into wrong ones. Collector first.
+ * **THE OTHER HALF — "a function that carries expandos is named `typeof $name`" — WAS
+ * A PRE-(LEGACY.0) MEASUREMENT AND (CHK.124) RETIRED IT.** It was true of pristine
+ * `typescript@6.0.3` and is FALSE of the only reference this project now has.
+ * Re-measured on `tools/tsgo-7.0.2/lib/tsc`:
+ *
+ * ```
+ * function ZzzB() {}
+ * ZzzB.tag = 1;
+ * function zzzG() { ZzzB.zzzProbe; }
+ * ```
+ *
+ * reports against `'{ (): void; tag: number; }'`, and the element-access spelling
+ * (`ZzzB["tag"] = 1`) reports identically — read position makes no difference. The two
+ * pins below therefore assert tsgo's answer, which (CHK.124) produces by putting the
+ * MEMBERS on the type (`Checker.attachExpandoMembers`) rather than by a display rule:
+ * `spineExReceiverDisplay` now renders whatever the type says, with or without
+ * expandos.
+ *
+ * **THE ORDER OF THE TWO FIXES IS STILL LOAD-BEARING, in the other direction.** Before
+ * the collector was widened, `F["tag"] = 1` and `` `${F.tag = 1}` `` left `declared`
+ * EMPTY for a function that plainly has expandos — so such a function would render its
+ * bare SIGNATURE where tsgo renders the members. Collector first.
  *
  * ### 3. WHAT THIS DOES NOT CLOSE
  *
@@ -201,8 +219,13 @@ class ExpandoReceiverDisplayTest {
         )
     }
 
+    /**
+     * (CHK.124) RE-POINTED. This asserted `'typeof ZzzB'` — pristine 6.0.3's answer,
+     * and a countdown under the tsgo-only directive. Re-measured against
+     * `tools/tsgo-7.0.2/lib/tsc`, which reports against the MEMBERS.
+     */
     @Test
-    fun `a function WITH an expando keeps the typeof display`() {
+    fun `a function WITH an expando is named by its members`() {
         val d = diagnose(
             """
             function ZzzB() {}
@@ -212,17 +235,19 @@ class ExpandoReceiverDisplayTest {
         )
         assert(
             t2339(d).single().message ==
-                "Property 'zzzProbe' does not exist on type 'typeof ZzzB'."
+                "Property 'zzzProbe' does not exist on type '{ (): void; tag: number; }'."
         )
     }
 
     /**
-     * THE PIN THAT MAKES THE ORDER OF THE TWO FIXES VISIBLE. With the display rule
-     * but WITHOUT the collector fix, `declared` is empty here and this renders
-     * `() => void` — a wrong answer on a row that was previously right.
+     * (CHK.124) RE-POINTED, and still THE PIN THAT MAKES THE ORDER OF THE TWO FIXES
+     * VISIBLE: without the collector fix `declared` is empty here, no member is
+     * attached, and this renders the bare `() => void`. Re-measured against
+     * `tools/tsgo-7.0.2/lib/tsc`, which renders this identically to the
+     * property-access spelling above — read position makes no difference.
      */
     @Test
-    fun `a function whose only expando came through element access keeps typeof`() {
+    fun `a function whose only expando came through element access is named by its members`() {
         val d = diagnose(
             """
             function ZzzC() {}
@@ -232,7 +257,7 @@ class ExpandoReceiverDisplayTest {
         )
         assert(
             t2339(d).single().message ==
-                "Property 'zzzProbe' does not exist on type 'typeof ZzzC'."
+                "Property 'zzzProbe' does not exist on type '{ (): void; tag: number; }'."
         )
     }
 

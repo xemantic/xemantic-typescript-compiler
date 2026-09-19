@@ -5565,7 +5565,7 @@ class Checker(
     /** The current file's expando candidates (uniquely-named top-level fns). */
     private var spineExCands: Set<String> = emptySet()
     /** candidate → file-scope-declared property names (the collector's output). */
-    private var spineExDeclared: Map<String, HashSet<String>> = emptyMap()
+    private var spineExDeclared: Map<String, ExpandoHostWrites> = emptyMap()
     /** Per-file nodeId memo for [spineExStatus] — 0 unknown, else EX_*. */
     private var spineExReachMemo = ByteArray(0)
     /** Reusable ascent buffer for [spineExStatus]. */
@@ -7506,6 +7506,30 @@ class Checker(
      *  FILE must be in the key because a node position is per file (round 787's nodeId
      *  trap one quantity over). Declared before `init` per the init-order trap. */
     private val cmamExpandoHostMemo = HashMap<String, Boolean>()
+
+    /** (CHK.124): memo for [expandoContainerWrites], keyed by
+     *  `"<file>\u0000<container pos>"` — PER CONTAINER, not per name, because
+     *  [getTypeOfFunction] runs for every function in the program and a per-name scan
+     *  would be quadratic in a container's function count ((INC.57)'s shape). One scan
+     *  answers for every function declared in that container. Declared before `init`
+     *  per the init-order trap. */
+    private val expandoContainerMemo = HashMap<String, Map<String, ExpandoHostWrites>>()
+
+    /** (CHK.124): the hosts whose expando members are being attached right now.
+     *  A member's right-hand side may read the host itself (`g.self = g`, which the
+     *  B198 sentinel answers) or one of its own members (`f.b = f.a`); this bounds the
+     *  pathological case where that read re-enters [getTypeOfFunction] for the same
+     *  symbol. Declared before `init` per the init-order trap. */
+    private val expandoAttachInProgress = HashSet<Int>()
+
+    /** (CHK.124): the `Type.id`s [attachExpandoMembers] gave members to. Route (B) —
+     *  the identifier-receiver branch of [cmamCheckResolvedObjectType] — stays SHUT for
+     *  these: B431's spine anchor ([spineExEnterNode]) already owns that read, with the
+     *  reach, shadow and RUNTIME_PROPERTIES rules the corpus gates, and without this
+     *  marker the two emit the SAME row twice (measured). Step 2 of the arc is where
+     *  the general path takes the family over. Declared before `init` per the
+     *  init-order trap. */
+    private val expandoAttachedTypeIds = HashSet<Int>()
 
     /** (CHK.97): memo for [combineUnionSignatures], keyed by the UNION's `Type.id`.
      *  INV.5(a) interns unions by their member-id list, so the key is exact. A NULL
@@ -35623,8 +35647,8 @@ class Checker(
         if (funcNames.isEmpty()) return
         val candidates = funcNames.filterTo(HashSet()) { it !in merged && (nameCount[it] ?: 0) == 1 }
         if (candidates.isEmpty()) return
-        val declared = HashMap<String, HashSet<String>>()
-        candidates.forEach { declared[it] = HashSet() }
+        val declared = HashMap<String, ExpandoHostWrites>()
+        candidates.forEach { declared[it] = ExpandoHostWrites() }
         for (stmt in sf.statements) collectExpandoDecls(stmt, candidates, declared)
         spineExActive = true
         spineExCands = candidates
@@ -35644,15 +35668,23 @@ class Checker(
      *    (`() => void`, `<T>(zzzX: T) => T`, `{ (zzzX: string): void; … }` for an
      *    overload set) — so every row B431 emitted for such a function carried the
      *    wrong display;
-     *  - a function that DOES carry expando members is named `typeof $name`, which
-     *    is what B431 was already producing.
+     *  - a function that DOES carry expando members was named `typeof $name`.
      *
-     * **This is only sound because the collector is now complete for the forms both
-     * references recognise.** Before the same round widened `collectExpandoDecls`,
-     * `F["tag"] = 1` and `` `${F.tag = 1}` `` left `declared` EMPTY for a function
-     * that plainly has expandos — so this rule would have renamed exactly those to
-     * their signature and turned two AGREE rows into wrong ones. The collector fix
-     * is a precondition, not a companion.
+     * **THE SECOND BULLET WAS A PRE-(LEGACY.0) MEASUREMENT AND (CHK.124) RETIRED IT.**
+     * It was true of pristine `typescript@6.0.3` and is FALSE of the only reference
+     * this project now has: measured on `tools/tsgo-7.0.2/lib/tsc`, `function ZzzB() {}
+     * ZzzB.tag = 1; function zzzG() { ZzzB.zzzProbe; }` reports against
+     * `'{ (): void; tag: number; }'`, and the element-access spelling
+     * (`ZzzB["tag"] = 1`) reports identically — read position makes no difference.
+     * Both spellings now render structurally because the MEMBERS are on the type
+     * ([attachExpandoMembers]), so this helper no longer needs a rule at all: it
+     * renders whatever the type says, for a function with expandos and without.
+     *
+     * **The collector's completeness is still a precondition, in the other direction.**
+     * Before `collectExpandoDecls` learned `F["tag"] = 1` and `` `${F.tag = 1}` ``,
+     * `declared` was EMPTY for a function that plainly has expandos — so a function
+     * whose only write came through one of those forms would render its bare signature
+     * where tsgo renders the members.
      *
      * **The fallback is load-bearing**: where the symbol or its type cannot be
      * reached from the spine, this answers the OLD display rather than a guess, so
@@ -35663,7 +35695,6 @@ class Checker(
      */
     private fun spineExReceiverDisplay(recv: Identifier, name: String): String {
         val fallback = "typeof $name"
-        if (spineExDeclared[name]?.isNotEmpty() != false) return fallback
         val sym = lookupPerFileForNode(recv, name) ?: return fallback
         if (!sym.flags.hasAny(SymbolFlags.Function)) return fallback
         val t = getTypeOfSymbol(sym)
@@ -35701,7 +35732,7 @@ class Checker(
         // `propName.isNotEmpty()` test all along; B431 never needed it because it
         // only fired inside nested functions.
         if (prop.isEmpty()) return
-        if (prop in (spineExDeclared[name] ?: emptySet<String>())) return
+        if (prop in (spineExDeclared[name]?.names ?: emptySet<String>())) return
         if (prop in RUNTIME_PROPERTIES) return
         val pos = node.name.pos
         if (pos < 0) return
@@ -35919,9 +35950,50 @@ class Checker(
         else -> EX_NONE
     }
 
+    /**
+     * (CHK.124) WHAT THE EXPANDO WRITE COLLECTOR RECORDS FOR ONE HOST NAME.
+     *
+     * B431 needed only the NAME SET — "does `Foo` declare `tag`?" — so this was a
+     * `HashSet<String>`. Modelling the members on the TYPE needs two more things that
+     * a set cannot carry, and BOTH are load-bearing rather than convenience:
+     *
+     *  * the **RIGHT-HAND SIDES**, because a member's type is the union of its writes'
+     *    WIDENED types (measured against tsgo 7.0.2: `g.a = 1; g.a = "s"` is
+     *    `a: string | number`), and
+     *  * each member's **FIRST-WRITE POSITION**, because tsgo renders the members in
+     *    SOURCE order and [collectExpandoDecls] does not walk in source order. The one
+     *    inversion in the corpus row this closes is the DO-WHILE: its arm visits the
+     *    CONDITION before the BODY, so `do { Foo.fromDoBody = 1 } while (Foo.fromDoCondition = 1)`
+     *    collects `fromDoCondition` first where tsgo prints `fromDoBody` first. Sorting
+     *    by `pos` makes the order a property of the SOURCE rather than of the walk, so
+     *    a future arm reordering cannot silently move a rendered type.
+     *
+     * A member written twice keeps its FIRST position (measured: `o.first = 1;
+     * o.second = 2; o.first = "re"` renders `first` before `second`).
+     */
+    internal class ExpandoHostWrites {
+        /** member -> the `pos` of its EARLIEST write target. */
+        private val firstPos = HashMap<String, Int>()
+        /** member -> every right-hand side written to it, in collector order. */
+        val rhs = HashMap<String, MutableList<Expression>>()
+
+        /** The member names, unordered — B431's original product. */
+        val names: Set<String> get() = firstPos.keys
+
+        fun record(member: String, pos: Int, value: Expression) {
+            val prev = firstPos[member]
+            if (prev == null || pos < prev) firstPos[member] = pos
+            rhs.getOrPut(member) { mutableListOf() }.add(value)
+        }
+
+        /** The members in SOURCE order — the order tsgo renders them in. */
+        fun membersInSourceOrder(): List<String> =
+            firstPos.entries.sortedBy { it.value }.map { it.key }
+    }
+
     /** The expando write collector ([spineExSetup]-called): file-scope
      *  `Foo.prop =` writes, NOT descending into function-likes. */
-    private fun collectExpandoDecls(s: Statement?, cands: Set<String>, declared: MutableMap<String, HashSet<String>>) {
+    private fun collectExpandoDecls(s: Statement?, cands: Set<String>, declared: MutableMap<String, ExpandoHostWrites>) {
         when (s) {
             null -> {}
             is ExpressionStatement -> collectExpandoDeclsExpr(s.expression, cands, declared)
@@ -35998,7 +36070,7 @@ class Checker(
         return if (recvName in cands) recvName to member else null
     }
 
-    private fun collectExpandoDeclsExpr(e: Expression?, cands: Set<String>, declared: MutableMap<String, HashSet<String>>) {
+    private fun collectExpandoDeclsExpr(e: Expression?, cands: Set<String>, declared: MutableMap<String, ExpandoHostWrites>) {
         when (e) {
             null -> {}
             is BinaryExpression -> {
@@ -36021,7 +36093,12 @@ class Checker(
                             // cases, and we already agree with them there. So the two
                             // exclusions are the negative controls, not conservatism.
                             val name = expandoAssignedMemberName(c.left, cands)
-                            if (name != null) declared[name.first]?.add(name.second)
+                            // (CHK.124) the TARGET's own `pos` (`Foo` in `Foo.tag`) is the
+                            // source position the member is ordered by; `c.right` is the
+                            // value its type is inferred from.
+                            if (name != null) {
+                                declared[name.first]?.record(name.second, c.left.pos, c.right)
+                            }
                         }
                         work.addLast(c.right); c = c.left
                     }
@@ -114931,7 +115008,198 @@ interface DataView {
             if (fnNsPushed) inferenceNamespaceStack.removeLast()
         }
         fnType.callSignatures = signatures
+        attachExpandoMembers(symbol, funcDecls, fnType)
         return fnType
+    }
+
+    /**
+     * (CHK.124) step 1 — THE EXPANDO MEMBERS OF A `FunctionDeclaration` HOST, ATTACHED
+     * TO THE TYPE.
+     *
+     * tsgo has no checker-side expando exemption ((P18.134)): its BINDER declares
+     * `Foo.tag = 1` onto the host symbol's `exports` (`binder.go` `getInitializerSymbol`)
+     * and `resolveAnonymousTypeMembers` takes `members := getExportsOfSymbol(symbol)`, so
+     * `typeof Foo` simply IS `{ (): void; tag: number; }` and every ordinary rule —
+     * lookup, assignability, display — falls out of that one fact. This model had the
+     * WRITE COLLECTOR (B431) and no attachment point at all, so `typeof g` was the bare
+     * signature and three answers were wrong at once:
+     *
+     * | shape                                    | tsgo            | before        |
+     * |------------------------------------------|-----------------|---------------|
+     * | `const c: typeof g = h`                  | TS2741 `px`     | **silent**    |
+     * | `const d: { (): void; px: number } = g`  | silent          | **TS2322 FP** |
+     * | `const s: string = g.px`                 | TS2322          | **silent**    |
+     *
+     * **WHY HERE.** [getTypeOfFunction] is the one place a function's `Type.Object` is
+     * minted, and the B198 sentinel has ALREADY stored it in `symbolTypes` by the time
+     * this runs — which is what makes `g.self = g` render `{ (): void; self: typeof g; }`
+     * for free: typing the right-hand side resolves `g` back through the cache to THIS
+     * instance, and `typeToString`'s B198 recursion cut names a re-entered
+     * function-symbol type `typeof <name>`, exactly as tsgo does. Attaching lazily from
+     * [resolveStructuredTypeMembers] instead would make the identity depend on who
+     * walked first (round 833) on a table two readers already consult.
+     *
+     * **THE TABLE IS PLANTED BEFORE THE MEMBER TYPES ARE COMPUTED**, and that ordering is
+     * load-bearing rather than tidy: typing a right-hand side can read the host's own
+     * members (`f.a = 1; f.b = f.a`, which tsgo types `b: number`), and that read runs
+     * [resolveStructuredTypeMembers] on a type whose `properties` is still null — whose
+     * anonymous arm would then plant an EMPTY table and permanently mask this one. Every
+     * member is seeded `anyType` for the same reason, so a genuine cycle (`f.a = f.a`)
+     * degrades to `any` instead of recursing.
+     *
+     * Scope, each boundary measured against tsgo 7.0.2 rather than assumed:
+     *  * **`FunctionDeclaration` hosts only.** A symbol carrying any OTHER declaration is
+     *    refused — a function merged with a NAMESPACE renders `typeof ns` in tsgo, which
+     *    we already match byte-for-byte, and a class static side renders `typeof C`.
+     *    An INTERFACE merge is refused too, where tsgo does attach; that under-attaches,
+     *    i.e. it keeps today's answer, and belongs to the same widening as route (B).
+     *  * **OVERLOAD SETS ATTACH** — tsgo renders `{ (x: string): void; (x: number): void;
+     *    tag: number; }` — which is one place this is deliberately WIDER than B431's
+     *    `nameCount == 1` candidate rule. The two cannot contradict each other: with
+     *    members present, `cmamPlainFunctionTypeTrusted` refuses route (A) outright.
+     *  * **JavaScript files are refused.** `getTypeOfFunction` runs for them too, and a
+     *    JS host's member set is B419/B432/B433's territory (`Fn.prototype = {…}` alone
+     *    reshapes three walkers). That is step 3 of this arc; admitting it here would
+     *    move `jsFunctionWithPrototypeNoErrorTruncationNoCrash`, whose whole subject is
+     *    the LENGTH of a rendered function type.
+     *  * **Only `=` declares, and only an access LHS** — (P18.123)'s rule, reused from
+     *    [collectExpandoDecls] rather than re-derived, so this and B431 can never
+     *    disagree about what a write declares.
+     */
+    private fun attachExpandoMembers(
+        symbol: Symbol,
+        funcDecls: List<FunctionDeclaration>,
+        fnType: Type.Object,
+    ) {
+        // A re-entrant reader already planted a table (round 833) — leave it alone.
+        if (fnType.members != null || fnType.properties != null) return
+        // A merged host is tsgo's `typeof <name>` case and is refused whole.
+        for (d in symbol.declarations) if (d !is FunctionDeclaration) return
+        val writes = expandoWritesForHost(funcDecls) ?: return
+        if (!expandoAttachInProgress.add(symbol.id)) return
+        try {
+            val order = writes.membersInSourceOrder()
+            val members = symbolTable()
+            val propSyms = ArrayList<Symbol>(order.size)
+            for (m in order) {
+                val ps = Symbol(SymbolFlags.Property, m)
+                ps.parent = symbol
+                // A materializer-MINTED symbol's type is written at mint time, ungated
+                // (the `resolveReferenceMembers` idiom): the id is reachable only from
+                // this one type, so round 778's write gate has nothing to protect.
+                symbolTypes[ps.id] = anyType
+                members[m] = ps
+                propSyms.add(ps)
+            }
+            fnType.members = members
+            fnType.properties = propSyms
+            expandoAttachedTypeIds.add(fnType.id)
+            for ((i, m) in order.withIndex()) {
+                expandoMemberType(writes.rhs[m] ?: continue)?.let { symbolTypes[propSyms[i].id] = it }
+            }
+        } finally {
+            expandoAttachInProgress.remove(symbol.id)
+        }
+    }
+
+    /**
+     * (CHK.124) The expando writes every declaration of a `FunctionDeclaration` host
+     * contributes, or null when there are none.
+     *
+     * Scoped to each declaration's own CONTAINER, not to its file — a bare `foo.px = 1`
+     * inside the enclosing `namespace A { export function foo(): void {} }` declares
+     * `px` ((P18.134)) — and MEMOIZED PER CONTAINER rather than per name, because
+     * [getTypeOfFunction] runs for every function in the program and a per-name scan
+     * would be quadratic in a file's function count ((INC.57)'s shape). One scan per
+     * container answers for every function declared in it. The key must name the FILE:
+     * a node position is per file (round 787 / `nodeKey`).
+     */
+    private fun expandoWritesForHost(funcDecls: List<FunctionDeclaration>): ExpandoHostWrites? {
+        var merged: ExpandoHostWrites? = null
+        var seenKey: String? = null
+        for (decl in funcDecls) {
+            val name = decl.name?.text ?: return null
+            val container = (decl as NodeBase).parent
+            val statements: List<Statement>
+            val fileName: String
+            val containerPos: Int
+            when (container) {
+                is SourceFile -> {
+                    statements = container.statements
+                    fileName = container.fileName
+                    containerPos = container.pos
+                }
+                is ModuleBlock -> {
+                    statements = container.statements
+                    fileName = owningSourceFileName(decl) ?: return null
+                    containerPos = container.pos
+                }
+                // A container this cannot name (a function body, a block) is B83.5's
+                // population: such a declaration is never BOUND, so this is unreachable
+                // through `getTypeOfFunction` — refused rather than guessed at.
+                else -> return null
+            }
+            if (isJsLikeFileName(fileName)) return null
+            val key = "$fileName\u0000$containerPos"
+            // Overload declarations share one container; scan it once.
+            if (key == seenKey) continue
+            seenKey = key
+            val found = expandoContainerWrites(key, statements)[name] ?: continue
+            if (found.names.isEmpty()) continue
+            if (merged == null) merged = found
+            else if (merged !== found) {
+                val both = ExpandoHostWrites()
+                for (src in listOf(merged, found)) {
+                    for (m in src.membersInSourceOrder()) {
+                        src.rhs[m]?.forEach { both.record(m, it.pos, it) }
+                    }
+                }
+                merged = both
+            }
+        }
+        return merged
+    }
+
+    /** (CHK.124) One scan of a container's statements, answering for EVERY function
+     *  declared in it. See [expandoWritesForHost] for why the memo is per container. */
+    private fun expandoContainerWrites(
+        key: String,
+        statements: List<Statement>,
+    ): Map<String, ExpandoHostWrites> = expandoContainerMemo.getOrPut(key) {
+        val cands = HashSet<String>()
+        for (st in statements) if (st is FunctionDeclaration) st.name?.text?.let { cands.add(it) }
+        if (cands.isEmpty()) return@getOrPut emptyMap()
+        val declared = HashMap<String, ExpandoHostWrites>()
+        for (c in cands) declared[c] = ExpandoHostWrites()
+        for (st in statements) collectExpandoDecls(st, cands, declared)
+        declared
+    }
+
+    /**
+     * (CHK.124) An expando member's type: every write's WIDENED type, unioned.
+     *
+     * Measured against tsgo 7.0.2 — `g.a = 1; g.a = "s"` is `a: string | number` (the
+     * member ORDER of that union is [getUnionType]'s stable ordering, which is tsgo's,
+     * and NOT the write order: the two spellings render identically). Widening is
+     * ordinary `getWidenedLiteralType`: a fresh `1` / `"s"` / `true` and a `let`'s or
+     * `const`'s widening literal all reach the base primitive, while `9 as const` and a
+     * DECLARED `1 | 2` keep their literal types. Because the value read is
+     * [getTypeOfExpression], which never flow-narrows, no narrowing can reach a member
+     * type — which is what bounds (CHK.102)'s frozen-first-touch hazard here.
+     *
+     * Deliberately NOT [MemberResolver.inferJsExpandoPropType]: that drops nullish
+     * members when a non-nullish write exists, which is tsc's JS-class rule and is
+     * measurably WRONG for a TypeScript expando — tsgo types `f.p = null; f.p = 1` as
+     * `number | null`.
+     */
+    private fun expandoMemberType(rhsList: List<Expression>): Type? {
+        val types = rhsList.mapNotNull {
+            val t = getWidenedLiteralType(getTypeOfExpression(it))
+            if (t === errorType) null else t
+        }
+        if (types.isEmpty()) return null
+        val distinct = types.distinctBy { it.id }
+        return if (distinct.size == 1) distinct[0] else getUnionType(distinct)
     }
 
     /**
@@ -152504,10 +152772,10 @@ interface DataView {
         val fileName = owningSourceFileName(decl) ?: return true
         val key = "$fileName\u0000$containerPos\u0000$name"
         cmamExpandoHostMemo[key]?.let { return it }
-        val declared = HashMap<String, HashSet<String>>()
-        declared[name] = HashSet()
+        val declared = HashMap<String, ExpandoHostWrites>()
+        declared[name] = ExpandoHostWrites()
         for (stmt in statements) collectExpandoDecls(stmt, setOf(name), declared)
-        val answer = declared[name]?.isNotEmpty() == true
+        val answer = declared[name]?.names?.isNotEmpty() == true
         cmamExpandoHostMemo[key] = answer
         return answer
     }
@@ -153923,6 +154191,16 @@ interface DataView {
         // (REL.1)(b0): an enum MEMBER type is equally member-less, so it would match
         // the "empty receiver" TS2339 gate below (`Extension.Dts.length`).
         if (isEnumFlavoredObjectType(objectType)) return
+        // (CHK.124) ROUTE (B) STAYS SHUT FOR AN EXPANDO-ATTACHED FUNCTION TYPE.
+        // Giving `typeof g` real members ([attachExpandoMembers]) takes it out of the
+        // empty-`properties` branch below and into the ordinary member-missing one, so
+        // this path and B431's spine anchor ([spineExEnterNode]) BOTH emit — measured,
+        // the identical row twice for `function g(){} g.px = 1; function n() { g.zzzProbe }`.
+        // B431 keeps the read: it carries the reach classifier, the shadow chain and the
+        // RUNTIME_PROPERTIES exemption that the corpus gates, none of which this path has
+        // for this shape. Opening route (B) is step 2 of the arc, not a side effect of
+        // step 1.
+        if (objectType.id in expandoAttachedTypeIds) return
         // Resolve members
         CpaSections.atR(CpaSections.R_RESOLVE)
         resolveStructuredTypeMembers(objectType)

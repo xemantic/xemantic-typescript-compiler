@@ -959,14 +959,6 @@ val tsgoPendingBaselines = listOf(
         "cannot be found. | ours: ==== file.ts (0 errors) ===="
     ),
     TsgoPendingBaseline(
-        "expandoFunctionNestedAssigments.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submodule`. tsgo: " +
-        "expandoFunctionNestedAssigments.ts(7,23): error TS2339: Property 'inNestedFunction' " +
-        "does not exist on type '{ (): void; inVariableInit: number; bla: { | ours: " +
-        "expandoFunctionNestedAssigments.ts(7,23): error TS2339: Property 'inNestedFunction' " +
-        "does not exist on type 'typeof Foo'."
-    ),
-    TsgoPendingBaseline(
         "exportAssignmentMembersVisibleInAugmentation.errors.txt",
         "F6 top code differs (tsgo TS4060 / ours TS2304,TS2664); layer `submoduleTriaged`. " +
         "tsgo: /a.ts(3,26): error TS4060: Return type of exported function has or is using " +

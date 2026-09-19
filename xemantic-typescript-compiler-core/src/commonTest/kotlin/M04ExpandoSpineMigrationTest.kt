@@ -59,20 +59,26 @@ class M04ExpandoSpineMigrationTest {
      * unconditionally, so every pin in this class that uses the default below was
      * asserting a display neither reference produces.
      *
-     * `fn` is still taken, and is still used by the `typeof` callers — it is not
-     * vestigial.
+     * (CHK.124) THE `fn` PARAMETER IS GONE. It was never read — the message is built
+     * from `display` alone — and it sat directly beside `prop`, also a `String`, so a
+     * positional swap type-checked while silently asserting a DIFFERENT property
+     * (CLAUDE.md's same-typed-parameter trap). Its last justification was the `typeof
+     * $fn` caller, which (CHK.124) re-pointed to the member form.
      */
     private fun expando(
         d: List<Diagnostic>,
         prop: String,
-        fn: String,
         display: String = "() => void",
     ) = d.any { it.code == 2339 && it.message == "Property '$prop' does not exist on type '$display'." }
 
-    /** The expando-carrying form: `typeof <fn>`, which is what both references print
-     *  once the function has at least one expando member. */
-    private fun expandoTypeof(d: List<Diagnostic>, prop: String, fn: String) =
-        expando(d, prop, fn, "typeof $fn")
+    /**
+     * The expando-carrying form. (CHK.124) RE-POINTED: this was `typeof <fn>` —
+     * pristine 6.0.3's answer, chosen while pristine was still an adjudicator — and
+     * `tools/tsgo-7.0.2/lib/tsc` prints the MEMBERS, which is what the caller now
+     * spells out. Re-measured on the caller's own fixture.
+     */
+    private fun expandoMembers(d: List<Diagnostic>, prop: String, members: String) =
+        expando(d, prop, members)
 
     // ── fires: nested-fn reads of undeclared expando props ────────────────
 
@@ -84,7 +90,7 @@ class M04ExpandoSpineMigrationTest {
             function g() { Foo.bar; }
             """
         )
-        d should { have(expando(d, "bar", "Foo")) }
+        d should { have(expando(d, "bar")) }
     }
 
     @Test
@@ -105,7 +111,7 @@ class M04ExpandoSpineMigrationTest {
             const h = function() { Foo.bar; };
             """
         )
-        d should { have(expando(d, "bar", "Foo")) }
+        d should { have(expando(d, "bar")) }
     }
 
     @Test
@@ -116,7 +122,7 @@ class M04ExpandoSpineMigrationTest {
             const h = () => Foo.bar;
             """
         )
-        d should { have(expando(d, "bar", "Foo")) }
+        d should { have(expando(d, "bar")) }
     }
 
     @Test
@@ -127,7 +133,7 @@ class M04ExpandoSpineMigrationTest {
             function g(p = Foo.bar) {}
             """
         )
-        d should { have(expando(d, "bar", "Foo")) }
+        d should { have(expando(d, "bar")) }
     }
 
     @Test
@@ -138,7 +144,7 @@ class M04ExpandoSpineMigrationTest {
             function a() { function b() { function c() { Foo.deep; } } }
             """
         )
-        d should { have(expando(d, "deep", "Foo")) }
+        d should { have(expando(d, "deep")) }
     }
 
     /**
@@ -160,7 +166,7 @@ class M04ExpandoSpineMigrationTest {
             """
         )
         d should {
-            have(expando(d, "viaValue", "Foo"))
+            have(expando(d, "viaValue"))
             have(none { it.code == 2339 && it.message.contains("viaMethod") })
         }
     }
@@ -174,8 +180,8 @@ class M04ExpandoSpineMigrationTest {
             """
         )
         d should {
-            have(expando(d, "subj", "Foo"))
-            have(expando(d, "cas", "Foo"))
+            have(expando(d, "subj"))
+            have(expando(d, "cas"))
         }
     }
 
@@ -189,8 +195,8 @@ class M04ExpandoSpineMigrationTest {
             """
         )
         d should {
-            have(expando(d, "aw", "Foo"))
-            have(expando(d, "yi", "Foo"))
+            have(expando(d, "aw"))
+            have(expando(d, "yi"))
         }
     }
 
@@ -212,7 +218,7 @@ class M04ExpandoSpineMigrationTest {
             """
         )
         d should {
-            for (i in 1..12) have(expando(d, "c$i", "Foo"))
+            for (i in 1..12) have(expando(d, "c$i"))
         }
     }
 
@@ -233,7 +239,7 @@ class M04ExpandoSpineMigrationTest {
         )
         d should {
             for (p in listOf("arg", "t", "f", "narg", "el", "pv", "sp", "pa", "nn", "cast", "idx", "ea"))
-                have(expando(d, p, "Foo"))
+                have(expando(d, p))
         }
     }
 
@@ -253,16 +259,21 @@ class M04ExpandoSpineMigrationTest {
 
     @Test
     fun `TS2339 - an element-access write DOES declare where a compound one does not`() {
-        // (CHK.119) THE SECOND COUNTDOWN PIN IN THIS CLASS. It asserted all three
-        // rows fire; measured, the three compilers agree exactly on this fixture:
+        // (CHK.119) THE SECOND COUNTDOWN PIN IN THIS CLASS, and (CHK.124) COLLECTED
+        // IT. The WRITE rules are unchanged and still measured:
         //   `Foo["ele"] = 1`  declares `ele`     -> the read is LEGAL
         //   `Foo.cmp += 1`    declares nothing   -> TS2339
         //   `Foo.inc++`       declares nothing   -> TS2339
-        // and since `Foo` now HAS an expando, both displays are `typeof Foo`.
         //
-        // The two references disagree on that display — tsgo prints the object form
-        // `{ (): void; ele: number; }` — so it is not adjudicable, and we follow
-        // pristine, which is the corpus's oracle.
+        // What changed is the DISPLAY. This pin used to assert `typeof Foo` over a
+        // comment reading "the two references disagree on that display — tsgo prints
+        // the object form — so it is not adjudicable, and we follow pristine, which is
+        // the corpus's oracle". Under the tsgo-only directive there is no such choice
+        // left: tsgo IS the oracle. Re-measured on this exact fixture,
+        // `tools/tsgo-7.0.2/lib/tsc` prints
+        // `Property 'cmp' does not exist on type '{ (): void; ele: number; }'.` at
+        // (3,29) and the same for `inc` at (3,43) — which (CHK.124) now matches byte
+        // for byte by putting the MEMBERS on the type.
         val d = diagnose(
             """
             function Foo() {}
@@ -271,8 +282,8 @@ class M04ExpandoSpineMigrationTest {
             """
         )
         d should {
-            have(expandoTypeof(d, "cmp", "Foo"))
-            have(expandoTypeof(d, "inc", "Foo"))
+            have(expandoMembers(d, "cmp", "{ (): void; ele: number; }"))
+            have(expandoMembers(d, "inc", "{ (): void; ele: number; }"))
         }
         assert(d.none { it.code == 2339 && it.message.contains("'ele'") })
     }
@@ -304,7 +315,7 @@ class M04ExpandoSpineMigrationTest {
             function g() { { let Foo: any; } Foo.bar; }
             """
         )
-        d should { have(expando(d, "bar", "Foo")) }
+        d should { have(expando(d, "bar")) }
     }
 
     @Test
@@ -316,7 +327,7 @@ class M04ExpandoSpineMigrationTest {
             function b() { Foo.bar; }
             """
         )
-        d should { have(expando(d, "bar", "Foo")) }
+        d should { have(expando(d, "bar")) }
     }
 
     @Test
@@ -327,7 +338,7 @@ class M04ExpandoSpineMigrationTest {
             function g() { Foo?.opt; }
             """
         )
-        d should { have(expando(d, "opt", "Foo")) }
+        d should { have(expando(d, "opt")) }
     }
 
     @Test
@@ -338,7 +349,7 @@ class M04ExpandoSpineMigrationTest {
             function g() { Foo.bar; }
             """
         )
-        d should { have(expando(d, "bar", "Foo")) }
+        d should { have(expando(d, "bar")) }
     }
 
     // ── silent: declared props (file-scope writes in walked positions) ─────
