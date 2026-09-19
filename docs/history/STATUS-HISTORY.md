@@ -1,3 +1,19 @@
+**(P18.132) — (LEGACY.1)(g): `baseUrl` DELETED, AND (LEGACY.1) IS CLOSED, 19,885 / 0 / 64 (2026-09-17).**
+The last unlanded sub-step of the TS7-removal arc, and it needed an owner decision rather than code: 27 active
+subtests set `baseUrl` in an EMBEDDED tsconfig and tsgo has **no output of any kind** for one of them, so they
+were pinned to pristine TypeScript 6 through the *keep tsc's* leg of the baseline fallback. With both halves of
+the proposal approved, the embedded-tsconfig skip learned `baseUrl` and `moduleResolution: node/node10/classic`
+— **not `target`, which is measured gradeable** (7 of 9 such cases have real tsgo baselines) — and the resolution
+behaviour went. **The receipt is a count, not an argument**: `tsgoExpectedKeptTsc` 87 -> 3 while `adopted`, `new`
+and `deleted` are byte-identical, i.e. only pristine-pinned subtests left. **The brief was wrong in the dangerous
+direction and the agent caught it**: tsgo's harness loads an embedded tsconfig and then lets the directives
+OVERRIDE it, so an embedded-only rule deletes the one case tsgo did answer; the shipped predicate exempts any
+option a directive names. TS5090 stays and its predicate changed twice (tsgo does not gate it on `baseUrl` and
+does exempt absolute substitutions — landing only the first change manufactures false positives). TS5102 now
+carries tsgo's computed `Use '"paths": {"*": ["./src/*"]}' instead.` chain, measured over nine values, with the
+6.0-default branch untouched so **(P18.133)** can move the default safely. The 8-profile grid is a **control and
+counted**: no profile sets `baseUrl` or `paths`, and it reads 8 x 0/0 with emit 78 vs 78 byte-identical.
+
 **(P18.131) — THE JAVASCRIPT EXPANDO MEMBER MODEL: A LEDGER ROW CLOSED, 19,954 / 0 / 64 (2026-09-17).**
 The first closure in this family: pending baselines **40 → 39**, and the other entry goes from four missing rows to
 one. A JavaScript class's members now include what its assignments put there, resolved syntactically from the

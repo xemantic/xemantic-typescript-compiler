@@ -25,6 +25,77 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.137) — (CHK.124) step 2: route (B) opens, and the grid's green is verified rather than banked (2026-09-19)
+
+Suite **19,979 / 0 / 59** (+27 pins), errors screen 3,065 / 0 and emit 5,645 / 0, cost gate +0.15% max,
+`huge_methods --fail-over 0` exit 0, warning gate clean, 8-profile grid 8 x 0/0 with emit 78 vs 78 byte-identical.
+**Ledger UNCHANGED at 34 — this round closes no baseline deliberately**, and that is the point: a member access on
+an IDENTIFIER receiver whose type is a function type was **completely unchecked**, which is four real missed errors
+in eleven lines of ordinary TypeScript and worth more than a row.
+
+    declare const zq: () => void;   zq.nope1    BEFORE silent  ->  NOW TS2339 '() => void'            tsgo-identical
+    declare const zp: { (): void }; zp.nope2    BEFORE silent  ->  NOW TS2339 '() => void'            tsgo-identical
+    interface ZCallable { (): void }; zi.nope3  BEFORE silent  ->  NOW TS2339 'ZCallable'             tsgo-identical
+    const zf = () => {}; zf.ok = 1; zf.nope5    BEFORE silent  ->  NOW TS2339 '{ (): void; ok: number; }'
+
+All four byte-identical to `tools/tsgo-7.0.2/lib/tsc`, line and column, while `zf.ok = 1` and `zf.ok` stay silent.
+
+**HALF (a) — THE `const`-BOUND FUNCTION-EXPRESSION HOST**, tsgo's `getInitializerSymbol` `VariableDeclaration` arm:
+`const`, UN-ANNOTATED, initializer an `ArrowFunction`/`FunctionExpression`, container a `SourceFile`/`ModuleBlock`,
+non-JS, sole declaration. It attaches in `getTypeOfVariableOrProperty` AFTER `inferTypeFromInitializerType`, because
+`widenType`'s `Type.Object` arm returns the instance untouched only while `members` is null and REBUILDS the object
+once a table is present. `let`/`var` are refused and the annotated case needs no clause (`decl.type` returns
+earlier) — both measured against tsgo, which reports TS2339 on those writes.
+
+**HALF (b) — ROUTE (B)**: `cmamCallSignatureReceiverReportable` — call signatures present, no construct signatures,
+no index signature, no base types (through a `Type.Reference`'s target too), and the name non-empty and outside
+`RUNTIME_PROPERTIES`.
+
+**THE CRUX WAS NOT EMITTING, IT WAS NOT DOUBLE-EMITTING, AND IT IS MEASURED.** B431's spine anchor already owns the
+read for its own population, so route (B) refuses a receiver whose symbol carries a `FunctionDeclaration`. Ablating
+that one line reddens **3 pins**, with a literal diagram (`assert(d.size == 1)` -> `2`, the same row at the same
+`start=37` twice) plus an independent witness in a neighbouring class. The two guards cover DIFFERENT halves — the
+nested-read pin did NOT redden under that arm, because `expandoAttachedTypeIds` shuts route (B) above it — which is
+why both pins exist. And a variable host must NOT be marked in `expandoAttachedTypeIds`: marking it would shut the
+only emitter it has.
+
+**THE GRID IS GREEN AND THE GREEN WAS *VERIFIED*, NOT BANKED** — (CHK.124)'s own law, applied to a round where the
+profiles CAN express the shape (1,062 function-type annotations in the compiler profile alone). A temporary marker
+arm, removed before the final build, measured route (B) **entered 20-23 times per profile** with a
+call-signature-bearing receiver and `reportable=0` on all eight — **and every single arrival is `prop='call'`**. So
+`RUNTIME_PROPERTIES` is the one clause that fires across 1.2M lines of correct TypeScript, and the grid's 8 x 0/0
+means "the rule is right", not "the shape is absent". That distinction is exactly what a green grid usually cannot
+support. Real libraries are unchanged too (cronstrue 1 -> 1, marked 18 -> 18).
+
+**THE NAIVE ARM IS THE OTHER HALF OF THAT EVIDENCE**: without the B431 guard and without half (a), the corpus screen
+reads **1 mismatch** (`isolatedDeclarationErrors`, whose two `const`-bound arrow hosts are exactly half (a)'s
+population) and the probe set reads **5 false positives**. Both go to 0 in the landed arm.
+
+**REFUSED, EACH WITH ITS MEASUREMENT AND PINNED `residue -` RATHER THAN SPECIAL-CASED**: a CONSTRUCT-signature
+receiver and a callable INTERFACE WITH HERITAGE (both rows tsgo reports; (CHK.45) demands positive evidence the
+member table is complete and neither supplies it), and an IMPORTED function declaration (the price of the B431
+guard, today's answer preserved).
+
+**TWO PRE-EXISTING DISPLAY GAPS ARE EXPOSED BY ROUTE (B) AND ARE NOT ITS FAULT**, each pinned with today's text and
+a BEFORE-arm receipt taken through an unrelated TS2322: a call-signature type carrying an INDEX SIGNATURE renders as
+the bare signature, and a GENERIC type-alias instantiation renders structurally (`FA<string>` -> `(t: string) =>
+void`) where a non-generic alias prints its name on both compilers.
+
+**TWO COUNTDOWN PINS MOVED AND A CLASS KDoc SECTION RETIRED.** `ExpandoReceiverDisplayTest`'s
+`residue - an arrow-initialized const receiver is silent` and `residue - a function-typed parameter receiver is
+silent` both now report; re-measured against tsgo, re-pointed, renamed (they no longer assert a residue), and § 3
+"WHAT THIS DOES NOT CLOSE" — which predicted exactly this work — retired with them.
+
+**WHAT DID NOT WORK.** The first attempt at half (a) was SILENTLY INERT: `attachExpandoMembers`' round-833 guard is
+`properties != null`, and an arrow type's builder plants `properties = emptyList()`, so the variable path needs an
+EMPTINESS test rather than a null one — and getting it wrong attaches nothing, with no error anywhere. The risk the
+brief budgeted for — a body-local `const` arrow as a false-positive source — was measured and **does not exist**:
+such a receiver never reaches route (B) as a call-signature-bearing `Type.Object`, and the two rows lost there are
+pre-existing. **And the TS2322 half of table 2 is still missing and is the successor**: the member-access, display
+and route-(B) readers all see the attached type, but the var-decl ASSIGNABILITY reader types a file-level `const`
+out of `currentLocalTypes`, recorded from `getTypeOfExpression(init)` — a fresh arrow type with no members. BEFORE
+== AFTER byte-identically there.
+
 ### Round (P18.136) — (CHK.124) step 1: real expando MEMBERS on a function type, and a display rule that was pristine 6.0.3's answer (2026-09-19)
 
 Suite **19,952 / 0 / 59** (+17 pins, skipped 60 -> 59), errors screen 3,065 / 0 and emit 5,645 / 0 with the closed
@@ -548,69 +619,6 @@ full span-parity receipt. Counting "active corpus subtests carrying code X" by s
 every code** and looks like no coverage; the generator references the baseline PATH. And a KIR refusal assertion
 that reads `stderr` reads EMPTY for a compile that never ran — the diagnostics are in `report`.
 
-### Round (P18.127) — (KIR.LOWER.6): the values existed and TWO OF THEM WERE WRONG, which the missing arm was hiding (2026-09-17)
-
-**Three commits** (fix, test, this docs commit). **Suite 19,807 → 19,840 / 0 / 65**, the KIR module **242 → 275**;
-`huge_methods.py --fail-over 0` over BOTH core (875) and the KIR module (114, `lowerCall` unchanged at 4,620,
-`lowerNew` at 1,085, `lowerPropertyRead` 973); `cost_gate.py` exit 0 and the core corpus screen 8,790 / 0 are
-CONTROLS, and **the 8-profile grid is inapplicable by construction — `Checker.class` is BYTE-IDENTICAL to
-(P18.125)'s landed binary**. `JsRuntime.kt` was touched; the generator was re-run by the agent AND independently by
-the orchestrator (exit 0, every anchor matched exactly once, all 12 `java.` hits inside comments). No native build.
-
-**THE GAP IS ORDINARY CODE**: `lowerIdentifier` had an arm for a local, a module field and the intrinsic names and
-**none for a generated FUNCTION or CLASS**, so `[1,2].map(f)` for a top-level named `f` REFUSED — passing a named
-function as a callback, which is everywhere in real TypeScript. 21 of the 33 characterised shapes refused.
-
-**AND THE BRIEF'S PREMISE — "the values already exist, only the arm is missing" — WAS HALF WRONG IN THE WAY THAT
-MATTERS: TWO OF THE THREE VALUES WERE DEFECTIVE, AND BOTH DEFECTS PREDATE THE ARM.** `C.m === C.m` **compiled, ran
-and printed `false`** (a fresh forwarder per read); a rest-parameter function read as a value took the FIXED-ARITY
-forwarder and **compiled and then threw `ClassCastException: Double cannot be cast to JsArray`**. Both were
-reachable through `ns.f` and `C.m` before this round and neither had a pin. **The arm alone would have shipped both
-into the commonest shape in the language** — which is the round's reusable lesson: when a refusal is removed, the
-values behind it have never been exercised, so audit them rather than assuming the refusal was the only gap.
-
-**THE CARRIER QUESTION, ANSWERED IN BOTH DIRECTIONS.** A bare `Cls` produces a `JsConstructor` and a bare `f` a
-`FunctionN` — deliberately different, for (KIR.LOWER.5)'s measured reason — and **it is the SAME OBJECT the
-namespace object hands out** (`Cls === ns.Cls` and `bump === ns.bump` both `true`, pinned), because both paths go
-through the same memoizing builders. Both carriers are now lazy statics, which is what makes identity hold by
-construction rather than by accident. Scope of that claim is ONE FILE: two files taking a class's value mint two
-carriers, (P18.124)'s stated divergence inherited unchanged.
-
-**`.name` IS ANSWERED ON THE CARRIER AND REACHES NO REFLECTION, MEASURED BOTH WAYS.** A qualified `Cls.name`/
-`f.name` is a string CONSTANT (`jsGet == 0`, pinned); a dynamic `(Cls as any).name` is answered by a new `jsGet`
-arm placed ABOVE `else -> reflectiveGet`, where it previously reached reflection and threw (a Kotlin `public val`
-is a private field behind a getter, found under neither spelling). Every other member of a class value, and every
-member of a function value, now refuse BY NAME. **The brief predicted the qualified read reached reflection and it
-does not** — it refuses one layer earlier at `staticOwnerOf`; the `any`-typed read is the site that did.
-
-**A SECOND HALF THE ARM FORCED, AND IT IS A CHECKER QUIRK REACHED FOR THE FIRST TIME.** `variableType` must DECLINE
-the checker's answer for a class-value initializer, because this checker types a class value as its INSTANCE type
-((CHK.73)) — without it the field erases to `program.Cls` and storing the carrier is `cannot coerce JsConstructor
-to program.Cls`. Answered syntactically, precisely because the checker's type is the thing that cannot be trusted
-here; arm a3 is what measures it.
-
-**PINS AND ABLATION.** `KirDeclaredValueTest`, **33 cases, 857 lines**; **28 RED against the pre-change binary**,
-the 5 green being four refusal controls and one **measured REDUNDANT guard** (a class declaring its own
-`static name` — the static-field arm answers it on both arms, and tsgo refuses such a program outright with
-TS2699, so no valid program reaches the ordering). Eight arms, one injected mistake each, dry-run and
-anchor-count-1 asserted, `cmp`-verified on BOTH files per arm — a7 is runtime-only and its lowering md5 equals the
-final one, which is the cross-check. A countdown pin in `KirDynamicNewTest` was **re-pointed onto a shape that
-still refuses** (a class declared in a function body) rather than edited to whatever the new code prints.
-
-**TWO PINS HAD TO BE RE-SELECTED, AND THE FIRST IS THE SHARPER LESSON: THE REST-PARAMETER DEFECT IS UNREACHABLE
-THROUGH `map` IN VALID TYPESCRIPT** (tsgo rejects it, TS2345), so a pin written on the obvious fixture would have
-been a claim about a program no reference compiles. The pin is `(a: number, ...xs: any[])`, which tsgo accepts and
-node answers for.
-
-**WHAT REMAINS IN THIS FAMILY**, each a loud refusal or a stated divergence and all pinned: a function or class
-declared inside a BODY reaches neither table and its CALL refuses too, so that is a closure capability rather than
-a value-arm gap; `f.length`/`Cls.length` are deliberately not half-answered, since `length` has a dynamic half a
-`FunctionN` cannot carry and answering only the qualified spelling would make the two disagree; `(f as any).name`
-refuses where node answers; an ABSENT member of a class value refuses where node says `undefined`, deliberately,
-because the carrier holds no statics and `undefined` would be a SILENT wrong answer for a real static; a generic
-function in a value position refuses at the erasure. **And a checker gap found in passing: we accept
-`static name`, which tsgo refuses with TS2699.**
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -941,7 +949,24 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-28 LANDED 2026-09-19 ((P18.85)-(P18.136) notes) — pending **35 → 34**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-28 LANDED 2026-09-19 ((P18.85)-(P18.137) notes) — pending **34**
+  (UNCHANGED at (P18.137), deliberately), skipped 59, suite 19,979/0. **(P18.137) CLOSED NO BASELINE AND IS THE
+  MOST VALUABLE ROUND OF THE THREE**: (CHK.124) step 2 opened ROUTE (B), so a member access on an IDENTIFIER
+  receiver whose type is a function type is checked at all — four real missed errors in eleven lines of ordinary
+  TypeScript, all four now byte-identical to tsgo. Half (a) extended the expando model to `const`-bound
+  function-expression hosts (`getTypeOfVariableOrProperty`, AFTER `inferTypeFromInitializerType`); half (b) is
+  `cmamCallSignatureReceiverReportable`. **The grid's 8 x 0/0 was VERIFIED rather than banked** ((CHK.124)'s own
+  law, on a round where the profiles CAN express the shape): a marker arm measured route (B) entered 20-23 times
+  per profile with `reportable=0`, **every arrival `prop='call'`**, so `RUNTIME_PROPERTIES` is the single clause
+  firing across 1.2M lines. The naive arm (no B431 guard, no half (a)) reads 1 screen mismatch and 5 probe false
+  positives, which is what makes both guards load-bearing.
+  **THE SUCCESSOR IS NAMED AND MEASURED**: the TS2322 half is still missing because the var-decl ASSIGNABILITY
+  reader types a file-level `const` out of `currentLocalTypes`, recorded from `getTypeOfExpression(init)` — a fresh
+  arrow type with NO members — so it never sees the attachment (BEFORE == AFTER byte-identically). Refused with
+  measurements and pinned `residue -`: a CONSTRUCT-signature receiver, a callable INTERFACE WITH HERITAGE, an
+  IMPORTED function declaration. Two PRE-EXISTING display gaps are exposed but not caused by it (an index-signature
+  call type renders bare; a GENERIC alias instantiation renders structurally).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-28 LANDED 2026-09-19 ((P18.85)-(P18.136) notes) — pending **35 → 34**,
   skipped 59, suite 19,952/0. **(P18.136) CLOSED `expandoFunctionNestedAssigments`** as (CHK.124) step 1: real
   expando MEMBERS on a `FunctionDeclaration` host's type, attached in `getTypeOfFunction`, so the row closes
   THROUGH `typeToString` rather than through a third hand-built display string. **The ledger row is the small

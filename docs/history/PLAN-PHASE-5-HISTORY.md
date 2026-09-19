@@ -68318,3 +68318,66 @@ VALUE position REFUSES — `lowerIdentifier` has no arm for either — so `const
 `make(Cls)`, `{ Cls }`, `Cls.name` and **`[1,2].map(f)` for a top-level named `f`** all refuse; that is the natural
 sequel and `namespaceExportValue` already maps both declaration kinds. And a CHECKER false positive:
 `class Cls {}; const c = Cls; new c()` is an ours-only TS2351 where tsgo reports nothing.
+
+### Round (P18.127) — (KIR.LOWER.6): the values existed and TWO OF THEM WERE WRONG, which the missing arm was hiding (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,807 → 19,840 / 0 / 65**, the KIR module **242 → 275**;
+`huge_methods.py --fail-over 0` over BOTH core (875) and the KIR module (114, `lowerCall` unchanged at 4,620,
+`lowerNew` at 1,085, `lowerPropertyRead` 973); `cost_gate.py` exit 0 and the core corpus screen 8,790 / 0 are
+CONTROLS, and **the 8-profile grid is inapplicable by construction — `Checker.class` is BYTE-IDENTICAL to
+(P18.125)'s landed binary**. `JsRuntime.kt` was touched; the generator was re-run by the agent AND independently by
+the orchestrator (exit 0, every anchor matched exactly once, all 12 `java.` hits inside comments). No native build.
+
+**THE GAP IS ORDINARY CODE**: `lowerIdentifier` had an arm for a local, a module field and the intrinsic names and
+**none for a generated FUNCTION or CLASS**, so `[1,2].map(f)` for a top-level named `f` REFUSED — passing a named
+function as a callback, which is everywhere in real TypeScript. 21 of the 33 characterised shapes refused.
+
+**AND THE BRIEF'S PREMISE — "the values already exist, only the arm is missing" — WAS HALF WRONG IN THE WAY THAT
+MATTERS: TWO OF THE THREE VALUES WERE DEFECTIVE, AND BOTH DEFECTS PREDATE THE ARM.** `C.m === C.m` **compiled, ran
+and printed `false`** (a fresh forwarder per read); a rest-parameter function read as a value took the FIXED-ARITY
+forwarder and **compiled and then threw `ClassCastException: Double cannot be cast to JsArray`**. Both were
+reachable through `ns.f` and `C.m` before this round and neither had a pin. **The arm alone would have shipped both
+into the commonest shape in the language** — which is the round's reusable lesson: when a refusal is removed, the
+values behind it have never been exercised, so audit them rather than assuming the refusal was the only gap.
+
+**THE CARRIER QUESTION, ANSWERED IN BOTH DIRECTIONS.** A bare `Cls` produces a `JsConstructor` and a bare `f` a
+`FunctionN` — deliberately different, for (KIR.LOWER.5)'s measured reason — and **it is the SAME OBJECT the
+namespace object hands out** (`Cls === ns.Cls` and `bump === ns.bump` both `true`, pinned), because both paths go
+through the same memoizing builders. Both carriers are now lazy statics, which is what makes identity hold by
+construction rather than by accident. Scope of that claim is ONE FILE: two files taking a class's value mint two
+carriers, (P18.124)'s stated divergence inherited unchanged.
+
+**`.name` IS ANSWERED ON THE CARRIER AND REACHES NO REFLECTION, MEASURED BOTH WAYS.** A qualified `Cls.name`/
+`f.name` is a string CONSTANT (`jsGet == 0`, pinned); a dynamic `(Cls as any).name` is answered by a new `jsGet`
+arm placed ABOVE `else -> reflectiveGet`, where it previously reached reflection and threw (a Kotlin `public val`
+is a private field behind a getter, found under neither spelling). Every other member of a class value, and every
+member of a function value, now refuse BY NAME. **The brief predicted the qualified read reached reflection and it
+does not** — it refuses one layer earlier at `staticOwnerOf`; the `any`-typed read is the site that did.
+
+**A SECOND HALF THE ARM FORCED, AND IT IS A CHECKER QUIRK REACHED FOR THE FIRST TIME.** `variableType` must DECLINE
+the checker's answer for a class-value initializer, because this checker types a class value as its INSTANCE type
+((CHK.73)) — without it the field erases to `program.Cls` and storing the carrier is `cannot coerce JsConstructor
+to program.Cls`. Answered syntactically, precisely because the checker's type is the thing that cannot be trusted
+here; arm a3 is what measures it.
+
+**PINS AND ABLATION.** `KirDeclaredValueTest`, **33 cases, 857 lines**; **28 RED against the pre-change binary**,
+the 5 green being four refusal controls and one **measured REDUNDANT guard** (a class declaring its own
+`static name` — the static-field arm answers it on both arms, and tsgo refuses such a program outright with
+TS2699, so no valid program reaches the ordering). Eight arms, one injected mistake each, dry-run and
+anchor-count-1 asserted, `cmp`-verified on BOTH files per arm — a7 is runtime-only and its lowering md5 equals the
+final one, which is the cross-check. A countdown pin in `KirDynamicNewTest` was **re-pointed onto a shape that
+still refuses** (a class declared in a function body) rather than edited to whatever the new code prints.
+
+**TWO PINS HAD TO BE RE-SELECTED, AND THE FIRST IS THE SHARPER LESSON: THE REST-PARAMETER DEFECT IS UNREACHABLE
+THROUGH `map` IN VALID TYPESCRIPT** (tsgo rejects it, TS2345), so a pin written on the obvious fixture would have
+been a claim about a program no reference compiles. The pin is `(a: number, ...xs: any[])`, which tsgo accepts and
+node answers for.
+
+**WHAT REMAINS IN THIS FAMILY**, each a loud refusal or a stated divergence and all pinned: a function or class
+declared inside a BODY reaches neither table and its CALL refuses too, so that is a closure capability rather than
+a value-arm gap; `f.length`/`Cls.length` are deliberately not half-answered, since `length` has a dynamic half a
+`FunctionN` cannot carry and answering only the qualified spelling would make the two disagree; `(f as any).name`
+refuses where node answers; an ABSENT member of a class value refuses where node says `undefined`, deliberately,
+because the carrier holds no statics and `undefined` would be a SILENT wrong answer for a real static; a generic
+function in a value position refuses at the erasure. **And a checker gap found in passing: we accept
+`static name`, which tsgo refuses with TS2699.**
