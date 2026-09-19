@@ -7531,6 +7531,31 @@ class Checker(
      *  init-order trap. */
     private val expandoAttachedTypeIds = HashSet<Int>()
 
+    /**
+     * (P18.138): the `Type.id`s of the JAVASCRIPT OBJECT-LITERAL expando hosts
+     * [attachVariableExpandoMembers] gave a COMPLETE member table to. The member-access
+     * firewall ([jsExpandoObjectAccessAdmitted]) admits a read on one of these precisely
+     * BECAUSE the table is complete: the container scan behind it is tsgo's own rule —
+     * measured, a write inside a nested `function` body or an IIFE declares NOTHING
+     * there, while one inside an `if` block does, which is exactly what
+     * [collectExpandoDecls] walks. Declared before `init` per the init-order trap.
+     */
+    private val jsExpandoObjectTypeIds = HashSet<Int>()
+
+    /**
+     * (P18.138): does this program contain a `.js`/`.jsx`/`.cjs`/`.mjs` file at all?
+     *
+     * The JavaScript expando family's mint-time and attach-time hooks each need to know
+     * the OWNING FILE of a node, which is a parent-chain ascent; this is the pre-gate
+     * that keeps every one of them at a single boolean read on a pure-TypeScript
+     * program — all eight dashboard profiles and most of the corpus. Computed from the
+     * binder results rather than from `options`, because `allowJs` may be on for a
+     * program that happens to carry no JavaScript. Declared before `init` per the
+     * init-order trap.
+     */
+    private val programHasJsFile: Boolean =
+        binderResults.any { isJsLikeFileName(it.sourceFile.fileName) }
+
     /** (CHK.97): memo for [combineUnionSignatures], keyed by the UNION's `Type.id`.
      *  INV.5(a) interns unions by their member-id list, so the key is exact. A NULL
      *  answer (the combination is refused) is memoized too — it is as expensive to
@@ -35649,7 +35674,13 @@ class Checker(
         if (candidates.isEmpty()) return
         val declared = HashMap<String, ExpandoHostWrites>()
         candidates.forEach { declared[it] = ExpandoHostWrites() }
-        for (stmt in sf.statements) collectExpandoDecls(stmt, candidates, declared)
+        // (P18.138) `Object.defineProperty(F, 'p', d)` declares an expando member in a
+        // JAVASCRIPT file ONLY — tsgo's `GetAssignmentDeclarationKind` gates its
+        // `IsBindableObjectDefinePropertyCall` arm on `IsInJSFile`. Measured: with
+        // `function fd() {}` + `Object.defineProperty(fd, 'dp', { value: 1 })`, tsgo
+        // reports a later `fd.zzzMiss` against `{ (): void; readonly dp: number; … }`.
+        val jsFile = isJsLikeFileName(sf.fileName)
+        for (stmt in sf.statements) collectExpandoDecls(stmt, candidates, declared, jsFile)
         spineExActive = true
         spineExCands = candidates
         spineExDeclared = declared
@@ -35977,6 +36008,27 @@ class Checker(
         /** member -> every right-hand side written to it, in collector order. */
         val rhs = HashMap<String, MutableList<Expression>>()
 
+        /**
+         * (P18.138) member -> the DESCRIPTOR expression of every
+         * `Object.defineProperty(host, '<member>', <descriptor>)` write, in collector
+         * order. Kept apart from [rhs] because a descriptor is not the member's VALUE:
+         * its type comes from the descriptor's own `value` / `get` / `set` property
+         * (tsgo's `getTypeFromPropertyDescriptor`) and it also decides `readonly`.
+         */
+        val descriptors = HashMap<String, MutableList<Expression>>()
+
+        /**
+         * (P18.138) True when a write on this host names a member this collector cannot
+         * NAME, so the collected set is a strict SUBSET of what tsgo declares. The only
+         * such form is an `Object.defineProperty` whose name argument is a NUMERIC
+         * literal — tsgo declares it under the numeric value's canonical string, which
+         * is not this parser's source text (round 934). Refusing the whole host is the
+         * (CHK.45) answer: an incomplete table is exactly what the member-access
+         * firewall must not trust.
+         */
+        var undecidable: Boolean = false
+            private set
+
         /** The member names, unordered — B431's original product. */
         val names: Set<String> get() = firstPos.keys
 
@@ -35986,6 +36038,14 @@ class Checker(
             rhs.getOrPut(member) { mutableListOf() }.add(value)
         }
 
+        fun recordDescriptor(member: String, pos: Int, descriptor: Expression) {
+            val prev = firstPos[member]
+            if (prev == null || pos < prev) firstPos[member] = pos
+            descriptors.getOrPut(member) { mutableListOf() }.add(descriptor)
+        }
+
+        fun markUndecidable() { undecidable = true }
+
         /** The members in SOURCE order — the order tsgo renders them in. */
         fun membersInSourceOrder(): List<String> =
             firstPos.entries.sortedBy { it.value }.map { it.key }
@@ -35993,37 +36053,37 @@ class Checker(
 
     /** The expando write collector ([spineExSetup]-called): file-scope
      *  `Foo.prop =` writes, NOT descending into function-likes. */
-    private fun collectExpandoDecls(s: Statement?, cands: Set<String>, declared: MutableMap<String, ExpandoHostWrites>) {
+    private fun collectExpandoDecls(s: Statement?, cands: Set<String>, declared: MutableMap<String, ExpandoHostWrites>, jsFile: Boolean) {
         when (s) {
             null -> {}
-            is ExpressionStatement -> collectExpandoDeclsExpr(s.expression, cands, declared)
-            is ReturnStatement -> collectExpandoDeclsExpr(s.expression, cands, declared)
-            is ThrowStatement -> collectExpandoDeclsExpr(s.expression, cands, declared)
-            is VariableStatement -> s.declarationList.declarations.forEach { collectExpandoDeclsExpr(it.initializer, cands, declared) }
-            is IfStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared); collectExpandoDecls(s.thenStatement, cands, declared); collectExpandoDecls(s.elseStatement, cands, declared) }
-            is Block -> s.statements.forEach { collectExpandoDecls(it, cands, declared) }
+            is ExpressionStatement -> collectExpandoDeclsExpr(s.expression, cands, declared, jsFile)
+            is ReturnStatement -> collectExpandoDeclsExpr(s.expression, cands, declared, jsFile)
+            is ThrowStatement -> collectExpandoDeclsExpr(s.expression, cands, declared, jsFile)
+            is VariableStatement -> s.declarationList.declarations.forEach { collectExpandoDeclsExpr(it.initializer, cands, declared, jsFile) }
+            is IfStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared, jsFile); collectExpandoDecls(s.thenStatement, cands, declared, jsFile); collectExpandoDecls(s.elseStatement, cands, declared, jsFile) }
+            is Block -> s.statements.forEach { collectExpandoDecls(it, cands, declared, jsFile) }
             is ForStatement -> {
-                s.initializer?.let { if (it is Expression) collectExpandoDeclsExpr(it, cands, declared) else if (it is VariableDeclarationList) it.declarations.forEach { d -> collectExpandoDeclsExpr(d.initializer, cands, declared) } }
-                collectExpandoDeclsExpr(s.condition, cands, declared); collectExpandoDeclsExpr(s.incrementor, cands, declared); collectExpandoDecls(s.statement, cands, declared)
+                s.initializer?.let { if (it is Expression) collectExpandoDeclsExpr(it, cands, declared, jsFile) else if (it is VariableDeclarationList) it.declarations.forEach { d -> collectExpandoDeclsExpr(d.initializer, cands, declared, jsFile) } }
+                collectExpandoDeclsExpr(s.condition, cands, declared, jsFile); collectExpandoDeclsExpr(s.incrementor, cands, declared, jsFile); collectExpandoDecls(s.statement, cands, declared, jsFile)
             }
-            is ForInStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared); collectExpandoDecls(s.statement, cands, declared) }
-            is ForOfStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared); collectExpandoDecls(s.statement, cands, declared) }
-            is WhileStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared); collectExpandoDecls(s.statement, cands, declared) }
-            is DoStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared); collectExpandoDecls(s.statement, cands, declared) }
+            is ForInStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared, jsFile); collectExpandoDecls(s.statement, cands, declared, jsFile) }
+            is ForOfStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared, jsFile); collectExpandoDecls(s.statement, cands, declared, jsFile) }
+            is WhileStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared, jsFile); collectExpandoDecls(s.statement, cands, declared, jsFile) }
+            is DoStatement -> { collectExpandoDeclsExpr(s.expression, cands, declared, jsFile); collectExpandoDecls(s.statement, cands, declared, jsFile) }
             is SwitchStatement -> {
-                collectExpandoDeclsExpr(s.expression, cands, declared)
+                collectExpandoDeclsExpr(s.expression, cands, declared, jsFile)
                 for (c in s.caseBlock) when (c) {
-                    is CaseClause -> { collectExpandoDeclsExpr(c.expression, cands, declared); c.statements.forEach { collectExpandoDecls(it, cands, declared) } }
-                    is DefaultClause -> c.statements.forEach { collectExpandoDecls(it, cands, declared) }
+                    is CaseClause -> { collectExpandoDeclsExpr(c.expression, cands, declared, jsFile); c.statements.forEach { collectExpandoDecls(it, cands, declared, jsFile) } }
+                    is DefaultClause -> c.statements.forEach { collectExpandoDecls(it, cands, declared, jsFile) }
                     else -> {}
                 }
             }
             is TryStatement -> {
-                s.tryBlock.statements.forEach { collectExpandoDecls(it, cands, declared) }
-                s.catchClause?.block?.statements?.forEach { collectExpandoDecls(it, cands, declared) }
-                s.finallyBlock?.statements?.forEach { collectExpandoDecls(it, cands, declared) }
+                s.tryBlock.statements.forEach { collectExpandoDecls(it, cands, declared, jsFile) }
+                s.catchClause?.block?.statements?.forEach { collectExpandoDecls(it, cands, declared, jsFile) }
+                s.finallyBlock?.statements?.forEach { collectExpandoDecls(it, cands, declared, jsFile) }
             }
-            is LabeledStatement -> collectExpandoDecls(s.statement, cands, declared)
+            is LabeledStatement -> collectExpandoDecls(s.statement, cands, declared, jsFile)
             else -> {}
         }
     }
@@ -36070,7 +36130,49 @@ class Checker(
         return if (recvName in cands) recvName to member else null
     }
 
-    private fun collectExpandoDeclsExpr(e: Expression?, cands: Set<String>, declared: MutableMap<String, ExpandoHostWrites>) {
+    /**
+     * (P18.138) Record the member an `Object.defineProperty(host, '<member>', <descriptor>)`
+     * call declares on an expando host, in a JAVASCRIPT file.
+     *
+     * The call shape is tsgo's `IsBindableObjectDefinePropertyCall`, transcribed rather
+     * than approximated: EXACTLY three arguments, the callee spelled `Object.defineProperty`,
+     * and the NAME argument `IsStringOrNumericLiteralLike` — a string literal, a
+     * NO-SUBSTITUTION template or a numeric literal. tsgo additionally accepts a DOTTED
+     * host (`IsBindableStaticNameExpression`); only a bare identifier is admitted here,
+     * because a dotted host is the expando CHAIN this round refuses (see
+     * [jsExpandoObjectAccessAdmitted]).
+     *
+     * Measured against `tools/tsgo-7.0.2/lib/tsc`, which declares for the accepted forms
+     * and declares NOTHING for a computed name (`Object.defineProperty(h, f(), d)`), for
+     * a name read from a variable, or for a call with any other argument count — so the
+     * two exclusions below are agreements, not conservatism.
+     *
+     * A NUMERIC name marks the host UNDECIDABLE instead of declaring: tsgo names such a
+     * member by the numeric value's canonical string where this parser holds the source
+     * text (`1e3` vs `1000`, round 934), and a table that is a strict subset of tsgo's is
+     * precisely what [jsExpandoObjectAccessAdmitted] must refuse to trust.
+     */
+    private fun expandoDefinePropertyDecl(
+        call: CallExpression,
+        cands: Set<String>,
+        declared: MutableMap<String, ExpandoHostWrites>,
+    ) {
+        if (call.arguments.size != 3) return
+        val callee = call.expression as? PropertyAccessExpression ?: return
+        if (callee.name.text != "defineProperty") return
+        if ((callee.expression as? Identifier)?.text != "Object") return
+        val host = (call.arguments[0] as? Identifier)?.text ?: return
+        val entry = declared[host] ?: return
+        if (host !in cands) return
+        when (val nameArg = call.arguments[1]) {
+            is StringLiteralNode -> entry.recordDescriptor(nameArg.text, call.pos, call.arguments[2])
+            is NoSubstitutionTemplateLiteralNode -> entry.recordDescriptor(nameArg.text, call.pos, call.arguments[2])
+            is NumericLiteralNode -> entry.markUndecidable()
+            else -> {}
+        }
+    }
+
+    private fun collectExpandoDeclsExpr(e: Expression?, cands: Set<String>, declared: MutableMap<String, ExpandoHostWrites>, jsFile: Boolean) {
         when (e) {
             null -> {}
             is BinaryExpression -> {
@@ -36102,19 +36204,31 @@ class Checker(
                         }
                         work.addLast(c.right); c = c.left
                     }
-                    collectExpandoDeclsExpr(c, cands, declared)
+                    collectExpandoDeclsExpr(c, cands, declared, jsFile)
                     cur = work.removeLastOrNull()
                 }
             }
-            is PropertyAccessExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
-            is ElementAccessExpression -> { collectExpandoDeclsExpr(e.expression, cands, declared); collectExpandoDeclsExpr(e.argumentExpression, cands, declared) }
-            is ParenthesizedExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
-            is CallExpression -> { collectExpandoDeclsExpr(e.expression, cands, declared); e.arguments.forEach { collectExpandoDeclsExpr(it, cands, declared) } }
-            is NewExpression -> { collectExpandoDeclsExpr(e.expression, cands, declared); e.arguments?.forEach { collectExpandoDeclsExpr(it, cands, declared) } }
-            is ConditionalExpression -> { collectExpandoDeclsExpr(e.condition, cands, declared); collectExpandoDeclsExpr(e.whenTrue, cands, declared); collectExpandoDeclsExpr(e.whenFalse, cands, declared) }
-            is PrefixUnaryExpression -> collectExpandoDeclsExpr(e.operand, cands, declared)
-            is PostfixUnaryExpression -> collectExpandoDeclsExpr(e.operand, cands, declared)
-            is ArrayLiteralExpression -> e.elements.forEach { collectExpandoDeclsExpr(it, cands, declared) }
+            is PropertyAccessExpression -> collectExpandoDeclsExpr(e.expression, cands, declared, jsFile)
+            is ElementAccessExpression -> { collectExpandoDeclsExpr(e.expression, cands, declared, jsFile); collectExpandoDeclsExpr(e.argumentExpression, cands, declared, jsFile) }
+            is ParenthesizedExpression -> collectExpandoDeclsExpr(e.expression, cands, declared, jsFile)
+            is CallExpression -> {
+                // (P18.138) `Object.defineProperty(host, '<member>', <descriptor>)`
+                // DECLARES an expando member — in a JAVASCRIPT file only. tsgo's
+                // `GetAssignmentDeclarationKind` gates the whole
+                // `IsBindableObjectDefinePropertyCall` arm on `IsInJSFile`, so in a
+                // TypeScript file the same call declares nothing and this must not
+                // fire (measured on both file kinds). The arguments are still walked
+                // below, because a nested ordinary write inside one of them declares
+                // exactly as it would anywhere else.
+                if (jsFile) expandoDefinePropertyDecl(e, cands, declared)
+                collectExpandoDeclsExpr(e.expression, cands, declared, jsFile)
+                e.arguments.forEach { collectExpandoDeclsExpr(it, cands, declared, jsFile) }
+            }
+            is NewExpression -> { collectExpandoDeclsExpr(e.expression, cands, declared, jsFile); e.arguments?.forEach { collectExpandoDeclsExpr(it, cands, declared, jsFile) } }
+            is ConditionalExpression -> { collectExpandoDeclsExpr(e.condition, cands, declared, jsFile); collectExpandoDeclsExpr(e.whenTrue, cands, declared, jsFile); collectExpandoDeclsExpr(e.whenFalse, cands, declared, jsFile) }
+            is PrefixUnaryExpression -> collectExpandoDeclsExpr(e.operand, cands, declared, jsFile)
+            is PostfixUnaryExpression -> collectExpandoDeclsExpr(e.operand, cands, declared, jsFile)
+            is ArrayLiteralExpression -> e.elements.forEach { collectExpandoDeclsExpr(it, cands, declared, jsFile) }
             // (CHK.127) AN OBJECT LITERAL IS A HARD STOP: nothing written inside one
             // declares an expando member, at any depth. This arm used to descend into
             // property initializers and spread expressions, which OVER-declared — the
@@ -36130,22 +36244,22 @@ class Checker(
             // an object literal nested inside an array**, which is what makes this a
             // hard stop rather than a rule about the immediate parent.
             is ObjectLiteralExpression -> {}
-            is SpreadElement -> collectExpandoDeclsExpr(e.expression, cands, declared)
+            is SpreadElement -> collectExpandoDeclsExpr(e.expression, cands, declared, jsFile)
             // (CHK.119) A TEMPLATE SPAN IS AN EXPRESSION POSITION AND WAS NOT WALKED
             // AT ALL, so `` `${F.tag = 1}` `` declared nothing and the later read of
             // `F.tag` was an ours-only false positive — measured, both references
             // treat it as an ordinary expando declaration. The tagged form is the
             // same position one node up.
-            is TemplateExpression -> e.templateSpans.forEach { collectExpandoDeclsExpr(it.expression, cands, declared) }
+            is TemplateExpression -> e.templateSpans.forEach { collectExpandoDeclsExpr(it.expression, cands, declared, jsFile) }
             is TaggedTemplateExpression -> {
-                collectExpandoDeclsExpr(e.tag, cands, declared)
+                collectExpandoDeclsExpr(e.tag, cands, declared, jsFile)
                 (e.template as? TemplateExpression)?.templateSpans
-                    ?.forEach { collectExpandoDeclsExpr(it.expression, cands, declared) }
+                    ?.forEach { collectExpandoDeclsExpr(it.expression, cands, declared, jsFile) }
             }
-            is AsExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
-            is TypeAssertionExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
-            is NonNullExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
-            is SatisfiesExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
+            is AsExpression -> collectExpandoDeclsExpr(e.expression, cands, declared, jsFile)
+            is TypeAssertionExpression -> collectExpandoDeclsExpr(e.expression, cands, declared, jsFile)
+            is NonNullExpression -> collectExpandoDeclsExpr(e.expression, cands, declared, jsFile)
+            is SatisfiesExpression -> collectExpandoDeclsExpr(e.expression, cands, declared, jsFile)
             else -> {}
         }
     }
@@ -70762,6 +70876,21 @@ interface DataView {
      * arc — see `docs/legacy-removal-census.md`.
      */
     private fun jsAccessReceiverIsExpandoImmune(receiver: Expression): Boolean {
+        // (P18.138) A PRIMITIVE receiver is immune by the same structural argument —
+        // tsgo's `IsExpandoInitializer` admits a function expression, an arrow, a class
+        // expression and an EMPTY object literal and nothing else, so nothing can put a
+        // member on a `number` — and it is REFUSED ANYWAY, with the measurement, because
+        // admitting it BREAKS this family's own invariant that every row emitted in a
+        // `.js` file is a row tsgo emits with tsgo's MESSAGE. Built and reverted: three
+        // shapes print a type tsgo does not — `const cs = "hi"; cs.zzzCs` renders
+        // `'string'` against tsgo's `'"hi"'`, `const cn = 1` renders `'number'` against
+        // `'1'`, and `var b = true` (also `h.b = true; h.b.zzzB`) renders `'boolean'`
+        // against `'true'`. All three reproduce IDENTICALLY in a `.ts` file on this
+        // binary AND on its parent, so the blocker is a standing literal-display /
+        // flow-narrowing gap and not a JavaScript question; opening the JS path first
+        // would merely make it reachable from a second file kind. That is also why
+        // `plain.expandoOk = 1; plain.expandoOk.nope` — tsgo TS2339 on `number` — stays
+        // silent here.
         val type = getTypeOfExpression(receiver) as? Type.Object ?: return false
         val decls = jsExpandoImmunityDeclarations(type)
         if (decls.isEmpty()) return false
@@ -70798,6 +70927,94 @@ interface DataView {
         }
         return null
     }
+
+    /**
+     * (P18.138) (CHK.124) step 3 — THE JAVASCRIPT OBJECT-LITERAL RECEIVER, and the one
+     * thing that makes it decidable: a member table we KNOW to be complete.
+     *
+     * [jsAccessReceiverIsExpandoImmune] admits an access whose receiver cannot carry a
+     * JavaScript expando member at all; [jsClassAccessAdmitted] admits one whose class
+     * expando set this checker can COMPUTE. This is the third arm and it is the same
+     * shape as the second: an OBJECT-LITERAL receiver whose expando set is either
+     * computed in full, or provably empty.
+     *
+     * Returns null when [receiver] is not such an access (the caller falls back to the
+     * immunity test), true to ADMIT and false to REFUSE.
+     *
+     * The three cells, each measured against `tools/tsgo-7.0.2/lib/tsc`:
+     *
+     *  * **An ATTACHED HOST** ([jsExpandoObjectTypeIds]) — `var chrome = {}` plus every
+     *    `chrome.p = v` and `Object.defineProperty(chrome, 'p', d)` in its container.
+     *    ADMITTED, because the container scan behind the attachment IS tsgo's rule: a
+     *    write inside a nested `function` body or an IIFE declares NOTHING there (tsgo
+     *    reports TS2339 at the write itself) while one inside an `if` block does, and
+     *    [collectExpandoDecls] walks exactly that set. A host whose collection was
+     *    UNDECIDABLE is never in the set, so it falls to the refusal below.
+     *  * **A LITERAL THAT CANNOT BE A HOST** — the `{}` inside an
+     *    `Object.defineProperty` descriptor is the ledger row's own receiver.
+     *    tsgo's `IsExpandoInitializer` admits an object literal only when it is EMPTY
+     *    and sits as a `VariableDeclaration`'s un-annotated initializer or as an
+     *    assignment's right-hand side, so anything else has a table nothing can add to.
+     *    ADMITTED.
+     *  * **A LITERAL THAT COULD BE A HOST AND WAS NOT ATTACHED** — the expando CHAIN
+     *    (`c1.inner = {}` then `c1.inner.deep = 1`, which tsgo DOES treat as a nested
+     *    host). REFUSED: this round models one level, so its table is a strict subset
+     *    of tsgo's and (CHK.45) forbids trusting it. The cost is a missing row, never a
+     *    false one.
+     *
+     * A structural conservatism sits under all three: a receiver carrying call or
+     * construct signatures, or an index signature, is handed back to the immunity test
+     * rather than decided here — those tables are not this family's.
+     */
+    private fun jsExpandoObjectAccessAdmitted(receiver: Expression): Boolean? {
+        val type = getTypeOfExpression(receiver) as? Type.Object ?: return null
+        if (type is Type.Reference) return null
+        val literal = type.declaredAt as? ObjectLiteralExpression ?: return null
+        val litFile = owningSourceFileName(literal) ?: return null
+        if (!isJsLikeFileName(litFile)) return null
+        // tsgo's `isJSLiteralType`: an object type declared in JS "disables errors on
+        // read/write of nonexisting members" — but the flag is MEANINGLESS under
+        // `noImplicitAny`, where tsgo returns false outright. Measured both ways: with
+        // the option off, `var o = {}; o.zzzMiss` is silent there and with it on it is
+        // TS2339, while the ledger row's own receiver reports in BOTH modes because a
+        // descriptor's `value` gives its literal a contextual type.
+        if (type.jsLiteral && !expandoNoImplicitAny()) return false
+        if (type.id in jsExpandoObjectTypeIds) return true
+        if (jsObjectLiteralCouldBeExpandoHost(literal)) return false
+        resolveStructuredTypeMembers(type)
+        if (!type.callSignatures.isNullOrEmpty() || !type.constructSignatures.isNullOrEmpty()) return null
+        if (type.stringIndexInfo != null || type.numberIndexInfo != null) return null
+        return true
+    }
+
+    /**
+     * (P18.138) Could this object literal be given expando members by tsgo's binder?
+     *
+     * tsgo's `IsExpandoInitializer` (`ast/utilities.go`) — an object literal qualifies
+     * ONLY in a JS file, ONLY when it has no properties, and ONLY when the declaration
+     * it initializes carries no type annotation; `getInitializerSymbol` then accepts it
+     * as a `VariableDeclaration`'s initializer (any of `var`/`let`/`const` in JS) or as
+     * an expando assignment's right-hand side. A NON-empty literal is measured NOT a
+     * host — tsgo reports TS2339 at `a6.p = 1` for `var a6 = { k: 1 }`.
+     */
+    private fun jsObjectLiteralCouldBeExpandoHost(literal: ObjectLiteralExpression): Boolean {
+        if (literal.properties.isNotEmpty()) return false
+        return when (val parent = (literal as NodeBase).parent) {
+            is VariableDeclaration -> parent.initializer === literal && parent.type == null
+            is BinaryExpression ->
+                parent.operator == SyntaxKind.Equals && parent.right === literal &&
+                    (parent.left is PropertyAccessExpression || parent.left is ElementAccessExpression)
+            else -> false
+        }
+    }
+
+    /** (P18.138) `noImplicitAny` as tsgo's `getStrictOptionValue` computes it — the
+     *  option when written, else `strict`'s value, which DEFAULTS ON ((P18.92)). The
+     *  whole JavaScript object-literal suppression turns on it, so a probe taken
+     *  without it is a measured source of false conclusions ((P18.114)). */
+    private fun expandoNoImplicitAny(): Boolean =
+        options.noImplicitAny ||
+            (!options.noImplicitAnyExplicitlyFalse && !options.strictExplicitlyFalse)
 
     /**
      * (LEGACY.0b) J1/J2 — THE JAVASCRIPT CLASS EXPANDO MEMBER MODEL, and the three
@@ -115132,7 +115349,33 @@ interface DataView {
             fnType.properties = propSyms
             if (ownedByB431) expandoAttachedTypeIds.add(fnType.id)
             for ((i, m) in order.withIndex()) {
-                expandoMemberType(writes.rhs[m] ?: continue)?.let { symbolTypes[propSyms[i].id] = it }
+                val fromWrites = writes.rhs[m]?.let { expandoMemberType(it) }
+                // (P18.138) An `Object.defineProperty` write contributes the DESCRIPTOR's
+                // type, not the descriptor itself, and makes the member `readonly`
+                // whenever ANY of its declarations is a readonly assignment declaration
+                // (tsgo's `isReadonlySymbol` folds them with `core.Some`, so a member
+                // both `defineProperty`-declared and plainly assigned is readonly — and
+                // the plain assignment is then a TS2540, which is what tsgo reports).
+                val descriptors = writes.descriptors[m]
+                // Widened exactly as a plain write is ([expandoMemberType]): tsgo folds
+                // every declaration's type and then applies `getWidenedType` once
+                // (`getWidenedTypeForAssignmentDeclaration`), so a getter returning the
+                // literal `true` contributes `boolean` — measured, `{ get: () => true }`
+                // renders `readonly arrowGet: boolean` there.
+                val fromDescriptors = descriptors
+                    ?.mapNotNull { expandoDescriptorMemberType(it) }
+                    ?.map { getWidenedLiteralType(it) }
+                if (descriptors != null && descriptors.any { expandoDescriptorIsReadonly(it) }) {
+                    mappedReadonlyMemberIds.add(propSyms[i].id)
+                }
+                val all = buildList {
+                    fromWrites?.let { add(it) }
+                    fromDescriptors?.let { addAll(it) }
+                }
+                if (all.isEmpty()) continue
+                val distinct = all.distinctBy { it.id }
+                symbolTypes[propSyms[i].id] =
+                    if (distinct.size == 1) distinct[0] else getUnionType(distinct)
             }
         } finally {
             expandoAttachInProgress.remove(symbol.id)
@@ -115184,21 +115427,52 @@ interface DataView {
      * here at all — a body-local `const` is never BOUND (B83.5) and so has no symbol.
      * JavaScript files are refused whole, as step 1 refuses them.
      */
-    private fun attachVariableExpandoMembers(symbol: Symbol, fnType: Type.Object) {
-        // A re-entrant reader already planted a real table (round 833) — leave it alone.
-        if (fnType.members != null || !fnType.properties.isNullOrEmpty()) return
-        if (fnType.callSignatures.isNullOrEmpty()) return
+    private fun attachVariableExpandoMembers(symbol: Symbol, hostType: Type.Object) {
         val decl = symbol.valueDeclaration as? VariableDeclaration ?: return
         if (symbol.declarations.any { it !== decl }) return
         if (decl.type != null) return
-        if (!varDeclIsImmutableBinding(decl)) return
-        val init = decl.initializer
-        if (init !is ArrowFunction && init !is FunctionExpression) return
+        val init = decl.initializer ?: return
+        if (init !is ArrowFunction && init !is FunctionExpression && init !is ObjectLiteralExpression) return
         val name = (decl.name as? Identifier)?.text ?: return
-        val writes = expandoWritesForVariableHost(decl, name) ?: return
+        val jsFile = programHasJsFile && (owningSourceFileName(decl)?.let { isJsLikeFileName(it) } ?: return)
+        when {
+            init is ArrowFunction || init is FunctionExpression -> {
+                // A re-entrant reader already planted a real table (round 833) — leave
+                // it alone. An arrow's builder plants `properties = emptyList()`, so the
+                // test is EMPTINESS here where [attachExpandoMembers] can use null.
+                if (hostType.members != null || !hostType.properties.isNullOrEmpty()) return
+                if (hostType.callSignatures.isNullOrEmpty()) return
+                if (!varDeclIsImmutableBinding(decl)) return
+                // (P18.138) A JavaScript function-expression host is B433's population
+                // and is REFUSED here — see [attachJsObjectLiteralExpandoMembers].
+                if (jsFile) return
+            }
+            init is ObjectLiteralExpression -> {
+                if (!jsFile) return
+                if (init.properties.isNotEmpty()) return
+                // An object-literal type's builder plants a table; only an EMPTY one is
+                // this host, and a re-entrant reader that filled it is round 833's case.
+                if (!hostType.properties.isNullOrEmpty()) return
+                if (!hostType.callSignatures.isNullOrEmpty()) return
+                if (hostType.stringIndexInfo != null || hostType.numberIndexInfo != null) return
+            }
+            else -> return
+        }
+        val writes = expandoWritesForVariableHost(decl, name)
+        // (P18.138) An UNDECIDABLE collection is a strict subset of what tsgo declares,
+        // so attaching it would render a type missing a member and — worse — make
+        // [jsExpandoObjectAccessAdmitted] trust a table that is not complete.
+        if (writes != null && writes.undecidable) return
+        // (P18.138) A JavaScript object-literal host with NO collected write still has a
+        // COMPLETE table — an empty one — and tsgo reports a missing member on it
+        // (`var k = {}` whose only write sits inside an IIFE, which declares nothing
+        // there). Marking it is what makes [jsExpandoObjectAccessAdmitted] admit that
+        // read; there is nothing to plant.
+        if (init is ObjectLiteralExpression) jsExpandoObjectTypeIds.add(hostType.id)
+        if (writes == null) return
         // A VARIABLE host is in NO B431 candidate set, so route (B) must stay OPEN for
         // it — see [plantExpandoMembers].
-        plantExpandoMembers(symbol, writes, fnType, ownedByB431 = false)
+        plantExpandoMembers(symbol, writes, hostType, ownedByB431 = false)
     }
 
     /**
@@ -115230,9 +115504,12 @@ interface DataView {
             }
             else -> return null
         }
-        if (isJsLikeFileName(fileName)) return null
-        val found = expandoContainerWrites("$fileName\u0000$containerPos", statements)[name] ?: return null
-        return if (found.names.isEmpty()) null else found
+        val jsFile = isJsLikeFileName(fileName)
+        val found = expandoContainerWrites("$fileName\u0000$containerPos", statements, jsFile)[name] ?: return null
+        // (P18.138) An UNDECIDABLE host must reach the caller even with no NAMED member,
+        // because the whole point of the flag is that the collection is a strict subset
+        // of tsgo's — answering null there would read as "complete and empty".
+        return if (found.names.isEmpty() && !found.undecidable) null else found
     }
 
     /**
@@ -115277,7 +115554,7 @@ interface DataView {
             // Overload declarations share one container; scan it once.
             if (key == seenKey) continue
             seenKey = key
-            val found = expandoContainerWrites(key, statements)[name] ?: continue
+            val found = expandoContainerWrites(key, statements, jsFile = false)[name] ?: continue
             if (found.names.isEmpty()) continue
             if (merged == null) merged = found
             else if (merged !== found) {
@@ -115285,7 +115562,13 @@ interface DataView {
                 for (src in listOf(merged, found)) {
                     for (m in src.membersInSourceOrder()) {
                         src.rhs[m]?.forEach { both.record(m, it.pos, it) }
+                        // (P18.138) descriptors travel with the writes; this merge is
+                        // TypeScript-only today (a JS container is refused above), and
+                        // carrying them is what keeps that a property of the CALLER
+                        // rather than of this loop.
+                        src.descriptors[m]?.forEach { both.recordDescriptor(m, it.pos, it) }
                     }
+                    if (src.undecidable) both.markUndecidable()
                 }
                 merged = both
             }
@@ -115298,6 +115581,7 @@ interface DataView {
     private fun expandoContainerWrites(
         key: String,
         statements: List<Statement>,
+        jsFile: Boolean,
     ): Map<String, ExpandoHostWrites> = expandoContainerMemo.getOrPut(key) {
         val cands = HashSet<String>()
         for (st in statements) when (st) {
@@ -115306,11 +115590,33 @@ interface DataView {
             // or an arrow, un-annotated. The two share this scan so they cannot
             // disagree about what a write declares; a name that turns out not to be a
             // host simply never has its entry read.
-            is VariableStatement -> if (st.declarationList.flags == SyntaxKind.ConstKeyword) {
+            is VariableStatement -> {
+                val isConst = st.declarationList.flags == SyntaxKind.ConstKeyword
                 for (d in st.declarationList.declarations) {
                     if (d.type != null) continue
                     val di = d.initializer
-                    if (di !is ArrowFunction && di !is FunctionExpression) continue
+                    val admitted = when {
+                        di is ArrowFunction || di is FunctionExpression -> isConst
+                        // (P18.138) THE THIRD HOST KIND, JAVASCRIPT-ONLY: an EMPTY object
+                        // literal. tsgo's `IsExpandoInitializer` admits one in a JS file
+                        // when the declaration carries no type annotation, and its
+                        // `getInitializerSymbol` drops the `const` requirement for a JS
+                        // declaration entirely — measured, `var`, `let` and `const` are
+                        // all hosts there while a NON-empty literal (`{ k: 1 }`) is none
+                        // (tsgo reports TS2339 at the write itself for that one).
+                        // The EMPTINESS test appears at THREE layers — here, at
+                        // [attachVariableExpandoMembers]' `init.properties.isNotEmpty()`
+                        // and at its `hostType.properties` test. Measured, each is
+                        // individually REDUNDANT (every single-layer ablation, and the
+                        // two-layer one, read 0 RED over 22 pins) and the FAMILY is
+                        // load-bearing: with all three dropped, `var a = { k: 1 }`
+                        // becomes a host, its `a.p = 1` write goes SILENT where tsgo
+                        // reports it, and the later read renders `'{ p: number; }'` for
+                        // tsgo's `'{ k: number; }'`. Round 927's pair, three layers deep.
+                        di is ObjectLiteralExpression -> jsFile && di.properties.isEmpty()
+                        else -> false
+                    }
+                    if (!admitted) continue
                     (d.name as? Identifier)?.text?.let { cands.add(it) }
                 }
             }
@@ -115319,7 +115625,7 @@ interface DataView {
         if (cands.isEmpty()) return@getOrPut emptyMap()
         val declared = HashMap<String, ExpandoHostWrites>()
         for (c in cands) declared[c] = ExpandoHostWrites()
-        for (st in statements) collectExpandoDecls(st, cands, declared)
+        for (st in statements) collectExpandoDecls(st, cands, declared, jsFile)
         declared
     }
 
@@ -115340,6 +115646,108 @@ interface DataView {
      * measurably WRONG for a TypeScript expando — tsgo types `f.p = null; f.p = 1` as
      * `number | null`.
      */
+    /**
+     * (P18.138) The TYPE an `Object.defineProperty` descriptor gives its member —
+     * tsgo's `getTypeFromPropertyDescriptor`, transcribed:
+     *
+     * ```
+     * value?           -> its type
+     * else get?        -> that function's SINGLE call signature's RETURN type
+     * else set?        -> that function's SINGLE call signature's FIRST PARAMETER type
+     * else                any
+     * ```
+     *
+     * Measured against `tools/tsgo-7.0.2/lib/tsc` on all four arms plus the shorthand
+     * (`get() { … }`) and arrow spellings, and on a descriptor held in a VARIABLE
+     * (`var d = { value: 9 }; Object.defineProperty(h, 'p', d)`), which tsgo also
+     * resolves — which is why this asks the descriptor's TYPE rather than reading the
+     * call site's object literal syntactically.
+     */
+    private fun expandoDescriptorMemberType(descriptor: Expression): Type? {
+        val descType = getTypeOfExpression(descriptor)
+        if (descType === errorType || descType === anyType) return null
+        descriptorProperty(descType, "value")?.let {
+            val t = getTypeOfSymbol(it)
+            return if (t === errorType) null else t
+        }
+        descriptorProperty(descType, "get")?.let { g ->
+            expandoDescriptorSingleSignature(g)?.let { sig ->
+                val rt = sig.resolvedReturnType
+                if (rt != null && rt !== errorType) return rt
+            }
+        }
+        descriptorProperty(descType, "set")?.let { s ->
+            expandoDescriptorSingleSignature(s)?.let { sig ->
+                val first = sig.parameters.firstOrNull()
+                if (first != null) {
+                    val pt = getTypeOfSymbol(first)
+                    if (pt !== errorType) return pt
+                }
+            }
+        }
+        return anyType
+    }
+
+    /**
+     * (P18.138) Is the member an `Object.defineProperty` descriptor declares READ-ONLY?
+     * tsgo's `isReadonlyAssignmentDeclaration`, transcribed:
+     *
+     * ```
+     * value present  ->  writable present ? (writable's type is the literal `false`) : true
+     * value absent   ->  `set` absent
+     * ```
+     *
+     * Measured on all six cells: `{ value: 1 }` and `{ enumerable: true }` are readonly,
+     * `{ value: 2, writable: true }` is not, `{ value: 3, writable: false }` is,
+     * `{ get }` is, `{ set }` and `{ get, set }` are not.
+     *
+     * The `writable` value is read through its PROPERTY ASSIGNMENT's initializer when it
+     * has one — tsgo does the same, and for the same reason it states: the member's own
+     * type is WIDENED to `boolean` by the time the object literal has been typed, so
+     * asking the symbol would answer "not the literal `false`" for `writable: false` and
+     * silently make every such member readonly.
+     *
+     * **IT IS A MEASURED REDUNDANT GUARD *IN THIS MODEL*, AND IT IS KEPT BECAUSE IT IS
+     * tsgo's OWN SPELLING.** Ablated (the initializer leg deleted, so the symbol type
+     * decides), the CLI output over `{ value: 3, writable: false }` +
+     * `{ value: 4, writable: true }` is BYTE-IDENTICAL: an object-literal member's
+     * `symbolTypes` entry keeps the fresh literal here while only its DISPLAY widens, so
+     * the two readings coincide on every shape reachable from JavaScript syntax. Recorded
+     * rather than deleted — a shape whose descriptor type comes from somewhere other than
+     * an inline literal would separate them, and losing tsgo's spelling is how the two
+     * drift.
+     */
+    private fun expandoDescriptorIsReadonly(descriptor: Expression): Boolean {
+        val descType = getTypeOfExpression(descriptor)
+        if (descType === errorType || descType === anyType) return false
+        if (descriptorProperty(descType, "value") != null) {
+            val writable = descriptorProperty(descType, "writable") ?: return true
+            val init = (writable.valueDeclaration as? PropertyAssignment)?.initializer
+            if (init != null) return literalTypeOfExpression(init) === falseType
+            return getTypeOfSymbol(writable) === falseType
+        }
+        return descriptorProperty(descType, "set") == null
+    }
+
+    /** (P18.138) A descriptor's own member, resolved through the ordinary member
+     *  lookup so a descriptor held in a variable answers exactly as an inline one
+     *  does. The receiver's table is resolved first — it is lazy (round 833). */
+    private fun descriptorProperty(descType: Type, name: String): Symbol? {
+        if (descType is Type.Object) resolveStructuredTypeMembers(descType)
+        return getPropertyOfType(descType, name)
+    }
+
+    /** (P18.138) The SINGLE call signature of a descriptor's `get`/`set` member, or
+     *  null — tsgo's `getSingleCallSignature`, which answers null for an overload set
+     *  and for a non-callable value, leaving the descriptor's type at `any`. */
+    private fun expandoDescriptorSingleSignature(member: Symbol): Signature? {
+        val t = getTypeOfSymbol(member)
+        if (t !is Type.Object) return null
+        resolveStructuredTypeMembers(t)
+        val sigs = t.callSignatures ?: return null
+        return sigs.singleOrNull()
+    }
+
     private fun expandoMemberType(rhsList: List<Expression>): Type? {
         val types = rhsList.mapNotNull {
             val t = getWidenedLiteralType(getTypeOfExpression(it))
@@ -126328,6 +126736,21 @@ interface DataView {
         }
         val objType = Type.Object()
         objType.declaredAt = expr // (LEGACY.0a)
+        // (P18.138) tsgo's `ObjectFlagsJSLiteral` (checker.go `checkObjectLiteral`):
+        // set for an object literal in a JS file typed with NO contextual type. The
+        // contextual test is tsgo's own and is load-bearing — the `{}` inside an
+        // `Object.defineProperty` descriptor IS contextually typed (`value?: any`), so
+        // it is NOT a JS literal and tsgo reports a missing member on it even under
+        // `strict: false`, which is exactly the row `jsExpandoObjectDefineProperty`
+        // pins.
+        // [programHasJsFile] is the pre-gate: on a pure-TypeScript program (every
+        // dashboard profile, most of the corpus) this is one boolean read and the
+        // parent-chain ascent never runs.
+        if (programHasJsFile && contextualType == null &&
+            isJsLikeFileName(owningSourceFileName(expr) ?: "")
+        ) {
+            objType.jsLiteral = true
+        }
         objType.members = members
         objType.properties = properties
         // (CHK.93)(b): a const-context literal's members are REGULAR literal types and
@@ -149587,7 +150010,17 @@ interface DataView {
             val jsClassAdmitted = jsClassAccessAdmitted(expr, fileName)
             if (jsClassAdmitted != null) {
                 if (!jsClassAdmitted) return
-            } else if (!jsAccessReceiverIsExpandoImmune(expr.expression)) return
+            } else {
+                // (P18.138) (CHK.124) step 3: an OBJECT-LITERAL receiver whose expando
+                // set this checker has computed in full, or which provably has none, is
+                // decidable too — see [jsExpandoObjectAccessAdmitted]. Asked BEFORE the
+                // immunity test because that test refuses every JavaScript-declared
+                // type by construction.
+                val jsObjAdmitted = jsExpandoObjectAccessAdmitted(expr.expression)
+                if (jsObjAdmitted != null) {
+                    if (!jsObjAdmitted) return
+                } else if (!jsAccessReceiverIsExpandoImmune(expr.expression)) return
+            }
         }
         // (ENGINE.2) round 787: level Q. Non-recursive, so it keeps the
         // `depth != 1 => return` shape; a nested invocation would be counted in
@@ -152287,7 +152720,9 @@ interface DataView {
         if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return false
         if (raw !is Type.Object) return false
         if (isGlobalObjectOrFunctionType(raw)) return false
-        if (!cmamAllMissingTrustedMember(raw, propName)) return false
+        if (!cmamAllMissingTrustedMember(raw, propName) &&
+            !cmamNestedEmptyJsObjectTrusted(raw, fileName)
+        ) return false
         // MEASURED, not argued: an ARRAY-LIKE (a tuple is an anonymous object
         // carrying a number index signature) reaches its `slice`/`map`/`filter`
         // through the global `Array` interface, and `getApparentType` does not
@@ -152316,6 +152751,46 @@ interface DataView {
             fileName = fileName, line = line, character = character,
             start = diagStart, length = diagLength,
         ))
+        return true
+    }
+
+    /**
+     * (P18.138) A NESTED receiver typed as the truly-EMPTY `{}` of a JavaScript object
+     * literal, which [cmamAllMissingTrustedMember] refuses and must go on refusing.
+     *
+     * That predicate's anonymous arm demands POSITIVE evidence a member table is
+     * complete — `!callSignatures.isNullOrEmpty() || !constructSignatures.isNullOrEmpty()
+     * || !members.isNullOrEmpty()` — and an EMPTY `{}` supplies none of it, for
+     * (CHK.45)'s reason: `{}` from a literal and `{}` from an unfinished resolution
+     * (round 833) are the same type. (CHK.109) recorded the escape hatch and this is it:
+     * the receiver EXPRESSION can be evidence the receiver TYPE cannot carry. A type
+     * whose [Type.Object.declaredAt] is an object literal with NO properties was minted
+     * from that syntax, so its emptiness is a fact about the source.
+     *
+     * It is the NESTED twin of the B63.33 emission fifty lines into
+     * [cmamCheckResolvedObjectType], whose gate this copies term for term — no symbol,
+     * no signatures, no index signatures, no base types — and which has owned the
+     * IDENTIFIER-receiver `{}` case for the whole corpus era.
+     *
+     * **GATED TO JAVASCRIPT, AND THAT IS A REFUSAL RATHER THAN A RULE.** The same
+     * widening is correct in a `.ts` file — measured, `declare const h: { readonly d: {} };
+     * h.d.readMiss` is TS2339 in tsgo and silent here on the parent binary AND on this
+     * one — but it is a TypeScript-visible change whose instrument is the 8-profile
+     * grid, and this round's whole JavaScript surface sits behind
+     * [jsExpandoObjectAccessAdmitted], where the grid is a control by construction. The
+     * `.ts` half is left to a successor with the grid in hand.
+     */
+    private fun cmamNestedEmptyJsObjectTrusted(raw: Type.Object, fileName: String): Boolean {
+        if (!isJsLikeFileName(fileName)) return false
+        if (raw is Type.Reference) return false
+        if (raw.symbol != null) return false
+        val literal = raw.declaredAt as? ObjectLiteralExpression ?: return false
+        if (literal.properties.isNotEmpty()) return false
+        resolveStructuredTypeMembers(raw)
+        if (!raw.properties.isNullOrEmpty() || !raw.members.isNullOrEmpty()) return false
+        if (!raw.callSignatures.isNullOrEmpty() || !raw.constructSignatures.isNullOrEmpty()) return false
+        if (raw.stringIndexInfo != null || raw.numberIndexInfo != null) return false
+        if (raw is Type.Interface && !raw.baseTypes.isNullOrEmpty()) return false
         return true
     }
 
@@ -152922,7 +153397,10 @@ interface DataView {
         cmamExpandoHostMemo[key]?.let { return it }
         val declared = HashMap<String, ExpandoHostWrites>()
         declared[name] = ExpandoHostWrites()
-        for (stmt in statements) collectExpandoDecls(stmt, setOf(name), declared)
+        // (P18.138) This asks whether `typeof <decl>` carries members this model lacks,
+        // so it must see the SAME declarations the attachment does — including the
+        // JavaScript-only `Object.defineProperty` form.
+        for (stmt in statements) collectExpandoDecls(stmt, setOf(name), declared, isJsLikeFileName(fileName))
         val answer = declared[name]?.names?.isNotEmpty() == true
         cmamExpandoHostMemo[key] = answer
         return answer

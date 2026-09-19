@@ -59,7 +59,8 @@ import kotlin.test.Test
  * makes it the class's own `typeParameters`.
  *
  * **Stated residues, each measured** (tsgo reports, we stay silent): an instance-typed
- * VARIABLE receiver (`const h = new Holder(); h.missing`), a JavaScript OBJECT LITERAL, and
+ * VARIABLE receiver (`const h = new Holder(); h.missing`), a JavaScript OBJECT LITERAL — CLOSED
+ * by (CHK.124) step 3, (P18.138), and re-pointed below — and
  * a class whose `extends` base is not a resolvable `ClassDeclaration` of the same file. And
  * one divergence J2 makes reachable rather than introduces: the STATIC-side spelling
  * suggestion — tsgo answers `TS2551 … Did you mean 'known'?` for `Statics.unknown` where we
@@ -573,10 +574,36 @@ class TsgoStep25Test {
     }
 
     @Test
-    fun `negative control - an instance typed variable receiver stays silent`() {
-        // Stated residue: tsgo reports a.js(5,3) TS2339 on 'residueMissing' and a.js(7,5) on
-        // 'residueLit'. Both need a receiver whose class is decided by its TYPE rather than
-        // syntactically, which is the next slice, not this one.
+    fun `residue - an instance typed variable receiver stays silent`() {
+        // (P18.138) RE-POINTED AND SPLIT. This pin used to assert that BOTH halves of the
+        // step-25 residue stayed silent; (CHK.124) step 3 closed the OBJECT-LITERAL half,
+        // so the two are now separate observables and each is re-measured against
+        // `tools/tsgo-7.0.2/lib/tsc` rather than edited to what this compiler prints.
+        //
+        // tsgo, both rows: a.js(5,3) TS2339 'residueMissing' on 'Holder', and a.js(7,5)
+        // TS2339 'residueLit' on '{}'. The SURVIVING residue is the first: an
+        // instance-typed VARIABLE receiver needs a class decided by its TYPE rather than
+        // syntactically, which neither step 25 nor step 3 supplies.
+        val d = diagnose(
+            """
+            // @Filename: /a.js
+            class Holder {
+                constructor() { this.inCtor = 1; }
+            }
+            const h = new Holder();
+            h.residueMissing;
+            """,
+            js,
+        )
+        assert(d.none { it.code == 2339 })
+    }
+
+    @Test
+    fun `the javascript object literal half of the step 25 residue now reports`() {
+        // tsgo: a.js(7,5): error TS2339: Property 'residueLit' does not exist on type
+        //       '{}'. Closed by (CHK.124) step 3 — an `{}`-initialized `const` in a
+        // JavaScript file is an expando host whose member table this checker computes in
+        // full, so the access is decidable. Byte-identical to tsgo, line and column.
         val d = diagnose(
             """
             // @Filename: /a.js
@@ -590,7 +617,12 @@ class TsgoStep25Test {
             """,
             js,
         )
-        assert(d.none { it.code == 2339 })
+        assert(d.any {
+            it.code == 2339 && it.fileName == "/a.js" && it.line == 7 && it.character == 5 &&
+                it.length == 10 &&
+                it.message == "Property 'residueLit' does not exist on type '{}'."
+        })
+        assert(d.count { it.code == 2339 } == 1)
     }
 
     @Test

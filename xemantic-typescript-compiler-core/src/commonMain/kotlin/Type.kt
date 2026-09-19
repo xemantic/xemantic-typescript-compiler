@@ -182,6 +182,17 @@ sealed class Type {
          * for every type minted without a declaration.
          */
         var declaredAt: Node? = null
+        /**
+         * (P18.138) tsgo's `ObjectFlagsJSLiteral` — "object type declared in JS, disables
+         * errors on read/write of nonexisting members". Set by `getTypeOfObjectLiteral`
+         * for an object literal in a `.js`/`.jsx`/`.cjs`/`.mjs` file that was typed with
+         * NO contextual type, and for an attached JavaScript expando host. Read by
+         * `isJsLiteralSuppressedAccess`, which mirrors `isJSLiteralType`: the flag is
+         * MEANINGLESS under `noImplicitAny` (tsgo returns false there outright), so it
+         * suppresses a missing-member row only when that option is off — which is why a
+         * JS probe taken without the flag set is a measured source of false conclusions.
+         */
+        var jsLiteral: Boolean = false
         var members: SymbolTable? = null
         var properties: List<Symbol>? = null
         var callSignatures: List<Signature>? = null

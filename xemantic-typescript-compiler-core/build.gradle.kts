@@ -1023,12 +1023,6 @@ val tsgoPendingBaselines = listOf(
         "`~` at column 21."
     ),
     TsgoPendingBaseline(
-        "jsExpandoObjectDefineProperty.errors.txt",
-        "F1 tsgo REPORTS where we are silent (a NEW errors baseline); layer `submodule`. tsgo: " +
-        "index.js(3,17): error TS2339: Property 'inspectedWindow' does not exist on type '{}'. " +
-        "| ours: nothing"
-    ),
-    TsgoPendingBaseline(
         "jsExportMemberMergedWithModuleAugmentation.errors.txt",
         "PARTIAL since (P18.121): the TS2671 row now MATCHES tsgo, at /index.ts(3,16), and the " +
         "TS2741 it used to carry is gone — the augmentation is refused rather than merged. The " +
