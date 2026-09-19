@@ -1,3 +1,20 @@
+**(P18.133) — THE `simulatedVersion` DEFAULT MOVES TO 7.0; TypeScript 6's LADDER IS GONE, 19,903 / 0 / 62 (2026-09-17).**
+One line, and everything else is consequence: every TS7-removed option now reports tsgo's TS5102/TS5108 *has been
+removed* instead of TypeScript 6's TS5101/TS5107 *deprecated, will stop functioning*, and `ignoreDeprecations` no
+longer silences it. **The measurement**: across tsgo's whole baseline corpus TS5101 and TS5107 appear ONLY as lines
+tsgo deletes, and `ignoreDeprecations` is parsed and read nowhere. **The correctness argument is the stronger one** —
+(LEGACY.1) had already deleted these options' behaviour, so we were telling users an option "will stop functioning
+in TypeScript 7.0" and offering a flag to silence it while it was already inert. Two pending rows CLOSE (ledger
+39 -> 37, skipped 64 -> 62) and a third is DROPPED rather than ledgered: `pathMappingInheritedBaseUrl`'s baseline is
+PRISTINE's TS5101, so it could never close — an un-closeable row is not a pending row, and the skip now follows a
+config's `extends` chain to reach it. **`keptTsc` 3 -> 1, not 3 -> 2, because the bucket counts BASELINES** and that
+one case contributes two. **The round's reusable lesson is a census failure**: sizing the at-risk pins by diagnostic
+CODE could not see the nine classes that depend on a code NOT being emitted (`@ignoreDeprecations: 6.0`), which was
+29 of 41 first-run failures. TS5103 retired with its validity filter KEPT (`"banana" >= "6.0"` is lexicographically
+true, so dropping the filter would make garbage start silencing the ladder); `module=None` refused as TS6046's, i.e.
+(LEGACY.2)'s. Grid is a **counted control** — no profile sets any flipping option and no capture in either arm
+carries one of the four codes.
+
 **(P18.132) — (LEGACY.1)(g): `baseUrl` DELETED, AND (LEGACY.1) IS CLOSED, 19,885 / 0 / 64 (2026-09-17).**
 The last unlanded sub-step of the TS7-removal arc, and it needed an owner decision rather than code: 27 active
 subtests set `baseUrl` in an EMBEDDED tsconfig and tsgo has **no output of any kind** for one of them, so they

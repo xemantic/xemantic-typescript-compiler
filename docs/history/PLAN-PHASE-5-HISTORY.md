@@ -68381,3 +68381,69 @@ refuses where node answers; an ABSENT member of a class value refuses where node
 because the carrier holds no statics and `undefined` would be a SILENT wrong answer for a real static; a generic
 function in a value position refuses at the erasure. **And a checker gap found in passing: we accept
 `static name`, which tsgo refuses with TS2699.**
+
+### Round (P18.128) — (CHK.137)+(CHK.138): two gaps that were five, and a "measured redundant guard" that was only redundant below ES2022 (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,840 → 19,881 / 0 / 65**; corpus screen **3,102 / 0
+errors** (run SEVEN times — once landed and once per ablation arm, which is the per-mechanism attribution) and
+**5,688 / 0 emit**; `cost_gate.py` exit 0 (max +0.15%, and `globals.lookups` +0.04% is the new declaration probe,
+accounted); `huge_methods.py --fail-over 0` exit 0 over 875 classes; the 8-profile grid `added=0 removed=0` on all
+eight with 78 emit files byte-identical. `Checker.kt` 195,036 → 195,278 (+255/−13).
+
+**M1 (CHK.137) IS A SYMMETRIC FP/FN PAIR, NOT A FALSE POSITIVE.** The cause is the one the brief predicted —
+(CHK.73), a class VALUE types as its INSTANCE type — but the SAME artifact hides a false NEGATIVE, and **a fixture
+that varies only whether the class writes `constructor() {}` swaps which one you see**: a declared constructor puts
+a construct signature on the instance type, so `signatures.isEmpty()` is false, the emitter is never reached, and
+`const i = new Cls(); new i()` goes silent where tsgo reports. Both directions now agree with tsgo.
+
+**AND THE FP IS SCRIPT-FILE-ONLY, WHICH ALMOST LOST THE ROUND: A MATRIX WRITTEN THE OBVIOUS WAY — WITH `export`s —
+READS COMPLETELY CLEAN.** A bare `export {}` makes it vanish, because the emitter reads `globals[…]` and INV.3(d)
+keeps a module file's locals out of `globals`. The first 10-case matrix measured nothing and the defect was nearly
+reported unreproducible. **Any (CHK.73)-adjacent probe must be run in a SCRIPT file.**
+
+**M1b — A THIRD MECHANISM THE FIX FORCED.** Closing the FP would have left
+`abstract class Cls; const c = Cls; new c()` SILENT on erroneous code: it had been caught by the false positive, at
+the right position with the WRONG CODE (TS2351 for TS2511). `collectTypeofAbstractVars` learned the INFERRED alias
+spelling beside the annotated one, which is a real widening of a family with **4 active corpus subtests**.
+
+**M2 (CHK.138) IS THREE DEFECTS, AND ONE POINTS THE OPPOSITE WAY TO THE QUEUE ITEM.** tsgo has TWO emitters and
+they are NOT interchangeable: `prototype` fires at every target, while `name`/`length`/`caller`/`arguments` are
+gated on `useDefineForClassFields` — so **an UNSET target is silent** (it defaults above ES2022) and every pin must
+name a target or it is vacuous. Beside the missing four-name family we had an **ours-only FALSE POSITIVE**
+(`declare class C { static prototype: number }` and the same in `declare namespace`/`declare module` — we had no
+ambient gate at all, `spineDupIdFinish` skipping a whole `.d.ts` but not a `declare` in a `.ts`), and a NAME-READ
+defect: `static "prototype"` and a computed `static [k]` were missed because the name was
+`(name as? Identifier)?.text`. **And the TS2300 companion must carry the WRITTEN name** — tsgo prints
+`Duplicate identifier '[k]'`, not `'prototype'`.
+
+**AN INDEPENDENT RECEIPT FOR M2, BECAUSE THE CORPUS CANNOT GIVE ONE.** `staticPropertyNameConflicts` is a
+conformance fixture whose every variation names a target `usesUnsupportedOption` skips, so it is in NO active
+subtest; reconstructed from its pristine baseline it reads **20 of its 60 TS2699 rows and ZERO false positives**.
+The 40 missing are two PRE-EXISTING refusals deliberately not widened (30 a computed key that is a dotted path
+through an `as const` object literal, which `MemberNames` refuses BY NAME as (CHK.5) late binding; 10 the
+class-expression reach gap). Final agreement over the round's own 74 shapes: **65**, with the 9 divergences each
+attributed — 3 pre-existing M1 misses, 5 the reach gap, and 1 an `es5` config **tsgo refuses outright and then
+checks nothing at all**, i.e. the (LEGACY.1) removed-option family.
+
+**THE ROUND FIRED (P18.127)'s COUNTDOWN, AND THE LESSON IS ABOUT THE PREMISE RATHER THAN THE PIN.** That round
+recorded a **measured redundant guard** — `.name` placed last in the static-member block — on the grounds that
+"tsgo refuses `static name` outright and our accepting it is a separate gap". Closing the gap reddened it. **The
+premise was only ever true BELOW ES2022**: tsgo ACCEPTS `static name` at ES2022 and above, which is also the
+default, so the ordering is reachable by a valid program. Repaired by RE-POINTING (the pin now runs at ES2022 on a
+one-case tsconfig override, with a new sibling pinning the sub-ES2022 refusal by message), never by editing the
+assertion — **and the guard is now LIVE rather than redundant.** A "measured redundant" verdict is a claim about a
+configuration as much as about a shape.
+
+**PINS AND ABLATION.** `TsgoStep23Test`, 40 pins, 40 green; **23 RED** against a stash-ablated HEAD whose rebuild
+reproduced HEAD's committed `Checker.class` md5 exactly — which is the control that the arm really was the
+pre-change binary. Six arms, each uniquely attributable; a6 (dropping the `useDefineForClassFields` gate) is what
+makes the three target controls discriminating rather than blind. One pin is green pre-change **for the wrong
+reason** (the family did not exist) and is red under the ambient arm, so it is recorded as discriminating that
+mechanism rather than claimed for its own.
+
+**THREE INSTRUMENT TRAPS, ALL PAID FOR IN THIS ROUND.** `Diagnostic.character` is **1-based** here, and calibrating
+against a sibling pin in another class (0-based, `.js` fixture, different helper) cost 12 of 40 pins on the first
+run — after correction all fifteen asserted columns are tsgo's own column VERBATIM, so that first run was in fact a
+full span-parity receipt. Counting "active corpus subtests carrying code X" by sanitised test NAME reads **0 for
+every code** and looks like no coverage; the generator references the baseline PATH. And a KIR refusal assertion
+that reads `stderr` reads EMPTY for a compile that never ran — the diagnostics are in `report`.

@@ -25,6 +25,71 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.138) — (CHK.124) step 3: the JavaScript object-literal host, and B433 priced rather than assumed (2026-09-19)
+
+`jsExpandoObjectDefineProperty.errors.txt` CLOSES — ledger **34 -> 33**, skipped 59 -> 58, suite
+**20,002 / 0 / 58** (+23 pins). Errors screen 3,066 / 0 and emit 5,645 / 0 **with the closed row ACTIVE in that
+count** — that, not `--include`, is the closure receipt. Cost gate +0.15% max, `huge_methods --fail-over 0` exit 0,
+warning gate clean, 8-profile grid 8 x 0/0 on both arms with emit 78 vs 78 byte-identical. Libraries unchanged
+(cronstrue 1 -> 1, marked 18 -> 18).
+
+**A THIRD HOST KIND, REUSING EVERYTHING STEPS 1 AND 2 BUILT** — no second collector: in a JS file, an **EMPTY**
+`ObjectLiteralExpression` initializing an **un-annotated** `var`/`let`/`const` in a `SourceFile`/`ModuleBlock`. All
+three binding kinds are hosts here where TypeScript requires `const`, which is tsgo's `getInitializerSymbol` arm;
+`programHasJsFile` pre-gates every new parent-chain ascent to one boolean on a pure-TS program. `Object.
+defineProperty` membership transcribes `IsBindableObjectDefinePropertyCall` (exactly 3 args, literal-like name) with
+the type taken from the descriptor (`value` -> `get`'s return -> `set`'s parameter -> `any`) and `readonly` from
+`isReadonlyAssignmentDeclaration`; **all six descriptor cells plus `writable` true/false and TS2540 are
+byte-identical to tsgo.**
+
+**WHAT WAS REFUSED IS THE MORE USEFUL HALF, AND EVERY REFUSAL CARRIES ITS MEASUREMENT.** A NUMERIC
+`defineProperty` name marks the host UNDECIDABLE and refuses it whole, because tsgo names such a member by its
+canonical numeric string (round 934) and a subset member table is exactly what (CHK.45) forbids trusting. A
+non-empty literal, an annotated one, a JS function-/class-expression host, the expando CHAIN and a body-local host
+(B83.5 — never bound, so there is no symbol to attach to) are all refused, each measured.
+
+**AND THE PRIMITIVE-RECEIVER ARM WAS BUILT AND REVERTED**, which is why this fixture's third row is still missing:
+it closes `plain.expandoOk.nope` and **breaks (P18.130)'s stated invariant** that every row emitted in a `.js` file
+carries tsgo's MESSAGE — three shapes print `'string'`/`'number'`/`'boolean'` where tsgo prints the literal types.
+All three reproduce IDENTICALLY in a `.ts` file on this binary and on its parent, so the blocker is a standing
+literal-display/flow-narrowing gap and not a JavaScript one. Two rows of three, with the third refused for a reason
+that names its successor.
+
+**B433 IS *NOT* RETIRED, AND THAT IS A MEASUREMENT RATHER THAN A CONCESSION.** The PassLab priced it in one run
+(`disable checkJsObjectDefinePropertyLocalFnReads`, banner confirmed): **1 mismatch**, and the diff is *"expected
+diagnostics from baseline but none produced"* — the whole ROW, not its display. Its host is a body-local `const`,
+i.e. B83.5's unbound population that `getTypeOfVariableOrProperty` never sees, and it also owns the file-level JS
+function-expression host, so admitting that shape here would DOUBLE-EMIT. Both of B433's rows are byte-identical to
+tsgo on the shipped binary. Retiring it needs the binder, not this model.
+
+**THE ABLATION IS THE ROUND'S BEST ARTEFACT: EIGHT ARMS, ONE MISTAKE AT A TIME, AND TWO OF THEM FOUND REDUNDANT
+GUARDS THAT ARE RECORDED RATHER THAN CLAIMED AS COVERAGE.** a1 (never set `jsLiteral`) 1 RED; a2 (admit a possible
+host) 2 RED; a3 (drop the undecidable refusal) 1 RED; a4 (drop `cmamNestedEmptyJsObjectTrusted`) **2 RED — the
+ledger row**; a5 (ungate `defineProperty` on JS) 1 RED *after its fixture was repaired*; a8 (drop the
+`jsExpandoObjectTypeIds` marking) **11 RED**. a6/a6b/a6c each dropped one non-empty guard alone and read **0 RED —
+individually redundant** — while a6d dropped all three and LOST a row and produced a wrong display, so the family is
+load-bearing though no member is. a7 read `writable` from the symbol type: **0 RED and CLI byte-identical, a
+measured redundant guard**, kept because it is tsgo's spelling. Round 807's law honoured in both directions.
+
+**THE SCREEN IS LARGELY A CONTROL HERE AND THE COUNT WAS TAKEN BEFORE THE ROUND** ((CHK.124)): of 2,822 active
+`.errors.txt` cases, 143 carry a `.js` file and 36 an expando assignment or `defineProperty` — but only **1** has
+the new host shape (annotated, so refused) and **2** carry `defineProperty` (neither an object-literal host). The
+grid is a control for a structural reason rather than a measured one: every new rule is JS-gated and all eight
+profiles are `.ts`.
+
+**A COUNTDOWN PIN MOVED AND WAS SPLIT RATHER THAN EDITED.** `TsgoStep25Test`'s `negative control - an instance
+typed variable receiver stays silent` asserted (P18.131)'s residue, half of which this round closes; re-measured
+against tsgo it became a renamed `residue -` pin for the surviving instance-typed half plus a NEW positive pin for
+the object-literal half, with the class KDoc updated.
+
+**WHAT DID NOT WORK.** Under `noImplicitAny: false` the ledger row is still MISSED — our contextual typing does not
+reach a nested literal inside a contextually-typed one, so `jsLiteral` is over-set for the descriptor's `value: {}`;
+missing, never false, and pinned. Two residual "ours-only" probe lines are the SAME row as tsgo's with a pre-existing
+display gap (an inline-JSDoc parameter typed `any`, and B431's `() => void` for a JS function-declaration host),
+both unchanged from the parent binary. Zero new ours-only rows anywhere. Process: background shells are throttled
+between turns here, so an ablation batch advanced ~1 minute per several minutes of waiting and had to be re-run in
+the foreground under an explicit `timeout`.
+
 ### Round (P18.137) — (CHK.124) step 2: route (B) opens, and the grid's green is verified rather than banked (2026-09-19)
 
 Suite **19,979 / 0 / 59** (+27 pins), errors screen 3,065 / 0 and emit 5,645 / 0, cost gate +0.15% max,
@@ -553,72 +618,6 @@ from the expression form, with a control pin proving it is not new; a capturing 
 declaration throws `JsTypeError` where node throws `ReferenceError` (both fail, and node's is the TDZ, so no
 correct program is affected); and a nested generator or `async` refuses, as everywhere in this subset.
 
-### Round (P18.128) — (CHK.137)+(CHK.138): two gaps that were five, and a "measured redundant guard" that was only redundant below ES2022 (2026-09-17)
-
-**Three commits** (fix, test, this docs commit). **Suite 19,840 → 19,881 / 0 / 65**; corpus screen **3,102 / 0
-errors** (run SEVEN times — once landed and once per ablation arm, which is the per-mechanism attribution) and
-**5,688 / 0 emit**; `cost_gate.py` exit 0 (max +0.15%, and `globals.lookups` +0.04% is the new declaration probe,
-accounted); `huge_methods.py --fail-over 0` exit 0 over 875 classes; the 8-profile grid `added=0 removed=0` on all
-eight with 78 emit files byte-identical. `Checker.kt` 195,036 → 195,278 (+255/−13).
-
-**M1 (CHK.137) IS A SYMMETRIC FP/FN PAIR, NOT A FALSE POSITIVE.** The cause is the one the brief predicted —
-(CHK.73), a class VALUE types as its INSTANCE type — but the SAME artifact hides a false NEGATIVE, and **a fixture
-that varies only whether the class writes `constructor() {}` swaps which one you see**: a declared constructor puts
-a construct signature on the instance type, so `signatures.isEmpty()` is false, the emitter is never reached, and
-`const i = new Cls(); new i()` goes silent where tsgo reports. Both directions now agree with tsgo.
-
-**AND THE FP IS SCRIPT-FILE-ONLY, WHICH ALMOST LOST THE ROUND: A MATRIX WRITTEN THE OBVIOUS WAY — WITH `export`s —
-READS COMPLETELY CLEAN.** A bare `export {}` makes it vanish, because the emitter reads `globals[…]` and INV.3(d)
-keeps a module file's locals out of `globals`. The first 10-case matrix measured nothing and the defect was nearly
-reported unreproducible. **Any (CHK.73)-adjacent probe must be run in a SCRIPT file.**
-
-**M1b — A THIRD MECHANISM THE FIX FORCED.** Closing the FP would have left
-`abstract class Cls; const c = Cls; new c()` SILENT on erroneous code: it had been caught by the false positive, at
-the right position with the WRONG CODE (TS2351 for TS2511). `collectTypeofAbstractVars` learned the INFERRED alias
-spelling beside the annotated one, which is a real widening of a family with **4 active corpus subtests**.
-
-**M2 (CHK.138) IS THREE DEFECTS, AND ONE POINTS THE OPPOSITE WAY TO THE QUEUE ITEM.** tsgo has TWO emitters and
-they are NOT interchangeable: `prototype` fires at every target, while `name`/`length`/`caller`/`arguments` are
-gated on `useDefineForClassFields` — so **an UNSET target is silent** (it defaults above ES2022) and every pin must
-name a target or it is vacuous. Beside the missing four-name family we had an **ours-only FALSE POSITIVE**
-(`declare class C { static prototype: number }` and the same in `declare namespace`/`declare module` — we had no
-ambient gate at all, `spineDupIdFinish` skipping a whole `.d.ts` but not a `declare` in a `.ts`), and a NAME-READ
-defect: `static "prototype"` and a computed `static [k]` were missed because the name was
-`(name as? Identifier)?.text`. **And the TS2300 companion must carry the WRITTEN name** — tsgo prints
-`Duplicate identifier '[k]'`, not `'prototype'`.
-
-**AN INDEPENDENT RECEIPT FOR M2, BECAUSE THE CORPUS CANNOT GIVE ONE.** `staticPropertyNameConflicts` is a
-conformance fixture whose every variation names a target `usesUnsupportedOption` skips, so it is in NO active
-subtest; reconstructed from its pristine baseline it reads **20 of its 60 TS2699 rows and ZERO false positives**.
-The 40 missing are two PRE-EXISTING refusals deliberately not widened (30 a computed key that is a dotted path
-through an `as const` object literal, which `MemberNames` refuses BY NAME as (CHK.5) late binding; 10 the
-class-expression reach gap). Final agreement over the round's own 74 shapes: **65**, with the 9 divergences each
-attributed — 3 pre-existing M1 misses, 5 the reach gap, and 1 an `es5` config **tsgo refuses outright and then
-checks nothing at all**, i.e. the (LEGACY.1) removed-option family.
-
-**THE ROUND FIRED (P18.127)'s COUNTDOWN, AND THE LESSON IS ABOUT THE PREMISE RATHER THAN THE PIN.** That round
-recorded a **measured redundant guard** — `.name` placed last in the static-member block — on the grounds that
-"tsgo refuses `static name` outright and our accepting it is a separate gap". Closing the gap reddened it. **The
-premise was only ever true BELOW ES2022**: tsgo ACCEPTS `static name` at ES2022 and above, which is also the
-default, so the ordering is reachable by a valid program. Repaired by RE-POINTING (the pin now runs at ES2022 on a
-one-case tsconfig override, with a new sibling pinning the sub-ES2022 refusal by message), never by editing the
-assertion — **and the guard is now LIVE rather than redundant.** A "measured redundant" verdict is a claim about a
-configuration as much as about a shape.
-
-**PINS AND ABLATION.** `TsgoStep23Test`, 40 pins, 40 green; **23 RED** against a stash-ablated HEAD whose rebuild
-reproduced HEAD's committed `Checker.class` md5 exactly — which is the control that the arm really was the
-pre-change binary. Six arms, each uniquely attributable; a6 (dropping the `useDefineForClassFields` gate) is what
-makes the three target controls discriminating rather than blind. One pin is green pre-change **for the wrong
-reason** (the family did not exist) and is red under the ambient arm, so it is recorded as discriminating that
-mechanism rather than claimed for its own.
-
-**THREE INSTRUMENT TRAPS, ALL PAID FOR IN THIS ROUND.** `Diagnostic.character` is **1-based** here, and calibrating
-against a sibling pin in another class (0-based, `.js` fixture, different helper) cost 12 of 40 pins on the first
-run — after correction all fifteen asserted columns are tsgo's own column VERBATIM, so that first run was in fact a
-full span-parity receipt. Counting "active corpus subtests carrying code X" by sanitised test NAME reads **0 for
-every code** and looks like no coverage; the generator references the baseline PATH. And a KIR refusal assertion
-that reads `stderr` reads EMPTY for a compile that never ran — the diagnostics are in `report`.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -949,7 +948,25 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-28 LANDED 2026-09-19 ((P18.85)-(P18.137) notes) — pending **34**
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-29 LANDED 2026-09-19 ((P18.85)-(P18.138) notes) — pending **34 → 33**,
+  skipped 58, suite 20,002/0. **(P18.138) CLOSED `jsExpandoObjectDefineProperty`** as (CHK.124) step 3: a third
+  host kind (a JS **empty object literal** initializing an un-annotated `var`/`let`/`const`) plus
+  `Object.defineProperty` membership, reusing steps 1-2's collector and attachment rather than a second copy.
+  **B433 IS *NOT* RETIRED AND THAT IS A MEASUREMENT**: the PassLab priced it at **1 mismatch**, and the diff is
+  the whole ROW — its host is a body-local `const`, i.e. B83.5's unbound population `getTypeOfVariableOrProperty`
+  never sees, and it also owns the file-level JS function-expression host, so admitting that shape here would
+  DOUBLE-EMIT. Retiring it needs the BINDER, not this model.
+  **THE (CHK.124) ARC AS IT STANDS**: steps 1-3 are done. What is left, each with its measured blocker —
+  (i) the **primitive-receiver** arm, BUILT AND REVERTED because it breaks (P18.130)'s invariant that a row
+  emitted in a `.js` file carries tsgo's MESSAGE (three shapes print `'string'`/`'number'`/`'boolean'` where tsgo
+  prints the literal types, and all three reproduce in a `.ts` file on the parent binary too — a standing
+  literal-display/flow-narrowing gap, not a JavaScript one); (ii) the **TS2741-vs-TS2322 selection** and the
+  `typeof g` TARGET display at `const c: typeof g = h` (we emit TS2741 from 18 sites already, so this is a narrow
+  selection gap, not a missing feature); (iii) the expando CHAIN, a JS function-/class-expression host, and a
+  NUMERIC `defineProperty` name (refused: tsgo names it by the canonical numeric string, round 934, and a subset
+  member table is what (CHK.45) forbids trusting); (iv) under `noImplicitAny: false` the row is still MISSED,
+  because contextual typing does not reach a nested literal inside a contextually-typed one.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-28 LANDED 2026-09-19 ((P18.85)-(P18.137) notes) — pending **34**
   (UNCHANGED at (P18.137), deliberately), skipped 59, suite 19,979/0. **(P18.137) CLOSED NO BASELINE AND IS THE
   MOST VALUABLE ROUND OF THE THREE**: (CHK.124) step 2 opened ROUTE (B), so a member access on an IDENTIFIER
   receiver whose type is a function type is checked at all — four real missed errors in eleven lines of ordinary
