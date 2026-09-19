@@ -25,6 +25,63 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
+
+Suite **19,935 / 0 / 60** (+8 pins, skipped 61 -> 60), errors screen 3,063 / 0 and emit 5,645 / 0, cost gate
+UNCHANGED from (P18.134) (+0.15% max — this rule runs only at error-elaboration time), `huge_methods --fail-over 0`
+exit 0 with `getPropertyElaborationChain` **SHRINKING** 6,271 -> 6,260, warning gate clean, 8-profile grid 8 x 0/0
+on BOTH arms with emit 78 vs 78 byte-identical. Ledger **36 -> 35**.
+
+**READ THIS ROUND AS TWO THINGS, BECAUSE ONLY ONE OF THEM CLOSED THE ROW.**
+
+**(1) THE ENGINE RULE IS REAL AND CLOSES NOTHING.** tsgo emits an intermediate `Type 'A' is not assignable to type
+'B'.` at every nesting level of a generic-argument descent and none at the innermost; we collapsed every level onto
+the innermost sentence, so `Inv<Inv<Small>>` read exactly like `Inv<Small>`. The cause was that tsgo's ONE condition
+— `chainArgsMatch(nil, generalizedSourceType, targetType)` — had **two independent approximations here**: the
+suppressing half (`RelationHeadSuppression.suppressHead`) tested the ARGUMENTS and was right, while the emitting
+half tested the message **SHAPE** (`startsWith("Property '")`) inline in `getPropertyElaborationChain` and was
+wrong. The fix adds `leafNamesTypePair` beside `suppressHead`, REUSING its `parseMissingProperty`, so the two halves
+of one tsgo condition can no longer drift. **Variance is not the axis and that was measured**: a covariant wrapper
+reads identically to the invariant one, and what decides the header is only that the descent went through a type
+ARGUMENT rather than a property.
+
+**(2) THE LEDGER ROW CLOSED BY A RE-TRANSCRIPTION, AND ONLY AN ABLATION SAYS SO.**
+`mutuallyRecursiveCallbacks.errors.txt` is served by `tryEmitMutuallyRecursiveCallbackAssign`, a corpus-unique
+WIPE-AND-PIN walker whose own comment says "chain depth/leaf hardcoded for the shape" — so it wipes the file and the
+engine never reaches that fixture at all. Its hardcoded chain was extended to tsgo's five lines. **Measured by
+ablating that hunk ALONE and re-screening: with the engine rule still in place the row MISMATCHES.** So the engine
+rule closed no ledger row, and the row was closed by updating a pin that had been emitting TypeScript 6's chain —
+which, under the tsgo-only directive, was knowingly wrong output for the shape it serves. Both were worth landing;
+conflating them would not have been.
+
+**(3) `invariantGenericErrorElaboration` IS REFUSED WITH ITS MECHANISM NAMED**, and the ledger's "F7 diagnostic
+COUNT changed" label was a hypothesis that is wrong: it is not the header family at all. tsgo needs TWO lines we
+lack and a REVERSED pair the forward argument walk can never produce, because `Constraint<A extends Runtype<any>>`
+uses `A` both co- and contravariantly, measures INVARIANT, and takes `relater.go:3288-3304`'s path — *"if any of
+the type parameters are invariant we reset the reported errors and instead force a structural comparison"*. **This
+compiler measures no variances** (round 336: global variance analysis in the relation engine is DEAD, ~263
+regressions), so the row is one absent MECHANISM away, not one rule away. Its entry keeps its place with the
+measured reason substituted.
+
+**WHAT THE INSTRUMENTS SAID, INCLUDING THE ONE THAT SAID NOTHING.** The implementer's ablation is the honest part:
+removing the suppression entirely moves **8** active baselines (`arrayAssignmentTest1/2/5`, `arrayFrom`,
+`interfaceAssignmentCompat`, `promisesWithConstraints`, `typeMatch2`, `varianceAnnotationValidation`), so it is
+load-bearing — but the BEFORE binary *is* the old shape-based predicate and its screen was also 0 mismatches, so
+**the corpus cannot discriminate this change in either direction and the 8 pins are the only instrument.** Blast
+radius was re-derived rather than inherited and is materially smaller than the brief's numbers: depth>=2 baselines
+**296** (not <=508), depth>=3 **131** (not 167), non-head `Type X is not assignable` carriers 248 (confirmed).
+
+**THE GRID GAINED AN ARM, BECAUSE THE USUAL RECIPE COULD NOT SEE THIS ROUND AT ALL.** Every grid script here
+compares `grep 'error TS'` row sets — i.e. HEAD lines — so it is structurally blind to a change that only alters
+CHAIN lines. `scripts/p18-135-grid.sh` adds a normalised FULL-capture diff, and both arms read 0. It also COUNTS
+what (PARITY.1) had only asserted: **0 chain lines across all eight profiles**, which is the receipt that the grid
+is a control for this whole family rather than a gate.
+
+**WHAT DID NOT WORK.** The brief I handed the implementer asserted "there is no deliberate collapse mechanism here
+— grep finds none"; that was FALSE (I grepped `incompatibleStack`/`chainDepth`/`collapseChain` and the machinery is
+called `RelationHeadSuppression`), and I retracted it mid-round. It mattered: the fix is a NARROWING of an existing
+approximation, not the ADDITION the brief described.
+
 ### Round (P18.134) — (LEGACY.0b): a missing member on a function type, and the one line that made `typeof g` and `() => void` answer differently (2026-09-19)
 
 `contextualReturnTypeOfIIFE2.errors.txt` CLOSES — pending **37 -> 36**, skipped 62 -> 61, suite **19,927 / 0 / 61**
@@ -546,61 +603,6 @@ VALUE position REFUSES — `lowerIdentifier` has no arm for either — so `const
 sequel and `namespaceExportValue` already maps both declaration kinds. And a CHECKER false positive:
 `class Cls {}; const c = Cls; new c()` is an ours-only TS2351 where tsgo reports nothing.
 
-### Round (P18.125) — the two export gaps are ONE capability, and the brief's "a barrel refuses" was true only of the PURE case (2026-09-17)
-
-**Three commits** (fix, test, this docs commit). **Suite 19,758 → 19,788 / 0 / 65**, the KIR module **211 → 223**;
-corpus screen **3,102 / 0 errors and 5,688 / 0 emit** after EACH mechanism (a REAL gate this round — the checker
-was touched); `cost_gate.py` exit 0 with every delta unchanged from (P18.119)'s reading; `huge_methods.py
---fail-over 0` exit 0 over 875 classes; the 8-profile grid `added=0 removed=0` on all eight with 78 emit files
-byte-identical. `Checker.kt` 194,802 → 195,036 (+234, −0).
-
-**THE MECHANISM IS ONE LINE AND THE BRIEF NAMED A THIRD OF IT.** `Checker.createModuleSymbol` (`Checker.kt:14461`)
-sets `moduleSymbol.exports = targetResult.locals` — **the module symbol's export table IS the target file's
-`locals`**. So it is wrong for an enumeration in three ways: a star re-export contributes nothing (M1, briefed); a
-renaming specifier is keyed by the DECLARED name (M2, briefed); and **it holds names the file does not export at
-all** — a module-private `const` was a key of `Object.keys(ns)`, which no one had noticed and which falls out of
-the fix for free.
-
-**AND THE BRIEF'S FAILURE MODE WAS WRONG IN THE DIRECTION THAT MATTERS.** "A barrel leaves the table EMPTY" is true
-only of a PURE barrel, where `moduleSymbolOf`'s `takeIf { it.isNotEmpty() }` guard refuses loudly. A barrel that
-also declares its own exports, and a star CYCLE, both have a non-empty `locals` — so the guard PASSED and the
-starred names came back **`null` at run time**. (P18.124) recorded this family as a loud refusal; it is a loud
-refusal for the pure case and a **silent wrong answer** for the mixed one, which is the half every gate here is
-blind to and the half a round implementing only the brief would have left. The 10-shape sweep is what found it.
-
-**M1 AND M2 ARE ONE WALK, BECAUSE KEYING BY THE NAME AN IMPORTER SEES *IS* BOTH.** `exportedSymbolsThroughStars`
-answers `Map<String, Symbol>?` with the by-name sibling's cycle/depth discipline and memo shape; stars first, own
-exports SHADOWING them (which is what tsgo does — s10); a star carries every name **but `default`**; `null` means
-UNKNOWABLE and a name whose symbol cannot be named is ABSENT, deliberately the same omission today's table makes,
-so only the star half is new. **One deviation from the sibling is load-bearing**: the NAMED re-export arm asks a
-different question of its target, which the star walk's visited set answers `emptyMap`, so it goes through the
-memoized entry and terminates on a separate in-progress set.
-
-**THE ADDITIVE CLAIM IS MEASURED, NOT ARGUED.** The capability has exactly one non-test caller (the checker's own
-lens override), the exposure is a DEFAULTED `CheckedLens` member that no other implementor overrides, and **arm a1
-puts a mistake INSIDE the star half and the corpus screen reads 0 mismatches over 8,790 subtests** — which is also
-why a green grid here is a CONTROL rather than coverage. The externals module (the largest lens consumer) reads
-290 / 0 unchanged.
-
-**PINS AND ABLATION.** A new core class of 18 pins asserting SYMBOL IDENTITY against the declaring file's binder
-locals — not just name sets — and each barrel pin also asserts what the LOCALS table says, so the divergence is
-recorded in the test rather than only in prose; the KIR class goes 17 → 29 with **two countdown pins re-pointed**
-against measured answers (both were (P18.124)'s own refusals, converted from `residue - …` to positive pins) and
-the loader-shape pin strengthened to import through a REAL barrel. Five arms; a0 (pre-change) reddens all 18 core
-pins by COMPILE FAILURE, which is the strongest form of red a capability pin can have, and 15 of 29 KIR pins.
-
-**WHAT THE LIBRARY STILL NEEDS IS ONE THING**: the DYNAMIC `new` (`lowerNew` resolves a class declaration or
-refuses), pinned as a named residue and deliberately out of scope. The barrel shape now enumerates at
-`dynamicOps = 0`; `cronstrue` is not on this box, so that is a claim about the SHAPE, as (P18.124)'s was.
-
-**THREE THINGS WORTH CARRYING.** A real ES module namespace object **SORTS** its keys and we ship declaration
-order — a pre-existing stated divergence, values unaffected, now recorded in the KDoc and in the pins'
-expectations so it reads as a decision. An AMBIGUOUS star (TS2308) is a TYPE ERROR in both compilers and never
-reaches the backend, so no ambiguity rule was needed. And **the unknowable-star pin could not be written the
-obvious way**: a bare package specifier, a missing target and an `export =` target are all reported by the CHECKER
-first (TS2307/TS2307/TS2498), so the program never lowers — the only unknowable case this harness can reach is the
-DEPTH BOUND, and the pin is a 70-hop barrel chain, stated in its KDoc rather than left as an untested guard.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -931,7 +933,24 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-26 LANDED 2026-09-19 ((P18.85)-(P18.134) notes) — pending **37 → 36**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-27 LANDED 2026-09-19 ((P18.85)-(P18.135) notes) — pending **36 → 35**,
+  skipped 60, suite 19,935/0. **(P18.135) CLOSED `mutuallyRecursiveCallbacks` AND REFUSED
+  `invariantGenericErrorElaboration`** — and the two halves of that round must not be conflated: the ENGINE rule
+  (tsgo's per-level `Type 'A' is not assignable to type 'B'.` header on a generic-ARGUMENT descent, landed by
+  narrowing the emitting half of `chainArgsMatch` onto `RelationHeadSuppression.leafNamesTypePair`) closes **NO**
+  ledger row, while the ROW closed by RE-TRANSCRIBING the hardcoded chain in the corpus-unique wipe-and-pin walker
+  `tryEmitMutuallyRecursiveCallbackAssign` — **measured by ablating that hunk alone, which mismatches with the
+  engine rule still in place**. `invariantGenericErrorElaboration` needs tsgo's VARIANCE-driven structural reset
+  (`relater.go:3288-3304`), which this compiler cannot do (round 336: global variance analysis DEAD), so it is one
+  absent MECHANISM away and its entry now says so.
+  **TWO RESIDUES THIS ROUND NAMES AND THE LEDGER NO LONGER CARRIES** (the row is green, so nothing else does):
+  (i) the CALLBACK-PARAMETER chain locus is a DIFFERENT site from the generic-argument one — tsgo's first callback
+  level recurses into `compareSignaturesRelated` and pushes no header, deeper levels carry the `Callback` bit and
+  go back through `isRelatedToEx`; here that lives in `getFunctionMismatchElaboration`, and the population is
+  **6** active baselines with >=2 consecutive `Types of parameters` lines and **0** with >=3;
+  (ii) `tryEmitMutuallyRecursiveCallbackAssign` remains a corpus-unique pin walker and is now MORE specific than
+  before — retiring it needs the callback locus in (i).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-26 LANDED 2026-09-19 ((P18.85)-(P18.134) notes) — pending **37 → 36**,
   skipped 61, suite 19,927/0. **(P18.134) CLOSED `contextualReturnTypeOfIIFE2`**, a missing TS2339 on a
   function-typed receiver, by relaxing ONE trust gate: `cmamAllMissingTrustedMember`'s
   `if (m.symbol != null) return false` refused every symbol-carrying function type, so `{ m: typeof g }` was silent

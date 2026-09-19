@@ -68203,3 +68203,58 @@ method with a REST parameter is deliberately left out of `invokeMember`. Pre-exi
 `void` bag member call throws `NullPointerException` from `adaptingCall`'s `Any?` typing — the parent binary fails
 identically. **`cronstrue` is not on this box**, so the library claim is MECHANICAL: every shape its failure was
 recorded from now compiles and runs, and the queue's own next wall is (LIB.7)'s namespace import, not started.
+
+### Round (P18.125) — the two export gaps are ONE capability, and the brief's "a barrel refuses" was true only of the PURE case (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,758 → 19,788 / 0 / 65**, the KIR module **211 → 223**;
+corpus screen **3,102 / 0 errors and 5,688 / 0 emit** after EACH mechanism (a REAL gate this round — the checker
+was touched); `cost_gate.py` exit 0 with every delta unchanged from (P18.119)'s reading; `huge_methods.py
+--fail-over 0` exit 0 over 875 classes; the 8-profile grid `added=0 removed=0` on all eight with 78 emit files
+byte-identical. `Checker.kt` 194,802 → 195,036 (+234, −0).
+
+**THE MECHANISM IS ONE LINE AND THE BRIEF NAMED A THIRD OF IT.** `Checker.createModuleSymbol` (`Checker.kt:14461`)
+sets `moduleSymbol.exports = targetResult.locals` — **the module symbol's export table IS the target file's
+`locals`**. So it is wrong for an enumeration in three ways: a star re-export contributes nothing (M1, briefed); a
+renaming specifier is keyed by the DECLARED name (M2, briefed); and **it holds names the file does not export at
+all** — a module-private `const` was a key of `Object.keys(ns)`, which no one had noticed and which falls out of
+the fix for free.
+
+**AND THE BRIEF'S FAILURE MODE WAS WRONG IN THE DIRECTION THAT MATTERS.** "A barrel leaves the table EMPTY" is true
+only of a PURE barrel, where `moduleSymbolOf`'s `takeIf { it.isNotEmpty() }` guard refuses loudly. A barrel that
+also declares its own exports, and a star CYCLE, both have a non-empty `locals` — so the guard PASSED and the
+starred names came back **`null` at run time**. (P18.124) recorded this family as a loud refusal; it is a loud
+refusal for the pure case and a **silent wrong answer** for the mixed one, which is the half every gate here is
+blind to and the half a round implementing only the brief would have left. The 10-shape sweep is what found it.
+
+**M1 AND M2 ARE ONE WALK, BECAUSE KEYING BY THE NAME AN IMPORTER SEES *IS* BOTH.** `exportedSymbolsThroughStars`
+answers `Map<String, Symbol>?` with the by-name sibling's cycle/depth discipline and memo shape; stars first, own
+exports SHADOWING them (which is what tsgo does — s10); a star carries every name **but `default`**; `null` means
+UNKNOWABLE and a name whose symbol cannot be named is ABSENT, deliberately the same omission today's table makes,
+so only the star half is new. **One deviation from the sibling is load-bearing**: the NAMED re-export arm asks a
+different question of its target, which the star walk's visited set answers `emptyMap`, so it goes through the
+memoized entry and terminates on a separate in-progress set.
+
+**THE ADDITIVE CLAIM IS MEASURED, NOT ARGUED.** The capability has exactly one non-test caller (the checker's own
+lens override), the exposure is a DEFAULTED `CheckedLens` member that no other implementor overrides, and **arm a1
+puts a mistake INSIDE the star half and the corpus screen reads 0 mismatches over 8,790 subtests** — which is also
+why a green grid here is a CONTROL rather than coverage. The externals module (the largest lens consumer) reads
+290 / 0 unchanged.
+
+**PINS AND ABLATION.** A new core class of 18 pins asserting SYMBOL IDENTITY against the declaring file's binder
+locals — not just name sets — and each barrel pin also asserts what the LOCALS table says, so the divergence is
+recorded in the test rather than only in prose; the KIR class goes 17 → 29 with **two countdown pins re-pointed**
+against measured answers (both were (P18.124)'s own refusals, converted from `residue - …` to positive pins) and
+the loader-shape pin strengthened to import through a REAL barrel. Five arms; a0 (pre-change) reddens all 18 core
+pins by COMPILE FAILURE, which is the strongest form of red a capability pin can have, and 15 of 29 KIR pins.
+
+**WHAT THE LIBRARY STILL NEEDS IS ONE THING**: the DYNAMIC `new` (`lowerNew` resolves a class declaration or
+refuses), pinned as a named residue and deliberately out of scope. The barrel shape now enumerates at
+`dynamicOps = 0`; `cronstrue` is not on this box, so that is a claim about the SHAPE, as (P18.124)'s was.
+
+**THREE THINGS WORTH CARRYING.** A real ES module namespace object **SORTS** its keys and we ship declaration
+order — a pre-existing stated divergence, values unaffected, now recorded in the KDoc and in the pins'
+expectations so it reads as a decision. An AMBIGUOUS star (TS2308) is a TYPE ERROR in both compilers and never
+reaches the backend, so no ambiguity rule was needed. And **the unknowable-star pin could not be written the
+obvious way**: a bare package specifier, a missing target and an `export =` target are all reported by the CHECKER
+first (TS2307/TS2307/TS2498), so the program never lowers — the only unknowable case this harness can reach is the
+DEPTH BOUND, and the pin is a 70-hop barrel chain, stated in its KDoc rather than left as an untested guard.

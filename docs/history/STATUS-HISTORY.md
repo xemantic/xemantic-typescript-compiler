@@ -1,3 +1,16 @@
+**(P18.130) — THE JAVASCRIPT PROPERTY-ACCESS FAMILY: FOUR GATES ARE TWO PAIRS, 19,931 / 0 / 65 (2026-09-17).**
+The family was off for every `.js` file; it is now on for a receiver whose member table cannot carry a JavaScript
+expando. **The four gates are two enter/leave PAIRS**, and characterising them split the round: the call pair costs
+three corpus mismatches and delivers none of the six ledger rows, so it stays shut; the property-access pair costs
+two and delivers all six. **The expando rule is the opposite of the obvious one** — an assignment declares only on
+the STATIC side of a JavaScript class or function, and a TypeScript-declared receiver reports even when written from
+JavaScript, so what ships is a whitelist rather than a suppression list; ungated, the family invents ten rows tsgo
+does not report on a nineteen-line file. Every row we now emit in a `.js` file is byte-identical to tsgo's over
+eight probes. **It closes no ledger row, and that is stated rather than hidden**: all six have JavaScript-declared
+receivers, which the firewall refuses by construction, so the rest of the arc is queued as a seven-item table.
+Errors screen 3,102 / 0 is the real gate (153 of 2,898 active error subtests carry a `.js` file); the 8-profile
+grid is a control and reads 8 x 0/0. **`cpaSpineLeave` is now at 7,898 of the 8,000-bytecode JIT limit.**
+
 **(P18.129) — A NESTED `function` LANDS; THE CLASS HALF IS REFUSED WITH ITS PRICE, 19,918 / 0 / 65 (2026-09-17).**
 The KIR module goes 276 -> 313, and a corpus fixture is added, because the census found the gap was UNTESTED rather
 than incomplete: not one of the 59 fixtures declared a function inside a function body, and 39 of 41 characterised
