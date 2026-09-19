@@ -1,3 +1,15 @@
+**(P18.131) — THE JAVASCRIPT EXPANDO MEMBER MODEL: A LEDGER ROW CLOSED, 19,954 / 0 / 64 (2026-09-17).**
+The first closure in this family: pending baselines **40 → 39**, and the other entry goes from four missing rows to
+one. A JavaScript class's members now include what its assignments put there, resolved syntactically from the
+`this`/`super` binder and unioned over the `extends` chain, so a missing-member read on such a receiver is
+decidable instead of refused. **A tsc-6 walker is retired** — it existed only because this family was off, and with
+the general path owning the row it double-emits; the PassLab measured that in one run. **The display half was never
+a JavaScript question**: the defect is a CONSTRUCTOR-context one in plain TypeScript, where the member table has
+not resolved and the read lands on a different emitter, and the fix is five lines. Two further pre-existing
+TypeScript divergences were found and refused with their measurements rather than folded in. Errors screen
+3,103 / 0 and emit 5,688 / 0; **the 8-profile grid is a real gate here** — the display change is TypeScript-visible
+— and reads 8 x 0/0; `cpaSpineLeave` still 7,898 of 8,000, all new code in helpers.
+
 **(P18.130) — THE JAVASCRIPT PROPERTY-ACCESS FAMILY: FOUR GATES ARE TWO PAIRS, 19,931 / 0 / 65 (2026-09-17).**
 The family was off for every `.js` file; it is now on for a receiver whose member table cannot carry a JavaScript
 expando. **The four gates are two enter/leave PAIRS**, and characterising them split the round: the call pair costs

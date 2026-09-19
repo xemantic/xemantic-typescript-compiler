@@ -25,6 +25,74 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.136) — (CHK.124) step 1: real expando MEMBERS on a function type, and a display rule that was pristine 6.0.3's answer (2026-09-19)
+
+Suite **19,952 / 0 / 59** (+17 pins, skipped 60 -> 59), errors screen 3,065 / 0 and emit 5,645 / 0 with the closed
+row ACTIVE in that count, cost gate exit 0, `huge_methods --fail-over 0` exit 0, warning gate clean, 8-profile grid
+8 x 0/0 on both arms with emit 78 vs 78 byte-identical. Ledger **35 -> 34**.
+
+**THE LEDGER ROW IS THE SMALL HALF.** `expandoFunctionNestedAssigments` closes because `typeof Foo` now renders
+`{ (): void; inVariableInit: number; … }` — and it closes THROUGH `typeToString`, which already produced tsgo's
+braces form byte-for-byte, so no third hand-built expando display string was written (after B433's). The big half is
+that **two shipping wrong answers move**, neither of which any ledger row covered:
+
+    const zs: string = zg.px;                  BEFORE silent (`zg.px` was `any`)  ->  NOW TS2322, tsgo-identical
+    const zd: { (): void; px: number } = zg;   BEFORE a FALSE TS2322              ->  NOW silent, tsgo-identical
+
+**AND THE THIRD IS ONLY PARTLY MOVED, WHICH THIS NOTE RECORDS RATHER THAN ROUNDS OFF**: `const zc: typeof zg = zh`
+was SILENT and now REPORTS, but as `TS2322 Type '() => void' is not assignable to type 'typeof zg'.` where tsgo says
+`TS2741 Property 'px' is missing in type '() => void' but required in type '{ (): void; px: number; }'.` So the
+members participate in assignability (the row exists at all only because they do) while the TARGET-side display
+keeps the `typeof` spelling and the code is the generic one. Missing-row -> wrong-code-row is an improvement, not
+parity, and it is the successor's first item.
+
+**A STALE DISPLAY RULE IS RETIRED, AND IT WAS A COUNTDOWN NOBODY HAD RE-MEASURED.**
+`ExpandoReceiverDisplayTest`'s KDoc § 2 stated that both references name a function carrying expandos as
+`typeof $name`, and two pins asserted it. That was **pristine `typescript@6.0.3`'s answer** and is FALSE of the only
+reference this project now has: measured, tsgo renders `'{ (): void; tag: number; }'` for both the property-access
+and the element-access spelling, and read position makes no difference. Both pins are re-pointed to tsgo's answer
+and **verified byte-identical to `tools/tsgo-7.0.2/lib/tsc` on both spellings**; `spineExReceiverDisplay` now needs
+no rule at all, because it renders whatever the type says. `M04ExpandoSpineMigrationTest:627`'s `typeof Foo` is a
+CLASS static and was correctly left alone.
+
+**THE DESIGN, AND THE THREE ORDERING FACTS THAT ARE LOAD-BEARING RATHER THAN TIDY.** Members attach in
+`getTypeOfFunction` (the single TS attachment point, which stores the `Type.Object` at the B198 sentinel so identity
+is stable for the self-reference `g.self = g`). (i) **The member TABLE is planted BEFORE the member TYPES are
+computed**: typing a right-hand side can read the host's own members (`f.a = 1; f.b = f.a`), which runs
+`resolveStructuredTypeMembers` on a type whose `properties` is still null — whose anonymous arm would plant an EMPTY
+table and permanently mask this one (round 833). (ii) Every member is **seeded `anyType`** for the same reason, so a
+genuine cycle (`f.a = f.a`) degrades instead of recursing. (iii) The member type is written at MINT time, ungated —
+the `resolveReferenceMembers` idiom — which is sound because the id is reachable only from this one type, so round
+778's write gate has nothing to protect. `expandoAttachedTypeIds` keeps route (B) SHUT for attached types because
+B431's spine anchor already owns that read and without the marker the two **emit the same row twice** (measured;
+pinned by `an absent member on an expando host is reported exactly once`).
+
+**THE BOUNDARIES ARE MEASURED, AND ONE IS DELIBERATELY WIDER THAN B431.** An **OVERLOAD SET attaches** — tsgo
+renders `{ (x: string): void; (x: number): void; tag: number; }` — where B431's candidate rule is `nameCount == 1`;
+the two cannot contradict each other, because with members present `cmamPlainFunctionTypeTrusted` refuses route (A)
+outright. A namespace-merged host, a class static side and an INTERFACE merge are all REFUSED (tsgo renders
+`typeof ns` / `typeof C`, which we already match); JavaScript files are refused whole, because a JS host's members
+are B419/B432/B433's territory and admitting them here moves
+`jsFunctionWithPrototypeNoErrorTruncationNoCrash`, whose subject is the LENGTH of a rendered function type. Member
+types UNION across writes and the right-hand side is WIDENED; members render in SOURCE order, which needed the
+collector to carry each member's first-write `pos` — `collectExpandoDecls` does not walk in source order, and the
+do-while arm visits the CONDITION before the BODY.
+
+**WHAT THE INSTRUMENTS COULD AND COULD NOT SAY.** The grid is a CONTROL and the count was taken BEFORE the round:
+the eight profiles carry **0 genuine expando shapes** across 1,249 `.ts` files (the 8 grep hits are one
+function-LOCAL false positive). **And the cost gate is structurally BLIND to this change** — its counters are type
+RESOLUTION operations while the new per-container scan is a pure AST walk, so its exit 0 means "no resolution
+moved", never "the scan is free". What bounds the scan is its SHAPE: memoized per CONTAINER rather than per name, so
+one scan answers for every function declared in it ((INC.57)'s quadratic shape avoided by construction). The real
+gate was the corpus screen, and the assignability side — giving a type new members changes every relation it
+participates in — is what it was measuring.
+
+**PROCESS NOTE.** The implementing agent ended without a final report, leaving its suite running; the verification,
+all five remaining gates, the tsgo re-measurement of both countdown pins and this write-up were completed by the
+orchestrator against the binary it left. Also worth carrying: a `pgrep -f "GradleWrapperMain"` wait-loop MATCHES ITS
+OWN command line and never exits — CLAUDE.md documents exactly this and it still cost ~20 minutes; the bracket form
+`GradleWrapperMai[n]` is the one that answers.
+
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
 Suite **19,935 / 0 / 60** (+8 pins, skipped 61 -> 60), errors screen 3,063 / 0 and emit 5,645 / 0, cost gate
@@ -543,66 +611,6 @@ because the carrier holds no statics and `undefined` would be a SILENT wrong ans
 function in a value position refuses at the erasure. **And a checker gap found in passing: we accept
 `static name`, which tsgo refuses with TS2699.**
 
-### Round (P18.126) — (KIR.LOWER.5): a dynamic `new`, and the LOADER SHAPE runs end to end (2026-09-17)
-
-**Three commits** (fix, test, this docs commit). **Suite 19,788 → 19,807 / 0 / 65**, the KIR module **223 → 242**;
-`huge_methods.py --fail-over 0` over BOTH core (875) and the KIR module (114, `lowerCall` unchanged at 4,620 and
-`lowerNew` 1,085); `cost_gate.py` exit 0 and the core corpus screen 8,790 / 0 are CONTROLS, and **the 8-profile
-grid is inapplicable by construction — `Checker.class` is BYTE-IDENTICAL to (P18.125)'s landed binary
-(`58ca693b…`)**. `JsRuntime.kt` WAS touched and the generator was re-run by the agent AND independently by the
-orchestrator: **every anchor matched exactly once and every `java.`/`System.err` hit in the generated file is
-inside a comment**. No native build was run.
-
-**THE LOADER SHAPE NOW RUNS END TO END, AND IT IS A CLAIM ABOUT THE SHAPE**: a pure `export * from` barrel →
-`import * as` → `for…in` → `locales[p] = new found[p]()` → **a method call on what was constructed**, printing
-`en,fr` at `jsNew = 1` and `jsGet = 0`. The method call is the half that says the value is a real instance rather
-than a bag. `cronstrue` is not on this box — measured three rounds running — so this is the shape of
-`allLocalesLoader.ts`, not the library, and it took (P18.122)'s storage, (P18.124)'s namespace object,
-(P18.125)'s barrel enumeration and this round's construction to get there.
-
-**THE BRIEF SAID "ONE CONSTRUCTION ARM BESIDE `jsCall`" AND THE ARM ALONE IS A SILENT WRONG ANSWER.**
-`constructorValue`'s value is a `FunctionN` lambda whose body CONSTRUCTS — so invoking it *is* constructing, and
-an ordinary function export's value (`staticMethodValue`) is the SAME CARRIER and does not. A dynamic `new` has
-only the value to go on, so routing it at the old value makes `new found["bump"]()` answer the function's RETURN
-VALUE: arm a2 measures exactly that, printing **`7`** for a function export and **`3`** for an arrow. **The carrier
-is the mechanism, not the arm.** `JsConstructor(name, required, impl)` — `JsVarargFunction`'s shape one mechanism
-over — is what `jsNew` accepts, and everything else is a `JsTypeError`.
-
-**WHAT A NON-CONSTRUCTIBLE CALLEE DOES, MEASURED AGAINST `node`**: a number, a string, a bag, an arrow, `null` and
-`undefined` all throw a TypeError in both. A plain FUNCTION is a **stated divergence** — node constructs it through
-prototypes, this backend has none, and answering the return value would be a wrong answer, so it refuses loudly.
-The mirror direction was a live defect this round closed: `found["Cls"]()` — CALLING a class — used to **silently
-CONSTRUCT** and is now `JsTypeError: class Cls is not a function`, which is node's answer too.
-
-**NOTHING REACHES REFLECTION**, and the pin says so structurally: `impl` is a lambda whose body is a direct
-`IrConstructorCall`, asserted as exactly one `new … // class program/Cls` in the bytecode. The carrier is allocated
-ONCE into a lazy static field (`namespaceAccessor`'s shape), so `ns.C === ns.C` stays true — **it was true before
-only by the accident that a non-capturing Kotlin lambda is a JVM singleton**, which arm a5 is what measures.
-
-**THE `required` GUARD CONVERTS A CRASH INTO A DIAGNOSIS AND INTRODUCES NO DIVERGENCE.** Too few arguments for a
-non-nullable parameter was a JVM `NullPointerException: null cannot be cast to non-null type kotlin.String`
-(measured); it is now a named `JsTypeError`. It refuses EXACTLY the counts that already crashed, because `Any?` to
-a non-null type is a `Coercion.CAST` — an OPTIONAL parameter is unaffected and still prints its default.
-
-**PINS AND ABLATION.** `KirDynamicNewTest`, 19 cases; **18 RED against the pre-change binary**, the 2 green being
-`!compiled` controls that are correctly true on both arms. Six arms, each a single injected mistake with an
-exactly-one-occurrence assertion and a `cmp`-verified restore; a4 (dropping `jsTypeOf`'s constructor arm) reddens
-**two PRE-EXISTING (P18.124)/(P18.125) pins** as well, which is the receipt that the three rounds are one
-mechanism. The countdown `residue - a dynamic new is still refused` was **re-pointed against the measured answer,
-not deleted**, and its KDoc records what it used to say.
-
-**A NEGATIVE CONTROL WRITTEN THE OBVIOUS WAY WOULD HAVE CREDITED THE GATE WITH UNTESTED COVERAGE.** Two fixtures
-for the `signature == null` gate were wrong before the third: `new WeakMap()` and a `declare class` both COMPILE
-AND RUN (the backend models them), and `new Object()` refuses one layer earlier at *cannot map the type* and never
-reaches `lowerNew`. An interface CONSTRUCT SIGNATURE on a parameter is the shape that reaches it — and asserting
-the MESSAGE rather than `!compiled` is what makes that arm discriminate at all.
-
-**TWO FINDINGS THE BRIEF DID NOT NAME, BOTH RECORDED AND OUT OF SCOPE.** A generated CLASS or FUNCTION name in a
-VALUE position REFUSES — `lowerIdentifier` has no arm for either — so `const c: any = Cls`, `typeof Cls`,
-`make(Cls)`, `{ Cls }`, `Cls.name` and **`[1,2].map(f)` for a top-level named `f`** all refuse; that is the natural
-sequel and `namespaceExportValue` already maps both declaration kinds. And a CHECKER false positive:
-`class Cls {}; const c = Cls; new c()` is an ours-only TS2351 where tsgo reports nothing.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -933,7 +941,27 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-27 LANDED 2026-09-19 ((P18.85)-(P18.135) notes) — pending **36 → 35**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-28 LANDED 2026-09-19 ((P18.85)-(P18.136) notes) — pending **35 → 34**,
+  skipped 59, suite 19,952/0. **(P18.136) CLOSED `expandoFunctionNestedAssigments`** as (CHK.124) step 1: real
+  expando MEMBERS on a `FunctionDeclaration` host's type, attached in `getTypeOfFunction`, so the row closes
+  THROUGH `typeToString` rather than through a third hand-built display string. **The ledger row is the small
+  half** — two shipping wrong answers move (`const s: string = g.px` was silent and is now tsgo-identical; a FALSE
+  TS2322 on `const d: { (): void; px: number } = g` is gone) — **and a third is only PARTLY moved and is the
+  successor's first item**: `const c: typeof g = h` was silent and now reports, but as TS2322 against
+  `'typeof g'` where tsgo says **TS2741** against `'{ (): void; px: number; }'`, i.e. the members participate in
+  assignability while the TARGET-side display keeps the `typeof` spelling. A stale display rule was RETIRED with
+  its two countdown pins: `ExpandoReceiverDisplayTest`'s KDoc claimed both references name an expando-carrying
+  function `typeof $name`, which was **pristine 6.0.3's answer** and is false of tsgo — re-pointed and verified
+  byte-identical on both the property- and element-access spellings.
+  **THE REST OF THE ARC, EACH ITS OWN ROUND**: (2) the `const f = <fn expr>` host plus opening route (B), which is
+  SHUT today by `expandoAttachedTypeIds` because B431's spine anchor already owns that read and without the marker
+  the two emit the same row TWICE (measured); (3) the JS object-literal host + `Object.defineProperty`, which
+  closes `jsExpandoObjectDefineProperty` and would retire B433. JS files are refused WHOLE today — a JS host's
+  members are B419/B432/B433's territory.
+  **AND THE COST GATE IS BLIND TO THIS FAMILY**: its counters are type-RESOLUTION operations while the expando
+  scan is a pure AST walk, so a green cost gate means "no resolution moved", never "the scan is free"; what bounds
+  it is the per-CONTAINER memo ((INC.57)'s quadratic shape).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-27 LANDED 2026-09-19 ((P18.85)-(P18.135) notes) — pending **36 → 35**,
   skipped 60, suite 19,935/0. **(P18.135) CLOSED `mutuallyRecursiveCallbacks` AND REFUSED
   `invariantGenericErrorElaboration`** — and the two halves of that round must not be conflated: the ENGINE rule
   (tsgo's per-level `Type 'A' is not assignable to type 'B'.` header on a generic-ARGUMENT descent, landed by
