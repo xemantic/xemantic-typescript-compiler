@@ -813,11 +813,18 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "noInferUnionExcessPropertyCheck1.errors.txt",
-        "ORDER-model (re-measured (LEGACY.0b) step 9): the residue is the order of two " +
+        "ORDER-model. **THE RECORDED \"it is not `compareSymbols`\" REASON IS REFUTED** " +
+            "(re-measured (P18.135) recon): it IS `compareSymbols`. The old reason took `T`'s " +
+            "declaration to be the CONSTRAINT's type literal, but `T` is inferred to the " +
+            "ARGUMENT object literal, which is LATER in the file than the function-type node " +
+            "— giving function-type-first, which is exactly tsgo's answer. Measured: tsgo " +
+            "canonicalizes both written orders identically and orders a named reference first " +
+            "(`Fn<NoInfer<...>> | NoInfer<...>`). Old reason, kept so the refutation is " +
+            "checkable: `the residue is the order of two " +
             "ANONYMOUS constituents — a function type and an object type — and their " +
-            "DECLARATION positions give the opposite of tsgo's answer (row 23 is `(() => { x: " +
-            "string; }) | { x: string; }` where the object's declaration, `T`'s constraint, is " +
-            "the EARLIER node), so it is not `compareSymbols`. Rows 7/15 need the other half: " +
+            "DECLARATION positions give the opposite of tsgo's answer (row 23 is (() => { x: " +
+            "string; }) | { x: string; } where the object's declaration, T's constraint, is " +
+            "the EARLIER node), so it is not compareSymbols.` Rows 7/15 still need the other half: " +
             "`NoInfer<T>` is a `Substitution` type in tsc (bit 24, after `Object`'s bit 20) " +
             "where this model represents it as its own argument with an alias display. NOT " +
             "served by the TS2353 walker step 9 ordered — a `FunctionType` constituent makes " +
@@ -825,25 +832,39 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "reverseMappedTypeIntersectionConstraint.errors.txt",
-        "ORDER-model — and NOT a union order at all (re-measured (LEGACY.0b) step 9): all " +
-            "four rows are the MEMBER order inside one anonymous object display, and every " +
-            "one of them is tsgo's alphabetical-by-property-name (`{ anotherField; field }`, " +
-            "`{ nested; prop }`, `{ invoke; types }`). A reverse-mapped type's members carry " +
-            "no declarations in tsc and so list by NAME; ours carry the source literal's " +
-            "declarations and list by position. Needs a reverse-mapped MARK on the type — " +
-            "sorting every anonymous object's members by name is a whole-corpus change.",
+        "**PIN-SERVED, AND THE RECORDED ORDER-MODEL REASON IS REFUTED** (re-measured " +
+            "(P18.135) recon, verified independently): this whole baseline is re-emitted by " +
+            "the wipe-and-pin walker `checkReverseMappedIntersectionConstraint` " +
+            "(`Checker.kt:69136`), whose four member orders are HARDCODED `pinDiag` strings " +
+            "over a file it wipes first — so NO engine rule produces these rows and no " +
+            "`reverse-mapped MARK` is involved. Closing the row is a RE-TRANSCRIPTION of " +
+            "those strings or a RETIREMENT of the walker, never an engine fix. The engine " +
+            "claim behind the old reason is false too: tsgo orders a plain `keyof X` mapped " +
+            "type by DECLARATION order (byte-identical to ours), and alphabetically only " +
+            "when the key source is `keyof A & keyof B`, which it reduces to a SORTED " +
+            "literal union where we leave it unreduced — 4 active cases write that shape. " +
+            "Old reason, kept so the refutation is checkable: `all four rows are the MEMBER " +
+            "order inside one anonymous object display ... Needs a reverse-mapped MARK on " +
+            "the type — sorting every anonymous object's members by name is a whole-corpus " +
+            "change.`",
     ),
     TsgoPendingBaseline(
         "typeParameterDiamond4.errors.txt",
-        "ORDER-model (measured (LEGACY.0b) step 9): `T | Top | U`. NOT \"type parameters " +
-            "cannot be ordered\" — the comparator orders a type-parameter union correctly " +
-            "inside ONE function scope (`Zed | Alpha` renders `Alpha | Zed`, byte-identical " +
-            "to tsgo, in both written orders). The variable is an ENCLOSING function's type " +
-            "parameter: this display follows the WRITTEN annotation order exactly (rewriting " +
-            "the fixture as `U | T | Top` renders `U | T | Top`), and the same union is " +
-            "degraded enough elsewhere that the ordinary var-decl reader emits NOTHING for " +
-            "`Zed | Alpha` when `Zed` comes from an enclosing scope. So the ORDER row sits on " +
-            "a RESOLUTION gap, not on the comparator.",
+        "ORDER-model at a per-READER DISPLAY site. **THE RECORDED \"RESOLUTION gap / " +
+            "ENCLOSING function's type parameter\" REASON IS REFUTED** (re-measured " +
+            "(P18.135) recon, verified independently): the divergence reproduces with ALL " +
+            "THREE type parameters LOCAL to ONE function — `function flat<Top, T, U>() { " +
+            "var top!: Top; var middle!: Top | T | U; top = middle }` renders `Top | T | U` " +
+            "here and `T | Top | U` in tsgo — so no enclosing scope is involved and nothing " +
+            "is degraded. The decisive corroboration is that `typeParameterDiamond3` is " +
+            "ACTIVE and GREEN and its chain requires the SORTED `T | Top | U` for the very " +
+            "same union: the comparator is fine, and it is the TYPE-PARAMETER-TARGET branch " +
+            "of the assignment reader that renders its source in WRITTEN order instead of " +
+            "the stably-ordered resolved type. At-risk if that branch is fixed: 4 green " +
+            "baselines (`typeParameterDiamond2/3`, `doNotElaborateAssignabilityToTypeParameters`, " +
+            "`quickIntersectionCheckCorrectlyCachesErrors`). The same fixture also shows a " +
+            "SECOND, separate gap: tsgo adds `'Top' could be instantiated with an arbitrary " +
+            "type which could be unrelated to ...` where we are silent.",
     ),
     // -------------------------------------------------------------------- (LEGACY.0b)
     TsgoPendingBaseline(
@@ -892,7 +913,13 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "complexRecursiveCollections.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> chain CONTENT: a different chain message is chosen, not a different spelling of the same one; layer `submoduleAccepted`. tsgo: The types " +
+        "**PIN-SERVED** (re-measured (P18.135) recon, verified independently): the row is a " +
+        "hardcoded `pinDiag` chain in the wipe-and-pin walker `checkComplexRecursiveCollections` " +
+        "(`Checker.kt:69241`), which wipes the file first — so the earlier `chain CONTENT` " +
+        "classification is true of the BYTES and misleading about the CAUSE: no engine rule " +
+        "chooses this message. Closing it is a RE-TRANSCRIPTION (`The types of` -> `The types " +
+        "returned by`) or a walker RETIREMENT, and retirement is NOT yet viable — the engine's " +
+        "own path accumulation is still short for this fixture. layer `submoduleAccepted`. tsgo: The types " +
         "returned by 'map(...).size' are incompatible between these types. | ours: The types of " +
         "'map(...).size' are incompatible between these types."
     ),
