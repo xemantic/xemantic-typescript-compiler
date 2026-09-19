@@ -1,3 +1,15 @@
+**(P18.129) — A NESTED `function` LANDS; THE CLASS HALF IS REFUSED WITH ITS PRICE, 19,918 / 0 / 65 (2026-09-17).**
+The KIR module goes 276 -> 313, and a corpus fixture is added, because the census found the gap was UNTESTED rather
+than incomplete: not one of the 59 fixtures declared a function inside a function body, and 39 of 41 characterised
+shapes refused. **The two designs were not a free choice** — the obvious typed one was built and the refusal MOVED
+rather than disappearing, because a nested declaration is never bound, so the checker answers no signature and a
+parameter has no symbol. The expression form needs neither, at a measured price of one dynamic call per call and
+zero in a value position; unblocking that is a BINDER change. Hoisting is per statement list and block-scoped, not
+the function-scoped `var` table, which the reference's own diagnostic settles. **The class half is refused and the
+refusal answers a question no earlier round had to**: a nested class's identity is per INVOCATION, so the lazy
+per-file carrier those rounds introduced is the wrong one here. 36 pins, 39 of 40 red against the parent, nine
+arms — one of them a measured redundant guard and two of them a recorded pair.
+
 **(P18.128) — (CHK.137)+(CHK.138): TWO GAPS THAT WERE FIVE, 19,881 / 0 / 65 (2026-09-17).**
 The first is a SYMMETRIC pair rather than a false positive: the same artifact that makes a class value type as its
 instance type hides a false NEGATIVE too, and a fixture that varies only whether the class declares a constructor

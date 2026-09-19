@@ -68009,3 +68009,197 @@ defects. Recorded rather than silently adopted.
 TS6133 → TS6196 (26) and F5 removed-option wording (4, which also answers (LEGACY.1)'s
 6.0-vs-7.0 question) are the cheap families; then the ranked family rounds, ordered from the
 RED SET rather than from the diff layers.
+
+### Round (P18.124) — (LIB.7): the namespace import needed a runtime object for 4 of 21 shapes and a QUALIFIED REFERENCE for the other 17 (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,741 → 19,758 / 0 / 65**, the KIR module **194 → 211**;
+`huge_methods.py --fail-over 0` run over BOTH core (875 classes) and the **KIR module** (113, largest
+`lowerCall` at 4,620 after taking a 9-line arm), since this round adds 430 lines of compiled code outside the
+default core-only census; `cost_gate.py` exit 0 and the core corpus screen 8,790 / 0 are CONTROLS, and **the
+8-profile grid is inapplicable by construction — `Checker.class` is BYTE-IDENTICAL to (P18.123)'s landed binary
+(`8b302f30…`)**. The checker was not touched, and neither was `JsRuntime.kt` (0-line diff), so the native-runtime
+generator is not engaged.
+
+**THE BRIEF ASKED THE WRONG QUESTION, AND THE CHARACTERISATION SWEEP IS WHAT CAUGHT IT.** It framed the round as a
+choice between two shapes of module OBJECT. Measured over 21 shapes rather than the briefed five, **the object is
+needed for 4 of them and the other 17 need a QUALIFIED REFERENCE that needs no object at all** — and a round that
+had built only the object would have shipped every namespace-imported member as a REFLECTIVE read, which the
+round's own ablation prices exactly: with the reference arm removed and the object present, the same fixture still
+compiles and prints the right answer through **`dynamicOps = 2`**, i.e. (KIR.LOWER.3)'s 33x hazard one mechanism
+over. "Is an object the thing this item needs" was the question the brief did not ask.
+
+**THE CHECKER IS SILENT ABOUT A NAMESPACE MEMBER, AND THAT IS THE ROUND'S STRUCTURAL FINDING.** A one-line probe on
+`facts` settled it in a single run: `facts.nameAt(ns)` DOES answer (`ValueModule|NamespaceModule`, `declarations`
+empty, `exports` = the module's own table with every entry resolved into the declaring file), while
+**`facts.memberAt(ns.alpha)` is null and `facts.callAt(ns.bump())` reads `signatureCount = 0`**. So `lowerCall`'s
+existing `functions[fact.signature?.declaration]` arm can NEVER fire for `ns.f()`, however ordinary the call is —
+three distinct gaps behind one refusal message, where the item and the brief both read one.
+
+**WHAT LANDED.** (M1) A qualified reference resolves to the DECLARATION and costs nothing at run time — three arms,
+and the read arm must sit FIRST in `lowerPropertyRead`, above every arm that reasons about a receiver TYPE, because
+the checker types `ns` as `any` and the dynamic fallback would otherwise claim it. (M2) The namespace OBJECT is a
+final `JsObject` subclass with generated `get`/`has`/`keys`/`spill` and a lazily-allocated singleton, one per
+(importing file, module) — per IMPORTER because a namespace object built into the imported file would be a
+cross-file declaration, which is what the IR verifier refuses ((P18.122)); the exports are reached through shared
+accessors, so every value is identical and LIVE and only the object's identity is per-file. (M3) A RENAMED export
+(`export { inner as outer }`) is REFUSED rather than answered wrongly.
+
+**THE DESIGN DECISION IS DECIDED BY CORRECTNESS, NOT TIDINESS: AN ES MODULE'S EXPORTS ARE *LIVE BINDINGS* AND AN
+EAGER BAG IS A COPY.** The pin that separates the two designs is `a module whose exports change reads them through
+the namespace` — it prints `2\n2\n` here and a bag would print the pre-init value. The bag additionally makes
+module-init ORDER decide whether the entries exist at all. **And the one place where reusing (P18.122)'s machinery
+verbatim would have been WRONG is the `keys()`/`get` asymmetry**: enumeration spills (`buildShapeKeys` verbatim) and
+`get` is deliberately NOT `shapeActive()`-gated, because its arms read through accessors rather than fields — a
+namespace that spilled AND answered from the spill would freeze every live binding at the first `for…in`.
+
+**M3 IS A DEFECT THIS ROUND'S OWN FIX INTRODUCED, CAUGHT BY THE SWEEP.** The checker's export table is keyed by the
+DECLARED name, so `export { inner as outer }` made `ns.outer` answer `null` and `Object.keys(ns)` report `inner` —
+a loud refusal turned into a silent wrong answer, (INC.51)'s two-spellings-one-symbol trap one table over. Refused
+with the offending specifier named; the non-renaming `export { inner }` keys correctly and both are pinned as a pair.
+
+**A SHAPE PIN CAN BE SATISFIED BY A REFUSAL — THE INSTRUMENT'S ZERO HAS TWO CAUSES.** The helper reports
+`dynamicOps = 0` for a program that never compiled, so the first version of both shape pins would have been
+VACUOUSLY GREEN under the M1-off arm. Strengthened to assert `compiled` first — and the strengthened pin then
+reddened on `compiled` rather than on the count, so a THIRD pin (a qualified READ with no `new` in it) had to be
+added before M1's actual shape claim was measured at all. (P18.118)'s law in a new costume.
+
+**PINS AND ABLATION.** `KirNamespaceImportTest`, 17 cases (15 non-residue, all RED against the pre-change binary;
+2 named `residue - …`). Four arms — pre-change, M1 off, M2 off, M3 off — redden 15 / 3 / 10 / 1, each generated by a
+script asserting exactly ONE occurrence of the text it removes, every restore `cmp`-verified on both files, and the
+post-restore rebuild identical to the landed md5 at 211 / 0.
+
+**WHAT THE LIBRARY NEEDS NEXT, AND NONE OF IT IS A NAMESPACE QUESTION**: a DYNAMIC `new` (`lowerNew` resolves a
+class declaration or refuses, so `new (x as any)()` refuses for any dynamic callee — one arm, and it is what
+`cronstrue`'s `new (allLocales as any)[property]()` is blocked on); **`export * from` in the CHECKER** (a barrel
+module symbol's `exports` table is EMPTY — the checker resolves a star re-export at LOOKUP time and never populates
+the table, so the enumeration does not exist); the renamed export above; and `in`, which is not lowered at all, so
+the generated `has` override has no consumer yet and is kept for protocol completeness. **`cronstrue` is not on
+this box**, so the claim is MECHANICAL and stated as such: the SHAPE of `allLocalesLoader.ts` runs at
+`dynamicOps = 0`; its construction half and its barrel half are the two residues.
+
+### Round (P18.123) — (LEGACY.0b) step 22: only an ASSIGNMENT declares a JS expando, and the brief's own premise about the sequel was false (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,726 → 19,741 / 0 / 65**; `tsgoPendingBaselines`
+unchanged at 40 with **2 entries REWRITTEN** — both rows are PARTIALLY closed, not closed; corpus screen **3,102 /
+0 errors and 5,688 / 0 emit**; `cost_gate.py` exit 0 (deltas unchanged from (P18.119)'s reading, max +0.15%);
+`huge_methods.py --fail-over 0` exit 0 over 875 classes; the 8-profile grid `added=0 removed=0` on all eight with
+78 emit files byte-identical. `Checker.kt` 194,764 → 194,802 (+97/−59).
+
+**THE MECHANISM HAS THREE FACES AND THE BRIEF NAMED ONE.** `ast.IsExpandoPropertyDeclaration` really is
+`IsBinaryExpression(node)`, and `GetAssignmentDeclarationKind` additionally demands the operator be **`=`** and the
+left be an ACCESS expression — so `this.a = 1` and `this['d'] = 2` declare while `this.b;`, `this['e'];`,
+`this.c += 1` and **`(this.f) = 3`** do not; the parenthesized target is the one no reading would have predicted.
+Second face: **the REPARSER drops a JSDoc `@type` above a non-declaration statement** (`reparser.go:369` takes an
+`ExpressionStatement` host only when its expression is assignment-shaped), so `/** @type {T} */ this.p;`
+references nothing while the same tag on an assignment, a `let`, a `return` or a parenthesized expression does.
+Ours declared on all of them — `collectClassInstanceFields`' KDoc said so in as many words.
+
+**THE THIRD FACE IS THAT (P18.121)'s RECORDED MEASUREMENT — WHICH THIS ORCHESTRATOR'S BRIEF REPEATED AS FACT — WAS
+WRONG.** "The TS6205 aggregation predicate is already correct" is false: tsgo aggregates over the DECLARATION's
+whole type-parameter list and never per tag, so `@template T,V` (used) beside `@template X,Y` (unused) is **two
+TS6196 rows** where we emitted one TS6205 over the second tag. **And the SPAN half was needed after all** —
+`rangeOfTypeParameters` is `[list.Pos()-1, skipTrivia(end)+1)`, which moves the column 4 → 3 and widens the squiggle
+at both ends. The per-tag loop is deleted; `TypeParameter.jsDocTagEnd` now has ZERO readers, that loop having been
+its only consumer. Fifth instance in this arc of a recorded reason being a previous round's hypothesis — and the
+first where the hypothesis had already been copied forward into a brief.
+
+**THE BRIEF'S BIGGEST ERROR IS THE SEQUEL, AND IT IS THE ROUND'S REUSABLE LESSON: "the TS2339 follows directly once
+the declaration stops" DOES NOT FOLLOW AT ALL.** A declaration rule only ever REMOVES rows; the TS2339 half is a
+separate, whole-family gap — `cpaSpineLeave` opens `if (spineIsDts || spineIsJsLike) return`, so **the entire
+property-access-check family is off for every `.js` file**, measured silent even where the receiver's type is a
+TypeScript class declared in a `.ts` file (3 missing rows in one 9-line probe). The naive gate flip
+(`spineIsJsLike && !options.checkJs`) was BUILT and REFUSED on a measurement: it delivers none of the six rows the
+two pending entries need, adds a false TS2339 on a legal `this.foo = 10` in an accessor initializer, and moves one
+currently-green baseline (`classFieldSuperAccessibleJs1`, a false row on the legal expando static `C.blah2 = 456`).
+That family needs the JS expando member model inside the cpa member tables plus `super.`/`this.` receiver legs —
+its own arc.
+
+**BOTH ROWS ARE NOW STRICT SUBSETS OF tsgo's, BYTE-IDENTICAL ON EVERY ROW WE EMIT.** R1 emits tsgo's three TS6205
+rows at (2,3)/(13,3)/(20,3) — multi-line squiggles included — where it used to emit three TS6196 plus one TS6205 at
+the wrong column; R2's two wrong TS2855 rows are gone and its two correct ones are byte-identical. R2 is **four
+changes, not one**: `this['literalElementAccess'];` is the same mechanism's element-access twin and tsgo's answer
+carries a TS7053 with a two-line chain. The firing emitter was identified by PassLab ablation with a positive
+control (`disable checkClassFieldSuperAccessJs` → 0 rows), so the `.ts`-side TS2855 emitter never fires in a JS
+file and no third emitter was added.
+
+**SIZING AND ABLATION.** The census is **11 case files** carrying a bare `this.X;`, of which only **3 are JS** —
+the rest are TypeScript, where the recorder is never reached, and that 3 is what bounds the risk. Each of the five
+named green baselines was verified explicitly on both channels. 15 pins; three arms, each reverting one mechanism,
+redden 7 / 3 / 5 with no pin green on all three; four distinct class md5s and the post-restore rebuild identical to
+the landed value.
+
+**RESIDUES AND LEADS.** R1 keeps TS2339 at (8,14)/(25,14) and R2 keeps 3×TS2339 + 1×TS7053, all of them the cpa
+family above. **Pre-existing and newly measured**: under `allowJs` WITHOUT `checkJs` tsgo is silent for the whole
+fixture and we still emit two TS2855 rows, because `checkClassFieldSuperAccessJs` is gated on the file EXTENSION
+rather than on `checkJs` ((P18.92)'s hazard) — recorded as an explicit `residue - …` pin rather than patched, since
+the honest fix is a file-level "an unchecked JS file reports nothing" gate. `Checker.kt:34337` is an existing
+TS2339-for-`this.X`-in-a-JS-class emitter gated on the constructor carrying an `Object.defineProperty(this, …)`:
+a lead for that arc, deliberately not widened. And tsgo emits a TS2322 for `/** @type {T} */ this.p = null` that we
+do not — a pre-existing expando-TYPING gap, unreachable from all three mechanisms.
+
+### Round (P18.122) — (LIB.6) the NOMINAL half: the item's failure was three rounds stale, its own design does not work, and the backend had already answered the question once (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,706 → 19,726 / 0 / 65**, the KIR module **174 → 194**;
+`huge_methods.py --fail-over 0` run over BOTH core (875 classes) and the **KIR module** (113, largest 4,424) —
+the default census is core-only and this round added 546 lines of compiled code outside it, exactly the (JIT.1)
+blind spot; `cost_gate.py` exit 0 and the core corpus screen 8,790 / 0 are CONTROLS, and **the 8-profile grid is
+inapplicable by construction — `Checker.class` is BYTE-IDENTICAL to (P18.121)'s landed binary (`5dc1b815…`), which
+is that comparison's receipt**. The checker was not touched. `docs/kir-structural-typing.md` § 7's verdict is
+superseded by this round and the doc is left for its measurements.
+
+**THE ITEM'S RECORDED FAILURE IS GONE, AND WHAT REPLACED IT IS WORSE IN ONE FAMILY.** (LIB.6) records an
+`IllegalArgumentException` from `reflectiveSet`; (P18.118) made `this.x = …` a direct field store, so that path is
+UNREACHABLE and `cronstrue`'s exact shape now **refuses at compile time** (`cannot coerce program.En to …JsObject`).
+Re-measured over 14 shapes: **10 refuse at compile time** (local, parameter, return, class field, field
+initializer, alias, inline literal, property-only interface, interface-extends-interface) and **3 COMPILE, read
+`dynamicOps=0` AND throw `ClassCastException` at run time** (array element, `Map` value, object-literal property —
+every one reached through `Any?`). So there were two failure modes and the silent one is the dangerous one:
+(P18.118)'s "a zero-dynamic-op fixture can still fail to run", one mechanism over, which is why every case landed
+here carries a BEHAVIOUR assertion beside its SHAPE assertion.
+
+**THE DECISION WAS NOT BETWEEN THE ITEM'S TWO DESIGNS.** (1) minting JVM interfaces + the 158-edge closure is
+REFUSED, and not on the closure size: the closure needs an assignability oracle at LOWERING time and the checker is
+gone by then; `JsObject` is not merely the erasure but the whole dynamic protocol (`get`/`set`/`has`/`delete`/
+`keys`/`spill` plus the `is JsObject` arms of nine runtime members), all of which stop working for an
+interface-typed value; and a plain bag can never implement a minted interface, so literals that reach interface
+slots TODAY would become refusals. (2) — the item's own "cheap" shape — **does not work, in two independent places
+read off the source**: a method call on a STATICALLY-BAG receiver never reaches `jsInvoke` (`isPropertyBag` fires
+first and emits `bag.get(name)` + `jsCall`), and `jsInvoke`'s `is JsObject` arm SHADOWS the reflective fallback the
+design depends on. A third candidate the item never names — erase an own-structural type to `Any?` — needs no
+runtime change and fixes all 14 shapes, and is refused on a measurement: it demotes every bag member read from a
+virtual `JsObject.get` to a static `jsGet` `when`, handing back `docs/perf/kir-backend-levers.md` § 2a's whole prize.
+
+**WHAT LANDED IS THE ANSWER THE BACKEND HAD ALREADY WRITTEN DOWN FOR OBJECT LITERALS** — `JsObject`'s own KDoc: *the
+subclass is a `JsObject`, so nothing about assignability changes; that is the whole reason this shape was chosen
+over changing what an object type ERASES to*. Applied to a `class`: it extends `JsObject`, overrides
+`get`/`set`/`has`/`spill` over its OWN slots and chains to its base's through `super`, and answers method calls
+through a new `JsObject.invokeMember(name, args)` whose per-class override is a `when` over its own methods — a
+monomorphic virtual call and a name compare, **not** reflection. `instanceof` is unchanged (a `checkcast` on the
+generated class); what moves are the runtime's `is JsObject` arms, every one toward the JS-correct answer
+(`"[object Object]"`, `Object.keys`/`for…in`/`JSON.stringify` enumerating own fields). One moved the WRONG way and
+is fixed in the same commit — `jsToString`'s arm was a constant, so a class declaring its own `toString()` would
+have stopped being consulted. A member whose name collides with the protocol is mangled, and `invokeMember`'s
+`when` keys on the TYPESCRIPT name. All 14 shapes now compile, run, print the right answer at `dynamicOps = 0`.
+
+**FOUR THINGS THAT DID NOT WORK, AND THE FIRST IS THE REUSABLE ONE.** The first cut FLATTENED the inheritance chain
+into each class's `get`, which the IR verifier refuses (*Access to a field declared in another file*) — the same
+constraint `KirProgramTables.ModuleVariable` exists for; the chain must go through `super`, which forces the pass
+into declare-all-then-define-all sub-passes, and **only the CROSS-FILE pin saw it** (every single-file case was
+green). `scope` does not exist between those sub-passes, so `irAs`/`irNull` are hand-built. **The mangling pin was
+BLIND on its first version** (arm a4 read 0 RED): a TypeScript `get(k: string): string` has descriptor
+`(String)String` and is simply NOT an override of `JsObject.get(String)Object` — only an exactly matching
+descriptor collides. And a `$`-spelling fallback added to `reflectiveGet`/`Set`/`Invoke` was REVERTED, because
+`scripts/kir_native_runtime.py` anchors on those three bodies verbatim and refuses the edit.
+
+**PINS AND ABLATION.** `KirNominalSlotTest`, 20 cases, 622 lines; 17 of 20 red in at least one of **six** arms
+(storage, field protocol, call protocol, mangling, display, the bag method-call route), each arm's restore
+`cmp`-verified and the final class md5s identical to the pre-ablation landed build. a2 and a3 each redden a
+PRE-EXISTING `KirReceiverShapeTest` control as well, which is the receipt that the two protocols are one mechanism
+with (P18.118)'s work rather than a parallel one.
+
+**RESIDUES, PINNED SO CLOSING THEM IS A VISIBLE CHANGE**: a class extending a RUNTIME base (`extends Date`) still
+refuses a bag slot (one JVM superclass); an ACCESSOR is invisible through a bag-typed slot and reads `null`; a
+method with a REST parameter is deliberately left out of `invokeMember`. Pre-existing and separately recorded: a
+`void` bag member call throws `NullPointerException` from `adaptingCall`'s `Any?` typing — the parent binary fails
+identically. **`cronstrue` is not on this box**, so the library claim is MECHANICAL: every shape its failure was
+recorded from now compiles and runs, and the queue's own next wall is (LIB.7)'s namespace import, not started.
