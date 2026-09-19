@@ -110199,9 +110199,19 @@ interface DataView {
         val tgtDisp = formatTypeForDisplay(varTypeRef) ?: return false
         val srcDisp = "<${tpNames.joinToString(", ")}>($fnParamName: $paramTypeDisp) => $retDisp"
         val paramLine = "Types of parameters '$fnParamName' and '$aliasParamName' are incompatible."
+        // (P18.135): re-transcribed from TypeScript 7. tsgo reaches the third `Types of
+        // parameters` level through the ALIAS's own parameter, whose `isRelatedToEx` frame then
+        // pushes its own `Type 'Foo<unknown>' is not assignable to type 'Bar<{}>'.` head — the
+        // same per-level header the generic-reference branch of `getPropertyElaborationChain`
+        // grew in this round, one construct over. tsc 6 printed a third bare `paramLine` here
+        // and is no longer a reference (owner directive 2026-09-12); `submoduleAccepted.txt`
+        // files this row under "These chains are *longer* in Corsa than in Strada".
         val chain = listOf(
-            "  $paramLine", "    $paramLine", "      $paramLine",
-            "        Type '$retDisp' is not assignable to type '$fooName<unknown>'.")
+            "  $paramLine",
+            "    $paramLine",
+            "      Type '$fooName<unknown>' is not assignable to type '$tgtDisp'.",
+            "        $paramLine",
+            "          Type '$retDisp' is not assignable to type '$fooName<unknown>'.")
         val pos = lhs.pos; val len = lhs.text.length
         val (line, character) = getLineAndCharacterOfPosition(source, pos)
         diagnostics.add(Diagnostic(
@@ -171225,8 +171235,16 @@ interface DataView {
                                     // and the multi-prop "Type 'X' is missing the following
                                     // properties from type 'Y': …" lines are missing-property
                                     // TERMINALS that already name both types → no header.
-                                    if (firstTrimmed.startsWith("Property '") ||
-                                        firstTrimmed.contains("is missing the following properties")) {
+                                    // (P18.135): "both types" is tsgo's `chainArgsMatch(nil,
+                                    // generalizedSourceType, targetType)` and it names THIS
+                                    // level's argument pair, not any missing-property sentence
+                                    // — a deeper generic level leaves a sentence about ITS OWN
+                                    // arguments, which this pair's header must still introduce.
+                                    // Testing the message SHAPE instead collapsed every nesting
+                                    // level onto the innermost sentence, so `Inv<Inv<Small>>`
+                                    // read like `Inv<Small>`.
+                                    if (RelationHeadSuppression.leafNamesTypePair(
+                                            firstTrimmed, typeToString(sa), typeToString(ta))) {
                                         argChain
                                     } else {
                                         listOf(header) + argChain.map { "  $it" }

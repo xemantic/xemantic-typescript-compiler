@@ -998,9 +998,20 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "invariantGenericErrorElaboration.errors.txt",
-        "F7 diagnostic COUNT changed; layer `submoduleAccepted`. tsgo: Type " +
-        "'Constraint<Runtype<any>>' is not assignable to type 'Constraint<Num>'. | ours: " +
-        "Property 'tag' is missing in type 'Runtype<any>' but required in type 'Num'."
+        "(P18.135) RE-MEASURED, and the family label was wrong: it is not the missing " +
+        "per-level relation header that round added (`Constraint<A>`'s chain does not go " +
+        "through one), it is tsgo's VARIANCE measurement. `Constraint<A extends " +
+        "Runtype<any>>` uses A both covariantly (`underlying: A`) and contravariantly " +
+        "(`check: (x: A['witness']) => void`), so tsc's `relateVariances` measures A " +
+        "INVARIANT, fails the type-argument check, RESETS the error info and falls back to " +
+        "the STRUCTURAL comparison -- which is where the `Types of property 'underlying'` " +
+        "line and the REVERSED `Constraint<Runtype<any>>` / `Constraint<Num>` header come " +
+        "from. This checker measures no variances (CLAUDE.md: global variance analysis in " +
+        "the relation engine is DEAD, ~263 regressions at round 336), so BOTH missing lines " +
+        "and the direction of the header they carry are downstream of that one absent " +
+        "mechanism. tsgo: Type 'Constraint<Runtype<any>>' is not assignable to type " +
+        "'Constraint<Num>'. | ours: Property 'tag' is missing in type 'Runtype<any>' but " +
+        "required in type 'Num'."
     ),
     TsgoPendingBaseline(
         "jsDeclarationEmitExportedClassWithExtends.errors.txt",
@@ -1075,12 +1086,6 @@ val tsgoPendingBaselines = listOf(
         "'pvt' exists in multiple constituents and is private in some. | ours: The intersection " +
         "'mixB<typeof A>.(Anonymous class) & A' was reduced to 'never' because property 'pvt' " +
         "exists in multiple constituents and is private i"
-    ),
-    TsgoPendingBaseline(
-        "mutuallyRecursiveCallbacks.errors.txt",
-        "F7 diagnostic COUNT changed; layer `submoduleAccepted`. tsgo: Type 'Foo<unknown>' is " +
-        "not assignable to type 'Bar<{}>'. | ours: Types of parameters 'bar' and 'foo' are " +
-        "incompatible."
     ),
     TsgoPendingBaseline(
         "noParameterReassignmentIIFEAnnotated.errors.txt",

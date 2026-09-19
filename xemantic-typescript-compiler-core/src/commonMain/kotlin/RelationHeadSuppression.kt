@@ -145,6 +145,33 @@ internal object RelationHeadSuppression {
         return substring(n)
     }
 
+    /**
+     * (P18.135) — the OTHER branch of the same `chainArgsMatch` condition, asked while the
+     * relation is still BUILDING its chain rather than of a finished head.
+     *
+     * tsgo reaches a nested generic instantiation through `typeArgumentsRelatedTo`, and the
+     * failing argument pair's own `isRelatedToEx` frame ends in `reportErrorResults` →
+     * [reportRelationError], which pushes a `Type '<srcArg>' is not assignable to type
+     * '<tgtArg>'.` entry UNLESS the entry already on the chain is a missing-property sentence
+     * **about that very pair**. So `Inv<Small>` vs `Inv<Big>` prints the sentence alone while
+     * `Inv<Inv<Small>>` vs `Inv<Inv<Big>>` prints an intermediate header for `Inv<Small>` /
+     * `Inv<Big>` above it — one header per nesting level, and none at the innermost one.
+     *
+     * [suppressHead] cannot decide this: the header it would have to weigh was never produced,
+     * and the two type displays it compares are not recoverable from the finished strings. The
+     * decision therefore lives at the one site that still holds the pair — the same-target
+     * generic-reference branch of `Checker.getPropertyElaborationChain` — and asks this, so the
+     * emitting and the suppressing halves of tsgo's one condition cannot drift apart.
+     *
+     * Returns false for any chain entry that is not one of the three missing-property messages,
+     * which is the EMITTING direction: an unrecognised entry gets its header, as tsgo's `switch`
+     * (whose every other arm falls through to `reportError`) does.
+     */
+    fun leafNamesTypePair(chainEntry: String, source: String, target: String): Boolean {
+        val leaf = parseMissingProperty(chainEntry.trimStart()) ?: return false
+        return leaf.source == source && leaf.target == target
+    }
+
     /** The two type displays a relation-error head carries, and whether it is excluded. */
     private class Head(
         val source: String,
