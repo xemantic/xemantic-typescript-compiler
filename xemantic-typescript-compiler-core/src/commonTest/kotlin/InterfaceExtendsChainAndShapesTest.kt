@@ -244,6 +244,31 @@ class InterfaceExtendsChainAndShapesTest {
     }
 
     /**
+     * The confinement guard, pinned. The structural arm may only decide a member the derived
+     * interface DECLARES in one of the two shapes the name-based loop cannot name; without
+     * that gate it reaches an INHERITED member and reports TS2430 where the real answer is
+     * TS2320 — `interface A extends C, C2` with `x?: number` and `x: number` declares no `x`
+     * at all, and tsgo reports only *cannot simultaneously extend*.
+     *
+     * This is the one guard of the round's four that NO other pin discriminates: its ablation
+     * reddens the corpus screen (`inheritSameNamePropertiesWithDifferentOptionality`) and
+     * nothing else, so it was held on a baseline until this pin existed.
+     */
+    @Test
+    fun `negative control - an inherited member conflict stays TS2320 and grows no TS2430`() {
+        val d = diagnose(
+            """
+            interface C { x?: number }
+            interface C2 { x: number }
+            interface A extends C, C2 { y: string }
+            """.trimIndent(),
+            directives = "// @strict: true",
+        )
+        assert(d.none { it.code == 2430 })
+        assert(d.count { it.code == 2320 } == 1)
+    }
+
+    /**
      * The chain builder prefers a LEAF mismatch where this walker takes the first base
      * property in table order, so the two can choose DIFFERENT members. When they disagree
      * the engine chain is refused and the hardcoded pair stands, because a chain naming a
