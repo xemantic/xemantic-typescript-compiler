@@ -86,8 +86,13 @@ import com.xemantic.typescript.compiler.parsedSourceOrNull
  * conversions and unlike everything else here it does NOT build: it PARSES the one
  * file asked about, with the parser flags the project's `tsconfig.json` implies,
  * and caches that parse the same way the line indexes are cached. A caller gets a
- * value ([NodeInfo]), never a node — see that class for why, and [SourceIndex] for
- * why "the node at an offset" needs more than the node's own `pos`/`end`.
+ * value ([NodeInfo]) — see that class for why a DESCRIPTOR is the right answer for
+ * a host that only wants to know what the text is, and [SourceIndex] for why "the
+ * node at an offset" needs more than the node's own `pos`/`end`.
+ *
+ * [nodeAt] answers the same question with the NODE itself, and exists because
+ * [typeOracle]'s whole surface is addressed by node: it is the bridge from a
+ * caret to something an oracle can be asked about (INV.2b).
  *
  * ## Semantics
  *
@@ -752,6 +757,7 @@ public class Project private constructor(
         // CLOSED, which is what turns the host's next question into a refusal.
         oracle?.close()
         oracle = null
+        oracleTrees = null
         (dirtyFiles ?: LinkedHashSet<String>().also { dirtyFiles = it }).add(key)
         invalidate(key)
     }
@@ -1147,7 +1153,27 @@ public class Project private constructor(
             cancellation = cancellation,
             oracleHolder = holder,
         )
-        return holder.oracle
+        val built = holder.oracle ?: return null
+        // (INV.2b) Every index cached BEFORE this build describes a tree that is not
+        // the one this oracle's store is indexed by. Equal text, so every syntactic
+        // answer is identical and dropping them changes nothing a host can see — but
+        // a NODE from such an index is not a node of the oracle's tree, and
+        // `TypeOracle.storeOf` answers it anyway (it finds a store by file NAME and
+        // reads by `nodeId`). Dropped so the next ask rebuilds around [oracleTreeOf],
+        // which makes "a node from this project is a node of this project's oracle"
+        // true for EVERY ordering rather than for the ones measured.
+        //
+        // Scoped to the files this oracle WALKED, which is what makes rebuilding
+        // cheap enough to be unremarkable: for those, [oracleTreeOf] hands the next
+        // ask a tree already in hand and the rebuild is a token scan. A blunt
+        // `clear()` would also drop indexes for files OUTSIDE the program, for
+        // which there is no anchor and the rebuild is a re-PARSE — a cost with
+        // nothing to buy, since an unwalked file has no store to be consistent with.
+        val walked = built.files.mapTo(HashSet()) { it.fileName }
+        sourceIndexes.keys.removeAll { it in walked }
+        ownParses.keys.removeAll { it in walked }
+        oracleTrees = null
+        return built
     }
 
 
@@ -1225,6 +1251,65 @@ public class Project private constructor(
     private val sourceIndexes = HashMap<String, SourceIndex>()
 
     /**
+     * (INV.2b) The live [oracle]'s own trees by file name, built on the first ask
+     * after an oracle appears and dropped with it.
+     *
+     * The ANCHOR that makes [nodeAt]'s tree identity a property of this class
+     * instead of a property of the process-wide parse cache — see [oracleTreeOf]
+     * for what that buys and what it was measured NOT to fix.
+     */
+    private var oracleTrees: Map<String, SourceFile>? = null
+
+    /**
+     * The tree the live [oracle]'s store is indexed by for [key], or null when
+     * there is no live oracle or it never walked that file.
+     *
+     * ## Why an anchor at all, stated as what it does NOT do
+     *
+     * It fixes no measured defect. Over **669,350 offsets** spanning twelve of
+     * tsc's own compiler sources, the node [nodeAt] answered was a node of the
+     * oracle's own tree **every single time** — 0 from another tree, 0 nulls —
+     * and every ordering that could break that self-heals: an index built before
+     * the build is either re-pointed by [upgradeIfShareable] or, for a file the
+     * build never parsed, matched by no store at all. What it buys is that the
+     * property stops being a coincidence of three collaborating caches and
+     * becomes one line of code: the tree [nodeAt] descends IS the tree
+     * `TypeOracle.storeOf` will index.
+     *
+     * That matters because the failure it forecloses is silent. `storeOf` finds
+     * a store by the node's file NAME and reads `types[node.nodeId]` behind a
+     * bounds check alone, so a node from any equally-named tree is ANSWERED —
+     * correctly while the two trees agree, and confidently wrongly the moment
+     * they do not. An invariant whose violation cannot be observed is exactly
+     * the kind this repo pays for structurally rather than by care.
+     *
+     * ## The two layers, and the one guard measured REDUNDANT
+     *
+     * Reaching the anchor takes two edits, and they cover different halves of
+     * [sourceIndexOf]: this one serves the MISS, and [buildOracle]'s drop of
+     * [sourceIndexes] serves the HIT, where an index cached before the build
+     * would otherwise be returned by [upgradeIfShareable]. Ablated one at a time,
+     * each alone reddens exactly the same single pin (`the bridge is anchored
+     * even when it was asked before the oracle existed`) — round 927's pair:
+     * indistinguishable to any ablation, and NEITHER redundant, so both stay and
+     * this says which does what.
+     *
+     * `isClosed` is a third test and it is **measured undiscriminated** (0 RED):
+     * a host-closed oracle's trees are still the parse of the current text, since
+     * nothing but an edit closes one from this side and an edit also nulls the
+     * field — so serving them would be harmless today. It stays because it is
+     * what makes this function's contract ("a LIVE oracle's tree") a test rather
+     * than an assumption: a future path that left a closed oracle in the field
+     * across an edit would otherwise serve its trees silently, which is the one
+     * failure mode this whole anchor exists to foreclose.
+     */
+    private fun oracleTreeOf(key: String): SourceFile? {
+        val live = oracle?.takeIf { !it.isClosed } ?: return null
+        val trees = oracleTrees ?: live.files.associateBy { it.fileName }.also { oracleTrees = it }
+        return trees[key]
+    }
+
+    /**
      * The resolved `tsconfig.json` options, loaded once and dropped when any JSON
      * file is edited.
      *
@@ -1274,16 +1359,71 @@ public class Project private constructor(
     }
 
     /**
-     * The narrowest node containing [offset] in [fileName], or null.
+     * (INV.2b) The narrowest node containing [offset] in [fileName], or null — the
+     * POSITION→NODE BRIDGE, and the member that makes [typeOracle] usable.
      *
-     * INTERNAL, and the deliberate counterpart of the public [nodeInfoAt]: whether
-     * this API publishes `Node` at all is an open question that the next queue item
-     * decides, and answering it here by accident would be the one direction that
-     * cannot be walked back ([NodeInfo] carries the argument). Everything inside
-     * this module that needs the node itself — and the tests that have to reach past
-     * the descriptor to check the lookup — goes through this.
+     * ```kotlin
+     * val oracle = project.typeOracle()!!
+     * val node = project.nodeAt(file, caret) as? Expression
+     * val type = node?.let { oracle.typeAt(it) }?.let { oracle.typeToString(it) }
+     * ```
+     *
+     * ## Why this is public, when [nodeInfoAt] already describes the same node
+     *
+     * Because `TypeOracle`'s entire surface is addressed BY NODE — `typeAt`,
+     * `symbolsAt`, `resolvedCallAt`, `contextualTypeAt` all take one — so a host
+     * that cannot obtain a node cannot ask the oracle anything. [nodeInfoAt]
+     * deliberately answers a DESCRIPTOR (kind, span, ancestor kinds) and is the
+     * right member for a host that only wants to know what the text is; it is
+     * useless as an oracle address. This publishes no type the API did not already
+     * publish: `TypeOracle.files` hands out `SourceFile` and `NodeBase.parent`
+     * walks upward from any node, so the AST was already reachable — what was
+     * missing was the one correct way IN.
+     *
+     * ## Why a host must not hand-roll this, measured
+     *
+     * The obvious descent — recurse into the child whose `[pos, end)` contains the
+     * offset — is wrong, because **`Node.end` is the end of the token AFTER the
+     * node** (round 910), so sibling spans overlap and a node can claim an offset
+     * belonging to its parent or to its next sibling. Measured over **669,350
+     * offsets** in twelve of tsc's own compiler sources: the naive descent names a
+     * DIFFERENT node at **190,820 of them (28.5 %)**, and at those the oracle's
+     * answer differs — a different type, or one where the other has none — at
+     * **42,507 offsets (6.4 % of all of them)**. Restricted to offsets that begin
+     * an identifier, i.e. the realistic caret, it is 591 of 25,533 (2.3 %), of
+     * which 27 change the type: rarer, and silent when it happens. This member
+     * bounds each span by the next token end ([SourceIndex.realEndOf]) and has the
+     * (GATE.2) token-invariant gate behind it.
+     *
+     * ## Tree identity — what a host may rely on
+     *
+     * While a [typeOracle] is live, the node comes from THAT ORACLE'S OWN TREE
+     * ([oracleTreeOf]), for every file it walked and whatever order the two
+     * members were called in. That is what makes the oracle's answer an answer
+     * about this node rather than about a node with the same id in an equal tree
+     * — a distinction with no observable difference until the two trees stop
+     * agreeing, at which point the store answers CONFIDENTLY WRONGLY rather than
+     * null (see [oracle]).
+     *
+     * ## The three things that are not tree identity
+     *
+     *  * **Nodes go stale.** A node is a claim about the text it was parsed from.
+     *    Any edit invalidates it and CLOSES the oracle, so a retained node asked
+     *    about afterwards is refused rather than answered — but nothing here can
+     *    refuse a retained node handed to a LATER oracle, so do not keep one
+     *    across an edit.
+     *  * **Do not put nodes in a hash container.** They are `data class`es, so
+     *    `hashCode()` deep-walks the whole subtree (round 471). Key by
+     *    `(fileName, pos)` or use an identity map.
+     *  * **This does not build.** It parses, exactly as [nodeInfoAt] does, so it
+     *    answers on a dirty project — and answers a node whose file the oracle may
+     *    never have walked, for which `typeAt` correctly answers null.
+     *
+     * Null means what [nodeInfoAt]'s null means: no text, a negative offset, an
+     * offset at or past the end of the file (spans are half-open, so the caret
+     * after the last character is inside no node), or no node parsed there.
      */
-    internal fun nodeAt(fileName: String, offset: Int): Node? =
+    public fun nodeAt(fileName: String, offset: Int): Node? =
         sourceIndexOf(fileName)?.pathAt(offset)?.lastOrNull()
 
     /**
@@ -1314,6 +1454,15 @@ public class Project private constructor(
         val key = keyOf(fileName)
         sourceIndexes[key]?.let { return upgradeIfShareable(key, it) }
         val text = overlay.readText(key) ?: return null
+        // (INV.2b) A live oracle's own tree wins, and is paired with ITS OWN text.
+        // `SourceIndex.around`'s contract — the tree must be the parse of the text —
+        // then holds by construction rather than by a lookup key that happens to
+        // encode it, because both come out of one object. The overlay read above
+        // still decides nullity, so "no text, no index" is unchanged; the two texts
+        // cannot differ while the oracle is live, since every edit closes it.
+        oracleTreeOf(key)?.let { tree ->
+            return SourceIndex.around(tree.text, tree).also { sourceIndexes[key] = it }
+        }
         val options = parseOptions
             ?: TsConfigLoader(overlay).load(configPath).options.also { parseOptions = it }
         val flags = computeParserFlags(key, text, options)
@@ -3264,6 +3413,7 @@ public class Project private constructor(
         // CLOSED, which is what turns the host's next question into a refusal.
         oracle?.close()
         oracle = null
+        oracleTrees = null
         // (INC.46) The export SURFACE deliberately does NOT go with them: it is a claim
         // about the files this edit did not touch, which is exactly what survives. The
         // edited file joins the set the next [diagnostics] must clear.
@@ -3296,6 +3446,7 @@ public class Project private constructor(
         // CLOSED, which is what turns the host's next question into a refusal.
         oracle?.close()
         oracle = null
+        oracleTrees = null
         // (INC.46) The export SURFACE deliberately does NOT go with them: it is a claim
         // about the files this edit did not touch, which is exactly what survives. The
         // edited file joins the set the next [diagnostics] must clear.
@@ -3456,6 +3607,7 @@ public class Project private constructor(
         // CLOSED, which is what turns the host's next question into a refusal.
         oracle?.close()
         oracle = null
+        oracleTrees = null
         // (INC.46) the export surface is a claim about a live project.
         surface = null
         dirtyFiles = null

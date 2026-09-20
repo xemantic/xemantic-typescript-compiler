@@ -29,29 +29,32 @@ package com.xemantic.typescript.compiler.project
  * What the compiler's syntax tree says is at one position: a VALUE, carrying no
  * reference to the tree it was read from.
  *
- * ## Why a value and not the node
+ * ## Why a value, when `Project.nodeAt` hands back the node
  *
- * `Project.nodeAt` — the internal half of this — hands back the `Node` itself, and
- * this class exists precisely so the PUBLIC half does not. Three reasons, in
- * increasing order of how expensive the mistake would be to undo:
+ * **(INV.2b) decided the open question this class used to be waiting on, and
+ * decided it the other way**: `Project.nodeAt` is PUBLIC, because `TypeOracle`'s
+ * whole surface is addressed by node and a host that cannot obtain one cannot ask
+ * the oracle anything. This class is no longer "the public half that withholds the
+ * node" — it is the answer for a host that wants to know what the text IS without
+ * taking on an AST, and both reasons for preferring it survive the change intact:
  *
  * 1. **A node goes stale silently.** It belongs to one parse of one buffer; the
  *    next `Project.updateFile` replaces that parse and nothing on the node says so.
  *    A host would cache it beside its own editor state and describe the previous
  *    keystroke. A value cannot go stale — it is already only a claim about the text
  *    at the moment it was asked for, and its [start]/[end] are offsets a caller can
- *    re-validate against its own buffer.
+ *    re-validate against its own buffer. (An oracle query is safe from this for a
+ *    different reason: the edit CLOSES the oracle, so the stale node is refused
+ *    rather than answered.)
  * 2. **`Node` is a large, sealed, mutable-in-places hierarchy** whose members are
  *    the compiler's own working state (`NodeBase.nodeId`/`parent`/`kindId` are
  *    `var`s stamped by the indexer, and a `data class` node's `hashCode` recurses
- *    its whole subtree — CLAUDE.md, round 471). Publishing it would make every
- *    parser refactor an API break, and would hand a host an object it is unsafe to
- *    use as a map key.
- * 3. **Whether the embedding API publishes `Node` / `Symbol` / `Type` at all is a
- *    DELIBERATELY OPEN question** — the queue item after this one is where it gets
- *    decided, together with what a quick-info answer should look like. Publishing
- *    the node here would decide it by accident, in the direction that cannot be
- *    walked back.
+ *    its whole subtree — CLAUDE.md, round 471). A host that holds nodes takes on a
+ *    dependency on the parser's shape and an object that is unsafe as a map key; a
+ *    host that holds [NodeInfo] takes on neither.
+ *
+ * So: reach for the node when you are going to ASK THE ORACLE about it, and for
+ * this when you are going to render, compare or store it.
  *
  * ## The span
  *
@@ -75,8 +78,8 @@ public data class NodeInfo(
      * The node's syntax kind, as `SyntaxKind`'s own name — `"Identifier"`,
      * `"VariableDeclaration"`, `"JsxOpeningElement"`.
      *
-     * A STRING rather than the `SyntaxKind` enum, for the same reason the node
-     * itself is not published: the enum is the parser's internal vocabulary, it has
+     * A STRING rather than the `SyntaxKind` enum, for reason 2 above applied to the
+     * enum: it is the parser's internal vocabulary, it has
      * hundreds of entries, and pinning this API to it would make adding a syntax
      * kind a breaking change for every consumer's exhaustive `when`. The names are
      * tsc's own AST vocabulary, so a host bridging to `tsserver`/LSP recognises
