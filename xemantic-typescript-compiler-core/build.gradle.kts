@@ -934,14 +934,6 @@ val tsgoPendingBaselines = listOf(
         "exist on type '{}'`. layer `submoduleAccepted`."
     ),
     TsgoPendingBaseline(
-        "elidedJSImport1.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
-        "caller.js(2,8): error TS18042: 'TruffleContract' is a type and cannot be imported in " +
-        "JavaScript files. Use 'import(\"@truffle/contract\")' in a JSDoc ty | ours: " +
-        "caller.js(2,8): error TS18042: 'TruffleContract' is a type and cannot be imported in " +
-        "JavaScript files. Use 'import(\"@truffle/contract\").TruffleContrac"
-    ),
-    TsgoPendingBaseline(
         "es6ExportEqualsInterop.errors.txt",
         "RECLASSIFIED (LEGACY.0b step 3) F6 -> pin-walker + type DISPLAY: this baseline's 31 " +
         "diagnostics (the nine TS2497 rows included) are re-emitted VERBATIM by the dedicated " +
@@ -1006,12 +998,6 @@ val tsgoPendingBaselines = listOf(
         "required in type 'Num'."
     ),
     TsgoPendingBaseline(
-        "jsDeclarationEmitExportedClassWithExtends.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> source-echo PATH: the annotated-source header spells a doubled separator; layer `submoduleAccepted`. tsgo: ==== " +
-        "node_modules/lit-element/development/lit-element.d.ts (0 errors) ==== | ours: ==== " +
-        "node_modules/lit-element/development//lit-element.d.ts (0 errors) ===="
-    ),
-    TsgoPendingBaseline(
         "jsEnumCrossFileExport.errors.txt",
         "RE-SIZED (LEGACY.0b step 14): the two enumDef.js TS1003 rows now MATCH ((P18.99) M2); " +
         "what remains is (a) the two index.js TS2749 rows on a QUALIFIED expando name " +
@@ -1064,14 +1050,6 @@ val tsgoPendingBaselines = listOf(
         "F6 top code differs (tsgo TS2554 / ours TS2345); layer `submodule`. tsgo: /a.js(8,6): " +
         "error TS2554: Expected 1 arguments, but got 2. | ours: /a.js(7,3): error TS2345: " +
         "Argument of type 'number[]' is not assignable to parameter of type 'number'."
-    ),
-    TsgoPendingBaseline(
-        "mixinPrivateAndProtected.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: The " +
-        "intersection 'mixB.(Anonymous class) & A' was reduced to 'never' because property " +
-        "'pvt' exists in multiple constituents and is private in some. | ours: The intersection " +
-        "'mixB<typeof A>.(Anonymous class) & A' was reduced to 'never' because property 'pvt' " +
-        "exists in multiple constituents and is private i"
     ),
     TsgoPendingBaseline(
         "noParameterReassignmentIIFEAnnotated.errors.txt",

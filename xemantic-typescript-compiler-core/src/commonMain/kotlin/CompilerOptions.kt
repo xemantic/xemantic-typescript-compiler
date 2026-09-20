@@ -758,6 +758,44 @@ fun parseCompilerOptions(source: String): Pair<CompilerOptions, String> {
 }
 
 /**
+ * (P18.139) Collapses a run of `/` in a `// @Filename:` / `// @symlink:` value into a
+ * single separator, and nothing else.
+ *
+ * **WHY THIS IS NOT [PathUtil.normalize].** tsgo's harness puts every unit name through
+ * `tspath.GetNormalizedAbsolutePath` (`internal/testrunner/compiler_runner.go`'s
+ * `createHarnessTestFile`), which collapses separator runs AND drops a leading `./` — and
+ * then its error baseline writes that normalized name into the `==== <file> (N errors) ====`
+ * header. Its diff machinery, however, forgives *one half* of that: `DiffFixupOld`
+ * (`compiler_runner.go:369`) rewrites `==== ./` to `==== ` in the OLD baseline before
+ * comparing, so a leading `./` never becomes a recorded divergence, while a `//` does —
+ * which is exactly why `jsDeclarationEmitExportedClassWithExtends.errors.txt` carries a
+ * `submoduleAccepted` layer and the nineteen `./`-prefixed fixtures carry none.
+ *
+ * Our corpus compares against the submodule baselines WITH those layers applied and has no
+ * such fixup, so the `./` spelling is what our pinned baselines contain. Censused over the
+ * whole corpus (1,556 distinct `@Filename` values) a full normalize would move **22**:
+ * nineteen leading-`./` names (which would then mismatch their baselines), two Windows
+ * `C:\a\b\c.ts` names (a fixture with no `.errors.txt` baseline at all), and **one** `//`
+ * name — the single case the reference does not forgive. So the narrow collapse is not a
+ * shortcut: it is the exact part of tsgo's normalization that its own diff records.
+ *
+ * A `//` is meaningless in a POSIX path — `a//b` and `a/b` name the same file — whereas
+ * `./a.ts` versus `a.ts` is a rendering choice. Nothing else here produces a `//`:
+ * [PathUtil.normalize] drops empty segments, [PathUtil.join]'s fast path handles the root
+ * head explicitly (pinned by `PathJoinFastPathTest`), and a real project's names come from
+ * the filesystem, which has no `//` component to hand back.
+ */
+internal fun collapseDuplicateSeparators(path: String): String =
+    if (!path.contains("//")) path else buildString(path.length) {
+        var prevSlash = false
+        for (ch in path) {
+            if (ch == '/' && prevSlash) continue
+            append(ch)
+            prevSlash = ch == '/'
+        }
+    }
+
+/**
  * Parses compiler options AND `// @Filename:` directives to split multi-file sources.
  * Returns [ParsedSource] with options and a list of source files.
  * If no `// @Filename:` directives are found, returns a single file with the test name.
@@ -790,19 +828,24 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
                 val key = content.substring(0, colonIndex).trim().lowercase()
                 val value = content.substring(colonIndex + 1).trim()
                 if (key == "filename") {
+                    // (P18.139) A `//` in the directive is a separator run and names the
+                    // same file as a single `/`; tsgo's harness collapses it before the
+                    // name ever reaches the program. See [collapseDuplicateSeparators] for
+                    // why this is NOT a full normalize.
+                    val declaredFileName = collapseDuplicateSeparators(value)
                     // Start a new file
                     if (currentFileName != null) {
                         // Strip leading blank lines (artifacts of whitespace after the @filename directive)
                         val fileContent = currentLines.joinToString("\n").trimStart('\n', '\r')
                         // Skip empty file entries when the same filename immediately follows
                         // (duplicate @filename directives, e.g. in augmentExportEquals2.ts)
-                        if (fileContent.isNotEmpty() || value != currentFileName) {
+                        if (fileContent.isNotEmpty() || declaredFileName != currentFileName) {
                             fileEntries.add(SourceFileEntry(currentFileName, fileContent))
                         }
                     }
                     // Clear any preamble lines collected before the first @Filename marker
                     currentLines.clear()
-                    currentFileName = value
+                    currentFileName = declaredFileName
                     inGlobalDirectives = false
                 } else if (key == "ts-ignore" || key == "ts-expect-error") {
                     // `// @ts-ignore: <text>` is a CODE comment-directive (suppression),
@@ -824,7 +867,12 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
                     // `// @symlink: pathA,pathB` (per-file): the current file is ALSO present
                     // at those symlink paths. Recorded here; when the targets are NOT under
                     // node_modules the file is re-registered at each target (see post-flush).
-                    val targets = value.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                    // (P18.139) A symlink target becomes a program FILE NAME below, so it
+                    // takes the same separator collapse as `@Filename`. Censused over the
+                    // corpus, no `@symlink` value carries a `//` today — this keeps the two
+                    // name sources from drifting rather than fixing a live case.
+                    val targets = value.split(',')
+                        .map { collapseDuplicateSeparators(it.trim()) }.filter { it.isNotEmpty() }
                     if (targets.isNotEmpty()) {
                         symlinkFileTargets.getOrPut(currentFileName) { mutableListOf() }.addAll(targets)
                     }

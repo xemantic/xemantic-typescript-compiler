@@ -29524,6 +29524,23 @@ class Checker(
                     // is itself type-only — tsc emits TS18042 at the import binding and
                     // routes value-position uses of the name to TS2708. Route to
                     // namespaceOnlyNames instead of valueNames (narrow: JS+checkJs only).
+                    //
+                    // (P18.139) THE SUGGESTED `import("<spec>")` CARRIES A `.<name>` TAIL
+                    // ONLY FOR AN `ImportSpecifier`, i.e. for `import { N } from "m"` —
+                    // tsgo's `checker.go:6758` appends it under
+                    // `if ast.IsImportSpecifier(node)` and this site is reached ONLY for
+                    // the DEFAULT binding (an `ImportClause`), so it never appends.
+                    // Measured against `tools/tsgo-7.0.2/lib/tsc` over one ambient module
+                    // exporting a type-only namespace plus two type aliases:
+                    //   import D from "m"            -> Use 'import("m")'
+                    //   import { N } from "m"        -> Use 'import("m").N'
+                    //   import { N as R } from "m"   -> 'N' …  Use 'import("m").N'
+                    //                                  (the PROPERTY name, not the local)
+                    //   import * as NS from "m"      -> silent
+                    //   import X = require("m")      -> TS8002, never reaches TS18042
+                    // The two `ImportSpecifier` rows are a SEPARATE, still-missing
+                    // emitter here (we are silent for both) — see
+                    // `ElidedJsTypeImportTest`'s `residue -` pins.
                     val defaultName = clause.name?.text
                     val jsTypeOnlyDefaultSpec = if (defaultName != null &&
                         isJsLikeFileName(fileName) && options.checkJs) {
@@ -29536,7 +29553,7 @@ class Checker(
                         val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
                         diagnostics.add(Diagnostic(
                             message = "'$defaultName' is a type and cannot be imported in JavaScript files. " +
-                                "Use 'import(\"$jsTypeOnlyDefaultSpec\").$defaultName' in a JSDoc type annotation.",
+                                "Use 'import(\"$jsTypeOnlyDefaultSpec\")' in a JSDoc type annotation.",
                             category = DiagnosticCategory.Error, code = 18042,
                             fileName = fileName, line = l, character = c,
                             start = nameNode.pos, length = defaultName.length,
@@ -68524,7 +68541,7 @@ interface DataView {
     /**
      * mixinPrivateAndProtected (#13830): a mixin function
      * `function mix<T extends Constructor<...>>(Cls: T) { return class extends Cls { ... private p ... } }`
-     * yields a class whose instance type is the INTERSECTION `mix<typeof Cls>.(Anonymous class) & <Cls instance>`.
+     * yields a class whose instance type is the INTERSECTION `mix.(Anonymous class) & <Cls instance>`.
      * When the mixin's own class AND the (transitive) base BOTH declare a PRIVATE member of the same name,
      * that private exists in two constituents → tsc reduces the intersection to `never`. Any member access
      * `v.<m>` on a var `const v = new MixinResult()` is then TS2339 "Property 'm' does not exist on type 'never'."
@@ -68596,10 +68613,19 @@ interface DataView {
                 if (conflict.isNotEmpty()) return conflict.first()
                 return reducesToNever(chain.second, depth + 1)
             }
+            // (P18.139) tsgo names an anonymous class by its DECLARATION CHAIN
+            // (`symbolToString` walking `Symbol.parent`) and so carries NO type
+            // arguments: `mixB.(Anonymous class) & A`, and one level deeper
+            // `mixC.(Anonymous class) & mixB.(Anonymous class) & A`. TypeScript 6
+            // rendered the INSTANTIATED anonymous-class type instead, which is
+            // where the old `mixB<typeof A>` / `mixC<{ new (...args: any[]): … }>`
+            // spellings came from — measured against `tools/tsgo-7.0.2/lib/tsc` on
+            // this fixture's own shape and recorded in tsgo's
+            // `submoduleAccepted/compiler/mixinPrivateAndProtected.errors.txt.diff`.
             fun instDisp(name: String, depth: Int): String {
                 if (depth > 20) return name
                 val chain = mixinChain[name] ?: return name
-                return "${chain.first}<${typeofDisp(chain.second, depth + 1, mixinChain)}>.(Anonymous class) & ${instDisp(chain.second, depth + 1)}"
+                return "${chain.first}.(Anonymous class) & ${instDisp(chain.second, depth + 1)}"
             }
 
             // (4) Instance vars `const v = new <neverMixinVar>()`.
@@ -68638,14 +68664,10 @@ interface DataView {
         return out
     }
 
-    /** The `typeof <mixin-chain>` constructor-type display, recomputed structurally. */
-    private fun typeofDisp(name: String, depth: Int, mixinChain: Map<String, Pair<String, String>>): String {
-        if (depth > 20) return "typeof $name"
-        val chain = mixinChain[name] ?: return "typeof $name"
-        val (fn, arg) = chain
-        return "{ new (...args: any[]): $fn<${typeofDisp(arg, depth + 1, mixinChain)}>.(Anonymous class); " +
-            "prototype: $fn<any>.(Anonymous class); } & ${typeofDisp(arg, depth + 1, mixinChain)}"
-    }
+    // (P18.139) `typeofDisp` — the `typeof <mixin-chain>` constructor-type display
+    // that used to fill the `<…>` of `<fn><typeof …>.(Anonymous class)` — is DELETED:
+    // tsgo writes no type arguments there at all, so its only caller (`instDisp`)
+    // stopped needing it and it had no other reader.
 
     /** Recurse an expression, emitting TS2339 "reduced to never" on each `<neverVar>.<member>` access. */
     private fun emitMixinNeverAccess(e: Expression, neverVars: Map<String, Pair<String, String>>, source: String, fileName: String) {
