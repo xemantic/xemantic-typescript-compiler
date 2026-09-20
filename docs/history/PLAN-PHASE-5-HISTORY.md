@@ -1,3 +1,77 @@
+### Round (P18.134) — (LEGACY.0b): a missing member on a function type, and the one line that made `typeof g` and `() => void` answer differently (2026-09-19)
+
+`contextualReturnTypeOfIIFE2.errors.txt` CLOSES — pending **37 -> 36**, skipped 62 -> 61, suite **19,927 / 0 / 61**
+(+24, this round's pin class). Errors screen 3,062 / 0 and emit 5,645 / 0 — the BEFORE counts exactly; the
+`--include` arm reads 3,063 / 0, which is how a row whose subtest is `@Ignore`d is proved closed at all. Cost gate
++0.15% max, `huge_methods --fail-over 0` exit 0 (largest 6,271), warning gate clean **with a live positive control**,
+8-profile grid 8 x 0/0 with EMIT 78 vs 78 byte-identical.
+
+**THE MECHANISM, AND IT IS NOT WHAT THE ROW LOOKED LIKE.** The round opened on the hypothesis that
+namespace-qualification was the axis — `app.foo.bar` where `app` is a namespace — and that is WRONG:
+`declare namespace A { const foo: () => void }` + `A.foo.bar` has always reported. The axis is whether the function
+type carries a DECLARATION SYMBOL, and the whole difference between two otherwise identical shapes was one line in
+`cmamAllMissingTrustedMember` (`Checker.kt:152379`), `if (m.symbol != null) return false`: `declare const o: { m: ()
+=> void }` reported (anonymous, `symbol == null`) while `declare const o: { m: typeof g }` with `g` a `function`
+declaration was silent, because the declaration's symbol rides on the type. Five shapes were losing a diagnostic at
+once, the corpus row among them.
+
+**WHY THE ROW IS A TypeScript 7 ROW.** tsgo has **no checker-side expando exemption at all** — measured in the Go
+source and confirmed on 217 probe projects. Its BINDER *declares* expando properties onto the host symbol's
+`exports` (`binder.go:1094 getInitializerSymbol`) and TS2339 then falls out of ordinary lookup; the host predicate
+keys on the head identifier's `valueDeclaration` KIND (a `FunctionDeclaration` always; a `const` with a
+FunctionExpression/ArrowFunction initializer; in JS also a class, an empty object literal and expando chains), and
+`lookupEntity` applies that predicate at EVERY hop of a dotted head, which is why a namespace-qualified head
+declares at no hop. TS 6 walked namespace export tables and was silent; **six probe shapes changed answer between
+6.0.3 and 7.0.2 and all six are that one mechanism.** We are on the other side of it entirely: measured,
+`function z(){} z.px = 1; const s: string = z.px` is SILENT here (so `z.px` is `any`) where tsgo reports TS2322, and
+we never emit TS2565 *used before being assigned*. **We SUPPRESS where tsgo DECLARES** — which is the fact that
+decides what was safe to land.
+
+**THE DECOMPOSITION — ROUTE (A) LANDED, ROUTE (B) REFUSED WITH ITS REASON.** Our silence has two independent causes
+at two funnels. Route (A), a PROPERTY-ACCESS receiver, is the trust gate above and is what the corpus row needs.
+Route (B), an IDENTIFIER receiver, dies in `cmamCheckResolvedObjectType`'s empty-properties branch
+(`Checker.kt:153796`), whose only emission is the B63.33 `'{}'` case and REQUIRES `callSignatures.isNullOrEmpty()`,
+so a call-signature-bearing type falls to a bare `return`. **(B) must not be opened until expando members are
+modelled**: it is the only reason `const f = () => {}; f.bar = 1` is correctly silent today, and opening it naively
+makes that a false positive. (B) is (CHK.124)'s "widening B431's candidate scan" and is this round's named successor.
+
+**THE GUARD FIRES, AND IT WAS BUILT UNGUARDED FIRST TO PROVE IT (round 902's dead-arm law).** (CHK.45) demands
+POSITIVE evidence that an all-missing verdict is reading a complete table, and for a function type the table's true
+contents are its expando exports — which this model does not synthesise. The unguarded arm was built and run: FIVE
+cells were false positives where tsgo says the property EXISTS (`g.px = 1` at file scope, a write inside a
+file-scope `if`, `g["px"] = 1`, a write inside the enclosing namespace body, the same in a module file) — tsgo
+answers TS2565 or nothing at every one. `cmamExpandoDeclaringHost` reuses **B431's `collectExpandoDecls` verbatim**
+so routes (A) and (B) cannot drift about what declares a member, and two of its properties were found only by
+measuring: the scan must be scoped to the declaration's own `ModuleBlock`/`SourceFile` CONTAINER and not to its file
+(a file-statement scan was a live false positive on `namespace A { export function foo(){} foo.px = 1 }`), and a
+write inside a NESTED function declares nothing — there both compilers report the same two rows, so a broader
+"any write anywhere" guard would have LOST them.
+
+**THE ORDER INSIDE THE NEW PREDICATE IS LOAD-BEARING**: the syntactic pre-gate (every declaration is a
+`FunctionDeclaration`) runs BEFORE `resolveStructuredTypeMembers`, so the newly-forced resolution population is tiny
+— round 833's lazy-table hazard bounded rather than argued. That pre-gate is also what refuses a CLASS static side
+and a function merged with a namespace; both are **lost rows and not false positives** (tsgo reports `typeof C` /
+`typeof foo`), pinned `residue -` so closing them is a visible change, and widening to them needs a member model
+rather than a wider gate.
+
+**WHAT THE GRID IS THIS ROUND, SAID PRECISELY.** It is a CONTROL for the FALSE-POSITIVE direction and a strong one,
+because that is the direction this change risks and the profiles are ~1.2M lines of correct TypeScript using
+function-typed values pervasively; it is NOT evidence about true positives, since correct code has no missing
+members to find. **Reach is evidenced separately and for free** by the cost gate's non-zero deltas on the compiler
+profile (`typeOfExpr.distinct` +0.15%, `narrow.walks` +0.08%) — a path that never executes reads +0.00% across the
+board, as the option-path rounds did. `scripts/p18-134-grid.sh` carries that reading in its header.
+
+**COUNTDOWN PINS: NONE MOVED.** `ExpandoReceiverDisplayTest` 21/21 and `M04ExpandoSpineMigrationTest` 34/34 stayed
+green, including the ten `residue -` pins two of which recon had flagged as asserting a silence tsgo contradicts —
+they are all route-(B) shapes with bare-identifier receivers and never enter `cmamCheckNestedObjectReceiver`, which
+is the prediction the decomposition makes and the cheapest available check on it.
+
+**WHAT DID NOT WORK.** A `\u0000` written into `Checker.kt` through a Python triple-quoted literal became a RAW NUL
+BYTE — CLAUDE.md's own NUL-in-source trap arriving through the TOOLING rather than the design; `sed` renders it
+invisibly and only `cat -A` and `git diff --numstat` see it. Fixed to a literal Kotlin escape. Also worth knowing:
+a failed Kotlin compile DELETES `Checker.class`, so the next probe dies on a missing class rather than silently
+measuring a stale one.
+
 ### Round (P18.133) — the `simulatedVersion` default moves to 7.0: TypeScript 6's deprecation ladder is gone, and the census that sized it was blind to its largest group (2026-09-17)
 
 **OWNER DECISION**, approved in the same session as (LEGACY.1)(g) and sequenced after it, because (g) is what gave

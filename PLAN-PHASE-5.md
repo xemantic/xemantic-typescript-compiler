@@ -25,6 +25,47 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.144) — (LEGACY.0b): a JSDoc `@param` makes its parameter required, and the LAST writer wins (2026-09-20)
+
+Ledger **27 -> 26**, `jsdocRestParameter` CLOSED and ACTIVE in the screen's 3,073 / 0. Suite **20,063 / 0 / 51**
+(+7 = exactly the new pins, skipped -1 = exactly the closed row). Corpus screen **0 of 8,718** with the row
+included, cost gate exit 0 and **byte-identical to the pre-change control**, all 8 profiles at their standing row
+counts, warning gate clean with the compile verified executed, `huge_methods --fail-over 0` exit 0.
+
+**THE RULE WAS ALREADY IMPLEMENTED AND WIRED TO ONE ARITY SITE OF FIVE.** `Checker.jsDocRequiredParamNames` and
+`paramInfo`'s `jsDocRequiredNames` are B434's; only the CROSS-FILE map passed them. So the identical two lines
+measured byte-identical to tsgo with the declaration and the call in two `.js` files and read `Expected 0-1` with
+them in one — a divergence no reference disagreed with us about, because tsgo answers the same for both spellings.
+
+**WHAT COST THE TIME IS THAT THE LAST WRITER WINS.** `collectFuncDecls` computed the correct entry and the
+nested-function OVERLAY in `spineArgCtxAt` then recomputed it WITHOUT the tag set and clobbered it. So wiring the
+obvious site changed nothing, which is indistinguishable from a refuted hypothesis. **Three readings of the code
+produced three wrong theories** — `isJsFile` false (refuted: `Expected 0-1` REQUIRES it true), `leadingComments`
+empty (refuted with no build at all: TS8024 fires on the same comments), and `collectFuncDecls` never called
+(**my own marker's fault** — printed in the TooFew emitter while the row comes from TooMany). The marker that
+worked went into the SHARED arity formatter, which both emitters reach: `[cfdBody js=true cm=1 req=y]` beside a
+`0-1` verdict says the set was right and something later overwrote it.
+
+**THE VARIADIC CELL IS A PARSER CHANGE AND IT RETIRED A WALKER.** `@param {...T}` was reparsed as a REST
+parameter (B437's `restNames`), which makes arity unbounded and suppressed the baseline's two TS2554 rows; the
+corpus-unique walker `checkJsRestParamArgTypes` then emitted a TS2345 tsgo does not produce. tsgo types the
+parameter `T[]` and leaves it an ordinary required parameter — **and ours already typed it `T[]`**, so only the
+rest marking was wrong. The walker plus its two private tree-walkers are DELETED (135 lines), PassLab-priced
+before removal at ONE mismatch (its own already-pending baseline) and 0 collateral.
+
+**ABLATION, AND ITS HONEST ROW.** Un-wiring the OVERLAY reads **4 RED**; un-wiring `collectFuncDecls` reads
+**0** and is recorded as UNDISCRIMINATED rather than claimed — the overlay writes last wherever it runs, which is
+the round's own finding, so no fixture here can separate them. It stays because every arity site now goes through
+one helper (a site added later cannot half-wire it the way B434 did) and because the overlay skips an entry
+already marked `isOverloaded`. Dropping the `{T=}` rule and typing a variadic tag `T` instead of `T[]` each redden
+exactly their own pin.
+
+**A DELETION THAT WENT WRONG ONCE AND IS WORTH THE WARNING.** The first attempt at removing the walker bounded
+its span by "the KDoc above the `fun`", and there were TWO stacked KDocs — an ORPHANED B431 one (its walker moved
+to the spine at round 644) sitting directly above B437's. The slice took the wrong one and left the two private
+helpers behind. Bound such a deletion by the DOC COMMENT'S OWN FIRST LINE matched on its text, not by "the
+nearest `/**` above", and delete the helpers in the same pass.
+
 ### Round (P18.143) — (LEGACY.0b): the interned union order and its display had come apart (2026-09-20)
 
 Ledger **28 -> 27**, `namespaceDisambiguationInUnion` CLOSED and ACTIVE in the screen's 3,072 / 0 — that, not
@@ -583,80 +624,6 @@ is a control for this whole family rather than a gate.
 called `RelationHeadSuppression`), and I retracted it mid-round. It mattered: the fix is a NARROWING of an existing
 approximation, not the ADDITION the brief described.
 
-### Round (P18.134) — (LEGACY.0b): a missing member on a function type, and the one line that made `typeof g` and `() => void` answer differently (2026-09-19)
-
-`contextualReturnTypeOfIIFE2.errors.txt` CLOSES — pending **37 -> 36**, skipped 62 -> 61, suite **19,927 / 0 / 61**
-(+24, this round's pin class). Errors screen 3,062 / 0 and emit 5,645 / 0 — the BEFORE counts exactly; the
-`--include` arm reads 3,063 / 0, which is how a row whose subtest is `@Ignore`d is proved closed at all. Cost gate
-+0.15% max, `huge_methods --fail-over 0` exit 0 (largest 6,271), warning gate clean **with a live positive control**,
-8-profile grid 8 x 0/0 with EMIT 78 vs 78 byte-identical.
-
-**THE MECHANISM, AND IT IS NOT WHAT THE ROW LOOKED LIKE.** The round opened on the hypothesis that
-namespace-qualification was the axis — `app.foo.bar` where `app` is a namespace — and that is WRONG:
-`declare namespace A { const foo: () => void }` + `A.foo.bar` has always reported. The axis is whether the function
-type carries a DECLARATION SYMBOL, and the whole difference between two otherwise identical shapes was one line in
-`cmamAllMissingTrustedMember` (`Checker.kt:152379`), `if (m.symbol != null) return false`: `declare const o: { m: ()
-=> void }` reported (anonymous, `symbol == null`) while `declare const o: { m: typeof g }` with `g` a `function`
-declaration was silent, because the declaration's symbol rides on the type. Five shapes were losing a diagnostic at
-once, the corpus row among them.
-
-**WHY THE ROW IS A TypeScript 7 ROW.** tsgo has **no checker-side expando exemption at all** — measured in the Go
-source and confirmed on 217 probe projects. Its BINDER *declares* expando properties onto the host symbol's
-`exports` (`binder.go:1094 getInitializerSymbol`) and TS2339 then falls out of ordinary lookup; the host predicate
-keys on the head identifier's `valueDeclaration` KIND (a `FunctionDeclaration` always; a `const` with a
-FunctionExpression/ArrowFunction initializer; in JS also a class, an empty object literal and expando chains), and
-`lookupEntity` applies that predicate at EVERY hop of a dotted head, which is why a namespace-qualified head
-declares at no hop. TS 6 walked namespace export tables and was silent; **six probe shapes changed answer between
-6.0.3 and 7.0.2 and all six are that one mechanism.** We are on the other side of it entirely: measured,
-`function z(){} z.px = 1; const s: string = z.px` is SILENT here (so `z.px` is `any`) where tsgo reports TS2322, and
-we never emit TS2565 *used before being assigned*. **We SUPPRESS where tsgo DECLARES** — which is the fact that
-decides what was safe to land.
-
-**THE DECOMPOSITION — ROUTE (A) LANDED, ROUTE (B) REFUSED WITH ITS REASON.** Our silence has two independent causes
-at two funnels. Route (A), a PROPERTY-ACCESS receiver, is the trust gate above and is what the corpus row needs.
-Route (B), an IDENTIFIER receiver, dies in `cmamCheckResolvedObjectType`'s empty-properties branch
-(`Checker.kt:153796`), whose only emission is the B63.33 `'{}'` case and REQUIRES `callSignatures.isNullOrEmpty()`,
-so a call-signature-bearing type falls to a bare `return`. **(B) must not be opened until expando members are
-modelled**: it is the only reason `const f = () => {}; f.bar = 1` is correctly silent today, and opening it naively
-makes that a false positive. (B) is (CHK.124)'s "widening B431's candidate scan" and is this round's named successor.
-
-**THE GUARD FIRES, AND IT WAS BUILT UNGUARDED FIRST TO PROVE IT (round 902's dead-arm law).** (CHK.45) demands
-POSITIVE evidence that an all-missing verdict is reading a complete table, and for a function type the table's true
-contents are its expando exports — which this model does not synthesise. The unguarded arm was built and run: FIVE
-cells were false positives where tsgo says the property EXISTS (`g.px = 1` at file scope, a write inside a
-file-scope `if`, `g["px"] = 1`, a write inside the enclosing namespace body, the same in a module file) — tsgo
-answers TS2565 or nothing at every one. `cmamExpandoDeclaringHost` reuses **B431's `collectExpandoDecls` verbatim**
-so routes (A) and (B) cannot drift about what declares a member, and two of its properties were found only by
-measuring: the scan must be scoped to the declaration's own `ModuleBlock`/`SourceFile` CONTAINER and not to its file
-(a file-statement scan was a live false positive on `namespace A { export function foo(){} foo.px = 1 }`), and a
-write inside a NESTED function declares nothing — there both compilers report the same two rows, so a broader
-"any write anywhere" guard would have LOST them.
-
-**THE ORDER INSIDE THE NEW PREDICATE IS LOAD-BEARING**: the syntactic pre-gate (every declaration is a
-`FunctionDeclaration`) runs BEFORE `resolveStructuredTypeMembers`, so the newly-forced resolution population is tiny
-— round 833's lazy-table hazard bounded rather than argued. That pre-gate is also what refuses a CLASS static side
-and a function merged with a namespace; both are **lost rows and not false positives** (tsgo reports `typeof C` /
-`typeof foo`), pinned `residue -` so closing them is a visible change, and widening to them needs a member model
-rather than a wider gate.
-
-**WHAT THE GRID IS THIS ROUND, SAID PRECISELY.** It is a CONTROL for the FALSE-POSITIVE direction and a strong one,
-because that is the direction this change risks and the profiles are ~1.2M lines of correct TypeScript using
-function-typed values pervasively; it is NOT evidence about true positives, since correct code has no missing
-members to find. **Reach is evidenced separately and for free** by the cost gate's non-zero deltas on the compiler
-profile (`typeOfExpr.distinct` +0.15%, `narrow.walks` +0.08%) — a path that never executes reads +0.00% across the
-board, as the option-path rounds did. `scripts/p18-134-grid.sh` carries that reading in its header.
-
-**COUNTDOWN PINS: NONE MOVED.** `ExpandoReceiverDisplayTest` 21/21 and `M04ExpandoSpineMigrationTest` 34/34 stayed
-green, including the ten `residue -` pins two of which recon had flagged as asserting a silence tsgo contradicts —
-they are all route-(B) shapes with bare-identifier receivers and never enter `cmamCheckNestedObjectReceiver`, which
-is the prediction the decomposition makes and the cheapest available check on it.
-
-**WHAT DID NOT WORK.** A `\u0000` written into `Checker.kt` through a Python triple-quoted literal became a RAW NUL
-BYTE — CLAUDE.md's own NUL-in-source trap arriving through the TOOLING rather than the design; `sed` renders it
-invisibly and only `cat -A` and `git diff --numstat` see it. Fixed to a literal Kotlin escape. Also worth knowing:
-a failed Kotlin compile DELETES `Checker.class`, so the next probe dies on a missing class rather than silently
-measuring a stale one.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -987,7 +954,18 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-32 LANDED 2026-09-20 ((P18.85)-(P18.143) notes) — pending **28 → 27**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-33 LANDED 2026-09-20 ((P18.85)-(P18.144) notes) — pending **27 → 26**,
+  skipped 51, suite 20,063/0. **(P18.144) CLOSED `jsdocRestParameter`** — a JSDoc `@param` tag makes its
+  parameter REQUIRED (`[n]` / `[n=1]` / `{T=}` leave it optional; `{...T}` is required with arity exactly ONE and
+  type `T[]`), measured cell by cell against tsgo. **The rule was ALREADY implemented and wired to one arity site
+  of five** (B434's, cross-file only), so the same two lines answered tsgo-identically in two files and
+  `Expected 0-1` in one. **The finding is that the LAST WRITER WINS**: `collectFuncDecls` computed the right
+  entry and `spineArgCtxAt`'s nested-function OVERLAY recomputed it without the tag set and clobbered it — so
+  wiring the obvious site changed nothing, which reads as a refuted hypothesis. Three code readings gave three
+  wrong theories; a marker in the SHARED arity formatter settled it. The variadic cell is a PARSER change
+  (`{...T}` is not a rest parameter) and it RETIRED corpus-unique walker B437 — 135 lines deleted, PassLab-priced
+  at 1 mismatch and 0 collateral first.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-32 LANDED 2026-09-20 ((P18.85)-(P18.143) notes) — pending **28 → 27**,
   skipped 52, suite 20,056/0. **(P18.143) CLOSED `namespaceDisambiguationInUnion`, AND THE ROW'S RECORDED REASON
   WAS WRONG TWICE.** It said the var-decl chain "picks the first" and "does not go through
   `findBestUnionConstituent`, which already keeps the LAST on a tie"; in fact `cvdaElaborateMismatch`'s B50.3

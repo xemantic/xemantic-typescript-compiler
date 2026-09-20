@@ -1,3 +1,20 @@
+**(P18.139) — THREE SMALL LEDGER ROWS, AND ONE WHOSE MECHANISM DID NOT EXIST, 20,018 / 0 / 55 (2026-09-20).**
+Ledger 33 -> 30, all three rows ACTIVE in the screen's 3,069 / 0 — the closure receipt. **The best result is a
+FALSIFIED hypothesis**: the doubled path separator was briefed as a real path-JOIN defect and there is no join —
+the `//` is AUTHORED in the fixture (line 36) and tsgo's harness normalizes unit names, so the fix belongs in
+`parseMultiFileSource`, the corpus-harness directive path that `ProjectCompiler` never calls. Four independent
+checks establish it (no join can produce one; exactly 1 of 1,556 `@Filename` values carries `//`; `^==== .*//`
+matches one line across every baseline and the `.js` form matches zero; a real filesystem hands back no empty
+component). **The collapse is narrower than `PathUtil.normalize` for a measured reason**: a full normalize moves 22
+baselines, because tsgo's own `DiffFixupOld` forgives a leading `./` in the OLD baseline while recording a `//`.
+**Two root-only `//` producers were found and left alone with their reachability recorded** — benign, and neither
+pinnable today, since `-project`'s `InMemoryVfs` normalizes on every lookup ((CFG.1) forbids landing an
+unobservable path change). TS18042's `.<name>` tail now fires only where tsgo's `IsImportSpecifier` gate allows.
+**The mixin walker was NOT narrowed**: tsgo produces no such diagnostic for a non-generic owner (TS2415 at the
+class instead), so our by-NAME test is a pre-existing ours-only row pinned `residue -` — a corpus-unique walker's
+successor is PassLab retirement, not tuning. 16 pins, no countdown pin moved, and a (CHK.126) disarm check
+confirmed no pin was keyed on a now-unproducible spelling.
+
 **(P18.138) — (CHK.124) STEP 3: THE JAVASCRIPT OBJECT-LITERAL HOST, 20,002 / 0 / 58 (2026-09-19).**
 Ledger 34 -> 33, `jsExpandoObjectDefineProperty` CLOSED, and the row is ACTIVE in the plain screen's 3,066 / 0 —
 that, not `--include`, is the closure receipt. A third host kind (a JS EMPTY object literal initializing an
