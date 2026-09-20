@@ -64,6 +64,27 @@ package com.xemantic.typescript.compiler
  * no invalidation protocol finer than that — (INC.46)'s rule that an id-keyed
  * anything must never cross builds.
  *
+ * **A stale oracle answers WRONGLY, not null, which is why closing is the whole
+ * mechanism and not tidiness.** The store is keyed by file NAME and read by
+ * `nodeId` behind a bounds check alone, so a node of a RE-PARSE of the edited
+ * file indexes the previous build's array. Measured (INV.2b) on a four-line
+ * program, three edit shapes: text re-set unchanged answers correctly
+ * everywhere; an annotation retyped in place (`number` -> `string`, ids unmoved)
+ * answers every identifier and reads `number` for each name the retype moved; an
+ * inserted statement (ids moved) reads `number` for a `string`-declared name,
+ * `string` for a `number` one, and null past the old array's end — a MIXTURE of
+ * confident wrong answers and nulls with nothing in the answer to tell them
+ * apart.
+ *
+ * ## One id space, therefore one thread
+ *
+ * An oracle also belongs to the ID SPACE of the thread its build returned to:
+ * almost every row can MINT, a mint draws from the ASKING thread's thread-local
+ * counter, and a thread that has never compiled starts at 1 — inside the build's
+ * own ids. Every query therefore refuses a thread whose sequences do not dominate
+ * the build's; [buildTypeId] carries the measurement and the reason the guard is
+ * the counter rather than the thread.
+ *
  * ## Per-row fidelity (the A° divergences, stated rather than hidden)
  *
  * `docs/type-oracle.md` carries the full table; the ones a consumer will meet
@@ -109,6 +130,49 @@ class TypeOracle internal constructor(
         private set
 
     /**
+     * (INV.2b) INV.6(6c0) — the id-sequence HIGH-WATER MARKS of the build this
+     * oracle answers about, read where this object is constructed, i.e. on the
+     * compile thread at the moment the check finished.
+     *
+     * ## Why an oracle is bound to an id space and not merely to a program text
+     *
+     * `Type.id` and `Symbol.id` are drawn from THREAD-LOCAL counters. Almost
+     * every row here can MINT — `typeOfSymbol` resolving a symbol the walk never
+     * needed, `propertiesOfType` resolving a member table, `isAssignableTo`
+     * instantiating a generic's members — and a mint draws from the ASKING
+     * thread's counter, not from the build's. A thread that has never compiled
+     * starts at 1, so a query from one mints ids INSIDE the build's own space and
+     * the checker's id-keyed tables (`Relation`'s packed `(source.id, target.id)`
+     * key, the union interning by member-id list, the `Symbol.id`-keyed type memo)
+     * then confuse two distinct objects. That is round 825's `--workers` race
+     * reached through a retained oracle rather than through a worker.
+     *
+     * **Measured (INV.2b), on a 7-declaration program whose build minted 612
+     * types**: seven representative rows mint NOTHING on either thread (everything
+     * they ask about is already interned — which is why a naive probe reads a
+     * reassuring zero), while resolving a LIB type the program never mentions
+     * mints 7-82 types per row. On the building thread those landed at ids
+     * 612-806, safely above the build; on a fresh thread the same class of query
+     * minted ids **1-70**, and `anyType.id` is **10** — a freshly minted type
+     * carrying the intrinsic `any`'s id, silently.
+     *
+     * ## Why the guard is the COUNTER and not the thread
+     *
+     * The thread that ran the checker is `runWithDeepStack`'s `xtsc-deep-stack`
+     * thread, which is dead before any caller can ask a question — so a thread
+     * IDENTITY check would refuse every query of every oracle. What that handoff
+     * does is WRITE THE ADVANCED COUNTERS BACK to the caller, so the caller's
+     * thread is exactly the thread whose sequences dominate the build's. That
+     * domination is the soundness condition itself, it is monotone (a thread's
+     * counters only advance), and it admits every safe case by construction: a
+     * second build on the same thread, a later query after it, and a worker-rebased
+     * thread (whose counters sit at 1e9, above everything) all pass; only a thread
+     * that could mint INTO the build's space is refused.
+     */
+    private val buildTypeId: Int = Type.captureThreadId()
+    private val buildSymbolIds: Pair<Int, Int> = Symbol.captureThreadIds()
+
+    /**
      * Ends this oracle: every later question throws [OracleRefusal] and every
      * handle is released. The owner of the program calls this on ANY edit —
      * the oracle cannot tell a stale answer from a fresh one, so it must not
@@ -121,7 +185,39 @@ class TypeOracle internal constructor(
 
     private fun open() {
         if (isClosed) throw OracleRefusal("this oracle is closed: the program it answered about was edited or released")
+        // (INV.2b) The asking thread must be able to mint ABOVE this build, or a
+        // mint lands inside it — see [buildTypeId].
+        //
+        // TWO CHECKS, ONE OBSERVABLE (round 927's pair, recorded rather than
+        // claimed): ablated, the two halves are each UNDISCRIMINATED — removing the
+        // symbol half alone is 0 RED and removing the type half alone is 0 RED,
+        // while removing BOTH reddens exactly the refusal pin in
+        // `TypeOracleIdSpaceTest`. They are redundant because nothing in this repo
+        // advances one sequence without the other (`runWithDeepStack` restores both,
+        // `runInDeepStackWorkers` rebases both), i.e. the coupling is a property of
+        // `DeepStack` and not of this class — so a future path that advances one
+        // alone would be silent here, which is why the cheap second compare stays.
+        // Its `Pair` never escapes this function and is scalar-replaced on the JVM.
+        val typeId = Type.captureThreadId()
+        if (typeId < buildTypeId) refuseForeignIdSpace(typeId)
+        val symbolIds = Symbol.captureThreadIds()
+        // The scope-symbol sequence DESCENDS from −2, so "further advanced" is
+        // more negative — the comparison is inverted for that one and only that one.
+        if (symbolIds.first < buildSymbolIds.first || symbolIds.second > buildSymbolIds.second) {
+            refuseForeignIdSpace(typeId)
+        }
     }
+
+    private fun refuseForeignIdSpace(typeId: Int): Nothing = throw OracleRefusal(
+        "this oracle belongs to the id space of the thread its build returned to, and " +
+            "this thread's sequences do not dominate it (type ids at $typeId against the " +
+            "build's $buildTypeId): a query that RESOLVES anything the walk did not " +
+            "would mint Type/Symbol ids INSIDE this build's own space (INV.6(6c0) — the " +
+            "counters are thread-local), and the checker's id-keyed tables would then " +
+            "confuse two distinct objects. Obtain an oracle and ask it from ONE thread; " +
+            "a host that moves a project between threads closes the oracle and asks for " +
+            "a new one from the thread it has moved to.",
+    )
 
     // ---------------------------------------------------------------------
     // Bin B/R — recorded during the walk, served from the store.
@@ -465,8 +561,20 @@ class TypeOracle internal constructor(
     /**
      * The intrinsic types by name — `getAnyType`, `getStringType` and the rest
      * of the 11-row family in one lookup; null for a name that is not one.
+     *
+     * (INV.2b) It reads no build state — the intrinsics are process-wide
+     * singletons — and it still goes through [open], because the class contract
+     * is that a CLOSED oracle answers nothing: one row that kept answering would
+     * be a fact a consumer has to learn from the source rather than from the
+     * documented rule, and a host testing "is this oracle still usable" on
+     * whichever row it happens to call first would get two different answers.
      */
-    fun intrinsicType(name: String): Type? = when (name) {
+    fun intrinsicType(name: String): Type? {
+        open()
+        return intrinsicTypeByName(name)
+    }
+
+    private fun intrinsicTypeByName(name: String): Type? = when (name) {
         "any" -> anyType
         "unknown" -> unknownType
         "string" -> stringType

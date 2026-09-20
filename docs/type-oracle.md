@@ -39,12 +39,34 @@ val result = ProjectCompiler(SystemVfs).build("/path/to/project", noEmit = true,
 val oracle = holder.oracle!!
 ```
 
-Both run the SEQUENTIAL checker (a `--workers` partition rebases ids per worker, so two
-workers' stores would silently conflate) and both refuse `recheckOnly` (a partition walks a
-subset, so the store would be a subset with nothing to say so). The nodes to ask about are
-the trees the oracle itself hands out (`oracle.files`): every store is keyed by node
-IDENTITY within its own file, and a re-parse of the same text produces equal-but-distinct
-nodes that answer nothing.
+An open `Project` (the `-project` module) hands one out directly, which is the shape an
+editor-style host wants — it shares this project's parses, so `nodeAt` and `typeAt` address
+the same objects, and it is CLOSED by every edit:
+
+```kotlin
+val project = Project.open("/path/to/project")
+val oracle = project.typeOracle()!!           // valid until the next edit
+val type = oracle.typeAt(project.nodeAt(file, offset) as Expression)
+```
+
+All three run the SEQUENTIAL checker (a `--workers` partition rebases ids per worker, so two
+workers' stores would silently conflate) and all three refuse `recheckOnly` (a partition walks a
+subset, so the store would be a subset with nothing to say so).
+
+**Ask about the trees the oracle itself hands out** (`oracle.files`, or — through `Project` —
+that project's own parses, which are the same objects). A store is keyed by `nodeId` WITHIN
+its file and read behind a BOUNDS CHECK ALONE: node identity is never compared, so a node
+of another parse of the same file name does not "answer nothing", it answers **whatever the
+previous build recorded at that index**. Measured (INV.2b) on an eight-line file, three
+shapes of the same program:
+
+| what changed | what the stale store does |
+|---|---|
+| nothing (text re-set unchanged) | answers CORRECTLY everywhere — the parse cache is content-keyed, so the "new" tree is the same tree |
+| an annotation retyped in place (ids unmoved) | answers EVERY identifier, and reads `number` for each name a file now declaring `string` moved |
+| a statement inserted above (ids moved) | two confidently WRONG types, three nulls past the old array's end, the rest right by coincidence |
+
+So an oracle must be closed on ANY edit and re-obtained — which `Project` does for you.
 
 ## 2. Validity and closing
 
@@ -56,6 +78,28 @@ nodes that answer nothing.
 - `handles` is the per-build handle table of the design's § 4: `pin(type|symbol|signature)`
   → a `(generation, id)` handle, `type(handle)` etc. to resolve, `release(handle)`. A handle
   of another generation, a released one, or one asked after `close()` is refused.
+- **One id space, therefore one thread.** Ask an oracle from the thread you obtained it on.
+  `Type.id` / `Symbol.id` come from THREAD-LOCAL counters (INV.6(6c0)) and most rows here can
+  MINT — `typeOfSymbol` resolving a symbol the walk never needed, `propertiesOfType`
+  resolving a member table, `isAssignableTo` instantiating a generic's members. A thread
+  that has never compiled starts at 1, so its mints land INSIDE this build's own ids and the
+  checker's id-keyed tables then confuse two distinct objects. A query from such a thread is
+  REFUSED rather than answered.
+
+  Measured (INV.2b), on a program whose build minted 612 types: seven representative rows
+  mint nothing on either thread (everything they ask about is already interned — which is
+  why a naive probe reads a reassuring zero), while resolving a lib type the program never
+  mentions mints 7-82 types per row. On the building thread those landed at ids 612-806; on
+  a fresh thread the same queries minted ids **1-70**, and `anyType.id` is **10** — a fresh
+  type carrying the intrinsic `any`'s id, which is round 825's `--workers` race reached
+  through a retained oracle.
+
+  The guard is the COUNTER, not the thread: the thread that RAN the checker is
+  `runWithDeepStack`'s `xtsc-deep-stack` thread and is already dead, and what the handoff
+  does is write the advanced counters back to the CALLER. So a thread whose sequences
+  dominate the build's is admitted — which includes the caller, a thread that has built
+  something else since, and a parallel worker — and only a thread that could mint into the
+  build is refused.
 
 ## 3. The rows
 
@@ -132,6 +176,22 @@ and then every question is a lookup.
 The oracle is NODE-addressed, as tsgo's checker API is. A `(file, offset)` question is the
 `-project` module's `SourceIndex` (round 910's span rules: `Node.end` overshoots to the
 following token, `Node.pos` is tsc's `getStart()`), and an editor-shaped host wires the two
-together. `Project` does not yet hand out an oracle; that is (INV.2b) in the queue, because
-its per-keystroke build and the oracle's one-build validity need an invalidation story
-decided together.
+together.
+
+**`Project.typeOracle()` (INV.2b) is that wiring's first half.** It builds whole-program with
+an `OracleHolder`, retains the oracle so a second call with no edit costs no build, and CLOSES
+it in `updateFile`, `deleteFile`, `reloadFile` and `close` — the four sites that drop the
+project's cached build. Closing rather than merely dropping the field is the point: the HOST
+holds its own reference, and a stale store answers a wrong type rather than nothing (§ 1).
+Its files are this project's own parses, so `Project.nodeAt` and `TypeOracle.typeAt` address
+the same objects with no translation.
+
+What it deliberately does NOT do: serve any shipped query. `quickInfoAt`, `definitionsAt`,
+`completionsAt`, `signatureHelpAt` and the rest still answer from the capture machinery, and
+whether the oracle may serve them is a separate decision that needs an oracle-vs-capture
+equivalence sweep (`scripts/capture-equivalence.sh` varies the PARTITION at a fixed request
+and structurally cannot see it). The oracle build is also kept out of `Project`'s `cached`:
+a store build types nodes an ordinary build never types, so its diagnostics are not a plain
+build's ((INC.14)), and the separation is enforced by the return type of the private
+`buildOracle()` rather than by documentation. A position→node bridge on the oracle itself is
+likewise still to come.

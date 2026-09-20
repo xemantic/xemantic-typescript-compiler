@@ -38,6 +38,7 @@ import com.xemantic.typescript.compiler.NamespaceImport
 import com.xemantic.typescript.compiler.ProjectStateSnapshot
 import com.xemantic.typescript.compiler.Node
 import com.xemantic.typescript.compiler.NodeBase
+import com.xemantic.typescript.compiler.OracleHolder
 import com.xemantic.typescript.compiler.ParserFlags
 import com.xemantic.typescript.compiler.PathUtil
 import com.xemantic.typescript.compiler.ProgramRecheck
@@ -49,6 +50,7 @@ import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
 import com.xemantic.typescript.compiler.TypeCaptureRequest
 import com.xemantic.typescript.compiler.TypeCaptureSpan
+import com.xemantic.typescript.compiler.TypeOracle
 import com.xemantic.typescript.compiler.Vfs
 import com.xemantic.typescript.compiler.computeParserFlags
 import com.xemantic.typescript.compiler.parsedSourceOrNull
@@ -386,6 +388,64 @@ public class Project private constructor(
     private var recheck: DiagnosticsOnlyRecheck? = null
 
     /**
+     * (INV.2b) The post-hoc TYPE ORACLE over this project's current text, or null
+     * until a host asks for one — `docs/type-oracle.md`, Stage 2 of the inversion.
+     *
+     * ## What it is, and why a project may hand one out at all
+     *
+     * Every other semantic member here answers a question stated BEFORE the walk:
+     * a caret's span, a file's occurrence population, a working set. That is the
+     * whole shape of the capture machinery and the reason it is location-correct.
+     * An oracle is the third shape — the walk records its answer at EVERY node into
+     * the (INV.1) store, and the host then asks in whatever order it likes, about
+     * whatever node it likes, with no build per question. It is what a post-hoc
+     * type API needs and what none of the capture members can be widened into.
+     *
+     * ## What it may serve, and what it may NOT
+     *
+     * It may serve type questions about the trees in [TypeOracle.files]. It may not
+     * serve [diagnostics] or [diagnosticsOf], and that is enforced by the TYPE
+     * rather than by care, exactly as [DiagnosticsOnlyRecheck] enforces the mirror
+     * rule for the replay: the build behind an oracle is performed inside
+     * [buildOracle], whose return type is [TypeOracle], so its
+     * `ProjectCompiler.Result` is never bound to a name that outlives that function
+     * and no caller here can reach its diagnostics even by mistake. The standing
+     * rule ((INC.14), `docs/language-service.md` § 3) is that a capture build types
+     * nodes the checker had no reason to type, so its diagnostics are not
+     * interchangeable with a plain build's — a store build is that with the span
+     * set widened to everything, so the rule applies a fortiori.
+     *
+     * ## What invalidates it, and why the drop is a CLOSE
+     *
+     * The same four edits that invalidate [cached] — and unlike every other handle
+     * here, dropping the field is NOT enough: the HOST holds its own reference to
+     * the oracle, so this project must [TypeOracle.close] it, which is what turns
+     * the host's next question into a refusal instead of an answer.
+     *
+     * **A stale store answers WRONGLY, not null**, which is what makes that
+     * load-bearing. `TypeOracle.storeOf` finds the store by the node's file NAME
+     * and `NodeAnswerStore.typeAt` reads `types[node.nodeId]` behind a bounds check
+     * alone — node identity is never checked — so after an edit a node of the
+     * RE-PARSED file indexes the previous build's array. Measured (INV.2b) on the
+     * eight-line fixture of `ProjectTypeOracleTest`: an annotation retyped in place
+     * (ids unmoved) answers EVERY identifier and reads `number` for the three a
+     * file now declaring `string` moved; an inserted statement (ids moved) reads
+     * `number` for a `string`-declared name, `string` for a `number` one, and null
+     * for three names past the old array's end. A host would see a mixture of
+     * confident wrong answers and absences with nothing in either to tell it what
+     * happened — and text re-set UNCHANGED answers correctly, so "it stops
+     * answering after an edit" is false in both directions.
+     *
+     * ## What it costs
+     *
+     * It RETAINS the whole checker, as [recheck] does — every `Type`, every
+     * `Symbol`, every side table — PLUS the (INV.1) store, which is three dense
+     * per-file arrays over every node of the program. Paid only by a project a host
+     * has asked for an oracle, and dropped by the next edit.
+     */
+    private var oracle: TypeOracle? = null
+
+    /**
      * (INC.12) The capture builds [captureIn] has already performed for this project
      * STATE, keyed by the REQUEST that produced them.
      *
@@ -456,10 +516,19 @@ public class Project private constructor(
      * they do not shrink with the span count.
      *
      * Retaining more makes a stale serve strictly more likely, so the invalidation was
-     * re-audited rather than assumed: `cached = null` occurs at exactly three sites in
-     * this class ([updateFile], [deleteFile], [close]) and every one of them clears
-     * this map in the same breath. There is no fourth path that changes program text
-     * or options.
+     * re-audited rather than assumed: `cached = null` occurs at exactly FOUR sites in
+     * this class ([updateFile], [deleteFile], [reloadFile] and [close]) and every one
+     * of them clears this map in the same breath. There is no fifth path that changes
+     * program text or options.
+     *
+     * **The fourth is [reloadFile] and this sentence said THREE until (INV.2b)** — it
+     * was written before (INC.56) added that member, and stayed stale because nothing
+     * can notice: the audit it records is a claim about the class, not a value any
+     * assertion reads. It is quoted here because it is the sentence an implementer
+     * reads when deciding where to drop a NEW edit-scoped handle, so a reader who
+     * trusted it would have shipped one that survives a reload. Re-derive the set
+     * (`grep -n "cached = null"`) rather than trusting this list, and if it has moved
+     * again, fix it here.
      */
     private val captures = LinkedHashMap<TypeCaptureRequest, ProjectCompiler.Result>()
 
@@ -677,6 +746,12 @@ public class Project private constructor(
         captures.clear()
         prepared = null
         recheck = null
+        // (INV.2b) The oracle is a claim about this text, and its store answers a
+        // WRONG type rather than nothing once the text moves (see [oracle]). The
+        // HOST holds its own reference, so dropping the field is not enough: it is
+        // CLOSED, which is what turns the host's next question into a refusal.
+        oracle?.close()
+        oracle = null
         (dirtyFiles ?: LinkedHashSet<String>().also { dirtyFiles = it }).add(key)
         invalidate(key)
     }
@@ -956,6 +1031,123 @@ public class Project private constructor(
             typeCapture = TypeCaptureRequest(spans),
         )
         prepared = PreparedCheck(keys, covered, result)
+    }
+
+    /**
+     * (INV.2b) The post-hoc TYPE ORACLE over this project's current text — the
+     * embedding surface of `docs/type-oracle.md`, and the first consumer the
+     * Stage-2 facade has.
+     *
+     * ## What it hands back
+     *
+     * A [TypeOracle] over ONE whole-program build of the text this project holds
+     * right now: `getTypeAtLocation`, `getSymbolAtLocation`, `getResolvedSignature`,
+     * `getContextualType` and the symbol / type / signature accessors, answered
+     * about the nodes of [TypeOracle.files] — which are THIS project's own trees,
+     * shared with the compiler's parse rather than a second copy of it (INC.36), so
+     * [nodeAt] and the oracle address the same objects.
+     *
+     * The answers to the four walk-scoped rows come from the (INV.1) store, which
+     * the check spine filled AS IT WALKED PAST each node, under the ambient it had
+     * there. That is what separates them from a post-hoc ask of the same checker:
+     * at rest a body local answers the same-named GLOBAL's type and a parameter
+     * answers `any`, silently (round 911). Everything else is answered from the
+     * retained graph through the live checker.
+     *
+     * Null when the build produced no oracle at all, i.e. when it never reached a
+     * `Checker`. **No configuration measured here does that** — an empty program, a
+     * directory with no `tsconfig.json`, a config that is not JSON and one setting a
+     * TypeScript-7-removed option all answer a usable oracle over 0 or 1 files
+     * (`ProjectTypeOracleTest`) — so a host meeting a null has met a defect rather
+     * than a project it should tolerate. The type stays nullable because that is a
+     * claim about every error path `ProjectCompiler` has, not only the four probed.
+     *
+     * ## It is a SEPARATE build, and deliberately
+     *
+     * It does not fill [cached] and is not filled by it. Two reasons, and both are
+     * about what a build IS rather than about cost. A store build records an answer
+     * at every node, so it types nodes an ordinary build never types — the standing
+     * rule that such a build's diagnostics are not a plain build's ((INC.14),
+     * `docs/language-service.md` § 3) — and the type-recording build is therefore
+     * not a substitute for the one [diagnostics] answers from. And its result is
+     * never bound to a name here at all: [buildOracle] returns a [TypeOracle], so
+     * no caller in this class can reach that build's diagnostics even by mistake,
+     * which is [DiagnosticsOnlyRecheck]'s valve pointed the other way.
+     *
+     * It does not pass `exportSignatures`: that walk forces resolutions the check
+     * did not need, and forcing is exactly what the hazards ledger
+     * (`docs/INVERSION-DESIGN.md` § 5) says a store build must not do for free.
+     *
+     * ## Lifetime — one text, one thread
+     *
+     * The oracle is RETAINED, so a second call with no edit between hands back the
+     * SAME instance and costs no build. Any edit — [updateFile], [deleteFile],
+     * [reloadFile] — and [close] CLOSE it, after which the host's own reference
+     * throws `OracleRefusal`. That is the whole invalidation protocol and it is
+     * deliberately not finer ((INC.46)): a stale store answers a WRONG type rather
+     * than nothing, because it is keyed by file name and read by `nodeId` behind a
+     * bounds check alone (see [oracle] for the measurement).
+     *
+     * **Ask it from the thread you obtained it on.** `Type.id` / `Symbol.id` are
+     * thread-local sequences (INV.6(6c0)) and most oracle rows can MINT, so a query
+     * from a thread that has never compiled mints ids inside this build's own space;
+     * the oracle refuses such a query rather than answering it, and `TypeOracle`'s
+     * own KDoc carries the measurement. This project is already documented as
+     * belonging to one thread at a time (`docs/language-service.md` § 11); an oracle
+     * sharpens that from a convention into a refusal.
+     *
+     * ## What it costs
+     *
+     * One whole-program build with the store recorded — measured at +21.5 % over a
+     * plain check on tsc's own 78 sources and +6-7 % on an application-shaped
+     * project (`docs/type-oracle.md` § 4) — and then RETENTION of the whole checker
+     * plus the store until the next edit ([oracle]).
+     */
+    public fun typeOracle(): TypeOracle? {
+        checkOpen()
+        oracle?.let { return it }
+        return buildOracle()?.also { oracle = it }
+    }
+
+    /**
+     * (INV.2b) The build behind [typeOracle], and the ONE-WAY VALVE that keeps it
+     * out of everything else.
+     *
+     * The point is the RETURN TYPE. `ProjectCompiler.build` answers a
+     * `ProjectCompiler.Result` carrying this build's diagnostics, its program file
+     * list and its export surface; a store build's diagnostics are not a plain
+     * build's ((INC.14)), so none of that may become this project's answer to
+     * [diagnostics], [diagnosticsOf] or [files]. Rather than documenting that, the
+     * result is never bound to a name: it is discarded where it is produced and
+     * this function's type is [TypeOracle], so [typeOracle]'s caller has nothing
+     * else to reach. That is exactly what [DiagnosticsOnlyRecheck] does for the
+     * replay, with the two channels swapped.
+     *
+     * `exportSignatures` is deliberately NOT passed, unlike [build]'s: that walk
+     * FORCES resolutions the check did not need, and a forcing entry point is what
+     * the hazards ledger (`docs/INVERSION-DESIGN.md` § 5) audits — post-hoc forcing
+     * writes first-touch state (`declaredTypes` has no write gate, TP constraints
+     * are write-once, alias display is first-wins), so an oracle build must not do
+     * it on a caller's behalf.
+     *
+     * Nor does it clear [OverlayVfs.jsonReads], which [build] does. Deliberate and
+     * checked rather than overlooked: that record is the `.json` INPUT SET
+     * [saveState] hashes, clearing it here would erase the diagnostics build's own
+     * record, and leaving it can only make the set a SUPERSET — which hashes more
+     * files and therefore invalidates more readily, the safe direction. In practice
+     * the two builds read the same config chain, so it is the same set; and
+     * [saveState] answers null without a [surface], which only [build] establishes,
+     * so an oracle build alone can never produce a snapshot at all.
+     */
+    private fun buildOracle(): TypeOracle? {
+        val holder = OracleHolder()
+        ProjectCompiler(overlay).build(
+            projectPath,
+            noEmit = true,
+            cancellation = cancellation,
+            oracleHolder = holder,
+        )
+        return holder.oracle
     }
 
 
@@ -3066,6 +3258,12 @@ public class Project private constructor(
         // from; `ProgramRecheck` has no invalidation protocol and deliberately wants
         // none, so the handle goes wherever [cached] goes.
         recheck = null
+        // (INV.2b) The oracle is a claim about this text, and its store answers a
+        // WRONG type rather than nothing once the text moves (see [oracle]). The
+        // HOST holds its own reference, so dropping the field is not enough: it is
+        // CLOSED, which is what turns the host's next question into a refusal.
+        oracle?.close()
+        oracle = null
         // (INC.46) The export SURFACE deliberately does NOT go with them: it is a claim
         // about the files this edit did not touch, which is exactly what survives. The
         // edited file joins the set the next [diagnostics] must clear.
@@ -3092,6 +3290,12 @@ public class Project private constructor(
         // from; `ProgramRecheck` has no invalidation protocol and deliberately wants
         // none, so the handle goes wherever [cached] goes.
         recheck = null
+        // (INV.2b) The oracle is a claim about this text, and its store answers a
+        // WRONG type rather than nothing once the text moves (see [oracle]). The
+        // HOST holds its own reference, so dropping the field is not enough: it is
+        // CLOSED, which is what turns the host's next question into a refusal.
+        oracle?.close()
+        oracle = null
         // (INC.46) The export SURFACE deliberately does NOT go with them: it is a claim
         // about the files this edit did not touch, which is exactly what survives. The
         // edited file joins the set the next [diagnostics] must clear.
@@ -3246,6 +3450,12 @@ public class Project private constructor(
         // from; `ProgramRecheck` has no invalidation protocol and deliberately wants
         // none, so the handle goes wherever [cached] goes.
         recheck = null
+        // (INV.2b) The oracle is a claim about this text, and its store answers a
+        // WRONG type rather than nothing once the text moves (see [oracle]). The
+        // HOST holds its own reference, so dropping the field is not enough: it is
+        // CLOSED, which is what turns the host's next question into a refusal.
+        oracle?.close()
+        oracle = null
         // (INC.46) the export surface is a claim about a live project.
         surface = null
         dirtyFiles = null

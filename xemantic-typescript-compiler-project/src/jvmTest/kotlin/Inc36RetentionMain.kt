@@ -25,7 +25,9 @@
 
 package com.xemantic.typescript.compiler.project
 
+import com.xemantic.typescript.compiler.Identifier
 import com.xemantic.typescript.compiler.Node
+import com.xemantic.typescript.compiler.TypeOracle
 import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.TsConfigLoader
 import com.xemantic.typescript.compiler.computeParserFlags
@@ -73,7 +75,11 @@ import java.lang.reflect.Field
  *    finding.
  *  * **attribution control** — the steps that should return nothing (`narrowed`,
  *    `recheck`, which this arm never fills) must in fact return ~0 MB. A ladder whose
- *    every step returns something is a ladder measuring GC noise.
+ *    every step returns something is a ladder measuring GC noise. **That row is an
+ *    INERT CONTROL and its 0.0 MB is NOT evidence that retaining a live checker is
+ *    free** — the `ladder` arm never asks [Project.diagnosticsOf], so no
+ *    `ProgramRecheck` is ever held. What a retained checker costs is what the
+ *    `oracle` mode measures.
  *
  * Two processes minimum for anything quoted as a result — the reading is a heap
  * occupancy after a collector's own decisions, not a counter.
@@ -81,7 +87,10 @@ import java.lang.reflect.Field
  * Modes: `ladder` (the census, default), `second` (the ladder plus a SECOND
  * [Project] opened in the same process, which prices what a second plugin project
  * costs once the process-global caches are warm), `reparse` (the timing half of the
- * recommendation: what bounding `sourceIndexes` would cost in re-parses).
+ * recommendation: what bounding `sourceIndexes` would cost in re-parses), `oracle`
+ * ((INV.2b): what a retained [Project.typeOracle] costs a host, measured on a CLEAN
+ * process so the number is the oracle's own and not a delta against a build that
+ * already retains a checker).
  *
  * Companion to `Inc31ResidueMain`, whose `heap` arm produced the 264 MB this
  * decomposes; same profile, same process rules.
@@ -203,10 +212,136 @@ private fun histogram(tag: String, top: Int) {
 
 private fun med(v: MutableList<Long>): Long { v.sort(); return v[v.size / 2] }
 
+/**
+ * (INV.2b) What a retained `Project.typeOracle()` costs a host — a number that did not
+ * exist before this arm, and one the `ladder` mode's inert `narrowed`/`recheck` row
+ * must not be read as standing in for.
+ *
+ * The ladder is DELIBERATELY not reused: its rows are deltas against a project that
+ * has already built, so an oracle step there would price only the STORE plus whatever
+ * second checker the oracle's own build allocates. A host that opens a project purely
+ * to ask type questions pays the whole thing, so this arm opens a clean project and
+ * takes three points — nothing, a plain whole-program build, and the same project
+ * holding an oracle.
+ *
+ * Its own non-vacuity check is the oracle ANSWERING: a null oracle, or one whose store
+ * holds nothing, would make every row below a measurement of an early return.
+ */
+private fun oracleArm(dir: String) {
+    val ladder = Ladder()
+    ladder.read("0.baseline")
+
+    val project = Project.open(dir)
+    ladder.read("1.open")
+
+    // A plain whole-program build FIRST, so the oracle step below is the oracle's own
+    // cost and not "a compile happened".
+    val diagnostics = project.diagnostics()
+    ladder.read("2.diagnostics")
+    val files = project.files
+    println("BUILD files=${files.size} diagnostics=${diagnostics.size}")
+
+    // A one-slot HOLDER, and every read of it through a FUNCTION rather than a local:
+    // a local still in scope keeps the whole checker reachable however the ladder is
+    // written, so a ladder holding one reads +0.0 MB at the release step and looks
+    // exactly like an oracle that costs nothing. (And `oracle = null` on a local is
+    // dead code to the Kotlin compiler, which this warning-clean build rejects.)
+    val held = arrayOfNulls<TypeOracle>(1)
+    val at = System.nanoTime()
+    held[0] = project.typeOracle()
+    val wall = (System.nanoTime() - at) / 1_000_000
+    ladder.read("3.typeOracle")
+    require(held[0] != null) { "REFUSED: typeOracle() answered null — every row below is vacuous." }
+
+    val census = censusOracle(held)
+    println(
+        "ORACLE files=${census.first} identifiers=${census.second} " +
+            "answered=${census.third} wall=${wall}ms",
+    )
+    // Non-vacuity: the store must actually hold answers, or the retention row prices
+    // an empty array (round 849 — a zero from a blind instrument reads like a real one).
+    require(census.third > 0) {
+        "REFUSED: the oracle answered NONE of ${census.second} identifiers — the store " +
+            "is empty, so the retention row below prices nothing."
+    }
+    histogram("withOracle", 15)
+    ladder.read("3b.afterHistogram")
+
+    // Drop it the way an edit does.
+    val edited = files.first { it.endsWith(".ts") }
+    project.updateFile(edited, "export {};\n")
+    held[0] = null
+    ladder.read("4.editDropsOracle")
+    println("STEP released=${held[0] == null} edited=${edited.substringAfterLast('/')}")
+
+    project.close()
+    ladder.read("5.close")
+
+    val oracleStep = ladder.deltaOf("3.typeOracle")
+    val returnedByEdit = -ladder.deltaOf("4.editDropsOracle")
+    println(
+        (
+            "RECEIPT oracle retains %.1fm over a project that has already built; an edit " +
+                "returns %.1fm (%d files, %d of %d identifiers recorded, handout %dms)"
+            ).format(
+            oracleStep / Ladder.MB, returnedByEdit / Ladder.MB,
+            census.first, census.third, census.second, wall,
+        ),
+    )
+    if (oracleStep < 8L * 1024 * 1024) {
+        println(
+            ("CONTROL FAILED positive: the oracle step returned %.1fm — a retained checker " +
+                "plus a per-node store cannot be free, so this ladder is measuring noise.")
+                .format(oracleStep / Ladder.MB),
+        )
+    } else {
+        println("CONTROL positive: OK (oracle step = %.1fm)".format(oracleStep / Ladder.MB))
+    }
+    // …and the mirror: the edit must GIVE BACK most of it, or the close is releasing
+    // less than the handout took and the retention is unbounded in practice.
+    if (returnedByEdit < oracleStep / 2) {
+        println(
+            ("CONTROL FAILED release: the edit returned %.1fm of the %.1fm the handout " +
+                "took — something is still holding the checker.")
+                .format(returnedByEdit / Ladder.MB, oracleStep / Ladder.MB),
+        )
+    } else {
+        println("CONTROL release: OK (%.1fm returned)".format(returnedByEdit / Ladder.MB))
+    }
+}
+
+/**
+ * (files, identifiers asked, identifiers answered) — taken through the HOLDER and in a
+ * frame of its own, so no reference to the oracle survives this call.
+ */
+private fun censusOracle(held: Array<TypeOracle?>): Triple<Int, Int, Int> {
+    val oracle = held[0] ?: return Triple(0, 0, 0)
+    var asked = 0
+    var answered = 0
+    for (file in oracle.files) {
+        val stack = ArrayList<Node>()
+        stack.add(file)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            forEachChild(node) { child -> stack.add(child) }
+            if (node is Identifier) {
+                asked++
+                if (oracle.typeAt(node) != null) answered++
+            }
+        }
+    }
+    return Triple(oracle.files.size, asked, answered)
+}
+
 fun main(args: Array<String>) {
     val dir = args[0]
     val mode = if (args.size > 1) args[1] else "ladder"
     println("mode=$mode maxHeap=${Runtime.getRuntime().maxMemory() / (1024 * 1024)}m")
+
+    if (mode == "oracle") {
+        oracleArm(dir)
+        return
+    }
 
     val ladder = Ladder()
     ladder.read("0.baseline")

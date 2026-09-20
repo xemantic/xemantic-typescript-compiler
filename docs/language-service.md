@@ -41,6 +41,13 @@ model to drift out of step with the compiler.
   them, and that is **verified by applying it and compiling again**, so a
   collision or a capture withdraws the plan instead of reaching your buffer.
 - **Batched semantics** — many carets, or a whole file, answered in one build.
+- **A type oracle** — `typeOracle()` hands out the post-hoc, node-addressed query
+  surface of [`docs/type-oracle.md`](type-oracle.md) (`getTypeAtLocation`, `getSymbolAtLocation`,
+  `getResolvedSignature`, `getContextualType`, and the symbol / type / signature
+  accessors) over one build of the current text, for a host that asks thousands of
+  small questions in an order nobody can state in advance. It is CLOSED by every
+  edit, and it serves none of the calls above — those still answer from the
+  capture machinery.
 
 ### The calls
 
@@ -71,6 +78,7 @@ model to drift out of step with the compiler.
 | `trustFilesystem` | opt-in: the host promises the bytes of a file never change without saying so, and builds stop re-reading | § 5a |
 | `cancellation` | a signal the build polls, so a host can abandon an unwanted answer | § 14 |
 | `saveState()` / `restoreState(text)` | this project's incremental state as text, for the next process | § 14 |
+| `typeOracle()` | a `TypeOracle` over one whole-program build of the current text — node-addressed type/symbol/signature questions, asked in any order, closed by any edit | [`type-oracle.md`](type-oracle.md) |
 | `close()` | releases the overlay and the cached build; idempotent | § 11 |
 
 `LineMap` is the line index behind `positionAt` / `offsetAt`, exposed for a host
@@ -2160,6 +2168,13 @@ default `SystemVfs` is your process's working directory.
 
 **Threading.** A `Project` is not thread-safe: one instance belongs to one
 thread at a time. Builds run synchronously on the calling thread.
+
+A `TypeOracle` from `typeOracle()` is STRICTER, and it enforces the difference
+rather than documenting it: ask it from the thread you obtained it on. Unlike every
+other answer here it hands out the checker's own `Type` and `Symbol` objects, and
+those ids come from thread-local counters (INV.6(6c0)); a query from a thread that
+has never compiled would mint ids inside the build's own space, so such a query is
+refused with `OracleRefusal`. `docs/type-oracle.md` § 2 carries the measurement.
 
 **Lifecycle.** `close()` releases the overlay and the cached build and is
 idempotent, so you may close on every teardown path. Any query or edit

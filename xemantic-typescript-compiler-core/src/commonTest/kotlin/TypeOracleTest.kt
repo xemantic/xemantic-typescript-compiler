@@ -565,6 +565,18 @@ class TypeOracleTest {
         }
         assert(handleRefused)
         assert(b.oracle.handles.pinned == 0)
+        // (INV.2b) …INCLUDING the one row that reads no build state. [intrinsicType]
+        // answers from process-wide singletons and used to skip `open()`, so a closed
+        // oracle went on answering it — one row contradicting the class's own contract,
+        // and a host probing "is this still usable" got two different answers depending
+        // on which row it happened to call first.
+        var intrinsicRefused = false
+        try {
+            b.oracle.intrinsicType("string")
+        } catch (_: OracleRefusal) {
+            intrinsicRefused = true
+        }
+        assert(intrinsicRefused)
     }
 
     @Test
