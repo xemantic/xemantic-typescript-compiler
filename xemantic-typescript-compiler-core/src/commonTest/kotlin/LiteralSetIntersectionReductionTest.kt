@@ -153,6 +153,24 @@ class LiteralSetIntersectionReductionTest {
     }
 
     @Test
+    fun `a literal and a primitive of another domain reduce to never`() {
+        // The row that discriminates the literal-vs-primitive DOMAIN check: without it
+        // `"a" & number` answers `"a"` instead of the empty intersection tsgo reports
+        // nothing for. Written as a whole-list assertion with its own positive control,
+        // because the correct answer here is an ABSENCE.
+        assert(
+            rows(
+                """
+                declare const a: "a" & number;
+                const p: never = a;
+                declare const b: "a" & string;
+                const q: never = b;
+                """.trimIndent(),
+            ) == listOf("Type '\"a\"' is not assignable to type 'never'."),
+        )
+    }
+
+    @Test
     fun `disjoint key sets reduce to never and report nothing`() {
         // An absence, so it carries its own positive control in the same fixture:
         // `never` is assignable to everything, and only the second row may survive.
