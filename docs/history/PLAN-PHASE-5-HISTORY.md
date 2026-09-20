@@ -1,3 +1,51 @@
+### Round (P18.132) — (LEGACY.1)(g): `baseUrl` deleted, and the item's own skip rule would have thrown away a gradeable tsgo answer (2026-09-17)
+
+**OWNER DECISION.** Both halves of the (g) proposal were approved in session: widen the embedded-tsconfig skip,
+and follow tsgo 7.0.2 rather than pristine. (g) was the last unlanded sub-step of (LEGACY.1), so **(LEGACY.1) is
+CLOSED**. Suite **19,885 / 0 / 64** (9 modules), errors screen 3,061 / 0 and emit 5,646 / 0, cost gate +0.04% max,
+`huge_methods --fail-over 0` clean, warning gate clean with a live positive control, 8-profile grid 8 x 0/0 and
+EMIT 78 vs 78 byte-identical.
+
+**WHY IT WAS BLOCKED, AND WHAT THE MEASUREMENT SAID.** 27 active subtests set `baseUrl` in an EMBEDDED tsconfig,
+and tsgo has **no output of any kind** for a single one of them — not a baseline, not a `.diff`, nothing anywhere
+in `typescript-go-repo/testdata` — so (LEGACY.0b)'s *absent, no `.diff` -> keep tsc's* leg pins all 27 to PRISTINE
+TypeScript 6, which the 2026-09-12 directive says is not a reference. Deleting `baseUrl`'s behaviour would have
+moved them toward an answer no reference has. The same census says embedded `moduleResolution: node/node10/classic`
+is 18 cases with **1** tsgo answer, and embedded `target: es3/es5` is 9 cases with **7** — which is why `target`
+stays in and the other two come out. The receipt that the widening lost nothing gradeable is a COUNT, not an
+argument: `tsgoExpectedKeptTsc` **87 -> 3** while `adopted`, `new` and `deleted` are byte-identical.
+
+**THE BRIEF WAS WRONG IN THE DANGEROUS DIRECTION, AND THE AGENT CAUGHT IT.** Its embedded-only rule would have
+deleted `maxNodeModuleJsDepthDefaultsToZero` — the one gradeable case in the `moduleResolution` family. tsgo's
+harness LOADS an embedded tsconfig (`GetConfigNameFromFileName`, basename match) and seeds its options from it
+*before* `SetOptionsFromTestConfig` applies the directives, so a **directive OVERRIDES the embedded value**; that
+case writes `"moduleResolution": "node"` embedded and `// @moduleResolution: bundler` as a directive, so tsgo
+resolved Bundler and ran it. The shipped predicate exempts any option a directive names, which is exactly the
+disqualifier that keeps `target` out. Two further corrections to the item: the `baseUrl == null` conjuncts are
+EIGHT, not ten; and under the corrected rule `target` would skip NONE of its nine anyway.
+
+**TS5090 STAYS, AND ITS PREDICATE CHANGED TWICE.** The item recorded it as "goes only if tsgo has no such path
+(verify)". tsgo emits it at `program.go:995` and does NOT gate it on `baseUrl`, so dropping our
+`result.baseUrl == null` conjunct ENLARGES the population — and tsgo additionally exempts ABSOLUTE substitutions,
+which we did not. Landing only the first change manufactures false positives; both landed, and the second is
+pinned by a fixture that fails without it (ablation a2: 4 RED — POSIX root, DOS drive, bare dot, backslash).
+
+**TS5102's CHAIN IS COMPUTED, AND IT WAS MEASURED RATHER THAN REASONED.** tsgo appends TS5106
+`Use '"paths": {"*": ["./src/*"]}' instead.`, derived from the config path, and prints the row ALONE and file-less
+when there is no config file. Nine `baseUrl` values were run through `tools/tsgo-7.0.2/lib/tsc` to fix the
+rendering. The 6.0-default branch is untouched by construction (`removedMessageChain` defaults to `messageChain`),
+so this round moves no output at today's default — it exists so **(P18.133)** can move the default safely.
+
+**TWO MEASUREMENT TRAPS WORTH CARRYING.** tsgo's CLI SHORT-CIRCUITS after a config error: with `baseUrl` set it
+prints TS5102 and not one semantic row, even for an obvious type error elsewhere — so "the import is now
+unresolved" is not gradeable against its CLI. And TS5090 is HARNESS-ONLY here (`applyTsconfigOptions` raises it,
+`TsConfigLoader` does not), so a real project is silent where tsgo reports; pre-existing, recorded, not chased.
+
+**PINS**: `BaseUrlRemovedTest`, 15 pins, six ablation arms plus a both-green control. Arm a4 (restore
+`NameResolver`'s baseUrl leg) read 0 RED and is recorded as a MEASURED REDUNDANT guard rather than a blind pin —
+a4b and a4c are what establish that (a4b proves the fixture reaches the fallback; a4c proves the restored leg
+resolves the same file), which is the round-902 dead-arm discipline applied to a zero.
+
 ### Round (P18.121) — (LEGACY.0b) step 21: three mechanisms whose emitters we already had, two rows closed, one REFUSED with the decisive control (2026-09-16)
 
 **Three commits** (fix, test, this docs commit). **Suite 19,694 → 19,706 / 0 / 65**; `tsgoPendingBaselines` 42 → 40,

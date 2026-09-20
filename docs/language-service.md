@@ -63,6 +63,7 @@ model to drift out of step with the compiler.
 | `positionAt(fileName, offset)` | offset → 1-based line/character | § 6 |
 | `offsetAt(fileName, line, character)` | 1-based line/character → offset | § 6 |
 | `nodeInfoAt(fileName, offset)` | the narrowest node at the offset, and its ancestor kinds | § 7 |
+| `nodeAt(fileName, offset)` | the same node, as the AST node — the address a `TypeOracle` takes | § 7 |
 | `quickInfoAt(fileName, offset)` | the type at the caret, as display text | § 8 |
 | `definitionsAt(fileName, offset)` | where the thing at the caret is declared — a list, because a symbol may have several | § 9 |
 | `completionsAt(fileName, offset)` | the completion list and the span it replaces | § 10a |
@@ -229,6 +230,7 @@ you call them.
 | `open` | free | resolves the path; compiles nothing |
 | `positionAt` / `offsetAt` | reads the file | never builds, even on a dirty project |
 | `nodeInfoAt` | parses **one file** | never builds; cached until that file is edited |
+| `nodeAt` | parses **one file** | never builds; shares the parse `nodeInfoAt` caches, and a live oracle's own tree |
 | `diagnostics()` / `diagnostics(f)` | **ONE NARROWED build** after an edit that moved no exported signature; a **full build** otherwise (that costs two: the narrowed gate, then the rebuild); none when clean | 67% of real edits to tsc's own compiler move no signature, and a served edit is **108 – 113 ms against 4,864 – 5,096 ms — a factor of 45**. See § 4b |
 | `files` | **full build** when dirty, else cached | a question about the PROGRAM, which is what a build computes |
 | `diagnosticsOf(files)` | **one NARROWED build** for the FIRST query of a project state; **none** when clean, repeated, a SUBSET of a set already asked about, or about any other file — a live re-entrant checker answers it | checks only those files: **108 – 113 ms at the median file** against a 4.9 s full rebuild on tsc's own sources (2026-08-24; § 13 has the full table) — see § 4a |
@@ -960,9 +962,33 @@ truthful negative answer.
 > spans **overlap between siblings**, and `[pos, end)` is not a containment
 > test: in `const abc = 1;` the identifier `abc` carries `[6,11)` though its text
 > is `[6,9)`, which puts a caret on the `=` inside `abc`. `NodeInfo` reports the
-> real end, snapped back to the token stream. You never see the raw value — this
-> note exists so the numbers are not surprising if you compare them against a
-> tree you parsed yourself.
+> real end, snapped back to the token stream. You never see the raw value through
+> `NodeInfo` — this note exists so the numbers are not surprising if you compare
+> them against a tree you parsed yourself.
+
+### `nodeAt` — the same question, answered with the node
+
+```kotlin
+val node: Node? = project.nodeAt(path, offset)
+```
+
+Same descent, same spans, same nulls; it hands back the AST node instead of a
+descriptor. It exists because `TypeOracle` (§ 12, `docs/type-oracle.md`) is
+addressed **by node**, so this is how a caret becomes something an oracle can be
+asked about. Two things a host taking nodes must know: a node is a claim about the
+text it was parsed from, so do not keep one across an edit (an oracle query with a
+stale node is refused, but nothing refuses a stale node handed to a *later*
+oracle); and nodes are `data class`es whose `hashCode` walks the whole subtree, so
+key a map by `(file, pos)` rather than by the node.
+
+Reach for `NodeInfo` when you are going to render, compare or store the answer,
+and for `nodeAt` when you are going to ask the oracle about it.
+
+The raw-span caveat above is why you should not re-derive this descent from
+`Node.pos`/`Node.end` yourself. Measured over 669,350 offsets in twelve of tsc's
+own compiler sources, the naive `[pos, end)` descent names a different node at
+**28.5 %** of them, and changes the oracle's answer at **6.4 %**
+(`Inv2bBridgeProbeMain`).
 
 ## 8. Semantic queries: hover
 

@@ -25,6 +25,79 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.142) — (INV.2b) commit 2: the position→node bridge, and the 28.5 % that justifies it (2026-09-20)
+
+**The second (INV.\*) round in a row, and the commit that makes commit 1 USABLE.** (P18.141) shipped
+`Project.typeOracle()` — an oracle addressed entirely by `Node` — while `Project.nodeAt` was `internal` and
+`NodeInfo` is a descriptor by design. A host holding an oracle therefore had exactly one supported move, which
+was to walk `TypeOracle.files` itself. `nodeAt` is now PUBLIC and ANCHORED on the oracle's own trees.
+`Checker.kt` is untouched (`git diff --name-only` confirms), so `cost_gate.py` is a control, and the 8-profile
+grid is structurally incapable of differing — the CLI never constructs a `Project`, a `SourceIndex` or an oracle.
+
+**GATES.** Suite **20,053 / 0 / 53** (+9 = exactly the new pins; skipped unchanged, which is right — this is
+not a parity round and no ledger row moved), re-run on the COMMITTED test source after a late assert-hygiene
+edit. Warning gate clean over `-project`'s `compileKotlinJvm` + `compileTestKotlinJvm` with `--rerun`, and with a
+LIVE positive control first (a throwaway `x as String` printed `No cast needed.`, then was deleted) — an empty
+log is not evidence of a clean gate. `huge_methods.py --fail-over 0` exit 0 on core (a CONTROL: core is
+untouched) and on the `-project` module, which is where this round's compiled code is — 52 classes, 536
+methods, 0 over the limit. `cost_gate.py` exit 0, max **+0.15 %**: a CONTROL by construction (no `Checker.kt`
+change can move a counter), so the residue is the recorded baseline being a few rounds old — round 776's
+"a recorded counter baseline is a claim about a BUILD, not about a commit" — and NOT this round.
+
+**THE PRIZE IS A MEASUREMENT, NOT AN ARGUMENT, AND IT WAS TAKEN BEFORE ANYTHING WAS WRITTEN.**
+`Inv2bBridgeProbeMain` over **669,350 offsets** in twelve of tsc's own compiler sources, every 7th character:
+
+| | |
+|---|---|
+| the obvious hand-rolled descent (`pos <= off < end`) names a DIFFERENT node | **190,820 (28.5 %)** |
+| …and at those the ORACLE's answer differs | **42,507 (6.4 % of all offsets)** |
+| …split: a different type / only ours answers / only the naive one does | 23,303 / 6,939 / 12,265 |
+| restricted to offsets that BEGIN an identifier — the realistic caret | 591 of 25,533 (2.3 %), **27** changing the type |
+
+The mechanism is round 910's: `Node.end` is the end of the token AFTER the node, so sibling spans OVERLAP and
+the naive descent claims offsets belonging to the parent. Every one of the probe's first six examples was the
+same shape — a caret on the comma of an import clause reading `Identifier` where the answer is `NamedImports`.
+That is now a value pin (`round 910 is honoured at the bridge`) with its own reached-the-mistake control.
+
+**AND THE ANCHOR FIXES NOTHING MEASURED, WHICH THE ROUND SAYS RATHER THAN IMPLIES.** The same probe asked
+whether the node `nodeAt` answered was a node of the oracle's own tree: **669,350 of 669,350, 0 from another
+tree, 0 nulls**, and every ordering that could break it self-heals (an index built before the build is
+re-pointed by `upgradeIfShareable`; a file the build never parsed has no store to be inconsistent with). So
+the anchor is not a repair — it turns a property that held by the cooperation of three caches into two lines.
+It is worth that because its violation is SILENT: `TypeOracle.storeOf` is keyed by the node's file NAME and
+reads `types[node.nodeId]` behind a bounds check alone, so a node of ANY equally-named tree is answered.
+
+**THE ONE CONFIGURATION IN WHICH IT DOES NOT SELF-HEAL, AND THE PIN IS BUILT ON IT.** `CrawlParseCache` is
+process-global, keyed by PATH with the content inside the value, and `store` REPLACES. So: project asks
+`nodeAt` before anything is built (a PRIVATE parse, since the compiler has never seen those bytes) → asks for
+an oracle → a SECOND project over the same absolute paths with different bytes builds → the cache entry is
+overwritten → `upgradeIfShareable` can no longer find those bytes and keeps the private tree. That is the
+fixture of `the bridge is anchored even when it was asked before the oracle existed`, and it is the only pin
+either anchor half reddens.
+
+**THE TWO HALVES ARE A ROUND-927 PAIR AND THE THIRD GUARD IS MEASURED REDUNDANT.** Ablated one mistake at a
+time, 21 tests per arm: dropping `oracleTreeOf`'s preference in `sourceIndexOf` (the MISS half) reads 1 RED;
+dropping `buildOracle`'s index drop (the HIT half) reads the SAME 1 RED; dropping the `isClosed` test reads
+**0 RED**; descending by `Node.end` reads 1 RED, on the round-910 pin and no other. The first two cover
+different halves of one path, so neither is redundant and no pin can separate them — recorded as one
+observable with each layer named. The third stays with its redundancy stated, because it is what makes
+`oracleTreeOf`'s contract a test rather than an assumption.
+
+**A DOC THAT HAD BECOME FALSE IN ADVANCE, AND ONE THAT WAS FALSE ALREADY.** `NodeInfo`'s KDoc listed as its
+third reason for existing that "whether the embedding API publishes `Node` at all is a DELIBERATELY OPEN
+question — the queue item after this one is where it gets decided". This is that item; it decided the other
+way, and the class's remaining two reasons (a node goes stale; a node is unsafe as a map key) are why it is
+still the right answer for a host that renders rather than asks. And `docs/type-oracle.md` § 1 already showed
+`project.nodeAt(file, offset)` in a host-facing code sample — a sample that could not compile, because the
+member was internal.
+
+**WHAT DID NOT WORK / WHAT WAS CORRECTED MID-ROUND.** The first cut of the index drop was a blunt
+`sourceIndexes.clear()`, with a comment claiming the rebuild is "a token scan, never a parse" — true for a
+file the oracle walked and FALSE for one outside the program, which has no anchor and re-parses. Scoped to the
+walked set, which makes the comment true and the cost real. The recon probe was also deleted as a scratch
+artifact and then restored: `docs/type-oracle.md` and the test class both cite its numbers, and a doc citing a
+script that does not exist is the frozen-instrument problem in its cheapest form.
+
 ### Round (P18.141) — (INV.2b) commit 1: `Project.typeOracle()`, the capability without the decision (2026-09-20)
 
 **The first (INV.\*) round since 2026-09-10, and a MISSION-LEG deliverable rather than a parity row**: leg 2, "an
@@ -577,54 +650,6 @@ two** (`.errors.txt` and `.js`) — now recorded in the constant's KDoc.
 makes tsgo compute the chain against the DECLARING file where we round-trip the written value against the ROOT
 config, with a same-directory control proving the fixture reaches the chain and that root-declared values agree
 exactly. Closing it needs provenance `CompilerOptions.baseUrl` — a bare `String` — does not carry.
-
-### Round (P18.132) — (LEGACY.1)(g): `baseUrl` deleted, and the item's own skip rule would have thrown away a gradeable tsgo answer (2026-09-17)
-
-**OWNER DECISION.** Both halves of the (g) proposal were approved in session: widen the embedded-tsconfig skip,
-and follow tsgo 7.0.2 rather than pristine. (g) was the last unlanded sub-step of (LEGACY.1), so **(LEGACY.1) is
-CLOSED**. Suite **19,885 / 0 / 64** (9 modules), errors screen 3,061 / 0 and emit 5,646 / 0, cost gate +0.04% max,
-`huge_methods --fail-over 0` clean, warning gate clean with a live positive control, 8-profile grid 8 x 0/0 and
-EMIT 78 vs 78 byte-identical.
-
-**WHY IT WAS BLOCKED, AND WHAT THE MEASUREMENT SAID.** 27 active subtests set `baseUrl` in an EMBEDDED tsconfig,
-and tsgo has **no output of any kind** for a single one of them — not a baseline, not a `.diff`, nothing anywhere
-in `typescript-go-repo/testdata` — so (LEGACY.0b)'s *absent, no `.diff` -> keep tsc's* leg pins all 27 to PRISTINE
-TypeScript 6, which the 2026-09-12 directive says is not a reference. Deleting `baseUrl`'s behaviour would have
-moved them toward an answer no reference has. The same census says embedded `moduleResolution: node/node10/classic`
-is 18 cases with **1** tsgo answer, and embedded `target: es3/es5` is 9 cases with **7** — which is why `target`
-stays in and the other two come out. The receipt that the widening lost nothing gradeable is a COUNT, not an
-argument: `tsgoExpectedKeptTsc` **87 -> 3** while `adopted`, `new` and `deleted` are byte-identical.
-
-**THE BRIEF WAS WRONG IN THE DANGEROUS DIRECTION, AND THE AGENT CAUGHT IT.** Its embedded-only rule would have
-deleted `maxNodeModuleJsDepthDefaultsToZero` — the one gradeable case in the `moduleResolution` family. tsgo's
-harness LOADS an embedded tsconfig (`GetConfigNameFromFileName`, basename match) and seeds its options from it
-*before* `SetOptionsFromTestConfig` applies the directives, so a **directive OVERRIDES the embedded value**; that
-case writes `"moduleResolution": "node"` embedded and `// @moduleResolution: bundler` as a directive, so tsgo
-resolved Bundler and ran it. The shipped predicate exempts any option a directive names, which is exactly the
-disqualifier that keeps `target` out. Two further corrections to the item: the `baseUrl == null` conjuncts are
-EIGHT, not ten; and under the corrected rule `target` would skip NONE of its nine anyway.
-
-**TS5090 STAYS, AND ITS PREDICATE CHANGED TWICE.** The item recorded it as "goes only if tsgo has no such path
-(verify)". tsgo emits it at `program.go:995` and does NOT gate it on `baseUrl`, so dropping our
-`result.baseUrl == null` conjunct ENLARGES the population — and tsgo additionally exempts ABSOLUTE substitutions,
-which we did not. Landing only the first change manufactures false positives; both landed, and the second is
-pinned by a fixture that fails without it (ablation a2: 4 RED — POSIX root, DOS drive, bare dot, backslash).
-
-**TS5102's CHAIN IS COMPUTED, AND IT WAS MEASURED RATHER THAN REASONED.** tsgo appends TS5106
-`Use '"paths": {"*": ["./src/*"]}' instead.`, derived from the config path, and prints the row ALONE and file-less
-when there is no config file. Nine `baseUrl` values were run through `tools/tsgo-7.0.2/lib/tsc` to fix the
-rendering. The 6.0-default branch is untouched by construction (`removedMessageChain` defaults to `messageChain`),
-so this round moves no output at today's default — it exists so **(P18.133)** can move the default safely.
-
-**TWO MEASUREMENT TRAPS WORTH CARRYING.** tsgo's CLI SHORT-CIRCUITS after a config error: with `baseUrl` set it
-prints TS5102 and not one semantic row, even for an obvious type error elsewhere — so "the import is now
-unresolved" is not gradeable against its CLI. And TS5090 is HARNESS-ONLY here (`applyTsconfigOptions` raises it,
-`TsConfigLoader` does not), so a real project is silent where tsgo reports; pre-existing, recorded, not chased.
-
-**PINS**: `BaseUrlRemovedTest`, 15 pins, six ablation arms plus a both-green control. Arm a4 (restore
-`NameResolver`'s baseUrl leg) read 0 RED and is recorded as a MEASURED REDUNDANT guard rather than a blind pin —
-a4b and a4c are what establish that (a4b proves the fixture reaches the fallback; a4c proves the restored leg
-resolves the same file), which is the round-902 dead-arm discipline applied to a zero.
 
 ## QUEUE
 
@@ -3130,11 +3155,17 @@ CLAUDE.md § "AI agent mission".
   documented per row. Consumers (EXT, LSP) migrate only if it beats what they use.
   Implementation does not start without owner approval — the (INV.1) approval covered
   Stage 1 only.
-- [ ] **(INV.2b) COMMIT 1 LANDED 2026-09-20 ((P18.141) note) — `Project.typeOracle()` EXISTS, the
-  invalidation is DECIDED and the thread question is ANSWERED. What is LEFT is commit 2 (the
-  position→node bridge, which must build its `SourceIndex` via `SourceIndex.around(text,
-  oracle.files[i])` so the tree identity is EXPLICIT rather than a parse-cache coincidence) and
-  commit 3 (THE DECISION: may `quickInfoAt`/`definitionsAt` be served from the oracle).**
+- [ ] **(INV.2b) COMMITS 1 AND 2 LANDED 2026-09-20 ((P18.141)/(P18.142) notes) — the oracle EXISTS,
+  is ADDRESSABLE, its invalidation is DECIDED and the thread question is ANSWERED. **ONLY COMMIT 3
+  REMAINS: THE DECISION — may `quickInfoAt`/`definitionsAt` be served from the oracle.**
+  Commit 2 made `Project.nodeAt` PUBLIC and anchored it on the oracle's own trees
+  (`Project.oracleTreeOf` on the miss path, `buildOracle`'s scoped index drop on the hit path),
+  which is the "explicit rather than a parse-cache coincidence" the previous head asked for. It
+  also MEASURED what the anchor does and does not do: over **669,350 offsets** in twelve of tsc's
+  own sources the property ALREADY HELD (669,350 same tree, 0 other, 0 null), so the anchor is a
+  structural guarantee and not a repair — while a host hand-rolling the `[pos, end)` descent names
+  a different node at **28.5 %** of offsets and gets a different or absent type at **6.4 %**
+  (`Inv2bBridgeProbeMain`, replicated byte-identically on both binaries).
   **Commit 3 needs an instrument that does not exist** — `scripts/capture-equivalence.sh` varies
   the PARTITION at a fixed request and structurally cannot see an oracle-vs-capture difference —
   **and carries a hazard with no instrument at all**: alias display is FIRST-WINS and (INC.41)

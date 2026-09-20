@@ -178,13 +178,39 @@ The oracle is NODE-addressed, as tsgo's checker API is. A `(file, offset)` quest
 following token, `Node.pos` is tsc's `getStart()`), and an editor-shaped host wires the two
 together.
 
-**`Project.typeOracle()` (INV.2b) is that wiring's first half.** It builds whole-program with
-an `OracleHolder`, retains the oracle so a second call with no edit costs no build, and CLOSES
-it in `updateFile`, `deleteFile`, `reloadFile` and `close` — the four sites that drop the
-project's cached build. Closing rather than merely dropping the field is the point: the HOST
-holds its own reference, and a stale store answers a wrong type rather than nothing (§ 1).
-Its files are this project's own parses, so `Project.nodeAt` and `TypeOracle.typeAt` address
-the same objects with no translation.
+**`Project.typeOracle()` (INV.2b commit 1) is that wiring's first half.** It builds
+whole-program with an `OracleHolder`, retains the oracle so a second call with no edit costs
+no build, and CLOSES it in `updateFile`, `deleteFile`, `reloadFile` and `close` — the four
+sites that drop the project's cached build. Closing rather than merely dropping the field is
+the point: the HOST holds its own reference, and a stale store answers a wrong type rather
+than nothing (§ 1).
+
+**`Project.nodeAt(fileName, offset)` (INV.2b commit 2) is the second half**, and it is public
+for a reason that is not convenience: every `TypeOracle` row is addressed BY NODE, so a host
+that cannot obtain a node cannot ask an oracle anything. `Project.nodeInfoAt` deliberately
+answers a descriptor and is the right member for a host that only wants to know what the text
+is; it is useless as an oracle address. Publishing `nodeAt` adds no type the API did not
+already publish — `TypeOracle.files` hands out `SourceFile` and `NodeBase.parent` walks
+upward — what was missing was the one correct way IN.
+
+*Correct* is measurable here. The obvious hand-rolled descent (recurse into the child whose
+`[pos, end)` contains the offset) is wrong because `Node.end` is the end of the token AFTER
+the node, so sibling spans overlap. Over **669,350 offsets** in twelve of tsc's own compiler
+sources (`Inv2bBridgeProbeMain`):
+
+| | |
+|---|---|
+| naive descent names a DIFFERENT node | 190,820 (28.5 %) |
+| …and the oracle's answer differs there | 42,507 (6.4 % of all offsets) |
+| restricted to offsets that BEGIN an identifier | 591 of 25,533 (2.3 %), 27 changing the type |
+
+**Tree identity is structural, not a coincidence.** While an oracle is live, `nodeAt` descends
+THAT ORACLE'S OWN tree (`Project.oracleTreeOf`), for every file it walked and in either call
+order — the miss path prefers it and `buildOracle` drops indexes built before the build, which
+is the hit path. The same probe measured the pre-existing behaviour and found the property
+already held at all 669,350 offsets, so this is not a repair; it is worth doing because the
+violation is silent (`TypeOracle.storeOf` is keyed by file NAME and reads by `nodeId` behind a
+bounds check alone, so a node of any equally-named tree is ANSWERED).
 
 What it deliberately does NOT do: serve any shipped query. `quickInfoAt`, `definitionsAt`,
 `completionsAt`, `signatureHelpAt` and the rest still answer from the capture machinery, and
@@ -193,5 +219,4 @@ equivalence sweep (`scripts/capture-equivalence.sh` varies the PARTITION at a fi
 and structurally cannot see it). The oracle build is also kept out of `Project`'s `cached`:
 a store build types nodes an ordinary build never types, so its diagnostics are not a plain
 build's ((INC.14)), and the separation is enforced by the return type of the private
-`buildOracle()` rather than by documentation. A position→node bridge on the oracle itself is
-likewise still to come.
+`buildOracle()` rather than by documentation.

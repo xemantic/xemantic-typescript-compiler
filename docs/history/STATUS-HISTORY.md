@@ -1,3 +1,21 @@
+**(P18.137) — (CHK.124) STEP 2: ROUTE (B) OPENS AND THE GRID'S GREEN IS VERIFIED, 19,979 / 0 / 59 (2026-09-19).**
+**Ledger UNCHANGED at 34, deliberately — and this is the most valuable round of the three.** A member access on an
+IDENTIFIER receiver whose type is a function type was COMPLETELY UNCHECKED: four real missed errors in eleven lines
+of ordinary TypeScript (`declare const q: () => void; q.nope`), all four now byte-identical to tsgo in line, column
+and message, while a genuine expando member stays silent. Half (a) extended the expando model to `const`-bound
+function-expression hosts (tsgo's `getInitializerSymbol` arm: `const`, un-annotated, arrow/function-expression
+initializer); half (b) is `cmamCallSignatureReceiverReportable`. **The crux was not emitting but NOT
+DOUBLE-emitting** — B431's anchor owns its own population — and ablating that one guard reddens 3 pins with a
+literal `assert(d.size == 1) -> 2` diagram; the two guards cover DIFFERENT halves, which is why both pins exist.
+**THE GRID'S 8 x 0/0 WAS VERIFIED, NOT BANKED**, on a round where the profiles CAN express the shape (1,062
+function-type annotations in the compiler profile): a marker arm measured route (B) entered 20-23 times per profile
+with `reportable=0` and **every arrival `prop='call'`**, so `RUNTIME_PROPERTIES` is the one clause firing across
+1.2M lines — the grid means "the rule is right", not "the shape is absent". The naive arm (no guard, no half (a))
+reads 1 screen mismatch and 5 probe false positives. Refused with measurements and pinned `residue -`: a
+construct-signature receiver, a callable interface with heritage, an imported function declaration. Two countdown
+pins moved and a class KDoc section that predicted this work was retired. Libraries unchanged (cronstrue 1 -> 1,
+marked 18 -> 18). 27 pins.
+
 **(P18.136) — (CHK.124) STEP 1: REAL EXPANDO MEMBERS ON A FUNCTION TYPE, 19,952 / 0 / 59 (2026-09-19).**
 Ledger 35 -> 34, and the ledger row is the SMALL half. `expandoFunctionNestedAssigments` closes because `typeof Foo`
 now renders its members — THROUGH `typeToString`, which already produced tsgo's braces form byte-for-byte, so no
