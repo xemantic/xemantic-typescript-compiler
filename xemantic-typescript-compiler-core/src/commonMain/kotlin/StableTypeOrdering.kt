@@ -207,15 +207,61 @@ internal class StableTypeOrdering(
         return out
     }
 
-    /** The name tsc's `getTypeNameSymbol` would answer, plus the alias arguments it compares. */
-    private class NameKey(val name: String, val symbol: Symbol?, val aliasArgs: List<Type>?)
+    /**
+     * The name tsc's `getTypeNameSymbol` would answer, plus the alias arguments it
+     * compares.
+     *
+     * ## Two names, because our alias display is QUALIFIED and tsc's key is not
+     *
+     * tsc compares `symbolName(getTypeNameSymbol(t))` — a SYMBOL's own name, which
+     * carries no namespace. `Checker.aliasDisplayMap` holds a DISPLAY string, which
+     * B86.4 qualifies through the enclosing namespace chain (`Foo.Yep`), so feeding
+     * it to the final `compareTo` compares `"Bar.Yep"` against `"Foo.Yep"` where tsc
+     * compares `"Yep"` against `"Yep"` — equal, and the ordering falls through to the
+     * next key.
+     *
+     * Measured (LEGACY.0b): with the qualified string, `Foo.Yep | Bar.Yep` INTERNS as
+     * `[Bar.Yep, Foo.Yep]`, i.e. the reverse of what it displays — and every consumer
+     * that reports against a union's LAST constituent then names the wrong one
+     * (`namespaceDisambiguationInUnion`: tsgo says `"bar.yep"`, we said `"foo.yep"`).
+     * The order is a property of the TYPE and the display comes from the annotation
+     * NODE ((P18.140)), so nothing in the rendered output says the two disagree.
+     *
+     * [compareName] is therefore the unqualified tail and is used for ORDERING only;
+     * [name] stays qualified and is what decides alias IDENTITY, so two same-named
+     * aliases in different namespaces are still two aliases.
+     */
+    private class NameKey(
+        val name: String,
+        val compareName: String,
+        val symbol: Symbol?,
+        val aliasArgs: List<Type>?,
+    )
+
+    /**
+     * The last segment of a dotted qualified name, or [name] itself.
+     *
+     * Guarded on the name being dotted-identifier shaped: an alias display is always
+     * a qualified NAME here, but a future reader that puts a rendered type into that
+     * map would otherwise have a string literal's own dot cut its display in half.
+     */
+    private fun unqualified(name: String): String {
+        val cut = name.lastIndexOf('.')
+        if (cut <= 0 || cut == name.length - 1) return name
+        for (ch in name) {
+            if (ch != '.' && ch != '_' && ch != '$' && !ch.isLetterOrDigit()) return name
+        }
+        return name.substring(cut + 1)
+    }
 
     private fun nameKeyOf(t: Type): NameKey? {
-        checker.aliasDisplayMap[t.id]?.let { (name, args) -> return NameKey(name, null, args) }
+        checker.aliasDisplayMap[t.id]?.let { (name, args) ->
+            return NameKey(name, unqualified(name), null, args)
+        }
         return when (t) {
-            is Type.TypeParam -> t.symbol?.let { NameKey(it.name, it, null) }
-            is Type.Reference -> t.target.symbol?.let { NameKey(it.name, it, null) }
-            is Type.Interface -> t.symbol?.let { NameKey(it.name, it, null) }
+            is Type.TypeParam -> t.symbol?.let { NameKey(it.name, it.name, it, null) }
+            is Type.Reference -> t.target.symbol?.let { NameKey(it.name, it.name, it, null) }
+            is Type.Interface -> t.symbol?.let { NameKey(it.name, it.name, it, null) }
             else -> null
         }
     }
@@ -233,7 +279,7 @@ internal class StableTypeOrdering(
             if (n1.aliasArgs != null) return compareTypeLists(n1.aliasArgs, n2.aliasArgs, depth)
             return 0
         }
-        return n1.name.compareTo(n2.name)
+        return n1.compareName.compareTo(n2.compareName)
     }
 
     private fun compareTypeLists(l1: List<Type>?, l2: List<Type>?, depth: Int): Int {

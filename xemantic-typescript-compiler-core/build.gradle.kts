@@ -802,16 +802,6 @@ val tsgoPendingBaselines = listOf(
             "generic inference does not reach here; not an ordering row.",
     ),
     TsgoPendingBaseline(
-        "namespaceDisambiguationInUnion.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 9) ORDER -> CHAIN-PICKER: the union's own display is " +
-            "now CORRECT (`Foo.Yep | Bar.Yep`, verified) and the whole residue is one chain " +
-            "sub-line — tsgo names `\"bar.yep\"` and we name `\"foo.yep\"`. tsc's " +
-            "`typeRelatedToSomeType` reports a union TARGET with no discriminant match " +
-            "against its LAST constituent; the var-decl chain here picks the first. " +
-            "`findBestUnionConstituent` already keeps the LAST on a tie ((LEGACY.0a)), so " +
-            "this chain does not go through it — that is the gap.",
-    ),
-    TsgoPendingBaseline(
         "reverseMappedTypeIntersectionConstraint.errors.txt",
         "**PIN-SERVED, AND THE RECORDED ORDER-MODEL REASON IS REFUTED** (re-measured " +
             "(P18.135) recon, verified independently): this whole baseline is re-emitted by " +

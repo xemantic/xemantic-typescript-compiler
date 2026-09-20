@@ -472,4 +472,115 @@ class StableTypeOrderingTest {
         )
     }
 
+    // -------------------------------------------------------------------------
+    // (LEGACY.0b) The name key is a SYMBOL name, not a qualified display string.
+    // -------------------------------------------------------------------------
+
+    /**
+     * `namespaceDisambiguationInUnion` — two aliases that are both named `Yep`, in two
+     * namespaces. tsc compares `symbolName(getTypeNameSymbol(t))`, which carries no
+     * namespace, so the two names are EQUAL and the ordering falls through to the
+     * declaration-position key: `Foo.Yep` first, `Bar.Yep` last.
+     *
+     * ## Why the chain line is what this asserts
+     *
+     * The interning order is not rendered anywhere. The head line names the union
+     * through the ANNOTATION NODE ((P18.140)), so it prints `Foo.Yep | Bar.Yep`
+     * whatever the type holds — which is exactly why the disagreement was silent. The
+     * observable is the CHAIN: `cvdaElaborateMismatch`'s B50.3 branch reports a
+     * same-simple-name union against its LAST failing constituent, so the leaf names
+     * that constituent's own property type.
+     *
+     * Measured with a marker before the fix: the union INTERNED as
+     * `[Bar.Yep, Foo.Yep]` — the reverse of its display — with both constituents
+     * failing the relation, so the last-picking rule correctly returned `Foo.Yep` and
+     * the leaf read `"foo.yep"`. tsgo 7.0.2 reads `"bar.yep"`.
+     */
+    @Test
+    fun `two same-named aliases in two namespaces intern in declaration order`() {
+        val d = diagnose(
+            """
+            namespace Foo { export type Yep = { type: "foo.yep" }; }
+            namespace Bar { export type Yep = { type: "bar.yep" }; }
+            const x = { type: "wat.nup" };
+            const val1: Foo.Yep | Bar.Yep = x;
+            """,
+        ).filter { it.code == 2322 }
+        assert(d.map { it.message } == listOf("Type '{ type: string; }' is not assignable to type 'Foo.Yep | Bar.Yep'."))
+        assert(
+            d.single().messageChain == listOf(
+                "  Type '{ type: string; }' is not assignable to type 'Yep'.",
+                "    Types of property 'type' are incompatible.",
+                "      Type 'string' is not assignable to type '\"bar.yep\"'.",
+            ),
+        )
+    }
+
+    /**
+     * …and the order really is the DECLARATION position rather than "the second one
+     * written in the annotation": swapping the two namespace declarations swaps which
+     * constituent the chain names, while writing the annotation the other way round
+     * does not.
+     *
+     * Without this the pin above is satisfied by a rule that keeps the annotation's
+     * last member, which is a different rule that agrees on the corpus fixture
+     * (round 807 — a pin whose fixture cannot separate two rules pins neither).
+     *
+     * All three cells are `tools/tsgo-7.0.2/lib/tsc`'s own answers, measured. Only the
+     * chain LEAF is asserted: the head line comes from the annotation NODE here
+     * ((P18.140)) and from the TYPE in tsgo, so the two agree on the corpus fixture
+     * and that agreement is a different mechanism's to keep.
+     */
+    @Test
+    fun `it is the declaration position and not the written order`() {
+        fun leafOf(decls: String, annotation: String) = diagnose(
+            "$decls\nconst x = { type: \"wat.nup\" };\nconst v: $annotation = x;",
+        ).filter { it.code == 2322 }.single().messageChain.lastOrNull()
+
+        val fooFirst = """
+            namespace Foo { export type Yep = { type: "foo.yep" }; }
+            namespace Bar { export type Yep = { type: "bar.yep" }; }
+        """.trimIndent()
+        val barFirst = """
+            namespace Bar { export type Yep = { type: "bar.yep" }; }
+            namespace Foo { export type Yep = { type: "foo.yep" }; }
+        """.trimIndent()
+
+        // Declared Foo-then-Bar: the LAST declared is Bar, whichever way it is written.
+        assert(leafOf(fooFirst, "Foo.Yep | Bar.Yep") == "      Type 'string' is not assignable to type '\"bar.yep\"'.")
+        assert(leafOf(fooFirst, "Bar.Yep | Foo.Yep") == "      Type 'string' is not assignable to type '\"bar.yep\"'.")
+        // …and declaring them the other way round moves it, which is what makes the
+        // two assertions above a statement about DECLARATION order.
+        assert(leafOf(barFirst, "Foo.Yep | Bar.Yep") == "      Type 'string' is not assignable to type '\"foo.yep\"'.")
+    }
+
+    /**
+     * The negative control: the name key is still a NAME. Two aliases whose simple
+     * names DIFFER order by that name, so unqualifying it cannot have turned the key
+     * off — which an implementation that simply stopped comparing names would pass
+     * the two pins above with.
+     *
+     * **The ORDER is tsgo's and the QUALIFICATION is not, which this says rather than
+     * hides.** Measured on the same fixture, `tools/tsgo-7.0.2/lib/tsc` prints
+     * `Type 'Alpha | Beta' is not assignable to type 'never'.` — same order, and
+     * UNqualified, because tsgo qualifies an alias display only where it is needed to
+     * disambiguate (it does qualify the `Foo.Yep | Bar.Yep` pair above). Our B86.4
+     * display qualifies unconditionally. That is a separate, unclosed mechanism and
+     * no corpus baseline covers it; the assertion below is written against OUR string
+     * so that it can still fail, and the divergence is recorded here so the next
+     * reader does not mistake it for a parity claim.
+     */
+    @Test
+    fun `differently-named aliases still order by their simple name - display qualification diverges`() {
+        val d = diagnose(
+            """
+            namespace Zed { export type Alpha = { a: string }; }
+            namespace Ack { export type Beta = { b: string }; }
+            declare const u: Zed.Alpha | Ack.Beta;
+            const p: never = u;
+            """,
+        ).filter { it.code == 2322 }.map { it.message }
+        assert(d == listOf("Type 'Zed.Alpha | Ack.Beta' is not assignable to type 'never'."))
+    }
+
 }
