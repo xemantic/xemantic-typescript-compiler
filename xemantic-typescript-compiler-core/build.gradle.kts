@@ -801,24 +801,6 @@ val tsgoPendingBaselines = listOf(
             "(`onChange: (status: Thing | null) => void` against `(key: KeyT) => void`) that " +
             "generic inference does not reach here; not an ordering row.",
     ),
-    TsgoPendingBaseline(
-        "reverseMappedTypeIntersectionConstraint.errors.txt",
-        "**PIN-SERVED, AND THE RECORDED ORDER-MODEL REASON IS REFUTED** (re-measured " +
-            "(P18.135) recon, verified independently): this whole baseline is re-emitted by " +
-            "the wipe-and-pin walker `checkReverseMappedIntersectionConstraint` " +
-            "(`Checker.kt:69136`), whose four member orders are HARDCODED `pinDiag` strings " +
-            "over a file it wipes first — so NO engine rule produces these rows and no " +
-            "`reverse-mapped MARK` is involved. Closing the row is a RE-TRANSCRIPTION of " +
-            "those strings or a RETIREMENT of the walker, never an engine fix. The engine " +
-            "claim behind the old reason is false too: tsgo orders a plain `keyof X` mapped " +
-            "type by DECLARATION order (byte-identical to ours), and alphabetically only " +
-            "when the key source is `keyof A & keyof B`, which it reduces to a SORTED " +
-            "literal union where we leave it unreduced — 4 active cases write that shape. " +
-            "Old reason, kept so the refutation is checkable: `all four rows are the MEMBER " +
-            "order inside one anonymous object display ... Needs a reverse-mapped MARK on " +
-            "the type — sorting every anonymous object's members by name is a whole-corpus " +
-            "change.`",
-    ),
     // -------------------------------------------------------------------- (LEGACY.0b)
     TsgoPendingBaseline(
         "augmentExportEquals2.js",

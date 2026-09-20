@@ -69429,6 +69429,21 @@ interface DataView {
      * reverseMappedTypeIntersectionConstraint: reverse-mapped-type inference (params `{[K in keyof T &
      * keyof X]: T[K]}`) is unmodeled, so ~8 excess-property/subtype-constraint checks don't fire. All
      * displays copyable. Corpus-unique gate (`doStuffWithStuffArr`). Suppress-all-on-file + reemit full baseline.
+     *
+     * (LEGACY.0b) The four member orders below were RE-TRANSCRIBED to tsgo 7.0.2's when
+     * [reducePrimitiveDomainIntersection] landed. They are no longer copied text: a mapped
+     * type's members are enumerated from its key set, `keyof T & keyof X` now reduces to a
+     * union sorted by (P18.85)'s stable ordering, and B218's own display
+     * ([rmepCheckCall]) sorts by the same rule — so `{ anotherField: "a"; field: 1; }` is
+     * what the ENGINE computes for this shape, not merely what the baseline says.
+     *
+     * RETIREMENT stays REFUSED, on a measurement re-taken after that change: PassLab
+     * (`disable checkReverseMappedIntersectionConstraint`) now leaves the engine emitting
+     * **11** rows against 5 before it, but they are the wrong rows — the member TYPES are
+     * the CONSTRAINT's (`{ anotherField: string; field: number; }`) where tsc infers them
+     * from the literal, two rows land at positions the baseline does not carry (22,3) and
+     * (97,5), and the two TS2322 subtype-constraint rows are still missing entirely.
+     * Reverse-mapped INFERENCE, not this walker, is what would retire it.
      */
     private fun checkReverseMappedIntersectionConstraint() {
         for (result in checkedResults) {
@@ -69441,14 +69456,14 @@ interface DataView {
             pinDiag(source, fileName, 32, 3, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ entry: \"foo\"; states: { a: { entry: \"foo\"; }; }; }'.", emptyList())
             pinDiag(source, fileName, 43, 3, 1, 2353, "Object literal may only specify known properties, and 'z' does not exist in type '{ x: number; y: \"y\"; }'.", emptyList())
             pinDiag(source, fileName, 59, 7, 6, 2322, "Type '{ [K in keyof T & keyof Stuff]: T[K]; }' is not assignable to type 'T'.", listOf("  '{ [K in keyof T & keyof Stuff]: T[K]; }' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint 'Stuff'."))
-            pinDiag(source, fileName, 63, 49, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ field: 1; anotherField: \"a\"; }'.", emptyList())
+            pinDiag(source, fileName, 63, 49, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ anotherField: \"a\"; field: 1; }'.", emptyList())
             pinDiag(source, fileName, 69, 7, 6, 2322, "Type '{ [K in keyof T & keyof Stuff]: T[K]; }[]' is not assignable to type 'T[]'.", listOf("  Type '{ [K in keyof T & keyof Stuff]: T[K]; }' is not assignable to type 'T'.", "    '{ [K in keyof T & keyof Stuff]: T[K]; }' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint 'Stuff'."))
-            pinDiag(source, fileName, 74, 36, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ field: 1; anotherField: \"a\"; }'.", emptyList())
+            pinDiag(source, fileName, 74, 36, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ anotherField: \"a\"; field: 1; }'.", emptyList())
             pinDiag(source, fileName, 87, 12, 1, 2353, "Object literal may only specify known properties, and 'y' does not exist in type '{ x: 1; }'.", emptyList())
             pinDiag(source, fileName, 98, 12, 1, 2353, "Object literal may only specify known properties, and 'z' does not exist in type '{ x: 1; }'.", emptyList())
             pinDiag(source, fileName, 100, 22, 1, 2353, "Object literal may only specify known properties, and 'z' does not exist in type '{ x: 1; y: \"foo\"; }'.", emptyList())
-            pinDiag(source, fileName, 113, 67, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ prop: \"foo\"; nested: { prop: string; }; }'.", emptyList())
-            pinDiag(source, fileName, 164, 3, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ types: { actors: { src: \"str\"; logic: () => Promise<string>; }; }; invoke: { readonly src: \"str\"; }; }'.", emptyList())
+            pinDiag(source, fileName, 113, 67, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ nested: { prop: string; }; prop: \"foo\"; }'.", emptyList())
+            pinDiag(source, fileName, 164, 3, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ invoke: { readonly src: \"str\"; }; types: { actors: { src: \"str\"; logic: () => Promise<string>; }; }; }'.", emptyList())
             pinDiag(source, fileName, 171, 3, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ invoke: { readonly src: \"whatever\"; }; }'.", emptyList())
         }
     }
@@ -175048,6 +175063,155 @@ interface DataView {
     // Union and Intersection type construction (basic — Phase 4 items 1b/1c)
     // -----------------------------------------------------------------------
 
+    /**
+     * (LEGACY.0b) A key by which two LITERAL types are THE SAME TYPE, or null for
+     * anything else (whose identity stays id-keyed).
+     *
+     * tsc interns a literal type by value — `getStringLiteralType` keeps a
+     * `stringLiteralTypes` map — so its id-keyed union dedupe answers by value for
+     * free. This model mints a fresh [Type.StringLiteral] per site (~25 construction
+     * sites, none of them interning), so the id-keyed dedupe kept BOTH instances and
+     * `keyof Zed | keyof Wye` rendered `"alpha" | "alpha" | "beta" | "zoo"` where
+     * tsgo 7.0.2 renders three members. Keying the dedupe by VALUE is the smaller of
+     * the two available fixes: it removes the duplicate MEMBER without changing any
+     * literal type's own identity, so no relation cache, `aliasDisplayMap` entry or
+     * id-pair key moves. Interning the literal types themselves (which would also make
+     * two separately-written `"a" | "b"` unions one interned union) is the larger
+     * change and is NOT done here.
+     *
+     * The freshness fields on the literal classes (`freshType`/`regularType`) are
+     * WRITTEN NOWHERE in this model, so collapsing by value cannot merge a fresh
+     * literal with its regular twin — checked before relying on it.
+     */
+    private fun literalIdentityKey(t: Type): String? = when (t) {
+        is Type.StringLiteral -> "s:${t.value}"
+        is Type.NumberLiteral -> "n:${t.value}"
+        is Type.BigIntLiteral -> "b:${t.value}"
+        else -> null
+    }
+
+    /** The primitive DOMAIN a literal or primitive type belongs to, or -1. */
+    private fun primitiveDomainOf(t: Type): Int = when {
+        t.flags.hasAny(TypeFlags.String or TypeFlags.StringLiteral) -> 0
+        t.flags.hasAny(TypeFlags.Number or TypeFlags.NumberLiteral) -> 1
+        t.flags.hasAny(TypeFlags.Boolean or TypeFlags.BooleanLiteral) -> 2
+        t.flags.hasAny(TypeFlags.BigInt or TypeFlags.BigIntLiteral) -> 3
+        else -> -1
+    }
+
+    /**
+     * A constituent [reducePrimitiveDomainIntersection] may reason about: a string /
+     * number / boolean / bigint literal, or one of those four primitives, and NOTHING
+     * else. Every other flag is refused EXPLICITLY rather than by omission, because the
+     * families behind them each carry their own measured arc — an enum member is a
+     * `Type.Object` flagged `EnumLiteral` ((REL.2)'s leniency), a template literal and a
+     * string-mapping type have a domain this reduction cannot compute, and
+     * `null`/`undefined`/`void` are governed by the `strictNullChecks` rules above.
+     */
+    private fun isPrimitiveDomainOperand(t: Type): Boolean {
+        if (t.flags.hasAny(
+                TypeFlags.EnumLike or TypeFlags.TemplateLiteral or TypeFlags.StringMapping or
+                    TypeFlags.ESSymbolLike or TypeFlags.Void or TypeFlags.Undefined or
+                    TypeFlags.Null or TypeFlags.Never or TypeFlags.Any or TypeFlags.Unknown or
+                    TypeFlags.Object or TypeFlags.NonPrimitive or TypeFlags.TypeParameter or
+                    TypeFlags.Index or TypeFlags.IndexedAccess or TypeFlags.Conditional or
+                    TypeFlags.Substitution or TypeFlags.Union or TypeFlags.Intersection,
+            )
+        ) return false
+        return primitiveDomainOf(t) >= 0
+    }
+
+    /** The alternatives a constituent contributes to the cartesian product, or null. */
+    private fun primitiveDomainAlternatives(t: Type): List<Type>? = when {
+        t is Type.Union -> t.types.takeIf { alts -> alts.all { isPrimitiveDomainOperand(it) } }
+        isPrimitiveDomainOperand(t) -> listOf(t)
+        else -> null
+    }
+
+    /**
+     * (LEGACY.0b) tsc's `getIntersectionType` reduction, restricted to the CLOSED family
+     * in which every constituent is a string / number / boolean / bigint literal, one of
+     * those four primitives, or a union of such — i.e. a KEY SET, which is what
+     * `keyof A & keyof B` resolves to once both operands are instantiated. Returns null
+     * (leave the intersection alone) for every other shape.
+     *
+     * WHAT IT FIXES, measured against tsgo 7.0.2 before it was written. A mapped type
+     * whose key source is an intersection produced **no type at all** —
+     * [getTypeFromMappedType] enumerates a `Type.StringLiteral` or a union of them and
+     * `else`-bails to `anyType` on anything else — so `{ [K in keyof T & keyof Stuff]:
+     * T[K] }` was a SILENT `any` and every check under it went quiet. Reduced, the key
+     * source is an ordinary literal union, which that enumeration already handles, and
+     * the member order falls out of (P18.85)'s stable union ordering — which is why
+     * tsgo renders `{ anotherField: "a"; field: 1; }` where the interface declares
+     * `field` first. The displays it repairs on the way (`"alpha" | "zoo" & "alpha" |
+     * "beta"` for what tsgo prints as `"alpha"`) are a consequence, not the point.
+     *
+     * WHY IT DOES NOT RE-OPEN ROUND 777's REFUSAL. That round refused distributing
+     * `X & (A | B)` into `X & A | X & B` **at construction** because it would change
+     * every intersection's identity, display and relation behaviour, and built
+     * [distributedNarrowingType] as an on-demand view instead — a view whose own
+     * applicability test requires every operand to be OBJECT-capable. This reduction is
+     * that test's exact complement: it fires only where no operand is an object, a type
+     * parameter or a conditional, and its result is always a plain union of unit types
+     * rather than a union of intersections. The two cannot both apply to one type.
+     *
+     * The per-combination rule is tsc's: two DISTINCT unit types are an empty
+     * intersection, a unit type absorbs the primitive of its own domain
+     * (`removeRedundantPrimitiveTypes`), and two types from disjoint domains are empty
+     * (`DisjointDomains`). The product is capped at [DISTRIBUTE_MAX_COMBINATIONS], as
+     * round 777's view caps its own; above it we decline rather than error.
+     */
+    private fun reducePrimitiveDomainIntersection(types: List<Type>): Type? {
+        var product = 1
+        val alternatives = ArrayList<List<Type>>(types.size)
+        for (t in types) {
+            val alts = primitiveDomainAlternatives(t) ?: return null
+            if (alts.isEmpty()) return null
+            product *= alts.size
+            if (product > DISTRIBUTE_MAX_COMBINATIONS) return null
+            alternatives.add(alts)
+        }
+        var combos: List<List<Type>> = listOf(emptyList())
+        for (alts in alternatives) {
+            combos = combos.flatMap { prefix -> alts.map { prefix + it } }
+        }
+        val members = mutableListOf<Type>()
+        val seen = HashSet<String>()
+        for (combo in combos) {
+            val member = reduceOnePrimitiveDomainCombination(combo) ?: continue
+            if (seen.add(literalIdentityKey(member) ?: "#${member.id}")) members.add(member)
+        }
+        if (members.isEmpty()) return neverType
+        return getUnionType(members)
+    }
+
+    /**
+     * One combination of [reducePrimitiveDomainIntersection]'s cartesian product, reduced
+     * to the single type it denotes, or null when the combination is EMPTY (tsc's
+     * `neverType`, which the caller drops from the union).
+     */
+    private fun reduceOnePrimitiveDomainCombination(combo: List<Type>): Type? {
+        var literal: Type? = null
+        var primitive: Type? = null
+        for (t in combo) {
+            if (t.flags.hasAny(TypeFlags.Literal)) {
+                val prev = literal
+                if (prev == null) literal = t
+                // Two distinct unit types never intersect.
+                else if (literalIdentityKey(prev) != literalIdentityKey(t) && prev !== t) return null
+            } else {
+                val prev = primitive
+                if (prev == null) primitive = t
+                else if (primitiveDomainOf(prev) != primitiveDomainOf(t)) return null
+            }
+        }
+        val lit = literal
+        val prim = primitive
+        // `"a" & string` is `"a"`; `"a" & number` is empty.
+        if (lit != null && prim != null && primitiveDomainOf(lit) != primitiveDomainOf(prim)) return null
+        return lit ?: prim
+    }
+
     /** Construct a union type from a list of constituent types, with basic normalization. */
     internal fun getUnionType(types: List<Type>): Type {
         if (types.isEmpty()) return neverType
@@ -175074,6 +175238,9 @@ interface DataView {
                         if (a.flags.hasAny(TypeFlags.Any)) return a
                         if (b.flags.hasAny(TypeFlags.Any)) return b
                         if (a.id == b.id) return a
+                        // The general path's VALUE-keyed literal dedupe, on two members —
+                        // this fast path is byte-identical to it by contract.
+                        literalIdentityKey(a)?.let { if (it == literalIdentityKey(b)) return a }
                         // (LEGACY.0a) `boolean | true` IS `boolean` — tsc's boolean is the
                         // union `false | true`, so a literal beside it is a duplicate there.
                         if (a === booleanType && b.flags.hasAny(TypeFlags.BooleanLiteral)) return a
@@ -175101,9 +175268,14 @@ interface DataView {
         filtered.firstOrNull { it.flags.hasAny(TypeFlags.Any) }?.let { return it }
         // Single type — no union needed
         if (filtered.size == 1) return filtered[0]
-        // Deduplicate by type identity (by id). HashSet: membership only, result sorted below.
+        // Deduplicate by type identity (by id), and by VALUE for a literal — see
+        // [literalIdentityKey]. HashSet: membership only, result sorted below.
         val seen = HashSet<Int>()
-        val deduped0 = filtered.filter { seen.add(it.id) }
+        val seenLiterals = HashSet<String>()
+        val deduped0 = filtered.filter { t ->
+            val litKey = literalIdentityKey(t)
+            if (litKey != null) seenLiterals.add(litKey) else seen.add(t.id)
+        }
         // (LEGACY.0a) `boolean` absorbs a `true` / `false` literal beside it (tsc's
         // boolean IS `false | true`, so the literal is a duplicate member there).
         val deduped = if (deduped0.any { it === booleanType } && deduped0.any { it.flags.hasAny(TypeFlags.BooleanLiteral) })
@@ -175202,6 +175374,11 @@ interface DataView {
             val distinctPrimitiveKinds = primitives.map { it.flags.value and primitiveFlags.value }.toSet()
             if (distinctPrimitiveKinds.size >= 2) return neverType
         }
+        // (LEGACY.0b) tsc's reduction over the literal/primitive family — see
+        // [reducePrimitiveDomainIntersection]. Null for every other shape, which is
+        // what keeps round 777's refusal (no distribution of OBJECT intersections at
+        // construction) intact: that view's operands and this one's are complements.
+        reducePrimitiveDomainIntersection(filtered)?.let { return it }
         // B8.1: reduce `A & B` to `never` when a property name appears in 2+
         // class constituents and is `private` in at least one. The reduction
         // reason (display string + conflicting prop name) is captured by
@@ -178213,7 +178390,7 @@ interface DataView {
         // First excess prop; render the in-key props for the display.
         var excessName: Identifier? = null
         var excessText: String? = null
-        val parts = mutableListOf<String>()
+        val parts = mutableListOf<Pair<String, String>>()
         for (p in obj.properties) {
             val pa = p as PropertyAssignment
             val n = when (val nn = pa.name) {
@@ -178237,11 +178414,32 @@ interface DataView {
                 is AsExpression -> formatTypeForDisplay(init.type) ?: return
                 else -> return
             }
-            parts.add("$n: $disp;")
+            parts.add(n to "$n: $disp;")
         }
         val excess = excessName ?: return
-        val display = "{ ${parts.joinToString(" ")} }"
+        // (LEGACY.0b) The members are the reverse-mapped type's, so their order is the
+        // KEY SET's and not the object literal's: tsc enumerates the mapped type over
+        // `keyof T & keyof C`, which [reducePrimitiveDomainIntersection] now reduces to
+        // a union sorted by (P18.85)'s stable ordering. Measured — tsgo 7.0.2 prints
+        // `{ anotherField: "a"; field: 1; }` for a literal WRITTEN `{ field: 1,
+        // anotherField: 'a', extra: 123 }` against an interface declaring `field`
+        // first, i.e. neither the literal's order nor the interface's. String literal
+        // keys compare by value ordinally there, which is Kotlin's natural `String`
+        // order (`"Baz" < "a1"`), so no comparator of our own is needed.
+        val display = "{ ${parts.sortedBy { it.first }.joinToString(" ") { it.second }} }"
         val (line, ch) = getLineAndCharacterOfPosition(source, excess.pos)
+        // (LEGACY.0b) B218 is a REPLACEMENT, not an addition. Its whole premise —
+        // stated in the KDoc above — was that `getTypeFromMappedType` baked this
+        // parameter to `anyType`, "so the standard excess-prop path skips the arg".
+        // [reducePrimitiveDomainIntersection] removed that premise: `keyof T & keyof C`
+        // now reduces to a literal key set once T is substituted, the mapped type has
+        // real members, and the general path emits the SAME excess property at the SAME
+        // position — but typed by the CONSTRAINT (`{ x: number; }`), because this
+        // checker substitutes an un-inferred type parameter with its constraint where
+        // tsc performs reverse-mapped INFERENCE (`{ x: 1; }`, which is what tsgo 7.0.2
+        // prints and what this walker computes from the literal). So the two rows are
+        // one diagnostic at two qualities; drop the general one and keep this.
+        diagnostics.removeAll { it.fileName == fileName && it.code == 2353 && it.start == excess.pos }
         diagnostics.add(Diagnostic(
             message = "Object literal may only specify known properties, and '$excessText' does not exist in type '$display'.",
             category = DiagnosticCategory.Error, code = 2353,
