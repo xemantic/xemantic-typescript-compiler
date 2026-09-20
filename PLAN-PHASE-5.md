@@ -25,6 +25,35 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.145) — (LEGACY.0b): a static field's class alias is decided by `this`, not by `async` (2026-09-20)
+
+Ledger **26 -> 25**, `asyncArrowInClassES5(target=es2015).js` CLOSED and ACTIVE in the EMIT channel's 5,646 / 0.
+Suite **20,068 / 0 / 50** (+5 = exactly the new pins, skipped -1 = exactly the closed row). Warning gate clean,
+`huge_methods --fail-over 0` exit 0, cost gate exit 0 — **a control, and stated as one**: round 738's
+`skipEmitOutputs` gate means `--noEmit` never runs the transformer, so the 8-profile grid and every counter in
+this repo are STRUCTURALLY BLIND to an emit change. The gate is the corpus EMIT channel; the control beside it is
+an `--outDir` run over the compiler profile (78 files, no stray `var _a;` in any of them).
+
+**THE FIX IS A DELETED DISJUNCT, AND THE CODE'S OWN COMMENT NAMED IT.** Below ES2022 a static field initializer
+that reads `this` needs the class captured into a temp first. TypeScript 6 ALSO pre-emitted that capture for
+EVERY async-arrow initializer, defensively, because the downleveled `__awaiter` template is *conceptually*
+`this`-binding — producing a `var _a;` and an `_a = Cls;` the emitted program never reads. tsgo 7.0.2 does not.
+
+**THREE CELLS MEASURED BEFORE THE CHANGE, AND THE MIDDLE ONE IS THE ONE THAT MATTERS**: an async arrow with no
+`this` gets no capture; an async arrow reading the class BY NAME gets no capture (a name is not `this`, which is
+what separates "reads the class" from "reads `this`"); an async arrow reading `this` still captures, and there
+`_a` IS read. So the async case that genuinely needs an alias is exactly the one `containsThisInExpr` already
+answers — the disjunct only produced dead output.
+
+**A PRE-EXISTING DIVERGENCE THE ROUND EXPOSES AND DOES NOT CLOSE**, recorded in the pin rather than chased: in the
+third cell tsgo rewrites the arrow's `this` to `_a` where we emit the capture and leave `this` in the body. It was
+the same before this round, which is why the positive-control pin asserts the CAPTURE and not the body — a pin
+written on the body would have been a countdown asserting today's wrong answer.
+
+**Ablation**: restoring the TypeScript-6 disjunct reddens 2 of the 5 pins (the two no-capture cells) and leaves
+the three controls green. The pin helper names `// @target: es2015` explicitly — the capture only exists below
+ES2022, so at the default target every pin here would pass vacuously (round 945's law).
+
 ### Round (P18.144) — (LEGACY.0b): a JSDoc `@param` makes its parameter required, and the LAST writer wins (2026-09-20)
 
 Ledger **27 -> 26**, `jsdocRestParameter` CLOSED and ACTIVE in the screen's 3,073 / 0. Suite **20,063 / 0 / 51**
@@ -567,63 +596,6 @@ orchestrator against the binary it left. Also worth carrying: a `pgrep -f "Gradl
 OWN command line and never exits — CLAUDE.md documents exactly this and it still cost ~20 minutes; the bracket form
 `GradleWrapperMai[n]` is the one that answers.
 
-### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
-
-Suite **19,935 / 0 / 60** (+8 pins, skipped 61 -> 60), errors screen 3,063 / 0 and emit 5,645 / 0, cost gate
-UNCHANGED from (P18.134) (+0.15% max — this rule runs only at error-elaboration time), `huge_methods --fail-over 0`
-exit 0 with `getPropertyElaborationChain` **SHRINKING** 6,271 -> 6,260, warning gate clean, 8-profile grid 8 x 0/0
-on BOTH arms with emit 78 vs 78 byte-identical. Ledger **36 -> 35**.
-
-**READ THIS ROUND AS TWO THINGS, BECAUSE ONLY ONE OF THEM CLOSED THE ROW.**
-
-**(1) THE ENGINE RULE IS REAL AND CLOSES NOTHING.** tsgo emits an intermediate `Type 'A' is not assignable to type
-'B'.` at every nesting level of a generic-argument descent and none at the innermost; we collapsed every level onto
-the innermost sentence, so `Inv<Inv<Small>>` read exactly like `Inv<Small>`. The cause was that tsgo's ONE condition
-— `chainArgsMatch(nil, generalizedSourceType, targetType)` — had **two independent approximations here**: the
-suppressing half (`RelationHeadSuppression.suppressHead`) tested the ARGUMENTS and was right, while the emitting
-half tested the message **SHAPE** (`startsWith("Property '")`) inline in `getPropertyElaborationChain` and was
-wrong. The fix adds `leafNamesTypePair` beside `suppressHead`, REUSING its `parseMissingProperty`, so the two halves
-of one tsgo condition can no longer drift. **Variance is not the axis and that was measured**: a covariant wrapper
-reads identically to the invariant one, and what decides the header is only that the descent went through a type
-ARGUMENT rather than a property.
-
-**(2) THE LEDGER ROW CLOSED BY A RE-TRANSCRIPTION, AND ONLY AN ABLATION SAYS SO.**
-`mutuallyRecursiveCallbacks.errors.txt` is served by `tryEmitMutuallyRecursiveCallbackAssign`, a corpus-unique
-WIPE-AND-PIN walker whose own comment says "chain depth/leaf hardcoded for the shape" — so it wipes the file and the
-engine never reaches that fixture at all. Its hardcoded chain was extended to tsgo's five lines. **Measured by
-ablating that hunk ALONE and re-screening: with the engine rule still in place the row MISMATCHES.** So the engine
-rule closed no ledger row, and the row was closed by updating a pin that had been emitting TypeScript 6's chain —
-which, under the tsgo-only directive, was knowingly wrong output for the shape it serves. Both were worth landing;
-conflating them would not have been.
-
-**(3) `invariantGenericErrorElaboration` IS REFUSED WITH ITS MECHANISM NAMED**, and the ledger's "F7 diagnostic
-COUNT changed" label was a hypothesis that is wrong: it is not the header family at all. tsgo needs TWO lines we
-lack and a REVERSED pair the forward argument walk can never produce, because `Constraint<A extends Runtype<any>>`
-uses `A` both co- and contravariantly, measures INVARIANT, and takes `relater.go:3288-3304`'s path — *"if any of
-the type parameters are invariant we reset the reported errors and instead force a structural comparison"*. **This
-compiler measures no variances** (round 336: global variance analysis in the relation engine is DEAD, ~263
-regressions), so the row is one absent MECHANISM away, not one rule away. Its entry keeps its place with the
-measured reason substituted.
-
-**WHAT THE INSTRUMENTS SAID, INCLUDING THE ONE THAT SAID NOTHING.** The implementer's ablation is the honest part:
-removing the suppression entirely moves **8** active baselines (`arrayAssignmentTest1/2/5`, `arrayFrom`,
-`interfaceAssignmentCompat`, `promisesWithConstraints`, `typeMatch2`, `varianceAnnotationValidation`), so it is
-load-bearing — but the BEFORE binary *is* the old shape-based predicate and its screen was also 0 mismatches, so
-**the corpus cannot discriminate this change in either direction and the 8 pins are the only instrument.** Blast
-radius was re-derived rather than inherited and is materially smaller than the brief's numbers: depth>=2 baselines
-**296** (not <=508), depth>=3 **131** (not 167), non-head `Type X is not assignable` carriers 248 (confirmed).
-
-**THE GRID GAINED AN ARM, BECAUSE THE USUAL RECIPE COULD NOT SEE THIS ROUND AT ALL.** Every grid script here
-compares `grep 'error TS'` row sets — i.e. HEAD lines — so it is structurally blind to a change that only alters
-CHAIN lines. `scripts/p18-135-grid.sh` adds a normalised FULL-capture diff, and both arms read 0. It also COUNTS
-what (PARITY.1) had only asserted: **0 chain lines across all eight profiles**, which is the receipt that the grid
-is a control for this whole family rather than a gate.
-
-**WHAT DID NOT WORK.** The brief I handed the implementer asserted "there is no deliberate collapse mechanism here
-— grep finds none"; that was FALSE (I grepped `incompatibleStack`/`chainDepth`/`collapseChain` and the machinery is
-called `RelationHeadSuppression`), and I retracted it mid-round. It mattered: the fix is a NARROWING of an existing
-approximation, not the ADDITION the brief described.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -954,7 +926,15 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-33 LANDED 2026-09-20 ((P18.85)-(P18.144) notes) — pending **27 → 26**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-34 LANDED 2026-09-20 ((P18.85)-(P18.145) notes) — pending **26 → 25**,
+  skipped 50, suite 20,068/0. **(P18.145) CLOSED `asyncArrowInClassES5(target=es2015).js`** by deleting a
+  TypeScript-6 disjunct the code's own comment described: the class-alias capture for a static field initializer
+  is decided by `this` and nothing else, where TS6 also pre-emitted it for EVERY async-arrow initializer and so
+  produced a `var _a;`/`_a = Cls;` the program never reads. Three cells measured against tsgo first, the middle
+  one (an async arrow reading the class BY NAME — no capture) being what separates "reads the class" from "reads
+  `this`". **The emit channel is the only instrument that can see this family** — `--noEmit` skips the
+  transformer (round 738), so the grid and every counter are blind; an `--outDir` run is the control.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-33 LANDED 2026-09-20 ((P18.85)-(P18.144) notes) — pending **27 → 26**,
   skipped 51, suite 20,063/0. **(P18.144) CLOSED `jsdocRestParameter`** — a JSDoc `@param` tag makes its
   parameter REQUIRED (`[n]` / `[n=1]` / `{T=}` leave it optional; `{...T}` is required with arity exactly ONE and
   type `T[]`), measured cell by cell against tsgo. **The rule was ALREADY implemented and wired to one arity site

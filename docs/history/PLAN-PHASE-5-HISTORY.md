@@ -1,3 +1,60 @@
+### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
+
+Suite **19,935 / 0 / 60** (+8 pins, skipped 61 -> 60), errors screen 3,063 / 0 and emit 5,645 / 0, cost gate
+UNCHANGED from (P18.134) (+0.15% max — this rule runs only at error-elaboration time), `huge_methods --fail-over 0`
+exit 0 with `getPropertyElaborationChain` **SHRINKING** 6,271 -> 6,260, warning gate clean, 8-profile grid 8 x 0/0
+on BOTH arms with emit 78 vs 78 byte-identical. Ledger **36 -> 35**.
+
+**READ THIS ROUND AS TWO THINGS, BECAUSE ONLY ONE OF THEM CLOSED THE ROW.**
+
+**(1) THE ENGINE RULE IS REAL AND CLOSES NOTHING.** tsgo emits an intermediate `Type 'A' is not assignable to type
+'B'.` at every nesting level of a generic-argument descent and none at the innermost; we collapsed every level onto
+the innermost sentence, so `Inv<Inv<Small>>` read exactly like `Inv<Small>`. The cause was that tsgo's ONE condition
+— `chainArgsMatch(nil, generalizedSourceType, targetType)` — had **two independent approximations here**: the
+suppressing half (`RelationHeadSuppression.suppressHead`) tested the ARGUMENTS and was right, while the emitting
+half tested the message **SHAPE** (`startsWith("Property '")`) inline in `getPropertyElaborationChain` and was
+wrong. The fix adds `leafNamesTypePair` beside `suppressHead`, REUSING its `parseMissingProperty`, so the two halves
+of one tsgo condition can no longer drift. **Variance is not the axis and that was measured**: a covariant wrapper
+reads identically to the invariant one, and what decides the header is only that the descent went through a type
+ARGUMENT rather than a property.
+
+**(2) THE LEDGER ROW CLOSED BY A RE-TRANSCRIPTION, AND ONLY AN ABLATION SAYS SO.**
+`mutuallyRecursiveCallbacks.errors.txt` is served by `tryEmitMutuallyRecursiveCallbackAssign`, a corpus-unique
+WIPE-AND-PIN walker whose own comment says "chain depth/leaf hardcoded for the shape" — so it wipes the file and the
+engine never reaches that fixture at all. Its hardcoded chain was extended to tsgo's five lines. **Measured by
+ablating that hunk ALONE and re-screening: with the engine rule still in place the row MISMATCHES.** So the engine
+rule closed no ledger row, and the row was closed by updating a pin that had been emitting TypeScript 6's chain —
+which, under the tsgo-only directive, was knowingly wrong output for the shape it serves. Both were worth landing;
+conflating them would not have been.
+
+**(3) `invariantGenericErrorElaboration` IS REFUSED WITH ITS MECHANISM NAMED**, and the ledger's "F7 diagnostic
+COUNT changed" label was a hypothesis that is wrong: it is not the header family at all. tsgo needs TWO lines we
+lack and a REVERSED pair the forward argument walk can never produce, because `Constraint<A extends Runtype<any>>`
+uses `A` both co- and contravariantly, measures INVARIANT, and takes `relater.go:3288-3304`'s path — *"if any of
+the type parameters are invariant we reset the reported errors and instead force a structural comparison"*. **This
+compiler measures no variances** (round 336: global variance analysis in the relation engine is DEAD, ~263
+regressions), so the row is one absent MECHANISM away, not one rule away. Its entry keeps its place with the
+measured reason substituted.
+
+**WHAT THE INSTRUMENTS SAID, INCLUDING THE ONE THAT SAID NOTHING.** The implementer's ablation is the honest part:
+removing the suppression entirely moves **8** active baselines (`arrayAssignmentTest1/2/5`, `arrayFrom`,
+`interfaceAssignmentCompat`, `promisesWithConstraints`, `typeMatch2`, `varianceAnnotationValidation`), so it is
+load-bearing — but the BEFORE binary *is* the old shape-based predicate and its screen was also 0 mismatches, so
+**the corpus cannot discriminate this change in either direction and the 8 pins are the only instrument.** Blast
+radius was re-derived rather than inherited and is materially smaller than the brief's numbers: depth>=2 baselines
+**296** (not <=508), depth>=3 **131** (not 167), non-head `Type X is not assignable` carriers 248 (confirmed).
+
+**THE GRID GAINED AN ARM, BECAUSE THE USUAL RECIPE COULD NOT SEE THIS ROUND AT ALL.** Every grid script here
+compares `grep 'error TS'` row sets — i.e. HEAD lines — so it is structurally blind to a change that only alters
+CHAIN lines. `scripts/p18-135-grid.sh` adds a normalised FULL-capture diff, and both arms read 0. It also COUNTS
+what (PARITY.1) had only asserted: **0 chain lines across all eight profiles**, which is the receipt that the grid
+is a control for this whole family rather than a gate.
+
+**WHAT DID NOT WORK.** The brief I handed the implementer asserted "there is no deliberate collapse mechanism here
+— grep finds none"; that was FALSE (I grepped `incompatibleStack`/`chainDepth`/`collapseChain` and the machinery is
+called `RelationHeadSuppression`), and I retracted it mid-round. It mattered: the fix is a NARROWING of an existing
+approximation, not the ADDITION the brief described.
+
 ### Round (P18.134) — (LEGACY.0b): a missing member on a function type, and the one line that made `typeof g` and `() => void` answer differently (2026-09-19)
 
 `contextualReturnTypeOfIIFE2.errors.txt` CLOSES — pending **37 -> 36**, skipped 62 -> 61, suite **19,927 / 0 / 61**

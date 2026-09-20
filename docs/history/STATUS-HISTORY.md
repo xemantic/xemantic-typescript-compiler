@@ -1,3 +1,19 @@
+**(P18.140) — TWO ORDER ROWS, AND THREE REFUTED PREMISES, 20,027 / 0 / 53 (2026-09-20).**
+Ledger 30 -> 28, both rows ACTIVE in the screen's 3,071 / 0. **The round's value is that it refuted its own brief
+three times**: the `'Top' could be instantiated…` chain line is one WE ALREADY EMIT (it carried the same wrong
+order, so a single ordering fix closed both lines of both occurrences and the suspected second mechanism does not
+exist); `noInferUnionExcessPropertyCheck1` is NOT an engine order row but a dedicated B219 walker written for one
+fixture; and its rows 7/15 needed no `Substitution` model — all three were pure order swaps. **The mechanism is a
+PAIR with one arm unfixed**: `resolveSimpleTypeName`'s `UnionType` arm joined members VERBATIM while its sibling
+`formatTypeForDisplay` has sorted since (LEGACY.0b) step 9, over the same node — and `StableTypeOrdering` already
+carried a comment naming `typeParameterDiamond4`, so the comparator had been fixed for this shape and nothing
+consulted it. The second row's rule is tsc's `compareTypes` in two keys (flags, then `compareSymbols` on the
+declaration each constituent BOTTOMS OUT in), and **the decisive probe is moving the CALL above the declaration**
+— with the signature first, flags and position agree, so every obvious cell is blind to the flag key. That is also
+how the pin set was repaired: ablating the two keys read 1 and 2 RED only after a call-before-declaration pin was
+added, without which the flag key would have shipped unpinned (round 807). Recorded and unqueued: `b: T | (() =>
+T)` without `NoInfer` is silent in tsgo and emits TS2353 here — not in the corpus, so no gate sees it. 9 pins.
+
 **(P18.139) — THREE SMALL LEDGER ROWS, AND ONE WHOSE MECHANISM DID NOT EXIST, 20,018 / 0 / 55 (2026-09-20).**
 Ledger 33 -> 30, all three rows ACTIVE in the screen's 3,069 / 0 — the closure receipt. **The best result is a
 FALSIFIED hypothesis**: the doubled path separator was briefed as a real path-JOIN defect and there is no join —
