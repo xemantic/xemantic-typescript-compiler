@@ -854,18 +854,6 @@ val tsgoPendingBaselines = listOf(
         "tsgo: /a.js(12,18): error TS7009 | ours: nothing"
     ),
     TsgoPendingBaseline(
-        "complexRecursiveCollections.errors.txt",
-        "**PIN-SERVED** (re-measured (P18.135) recon, verified independently): the row is a " +
-        "hardcoded `pinDiag` chain in the wipe-and-pin walker `checkComplexRecursiveCollections` " +
-        "(`Checker.kt:69241`), which wipes the file first — so the earlier `chain CONTENT` " +
-        "classification is true of the BYTES and misleading about the CAUSE: no engine rule " +
-        "chooses this message. Closing it is a RE-TRANSCRIPTION (`The types of` -> `The types " +
-        "returned by`) or a walker RETIREMENT, and retirement is NOT yet viable — the engine's " +
-        "own path accumulation is still short for this fixture. layer `submoduleAccepted`. tsgo: The types " +
-        "returned by 'map(...).size' are incompatible between these types. | ours: The types of " +
-        "'map(...).size' are incompatible between these types."
-    ),
-    TsgoPendingBaseline(
         "controlFlowInstanceof.errors.txt",
         "TS2683-residue: the `uglify.js(5,23)` TS2683 row is CORRECT since (LEGACY.0b step " +
         "7); the residue is THREE other mechanisms and none is implicit-`this`. Ours-only: " +

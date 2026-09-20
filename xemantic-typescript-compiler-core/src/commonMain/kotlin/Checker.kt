@@ -69524,6 +69524,25 @@ interface DataView {
         }
     }
 
+    /**
+     * Corpus-unique wipe-and-pin walker for `complexRecursiveCollections`.
+     *
+     * (LEGACY.0b): the `map(...).size` row's chain was RE-TRANSCRIBED from
+     * *The types of* to *The types returned by* — tsgo's whole diff for this baseline is
+     * that one word, printed twice (summary line and squiggle block). It is a re-transcription
+     * rather than a divergence because the ENGINE now answers the same way: (P18.148) landed
+     * tsgo's second chain fold, and the identical shape (a method WITH parameters whose return
+     * type drills into a property) measures byte-identical to tsgo at an ordinary variable
+     * declaration and, since (P18.149), at a TS2430 interface-extends site too.
+     *
+     * **RETIREMENT IS STILL NOT VIABLE, and the reason is now measured rather than assumed.**
+     * PassLab-disabling this pass leaves ALL FOUR TS2430 rows missing, not one: the other three
+     * compare a polymorphic `this` return type (*'this' could be instantiated with an arbitrary
+     * type which could be unrelated to 'Keyed<K, V>'*), which is (CHK.133)'s recorded `this: this`
+     * residue and a different mechanism from anything the chain builder does. Re-price with
+     * `build/pass-lab.txt` + `scripts/corpus-screen.sh --include complexRecursiveCollections`
+     * once that lands; it costs one run and no recompile.
+     */
     private fun checkComplexRecursiveCollections() {
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
@@ -69535,7 +69554,7 @@ interface DataView {
             pinDiag(source, fileName, 270, 22, 5, 2320, "Interface 'Keyed<K, V>' cannot simultaneously extend types 'Seq<K, V>' and 'Keyed<K, V>'.", listOf("  Named property 'size' of types 'Seq<K, V>' and 'Keyed<K, V>' are not identical."))
             pinDiag(source, fileName, 289, 22, 7, 2320, "Interface 'Indexed<T>' cannot simultaneously extend types 'Seq<number, T>' and 'Indexed<T>'.", listOf("  Named property 'size' of types 'Seq<number, T>' and 'Indexed<T>' are not identical."))
             pinDiag(source, fileName, 305, 22, 3, 2320, "Interface 'Set<T>' cannot simultaneously extend types 'Seq<never, T>' and 'Set<T>'.", listOf("  Named property 'size' of types 'Seq<never, T>' and 'Set<T>' are not identical."))
-            pinDiag(source, fileName, 323, 20, 3, 2430, "Interface 'Seq<K, V>' incorrectly extends interface 'Collection<K, V>'.", listOf("  The types of 'map(...).size' are incompatible between these types.", "    Type 'number | undefined' is not assignable to type 'number'.", "      Type 'undefined' is not assignable to type 'number'."))
+            pinDiag(source, fileName, 323, 20, 3, 2430, "Interface 'Seq<K, V>' incorrectly extends interface 'Collection<K, V>'.", listOf("  The types returned by 'map(...).size' are incompatible between these types.", "    Type 'number | undefined' is not assignable to type 'number'.", "      Type 'undefined' is not assignable to type 'number'."))
             pinDiag(source, fileName, 341, 22, 5, 2430, "Interface 'Keyed<K, V>' incorrectly extends interface 'Collection<K, V>'.", listOf("  The types returned by 'toSeq()' are incompatible between these types.", "    Type 'Keyed<K, V>' is not assignable to type 'this'.", "      'this' could be instantiated with an arbitrary type which could be unrelated to 'Keyed<K, V>'."))
             pinDiag(source, fileName, 359, 22, 7, 2430, "Interface 'Indexed<T>' incorrectly extends interface 'Collection<number, T>'.", listOf("  The types returned by 'toSeq()' are incompatible between these types.", "    Type 'Indexed<T>' is not assignable to type 'this'.", "      'this' could be instantiated with an arbitrary type which could be unrelated to 'Indexed<T>'."))
             pinDiag(source, fileName, 391, 22, 3, 2430, "Interface 'Set<T>' incorrectly extends interface 'Collection<never, T>'.", listOf("  The types returned by 'toSeq()' are incompatible between these types.", "    Type 'Set<T>' is not assignable to type 'this'.", "      'this' could be instantiated with an arbitrary type which could be unrelated to 'Set<T>'."))
@@ -142829,6 +142848,16 @@ interface DataView {
         }
         if (derivedProps.isEmpty() && derivedMethods.isEmpty()) return
 
+        // (LEGACY.0b): the derived interface's OWN type, resolved once for every base in
+        // the clause list. It feeds [ts2430EngineChain] (the general elaboration) and the
+        // method/type-literal comparisons below, both of which are TYPE questions this
+        // walker used to ask of an AST NAME. Null for a derived interface whose symbol is
+        // not reachable per-file; every reader falls back to the name-based behaviour.
+        val derivedIfaceType = lookupPerFileForNode(ifaceDecl.name, derivedName)
+            ?.takeIf { it.flags.hasAny(SymbolFlags.Interface) }
+            ?.let { getDeclaredTypeOfSymbol(it) as? Type.Object }
+            ?.also { resolveStructuredTypeMembers(it) }
+
         for (clause in extendsClauses) {
             for (typeExpr in clause.types) {
                 val baseName = when (val tn = typeExpr.expression) {
@@ -142927,7 +142956,9 @@ interface DataView {
                     // Get the base type name for error message
                     val baseTypeName = typeToString(basePropType)
 
-                    // Get derived type name from AST type node
+                    // Get derived type name from AST type node. A null here is a missing
+                    // DISPLAY name, not an undecidable comparison — the structural fallback
+                    // below the loop picks such a member up.
                     val derivedTypeName = typeNodeToSimpleName(derivedType) ?: continue
 
                     // Skip if same type name
@@ -142945,7 +142976,8 @@ interface DataView {
                             val baseForRel = widenOptionalTargetPropType(basePropType, baseProp, derivedSemanticType)
                             if (!isTypeAssignableTo(derivedSemanticType, baseForRel)) {
                                 emitTS2430(ifaceDecl.name, derivedName, baseName, propName,
-                                    derivedTypeName, baseTypeName, source, fileName)
+                                    derivedTypeName, baseTypeName, source, fileName,
+                                    ts2430EngineChain(derivedIfaceType, baseType, propName))
                                 return // One TS2430 per interface per base
                             }
                         }
@@ -142957,12 +142989,25 @@ interface DataView {
                             val baseForRel = widenOptionalTargetPropType(basePropType, baseProp, derivedResolvedType)
                             if (!isTypeAssignableTo(derivedResolvedType, baseForRel)) {
                                 emitTS2430(ifaceDecl.name, derivedName, baseName, propName,
-                                    derivedTypeName, baseTypeName, source, fileName)
+                                    derivedTypeName, baseTypeName, source, fileName,
+                                    ts2430EngineChain(derivedIfaceType, baseType, propName))
                                 return
                             }
                         }
                     }
                 }
+
+                // (LEGACY.0b): the name-based loop above ruled on every member it can NAME.
+                // A method and a type-literal-annotated property are the two it cannot, and
+                // both are shapes tsgo reports — so they are decided here, by the engine,
+                // and only once the loop has declined. Running it AFTER the loop is what
+                // keeps this round additive: a member the old path fires on `return`s before
+                // ever reaching this line, so no existing row can change verdict or chain.
+                if (tryEmitTS2430Structural(
+                        ifaceDecl, derivedName, baseName, baseType, baseProps,
+                        derivedProps, derivedMethods, derivedIfaceType, source, fileName,
+                    )
+                ) return
             }
         }
     }
@@ -143129,6 +143174,7 @@ interface DataView {
     private fun emitTS2430(
         nameNode: Identifier, derivedName: String, baseName: String, propName: String,
         derivedTypeName: String, baseTypeName: String, source: String, fileName: String,
+        chain: List<String>? = null,
     ) {
         val start = nameNode.pos
         val length = derivedName.length
@@ -143142,11 +143188,153 @@ interface DataView {
             character = character,
             start = start,
             length = length,
-            messageChain = listOf(
+            messageChain = chain ?: listOf(
                 "  Types of property '$propName' are incompatible.",
                 "    Type '$derivedTypeName' is not assignable to type '$baseTypeName'.",
             ),
         ))
+    }
+
+    /**
+     * (LEGACY.0b): the TYPE-based half of TS2430 — the shapes this walker's NAME-based
+     * comparison could not express at all.
+     *
+     * Three were measured MISSING against tsgo 7.0.2 while the direct-property shape
+     * beside them agreed: a METHOD whose return type differs (`m(): string` over
+     * `m(): number`), a method whose return DRILLS DEEPER (`m(): InnerBad` over
+     * `m(): Inner`), and a method whose PARAMETER differs (`m(a: string)` over
+     * `m(a: number)`) — all three `continue`d by the `SymbolFlags.Function` branch after
+     * its two narrow arity/overload arms — plus a property whose annotation is a TYPE
+     * LITERAL (`p: { size: string }`), which `typeNodeToSimpleName` answers null for, so
+     * the comparison was skipped for want of a DISPLAY name.
+     *
+     * The derived member's type comes from the derived interface's own resolved member
+     * table rather than from its annotation NODE, which is what makes one comparison serve
+     * a method, a type literal and everything else; the verdict is the ordinary relation
+     * and the chain is the ordinary elaboration, so a row this produces is byte-identical
+     * to the TS2322 the same pair produces at a variable declaration.
+     *
+     * Conservative by construction — it only ever ADDS rows, so every gate here is an FP
+     * firewall: the derived must DECLARE the member (an inherited one trivially matches),
+     * a generic member on either side is refused (no inference at this site), an
+     * overloaded base member belongs to the B421 arm above, and an `any`/`error` on either
+     * side is undecidable.
+     */
+    private fun tryEmitTS2430Structural(
+        ifaceDecl: InterfaceDeclaration,
+        derivedName: String,
+        baseName: String,
+        baseType: Type.Object,
+        baseProps: List<Symbol>,
+        derivedProps: Map<String, TypeNode>,
+        derivedMethods: Map<String, MethodDeclaration>,
+        derivedIfaceType: Type.Object?,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        if (derivedIfaceType == null) return false
+        // THE VERDICT IS THE WHOLE-TYPE RELATION, which is what tsc asks and the ONLY form
+        // that gets method variance right. A per-MEMBER `isTypeAssignableTo` of the two
+        // function types loses the bivariance a method's parameters are compared with
+        // (`bivariantParams` reads BOTH declarations), so the first cut of this arm reported
+        // `interface D extends B { m(a: number): number }` over `m(a: number | string):
+        // number | string` — legal TypeScript, silent in tsgo AND silent on our own TS2322
+        // path for the identical pair, which is what named the mechanism.
+        if (isTypeAssignableTo(derivedIfaceType, baseType)) return false
+
+        val chain = getPropertyElaborationChain(derivedIfaceType, baseType)
+        if (chain.isNullOrEmpty()) return false
+        val propName = ts2430ChainNames(chain.first()) ?: return false
+        val baseProp = baseProps.firstOrNull { it.name == propName } ?: return false
+
+        // CONFINED TO THE TWO SHAPES THAT WERE MISSING, so this arm cannot re-decide a member
+        // the name-based loop above already ruled on: a METHOD (every one of which that loop
+        // `continue`s past its arity and overload arms) and a property whose annotation has no
+        // simple name (a TYPE LITERAL, which `typeNodeToSimpleName` answers null for). Every
+        // other member keeps exactly the verdict and the chain it had before this round.
+        val derivedMethod = derivedMethods[propName]
+        val derivedAnnotation = derivedProps[propName]
+        val isMissingShape = derivedMethod != null ||
+            (derivedAnnotation != null && typeNodeToSimpleName(derivedAnnotation) == null)
+        if (!isMissingShape) return false
+
+        // No inference at this site — a generic member on either side is undecidable here.
+        if (derivedMethod != null && declHasTypeParameters(derivedMethod)) return false
+        if (baseProp.declarations.any { declHasTypeParameters(it) }) return false
+        // An OVERLOADED base member is the B421 arm's business, and a derived interface that
+        // re-declares the FULL set is compatible — both are decided above.
+        if (baseProp.declarations.count { it is MethodDeclaration } > 1) return false
+
+        val basePropType = getTypeOfSymbol(baseProp)
+        if (basePropType === anyType || basePropType === errorType) return false
+        val derivedProp = derivedIfaceType.properties?.firstOrNull { it.name == propName }
+        val derivedMemberType = derivedProp?.let { getTypeOfSymbol(it) }
+        if (derivedMemberType === anyType || derivedMemberType === errorType) return false
+
+        emitTS2430(
+            ifaceDecl.name, derivedName, baseName, propName,
+            derivedMemberType?.let { typeToString(it) } ?: "", typeToString(basePropType),
+            source, fileName, chain,
+        )
+        return true
+    }
+
+    /**
+     * Whether a member declaration carries its own type parameters (a generic method).
+     * An interface method is a [MethodDeclaration] in this parser — there is no
+     * `MethodSignature` node class — so one arm covers both syntactic spellings.
+     */
+    private fun declHasTypeParameters(decl: Node): Boolean =
+        decl is MethodDeclaration && !decl.typeParameters.isNullOrEmpty()
+
+    /**
+     * (LEGACY.0b): TS2430's chain, built by the GENERAL elaboration engine
+     * ([getPropertyElaborationChain]) rather than by this walker's two hardcoded lines.
+     *
+     * tsc compares the whole derived interface type against the base
+     * (`checkTypeAssignableTo(typeWithThis, baseWithThis, node.name, Interface_0_incorrectly_extends_interface_1)`),
+     * so the chain a TS2430 carries is the SAME chain the ordinary assignability path
+     * produces — which is why a nested property reads `The types of 'p.size' are
+     * incompatible between these types.` and a method return reads `The types returned by
+     * 'm()'`. This walker is name-based and hardcoded a whole-object line instead, so it
+     * truncated exactly one level below wherever the mismatch really was. Measured against
+     * tsgo 7.0.2 over six shapes (direct property, nested property, method return, method
+     * return drilling deeper, method with parameters, type-literal property).
+     *
+     * **The walker's own choice stays authoritative.** The engine picks its own property
+     * (it prefers a LEAF mismatch where this loop takes the first base property in table
+     * order), so the engine's chain is adopted only when its first line names the SAME
+     * member this walker fired on — otherwise the chain would contradict the verdict that
+     * produced it. Falls back to the hardcoded pair whenever the engine declines or
+     * disagrees, so no row this walker already emitted can lose its chain.
+     */
+    private fun ts2430EngineChain(
+        derivedIfaceType: Type?,
+        baseType: Type,
+        propName: String,
+    ): List<String>? {
+        if (derivedIfaceType == null) return null
+        val chain = getPropertyElaborationChain(derivedIfaceType, baseType)
+        if (chain.isNullOrEmpty()) return null
+        return if (ts2430ChainNames(chain.first()) == propName) chain else null
+    }
+
+    /**
+     * The member name an elaboration chain's first line is ABOUT, or null when that line
+     * is not one of the member-naming forms. The three forms [getPropertyElaborationChain]
+     * can lead with are `Types of property 'p' are incompatible.`, `The types of 'p.q' are
+     * incompatible between these types.` and `The types returned by 'p()' are incompatible
+     * between these types.` — all of which carry the path in the FIRST quoted run, whose
+     * leading segment (up to a `.` or a `(`) is the member.
+     */
+    private fun ts2430ChainNames(firstLine: String): String? {
+        val open = firstLine.indexOf('\'')
+        if (open < 0) return null
+        val close = firstLine.indexOf('\'', open + 1)
+        if (close < 0) return null
+        val path = firstLine.substring(open + 1, close)
+        val cut = path.indexOfFirst { it == '.' || it == '(' }
+        return if (cut < 0) path else path.substring(0, cut)
     }
 
     /** B63.3: TS2430 for method-vs-method arity mismatch (derived requires more args than base accepts). */

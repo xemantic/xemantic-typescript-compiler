@@ -51,10 +51,10 @@ import kotlin.test.Test
  * Confined to a single call signature on both sides: with overloads, the return pair this drills
  * is not necessarily the one the elaboration chose.
  *
- * RESIDUES measured in the same matrix, both OUT of this round and neither a chain question:
- * `interface D extends B` reports TS2430 only for a DIRECT property mismatch — every deeper
- * shape (nested property, method return, with or without parameters) is entirely missing — and a
- * `class C implements B` whose method return drills deeper reports no TS2416 at all.
+ * RESIDUES measured in the same matrix. The TS2430 half is CLOSED at (P18.149): every deeper
+ * shape now routes through this chain builder and the pin below was re-pointed from `residue -`
+ * to tsgo's answer. What is still open is the sibling — a `class C implements B` whose method
+ * return drills deeper reports no TS2416 at all — which is a different walker.
  */
 class ReturnedByChainCollapseTest {
 
@@ -156,13 +156,18 @@ class ReturnedByChainCollapseTest {
     }
 
     /**
-     * residue - `interface D extends B` reports TS2430 for a DIRECT property mismatch only.
-     * tsgo reports it for the nested and call-return shapes above too; we are silent for all of
-     * them, so the dotted chain this round added is unreachable through `extends`. Not a chain
-     * question, and the reason `complexRecursiveCollections`' walker cannot yet be retired.
+     * CLOSED at (P18.149) — this was a COUNTDOWN pin, written here as `residue -` to record
+     * that `interface D extends B` reported TS2430 for a DIRECT property mismatch only, so the
+     * dotted chain (P18.148) added was unreachable through `extends`. TS2430 now routes through
+     * the general elaboration engine and the two missing member shapes (a METHOD, and a
+     * property whose annotation has no simple name) are decided structurally, so all three
+     * shapes report and all three chains are byte-identical to tsgo 7.0.2.
+     *
+     * Re-pointed by MEASUREMENT, not by transcribing what the new code prints: each expectation
+     * below is tsgo's own output for that fixture at `strict`, `target: es2020`.
      */
     @Test
-    fun `residue - interface extends reports only a direct property mismatch`() {
+    fun `interface extends reports the direct, nested and call-return shapes alike`() {
         val direct = ts(
             """
             interface B1 { p: number }
@@ -181,8 +186,32 @@ class ReturnedByChainCollapseTest {
             interface D4 extends B4 { m(): { size: number | undefined } }
             """
         )
+        assert(
+            chainOf(direct, 2430) == listOf(
+                "Interface 'D1' incorrectly extends interface 'B1'.",
+                "  Types of property 'p' are incompatible.",
+                "    Type 'string' is not assignable to type 'number'.",
+            )
+        )
+        assert(
+            chainOf(nested, 2430) == listOf(
+                "Interface 'D2' incorrectly extends interface 'B2'.",
+                "  The types of 'p.size' are incompatible between these types.",
+                "    Type 'number | undefined' is not assignable to type 'number'.",
+                "      Type 'undefined' is not assignable to type 'number'.",
+            )
+        )
+        assert(
+            chainOf(returned, 2430) == listOf(
+                "Interface 'D4' incorrectly extends interface 'B4'.",
+                "  The types returned by 'm().size' are incompatible between these types.",
+                "    Type 'number | undefined' is not assignable to type 'number'.",
+                "      Type 'undefined' is not assignable to type 'number'.",
+            )
+        )
+        // exactly one row per interface per base — the walker's own invariant
         assert(direct.count { it.code == 2430 } == 1)
-        assert(nested.none { it.code == 2430 })
-        assert(returned.none { it.code == 2430 })
+        assert(nested.count { it.code == 2430 } == 1)
+        assert(returned.count { it.code == 2430 } == 1)
     }
 }
