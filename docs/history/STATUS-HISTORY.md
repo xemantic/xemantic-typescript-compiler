@@ -1,3 +1,20 @@
+**(P18.144) — (LEGACY.0b): A JSDoc `@param` MAKES ITS PARAMETER REQUIRED, 20,063 / 0 / 51 (2026-09-20).**
+Ledger 27 -> 26, `jsdocRestParameter` CLOSED and ACTIVE in the screen's 3,073 / 0. The rule, measured cell by cell
+against tsgo: `@param {T} n` REQUIRED; `[n]`, `[n=1]` and `{T=}` optional; `{...T}` REQUIRED with type `T[]` and
+arity exactly ONE; an untagged JS parameter optional. **IT WAS ALREADY IMPLEMENTED AND WIRED TO ONE ARITY SITE OF
+FIVE** — B434's `jsDocRequiredParamNames` reached only the CROSS-FILE map, so the same two lines answered
+tsgo-identically in two `.js` files and `Expected 0-1` in one. **The finding is that the LAST WRITER WINS**:
+`collectFuncDecls` computed the right entry and `spineArgCtxAt`'s nested-function OVERLAY recomputed it without
+the tag set and clobbered it, so wiring the obvious site changed NOTHING — indistinguishable from a refuted
+hypothesis. Three readings of the code gave three wrong theories (`isJsFile` false; `leadingComments` empty;
+`collectFuncDecls` never called — the last my own marker's fault, printed in the TooFew emitter while the row
+comes from TooMany); a marker in the SHARED arity formatter settled it in one run. **The variadic cell is a
+PARSER change that RETIRED a walker**: `{...T}` was reparsed as a REST parameter, making arity unbounded and
+suppressing the baseline's rows, while ours already typed it `T[]` — so only the rest marking was wrong, and
+`checkJsRestParamArgTypes` plus its two helpers are deleted (135 lines) after a PassLab price of 1 mismatch and 0
+collateral. Ablation: un-wiring the overlay 4 RED, un-wiring `collectFuncDecls` **0 RED and recorded as
+undiscriminated**, the `{T=}` rule and the `T[]` typing 1 RED each on their own pins. 7 pins, 4 arms.
+
 **(P18.140) — TWO ORDER ROWS, AND THREE REFUTED PREMISES, 20,027 / 0 / 53 (2026-09-20).**
 Ledger 30 -> 28, both rows ACTIVE in the screen's 3,071 / 0. **The round's value is that it refuted its own brief
 three times**: the `'Top' could be instantiated…` chain line is one WE ALREADY EMIT (it carried the same wrong

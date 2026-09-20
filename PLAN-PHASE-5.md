@@ -25,6 +25,74 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.149) — (LEGACY.0b): TS2430's chain comes from the engine, and two shapes it could not see (2026-09-20)
+
+**Ledger 23 -> 22**, `complexRecursiveCollections.errors.txt` CLOSED and ACTIVE in the screen's
+3,076 / 0. Suite **20,112 / 0 / 47** (was 20,101 / 0 / 48 — 11 new pins, one skip closed).
+
+tsc compares the whole derived interface type against the base
+(`checkTypeAssignableTo(typeWithThis, baseWithThis, node.name, …)`), so a TS2430 carries exactly
+the chain the ordinary assignability path produces. `checkInterfaceExtendsClauses` was NAME-based
+instead — `typeNodeToSimpleName(annotation)` against `typeToString(baseMemberType)`, with a
+hardcoded two-line chain — so it truncated one level below wherever the mismatch really was, and
+could not compare a member with no simple name at all.
+
+**THE BRIEF THE PREVIOUS ROUND HANDED OVER WAS PARTLY WRONG, AND ONLY THE MATRIX SHOWED IT.**
+(P18.148) sized the successor as "nested, method-return and method-with-parameters are ENTIRELY
+MISSING". Measured against tsgo 7.0.2 over six shapes before any code was written: nesting was
+NOT missing — `interface D2 extends B2 { p: InnerBad }` reported, with the chain stopping at the
+whole-object line. What was missing is a METHOD whose return differs, one whose return drills
+deeper, one whose PARAMETER differs, and a property annotated with a TYPE LITERAL. The last is the
+one worth carrying: `typeNodeToSimpleName` answers null for a type literal, and that null gated the
+whole comparison — an undecidable *rendering* silencing a perfectly decidable *comparison*. (The
+previous round's own residue pin used the type-literal spelling for its "nested" case, which is why
+both readings were self-consistent and still disagreed.)
+
+**THE VERDICT HAS TO BE THE WHOLE-TYPE RELATION, AND THE ROUND'S OWN NEGATIVE CONTROL IS WHAT SAID
+SO.** The first cut asked `isTypeAssignableTo` of the two MEMBER types and reported
+`interface D extends B { m(a: number): number }` over `m(a: number | string): number | string` —
+legal TypeScript, silent in tsgo. `bivariantParams` reads BOTH declarations, which a bare pair of
+function types no longer carries. **The cheapest oracle for it was already on the same binary**:
+the identical pair written as a variable declaration goes through the whole-type relation and is
+silent, so one fixture separated "our relation is wrong" from "we asked it the wrong question".
+
+**ADDITIVE BY CONSTRUCTION, WHICH IS A PLACEMENT DECISION RATHER THAN AN ARGUMENT.** The structural
+arm runs AFTER the name-based loop declines — a member the old path fires on `return`s before ever
+reaching it — so no existing row can change verdict or chain. The engine chain is adopted only when
+its first line names the SAME member the walker fired on (the builder prefers a LEAF mismatch where
+the loop takes the first base property in table order, so they can choose differently, and a chain
+naming another member contradicts its own row).
+
+**THE CLOSED LEDGER ROW IS A RE-TRANSCRIPTION THAT THE ENGINE NOW JUSTIFIES.** tsgo's whole diff for
+`complexRecursiveCollections` is one word printed twice: `The types of 'map(...).size'` ->
+`The types returned by`. That is a stale copy rather than a divergence, because (P18.148)'s second
+fold makes the engine answer the same way — measured byte-identical to tsgo at a variable
+declaration AND, since this round, at a TS2430 site. **RETIREMENT of that walker stays refused, now
+on a measurement instead of an assumption**: PassLab-disabling the pass leaves ALL FOUR TS2430 rows
+missing, not one, because the other three compare a polymorphic `this` return type — (CHK.133)'s
+recorded `this: this` residue, a different mechanism. The ledger entry's own reason ("the engine's
+own path accumulation is still short for this fixture") was right about the outcome and wrong about
+the cause.
+
+**a4 WAS UNDISCRIMINATED BY EVERY PIN AND IS NOT A REDUNDANT GUARD.** Dropping the confinement gate
+reddened 0 of the hand-written pins and 1 corpus baseline:
+`inheritSameNamePropertiesWithDifferentOptionality`, where the structural arm reaches an INHERITED
+member and reports TS2430 for an `x?: number` / `x: number` conflict whose answer is TS2320 —
+`interface A extends C, C2` declares no `x` at all. Round 807 says a signal with no uniquely-its-own
+failure is a redundant guard; the step it does not name is **screening the arm before believing
+that**, and here the screen turned a "redundant" verdict into a missing pin (RED 0 -> 1 once added).
+
+**Gates.** corpus-screen **0 of 8,722** both channels; 8-profile grid **0 added / 0 removed /
+0 fullDiffLines**, emit 0 differing files — and the grid is a **REAL gate** here, not a (PARITY.1)
+control, because this rule can ADD rows and tsc's own sources are full of `interface X extends Y`
+whose members are methods; `cost_gate` PASS (max +0.15% on `typeOfExpr.distinct`, `output.errors` 46
+unchanged); `huge_methods` PASS (top 6,892; `getPropertyElaborationChain` unchanged at 6,480).
+11 pins, 4 arms, all four red.
+
+**Residue, unchanged and now the successor:** a `class C implements B` whose method return drills
+deeper reports no TS2416 at all — a different walker (`checkImplementsClauses`, 5,600 bytecodes),
+54 TS2416 baselines in the reference set.
+
 ### Round (P18.148) — (LEGACY.0b): the SECOND chain fold, and a row that could not show its own mechanism (2026-09-20)
 
 **NO LEDGER MOVEMENT — pending stays 23**, and that is the point of the note. Suite **20,101 / 0 / 48**
@@ -875,7 +943,27 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-37 LANDED 2026-09-20 ((P18.85)-(P18.148) notes) — pending **23**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-38 LANDED 2026-09-20 ((P18.85)-(P18.149) notes) — pending **22**,
+  skipped 47, suite 20,112/0. **(P18.149) CLOSED `complexRecursiveCollections.errors.txt`** by routing
+  TS2430 through the general elaboration engine and deciding the two member shapes the name-based
+  walker cannot NAME (a METHOD, and a property annotated with a TYPE LITERAL) structurally. The
+  ledger row itself is a RE-TRANSCRIPTION of its wipe-and-pin walker's stale
+  `The types of 'map(...).size'` — tsgo's whole diff for that baseline is one word, printed twice —
+  and it is a re-transcription rather than a divergence because (P18.148)'s second fold makes the
+  ENGINE answer the same way, measured byte-identical at a variable declaration AND at a TS2430 site.
+  **The previous round's brief was partly wrong and only the six-shape matrix showed it**: nesting was
+  not missing, it reported with a TRUNCATED chain. **THE VERDICT MUST BE THE WHOLE-TYPE RELATION** —
+  a per-MEMBER `isTypeAssignableTo` of two function types loses `bivariantParams`, which reads BOTH
+  declarations, and reported legal TypeScript that tsgo and our own TS2322 path are both silent on;
+  the round's own negative control caught it. **WALKER RETIREMENT STAYS REFUSED, NOW ON A
+  MEASUREMENT**: PassLab-disabling the pass leaves ALL FOUR rows missing, the other three comparing a
+  polymorphic `this` return type ((CHK.133)'s residue). **SUCCESSOR, SIZED**: `class C implements B`
+  whose method return drills deeper reports no TS2416 at all — a different walker
+  (`checkImplementsClauses`, 5,600 bytecodes, so it has room), 54 TS2416 baselines in the reference
+  set; the TS2430 half of (P18.148)'s recorded pair is done. Grid a REAL gate and 8×0; screen 0 of
+  8,722; 11 pins, 4 arms, all red — a4 read 0 RED on the pins and 1 on the SCREEN, so it was a guard
+  held on a baseline rather than a redundant one.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-37 LANDED 2026-09-20 ((P18.85)-(P18.148) notes) — pending **23**,
   skipped 48, suite 20,101/0. **(P18.148) CLOSED NO ROW and is recorded for its MEASUREMENT**: it landed tsgo's
   SECOND chain fold (a call-return incompatibility that drills deeper is dotted onto the called name AND keeps
   the *returned by* wording — `The types returned by 'm().size'`), which is the engine mechanism
