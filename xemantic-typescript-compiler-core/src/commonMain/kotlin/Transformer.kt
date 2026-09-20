@@ -13696,15 +13696,24 @@ class Transformer(
         var finalHeritage = heritageIn
         // Check if any static property initializer contains `this` (lexically, across arrow fns).
         // If so, we must capture the class in a temp var before the initializers run.
-        // Also force capture for async-arrow initializers: TypeScript pre-emits the class
-        // capture defensively because the downleveled `__awaiter` template (target<ES2022)
-        // is conceptually `this`-binding even when the body doesn't reference `this`.
+        //
+        // (LEGACY.0b) `this` IS THE WHOLE TEST, and an async arrow is not special.
+        // TypeScript 6 additionally pre-emitted the capture for EVERY async-arrow
+        // initializer, defensively, on the grounds that the downleveled `__awaiter`
+        // template is conceptually `this`-binding — which emits a `var _a;` and an
+        // `_a = Cls;` that the output then never reads. tsgo 7.0.2 does not; measured at
+        // `target: es2015`, three shapes:
+        //
+        //   static m = async (x) => {}                  -> no capture
+        //   static m = async () => WithThis.n           -> no capture (a NAME, not `this`)
+        //   static m = async () => this                 -> `_a = Cls`, and `_a` IS read
+        //
+        // so the async case that genuinely needs the alias is exactly the one
+        // [containsThisInExpr] already answers, and the disjunct only produced dead code.
         val staticPropsWithThis = staticProperties.filter { prop ->
             prop.initializer != null &&
                 options.effectiveTarget < ScriptTarget.ES2022 &&
-                (containsThisInExpr(prop.initializer) ||
-                    (prop.initializer is ArrowFunction &&
-                        ModifierFlag.Async in prop.initializer.modifiers))
+                containsThisInExpr(prop.initializer)
         }
         // B341: a static BLOCK referencing `this` (downleveled to an IIFE arrow that
         // would otherwise capture the OUTER this) also forces the class-alias capture.

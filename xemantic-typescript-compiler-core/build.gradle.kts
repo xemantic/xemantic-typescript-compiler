@@ -828,10 +828,6 @@ val tsgoPendingBaselines = listOf(
         "'IArguments' is not assignable to parameter of type '[f?: any, ...any[]]'."
     ),
     TsgoPendingBaseline(
-        "asyncArrowInClassES5(target=es2015).js",
-        "JS emit; layer `submoduleAccepted`. tsgo: (none) | ours: var _a;"
-    ),
-    TsgoPendingBaseline(
         "augmentExportEquals2.js",
         "JS emit; layer `submoduleAccepted`. tsgo: //// [file3.ts] | ours: //// [file1.js]"
     ),
