@@ -249,4 +249,227 @@ class StableTypeOrderingTest {
         ).filter { it.code == 2322 }.map { it.message }
         assert(e == listOf("Type '{ zz: boolean; aa: boolean; }' is not assignable to type 'never'."))
     }
+
+    // ---------------------------------------------------------------- (P18.140)
+    // The two display paths that render a union from its ANNOTATION rather than
+    // from a resolved `Type.Union`, and so are not served by `getUnionType`'s
+    // interning order. Both were joining their members in WRITTEN order.
+
+    /**
+     * (P18.140) `typeParameterDiamond4`. The legacy-string assignment reader
+     * (`caeLegacyDeclaredStringPath` -> `emitTS2322`, B212) takes its source display
+     * from `resolveSimpleTypeName`, whose `UnionType` arm joined the annotation's
+     * members verbatim — so this rendered `Top | T | U` while every type-level reader
+     * of the same annotation already rendered tsgo's `T | Top | U`. No enclosing
+     * scope is involved: all three parameters are local to one function.
+     * Measured against `tools/tsgo-7.0.2/lib/tsc`, byte for byte, including the chain.
+     */
+    @Test
+    fun `a type-parameter union assigned to a bare type parameter renders sorted`() {
+        val d = diagnose(
+            """
+            function flat<Top, T, U>() {
+                var top!: Top;
+                var middle!: Top | T | U;
+                top = middle;
+            }
+            """,
+        ).filter { it.code == 2322 }
+        assert(d.map { it.message } == listOf("Type 'T | Top | U' is not assignable to type 'Top'."))
+        assert(
+            d.single().messageChain == listOf(
+                "  'Top' could be instantiated with an arbitrary type which could be unrelated to 'T | Top | U'.",
+            ),
+        )
+    }
+
+    /** (P18.140) …and the order is CANONICAL, as tsgo's is: the written order of the
+     *  same three parameters does not reach the message. */
+    @Test
+    fun `that union renders the same however the annotation is written`() {
+        fun render(ann: String) = diagnose(
+            "function flat<Top, T, U>() { var top!: Top; var middle!: $ann; top = middle; }",
+        ).filter { it.code == 2322 }.map { it.message }
+        val expected = listOf("Type 'T | Top | U' is not assignable to type 'Top'.")
+        assert(render("Top | T | U") == expected)
+        assert(render("U | T | Top") == expected)
+        assert(render("T | U | Top") == expected)
+    }
+
+    /**
+     * (P18.140) the corpus shape itself — the three parameters declared by THREE
+     * nested functions, which is what the recorded reason had blamed. It renders
+     * exactly as the all-local spelling above.
+     */
+    @Test
+    fun `the nested-scope spelling renders the same as the all-local one`() {
+        val d = diagnose(
+            """
+            function diamondTop<Top>() {
+                function diamondMiddle<T, U>() {
+                    function diamondBottom<Bottom extends Top | T | U>() {
+                        var top!: Top;
+                        var middle!: Top | T | U;
+                        top = middle;
+                    }
+                }
+            }
+            """,
+        ).filter { it.code == 2322 }.map { it.message }
+        assert(d == listOf("Type 'T | Top | U' is not assignable to type 'Top'."))
+    }
+
+    /**
+     * (P18.140) the companion that was already GREEN and must stay so: the same
+     * union reached through a type parameter's CONSTRAINT is rendered by the
+     * TYPE-level reader, which `getUnionType` had always sorted. It is the
+     * corroboration that the comparator was never the gap — only the string arm was.
+     */
+    @Test
+    fun `the constraint chain of typeParameterDiamond3 still renders sorted`() {
+        val d = diagnose(
+            """
+            function diamondTop<Top>() {
+                function diamondMiddle<T, U>() {
+                    function diamondBottom<Bottom extends Top | T | U>() {
+                        var middle!: T | U;
+                        var bottom!: Bottom;
+                        middle = bottom;
+                    }
+                }
+            }
+            """,
+        ).filter { it.code == 2322 }
+        assert(d.map { it.message } == listOf("Type 'Bottom' is not assignable to type 'T | U'."))
+        assert(
+            d.single().messageChain == listOf(
+                "  Type 'T | Top | U' is not assignable to type 'T | U'.",
+                "    Type 'Top' is not assignable to type 'T | U'.",
+            ),
+        )
+    }
+
+    /**
+     * (P18.140) `noInferUnionExcessPropertyCheck1`, served by the dedicated B219
+     * walker `tryEmitNoInferUnionExcessPropTs2353`, which joined the annotation's
+     * constituents in WRITTEN order. tsc orders them by `compareTypes`: a top-level
+     * `NoInfer<…>` is a `Substitution` (bit 24) and a bare `() => …` an anonymous
+     * `Object` (bit 20), so the UNWRAPPED function sorts first whatever is written.
+     */
+    @Test
+    fun `an unwrapped function constituent sorts before a NoInfer-wrapped one`() {
+        fun render(ann: String) = diagnose(
+            """
+            declare function test1<T extends { x: string }>(a: T, b: $ann): void;
+            test1({ x: "foo" }, { x: "bar", y: 42 });
+            """,
+        ).filter { it.code == 2353 }.map { it.message }
+        val expected = listOf(
+            "Object literal may only specify known properties, and 'y' does not exist in type " +
+                "'(() => NoInfer<{ x: string; }>) | NoInfer<{ x: string; }>'.",
+        )
+        assert(render("NoInfer<T> | (() => NoInfer<T>)") == expected)
+        assert(render("(() => NoInfer<T>) | NoInfer<T>") == expected)
+    }
+
+    /**
+     * (P18.140) THE DISCRIMINATOR for the FLAG key, and the only shape that separates
+     * it from the position key: with the call ABOVE the declaration the anchor
+     * argument is the EARLIER node, so a position-only rule would put `NoInfer<T>`
+     * first — and tsgo still renders the unwrapped function first, because `Object`
+     * (bit 20) precedes `Substitution` (bit 24) before any symbol is consulted.
+     */
+    @Test
+    fun `the flag key outranks the position key for an unwrapped function`() {
+        val d = diagnose(
+            """
+            callFirst1({ x: "foo" }, { x: "bar", y: 42 });
+            declare function callFirst1<T extends { x: string }>(a: T, b: NoInfer<T> | (() => NoInfer<T>)): void;
+            """,
+        ).filter { it.code == 2353 }.map { it.message }
+        assert(
+            d == listOf(
+                "Object literal may only specify known properties, and 'y' does not exist in type " +
+                    "'(() => NoInfer<{ x: string; }>) | NoInfer<{ x: string; }>'.",
+            ),
+        )
+    }
+
+    /**
+     * (P18.140) with the flags EQUAL — two `NoInfer<…>` constituents — tsc falls to
+     * `compareSymbols`, i.e. the DECLARATION position of the type each bottoms out
+     * in. With the signature above the call, the `() => T` node is the earlier one.
+     */
+    @Test
+    fun `two NoInfer constituents order by the declaration position they bottom out in`() {
+        fun render(ann: String) = diagnose(
+            """
+            declare function test2<T extends { x: string }>(a: T, b: $ann): void;
+            test2({ x: "foo" }, { x: "bar", y: 42 });
+            """,
+        ).filter { it.code == 2353 }.map { it.message }
+        val expected = listOf(
+            "Object literal may only specify known properties, and 'y' does not exist in type " +
+                "'NoInfer<() => { x: string; }> | NoInfer<{ x: string; }>'.",
+        )
+        assert(render("NoInfer<T> | NoInfer<() => T>") == expected)
+        assert(render("NoInfer<() => T> | NoInfer<T>") == expected)
+    }
+
+    /**
+     * (P18.140) THE DISCRIMINATOR for that second key, and the reason the rule is not
+     * "a function constituent comes first": `T`'s only inference site is the ANCHOR
+     * ARGUMENT, so moving the CALL above the `declare function` makes the argument's
+     * object literal the earlier declaration and tsgo flips both of these rows.
+     * Measured on `tools/tsgo-7.0.2/lib/tsc` in both regimes.
+     */
+    @Test
+    fun `putting the call above the declaration flips the equal-flag order`() {
+        val two = diagnose(
+            """
+            callFirst2({ x: "foo" }, { x: "bar", y: 42 });
+            declare function callFirst2<T extends { x: string }>(a: T, b: NoInfer<T> | NoInfer<() => T>): void;
+            """,
+        ).filter { it.code == 2353 }.map { it.message }
+        assert(
+            two == listOf(
+                "Object literal may only specify known properties, and 'y' does not exist in type " +
+                    "'NoInfer<{ x: string; }> | NoInfer<() => { x: string; }>'.",
+            ),
+        )
+        val three = diagnose(
+            """
+            callFirst3({ x: "foo" }, { x: "bar", y: 42 });
+            declare function callFirst3<T extends { x: string }>(a: T, b: NoInfer<T | (() => T)>): void;
+            """,
+        ).filter { it.code == 2353 }.map { it.message }
+        assert(
+            three == listOf(
+                "Object literal may only specify known properties, and 'y' does not exist in type " +
+                    "'{ x: string; } | (() => { x: string; })'.",
+            ),
+        )
+    }
+
+    /** (P18.140) both keys in one union: the unwrapped function by FLAGS, then the two
+     *  `NoInfer` constituents by position. Three members, one written order. */
+    @Test
+    fun `a three-member union applies the flag key before the position key`() {
+        val d = diagnose(
+            """
+            declare function test3<T extends { x: string }>(
+              a: T,
+              b: NoInfer<T> | (() => NoInfer<T>) | NoInfer<() => T>,
+            ): void;
+            test3({ x: "foo" }, { x: "bar", y: 42 });
+            """,
+        ).filter { it.code == 2353 }.map { it.message }
+        assert(
+            d == listOf(
+                "Object literal may only specify known properties, and 'y' does not exist in type " +
+                    "'(() => NoInfer<{ x: string; }>) | NoInfer<() => { x: string; }> | NoInfer<{ x: string; }>'.",
+            ),
+        )
+    }
+
 }

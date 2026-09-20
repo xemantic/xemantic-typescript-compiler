@@ -174958,6 +174958,28 @@ interface DataView {
     // String-based type resolution (legacy — to be replaced by Type-based)
     // -----------------------------------------------------------------------
 
+    /**
+     * (LEGACY.0a) the members of a WRITTEN union in tsc's order, for the display
+     * paths that render an annotation without resolving it: `compareTypes` over the
+     * NODES (`StableTypeOrdering.nodeComparator`), then `formatUnionTypes`' own
+     * display rule that `null` and then `undefined` render LAST.
+     *
+     * ONE home because [formatTypeForDisplay] and [resolveSimpleTypeName] are two
+     * arms of one pair over the same `UnionType` node and only the first of them
+     * carried the sort — which is why `typeParameterDiamond4`'s `Top | T | U`
+     * reached `emitTS2322` in WRITTEN order while every type-level reader of the
+     * same annotation rendered tsgo's `T | Top | U`.
+     */
+    private fun stableUnionMemberNodes(types: List<TypeNode>): List<TypeNode> {
+        fun nullishRank(n: TypeNode): Int = when {
+            n is KeywordTypeNode && n.kind == SyntaxKind.NullKeyword -> 1
+            n is LiteralType && (n.literal as? Identifier)?.text == "null" -> 1
+            n is KeywordTypeNode && n.kind == SyntaxKind.UndefinedKeyword -> 2
+            else -> 0
+        }
+        return types.sortedWith(stableOrdering.nodeComparator).sortedBy { nullishRank(it) }
+    }
+
     /** Resolve a type annotation to a type name string. Returns null for complex types we can't handle.
      *  Named types (from TypeReference) are prefixed with "@" to distinguish from keyword types. */
     private fun resolveSimpleTypeName(typeNode: TypeNode): String? {
@@ -174992,8 +175014,14 @@ interface DataView {
                 }
             }
             is UnionType -> {
-                // Format as "type1 | type2 | ..." for display
-                val memberTypes = typeNode.types.map { formatTypeForDisplay(it) }
+                // Format as "type1 | type2 | ..." for display.
+                // (P18.140) in tsc's STABLE order, the same [stableUnionMemberNodes]
+                // its sibling [formatTypeForDisplay] uses — this arm joined the
+                // members in WRITTEN order, so the legacy-string assignment reader
+                // (`caeLegacyDeclaredStringPath` -> [emitTS2322], B212/B212b) rendered
+                // `typeParameterDiamond4`'s `var middle!: Top | T | U` verbatim where
+                // every type-level reader of the same annotation renders `T | Top | U`.
+                val memberTypes = stableUnionMemberNodes(typeNode.types).map { formatTypeForDisplay(it) }
                 if (memberTypes.any { it == null }) return null
                 // Use "|" prefix to mark as union type for assignability checking
                 "|${memberTypes.joinToString(" | ")}"
@@ -175265,16 +175293,9 @@ interface DataView {
                 val collidingNames = refLastNames.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
                 // (LEGACY.0a): the members in tsc's STABLE order, read off the nodes —
                 // this path renders an annotation without resolving it, so the type-level
-                // comparator cannot serve it; `StableTypeOrdering.nodeComparator` mirrors
-                // the same keys over syntax.
-                // …and then tsc's `formatUnionTypes`: `null`, then `undefined`, render LAST.
-                fun nodeNullishRank(n: TypeNode): Int = when {
-                    n is KeywordTypeNode && n.kind == SyntaxKind.NullKeyword -> 1
-                    n is LiteralType && (n.literal as? Identifier)?.text == "null" -> 1
-                    n is KeywordTypeNode && n.kind == SyntaxKind.UndefinedKeyword -> 2
-                    else -> 0
-                }
-                val orderedNodes = typeNode.types.sortedWith(stableOrdering.nodeComparator).sortedBy { nodeNullishRank(it) }
+                // comparator cannot serve it; [stableUnionMemberNodes] mirrors the same
+                // keys over syntax and then applies `formatUnionTypes`' nullish-last rule.
+                val orderedNodes = stableUnionMemberNodes(typeNode.types)
                 // Function/constructor types in unions need parens: `number | (new () => T)`.
                 val memberStrs = orderedNodes.map { m ->
                     val s = if (m is TypeReference && m.typeArguments.isNullOrEmpty() &&
@@ -178040,7 +178061,34 @@ interface DataView {
             if (t is FunctionType && t.parameters.isEmpty()) return renderInner(t.type)?.let { "() => $it" }
             return null
         }
-        val memberDisps = u.types.map { m0 ->
+        // (P18.140) the constituents in tsc's STABLE order rather than the
+        // annotation's written one. Two keys, both measured against tsgo 7.0.2 in
+        // BOTH position regimes (10 cells, `scripts`-free scratch projects):
+        //  * `compareTypes` reads the type FLAGS first, and a top-level `NoInfer<…>`
+        //    is a `Substitution` (tsc bit 24) where a bare `() => …` is an anonymous
+        //    `Object` (bit 20) — so an UNWRAPPED function constituent sorts first
+        //    however the union is written, and no position is consulted;
+        //  * equal flags fall to `compareSymbols`, i.e. the DECLARATION position of
+        //    the type the constituent bottoms out in: the `() => …` FunctionType NODE
+        //    for a function, and for a bare `T` the ANCHOR ARGUMENT's object literal,
+        //    because this gate's `T` has that argument as its only inference site.
+        // The position key is not "the function comes first": moving the CALL above
+        // the `declare function` flips exactly the equal-flag cells in tsgo, and this
+        // reproduces that. Ties keep the written order (`sortedWith` is stable), which
+        // is what a nested `NoInfer<NoInfer<…>>` falls back to — unmeasured, absent
+        // from the corpus. Both nodes are this file's; a signature split across files
+        // would need tsc's file rank ahead of `pos` and is likewise unmeasured.
+        fun substitutionRank(t0: TypeNode): Int =
+            if (noInferInner(unwrapParens(t0)) != null) 1 else 0
+        fun bottomDeclPos(t0: TypeNode): Int {
+            val t = unwrapParens(t0)
+            noInferInner(t)?.let { return bottomDeclPos(it) }
+            return if (t is FunctionType) t.pos else anchorArg.pos
+        }
+        val orderedMembers = u.types.sortedWith(
+            compareBy({ substitutionRank(it) }, { bottomDeclPos(it) }),
+        )
+        val memberDisps = orderedMembers.map { m0 ->
             val m = unwrapParens(m0)
             val core = renderInner(m) ?: return false
             if (m is FunctionType) "($core)" else core

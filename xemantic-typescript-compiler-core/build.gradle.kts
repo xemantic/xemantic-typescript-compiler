@@ -812,25 +812,6 @@ val tsgoPendingBaselines = listOf(
             "this chain does not go through it — that is the gap.",
     ),
     TsgoPendingBaseline(
-        "noInferUnionExcessPropertyCheck1.errors.txt",
-        "ORDER-model. **THE RECORDED \"it is not `compareSymbols`\" REASON IS REFUTED** " +
-            "(re-measured (P18.135) recon): it IS `compareSymbols`. The old reason took `T`'s " +
-            "declaration to be the CONSTRAINT's type literal, but `T` is inferred to the " +
-            "ARGUMENT object literal, which is LATER in the file than the function-type node " +
-            "— giving function-type-first, which is exactly tsgo's answer. Measured: tsgo " +
-            "canonicalizes both written orders identically and orders a named reference first " +
-            "(`Fn<NoInfer<...>> | NoInfer<...>`). Old reason, kept so the refutation is " +
-            "checkable: `the residue is the order of two " +
-            "ANONYMOUS constituents — a function type and an object type — and their " +
-            "DECLARATION positions give the opposite of tsgo's answer (row 23 is (() => { x: " +
-            "string; }) | { x: string; } where the object's declaration, T's constraint, is " +
-            "the EARLIER node), so it is not compareSymbols.` Rows 7/15 still need the other half: " +
-            "`NoInfer<T>` is a `Substitution` type in tsc (bit 24, after `Object`'s bit 20) " +
-            "where this model represents it as its own argument with an alias display. NOT " +
-            "served by the TS2353 walker step 9 ordered — a `FunctionType` constituent makes " +
-            "that one bail.",
-    ),
-    TsgoPendingBaseline(
         "reverseMappedTypeIntersectionConstraint.errors.txt",
         "**PIN-SERVED, AND THE RECORDED ORDER-MODEL REASON IS REFUTED** (re-measured " +
             "(P18.135) recon, verified independently): this whole baseline is re-emitted by " +
@@ -847,24 +828,6 @@ val tsgoPendingBaselines = listOf(
             "order inside one anonymous object display ... Needs a reverse-mapped MARK on " +
             "the type — sorting every anonymous object's members by name is a whole-corpus " +
             "change.`",
-    ),
-    TsgoPendingBaseline(
-        "typeParameterDiamond4.errors.txt",
-        "ORDER-model at a per-READER DISPLAY site. **THE RECORDED \"RESOLUTION gap / " +
-            "ENCLOSING function's type parameter\" REASON IS REFUTED** (re-measured " +
-            "(P18.135) recon, verified independently): the divergence reproduces with ALL " +
-            "THREE type parameters LOCAL to ONE function — `function flat<Top, T, U>() { " +
-            "var top!: Top; var middle!: Top | T | U; top = middle }` renders `Top | T | U` " +
-            "here and `T | Top | U` in tsgo — so no enclosing scope is involved and nothing " +
-            "is degraded. The decisive corroboration is that `typeParameterDiamond3` is " +
-            "ACTIVE and GREEN and its chain requires the SORTED `T | Top | U` for the very " +
-            "same union: the comparator is fine, and it is the TYPE-PARAMETER-TARGET branch " +
-            "of the assignment reader that renders its source in WRITTEN order instead of " +
-            "the stably-ordered resolved type. At-risk if that branch is fixed: 4 green " +
-            "baselines (`typeParameterDiamond2/3`, `doNotElaborateAssignabilityToTypeParameters`, " +
-            "`quickIntersectionCheckCorrectlyCachesErrors`). The same fixture also shows a " +
-            "SECOND, separate gap: tsgo adds `'Top' could be instantiated with an arbitrary " +
-            "type which could be unrelated to ...` where we are silent.",
     ),
     // -------------------------------------------------------------------- (LEGACY.0b)
     TsgoPendingBaseline(
