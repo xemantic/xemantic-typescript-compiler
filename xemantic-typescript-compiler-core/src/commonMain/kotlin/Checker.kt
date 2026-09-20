@@ -94883,6 +94883,8 @@ interface DataView {
                         if (stmt.importClause?.isTypeOnly != true) {
                             val clause = stmt.importClause ?: continue
                             val bindings = clause.namedBindings
+                            val beforeThisStmt =
+                                diagnostics.count { it.code == 2354 && it.fileName == fileName }
                             // import * as X from "..." needs __importStar
                             if (bindings is NamespaceImport) {
                                 // Span covers whole import statement (from import keyword to semicolon)
@@ -94909,6 +94911,26 @@ interface DataView {
                                         emitTS2354(spanStart, spanLen, source, fileName)
                                     }
                                 }
+                            }
+                            // (P18.152): a DEFAULT IMPORT CLAUSE (`import path from "path"`)
+                            // needs `__importDefault` exactly as `{ default as X }` does, and
+                            // this walker only ever looked at `namedBindings` — so the one
+                            // import shape a user is most likely to write was the one shape it
+                            // could not see. Anchored at the WHOLE statement, as tsgo does
+                            // (measured at column 1, the same span the namespace arm uses).
+                            //
+                            // ORDERED AFTER the named-specifier arm and gated on this statement
+                            // having emitted nothing, because when a clause carries BOTH
+                            // (`import path, { default as r } from "path"`) tsgo reports at the
+                            // SPECIFIER, not at the statement — measured 1:16 against 1:1.
+                            if (clause.name != null &&
+                                diagnostics.count { it.code == 2354 && it.fileName == fileName } == beforeThisStmt
+                            ) {
+                                val spanStart = stmt.pos
+                                val lineEnd = source.indexOf('\n', spanStart)
+                                    .let { if (it < 0) source.length else it }
+                                val spanLen = source.substring(spanStart, lineEnd).trimEnd().length
+                                emitTS2354(spanStart, spanLen, source, fileName)
                             }
                         }
                     }

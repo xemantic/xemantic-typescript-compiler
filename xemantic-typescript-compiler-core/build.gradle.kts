@@ -875,12 +875,6 @@ val tsgoPendingBaselines = listOf(
         "TS2497 rows tsgo does not have."
     ),
     TsgoPendingBaseline(
-        "esModuleInteropTslibHelpers.errors.txt",
-        "F6 top code differs (tsgo TS2354 / ours -); layer `submoduleAccepted`. tsgo: " +
-        "file.ts(1,1): error TS2354: This syntax requires an imported helper but module 'tslib' " +
-        "cannot be found. | ours: ==== file.ts (0 errors) ===="
-    ),
-    TsgoPendingBaseline(
         "exportAssignmentMembersVisibleInAugmentation.errors.txt",
         "F6 top code differs (tsgo TS4060 / ours TS2304,TS2664); layer `submoduleTriaged`. " +
         "tsgo: /a.ts(3,26): error TS4060: Return type of exported function has or is using " +
