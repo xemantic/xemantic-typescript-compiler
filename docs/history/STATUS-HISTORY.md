@@ -1,3 +1,21 @@
+**(P18.136) — (CHK.124) STEP 1: REAL EXPANDO MEMBERS ON A FUNCTION TYPE, 19,952 / 0 / 59 (2026-09-19).**
+Ledger 35 -> 34, and the ledger row is the SMALL half. `expandoFunctionNestedAssigments` closes because `typeof Foo`
+now renders its members — THROUGH `typeToString`, which already produced tsgo's braces form byte-for-byte, so no
+third hand-built expando display string was written. The big half is two shipping wrong answers: `const s: string =
+g.px` was SILENT (the member was `any`) and is now tsgo-identical, and a FALSE TS2322 on `const d: { (): void; px:
+number } = g` is gone. **A third is only PARTLY moved and the note says so**: `const c: typeof g = h` was silent and
+now REPORTS, but as TS2322 against `'typeof g'` where tsgo says TS2741 against the structural form — missing-row to
+wrong-code-row is an improvement, not parity. **A stale display rule was RETIRED**: `ExpandoReceiverDisplayTest`
+asserted that both references name an expando-carrying function `typeof $name`, which was **pristine 6.0.3's
+answer** and is FALSE of tsgo; both pins re-pointed and verified byte-identical on the property- and element-access
+spellings. Members attach at `getTypeOfFunction` with three load-bearing orderings — the TABLE is planted before the
+member TYPES (a right-hand side may read the host's own members, and the anonymous arm would otherwise plant an
+EMPTY table and mask it), every member is seeded `anyType` so a cycle degrades, and the type is written at MINT time
+ungated. Route (B) stays SHUT via `expandoAttachedTypeIds`, without which B431's anchor and the general path emit
+the SAME row twice (measured, pinned). **The grid is a CONTROL with its count taken BEFORE the round** (0 genuine
+expando shapes across 1,249 profile `.ts` files) **and the cost gate is structurally BLIND** — its counters are type
+resolutions, the new scan is an AST walk; the per-CONTAINER memo is what bounds it. 17 pins.
+
 **(P18.135) — THE NESTED-GENERIC CHAIN HEADER: A CORRECT ENGINE RULE THAT CLOSED NO ROW, 19,935 / 0 / 60 (2026-09-19).**
 Ledger 36 -> 35, and the round must be read as TWO things. **The ENGINE rule is real and closes nothing**: tsgo
 emits an intermediate `Type 'A' is not assignable to type 'B'.` at every level of a generic-ARGUMENT descent and

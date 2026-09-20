@@ -25,6 +25,73 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.141) — (INV.2b) commit 1: `Project.typeOracle()`, the capability without the decision (2026-09-20)
+
+**The first (INV.\*) round since 2026-09-10, and a MISSION-LEG deliverable rather than a parity row**: leg 2, "an
+embeddable whole-program checker", and the documented reason the JetBrains/WebStorm evaluation paused — their need
+was a post-hoc TYPE ORACLE and this checker could not serve one. (INV.1) and (INV.2) landed the store and the
+Stage-2 facade in September and were **core-only in the sense of having NO CONSUMER**; this gives them one.
+Suite **20,044 / 0 / 53** (+17 = exactly the new pins, skipped unchanged), `-project` module 937 / 0 / 0, warning
+gate clean with a live positive control, `huge_methods --fail-over 0` exit 0, `cost_gate.py` exit 0 and IDENTICAL
+to the previous round — **`Checker.kt` is untouched, which the item required and `git diff --name-only` confirms.**
+
+**THE HAZARD THAT MAKES CLOSING THE WHOLE MECHANISM, REPRODUCED BEFORE ANYTHING WAS BUILT.** A stale oracle answers
+a **WRONG `Type`, not null**: the store is keyed by file NAME and read by `nodeId` behind a bounds check alone, so
+a node of a re-parse indexes the previous build's array. Measured on one fixture, three edit shapes — text re-set
+UNCHANGED answers correctly everywhere (the parse cache is content-keyed, so the "fresh" tree IS the same tree); an
+annotation retyped IN PLACE answers **all 9 identifiers** and reads `number` for a file that now declares `string`
+(100% answer rate, no signal); an INSERTED statement gives 2 confidently wrong answers, 3 nulls past the old
+array's end, and the rest right by coincidence. **`docs/type-oracle.md` § 1 claimed a re-parse "answers nothing",
+which is wrong in BOTH directions**, and is replaced by that table.
+
+**THE INVALIDATION SET IS FOUR AND THE CODE SAID THREE.** `cached = null` occurs at `reloadFile`, `updateFile`,
+`deleteFile` and `close`, but the `captures` KDoc still said *"exactly three sites … There is no fourth path"* —
+stale since (INC.56) added `reloadFile`, and precisely the sentence an implementer reads when deciding where to
+close an oracle. Corrected, with a note telling the next reader to re-derive rather than trust it, and the
+`reloadFile` close carries its own pin so the claim costs a red test instead of a silent gap.
+
+**THE THREAD DECISION WAS TAKEN IN THIS COMMIT, AND THE OBVIOUS IMPLEMENTATION IS WRONG.** Ids are thread-local
+(INV.6(6c0)) and almost every oracle row can MINT, drawing from the **asking** thread's counter. **A guard on the
+BUILD THREAD'S IDENTITY would refuse every query of every oracle**, because the thread that ran the checker is
+`runWithDeepStack`'s `xtsc-deep-stack` thread and is `join()`ed — dead before any caller can ask. What that handoff
+does is WRITE THE ADVANCED COUNTERS BACK to the caller, so "the asking thread's sequences dominate the build's" IS
+the soundness condition: monotone, and it admits the caller, a thread that has built something else since, and a
+worker-rebased thread alike. **Measured**: seven representative rows mint NOTHING on either thread (which is why a
+naive probe reads a reassuring zero — the fixture's types are all already interned), while resolving a LIB type the
+program never mentions mints 7-82 types per row — at ids **612-806** on the building thread and **1-70** on a fresh
+one, where **`anyType.id` is 10**. A freshly minted type silently carrying the intrinsic `any`'s id is round 825's
+`--workers` race reached through a retained oracle. The type and symbol halves are ONE observable (each ablates to
+0 RED alone), recorded as a round-927 pair rather than claimed as two pins.
+
+**A RETENTION NUMBER THAT DID NOT EXIST.** `typeOracle()` over tsc's own 78 sources retains **146.9 / 146.3 MB** on
+top of a project that has already built, against a documented `-Xmx2g` floor and a measured 176.7 MB peak; an edit
+returns 146.6 / 146.1. Non-vacuity: **381,670 of 381,670 identifiers answered**. The (INC.36) ladder's existing
+`narrowed`+`recheck` row is an INERT CONTROL — its own source says *"which this arm never fills"* — so its 0.0 MB
+was never evidence that retaining a live checker is free, and that is now documented in place.
+
+**SCOPE HELD: THE CAPABILITY, NOT THE DECISION.** Whether `quickInfoAt`/`definitionsAt` may be SERVED from the
+oracle is commit 3 and needs an instrument that does not exist — `scripts/capture-equivalence.sh` varies the
+PARTITION at a fixed request and structurally cannot see an oracle-vs-capture difference — plus a hazard with no
+instrument at all: alias display is FIRST-WINS and (INC.41) measured that a RETAINING arm's divergence grows with
+session length (393 of 413 worse rows were accumulated alias names). An oracle is retaining by definition; a
+capture build is fresh per query. **The arithmetic for that decision, so it is informed when taken**: riding a
+whole-program build the host already pays costs the store alone (≈ +1.1 s on the compiler profile, ≈ +200 ms on
+the 2,401-file shape) and buys the FIRST hover per buffer (318-327 ms → a lookup) where later carets are already
+4-7 ms — break-even ≈ **3.6 distinct buffers hovered per edit cycle**, and `prepare(workingSet)` already collapses
+N first-hovers into one narrowed build.
+
+**WHAT DID NOT WORK.** The retention arm's first cut read **+0.0 MB** and looked like a free oracle: the reference
+must be held in a SLOT and nulled through it, because a local keeps the checker reachable and `local = null` is
+dead code to a warning-clean build. Also `"a" + "b".format(x)` binds `.format` to the second literal only. And a
+NON-NULL return type was refused on measurement rather than taste — four degenerate configurations (no sources, no
+`tsconfig.json`, malformed JSON, a TS7-removed option) all answer a usable oracle, so no measured path produces
+null, but asserting that across every `ProjectCompiler` error path is a negative I have not enumerated; the four
+cases became a pin and the KDoc states the measurement instead of inventing a reason.
+
+**No 8-profile grid this round, stated rather than skipped**: `Checker.kt` is untouched and `--listAll` never
+builds an oracle, so the two binaries cannot differ in any diagnostic — the grid would be a control that cannot
+fail. `cost_gate.py` is a control for the same reason and reads identical to (P18.140).
+
 ### Round (P18.140) — two ORDER rows, and THREE of the brief's premises refuted by measurement (2026-09-20)
 
 Ledger **30 -> 28**, both rows CLOSED. Suite **20,027 / 0 / 53** (+9 = exactly the new pins, skipped 55 -> 53 =
@@ -558,26 +625,6 @@ unresolved" is not gradeable against its CLI. And TS5090 is HARNESS-ONLY here (`
 `NameResolver`'s baseUrl leg) read 0 RED and is recorded as a MEASURED REDUNDANT guard rather than a blind pin —
 a4b and a4c are what establish that (a4b proves the fixture reaches the fallback; a4c proves the restored leg
 resolves the same file), which is the round-902 dead-arm discipline applied to a zero.
-
-### Round (P18.131) — the JavaScript expando MEMBER model: a ledger row CLOSED, a tsc-6 walker RETIRED, and the display half was never a JavaScript question (2026-09-17)
-
-**Three commits** (fix, test, this docs commit). **Suite 19,918 → 19,954 / 0 / 64** (+23 pins; skipped 65 → **64**, which is the receipt for the closed ledger row); `huge_methods.py --fail-over 0` 875 classes / 17,906 methods / **0 over**, with **`cpaSpineLeave` unchanged at 7,898** — every line of new code went into helpers, which is what last round's CLAUDE.md entry exists to force. `cost_gate.py` exit 0 with every delta unchanged from (P18.119)'s standing reading (max +0.15%). Corpus **errors 3,103 / 0** (the REAL gate) and **emit 5,688 / 0**. **The 8-profile grid is a REAL gate this round and reads 8 × `added=0 removed=0`** with 0 differing emitted files — it grades J4, whose change is TypeScript-visible, and controls J1/J2, which short-circuit on the file name.
-
-**THE LEDGER MOVED FOR THE FIRST TIME IN THIS FAMILY: pending 40 → 39.** `unusedTypeParameters_templateTag2` **CLOSED** and its `tsgoPendingBaselines` entry was DELETED — required, not optional, since the build fails on a stale entry — with `docs/logical-parity.md` regenerated. `classFieldSuperNotAccessibleJs` went from **4 missing rows to 1**, and the survivor is J3's TS7053 element access, which is **not a JavaScript question**: the same divergence reproduces in a `.ts` file, so opening it would propagate a wrong code and span into a second file kind rather than deliver a row.
-
-**J1 IS A MEMBER MODEL, NOT A WIDER FIREWALL, AND THAT IS WHAT MAKES IT SAFE.** `jsClassAccessAdmitted` answers three ways — **null** (fall through to (P18.130)'s immunity test), **ADMIT**, or **REFUSE because the name IS an expando member**. The class is resolved SYNTACTICALLY (`jsClassThisBinder`: an arrow is transparent, an ordinary `function` is opaque, staticness comes from the member kind), and the name set is own members + `collectClassInstanceFields` **unioned over the `extends` chain**, answering null when a base is not a resolvable `ClassDeclaration` of the same file. All four of the brief's questions were settled by measurement: an arrow's `this.x = v` IS in the set (arm a4 proves it), the chain union is load-bearing (a1 reddens exactly its pin), an `any` base must be refused, and the prototype-name removal is irrelevant because the closure adds every member name itself.
-
-**B428 IS RETIRED, MEASURED WITH THE PassLab.** With `disable checkJsObjectDefinePropertyThisReads` live (its banner confirms the lab was loaded), the errors screen reads 3,102 / 0; without the retirement `jsCheckObjectDefineThisNoCrash` **double-emits**, which is exactly what (P18.130)'s arm a2 predicted. The dedicated walker existed *because* the family was off; the general path now owns the row, and 75 lines plus a pass registration are gone.
-
-**THE BRIEF NAMED J4's AXIS WRONG, AND THE REAL ONE IS PLAIN TypeScript.** It is not JSDoc `@template`: `class Gen<T,V> { constructor() { this.missing } }` rendered `Gen` where tsgo renders `Gen<T, V>`, while the identical read in a method, getter, setter or property initializer already rendered the parameters. A constructor body's member table has not resolved yet, so the read lands on `cmamCheckResolvedObjectType`'s `ctorClassSym` fallback — which printed `symbol.name` — instead of `cmamEmitMissingProperty`, which has always printed the list. **The fix is five lines and copies the format the B15.1 site fifty lines below already used**; a JSDoc `@template` list is merely the parser making those the class's own `typeParameters`. It is also why the round closed a ledger row at all: `unusedTypeParameters_templateTag2` needed J1 to admit the read AND J4 to render it.
-
-**TWO MORE THINGS THE BRIEF GOT WRONG.** The **function** half of J2 already existed — `spineExEnterNode` (B431) is a complete spine-resident expando model for top-level `function` declarations — so only the CLASS static side was missing. And `getTypeOfExpression(this)` is `any` in a JavaScript class, which is a **red herring that cost a probe build**: the `cmam*` path types `this` from `enclosingClassType`, so J1 was a pure ADMISSION problem and the messages were already byte-correct behind the firewall.
-
-**PINS AND ABLATION.** `TsgoStep25Test`, **23 pins, 612 lines**, **8 RED** against the parent. Seven arms, each rebuilt with its own screen: a1 (drop the chain union) 1 RED, a2 (restore B428) 2 RED **and 1 screen mismatch**, a3 (drop the static half) 1 RED, a4 (always admit) 4 RED, a5 (drop J4) 1 RED **and 1 screen mismatch**, a6 (drop the `this`/`super` admission) 9 RED and 2 mismatches. **a4's screen zero is recorded as BLIND rather than green** — the baseline that sees its two false rows is `@Ignore`d, so only `--include` reaches it, and the next reader must not inherit that zero. **Two countdown pins in `TsgoStep22Test`** — both asserting `d.size == 1` on `unusedTypeParameters_templateTag2`'s own shape, where tsgo reports the TS2339 beside the TS6205 — were **re-pointed against the measured tsgo row**, not edited to what the code prints. **Three J4 pins were RENAMED as measured-undiscriminated controls**: in the `diagnose()` harness a single-file compile resolves the member table before the constructor body is walked, so those reads never reach the fallback.
-
-**TWO PRE-EXISTING `.ts` DIVERGENCES FOUND AND REFUSED WITH THEIR MEASUREMENT**, both reproduced with no JavaScript involved: tsgo answers a missing STATIC with **TS2551 plus a spelling suggestion** where we answer TS2339 (so the pins deliberately use a non-close-spelled name), and `class A7<T> extends Object { constructor() { super(); this.m7 } }` is a row tsgo reports and we do not — (CHK.51)'s heritage firewall, unrelated to this round.
-
-**RESIDUES, each measured**: an instance-typed VARIABLE receiver, a JavaScript OBJECT LITERAL, a base that is not a resolvable same-file `ClassDeclaration`, and `X.prototype.p = 1` — all four need a receiver whose class is decided by its TYPE rather than syntactically, which is the next item in the arc's table.
 
 ## QUEUE
 
@@ -3083,7 +3130,23 @@ CLAUDE.md § "AI agent mission".
   documented per row. Consumers (EXT, LSP) migrate only if it beats what they use.
   Implementation does not start without owner approval — the (INV.1) approval covered
   Stage 1 only.
-- [ ] **(INV.2b) HAND `Project` AN ORACLE, WITH THE INVALIDATION DECIDED — the Stage-2 facade
+- [ ] **(INV.2b) COMMIT 1 LANDED 2026-09-20 ((P18.141) note) — `Project.typeOracle()` EXISTS, the
+  invalidation is DECIDED and the thread question is ANSWERED. What is LEFT is commit 2 (the
+  position→node bridge, which must build its `SourceIndex` via `SourceIndex.around(text,
+  oracle.files[i])` so the tree identity is EXPLICIT rather than a parse-cache coincidence) and
+  commit 3 (THE DECISION: may `quickInfoAt`/`definitionsAt` be served from the oracle).**
+  **Commit 3 needs an instrument that does not exist** — `scripts/capture-equivalence.sh` varies
+  the PARTITION at a fixed request and structurally cannot see an oracle-vs-capture difference —
+  **and carries a hazard with no instrument at all**: alias display is FIRST-WINS and (INC.41)
+  measured a RETAINING arm's divergence growing with SESSION LENGTH (393 of 413 worse rows were
+  accumulated alias names), where an oracle is retaining by definition and a capture build is
+  fresh per query. **The arithmetic, measured, so the decision is informed**: riding a
+  whole-program build the host already pays costs the store alone (≈ +1.1 s compiler profile,
+  ≈ +200 ms at 2,401 files) and buys the FIRST hover per buffer (318-327 ms → a lookup) where
+  later carets are already 4-7 ms — break-even ≈ **3.6 distinct buffers hovered per edit cycle**,
+  and `prepare(workingSet)` already collapses N first-hovers into one narrowed build. Retention
+  is now measured: **146.9 / 146.3 MB** for a retained oracle over tsc's 78 sources.
+  ORIGINAL ITEM: **HAND `Project` AN ORACLE, WITH THE INVALIDATION DECIDED — the Stage-2 facade
   is core-only today.** `Project` runs a NARROWED build per keystroke ((INC.1)) and keeps a
   whole-program `cached` result; an oracle is valid for ONE build of ONE text ((INC.46)) and
   the store may never serve `diagnostics` ((INC.14)'s capture rule). Design: a
