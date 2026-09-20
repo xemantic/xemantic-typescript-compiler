@@ -822,7 +822,17 @@ val tsgoPendingBaselines = listOf(
     // -------------------------------------------------------------------- (LEGACY.0b)
     TsgoPendingBaseline(
         "augmentExportEquals2.js",
-        "JS emit; layer `submoduleAccepted`. tsgo: //// [file3.ts] | ours: //// [file1.js]"
+        "RE-MEASURED (P18.152) recon — **it is a HARNESS question, not a compiler one**, and the " +
+        "old reason (`tsgo: //// [file3.ts] | ours: //// [file1.js]`) was the diff's first " +
+        "differing line rather than the mechanism. The CASE FILE declares `// @filename: " +
+        "file3.ts` TWICE (consecutive lines), and tsgo's harness renders that as an EMPTY " +
+        "`//// [file3.ts]` block followed by the real one — then emits ONLY `//// [file3.js]` " +
+        "containing `\"use strict\";`, i.e. no file1.js and no file2.js at all. Ours takes the " +
+        "content-bearing declaration and emits all three files with full bodies. So closing it " +
+        "means reproducing tsgo's duplicate-`@filename` behaviour in `parseMultiFileSource` " +
+        "(the (P18.139) seam), and the open question is whether that behaviour is a tsgo harness " +
+        "defect worth copying — decide that BEFORE touching the emit path, which is innocent. " +
+        "layer `submoduleAccepted`."
     ),
     TsgoPendingBaseline(
         "classFieldSuperNotAccessibleJs.errors.txt",
@@ -957,10 +967,19 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "jsdocImportTypeNodeNamespace.errors.txt",
-        "F6 top code differs (tsgo TS2694 / ours TS2352); layer `submodule`. tsgo: " +
-        "Main.js(2,49): error TS2694: Namespace '\"GeometryType\"' has no exported member " +
-        "'default'. | ours: Main.js(2,21): error TS2352: Conversion of type 'string' to type " +
-        "'typeof _default' may be a mistake because neither type sufficiently overlaps with th"
+        "RE-MEASURED (P18.152) recon. **NOT a JSDoc question** — the shape reproduces in a plain " +
+        "`.ts` file (`type A = import('./M').default` where M is `declare namespace _default { … } " +
+        "export default _default`): tsgo reports TS2694 there too and we are SILENT, so the " +
+        "JSDoc `@type` cast is only where the divergence happens to surface. tsgo resolves an " +
+        "import-type QUALIFIER in TYPE space, and `default` of an `export default <namespace>` " +
+        "is a VALUE export, so the member is absent; we resolve it to `typeof _default` and then " +
+        "report TS2352 on the cast that follows. **THE REASON THIS IS NOT A CHEAP ROW: the " +
+        "import-type family has NO corpus coverage at all** — `import(` occurs ZERO times in the " +
+        "whole active generated tree (62 reference CASES write one, none of them active), so a " +
+        "green corpus screen would be a statement about the corpus and not about the change " +
+        "((CHK.124)). Real libraries use `import()` types heavily, so the instrument is a " +
+        "library probe (`docs/kir-library-readiness.md`) plus hand-written pins, not the screen. " +
+        "layer `submodule`. tsgo: Main.js(2,49) TS2694 | ours: Main.js(2,21) TS2352."
     ),
     TsgoPendingBaseline(
         "jsdocParameterParsingInfiniteLoop.errors.txt",

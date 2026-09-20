@@ -25,6 +25,37 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.153) — (LEGACY.0b) recon: two ledger reasons re-measured, neither was its mechanism (2026-09-20)
+
+**NO LEDGER MOVEMENT — pending stays 20.** Suite **20,128 / 0 / 45**, no compiled code touched.
+A short recon round that applies this session's own finding to the two rows a next session would
+most likely reach for, because both had one-line reasons that read as cheap.
+
+**`augmentExportEquals2.js` IS A HARNESS QUESTION, NOT A COMPILER ONE.** Recorded reason:
+`tsgo: //// [file3.ts] | ours: //// [file1.js]` — the diff's first differing line again. Measured:
+the CASE FILE declares `// @filename: file3.ts` on two consecutive lines, and tsgo's harness
+renders that as an EMPTY `//// [file3.ts]` block followed by the real one, then emits ONLY
+`//// [file3.js]` containing `"use strict";` — no file1.js, no file2.js. We take the
+content-bearing declaration and emit all three with full bodies. So the emit path is innocent and
+the seam is `parseMultiFileSource` ((P18.139)'s); the open question is whether tsgo's
+duplicate-`@filename` behaviour is a harness defect worth copying, which should be DECIDED before
+anything is changed.
+
+**`jsdocImportTypeNodeNamespace` IS NOT A JSDoc QUESTION, AND ITS REAL OBSTACLE IS THAT NOTHING
+GATES IT.** The shape reproduces in a plain `.ts` file — `type A = import('./M').default` against
+`declare namespace _default { … } export default _default` is TS2694 in tsgo and SILENT here, so
+the JSDoc `@type` cast is only where the divergence surfaced. tsgo resolves an import-type
+QUALIFIER in TYPE space and `default` of an `export default <namespace>` is a VALUE export. **The
+reason it is not a cheap row is a COUNT: `import(` occurs ZERO times in the whole active generated
+corpus** (62 reference cases write one, none active), so a green screen there would be a statement
+about the corpus, not about the change — and real libraries use `import()` types heavily. The
+instrument is a library probe plus hand-written pins, not the screen. Sized and deliberately NOT
+started at the end of a session.
+
+**The reusable half**: four of the reasons examined this session described a SYMPTOM (a diff's
+first differing line) and were read as verdicts on the MECHANISM — three of them overstating the
+work, one understating it. Correcting a reason costs one screen run and no build.
+
 ### Round (P18.152) — (LEGACY.0b): the import shape a user actually writes (2026-09-20)
 
 **Ledger 21 -> 20**, `esModuleInteropTslibHelpers.errors.txt` CLOSED and ACTIVE in the screen's
@@ -1052,7 +1083,17 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-41 LANDED 2026-09-20 ((P18.85)-(P18.152) notes) — pending **20**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-42 LANDED 2026-09-20 ((P18.85)-(P18.153) notes) — pending **20**,
+  skipped 45, suite 20,128/0. **(P18.153) MOVED NO ROW and re-measured TWO reasons** so the next
+  session starts from mechanisms rather than from diff lines. **`augmentExportEquals2.js` is a HARNESS
+  question**: the case file declares `// @filename: file3.ts` twice, tsgo's harness renders an EMPTY
+  block then the real one and emits only `file3.js` = `"use strict";`, where we emit all three files —
+  the seam is `parseMultiFileSource`, the emit path is innocent, and whether to copy tsgo's
+  duplicate-`@filename` behaviour is a DECISION to take first. **`jsdocImportTypeNodeNamespace` is not
+  a JSDoc question** — `type A = import('./M').default` reproduces it in a plain `.ts` file — and its
+  real obstacle is that `import(` occurs ZERO times in the active corpus, so the screen cannot gate it;
+  it needs a library probe plus pins.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-41 LANDED 2026-09-20 ((P18.85)-(P18.152) notes) — pending **20**,
   skipped 45, suite 20,128/0. **(P18.152) CLOSED `esModuleInteropTslibHelpers.errors.txt`** — a DEFAULT
   IMPORT CLAUSE is TS2354 under `importHelpers` with no tslib, and the walker only ever looked at
   `namedBindings`. **The ledger reason said we emitted NOTHING for the baseline; we emitted three of its

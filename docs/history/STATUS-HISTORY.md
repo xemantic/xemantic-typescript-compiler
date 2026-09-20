@@ -1,3 +1,20 @@
+**(P18.148) — (LEGACY.0b): THE SECOND CHAIN FOLD, AND A ROW THAT COULD NOT SHOW ITS OWN MECHANISM, 20,101 / 0 / 48 (2026-09-20).**
+**NO LEDGER MOVEMENT — pending stays 23**, and that is the point. tsgo's `reportRelationError` folds TWICE: fold 1
+turns a property incompatibility followed by a call-signature return one into `The types returned by 'm()'`, and
+fold 2 runs over THAT result, its `switch` listing `The_types_returned_by_0` BESIDE the property messages and
+converting the message only when it is still the property one — so a return type that drills deeper reads
+**`The types returned by 'm().size'`**. We stopped after fold 1 and printed the header over a whole-object line.
+**THE ROW THAT NAMES THE MECHANISM CANNOT SHOW IT**: `complexRecursiveCollections` is served by a wipe-and-pin
+walker, so no engine path reaches it. What located the gap was a PAIR of fixtures differing in ONE ingredient —
+the same mismatch through a plain nested property was ALREADY byte-identical to tsgo (`The types of 'p.size'`)
+and only the call form diverged. **TWO RESIDUES MEASURED IN THE SAME MATRIX, BOTH BIGGER THAN THE FIX AND NEITHER
+A DISPLAY QUESTION**: `interface D extends B` reports TS2430 for a DIRECT property mismatch ONLY — nested,
+method-return and method-with-parameters are ENTIRELY MISSING, all three reported by tsgo — and a
+`class C implements B` whose method return drills deeper reports no TS2416 at all; the first is why that walker
+cannot be retired even with the chain fixed. Price: corpus-screen 0 of 8,721, which for a display change IS the
+whole price ((PARITY.1)); `getPropertyElaborationChain` 6,260 -> 6,480 bytecodes, 1,520 under the JIT limit.
+5 pins, 2 arms, both red and recorded as ONE observable — c1's damage subsumes c2's, so no pin can separate them.
+
 **(P18.147) — (LEGACY.0b): TypeScript 7 GIVES A JS FUNCTION NO IMPLICIT `...any[]` REST, 20,096 / 0 / 48 (2026-09-20).**
 Ledger 24 -> 23, `argumentsReferenceInFunction1_Js.errors.txt` CLOSED and ACTIVE in the screen's 3,075 / 0.
 `strictBindCallApply` types `apply`'s 2nd parameter as the receiver's parameter TUPLE, and tsc 6 inferred an
