@@ -144951,7 +144951,27 @@ interface DataView {
                                 // Add signature elaboration for function types
                                 // (also populates `relatedInfo` with TS2208 when base has a
                                 // method-level TypeParam that derived overrides with a concrete type).
+                                val sizeBefore = chain.size
                                 addSignatureElaboration(derivedType, basePropType, chain, relatedInfo, fileName, source, classTypeParams)
+                                if (chain.size == sizeBefore) {
+                                    // (P18.150): the pair is not a function pair (or the
+                                    // signature elaboration had nothing to say), so the chain
+                                    // still stops at the whole-object line added above — one
+                                    // level short of the cause for an OBJECT pair, which is
+                                    // what `p: InnerBad` over `p: Inner` and every
+                                    // type-literal property printed. Drill with the general
+                                    // elaboration, as (P18.149) did for TS2430.
+                                    //
+                                    // Gated on the chain NOT having grown so it can never
+                                    // double-append under a branch that already elaborated;
+                                    // that test is a property of what happened rather than a
+                                    // second, drifting copy of `addSignatureElaboration`'s
+                                    // own applicability rule.
+                                    // The line above sits at 2 spaces and the builder emits
+                                    // at 2, so +2.
+                                    getPropertyElaborationChain(derivedType, basePropType)
+                                        ?.let { deeper -> chain.addAll(deeper.map { "  $it" }) }
+                                }
                             }
                         }
                         if (derivedType is Type.TypeParam && derivedType.constraint == null &&
@@ -146160,6 +146180,17 @@ interface DataView {
                 if (failing != null) {
                     chain.add("      Type '${typeToString(failing)}' is not assignable to type '${typeToString(targetReturn)}'.")
                 }
+            } else {
+                // (P18.150): an OBJECT return pair drills on into the failing property.
+                // The line above names the two whole types and is where this chain used to
+                // stop, one level short of the cause — `m(): InnerBad` over `m(): Inner`
+                // printed `Type 'InnerBad' is not assignable to type 'Inner'.` and nothing
+                // more, where tsgo goes on to `Types of property 'size' are incompatible.`
+                // plus the leaf pair. Same engine and same law as (P18.149)'s TS2430: the
+                // general elaboration is what knows how deep the mismatch is.
+                // The return line sits at 4 spaces and the builder emits at 2, so +4.
+                getPropertyElaborationChain(sourceReturn, targetReturn)
+                    ?.let { deeper -> chain.addAll(deeper.map { "    $it" }) }
             }
             // 17.78: When base's return is a TypeParam and derived's return is a
             // concrete type, the override is unsound — T can be instantiated to any
