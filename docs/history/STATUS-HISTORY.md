@@ -1,3 +1,22 @@
+**(P18.147) — (LEGACY.0b): TypeScript 7 GIVES A JS FUNCTION NO IMPLICIT `...any[]` REST, 20,096 / 0 / 48 (2026-09-20).**
+Ledger 24 -> 23, `argumentsReferenceInFunction1_Js.errors.txt` CLOSED and ACTIVE in the screen's 3,075 / 0.
+`strictBindCallApply` types `apply`'s 2nd parameter as the receiver's parameter TUPLE, and tsc 6 inferred an
+un-annotated JS function that referenced `arguments` as `[p?: any, …, ...any[]]` — a tail corpus-unique walker
+B230 hardcoded. **WHAT RETIRES IT IS AN ARITY MEASUREMENT, NOT A DISPLAY ONE**: `f(1,2,3)` on
+`const f = function (a) {}` is `Expected 0-1 arguments` in tsgo with or WITHOUT an `arguments` reference in the
+body, so there is no implicit rest left to render and the tail is not narrowable but GONE. Our arity model
+already agreed on 3 of 3 cells; only the display carried the residue. **The surviving `bodyMentionsArguments`
+gate therefore changed MEANING rather than being deleted** — it used to select the shape that GOT the rest, and
+now only confines the walker to the receivers its hardcoded display renders exactly; its substring imprecision
+(a body mentioning `arguments` only inside a STRING) is harmless because tsgo reports there too, which is
+measured and pinned as a control rather than argued. **RECORDED AND DELIBERATELY NOT TAKEN — the row was the
+small half of an 8-OF-8 GAP**: tsgo types every `f.apply(x, arguments)` from the receiver's real signature,
+rendering a REST receiver as `any[]` (TS2740, a different CODE), a defaulted parameter as
+`[a?: number | undefined]`, and a tagged or annotated one as `[a: number]` — that is (CHK.134)'s general
+`bindCallApplyType` path, so the JSDoc-tagged receiver is REFUSED here instead of printed wrong (one MISSING
+row against two wrong ones, pinned `residue -`). cost_gate is BYTE-IDENTICAL to (P18.146)'s reading on every
+counter, which is the receipt that its +0.15% is the stale baseline and not either round. 7 pins, 2 arms.
+
 **(P18.146) — (LEGACY.0b): THE JSDoc `@param` CHECK HAS TWO BRANCHES, AND THIS COMPILER HAD ONE, 20,089 / 0 / 49 (2026-09-20).**
 Ledger 25 -> 24, `noParameterReassignmentIIFEAnnotated.errors.txt` CLOSED and ACTIVE in the screen's 3,074 / 0.
 tsgo's `checkUnmatchedJSDocParameters` splits on whether the function reads `arguments`, and the two branches

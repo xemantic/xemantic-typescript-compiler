@@ -25,6 +25,41 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.152) — (LEGACY.0b): the import shape a user actually writes (2026-09-20)
+
+**Ledger 21 -> 20**, `esModuleInteropTslibHelpers.errors.txt` CLOSED and ACTIVE in the screen's
+3,078 / 0. Suite **20,128 / 0 / 45**.
+
+A DEFAULT IMPORT CLAUSE needs `__importDefault` exactly as `{ default as X }` does, so under
+`importHelpers` with no resolvable `tslib` it is TS2354. `checkImportHelpersWithoutTslib` only
+ever looked at `namedBindings` — it had arms for `import * as X` and for a `default` SPECIFIER —
+so `import path from "path"`, the shape a user is most likely to write, was the one shape it could
+not see.
+
+**THE LEDGER'S RECORDED REASON WAS WRONG FOR THE THIRD TIME THIS SESSION, AND THE MECHANISM IS
+ALWAYS THE SAME.** It read `ours: ==== file.ts (0 errors) ====`, which says we emit nothing for
+the baseline; we emitted THREE of its four rows correctly and the gap was one. A reason built from
+the FIRST DIFFERING LINE of a diff describes a symptom and then gets read as a verdict on the
+mechanism — the same shape as (P18.149)'s "nesting is entirely missing" and (P18.150)'s "reports
+no TS2416 at all". All three overstated the work.
+
+**Measured against tsgo cell by cell before writing anything**, and one cell decided the
+implementation: a clause carrying BOTH a default name and a `default as` specifier reports at the
+**SPECIFIER** (1:16), not at the statement (1:1). So the new arm is ordered AFTER the specifier
+arm and gated on the statement having emitted nothing; its ablation moves exactly that row.
+
+**Recorded and deliberately NOT followed**: tsgo also reports at (1,1) for a TYPE-ONLY default
+import. A type-only import emits nothing, so no helper can be required — it reads as a tsgo defect,
+following it would add a row to every `import type X from` in a project using `importHelpers`, and
+it is in NO baseline either way. Pinned `residue -` rather than argued about.
+
+**Gates, and one of them is vacuous ON A COUNT rather than on an argument**: corpus-screen 0 of
+8,723 (0 of 8,724 with the row included); cost_gate PASS and byte-identical to (P18.150) on every
+counter; huge_methods PASS. **The 8-profile grid is STRUCTURALLY VACUOUS and that was counted, not
+assumed — 0 of 8 profiles set `importHelpers`, so the walker returns on its first line for every
+one of them**, which is (CHK.124)'s law used to SKIP an eight-minute run honestly instead of
+reading eight zeros and calling them a gate. 5 pins, 2 arms, both red.
+
 ### Round (P18.151) — (LEGACY.0b): a refusal that dissolved while nobody was looking (2026-09-20)
 
 **Ledger 22 -> 21**, `pathsValidation5.errors.txt` CLOSED and ACTIVE in the screen's 3,077 / 0.
@@ -1017,7 +1052,18 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-40 LANDED 2026-09-20 ((P18.85)-(P18.151) notes) — pending **21**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-41 LANDED 2026-09-20 ((P18.85)-(P18.152) notes) — pending **20**,
+  skipped 45, suite 20,128/0. **(P18.152) CLOSED `esModuleInteropTslibHelpers.errors.txt`** — a DEFAULT
+  IMPORT CLAUSE is TS2354 under `importHelpers` with no tslib, and the walker only ever looked at
+  `namedBindings`. **The ledger reason said we emitted NOTHING for the baseline; we emitted three of its
+  four rows** — third recorded reason this session to overstate a gap, always by quoting a diff's first
+  differing line as a verdict on the mechanism. One measured cell decided the shape: a clause with BOTH a
+  default name and a `default as` specifier reports at the SPECIFIER (1:16), so the new arm is ordered
+  after the specifier one and gated on the statement having emitted nothing. **RESIDUE, measured and not
+  followed**: tsgo reports at (1,1) for a TYPE-ONLY default import, which emits nothing and so can need no
+  helper — a tsgo defect, in no baseline either way, pinned `residue -`. The grid is VACUOUS here on a
+  COUNT (0 of 8 profiles set `importHelpers`), not on an argument.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-40 LANDED 2026-09-20 ((P18.85)-(P18.151) notes) — pending **21**,
   skipped 46, suite 20,123/0. **(P18.151) CLOSED `pathsValidation5.errors.txt`** by ordering two
   FILE-bearing diagnostics by PATH, as tsgo's `ast.CompareDiagnostics` does, and deleting the
   config-first rule. **NOTHING WAS FIXED TO MAKE IT POSSIBLE**: (LEGACY.0b) step 15 measured the same
