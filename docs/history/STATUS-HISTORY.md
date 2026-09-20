@@ -1,3 +1,21 @@
+**(P18.135) — THE NESTED-GENERIC CHAIN HEADER: A CORRECT ENGINE RULE THAT CLOSED NO ROW, 19,935 / 0 / 60 (2026-09-19).**
+Ledger 36 -> 35, and the round must be read as TWO things. **The ENGINE rule is real and closes nothing**: tsgo
+emits an intermediate `Type 'A' is not assignable to type 'B'.` at every level of a generic-ARGUMENT descent and
+none at the innermost, where we collapsed every level onto the innermost sentence — `Inv<Inv<Small>>` read exactly
+like `Inv<Small>`. tsgo's ONE condition had TWO approximations here, and the emitting half tested the message
+SHAPE where the suppressing half correctly tested the ARGUMENTS; they now share a parser and cannot drift.
+**The ledger ROW closed by a RE-TRANSCRIPTION**, measured by ablating that hunk alone: `mutuallyRecursiveCallbacks`
+is served by a corpus-unique WIPE-AND-PIN walker, so the engine never reaches the fixture, and its hardcoded chain
+had been emitting TypeScript 6's answer. **`invariantGenericErrorElaboration` is REFUSED with its mechanism named**
+— tsgo resets the chain and forces a STRUCTURAL comparison when a type parameter measures invariant
+(`relater.go:3288-3304`), and this compiler measures no variances (round 336: that analysis is DEAD). The ledger's
+"F7 diagnostic COUNT" label for it was a hypothesis and was wrong. **The corpus cannot discriminate the engine rule
+in EITHER direction** (the before-binary screen is also 0), so the 8 pins are the only instrument; removing the
+suppression outright moves 8 baselines, which is what makes it load-bearing. Blast radius was re-derived, not
+inherited: depth>=2 is **296**, not <=508. **The grid gained an arm**: every grid script here compares head rows
+only and is blind to CHAIN lines, so a normalised FULL-capture diff was added — and it COUNTS what (PARITY.1) had
+only asserted, **0 chain lines across all eight profiles**. `getPropertyElaborationChain` SHRANK 6,271 -> 6,260.
+
 **(P18.134) — A MISSING MEMBER ON A FUNCTION TYPE: ONE TRUST GATE, 19,927 / 0 / 61 (2026-09-19).**
 `contextualReturnTypeOfIIFE2` closes (pending 37 -> 36). `cmamAllMissingTrustedMember`'s
 `if (m.symbol != null) return false` refused every SYMBOL-CARRYING function type, so

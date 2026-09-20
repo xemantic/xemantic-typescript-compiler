@@ -68511,3 +68511,79 @@ binder question); a NON-capturing nested function is one object across invocatio
 from the expression form, with a control pin proving it is not new; a capturing body called above its own
 declaration throws `JsTypeError` where node throws `ReferenceError` (both fail, and node's is the TDZ, so no
 correct program is affected); and a nested generator or `async` refuses, as everywhere in this subset.
+
+### Round (P18.130) — the JavaScript property-access family: the four gates are TWO PAIRS, and the expando rule is the opposite of the obvious one (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,918 → 19,931 / 0 / 65** (+13 pins), 9 modules;
+`huge_methods.py --fail-over 0` 875 classes / 17,901 methods / **0 over the limit**; `cost_gate.py` exit 0 with
+every delta unchanged from (P18.119)'s standing reading (max +0.15%) — this round moves no counter, because both
+mechanisms short-circuit on `isJsLikeFileName` and every profile file is TypeScript. **The corpus errors screen is
+the REAL gate — 153 of the 2,898 active error subtests carry a `.js` file — and it reads 3,102 / 0**, with emit
+5,688 / 0. The **8-profile grid is a CONTROL by construction** and reads 8 × `added=0 removed=0` with 0 differing
+emitted files; `MemberResolver.class`'s md5 moved and is BYTECODE-IDENTICAL (`javap -c -p` minus `line`, 3,615
+lines both arms). Pending baselines **40, UNCHANGED**.
+
+**THE FOUR GATES ARE TWO ENTER/LEAVE PAIRS, NOT FOUR GATES**, and characterising them is what split the round.
+`ccetSpineEnter`/`ccetSpineLeave` own per-call checking (TS2345/2349/2351/2554/7009); `cpaSpineEnter`/`cpaSpineLeave`
+own property access (TS2339/TS7053/TS2576). Opening a LEAVE alone checks every body under the FILE-LEVEL ambient;
+opening an ENTER alone leaks frames — so the pair is the unit of decision. Measured on the all-four arm:
+
+| pair | screen cost of opening | of which false rows on legal code | needed ledger rows delivered |
+|---|---|---|---|
+| ccet | **3** | a duplicated TS2349; **3 false TS2351** on `new B()` where `B extends` a `.d.ts` class; 1 false TS2345 against a JSDoc `@overload` set | **0 of 6** |
+| cpa  | **2** | a false TS2339 on the legal expando static `C.blah2 = 456`; a duplicated TS2339 (B428's dedicated walker exists *because* this family was off) | **6 of 6** |
+
+So **ccet is refused with numbers** and only cpa was opened.
+
+**THE BRIEF'S EXPANDO RULE WAS EXACTLY BACKWARDS, AND THE COUNTER-MEASUREMENT IS THE ROUND'S FINDING.** The obvious
+model — "an assignment DECLARES, so suppress the assignment's LHS" — is false: measured against tsgo 7.0.2,
+`c.expandoOnTsClass = 1`, `c.x += 1` and `(c.y) = 7` are all **TS2339** when the receiver's type is declared in
+TypeScript, while `JsCls.staticExpando = 3` and `g.f1 = 1` are silent. Only the **static side of a JavaScript class
+or function** declares. And the reverse arm prices the naive opening: on a 19-line JavaScript file whose class
+carries five ordinary expando fields, the ungated family invents **TEN rows tsgo does not report** — reads and
+writes, instance and static, including a `this.p = v` written in a method rather than the constructor, and even
+`this.inCtor = 1` read back through a variable. So what ships is a **WHITELIST, not a suppression list**:
+`jsAccessReceiverIsExpandoImmune` admits an access only when every declaration of the receiver's type lives in a
+`.ts`/`.d.ts` file. Over eight adversarial probes, **every row we now emit in a `.js` file is a row tsgo emits, at
+tsgo's position, with tsgo's message** — zero false positives.
+
+**AND THE BRIEF'S "narrowest slice" IS DISJOINT FROM THE LEDGER, WHICH IS WORTH SAYING PLAINLY.** It read as though
+the trusted-receiver slice would advance the two pending entries; it delivers **none of their six rows**, because
+every one of those receivers (`YaddaBase`, `C1`, `C3`) is JavaScript-declared. Both entries stay byte-identical and
+still strict SUBSETS — re-verified, `classFieldSuperNotAccessibleJs` emits 2 of tsgo's 6 with no `+` line, and the
+four missing rows are exactly what the firewall refuses (three on `YaddaBase`, one a TS7053 element access).
+
+**THREE PLACEMENT FACTS, EACH FOUND BY BUILDING THE WRONG THING FIRST.** (i) `cmamEmitMissingProperty` is **not**
+the funnel — TS2339 has **85 emission sites across 69 functions**, and a guard there left `super.*` and most
+`cmam*` routes emitting; the per-access funnel `checkSinglePropertyAccess` is the one place that covers every route
+and every code, so a route added later inherits the firewall. (ii) The guard keys on the **FILE NAME**, not on
+`spineIsJsLike`: that field is set per file inside `checkSpine` and never cleared, so after the spine it holds the
+LAST file's value — reading it there would have suppressed `.ts` rows whenever a program's final file is JavaScript,
+a silent loss no gate in this repo prints, and the grid is precisely the control for that direction. (iii) The
+**element-access funnel stays closed**, for a reason that has nothing to do with JavaScript: `recv['missing']` is
+TS7053 with a two-line chain at the receiver in tsgo and TS2339 at the index here, and **the same fixture in a `.ts`
+file diverges identically** — opening it would propagate a wrong code and span into a second file kind rather than
+deliver a row.
+
+**A (JIT.1) WARNING THIS ROUND SURFACES: `cpaSpineLeave` IS AT 7,898 OF 8,000 BYTECODES** — ~100 of headroom on one
+of the six hottest spine handlers (617 ms warm). The census is still 0-over, and the next round to add to that
+handler must split it rather than grow it.
+
+**PINS AND ABLATION.** `TsgoStep24Test`, **13 pins**: 7 positives, all RED against the pre-change binary, and 6
+declared controls (`allowJs` without `checkJs`; a JavaScript class instance receiver, i.e. the stated residue; a
+static expando; an element access on a `.ts` receiver; the `Object.defineProperty` row emitted **exactly once**; an
+unaffected `.ts` file). Four arms: a1 (revert the two gate flips) 7 RED, a2 (firewall always admits) 3 RED — the
+three residue/duplication controls, which is how the whitelist is shown to be load-bearing — a3 (give the element
+funnel the immunity test) 1 RED. Countdown grep: none of the 21 tsc-6 mirrored baseline case files carries a `.js`
+file or `@allowJs`/`@checkJs`, so the mirrors are structurally out of reach; all 17 JavaScript-fixture classes
+carrying a residue marker ran green (120 at-risk classes, 1,135 tests, 0 failures).
+
+**RESIDUES, all stated rather than hidden** — each needs the expando member model itself: a JavaScript class
+instance, the static side of a JavaScript class or function, and a JavaScript object literal. The decomposition
+that closes them is now a table in (LEGACY.0)'s head (J1-J7), including two things this round found that no queue
+item named: a `declare class` receiver is silent **in a `.ts` file too** (J6), and an unchecked JavaScript file
+still leaks a TS7006 (J7).
+
+**WHAT DID NOT WORK.** The `cmamEmitMissingProperty` placement above. And a scripted edit inserted a
+`private const val` immediately before an existing one, **orphaning that one's KDoc onto the new constant** — caught
+by reading the final diff, by no gate.
