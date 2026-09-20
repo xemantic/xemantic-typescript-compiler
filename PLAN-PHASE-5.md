@@ -883,7 +883,16 @@ CLAUDE.md § "AI agent mission".
   round measured why: `interface D extends B` reports TS2430 for a DIRECT property mismatch ONLY — the nested,
   method-return and method-with-parameters shapes are entirely missing, all three of which tsgo reports — and a
   `class C implements B` whose method return drills deeper reports no TS2416 at all. **Those two gaps are the
-  successors**, both bigger than the chain fix and neither a display question. Also recorded: the row that names
+  successors**, both bigger than the chain fix and neither a display question. **SIZED, so the next round
+  starts from a brief rather than a hunch**: the TS2430 walker is NAME-BASED — its gate is
+  `typeNodeToSimpleName(derivedType) ?: continue` (`Checker.kt`, the `checkInterfaceExtends` family), which
+  handles only a `KeywordTypeNode` and an Identifier-named `TypeReference`, so a TYPE LITERAL returns null
+  and a METHOD is `continue`d by the branch above it — and `emitTS2430` hardcodes a two-line chain rather
+  than calling `getPropertyElaborationChain`. So the fix is to route TS2430 through the general chain
+  builder, which both closes the missing shapes and changes the CHAIN of every row it already emits.
+  EXPOSURE: 40 TS2430 baselines in the reference set, **10 ACTIVE and currently green** in the generated
+  tree; TS2416 has 54. That is one `corpus-screen.sh` run away from a decision, which is the whole reason
+  to record the numbers here. Also recorded: the row that names
   a mechanism could not show it (a wipe-and-pin walker serves the file), and what located the gap was a PAIR of
   fixtures differing in one ingredient — the nested-property form was already byte-identical to tsgo.
   PREVIOUS HEAD: (0a) + (0b) STEPS 1-36 LANDED 2026-09-20 ((P18.85)-(P18.147) notes) — pending **24 → 23**,
