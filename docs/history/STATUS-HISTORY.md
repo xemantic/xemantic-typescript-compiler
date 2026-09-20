@@ -1,4 +1,20 @@
-**(P18.145) — (LEGACY.0b): A STATIC FIELD'S CLASS ALIAS IS DECIDED BY `this`, NOT BY `async`, 20,068 / 0 / 50 (2026-09-20).**
+**(P18.146) — (LEGACY.0b): THE JSDoc `@param` CHECK HAS TWO BRANCHES, AND THIS COMPILER HAD ONE, 20,089 / 0 / 49 (2026-09-20).**
+Ledger 25 -> 24, `noParameterReassignmentIIFEAnnotated.errors.txt` CLOSED and ACTIVE in the screen's 3,074 / 0.
+tsgo's `checkUnmatchedJSDocParameters` splits on whether the function reads `arguments`, and the two branches
+report different CODES over different TAGS: reads it -> only the **LAST** tag can report, as **TS8029**, and it is
+silent when that tag names a real parameter, is qualified, carries no type, or carries an ARRAY type; otherwise ->
+TS8024 per unmatched tag, skipping a NAME-FIRST tag and one at a BINDING-PATTERN parameter's index. This compiler
+asked the question nowhere. **The ledger row was ONE CELL OF SIX** — 19 cells measured against tsgo 7.0.2 first,
+5 of the first 7 divergent. **The walker that owned the row was ANTI-CORRECT BY CONSTRUCTION**: B558's regex
+matched only the VARIADIC `{...T}` form, which is the one shape tsgo can never report because a variadic tag IS
+an array type — every row it could produce was a false positive, so it is deleted rather than narrowed. **And the
+second defect was MASKED by the first**: with the TS8029 gone the baseline still mismatched, on a DUPLICATE
+TS2683 that the B557 pin walker hardcodes and the general rule ((LEGACY.0b) step 7) has emitted since —
+`--passTiming`'s `emissions by pass` named both emitters in one run. **A pending row can hide a second defect
+behind the one its ledger entry names.** tsgo's `arguments` rule is not JavaScript's and had to be measured:
+`ArrowFunction` is on its lexical-environment list, so `arguments` in a nested arrow does NOT reach the enclosing
+function. Blast radius taken BEFORE any pin: 0 mismatches of 8,719. Residues recorded: an array-typed ALIAS, a tag
+on the enclosing `VariableStatement`, and TS8032 (no emitter here). 21 pins, 8 arms, all red.\n\n**(P18.145) — (LEGACY.0b): A STATIC FIELD'S CLASS ALIAS IS DECIDED BY `this`, NOT BY `async`, 20,068 / 0 / 50 (2026-09-20).**
 Ledger 26 -> 25, `asyncArrowInClassES5(target=es2015).js` CLOSED and ACTIVE in the EMIT channel's 5,646 / 0.
 Below ES2022 a static field initializer reading `this` needs the class captured into a temp; TypeScript 6 ALSO
 pre-emitted that capture for EVERY async-arrow initializer, defensively, producing a `var _a;` and an `_a = Cls;`

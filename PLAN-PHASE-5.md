@@ -25,6 +25,34 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.151) — (LEGACY.0b): a refusal that dissolved while nobody was looking (2026-09-20)
+
+**Ledger 22 -> 21**, `pathsValidation5.errors.txt` CLOSED and ACTIVE in the screen's 3,077 / 0.
+Suite **20,123 / 0 / 46**. One deleted rule, one pin, one arm.
+
+The whole divergence was where a `tsconfig.json` row sorts against a source file's in the summary:
+tsgo's `ast.CompareDiagnostics` compares the two PATHS as strings, so `src/main.ts` comes first,
+and `BaselineFormatter`'s comparator gave the config file a privileged position.
+
+**THE POINT IS THAT NOTHING WAS FIXED TO MAKE THIS POSSIBLE.** (LEGACY.0b) step 15 measured this
+exact deletion and REFUSED it — it moved SEVEN green baselines whose tsconfig rows tsgo keeps
+first, every one a baseUrl / node10 / rootDir case tsgo 7 does not run — and wrote the measurement
+into the comparator's own comment, which is why the refusal was checkable. Re-running the same
+deletion today reads **0 mismatches of 8,722**: (LEGACY.1) removed those option values, so the
+seven are no longer generated. **A refusal in this repo is a measurement taken in a REGIME, and a
+neighbouring arc can dissolve it without anyone noticing** — the same shape as (P18.149)'s
+`complexRecursiveCollections`, where (P18.148)'s fold had made a recorded blocker obsolete one
+round earlier. Cheap rule: when a pending row's reason names a COUNT of collateral baselines,
+re-take the count before reading the refusal.
+
+**Scope receipt**: the change is test-side only. Production carries no config-first diagnostic
+ordering rule, and `Checker.class` is byte-identical to (P18.150)'s landed binary — so `cost_gate`
+and `huge_methods` are INAPPLICABLE here rather than skipped, which is a different claim and worth
+writing down.
+
+**One observable, not two**: the arm restoring the rule reddens the new pin AND the corpus row.
+That is round 927's pair law and is recorded rather than counted twice.
+
 ### Round (P18.150) — (LEGACY.0b): TS2416's chain drills into the failing member, at both tails (2026-09-20)
 
 **NO LEDGER MOVEMENT — pending stays 22.** Suite **20,122 / 0 / 47** (+10 pins). The sibling of
@@ -989,7 +1017,17 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-39 LANDED 2026-09-20 ((P18.85)-(P18.150) notes) — pending **22**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-40 LANDED 2026-09-20 ((P18.85)-(P18.151) notes) — pending **21**,
+  skipped 46, suite 20,123/0. **(P18.151) CLOSED `pathsValidation5.errors.txt`** by ordering two
+  FILE-bearing diagnostics by PATH, as tsgo's `ast.CompareDiagnostics` does, and deleting the
+  config-first rule. **NOTHING WAS FIXED TO MAKE IT POSSIBLE**: (LEGACY.0b) step 15 measured the same
+  deletion, found it moved SEVEN green baselines, and refused it — every one a baseUrl / node10 /
+  rootDir case that (LEGACY.1) has since stopped generating, so the same deletion now reads 0 of
+  8,722. **When a pending row's reason names a COUNT of collateral baselines, re-take the count
+  before inheriting the refusal** — second time in this session that a recorded blocker had already
+  dissolved. Test-side only: `Checker.class` byte-identical to (P18.150)'s binary, so the cost and
+  JIT gates are INAPPLICABLE rather than skipped.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-39 LANDED 2026-09-20 ((P18.85)-(P18.150) notes) — pending **22**,
   skipped 47, suite 20,122/0. **(P18.150) CLOSED NO ROW and is recorded for its MEASUREMENT**: it landed
   TS2416's chain DEPTH — a property pair and a method's RETURN pair now drill into the failing member
   instead of stopping at the whole-object line — which is (P18.149)'s mechanism one walker over.
