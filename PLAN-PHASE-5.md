@@ -25,6 +25,87 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.154) — (LEGACY.0b): an intersection of literal sets is a KEY SET, and a mapped type over one was `any` (2026-09-20)
+
+**Ledger 20 -> 19, `reverseMappedTypeIntersectionConstraint.errors.txt` CLOSED and ACTIVE.**
+Suite **20,148 / 0 / 44** (+20 pins, one baseline un-`@Ignore`d); corpus screen **0 of 8,725**
+over BOTH channels; `cost_gate` PASS (largest delta +0.15%); `huge_methods` PASS; warning gate
+clean with both compile tasks verified EXECUTED rather than up-to-date. `Checker.kt` 197,132 ->
+197,342 (**+210**).
+
+**THE ROW WAS LABELLED "PIN-SERVED, RE-TRANSCRIBE OR RETIRE" AND THERE WAS AN ENGINE DEFECT
+UNDER IT.** The recorded reason was right that a wipe-and-pin walker re-emits the whole file and
+that its four member orders are hardcoded — but the mechanism it named in passing (*tsgo reduces
+`keyof A & keyof B` to a SORTED literal union where we leave it unreduced*) had never been
+measured, and measuring it first is what turned a text edit into a fix. **A mapped type whose
+key source is an INTERSECTION produced NO TYPE AT ALL**: `getTypeFromMappedType` enumerates a
+`Type.StringLiteral` or a union of them and `else`-bails to `anyType`, so
+`{ [K in keyof T & keyof C]: T[K] }` — the reverse-mapped idiom — was a silent `any`. `any` is
+legal everywhere, so the corpus, the 8-profile grid and `cost_gate.py` are all green either way;
+only a reference shows it.
+
+**THE RULE IS ROUND 777'S EXACT COMPLEMENT, WHICH IS WHY IT DOES NOT RE-OPEN THAT REFUSAL.** That
+round refused distributing `X & (A | B)` at construction ("would change every intersection's
+identity, display and relation behaviour") and built `distributedNarrowingType` as an on-demand
+view **whose applicability test requires every operand to be OBJECT-capable**.
+`reducePrimitiveDomainIntersection` fires only when every constituent is a string / number /
+boolean / bigint literal, one of those four primitives, or a union of such — so the two can never
+both apply to one type, and the result is always a plain union of unit types rather than a union
+of intersections. Measured on 11 shapes against tsgo 7.0.2 before any code: 10 now byte-identical.
+
+**A SECOND, INDEPENDENT DEFECT FOUND ON THE WAY, AND IT IS THE ONE WITH THE WIDER REACH: LITERAL
+TYPES ARE NOT INTERNED IN THIS MODEL.** ~25 `Type.StringLiteral(...)` construction sites and no
+factory, so `getUnionType`'s id-keyed dedupe kept BOTH instances and `keyof Zed | keyof Wye`
+rendered `"alpha" | "alpha" | "beta" | "zoo"` where tsgo renders three members. Fixed by keying
+that dedupe on the literal's VALUE — the smaller of the two available fixes, because it removes
+the duplicate MEMBER without moving any literal type's own identity, so no relation cache,
+`aliasDisplayMap` entry or id-pair key changes. Interning the literals themselves (which would
+also make two separately-written `"a" | "b"` unions ONE interned union) is left unstarted and is
+the bigger change.
+
+**(CHK.50) FIRED ON SCHEDULE AND THE SCREEN CAUGHT IT IN ONE RUN — 1 MISMATCH OF 8,724.** With the
+key source reduced, the general excess-property path now fires where B218 already emitted, so
+`reverseMappedTypeLimitedConstraint` grew a DUPLICATE row. B218's own KDoc states the premise the
+reduction removed — *"getTypeFromMappedType bakes the param to anyType, so the standard
+excess-prop path skips the arg"* — so it is now a REPLACEMENT: it drops the general row, which is
+typed by the CONSTRAINT (`{ x: number; }`) where tsc infers from the literal (`{ x: 1; }`). Second
+B218 finding: it built its display in the OBJECT LITERAL's property order where the members are
+the mapped type's, so it now sorts by key. **That is what makes the four re-transcribed pin
+strings what the ENGINE computes rather than copied text** — a hand-written fixture is byte-
+identical to tsgo including `{ alpha: "a"; zoo: 1; }` for a literal written `{ zoo, alpha, extra }`.
+
+**WALKER RETIREMENT STAYS REFUSED, ON A RE-TAKEN MEASUREMENT.** PassLab-disabling
+`checkReverseMappedIntersectionConstraint` used to leave the engine emitting 5 of 13 rows; it now
+leaves **11**, but they are the wrong rows — member TYPES are the constraint's
+(`{ anotherField: string; field: number; }`), two land at positions the baseline does not carry,
+and both TS2322 subtype-constraint rows are still missing. Reverse-mapped INFERENCE, not this
+walker, is what would retire it.
+
+**ABLATION: SIX ARMS, ONE MISTAKE EACH, EVERY ARM PROVEN TO DIFFER FROM ITS OWN SNAPSHOT.**
+a1 literal dedupe -> id-only: **1 RED**. a2 reduction declines for a union constituent: **10 RED**.
+a3 literal-vs-primitive domain check dropped: **0 RED — the pin set was BLIND**, and the shape had
+to be constructed from the mechanism (`"a" & number`, which the 20 pins did not contain: they held
+literal-vs-literal and same-domain only). Pinned, re-run, **1 RED**. a4 `TypeParameter` admitted to
+the family: **0 RED and it is genuinely REDUNDANT** — the whole refusal list is subsumed by the
+positive domain test, because in THIS model an enum literal is a member-less `Type.Object`
+((REL.1)(b)) and carries no domain bit; kept as a barrier against widening `primitiveDomainOf`
+and recorded in its KDoc rather than claimed. a5 B218 sort dropped: **1 RED**. a6 B218 replacement
+dropped: **2 RED**.
+
+**THREE RESIDUES, MEASURED AND PINNED AS RESIDUES** so the next reader meets a decision: an enum
+member is outside the family (tsgo reduces `E.A & "x"` to `never`); `keyof T` over a FREE type
+parameter degrades to `string` here, so a generic DECLARATION renders the reduced key set instead
+of tsgo's mapped-type node — **the row it replaced was `any`, so neither text is tsgo's and the
+new one is the informative one**; and `(true | false) & boolean` elaborates one chain sub-line
+tsgo does not print. The parenthesization of a union member inside an intersection display
+(`("a" | "b") & Zed`) is (CHK.130)'s rule one container over and is left as a separate family.
+
+**SUCCESSOR, per the WORK ORDER note.** The (LEGACY.0b) ledger is at 19. The cheapest measured
+next row is still `augmentExportEquals2.js` (a HARNESS decision, (P18.153)); the one this round
+makes newly interesting is any row whose reason blames a DISPLAY where the type underneath is
+`any` — this round is the second in three where the recorded reason described the symptom and the
+mechanism was one layer down.
+
 ### Round (P18.153) — (LEGACY.0b) recon: two ledger reasons re-measured, neither was its mechanism (2026-09-20)
 
 **NO LEDGER MOVEMENT — pending stays 20.** Suite **20,128 / 0 / 45**, no compiled code touched.
@@ -1083,7 +1164,23 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-42 LANDED 2026-09-20 ((P18.85)-(P18.153) notes) — pending **20**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-43 LANDED 2026-09-20 ((P18.85)-(P18.154) notes) — pending **19**,
+  skipped 44, suite 20,148/0. **(P18.154) CLOSED `reverseMappedTypeIntersectionConstraint.errors.txt`**,
+  and the row labelled "PIN-SERVED, RE-TRANSCRIBE OR RETIRE" had an ENGINE defect under it: a mapped
+  type whose key source is an INTERSECTION produced **no type at all** (`getTypeFromMappedType`
+  `else`-bails to `anyType`), so the reverse-mapped idiom `{ [K in keyof T & keyof C]: T[K] }` was a
+  silent `any` that no gate here can see. `reducePrimitiveDomainIntersection` is tsc's reduction
+  restricted to the literal/primitive family — **round 777's refusal is untouched because that view
+  requires OBJECT-capable operands and this rule refuses them**, so the two can never both apply.
+  **A second, wider defect found on the way: literal types are NOT interned here**, so the id-keyed
+  union dedupe kept duplicates (`"alpha" | "alpha" | "beta" | "zoo"`); fixed by keying it on the
+  VALUE, which moves no type's identity. (CHK.50) fired and the screen caught it in one run: B218
+  now REPLACES the general row (its own KDoc's premise was the `anyType` bail) and sorts its display
+  by key, which is what makes the four re-transcribed pin strings what the engine computes.
+  Retirement re-measured and still refused (engine-only 5 -> 11 rows, constraint-typed). 20 pins,
+  six arms; a3 read 0 RED and the pin set was BLIND, a4 read 0 RED and the refusal list is genuinely
+  REDUNDANT (recorded in its KDoc, kept as a barrier).
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-42 LANDED 2026-09-20 ((P18.85)-(P18.153) notes) — pending **20**,
   skipped 45, suite 20,128/0. **(P18.153) MOVED NO ROW and re-measured TWO reasons** so the next
   session starts from mechanisms rather than from diff lines. **`augmentExportEquals2.js` is a HARNESS
   question**: the case file declares `// @filename: file3.ts` twice, tsgo's harness renders an EMPTY

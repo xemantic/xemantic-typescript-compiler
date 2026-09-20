@@ -15,6 +15,28 @@ cannot be retired even with the chain fixed. Price: corpus-screen 0 of 8,721, wh
 whole price ((PARITY.1)); `getPropertyElaborationChain` 6,260 -> 6,480 bytecodes, 1,520 under the JIT limit.
 5 pins, 2 arms, both red and recorded as ONE observable — c1's damage subsumes c2's, so no pin can separate them.
 
+**(P18.149) — (LEGACY.0b): TS2430's CHAIN COMES FROM THE ENGINE, AND TWO SHAPES IT COULD NOT SEE, 20,112 / 0 / 47 (2026-09-20).**
+Ledger 23 -> 22, `complexRecursiveCollections.errors.txt` CLOSED and ACTIVE in the screen's 3,076 / 0. tsc compares
+the WHOLE derived interface type against the base, so a TS2430 carries exactly the chain the ordinary assignability
+path produces; `checkInterfaceExtendsClauses` was NAME-based and hardcoded two lines, truncating one level below the
+real mismatch and unable to compare a member with no simple name. **THE HANDED-OVER BRIEF WAS PARTLY WRONG AND ONLY
+THE SIX-SHAPE MATRIX SHOWED IT**: nesting was not missing, it reported with a TRUNCATED chain; what was missing is a
+METHOD (return, deeper return, parameter) and a TYPE-LITERAL-annotated property — the last gated by
+`typeNodeToSimpleName` answering null, i.e. an undecidable *rendering* silencing a decidable *comparison*.
+**THE VERDICT MUST BE THE WHOLE-TYPE RELATION**: a per-MEMBER `isTypeAssignableTo` of two function types loses
+`bivariantParams` (it reads BOTH declarations) and reported legal TypeScript that tsgo AND our own TS2322 path for
+the identical pair are silent on — the round's own negative control caught it, and the variable-declaration spelling
+of the same pair is the oracle that names the mechanism on one binary. Additive by PLACEMENT, not by argument: the
+structural arm runs only after the name-based loop declines. **The closed row is a RE-TRANSCRIPTION the engine now
+justifies** (tsgo's whole diff is one word, twice), and **walker RETIREMENT stays refused on a measurement**:
+PassLab-disabling the pass leaves all FOUR rows missing, the other three comparing a polymorphic `this` return type.
+**a4 READ 0 RED ON THE PINS AND 1 ON THE SCREEN** — the confinement guard was held on a baseline
+(`inheritSameNamePropertiesWithDifferentOptionality`, where an INHERITED member conflict is TS2320) rather than being
+redundant; screening an undiscriminated arm before believing round 807's verdict is the step that found it.
+Grid a REAL gate here (this rule can ADD rows) and 8x0/0/0; screen 0 of 8,722; cost_gate PASS (max +0.15%);
+huge_methods PASS. 11 pins, 4 arms, all red. Successor, sized: `class C implements B` whose method return drills
+deeper reports no TS2416 at all — a different walker, 54 baselines.
+
 **(P18.147) — (LEGACY.0b): TypeScript 7 GIVES A JS FUNCTION NO IMPLICIT `...any[]` REST, 20,096 / 0 / 48 (2026-09-20).**
 Ledger 24 -> 23, `argumentsReferenceInFunction1_Js.errors.txt` CLOSED and ACTIVE in the screen's 3,075 / 0.
 `strictBindCallApply` types `apply`'s 2nd parameter as the receiver's parameter TUPLE, and tsc 6 inferred an
