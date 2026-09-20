@@ -25,6 +25,78 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.146) — (LEGACY.0b): the JSDoc `@param` check has TWO branches, and this compiler had one (2026-09-20)
+
+Ledger **25 -> 24**, `noParameterReassignmentIIFEAnnotated.errors.txt` CLOSED and ACTIVE.
+Suite **20,089 / 0 / 49** (was 20,068 / 0 / 50 — one pending row closed, 21 pins added).
+
+**THE ROW WAS ONE CELL OF A SIX-CELL FAMILY.** Its recorded reason was right about the mechanism —
+a VARIADIC `@param {...T}` tag IS an array type, so tsc's *It would match 'arguments' if it had an
+array type* rung must not fire — and wrong about the SIZE. tsgo's `checkUnmatchedJSDocParameters`
+(`internal/checker/jsdoc.go`) is **two branches chosen by whether the function reads `arguments`**,
+reporting different CODES over different TAGS, and `checkJSDocParamTags` here never asked the
+question at all. Measured against tsgo 7.0.2 over 19 scratch cells — **5 of the first 7 diverged**:
+
+| shape | tsgo | ours before |
+|---|---|---|
+| `{number}` + `arguments` | **TS8029** | TS8024 (wrong code AND message) |
+| `{...unknown}` / `{T[]}` / `Array<T>` / `ReadonlyArray<T>` + `arguments` | SILENT | TS8024 |
+| two unmatched tags + `arguments` | TS8029 on the **LAST** only | TS8024 on **both** |
+| last tag MATCHES a param + `arguments` | SILENT (the whole check returns) | TS8024 on the earlier one |
+| no type + `arguments` | SILENT | TS8024 |
+| `@param n {T}` / `@param n`, no `arguments` | SILENT (name-first) | TS8024 |
+| tag at a BINDING-PATTERN param's index | SILENT | TS8024 |
+
+**THE WALKER THAT OWNED THE LEDGER ROW WAS ANTI-CORRECT BY CONSTRUCTION.** B558
+(`iqaCheckJsDocParam`) was a corpus-unique TS8029 emitter whose regex was
+``@param\s+\{\.\.\.[^}]*\}\s+(name)`` — i.e. it matched **only the variadic form**, which is the one
+shape tsgo can never report. Every row it could produce was a false positive, so it is DELETED
+rather than narrowed. Reading a pin walker's *gate* rather than its message is what showed this in
+one minute; the ledger entry had described it as a missing variadic test.
+
+**THE SECOND DEFECT WAS MASKED BY THE FIRST, AND THAT IS THE ROUND'S REUSABLE FINDING.** With the
+TS8029 gone the baseline still mismatched — on a **duplicate TS2683** at the same position.
+`--passTiming`'s `emissions by pass` named both emitters in one run
+(`checkJsImportScriptsApplyArguments 2`, `checkSpine 1`): the B557 pin walker hardcodes an
+implicit-`this` row that the general rule ((LEGACY.0b) step 7) has emitted since, and it stayed
+invisible for as long as the baseline ALSO mismatched on the JSDoc row. **A pending row can hide a
+second defect behind the one its ledger entry names** — re-read the diff after closing the named
+mechanism instead of assuming the row goes green. The sibling `noParameterReassignmentJSIIFE` is the
+control that the general rule honours `noImplicitThis: false` by itself: it is ACTIVE, green, and
+its baseline carries no TS2683.
+
+**tsgo's `arguments` RULE IS NOT JAVASCRIPT'S, AND THAT HAD TO BE MEASURED.**
+`nodeStartsNewLexicalEnvironment` puts **`ArrowFunction`** on its list, so a tag on a function whose
+only `arguments` sits in a nested ARROW reports TS8024 — even though at run time that arrow's
+`arguments` IS the enclosing function's. The same matrix refuted a guess in the other direction: a
+qualified tag name is **TS8032**, not the TS8028 the round expected.
+
+**BLAST RADIUS MEASURED BEFORE ANY PIN WAS WRITTEN**: `corpus-screen.sh` over the built arm reads
+**0 mismatches of 8,719** (3,073 errors / 5,646 emit), and **0 of 8,720** with the pending row
+`--include`d — i.e. the change moves nothing that was green and closes the row it targeted.
+`cost_gate.py` max **+0.15%** (stale-baseline drift; the profile is all `.ts`, which this JS-only
+walker cannot reach), `huge_methods.py` **0 over limit / 878 classes**.
+
+**RESIDUES, each measured, each leaving the row it already had**: a type ALIAS resolving to an array
+(`@typedef {number[]} Nums`) reads as a non-array here, because JSDoc types are TEXT at this layer —
+that shape keeps an ours-only row with a different code; a tag attached to the enclosing
+`VariableStatement` rather than to the function expression it initializes is not seen by the walker
+at all (a MISSING row, unchanged by this round, and the reason the ledger-row pin discriminates only
+its TS2683 half); and TS8032 has no emitter in this compiler and is its own family.
+
+**21 pins, 8 arms, every arm RED and every mechanism uniquely covered**: a1 restore B558's answer
+(variadic is not an array) **2**, a2 never take the `arguments` branch **10**, a3 the `[]` test
+**1**, a4 drop the lexical-environment boundary **3**, a5 drop the name-first skip **2**, a6 drop
+the binding-pattern skip **1**, a7 restore B557's duplicate TS2683 **1**, a8 report every tag rather
+than the last **2**.
+
+**PROCESS COST WORTH RECORDING**: the round lost ~15 minutes to running the suite as a
+`run_in_background` `nohup … &` double-detach (CLAUDE.md names it) *and* through a `| grep | head`
+pipeline, so the log flushed nothing and a SECOND suite run started beside the first — two live
+`GradleWorkerMain`s, and a `rm -rf` of the results dir under the older one. `pgrep -fa
+'GradleWorkerMai[n]'` is what diagnosed it; the recovery is `./gradlew --stop`, verify `free -m`,
+then ONE foreground run redirected to a file.
+
 ### Round (P18.145) — (LEGACY.0b): a static field's class alias is decided by `this`, not by `async` (2026-09-20)
 
 Ledger **26 -> 25**, `asyncArrowInClassES5(target=es2015).js` CLOSED and ACTIVE in the EMIT channel's 5,646 / 0.
@@ -528,74 +600,6 @@ and route-(B) readers all see the attached type, but the var-decl ASSIGNABILITY 
 out of `currentLocalTypes`, recorded from `getTypeOfExpression(init)` — a fresh arrow type with no members. BEFORE
 == AFTER byte-identically there.
 
-### Round (P18.136) — (CHK.124) step 1: real expando MEMBERS on a function type, and a display rule that was pristine 6.0.3's answer (2026-09-19)
-
-Suite **19,952 / 0 / 59** (+17 pins, skipped 60 -> 59), errors screen 3,065 / 0 and emit 5,645 / 0 with the closed
-row ACTIVE in that count, cost gate exit 0, `huge_methods --fail-over 0` exit 0, warning gate clean, 8-profile grid
-8 x 0/0 on both arms with emit 78 vs 78 byte-identical. Ledger **35 -> 34**.
-
-**THE LEDGER ROW IS THE SMALL HALF.** `expandoFunctionNestedAssigments` closes because `typeof Foo` now renders
-`{ (): void; inVariableInit: number; … }` — and it closes THROUGH `typeToString`, which already produced tsgo's
-braces form byte-for-byte, so no third hand-built expando display string was written (after B433's). The big half is
-that **two shipping wrong answers move**, neither of which any ledger row covered:
-
-    const zs: string = zg.px;                  BEFORE silent (`zg.px` was `any`)  ->  NOW TS2322, tsgo-identical
-    const zd: { (): void; px: number } = zg;   BEFORE a FALSE TS2322              ->  NOW silent, tsgo-identical
-
-**AND THE THIRD IS ONLY PARTLY MOVED, WHICH THIS NOTE RECORDS RATHER THAN ROUNDS OFF**: `const zc: typeof zg = zh`
-was SILENT and now REPORTS, but as `TS2322 Type '() => void' is not assignable to type 'typeof zg'.` where tsgo says
-`TS2741 Property 'px' is missing in type '() => void' but required in type '{ (): void; px: number; }'.` So the
-members participate in assignability (the row exists at all only because they do) while the TARGET-side display
-keeps the `typeof` spelling and the code is the generic one. Missing-row -> wrong-code-row is an improvement, not
-parity, and it is the successor's first item.
-
-**A STALE DISPLAY RULE IS RETIRED, AND IT WAS A COUNTDOWN NOBODY HAD RE-MEASURED.**
-`ExpandoReceiverDisplayTest`'s KDoc § 2 stated that both references name a function carrying expandos as
-`typeof $name`, and two pins asserted it. That was **pristine `typescript@6.0.3`'s answer** and is FALSE of the only
-reference this project now has: measured, tsgo renders `'{ (): void; tag: number; }'` for both the property-access
-and the element-access spelling, and read position makes no difference. Both pins are re-pointed to tsgo's answer
-and **verified byte-identical to `tools/tsgo-7.0.2/lib/tsc` on both spellings**; `spineExReceiverDisplay` now needs
-no rule at all, because it renders whatever the type says. `M04ExpandoSpineMigrationTest:627`'s `typeof Foo` is a
-CLASS static and was correctly left alone.
-
-**THE DESIGN, AND THE THREE ORDERING FACTS THAT ARE LOAD-BEARING RATHER THAN TIDY.** Members attach in
-`getTypeOfFunction` (the single TS attachment point, which stores the `Type.Object` at the B198 sentinel so identity
-is stable for the self-reference `g.self = g`). (i) **The member TABLE is planted BEFORE the member TYPES are
-computed**: typing a right-hand side can read the host's own members (`f.a = 1; f.b = f.a`), which runs
-`resolveStructuredTypeMembers` on a type whose `properties` is still null — whose anonymous arm would plant an EMPTY
-table and permanently mask this one (round 833). (ii) Every member is **seeded `anyType`** for the same reason, so a
-genuine cycle (`f.a = f.a`) degrades instead of recursing. (iii) The member type is written at MINT time, ungated —
-the `resolveReferenceMembers` idiom — which is sound because the id is reachable only from this one type, so round
-778's write gate has nothing to protect. `expandoAttachedTypeIds` keeps route (B) SHUT for attached types because
-B431's spine anchor already owns that read and without the marker the two **emit the same row twice** (measured;
-pinned by `an absent member on an expando host is reported exactly once`).
-
-**THE BOUNDARIES ARE MEASURED, AND ONE IS DELIBERATELY WIDER THAN B431.** An **OVERLOAD SET attaches** — tsgo
-renders `{ (x: string): void; (x: number): void; tag: number; }` — where B431's candidate rule is `nameCount == 1`;
-the two cannot contradict each other, because with members present `cmamPlainFunctionTypeTrusted` refuses route (A)
-outright. A namespace-merged host, a class static side and an INTERFACE merge are all REFUSED (tsgo renders
-`typeof ns` / `typeof C`, which we already match); JavaScript files are refused whole, because a JS host's members
-are B419/B432/B433's territory and admitting them here moves
-`jsFunctionWithPrototypeNoErrorTruncationNoCrash`, whose subject is the LENGTH of a rendered function type. Member
-types UNION across writes and the right-hand side is WIDENED; members render in SOURCE order, which needed the
-collector to carry each member's first-write `pos` — `collectExpandoDecls` does not walk in source order, and the
-do-while arm visits the CONDITION before the BODY.
-
-**WHAT THE INSTRUMENTS COULD AND COULD NOT SAY.** The grid is a CONTROL and the count was taken BEFORE the round:
-the eight profiles carry **0 genuine expando shapes** across 1,249 `.ts` files (the 8 grep hits are one
-function-LOCAL false positive). **And the cost gate is structurally BLIND to this change** — its counters are type
-RESOLUTION operations while the new per-container scan is a pure AST walk, so its exit 0 means "no resolution
-moved", never "the scan is free". What bounds the scan is its SHAPE: memoized per CONTAINER rather than per name, so
-one scan answers for every function declared in it ((INC.57)'s quadratic shape avoided by construction). The real
-gate was the corpus screen, and the assignability side — giving a type new members changes every relation it
-participates in — is what it was measuring.
-
-**PROCESS NOTE.** The implementing agent ended without a final report, leaving its suite running; the verification,
-all five remaining gates, the tsgo re-measurement of both countdown pins and this write-up were completed by the
-orchestrator against the binary it left. Also worth carrying: a `pgrep -f "GradleWrapperMain"` wait-loop MATCHES ITS
-OWN command line and never exits — CLAUDE.md documents exactly this and it still cost ~20 minutes; the bracket form
-`GradleWrapperMai[n]` is the one that answers.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -926,7 +930,18 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-34 LANDED 2026-09-20 ((P18.85)-(P18.145) notes) — pending **26 → 25**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-35 LANDED 2026-09-20 ((P18.85)-(P18.146) notes) — pending **25 → 24**,
+  skipped 49, suite 20,089/0. **(P18.146) CLOSED `noParameterReassignmentIIFEAnnotated.errors.txt`** by
+  implementing tsgo's `checkUnmatchedJSDocParameters` whole: it is TWO branches chosen by whether the function
+  reads `arguments`, reporting different CODES over different TAGS, and this compiler had one branch and never
+  asked the question. 19 cells measured against tsgo first; 5 of the first 7 diverged, so the ledger row was one
+  cell of a six-cell family. Two walkers retired: **B558 was ANTI-CORRECT by construction** (its regex matched
+  only the VARIADIC `@param {...T}` form, which is the one shape tsgo can never report — read a pin walker's
+  GATE, not its message), and **B557's hardcoded TS2683 was a DUPLICATE** of the general implicit-`this` rule,
+  masked for as long as the baseline also mismatched on the JSDoc row. **A pending row can hide a second defect
+  behind the one its ledger entry names** — re-read the diff after closing the named mechanism.
+  `corpus-screen.sh` 0 of 8,719, and 0 of 8,720 with the row `--include`d. 21 pins, 8 arms, all red.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-34 LANDED 2026-09-20 ((P18.85)-(P18.145) notes) — pending **26 → 25**,
   skipped 50, suite 20,068/0. **(P18.145) CLOSED `asyncArrowInClassES5(target=es2015).js`** by deleting a
   TypeScript-6 disjunct the code's own comment described: the class-alias capture for a static field initializer
   is decided by `this` and nothing else, where TS6 also pre-emitted it for EVERY async-arrow initializer and so

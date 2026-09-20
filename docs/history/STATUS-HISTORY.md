@@ -14,6 +14,25 @@ how the pin set was repaired: ablating the two keys read 1 and 2 RED only after 
 added, without which the flag key would have shipped unpinned (round 807). Recorded and unqueued: `b: T | (() =>
 T)` without `NoInfer` is silent in tsgo and emits TS2353 here — not in the corpus, so no gate sees it. 9 pins.
 
+**(P18.141) — (INV.2b) COMMIT 1: `Project.typeOracle()`, A MISSION-LEG DELIVERABLE, 20,044 / 0 / 53 (2026-09-20).**
+The first (INV.*) round since 2026-09-10 and NOT a parity row: leg 2, "an embeddable whole-program checker", and the
+documented reason the JetBrains/WebStorm evaluation paused. (INV.1)/(INV.2) landed the store and the Stage-2 facade
+in September and had **no consumer**; this gives them one. **`Checker.kt` is UNTOUCHED** (the item required it), so
+`cost_gate.py` is a control and reads identical to (P18.140), and no 8-profile grid was run — `--listAll` never
+builds an oracle, so the two binaries cannot differ in any diagnostic. **A stale oracle answers a WRONG `Type`, not
+null** — the store is keyed by file NAME and read by `nodeId` behind a bounds check alone — which is why closing is
+the whole mechanism; measured on three edit shapes, an in-place retype answers ALL 9 identifiers with the old types
+(100% answer rate, no signal). `docs/type-oracle.md` § 1 claimed a re-parse "answers nothing", wrong in BOTH
+directions. **The invalidation set is FOUR and the code said three** (`reloadFile` since (INC.56)) — corrected, with
+its own pin. **The thread question was decided here and the obvious implementation is wrong**: a guard on the BUILD
+THREAD'S IDENTITY would refuse every query of every oracle, because `runWithDeepStack`'s thread is `join()`ed and
+dead; the handoff writes the advanced COUNTERS back to the caller, so "the asking thread's sequences dominate the
+build's" is the soundness condition. Measured: a fresh thread minted ids **1-70** where `anyType.id` is **10** —
+round 825's worker race through a retained oracle. **Retention measured for the first time: 146.9 / 146.3 MB**, with
+381,670 of 381,670 identifiers answered; the (INC.36) ladder's existing row is an inert control and now says so.
+Scope held: the capability, NOT the decision — commit 3 needs an instrument that does not exist and a first-wins
+alias hazard that has none. 17 pins, 9 ablation arms including a recorded redundant pair.
+
 **(P18.139) — THREE SMALL LEDGER ROWS, AND ONE WHOSE MECHANISM DID NOT EXIST, 20,018 / 0 / 55 (2026-09-20).**
 Ledger 33 -> 30, all three rows ACTIVE in the screen's 3,069 / 0 — the closure receipt. **The best result is a
 FALSIFIED hypothesis**: the doubled path separator was briefed as a real path-JOIN defect and there is no join —

@@ -55,6 +55,74 @@ is a control for this whole family rather than a gate.
 called `RelationHeadSuppression`), and I retracted it mid-round. It mattered: the fix is a NARROWING of an existing
 approximation, not the ADDITION the brief described.
 
+### Round (P18.136) — (CHK.124) step 1: real expando MEMBERS on a function type, and a display rule that was pristine 6.0.3's answer (2026-09-19)
+
+Suite **19,952 / 0 / 59** (+17 pins, skipped 60 -> 59), errors screen 3,065 / 0 and emit 5,645 / 0 with the closed
+row ACTIVE in that count, cost gate exit 0, `huge_methods --fail-over 0` exit 0, warning gate clean, 8-profile grid
+8 x 0/0 on both arms with emit 78 vs 78 byte-identical. Ledger **35 -> 34**.
+
+**THE LEDGER ROW IS THE SMALL HALF.** `expandoFunctionNestedAssigments` closes because `typeof Foo` now renders
+`{ (): void; inVariableInit: number; … }` — and it closes THROUGH `typeToString`, which already produced tsgo's
+braces form byte-for-byte, so no third hand-built expando display string was written (after B433's). The big half is
+that **two shipping wrong answers move**, neither of which any ledger row covered:
+
+    const zs: string = zg.px;                  BEFORE silent (`zg.px` was `any`)  ->  NOW TS2322, tsgo-identical
+    const zd: { (): void; px: number } = zg;   BEFORE a FALSE TS2322              ->  NOW silent, tsgo-identical
+
+**AND THE THIRD IS ONLY PARTLY MOVED, WHICH THIS NOTE RECORDS RATHER THAN ROUNDS OFF**: `const zc: typeof zg = zh`
+was SILENT and now REPORTS, but as `TS2322 Type '() => void' is not assignable to type 'typeof zg'.` where tsgo says
+`TS2741 Property 'px' is missing in type '() => void' but required in type '{ (): void; px: number; }'.` So the
+members participate in assignability (the row exists at all only because they do) while the TARGET-side display
+keeps the `typeof` spelling and the code is the generic one. Missing-row -> wrong-code-row is an improvement, not
+parity, and it is the successor's first item.
+
+**A STALE DISPLAY RULE IS RETIRED, AND IT WAS A COUNTDOWN NOBODY HAD RE-MEASURED.**
+`ExpandoReceiverDisplayTest`'s KDoc § 2 stated that both references name a function carrying expandos as
+`typeof $name`, and two pins asserted it. That was **pristine `typescript@6.0.3`'s answer** and is FALSE of the only
+reference this project now has: measured, tsgo renders `'{ (): void; tag: number; }'` for both the property-access
+and the element-access spelling, and read position makes no difference. Both pins are re-pointed to tsgo's answer
+and **verified byte-identical to `tools/tsgo-7.0.2/lib/tsc` on both spellings**; `spineExReceiverDisplay` now needs
+no rule at all, because it renders whatever the type says. `M04ExpandoSpineMigrationTest:627`'s `typeof Foo` is a
+CLASS static and was correctly left alone.
+
+**THE DESIGN, AND THE THREE ORDERING FACTS THAT ARE LOAD-BEARING RATHER THAN TIDY.** Members attach in
+`getTypeOfFunction` (the single TS attachment point, which stores the `Type.Object` at the B198 sentinel so identity
+is stable for the self-reference `g.self = g`). (i) **The member TABLE is planted BEFORE the member TYPES are
+computed**: typing a right-hand side can read the host's own members (`f.a = 1; f.b = f.a`), which runs
+`resolveStructuredTypeMembers` on a type whose `properties` is still null — whose anonymous arm would plant an EMPTY
+table and permanently mask this one (round 833). (ii) Every member is **seeded `anyType`** for the same reason, so a
+genuine cycle (`f.a = f.a`) degrades instead of recursing. (iii) The member type is written at MINT time, ungated —
+the `resolveReferenceMembers` idiom — which is sound because the id is reachable only from this one type, so round
+778's write gate has nothing to protect. `expandoAttachedTypeIds` keeps route (B) SHUT for attached types because
+B431's spine anchor already owns that read and without the marker the two **emit the same row twice** (measured;
+pinned by `an absent member on an expando host is reported exactly once`).
+
+**THE BOUNDARIES ARE MEASURED, AND ONE IS DELIBERATELY WIDER THAN B431.** An **OVERLOAD SET attaches** — tsgo
+renders `{ (x: string): void; (x: number): void; tag: number; }` — where B431's candidate rule is `nameCount == 1`;
+the two cannot contradict each other, because with members present `cmamPlainFunctionTypeTrusted` refuses route (A)
+outright. A namespace-merged host, a class static side and an INTERFACE merge are all REFUSED (tsgo renders
+`typeof ns` / `typeof C`, which we already match); JavaScript files are refused whole, because a JS host's members
+are B419/B432/B433's territory and admitting them here moves
+`jsFunctionWithPrototypeNoErrorTruncationNoCrash`, whose subject is the LENGTH of a rendered function type. Member
+types UNION across writes and the right-hand side is WIDENED; members render in SOURCE order, which needed the
+collector to carry each member's first-write `pos` — `collectExpandoDecls` does not walk in source order, and the
+do-while arm visits the CONDITION before the BODY.
+
+**WHAT THE INSTRUMENTS COULD AND COULD NOT SAY.** The grid is a CONTROL and the count was taken BEFORE the round:
+the eight profiles carry **0 genuine expando shapes** across 1,249 `.ts` files (the 8 grep hits are one
+function-LOCAL false positive). **And the cost gate is structurally BLIND to this change** — its counters are type
+RESOLUTION operations while the new per-container scan is a pure AST walk, so its exit 0 means "no resolution
+moved", never "the scan is free". What bounds the scan is its SHAPE: memoized per CONTAINER rather than per name, so
+one scan answers for every function declared in it ((INC.57)'s quadratic shape avoided by construction). The real
+gate was the corpus screen, and the assignability side — giving a type new members changes every relation it
+participates in — is what it was measuring.
+
+**PROCESS NOTE.** The implementing agent ended without a final report, leaving its suite running; the verification,
+all five remaining gates, the tsgo re-measurement of both countdown pins and this write-up were completed by the
+orchestrator against the binary it left. Also worth carrying: a `pgrep -f "GradleWrapperMain"` wait-loop MATCHES ITS
+OWN command line and never exits — CLAUDE.md documents exactly this and it still cost ~20 minutes; the bracket form
+`GradleWrapperMai[n]` is the one that answers.
+
 ### Round (P18.134) — (LEGACY.0b): a missing member on a function type, and the one line that made `typeof g` and `() => void` answer differently (2026-09-19)
 
 `contextualReturnTypeOfIIFE2.errors.txt` CLOSES — pending **37 -> 36**, skipped 62 -> 61, suite **19,927 / 0 / 61**
