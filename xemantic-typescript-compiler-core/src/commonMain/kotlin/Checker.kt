@@ -32836,17 +32836,17 @@ class Checker(
     private fun walkJSDocParamTagsInStmt(stmt: Statement, source: String, fileName: String) {
         when (stmt) {
             is FunctionDeclaration -> {
-                checkJSDocParamTagsForFunction(stmt.leadingComments, stmt.parameters, source, fileName)
+                checkJSDocParamTagsForFunction(stmt.leadingComments, stmt.parameters, stmt.body, source, fileName)
                 stmt.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
             }
             is ClassDeclaration -> {
                 for (member in stmt.members) when (member) {
                     is MethodDeclaration -> {
-                        checkJSDocParamTagsForFunction(member.leadingComments, member.parameters, source, fileName)
+                        checkJSDocParamTagsForFunction(member.leadingComments, member.parameters, member.body, source, fileName)
                         member.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
                     }
                     is Constructor -> {
-                        checkJSDocParamTagsForFunction(member.leadingComments, member.parameters, source, fileName)
+                        checkJSDocParamTagsForFunction(member.leadingComments, member.parameters, member.body, source, fileName)
                         member.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
                     }
                     // round 43 iter2: include accessor bodies so JSDoc `@param` inside
@@ -32854,7 +32854,7 @@ class Checker(
                     // gets its single param checked.
                     is GetAccessor -> member.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
                     is SetAccessor -> {
-                        checkJSDocParamTagsForFunction(member.leadingComments, member.parameters, source, fileName)
+                        checkJSDocParamTagsForFunction(member.leadingComments, member.parameters, member.body, source, fileName)
                         member.body?.let { walkJSDocParamTagsInStmts(it.statements, source, fileName) }
                     }
                     is PropertyDeclaration -> member.initializer?.let { walkJSDocParamTagsInExpr(it, source, fileName) }
@@ -32932,11 +32932,11 @@ class Checker(
     private fun walkJSDocParamTagsInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is FunctionExpression -> {
-                checkJSDocParamTagsForFunction(expr.leadingComments, expr.parameters, source, fileName)
+                checkJSDocParamTagsForFunction(expr.leadingComments, expr.parameters, expr.body, source, fileName)
                 walkJSDocParamTagsInStmts(expr.body.statements, source, fileName)
             }
             is ArrowFunction -> {
-                checkJSDocParamTagsForFunction(expr.leadingComments, expr.parameters, source, fileName)
+                checkJSDocParamTagsForFunction(expr.leadingComments, expr.parameters, expr.body, source, fileName)
                 when (val body = expr.body) {
                     is Block -> walkJSDocParamTagsInStmts(body.statements, source, fileName)
                     is Expression -> walkJSDocParamTagsInExpr(body, source, fileName)
@@ -32997,14 +32997,38 @@ class Checker(
         }
     }
 
-    private fun checkJSDocParamTagsForFunction(
-        comments: List<Comment>?,
-        parameters: List<Parameter>,
-        source: String,
-        fileName: String,
-    ) {
-        if (comments.isNullOrEmpty()) return
-        val paramNames = parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+    /**
+     * One parsed JSDoc `@param` tag, as [checkJSDocParamTagsForFunction] needs it:
+     * tsgo's `checkUnmatchedJSDocParameters` decides per TAG and, when the function
+     * reads `arguments`, looks at the LAST tag only — so the scan has to produce a
+     * LIST rather than emit as it goes.
+     *
+     * @property name the tag's parameter name (never empty — an empty-named tag is
+     *   dropped, as tsgo drops it from `jsdocParameters`).
+     * @property namePos absolute source position of [name] (the diagnostic's anchor).
+     * @property typeText the text INSIDE the `{…}` braces, or `null` when the tag
+     *   carries no type expression at all (tsgo: `TypeExpression == nil`).
+     * @property isNested the name is a qualified `obj.foo` (tsgo: not an Identifier).
+     * @property isNameFirst the name precedes the `{type}` (`@param n {T}`), which is
+     *   also how a type-less `@param n` parses. tsgo reports TS8024 only when this is
+     *   FALSE, and ignores it entirely on the `arguments` path.
+     */
+    private class JsDocParamTagRef(
+        val name: String,
+        val namePos: Int,
+        val typeText: String?,
+        val isNested: Boolean,
+        val isNameFirst: Boolean,
+    )
+
+    /**
+     * The `@param` tags of [comments], in source order. Scanning rules (the `{type}`
+     * brace skip, the `[name]` bracket strip, the nested-name test) are the ones
+     * [jsDocRequiredParamNames] uses, kept here rather than shared because that helper
+     * answers a NAME SET for arity and this one needs each tag's position and type.
+     */
+    private fun jsDocParamTagRefs(comments: List<Comment>): List<JsDocParamTagRef> {
+        val out = ArrayList<JsDocParamTagRef>()
         for (comment in comments) {
             if (comment.kind != SyntaxKind.MultiLineComment) continue
             val ct = comment.text
@@ -33020,7 +33044,12 @@ class Checker(
                 }
                 var i = tagIdx + 6
                 while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t' || ct[i] == '\n' || ct[i] == '\r' || ct[i] == '*')) i++
+                // `@param {T} n` is type-first; `@param n` and `@param n {T}` are both
+                // name-first, which is the shape tsgo's TS8024 branch skips.
+                val isNameFirst = !(i < ct.length && ct[i] == '{')
+                var typeText: String? = null
                 if (i < ct.length && ct[i] == '{') {
+                    val typeStart = i + 1
                     var depth = 1; i++
                     while (i < ct.length && depth > 0) {
                         when (ct[i]) {
@@ -33029,6 +33058,9 @@ class Checker(
                         }
                         i++
                     }
+                    // `i` now sits one past the matching `}` (or at EOF for an
+                    // unterminated brace, where there is no type expression to read).
+                    if (depth == 0) typeText = ct.substring(typeStart, i - 1)
                 }
                 while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
                 // Optional `[name]` brackets — strip them and treat the inner text as the name.
@@ -33041,27 +33073,198 @@ class Checker(
                     idx = tagIdx + 6
                     continue
                 }
-                // Skip nested name (`@param obj.foo`) — out of scope; only flag the
-                // top-level identifier when it's missing from the param list.
-                val isNested = i < ct.length && ct[i] == '.'
-                if (!isNested && name !in paramNames) {
-                    val pos = comment.pos + nameStart
-                    val length = name.length
-                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
-                    diagnostics.add(Diagnostic(
-                        message = "JSDoc '@param' tag has name '$name', but there is no parameter with that name.",
-                        category = DiagnosticCategory.Error,
-                        code = 8024,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = pos,
-                        length = length,
-                    ))
+                // A name-first tag's type sits AFTER the name (`@param n {T}`); read it
+                // so the `arguments` branch can ask whether it is an array type.
+                if (isNameFirst && typeText == null) {
+                    var j = i
+                    while (j < ct.length && (ct[j] == ' ' || ct[j] == '\t')) j++
+                    if (j < ct.length && ct[j] == '{') {
+                        val typeStart = j + 1
+                        var depth = 1; j++
+                        while (j < ct.length && depth > 0) {
+                            when (ct[j]) {
+                                '{' -> depth++
+                                '}' -> depth--
+                            }
+                            j++
+                        }
+                        if (depth == 0) typeText = ct.substring(typeStart, j - 1)
+                    }
                 }
+                out.add(
+                    JsDocParamTagRef(
+                        name = name,
+                        namePos = comment.pos + nameStart,
+                        typeText = typeText,
+                        isNested = i < ct.length && ct[i] == '.',
+                        isNameFirst = isNameFirst,
+                    )
+                )
                 idx = i
             }
         }
+        return out
+    }
+
+    /**
+     * tsgo's `isArrayType(getTypeFromTypeNode(tag.TypeExpression.Type))`, decided from
+     * the tag's TYPE TEXT because JSDoc types are not parsed into `TypeNode`s here.
+     * Only the spellings that resolve to a `Type.Reference` on `Array`/`ReadonlyArray`
+     * answer true: the JSDoc VARIADIC `{...T}` (which is `T[]`, and is the whole reason
+     * `noParameterReassignmentIIFEAnnotated` carries no TS8029), an `[]` suffix, and an
+     * `Array`/`ReadonlyArray` head. A top-level `|`/`&` makes the type a union or
+     * intersection, which is not such a reference however its last member is spelled.
+     *
+     * RESIDUE, measured: a type ALIAS that resolves to an array (`@typedef {number[]}
+     * Nums` + `@param {Nums} rest`) is silent in tsgo and answers false here, so that
+     * shape keeps an ours-only row — the same row it has today, with a different code.
+     */
+    private fun jsDocTypeTextIsArray(raw: String): Boolean {
+        var t = raw.trim()
+        // `{T=}` is JSDoc's optional-parameter suffix, not part of the type.
+        if (t.endsWith("=")) t = t.dropLast(1).trim()
+        if (t.isEmpty()) return false
+        if (t.startsWith("...")) return true
+        var depth = 0
+        for (c in t) {
+            when (c) {
+                '<', '(', '[', '{' -> depth++
+                '>', ')', ']', '}' -> depth--
+                '|', '&' -> if (depth == 0) return false
+            }
+        }
+        if (t.endsWith("[]")) return true
+        if (t == "Array" || t == "ReadonlyArray") return true
+        return (t.startsWith("Array<") || t.startsWith("ReadonlyArray<")) && t.endsWith(">")
+    }
+
+    /**
+     * tsgo's `nodeStartsNewLexicalEnvironment` (checker/utilities.go): the node kinds
+     * that bind their own `arguments`, so an `arguments` below one is NOT a reference
+     * belonging to the function being checked. **An `ArrowFunction` IS on tsgo's list**
+     * even though JavaScript gives an arrow its enclosing function's `arguments` —
+     * measured, and it is what makes a tag on a function whose only `arguments` sits in
+     * a nested arrow report TS8024 rather than TS8029.
+     */
+    private fun jsDocStartsNewLexicalEnvironment(node: Node): Boolean = when (node) {
+        is Constructor, is FunctionExpression, is FunctionDeclaration, is ArrowFunction,
+        is MethodDeclaration, is GetAccessor, is SetAccessor, is ModuleDeclaration,
+        is SourceFile -> true
+        else -> false
+    }
+
+    /**
+     * tsgo's `containsArgumentsReference`: does [body] read the `arguments` object of
+     * the function it belongs to? Walks with an explicit worklist (CLAUDE.md: a new
+     * full-tree walker must not recurse, or `binderBinaryExpressionStress` overflows),
+     * stopping at a nested lexical environment and at type positions, and reading only
+     * the RECEIVER of a member access so that `o.arguments` is a member name rather
+     * than a reference.
+     *
+     * Approximate in one direction only: the name is matched by SPELLING where tsgo
+     * additionally resolves it, so a local named `arguments` would read as a reference.
+     * That direction SUPPRESSES rows, never invents one.
+     */
+    private fun jsDocBodyReadsArguments(body: Node?): Boolean {
+        if (body == null) return false
+        val work = ArrayDeque<Node>()
+        work.addLast(body)
+        while (work.isNotEmpty()) {
+            when (val n = work.removeLast()) {
+                is Identifier -> if (n.text == "arguments") return true
+                is PropertyAccessExpression -> work.addLast(n.expression)
+                is ElementAccessExpression -> work.addLast(n.expression)
+                else -> {
+                    if (jsDocStartsNewLexicalEnvironment(n) || n is TypeNode) continue
+                    forEachChild(n) { work.addLast(it) }
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * tsgo's `checkUnmatchedJSDocParameters` (checker/jsdoc.go), measured cell by cell
+     * against tsgo 7.0.2 (LEGACY.0b): the check has TWO branches chosen by whether the
+     * function reads `arguments`, and they report DIFFERENT codes over DIFFERENT tags.
+     *
+     *  - reads `arguments` -> only the **LAST** tag can report, and it reports TS8029
+     *    ("It would match 'arguments' if it had an array type"); it stays silent when
+     *    that tag names a real parameter, is qualified, carries no type, or carries an
+     *    ARRAY type. Every earlier tag is silent whatever it names.
+     *  - otherwise -> the pre-existing TS8024 per unmatched tag, now also skipping a
+     *    NAME-FIRST tag (`@param n {T}` / `@param n`) and a tag whose index is that of
+     *    a BINDING-PATTERN parameter, both of which tsgo skips.
+     *
+     * RESIDUE: a qualified tag name is TS8032 *Qualified name '{0}' is not allowed
+     * without a leading '@param {object} {1}'* in tsgo and silent here — a diagnostic
+     * this compiler does not emit at all, so it is its own family.
+     */
+    private fun checkJSDocParamTagsForFunction(
+        comments: List<Comment>?,
+        parameters: List<Parameter>,
+        body: Node?,
+        source: String,
+        fileName: String,
+    ) {
+        if (comments.isNullOrEmpty()) return
+        val tags = jsDocParamTagRefs(comments)
+        if (tags.isEmpty()) return
+        val paramNames = parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+        // tsgo's `excludedParameters`: the indices of BINDING-PATTERN parameters, tested
+        // against the TAG index in both branches (its own conflation, carried verbatim).
+        val patternIndices = parameters.indices.filter {
+            val nm = parameters[it].name
+            nm is ObjectBindingPattern || nm is ArrayBindingPattern
+        }.toSet()
+
+        if (jsDocBodyReadsArguments(body)) {
+            val lastIdx = tags.size - 1
+            val last = tags[lastIdx]
+            if (last.isNested) return
+            if (lastIdx in patternIndices) return
+            if (last.name in paramNames) return
+            val typeText = last.typeText ?: return
+            if (jsDocTypeTextIsArray(typeText)) return
+            emitJSDocUnmatchedParam(last, argumentsForm = true, source = source, fileName = fileName)
+            return
+        }
+
+        for ((index, tag) in tags.withIndex()) {
+            if (index in patternIndices) continue
+            // Skip nested name (`@param obj.foo`) — TS8032 territory, not emitted here.
+            if (tag.isNested) continue
+            if (tag.name in paramNames) continue
+            if (tag.isNameFirst) continue
+            emitJSDocUnmatchedParam(tag, argumentsForm = false, source = source, fileName = fileName)
+        }
+    }
+
+    /** The two messages of [checkJSDocParamTagsForFunction], anchored at the tag's name. */
+    private fun emitJSDocUnmatchedParam(
+        tag: JsDocParamTagRef,
+        argumentsForm: Boolean,
+        source: String,
+        fileName: String,
+    ) {
+        val (line, character) = getLineAndCharacterOfPosition(source, tag.namePos)
+        diagnostics.add(
+            Diagnostic(
+                message = if (argumentsForm) {
+                    "JSDoc '@param' tag has name '${tag.name}', but there is no parameter with " +
+                        "that name. It would match 'arguments' if it had an array type."
+                } else {
+                    "JSDoc '@param' tag has name '${tag.name}', but there is no parameter with that name."
+                },
+                category = DiagnosticCategory.Error,
+                code = if (argumentsForm) 8029 else 8024,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = tag.namePos,
+                length = tag.name.length,
+            )
+        )
     }
 
     /**
@@ -33335,41 +33538,10 @@ class Checker(
         }
     }
 
-    /** B558: TS8029 — a rest `@param {...T} name` JSDoc tag whose `name` matches no
-     *  parameter of [fn] (it would match `arguments` if the type were an array). Gated
-     *  to the corpus-unique `importScripts.apply` walk so the FP surface is exactly the
-     *  noParameterReassignmentIIFEAnnotated inner function. */
-    private fun iqaCheckJsDocParam(fn: FunctionExpression, comments: List<Comment>, source: String, fileName: String) {
-        val paramNames = fn.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
-        val re = Regex("""@param\s+\{\.\.\.[^}]*\}\s+([A-Za-z_$][\w$]*)""")
-        for (c in comments) {
-            for (m in re.findAll(c.text)) {
-                val g = m.groups[1] ?: continue
-                val name = g.value
-                if (name in paramNames) continue
-                val pos = c.pos + g.range.first
-                val (line, ch) = getLineAndCharacterOfPosition(source, pos)
-                diagnostics.add(Diagnostic(
-                    message = "JSDoc '@param' tag has name '$name', but there is no parameter with that name. It would match 'arguments' if it had an array type.",
-                    category = DiagnosticCategory.Error, code = 8029, fileName = fileName,
-                    line = line, character = ch, start = pos, length = name.length,
-                ))
-            }
-        }
-    }
-
     private fun iqaStmt(stmt: Statement, source: String, fileName: String) {
         when (stmt) {
             is ExpressionStatement -> iqaExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> {
-                val ex = stmt.expression
-                if (ex is FunctionExpression) {
-                    val cmts = ((stmt.leadingComments ?: emptyList()) +
-                        (ex.leadingComments ?: emptyList())).distinctBy { it.pos }
-                    iqaCheckJsDocParam(ex, cmts, source, fileName)
-                }
-                ex?.let { iqaExpr(it, source, fileName) }
-            }
+            is ReturnStatement -> stmt.expression?.let { iqaExpr(it, source, fileName) }
             is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { iqaExpr(it, source, fileName) }
             is Block -> stmt.statements.forEach { iqaStmt(it, source, fileName) }
             is IfStatement -> {
@@ -33391,20 +33563,11 @@ class Checker(
                 if (callee is PropertyAccessExpression && callee.name.text == "apply" &&
                     (callee.expression as? Identifier)?.text == "importScripts" &&
                     e.arguments.size == 2 && (e.arguments[1] as? Identifier)?.text == "arguments") {
-                    // B558: `this` as the receiver arg of `.apply(this, arguments)` is
-                    // implicit-`any` unless noImplicitThis was EXPLICITLY disabled
-                    // (`noParameterReassignmentJSIIFE` sets `@noImplicitThis: false` →
-                    // suppressed; `noParameterReassignmentIIFEAnnotated` leaves it default → fires).
-                    val thisArg = e.arguments[0]
-                    if (!options.noImplicitThisExplicitlyFalse &&
-                        (thisArg as? Identifier)?.text == "this") {
-                        val (tl, tc) = getLineAndCharacterOfPosition(source, thisArg.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "'this' implicitly has type 'any' because it does not have a type annotation.",
-                            category = DiagnosticCategory.Error, code = 2683, fileName = fileName,
-                            line = tl, character = tc, start = thisArg.pos, length = "this".length,
-                        ))
-                    }
+                    // (LEGACY.0b): the implicit-`this` row this block used to hardcode is
+                    // gone. The general rule (step 7) emits TS2683 at the same position and
+                    // honours `noImplicitThis: false` itself, so the transcription was a
+                    // DUPLICATE — masked for as long as the baseline also mismatched on the
+                    // TS8029 this round removed.
                     val arg = e.arguments[1] as Identifier
                     val (line, ch) = getLineAndCharacterOfPosition(source, arg.pos)
                     diagnostics.add(Diagnostic(

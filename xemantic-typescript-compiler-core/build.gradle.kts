@@ -995,18 +995,6 @@ val tsgoPendingBaselines = listOf(
         "return type."
     ),
     TsgoPendingBaseline(
-        "noParameterReassignmentIIFEAnnotated.errors.txt",
-        "JSDoc: an OURS-ONLY TS8029. (LEGACY.0b) F6a is CLOSED for this row -- its " +
-            "TS2740 leaf now matches tsgo byte for byte -- and what is left is a " +
-            "different family: `@param {...unknown} rest` on a zero-parameter function " +
-            "that reads `arguments`. A VARIADIC JSDoc param IS an array type, so tsc's " +
-            "`It would match 'arguments' if it had an array type` rung must not fire; " +
-            "our emitter does not test the tag's variadic-ness. tsgo reports nothing " +
-            "here. Layer `submoduleAccepted`. tsgo: index.js(6,42): error TS2740 (which " +
-            "we now match) | ours: that row PLUS index.js(3,28): error TS8029: JSDoc " +
-            "'@param' tag has name 'rest', but there is no parameter with that name.",
-    ),
-    TsgoPendingBaseline(
         "overloadOnConstNoAnyImplementation2.errors.txt",
         "REFUSED with a measurement (LEGACY.0b step 18): the mechanism is tsgo's type-NODE " +
         "REUSE, not quote preservation. tsgo prints the SOURCE TEXT of a parameter's written " +
