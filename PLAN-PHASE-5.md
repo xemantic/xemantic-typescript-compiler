@@ -25,6 +25,52 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.150) — (LEGACY.0b): TS2416's chain drills into the failing member, at both tails (2026-09-20)
+
+**NO LEDGER MOVEMENT — pending stays 22.** Suite **20,122 / 0 / 47** (+10 pins). The sibling of
+(P18.149) one walker over, and the same law: the general elaboration is what knows how deep a
+mismatch is, so a chain that names two object types and stops is short by however far the cause
+actually lies.
+
+Two tails were truncated. A PROPERTY pair in `checkClassPropertyOverrides` added its
+`Type 'A' is not assignable to type 'B'.` line and had nothing more to say for a non-function
+pair. A method's RETURN pair in `addSignatureElaboration` had a drill only for a UNION source, so
+an OBJECT return pair stopped one line later. Three of six shapes went from truncated to
+byte-identical with tsgo 7.0.2; the other three were already right and are pinned as controls.
+
+**THE SIZING THIS ROUND INHERITED — MY OWN, WRITTEN ONE ROUND EARLIER — WAS WRONG, AND IN THE SAME
+DIRECTION AS THE ONE BEFORE IT.** (P18.148) and (P18.149) both recorded `class C implements B`
+whose method return drills deeper as reporting **no TS2416 at all**. Measured cell by cell first:
+all six shapes REPORT, in the `string`/`number` and the `number | undefined` spellings alike, and
+the gap is purely chain DEPTH. That is twice in one session that a recorded sizing said "missing"
+where the truth was "truncated" — the failure mode is reading a SHORT chain as an ABSENT row, and
+the cheap guard against it is that a sizing must quote the row it claims is missing.
+
+**AN UNDISCRIMINATED ARM WAS AN UNPINNED GUARD FOR THE SECOND TIME TODAY, AND THIS ONE WAS BLIND TO
+BOTH INSTRUMENTS.** Ablating the double-append guard (`chain.size == sizeBefore`) read **0 RED over
+8 pins AND 0 mismatch over 8,722 baselines**. (P18.149)'s a4 was found by the screen; this one the
+screen could not see either, so the shape had to be CONSTRUCTED from the mechanism — a member that
+is BOTH callable and carries a property, which is the only way `addSignatureElaboration` elaborates
+AND the property drill has something to drill. Without the guard that chain grows a contradictory
+DOUBLE tail (two sibling sub-chains at one indent) where tsgo prints exactly one. **So round 807's
+"a signal with no uniquely-its-own failure is a REDUNDANT guard" now has two measured
+counter-examples in one session**, and the escalation is: pins -> screen -> ask what shape the
+mechanism could bite on.
+
+**A PRE-EXISTING DIVERGENCE SURFACED AND IS RECORDED RATHER THAN CHASED**: for that same hybrid
+member tsgo elaborates the PROPERTY (`Types of property 'tag' are incompatible.`) and we elaborate
+the PARAMETER. It is a question of WHICH mechanism to elaborate, not of chain depth, so it is out
+of this round and pinned `residue -` with today's answer so the next reader meets a recorded
+decision instead of a guarantee.
+
+**Gates.** corpus-screen **0 of 8,722** both channels — the real instrument here, since 54 TS2416
+baselines are in the reference set; 8-profile grid 8x0 with emit 0 differing, where `added`/
+`removed` cannot move by construction (the round adds no diagnostic) and the profiles carry no
+chain line for `fullDiffLines` to see either, so that grid is a CONTROL and says so in its header;
+**`cost_gate` is BYTE-IDENTICAL to (P18.149)'s reading on every counter** — the receipt that the
+compiler profile carries none of this population and that no resolution moved; `huge_methods` PASS
+(0 over the limit, 17,965 methods). 10 pins, 3 arms, all red.
+
 ### Round (P18.149) — (LEGACY.0b): TS2430's chain comes from the engine, and two shapes it could not see (2026-09-20)
 
 **Ledger 23 -> 22**, `complexRecursiveCollections.errors.txt` CLOSED and ACTIVE in the screen's
@@ -943,7 +989,22 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-38 LANDED 2026-09-20 ((P18.85)-(P18.149) notes) — pending **22**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-39 LANDED 2026-09-20 ((P18.85)-(P18.150) notes) — pending **22**,
+  skipped 47, suite 20,122/0. **(P18.150) CLOSED NO ROW and is recorded for its MEASUREMENT**: it landed
+  TS2416's chain DEPTH — a property pair and a method's RETURN pair now drill into the failing member
+  instead of stopping at the whole-object line — which is (P18.149)'s mechanism one walker over.
+  **THE SIZING (P18.148)/(P18.149) HANDED IT WAS WRONG**: `class C implements B` whose method return
+  drills deeper does NOT "report no TS2416 at all" — all six shapes report, in both the `string`/`number`
+  and `number | undefined` spellings, and the gap was purely chain depth. Twice in one session a
+  recorded sizing read a SHORT chain as an ABSENT row; a sizing must quote the row it claims is missing.
+  **AND AN UNDISCRIMINATED ARM WAS AN UNPINNED GUARD FOR THE SECOND TIME**: the double-append guard read
+  0 RED on 8 pins AND 0 mismatch on 8,722 baselines, and is load-bearing — the discriminating shape (a
+  member that is both callable and carries a property) had to be constructed from the mechanism, because
+  both standing instruments are blind to it. **RESIDUE recorded, not chased**: for that hybrid member
+  tsgo elaborates the PROPERTY where we elaborate the PARAMETER — which mechanism to elaborate, not how
+  deep, so it is a separate family; pinned `residue -`. cost_gate byte-identical to (P18.149) on every
+  counter, i.e. the profiles carry none of this population.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-38 LANDED 2026-09-20 ((P18.85)-(P18.149) notes) — pending **22**,
   skipped 47, suite 20,112/0. **(P18.149) CLOSED `complexRecursiveCollections.errors.txt`** by routing
   TS2430 through the general elaboration engine and deciding the two member shapes the name-based
   walker cannot NAME (a METHOD, and a property annotated with a TYPE LITERAL) structurally. The

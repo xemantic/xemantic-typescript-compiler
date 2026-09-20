@@ -1,3 +1,18 @@
+**(P18.145) — (LEGACY.0b): A STATIC FIELD'S CLASS ALIAS IS DECIDED BY `this`, NOT BY `async`, 20,068 / 0 / 50 (2026-09-20).**
+Ledger 26 -> 25, `asyncArrowInClassES5(target=es2015).js` CLOSED and ACTIVE in the EMIT channel's 5,646 / 0.
+Below ES2022 a static field initializer reading `this` needs the class captured into a temp; TypeScript 6 ALSO
+pre-emitted that capture for EVERY async-arrow initializer, defensively, producing a `var _a;` and an `_a = Cls;`
+the program never reads — **its own comment said so**. tsgo 7.0.2 does not. Three cells measured first, and the
+MIDDLE one is what makes the rule precise: no `this` -> no capture; reading the class **BY NAME** -> no capture
+(a name is not `this`); reading `this` -> capture, and `_a` IS read. So the async case that needs an alias is
+exactly the one `containsThisInExpr` already answers. **THE EMIT CHANNEL IS THE ONLY INSTRUMENT THAT CAN SEE THIS
+FAMILY** — round 738's `skipEmitOutputs` gate means `--noEmit` never runs the transformer, so the 8-profile grid
+and every counter here are structurally blind; the control beside it is an `--outDir` run over the compiler
+profile (78 files, no stray `var _a;`). **A pre-existing divergence is exposed and recorded rather than chased**:
+tsgo rewrites the capturing arrow's `this` to `_a` and we leave `this` in the body — unchanged by this round,
+which is why the positive-control pin asserts the CAPTURE and not the body. Ablation: restoring the TS6 disjunct
+reddens 2 of 5 pins. 5 pins, 1 arm.
+
 **(P18.144) — (LEGACY.0b): A JSDoc `@param` MAKES ITS PARAMETER REQUIRED, 20,063 / 0 / 51 (2026-09-20).**
 Ledger 27 -> 26, `jsdocRestParameter` CLOSED and ACTIVE in the screen's 3,073 / 0. The rule, measured cell by cell
 against tsgo: `@param {T} n` REQUIRED; `[n]`, `[n=1]` and `{T=}` optional; `{...T}` REQUIRED with type `T[]` and
