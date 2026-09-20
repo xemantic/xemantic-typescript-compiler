@@ -999,33 +999,6 @@ val tsgoPendingBaselines = listOf(
         "return type."
     ),
     TsgoPendingBaseline(
-        "jsdocRestParameter.errors.txt",
-        "RE-SIZED AND MOSTLY DE-RISKED (LEGACY.0b recon 2026-09-20, (P18.143) session): the row " +
-        "is TWO edits and neither is a missing model. **(1) RETIRE B437** " +
-        "`checkJsRestParamArgTypes`, a tsc-6 walker that models `@param {...number} a` as a REST " +
-        "parameter and is the SOLE producer of our two TS2345 rows -- PassLab-priced at 1 " +
-        "mismatch (this row) and 0 collateral over 8,718 subtests, and with it disabled we emit " +
-        "NOTHING for the file. It contradicts our own typing, which is already RIGHT: a probe " +
-        "`/** @type {string} */ const p = a` reads `Type 'number[]' is not assignable to type " +
-        "'string'`, byte-identical to tsgo. **(2) WIRE THE SAME-FILE ARITY PATH TO THE JSDoc " +
-        "REQUIRED-NAME SET.** tsgo's rule, measured in 7 cells: a plain `@param {T} n` makes `n` " +
-        "REQUIRED, `[n]` / `[n=1]` / `{T=}` leave it optional, `{...T}` makes it REQUIRED (type " +
-        "`T[]`, arity still exactly 1), and an untagged JS parameter stays optional. That is " +
-        "EXACTLY what `Checker.jsDocRequiredParamNames` + `paramInfo`'s `jsDocRequiredNames` " +
-        "already implement (B434) -- and they are wired ONLY to the CROSS-FILE map. Measured: " +
-        "declaration and call in two `.js` files is byte-identical to tsgo (`Expected 1 " +
-        "arguments, but got 0` / `but got 2`); the same two lines in ONE file read `Expected 0-1` " +
-        "and nothing for the zero-arg call, because `spineArgFileCtx` fills `funcParams` from " +
-        "`collectFuncDecls` FIRST and only then takes cross-file names not already present. " +
-        "**THE OPEN QUESTION IS ONLY WHICH MAP THE SAME-FILE CALL READS**: wiring " +
-        "`collectFuncDecls`' two `paramInfo` calls plus `overloadSigOf` (verified present in the " +
-        "compiled class) did NOT move the one-file probe, so a third map or a stale " +
-        "`spineIsJsLike` is in the way. Blast radius of the whole change measured at **0 of " +
-        "8,718**. Layer `submodule`. tsgo: /a.js(8,6): error TS2554: Expected 1 arguments, but " +
-        "got 2. | ours: /a.js(7,3): error TS2345: Argument of type 'number[]' is not assignable " +
-        "to parameter of type 'number'."
-    ),
-    TsgoPendingBaseline(
         "noParameterReassignmentIIFEAnnotated.errors.txt",
         "JSDoc: an OURS-ONLY TS8029. (LEGACY.0b) F6a is CLOSED for this row -- its " +
             "TS2740 leaf now matches tsgo byte for byte -- and what is left is a " +

@@ -8669,12 +8669,11 @@ class Parser(
     // diagnostics with garbled squiggles. Primitives have no name — no risk.
     /** Result of [parseJSDocParamPrimitiveTypeMap]: synthesized param type nodes by name,
      *  plus the subset of names declared as a JSDoc rest param (`@param {...T} name`). */
-    private data class JsDocParamTypeMap(val types: Map<String, TypeNode>, val restNames: Set<String>)
+    private data class JsDocParamTypeMap(val types: Map<String, TypeNode>)
 
     private fun parseJSDocParamPrimitiveTypeMap(comments: List<Comment>?): JsDocParamTypeMap? {
         if (!isJsLikeFile || comments.isNullOrEmpty()) return null
         var map: MutableMap<String, TypeNode>? = null
-        val restNames = mutableSetOf<String>()
         for (comment in comments) {
             if (comment.kind != SyntaxKind.MultiLineComment) continue
             val ct = comment.text
@@ -8719,10 +8718,21 @@ class Parser(
                 if (name.isEmpty() || typeText == null) continue
                 // Skip nested name (`@param obj.foo`) — not a top-level parameter binding.
                 if (i < ct.length && ct[i] == '.') continue
-                // B437: JSDoc rest param `@param {...PRIMITIVE} name` → a rest parameter
-                // of type `PRIMITIVE[]`. Primitive element only (no name resolution → no
-                // JSDoc-position risk). The element keyword node carries pos=-1/end=-1
-                // (synthetic); the callers set `dotDotDotToken` for names in restNames.
+                // (LEGACY.0b) JSDoc variadic `@param {...PRIMITIVE} name` types the
+                // parameter `PRIMITIVE[]` and leaves it an ORDINARY required parameter.
+                // Primitive element only (no name resolution → no JSDoc-position risk);
+                // the element keyword node carries pos=-1/end=-1 (synthetic).
+                //
+                // IT IS NOT A REST PARAMETER, which is where tsgo 7.0.2 and TypeScript 6
+                // part company and why B437's `restNames` marking was dropped. Measured on
+                // `/** @param {...number} a */ function f(a) {}`: tsgo types `a` as
+                // `number[]` (a `@type {string}` probe reads
+                // `Type 'number[]' is not assignable to type 'string'`), accepts
+                // `f([1, 2])`, and reports TS2554 `Expected 1 arguments, but got 2` for
+                // `f(1, "2")` and `f(1, 2)` — i.e. arity stays EXACTLY ONE. Marking it rest
+                // made the arity unbounded, which is what suppressed those two rows and
+                // what the corpus-unique walker `checkJsRestParamArgTypes` existed to paper
+                // over with a TS2345 tsgo does not produce.
                 if (typeText.startsWith("...")) {
                     val elemText = typeText.substring(3).trim()
                     val elemKind = primitiveKeywordKindFor(elemText)
@@ -8733,7 +8743,6 @@ class Parser(
                                 elementType = KeywordTypeNode(kind = elemKind, pos = -1, end = -1),
                                 pos = -1, end = -1,
                             )
-                            restNames.add(name)
                         }
                     }
                     continue
@@ -8779,7 +8788,7 @@ class Parser(
             }
         }
         if (map == null) return null
-        return JsDocParamTypeMap(map, restNames)
+        return JsDocParamTypeMap(map)
     }
 
     /** Apply JSDoc `@param {primitive} name` types to params whose `type` is null,
@@ -8800,8 +8809,7 @@ class Parser(
                 val t = name?.let { map[it] }
                 if (t != null) {
                     changed = true
-                    val isRest = name in parsed.restNames
-                    p.copy(type = t, typeFromJSDoc = true, dotDotDotToken = p.dotDotDotToken || isRest)
+                    p.copy(type = t, typeFromJSDoc = true)
                 } else p
             }
         }

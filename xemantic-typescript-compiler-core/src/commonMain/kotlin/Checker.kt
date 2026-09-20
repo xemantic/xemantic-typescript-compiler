@@ -8978,10 +8978,13 @@ class Checker(
         pass("checkJsAmbientDeclaredClassProperties") { checkJsAmbientDeclaredClassProperties() }
         // B431: checkExpandoFunctionNestedReads (TS2339 expando nested reads)
         // rides the spine since round 644 — see spineExEnterNode.
-        // B437: TS2345 for args passed to a JS function with a JSDoc primitive rest param
-        // (`@param {...number} a`) — dedicated walker (the `.js` checkCallExpressionTypes
-        // skip is load-bearing). JS-like files only.
-        pass("checkJsRestParamArgTypes") { checkJsRestParamArgTypes() }
+        // (LEGACY.0b) B437 RETIRED: `checkJsRestParamArgTypes` emitted TS2345 for arguments
+        // passed to a JS function with a JSDoc `@param {...T}` parameter, modelling it as a
+        // REST parameter. tsgo 7.0.2 does not — the parameter is an ordinary REQUIRED one of
+        // type `T[]`, so the answer is TS2554 on ARITY, which the ordinary path now gives
+        // (`Parser.parseJsDocParamTypes` no longer marks it rest). PassLab-priced before
+        // removal at ONE mismatch — its own already-pending baseline — and 0 collateral over
+        // 8,718 subtests.
         // B437b: TS2322 + TS2554 for a JS `@callback`-typed variable initialized with `{}`
         // and called with arguments (jsdocCallbackAndType). JS-like files only.
         pass("checkJsCallbackTypeAssignments") { checkJsCallbackTypeAssignments() }
@@ -35216,141 +35219,6 @@ class Checker(
      * blocks) all declare, matching tsc; top-level undeclared reads are deliberately NOT
      * checked (broader FP surface, no consumer). RUNTIME function props excluded.
      */
-    /** B437: TS2345 for arguments passed to a JS function with a JSDoc primitive rest
-     *  parameter (`@param {...number} a`). The `.js` skip in checkCallExpressionTypes
-     *  is load-bearing (B152b), so this is a dedicated narrow walker. Gated to a
-     *  top-level FunctionDeclaration in a JS file whose LAST parameter is a
-     *  JSDoc-synthesized (`typeFromJSDoc`) rest param of `ArrayType(primitive)` and
-     *  whose name is declared exactly once. Each call's args from the rest position
-     *  onward are checked against the element type; a genuine mismatch is always a
-     *  real type error (no FP — `any`/error args are skipped). */
-    private fun checkJsRestParamArgTypes() {
-        for (result in checkedResults) {
-            val sf = result.sourceFile
-            val fileName = sf.fileName
-            if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
-            val nameCount = HashMap<String, Int>()
-            val cands = HashMap<String, Pair<Int, Type>>()  // name -> (restIndex, elementType)
-            for (stmt in sf.statements) {
-                if (stmt !is FunctionDeclaration) continue
-                val nm = stmt.name?.text ?: continue
-                nameCount[nm] = (nameCount[nm] ?: 0) + 1
-                val params = stmt.parameters
-                val restIdx = params.indexOfFirst { it.dotDotDotToken }
-                if (restIdx < 0 || restIdx != params.lastIndex) continue
-                val rp = params[restIdx]
-                if (!rp.typeFromJSDoc) continue
-                val at = rp.type as? ArrayType ?: continue
-                if (at.elementType !is KeywordTypeNode) continue
-                val elemType = getTypeFromTypeNode(at.elementType)
-                if (elemType === anyType || elemType === errorType) continue
-                cands[nm] = restIdx to elemType
-            }
-            if (cands.isEmpty()) continue
-            // Drop ambiguous (overloaded/redeclared) names — conservative FP firewall.
-            val final = cands.filterKeys { (nameCount[it] ?: 0) == 1 }
-            if (final.isEmpty()) continue
-            val source = sf.text
-            for (stmt in sf.statements) walkJsRestCallStmt(stmt, final, source, fileName)
-        }
-    }
-
-    private fun walkJsRestCallStmt(s: Statement?, cands: Map<String, Pair<Int, Type>>, source: String, fileName: String) {
-        when (s) {
-            null -> {}
-            is ExpressionStatement -> walkJsRestCallExpr(s.expression, cands, source, fileName)
-            is ReturnStatement -> walkJsRestCallExpr(s.expression, cands, source, fileName)
-            is ThrowStatement -> walkJsRestCallExpr(s.expression, cands, source, fileName)
-            is VariableStatement -> s.declarationList.declarations.forEach { walkJsRestCallExpr(it.initializer, cands, source, fileName) }
-            is IfStatement -> { walkJsRestCallExpr(s.expression, cands, source, fileName); walkJsRestCallStmt(s.thenStatement, cands, source, fileName); walkJsRestCallStmt(s.elseStatement, cands, source, fileName) }
-            is Block -> s.statements.forEach { walkJsRestCallStmt(it, cands, source, fileName) }
-            is ForStatement -> {
-                (s.initializer as? Expression)?.let { walkJsRestCallExpr(it, cands, source, fileName) }
-                (s.initializer as? VariableDeclarationList)?.declarations?.forEach { walkJsRestCallExpr(it.initializer, cands, source, fileName) }
-                walkJsRestCallExpr(s.condition, cands, source, fileName); walkJsRestCallExpr(s.incrementor, cands, source, fileName); walkJsRestCallStmt(s.statement, cands, source, fileName)
-            }
-            is ForInStatement -> { walkJsRestCallExpr(s.expression, cands, source, fileName); walkJsRestCallStmt(s.statement, cands, source, fileName) }
-            is ForOfStatement -> { walkJsRestCallExpr(s.expression, cands, source, fileName); walkJsRestCallStmt(s.statement, cands, source, fileName) }
-            is WhileStatement -> { walkJsRestCallExpr(s.expression, cands, source, fileName); walkJsRestCallStmt(s.statement, cands, source, fileName) }
-            is DoStatement -> { walkJsRestCallExpr(s.expression, cands, source, fileName); walkJsRestCallStmt(s.statement, cands, source, fileName) }
-            is SwitchStatement -> {
-                walkJsRestCallExpr(s.expression, cands, source, fileName)
-                for (c in s.caseBlock) when (c) {
-                    is CaseClause -> { walkJsRestCallExpr(c.expression, cands, source, fileName); c.statements.forEach { walkJsRestCallStmt(it, cands, source, fileName) } }
-                    is DefaultClause -> c.statements.forEach { walkJsRestCallStmt(it, cands, source, fileName) }
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                s.tryBlock.statements.forEach { walkJsRestCallStmt(it, cands, source, fileName) }
-                s.catchClause?.block?.statements?.forEach { walkJsRestCallStmt(it, cands, source, fileName) }
-                s.finallyBlock?.statements?.forEach { walkJsRestCallStmt(it, cands, source, fileName) }
-            }
-            is LabeledStatement -> walkJsRestCallStmt(s.statement, cands, source, fileName)
-            is FunctionDeclaration -> s.body?.statements?.forEach { walkJsRestCallStmt(it, cands, source, fileName) }
-            else -> {}
-        }
-    }
-
-    private fun walkJsRestCallExpr(e: Expression?, cands: Map<String, Pair<Int, Type>>, source: String, fileName: String) {
-        when (e) {
-            null -> {}
-            is CallExpression -> {
-                val callee = e.expression as? Identifier
-                val info = callee?.let { cands[it.text] }
-                if (info != null) {
-                    val (restIdx, elemType) = info
-                    val args = e.arguments
-                    for (ai in restIdx until args.size) {
-                        val arg = args[ai]
-                        if (arg is SpreadElement) continue  // spread into rest: element-by-element unknown
-                        val argType = getWidenedLiteralType(getTypeOfExpression(arg))
-                        if (argType === errorType || argType === anyType) continue
-                        if (isTypeAssignableTo(argType, elemType)) continue
-                        val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Argument of type '${typeToString(argType)}' is not assignable to parameter of type '${typeToString(elemType)}'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2345,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = arg.pos,
-                            length = expressionTrueEnd(arg) - arg.pos,
-                        ))
-                    }
-                }
-                walkJsRestCallExpr(e.expression, cands, source, fileName)
-                e.arguments.forEach { walkJsRestCallExpr(it, cands, source, fileName) }
-            }
-            is BinaryExpression -> {
-                // Iterative right-spine to avoid StackOverflow on deep `a+b+c` chains.
-                var cur: Expression? = e
-                while (cur is BinaryExpression) {
-                    walkJsRestCallExpr(cur.left, cands, source, fileName)
-                    cur = cur.right
-                }
-                walkJsRestCallExpr(cur, cands, source, fileName)
-            }
-            is ParenthesizedExpression -> walkJsRestCallExpr(e.expression, cands, source, fileName)
-            is PropertyAccessExpression -> walkJsRestCallExpr(e.expression, cands, source, fileName)
-            is ElementAccessExpression -> { walkJsRestCallExpr(e.expression, cands, source, fileName); walkJsRestCallExpr(e.argumentExpression, cands, source, fileName) }
-            is NewExpression -> { walkJsRestCallExpr(e.expression, cands, source, fileName); e.arguments?.forEach { walkJsRestCallExpr(it, cands, source, fileName) } }
-            is ConditionalExpression -> { walkJsRestCallExpr(e.condition, cands, source, fileName); walkJsRestCallExpr(e.whenTrue, cands, source, fileName); walkJsRestCallExpr(e.whenFalse, cands, source, fileName) }
-            is PrefixUnaryExpression -> walkJsRestCallExpr(e.operand, cands, source, fileName)
-            is PostfixUnaryExpression -> walkJsRestCallExpr(e.operand, cands, source, fileName)
-            is ArrayLiteralExpression -> e.elements.forEach { walkJsRestCallExpr(it, cands, source, fileName) }
-            is ObjectLiteralExpression -> e.properties.forEach { p -> when (p) { is PropertyAssignment -> walkJsRestCallExpr(p.initializer, cands, source, fileName); is SpreadAssignment -> walkJsRestCallExpr(p.expression, cands, source, fileName); else -> {} } }
-            is SpreadElement -> walkJsRestCallExpr(e.expression, cands, source, fileName)
-            is AsExpression -> walkJsRestCallExpr(e.expression, cands, source, fileName)
-            is TypeAssertionExpression -> walkJsRestCallExpr(e.expression, cands, source, fileName)
-            is NonNullExpression -> walkJsRestCallExpr(e.expression, cands, source, fileName)
-            is SatisfiesExpression -> walkJsRestCallExpr(e.expression, cands, source, fileName)
-            is ArrowFunction -> { (e.body as? Block)?.statements?.forEach { walkJsRestCallStmt(it, cands, source, fileName) }; (e.body as? Expression)?.let { walkJsRestCallExpr(it, cands, source, fileName) } }
-            is FunctionExpression -> e.body.statements.forEach { walkJsRestCallStmt(it, cands, source, fileName) }
-            else -> {}
-        }
-    }
 
     /** B437b: TS2322 + TS2554 for a JS `@callback`-typed variable (jsdocCallbackAndType).
      *  A standalone `@callback NAME` JSDoc (no `@param`/`@returns`) declares a callback
@@ -66167,7 +66035,7 @@ interface DataView {
                 val nm = stmt.name?.text ?: continue
                 if (nm in crossFileDupNames) continue
                 if (nm in crossFileFuncs) { crossFileDupNames.add(nm); crossFileFuncs.remove(nm); continue }
-                val req = if (bIsJs) jsDocRequiredParamNames(stmt.leadingComments) else emptySet()
+                val req = jsDocRequiredParamNames(bIsJs, stmt.leadingComments)
                 crossFileFuncs[nm] = paramInfo(stmt.parameters, bIsJs, req).copy(declFileName = bfn, declSource = br.sourceFile.text)
             }
         }
@@ -66509,7 +66377,7 @@ interface DataView {
             for (fd in nestedFuncs) {
                 val name = fd.name?.text ?: continue
                 if (overlay[name]?.isOverloaded == true) continue
-                overlay[name] = paramInfo(fd.parameters, spineIsJsLike)
+                overlay[name] = paramInfo(fd.parameters, spineIsJsLike, jsDocRequiredParamNames(spineIsJsLike, fd.leadingComments))
                 written++
             }
             FrontEnd.noteMuts(FrontEnd.CP_ARG_OVERLAY, written)
@@ -66651,7 +66519,7 @@ interface DataView {
         OverloadSig(info.minParams, info.maxParams, info.hasRest, 0, 0, info.parameters)
 
     private fun overloadSigOf(stmt: FunctionDeclaration, isJsFile: Boolean): OverloadSig {
-        val pi = paramInfo(stmt.parameters, isJsFile)
+        val pi = paramInfo(stmt.parameters, isJsFile, jsDocRequiredParamNames(isJsFile, stmt.leadingComments))
         val tps = stmt.typeParameters
         return OverloadSig(
             minParams = pi.minParams,
@@ -66765,7 +66633,7 @@ interface DataView {
                         // across the overload SIGNATURES (excluding the impl) so a call whose
                         // arg count matches NO overload can fire TS2554. (Was: collapsed to
                         // (0, MAX, rest) which suppressed all overload arity checking.)
-                        val thisInfo = paramInfo(stmt.parameters, isJsFile)
+                        val thisInfo = paramInfo(stmt.parameters, isJsFile, jsDocRequiredParamNames(isJsFile, stmt.leadingComments))
                         val thisSig = overloadSigOf(stmt, isJsFile)
                         val existing = funcParams[name]
                         if (existing != null) {
@@ -66801,7 +66669,7 @@ interface DataView {
                         continue
                     }
                     if (funcParams[name]?.isOverloaded == true) continue // impl of an overloaded fn — keep overload arity
-                    val info = paramInfo(stmt.parameters, isJsFile)
+                    val info = paramInfo(stmt.parameters, isJsFile, jsDocRequiredParamNames(isJsFile, stmt.leadingComments))
                     funcParams[name] = info
                 }
                 is ClassDeclaration -> {
@@ -66879,6 +66747,13 @@ interface DataView {
      * marks which JS params become REQUIRED. Mirrors the `@param`-parsing in
      * [checkJSDocParamTagsForFunction] (incl. the `{type}` skip and `[name]` bracket rule).
      */
+    /**
+     * (LEGACY.0b) [jsDocRequiredParamNames] for a JS file, empty otherwise — the one
+     * shape every arity site needs, so a new site cannot half-wire it.
+     */
+    private fun jsDocRequiredParamNames(isJsFile: Boolean, comments: List<Comment>?): Set<String> =
+        if (isJsFile) jsDocRequiredParamNames(comments) else emptySet()
+
     private fun jsDocRequiredParamNames(comments: List<Comment>?): Set<String> {
         if (comments.isNullOrEmpty()) return emptySet()
         val out = HashSet<String>()
@@ -66894,9 +66769,14 @@ interface DataView {
                 if (afterTag.isLetterOrDigit() || afterTag == '_') { idx = tagIdx + 6; continue }
                 var i = tagIdx + 6
                 while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t' || ct[i] == '\n' || ct[i] == '\r' || ct[i] == '*')) i++
+                // JSDoc's `{T=}` suffix is the third optional spelling, beside `[n]` and
+                // `[n=1]` — measured against tsgo 7.0.2, which leaves such a parameter
+                // optional exactly as the bracket forms do.
+                var typeEndsWithEq = false
                 if (i < ct.length && ct[i] == '{') {
                     var depth = 1; i++
                     while (i < ct.length && depth > 0) { when (ct[i]) { '{' -> depth++; '}' -> depth-- }; i++ }
+                    typeEndsWithEq = i >= 2 && ct[i - 2] == '='
                 }
                 while (i < ct.length && (ct[i] == ' ' || ct[i] == '\t')) i++
                 val hasBrackets = i < ct.length && ct[i] == '['
@@ -66907,9 +66787,10 @@ interface DataView {
                 idx = tagIdx + 6
                 if (name.isEmpty()) continue
                 val isNested = i < ct.length && ct[i] == '.'
-                // `[name]` (optional), `[name=default]` (optional w/ default), and nested
-                // `obj.foo` tags do NOT make the param required.
-                if (!hasBrackets && !isNested) out.add(name)
+                // `[name]` (optional), `[name=default]` (optional w/ default), `{T=}`
+                // (optional by type suffix) and nested `obj.foo` tags do NOT make the
+                // param required.
+                if (!hasBrackets && !isNested && !typeEndsWithEq) out.add(name)
             }
         }
         return out
