@@ -68447,3 +68447,67 @@ run — after correction all fifteen asserted columns are tsgo's own column VERB
 full span-parity receipt. Counting "active corpus subtests carrying code X" by sanitised test NAME reads **0 for
 every code** and looks like no coverage; the generator references the baseline PATH. And a KIR refusal assertion
 that reads `stderr` reads EMPTY for a compile that never ran — the diagnostics are in `report`.
+
+### Round (P18.129) — a nested `function` lands; the CLASS half is REFUSED because a nested class's identity is PER INVOCATION (2026-09-17)
+
+**Three commits** (fix, test, this docs commit). **Suite 19,881 → 19,918 / 0 / 65**, the KIR module **276 → 313**;
+`huge_methods.py --fail-over 0` over BOTH core (875) and the KIR module (114, `lowerCall` **unchanged at 4,620** —
+the first design's call arm was removed with the redesign); `cost_gate.py` exit 0 and the core corpus screen
+8,790 / 0 are CONTROLS, and **the 8-profile grid is inapplicable by construction — `Checker.class` is
+BYTE-IDENTICAL to (P18.128)'s landed binary**. Neither the checker nor `JsRuntime.kt` was touched, so no generator
+run was owed.
+
+**THE GAP WAS UNTESTED RATHER THAN INCOMPLETE, WHICH IS WHY IT SURVIVED.** Censused before briefing: **not one of
+the 59 KIR corpus fixtures declared a `function` inside a function body**, and `18-var-scoping.ts` reaches for
+`const innerFn = function () {}` — the EXPRESSION form, which works. Of 41 characterised shapes, **39 refused**.
+This round adds `30-nested-functions.ts` + its `.expected` to the corpus, so the hole that let the gap survive is
+closed by a spawned-child behaviour gate rather than by a note.
+
+**THE TWO DESIGNS WERE NOT A FREE CHOICE, AND ONLY BUILDING THE WRONG ONE SHOWED IT.** The obvious design — a real
+local `IrSimpleFunction`, so a direct call costs no dynamic op, mirroring (KIR.LOWER.6) for a top-level function —
+compiled, and **the refusal MOVED** rather than disappearing: `the checker gave no signature for this declaration`.
+A nested declaration is never BOUND (B83.5: `Binder.bindStatement` recurses into a `SourceFile`'s own list and a
+`ModuleBlock`'s and nothing else), so `signatureOf` answers null and a parameter has no symbol to type. **The
+expression form needs neither** — every slot is `Any?` and every name comes from the syntax — which is exactly why
+`const innerFn = function () {}` has always worked. Measured price of reusing it: **one `jsCall` per call** where a
+top-level function's call is direct, and **zero** in a value position. Unblocking that is a BINDER change, not a
+backend one.
+
+**HOISTING IS NOT `frame.hoisted`, AND tsgo's OWN DIAGNOSTIC SETTLES IT.** That table is function-scoped `var`; a
+`function` in a block is BLOCK-scoped in a module — reading one after its block closes is TS2304 in tsgo, measured.
+So the slot is a block-scoped local and hoisting is per STATEMENT LIST, wired at all eight list sites (function
+body, block, switch — hoisted once over the union of every clause — catch, two lambda bodies, and the constructor's
+pre- and post-`super` halves). **The load-bearing subtlety**: the SLOT is always created at the top, but the LAMBDA
+can only be built there when the body reads nothing the list itself declares, or a capture is out of scope —
+`mentionsAny` is that conservative test, and arm a3 (hoist everything) reddens exactly the 8 capture pins while a1
+(never hoist) reddens exactly the 5 hoisting pins.
+
+**THE CLASS HALF IS REFUSED, AND THE REFUSAL ANSWERS THE QUESTION NO EARLIER ROUND HAD TO: A NESTED CLASS'S
+CARRIER CANNOT BE A STATIC.** Measured in node: `function outer() { class P {} ; return P }` gives
+`outer() !== outer()`, and an instance from one invocation is **not `instanceof`** another's `P` — identity is per
+INVOCATION, where (KIR.LOWER.5)/(KIR.LOWER.6)'s carrier is a lazy per-file static. Landing it needs five mechanisms
+against M1's one (a local `IrClass` built mid-body, its own `extends` ordering within the list, the (P18.122) bag
+protocol, the `super` chain, a per-invocation carrier), so it is refused with that price and a NAMED refusal
+message replacing the generic one.
+
+**PINS AND ABLATION.** `KirNestedDeclarationTest`, **36 pins, 940 lines**, every shape pin asserting `compiled`
+first and every refusal asserting the MESSAGE. **39 of 40 RED** against the pre-change lowering; the one green is a
+declared CONTROL asserting the expression form's own pre-existing behaviour. Nine arms. **a1 and a4 are a
+round-927 PAIR** — two mistakes at two layers with one observable, recorded rather than claimed — and **a8 is a
+MEASURED REDUNDANT guard**: under `strict` tsgo refuses a bare `this` in a nested `function` (TS2683) and the only
+ways to give one a receiver are refused by this backend anyway, so no valid program can observe the choice; kept
+because it is the right semantics and free. **Three countdown pins were re-pointed** against measured answers,
+never edited to whatever the code prints.
+
+**THREE THINGS THAT DID NOT WORK, AND THE SECOND IS THE REUSABLE ONE.** The typed design above, built and
+abandoned. **The first hoisting test scanned the whole declaration NODE — whose own name is in the "declared here"
+set — so EVERY nested function deferred and a call above it read `undefined`**; that is arm a4, and it reads
+identically to a1, which is why the pair is recorded rather than split. And a scripted slice edit re-appended its
+own end anchor and duplicated a signature line onto itself, producing 20 unresolved-reference errors hundreds of
+lines from the edit — **the tell was that every unresolved name EXISTED**.
+
+**RESIDUES, each a loud refusal or a pinned divergence**: the CLASS half; the one `jsCall` per nested call (a
+binder question); a NON-capturing nested function is one object across invocations where node says two — inherited
+from the expression form, with a control pin proving it is not new; a capturing body called above its own
+declaration throws `JsTypeError` where node throws `ReferenceError` (both fail, and node's is the TDZ, so no
+correct program is affected); and a nested generator or `async` refuses, as everywhere in this subset.

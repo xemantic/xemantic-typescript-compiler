@@ -25,6 +25,57 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.139) — three small ledger rows, and the one whose stated mechanism did not exist (2026-09-20)
+
+Ledger **33 -> 30**, skipped 58 -> 55, suite **20,018 / 0 / 55** (+16, exactly the new pins). Errors screen
+3,069 / 0 and emit 5,645 / 0 **with all three rows ACTIVE in the compared count** — the closure receipt. Cost gate
++0.15% max with `output.programFiles` FLAT at 78, `huge_methods --fail-over 0` exit 0, warning gate clean,
+8-profile grid 8 x 0/0 on both arms with emit 78 vs 78 byte-identical. No countdown pin moved, and a (CHK.126)
+disarm check confirmed no pre-existing pin was keyed on a spelling this round made unproducible.
+
+**(1) THE DOUBLED PATH SEPARATOR — THE BRIEF'S HYPOTHESIS WAS FALSIFIED, AND THAT IS THE ROUND'S BEST RESULT.** I
+briefed it as "a real path-joining defect… fix it AT THE JOIN". **There is no join.** The `//` is AUTHORED in the
+fixture: line 36 of `jsDeclarationEmitExportedClassWithExtends.ts` spells
+`@filename: node_modules/lit-element/development//lit-element.d.ts`, and tsgo's harness puts every unit name
+through `GetNormalizedAbsolutePath` before it becomes a program file name where ours carried the directive text
+verbatim. The fix is in `parseMultiFileSource`, i.e. the CORPUS HARNESS's directive path, not in `PathUtil`.
+**Four independent checks answered "does the same join produce `//` elsewhere", and they are what make that a
+finding rather than a guess**: no join can produce it (`PathUtil.normalize` drops empty segments, `join`'s root
+head is explicit, the three emit sites `trimEnd('/')` first); of 1,556 distinct `@Filename` values exactly ONE
+carries a `//`; across every baseline `^==== .*//` matches exactly one line and the `.js` header form matches
+ZERO; and the `-project` path cannot produce one because a real filesystem hands back no empty component.
+
+**AND THE NARROW FIX IS NARROW FOR A MEASURED REASON.** A full `PathUtil.normalize` there moves **22** baselines —
+19 leading-`./` names, 2 Windows paths, 1 `//` — because **tsgo's own diff machinery forgives half of its own
+normalization**: `DiffFixupOld` rewrites `==== ./` -> `==== ` in the OLD baseline before comparing, so a leading
+`./` never becomes a recorded divergence while a `//` does. Collapsing duplicate separators is exactly the part
+tsgo's diff records. The `./`-preserving and interior-`.`-preserving pins are the discriminators: a full normalize
+fails them.
+
+**TWO ROOT-ONLY `//` PRODUCERS WERE FOUND AND DELIBERATELY NOT CHANGED** (`resolveConfigPath`'s
+`"$p/tsconfig.json"` for `xtsc /`, and `effectiveTypeRoots`' `"$dir/node_modules/@types"` on the LAST iteration of
+EVERY build, since the walk always reaches `/`). Both are benign — Linux collapses a leading `//` and the type root
+is re-joined through `PathUtil.join` downstream — and **neither is pinnable today**, because `-project`'s
+`InMemoryVfs` normalizes on every lookup and is structurally blind to the spelling. Landing an unobservable path
+change with no gate that can see it is what (CFG.1) and round 902 forbid, so they are recorded with their
+reachability instead; the successor is a non-normalizing exact-key test `Vfs`.
+
+**(2) TS18042's `.<name>` TAIL.** tsgo appends it under ONE gate (`checker.go:6758`, `ast.IsImportSpecifier(node)`),
+and our B508 emitter is reached only for an `ImportClause` name — so it must never append. Measured per import
+form against tsgo: the default form now matches byte-for-byte; `import { N }` and `import { N as R }` are rows we
+do not emit at all (a separate, still-missing emitter, pinned `residue -`, and note tsgo names the PROPERTY in the
+renamed form); `import * as NS` is silent in both; `import X = require` never reaches TS18042 (TS8002 first).
+
+**(3) THE ANONYMOUS CLASS'S TYPE ARGUMENTS — A tsc-6 TRANSCRIPTION, NOT A MODEL GAP** ((P18.101)'s rule). The site
+is the hardcoded pin walker `checkMixinPrivateConflictReducedToNever`, whose own KDoc says it recomputes these
+strings because the types are not modelled; tsgo names an anonymous class by its declaration chain with NO type
+arguments at any level. **And the brief's question about the non-generic owner has a more interesting answer than
+"it already matches": tsgo does not produce this diagnostic there AT ALL** — with a concrete constructor base it
+reports TS2415 at the class and is silent at the member access, while our walker's `extendsParam` test is by NAME
+only and fires anyway. That is a **pre-existing ours-only row**, unchanged by this round and pinned `residue -`.
+**The walker was NOT narrowed**: that is a behaviour change whose only evidence is one hand-written probe, and a
+corpus-unique walker's proper successor is PassLab retirement, not tuning.
+
 ### Round (P18.138) — (CHK.124) step 3: the JavaScript object-literal host, and B433 priced rather than assumed (2026-09-19)
 
 `jsExpandoObjectDefineProperty.errors.txt` CLOSES — ledger **34 -> 33**, skipped 59 -> 58, suite
@@ -554,70 +605,6 @@ still leaks a TS7006 (J7).
 `private const val` immediately before an existing one, **orphaning that one's KDoc onto the new constant** — caught
 by reading the final diff, by no gate.
 
-### Round (P18.129) — a nested `function` lands; the CLASS half is REFUSED because a nested class's identity is PER INVOCATION (2026-09-17)
-
-**Three commits** (fix, test, this docs commit). **Suite 19,881 → 19,918 / 0 / 65**, the KIR module **276 → 313**;
-`huge_methods.py --fail-over 0` over BOTH core (875) and the KIR module (114, `lowerCall` **unchanged at 4,620** —
-the first design's call arm was removed with the redesign); `cost_gate.py` exit 0 and the core corpus screen
-8,790 / 0 are CONTROLS, and **the 8-profile grid is inapplicable by construction — `Checker.class` is
-BYTE-IDENTICAL to (P18.128)'s landed binary**. Neither the checker nor `JsRuntime.kt` was touched, so no generator
-run was owed.
-
-**THE GAP WAS UNTESTED RATHER THAN INCOMPLETE, WHICH IS WHY IT SURVIVED.** Censused before briefing: **not one of
-the 59 KIR corpus fixtures declared a `function` inside a function body**, and `18-var-scoping.ts` reaches for
-`const innerFn = function () {}` — the EXPRESSION form, which works. Of 41 characterised shapes, **39 refused**.
-This round adds `30-nested-functions.ts` + its `.expected` to the corpus, so the hole that let the gap survive is
-closed by a spawned-child behaviour gate rather than by a note.
-
-**THE TWO DESIGNS WERE NOT A FREE CHOICE, AND ONLY BUILDING THE WRONG ONE SHOWED IT.** The obvious design — a real
-local `IrSimpleFunction`, so a direct call costs no dynamic op, mirroring (KIR.LOWER.6) for a top-level function —
-compiled, and **the refusal MOVED** rather than disappearing: `the checker gave no signature for this declaration`.
-A nested declaration is never BOUND (B83.5: `Binder.bindStatement` recurses into a `SourceFile`'s own list and a
-`ModuleBlock`'s and nothing else), so `signatureOf` answers null and a parameter has no symbol to type. **The
-expression form needs neither** — every slot is `Any?` and every name comes from the syntax — which is exactly why
-`const innerFn = function () {}` has always worked. Measured price of reusing it: **one `jsCall` per call** where a
-top-level function's call is direct, and **zero** in a value position. Unblocking that is a BINDER change, not a
-backend one.
-
-**HOISTING IS NOT `frame.hoisted`, AND tsgo's OWN DIAGNOSTIC SETTLES IT.** That table is function-scoped `var`; a
-`function` in a block is BLOCK-scoped in a module — reading one after its block closes is TS2304 in tsgo, measured.
-So the slot is a block-scoped local and hoisting is per STATEMENT LIST, wired at all eight list sites (function
-body, block, switch — hoisted once over the union of every clause — catch, two lambda bodies, and the constructor's
-pre- and post-`super` halves). **The load-bearing subtlety**: the SLOT is always created at the top, but the LAMBDA
-can only be built there when the body reads nothing the list itself declares, or a capture is out of scope —
-`mentionsAny` is that conservative test, and arm a3 (hoist everything) reddens exactly the 8 capture pins while a1
-(never hoist) reddens exactly the 5 hoisting pins.
-
-**THE CLASS HALF IS REFUSED, AND THE REFUSAL ANSWERS THE QUESTION NO EARLIER ROUND HAD TO: A NESTED CLASS'S
-CARRIER CANNOT BE A STATIC.** Measured in node: `function outer() { class P {} ; return P }` gives
-`outer() !== outer()`, and an instance from one invocation is **not `instanceof`** another's `P` — identity is per
-INVOCATION, where (KIR.LOWER.5)/(KIR.LOWER.6)'s carrier is a lazy per-file static. Landing it needs five mechanisms
-against M1's one (a local `IrClass` built mid-body, its own `extends` ordering within the list, the (P18.122) bag
-protocol, the `super` chain, a per-invocation carrier), so it is refused with that price and a NAMED refusal
-message replacing the generic one.
-
-**PINS AND ABLATION.** `KirNestedDeclarationTest`, **36 pins, 940 lines**, every shape pin asserting `compiled`
-first and every refusal asserting the MESSAGE. **39 of 40 RED** against the pre-change lowering; the one green is a
-declared CONTROL asserting the expression form's own pre-existing behaviour. Nine arms. **a1 and a4 are a
-round-927 PAIR** — two mistakes at two layers with one observable, recorded rather than claimed — and **a8 is a
-MEASURED REDUNDANT guard**: under `strict` tsgo refuses a bare `this` in a nested `function` (TS2683) and the only
-ways to give one a receiver are refused by this backend anyway, so no valid program can observe the choice; kept
-because it is the right semantics and free. **Three countdown pins were re-pointed** against measured answers,
-never edited to whatever the code prints.
-
-**THREE THINGS THAT DID NOT WORK, AND THE SECOND IS THE REUSABLE ONE.** The typed design above, built and
-abandoned. **The first hoisting test scanned the whole declaration NODE — whose own name is in the "declared here"
-set — so EVERY nested function deferred and a call above it read `undefined`**; that is arm a4, and it reads
-identically to a1, which is why the pair is recorded rather than split. And a scripted slice edit re-appended its
-own end anchor and duplicated a signature line onto itself, producing 20 unresolved-reference errors hundreds of
-lines from the edit — **the tell was that every unresolved name EXISTED**.
-
-**RESIDUES, each a loud refusal or a pinned divergence**: the CLASS half; the one `jsCall` per nested call (a
-binder question); a NON-capturing nested function is one object across invocations where node says two — inherited
-from the expression form, with a control pin proving it is not new; a capturing body called above its own
-declaration throws `JsTypeError` where node throws `ReferenceError` (both fail, and node's is the TDZ, so no
-correct program is affected); and a nested generator or `async` refuses, as everywhere in this subset.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -948,7 +935,23 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-29 LANDED 2026-09-19 ((P18.85)-(P18.138) notes) — pending **34 → 33**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-30 LANDED 2026-09-20 ((P18.85)-(P18.139) notes) — pending **33 → 30**,
+  skipped 55, suite 20,018/0. **(P18.139) CLOSED THREE INDEPENDENT ROWS** — the corpus harness's `@filename`
+  separator collapse, TS18042's `.<name>` tail, and the anonymous-class display in the mixin pin walker.
+  **THE FIRST ONE'S RECORDED MECHANISM DID NOT EXIST**: it is not a path-JOIN defect, the `//` is AUTHORED in the
+  fixture (line 36) and tsgo's harness normalizes unit names where ours carried the directive text verbatim — so
+  the fix is in `parseMultiFileSource`, the CORPUS-HARNESS path, and `ProjectCompiler` never calls it. The collapse
+  is deliberately NARROWER than `PathUtil.normalize`: a full normalize moves **22** baselines because tsgo's own
+  `DiffFixupOld` forgives a leading `./` in the OLD baseline while recording a `//`.
+  **TWO ROOT-ONLY `//` PRODUCERS ARE RECORDED AND UNFIXED** (`resolveConfigPath` for `xtsc /`, and
+  `effectiveTypeRoots` on the LAST iteration of EVERY build) — both benign, and **neither pinnable today** because
+  `-project`'s `InMemoryVfs` normalizes on every lookup and is blind to the spelling; the successor is a
+  non-normalizing exact-key test `Vfs`. **And the mixin walker was NOT narrowed**: tsgo does not produce that
+  diagnostic for a non-generic owner at all (TS2415 at the class instead), so our `extendsParam`-by-NAME test is a
+  pre-existing ours-only row, pinned `residue -` — a corpus-unique walker's successor is PassLab retirement, not
+  tuning. Two TS18042 `ImportSpecifier` rows remain unemitted (a separate emitter; tsgo names the PROPERTY in the
+  renamed form), pinned `residue -`.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-29 LANDED 2026-09-19 ((P18.85)-(P18.138) notes) — pending **34 → 33**,
   skipped 58, suite 20,002/0. **(P18.138) CLOSED `jsExpandoObjectDefineProperty`** as (CHK.124) step 3: a third
   host kind (a JS **empty object literal** initializing an un-annotated `var`/`let`/`const`) plus
   `Object.defineProperty` membership, reusing steps 1-2's collector and attachment rather than a second copy.

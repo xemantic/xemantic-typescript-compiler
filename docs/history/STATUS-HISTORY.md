@@ -1,3 +1,22 @@
+**(P18.134) — A MISSING MEMBER ON A FUNCTION TYPE: ONE TRUST GATE, 19,927 / 0 / 61 (2026-09-19).**
+`contextualReturnTypeOfIIFE2` closes (pending 37 -> 36). `cmamAllMissingTrustedMember`'s
+`if (m.symbol != null) return false` refused every SYMBOL-CARRYING function type, so
+`declare const o: { m: typeof g }` was silent where the identical `{ m: () => void }` reported —
+five shapes losing a diagnostic on one line. **The round's opening hypothesis was wrong**: the axis is
+not namespace-qualification (`namespace A { const foo: () => void }` + `A.foo.bar` has always reported)
+but whether the type carries a declaration symbol. **tsgo has no checker-side expando exemption at all** —
+its BINDER declares expando properties onto the host symbol and TS2339 falls out of ordinary lookup, the
+host predicate keying on the head's `valueDeclaration` KIND at every hop of a dotted name; six probe shapes
+changed answer between 6.0.3 and 7.0.2 on exactly that. **We suppress where tsgo declares** (measured:
+`function z(){} z.px = 1; const s: string = z.px` is silent here, TS2322 in tsgo, and TS2565 never fires),
+which is what bounded the round to the property-access-receiver route. The identifier route stays SHUT
+until expando members are modelled — it is the only reason `const f = () => {}; f.bar = 1` is correctly
+silent — and is the named successor ((CHK.124)). The guard was **built unguarded first** and fires on five
+attributable cells; it reuses B431's collector verbatim so the two routes cannot drift, and its scan is
+scoped to the declaration's own container, not its file. The grid is a false-positive CONTROL and says so;
+reach is evidenced by the cost gate's non-zero deltas, which a no-op change cannot produce. 24 pins, no
+countdown pin moved.
+
 **(P18.133) — THE `simulatedVersion` DEFAULT MOVES TO 7.0; TypeScript 6's LADDER IS GONE, 19,903 / 0 / 62 (2026-09-17).**
 One line, and everything else is consequence: every TS7-removed option now reports tsgo's TS5102/TS5108 *has been
 removed* instead of TypeScript 6's TS5101/TS5107 *deprecated, will stop functioning*, and `ignoreDeprecations` no
