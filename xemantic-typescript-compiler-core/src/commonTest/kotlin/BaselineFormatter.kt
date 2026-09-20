@@ -994,18 +994,17 @@ private val diagnosticComparator = Comparator<Diagnostic> { a, b ->
             return@Comparator a.message.compareTo(b.message)
         }
         fileA != null && fileB != null -> {
-            // tsconfig.json diagnostics (program-level) sort before source file diagnostics,
-            // matching TypeScript's ordering: program/options diagnostics precede per-file diagnostics.
-            // (LEGACY.0b step 15) MEASURED AND KEPT: tsgo's `ast.CompareDiagnostics` compares
-            // the two PATHS as strings, which puts `src/main.ts` before `tsconfig.json`
-            // (pathsValidation5, tsgo's own baseline) — but dropping this rule for that one
-            // row moves SEVEN green baselines whose tsconfig rows tsgo keeps first, every one a
-            // case tsgo 7 does not run (baseUrl / node10 / rootDir cases with no baseline under
-            // typescript-go-repo/testdata). Their pristine-shaped order is a (LEGACY.1) question.
-            val aIsTsconfig = fileA.endsWith("tsconfig.json")
-            val bIsTsconfig = fileB.endsWith("tsconfig.json")
-            if (aIsTsconfig && !bIsTsconfig) return@Comparator -1
-            if (!aIsTsconfig && bIsTsconfig) return@Comparator 1
+            // (P18.151) THE tsconfig-FIRST RULE IS GONE. Two FILE-bearing rows are ordered by
+            // their PATHS as strings, which is tsgo's `ast.CompareDiagnostics` verbatim and puts
+            // `src/main.ts` before `tsconfig.json` (`pathsValidation5`, tsgo's own baseline).
+            //
+            // (LEGACY.0b) step 15 measured this exact deletion and REFUSED it: it moved SEVEN
+            // green baselines whose tsconfig rows tsgo keeps first, every one a baseUrl / node10 /
+            // rootDir case tsgo 7 does not run. **That blocker has since dissolved** — (LEGACY.1)
+            // removed those option values, so the seven are no longer generated, and re-measuring
+            // the same deletion now reads 0 mismatches of 8,722. Nothing was fixed to make this
+            // possible; a neighbouring arc removed the population that was in the way, which is
+            // why a refusal in this repo is re-measured rather than inherited.
             // Lib files (lib.*.d.ts) sort AFTER user files, matching TypeScript's baseline
             // ordering where user-file diagnostics precede lib-side ones.
             fun isLib(f: String): Boolean {

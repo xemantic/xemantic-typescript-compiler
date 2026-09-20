@@ -933,4 +933,41 @@ class BaselineFormatterTest {
         result sameAs expected
         assert(result == expected)
     }
+    /**
+     * (P18.151): two FILE-bearing diagnostics are ordered by their PATHS as strings — tsgo's
+     * `ast.CompareDiagnostics` verbatim — so `src/main.ts` precedes `tsconfig.json` and the
+     * config file gets no privileged position.
+     *
+     * (LEGACY.0b) step 15 measured this exact deletion and refused it: it moved SEVEN green
+     * baselines, every one a baseUrl / node10 / rootDir case. Re-measured after (LEGACY.1)
+     * removed those option values, the same deletion reads 0 mismatches of 8,722 — the
+     * population that blocked it no longer exists.
+     *
+     * The pin fixes the ONE fact the corpus cannot state on its own: which way round the two
+     * paths sort. `pathsValidation5` is the baseline that exercises it, and it is a single case,
+     * so an accidental re-introduction of a config-first rule would move exactly one row.
+     */
+    @Test
+    fun `a tsconfig row sorts by path against a source file, not before it`() {
+        val out = formatErrorBaseline(
+            listOf(
+                Diagnostic(
+                    message = "Non-relative paths are not allowed. Did you forget a leading './'?",
+                    category = DiagnosticCategory.Error, code = 5090,
+                    fileName = "tsconfig.json", line = 5, character = 26, start = 0, length = 1,
+                ),
+                Diagnostic(
+                    message = "Cannot find module or type declarations for side-effect import of 'someModule'.",
+                    category = DiagnosticCategory.Error, code = 2882,
+                    fileName = "src/main.ts", line = 1, character = 8, start = 0, length = 1,
+                ),
+            ),
+            sourceFiles = emptyList(),
+        )
+        val rows = out.split("\r\n", "\n").filter { it.contains("error TS") }
+        assert(rows.size == 2)
+        assert(rows[0].startsWith("src/main.ts"))
+        assert(rows[1].startsWith("tsconfig.json"))
+    }
+
 }

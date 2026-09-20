@@ -1018,19 +1018,6 @@ val tsgoPendingBaselines = listOf(
         "are double-quoted in tsgo too."
     ),
     TsgoPendingBaseline(
-        "pathsValidation5.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> summary ORDER; re-confirmed at step 9 that " +
-            "it is NOT a union order and shares no mechanism with the ORDER family: the " +
-            "TS5090 wording matches and the ONLY difference is where a `tsconfig.json` row " +
-            "sorts against a source file's in the summary — tsgo lists `src/main.ts(1,8): " +
-            "TS2882` FIRST and we list it last. Changing it reorders the summary of every " +
-            "multi-file baseline, so it needs its own round. MEASURED (LEGACY.0b step 15): " +
-            "tsgo's rule is pure path order (`ast.CompareDiagnostics`), and adopting it moves " +
-            "SEVEN green baselines whose tsconfig rows stay first — all seven are baseUrl / " +
-            "moduleResolution=node cases tsgo 7 does not run (no baseline under " +
-            "typescript-go-repo/testdata), so their order is a (LEGACY.1) question, not a rule.",
-    ),
-    TsgoPendingBaseline(
         "typeParameterWithInvalidConstraintType.errors.txt",
         "F0 rows tsgo emits that ours does not: a related TS2751 `Circularity originates in " +
         "type at this location.` on typeParameterWithInvalidConstraintType.ts:4:17. REFUSED (LEGACY.0b) step 19 and it must " +
