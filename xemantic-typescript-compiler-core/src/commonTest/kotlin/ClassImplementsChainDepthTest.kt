@@ -200,6 +200,68 @@ class ClassImplementsChainDepthTest {
     }
 
     /**
+     * The double-append guard, pinned — and it is NOT a redundant one, which took a second
+     * instrument to establish. Ablating `chain.size == sizeBefore` read **0 RED over 8 pins and
+     * 0 mismatch over 8,722 baselines**, i.e. undiscriminated by everything this repo runs; the
+     * shape that discriminates it had to be CONSTRUCTED from the mechanism: a member that is
+     * BOTH callable and carries a property, so `addSignatureElaboration` elaborates the
+     * parameter AND `getPropertyElaborationChain` has a property to drill.
+     *
+     * Without the guard the chain grows a contradictory DOUBLE tail — two sibling sub-chains at
+     * the same indent, `Types of parameters 'a' and 'a' are incompatible.` followed by
+     * `Types of property 'tag' are incompatible.` — where tsgo prints exactly one.
+     */
+    @Test
+    fun `a callable member with a property grows no second sub-chain`() {
+        val d = diagnose(
+            """
+            interface Fn { (a: number): void; tag: number }
+            interface FnBad { (a: string): void; tag: string }
+            interface B { m: Fn }
+            class C implements B { m: FnBad = null! }
+            """.trimIndent(),
+        ).filter { it.code == 2416 }
+        assert(d.size == 1)
+        val chain = d[0].messageChain
+        // exactly ONE sub-chain under the whole-object line
+        assert(chain.count { it.trimStart().startsWith("Types of ") } == 1)
+    }
+
+    /**
+     * residue - for that same hybrid member tsgo elaborates the PROPERTY and we elaborate the
+     * PARAMETER. Measured against tsgo 7.0.2:
+     *
+     *     Type 'FnBad' is not assignable to type 'Fn'.
+     *       Types of property 'tag' are incompatible.
+     *         Type 'string' is not assignable to type 'number'.
+     *
+     * Pre-existing and UNCHANGED by (P18.150) — it is a question of WHICH mechanism to
+     * elaborate for a member that is both callable and structural, not of chain depth, so it
+     * is recorded rather than chased. This pin asserts today's answer so the next round meets a
+     * recorded decision instead of a guarantee; re-measure before re-pointing it.
+     */
+    @Test
+    fun `residue - a hybrid member elaborates the parameter where tsgo elaborates the property`() {
+        val d = diagnose(
+            """
+            interface Fn { (a: number): void; tag: number }
+            interface FnBad { (a: string): void; tag: string }
+            interface B { m: Fn }
+            class C implements B { m: FnBad = null! }
+            """.trimIndent(),
+        ).filter { it.code == 2416 }
+        assert(d.size == 1)
+        assert(
+            (listOf(d[0].message) + d[0].messageChain) == listOf(
+                "Property 'm' in type 'C' is not assignable to the same property in base type 'B'.",
+                "  Type 'FnBad' is not assignable to type 'Fn'.",
+                "    Types of parameters 'a' and 'a' are incompatible.",
+                "      Type 'number' is not assignable to type 'string'.",
+            ),
+        )
+    }
+
+    /**
      * Negative control: the drill may only ever ADD depth to a row that already fires. A class
      * that legally implements its interface must stay silent — the drill is reached from inside
      * an emission, so this pin is what says the round did not move a verdict anywhere.
