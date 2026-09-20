@@ -1,3 +1,22 @@
+**(P18.138) — (CHK.124) STEP 3: THE JAVASCRIPT OBJECT-LITERAL HOST, 20,002 / 0 / 58 (2026-09-19).**
+Ledger 34 -> 33, `jsExpandoObjectDefineProperty` CLOSED, and the row is ACTIVE in the plain screen's 3,066 / 0 —
+that, not `--include`, is the closure receipt. A third host kind (a JS EMPTY object literal initializing an
+un-annotated `var`/`let`/`const` — all three binding kinds, where TypeScript requires `const`) plus
+`Object.defineProperty` membership, reusing steps 1-2's collector rather than a second copy; all six descriptor
+cells plus `writable` true/false and TS2540 are byte-identical to tsgo. **B433 is NOT retired and that is a
+MEASUREMENT**: the PassLab priced it at 1 mismatch and the diff is the whole ROW, because its host is a body-local
+`const` (B83.5's unbound population) and it also owns the file-level JS function-expression host, so admitting that
+shape would double-emit — retiring it needs the BINDER. **The primitive-receiver arm was BUILT AND REVERTED**: it
+closes the fixture's third row and breaks (P18.130)'s invariant that a `.js` row carries tsgo's MESSAGE, and the
+three offending shapes reproduce identically in a `.ts` file on the parent binary, so the blocker is a standing
+literal-display gap. **Eight ablation arms, one mistake at a time, and two found REDUNDANT guards that are recorded
+rather than claimed**: three non-empty guards each read 0 RED alone while dropping all three lost a row and produced
+a wrong display, and reading `writable` from the symbol type is 0 RED and CLI byte-identical, kept because it is
+tsgo's spelling. Refused with measurements: a NUMERIC `defineProperty` name (tsgo names it canonically, round 934;
+a subset member table is what (CHK.45) forbids), the expando chain, a JS function-/class-expression host. The screen
+is largely a CONTROL here and the count was taken BEFORE the round — only 1 active case has the new host shape and
+2 carry `defineProperty`. 23 pins.
+
 **(P18.137) — (CHK.124) STEP 2: ROUTE (B) OPENS AND THE GRID'S GREEN IS VERIFIED, 19,979 / 0 / 59 (2026-09-19).**
 **Ledger UNCHANGED at 34, deliberately — and this is the most valuable round of the three.** A member access on an
 IDENTIFIER receiver whose type is a function type was COMPLETELY UNCHECKED: four real missed errors in eleven lines

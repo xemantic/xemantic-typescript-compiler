@@ -25,6 +25,62 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.143) — (LEGACY.0b): the interned union order and its display had come apart (2026-09-20)
+
+Ledger **28 -> 27**, `namespaceDisambiguationInUnion` CLOSED and ACTIVE in the screen's 3,072 / 0 — that, not
+`--include`, is the closure receipt. Suite **20,056 / 0 / 52** (+3 = exactly the new pins, skipped -1 = exactly
+the closed row). Cost gate exit 0 and **byte-identical to the control taken before the change**, all 8 profiles at
+their standing row counts (46 x 7, 94 on harness), warning gate clean with the compile verified executed,
+`huge_methods --fail-over 0` exit 0. `Checker.kt` UNTOUCHED — the fix is nine lines of `StableTypeOrdering.kt`.
+
+**THE RECORDED REASON WAS WRONG TWICE, AND READING THE CODE WOULD NOT HAVE SHOWN IT.** The ledger said the
+var-decl chain "picks the first" and that it "does not go through `findBestUnionConstituent`, which already keeps
+the LAST on a tie". Both false: `cvdaElaborateMismatch`'s B50.3 branch has carried a dedicated
+same-simple-name COLLISION picker since the row was filed, and that picker takes `lastOrNull`. Reading it three
+times produced three wrong theories; one marker settled it:
+
+    [B50.3 pick=Foo.Yep order=Bar.Yep~Foo.Yep rel=false~false]
+
+**The picker was right all along and `Foo.Yep | Bar.Yep` had INTERNED as `[Bar.Yep, Foo.Yep]`** — the reverse of
+what it displays, with both constituents correctly failing the relation.
+
+**THE MECHANISM: A QUALIFIED DISPLAY STRING WAS BEING USED AS tsc's SYMBOL-NAME KEY.** tsc's `compareTypeNames`
+compares `symbolName(getTypeNameSymbol(t))`, which carries no namespace. `StableTypeOrdering.nameKeyOf` read
+`Checker.aliasDisplayMap`, whose string B86.4 QUALIFIES through the enclosing namespace chain — so the final
+compare ran `"Bar.Yep"` against `"Foo.Yep"` where tsc runs `"Yep"` against `"Yep"`, which is EQUAL and falls
+through to the declaration-position key. `NameKey` now carries both names: the qualified one still decides alias
+IDENTITY (two same-named aliases in two namespaces are two aliases, as tsc's symbol compare makes them), the
+unqualified tail is used for ORDERING only.
+
+**WHY IT WAS SILENT, AND WHY THAT IS THE GENERAL LESSON.** The order is a property of the TYPE; the head line
+names the union through the annotation NODE ((P18.140)). So the head printed `Foo.Yep | Bar.Yep` whatever the type
+held, and the ONLY observable was a consumer that reports against a union's LAST constituent — which then named
+the wrong one. A union's interning order is rendered nowhere: no diagnostic, no counter and no grid row moves when
+it is wrong, and the two halves can disagree indefinitely.
+
+**MEASURED AGAINST tsgo 7.0.2, FOUR CELLS, BYTE FOR BYTE**: the corpus fixture; the same declarations with the
+annotation written the other way round (SAME answer — it is the DECLARATION order, not the written one); the
+declarations swapped (the answer MOVES, which is what makes the first two a statement about declaration order
+rather than about writing); and two differently-named aliases. The third cell exists because without it the pin is
+satisfied by "keep the annotation's last member", a different rule that agrees on the corpus fixture (round 807).
+
+**AN OUT-OF-FAMILY DIVERGENCE FOUND IN THE FOURTH CELL, RECORDED IN THE PIN RATHER THAN CHASED**: tsgo renders
+`Zed.Alpha | Ack.Beta` as `Alpha | Beta`, because it qualifies an alias display only where qualification
+DISAMBIGUATES (it does qualify the `Yep` pair). Our B86.4 display qualifies unconditionally. The ORDER agrees; the
+qualification is a separate unclosed mechanism that no corpus baseline covers, and the pin's KDoc says so instead
+of letting the assertion read as a parity claim.
+
+**BLAST RADIUS WAS MEASURED BEFORE LANDING, WHICH IS WHAT MADE THE CHANGE AFFORDABLE.** `StableTypeOrdering` is
+wired into `getUnionType`, i.e. into every union in the program, and (PARITY.1) says the corpus is the only gate a
+display family has. The screen against a throwaway build read **0 of 8,716** — and 0 again with the pending row
+included. Ablating the one-word change back to the qualified compare reddens all three new pins.
+
+**PROCESS, AND IT COST MOST OF THE ROUND.** Two traps, both already in CLAUDE.md and both met anyway.
+`corpus-screen.sh` does NOT compile — its `Checker.class md5` line is the control that says so, and the first
+marker run printed the PRISTINE md5 and a pre-fix answer. And a `nohup ./gradlew ... &` launched from inside a
+tool call is reaped when the call returns: three builds died that way, one of them mid-write, leaving the class
+dir empty (round 851's signature). What worked every time was a plain foreground call left to auto-background.
+
 ### Round (P18.142) — (INV.2b) commit 2: the position→node bridge, and the 28.5 % that justifies it (2026-09-20)
 
 **The second (INV.\*) round in a row, and the commit that makes commit 1 USABLE.** (P18.141) shipped
@@ -601,56 +657,6 @@ invisibly and only `cat -A` and `git diff --numstat` see it. Fixed to a literal 
 a failed Kotlin compile DELETES `Checker.class`, so the next probe dies on a missing class rather than silently
 measuring a stale one.
 
-### Round (P18.133) — the `simulatedVersion` default moves to 7.0: TypeScript 6's deprecation ladder is gone, and the census that sized it was blind to its largest group (2026-09-17)
-
-**OWNER DECISION**, approved in the same session as (LEGACY.1)(g) and sequenced after it, because (g) is what gave
-TS5102 tsgo's computed `paths` chain. One line — `TypeScriptCompiler.kt`'s `?: "6.0"` becomes `?: "7.0"` — and
-everything else is consequence. Suite **19,903 / 0 / 62** (+18 tests, −2 skipped), errors screen 3,062 / 0, emit
-5,645 / 0, cost gate +0.04% max, `huge_methods --fail-over 0` exit 0, warning gate clean with a live positive
-control, 8-profile grid 8 x 0/0 and EMIT 78 vs 78 byte-identical.
-
-**THE MEASUREMENT.** Across tsgo's whole baseline corpus, TS5101 and TS5107 appear **only** as lines tsgo DELETES
-(60 and 2 occurrences, every one on the `-` side of an accepted diff); TS5102's 46 `+` lines are all
-`downlevelIteration`. TypeScript 7 has no "deprecated, will stop functioning" notion at all —
-`createRemovedOptionDiagnostic` (`program.go:803-876`) emits TS5102 (unvalued, KEY-anchored) or TS5108 (valued,
-VALUE-anchored) and nothing else, and `ignoreDeprecations` is parsed into its options struct and read NOWHERE.
-**The correctness argument is stronger than the parity one**: (LEGACY.1) already deleted every one of these
-options' behaviour, so at the old default we told a user an option "will stop functioning in TypeScript 7.0" and
-offered a flag to silence it while the option was ALREADY inert and silencing restored nothing.
-
-**THE BRIEF'S CENSUS WAS BLIND TO ITS LARGEST GROUP, AND THE MECHANISM GENERALISES.** It censused the at-risk pins
-by DIAGNOSTIC CODE, so it could not see the nine classes that use `@ignoreDeprecations: 6.0` to keep the option row
-*out* — `DOWNLEVEL_ES5`, one shared `CompilerTestSupport` constant, is behind 29 of the 41 first-run failures and
-none was predicted. **A census by code cannot see a pin that depends on a code NOT being emitted.** The repair
-gives the constant an explicit version, which preserves every exact-list assertion instead of weakening one; its
-ablation reddens 27 tests, so it is load-bearing rather than tidying.
-
-**TS5103 IS RETIRED AND ITS VALIDITY FILTER IS KEPT — the two are not the same thing.** tsgo has no TS5103
-emitter (the message exists only in its generated table; `ignoreDeprecations: "banana"` produces no tsgo output at
-all), but the FILTER must stay, because `"banana" >= "6.0"` is lexicographically true: dropping it would make a
-garbage value start SILENCING the explicit-6.0 ladder.
-
-**`module=None` IS NOT ONE OF THESE FAMILIES — the brief said thirteen and it is twelve.** `none` is absent from
-tsgo's module map and `createRemovedOptionDiagnostic` has no case for it; tsgo answers TS6046, an invalid ARGUMENT.
-Refusal taken: it stays on the shared ladder (wrong before as TS5107, wrong now as TS5108 — not widened), recorded
-at the emitter and by a `residue -` pin. That is **(LEGACY.2)**, whose mechanism (P18.113) already built.
-
-**A THIRD CORPUS ROW MOVED, AND ITS FILING IS THE ROUND'S REUSABLE LESSON.** `pathMappingInheritedBaseUrl` was
-first added to `tsgoPendingBaselines`; its baseline is PRISTINE's TS5101, so the row **can never close** —
-implementing tsgo's answer moves us FURTHER from it. A pending entry means "a tsgo-TARGET answer we do not produce
-YET", so an un-closeable row mis-states what the baseline is and the build's `pendingByBaseline` check cannot see
-it. It is instead the population (P18.132) drops, and it escaped only because its `baseUrl` lives in
-`/other/tsconfig.base.json` — not a file named `tsconfig.json`, so the basename scan missed it where tsgo's
-RESOLVED-options skip does not. `tsconfigInTestUsesRemovedFeature` now follows a root config's `extends` chain
-(array and extension-omitted forms, cycle-guarded, an unresolvable target not guessed at), and it is the corpus's
-ONLY such case. **`keptTsc` 3 -> 1, not 3 -> 2, because the bucket counts BASELINES and that one case contributes
-two** (`.errors.txt` and `.js`) — now recorded in the constant's KDoc.
-
-**THE FINDING BEHIND IT IS KEPT AS A MEASURED PAIR** in `BaseUrlRemovedTest`: an `extends`-inherited `baseUrl`
-makes tsgo compute the chain against the DECLARING file where we round-trip the written value against the ROOT
-config, with a same-directory control proving the fixture reaches the chain and that root-declared values agree
-exactly. Closing it needs provenance `CompilerOptions.baseUrl` — a bare `String` — does not carry.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -981,7 +987,21 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-31 LANDED 2026-09-20 ((P18.85)-(P18.140) notes) — pending **30 → 28**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-32 LANDED 2026-09-20 ((P18.85)-(P18.143) notes) — pending **28 → 27**,
+  skipped 52, suite 20,056/0. **(P18.143) CLOSED `namespaceDisambiguationInUnion`, AND THE ROW'S RECORDED REASON
+  WAS WRONG TWICE.** It said the var-decl chain "picks the first" and "does not go through
+  `findBestUnionConstituent`, which already keeps the LAST on a tie"; in fact `cvdaElaborateMismatch`'s B50.3
+  branch has a dedicated same-simple-name COLLISION picker that already takes `lastOrNull`, and it was right.
+  **The union had INTERNED as `[Bar.Yep, Foo.Yep]` — the reverse of what it displays** — because
+  `StableTypeOrdering.nameKeyOf` fed `Checker.aliasDisplayMap`'s QUALIFIED string into the key tsc fills with an
+  unqualified SYMBOL name, so `"Bar.Yep" < "Foo.Yep"` decided an order tsc leaves to the declaration position.
+  **Nothing renders a union's interning order** (the head line comes from the annotation NODE, (P18.140)), so the
+  two halves can disagree indefinitely and only a consumer reading the LAST constituent sees it.
+  **Three reusable facts**: reading the code produced three wrong theories and ONE marker
+  (`pick=… order=… rel=…`) settled it in a run; `corpus-screen.sh` does NOT compile, and its `Checker.class md5`
+  line is the control that says so; and the blast radius of a `getUnionType` change is one screen away —
+  0 of 8,716, which is what made a comparator change affordable at all.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-31 LANDED 2026-09-20 ((P18.85)-(P18.140) notes) — pending **30 → 28**,
   skipped 53, suite 20,027/0. **(P18.140) CLOSED BOTH ORDER-MODEL ROWS**, and REFUTED three recorded premises
   doing it: tsgo's `'Top' could be instantiated…` line is one WE ALREADY EMIT (it carried the same wrong order, so
   one fix closed both lines); `noInferUnionExcessPropertyCheck1` is served by a DEDICATED B219 walker
