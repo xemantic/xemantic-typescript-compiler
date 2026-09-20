@@ -175107,6 +175107,18 @@ interface DataView {
      * `Type.Object` flagged `EnumLiteral` ((REL.2)'s leniency), a template literal and a
      * string-mapping type have a domain this reduction cannot compute, and
      * `null`/`undefined`/`void` are governed by the `strictNullChecks` rules above.
+     *
+     * **THE REFUSAL LIST IS MEASURED REDUNDANT TODAY, AND IS KEPT ANYWAY** - ablation arm
+     * a4 dropped `TypeParameter` from it and read 0 RED of 20 with the corpus screen
+     * clean. It is subsumed by the POSITIVE test below: none of the refused flags is
+     * carried by a type that ALSO carries a primitive-domain bit, which for the enum case
+     * is a property of THIS model rather than of tsc - (REL.1)(b) mints an enum literal as
+     * a member-LESS [Type.Object] where tsc mints a `StringLiteral`/`NumberLiteral`
+     * carrying `EnumLiteral` beside it, a divergence
+     * [EnumSemantics.enumLiteralApparentPrimitive]'s own KDoc records. So the list is a
+     * BARRIER against widening [primitiveDomainOf] - the day an enum member is given its
+     * apparent primitive there, it is what stops this reduction silently swallowing
+     * (REL.2)'s arc - and not a guard any pin can hold. Recorded, not claimed (round 807).
      */
     private fun isPrimitiveDomainOperand(t: Type): Boolean {
         if (t.flags.hasAny(
