@@ -25442,6 +25442,35 @@ class Checker(
         return false
     }
 
+    /** True when [t]'s own symbol also declares a CLASS — a merged class+function
+     *  symbol, whose type in this model is the FUNCTION side alone, so its construct
+     *  signature is invisible to [getConstructSignaturesOfType]. The identifier path
+     *  ([checkNewExprImplicitAny]) has refused the same shape by the same test since
+     *  round 79i; the two must agree or one of them reports what the other suppresses. */
+    private fun newCalleeTypeSymbolDeclaresClass(callee: Expression, t: Type): Boolean {
+        fun declaresClass(sym: Symbol) =
+            sym.flags.hasAny(SymbolFlags.Class) || sym.declarations.any { it is ClassDeclaration }
+        (t as? Type.Object)?.symbol?.let { if (declaresClass(it)) return true }
+        // The type alone is not enough: a merged `class C` + `function C` resolves to an
+        // ANONYMOUS overload-set object carrying no symbol at all (measured on
+        // `constructorOverloads4`: `{ (...args: any[]): any; (...args: string[]): Function; }`).
+        // [resolveQualifiedValueSymbol] is the established resolver for a value-position
+        // dotted name — `getReturnTypeOfNewExpression` already uses it for `new M.C()` —
+        // and it is symbol-table-only, so it costs no type resolution; it runs here only
+        // for a `new` whose callee is a property access AND already types as call-only.
+        (callee as? PropertyAccessExpression)?.let { pa ->
+            resolveQualifiedValueSymbol(pa)?.let { if (declaresClass(it)) return true }
+            // B511's CLODULE: `declare namespace M { class C; function C }` does not merge
+            // in this binder (`canMerge` lacks the combo, so the FUNCTION overwrites the
+            // class symbol), which is why neither the type nor the resolved symbol can see
+            // the construct side. [getReturnTypeOfNewExpression] already recovers it by
+            // AST-scanning the namespace body for the lost declaration; the same scan is
+            // the refusal here, so the two answers about one `new M.C()` cannot disagree.
+            if (findNamespaceMemberClassDecl(pa) != null) return true
+        }
+        return false
+    }
+
     private fun emitNewExprImplicitAny(expr: NewExpression, source: String, fileName: String) {
         val start = expr.pos
         val length = (expressionTrueEnd(expr) - start).coerceAtLeast(1)
@@ -161443,6 +161472,50 @@ interface DataView {
         }
         val calleeType = getCalleeType(expr.expression)
         if (calleeType === anyType || calleeType === errorType) return
+        // (LEGACY.0b) TS7009 for a callee that is NOT a bare identifier. tsc decides it
+        // from the RESOLVED SIGNATURE's declaration - `checkCallExpression`'s
+        // `declaration.kind !== Constructor && !== ConstructSignature && !== ConstructorType`
+        // - i.e. a `new` that resolved a CALL signature yields `any` and reports under
+        // noImplicitAny. Measured against tsgo 7.0.2 before it was written: `new O.m()`,
+        // `new N.f()`, `new arr[0]()`, `new h.g()` and `new Base.make()` all report,
+        // `new C.K()` and a construct-signature-typed property do not, and an `any` callee
+        // is SILENT (tsc's `resolveUntypedCall` returns before the check) - which the
+        // guard above already gives us. The sibling comment below records the same rule
+        // from the other side ("under noImplicitAny tsc reports TS7009 instead").
+        //
+        // THE EVIDENCE IS POSITIVE IN BOTH DIRECTIONS - call signatures present AND
+        // construct signatures absent - which is what makes it safe to run program-wide:
+        // a callee this checker cannot type answers `anyType` and is refused above, so the
+        // rule can never fire on a type we failed to compute. (CHK.73) is why the class
+        // case is silent here for a DIFFERENT reason than in tsc: a class VALUE types as
+        // its INSTANCE type, which has neither signature kind, where tsc sees a construct
+        // signature. Same verdict, and recorded because the day (CHK.73) is fixed this
+        // arm must stay silent for the tsc reason instead.
+        //
+        // An IDENTIFIER callee is deliberately left to [checkNewExprImplicitAny], which is
+        // symbol-based and reaches two shapes no type can: a named function EXPRESSION's
+        // self-reference, in no symbol table at all (B83.5), and `super` (parsed as an
+        // Identifier here), whose `new super(...)` owns the TS2351 + TS17011 pair at
+        // 16.4cw. Running both paths would double-emit.
+        //
+        // A UNION callee is excluded so B60.15's three-case constituent report keeps it.
+        //
+        // A MERGED class+function symbol is refused for the reason the identifier path
+        // refuses it (`sym.declarations.any { it is ClassDeclaration }`, round 79i): its
+        // type here is the FUNCTION side alone, so the construct signature the class side
+        // carries is invisible to `getConstructSignaturesOfType`. Measured on
+        // `constructorOverloads4` — `declare namespace M { export class Function …;
+        // export function Function(…) … }` — where tsgo is silent and this arm reported.
+        if (spineNaRunActive &&
+            expr.expression !is Identifier &&
+            calleeType !is Type.Union &&
+            !newCalleeTypeSymbolDeclaresClass(expr.expression, calleeType) &&
+            getConstructSignaturesOfType(calleeType).isEmpty() &&
+            getCallSignaturesOfType(calleeType).isNotEmpty()
+        ) {
+            emitNewExprImplicitAny(expr, source, fileName)
+            return
+        }
         // intTypeCheck: `new <var>` (no argument list) where the var's annotated type is a
         // PURE user interface. tsc resolveNewExpression: construct sigs (own or inherited —
         // resolveStructuredTypeMembers merges base sigs) → constructable, nothing; else call
