@@ -14,6 +14,28 @@ how the pin set was repaired: ablating the two keys read 1 and 2 RED only after 
 added, without which the flag key would have shipped unpinned (round 807). Recorded and unqueued: `b: T | (() =>
 T)` without `NoInfer` is silent in tsgo and emits TS2353 here — not in the corpus, so no gate sees it. 9 pins.
 
+**(P18.142) — (INV.2b) COMMIT 2: THE POSITION→NODE BRIDGE, 20,053 / 0 / 53 (2026-09-20).**
+The commit that makes commit 1 USABLE. (P18.141) shipped an oracle addressed entirely by `Node` while
+`Project.nodeAt` was `internal` and `NodeInfo` is a descriptor by design — so a host holding an oracle had exactly
+one supported move, which was to walk `TypeOracle.files` itself. `nodeAt` is now PUBLIC and ANCHORED on the
+oracle's own trees. **`Checker.kt` UNTOUCHED again** (`git diff --name-only`), so `cost_gate.py` exit 0 at max +0.15 % (a control — no
+`Checker.kt` change can move a counter, so that residue is baseline staleness) and the 8-profile grid is structurally incapable of differing — the CLI never builds a `Project`, a `SourceIndex` or an
+oracle. **THE PRIZE IS A MEASUREMENT TAKEN BEFORE ANYTHING WAS WRITTEN**, over **669,350 offsets** in twelve of
+tsc's own sources (`Inv2bBridgeProbeMain`, replicated byte-identically on both binaries): the obvious hand-rolled
+`[pos, end)` descent names a DIFFERENT node at **190,820 (28.5 %)** — `Node.end` is the end of the token AFTER the
+node (round 910), so sibling spans overlap — and changes the ORACLE'S answer at **42,507 (6.4 % of all offsets)**;
+at identifier starts, the realistic caret, 591 of 25,533 (2.3 %) with 27 changing the type. **AND THE ANCHOR FIXES
+NOTHING MEASURED, WHICH THE ROUND SAYS RATHER THAN IMPLIES**: the same probe found the node was already a node of
+the oracle's tree **669,350 of 669,350 times**, and every ordering that could break it self-heals. It is worth two
+lines because the violation is SILENT — `TypeOracle.storeOf` is keyed by file NAME and reads by `nodeId` behind a
+bounds check alone, so a node of ANY equally-named tree is answered. The one configuration that does NOT self-heal
+(a second `Project` over the same absolute paths overwriting the process-global parse cache between the first ask
+and the oracle) is the fixture of the ordering pin. **Ablation, one mistake at a time**: the two anchor halves are a
+round-927 pair (each reddens the SAME single pin, neither redundant — they cover the miss and hit paths); the
+`isClosed` test is **measured redundant** and recorded, not claimed; the naive descent reddens exactly the pin
+written for it. `NodeInfo`'s KDoc had said this decision was open and named this queue item as where it would be
+taken — decided the other way, and its two surviving reasons say when to prefer a descriptor. 9 pins, 4 arms.
+
 **(P18.141) — (INV.2b) COMMIT 1: `Project.typeOracle()`, A MISSION-LEG DELIVERABLE, 20,044 / 0 / 53 (2026-09-20).**
 The first (INV.*) round since 2026-09-10 and NOT a parity row: leg 2, "an embeddable whole-program checker", and the
 documented reason the JetBrains/WebStorm evaluation paused. (INV.1)/(INV.2) landed the store and the Stage-2 facade

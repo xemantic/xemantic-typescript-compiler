@@ -25,6 +25,46 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.147) — (LEGACY.0b): TypeScript 7 gives a JS function no implicit `...any[]` rest (2026-09-20)
+
+Ledger **24 -> 23**, `argumentsReferenceInFunction1_Js.errors.txt` CLOSED and ACTIVE.
+Suite **20,096 / 0 / 48** (was 20,089 / 0 / 49).
+
+**THE ROW IS A tsc-6 TRANSCRIPTION IN A PIN WALKER, AND THE OBSERVATION THAT RETIRES IT IS NOT
+ABOUT DISPLAY AT ALL.** `strictBindCallApply` types `apply`'s second parameter as the receiver's
+parameter TUPLE; tsc 6 inferred an un-annotated JS function that referenced `arguments` as
+`[p?: any, …, ...any[]]`, and B230 hardcoded that tail. What decides it is the ARITY: measured
+against tsgo 7.0.2, `const f = function (a) {}` called `f(1,2,3)` is **`Expected 0-1 arguments`**
+with or without an `arguments` reference in the body — i.e. TypeScript 7 has no implicit JS rest to
+render, so the tail is not narrowable, it is **gone**. Our arity model already agreed (3 of 3 cells);
+only the display had the residue.
+
+**SO THE SURVIVING GATE CHANGED MEANING RATHER THAN BEING REMOVED.** `bodyMentionsArguments` used to
+select the shape that GOT the implicit rest. With no such rest it selects nothing semantic — it is
+now only a CONFINEMENT to the receivers whose tuple this hardcoded display renders exactly, and its
+substring imprecision (a body mentioning `arguments` only inside a STRING) is harmless under
+TypeScript 7 **because tsgo reports there too** — measured, and pinned as a control rather than
+asserted. A gate whose justification has evaporated is worth re-stating in place, not deleting: the
+KDoc now says what it confines and why.
+
+**THE ROW WAS THE SMALL HALF OF AN 8-OF-8 GAP, MEASURED AND DELIBERATELY NOT TAKEN.** tsgo types
+EVERY `f.apply(x, arguments)` from the receiver's real signature — 8 of 8 scratch cells report where
+these gates leave us silent for all but one — and it renders a REST receiver as `any[]`, which
+changes the **CODE** to TS2740; a defaulted parameter as `[a?: number | undefined]`; a JSDoc-tagged
+or TS-annotated one as `[a: number]`. That is the general `bindCallApplyType` path ((CHK.134)'s open
+item), not a transcription, so it is recorded with its cells rather than attempted here. **The
+JSDoc-tagged receiver is REFUSED rather than rendered wrong** — before this round it printed
+`[a?: any, ...any[]]` against tsgo's `[a: number]`, wrong in two ways; it is now one MISSING row,
+which is the conservative half of the same divergence and is pinned `residue -`.
+
+**Blast radius**: `corpus-screen.sh` **0 mismatches of 8,721** with the row `--include`d.
+`cost_gate.py` max **+0.15%** — and **byte-identical to (P18.146)'s reading on every counter**, which
+is the receipt that the drift is the stale baseline rather than either round; `huge_methods.py`
+**0 over limit / 878 classes**.
+
+**7 pins, 2 arms, both RED**: b1 restore the `...any[]` tail **4** (every positive pin), b2 drop the
+JSDoc-typed-receiver refusal **1** (the residue pin).
+
 ### Round (P18.146) — (LEGACY.0b): the JSDoc `@param` check has TWO branches, and this compiler had one (2026-09-20)
 
 Ledger **25 -> 24**, `noParameterReassignmentIIFEAnnotated.errors.txt` CLOSED and ACTIVE.
@@ -529,77 +569,6 @@ both unchanged from the parent binary. Zero new ours-only rows anywhere. Process
 between turns here, so an ablation batch advanced ~1 minute per several minutes of waiting and had to be re-run in
 the foreground under an explicit `timeout`.
 
-### Round (P18.137) — (CHK.124) step 2: route (B) opens, and the grid's green is verified rather than banked (2026-09-19)
-
-Suite **19,979 / 0 / 59** (+27 pins), errors screen 3,065 / 0 and emit 5,645 / 0, cost gate +0.15% max,
-`huge_methods --fail-over 0` exit 0, warning gate clean, 8-profile grid 8 x 0/0 with emit 78 vs 78 byte-identical.
-**Ledger UNCHANGED at 34 — this round closes no baseline deliberately**, and that is the point: a member access on
-an IDENTIFIER receiver whose type is a function type was **completely unchecked**, which is four real missed errors
-in eleven lines of ordinary TypeScript and worth more than a row.
-
-    declare const zq: () => void;   zq.nope1    BEFORE silent  ->  NOW TS2339 '() => void'            tsgo-identical
-    declare const zp: { (): void }; zp.nope2    BEFORE silent  ->  NOW TS2339 '() => void'            tsgo-identical
-    interface ZCallable { (): void }; zi.nope3  BEFORE silent  ->  NOW TS2339 'ZCallable'             tsgo-identical
-    const zf = () => {}; zf.ok = 1; zf.nope5    BEFORE silent  ->  NOW TS2339 '{ (): void; ok: number; }'
-
-All four byte-identical to `tools/tsgo-7.0.2/lib/tsc`, line and column, while `zf.ok = 1` and `zf.ok` stay silent.
-
-**HALF (a) — THE `const`-BOUND FUNCTION-EXPRESSION HOST**, tsgo's `getInitializerSymbol` `VariableDeclaration` arm:
-`const`, UN-ANNOTATED, initializer an `ArrowFunction`/`FunctionExpression`, container a `SourceFile`/`ModuleBlock`,
-non-JS, sole declaration. It attaches in `getTypeOfVariableOrProperty` AFTER `inferTypeFromInitializerType`, because
-`widenType`'s `Type.Object` arm returns the instance untouched only while `members` is null and REBUILDS the object
-once a table is present. `let`/`var` are refused and the annotated case needs no clause (`decl.type` returns
-earlier) — both measured against tsgo, which reports TS2339 on those writes.
-
-**HALF (b) — ROUTE (B)**: `cmamCallSignatureReceiverReportable` — call signatures present, no construct signatures,
-no index signature, no base types (through a `Type.Reference`'s target too), and the name non-empty and outside
-`RUNTIME_PROPERTIES`.
-
-**THE CRUX WAS NOT EMITTING, IT WAS NOT DOUBLE-EMITTING, AND IT IS MEASURED.** B431's spine anchor already owns the
-read for its own population, so route (B) refuses a receiver whose symbol carries a `FunctionDeclaration`. Ablating
-that one line reddens **3 pins**, with a literal diagram (`assert(d.size == 1)` -> `2`, the same row at the same
-`start=37` twice) plus an independent witness in a neighbouring class. The two guards cover DIFFERENT halves — the
-nested-read pin did NOT redden under that arm, because `expandoAttachedTypeIds` shuts route (B) above it — which is
-why both pins exist. And a variable host must NOT be marked in `expandoAttachedTypeIds`: marking it would shut the
-only emitter it has.
-
-**THE GRID IS GREEN AND THE GREEN WAS *VERIFIED*, NOT BANKED** — (CHK.124)'s own law, applied to a round where the
-profiles CAN express the shape (1,062 function-type annotations in the compiler profile alone). A temporary marker
-arm, removed before the final build, measured route (B) **entered 20-23 times per profile** with a
-call-signature-bearing receiver and `reportable=0` on all eight — **and every single arrival is `prop='call'`**. So
-`RUNTIME_PROPERTIES` is the one clause that fires across 1.2M lines of correct TypeScript, and the grid's 8 x 0/0
-means "the rule is right", not "the shape is absent". That distinction is exactly what a green grid usually cannot
-support. Real libraries are unchanged too (cronstrue 1 -> 1, marked 18 -> 18).
-
-**THE NAIVE ARM IS THE OTHER HALF OF THAT EVIDENCE**: without the B431 guard and without half (a), the corpus screen
-reads **1 mismatch** (`isolatedDeclarationErrors`, whose two `const`-bound arrow hosts are exactly half (a)'s
-population) and the probe set reads **5 false positives**. Both go to 0 in the landed arm.
-
-**REFUSED, EACH WITH ITS MEASUREMENT AND PINNED `residue -` RATHER THAN SPECIAL-CASED**: a CONSTRUCT-signature
-receiver and a callable INTERFACE WITH HERITAGE (both rows tsgo reports; (CHK.45) demands positive evidence the
-member table is complete and neither supplies it), and an IMPORTED function declaration (the price of the B431
-guard, today's answer preserved).
-
-**TWO PRE-EXISTING DISPLAY GAPS ARE EXPOSED BY ROUTE (B) AND ARE NOT ITS FAULT**, each pinned with today's text and
-a BEFORE-arm receipt taken through an unrelated TS2322: a call-signature type carrying an INDEX SIGNATURE renders as
-the bare signature, and a GENERIC type-alias instantiation renders structurally (`FA<string>` -> `(t: string) =>
-void`) where a non-generic alias prints its name on both compilers.
-
-**TWO COUNTDOWN PINS MOVED AND A CLASS KDoc SECTION RETIRED.** `ExpandoReceiverDisplayTest`'s
-`residue - an arrow-initialized const receiver is silent` and `residue - a function-typed parameter receiver is
-silent` both now report; re-measured against tsgo, re-pointed, renamed (they no longer assert a residue), and § 3
-"WHAT THIS DOES NOT CLOSE" — which predicted exactly this work — retired with them.
-
-**WHAT DID NOT WORK.** The first attempt at half (a) was SILENTLY INERT: `attachExpandoMembers`' round-833 guard is
-`properties != null`, and an arrow type's builder plants `properties = emptyList()`, so the variable path needs an
-EMPTINESS test rather than a null one — and getting it wrong attaches nothing, with no error anywhere. The risk the
-brief budgeted for — a body-local `const` arrow as a false-positive source — was measured and **does not exist**:
-such a receiver never reaches route (B) as a call-signature-bearing `Type.Object`, and the two rows lost there are
-pre-existing. **And the TS2322 half of table 2 is still missing and is the successor**: the member-access, display
-and route-(B) readers all see the attached type, but the var-decl ASSIGNABILITY reader types a file-level `const`
-out of `currentLocalTypes`, recorded from `getTypeOfExpression(init)` — a fresh arrow type with no members. BEFORE
-== AFTER byte-identically there.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -930,7 +899,20 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-35 LANDED 2026-09-20 ((P18.85)-(P18.146) notes) — pending **25 → 24**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-36 LANDED 2026-09-20 ((P18.85)-(P18.147) notes) — pending **24 → 23**,
+  skipped 48, suite 20,096/0. **(P18.147) CLOSED `argumentsReferenceInFunction1_Js.errors.txt`** by deleting
+  the tsc-6 `...any[]` tail corpus-unique walker B230 hardcoded into `apply`'s parameter-tuple display.
+  **What retires it is an ARITY measurement, not a display one**: an un-annotated JS `function (a)` is
+  `Expected 0-1 arguments` in tsgo with or WITHOUT an `arguments` reference in its body, so TypeScript 7 has
+  no implicit JS rest to render. The surviving `bodyMentionsArguments` gate therefore changed MEANING rather
+  than being removed — it is now only a confinement to the shape the hardcoded display renders exactly, and
+  its substring imprecision is harmless because tsgo reports there too (measured, pinned as a control).
+  **RECORDED AND NOT TAKEN — the 8-of-8 gap this walker sits in front of**: tsgo types every
+  `f.apply(x, arguments)` from the receiver's real signature, rendering a REST receiver as `any[]` (TS2740,
+  a different CODE), a defaulted parameter as `[a?: number | undefined]` and a tagged/annotated one as
+  `[a: number]` — that is (CHK.134)'s general `bindCallApplyType` path, and the JSDoc-tagged receiver is
+  REFUSED here rather than rendered wrong (one MISSING row, pinned `residue -`). 7 pins, 2 arms.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-35 LANDED 2026-09-20 ((P18.85)-(P18.146) notes) — pending **25 → 24**,
   skipped 49, suite 20,089/0. **(P18.146) CLOSED `noParameterReassignmentIIFEAnnotated.errors.txt`** by
   implementing tsgo's `checkUnmatchedJSDocParameters` whole: it is TWO branches chosen by whether the function
   reads `arguments`, reporting different CODES over different TAGS, and this compiler had one branch and never
