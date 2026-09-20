@@ -997,6 +997,21 @@ CLAUDE.md § "AI agent mission".
   unqualified SYMBOL name, so `"Bar.Yep" < "Foo.Yep"` decided an order tsc leaves to the declaration position.
   **Nothing renders a union's interning order** (the head line comes from the annotation NODE, (P18.140)), so the
   two halves can disagree indefinitely and only a consumer reading the LAST constituent sees it.
+  **AND THE ROUND'S RECON RE-SIZED A SECOND ROW WITHOUT LANDING IT — `jsdocRestParameter` is now
+  MOSTLY DE-RISKED and its ledger entry carries the whole measurement.** It is two edits and neither
+  is a missing model: **(1)** retire B437 `checkJsRestParamArgTypes`, a tsc-6 walker modelling
+  `@param {...number} a` as a REST parameter — PassLab-priced at **1 mismatch (the row itself) and 0
+  collateral over 8,718**, and it contradicts our own typing, which is already tsgo-identical
+  (`a` reads `number[]`); **(2)** wire the SAME-FILE arity path to the JSDoc required-name set.
+  tsgo's rule was measured in **7 cells** (`{T} n` required; `[n]` / `[n=1]` / `{T=}` optional;
+  `{...T}` required with arity still 1; untagged optional) and is EXACTLY what
+  `jsDocRequiredParamNames` + `paramInfo`'s `jsDocRequiredNames` already implement (B434) — **wired
+  only to the CROSS-FILE map**, which measures byte-identical to tsgo while the same two lines in ONE
+  file read `Expected 0-1`. The blast radius of the whole change is **0 of 8,718**. What remains is
+  one question: wiring `collectFuncDecls`' two `paramInfo` calls plus `overloadSigOf` (verified
+  present in the compiled class) did NOT move the one-file probe, so a third map or a stale
+  `spineIsJsLike` is in the way. Reverted rather than half-landed; the class dir was rebuilt back to
+  HEAD's `Checker.class` so the next session does not measure a stale binary.
   **Three reusable facts**: reading the code produced three wrong theories and ONE marker
   (`pick=… order=… rel=…`) settled it in a run; `corpus-screen.sh` does NOT compile, and its `Checker.class md5`
   line is the control that says so; and the blast radius of a `getUnionType` change is one screen away —
