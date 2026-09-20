@@ -25,6 +25,47 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.148) — (LEGACY.0b): the SECOND chain fold, and a row that could not show its own mechanism (2026-09-20)
+
+**NO LEDGER MOVEMENT — pending stays 23**, and that is the point of the note. Suite **20,101 / 0 / 48**
+(+5 pins). A parity fix taken because the measurement was in hand, not because a row closed.
+
+**THE ROW THAT NAMES THE MECHANISM CANNOT SHOW IT.** `complexRecursiveCollections` is served by a
+wipe-and-pin walker, so no engine path reaches it and its hardcoded
+`The types of 'map(...).size'` line says nothing about what the engine computes — which is why the
+ledger could only classify it as a re-transcription. **What located the real gap was a PAIR of
+scratch fixtures differing in ONE ingredient**: the same `{ size: number | undefined }` against
+`{ size: number }` through a plain nested property was **already byte-identical to tsgo**
+(`The types of 'p.size'`), and only the CALL form diverged. That one-line difference is the whole
+diagnosis, and it took two 20-second runs after five minutes of reading had produced nothing.
+
+**tsgo FOLDS TWICE** (`reportRelationError`, `internal/checker/relater.go`). Fold 1 turns a property
+incompatibility followed by a call-signature return incompatibility into `The types returned by
+'m()'` / `'m(...)'`. Fold 2 then runs over THAT result, and its `switch` lists
+`The_types_returned_by_0_are_incompatible_between_these_types` **beside** the two property messages,
+converting the message to `The_types_of_0` only when it is still the property one. So a return type
+that drills deeper reads `The types returned by 'm().size'`. We stopped after fold 1 and printed the
+header over a whole-object mismatch line. The fix is confined to a single call signature on both
+sides — with overloads the return pair it drills is not necessarily the one the elaboration chose.
+
+**Price**: `corpus-screen.sh` **0 mismatches of 8,721**. A display change is corpus-gated only
+((PARITY.1)), so that zero IS the price — there is no second instrument to reach for.
+`getPropertyElaborationChain` **6,260 -> 6,480** bytecodes, 1,520 under the JIT limit (worth quoting
+because CLAUDE.md flags this family, and it is one of the larger methods left).
+
+**TWO RESIDUES MEASURED IN THE SAME MATRIX, NEITHER A CHAIN QUESTION AND BOTH BIGGER THAN THIS FIX**:
+`interface D extends B` reports TS2430 for a **DIRECT property mismatch only** — the nested, the
+method-return and the method-with-parameters shapes are **entirely missing**, all three of which tsgo
+reports — and a `class C implements B` whose method return drills deeper reports **no TS2416 at all**.
+The first is why `complexRecursiveCollections`' walker cannot be retired even with the chain fixed,
+and it is the honest reason that ledger row stays pending rather than being re-transcribed.
+
+**5 pins, 2 arms, both RED and RECORDED AS ONE OBSERVABLE** (round 927's pair): c1 drop fold 2 and c2
+keep the fold but lose the *returned by* carry-forward both redden the SAME two pins, because c1's
+damage subsumes c2's and the pins assert the WHOLE chain. No pin can separate them, and the full-chain
+assertion is still the right one — so the arms are reported as covering one observable rather than
+credited as two.
+
 ### Round (P18.147) — (LEGACY.0b): TypeScript 7 gives a JS function no implicit `...any[]` rest (2026-09-20)
 
 Ledger **24 -> 23**, `argumentsReferenceInFunction1_Js.errors.txt` CLOSED and ACTIVE.
@@ -504,71 +545,6 @@ only and fires anyway. That is a **pre-existing ours-only row**, unchanged by th
 **The walker was NOT narrowed**: that is a behaviour change whose only evidence is one hand-written probe, and a
 corpus-unique walker's proper successor is PassLab retirement, not tuning.
 
-### Round (P18.138) — (CHK.124) step 3: the JavaScript object-literal host, and B433 priced rather than assumed (2026-09-19)
-
-`jsExpandoObjectDefineProperty.errors.txt` CLOSES — ledger **34 -> 33**, skipped 59 -> 58, suite
-**20,002 / 0 / 58** (+23 pins). Errors screen 3,066 / 0 and emit 5,645 / 0 **with the closed row ACTIVE in that
-count** — that, not `--include`, is the closure receipt. Cost gate +0.15% max, `huge_methods --fail-over 0` exit 0,
-warning gate clean, 8-profile grid 8 x 0/0 on both arms with emit 78 vs 78 byte-identical. Libraries unchanged
-(cronstrue 1 -> 1, marked 18 -> 18).
-
-**A THIRD HOST KIND, REUSING EVERYTHING STEPS 1 AND 2 BUILT** — no second collector: in a JS file, an **EMPTY**
-`ObjectLiteralExpression` initializing an **un-annotated** `var`/`let`/`const` in a `SourceFile`/`ModuleBlock`. All
-three binding kinds are hosts here where TypeScript requires `const`, which is tsgo's `getInitializerSymbol` arm;
-`programHasJsFile` pre-gates every new parent-chain ascent to one boolean on a pure-TS program. `Object.
-defineProperty` membership transcribes `IsBindableObjectDefinePropertyCall` (exactly 3 args, literal-like name) with
-the type taken from the descriptor (`value` -> `get`'s return -> `set`'s parameter -> `any`) and `readonly` from
-`isReadonlyAssignmentDeclaration`; **all six descriptor cells plus `writable` true/false and TS2540 are
-byte-identical to tsgo.**
-
-**WHAT WAS REFUSED IS THE MORE USEFUL HALF, AND EVERY REFUSAL CARRIES ITS MEASUREMENT.** A NUMERIC
-`defineProperty` name marks the host UNDECIDABLE and refuses it whole, because tsgo names such a member by its
-canonical numeric string (round 934) and a subset member table is exactly what (CHK.45) forbids trusting. A
-non-empty literal, an annotated one, a JS function-/class-expression host, the expando CHAIN and a body-local host
-(B83.5 — never bound, so there is no symbol to attach to) are all refused, each measured.
-
-**AND THE PRIMITIVE-RECEIVER ARM WAS BUILT AND REVERTED**, which is why this fixture's third row is still missing:
-it closes `plain.expandoOk.nope` and **breaks (P18.130)'s stated invariant** that every row emitted in a `.js` file
-carries tsgo's MESSAGE — three shapes print `'string'`/`'number'`/`'boolean'` where tsgo prints the literal types.
-All three reproduce IDENTICALLY in a `.ts` file on this binary and on its parent, so the blocker is a standing
-literal-display/flow-narrowing gap and not a JavaScript one. Two rows of three, with the third refused for a reason
-that names its successor.
-
-**B433 IS *NOT* RETIRED, AND THAT IS A MEASUREMENT RATHER THAN A CONCESSION.** The PassLab priced it in one run
-(`disable checkJsObjectDefinePropertyLocalFnReads`, banner confirmed): **1 mismatch**, and the diff is *"expected
-diagnostics from baseline but none produced"* — the whole ROW, not its display. Its host is a body-local `const`,
-i.e. B83.5's unbound population that `getTypeOfVariableOrProperty` never sees, and it also owns the file-level JS
-function-expression host, so admitting that shape here would DOUBLE-EMIT. Both of B433's rows are byte-identical to
-tsgo on the shipped binary. Retiring it needs the binder, not this model.
-
-**THE ABLATION IS THE ROUND'S BEST ARTEFACT: EIGHT ARMS, ONE MISTAKE AT A TIME, AND TWO OF THEM FOUND REDUNDANT
-GUARDS THAT ARE RECORDED RATHER THAN CLAIMED AS COVERAGE.** a1 (never set `jsLiteral`) 1 RED; a2 (admit a possible
-host) 2 RED; a3 (drop the undecidable refusal) 1 RED; a4 (drop `cmamNestedEmptyJsObjectTrusted`) **2 RED — the
-ledger row**; a5 (ungate `defineProperty` on JS) 1 RED *after its fixture was repaired*; a8 (drop the
-`jsExpandoObjectTypeIds` marking) **11 RED**. a6/a6b/a6c each dropped one non-empty guard alone and read **0 RED —
-individually redundant** — while a6d dropped all three and LOST a row and produced a wrong display, so the family is
-load-bearing though no member is. a7 read `writable` from the symbol type: **0 RED and CLI byte-identical, a
-measured redundant guard**, kept because it is tsgo's spelling. Round 807's law honoured in both directions.
-
-**THE SCREEN IS LARGELY A CONTROL HERE AND THE COUNT WAS TAKEN BEFORE THE ROUND** ((CHK.124)): of 2,822 active
-`.errors.txt` cases, 143 carry a `.js` file and 36 an expando assignment or `defineProperty` — but only **1** has
-the new host shape (annotated, so refused) and **2** carry `defineProperty` (neither an object-literal host). The
-grid is a control for a structural reason rather than a measured one: every new rule is JS-gated and all eight
-profiles are `.ts`.
-
-**A COUNTDOWN PIN MOVED AND WAS SPLIT RATHER THAN EDITED.** `TsgoStep25Test`'s `negative control - an instance
-typed variable receiver stays silent` asserted (P18.131)'s residue, half of which this round closes; re-measured
-against tsgo it became a renamed `residue -` pin for the surviving instance-typed half plus a NEW positive pin for
-the object-literal half, with the class KDoc updated.
-
-**WHAT DID NOT WORK.** Under `noImplicitAny: false` the ledger row is still MISSED — our contextual typing does not
-reach a nested literal inside a contextually-typed one, so `jsLiteral` is over-set for the descriptor's `value: {}`;
-missing, never false, and pinned. Two residual "ours-only" probe lines are the SAME row as tsgo's with a pre-existing
-display gap (an inline-JSDoc parameter typed `any`, and B431's `() => void` for a JS function-declaration host),
-both unchanged from the parent binary. Zero new ours-only rows anywhere. Process: background shells are throttled
-between turns here, so an ablation batch advanced ~1 minute per several minutes of waiting and had to be re-run in
-the foreground under an explicit `timeout`.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -899,7 +875,18 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
-- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-36 LANDED 2026-09-20 ((P18.85)-(P18.147) notes) — pending **24 → 23**,
+- [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-37 LANDED 2026-09-20 ((P18.85)-(P18.148) notes) — pending **23**,
+  skipped 48, suite 20,101/0. **(P18.148) CLOSED NO ROW and is recorded for its MEASUREMENT**: it landed tsgo's
+  SECOND chain fold (a call-return incompatibility that drills deeper is dotted onto the called name AND keeps
+  the *returned by* wording — `The types returned by 'm().size'`), which is the engine mechanism
+  `complexRecursiveCollections`' pending row names. **That row still cannot close through the engine**, and the
+  round measured why: `interface D extends B` reports TS2430 for a DIRECT property mismatch ONLY — the nested,
+  method-return and method-with-parameters shapes are entirely missing, all three of which tsgo reports — and a
+  `class C implements B` whose method return drills deeper reports no TS2416 at all. **Those two gaps are the
+  successors**, both bigger than the chain fix and neither a display question. Also recorded: the row that names
+  a mechanism could not show it (a wipe-and-pin walker serves the file), and what located the gap was a PAIR of
+  fixtures differing in one ingredient — the nested-property form was already byte-identical to tsgo.
+  PREVIOUS HEAD: (0a) + (0b) STEPS 1-36 LANDED 2026-09-20 ((P18.85)-(P18.147) notes) — pending **24 → 23**,
   skipped 48, suite 20,096/0. **(P18.147) CLOSED `argumentsReferenceInFunction1_Js.errors.txt`** by deleting
   the tsc-6 `...any[]` tail corpus-unique walker B230 hardcoded into `apply`'s parameter-tuple display.
   **What retires it is an ARITY measurement, not a display one**: an un-annotated JS `function (a)` is

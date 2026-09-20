@@ -55,6 +55,71 @@ is a control for this whole family rather than a gate.
 called `RelationHeadSuppression`), and I retracted it mid-round. It mattered: the fix is a NARROWING of an existing
 approximation, not the ADDITION the brief described.
 
+### Round (P18.138) — (CHK.124) step 3: the JavaScript object-literal host, and B433 priced rather than assumed (2026-09-19)
+
+`jsExpandoObjectDefineProperty.errors.txt` CLOSES — ledger **34 -> 33**, skipped 59 -> 58, suite
+**20,002 / 0 / 58** (+23 pins). Errors screen 3,066 / 0 and emit 5,645 / 0 **with the closed row ACTIVE in that
+count** — that, not `--include`, is the closure receipt. Cost gate +0.15% max, `huge_methods --fail-over 0` exit 0,
+warning gate clean, 8-profile grid 8 x 0/0 on both arms with emit 78 vs 78 byte-identical. Libraries unchanged
+(cronstrue 1 -> 1, marked 18 -> 18).
+
+**A THIRD HOST KIND, REUSING EVERYTHING STEPS 1 AND 2 BUILT** — no second collector: in a JS file, an **EMPTY**
+`ObjectLiteralExpression` initializing an **un-annotated** `var`/`let`/`const` in a `SourceFile`/`ModuleBlock`. All
+three binding kinds are hosts here where TypeScript requires `const`, which is tsgo's `getInitializerSymbol` arm;
+`programHasJsFile` pre-gates every new parent-chain ascent to one boolean on a pure-TS program. `Object.
+defineProperty` membership transcribes `IsBindableObjectDefinePropertyCall` (exactly 3 args, literal-like name) with
+the type taken from the descriptor (`value` -> `get`'s return -> `set`'s parameter -> `any`) and `readonly` from
+`isReadonlyAssignmentDeclaration`; **all six descriptor cells plus `writable` true/false and TS2540 are
+byte-identical to tsgo.**
+
+**WHAT WAS REFUSED IS THE MORE USEFUL HALF, AND EVERY REFUSAL CARRIES ITS MEASUREMENT.** A NUMERIC
+`defineProperty` name marks the host UNDECIDABLE and refuses it whole, because tsgo names such a member by its
+canonical numeric string (round 934) and a subset member table is exactly what (CHK.45) forbids trusting. A
+non-empty literal, an annotated one, a JS function-/class-expression host, the expando CHAIN and a body-local host
+(B83.5 — never bound, so there is no symbol to attach to) are all refused, each measured.
+
+**AND THE PRIMITIVE-RECEIVER ARM WAS BUILT AND REVERTED**, which is why this fixture's third row is still missing:
+it closes `plain.expandoOk.nope` and **breaks (P18.130)'s stated invariant** that every row emitted in a `.js` file
+carries tsgo's MESSAGE — three shapes print `'string'`/`'number'`/`'boolean'` where tsgo prints the literal types.
+All three reproduce IDENTICALLY in a `.ts` file on this binary and on its parent, so the blocker is a standing
+literal-display/flow-narrowing gap and not a JavaScript one. Two rows of three, with the third refused for a reason
+that names its successor.
+
+**B433 IS *NOT* RETIRED, AND THAT IS A MEASUREMENT RATHER THAN A CONCESSION.** The PassLab priced it in one run
+(`disable checkJsObjectDefinePropertyLocalFnReads`, banner confirmed): **1 mismatch**, and the diff is *"expected
+diagnostics from baseline but none produced"* — the whole ROW, not its display. Its host is a body-local `const`,
+i.e. B83.5's unbound population that `getTypeOfVariableOrProperty` never sees, and it also owns the file-level JS
+function-expression host, so admitting that shape here would DOUBLE-EMIT. Both of B433's rows are byte-identical to
+tsgo on the shipped binary. Retiring it needs the binder, not this model.
+
+**THE ABLATION IS THE ROUND'S BEST ARTEFACT: EIGHT ARMS, ONE MISTAKE AT A TIME, AND TWO OF THEM FOUND REDUNDANT
+GUARDS THAT ARE RECORDED RATHER THAN CLAIMED AS COVERAGE.** a1 (never set `jsLiteral`) 1 RED; a2 (admit a possible
+host) 2 RED; a3 (drop the undecidable refusal) 1 RED; a4 (drop `cmamNestedEmptyJsObjectTrusted`) **2 RED — the
+ledger row**; a5 (ungate `defineProperty` on JS) 1 RED *after its fixture was repaired*; a8 (drop the
+`jsExpandoObjectTypeIds` marking) **11 RED**. a6/a6b/a6c each dropped one non-empty guard alone and read **0 RED —
+individually redundant** — while a6d dropped all three and LOST a row and produced a wrong display, so the family is
+load-bearing though no member is. a7 read `writable` from the symbol type: **0 RED and CLI byte-identical, a
+measured redundant guard**, kept because it is tsgo's spelling. Round 807's law honoured in both directions.
+
+**THE SCREEN IS LARGELY A CONTROL HERE AND THE COUNT WAS TAKEN BEFORE THE ROUND** ((CHK.124)): of 2,822 active
+`.errors.txt` cases, 143 carry a `.js` file and 36 an expando assignment or `defineProperty` — but only **1** has
+the new host shape (annotated, so refused) and **2** carry `defineProperty` (neither an object-literal host). The
+grid is a control for a structural reason rather than a measured one: every new rule is JS-gated and all eight
+profiles are `.ts`.
+
+**A COUNTDOWN PIN MOVED AND WAS SPLIT RATHER THAN EDITED.** `TsgoStep25Test`'s `negative control - an instance
+typed variable receiver stays silent` asserted (P18.131)'s residue, half of which this round closes; re-measured
+against tsgo it became a renamed `residue -` pin for the surviving instance-typed half plus a NEW positive pin for
+the object-literal half, with the class KDoc updated.
+
+**WHAT DID NOT WORK.** Under `noImplicitAny: false` the ledger row is still MISSED — our contextual typing does not
+reach a nested literal inside a contextually-typed one, so `jsLiteral` is over-set for the descriptor's `value: {}`;
+missing, never false, and pinned. Two residual "ours-only" probe lines are the SAME row as tsgo's with a pre-existing
+display gap (an inline-JSDoc parameter typed `any`, and B431's `() => void` for a JS function-declaration host),
+both unchanged from the parent binary. Zero new ours-only rows anywhere. Process: background shells are throttled
+between turns here, so an ablation batch advanced ~1 minute per several minutes of waiting and had to be re-run in
+the foreground under an explicit `timeout`.
+
 ### Round (P18.137) — (CHK.124) step 2: route (B) opens, and the grid's green is verified rather than banked (2026-09-19)
 
 Suite **19,979 / 0 / 59** (+27 pins), errors screen 3,065 / 0 and emit 5,645 / 0, cost gate +0.15% max,

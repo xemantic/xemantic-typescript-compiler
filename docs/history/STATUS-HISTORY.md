@@ -14,6 +14,26 @@ how the pin set was repaired: ablating the two keys read 1 and 2 RED only after 
 added, without which the flag key would have shipped unpinned (round 807). Recorded and unqueued: `b: T | (() =>
 T)` without `NoInfer` is silent in tsgo and emits TS2353 here — not in the corpus, so no gate sees it. 9 pins.
 
+**(P18.143) — (LEGACY.0b): THE INTERNED UNION ORDER AND ITS DISPLAY HAD COME APART, 20,056 / 0 / 52 (2026-09-20).**
+Ledger 28 -> 27, `namespaceDisambiguationInUnion` CLOSED and ACTIVE in the screen's 3,072 / 0. `Checker.kt`
+UNTOUCHED; the fix is nine lines of `StableTypeOrdering.kt`. **THE RECORDED REASON WAS WRONG TWICE** — the ledger
+sent the reader to a chain that "picks the first" and to `findBestUnionConstituent`, when `cvdaElaborateMismatch`'s
+B50.3 branch already had a same-simple-name COLLISION picker taking `lastOrNull`, and that picker was right.
+Reading the code produced three wrong theories; ONE marker settled it in a run:
+`[B50.3 pick=Foo.Yep order=Bar.Yep~Foo.Yep rel=false~false]` — **`Foo.Yep | Bar.Yep` had INTERNED as
+`[Bar.Yep, Foo.Yep]`, the reverse of what it displays.** The mechanism is that `StableTypeOrdering.nameKeyOf` fed
+`Checker.aliasDisplayMap`'s QUALIFIED string into the key tsc fills with an unqualified SYMBOL name, so
+`"Bar.Yep" < "Foo.Yep"` decided an order tsc leaves to the declaration position; `NameKey` now carries the
+qualified name for alias IDENTITY and the unqualified tail for ORDERING. **It was silent because a union's
+interning order is rendered nowhere** — the head line names the union through the annotation NODE ((P18.140)) —
+so only a consumer reading the LAST constituent could see it. Four cells measured against tsgo 7.0.2 byte for
+byte, including the swapped-declaration cell that separates "declaration order" from "written order" (round 807).
+**An out-of-family divergence found in the fourth cell is recorded in the pin rather than chased**: tsgo renders
+`Zed.Alpha | Ack.Beta` as `Alpha | Beta`, qualifying an alias only to disambiguate, where ours qualifies always.
+Blast radius measured BEFORE landing, which is what made a `getUnionType` comparator change affordable: the screen
+read **0 of 8,716**. Cost gate byte-identical to the pre-change control; all 8 profiles at standing row counts.
+3 pins, 1 arm reddening all three.
+
 **(P18.142) — (INV.2b) COMMIT 2: THE POSITION→NODE BRIDGE, 20,053 / 0 / 53 (2026-09-20).**
 The commit that makes commit 1 USABLE. (P18.141) shipped an oracle addressed entirely by `Node` while
 `Project.nodeAt` was `internal` and `NodeInfo` is a descriptor by design — so a host holding an oracle had exactly
