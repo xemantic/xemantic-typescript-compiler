@@ -172577,10 +172577,34 @@ interface DataView {
                 // (we already passed the `!callSignatures.isNullOrEmpty()` gate above).
                 val tgtFirstSig = tgtObjForCollapse!!.callSignatures!!.first()
                 val parenSuffix = if (tgtFirstSig.parameters.isNotEmpty()) "(...)" else "()"
-                val collapsedHeader = if (path.isEmpty()) {
-                    "  The types returned by '${chosen.name}$parenSuffix' are incompatible between these types."
-                } else {
-                    "  The types returned by '$propPath$parenSuffix' are incompatible between these types."
+                val calledPath = if (path.isEmpty()) "${chosen.name}$parenSuffix" else "$propPath$parenSuffix"
+                val collapsedHeader =
+                    "  The types returned by '$calledPath' are incompatible between these types."
+                // (LEGACY.0b): tsgo folds a SECOND time. `reportRelationError` collapses a
+                // property incompatibility followed by a call-return one into
+                // `The types returned by 'm(...)'`, and then runs the dotted-name collapse
+                // over that result — whose `switch` lists
+                // `The_types_returned_by_0_are_incompatible_between_these_types` beside the
+                // property messages, and converts the MESSAGE only when it is still the
+                // property one. So a return type that drills further reads
+                // `The types returned by 'm().size'`, not `The types returned by 'm()'`
+                // followed by a whole-object mismatch line. Measured against tsgo 7.0.2 at
+                // both `m()` and `m(...)`.
+                //
+                // Confined to a single call signature on BOTH sides: with overloads the
+                // return pair this would drill is not the one the elaboration chose.
+                val srcSigs = srcObjForCollapse!!.callSignatures!!
+                if (srcSigs.size == 1 && tgtObjForCollapse.callSignatures!!.size == 1) {
+                    val srcRet = srcSigs.first().resolvedReturnType
+                    val tgtRet = tgtFirstSig.resolvedReturnType
+                    val dotted = if (srcRet != null && tgtRet != null) {
+                        getPropertyElaborationChain(srcRet, tgtRet, calledPath)
+                    } else null
+                    if (dotted != null && dotted.first().trimStart().startsWith("The types of '")) {
+                        return listOf(
+                            dotted.first().replaceFirst("The types of '", "The types returned by '")
+                        ) + dotted.drop(1)
+                    }
                 }
                 return listOf(collapsedHeader) + funcMismatch.map { "  $it" }
             }
