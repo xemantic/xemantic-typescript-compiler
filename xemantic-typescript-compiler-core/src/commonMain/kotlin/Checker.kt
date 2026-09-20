@@ -33398,16 +33398,32 @@ class Checker(
         }
     }
 
-    /** B230: TS2345 for `<localFn>.apply(<recv>, arguments)` in a JS file under strict —
-     *  strictBindCallApply types apply's 2nd param as the target's parameter tuple, and
-     *  `IArguments` is not assignable to a tuple. An un-annotated JS function that itself
-     *  references `arguments` gets the inferred signature `[p1?: any, ..., ...any[]]`
-     *  (params optional + implicit any-rest), which is what the display renders. Gates:
-     *  receiver is a bare Identifier resolving to a top-level FunctionDeclaration or a
-     *  const/var function-expression with >=1 plain Identifier parameter (no rest, no
-     *  initializer), whose body references `arguments` (else the inferred tuple has no
-     *  rest and the display differs — FN-skip); 2nd arg is the bare `arguments`. Lib /
-     *  parameter / imported receivers never match (locals only). */
+    /**
+     * B230: TS2345 for `<localFn>.apply(<recv>, arguments)` in a JS file under strict —
+     * `strictBindCallApply` types `apply`'s 2nd parameter as the target's parameter TUPLE,
+     * and `IArguments` is not assignable to a tuple.
+     *
+     * **(LEGACY.0b): TypeScript 7 gives a JS function NO implicit `...any[]` rest.** The
+     * tuple this used to render, `[p1?: any, …, ...any[]]`, was tsc 6's inferred signature;
+     * measured against tsgo 7.0.2, an un-annotated JS `function (a)` is `[a?: any]` and its
+     * arity is `0-1` whether or not the body references `arguments`. So the tail is gone,
+     * and the surviving `bodyMentionsArguments` gate no longer means what it used to: it is
+     * now nothing but a CONFINEMENT to a shape this hardcoded display renders exactly.
+     *
+     * Gates: the receiver is a bare Identifier resolving to a top-level `FunctionDeclaration`
+     * or a `const`/`var` function expression with >= 1 plain Identifier parameter (no rest,
+     * no initializer) and NO JSDoc `@param` tag naming one of them; the 2nd argument is the
+     * bare `arguments`. Lib / parameter / imported receivers never match (locals only).
+     *
+     * **MEASURED AND REFUSED, the much larger gap this walker sits in front of**: tsgo types
+     * EVERY `f.apply(x, arguments)` from the receiver's real signature — 8 of 8 scratch cells
+     * report, where this walker's gates leave us silent for all but one — and it renders a
+     * rest receiver as `any[]` (TS2740, a different code), a defaulted parameter as
+     * `[a?: number | undefined]`, and a JSDoc-tagged or TS-annotated one as `[a: number]`.
+     * That is the general `bindCallApplyType` path ((CHK.134)), not this transcription; the
+     * JSDoc-tagged receiver is REFUSED here rather than rendered wrong, which costs one
+     * MISSING row and is why the gate tests for a tag at all.
+     */
     private fun checkJsApplyArgumentsTuple() {
         if (!options.strict) return
         for (result in checkedResults) {
@@ -33419,7 +33435,9 @@ class Checker(
                 when (stmt) {
                     is FunctionDeclaration -> {
                         val body = stmt.body ?: continue
-                        if (stmt.name != null && bodyMentionsArguments(source, body)) {
+                        if (stmt.name != null && bodyMentionsArguments(source, body) &&
+                            !jsApplyReceiverIsJsDocTyped(stmt.leadingComments, stmt.parameters)
+                        ) {
                             fnParams[stmt.name.text] = stmt.parameters
                         }
                     }
@@ -33427,7 +33445,13 @@ class Checker(
                         val n = (d.name as? Identifier)?.text ?: continue
                         val init = d.initializer as? FunctionExpression ?: continue
                         val body = init.body
-                        if (bodyMentionsArguments(source, body)) fnParams[n] = init.parameters
+                        val cmts = (stmt.leadingComments ?: emptyList()) +
+                            (init.leadingComments ?: emptyList())
+                        if (bodyMentionsArguments(source, body) &&
+                            !jsApplyReceiverIsJsDocTyped(cmts, init.parameters)
+                        ) {
+                            fnParams[n] = init.parameters
+                        }
                     }
                     else -> {}
                 }
@@ -33435,6 +33459,22 @@ class Checker(
             if (fnParams.isEmpty()) continue
             for (stmt in result.sourceFile.statements) jsApplyArgsStmt(stmt, fnParams, source, fileName)
         }
+    }
+
+    /**
+     * Does a JSDoc `@param` tag name one of [parameters]? tsgo types such a parameter FROM
+     * the tag — `@param {number} a` renders `[a: number]`, required and typed — which this
+     * walker's hardcoded `?: any` rendering cannot express, so it refuses the receiver
+     * instead of printing a confidently wrong tuple.
+     */
+    private fun jsApplyReceiverIsJsDocTyped(
+        comments: List<Comment>?,
+        parameters: List<Parameter>,
+    ): Boolean {
+        if (comments.isNullOrEmpty()) return false
+        val names = parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+        if (names.isEmpty()) return false
+        return jsDocParamTagRefs(comments).any { !it.isNested && it.name in names }
     }
 
     private fun bodyMentionsArguments(source: String, body: Block): Boolean {
@@ -33487,7 +33527,7 @@ class Checker(
                     if (params.any { it.dotDotDotToken || it.initializer != null || it.name !is Identifier }) return@run
                     val arg = e.arguments.getOrNull(1) as? Identifier ?: return@run
                     if (arg.text != "arguments" || e.arguments.size != 2) return@run
-                    val tuple = "[" + params.joinToString(", ") { "${(it.name as Identifier).text}?: any" } + ", ...any[]]"
+                    val tuple = "[" + params.joinToString(", ") { "${(it.name as Identifier).text}?: any" } + "]"
                     val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
                     diagnostics.add(Diagnostic(
                         message = "Argument of type 'IArguments' is not assignable to parameter of type '$tuple'.",

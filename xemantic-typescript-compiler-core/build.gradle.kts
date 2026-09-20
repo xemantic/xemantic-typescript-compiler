@@ -821,13 +821,6 @@ val tsgoPendingBaselines = listOf(
     ),
     // -------------------------------------------------------------------- (LEGACY.0b)
     TsgoPendingBaseline(
-        "argumentsReferenceInFunction1_Js.errors.txt",
-        "RECLASSIFIED (LEGACY.0b step 2) F9 -> type DISPLAY: the code, span and sentence agree and only a rendered TYPE differs; layer `submoduleAccepted`. tsgo: " +
-        "index.js(13,29): error TS2345: Argument of type 'IArguments' is not assignable to " +
-        "parameter of type '[f?: any]'. | ours: index.js(13,29): error TS2345: Argument of type " +
-        "'IArguments' is not assignable to parameter of type '[f?: any, ...any[]]'."
-    ),
-    TsgoPendingBaseline(
         "augmentExportEquals2.js",
         "JS emit; layer `submoduleAccepted`. tsgo: //// [file3.ts] | ours: //// [file1.js]"
     ),
