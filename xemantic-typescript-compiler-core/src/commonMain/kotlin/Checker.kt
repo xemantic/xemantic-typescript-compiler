@@ -25467,6 +25467,21 @@ class Checker(
             // AST-scanning the namespace body for the lost declaration; the same scan is
             // the refusal here, so the two answers about one `new M.C()` cannot disagree.
             if (findNamespaceMemberClassDecl(pa) != null) return true
+            // AND the property's OWN type, because the callee type can LOSE the construct
+            // side: measured with a direct probe, `getTypeOfSymbol(<the `f` symbol>)` of
+            // `declare const both: { f: { (): void; new (): object } }` answers
+            // `call=1 ctor=1` while `getCalleeType(both.f)` — i.e.
+            // [getTypeOfPropertyAccess] — answers a type whose construct list is EMPTY.
+            // Without this the arm reported TS7009 for a genuinely constructable callee,
+            // which is the one false positive its own ablation found (arm b3). The
+            // underlying member-type gap is recorded as a residue pin rather than fixed
+            // here: it also makes `new ctorOnly.f()` answer `any` where tsgo answers the
+            // instance type, which is a wider change than this rule.
+            val recv = getTypeOfExpression(pa.expression)
+            if (recv !== anyType && recv !== errorType) {
+                val prop = getPropertyOfType(recv, pa.name.text)
+                if (prop != null && getConstructSignaturesOfType(getTypeOfSymbol(prop)).isNotEmpty()) return true
+            }
         }
         return false
     }

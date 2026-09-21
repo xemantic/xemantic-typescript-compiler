@@ -146,6 +146,35 @@ class NewExprImplicitAnyNonIdentifierCalleeTest {
     }
 
     @Test
+    fun `negative control - a property carrying BOTH signature kinds is silent`() {
+        // The one shape that separates this rule from one that reports whenever a CALL
+        // signature is present, and the false positive its own ablation (arm b3) found:
+        // the callee IS constructable, so tsgo is silent. It needs the property SYMBOL's
+        // type, because `getTypeOfPropertyAccess` loses the construct side here — see the
+        // residue below.
+        assert(
+            count("declare const both: { f: { (): void; new (): object } };\nnew both.f();") == 0,
+        )
+    }
+
+    @Test
+    fun `residue - a construct-signature property does not type the new expression`() {
+        // MEASURED with a direct probe: `getTypeOfSymbol` of the `f` symbol answers a type
+        // with `ctor=1`, while `getCalleeType` — `getTypeOfPropertyAccess` — answers one
+        // whose construct list is EMPTY, and `getReturnTypeOfNewExpression`'s
+        // PropertyAccessExpression arm only handles a namespace-qualified CLASS. So
+        // `new ctorOnly.f()` types as `any` and tsgo's TS2322 (`Type 'object' is not
+        // assignable to type 'never'`) is missing. Pinned as a residue because the fix is
+        // a member-type change with reach far beyond this rule; the rule itself is correct
+        // here only because it consults the property symbol.
+        assert(
+            diagnose(
+                "declare const ctorOnly: { f: { new (): object } };\nconst r: never = new ctorOnly.f();",
+            ).none { it.code == 2322 },
+        )
+    }
+
+    @Test
     fun `an identifier callee still reports exactly once`() {
         // The identifier path is a DIFFERENT emitter (`checkNewExprImplicitAny`, symbol-
         // based, on the `spineNa` anchor). Running both for one expression would
