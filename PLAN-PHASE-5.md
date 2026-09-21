@@ -97,9 +97,17 @@ letting the general arm re-decide it with a differently-resolved slot.
 **ABLATION, one mistake at a time, six arms then five.** a1 (the general arm never runs) 8 of 14 pins
 RED, screen 0 — the arm is load-bearing and the corpus is a CONTROL for it, exactly as the census
 said. a2 (the array-literal/TUPLE refusal removed) 1 pin RED plus the grid row on all eight profiles.
-a3 REMOVED THE GUARD INSTEAD (above). a4 (the ACCESSOR refusal removed) read 0 RED while a3's guard
-was still standing — re-run in the shipped configuration it is what carries the fixture, and the
-round's own accessor pin is what notices. a5 (the one-row-per-site dedupe removed) 1 screen mismatch,
+a3 REMOVED THE GUARD INSTEAD (above). **a4 (the ACCESSOR refusal removed) took THREE runs and a
+hand-built binary, and that is the second lesson**: it read 0 RED on the pins while the screen read 1
+mismatch — the guard was load-bearing and the PIN was blind, twice over. The first cell used
+`box['value'] = true`, which B243 (`checkElementAccessSetterWrite`) claims one walker earlier; the
+second used an unrelated getter/setter pair on a NON-union receiver, which nothing reaches. What
+settled it was building the guard-off binary by hand and reading WHICH rows it loses — they are
+`divergentAccessorsTypes8`'s UNION-receiver rows (65/68/73/75/77) — so the discriminator needs a UNION
+receiver AND a value that fails the union of the GETTER types while the SETTERS accept it
+(`pq['v'] = 42` against getters `string`, setters `string | number`; tsgo silent, guard-off binary
+TS2322). Final arm: **1 pin RED, 1 screen**. Both dead cells are kept as `residue -` pins named for
+what they actually test. a5 (the one-row-per-site dedupe removed) 1 screen mismatch,
 `widenedTypes`. a6 (the extracted narrow walker stops claiming a site whose relation PASSED) 0 RED: a
 measured REDUNDANT guard, recorded and kept as a barrier, not claimed as coverage. The restore
 rebuild returns `Checker.class` to the gated md5.

@@ -35,7 +35,7 @@ read 0 RED on the pins and 0 of 8,725 on the screen not because the pins were bl
 UNNECESSARY (`Two.prop3` is a get/set pair, so the ACCESSOR guard reaches every row in that fixture) — and
 measured one step further it was LOSSY, dropping two rows tsgo reports on a union receiver with no accessor at
 all. It was REMOVED and those two rows are now pins. A guard no arm can discriminate is as often unnecessary as
-it is unpinned; the only way to tell is to ask what it COSTS. **The four display/anchor divergences the new rows inherit are
+it is unpinned; the only way to tell is to ask what it COSTS. **The mirror case landed in the same ablation**: the ACCESSOR guard read 0 RED through TWO pin attempts while the screen read 1 mismatch — there the guard was load-bearing and the PIN was blind, and only building the guard-off binary by hand and reading WHICH rows it loses produced a discriminator (a UNION receiver plus a value that fails the GETTER union while the SETTERS accept it). Final arm 1 pin RED, 1 screen. **The four display/anchor divergences the new rows inherit are
 PRE-EXISTING AT THE PROPERTY TARGET, proved on a twin fixture** — one shared (PARITY.1) family, fixed in both
 readers or neither. Screen 0 of 8,725; grid 8x0; cost_gate PASS (max +0.21%, `output.errors` 46); huge_methods 0
 over; warning-clean; cronstrue 1 -> 1.
