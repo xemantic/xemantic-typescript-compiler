@@ -1,5 +1,28 @@
 **(P18.148) — (LEGACY.0b): THE SECOND CHAIN FOLD, AND A ROW THAT COULD NOT SHOW ITS OWN MECHANISM, 20,101 / 0 / 48 (2026-09-20).**
 
+**(P18.155) — (LEGACY.0b): TS7009 AT A NON-IDENTIFIER `new` CALLEE, AND TWO DEFENCES BUILT AGAINST A PHANTOM, 20,163 / 0 / 44 (2026-09-21).**
+CLOSED NO LEDGER ROW (pending stays 19) and is recorded for its MEASUREMENT. `new O.m()`, `new N.f()`, `new h.g()`,
+`new Base.make()` and `new arr[0]()` are TS7009 in tsgo 7.0.2 and were ALL silent here; tsc decides it from the RESOLVED
+SIGNATURE's declaration (not a constructor / construct signature / constructor type), and the comment two lines below
+the new arm had already recorded that rule from the other side while implementing only its noImplicitAny-OFF half. It
+lives in `checkSingleNewExpressionTypes` because that runs under the ccet FRAME ambient, where a body-local receiver
+resolves; the identifier path keeps its own symbol-based anchor (it reaches a named function expression's
+self-reference and `super`, which this parser makes an Identifier) and a COUNT pin holds the no-double-emit. The corpus
+screen found the one real refusal by reddening a CLODULE — `class C` + `function C` do not merge here, so the construct
+side is invisible to the callee type AND to `resolveQualifiedValueSymbol`, and the refusal consults B511's own AST scan.
+**THE ROUND'S MOST USEFUL FINDING IS A MISTAKE IT MADE**: after ablation arm b3 read 0 RED, a CLI probe "found" two
+false positives and both were defended against — but that probe had run against the ARM's class directory ((CHK.54)'s
+trap), i.e. against a binary with the very conjunct under test removed. The defences then passed the pins, the screen,
+the 8-profile grid, both libraries and the full suite, **because a redundant guard is invisible to every gate**, and
+they cost a positive tsgo reports. Re-measured from a known binary, both are unnecessary and are reverted; the KDoc
+claim that a member access loses construct signatures was false and is gone. **The trap's new costume: it bites the
+measurement taken to JUSTIFY work, not just the one taken to grade it**, and its tell was an arm reading 0 RED for a
+guard just "proved" load-bearing by hand. Grid a REAL gate here (the round ADDS a diagnostic): 8x `added=0 removed=0
+fullDiffLines=0`, emit byte-identical, cronstrue 1 and marked 18 unchanged. Five arms re-run against the corrected
+code — b1 6 RED, b3 2 RED, b2/b4/b5 1 RED each, no redundant guard. cost_gate PASS; huge_methods PASS; warning gate
+clean with both compile tasks verified EXECUTED.
+
+
 **(P18.154) — (LEGACY.0b): AN INTERSECTION OF LITERAL SETS IS A KEY SET, AND A MAPPED TYPE OVER ONE WAS `any`, 20,148 / 0 / 44 (2026-09-20).**
 Ledger 20 -> 19, `reverseMappedTypeIntersectionConstraint.errors.txt` CLOSED and ACTIVE in the screen's 3,079 / 0
 (emit 5,646 / 0). The row was labelled "PIN-SERVED — RE-TRANSCRIBE OR RETIRE" and **there was an ENGINE defect under
