@@ -382,6 +382,18 @@ correspondence rather than to an inspection, and they are queued as (CHK.31)-(CH
    and is clean under tsgo.
 5. **A function expression assigned through an index signature gets no contextual signature**
    — TS7019 + TS2683×4 in `marked`; possibly one path with the object-literal-method case.
+   **RE-MEASURED 2026-09-21 ((P18.164) tail) — TWO mechanisms, and the `this` half is a MODEL
+   gap.** An ELEMENT-ACCESS target supplies no contextual signature (2 FPs + 2 missing rows); a
+   PROPERTY-ACCESS target types the parameters correctly and fires TS2683 anyway. tsgo's actual
+   rule, over 6 positions: a function expression assigned to a MEMBER gets the RECEIVER's type as
+   `this`, while a variable annotation and a call argument supply none. A narrow fix keyed on the
+   target declaring a `this:` parameter was built and REVERTED — 0 rows on `marked`, 0 on the
+   corpus, 0 on the grid. See (CHK.35).
+6. **An assignment through an ELEMENT ACCESS is never type-checked at all** — `bag[key] =
+   "not a function"` is accepted in silence where the same mismatch through a property target
+   reports TS2322. A SOUNDNESS hole, and the root cause of `marked`'s three ours-only TS2578
+   `Unused '@ts-expect-error'` rows, which are SHADOWS of the three checks we never run. Queued
+   as (CHK.136); it shares its root cause with family 5 and should be sequenced with it.
 
 ~59 rows remain untriaged, led by TS2322×14 and TS2339×7. Stated rather than implied, because
 this page's own history is that a family attributed by inspection is a hypothesis.

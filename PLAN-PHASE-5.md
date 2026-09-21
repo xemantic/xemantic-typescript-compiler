@@ -8061,6 +8061,37 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   does not set the flag, where the other four families cost every project. The 8 profiles do not
   set it either, so `cost_gate.py` and the grid are structurally blind here and `yaml` is the gate.
 
+- [ ] **(CHK.136) AN ASSIGNMENT THROUGH AN ELEMENT ACCESS IS NEVER TYPE-CHECKED AT ALL — A
+  SOUNDNESS HOLE ON A COMMON PATTERN, AND THE ROOT CAUSE OF 5 OF `marked`'s REMAINING 8 ROWS.
+  FOUND 2026-09-21 ((P18.164) tail), measured against tsgo 7.0.2.** `bag[key] = <anything>` is
+  accepted in silence, including `bag[key] = "not a function"` against
+  `interface Bag { [k: string]: (t: {type: string}) => string }`. The IDENTICAL mismatch through
+  a PROPERTY target (`obj.m = …`) reports TS2322 correctly, so the defect is exactly the
+  element-access target and nothing else:
+
+      interface Bag { [k: string]: (t: { type: string }) => string }
+      declare const bag: Bag; declare const key: string;
+      bag[key] = (...args: unknown[]) => { return 1; };   // tsgo TS2322, ours SILENT
+      bag[key] = "not a function";                        // tsgo TS2322, ours SILENT
+      declare const obj: { m: (t: { type: string }) => string };
+      obj.m = (...args: unknown[]) => { return 1; };      // BOTH report TS2322 (the control)
+
+  **IT IS A FALSE-NEGATIVE CLASS THAT SURFACES AS FALSE POSITIVES**, which is why it was
+  invisible: `marked` guards all three sites with `// @ts-expect-error`, so our missing
+  diagnostics become three ours-only **TS2578 `Unused '@ts-expect-error' directive`** rows
+  (Instance.ts 201/228/241, every one an element-access assignment of an arrow). Fixing the
+  check REMOVES those 3 FPs and ADDS the 3 true rows tsgo has.
+  **SAME ROOT CAUSE AS (CHK.35)(1)**: nothing computes the TYPE of an element-access assignment
+  target, so neither the RHS's contextual typing nor its assignability check happens. Sequence
+  the two together — the type computation is shared, `getTypeOfElementAccess` (Checker.kt:133218)
+  already answers it and is already reached from `getTypeOfExpression`, so what is missing is the
+  ADMISSION of an `ElementAccessExpression` LHS at the readers, not the type.
+  **EXPECT IT TO ADD DIAGNOSTICS AND GATE ACCORDINGLY** — this is the one shape in the family
+  that makes the corpus screen and the 8-profile grid REAL gates rather than controls, because
+  an element-access assignment is ordinary code. Take a reach census FIRST ((CHK.124)); if the
+  profiles carry the shape, the grid will move and every moved row needs adjudicating against
+  tsgo before it is called a fix.
+
 - [ ] **(CHK.35) RE-MEASURED AND RE-SIZED 2026-09-21 ((P18.164) tail) — THE ITEM IS WRONG TWICE
   AND IT IS **NOT** (CHK.30)'s SIBLING. It is TWO mechanisms, and the `this` half is a MODEL GAP
   rather than the missing contextual signature this item names.** Measured with VALUE probes (a
