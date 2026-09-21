@@ -15,6 +15,24 @@ cannot be retired even with the chain fixed. Price: corpus-screen 0 of 8,721, wh
 whole price ((PARITY.1)); `getPropertyElaborationChain` 6,260 -> 6,480 bytecodes, 1,520 under the JIT limit.
 5 pins, 2 arms, both red and recorded as ONE observable — c1's damage subsumes c2's, so no pin can separate them.
 
+**(P18.150) — (LEGACY.0b): TS2416's CHAIN DRILLS INTO THE FAILING MEMBER, AT BOTH TAILS, 20,122 / 0 / 47 (2026-09-20).**
+NO LEDGER MOVEMENT — pending stays 22 — and the note is for the measurements. (P18.149)'s mechanism one walker over:
+a PROPERTY pair in `checkClassPropertyOverrides` and a method's RETURN pair in `addSignatureElaboration` both stopped
+at the whole-object line, so three of six shapes were short by two or three chain lines and are now byte-identical to
+tsgo. **THE SIZING THIS ROUND INHERITED — WRITTEN ONE ROUND EARLIER, BY ME — WAS WRONG IN THE SAME DIRECTION AS THE
+ONE BEFORE IT**: `class C implements B` whose method return drills deeper does NOT "report no TS2416 at all"; all six
+shapes report, in both spellings, and the gap was purely DEPTH. Twice in one session a recorded sizing read a SHORT
+chain as an ABSENT row — the cheap guard is that a sizing must quote the row it claims is missing.
+**AND AN UNDISCRIMINATED ARM WAS AN UNPINNED GUARD FOR THE SECOND TIME TODAY, THIS ONE BLIND TO BOTH INSTRUMENTS**:
+ablating the double-append guard read 0 RED over 8 pins AND 0 mismatch over 8,722 baselines, yet it is load-bearing —
+the discriminating shape (a member BOTH callable and carrying a property) had to be constructed from the mechanism,
+and without the guard the chain grows a contradictory DOUBLE tail where tsgo prints one. So round 807's
+"no uniquely-its-own failure means a REDUNDANT guard" now has two measured counter-examples, and the escalation is
+pins -> screen -> ask what shape the mechanism could bite on. **Residue recorded and not chased**: for that hybrid
+member tsgo elaborates the PROPERTY where we elaborate the PARAMETER (a different family), pinned `residue -`.
+Screen 0 of 8,722 (the real instrument — 54 TS2416 baselines); grid 8x0 and a CONTROL by construction; cost_gate
+BYTE-IDENTICAL to (P18.149) on every counter; huge_methods PASS. 10 pins, 3 arms, all red.
+
 **(P18.149) — (LEGACY.0b): TS2430's CHAIN COMES FROM THE ENGINE, AND TWO SHAPES IT COULD NOT SEE, 20,112 / 0 / 47 (2026-09-20).**
 Ledger 23 -> 22, `complexRecursiveCollections.errors.txt` CLOSED and ACTIVE in the screen's 3,076 / 0. tsc compares
 the WHOLE derived interface type against the base, so a TS2430 carries exactly the chain the ordinary assignability
