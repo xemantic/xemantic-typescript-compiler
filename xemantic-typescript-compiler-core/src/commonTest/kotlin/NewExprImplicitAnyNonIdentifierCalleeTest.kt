@@ -181,6 +181,18 @@ class NewExprImplicitAnyNonIdentifierCalleeTest {
     }
 
     @Test
+    fun `negative control - a non-callable property callee is silent`() {
+        // The row that discriminates the CALL-signature requirement: without it the arm
+        // reports TS7009 for `new o.p()` where `p: number`, which is TS2351 territory —
+        // tsgo prints `This expression is not constructable.` with a
+        // `Type 'Number' has no construct signatures.` chain at the CALLEE (2,5). We emit
+        // nothing there today; that missing row is pre-existing and belongs to the TS2351
+        // family, and what this pin holds is only that the TS7009 arm keeps its hands off
+        // a callee that is not callable at all.
+        assert(count("declare const o: { p: number };\nnew o.p();") == 0)
+    }
+
+    @Test
     fun `an identifier callee still reports exactly once`() {
         // The identifier path is a DIFFERENT emitter (`checkNewExprImplicitAny`, symbol-
         // based, on the `spineNa` anchor). Running both for one expression would

@@ -161513,6 +161513,14 @@ interface DataView {
         // Identifier here), whose `new super(...)` owns the TS2351 + TS17011 pair at
         // 16.4cw. Running both paths would double-emit.
         //
+        // MEASURED REDUNDANT, KEPT: with the arm restricted to a property access, the
+        // `getConstructSignaturesOfType(calleeType).isEmpty()` conjunct is subsumed by the
+        // property-SYMBOL consult in the refusal — ablation arm b3 drops it and reads
+        // 0 RED of 13 with the screen and the grid clean. It is kept because it is the
+        // only guard that survives if the refusal's receiver lookup ever fails to find
+        // the property, and because it states the rule the way tsc states it. Recorded
+        // rather than claimed (round 807).
+        //
         // A UNION callee is excluded so B60.15's three-case constituent report keeps it.
         //
         // AND AN ELEMENT-ACCESS CALLEE IS EXCLUDED ON A MEASUREMENT, not for lack of a
