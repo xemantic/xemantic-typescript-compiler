@@ -77,6 +77,25 @@ the declared count only through the combiner's extra rest element, which it appe
 barrier, not claimed as coverage. **Arm a3 reddens round 446's OWN `DestructuredParamArityTest`**,
 which is what makes the extraction faithful rather than a second copy.
 
+**TAIL — (CHK.35) RE-MEASURED AND ITS FIRST FIX REVERTED ON ITS OWN MEASUREMENT.** With
+(CHK.33) landed, the next `marked` cluster was opened and the item's framing is wrong twice: it
+is TWO mechanisms, not one, and the `this` half is a MODEL GAP rather than the missing
+contextual signature the item names. A VALUE-probed matrix (a deliberate mis-assignment off
+`this` AND off the parameter, which must report TS2322 when the contextual type really arrived)
+separates them: an ELEMENT-ACCESS target supplies nothing — 2 FPs and 2 MISSING true rows — while
+a PROPERTY-ACCESS target types the parameters correctly and fires TS2683 anyway, a case the item
+never mentions. **tsgo's actual rule, measured over 6 positions: a function expression assigned
+to a MEMBER gets the RECEIVER's type as `this`** (`o.m = function(){}` → `this` is `typeof o`,
+with tsgo reporting TS2339 for a bad member on it), while a variable ANNOTATION and a CALL
+ARGUMENT supply no `this` at all. **A narrow fix keyed on the target type declaring a `this:`
+parameter was built, measured and REVERTED**: it is correct where it applies and moves 0 rows on
+`marked`, 0 on the corpus and 0 on the grid, because `marked`'s own `walkTokens` declares no
+`this:`. Shipping it would have been a fix with no measured effect. The two halves must move
+together — suppressing TS2683 without typing `this` trades a loud wrong answer for a silent one —
+and the item now carries the three sites, the value-probe recipe and the recorded refusal
+(`pullContextualTypeAt`'s *"not a bounded question"*) to re-derive. **(CHK.30) is closed and
+unrelated**, which answers the item's own standing question: one path does NOT serve both.
+
 Gates: `marked` 18 -> 10, `cronstrue` 1 -> 1; corpus screen 0 of 8,725 over both channels; grid 8x0;
 suite **20,232 / 0 failed / 44 skipped** (+17, this round's pins); `cost_gate` PASS with max +0.15%
 and `output.errors` 46 unchanged; `huge_methods` 0 over. The ablation's restore rebuild returns
@@ -8042,7 +8061,38 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   does not set the flag, where the other four families cost every project. The 8 profiles do not
   set it either, so `cost_gate.py` and the grid are structurally blind here and `yaml` is the gate.
 
-- [ ] **(CHK.35) A FUNCTION EXPRESSION ASSIGNED THROUGH AN INDEX SIGNATURE GETS NO CONTEXTUAL
+- [ ] **(CHK.35) RE-MEASURED AND RE-SIZED 2026-09-21 ((P18.164) tail) — THE ITEM IS WRONG TWICE
+  AND IT IS **NOT** (CHK.30)'s SIBLING. It is TWO mechanisms, and the `this` half is a MODEL GAP
+  rather than the missing contextual signature this item names.** Measured with VALUE probes (a
+  deliberate mis-assignment off `this` and off the parameter, which must report TS2322 when the
+  contextual type really arrived — a silence-only pin cannot tell "typed right" from "typed
+  `any`"):
+  (1) an **ELEMENT-ACCESS** assignment target supplies NO contextual signature at all — 2 false
+  positives (TS7006/TS7019 + TS2683) AND 2 MISSING true rows, since `tok` and `this` are both
+  `any` so the probes go unreported. `marked` 118-121.
+  (2) a **PROPERTY-ACCESS** target supplies the parameters correctly and TS2683 fires anyway.
+  `marked` 270-272 — a case this item never mentions.
+  **tsgo's ACTUAL `this` RULE, 6 cells:** a function expression assigned to a MEMBER gets the
+  RECEIVER's type as `this` (`o.m = function(){}` → `this` is `typeof o`, and tsgo reports TS2339
+  for a bad member on it; an object-literal property value → the object literal; an element-access
+  target → the receiver, whose index signature then answers). A variable ANNOTATION and a CALL
+  ARGUMENT do NOT supply `this` (both TS2683 in tsgo). A contextual signature's own `this:`
+  parameter OUTRANKS the receiver rule. **We model neither for an assignment.**
+  **A NARROW FIX WAS BUILT AND REVERTED ON ITS OWN MEASUREMENT**: keying TS2683's suppression on
+  the target type declaring a `this:` parameter is CORRECT where it applies and moves **0 rows on
+  `marked`, 0 on the corpus and 0 on the grid**, because `marked`'s `walkTokens?: ((token: Token)
+  => void) | null` declares no `this:` at all. **The two halves must move TOGETHER**: suppressing
+  TS2683 without typing `this` trades a loud wrong answer for a silent one. Sites, from a census:
+  `spineItEdge`'s `is FunctionExpression` arm (Checker.kt:71786-71812 — a `BinaryExpression`
+  parent is the `else -> false`), `pullContextualTypeAt`'s `is BinaryExpression` arm
+  (Checker.kt:149997, LHS test `is Identifier || is PropertyAccessExpression`, with a RECORDED
+  refusal to admit an element access: *"getTypeOfExpression over an arbitrary LHS is not a bounded
+  question"* — re-derive that before inheriting it), and
+  `resolveAssignTargetCtxTypeForImplicitAny` (Checker.kt:37173, same missing arm).
+  **(CHK.30) IS CLOSED AND UNRELATED** — it closed 2026-08-25 with its own diagnosis recorded as
+  WRONG (the 89 TS7006 were a `node_modules` package resolving to `any`), and the shorthand-method
+  path is a DIFFERENT arm (`pullContextualTypeAt`'s `is ObjectLiteralExpression`), so the
+  "check whether one path serves both" question is answered: it does not. ORIGINAL: A FUNCTION EXPRESSION ASSIGNED THROUGH AN INDEX SIGNATURE GETS NO CONTEXTUAL
   SIGNATURE — 5 ROWS, AND IT IS (CHK.30)'s SIBLING.** In `marked/Instance.ts:118`,
   `extensions.renderers[ext.name] = function(...args) { … ext.renderer.apply(this, args) … }`
   gives **TS7019** for `args` (rest parameter implicitly `any[]`) and **TS2683**×4 for `this`
