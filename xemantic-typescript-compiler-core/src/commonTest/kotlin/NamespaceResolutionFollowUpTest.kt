@@ -280,9 +280,17 @@ class NamespaceResolutionFollowUpTest {
             """,
             directives = directives,
         )
-        assert(messages(d, 2339) == listOf(
-            "Property 'Nope' does not exist on type 'typeof import(\"node:net\")'.",
+        // SORTED, as the sibling above: (CHK.73)(A) gave the receiver gate — a spine
+        // handler, i.e. an EARLY pass — a missing-member emitter for a module object, so
+        // the `import netr = require("net")` row is now produced before the heritage
+        // walker reaches the `import * as net` one. Both DISPLAYS are unchanged and both
+        // spans are unchanged; only which pass emitted first moved, and raw diagnostic
+        // order is not an observable (the formatter sorts, which is why every corpus
+        // baseline is byte-identical across the change). The subject of this pin is the
+        // specifier a head displays, not the emission order.
+        assert(messages(d, 2339).sorted() == listOf(
             "Property 'Nope' does not exist on type 'typeof import(\"net\")'.",
+            "Property 'Nope' does not exist on type 'typeof import(\"node:net\")'.",
         ))
     }
 

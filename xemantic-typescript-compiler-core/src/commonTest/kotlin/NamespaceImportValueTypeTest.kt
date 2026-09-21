@@ -309,6 +309,219 @@ class NamespaceImportValueTypeTest {
         }
     }
 
+    // ── (CHK.73)(A) a member ABSENT from a module object is tsgo's TS2339 ──
+    //
+    // Every access below sits in a FUNCTION BODY on purpose. A BARE top-level
+    // `ns.nope;` has an emitter of its own — [Checker.checkAmbientModuleNamespaceImportMembers],
+    // and only for an AMBIENT specifier — so an expression-statement fixture reads as
+    // healthy for the ambient half whatever the receiver gate does, and the first
+    // version of these pins would have been vacuous for exactly that reason.
+    //
+    // The messages are tsgo 7.0.2's, measured 2026-09-21, with ONE stated divergence:
+    // tsgo names the resolved target by its full path sans extension
+    // (`typeof import("/abs/dir/mod")`) where every `typeof import(...)` site in this
+    // compiler names it by its BASENAME. On a flat harness the two coincide, which is
+    // also why the corpus cannot see the difference — see
+    // [Checker.moduleObjectTypeDisplay].
+
+    @Test
+    fun `a member absent from a RELATIVE module object is reported`() {
+        diagnose(
+            mod + """
+            // @filename: main.ts
+            import * as rel from "./mod";
+            export function f() { return rel.nope; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(any {
+                it.code == 2339 &&
+                    it.message == "Property 'nope' does not exist on type 'typeof import(\"mod\")'."
+            })
+        }
+    }
+
+    @Test
+    fun `a member absent from an AMBIENT module object is reported`() {
+        // BYTE-IDENTICAL to tsgo here: an ambient module is named by its specifier,
+        // which carries no path for the basename rule to shorten.
+        diagnose(
+            amb + """
+            // @filename: main.ts
+            import * as amb from "ambpkg";
+            export function f() { return amb.nope; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(any {
+                it.code == 2339 &&
+                    it.message == "Property 'nope' does not exist on type 'typeof import(\"ambpkg\")'."
+            })
+        }
+    }
+
+    @Test
+    fun `a module-PRIVATE name is not on the module object`() {
+        // The enumeration is the IMPORTER's view ([Checker.exportedSymbolsThroughStars]),
+        // not the target file's `locals` — which is the table the module symbol carries
+        // and which (P18.125) measured wrong for an enumeration three ways.
+        diagnose(
+            mod + """
+            // @filename: main.ts
+            import * as rel from "./mod";
+            export function f() { return rel.modulePrivate; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(any { it.code == 2339 && "'modulePrivate'" in it.message })
+        }
+    }
+
+    @Test
+    fun `negative control - a member the module DOES export is silent`() {
+        diagnose(
+            mod + amb + """
+            // @filename: main.ts
+            import * as rel from "./mod";
+            import * as amb from "ambpkg";
+            export function f() { return [rel.num, amb.anum]; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    @Test
+    fun `negative control - a star re-exporting ambient block is refused`() {
+        // (P18.125)'s "a barrel that also declares its own exports": the carrier's RAW
+        // `exports` hold `own` ALONE, so trusting them manufactures a false TS2339 on
+        // the very `@types` shape this arc exists for. tsgo reports `starred` as present.
+        diagnose(
+            """
+            // @filename: amb.d.ts
+            declare module "source" { export const starred: number; }
+            declare module "barrelpkg" {
+                export * from "source";
+                export const own: number;
+            }
+            // @filename: main.ts
+            import * as b from "barrelpkg";
+            export function f() { return b.starred; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    @Test
+    fun `residue - a star re-export target that does not resolve is refused too`() {
+        // tsgo REPORTS here: an unresolvable `export * from` contributes nothing, so the
+        // surface really is `own` alone. The refusal above cannot tell the two apart
+        // without a star-following enumeration for an ambient BLOCK, which does not
+        // exist — [Checker.collectExportedSymbolsFollowingStars] takes a `SourceFile`.
+        // Failing SILENT is the safe direction; measured 2026-09-21.
+        diagnose(
+            """
+            // @filename: amb.d.ts
+            declare module "barrelpkg" {
+                export * from "nowhere";
+                export const own: number;
+            }
+            // @filename: main.ts
+            import * as b from "barrelpkg";
+            export function f() { return b.whatever; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    @Test
+    fun `negative control - a SHORTHAND ambient module is any`() {
+        // `declare module "spec";` with NO body makes the module `any` in tsc, so
+        // nothing is missing from it — `esModuleInteropTslibHelpers` is the corpus
+        // baseline that says so, and it is what the first cut of this arm broke.
+        diagnose(
+            """
+            // @filename: amb.d.ts
+            declare module "shorty";
+            // @filename: main.ts
+            import * as s from "shorty";
+            export function f() { return s.whatever; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    @Test
+    fun `negative control - an export-equals ambient block is refused`() {
+        // `export = X` re-points the surface at a VALUE whose members live in a TYPE and
+        // not in a symbol table. `aliasOnMergedModuleInterface` is the corpus baseline:
+        // tsgo answers TS2708 at the RECEIVER there and no TS2339 at all.
+        diagnose(
+            """
+            // @filename: amb.d.ts
+            declare module "eqpkg" {
+                namespace B { export interface A { } }
+                interface B { bar: string; }
+                export = B;
+            }
+            // @filename: main.ts
+            import * as e from "eqpkg";
+            export function f() { return e.bar; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    // ── (CHK.73)(B) the DISPLAY of a module object ──
+
+    @Test
+    fun `a RELATIVE module object renders as typeof import`() {
+        // Before this it rendered `Type 'rel'` — the IMPORT ALIAS's local name, because
+        // [Checker.createModuleSymbol] is called with it and `typeToString`'s last
+        // `Type.Object` clause read `sym.name`.
+        diagnose(
+            mod + """
+            // @filename: main.ts
+            import * as rel from "./mod";
+            export const bad: number = rel;
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(any {
+                it.code == 2322 &&
+                    it.message == "Type 'typeof import(\"mod\")' is not assignable to type 'number'."
+            })
+        }
+    }
+
+    @Test
+    fun `an AMBIENT module object renders as typeof import`() {
+        // Before this it rendered `Type 'ambpkg'` — the SPECIFIER, which is the ambient
+        // carrier's symbol name. BYTE-IDENTICAL to tsgo.
+        diagnose(
+            amb + """
+            // @filename: main.ts
+            import * as amb from "ambpkg";
+            export const bad: number = amb;
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(any {
+                it.code == 2322 &&
+                    it.message == "Type 'typeof import(\"ambpkg\")' is not assignable to type 'number'."
+            })
+        }
+    }
+
     // ── CONTAINMENT: a `namespace` symbol is deliberately NOT admitted ──
 
     @Test

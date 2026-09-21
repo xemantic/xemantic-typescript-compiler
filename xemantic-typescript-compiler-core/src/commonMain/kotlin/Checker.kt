@@ -6863,6 +6863,19 @@ class Checker(
     internal val umdGlobalNames: MutableSet<String> = mutableSetOf()
 
     /**
+     * (CHK.73)(A) The `.d.ts` FILES that declare a UMD global, i.e. the modules whose
+     * surface a `declare global { namespace X { … } }` elsewhere can extend — a channel
+     * no walk over the file's OWN statements can see.
+     * [moduleObjectMissingMemberDisplay] refuses such a module, because absence from its
+     * export table is then not evidence: `exportAsNamespace_augment`'s `/a.d.ts` exports
+     * `x` alone and `a2.y` is legal, tsgo reporting nothing for it.
+     *
+     * Populated beside [umdGlobalNames], in the same scan and from the same match, so the
+     * two cannot disagree about which construct was seen.
+     */
+    internal val umdGlobalFiles: MutableSet<String> = mutableSetOf()
+
+    /**
      * Names declared inside any file's `declare global { var X: ... }` block.
      * Used to suppress TS2591 (node-builtin "did you mean @types/node?")
      * when the user has explicitly augmented the global namespace.
@@ -7517,6 +7530,18 @@ class Checker(
      * down the file is still null throughout every init pass.
      */
     private val syntheticModuleFile = HashMap<Int, SourceFile?>()
+
+    /**
+     * (CHK.73) The `declare module "spec"` block a `.d.ts` module symbol BORROWED its
+     * table from — [createModuleSymbol]'s single-ambient-block branch, which is how a
+     * `@types`-shaped package publishes (`fs.d.ts` holding `declare module "fs"`, reached
+     * whenever the bare resolver matches the specifier against that file's basename).
+     * Such a symbol is a module object with NO file and no declarations of its own, so
+     * neither [isAmbientModuleCarrier] nor [syntheticModuleFile] names it and both
+     * (CHK.73) consumers would answer null for it — a silence that is invisible because
+     * the shape only arises when a file name happens to coincide with a specifier.
+     */
+    private val syntheticModuleAmbientCarrier = HashMap<Int, Symbol>()
 
     /** (P18.134): memo for [cmamExpandoDeclaringHost], keyed by
      *  `"<file>\u0000<container pos>\u0000<function name>"`. The answer is a pure
@@ -13597,6 +13622,7 @@ class Checker(
             if (isDtsFile(fileName)) {
                 for (m in umdRegex.findAll(source)) {
                     umdGlobalNames.add(m.groupValues[1])
+                    umdGlobalFiles.add(fileName)
                 }
             }
             val isJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
@@ -14598,6 +14624,7 @@ class Checker(
                 }]
                 if (ambientSymbol != null && ambientSymbol.exports != null) {
                     moduleSymbol.exports = ambientSymbol.exports
+                    syntheticModuleAmbientCarrier[moduleSymbol.id] = ambientSymbol
                     // (CHK.73) the borrowed table IS the enumeration here; the FILE's own
                     // exports are a different (wrong) question.
                     syntheticModuleFile[moduleSymbol.id] = null
@@ -52503,6 +52530,13 @@ class Checker(
                 val member = pa.name.text
                 if (member in exports || member in RUNTIME_PROPERTIES) continue
                 if (member.isEmpty() || member[0].isDigit()) continue
+                // (CHK.73)(A) The receiver gate now reaches every module-object member
+                // access, bare expression statement included, and this pass runs AFTER
+                // `checkSpine` — so the identity test has to live HERE, in the pass that
+                // runs SECOND ((CHK.46)). The two answers agree by construction: both
+                // render through [moduleFileBaseNoExt]-shaped bases and anchor at the
+                // property NAME.
+                if (diagnostics.any { it.code == 2339 && it.fileName == fileName && it.start == pa.name.pos }) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, pa.name.pos)
                 diagnostics.add(Diagnostic(
                     message = "Property '$member' does not exist on type 'typeof import(\"$spec\")'.",
@@ -53681,6 +53715,134 @@ class Checker(
             block.statements.none { it is ExportAssignment && it.isExportEquals }
         }
     }
+
+    /**
+     * (CHK.73)(B) The `typeof import("…")` rendering of a MODULE OBJECT's type, or null
+     * where [symbol] is not one.
+     *
+     * A module object's type is [getTypeOfModuleSymbol]'s `Type.Object`, whose `symbol` IS
+     * the module symbol — so `typeToString`'s last `Type.Object` clause rendered it as
+     * `sym.name`, which is the IMPORT ALIAS's local name for a file-backed module
+     * ([createModuleSymbol] is called with `symbol.name`) and the SPECIFIER for an ambient
+     * carrier. Measured against tsgo 7.0.2: `import * as ns from "./m"; const p: number =
+     * ns` read `Type 'ns' is not assignable…` here and `Type 'typeof import("…")'` there,
+     * and `import * as amb from "pkg"` read `Type 'pkg'` against `typeof import("pkg")`.
+     *
+     * The membership test is [getTypeOfModuleSymbol]'s own, so the two cannot drift: a
+     * `namespace` symbol carries `SymbolFlags.Module` too and is deliberately NOT a module
+     * object here — tsgo renders one `typeof N`, which `sym.name` does not produce either,
+     * but that is (CHK.73)(C)'s question and not this one.
+     *
+     * ## The base is the BASENAME, and that is a MEASURED divergence
+     *
+     * tsgo prints the resolved target's full path sans extension
+     * (`typeof import("/abs/dir/m")`); this prints `typeof import("m")`, which is what the
+     * other hand-built `typeof import("…")` sites in this file already print
+     * ([moduleFileBaseNoExt]) — the B114 `import = require` emitter one screen up and the
+     * ambient namespace-member walker among them, whose rows are pinned by GREEN corpus
+     * baselines (`externalModuleImmutableBindings`, `maxNodeModuleJsDepthDefaultsToZero`).
+     * On the corpus the two agree, because its harness materialises no directory and a
+     * basename IS the path; they diverge on a real multi-directory project, where two
+     * `index` modules render identically. Converting all of them is its own round and
+     * needs a `-project` pin: (PARITY.1) — the corpus is the only gate a DISPLAY family
+     * has here, and it is structurally blind to exactly this difference.
+     */
+    internal fun moduleObjectTypeDisplay(symbol: Symbol): String? {
+        if (!symbol.flags.hasAny(SymbolFlags.Module)) return null
+        syntheticModuleFile[symbol.id]?.let {
+            return "typeof import(\"${moduleFileBaseNoExt(it.fileName)}\")"
+        }
+        val carrier = moduleObjectAmbientCarrier(symbol) ?: return null
+        return "typeof import(\"${carrier.name}\")"
+    }
+
+    /**
+     * (CHK.73) The ambient `declare module "spec"` block a module object stands for —
+     * itself, or the one whose table [createModuleSymbol] borrowed
+     * ([syntheticModuleAmbientCarrier]). Every ambient refusal is a question about that
+     * BLOCK, so both consumers must ask it of the same symbol.
+     */
+    private fun moduleObjectAmbientCarrier(symbol: Symbol): Symbol? =
+        if (isAmbientModuleCarrier(symbol)) symbol else syntheticModuleAmbientCarrier[symbol.id]
+
+    /**
+     * (CHK.73)(A) [moduleObjectTypeDisplay] for a module object that PROVABLY does not
+     * export [name] — and null wherever its export surface is not KNOWN to be complete.
+     *
+     * tsgo reports TS2339 for a member absent from a module object in both the relative
+     * and the ambient form (`import * as ns from "./m"; ns.nope` /
+     * `import * as amb from "pkg"; amb.nope`) and this compiler reported NEITHER: the
+     * receiver's gate refused every import alias outright ("can't reliably resolve
+     * imported module exports"), which was true before [getTypeOfModuleSymbol] existed.
+     * The bare top-level `ns.nope;` form has a walker of its own
+     * ([checkAmbientModuleNamespaceImportMembers]), and only for an AMBIENT specifier — which is
+     * why a probe written as an expression statement reads as healthy and the same access
+     * inside a function body is silent.
+     *
+     * ## (CHK.45)'s law is the whole design
+     *
+     * An absent member is an error only when the enumeration that failed to find it is
+     * EXHAUSTIVE, so every channel that can ADD to a module's surface has to be followed
+     * or refused. Each refusal below closes a measured false positive over the 8,725-
+     * subtest corpus screen; none is defensive.
+     *
+     * FILE-BACKED:
+     *  * a `.js`/CJS target is B114's own excluded class — this checker does not model a
+     *    `module.exports = …` surface (`maxNodeModuleJsDepthDefaultsToZero` resolves
+     *    `shortid` to one);
+     *  * a UMD-global file's surface is extended by `declare global { namespace X }`
+     *    ([umdGlobalFiles]);
+     *  * a `declare module "<spec>"` augmentation contributes names the target file does
+     *    not declare at all ([augmentationDeclaredExportNames], whose own contract is that
+     *    a name it adds can only SUPPRESS — the same direction this consumer needs);
+     *  * and the table itself is [exportedSymbolsThroughStars], NOT the module symbol's
+     *    `exports`, which (P18.125) measured wrong for an enumeration three ways. Its null
+     *    means "unknowable" and must not be read as "no exports".
+     *
+     * AMBIENT: the carrier's table is its RAW `exports`, so
+     *  * `export * from` / `export { a } from "m"` are refused
+     *    ([ambientSurfaceIsEnumerableForImport]) — `declare module "x" { export * from "y";
+     *    export const own }` enumerates `own` ALONE, and trusting that manufactures a false
+     *    TS2339 on the very `@types` shape this arc exists for;
+     *  * an `export = X` block is refused outright: it re-points the whole surface at a
+     *    VALUE whose members live in a TYPE and not in a symbol table
+     *    (`aliasOnMergedModuleInterface`'s `export = B` over a namespace/interface MERGE,
+     *    where tsgo's answer is TS2708 at the RECEIVER and no TS2339 at all);
+     *  * the block's own wiring is followed by name ([ambientModuleSurfaceMember], which
+     *    walks `export =`, local re-export clauses and `export * from`), and an
+     *    augmenting block of the same carrier is consulted
+     *    ([ambientCarrierAugmentationDeclares]) — both the TS2305 walker's own legs.
+     */
+    private fun moduleObjectMissingMemberDisplay(resolved: Symbol, name: String): String? {
+        val display = moduleObjectTypeDisplay(resolved) ?: return null
+        val file = syntheticModuleFile[resolved.id]
+        if (file != null) {
+            val fn = file.fileName
+            if (!(fn.endsWith(".ts") || fn.endsWith(".tsx"))) return null
+            if (fn in umdGlobalFiles) return null
+            val table = exportedSymbolsThroughStars(file) ?: return null
+            if (table.isEmpty() || table.containsKey(name)) return null
+            if (name in augmentationDeclaredExportNames(fn)) return null
+            return display
+        }
+        val carrier = moduleObjectAmbientCarrier(resolved) ?: return null
+        // A SHORTHAND ambient module (`declare module "path";` — no body) is `any` in
+        // tsc, so NOTHING is missing from it (`esModuleInteropTslibHelpers`).
+        if (carrier.declarations.any { it is ModuleDeclaration && it.body !is ModuleBlock }) return null
+        if (!ambientSurfaceIsEnumerableForImport(carrier)) return null
+        if (ambientCarrierHasExportEquals(carrier)) return null
+        if (ambientModuleSurfaceMember(carrier, name, HashSet()) != null) return null
+        if (classDeclaresStatic(carrier, name)) return null
+        if (ambientCarrierAugmentationDeclares(carrier, name)) return null
+        return display
+    }
+
+    /** (CHK.73)(A) A block of the ambient carrier [carrier] carries `export = X`. */
+    private fun ambientCarrierHasExportEquals(carrier: Symbol): Boolean =
+        carrier.declarations.any { decl ->
+            val body = (decl as? ModuleDeclaration)?.body as? ModuleBlock
+            body?.statements?.any { it is ExportAssignment && it.isExportEquals } == true
+        }
 
     private fun emitTs2305(
         source: String, fileName: String, moduleName: String,
@@ -134218,7 +134380,7 @@ interface DataView {
                         // answer NAMES THE OWNER so a block-scoped `enum Local` is told apart
                         // from an imported enum with the same member spelling.
                         sym.parent?.let { "${it.name}.${sym.name}" } ?: sym.name
-                    } else if (sym != null) sym.name
+                    } else if (sym != null) moduleObjectTypeDisplay(sym) ?: sym.name
                     else {
                         // Anonymous object type — format as { prop: type; ... }
                         val parts = mutableListOf<String>()
@@ -155202,6 +155364,35 @@ interface DataView {
             val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
             diagnostics.add(Diagnostic(
                 message = "Property '$propName' does not exist on type 'typeof import(\"$base\")'.",
+                category = DiagnosticCategory.Error, code = 2339,
+                fileName = fileName, line = line, character = character,
+                start = diagStart, length = diagLength,
+            ))
+            return true
+        }
+        // (CHK.73)(A) …but a MODULE OBJECT's surface IS enumerable, and tsgo reports
+        // TS2339 for a member absent from one. [moduleObjectMissingMemberDisplay] answers
+        // only where it can prove the enumeration exhaustive, so the skip below keeps
+        // every other alias shape — including every module whose surface this checker
+        // cannot enumerate. The DEDUPE is not optional: more than one emitter owns TS2339
+        // ((P18.94)), and `externalModuleImmutableBindings`' `stuff.blah = 2` is a row the
+        // assignment path already produces.
+        run {
+            if (!isPropertyAccessShape || propName.isEmpty() ||
+                propName[0] in '0'..'9' || propName in RUNTIME_PROPERTIES) return@run
+            if (!identSymbol.flags.hasAny(SymbolFlags.Alias)) return@run
+            // `resolveAlias` may answer the alias ITSELF where (CHK.80)'s merge fused it
+            // with the carrier — `import * as path from "path"`, the idiom, binds a module
+            // file's alias to the same name as the script-local `declare module "path"`
+            // carrier, and every such import was silent for that reason alone. The
+            // predicate below is a question about the SYMBOL's shape, so it decides that
+            // case correctly with no special leg.
+            val display = moduleObjectMissingMemberDisplay(resolveAlias(identSymbol), propName)
+                ?: return@run
+            if (diagnostics.any { it.code == 2339 && it.fileName == fileName && it.start == diagStart }) return true
+            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '$display'.",
                 category = DiagnosticCategory.Error, code = 2339,
                 fileName = fileName, line = line, character = character,
                 start = diagStart, length = diagLength,
@@ -177742,6 +177933,11 @@ interface DataView {
                 length = spanLen,
             ))
         } else if (isDot && propName !in info.allTopLevelNames) {
+            // (CHK.73)(A) The receiver gate reports the same row for a module object's
+            // missing member at every position, WRITE included, and this pass runs after
+            // `checkSpine` — so the identity test lives here, in the pass that runs SECOND
+            // ((CHK.46)). Both render the same base and anchor at the same span.
+            if (diagnostics.any { it.code == 2339 && it.fileName == fileName && it.start == spanStart }) return
             val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
             diagnostics.add(Diagnostic(
                 message = "Property '$propName' does not exist on type 'typeof import(\"${info.displayBase}\")'.",
