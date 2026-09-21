@@ -1,4 +1,22 @@
 **(P18.148) — (LEGACY.0b): THE SECOND CHAIN FOLD, AND A ROW THAT COULD NOT SHOW ITS OWN MECHANISM, 20,101 / 0 / 48 (2026-09-20).**
+
+**(P18.152) — (LEGACY.0b): THE IMPORT SHAPE A USER ACTUALLY WRITES, 20,128 / 0 / 45 (2026-09-20).**
+Ledger 21 -> 20, `esModuleInteropTslibHelpers.errors.txt` CLOSED and ACTIVE in the screen's 3,078 / 0. A DEFAULT
+IMPORT CLAUSE needs `__importDefault` exactly as `{ default as X }` does, so under `importHelpers` with no resolvable
+`tslib` it is TS2354 — and `checkImportHelpersWithoutTslib` only ever looked at `namedBindings`, so
+`import path from "path"` was the one shape it could not see. **THE LEDGER REASON WAS WRONG FOR THE THIRD TIME THIS
+SESSION AND ALWAYS BY THE SAME MECHANISM**: it said `ours: ==== file.ts (0 errors) ====` where we in fact emitted
+THREE of the baseline's four rows. A reason built from a diff's FIRST DIFFERING LINE describes a symptom and then gets
+read as a verdict on the mechanism — as in (P18.149)'s "nesting is entirely missing" and (P18.150)'s "reports no
+TS2416 at all". All three overstated the work. **One measured cell decided the implementation**: a clause carrying
+BOTH a default name and a `default as` specifier reports at the SPECIFIER (1:16), not the statement (1:1), so the new
+arm is ordered after the specifier one and gated on the statement having emitted nothing. **Residue measured and NOT
+followed**: tsgo reports at (1,1) for a TYPE-ONLY default import, which emits nothing and so can need no helper —
+a tsgo defect, in no baseline either way, pinned `residue -`. **And one gate was skipped HONESTLY, on a count**: the
+8-profile grid is structurally vacuous because 0 of 8 profiles set `importHelpers`, so the walker returns on its first
+line — (CHK.124)'s law used to avoid reading eight zeros and calling them a gate. cost_gate byte-identical to
+(P18.150); huge_methods PASS. 5 pins, 2 arms, both red.
+
 **NO LEDGER MOVEMENT — pending stays 23**, and that is the point. tsgo's `reportRelationError` folds TWICE: fold 1
 turns a property incompatibility followed by a call-signature return one into `The types returned by 'm()'`, and
 fold 2 runs over THAT result, its `switch` listing `The_types_returned_by_0` BESIDE the property messages and

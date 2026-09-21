@@ -25,6 +25,88 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.157) — (CHK.73): an external module symbol has a value type, and the refusal that blocked it had dissolved (2026-09-21)
+
+**CLOSED (CHK.73)'s (ii)+(iii) and the class-static PREREQUISITE it was refused on.** Suite
+**20,183 / 0 / 44** (+13 pins); corpus screen **0 of 8,725** over both channels; 8-profile grid
+**8x `added=0 removed=0 fullDiffLines=0`** with emit byte-identical; cronstrue 1 -> 1, marked
+18 -> 18; `cost_gate` PASS (max +0.15%), `huge_methods` 0 over limit, warning gate clean with
+both compile tasks verified EXECUTED. `Checker.kt` +119, `NameResolver.kt` +29.
+
+**THE SUCCESSOR NOTE ASKED FOR ONE THING AND IT WAS THE WHOLE ROUND.** (P18.156) said (CHK.73)'s
+refusal rests on a baseline COUNT that predates the corpus re-pin, and that such a count had gone
+stale twice in one session. Re-taken with a throwaway env-gated arm and `corpus-screen.sh`:
+
+| arm | moved of 3,079 |
+|---|---|
+| control (arm off) | 0 |
+| general `SymbolFlags.Module` arm, class export = INSTANCE type | **20** |
+| import-alias targets only, class export = INSTANCE type | **6** |
+| general arm + class export = CONSTRUCTOR side | **14** |
+| import-alias targets + class export = CONSTRUCTOR side | **0** |
+| … + the AMBIENT leg for `import * as` | **0** |
+
+The item recorded 21 / 4 and named the class STATIC SIDE as the prerequisite that made it
+unlandable. **It is not a prerequisite — it is already in the tree**: `getTypeOfSymbolForTypeQuery`
+has built the constructor side of a class symbol all along, and consulting it for a class EXPORT
+is exactly what takes the contained arm from 6 to 0. All six are that one cause
+(`aliasUsageInObjectLiteral` and its family, whose fixture is literally
+`var b: { x: IHasVisualizationModel } = { x: moduleA }`). **A refusal in this repo is a
+measurement taken in a REGIME, and one round's blocker can be another round's already-shipped
+helper — re-read what the blocker NAMES before inheriting it, not only its number.**
+
+**WHY THIS AND NOT A LEDGER ROW.** Same reasoning as (P18.156), one mechanism over: a namespace
+import typing `any` is silent in every channel this repo gates on, and it reaches the Kotlin
+externals generator (which renders from resolved types) and the KIR backend (which picks its
+lowering from them) rather than only a diagnostic. Measured against a real `@types/node@20`:
+before, ours reported **0** of tsgo's 4 rows on a four-line probe; after, **2** — `fs.readFileSync`
+and `path.join(...)` now carry their declared types. The two still missing are a separate
+`Buffer` resolution gap, not this arm.
+
+**THREE LEGS, AND THE ENUMERATION IS THE SUBTLE ONE.** `createModuleSymbol` sets
+`moduleSymbol.exports` to the target file's **locals**, which (P18.125) measured wrong for an
+ENUMERATION three ways. `exportedSymbolsThroughStars` is the right question and had exactly one
+non-test caller; this is its second. Ablation arm a4 (use `exports` instead) reddens exactly the
+star-barrel and renaming-specifier pins — so the distinction is pinned, not merely argued.
+
+**AND THE ROUND SHIPPED A GUARD IT DID NOT SET OUT TO WRITE.** The full suite found a false TS2322
+on `function zsh(zns: any) { zns.ztake(...) }` — a parameter SHADOWING the import alias. Root
+cause is general and PRE-EXISTING, and the measurement is what says so: with a file-level `const`
+in place of the import, the parent binary reports the identical false row. An `any`-ANNOTATED
+parameter is registered in no walk-scoped table (`populateParameterLocalTypes` skips `any`
+deliberately), so the conventional ladder answers the FILE-LEVEL declaration — and a module symbol
+had merely been giving the right answer by accident, because it answered `any` too. Contained to
+this arm (`nameBoundByEnclosingScope`, the same predicate `namespaceQualifiedCalleeType` uses);
+**the general form is queued rather than widened**, because making every shadowed identifier
+syntactic changes how every shadowed read in the program resolves.
+
+**A PIN THAT ASSERTS A SILENCE CAN BE SATISFIED BY A TYPE THAT HAPPENS TO FIT.** The first shadow
+pin was `const x: number = rel.num` under `none { 2322 }` — green on BOTH binaries, because the
+wrongly resolved module answers `number`. Ablation arm a6 read 0 RED and said so. Written the
+other way (`const x: string = rel.num`) it discriminates. Round 902's dead-arm law in its
+quietest costume: the arm was live and the PIN could not see it.
+
+**SECOND COUNTDOWN PIN IN TWO ROUNDS, AND IT WAS THE PREVIOUS ROUND'S.**
+`ExportEqualsNamedImportTest`'s `residue - a namespace import of an ORDINARY module is also still
+any` was written by (P18.156) and is closed by this one. Re-pointed to tsgo's answer (measured),
+not weakened; its two `export =` siblings survive and now say WHY they are a different mechanism
+(the alias resolves to the export TARGET — a function merged with a namespace, whose static side
+is unmodelled).
+
+**GATE PROVENANCE, COUNTED ((CHK.124)).** The 8 profiles carry **15-131** `import * as X from`
+sites each (harness 131, server 64, services 54), so the grid is a REAL gate for the relative
+half; they carry **0-2** non-relative specifiers, so the AMBIENT half's gate is the corpus, the
+pins and the `@types/node` probe. `scripts/chk73-grid.sh` names BOTH moved classes in its identity
+check, since (P18.156) measured that the stock script's `Checker.class`-only test refuses a sound
+grid when the change lives in a collaborator.
+
+**SUCCESSOR.** Two mechanisms are now sized from measurement rather than from a hunch, both
+recorded as `residue -` pins: (1) an `any`-annotated parameter shadowing ANY file-level binding
+resolves to the file-level one — general, pre-existing, and one syntactic test away; (2) a
+function/namespace MERGE has no static side, which is what leaves `import * as ns` and
+`import ns = require(...)` of an `export =` module at `any`. (1) is the cheaper and its blast
+radius is exactly measurable with the same throwaway-arm-plus-screen recipe this round used.
+
 ### Round (P18.156) — a named import through an `export =` surface, chosen against the MISSION rather than off the ledger (2026-09-21)
 
 **CLOSED NO LEDGER ROW and that was the point.** Suite **20,170 / 0 / 44** (+7 pins); corpus
@@ -7117,7 +7199,32 @@ CLAUDE.md § "AI agent mission".
   absent in NARROW), taking `capture-equivalence.sh`'s standing `definitions=0` to 1 — the
   (INC.2) first-touch family, in a population that did not exist before. The RESULT half
   (`a?.b` is `typeof a.b | undefined`) is still a separate, much larger change.
-- [ ] **(CHK.73) — DIAGNOSED AND PRICED 2026-08-29, AND IT IS NOT WHAT THIS ENTRY SAID.
+- [x] **(CHK.73) (ii)+(iii) DONE 2026-09-21 ((P18.157) note) — AN EXTERNAL MODULE SYMBOL HAS A
+  VALUE TYPE, AND THE PREREQUISITE THIS ENTRY REFUSED ON WAS ALREADY IN THE TREE.**
+  `getTypeOfSymbolWorker` has a `SymbolFlags.Module` arm ([Checker.getTypeOfModuleSymbol]),
+  `import * as` takes B113's AMBIENT second chance, and a CLASS export contributes its
+  CONSTRUCTOR side through the long-existing [Checker.getTypeOfSymbolForTypeQuery].
+  **THE RECORDED COUNT WAS RE-TAKEN AND THE REFUSAL DISSOLVED** (screen `--errors`, 3,079
+  active): general arm **20**, contained to import-alias targets **6**, general + class ctor
+  **14**, contained + class ctor **0**, plus the ambient leg **0**. All six of the contained
+  arm's baselines are the one class-static cause this entry named as its blocker.
+  `@types/node` probe: ours went 0 -> 2 of tsgo's 4 rows (`fs.readFileSync`, `path.join`
+  now carry their declared types). Shipped with a SHADOW GUARD: an `any`-annotated parameter
+  is registered in no walk-scoped table, so the conventional ladder answered the file-level
+  import — a GENERAL pre-existing defect (measured on the parent with a file-level `const`)
+  that a module symbol had merely been masking by also answering `any`.
+  **RESIDUES, both pinned `residue -` and both sized:** (1) an `any`-annotated parameter
+  shadowing ANY file-level binding still resolves to the file-level one — general,
+  pre-existing, one syntactic test away, and the same throwaway-arm-plus-screen recipe
+  prices it; (2) a function/namespace MERGE has no static side, which is what leaves
+  `import * as ns` / `import ns = require(...)` of an `export =` module at `any`. Also still
+  open: TS2339 for a member absent from a module object (`cmamAllMissingTrustedMember`'s
+  trust gate), the display (`Type 'rel'` where tsgo prints `typeof import("...")`), and a
+  NAMESPACE symbol's value type, which is REFUSED on the 20-baseline measurement above.
+  **(i) `resolveAlias`'s `ImportDeclaration` arm still has no `resolveImportTargetFallback`
+  leg** — unneeded for the shapes this round measured, kept as a record.
+  ORIGINAL ENTRY, kept for its diagnosis and its prices:
+  **(CHK.73) — DIAGNOSED AND PRICED 2026-08-29, AND IT IS NOT WHAT THIS ENTRY SAID.
   THE BLOCKER IS THE STATIC SIDE OF A CLASS, NOT RESOLUTION, AND THE ROUND-409 TS2315
   HAZARD IS NOT IN PLAY.** Built against a probe project with a REAL `@types/node`
   (`npm i @types/node@20` under `tools/node/bin` — the bench profile's `@types` directory
