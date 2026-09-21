@@ -7355,9 +7355,23 @@ CLAUDE.md § "AI agent mission".
   left there is the guard being SUPPRESSION-only, which costs one true row and is an
   (INV.0) step-10b question. (2) a function/namespace MERGE has no static side, which is what leaves
   `import * as ns` / `import ns = require(...)` of an `export =` module at `any`. Also still
-  open: TS2339 for a member absent from a module object (`cmamAllMissingTrustedMember`'s
-  trust gate), the display (`Type 'rel'` where tsgo prints `typeof import("...")`), and a
-  NAMESPACE symbol's value type, which is REFUSED on the 20-baseline measurement above.
+  open, each SIZED 2026-09-21 rather than left as a name:
+  **(A) TS2339 for a member absent from a module object** — tsgo reports it for both the
+  relative and the ambient form and we report neither. The gate is
+  `cmamAllMissingTrustedMember`'s `Type.Object` arm, which routes any symbol-carrying
+  object to `cmamPlainFunctionTypeTrusted` (a FUNCTION-type question a module object
+  fails). Admitting a module object is one clause — **but only where the table came from
+  `exportedSymbolsThroughStars`, i.e. from a FILE**: an AMBIENT block's table is its raw
+  `exports`, so `declare module "x" { export * from "y"; export const own }` enumerates
+  `own` ALONE ((P18.125)'s "a barrel that also declares its own exports"), and trusting
+  that manufactures a false TS2339 on the `@types` shape this whole arc exists for. The
+  unblocker is a star-following enumeration for an ambient BLOCK, which does not exist —
+  `collectExportedSymbolsFollowingStars` takes a `SourceFile`. (CHK.45)'s law applies
+  verbatim: demand POSITIVE evidence the table is complete.
+  **(B) the display** — `Type 'rel'` for a module object and the structural form for a
+  namespace-merged function, where tsgo prints `typeof import("<path>")` and
+  `typeof <name>`. Corpus-only gated ((PARITY.1)); one screen run prices each.
+  **(C) a NAMESPACE symbol's value type**, REFUSED on the 20-baseline measurement above.
   **(i) DONE 2026-09-21 ((P18.158) note)**: the `ImportEqualsDeclaration` arm's specifier
   ladder gained the directory-relative and bare-package legs, so
   `import x = require("./m")` resolves on a PATH-shaped project — it resolved nothing
