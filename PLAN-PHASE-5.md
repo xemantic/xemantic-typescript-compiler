@@ -41,6 +41,16 @@ it writes only when the annotation resolves to neither `anyType` nor `errorType`
 `: any` satisfies neither, so it leaked. Measured against tsgo 7.0.2: **three false positives on
 legal code**, none of them involving an import or a module symbol.
 
+**THE ARCHIVE HAD ALREADY NAMED THE CLASS, AND CHECKING IT IS PART OF THE PROTOCOL.**
+`docs/history/CLAUDE-GOTCHAS-ARCHIVE.md`'s round-757 entry on `ctaTypeParamsIntoLocals` says
+it verbatim: a nested body INHERITS `currentLocalTypes`/`varTypes`, and omitting the parameter
+scope install means "an inner read of a parameter name resolves to a same-named outer/global
+binding — the `applyBodyLocalShadowing` FP class". That is this defect with the annotation axis
+removed, i.e. corroboration rather than contradiction; the grep was run late (after the fix) and
+should have been run first. The other two greps for what this arc touched
+(`getTypeOfSymbolWorker`, `mergedDeclarations3`) hit entries about UNRELATED mechanisms (B451's
+computed member NAMES, B463's nominal enum mismatches), so nothing constrains what landed.
+
 **IT WAS INVISIBLE FOR AS LONG AS A MODULE SYMBOL TYPED `any`** — the wrong resolution then had
 the right answer by accident, which is exactly why (CHK.73) had to ship a contained guard and why
 this is its general form. A defect that is masked by a SECOND defect is not rare here; it is what
