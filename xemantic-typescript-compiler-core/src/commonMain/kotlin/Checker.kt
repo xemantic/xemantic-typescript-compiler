@@ -161515,6 +161515,15 @@ interface DataView {
         //
         // A UNION callee is excluded so B60.15's three-case constituent report keeps it.
         //
+        // AND AN ELEMENT-ACCESS CALLEE IS EXCLUDED ON A MEASUREMENT, not for lack of a
+        // shape: tsgo reports `new arr[0]()` and so did this arm, but the same
+        // construct-list gap that made a property callee a false positive is reachable
+        // through `getTypeOfElementAccess` too — `{ (): void; new (): object }[]` is
+        // constructable at `arr[0]` and tsgo is silent, where the arm reported. The
+        // property path has a trustworthy second source for the absence (the property
+        // SYMBOL's own type); an element access has none, so the positive is given up
+        // rather than bought with a false positive. Pinned as a residue.
+        //
         // A MERGED class+function symbol is refused for the reason the identifier path
         // refuses it (`sym.declarations.any { it is ClassDeclaration }`, round 79i): its
         // type here is the FUNCTION side alone, so the construct signature the class side
@@ -161522,7 +161531,7 @@ interface DataView {
         // `constructorOverloads4` — `declare namespace M { export class Function …;
         // export function Function(…) … }` — where tsgo is silent and this arm reported.
         if (spineNaRunActive &&
-            expr.expression !is Identifier &&
+            expr.expression is PropertyAccessExpression &&
             calleeType !is Type.Union &&
             !newCalleeTypeSymbolDeclaresClass(expr.expression, calleeType) &&
             getConstructSignaturesOfType(calleeType).isEmpty() &&

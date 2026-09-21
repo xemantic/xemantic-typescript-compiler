@@ -83,8 +83,14 @@ class NewExprImplicitAnyNonIdentifierCalleeTest {
     }
 
     @Test
-    fun `an element-access callee reports`() {
-        assert(rows("const arr = [function () {}];\nnew arr[0]();") == listOf(message))
+    fun `residue - an element-access callee does not report`() {
+        // tsgo reports here. The arm is restricted to a PROPERTY-access callee because the
+        // construct-list gap below is reachable through `getTypeOfElementAccess` as well:
+        // an array of `{ (): void; new (): object }` is constructable at `arr[0]` and tsgo
+        // is silent, where an element-access arm reported — measured, and a false positive
+        // is worse than a missing row. A property access has a trustworthy second source
+        // for the absence (the property symbol's own type); an element access has none.
+        assert(count("const arr = [function () {}];\nnew arr[0]();") == 0)
     }
 
     @Test
