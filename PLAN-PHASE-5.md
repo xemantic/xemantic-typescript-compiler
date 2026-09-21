@@ -25,6 +25,43 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.158) — (CHK.73)(i): `import x = require("./m")` resolved nothing on a path-shaped project (2026-09-21)
+
+**CLOSED (CHK.73)(i) and the `export =` half of the namespace-import form.** Suite
+**20,190 / 0 / 44** (+7 pins); corpus screen **0 of 8,725** over both channels; 8-profile grid
+**8x `added=0 removed=0 fullDiffLines=0`** with emit byte-identical; cronstrue 1 -> 1, marked
+18 -> 18; `cost_gate` PASS (max +0.09%), `huge_methods` 0 over limit, warning gate clean with
+both compile tasks verified EXECUTED. `NameResolver.kt` +29; `Checker.kt` UNCHANGED.
+
+**THE GAP, AND WHY EVERY GATE IN THIS REPO IS BLIND TO IT.** `resolveModuleSpecifier` matches a
+specifier against `fileResults` KEYS ((CHK.78)), which on a real on-disk project are ABSOLUTE
+paths — so `import p = require("./plain")` matched nothing, the alias resolved to NOTHING and the
+binding typed `any`. The `ImportDeclaration` arm has carried a directory-relative leg since round
+512 and this arm never did; it also lacked (CHK.30)'s mandatory bare-package leg. **Flat
+corpus-style names make the bare resolver match `"./m"` by string alone**, so all **183** active
+corpus case files that use this import form are VACUOUS for it, and the 8 profiles and both
+library arms contain **ZERO** of the form — counted, per (CHK.124), rather than assumed. The pins
+are therefore PATH-SHAPED (`// @Filename: /proj/src/main.ts`), which is what makes them able to
+fail at all.
+
+**THE SECOND LEG IS ONE LINE OF tsc's OWN RULE.** An `export = X` module IS `X`, and
+`resolveExternalModuleSymbol` follows it for `import * as` exactly as for
+`import = require(...)`. Ours built a module object over the target file's LOCALS instead, which
+does not carry the target's call signature — so `import * as n from "./legacy"; n(1)` was silent
+where tsgo reports. Measured on a five-shape path-shaped probe: **0 of 5 rows before, 3 of 5
+after**.
+
+**WHAT IS LEFT IS ONE MECHANISM AND IT IS NAMED.** The two shapes still silent are both the
+function/namespace MERGE's STATIC side: `l.inner` where `legacy` is `function legacy` merged with
+`namespace legacy`, reached through `import =` or `import * as` of an `export =` module. A merged
+symbol's value type here is its call signature alone. Pinned `residue -` with tsgo's measured
+answer beside it; it is the last `export =` gap and the natural successor.
+
+**A NOTE ON WHAT THIS ROUND DID NOT DO.** The `export =` follow for `import * as` is NOT gated on
+`esModuleInterop`/`module: node16` (TS2497 is unmodelled here, as (P18.105) records for the whole
+option family), so this matches what tsgo answers under the configurations measured and nothing
+more. Said explicitly because the next agent will otherwise read the missing gate as an oversight.
+
 ### Round (P18.157) — (CHK.73): an external module symbol has a value type, and the refusal that blocked it had dissolved (2026-09-21)
 
 **CLOSED (CHK.73)'s (ii)+(iii) and the class-static PREREQUISITE it was refused on.** Suite
@@ -7221,8 +7258,14 @@ CLAUDE.md § "AI agent mission".
   open: TS2339 for a member absent from a module object (`cmamAllMissingTrustedMember`'s
   trust gate), the display (`Type 'rel'` where tsgo prints `typeof import("...")`), and a
   NAMESPACE symbol's value type, which is REFUSED on the 20-baseline measurement above.
-  **(i) `resolveAlias`'s `ImportDeclaration` arm still has no `resolveImportTargetFallback`
-  leg** — unneeded for the shapes this round measured, kept as a record.
+  **(i) DONE 2026-09-21 ((P18.158) note)**: the `ImportEqualsDeclaration` arm's specifier
+  ladder gained the directory-relative and bare-package legs, so
+  `import x = require("./m")` resolves on a PATH-shaped project — it resolved nothing
+  there and typed `any`, invisibly, because flat corpus names let the bare resolver match
+  by string alone (183 active case files use the form and none can see it). The same round
+  made `import * as` follow an `export =` surface, as tsc's `resolveExternalModuleSymbol`
+  does. What is left of the `export =` family is ONE mechanism: a function/namespace
+  MERGE's static side, pinned `residue -` in `ImportEqualsModuleResolutionTest`.
   ORIGINAL ENTRY, kept for its diagnosis and its prices:
   **(CHK.73) — DIAGNOSED AND PRICED 2026-08-29, AND IT IS NOT WHAT THIS ENTRY SAID.
   THE BLOCKER IS THE STATIC SIDE OF A CLASS, NOT RESOLUTION, AND THE ROUND-409 TS2315

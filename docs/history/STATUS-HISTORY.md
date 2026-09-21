@@ -1,5 +1,21 @@
 **(P18.148) — (LEGACY.0b): THE SECOND CHAIN FOLD, AND A ROW THAT COULD NOT SHOW ITS OWN MECHANISM, 20,101 / 0 / 48 (2026-09-20).**
 
+**(P18.153) — (LEGACY.0b) RECON: TWO LEDGER REASONS RE-MEASURED, NEITHER WAS ITS MECHANISM, 20,128 / 0 / 45 (2026-09-20).**
+No ledger movement and no compiled code touched — the round applies this session's own finding to the two rows a next
+session would most likely reach for, because both carried one-line reasons that read as cheap. **`augmentExportEquals2.js`
+is a HARNESS question**: its CASE FILE declares `// @filename: file3.ts` on two consecutive lines, tsgo's harness renders
+an EMPTY `//// [file3.ts]` block followed by the real one and then emits ONLY `file3.js` = `"use strict";`, where we take
+the content-bearing declaration and emit all three files — so the emit path is innocent, the seam is
+`parseMultiFileSource`, and whether tsgo's duplicate-`@filename` behaviour is worth copying is a DECISION to take before
+any code moves. **`jsdocImportTypeNodeNamespace` is not a JSDoc question** — `type A = import('./M').default` against an
+`export default <namespace>` reproduces it in a plain `.ts` file (TS2694 in tsgo, SILENT here) — **and its real obstacle
+is a COUNT: `import(` occurs ZERO times in the whole active generated corpus**, so a green screen there is a statement
+about the corpus and not about the change; it needs a library probe plus pins, which is why it was sized and deliberately
+not started at the end of a session. **Four of the reasons examined today described a SYMPTOM — a diff's first differing
+line — and were read as verdicts on the MECHANISM**, three overstating the work and one understating it; correcting one
+costs a screen run and no build.
+
+
 **(P18.152) — (LEGACY.0b): THE IMPORT SHAPE A USER ACTUALLY WRITES, 20,128 / 0 / 45 (2026-09-20).**
 Ledger 21 -> 20, `esModuleInteropTslibHelpers.errors.txt` CLOSED and ACTIVE in the screen's 3,078 / 0. A DEFAULT
 IMPORT CLAUSE needs `__importDefault` exactly as `{ default as X }` does, so under `importHelpers` with no resolvable
