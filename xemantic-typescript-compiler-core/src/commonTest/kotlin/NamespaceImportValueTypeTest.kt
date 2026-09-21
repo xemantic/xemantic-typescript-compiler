@@ -481,6 +481,75 @@ class NamespaceImportValueTypeTest {
         }
     }
 
+    @Test
+    fun `negative control - a name a MODULE AUGMENTATION adds is refused`() {
+        // A `declare module "./x"` block contributes names the target file does not
+        // declare at all, so absence from its export table is not evidence. tsgo is
+        // silent here. [Checker.augmentationDeclaredExportNames] answers it — its own
+        // contract is that a name it adds can only SUPPRESS, which is the direction this
+        // consumer needs. `exportAsNamespace_augment` is the corpus baseline, but that
+        // fixture is ALSO a UMD global and so is closed by the sibling refusal; this
+        // shape is not, which is what makes the two separable.
+        diagnose(
+            """
+            // @filename: augt.d.ts
+            export const declared: number;
+            // @filename: main.ts
+            import * as a from "./augt";
+            declare module "./augt" { export const added: number; }
+            export function f() { return a.added; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    @Test
+    fun `negative control - a UMD-global module can be extended by declare global`() {
+        // `export as namespace u` makes the module's surface extendable through
+        // `declare global { namespace u { … } }`, a channel no walk over the FILE's own
+        // statements can see ([Checker.umdGlobalFiles]). tsgo is silent for `u2.uy`;
+        // `exportAsNamespace_augment` is the corpus baseline.
+        diagnose(
+            """
+            // @filename: umdm.d.ts
+            export as namespace umdm;
+            export const ux: number;
+            // @filename: main.ts
+            import * as u2 from "./umdm";
+            declare global { namespace umdm { export const uy: number; } }
+            export function f() { return u2.uy; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    @Test
+    fun `negative control - a LOCAL re-export clause names a member of the ambient surface`() {
+        // `export { Internal as Public }` with NO module specifier is the `@types/node`
+        // idiom, and the binder's `exports` for the block do not hold the EXPORTED
+        // spelling — [NameResolver.ambientModuleSurfaceMember] is what walks it, and it
+        // is the same leg the TS2305 walker already takes. tsgo is silent here.
+        diagnose(
+            """
+            // @filename: repkg.d.ts
+            declare module "repkg" {
+                class Internal { zz: number; }
+                export { Internal as Public };
+            }
+            // @filename: main.ts
+            import * as rp from "repkg";
+            export function f() { return rp.Public; }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
     // ── (CHK.73)(B) the DISPLAY of a module object ──
 
     @Test

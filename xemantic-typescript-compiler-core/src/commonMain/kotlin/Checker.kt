@@ -7531,18 +7531,6 @@ class Checker(
      */
     private val syntheticModuleFile = HashMap<Int, SourceFile?>()
 
-    /**
-     * (CHK.73) The `declare module "spec"` block a `.d.ts` module symbol BORROWED its
-     * table from — [createModuleSymbol]'s single-ambient-block branch, which is how a
-     * `@types`-shaped package publishes (`fs.d.ts` holding `declare module "fs"`, reached
-     * whenever the bare resolver matches the specifier against that file's basename).
-     * Such a symbol is a module object with NO file and no declarations of its own, so
-     * neither [isAmbientModuleCarrier] nor [syntheticModuleFile] names it and both
-     * (CHK.73) consumers would answer null for it — a silence that is invisible because
-     * the shape only arises when a file name happens to coincide with a specifier.
-     */
-    private val syntheticModuleAmbientCarrier = HashMap<Int, Symbol>()
-
     /** (P18.134): memo for [cmamExpandoDeclaringHost], keyed by
      *  `"<file>\u0000<container pos>\u0000<function name>"`. The answer is a pure
      *  function of the AST, so it carries none of round 776's program-order hazard; the
@@ -14624,7 +14612,6 @@ class Checker(
                 }]
                 if (ambientSymbol != null && ambientSymbol.exports != null) {
                     moduleSymbol.exports = ambientSymbol.exports
-                    syntheticModuleAmbientCarrier[moduleSymbol.id] = ambientSymbol
                     // (CHK.73) the borrowed table IS the enumeration here; the FILE's own
                     // exports are a different (wrong) question.
                     syntheticModuleFile[moduleSymbol.id] = null
@@ -53752,18 +53739,9 @@ class Checker(
         syntheticModuleFile[symbol.id]?.let {
             return "typeof import(\"${moduleFileBaseNoExt(it.fileName)}\")"
         }
-        val carrier = moduleObjectAmbientCarrier(symbol) ?: return null
-        return "typeof import(\"${carrier.name}\")"
+        if (!isAmbientModuleCarrier(symbol)) return null
+        return "typeof import(\"${symbol.name}\")"
     }
-
-    /**
-     * (CHK.73) The ambient `declare module "spec"` block a module object stands for —
-     * itself, or the one whose table [createModuleSymbol] borrowed
-     * ([syntheticModuleAmbientCarrier]). Every ambient refusal is a question about that
-     * BLOCK, so both consumers must ask it of the same symbol.
-     */
-    private fun moduleObjectAmbientCarrier(symbol: Symbol): Symbol? =
-        if (isAmbientModuleCarrier(symbol)) symbol else syntheticModuleAmbientCarrier[symbol.id]
 
     /**
      * (CHK.73)(A) [moduleObjectTypeDisplay] for a module object that PROVABLY does not
@@ -53818,6 +53796,13 @@ class Checker(
         val file = syntheticModuleFile[resolved.id]
         if (file != null) {
             val fn = file.fileName
+            // MEASURED REDUNDANT with the `table.isEmpty()` test below and kept as a
+            // round-927 PAIR: a CJS `.js` target declares no ES export, so the
+            // enumeration comes back EMPTY and refuses on that alone — ablated, no pin,
+            // no corpus baseline and no constructed `.js` shape moves. It is the barrier
+            // that stops a future widening of [exportedSymbolsThroughStars] to a `.js`
+            // file's `module.exports` surface from silently opening the class, which is
+            // why B114 carries the same test verbatim.
             if (!(fn.endsWith(".ts") || fn.endsWith(".tsx"))) return null
             if (fn in umdGlobalFiles) return null
             val table = exportedSymbolsThroughStars(file) ?: return null
@@ -53825,15 +53810,14 @@ class Checker(
             if (name in augmentationDeclaredExportNames(fn)) return null
             return display
         }
-        val carrier = moduleObjectAmbientCarrier(resolved) ?: return null
         // A SHORTHAND ambient module (`declare module "path";` — no body) is `any` in
         // tsc, so NOTHING is missing from it (`esModuleInteropTslibHelpers`).
-        if (carrier.declarations.any { it is ModuleDeclaration && it.body !is ModuleBlock }) return null
-        if (!ambientSurfaceIsEnumerableForImport(carrier)) return null
-        if (ambientCarrierHasExportEquals(carrier)) return null
-        if (ambientModuleSurfaceMember(carrier, name, HashSet()) != null) return null
-        if (classDeclaresStatic(carrier, name)) return null
-        if (ambientCarrierAugmentationDeclares(carrier, name)) return null
+        if (resolved.declarations.any { it is ModuleDeclaration && it.body !is ModuleBlock }) return null
+        if (!ambientSurfaceIsEnumerableForImport(resolved)) return null
+        if (ambientCarrierHasExportEquals(resolved)) return null
+        if (ambientModuleSurfaceMember(resolved, name, HashSet()) != null) return null
+        if (classDeclaresStatic(resolved, name)) return null
+        if (ambientCarrierAugmentationDeclares(resolved, name)) return null
         return display
     }
 
