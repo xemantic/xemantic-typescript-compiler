@@ -19,6 +19,21 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.161) — (DOC.2) TRANCHE 1: `CLAUDE.md` 663,894 -> 484,016 B (-26.8%), NOTHING DELETED (2026-09-21).**
+A DOCS-ONLY round; no compiled code, so the suite/cost/JIT gates are INAPPLICABLE rather than skipped.
+`### Checker walker gotchas` **240,298 -> 59,928 B**, resident entries **304 -> 122** (KEEP 29 / DISTIL 92 /
+ARCHIVE 183); `docs/history/CLAUDE-GOTCHAS-ARCHIVE.md` 822,487 -> 1,040,138 B as a PURE APPEND. The file is
+loaded into every agent session, so ~165k tokens of every context window went to it before any work started —
+this is the one lever whose payoff compounds across all 83 open items. Licensed by the file's OWN residency
+rule (*"per-test/per-walker detail goes straight to the archive"*): the section was post-(DOC.1) REGROWTH from
+the (CHK.\*) arc. **CONSERVATION IS A DISJUNCTION, AND THE LITERAL CHECK ASKS THE WRONG QUESTION** — "every
+before-entry is in the after-archive" fails by construction for the 29 byte-identical KEEPs and would require
+duplicating 23 KB; the property is *archived OR resident*, measured independently at **304 = 275 + 29, 0 in
+neither, 0 in both**, with isolation byte-identical outside the section and 93 grep keys all resolving. One
+gap closed by judgement: the Kotlin-externals rendering rules are COMPILE-GATE facts for a live mission leg
+and got a resident stub back. Next tranches: `### Measured dead-ends` (97,663 B) + `### Test assertion
+gotchas` (39,869 B), ~137 KB at the same risk profile.
+
 **(P18.160) — AN `any`-ANNOTATED PARAMETER SHADOWS ITS ENCLOSING SCOPE, AND A FIRST FIX THAT WAS COMPLETELY INERT, 20,202 / 0 / 44 (2026-09-21).**
 CLOSED the general shadow defect (P18.157) sized. `currentLocalTypes` is a FLAT COPY of the enclosing scope, so a
 parameter nothing registers is not merely untyped — the outer same-named entry is still there and every read resolves

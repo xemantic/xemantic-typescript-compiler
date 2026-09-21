@@ -25,6 +25,46 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.161) — (DOC.2) tranche 1: `### Checker walker gotchas` distilled, CLAUDE.md -27% (2026-09-21)
+
+**DOCS-ONLY ROUND, no compiled code touched.** `CLAUDE.md` **663,894 -> 484,016 B (-26.8%)**;
+the section `### Checker walker gotchas` **240,298 -> 59,928 B (-75.1%)**, resident entries
+**304 -> 122**. Archive `docs/history/CLAUDE-GOTCHAS-ARCHIVE.md` 822,487 -> 1,040,138 B, a PURE
+APPEND. **Nothing was deleted.**
+
+**WHY THIS IS A QUEUE ITEM AND NOT HOUSEKEEPING.** CLAUDE.md is loaded into every agent
+session; at 664 KB it spent roughly 165k tokens of every context window before any work
+started. That is a tax on all 83 remaining open items, so the saving compounds in a way no
+single parity row does. The file's own residency rule is what licensed the cut: *"per-test/per-walker
+detail goes straight to the archive"* — and this section was post-(DOC.1) REGROWTH from the
+(CHK.*) arc, exactly the category the 2026-08-24 trim moved wholesale.
+
+**BUCKETS over the 304 entries:** KEEP 29 byte-identical (the Gradle/daemon/memory traps, the
+narrowing-probe fixture conventions whose loss silently produces VACUOUS pins, and the entries
+whose invariant IS its detail — the SOE/`catch` doctrine, the new-node-class checklist,
+`Node.end`, the INV.4 spine contracts, `Checker` field ordering); DISTIL 92 (full text archived,
+a 1-3 line resident form ending in `(archive: <key>)`); ARCHIVE 183 outright.
+
+**CONSERVATION WAS VERIFIED TWICE, AND THE FIRST CHECK ASKED THE WRONG QUESTION.** The literal
+form — *every* before-entry appears in the after-archive — FAILS by construction for the 29
+KEEPs, and satisfying it would mean duplicating 23 KB into the archive and creating grep
+duplicates for entries that are still resident. The property that is actually conservation is
+the DISJUNCTION: archived OR byte-identical resident. Measured independently by the
+orchestrator: **304 = 275 archived + 29 resident verbatim, 0 in neither, 0 in both.** Isolation:
+everything outside the section byte-identical. Archive: pure append. Grep keys: 93 stubs, 0
+unresolved. `git diff --numstat` carries no `-`/`-` row (the NUL-sentinel hazard).
+
+**ONE GAP FOUND AND CLOSED BY JUDGEMENT.** The tranche archived the Kotlin-externals /
+Kotlin-JS rendering rules with no resident stub. The lead paragraph names the family and gives
+the grep command, which is discoverable — but those rules are *compile-gate* facts for a LIVE
+mission leg (the externals generator), where a rule guessed from reading produces a declaration
+no Kotlin compiler accepts and the metadata gate cannot see it. One resident stub was added
+back; its key resolves.
+
+**SUCCESSOR for this lane:** the same treatment for `### Measured dead-ends` (113 entries,
+97,663 B, whose own title already says *"full detail archived"* while averaging 864 bytes) and
+`### Test assertion gotchas` (52 entries, 39,869 B). Together ~137 KB at the same risk profile.
+
 ### Round (P18.160) — an `any`-annotated parameter shadows its enclosing scope, and a first fix that was completely inert (2026-09-21)
 
 **CLOSED the general shadow defect (P18.157) recorded and sized.** Suite **20,202 / 0 / 44**
@@ -4201,7 +4241,14 @@ CLAUDE.md § "AI agent mission".
   check-spine cookbook **13.3 KB -> 1.7 KB**. Protected sections byte-identical (14,078 B,
   `cmp` clean).
 
-- [ ] **(DOC.2) THE REMAINING `CLAUDE.md` LEVER IS DISTILLATION, NOT MOVING — 383 RESIDENT
+- [ ] **(DOC.2) TRANCHE 1 LANDED 2026-09-21 ((P18.161) note): `### Checker walker gotchas`
+  **240,298 -> 59,928 B**, CLAUDE.md **663,894 -> 484,016 B (-26.8%)**, 304 entries -> 122
+  (KEEP 29 / DISTIL 92 / ARCHIVE 183), archive a pure append, conservation verified as the
+  DISJUNCTION (archived OR byte-identical resident): 275 + 29 = 304, 0 lost, 0 duplicated.
+  **NEXT TRANCHES, same risk profile, ~137 KB:** `### Measured dead-ends` (113 entries,
+  97,663 B — its own title already says *"full detail archived"* while it averages 864 B)
+  and `### Test assertion gotchas` (52 entries, 39,869 B). The ~200 KB target is reachable
+  with those two. ORIGINAL: THE REMAINING `CLAUDE.md` LEVER IS DISTILLATION, NOT MOVING — 383 RESIDENT
   ENTRIES AVERAGE 780 BYTES AGAINST THE FILE'S OWN "1-3 LINES" RULE.** (DOC.1) established
   the arithmetic and it is in the header ladder: header 3.6 KB + protocol 14.1 KB + the
   protected (INC.*)/2026-08-2x set 61.8 KB = a **79.5 KB floor before one process trap is
