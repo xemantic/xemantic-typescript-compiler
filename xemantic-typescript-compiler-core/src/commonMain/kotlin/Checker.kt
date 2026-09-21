@@ -101160,8 +101160,19 @@ interface DataView {
         // 464's initializer-sibling arm, and [applyPulledContextualParamTypes]'s
         // contextual write all overwrite it. Nothing whose type is knowable is
         // affected — this only fills the hole where the answer was the wrong scope.
+        // (P18.160) …and an ANNOTATED parameter whose annotation answers `any` is the
+        // SAME HOLE. The arm below writes `currentLocalTypes` only when the resolved
+        // type is neither `anyType` nor `errorType`, so `function f(zloc: any)` beside a
+        // file-level `const zloc` registered NOTHING and every read of `zloc` in the body
+        // resolved to the file-level one — measured against tsgo 7.0.2, a TS2322 that
+        // does not exist, on a shape with no import and no module symbol in it. It was
+        // invisible for as long as (CHK.73) typed a module `any`, because the wrong
+        // resolution then had the right answer by accident.
+        //
+        // So the pre-pass now covers EVERY Identifier-named parameter. It stays a
+        // PRE-pass and every later write still wins, which is what keeps it inert for a
+        // parameter whose type is knowable.
         for (param in parameters) {
-            if (param.type != null) continue
             val n = (param.name as? Identifier)?.text ?: continue
             currentLocalTypes[n] = anyType
         }

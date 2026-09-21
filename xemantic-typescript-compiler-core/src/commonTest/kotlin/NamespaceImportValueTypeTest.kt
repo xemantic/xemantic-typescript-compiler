@@ -251,13 +251,12 @@ class NamespaceImportValueTypeTest {
     }
 
     @Test
-    fun `residue - the same shadowing defect for a file-level const is unchanged`() {
-        // The defect is GENERAL and PRE-EXISTING, measured on the parent binary: a
-        // file-level `const` shadowed by an `any`-annotated parameter resolves to the
-        // file-level one and reports the identical false TS2322, with no module symbol
-        // anywhere. This round contains its own arm and deliberately does not widen the
-        // syntactic test to every identifier, which would change how every shadowed read
-        // in the program resolves.
+    fun `the same shadowing defect for a file-level const is CLOSED too`() {
+        // Pinned as a residue when the guard landed and closed the same day by
+        // (P18.160), which widened (CHK.42)'s parameter pre-pass to cover an
+        // `any`-ANNOTATED parameter — the general form of what the guard handles for a
+        // module symbol. `AnyAnnotatedParameterShadowTest` owns that mechanism; this row
+        // holds the boundary, since no module symbol appears in it at all.
         diagnose(
             """
             // @filename: main.ts
@@ -266,7 +265,47 @@ class NamespaceImportValueTypeTest {
             """.trimIndent(),
             "// @module: commonjs",
         ) should {
-            have(any { it.code == 2322 })
+            have(none { it.code == 2322 })
+        }
+    }
+
+    @Test
+    fun `a catch variable shadowing the alias refuses the module type`() {
+        // THE SHAPE THAT KEEPS THE GUARD LOAD-BEARING after (P18.160) widened (CHK.42)'s
+        // parameter pre-pass. That pre-pass covers PARAMETERS; `nameBoundByEnclosingScope`
+        // covers the wider binder population, and measured on a five-shape matrix the
+        // module type otherwise leaks into a `catch` variable and a block-scoped `class`
+        // — ours reporting `Type 'zns'` where tsgo reports `unknown` and `typeof zns`.
+        // The guard is SUPPRESSION-only, so it also costs one true row there (a
+        // block-scoped `function zns`), which is recorded in the residue below.
+        diagnose(
+            mod + """
+            // @filename: main.ts
+            import * as rel from "./mod";
+            export function f() { try { } catch (rel) { const a: number = rel; } }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(none { it.code == 2322 && "'rel'" in it.message })
+        }
+    }
+
+    @Test
+    fun `residue - the shadow guard is suppression-only and costs a true row`() {
+        // tsgo reports `Type '() => number' is not assignable to type 'number'` for a
+        // BLOCK-SCOPED function shadowing the alias; the guard answers `any` there and we
+        // are silent. Measured 2026-09-21. Closing it needs the shadowing name to resolve
+        // to its own declaration ((INV.0) step 10b's scope-space consult), not a wider
+        // suppression.
+        diagnose(
+            mod + """
+            // @filename: main.ts
+            import * as rel from "./mod";
+            export function f() { { function rel() { return 1; } const a: number = rel; } }
+            """.trimIndent(),
+            "// @module: commonjs",
+        ) should {
+            have(none { it.code == 2322 })
         }
     }
 
