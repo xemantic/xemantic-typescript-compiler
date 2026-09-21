@@ -115528,7 +115528,59 @@ interface DataView {
         }
         fnType.callSignatures = signatures
         attachExpandoMembers(symbol, funcDecls, fnType)
+        attachMergedNamespaceMembers(symbol, fnType)
         return fnType
+    }
+
+    /**
+     * (CHK.73) A function MERGED with a namespace of the same name carries that
+     * namespace's exports as PROPERTIES of its value type — tsc's `typeof f` for
+     * `function f() {}` + `namespace f { export const v }` is `{ (): void; v: … }`.
+     *
+     * Without this a merged symbol's value type was its call signature ALONE, so `f.v`
+     * was reachable only through the SYNTACTIC qualified-name path — which is why a
+     * same-file merge and a NAMED import of one already resolved it, while the same
+     * member through a module object (`m.f.v`) or through an `export =` surface
+     * (`import f = require("./m"); f.v`) did not. That second shape is how the whole
+     * DefinitelyTyped ecosystem publishes a callable CommonJS package, so it is a
+     * typed-interop gap rather than a conformance row.
+     *
+     * [attachExpandoMembers] REFUSES a merged host by design (a `typeof <name>` case),
+     * so the two attachments are disjoint by construction and the round-833 guard below
+     * is what keeps them from disagreeing with a re-entrant reader that already planted
+     * a table. The exports are planted as the binder's own symbols: their types come from
+     * their own declarations, so nothing is minted and no symbol id is perturbed.
+     */
+    private fun attachMergedNamespaceMembers(symbol: Symbol, fnType: Type.Object) {
+        if (!symbol.flags.hasAny(SymbolFlags.Module)) return
+        // A re-entrant reader already planted a table (round 833) — leave it alone.
+        if (fnType.members != null || fnType.properties != null) return
+        // FILE-LEVEL merges only, and that is a MEASUREMENT: this binder merges every
+        // same-named `namespace` block of one container into ONE `exports` table,
+        // including blocks that carry no `export` modifier and are therefore invisible
+        // from outside. Nested in another namespace that is observable —
+        // `mergedDeclarations3` declares `M.foo` four times, two of the blocks
+        // unexported, and tsgo reports TS2339 for their members — so attaching that
+        // table there LOSES two rows (measured on the corpus screen, 1 of 8,725). At
+        // file level the table is the visible surface, which is also exactly where the
+        // `export = <callable>` shape this exists for lives. The over-merge itself is a
+        // BINDER defect and is recorded as a residue rather than worked around here.
+        for (d in symbol.declarations) {
+            if (d !is ModuleDeclaration) continue
+            if ((d as NodeBase).parent !is SourceFile) return
+        }
+        val exports = symbol.exports ?: return
+        if (exports.isEmpty()) return
+        val members = symbolTable()
+        val props = ArrayList<Symbol>(exports.size)
+        for ((name, exported) in exports) {
+            if (!exported.flags.hasAny(SymbolFlags.Value or SymbolFlags.Module)) continue
+            members[name] = exported
+            props.add(exported)
+        }
+        if (props.isEmpty()) return
+        fnType.members = members
+        fnType.properties = props
     }
 
     /**

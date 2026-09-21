@@ -59,11 +59,11 @@ import kotlin.test.Test
  * arm. It has one now, so the ORDINARY-module row below asserts tsgo's answer instead of
  * the silence — see `NamespaceImportValueTypeTest`.
  *
- * What is still `any` is exactly the `export =` half, and for a DIFFERENT reason: such an
- * alias resolves to the EXPORT TARGET rather than to a module symbol, and that target is
- * a function merged with a namespace, whose value type is its call signature alone. The
- * static side of a function/namespace merge is a separate mechanism, and these two pins
- * hold the boundary between it and the module arm so a future fixture cannot blur them.
+ * The `export =` half followed the same day: such an alias resolves to the EXPORT TARGET
+ * rather than to a module symbol, and that target is a function merged with a namespace —
+ * a value type that used to be its call signature alone. `attachMergedNamespaceMembers`
+ * put the namespace's exports on it, so all three whole-module forms now answer. The two
+ * pins below hold the boundary between that mechanism and the module arm.
  */
 class ExportEqualsNamedImportTest {
 
@@ -122,16 +122,23 @@ class ExportEqualsNamedImportTest {
     }
 
     @Test
-    fun `residue - a namespace import of an export equals module is still any`() {
-        // NOT the module arm: the alias resolves to the `export =` TARGET, a function
-        // merged with a namespace, and a merge's STATIC side is unmodelled. tsgo reports
-        // TS2322 here (measured 2026-09-21).
-        assert(rows("import * as ns from \"./legacy\";\nconst a: never = ns.version;\nexport {};").isEmpty())
+    fun `a namespace import of an export equals module resolves the target's namespace side`() {
+        // Pinned as a residue when this class was written and CLOSED the same day by
+        // (CHK.73)'s `attachMergedNamespaceMembers` — the alias resolves to the
+        // `export =` TARGET, a function merged with a namespace, whose value type now
+        // carries the namespace's exports. See `MergedNamespaceStaticsTest`.
+        assert(
+            rows("import * as ns from \"./legacy\";\nconst a: never = ns.version;\nexport {};") ==
+                listOf("Type 'string' is not assignable to type 'never'.")
+        )
     }
 
     @Test
-    fun `residue - an import-equals-require of an export equals module is still any`() {
-        assert(rows("import lg = require(\"./legacy\");\nconst a: never = lg.version;\nexport {};").isEmpty())
+    fun `an import-equals-require of an export equals module resolves the target's namespace side`() {
+        assert(
+            rows("import lg = require(\"./legacy\");\nconst a: never = lg.version;\nexport {};") ==
+                listOf("Type 'string' is not assignable to type 'never'.")
+        )
     }
 
     @Test

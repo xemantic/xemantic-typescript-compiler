@@ -321,14 +321,25 @@ class ExpandoFunctionMemberModelTest {
     }
 
     /**
-     * A function MERGED with a namespace is refused whole — tsgo attaches there and
-     * renders `typeof zzzNs`, which needs the namespace-merged VALUE display we do not
-     * have (measured pre-existing: the same merge with NO expando write renders
-     * `() => void` here and `typeof zzzNs2` in tsgo). Admitting the host without that
-     * display would produce a third answer neither compiler gives.
+     * A namespace-merged host is still refused by the EXPANDO attachment — `tag` is
+     * absent from the rendering below, which is this pin's subject and is unchanged.
+     *
+     * What moved (2026-09-21, (CHK.73)) is that the NAMESPACE side is now on the value
+     * type ([Checker.attachMergedNamespaceMembers]), because `export = <callable>` is how
+     * the DefinitelyTyped ecosystem publishes and its members were unreachable through
+     * any type. So the merged host renders structurally instead of as a bare signature.
+     *
+     * **THE DISPLAY MATCHES NEITHER ARM TO tsgo AND THAT IS PRE-EXISTING**: measured on
+     * `tools/tsgo-7.0.2/lib/tsc`, this fixture renders `typeof zzzNs` — where this
+     * compiler rendered `() => void` before and `{ (): void; zzzInNs: any; }` after. The
+     * structural form is strictly more informative (the member is there) and is also what
+     * tsgo itself gives an EXPANDO-only host ((CHK.119)'s retired second bullet), so the
+     * remaining divergence is the namespace-merged VALUE display alone. The `any` is a
+     * second, separate artifact — `typeToString` reads `symbolTypes[id]` raw, and the
+     * member ACCESS types `number` correctly in the same compile.
      */
     @Test
-    fun `negative control - a namespace-merged host is refused`() {
+    fun `a namespace-merged host is refused by the EXPANDO attachment`() {
         assert(
             rendered(
                 """
@@ -337,7 +348,7 @@ class ExpandoFunctionMemberModelTest {
                 zzzNs.tag = 1;
                 const zzzP: boolean = zzzNs;
                 """
-            ) == "Type '() => void' is not assignable to type 'boolean'."
+            ) == "Type '{ (): void; zzzInNs: any; }' is not assignable to type 'boolean'."
         )
     }
 

@@ -118,11 +118,14 @@ class ImportEqualsModuleResolutionTest {
     }
 
     @Test
-    fun `residue - a function-namespace MERGE's static side is still any`() {
-        // `l.inner` is declared by the NAMESPACE half of the `export =` target. tsgo
-        // reports TS2322 here (measured 2026-09-21); we are silent, because a merged
-        // function+namespace symbol's value type is its call signature alone. That is a
-        // separate mechanism and the last `export =` gap left.
-        assert(rows("import l = require(\"./legacy\");\nconst a: never = l.inner;\nexport {};").isEmpty())
+    fun `an import-equals of an export equals module resolves the MERGED namespace side`() {
+        // `l.inner` is declared by the NAMESPACE half of the `export =` target. It was
+        // pinned `residue -` when this class was written and is CLOSED by
+        // `attachMergedNamespaceMembers` in the same session — see
+        // `MergedNamespaceStaticsTest`, which owns the mechanism.
+        assert(
+            rows("import l = require(\"./legacy\");\nconst a: never = l.inner;\nexport {};") ==
+                listOf(strNotNever)
+        )
     }
 }
