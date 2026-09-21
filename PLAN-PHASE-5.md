@@ -1594,6 +1594,37 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 ("Green light to tsgo regenerated baseline") — queued as (LEGACY.0), ahead of the removal arc.** Full text in
 CLAUDE.md § "AI agent mission".
 
+**ADDENDUM 2026-09-21 (orchestration) — THE CHECKER LANE'S NEXT TARGET IS `marked`'s 18 FALSE
+POSITIVES, NOT THE NEXT CORPUS ROW.** `docs/kir-library-readiness.md` states the mission's binding
+constraint plainly: *"The blocker to compiling a bigger library is the FRONT END, not the backend
+... a checker that reports ~0.9 false positives per file cannot be lowered from at all — the
+backend's own rule is that it must refuse to emit a program the checker rejected."* That one
+constraint gates legs (2) embeddable checker, (3) externals and (4) KIR at once. The live number,
+carried unchanged through the whole (P18.156)-(P18.160) arc and through (P18.163), is
+**cronstrue 1, marked 18** — eighteen ours-only rows on a library **tsgo reports ZERO errors for**.
+
+**13 of the 18 are already sized, in two OPEN items far down this queue:**
+- **(CHK.33) — 8 rows.** Every call to `marked`'s renderer methods is rejected with
+  **`Expected 1-0 arguments, but got 1`** — an INVERTED range, i.e. self-evidently broken output
+  that needs no reference to adjudicate. Cause already recorded (round 921): `getParameterSymbols`
+  DROPS every binding-pattern parameter, so `Signature.parameters` is empty while
+  `minArgumentCount` still counts the pattern. The item names a free structural assertion —
+  no correct signature can have `minArgumentCount > parameters.size`.
+  **CAUTION (orchestrator): do NOT close it by changing `Signature.parameters`' MEMBERSHIP.**
+  CLAUDE.md records that exclusion as deliberate with `forSignatureDisplay` as the opt-in;
+  widening it is a repo-wide blast radius for a local defect. Compute the arity AND the
+  annotation zip from `sig.declaration`'s own list, as `typeCaptureSignatureParameters` does.
+  The second half is not optional: the same drop shifts the positional zip, so `f({a}: O, b: string)`
+  types `b` as `O`. Pin BOTH.
+- **(CHK.35) — 5 rows.** A function expression assigned through an INDEX SIGNATURE gets no
+  contextual signature (TS7019 + TS2683x4 at `marked/Instance.ts:118`). Check whether one
+  contextual-signature path also serves (CHK.30) before writing either.
+
+**THE GATE FOR BOTH IS THE LIBRARY PROBE PLUS PINS, NOT THE SCREEN OR THE GRID** — `marked`'s
+shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: these REMOVE false
+positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
+positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
+
 - [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-44 LANDED 2026-09-21 ((P18.85)-(P18.155) notes) — pending **19**,
   skipped 44, suite 20,163/0. **(P18.155) CLOSED NO ROW and is recorded for its MEASUREMENT**: it
   landed TS7009 for a PROPERTY-ACCESS callee — `new O.m()`, `new N.f()`, `new h.g()`,
