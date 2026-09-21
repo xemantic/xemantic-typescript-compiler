@@ -267,19 +267,35 @@ class ElementAccessWriteCheckTest {
     }
 
     @Test
-    fun `a divergent accessor reached by a literal key is refused, union receiver or not`() {
-        // The guard that actually carries `divergentAccessorsTypes8`: a member's WRITE type is
-        // its SETTER's parameter, which the read path does not answer. Both spellings, because
-        // the ablation showed the union half was never the separable one.
+    fun `a divergent accessor reached by a literal key is refused`() {
+        // THE DISCRIMINATING SHAPE, and it had to be CONSTRUCTED from the mechanism. The first
+        // version of this pin used `box['value'] = true` (the shape `divergentAccessorsTypes8`
+        // opens with) and read 0 RED under the arm that removes the guard — B243
+        // (`checkElementAccessSetterWrite`) claims that site first, so the pin was BLIND while
+        // the corpus screen showed the guard load-bearing. What B243 does NOT claim is a getter
+        // and setter whose types are UNRELATED: the read path answers `{ cssText: string }` and
+        // the write type is `string`, so without the refusal a legal assignment reports TS2322.
+        // tsgo 7.0.2 is silent here, measured.
+        val d = diagnose(
+            """
+            interface Holder { get style(): { cssText: string }; set style(v: string) }
+            declare const el: Holder;
+            el['style'] = "color: red";
+            """.trimIndent()
+        )
+        assert(d.none { it.code == 2322 })
+    }
+
+    @Test
+    fun `residue - a literal-keyed setter write is claimed by B243, not by this reader`() {
+        // Kept as a VALUE pin rather than as coverage: `divergentAccessorsTypes8`'s opening shape
+        // is decided one walker earlier, which is why it cannot discriminate the accessor
+        // refusal. Both references are silent.
         val d = diagnose(
             """
             interface Serializer { set value(v: string | number | boolean); get value(): string }
             declare let box: Serializer;
             box['value'] = true;
-            class One { get p(): string { return "" } set p(s: string | number) {} }
-            class Two { p: number = 1 }
-            declare const u: One | Two;
-            u['p'] = 42;
             """.trimIndent()
         )
         assert(d.none { it.code == 2322 })
