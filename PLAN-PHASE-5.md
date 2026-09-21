@@ -28,10 +28,10 @@ it is the live Phase 18 queue.
 ### Round (P18.155) — (LEGACY.0b): TS7009 at a property-access callee, and two false positives the ablation found (2026-09-21)
 
 **CLOSED NO LEDGER ROW and is recorded for its MEASUREMENT — pending stays 19.** Suite
-**20,161 / 0 / 44** (+14 pins); corpus screen **0 of 8,725** over both channels; 8-profile grid
+**20,163 / 0 / 44** (+15 pins); corpus screen **0 of 8,725** over both channels; 8-profile grid
 **8x `added=0 removed=0 fullDiffLines=0`** with emit byte-identical; cronstrue 1 -> 1, marked
 18 -> 18; `cost_gate` PASS, `huge_methods` PASS, warning gate clean with both compile tasks
-verified EXECUTED. `Checker.kt` 197,342 -> 197,447 (**+105**).
+verified EXECUTED. `Checker.kt` 197,342 -> 197,434 (**+92**).
 
 **THE GAP.** `commonjsAccessExports.errors.txt`'s residue is TS7009 for a PROPERTY-ACCESS callee,
 and the ledger reason already said the gap is GENERAL rather than JS-specific. Measured against
@@ -50,20 +50,26 @@ is deliberately left alone — it reaches two shapes no type can (a named functi
 self-reference, B83.5, and `super`, which this parser makes an `Identifier`, whose `new super()`
 owns the TS2351 + TS17011 pair) — and a COUNT pin holds the no-double-emit.
 
-**THREE REFUSALS, EVERY ONE FOUND BY AN INSTRUMENT RATHER THAN BY READING.**
-(1) The **screen** reddened `constructorOverloads4`: a CLODULE (`declare namespace M { class
-Function; function Function }`) does not merge in this binder, so neither the callee type (an
-anonymous overload-set object with no symbol) nor `resolveQualifiedValueSymbol` sees the construct
-side — B511 documents exactly this and ships `findNamespaceMemberClassDecl`, which the refusal now
-consults, so the two answers about one `new M.C()` cannot disagree.
-(2) **Arm b3 read 0 RED and its discriminating shape was a FALSE POSITIVE in the landed rule**: a
-property typed `{ (): void; new (): object }` is constructable and tsgo is silent, while the arm
-reported. A direct probe — not reasoning — settled why: `getTypeOfSymbol` of that property's symbol
-answers `call=1 ctor=1`, while `getCalleeType`, i.e. `getTypeOfPropertyAccess`, answers a type whose
-construct list is EMPTY. The refusal therefore consults the property SYMBOL.
-(3) **The same gap is reachable through `getTypeOfElementAccess`**, where there is no second source
-for the absence — so the `new arr[0]()` POSITIVE was GIVEN UP rather than bought with a false
-positive, and the arm is restricted to a property-access callee. A missing row beats an invented one.
+**ONE REAL REFUSAL, AND TWO DEFENCES BUILT AGAINST A PHANTOM — THE ROUND'S MOST USEFUL FINDING.**
+The REAL one came from the corpus screen, which reddened `constructorOverloads4`: a CLODULE
+(`declare namespace M { class Function; function Function }`) does not merge in this binder, so
+neither the callee type (an anonymous overload-set object with no symbol) nor
+`resolveQualifiedValueSymbol` sees the construct side — B511 documents exactly that and ships
+`findNamespaceMemberClassDecl`, which the refusal now consults, so the two answers about one
+`new M.C()` cannot disagree. **The other two were answers to a false positive that does not
+exist.** After ablation arm b3 read 0 RED I probed the shape through the CLI and saw TS7009 on a
+constructable callee — but the ablation driver restores the SOURCE and leaves the CLASS DIR
+holding the arm's binary (CLAUDE.md's (CHK.54) trap), so I was measuring the very binary that has
+the construct-signature conjunct REMOVED. On that reading I added a property-SYMBOL construct
+consult and EXCLUDED element-access callees, giving up a positive tsgo reports. **Both then passed
+the pins, the screen, the grid, both libraries and the full suite — because a redundant guard is
+invisible to every gate — and only re-measuring from a known binary found them.** Reverted: with
+neither defence the four shapes are byte-identical to tsgo, and `getCalleeType(both.f)` returns the
+SAME instance as `getTypeOfSymbol(<the property symbol>)` with `call=1 ctor=1`, so the KDoc claim
+that a member access loses construct signatures was simply false and is gone. **The lesson is the
+trap's new costume: it bites the measurement taken to JUSTIFY work, not just the one taken to grade
+it** — and its tell was there all along, an arm reading 0 RED for a guard I had just "proved"
+load-bearing by hand.
 
 **WHY THE ROW STILL DOES NOT CLOSE, NAMED SO THE NEXT ROUND STARTS FROM A MECHANISM.** The fixture
 needs these rows in a **`.js`** file, and `ccetSpineLeave` returns early on `spineIsJsLike`, so the
@@ -72,16 +78,16 @@ TS7009 fires in JS only because it lives on the other anchor. The two available 
 that file gate ((P18.130) measures that as its own hazard) or a JS-only path whose receiver
 resolution is shadow-safe; both are bigger than this round and neither is a display question.
 
-**ABLATION: FIVE ARMS.** b1 (the arm never fires) 5 RED; b2 (drop the refusal) 1 RED; b4 (drop the
-call-signature requirement) **0 RED until its shape was constructed** — a non-callable property
-callee, `new o.p()` with `p: number`, which tsgo answers with TS2351 — then 1 RED; b5 (drop the
-clodule leg) 1 RED; **b3 is measured REDUNDANT** once the arm is property-only (subsumed by the
-property-symbol consult) and is kept with that recorded in the code, not claimed.
+**ABLATION: FIVE ARMS, RE-RUN AGAINST THE CORRECTED CODE, AND EVERY CONJUNCT IS HELD.** b1 (the arm
+never fires) 6 RED; b2 (drop the refusal) 1 RED; b3 (drop the construct-signature conjunct) **2
+RED** — the two both-signature controls, which is exactly what the deleted consult had been
+masking when the same arm read 0 RED; b4 (drop the call-signature requirement) **0 RED until its
+shape was constructed** — a non-callable property callee, `new o.p()` with `p: number`, which tsgo
+answers with TS2351 — then 1 RED; b5 (drop the clodule leg) 1 RED. No redundant guard survives.
 
-**TWO RESIDUES PINNED AS RESIDUES**: an element-access callee no longer reports (above), and
-`new ctorOnly.f()` types as `any` where tsgo answers the instance type — `getReturnTypeOfNewExpression`'s
-property arm handles only a namespace-qualified CLASS, which is the same member-type gap seen from
-the other side.
+**ONE RESIDUE PINNED AS A RESIDUE**: `new ctorOnly.f()` types as `any` where tsgo answers the
+instance type — `getReturnTypeOfNewExpression`'s property arm handles only a namespace-qualified
+CLASS. Unrelated to this rule, which reads the callee's SIGNATURES and gets them right.
 
 **SUCCESSOR.** The ledger is at 19. This round is the third in a row whose recorded reason named a
 symptom one layer above the mechanism, and the second whose false positives were found only by
@@ -1228,21 +1234,22 @@ the in-flight (CHK.98) sub-step. **Later the same day the owner approved re-pinn
 CLAUDE.md § "AI agent mission".
 
 - [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-44 LANDED 2026-09-21 ((P18.85)-(P18.155) notes) — pending **19**,
-  skipped 44, suite 20,161/0. **(P18.155) CLOSED NO ROW and is recorded for its MEASUREMENT**: it
+  skipped 44, suite 20,163/0. **(P18.155) CLOSED NO ROW and is recorded for its MEASUREMENT**: it
   landed TS7009 for a PROPERTY-ACCESS callee — `new O.m()`, `new N.f()`, `new h.g()`,
   `new Base.make()`, all silent here and all reported by tsgo — which is the general mechanism
   `commonjsAccessExports`' residue names. **The row still needs it in a `.js` file and
   `ccetSpineLeave` returns early on `spineIsJsLike`**, so the whole ccet family (this emitter's
   ambient) is off for JavaScript; the two routes are relaxing that gate ((P18.130)'s hazard) or a
-  shadow-safe JS-only path, both bigger than this round. **TWO FALSE POSITIVES were found by
-  instruments, not by reading**: the screen reddened a CLODULE (B511 — class+function do not merge,
-  so the construct side is invisible to both the type and the resolved symbol), and arm b3's
-  discriminating shape showed a property typed `{ (): void; new (): object }` reporting where tsgo
-  is silent — a direct probe found `getTypeOfSymbol` answering `ctor=1` where
-  `getTypeOfPropertyAccess` answers an EMPTY construct list. The same gap at
-  `getTypeOfElementAccess` has no second source, so the `new arr[0]()` positive was GIVEN UP rather
-  than bought with a false positive. Grid a REAL gate and 8x0; five arms, b3 measured redundant and
-  recorded.
+  shadow-safe JS-only path, both bigger than this round. **ONE REAL REFUSAL and TWO DEFENCES
+  AGAINST A PHANTOM**: the screen reddened a CLODULE (B511 — class+function do not merge, so the
+  construct side is invisible to both the type and the resolved symbol), which is real; but a CLI
+  probe run straight after ablation arm b3 measured THAT ARM's binary ((CHK.54)'s trap) and
+  "found" two false positives that do not exist. Both defences passed the pins, the screen, the
+  grid, both libraries and the full suite — a redundant guard is invisible to every gate — and were
+  reverted only after re-measuring from a known binary, which recovered the `new arr[0]()` positive.
+  **The trap's new costume: it bites the measurement that JUSTIFIES work, not just the one that
+  grades it.** Grid a REAL gate and 8x0; five arms re-run against the corrected code, every
+  conjunct held (b1 6, b3 2, b2/b4/b5 1 each), no redundant guard.
   PREVIOUS HEAD: (0a) + (0b) STEPS 1-43 LANDED 2026-09-20 ((P18.85)-(P18.154) notes) — pending **19**,
   skipped 44, suite 20,148/0. **(P18.154) CLOSED `reverseMappedTypeIntersectionConstraint.errors.txt`**,
   and the row labelled "PIN-SERVED, RE-TRANSCRIBE OR RETIRE" had an ENGINE defect under it: a mapped
