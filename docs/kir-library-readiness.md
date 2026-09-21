@@ -404,6 +404,18 @@ correspondence rather than to an inspection, and they are queued as (CHK.31)-(CH
    their INTERSECTION for a write. Queued as **(CHK.139)** with the rule fitted to 12 measured
    tsgo fixtures and the prize measured at **marked 10 -> 7**; brief in
    `docs/element-access-union-key.md`.
+   **(CHK.139) LANDED 2026-09-21 in both halves — and `marked` did NOT move.** The read arm
+   (a UNION over the key's literals) and the write slot (their INTERSECTION) both agree with
+   tsgo exactly, including a SINGLETON literal key and the intersection display; grid 8x0,
+   screen 0 of 8,725. **The prize did not materialise because the blocker is one layer down,
+   and a five-variant bisect located it**: a non-generic receiver, a generic receiver
+   instantiated with a concrete argument and a `||`-initialised local all work, and only a
+   receiver whose type argument is the ENCLOSING class's own type parameter fails — round 761's
+   globally-`any` cached type for a type-parameter-typed member, which round 783's carrier read
+   does not reach at that instantiation. `marked`'s three rows sit inside a method of a generic
+   class indexing `_Tokenizer<ParserOutput, RendererOutput>`, which is exactly that shape. **So
+   the library's remaining front-end blocker is now ONE named mechanism rather than a family**,
+   and it is round 761/783 territory.
 
 ~59 rows remain untriaged, led by TS2322×14 and TS2339×7. Stated rather than implied, because
 this page's own history is that a family attributed by inspection is a hypothesis.
