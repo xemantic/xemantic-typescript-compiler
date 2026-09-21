@@ -25,6 +25,58 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.159) — (CHK.73): a function merged with a namespace carries its statics, and the last `export =` gap closes (2026-09-21)
+
+**CLOSED the mechanism (P18.158) named as its successor.** Suite **20,195 / 0 / 44** (+5 pins);
+corpus screen **0 of 8,725** over both channels; 8-profile grid **8x `added=0 removed=0
+fullDiffLines=0`** with emit byte-identical; cronstrue 1 -> 1, marked 18 -> 18; `cost_gate` PASS
+(max +0.09%), `huge_methods` 0 over limit, warning gate clean with both compile tasks verified
+EXECUTED. `Checker.kt` +50.
+
+**THE MECHANISM.** A symbol merged from `function f` and `namespace f` had a value type that was
+its CALL SIGNATURE alone, so the namespace side was reachable only through the SYNTACTIC
+qualified-name path. That is the whole explanation of an otherwise baffling split measured at
+(P18.158): a same-file merge and a NAMED import of one already resolved `f.v`, while the same
+member through a MODULE OBJECT (`m.f.v`) or an `export =` surface
+(`import f = require("./m"); f.v`) did not. `attachMergedNamespaceMembers` sits beside
+`attachExpandoMembers`, which REFUSES a merged host by design — so the two are disjoint by
+construction, and the round-833 already-planted-table guard is what keeps them from disagreeing.
+Measured against tsgo 7.0.2 on a four-shape probe: **2 of 4 before, 4 of 4 after**.
+
+**THE CONTAINMENT IS A MEASUREMENT, AND THE SCREEN IS WHAT TOOK IT.** The first cut attached the
+table for ANY merged function and moved `mergedDeclarations3` — **1 mismatch of 8,725, found in
+one run**. Reading it explained the shape: this binder merges every same-named `namespace` block
+of one container into ONE `exports` table, unexported blocks included, so attaching it for a
+NESTED namespace makes `M.foo.x` legal where tsgo reports TS2339 and the syntactic path (which
+respects export-ness) was already right. Restricted to FILE-LEVEL merges — which is exactly where
+the `export = <callable>` shape lives — it moves nothing. **The over-merge is a BINDER defect and
+is recorded rather than worked around**; the `mergedDeclarations3` pair is pinned directly.
+
+**AND THE ROUND'S OWN 'RESIDUE' PIN WAS WRONG BEFORE IT WAS BLIND.** The containment pin was first
+written as a `residue -` asserting that we ACCEPT all three nested members. Measured: we match
+tsgo exactly (one TS2339, `M.foo.y` silent) — so the pin was repaired into the containment's
+CONTROL. It then read **0 RED** under the arm that drops the restriction, because a path-shaped
+`-project` fixture resolves the shape down another route; the FLAT-named `diagnose()` form
+reproduces the corpus baseline's own path and reddens. **A fixture's file-name SHAPE is part of
+what it measures, in both directions** — (P18.158) needed path-shaped names to see a specifier
+defect, and this pin needs flat ones to see a display/resolution one.
+
+**THREE COUNTDOWN PINS REPAIRED, TWO OF THEM THIS ARC'S OWN.** `ExportEqualsNamedImportTest`'s two
+`export =` residues (written at (P18.156), re-explained at (P18.157)) are closed and now assert
+tsgo's answers. The third, `ExpandoFunctionMemberModelTest`'s merged-host control, keeps its
+SUBJECT — the expando attachment still refuses a merged host, `tag` is absent from the rendering —
+and its expected TEXT moves from `() => void` to the structural form. **Neither arm matches tsgo,
+which renders `typeof zzzNs`**, and that was already recorded in the pin's own KDoc as
+pre-existing; the structural form is strictly more informative and is also what tsgo gives an
+EXPANDO-only host ((CHK.119)). The `zzzInNs: any` inside it is a SECOND artifact — `typeToString`
+reads `symbolTypes[id]` raw, while the member ACCESS types `number` correctly in the same compile.
+
+**SUCCESSOR.** Two display rows are now sized from measurement: a namespace-merged function value
+should render `typeof <name>` and a module object `typeof import("<path>")` where we render the
+structural type and the alias's local name. Both are corpus-only-gated ((PARITY.1)) and the screen
+prices either in one run. The bigger remaining one is the general shadow defect (P18.157) recorded:
+an `any`-annotated parameter shadowing ANY file-level binding resolves to the file-level one.
+
 ### Round (P18.158) — (CHK.73)(i): `import x = require("./m")` resolved nothing on a path-shaped project (2026-09-21)
 
 **CLOSED (CHK.73)(i) and the `export =` half of the namespace-import form.** Suite
@@ -7264,8 +7316,10 @@ CLAUDE.md § "AI agent mission".
   there and typed `any`, invisibly, because flat corpus names let the bare resolver match
   by string alone (183 active case files use the form and none can see it). The same round
   made `import * as` follow an `export =` surface, as tsc's `resolveExternalModuleSymbol`
-  does. What is left of the `export =` family is ONE mechanism: a function/namespace
-  MERGE's static side, pinned `residue -` in `ImportEqualsModuleResolutionTest`.
+  does. The `export =` family is CLOSED as of (P18.159): a function/namespace MERGE's
+  static side is on the value type (`attachMergedNamespaceMembers`, FILE-LEVEL merges
+  only — the unrestricted form moves `mergedDeclarations3`), so all three whole-module
+  import forms answer. `MergedNamespaceStaticsTest` owns it.
   ORIGINAL ENTRY, kept for its diagnosis and its prices:
   **(CHK.73) — DIAGNOSED AND PRICED 2026-08-29, AND IT IS NOT WHAT THIS ENTRY SAID.
   THE BLOCKER IS THE STATIC SIDE OF A CLASS, NOT RESOLUTION, AND THE ROUND-409 TS2315

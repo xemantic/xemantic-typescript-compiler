@@ -1,5 +1,29 @@
 **(P18.148) — (LEGACY.0b): THE SECOND CHAIN FOLD, AND A ROW THAT COULD NOT SHOW ITS OWN MECHANISM, 20,101 / 0 / 48 (2026-09-20).**
 
+**(P18.154) — (LEGACY.0b): AN INTERSECTION OF LITERAL SETS IS A KEY SET, AND A MAPPED TYPE OVER ONE WAS `any`, 20,148 / 0 / 44 (2026-09-20).**
+Ledger 20 -> 19, `reverseMappedTypeIntersectionConstraint.errors.txt` CLOSED and ACTIVE in the screen's 3,079 / 0
+(emit 5,646 / 0). The row was labelled "PIN-SERVED — RE-TRANSCRIBE OR RETIRE" and **there was an ENGINE defect under
+it**: a mapped type whose key source is an INTERSECTION produced NO TYPE AT ALL — `getTypeFromMappedType` enumerates a
+string literal or a union of them and `else`-bails to `anyType` — so the reverse-mapped idiom
+`{ [K in keyof T & keyof C]: T[K] }` was a silent `any`, which the corpus, the grid and `cost_gate.py` are all green
+about by construction. `reducePrimitiveDomainIntersection` is tsc's reduction restricted to the CLOSED family where
+every constituent is a string/number/boolean/bigint literal, one of those four primitives, or a union of such — **which
+is round 777's refusal's exact COMPLEMENT** (that view requires OBJECT-capable operands), so the two can never both
+apply and no object intersection is distributed at construction. 10 of 11 measured shapes now byte-identical to tsgo.
+**A SECOND, WIDER DEFECT FOUND ON THE WAY: LITERAL TYPES ARE NOT INTERNED HERE** (~25 construction sites, no factory),
+so the id-keyed union dedupe kept both instances and `keyof Zed | keyof Wye` rendered `"alpha" | "alpha" | "beta" |
+"zoo"`; fixed by keying that dedupe on the VALUE, which moves no type's identity and therefore no relation cache or
+id-pair key. **(CHK.50) fired and the screen caught it in ONE run (1 mismatch of 8,724)**: B218 now REPLACES the
+general excess-property row — its own KDoc's premise was the `anyType` bail — and sorts its display by KEY rather than
+by the object literal's order, which is what makes the four re-transcribed pin strings what the ENGINE computes rather
+than copied text. Retirement re-measured and still REFUSED (engine-only 5 -> 11 rows, but constraint-typed and at two
+positions the baseline lacks). 20 pins, SIX arms: a2 10 RED, a6 2 RED, a1/a3/a5 1 RED each — **a3 read 0 RED first and
+the pin set was BLIND** (`"a" & number` had to be constructed from the mechanism), and **a4 read 0 RED and is
+genuinely REDUNDANT**, recorded in its KDoc as a barrier rather than claimed. cost_gate PASS (max +0.15%,
+the profiles now resolving mapped types that used to bail); huge_methods PASS; warning gate clean with both compile
+tasks verified EXECUTED.
+
+
 **(P18.153) — (LEGACY.0b) RECON: TWO LEDGER REASONS RE-MEASURED, NEITHER WAS ITS MECHANISM, 20,128 / 0 / 45 (2026-09-20).**
 No ledger movement and no compiled code touched — the round applies this session's own finding to the two rows a next
 session would most likely reach for, because both carried one-line reasons that read as cheap. **`augmentExportEquals2.js`
