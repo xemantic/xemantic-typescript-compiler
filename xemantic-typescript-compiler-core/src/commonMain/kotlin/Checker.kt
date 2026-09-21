@@ -160467,6 +160467,70 @@ interface DataView {
     }
 
     /**
+     * (CHK.33) The arity [sig]'s own DECLARATION states, or null where the declaration is
+     * absent or not function-like.
+     *
+     * **`Signature.parameters` IS NOT THE DECLARATION'S PARAMETER LIST.**
+     * [getParameterSymbols] drops every `ObjectBindingPattern` / `ArrayBindingPattern`
+     * parameter (its `forSignatureDisplay` opt-in is the only place a placeholder is
+     * minted), while [requiredParameterCount] — and so [Signature.minArgumentCount] —
+     * COUNTS it. Any reader that takes its MAXIMUM from `parameters.size` and its MINIMUM
+     * from `minArgumentCount` therefore prints an IMPOSSIBLE range for
+     * `m({ text }: T): R`: `Expected 1-0 arguments, but got 1.` on a call that is legal
+     * TypeScript, which is self-evidently broken output needing no reference to
+     * adjudicate. Round 446 recovered the true arity at the property-access reader
+     * ([checkTs2554ForPropertyAccessCall]); this is that block extracted so the UNION
+     * reader ([unionCalleeArityDiagnostic]) shares it rather than carrying a fourth copy
+     * of the declaration-to-parameters map.
+     *
+     * [paramInfo] is the right computation to reuse: it skips the `this` pseudo-parameter
+     * and the rest tail exactly as [requiredParameterCount] does, counts a binding-pattern
+     * parameter as an ordinary one, and reports `hasRest` — so `minParams`/`maxParams`
+     * are the arity the user WROTE.
+     *
+     * NOT a fix at [getParameterSymbols]: widening `Signature.parameters`' MEMBERSHIP is
+     * a repo-wide blast radius for a local defect, and CLAUDE.md records that exclusion as
+     * deliberate. The prescription there is the one applied here — *read `sig.declaration`'s
+     * own list*.
+     *
+     * **The kind list is round 446's PLUS `FunctionType` / `ConstructorType`, and the two
+     * additions are a MEASURED false-positive fix rather than tidiness.** A member whose
+     * type is written as a function TYPE carries that node as its signature's declaration
+     * ([buildSignatureForFunctionLikeTypeNode]), and such a node may perfectly well spell a
+     * binding pattern — `declare const host: { m: ({ a }: O) => void }; host.m(o)` is legal
+     * TypeScript that tsgo 7.0.2 accepts in silence and that this compiler answered
+     * `Expected 1-0 arguments, but got 1.` before the arms were added. An options-bag
+     * callback property is one of the commonest shapes in real TypeScript, so the omission
+     * was not academic.
+     *
+     * `GetAccessor` / `SetAccessor` are round 446's own arms and are kept VERBATIM, but a
+     * census of every `Signature(` construction in this module says they are DEAD: no
+     * signature is ever built with an accessor declaration (an accessor resolves into a
+     * Property symbol instead, `MemberResolver`). Recorded rather than deleted — an arm
+     * proved unreachable today is a barrier tomorrow, and deleting it would make the
+     * extraction no longer verbatim.
+     *
+     * Still NOT covered, and measured: `IndexSignature`. There is no `MethodSignature` /
+     * `CallSignature` / `ConstructSignature` node class in this codebase — the parser
+     * reuses `MethodDeclaration` for an interface method, a call signature (name `""`) and
+     * a construct signature (name `"new"`) alike — so those three are already covered by the
+     * `MethodDeclaration` arm.
+     */
+    private fun signatureDeclaredArity(sig: Signature): FuncParamInfo? =
+        when (val d = sig.declaration) {
+            is FunctionDeclaration -> d.parameters
+            is MethodDeclaration -> d.parameters
+            is FunctionExpression -> d.parameters
+            is ArrowFunction -> d.parameters
+            is Constructor -> d.parameters
+            is FunctionType -> d.parameters
+            is ConstructorType -> d.parameters
+            is GetAccessor -> d.parameters
+            is SetAccessor -> d.parameters
+            else -> null
+        }?.let { paramInfo(it) }
+
+    /**
      * (CHK.97) TS2554 for a call whose argument count no COMBINED signature admits —
      * `Expected 1-2 arguments, but got 3.` across the whole combined list, exactly as
      * tsc reports it for a union callee (measured identical on tsgo 7.0.2 and pristine
@@ -160483,15 +160547,34 @@ interface DataView {
         val args = expr.arguments
         if (args.any { it is SpreadElement }) return false
         if (sigs.isEmpty()) return false
-        val anyRest = sigs.any { sigHasRestParameter(it) }
-        val maxParams = sigs.maxOf { it.parameters.size }
+        // (CHK.33) The MAXIMUM must be read off the SAME list the MINIMUM is, or a
+        // binding-pattern parameter yields an impossible range — `parameters.size` drops it
+        // and `minArgumentCount` counts it, so `renderer.html(token)` against
+        // `html({ text }: Tokens.HTML | Tokens.Tag)` printed `Expected 1-0 arguments, but
+        // got 1.` on legal TypeScript (8 rows in `marked`, a library tsgo reports ZERO
+        // errors for). [signatureDeclaredArity] is round 446's recovery, shared.
+        //
+        // `maxOf` against `parameters.size` rather than a replacement: a PASS-2 combined
+        // signature's parameters are MINTED by [combineUnionParameters] (the extra rest
+        // element) and may exceed the head declaration's own count, and taking the LARGER
+        // can only remove a too-many row — the false-positive-safe direction. Likewise
+        // `anyRest` only ever becomes MORE true, which only suppresses.
+        val declared = sigs.map { signatureDeclaredArity(it) }
+        val anyRest = sigs.indices.any { sigHasRestParameter(sigs[it]) || declared[it]?.hasRest == true }
+        val maxParams = sigs.indices.maxOf { maxOf(sigs[it].parameters.size, declared[it]?.maxParams ?: 0) }
         val minParams = sigs.minOf { it.minArgumentCount }
         if (!anyRest && args.size > maxParams) {
             emitTS2554TooMany(minParams, maxParams, args.size, args, maxParams, source, fileName)
             return true
         }
         if (args.size < minParams) {
-            emitTS2554TooFew(minParams, maxParams, args.size, calleeExpr, source, fileName)
+            // (CHK.33) A combined signature with a REST tail is TS2555 in tsgo
+            // (`Expected at least 1 arguments, but got 0.`); TS2554's fixed-range wording is
+            // wrong there, and it was reachable BEFORE this round — `sigHasRestParameter`
+            // already answered true for a rest-bearing member whose leading parameter is a
+            // binding pattern, because the surviving rest symbol is still the list's last.
+            if (anyRest) emitTS2555TooFew(minParams, args.size, calleeExpr, source, fileName)
+            else emitTS2554TooFew(minParams, maxParams, args.size, calleeExpr, source, fileName)
             return true
         }
         return false
@@ -160990,23 +161073,11 @@ interface DataView {
             if (LIB_MIN_TARGET_SOFT.any { (k, v) -> k.endsWith(".$mName") && !libFeatureAvailable(v) }) return
         }
         val params = sig.parameters
-        // Round 446: a DESTRUCTURED param `{ a, b }: T` produces NO Symbol, so
-        // `sig.parameters` DROPS it (`{ fileName, pos }: Range` → empty parameters list),
-        // giving an impossible arity range (`maxParams` 0 while `minArgumentCount` 1 →
-        // "Expected 1-0 arguments"). Recover the TRUE arity from the DECLARATION's
-        // parameter list (paramInfo counts binding-pattern params + handles rest/optional)
-        // when the declaration is a function-like node.
-        val declParams: List<Parameter>? = when (val d = sig.declaration) {
-            is FunctionDeclaration -> d.parameters
-            is MethodDeclaration -> d.parameters
-            is FunctionExpression -> d.parameters
-            is ArrowFunction -> d.parameters
-            is Constructor -> d.parameters
-            is GetAccessor -> d.parameters
-            is SetAccessor -> d.parameters
-            else -> null
-        }
-        val declInfo = declParams?.let { paramInfo(it) }
+        // Round 446 / (CHK.33): a DESTRUCTURED param `{ a, b }: T` produces NO Symbol, so
+        // `sig.parameters` DROPS it — recovered from the DECLARATION by
+        // [signatureDeclaredArity], which is this block extracted verbatim so the UNION
+        // reader can share it.
+        val declInfo = signatureDeclaredArity(sig)
         val hasRest = declInfo?.hasRest
             ?: ((params.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true)
         val minParams = declInfo?.minParams ?: sig.minArgumentCount
