@@ -734,6 +734,7 @@ internal class NameResolver(
             val tr = fileResults[targetFile] ?: continue
             val sym = tr.locals[originalName]
                 ?: checker.resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
+                ?: exportEqualsSurfaceMember(tr, originalName)
                 ?: continue
             // [mergeSymbolTable] pollutes same-named symbols' FLAGS (and
             // declarations) across files — an Alias flag alone cannot identify
@@ -745,6 +746,30 @@ internal class NameResolver(
             computeImportedSymbolGeneral(sym, visited)?.let { return it }
         }
         return null
+    }
+
+    /**
+     * (P18.156) A named import's target inside a module whose surface is an
+     * `export = <namespace-merged value>`: the member lives in the EXPORT TARGET's
+     * `exports` table, not in the file's `locals`, so the two legs above both miss and
+     * the alias resolved to NOTHING — i.e. the binding typed `any`, silently.
+     *
+     * Measured against tsgo 7.0.2 on `declare function legacy(n: number): string;
+     * declare namespace legacy { const version: string }; export = legacy`: every import
+     * form of it — `import { version }`, `import * as ns` and `import ns = require(...)`
+     * — is `string` there and was `any` here, while the same named import of an ORDINARY
+     * `export const` module already worked. That is the shape `@types` packages are built
+     * from, so it reaches the externals generator and the KIR backend, not only a
+     * diagnostic.
+     *
+     * This is the file-bearing twin of [ambientModuleSurfaceMember] ((CHK.80)(a)), which
+     * does the same walk for a FILELESS `declare module "spec"` block. It is deliberately
+     * added HERE and not to the general `resolveAlias` — the round-409 TS2315 flood is
+     * what that costs — so its only consumer stays `lookupPerFile`.
+     */
+    private fun exportEqualsSurfaceMember(tr: BinderResult, name: String): Symbol? {
+        val target = checker.resolveModuleExportAssignment(tr) ?: return null
+        return target.exports?.get(name)
     }
 
     // -----------------------------------------------------------------------
