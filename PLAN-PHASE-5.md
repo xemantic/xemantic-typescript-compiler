@@ -8217,11 +8217,17 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   guessed**: a five-variant bisect shows a non-generic receiver, a generic receiver instantiated with
   a concrete argument and a `||`-initialised local ALL work, and only a receiver whose type argument
   is the ENCLOSING class's own type parameter fails — round 761's globally-`any` cached type for a
-  type-parameter-typed member, which round 783's carrier read does not reach at that instantiation.
-  That is `marked`'s exact shape, pinned `residue -` in `ElementAccessUnionKeyTest`. **SUCCESSOR, and
-  it is the real blocker for the library probe**: make the carrier read reach a `Type.Reference`
-  instantiated with an unresolved TYPE PARAMETER, or decide that shape some other way — it is
-  round 761/783 territory and its own round. Residues also stated: TS7053 for an absent key (tsgo
+  type-parameter-typed member. **RE-MEASURED after the first reading blamed round 783's carrier read:
+  that read IS reached and still answers `any`, and the CONTROL proves the gap is upstream of the key
+  question entirely — a read through a WRITTEN literal key (`t["a"]`, which never touches this round's
+  arm) answers `(s: string) => any` where tsgo answers `(s: string) => P`.** The key itself resolves
+  correctly; both compilers print it as `string`, which is (PARITY.1)'s generalization of a literal
+  union at a primitive target. The write then RELATES, because an `=> any` member accepts the arrow
+  that `=> P` would reject — so we are silent for a different reason than tsgo is. That is `marked`'s
+  exact shape, pinned `residue -` in `ElementAccessUnionKeyTest`. **SUCCESSOR, and it is the real
+  blocker for the library probe**: a member typed by its container's own TYPE PARAMETER must resolve
+  to that parameter rather than to `any` at an instantiation whose argument is itself an unresolved
+  parameter — round 761 territory, its own round, and NOT an element-access question at all. Residues also stated: TS7053 for an absent key (tsgo
   reports it, we are silent, and our silence is CORRECT about the type); and the anonymous-union
   display (`A & (B | C)` in tsgo, `A & U` here) is the pre-existing alias-interning family.
   ORIGINAL: AN ELEMENT ACCESS WHOSE *INDEX TYPE* IS A UNION OF LITERALS RESOLVES TO `any`,

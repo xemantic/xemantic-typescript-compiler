@@ -411,11 +411,15 @@ correspondence rather than to an inspection, and they are queued as (CHK.31)-(CH
    and a five-variant bisect located it**: a non-generic receiver, a generic receiver
    instantiated with a concrete argument and a `||`-initialised local all work, and only a
    receiver whose type argument is the ENCLOSING class's own type parameter fails — round 761's
-   globally-`any` cached type for a type-parameter-typed member, which round 783's carrier read
-   does not reach at that instantiation. `marked`'s three rows sit inside a method of a generic
-   class indexing `_Tokenizer<ParserOutput, RendererOutput>`, which is exactly that shape. **So
-   the library's remaining front-end blocker is now ONE named mechanism rather than a family**,
-   and it is round 761/783 territory.
+   globally-`any` cached type for a type-parameter-typed member. **RE-MEASURED: round 783's
+   carrier read IS reached and still answers `any`, and the control settles it — a read through a
+   WRITTEN literal key (`t["a"]`, which never touches the new arm) answers `(s: string) => any`
+   where tsgo answers `(s: string) => P`.** So the gap is upstream of element access entirely.
+   `marked`'s three rows sit inside a method of a generic class indexing
+   `_Tokenizer<ParserOutput, RendererOutput>`, so every member they could name is typed `any`
+   before the write is considered. **The library's remaining front-end blocker is now ONE named
+   mechanism rather than a family**: a member typed by its container's own type parameter must
+   resolve to that parameter at an instantiation whose argument is itself unresolved.
 
 ~59 rows remain untriaged, led by TS2322×14 and TS2339×7. Stated rather than implied, because
 this page's own history is that a family attributed by inspection is a hypothesis.

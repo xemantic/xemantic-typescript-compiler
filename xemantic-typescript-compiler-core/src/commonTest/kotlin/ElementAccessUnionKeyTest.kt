@@ -228,16 +228,25 @@ class ElementAccessUnionKeyTest {
 
     @Test
     fun `residue - an enclosing class TYPE PARAMETER in the receiver still blocks the write check`() {
-        // MEASURED, not chased. Bisected over five variants: a non-generic receiver, a generic
-        // receiver instantiated with a concrete argument, and a `||`-initialised local all work;
-        // only a receiver whose type argument is the ENCLOSING class's own type parameter fails,
-        // because a type-parameter-typed member's cached type is globally `any` (round 761) and
-        // round 783's carrier read does not reach this instantiation. tsgo reports nothing here
-        // (the write is legal for it); we are silent for the WRONG reason, so this pin asserts
-        // today's answer and is named for what it is.
+        // MEASURED, not chased, and RE-MEASURED once the first reading proved too narrow.
+        // Bisected over five variants: a non-generic receiver, a generic receiver instantiated
+        // with a concrete argument and a `||`-initialised local all work; only a receiver whose
+        // type argument is the ENCLOSING class's own type parameter fails.
+        //
+        // THE CAUSE IS *UPSTREAM OF THE KEY QUESTION*, and the control is what shows it: a read
+        // through a WRITTEN literal key (`t["a"]`, which never touches the union arm) answers
+        // `(s: string) => any` where tsgo answers `(s: string) => P`. So it is round 761's
+        // globally-`any` cached type for a type-parameter-typed member, NOT anything specific to
+        // this round's arm or to round 783's carrier read — that read is reached here and still
+        // answers `any`. The key itself resolves correctly: both compilers print it as `string`,
+        // which is the (PARITY.1) generalization of a literal union at a primitive target.
+        //
+        // The write then relates, because an `=> any` member accepts the arrow that `=> P` would
+        // reject — a false NEGATIVE, so tsgo is silent here for a different reason than we are.
         //
         // THIS IS WHY `marked` DOES NOT MOVE: its `tokenizer[tokenizerProp] = …` sits in a method
-        // of a generic class and indexes `_Tokenizer<ParserOutput, RendererOutput>`.
+        // of a generic class and indexes `_Tokenizer<ParserOutput, RendererOutput>`, so every
+        // member it could name is typed `any` before the write is ever considered.
         val d = diagnose(
             """
             type Excl3<T, U> = T extends U ? never : T;
