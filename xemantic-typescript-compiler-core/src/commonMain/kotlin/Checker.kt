@@ -25467,21 +25467,6 @@ class Checker(
             // AST-scanning the namespace body for the lost declaration; the same scan is
             // the refusal here, so the two answers about one `new M.C()` cannot disagree.
             if (findNamespaceMemberClassDecl(pa) != null) return true
-            // AND the property's OWN type, because the callee type can LOSE the construct
-            // side: measured with a direct probe, `getTypeOfSymbol(<the `f` symbol>)` of
-            // `declare const both: { f: { (): void; new (): object } }` answers
-            // `call=1 ctor=1` while `getCalleeType(both.f)` — i.e.
-            // [getTypeOfPropertyAccess] — answers a type whose construct list is EMPTY.
-            // Without this the arm reported TS7009 for a genuinely constructable callee,
-            // which is the one false positive its own ablation found (arm b3). The
-            // underlying member-type gap is recorded as a residue pin rather than fixed
-            // here: it also makes `new ctorOnly.f()` answer `any` where tsgo answers the
-            // instance type, which is a wider change than this rule.
-            val recv = getTypeOfExpression(pa.expression)
-            if (recv !== anyType && recv !== errorType) {
-                val prop = getPropertyOfType(recv, pa.name.text)
-                if (prop != null && getConstructSignaturesOfType(getTypeOfSymbol(prop)).isNotEmpty()) return true
-            }
         }
         return false
     }
@@ -161523,14 +161508,16 @@ interface DataView {
         //
         // A UNION callee is excluded so B60.15's three-case constituent report keeps it.
         //
-        // AND AN ELEMENT-ACCESS CALLEE IS EXCLUDED ON A MEASUREMENT, not for lack of a
-        // shape: tsgo reports `new arr[0]()` and so did this arm, but the same
-        // construct-list gap that made a property callee a false positive is reachable
-        // through `getTypeOfElementAccess` too — `{ (): void; new (): object }[]` is
-        // constructable at `arr[0]` and tsgo is silent, where the arm reported. The
-        // property path has a trustworthy second source for the absence (the property
-        // SYMBOL's own type); an element access has none, so the positive is given up
-        // rather than bought with a false positive. Pinned as a residue.
+        // A PROPERTY access and an ELEMENT access are both admitted, and the pair
+        // `{ (): void; new (): object }` vs `(() => void)[]` is pinned at BOTH — the
+        // construct-signature conjunct is what separates them, and it reads the same
+        // answer through `getTypeOfPropertyAccess` and `getTypeOfElementAccess`.
+        // (An earlier cut excluded element access and added a second, symbol-based
+        // construct consult, both in response to a false positive that did not exist:
+        // the CLI probe that "found" it had run against the PREVIOUS ablation arm's class
+        // directory — the round-851 trap — i.e. against a binary with this very conjunct
+        // removed. Both defences are gone; the shape they were built for is measured
+        // silent without them.)
         //
         // A MERGED class+function symbol is refused for the reason the identifier path
         // refuses it (`sym.declarations.any { it is ClassDeclaration }`, round 79i): its
@@ -161539,7 +161526,7 @@ interface DataView {
         // `constructorOverloads4` — `declare namespace M { export class Function …;
         // export function Function(…) … }` — where tsgo is silent and this arm reported.
         if (spineNaRunActive &&
-            expr.expression is PropertyAccessExpression &&
+            expr.expression !is Identifier &&
             calleeType !is Type.Union &&
             !newCalleeTypeSymbolDeclaresClass(expr.expression, calleeType) &&
             getConstructSignaturesOfType(calleeType).isEmpty() &&

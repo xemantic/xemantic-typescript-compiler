@@ -46,6 +46,8 @@ import kotlin.test.Test
  *    because (CHK.73) types a class value as its INSTANCE type, which carries neither
  *    signature kind, where tsc sees a construct signature. Same verdict today; the day
  *    (CHK.73) is fixed this arm must stay silent for the tsc reason instead.
+ *  * an element or property whose type carries BOTH signature kinds is silent, which is
+ *    what makes the construct-signature conjunct attributable at both callee kinds;
  *  * a CLODULE (`declare namespace M { class C; function C }`) is silent only because the
  *    refusal consults B511's `findNamespaceMemberClassDecl`: class+function do not merge
  *    in this binder, so neither the callee type nor the resolved symbol can see the
@@ -83,14 +85,17 @@ class NewExprImplicitAnyNonIdentifierCalleeTest {
     }
 
     @Test
-    fun `residue - an element-access callee does not report`() {
-        // tsgo reports here. The arm is restricted to a PROPERTY-access callee because the
-        // construct-list gap below is reachable through `getTypeOfElementAccess` as well:
-        // an array of `{ (): void; new (): object }` is constructable at `arr[0]` and tsgo
-        // is silent, where an element-access arm reported — measured, and a false positive
-        // is worse than a missing row. A property access has a trustworthy second source
-        // for the absence (the property symbol's own type); an element access has none.
-        assert(count("const arr = [function () {}];\nnew arr[0]();") == 0)
+    fun `an element-access callee reports`() {
+        assert(rows("const arr = [function () {}];\nnew arr[0]();") == listOf(message))
+    }
+
+    @Test
+    fun `negative control - an element whose type carries BOTH signature kinds is silent`() {
+        // The element-access twin of the property row below, and the pair that makes the
+        // construct-signature conjunct attributable at BOTH callee kinds.
+        assert(
+            count("declare const arr: { (): void; new (): object }[];\nnew arr[0]();") == 0,
+        )
     }
 
     @Test
@@ -153,11 +158,8 @@ class NewExprImplicitAnyNonIdentifierCalleeTest {
 
     @Test
     fun `negative control - a property carrying BOTH signature kinds is silent`() {
-        // The one shape that separates this rule from one that reports whenever a CALL
-        // signature is present, and the false positive its own ablation (arm b3) found:
-        // the callee IS constructable, so tsgo is silent. It needs the property SYMBOL's
-        // type, because `getTypeOfPropertyAccess` loses the construct side here — see the
-        // residue below.
+        // The shape that separates this rule from one reporting whenever a CALL signature
+        // is present: the callee IS constructable, so tsgo is silent.
         assert(
             count("declare const both: { f: { (): void; new (): object } };\nnew both.f();") == 0,
         )
@@ -165,14 +167,11 @@ class NewExprImplicitAnyNonIdentifierCalleeTest {
 
     @Test
     fun `residue - a construct-signature property does not type the new expression`() {
-        // MEASURED with a direct probe: `getTypeOfSymbol` of the `f` symbol answers a type
-        // with `ctor=1`, while `getCalleeType` — `getTypeOfPropertyAccess` — answers one
-        // whose construct list is EMPTY, and `getReturnTypeOfNewExpression`'s
-        // PropertyAccessExpression arm only handles a namespace-qualified CLASS. So
-        // `new ctorOnly.f()` types as `any` and tsgo's TS2322 (`Type 'object' is not
-        // assignable to type 'never'`) is missing. Pinned as a residue because the fix is
-        // a member-type change with reach far beyond this rule; the rule itself is correct
-        // here only because it consults the property symbol.
+        // `getReturnTypeOfNewExpression`'s PropertyAccessExpression arm handles only a
+        // namespace-qualified CLASS, so `new ctorOnly.f()` types as `any` and tsgo's
+        // TS2322 (`Type 'object' is not assignable to type 'never'`) is missing. Unrelated
+        // to the TS7009 rule — which reads the callee's SIGNATURES and gets them right
+        // here — and pinned so the gap is recorded rather than rediscovered.
         assert(
             diagnose(
                 "declare const ctorOnly: { f: { new (): object } };\nconst r: never = new ctorOnly.f();",
