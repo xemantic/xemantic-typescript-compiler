@@ -25,6 +25,95 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.165) — (CHK.136): an assignment through an element access is type-checked at last (2026-09-21)
+
+**A SOUNDNESS HOLE CLOSED, AND THE ITEM'S OWN SIZING CORRECTED BEFORE ANY CODE WAS WRITTEN.**
+`bag[key] = "not a function"` was accepted in SILENCE while the identical mismatch through a
+PROPERTY target reported TS2322 — the element-access arm dispatched to four narrowly-gated walkers
+and then simply stopped. `cheaGeneralElementWrite` is the general reader; its slot is
+`getTypeOfElementAccess`, and that function's `anyType` answer **is** the firewall, so an undecided
+slot is silence and never a diagnostic.
+
+**THE ITEM SAID "WHAT IS MISSING IS THE ADMISSION, NOT THE TYPE". THAT IS TRUE OF ITS OWN REPRO AND
+FALSE OF `marked`, AND ONE PROBE SEPARATED THEM.** Read-probing every target shape on the shipped
+binary split the defect in two: for an index SIGNATURE, an ARRAY element, a numeric index signature
+and a TUPLE the read type already resolved and only the write was missing (D1, this round); for an
+index whose TYPE is a union of literals (`mem[k]`, `k: keyof Members`) the READ resolves to `any`
+(D2) — and D2 is the shape `marked` actually uses. **So `marked` is unchanged at 10, exactly as
+predicted before the fix was built**, and the successor is sized from a measurement rather than a
+hope.
+
+**EVERY EXPECTATION WAS ADJUDICATED AGAINST tsgo 7.0.2 FIRST** — 63 fixtures over five scratch
+projects. Two of its rules the matrix established and the pins now encode: the ANCHOR is the LHS
+node at full width (`bag[key]` spans 8, not the whole assignment), and a COMPOUND assignment is NOT
+this check (`arr[i] += 123` on a `string[]` is legal, because `string + number` is `string`).
+
+**THE GRID WAS A REAL GATE AND IT CAUGHT ONE FALSE POSITIVE ON ALL EIGHT PROFILES.** A census of
+element-access assignments (a length-preserving comment/string/regex mask plus a bracket-matching
+scanner, 25/25 audited) reads 223 on the smallest arm and 347 on the largest, so (CHK.124)'s question
+was answered with a count before the arm was written. The row was tsc's own `builder.ts:1423`,
+`root[root.length - 2] = [lastButOne, fileId]` against a tuple-bearing slot — **round 459's recorded
+finding one reader over: this engine cannot decide an ARRAY LITERAL against a TUPLE target.** The
+Identifier site needs an AST-side helper and a declaration TYPE NODE this reader has not got, so the
+pair is REFUSED: a missing row, never a wrong one.
+
+**THE CORPUS SCREEN THEN CAUGHT TWO MORE, AND THEY WERE DIFFERENT DEFECTS.** `divergentAccessorsTypes8`
+is a WRITE-TYPE question — a member's write type is its SETTER's parameter, not the getter return the
+read path resolves. `widenedTypes` is not a false positive at all but a DOUBLE EMISSION: a legacy
+walker had already decided `t[3] = ""` under `strict: false` and read the widened `number` where this
+reader's un-widened `number | null` became a second row at the same squiggle. One row per assignment
+site; the legacy walker owns a site it has already decided.
+
+**AND THEN THE ABLATION OVERTURNED HALF OF THAT, WHICH IS THE ROUND'S MOST USEFUL RESULT.** The first
+cut answered `divergentAccessorsTypes8` with TWO refusals — an ACCESSOR one and a UNION-RECEIVER one —
+on the reading that the fixture exercised both halves separably. **Arm a3 read 0 RED on the pins AND 0
+of 8,725 on the screen, and the reason was not a blind pin: the union refusal was UNNECESSARY.**
+`Two.prop3` is a `get`/`set` pair even though `One.prop3` is a plain field, so every row in that
+fixture is reached by the accessor guard alone and the two were never the separable pair the sizing
+claimed. Measured one step further, the refusal was also **LOSSY** — on a union receiver with no
+accessor anywhere it dropped two rows tsgo 7.0.2 reports (`ab[key] = 42` on two string-indexed
+interfaces, and `cd[key] = true` on `string`- and `number`-indexed ones, whose target tsgo renders
+exactly as our read union does). tsc distributes a receiver union with a UNION in BOTH modes, so read
+and write coincide for every non-accessor member. **It was REMOVED, not recorded as a redundant
+barrier**, and the two rows it had been dropping are now pins. A guard that no arm can discriminate is
+as often unnecessary as it is unpinned, and the only way to tell is to ask what it COSTS.
+
+**THE FOUR DIVERGENCES THE NEW ROWS INHERIT ARE PRE-EXISTING AT THE PROPERTY TARGET, AND A TWIN
+FIXTURE IS WHAT PROVED IT** rather than an argument. tsgo re-anchors at the RHS with *Did you mean to
+call this expression?* when the RHS is callable and its RETURN relates; it drills INTO a
+zero-parameter arrow's expression body; it widens the literal SOURCE (`'boolean'` where we print
+`'true'`); and it contextually types the RHS parameter (`(t: { type: string; })` where we print
+`(t: any)`). Running the same four shapes through `holder.m = …` shows the shipped property reader
+doing exactly what the new arm does — so they are ONE shared display family, to be fixed in both
+readers or neither, and this round neither introduces nor fixes them. The VERDICT is tsgo's in every
+case; only the anchor and the display differ, which is a (PARITY.1) question.
+
+**THE EXTRACTION, NOT A FOURTH COPY.** B85.1d's `this`-rooted index write moved VERBATIM into
+`cheaThisRootedIndexWrite` so the general arm is a fallback behind it — it resolves its receiver
+through the STRING-keyed `varTypes` map and therefore serves shapes the type engine answers nothing
+for. One line changed inside it: a relation PASS is a DECISION, so it now claims the site rather than
+letting the general arm re-decide it with a differently-resolved slot.
+
+**ABLATION, one mistake at a time, six arms then five.** a1 (the general arm never runs) 8 of 14 pins
+RED, screen 0 — the arm is load-bearing and the corpus is a CONTROL for it, exactly as the census
+said. a2 (the array-literal/TUPLE refusal removed) 1 pin RED plus the grid row on all eight profiles.
+a3 REMOVED THE GUARD INSTEAD (above). a4 (the ACCESSOR refusal removed) read 0 RED while a3's guard
+was still standing — re-run in the shipped configuration it is what carries the fixture, and the
+round's own accessor pin is what notices. a5 (the one-row-per-site dedupe removed) 1 screen mismatch,
+`widenedTypes`. a6 (the extracted narrow walker stops claiming a site whose relation PASSED) 0 RED: a
+measured REDUNDANT guard, recorded and kept as a barrier, not claimed as coverage. The restore
+rebuild returns `Checker.class` to the gated md5.
+
+Gates: suite **20,246 / 0 failed / 44 skipped** before the a3 removal and re-run after it; corpus
+screen 0 of 8,725 over both channels; 8-profile grid 8x `added=0 removed=0`; `cost_gate` PASS with max
++0.21% and `output.errors` 46 unchanged; `huge_methods` 0 over limit; warning-clean over a non-empty
+log; `marked` 10 -> 10 (predicted) and `cronstrue` 1 -> 1.
+
+Residues stated, not chased: the four anchor/display divergences above; TS7052 for a receiver with no
+index signature and TS2542 for a readonly one, both of which tsgo reports and we do not; and a
+COMPOUND assignment, which never reaches this reader at all — a future arm for it must compute the
+OPERATOR's result type, because `arr[i] += 123` on a `string[]` is legal.
+
 ### Round (P18.164) — (CHK.33): a destructuring parameter no longer breaks arity; `marked` 18 -> 10 (2026-09-21)
 
 **THE ITEM'S 8 ROWS WERE THE PRIZE AND THREE MORE FALSE-POSITIVE CLASSES FELL OUT OF THE SAME ROOT
@@ -8061,7 +8150,55 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   does not set the flag, where the other four families cost every project. The 8 profiles do not
   set it either, so `cost_gate.py` and the grid are structurally blind here and `yaml` is the gate.
 
-- [ ] **(CHK.136) AN ASSIGNMENT THROUGH AN ELEMENT ACCESS IS NEVER TYPE-CHECKED AT ALL — A
+- [ ] **(CHK.139) AN ELEMENT ACCESS WHOSE *INDEX TYPE* IS A UNION OF LITERALS RESOLVES TO `any`,
+  AND IT IS THE SHAPE `marked` ACTUALLY USES — THE MEASURED SUCCESSOR OF (CHK.136), sized
+  read-only 2026-09-21 ((P18.165); full brief reproduced in
+  `docs/element-access-union-key.md`).** `mem[mkey]` where `mkey: keyof Members` answers
+  `anyType` in `elementAccessResultType`; tsgo answers the UNION of the per-key member types for a
+  READ and their INTERSECTION for a WRITE, so (CHK.136)'s `cheaGeneralElementWrite` — which uses
+  `getTypeOfElementAccess` as both slot AND firewall — is silent for exactly it.
+  **THE RULE, fitted to 12 measured tsgo fixtures:** distribute over the RECEIVER union with a
+  UNION in both modes; over the KEY union with a UNION for a read and an INTERSECTION for a write;
+  then let the ordinary reduction run (the `never` a differing pair shows is just `string & number`
+  reduced, which `getIntersectionType` already does). `keyof T`, `"a"|"b"`, `Exclude<keyof T,"c">`
+  and a literal-union alias are IDENTICAL — the rule keys on the index TYPE, never the syntax. A
+  key union with an ABSENT member is all-or-nothing `any` plus TS7053 in BOTH modes, which is the
+  binding constraint. A generic `T[K]` stays deferred and must be left at `any`.
+  **THE CODE SITE IS A ROUTE, NOT A NEW RULE**: `getIndexedAccessType` already implements the
+  distribution — but its union-index arm is `.filter { it !== anyType }` rather than
+  all-or-nothing, which would resolve an ABSENT key and is the false-positive direction, so add a
+  thin expression-side arm delegating per constituent and do NOT touch the type-position arm in the
+  same round. The WRITE needs a sibling `elementAccessWriteType` (the union arm is permissive and
+  wrong for a write), and (CHK.136)'s `recvType is Type.Union` refusal is what that replaces.
+  **THE PRIZE IS MEASURED**: a scratch copy of `marked` with its three `@ts-expect-error` comments
+  stripped gives exactly three tsgo TS2322 rows (`Instance.ts` 202/229/242), so this closes the
+  three ours-only TS2578 shadows — **marked 10 -> 7**. `Instance.ts:177` is the ready-made negative
+  control (same shape, no directive, tsgo silent).
+  **BLAST RADIUS, as counts**: this is a READ-path change, so (CHK.50) applies. Sound upper bound
+  (all computed-index accesses) 1,171-1,838 per profile; bare-identifier index 870-1,350; a
+  key-like heuristic 26-48 per profile, marked 10, cronstrue 0 — the heuristic is soft in BOTH
+  directions (adding one inference pattern moved it ~40%), so the exact number must be the round's
+  own admission COUNTER, not a grep. Largest new-row surfaces: a call through a union key (TS2345
+  with parameter `never`), member access on the resolved union (TS2339), argument position.
+  **THREE RISKS WHOSE MISTAKE IS A CONFIDENT WRONG ANSWER rather than a silence, so each needs its
+  own ablation arm**: an ABSENT key resolved anyway; `keyof` of an index-signature type is not a
+  literal union; a receiver-union write folded with the wrong operator.
+
+- [x] **(CHK.136) CLOSED 2026-09-21 ((P18.165) note) for the half whose slot already resolves —
+  the WRITE is checked, grid 8x0, screen 0 of 8,725, suite 20,246/0/44. THE ITEM'S PREMISE
+  ("what is missing is the ADMISSION, not the type") IS TRUE OF ITS OWN REPRO AND FALSE OF
+  `marked`, and a read-probe of every target shape is what separated them: for an index
+  SIGNATURE, an ARRAY element, a numeric index signature and a TUPLE the read type already
+  resolved; for an index whose TYPE is a union of literals it does not, and that is `marked`'s
+  shape — promoted to (CHK.139) above. `marked` therefore stays at 10 and the round SAID SO
+  before building anything. Three refusals were forced by measurement: an ARRAY LITERAL against a
+  tuple-bearing slot (round 459's finding one reader over — without it tsc's own `builder.ts:1423`
+  is an ours-only row on ALL EIGHT profiles), a UNION receiver (needs the per-constituent write
+  fold (CHK.139) brings), and a LITERAL key naming an ACCESSOR (write type is the setter's
+  parameter); plus one row per site, since a legacy walker owns a site it has already decided.
+  The four display/anchor divergences the new rows inherit are PRE-EXISTING AT THE PROPERTY
+  TARGET — proved on a twin fixture, so they are one shared (PARITY.1) family and not this
+  round's. ORIGINAL: AN ASSIGNMENT THROUGH AN ELEMENT ACCESS IS NEVER TYPE-CHECKED AT ALL — A
   SOUNDNESS HOLE ON A COMMON PATTERN, AND THE ROOT CAUSE OF 5 OF `marked`'s REMAINING 8 ROWS.
   FOUND 2026-09-21 ((P18.164) tail), measured against tsgo 7.0.2.** `bag[key] = <anything>` is
   accepted in silence, including `bag[key] = "not a function"` against

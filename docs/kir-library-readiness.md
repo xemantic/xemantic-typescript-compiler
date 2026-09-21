@@ -392,8 +392,18 @@ correspondence rather than to an inspection, and they are queued as (CHK.31)-(CH
 6. **An assignment through an ELEMENT ACCESS is never type-checked at all** — `bag[key] =
    "not a function"` is accepted in silence where the same mismatch through a property target
    reports TS2322. A SOUNDNESS hole, and the root cause of `marked`'s three ours-only TS2578
-   `Unused '@ts-expect-error'` rows, which are SHADOWS of the three checks we never run. Queued
-   as (CHK.136); it shares its root cause with family 5 and should be sequenced with it.
+   `Unused '@ts-expect-error'` rows, which are SHADOWS of the three checks we never run.
+   **HALF-CLOSED 2026-09-21, (CHK.136)**: the write IS now checked wherever the slot type already
+   resolves — an index signature, an array element, a numeric index signature, a tuple — through
+   `cheaGeneralElementWrite`, whose firewall is `getTypeOfElementAccess` answering `anyType`.
+   Grid 8x0, corpus screen 0 of 8,725. **`marked` did NOT move, and the round predicted that
+   before building anything**: a read-probe of every target shape split the defect in two, and
+   `marked`'s three rows need the OTHER half — an element access whose INDEX TYPE is a union of
+   literals (`tokenizer[tokenizerProp]`, key `Exclude<keyof _Tokenizer<..>, ...>`) resolves to
+   `any` on the READ path. tsgo answers the UNION of the per-key member types for a read and
+   their INTERSECTION for a write. Queued as **(CHK.139)** with the rule fitted to 12 measured
+   tsgo fixtures and the prize measured at **marked 10 -> 7**; brief in
+   `docs/element-access-union-key.md`.
 
 ~59 rows remain untriaged, led by TS2322×14 and TS2339×7. Stated rather than implied, because
 this page's own history is that a family attributed by inspection is a hypothesis.

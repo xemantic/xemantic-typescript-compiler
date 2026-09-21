@@ -111100,13 +111100,19 @@ interface DataView {
         target: ElementAccessExpression, value: Expression, source: String, fileName: String
     ) {
         if (target.questionDotToken) return
-        // A UNION receiver needs a per-constituent WRITE fold this reader does not have: tsc
-        // takes the UNION of each constituent's write type, which is not the union of their READ
-        // types whenever a constituent's setter diverges from its getter. MEASURED on the corpus:
-        // without this, `divergentAccessorsTypes8`'s `u1['prop1'] = 42` on `One | Two` grows four
-        // ours-only TS2322 rows the baseline does not have. Refused, not approximated.
+        // A UNION receiver is NOT refused, and the ablation is why. The first cut refused one,
+        // on the reading that `divergentAccessorsTypes8`'s four ours-only rows needed it; arm a3
+        // then read 0 RED on the pins AND 0 of 8,725 on the screen, because every row in that
+        // fixture is reached by the ACCESSOR guard below instead — `Two.prop3` is a `get`/`set`
+        // pair even though `One.prop3` is a plain field, so the two guards were never separable
+        // there. And the refusal was LOSSY: on a union receiver with no accessor anywhere it
+        // dropped two rows tsgo 7.0.2 reports (`ab[key] = 42` on `A | B` both string-indexed, and
+        // `cd[key] = true` on `C | D` indexed `string` and `number`, whose target tsgo renders
+        // exactly as our read union does — `string | number`). tsc distributes a receiver union
+        // with a UNION in BOTH modes, so read and write coincide for every non-accessor member,
+        // which is what makes the read type sound here. A KEY union is the half that differs
+        // (intersection for a write) and it is (CHK.139), where this slot still answers `any`.
         val recvType = getTypeOfExpression(target.expression)
-        if (recvType is Type.Union) return
         // A LITERAL key names a MEMBER, and a member's WRITE type is its SETTER's parameter — not
         // the getter return this reader resolves ([checkPropertyAccessAssignment] carries the same
         // rule for the dot form, and B243 [checkElementAccessSetterWrite] owns the literal-keyed

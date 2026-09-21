@@ -11,15 +11,23 @@
 # Arms:
 #   a1  the general arm never runs                 -> the whole pin class must redden
 #   a2  the array-literal/TUPLE refusal removed    -> pin + the 8-profile grid (builder.ts:1423)
-#   a3  the UNION-receiver refusal removed         -> corpus: divergentAccessorsTypes8 (prop3, a DATA member)
-#   a4  the literal-key ACCESSOR refusal removed   -> corpus: divergentAccessorsTypes8 (box['value'], NON-union receiver)
+#   a4  the literal-key ACCESSOR refusal removed   -> the accessor pin (`divergentAccessorsTypes8`'s
+#       mechanism: a member's WRITE type is its SETTER's parameter)
+#
+# ARM a3 IS GONE, AND THAT IS THIS SCRIPT'S ONE REAL FINDING. It ablated a UNION-receiver
+# refusal; it read 0 RED on the pins AND 0 of 8,725 on the screen, not because the pins were
+# blind but because the refusal was UNNECESSARY — every row in `divergentAccessorsTypes8` is
+# reached by the ACCESSOR guard instead (`Two.prop3` is a get/set pair even though `One.prop3`
+# is a plain field, so the two were never the separable pair the first cut claimed). Measured
+# further, it was LOSSY: it dropped two rows tsgo 7.0.2 reports on a union receiver with no
+# accessor anywhere. The refusal was REMOVED rather than recorded as a redundant barrier.
 #   a5  the one-row-per-site dedupe removed        -> corpus: widenedTypes (`t[3] = ""`, strict:false)
 #   a6  the narrow this-rooted walker stops claiming a PASSING site -> control for the extraction
 set -uo pipefail
 cd "$(dirname "$0")/.."
 K=xemantic-typescript-compiler-core/src/commonMain/kotlin/Checker.kt
 SNAP=build/bench/chk136/ablate; mkdir -p "$SNAP"
-ARMS=("$@"); [[ ${#ARMS[@]} -eq 0 ]] && ARMS=(a1 a2 a3 a4 a5 a6)
+ARMS=("$@"); [[ ${#ARMS[@]} -eq 0 ]] && ARMS=(a1 a2 a4 a5 a6)
 
 patch() { # patch <file> <old> <new>
   python3 - "$1" "$2" "$3" <<'PY'
@@ -43,7 +51,6 @@ for arm in "${ARMS[@]}"; do
         if (true) return
         // A UNION receiver needs' ;;
     a2) patch "$K" '        if (value is ArrayLiteralExpression && cheaSlotMentionsTuple(slot)) return' '        if (false && value is ArrayLiteralExpression && cheaSlotMentionsTuple(slot)) return' ;;
-    a3) patch "$K" '        if (recvType is Type.Union) return' '        if (false && recvType is Type.Union) return' ;;
     a4) patch "$K" '        if (cheaLiteralKeyNamesAccessor(target, recvType)) return' '        if (false && cheaLiteralKeyNamesAccessor(target, recvType)) return' ;;
     a5) patch "$K" '        if (diagnostics.any {
                 it.code == 2322 && it.fileName == fileName && it.line == line && it.character == character

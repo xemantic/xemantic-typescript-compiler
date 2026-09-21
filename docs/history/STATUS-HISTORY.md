@@ -1,3 +1,22 @@
+
+**(P18.160) — AN `any`-ANNOTATED PARAMETER SHADOWS ITS ENCLOSING SCOPE, AND A FIRST FIX THAT WAS COMPLETELY INERT, 20,202 / 0 / 44 (2026-09-21).**
+CLOSED the general shadow defect (P18.157) sized. `currentLocalTypes` is a FLAT COPY of the enclosing scope, so a
+parameter nothing registers is not merely untyped — the outer same-named entry is still there and every read resolves
+to IT. (CHK.42)'s pre-pass fills that hole and was gated `if (param.type != null) continue`, while the arm below it
+writes only when the annotation resolves to neither `anyType` nor `errorType`; an explicit `: any` satisfied neither.
+Three FALSE POSITIVES on legal code, none involving an import. **It was invisible for as long as a module symbol typed
+`any`** — the wrong resolution then had the right answer by accident, which is why (CHK.73) needed a contained guard
+and why this is its general form; a defect masked by a SECOND defect is what (CHK.50)'s law predicts every time a
+silent `any` becomes real. **THE FIRST FIX WAS INERT AND IS NOT IN THE COMMIT**: it used round 453's
+`currentParamBindingNames` side set — whose own KDoc describes this job — and produced byte-identical rows, so it was
+reverted per the standing rule rather than landed. What found the real site cost one command and no build:
+`--passTiming`'s `emissions by pass` named `checkSpine`, i.e. the cta frame's own seeder. **AND THE CONTAINED GUARD IS
+NOT REDUNDANT AFTERWARDS, WHICH HAD TO BE MEASURED**: ablating it left every existing pin GREEN — the textbook reading
+of "delete it" — while a five-shape matrix showed the module type leaking into a `catch` variable and a block-scoped
+`class` (ours `Type 'zns'`, tsgo `unknown` / `typeof zns`). Both are now pinned; the guard is suppression-only and
+costs one true row, recorded. Grid 8x0 with emit byte-identical; screen 0 of 8,725; cost_gate PASS; huge_methods 0
+over limit; two arms, each reddening exactly its own pins.
+
 **(P18.159) — (CHK.73): A FUNCTION MERGED WITH A NAMESPACE CARRIES ITS STATICS, AND THE `export =` FAMILY CLOSES, 20,195 / 0 / 44 (2026-09-21).**
 A merged `function f` + `namespace f` symbol's value type was its CALL SIGNATURE ALONE, so the namespace side was
 reachable only through the SYNTACTIC qualified-name path — which is the whole explanation of (P18.158)'s baffling

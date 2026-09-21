@@ -120,7 +120,10 @@ class ElementAccessWriteCheckTest {
     }
 
     @Test
-    fun `negative control - a correct write through an index signature is silent`() {
+    fun `negative control - a correct write through an index signature produces no TS2322`() {
+        // Scoped to TS2322 deliberately: this shape ALSO carries an ours-only TS7006 on `t`,
+        // because no contextual signature reaches an element-access assignment target. That is
+        // (CHK.35), pre-existing and untouched here — asserting a blanket silence would pin it.
         val d = diagnose(prelude + """bag[key] = (t) => t.type;""")
         assert(d.none { it.code == 2322 })
     }
@@ -217,6 +220,66 @@ class ElementAccessWriteCheckTest {
             declare const i: number;
             declare const a: number;
             rows[i] = [a, a];
+            """.trimIndent()
+        )
+        assert(d.none { it.code == 2322 })
+    }
+
+    @Test
+    fun `a union receiver is decided, not refused`() {
+        // THE ABLATION IS WHY THIS PIN EXISTS. The first cut REFUSED a union receiver, on the
+        // reading that `divergentAccessorsTypes8` needed it; arm a3 then read 0 RED on the pins
+        // and 0 of 8,725 on the screen, because every row in that fixture is reached by the
+        // ACCESSOR guard instead (`Two.prop3` is a get/set pair even though `One.prop3` is a
+        // plain field). The refusal was also LOSSY — these two rows are tsgo 7.0.2's, and it
+        // dropped both. tsc distributes a receiver union with a UNION in BOTH modes, so read and
+        // write coincide for every non-accessor member.
+        val d = diagnose(
+            """
+            interface A { [k: string]: string }
+            interface B { [k: string]: string }
+            declare const ab: A | B;
+            declare const key: string;
+            ab[key] = 42;
+            """.trimIndent()
+        )
+        assert(d.count { it.code == 2322 } == 1)
+        assert(d.single { it.code == 2322 }.message == "Type 'number' is not assignable to type 'string'.")
+    }
+
+    @Test
+    fun `a union receiver whose constituents disagree reports against the union`() {
+        val d = diagnose(
+            """
+            interface C { [k: string]: string }
+            interface D { [k: string]: number }
+            declare const cd: C | D;
+            declare const key: string;
+            cd[key] = true;
+            cd[key] = "str";
+            """.trimIndent()
+        )
+        // tsgo reports the first and is silent on the second; the target renders as the union.
+        val rows = d.filter { it.code == 2322 }
+        assert(rows.size == 1)
+        assert(rows.single().line == 5)
+        assert(rows.single().message.endsWith("is not assignable to type 'string | number'."))
+    }
+
+    @Test
+    fun `a divergent accessor reached by a literal key is refused, union receiver or not`() {
+        // The guard that actually carries `divergentAccessorsTypes8`: a member's WRITE type is
+        // its SETTER's parameter, which the read path does not answer. Both spellings, because
+        // the ablation showed the union half was never the separable one.
+        val d = diagnose(
+            """
+            interface Serializer { set value(v: string | number | boolean); get value(): string }
+            declare let box: Serializer;
+            box['value'] = true;
+            class One { get p(): string { return "" } set p(s: string | number) {} }
+            class Two { p: number = 1 }
+            declare const u: One | Two;
+            u['p'] = 42;
             """.trimIndent()
         )
         assert(d.none { it.code == 2322 })
