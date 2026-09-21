@@ -53,12 +53,17 @@ import kotlin.test.Test
  * import, which is what makes the corpus screen a real regression gate, and these pins
  * are the gate for the new answer.
  *
- * **THE RESIDUES BELOW ARE (CHK.73), NOT THIS LEG.** `import * as ns` and
- * `import ns = require(...)` still type `any` for ANY module, `export =` or not, because
- * `getTypeOfSymbolWorker` has no `SymbolFlags.Module` arm; CLAUDE.md records that
- * refusal and its measured cost. They are pinned here so the boundary between the two
- * mechanisms is a recorded decision rather than an accident of which form a future
- * fixture happens to use.
+ * **THE RESIDUES BELOW WERE (CHK.73) AND HALF OF IT IS CLOSED (2026-09-21).** When this
+ * class was written `import * as ns` and `import ns = require(...)` typed `any` for ANY
+ * module, `export =` or not, because `getTypeOfSymbolWorker` had no `SymbolFlags.Module`
+ * arm. It has one now, so the ORDINARY-module row below asserts tsgo's answer instead of
+ * the silence — see `NamespaceImportValueTypeTest`.
+ *
+ * What is still `any` is exactly the `export =` half, and for a DIFFERENT reason: such an
+ * alias resolves to the EXPORT TARGET rather than to a module symbol, and that target is
+ * a function merged with a namespace, whose value type is its call signature alone. The
+ * static side of a function/namespace merge is a separate mechanism, and these two pins
+ * hold the boundary between it and the module arm so a future fixture cannot blur them.
  */
 class ExportEqualsNamedImportTest {
 
@@ -118,8 +123,9 @@ class ExportEqualsNamedImportTest {
 
     @Test
     fun `residue - a namespace import of an export equals module is still any`() {
-        // (CHK.73): no `SymbolFlags.Module` arm in `getTypeOfSymbolWorker`, so `ns` has no
-        // type at all. Unchanged by this leg, which resolves a MEMBER and never a module.
+        // NOT the module arm: the alias resolves to the `export =` TARGET, a function
+        // merged with a namespace, and a merge's STATIC side is unmodelled. tsgo reports
+        // TS2322 here (measured 2026-09-21).
         assert(rows("import * as ns from \"./legacy\";\nconst a: never = ns.version;\nexport {};").isEmpty())
     }
 
@@ -129,9 +135,14 @@ class ExportEqualsNamedImportTest {
     }
 
     @Test
-    fun `residue - a namespace import of an ORDINARY module is also still any`() {
-        // The row that shows the residue is (CHK.73) and not an `export =` question: the
-        // same silence appears for a module with ordinary named exports.
-        assert(rows("import * as p from \"./plain\";\nconst a: never = p.version;\nexport {};").isEmpty())
+    fun `a namespace import of an ORDINARY module is typed`() {
+        // CLOSED 2026-09-21 by (CHK.73)'s `SymbolFlags.Module` arm. This row was pinned as
+        // a residue when the class was written and is the CONTROL that separates the two
+        // mechanisms: an ordinary module's namespace import now answers tsgo's type, so
+        // the two `export =` silences above are that surface's own gap and not this one.
+        assert(
+            rows("import * as p from \"./plain\";\nconst a: never = p.version;\nexport {};") ==
+                listOf("Type 'string' is not assignable to type 'never'.")
+        )
     }
 }

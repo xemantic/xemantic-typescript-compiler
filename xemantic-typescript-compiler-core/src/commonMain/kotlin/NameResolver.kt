@@ -360,7 +360,34 @@ internal class NameResolver(
                         val targetFile = resolveModuleSpecifier(specifier, decl)
                             ?: owningSourceFile(decl)?.fileName?.let {
                                 resolveModuleSpecifierRelative(specifier, it)
-                            } ?: continue
+                            }
+                        if (targetFile == null) {
+                            // (CHK.73) AMBIENT module — B113's second chance, which the
+                            // `ImportEqualsDeclaration` arm above has had for a long time
+                            // and this one did not, so `import * as fs from "fs"` against
+                            // an `@types` package (`declare module "fs"`, i.e. how the
+                            // whole DefinitelyTyped ecosystem publishes) resolved to
+                            // NOTHING and the binding typed `any`. It fails SILENTLY —
+                            // `any` is legal everywhere — which is why it survived: the
+                            // only observable is that nothing is reported, and the
+                            // 8 profiles import ~5-14 non-relative specifiers each.
+                            // Gated to a NAMESPACE import so no other import form's
+                            // established resolution moves.
+                            if (decl.importClause?.namedBindings is NamespaceImport) {
+                                val ambient = globals[specifier]
+                                if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module) &&
+                                    ambient.exports != null
+                                ) {
+                                    // (CHK.81)'s rule, as at the `require` arm: an
+                                    // `export = <value>` block is named by that value.
+                                    val target =
+                                        checker.ambientRequireAliasTarget(ambient, visited) ?: ambient
+                                    setSymbolTarget(symbol, target)
+                                    return resolveAlias(target, visited)
+                                }
+                            }
+                            continue
+                        }
                         val targetResult = fileResults[targetFile] ?: continue
 
                         // Namespace import: import * as Foo from "mod"

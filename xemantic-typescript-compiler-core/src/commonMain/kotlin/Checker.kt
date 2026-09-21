@@ -7500,6 +7500,24 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val canonicalEnumSymCache = HashMap<Int, Symbol>()
 
+    /**
+     * (CHK.73) The SYNTHETIC module symbols [createModuleSymbol] mints, mapped to the
+     * file each one stands for — or to `null` when the symbol borrowed a `.d.ts`'s single
+     * ambient block's exports, where the FILE's own exports are the wrong enumeration.
+     *
+     * It has two jobs and both are load-bearing for [getTypeOfModuleSymbol]. It is the
+     * membership test for "this symbol is an EXTERNAL MODULE" — a `namespace` symbol
+     * carries `SymbolFlags.Module` too and is never in here, which is what contains the
+     * value type to the import population (measured: a general arm moves 20 active
+     * baselines, this one moves 0). And it supplies the `SourceFile` that
+     * [exportedSymbolsThroughStars] needs, which the symbol itself does not carry.
+     *
+     * Declared here, above the `init` block, because `createModuleSymbol` is reached from
+     * `init:buildFileLocalTypeMaps` — a field declared beside its own consumer further
+     * down the file is still null throughout every init pass.
+     */
+    private val syntheticModuleFile = HashMap<Int, SourceFile?>()
+
     /** (P18.134): memo for [cmamExpandoDeclaringHost], keyed by
      *  `"<file>\u0000<container pos>\u0000<function name>"`. The answer is a pure
      *  function of the AST, so it carries none of round 776's program-order hazard; the
@@ -14580,11 +14598,15 @@ class Checker(
                 }]
                 if (ambientSymbol != null && ambientSymbol.exports != null) {
                     moduleSymbol.exports = ambientSymbol.exports
+                    // (CHK.73) the borrowed table IS the enumeration here; the FILE's own
+                    // exports are a different (wrong) question.
+                    syntheticModuleFile[moduleSymbol.id] = null
                     return moduleSymbol
                 }
             }
         }
         moduleSymbol.exports = targetResult.locals
+        syntheticModuleFile[moduleSymbol.id] = targetResult.sourceFile
         return moduleSymbol
     }
 
@@ -114812,8 +114834,89 @@ interface DataView {
                 } ?: importedTopLevelVarAnnotationType(symbol) ?: anyType
             }
             flags.hasAny(SymbolFlags.TypeParameter) -> getDeclaredTypeOfSymbol(symbol)
+            // (CHK.73) an EXTERNAL MODULE's value type. Last arm deliberately: a merged
+            // symbol (a namespace beside a function, a `const enum` carrier) keeps the
+            // type its other meaning already gave it.
+            flags.hasAny(SymbolFlags.Module) -> getTypeOfModuleSymbol(symbol)
             else -> anyType
         }
+    }
+
+    /**
+     * (CHK.73) The value type of an EXTERNAL MODULE symbol — tsc's
+     * `typeof import("...")`, the object an `import * as ns` / `import ns = require(...)`
+     * binding denotes.
+     *
+     * Before this the arm did not exist, so every namespace import typed `anyType`
+     * SILENTLY: `any` is legal everywhere, so no diagnostic moved and the member reads
+     * under it answered `any` too. That is a first-order defect for Phase 18 rather than a
+     * parity row — the Kotlin externals generator renders from resolved types and the KIR
+     * backend picks its lowering from them ((KIR.LOWER.3) measured 33x for ONE wrongly
+     * typed receiver), so `import * as fs from "fs"` reached both as a dynamic bag.
+     *
+     * ## What is IN the population, and why it is not every module symbol
+     *
+     * [syntheticModuleFile] is the membership test: a `namespace` symbol carries
+     * `SymbolFlags.Module` as well and is deliberately NOT admitted, together with an
+     * ambient carrier no import reaches. Measured on the 3,079 active `.errors.txt`
+     * subtests, admitting every module symbol moves **20** of them (the internal-module
+     * family: `aliasUsageIn*`, `typeValueConflict*`, `typeofInternalModules`,
+     * `moduleAndInterfaceWithSameName`, …) where this containment moves **0**. A namespace
+     * in value position is served today by the SYNTACTIC qualified-name path instead,
+     * which is why `N.num` already reports while `nn = N; nn.num` does not — recorded as a
+     * residue, not fixed here.
+     *
+     * ## Why a CLASS export contributes its CONSTRUCTOR side
+     *
+     * A module object exposes an exported class as `typeof C` — `new () => C`, not `C`.
+     * This checker types a class VALUE as its INSTANCE type, and the (CHK.73) entry
+     * recorded that as the item's PREREQUISITE and the reason it could not land. It is
+     * not: [getTypeOfSymbolForTypeQuery] has built that side all along, and consulting it
+     * here is what takes the contained arm from **6** moved baselines to **0** — all six
+     * (`aliasUsageInObjectLiteral` and its family) are that one cause. The carrier is a
+     * fresh property symbol whose type is seeded directly, minted in the INV.2(c) negative
+     * id space so it cannot perturb the global symbol-id sequence (id order is
+     * load-bearing here, cf. `Symbol.scopeSymbol`).
+     *
+     * ## The enumeration
+     *
+     * [createModuleSymbol] sets `exports` to the target file's LOCALS, which (P18.125)
+     * measured wrong for an enumeration three ways — a star re-export contributes nothing,
+     * a renaming specifier is keyed by the DECLARED name, and it holds names the file does
+     * not export at all. [exportedSymbolsThroughStars] is the enumeration keyed by the name
+     * an IMPORTER sees, and this is its second non-test caller. Its `null` means
+     * "unknowable" (some `export *` target is a bare specifier or an `export =` module) and
+     * must not be read as "no exports" — we fall back to the symbol's own table there,
+     * which is the status quo answer rather than an empty one.
+     */
+    private fun getTypeOfModuleSymbol(symbol: Symbol): Type {
+        if (!syntheticModuleFile.containsKey(symbol.id) && !isAmbientModuleCarrier(symbol)) return anyType
+        val file = syntheticModuleFile[symbol.id]
+        val table: Map<String, Symbol> =
+            (if (file != null) exportedSymbolsThroughStars(file) else null)
+                ?: symbol.exports
+                ?: return anyType
+        if (table.isEmpty()) return anyType
+        val props = mutableListOf<Symbol>()
+        val members = symbolTable()
+        for ((name, exported) in table) {
+            val resolved = resolveAlias(exported)
+            if (!resolved.flags.hasAny(SymbolFlags.Value or SymbolFlags.Module)) continue
+            val entry = if (resolved.flags.hasAny(SymbolFlags.Class)) {
+                val ctorType = getTypeOfSymbolForTypeQuery(resolved)
+                if (ctorType === anyType || ctorType === errorType) exported
+                else Symbol.scopeSymbol(SymbolFlags.Property, name)
+                    .also { it.transient = true; symbolTypes[it.id] = ctorType }
+            } else exported
+            props.add(entry)
+            members[name] = entry
+        }
+        if (props.isEmpty()) return anyType
+        val moduleType = Type.Object()
+        moduleType.symbol = symbol
+        moduleType.properties = props
+        moduleType.members = members
+        return moduleType
     }
 
     /**
@@ -117445,6 +117548,22 @@ interface DataView {
      */
     private fun getTypeOfIdentifierCore(id: Identifier): Type {
         val conventional = getTypeOfIdentifierConventional(id)
+        // (CHK.73) A module's value type may not be answered for a SHADOWED spelling.
+        // The conventional ladder resolves a name that is bound by an enclosing
+        // function or block to the FILE-LEVEL declaration whenever the inner binding is
+        // registered in no walk-scoped table — and an `any`-ANNOTATED parameter is
+        // exactly that ([populateParameterLocalTypes] skips `any` deliberately). That is
+        // a GENERAL pre-existing defect, measured on the parent binary with a file-level
+        // `const` in place of the import and reproducing identically; what is new here is
+        // that a module symbol used to answer `any` too, so the wrong resolution had the
+        // right answer by accident. Contained to this arm rather than fixed generally:
+        // the general form is its own item, and widening the syntactic test to every
+        // identifier is a change to how every shadowed read in the program resolves.
+        // `namespaceQualifiedCalleeType` refuses the same root the same way.
+        if (conventional is Type.Object &&
+            conventional.symbol?.flags?.hasAny(SymbolFlags.Module) == true &&
+            nameBoundByEnclosingScope(id, id.text)
+        ) return anyType
         if (conventional === anyType || conventional === errorType) return conventional
         if (id.text !in lexicalBlockScopedValueNames) return conventional
         val scoped = nameResolver.lexicalValueSymbolForNode(id, id.text) ?: return conventional
