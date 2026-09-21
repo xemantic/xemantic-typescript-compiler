@@ -268,14 +268,30 @@ class ElementAccessWriteCheckTest {
 
     @Test
     fun `a divergent accessor reached by a literal key is refused`() {
-        // THE DISCRIMINATING SHAPE, and it had to be CONSTRUCTED from the mechanism. The first
-        // version of this pin used `box['value'] = true` (the shape `divergentAccessorsTypes8`
-        // opens with) and read 0 RED under the arm that removes the guard — B243
-        // (`checkElementAccessSetterWrite`) claims that site first, so the pin was BLIND while
-        // the corpus screen showed the guard load-bearing. What B243 does NOT claim is a getter
-        // and setter whose types are UNRELATED: the read path answers `{ cssText: string }` and
-        // the write type is `string`, so without the refusal a legal assignment reports TS2322.
-        // tsgo 7.0.2 is silent here, measured.
+        // THE DISCRIMINATING SHAPE, and it took three tries and a measurement to find — twice
+        // the pin read 0 RED under the arm that removes the guard while the corpus screen showed
+        // the guard load-bearing, i.e. the PIN was blind, not the guard redundant.
+        // Building the ablated binary by hand and reading WHICH rows it loses settled it: they
+        // are `divergentAccessorsTypes8`'s UNION-receiver rows (65/68/73/75/77), not the
+        // `box['value']` one the fixture opens with (B243 claims that site first). So the shape
+        // needs a UNION receiver AND a value that fails the union of the GETTER types while the
+        // SETTERS accept it — `42` against getters `string` and setters `string | number`.
+        // Measured: tsgo 7.0.2 silent; the guard-off binary reports TS2322.
+        val d = diagnose(
+            """
+            class P { get v(): string { return "" } set v(s: string | number) {} }
+            class Q { get v(): string { return "" } set v(s: string | number) {} }
+            declare const pq: P | Q;
+            pq['v'] = 42;
+            """.trimIndent()
+        )
+        assert(d.none { it.code == 2322 })
+    }
+
+    @Test
+    fun `residue - an unrelated getter and setter pair on a NON-union receiver is claimed elsewhere`() {
+        // Kept as a value pin, named for what it tests. Both references silent; the guard-off
+        // binary is silent here too, so this cell says nothing about the accessor refusal.
         val d = diagnose(
             """
             interface Holder { get style(): { cssText: string }; set style(v: string) }
