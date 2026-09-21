@@ -316,7 +316,19 @@ internal class NameResolver(
                             is ExternalModuleReference -> {
                                 // import A = require("mod") — resolve module then its export
                                 val specifier = (ref.expression as? StringLiteralNode)?.text ?: continue
+                                // (CHK.73)(i) The bare resolver matches a specifier against
+                                // `fileResults` KEYS, which on a real on-disk project are
+                                // ABSOLUTE paths — so `import x = require("./m")` resolved
+                                // NOTHING there and the binding typed `any`, silently, for
+                                // an ORDINARY module as much as an `export =` one. Flat
+                                // corpus-style names hide it completely, which is why every
+                                // baseline is green about it. Same ladder as the
+                                // `ImportDeclaration` arm below plus (CHK.30)'s mandatory
+                                // bare-package leg.
+                                val ctxFile = owningSourceFile(decl)?.fileName
                                 val targetFile = resolveModuleSpecifier(specifier, decl)
+                                    ?: ctxFile?.let { resolveModuleSpecifierRelative(specifier, it) }
+                                    ?: resolveImportTargetFallback(specifier, ctxFile)
                                 if (targetFile == null) {
                                     // B113: AMBIENT module — `declare module "mod1" { ... }` is
                                     // bound (Binder) under a symbol whose name == the specifier
@@ -393,6 +405,18 @@ internal class NameResolver(
                         // Namespace import: import * as Foo from "mod"
                         val namedBindings = decl.importClause?.namedBindings
                         if (namedBindings is NamespaceImport) {
+                            // (CHK.73) An `export = X` module IS `X` — tsc's
+                            // `resolveExternalModuleSymbol` follows it for a namespace
+                            // import exactly as for `import = require(...)`, and measured
+                            // against tsgo 7.0.2 `import * as ns from "./legacy"` answers
+                            // the target's members, not a module object over the file's
+                            // locals (which is a different table and does not contain
+                            // them). The node16-ESM refusal (TS2497) is not modelled here
+                            // any more than it is anywhere else in this checker.
+                            checker.resolveModuleExportAssignment(targetResult, visited)?.let { t ->
+                                setSymbolTarget(symbol, t)
+                                return resolveAlias(t, visited)
+                            }
                             val moduleSymbol = checker.createModuleSymbol(symbol.name, targetResult)
                             setSymbolTarget(symbol, moduleSymbol)
                             return moduleSymbol
