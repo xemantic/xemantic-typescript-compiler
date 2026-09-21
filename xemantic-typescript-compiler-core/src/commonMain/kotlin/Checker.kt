@@ -111096,6 +111096,38 @@ interface DataView {
         else -> false
     }
 
+    /**
+     * (CHK.139)(b) THE WRITE SLOT of an element access, which is NOT its read type whenever the
+     * INDEX is a union of literals: tsc distributes over the KEY union with a UNION for a READ and
+     * an **INTERSECTION** for a WRITE, because the value written has to satisfy EVERY key the
+     * index could name. Measured against tsgo 7.0.2: `mem[k] = v` with `k: keyof Members` reports
+     * against `((t) => string) & ((t) => string)`, and where the members' types are unrelated the
+     * intersection reduces to `never` — which [getIntersectionType]'s primitive-domain reduction
+     * already produces, so the rendering comes out right without a special case.
+     *
+     * The RECEIVER union is distributed with a UNION in BOTH modes, which [getIndexedAccessType]
+     * already does, so it is handed the receiver whole. Receiver narrowing mirrors
+     * [getTypeOfElementAccess] exactly, or a guarded receiver would resolve differently at the
+     * read and the write of the same reference.
+     *
+     * Every other shape delegates to [getTypeOfElementAccess] unchanged: the read type IS the
+     * write type when the key names one member, and its `anyType` remains the firewall.
+     */
+    private fun cheaElementWriteSlot(target: ElementAccessExpression): Type {
+        val keys = cheaKeyLiterals(getTypeOfExpression(unwrapParensExpr(target.argumentExpression)))
+            ?: return getTypeOfElementAccess(target)
+        val raw = getTypeOfExpression(target.expression)
+        val recv = if (raw is Type.Union && getReferencePath(target.expression) != null) {
+            getNarrowedTypeForReference(raw, target.expression)
+        } else raw
+        if (recv === anyType || recv === errorType) return anyType
+        val parts = keys.map { getIndexedAccessType(recv, it) }
+        // The same ALL-OR-NOTHING rule the read arm carries: one absent key makes the whole
+        // access `any` in tsgo, in the write position as much as the read one.
+        if (parts.any { it === anyType || it === errorType }) return anyType
+        return getIntersectionType(parts)
+    }
+
     private fun cheaGeneralElementWrite(
         target: ElementAccessExpression, value: Expression, source: String, fileName: String
     ) {
@@ -111119,7 +111151,7 @@ interface DataView {
         // setter write). `box['value'] = true` against `set value(v: string|number|boolean)` /
         // `get value(): string` is legal and would otherwise read as a TS2322.
         if (cheaLiteralKeyNamesAccessor(target, recvType)) return
-        val slotRaw = getTypeOfElementAccess(target)
+        val slotRaw = cheaElementWriteSlot(target)
         if (slotRaw === anyType || slotRaw === errorType) return
         // (WIDEN.1)(b) mirror: a `readonly` slot keeps its initializer's literal type for READS,
         // but writing to it is already TS2540 and tsc adds no assignability error there.
@@ -111212,15 +111244,24 @@ interface DataView {
      * single constituent's symbol (CLAUDE.md).
      */
     private fun cheaLiteralKeyNamesAccessor(target: ElementAccessExpression, recvType: Type): Boolean {
-        val name = when (val idx = unwrapParensExpr(target.argumentExpression)) {
-            is StringLiteralNode -> idx.text
-            is NumericLiteralNode -> idx.text
-            else -> return false
+        val names = when (val idx = unwrapParensExpr(target.argumentExpression)) {
+            is StringLiteralNode -> listOf(idx.text)
+            is NumericLiteralNode -> listOf(idx.text)
+            // (CHK.139)(b): a union-of-literals KEY names several members at once, and the write
+            // slot is their INTERSECTION — of the SETTER types, which this reader cannot build.
+            // If ANY of them is an accessor the pair is refused, exactly as for a written literal.
+            else -> cheaKeyLiterals(getTypeOfExpression(unwrapParensExpr(target.argumentExpression)))
+                ?.map {
+                    (it as? Type.StringLiteral)?.value ?: (it as Type.NumberLiteral).value.toInt().toString()
+                }
+                ?: return false
         }
         val parts = if (recvType is Type.Union) recvType.types else listOf(recvType)
         for (part in parts) {
-            val sym = getPropertyOfType(part, name) ?: continue
-            if (sym.declarations.any { it is GetAccessor || it is SetAccessor }) return true
+            for (name in names) {
+                val sym = getPropertyOfType(part, name) ?: continue
+                if (sym.declarations.any { it is GetAccessor || it is SetAccessor }) return true
+            }
         }
         return false
     }
@@ -133444,6 +133485,26 @@ interface DataView {
     }
 
     /**
+     * (CHK.139) the LITERAL constituents of an index's TYPE, or null when it is not a literal
+     * question at all.
+     *
+     * A SINGLETON literal counts: `Exclude<keyof Tok, 'options'>` on a class with one remaining
+     * member is `"space"`, a bare [Type.StringLiteral] and not a union, and the arm that handled
+     * only unions left exactly that shape answering `anyType` — which is how the first cut of this
+     * round still missed a two-member class whose key excluded all but one.
+     *
+     * Returning null for anything else is what states the arm's DOMAIN: `keyof` of a type with a
+     * string index signature is `string | number`, whose answer is the plain index-signature
+     * lookup the branches above already give.
+     */
+    private fun cheaKeyLiterals(indexType: Type): List<Type>? = when {
+        indexType is Type.StringLiteral || indexType is Type.NumberLiteral -> listOf(indexType)
+        indexType is Type.Union && indexType.types.isNotEmpty() &&
+            indexType.types.all { it is Type.StringLiteral || it is Type.NumberLiteral } -> indexType.types
+        else -> null
+    }
+
+    /**
      * B122: core element-access resolution, factored out so element access can
      * DISTRIBUTE over union members: `(number[] | null[])[0]` → `number | null`.
      * Without this a union receiver fell through to `anyType`, masking downstream
@@ -133540,11 +133601,8 @@ interface DataView {
         // The `all { … is a literal }` guard states the arm's DOMAIN: `keyof` of a type with a
         // string index signature is `string | number`, which is NOT a literal union, and whose
         // answer is the plain index-signature lookup the branches above already give.
-        val unionIdx = getTypeOfExpression(indexExpr)
-        if (unionIdx is Type.Union && unionIdx.types.isNotEmpty() &&
-            unionIdx.types.all { it is Type.StringLiteral || it is Type.NumberLiteral }
-        ) {
-            val parts = unionIdx.types.map { getIndexedAccessType(objectType, it) }
+        cheaKeyLiterals(getTypeOfExpression(indexExpr))?.let { keys ->
+            val parts = keys.map { getIndexedAccessType(objectType, it) }
             if (parts.any { it === anyType || it === errorType }) return anyType
             return getUnionType(parts)
         }
@@ -134697,7 +134755,23 @@ interface DataView {
                 }
                 parts.joinToString(" | ")
             }
-            is Type.Intersection -> type.types.joinToString(" & ") { typeToString(it) }
+            // (CHK.139)(b): an intersection MEMBER that renders as a bare function/constructor
+            // type is parenthesized, exactly as the union arm above already does and as tsgo
+            // 7.0.2 prints it — `((t: { type: string; }) => string) & ((t) => string)`. Without
+            // it the `&` reads as part of the return type.
+            //
+            // A UNION member is deliberately NOT parenthesized here, and that is measured rather
+            // than assumed: tsgo's rule is about the RENDERED FORM, not the Type kind. It prints
+            // `A & U` for an alias-named union and `A & (B | C)` only for an anonymous one — so
+            // keying on `m is Type.Union` parenthesizes the alias too (`A & (U)`), which broke
+            // three standing display pins whose operands are union ALIASES. Our own union
+            // interning carries the alias name into the anonymous case as well, so the residue
+            // there (`A & U` where tsgo prints `A & (B | C)`) is the pre-existing alias-display
+            // family and not this round's to decide.
+            is Type.Intersection -> type.types.joinToString(" & ") { m ->
+                val rendered = typeToString(m)
+                if (unionMemberRendersAsFunctionType(m)) "($rendered)" else rendered
+            }
             is Type.TypeParam -> type.symbol?.name ?: "T"
         }
     }

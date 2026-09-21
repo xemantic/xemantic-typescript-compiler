@@ -160,6 +160,101 @@ class ElementAccessUnionKeyTest {
     }
 
     @Test
+    fun `a WRITE through a union key reports against the INTERSECTION, not the union`() {
+        // (CHK.139)(b). The value written has to satisfy EVERY key the index could name, so tsc
+        // distributes the KEY union with an INTERSECTION for a write where a read takes a UNION.
+        // Measured against tsgo 7.0.2 down to the parentheses.
+        val d = diagnose(
+            """
+            interface M2 { a: (t: { type: string }) => string; b: (t: { type: string }) => string }
+            declare const m2: M2;
+            declare const k: keyof M2;
+            m2[k] = "nope";
+            """.trimIndent()
+        )
+        assert(d.single { it.code == 2322 }.message ==
+            "Type 'string' is not assignable to type " +
+            "'((t: { type: string; }) => string) & ((t: { type: string; }) => string)'.")
+    }
+
+    @Test
+    fun `an intersection of UNRELATED member types reduces to never, as tsgo renders it`() {
+        // `string & number` is `never` by the ordinary primitive-domain reduction
+        // `getIntersectionType` already performs — so the rendering comes out right with no
+        // special case, which is the receipt that the write slot is built with the real helper.
+        val d = diagnose(
+            """
+            interface D2 { a: string; b: number }
+            declare const d2: D2;
+            declare const k: keyof D2;
+            d2[k] = { z: 1 };
+            """.trimIndent()
+        )
+        assert(d.single { it.code == 2322 }.message ==
+            "Type '{ z: number; }' is not assignable to type 'never'.")
+    }
+
+    @Test
+    fun `negative control - a write that satisfies every key is silent`() {
+        val d = diagnose(
+            """
+            interface S2 { a: string; b: string }
+            declare const s2: S2;
+            declare const k: keyof S2;
+            s2[k] = "fine";
+            """.trimIndent()
+        )
+        assert(d.none { it.code == 2322 })
+    }
+
+    @Test
+    fun `a SINGLETON literal key type is the same question as a union of them`() {
+        // `Exclude<keyof Tok, 'options'>` on a class with ONE remaining member is `"space"`, a
+        // bare literal and not a union — and the first cut of this round, which matched only
+        // `Type.Union`, left exactly that shape answering `anyType`. Found by bisecting a
+        // `marked`-shaped fixture one ingredient at a time; tsgo reports this row.
+        val d = diagnose(
+            """
+            class Tok { options: number = 1; space(src: string): string { return "" } }
+            type Excl<T, U> = T extends U ? never : T;
+            declare const tok: Tok;
+            declare const k: Excl<keyof Tok, 'options'>;
+            tok[k] = (...args: unknown[]) => { return 1; };
+            """.trimIndent()
+        )
+        assert(d.single { it.code == 2322 }.message ==
+            "Type '(...args: unknown[]) => number' is not assignable to type '(src: string) => string'.")
+    }
+
+    @Test
+    fun `residue - an enclosing class TYPE PARAMETER in the receiver still blocks the write check`() {
+        // MEASURED, not chased. Bisected over five variants: a non-generic receiver, a generic
+        // receiver instantiated with a concrete argument, and a `||`-initialised local all work;
+        // only a receiver whose type argument is the ENCLOSING class's own type parameter fails,
+        // because a type-parameter-typed member's cached type is globally `any` (round 761) and
+        // round 783's carrier read does not reach this instantiation. tsgo reports nothing here
+        // (the write is legal for it); we are silent for the WRONG reason, so this pin asserts
+        // today's answer and is named for what it is.
+        //
+        // THIS IS WHY `marked` DOES NOT MOVE: its `tokenizer[tokenizerProp] = …` sits in a method
+        // of a generic class and indexes `_Tokenizer<ParserOutput, RendererOutput>`.
+        val d = diagnose(
+            """
+            type Excl3<T, U> = T extends U ? never : T;
+            class T3<P> { options: number = 1; a(s: string): P { return null! } b(s: string): number { return 1 } }
+            class Host3<P> {
+              use() {
+                const t = new T3<P>();
+                const k = "a" as Excl3<keyof T3<P>, 'options'>;
+                t[k] = (...args: unknown[]) => { return 1; };
+              }
+            }
+            """.trimIndent()
+        )
+        assert(d.none { it.code == 2322 })
+    }
+
+    @Test
     fun `negative control - a non-union index is untouched`() {
         val d = diagnose(
             """
