@@ -110992,19 +110992,40 @@ interface DataView {
         // `arr[i] = v` where `arr` is a named-element Array and `v`'s type is not
         // assignable to the element type → TS2741 (missing required prop) / TS2322.
         if (tryEmitArrayElementWriteMismatch(target, value, source, fileName, varTypes)) return
+        // (CHK.136) the narrow `this`-rooted index write, extracted VERBATIM so the new
+        // general arm below is a fallback rather than a fourth copy of the same rule.
+        if (cheaThisRootedIndexWrite(target, value, source, fileName, varTypes)) return
+        cheaGeneralElementWrite(target, value, source, fileName)
+    }
+
+    /**
+     * B85.1d, extracted UNCHANGED by (CHK.136) so that the general element-access write
+     * check can run as a fallback behind it. It resolves its receiver through the STRING-keyed
+     * [varTypes] map (B85.1b populates `this.X`), which is why it is restricted to a
+     * PropertyAccess receiver and cannot be folded into the general arm: the general arm asks
+     * [getTypeOfExpression], which answers nothing for the `this.X` shapes this one serves.
+     *
+     * Returns true when it emitted, so the caller skips the general arm.
+     */
+    private fun cheaThisRootedIndexWrite(
+        target: ElementAccessExpression, value: Expression, source: String, fileName: String,
+        varTypes: Map<String, String>
+    ): Boolean {
         // Only handle PropertyAccess receivers rooted at `this` for now — the most common
         // shape and the one B85.1b's varTypes population is designed for.
-        val receiverExpr = target.expression as? PropertyAccessExpression ?: return
-        val receiverType = resolveReceiverTypeForElementAccess(receiverExpr, varTypes) ?: return
-        if (receiverType !is Type.Object) return
+        val receiverExpr = target.expression as? PropertyAccessExpression ?: return false
+        val receiverType = resolveReceiverTypeForElementAccess(receiverExpr, varTypes) ?: return false
+        if (receiverType !is Type.Object) return false
         resolveStructuredTypeMembers(receiverType)
-        val stringIdx = receiverType.stringIndexInfo ?: return
+        val stringIdx = receiverType.stringIndexInfo ?: return false
         val indexValueType = stringIdx.type
-        if (indexValueType === anyType || indexValueType === errorType) return
+        if (indexValueType === anyType || indexValueType === errorType) return false
         val rhsType = getTypeOfExpression(value)
-        if (rhsType === anyType || rhsType === errorType) return
-        // Use the existing relation engine.
-        if (checkTypeRelatedTo(rhsType, indexValueType, assignableRelation)) return
+        if (rhsType === anyType || rhsType === errorType) return false
+        // Use the existing relation engine. A PASS is still a DECISION — this walker
+        // resolved a concrete slot and found the write legal — so it claims the site and
+        // the general arm below never re-decides it with a differently-resolved slot.
+        if (checkTypeRelatedTo(rhsType, indexValueType, assignableRelation)) return true
         // Emit TS2322 at the entire element-access span.
         val start = target.expression.pos
         val end = expressionTrueEnd(target)
@@ -111028,6 +111049,174 @@ interface DataView {
             character = character,
             length = length,
         ))
+        return true
+    }
+
+    /**
+     * (CHK.136) THE GENERAL ELEMENT-ACCESS WRITE CHECK — `bag[key] = <rhs>`.
+     *
+     * Until this existed an assignment whose target was an [ElementAccessExpression] was never
+     * type-checked at all: `caeElementAccessAssign` dispatched to four narrowly-gated walkers and
+     * then stopped, so `bag[key] = "not a function"` against
+     * `interface Bag { [k: string]: (t: { type: string }) => string }` was accepted in SILENCE
+     * while the identical mismatch through a PROPERTY target reported TS2322 correctly. That is a
+     * FALSE-NEGATIVE class, and it surfaces as FALSE POSITIVES wherever real code guards such a
+     * write with `// @ts-expect-error`: the missing diagnostic makes the directive unused, so we
+     * grew ours-only TS2578 rows on code tsgo accepts.
+     *
+     * THE SLOT TYPE IS [getTypeOfElementAccess] AND THAT IS ALSO THE FIREWALL. That function
+     * answers `anyType` for every shape it cannot decide — an unresolved receiver, an index whose
+     * type maps to no index signature, a union member that washes out — so an undecided slot is
+     * silence here and never a diagnostic. Everything below it mirrors, deliberately and in the
+     * same order, the guards [checkPropertyAccessAssignment] accumulated for the property target:
+     * the (WIDEN.1)(b) readonly-literal widening, the foreign-type-parameter gate, the `void` and
+     * nullish bails, [canUseTypeEngine], the (CHK.93)(e) literal second chance and the (CHK.100)
+     * flow-narrowing second chance — both suppression-only, so a verdict can move from a rejection
+     * to an acceptance and never the other way.
+     *
+     * MEASURED AGAINST tsgo 7.0.2 BEFORE ANY CODE WAS WRITTEN: tsgo anchors the row at the START
+     * of the element access and spans the whole `bag[key]`, which is what the property reader's
+     * `target.expression.pos` .. [expressionTrueEnd] analogue gives.
+     *
+     * KNOWN RESIDUE, measured and NOT closed here: an index whose TYPE is a union of string
+     * literals (`mem[k]` where `k: keyof Members`) resolves to `anyType` on the READ path, so this
+     * arm is silent for it — and that is the shape `marked` actually uses. tsgo answers the UNION
+     * of the member types for a read and their INTERSECTION for a write. Closing it is a READ-path
+     * change with (CHK.50) blast radius and is its own round.
+     */
+    /**
+     * (CHK.136) does [t] mention a TUPLE slot, at the top level or inside a union/intersection?
+     * See the refusal in [cheaGeneralElementWrite] for why the pair is declined rather than
+     * decided. Union and intersection member lists are flat here, so the recursion terminates.
+     */
+    private fun cheaSlotMentionsTuple(t: Type): Boolean = when (t) {
+        is Type.Object -> t.tupleElementTypes != null
+        is Type.Union -> t.types.any { cheaSlotMentionsTuple(it) }
+        is Type.Intersection -> t.types.any { cheaSlotMentionsTuple(it) }
+        else -> false
+    }
+
+    private fun cheaGeneralElementWrite(
+        target: ElementAccessExpression, value: Expression, source: String, fileName: String
+    ) {
+        if (target.questionDotToken) return
+        // A UNION receiver needs a per-constituent WRITE fold this reader does not have: tsc
+        // takes the UNION of each constituent's write type, which is not the union of their READ
+        // types whenever a constituent's setter diverges from its getter. MEASURED on the corpus:
+        // without this, `divergentAccessorsTypes8`'s `u1['prop1'] = 42` on `One | Two` grows four
+        // ours-only TS2322 rows the baseline does not have. Refused, not approximated.
+        val recvType = getTypeOfExpression(target.expression)
+        if (recvType is Type.Union) return
+        // A LITERAL key names a MEMBER, and a member's WRITE type is its SETTER's parameter — not
+        // the getter return this reader resolves ([checkPropertyAccessAssignment] carries the same
+        // rule for the dot form, and B243 [checkElementAccessSetterWrite] owns the literal-keyed
+        // setter write). `box['value'] = true` against `set value(v: string|number|boolean)` /
+        // `get value(): string` is legal and would otherwise read as a TS2322.
+        if (cheaLiteralKeyNamesAccessor(target, recvType)) return
+        val slotRaw = getTypeOfElementAccess(target)
+        if (slotRaw === anyType || slotRaw === errorType) return
+        // (WIDEN.1)(b) mirror: a `readonly` slot keeps its initializer's literal type for READS,
+        // but writing to it is already TS2540 and tsc adds no assignability error there.
+        val slot = if (slotRaw.id in widen1ImmutableLiteralTypeIds) widenType(slotRaw) else slotRaw
+        // Round 459's finding, one reader over: this engine CANNOT decide an ARRAY LITERAL
+        // against a TUPLE target — `getTypeOfArrayLiteral` answers an array type, the relation
+        // SKIPS array->tuple, and the Identifier assignment site needs a dedicated AST-side
+        // helper ([arrayLiteralSatisfiesTupleTarget]) for exactly that pair. This reader has no
+        // declaration TYPE NODE to hand that helper (its slot comes from an index signature or
+        // an element type), so it REFUSES the pair — a missing row, never a wrong one.
+        // MEASURED: without this the 8-profile grid grows an ours-only TS2322 at tsc's own
+        // `builder.ts:1423`, `root[root.length - 2] = [lastButOne, fileId]` against a slot of
+        // `IncrementalBuildInfoRootStartEnd | (number & {…})`, which tsgo 7.0.2 accepts.
+        if (value is ArrayLiteralExpression && cheaSlotMentionsTuple(slot)) return
+        val valueType = getTypeOfExpression(value)
+        if (valueType === anyType || valueType === errorType) return
+        // round 431e mirror: this walker has no enclosing-fn typeParams threading, so a value whose
+        // type still mentions a type parameter is an un-inferred generic call result — never checked.
+        if (typeContainsForeignTypeParam(valueType, emptySet())) return
+        if (valueType.flags.hasAny(TypeFlags.Void)) return
+        if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) {
+            if (!strictNullChecks || typeIncludesNull(slot) || typeIncludesUndefined(slot)) return
+        }
+        if (!canUseTypeEngine(valueType, slot)) return
+        lastMissingIndexSigKind = null
+        if (checkTypeRelatedTo(valueType, slot, assignableRelation)) return
+        // (CHK.93)(e) mirror — `getTypeOfExpression` answers the BASE primitive for a literal node,
+        // so a literal written into a literal-typed slot needs its literal type to relate.
+        val literalValue = propertyWriteLiteralValueType(value, valueType)
+        if (literalValue != null && checkTypeRelatedTo(literalValue, slot, assignableRelation)) return
+        // (CHK.100) mirror — suppression-only, and a `never` (an unreachable position, whose
+        // adoption would DELETE a diagnostic) is refused.
+        if (value is Identifier || value is PropertyAccessExpression) {
+            val narrowedValue = getNarrowedTypeForReference(valueType, value)
+            if (narrowedValue !== valueType && narrowedValue !== neverType &&
+                checkTypeRelatedTo(narrowedValue, slot, assignableRelation)
+            ) return
+        }
+        val start = target.expression.pos
+        val length = (expressionTrueEnd(target) - start).coerceAtLeast(1)
+        val displayTarget = typeToString(slot)
+        // Object literal — excess-property TS2353 pre-empts the whole-type row, as at the
+        // property target.
+        if (value is ObjectLiteralExpression &&
+            checkExcessProperties(value, valueType, slot, displayTarget, source, fileName)
+        ) return
+        val displaySource = typeToString(
+            literalValue?.let { relationErrorSourceDisplayType(it, slot) } ?: valueType
+        )
+        val chain = mutableListOf<String>()
+        if (valueType is Type.Object && slot is Type.Object) {
+            lastChainMissingPropSymbol = null
+            getPropertyElaborationChain(valueType, slot)?.let { chain.addAll(it) }
+        }
+        if (chain.isEmpty() && lastMissingIndexSigKind != null) {
+            chain.add("  Index signature for type '${lastMissingIndexSigKind}' is missing in type '$displaySource'.")
+        }
+        if (chain.isEmpty()) {
+            getCallableMismatchElaboration(valueType, slot)?.let { chain.addAll(it) }
+        }
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // ONE ROW PER ASSIGNMENT SITE. Several legacy element-write walkers decide a site and
+        // then return without claiming it, so this general arm can arrive at a span another
+        // emitter has already reported — and its slot may be resolved DIFFERENTLY (measured:
+        // `widenedTypes`' `t[3] = ""` under `strict: false`, where the legacy row reads the
+        // widened `number` and this reader's un-widened `number | null` was a second row at the
+        // same squiggle). The legacy walker owns a site it has already decided.
+        if (diagnostics.any {
+                it.code == 2322 && it.fileName == fileName && it.line == line && it.character == character
+            }
+        ) return
+        diagnostics.add(Diagnostic(
+            message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+            messageChain = chain,
+            category = DiagnosticCategory.Error,
+            code = 2322,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * (CHK.136) does a LITERAL index name a member declared with a `get`/`set` accessor? Such a
+     * member's WRITE type is the setter's parameter, which [getTypeOfElementAccess] does not
+     * answer — it resolves the READ type. Constituents are walked one by one rather than through
+     * `getPropertyOfType`'s union arm, which answers an assignability question and hands back a
+     * single constituent's symbol (CLAUDE.md).
+     */
+    private fun cheaLiteralKeyNamesAccessor(target: ElementAccessExpression, recvType: Type): Boolean {
+        val name = when (val idx = unwrapParensExpr(target.argumentExpression)) {
+            is StringLiteralNode -> idx.text
+            is NumericLiteralNode -> idx.text
+            else -> return false
+        }
+        val parts = if (recvType is Type.Union) recvType.types else listOf(recvType)
+        for (part in parts) {
+            val sym = getPropertyOfType(part, name) ?: continue
+            if (sym.declarations.any { it is GetAccessor || it is SetAccessor }) return true
+        }
+        return false
     }
 
     /**
