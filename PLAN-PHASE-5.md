@@ -25,6 +25,56 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.156) — a named import through an `export =` surface, chosen against the MISSION rather than off the ledger (2026-09-21)
+
+**CLOSED NO LEDGER ROW and that was the point.** Suite **20,170 / 0 / 44** (+7 pins); corpus
+screen **0 of 8,725** over both channels; grid 8x `added=0 removed=0 fullDiffLines=0` with emit
+byte-identical; `cost_gate` PASS (max +0.07%), `huge_methods` PASS, warning gate clean with both
+compile tasks verified EXECUTED. `NameResolver.kt` +26; `Checker.kt` UNCHANGED.
+
+**WHY THIS AND NOT THE NEXT LEDGER ROW.** The WORK ORDER says a round that picks its own work
+should say so. The remaining 19 pending rows are mostly message/emit parity; this session's
+(P18.154) was worth more than its row number because the row was standing on a SILENT `any`. So
+the third round looked for the same shape and measured the CJS-interop family first: `import { x }
+from "./m"` where `m` is `export = <namespace-merged value>` — the way the whole `@types`
+ecosystem publishes CommonJS — resolved to NOTHING here, so the binding typed `any`. That reaches
+the Kotlin externals generator (which renders from resolved types) and the KIR backend (which
+picks its lowering from them, 33x for one wrong receiver at (KIR.LOWER.3)), not just a diagnostic.
+
+**THE MECHANISM IS ONE MISSING LEG, AND THE ISOLATION IS WHAT NAMED IT.** A five-form fixture
+measured against tsgo 7.0.2 split the family cleanly: a named import of an ORDINARY module already
+worked, a named import of an `export =` module did not, and `import * as` / `import ns =
+require(...)` fail for BOTH kinds. So the named-import gap is the export surface, and the
+namespace-import gap is (CHK.73)'s missing `SymbolFlags.Module` arm — two mechanisms that a
+one-form probe would have merged. `computeImportedSymbolGeneral` consults `locals` then `export *`
+barrels; an `export =` target's members are in the TARGET's own `exports`, which is neither.
+`exportEqualsSurfaceMember` is the file-bearing twin of `ambientModuleSurfaceMember` ((CHK.80)(a))
+and is added to that one function, never to the general `resolveAlias` (round 409's TS2315 flood).
+
+**THE GATE HAD TO BE COUNTED, AND THE GRID IS A CONTROL ((CHK.124)).** The 8 profiles, cronstrue
+and marked contain **ZERO** `export =` modules between them — `grep -rl '^export = '` — so 8x0 says
+nothing about this leg. The ACTIVE corpus carries **40** cases combining `export =` with a named
+import, which is what makes the screen a real regression gate; the pins are the gate for the new
+answer, and the ablation (remove the leg) reddens exactly the two positives.
+
+**AND THE ROUND WALKED INTO (CHK.54) A SECOND TIME, ~30 MINUTES AFTER DOCUMENTING IT.** Staging the
+grid's BEFORE arm rebuilds the class dir from the REVERTED source; I then re-measured the fixture
+without rebuilding and read the un-fixed answer, briefly concluding the leg had regressed. The
+entry (P18.155) added is therefore not a narrative but a live trap: **any measurement taken after a
+staging or ablation step must be preceded by a rebuild and an md5 of the class under test.** The
+md5 is what settled it in one command.
+
+**A GRID SCRIPT'S IDENTITY CHECK NAMES A CLASS, AND THE STOCK ONE NAMES `Checker.class`** — which
+is BYTE-IDENTICAL across this round's two arms, because the change is in `NameResolver.kt`. Copied
+unchanged it would have REFUSED a sound grid; worse, for a round that edits neither file it would
+pass a grid that had not been rebuilt at all. `scripts/p18-156-grid.sh` names the class that moved.
+
+**SUCCESSOR.** (CHK.73) is now the single largest typed-interop blocker and its refusal rests on a
+baseline COUNT (4 in MEANING for the `import * as` half, 21 for a general Module arm) that predates
+the corpus re-pin and ~70 parity rounds. This session found such a count stale twice
+((P18.151), and (P18.154)'s own retirement measurement moved 5 -> 11). **Re-take it before
+inheriting it** — one throwaway build plus `corpus-screen.sh`.
+
 ### Round (P18.155) — (LEGACY.0b): TS7009 at a property-access callee, and two false positives the ablation found (2026-09-21)
 
 **CLOSED NO LEDGER ROW and is recorded for its MEASUREMENT — pending stays 19.** Suite

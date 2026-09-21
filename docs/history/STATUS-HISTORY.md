@@ -15,6 +15,20 @@ cannot be retired even with the chain fixed. Price: corpus-screen 0 of 8,721, wh
 whole price ((PARITY.1)); `getPropertyElaborationChain` 6,260 -> 6,480 bytecodes, 1,520 under the JIT limit.
 5 pins, 2 arms, both red and recorded as ONE observable — c1's damage subsumes c2's, so no pin can separate them.
 
+**(P18.151) — (LEGACY.0b): A REFUSAL THAT DISSOLVED WHILE NOBODY WAS LOOKING, 20,123 / 0 / 46 (2026-09-20).**
+Ledger 22 -> 21, `pathsValidation5.errors.txt` CLOSED and ACTIVE in the screen's 3,077 / 0. The whole divergence was
+where a `tsconfig.json` row sorts against a source file's in the summary; tsgo's `ast.CompareDiagnostics` compares the
+two PATHS as strings, so `src/main.ts` comes first, and the baseline formatter gave the config file a privileged
+position. **NOTHING WAS FIXED TO MAKE THIS POSSIBLE.** (LEGACY.0b) step 15 measured this exact deletion, found it moved
+SEVEN green baselines — every one a baseUrl / node10 / rootDir case tsgo 7 does not run — refused it, and wrote the
+count into the comparator's own comment, which is what made the refusal checkable. Re-run today it reads **0 of 8,722**:
+(LEGACY.1) removed those option values, so the seven are no longer generated. **A refusal here is a measurement taken in
+a REGIME, and a neighbouring arc can dissolve it without anyone noticing** — the second time in this session, after
+(P18.149)'s `complexRecursiveCollections`. Cheap rule: when a pending row's reason names a COUNT of collateral
+baselines, re-take the count before inheriting the refusal. Test-side only — production has no config-first ordering
+rule and `Checker.class` is byte-identical to (P18.150)'s binary, so cost_gate and huge_methods are INAPPLICABLE rather
+than skipped. The one arm reddens the pin AND the corpus row: one observable (round 927), recorded not double-counted.
+
 **(P18.150) — (LEGACY.0b): TS2416's CHAIN DRILLS INTO THE FAILING MEMBER, AT BOTH TAILS, 20,122 / 0 / 47 (2026-09-20).**
 NO LEDGER MOVEMENT — pending stays 22 — and the note is for the measurements. (P18.149)'s mechanism one walker over:
 a PROPERTY pair in `checkClassPropertyOverrides` and a method's RETURN pair in `addSignatureElaboration` both stopped
