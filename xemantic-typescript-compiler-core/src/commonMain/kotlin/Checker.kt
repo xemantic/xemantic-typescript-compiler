@@ -133514,6 +133514,40 @@ interface DataView {
                 if (strIdx != null) return strIdx.type
             }
         }
+        // (CHK.139) the INDEX's own TYPE is a union of LITERALS — `o[k]` where `k: keyof O`.
+        // Every branch above tests the index EXPRESSION's syntax or the index type's
+        // String/Number-LIKE flags, and a `Type.Union` carries neither, so before this the whole
+        // access answered `anyType`: silently, and for the shape real code reaches for most often
+        // (`marked`'s `tokenizer[tokenizerProp]`, key `Exclude<keyof _Tokenizer<…>, …>`).
+        //
+        // tsc's rule, fitted to 12 tsgo 7.0.2 fixtures: distribute over the KEY union with a UNION
+        // for a READ (the WRITE half is an INTERSECTION and lives in [cheaElementWriteSlot]). It
+        // keys on the index TYPE and never on the syntax — `keyof T`, `"a" | "b"`,
+        // `Exclude<keyof T, "c">` and a literal-union alias are measured IDENTICAL.
+        //
+        // ALL-OR-NOTHING, and that is the binding constraint rather than a convenience: for a key
+        // union with a member the receiver does not declare, tsgo answers `any` for the WHOLE
+        // access (plus a TS7053 naming the first absent key, which we do not emit — a separate
+        // gap, not a regression). Answering "the union of the keys that DO exist" would be
+        // strictly narrower than `any` and is therefore a false-positive generator.
+        //
+        // The per-constituent delegation to [getIndexedAccessType] is deliberate: its own union
+        // arm is `.filter { it !== anyType }`, i.e. it DROPS an absent key, so calling it once
+        // with the union would reintroduce exactly that hazard — while calling it per LITERAL
+        // takes its string/number-literal arms, which already carry (CHK.96)'s optional
+        // `| undefined` and round 783's carrier read.
+        //
+        // The `all { … is a literal }` guard states the arm's DOMAIN: `keyof` of a type with a
+        // string index signature is `string | number`, which is NOT a literal union, and whose
+        // answer is the plain index-signature lookup the branches above already give.
+        val unionIdx = getTypeOfExpression(indexExpr)
+        if (unionIdx is Type.Union && unionIdx.types.isNotEmpty() &&
+            unionIdx.types.all { it is Type.StringLiteral || it is Type.NumberLiteral }
+        ) {
+            val parts = unionIdx.types.map { getIndexedAccessType(objectType, it) }
+            if (parts.any { it === anyType || it === errorType }) return anyType
+            return getUnionType(parts)
+        }
         return anyType
     }
 
