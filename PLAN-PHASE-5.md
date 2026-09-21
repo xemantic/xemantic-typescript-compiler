@@ -25,6 +25,73 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.164) — (CHK.33): a destructuring parameter no longer breaks arity; `marked` 18 -> 10 (2026-09-21)
+
+**THE ITEM'S 8 ROWS WERE THE PRIZE AND THREE MORE FALSE-POSITIVE CLASSES FELL OUT OF THE SAME ROOT
+CAUSE.** `Signature.parameters` drops every binding-pattern parameter (`getParameterSymbols`) while
+`minArgumentCount` counts it (`requiredParameterCount`), so a reader taking its MAXIMUM from one and
+its MINIMUM from the other states an impossible range. Round 446 fixed that at the property-access
+reader; (CHK.97)'s later union-callee reader reintroduced it verbatim. The fix is round 446's own
+recovery EXTRACTED into `Checker.signatureDeclaredArity` and shared — not a fourth copy of the
+declaration-to-parameters map, of which the file already had three.
+
+**THE AXIS IS THE UNION RECEIVER, AND A FIXTURE WITHOUT ONE IS VACUOUS.** The same method called on
+a plain receiver was already correct, which is why the defect survived round 446 by ~700 rounds and
+why the obvious repro reads clean. In `marked` it is
+`parseInline(tokens, renderer: _Renderer<..> | _TextRenderer<..>)`.
+
+**EVERY EXPECTATION WAS ADJUDICATED AGAINST tsgo 7.0.2 BEFORE ANY CODE WAS WRITTEN.** On a 10-case
+union-arity matrix tsgo reports 7 rows and is silent on 4; we reported **10, every one wrong** — 4
+false positives on legal code, 5 with an inverted range, one with the wrong CODE. After: 6 rows,
+**codes and messages identical to tsgo**.
+
+**THE OTHER THREE CLASSES, ALL MEASURED; TWO FIXED, ONE SIZED.**
+ * A REST parameter whose own name is a binding pattern (`...[a, b]: [string, number]`) is dropped
+   too, so `sigHasRestParameter` — which reads the list's LAST entry — answered FALSE and a legal
+   two-argument call was measured against a maximum of ZERO. FIXED by consulting the declaration's
+   own `hasRest`. **Neither standing instrument can see this shape**; it had to be constructed from
+   the mechanism, and arm a5 is what proves the guard load-bearing.
+ * A member typed by a FUNCTION TYPE (`declare const host: { m: ({ a }: O) => void }`) — an
+   options-bag callback property, one of the commonest shapes in real TypeScript — reported the same
+   impossible range. FIXED by two arms round 446's kind list lacked. It is decided by the ROUND-446
+   reader, not the union one, which is the receipt that the extracted helper serves BOTH.
+ * An OVERLOAD SET with a destructured overload picks the WRONG overload and reports a confident
+   TS2345 on legal code. **NOT FIXED**: it surfaces through overload SELECTION (`resolveCallOverload`
+   129258-129269, `allArgumentsMatch` 163057), not a TS2554 emitter, and a subagent census counts
+   **~55 readers** of the same split. Its own round.
+
+**THE FREE ASSERTION THE ITEM ASKED FOR IS UNAVAILABLE AS WRITTEN, AND SAYING SO IS PART OF THE
+FIX.** `require(minArgumentCount <= parameters.size)` at `Signature` construction would fire on
+EVERY binding-pattern signature — the `forSignatureDisplay` opt-in is the only builder that mints a
+placeholder — so the inversion is pinned instead as a MESSAGE invariant over a whole diagnostic
+list, which fails for any future reader that mixes the two lists again.
+
+**THE CORPUS IS BLIND TO THIS ENTIRE FAMILY, AND THE ABLATION MEASURED IT RATHER THAN ASSUMING IT.**
+All six arms read **0 mismatches of 8,725** screen subtests, and the 8-profile grid is 8x0 — while
+the pins move 7 / 1 / 15 / 0 / 1 / 4. So the screen and the grid are CONTROLS here and `marked` plus
+the pins were the only gate, which is (CHK.124)'s law and the reason the owner's 2026-09-21 directive
+makes the real-library probe the alignment stop-condition rather than corpus completeness.
+**Arm a4 read 0 RED and the `maxOf` barrier is genuinely REDUNDANT** — `parameters.size` can exceed
+the declared count only through the combiner's extra rest element, which it appends only when
+`eitherHasRest`, and then `anyRest` suppresses the branch anyway. Recorded in its KDoc and kept as a
+barrier, not claimed as coverage. **Arm a3 reddens round 446's OWN `DestructuredParamArityTest`**,
+which is what makes the extraction faithful rather than a second copy.
+
+Gates: `marked` 18 -> 10, `cronstrue` 1 -> 1; corpus screen 0 of 8,725 over both channels; grid 8x0;
+suite **20,232 / 0 failed / 44 skipped** (+17, this round's pins); `cost_gate` PASS with max +0.15%
+and `output.errors` 46 unchanged; `huge_methods` 0 over. The ablation's restore rebuild returns
+`Checker.class` to md5 `806cf77c…`, byte-identical to the gated binary.
+
+Residues stated, not chased: the too-few rows anchor at the RECEIVER where tsgo anchors at the
+METHOD NAME (the round-446 sibling already uses `callee.name.pos`); a tuple-typed rest is not
+expanded to a fixed arity, so we are now silent where tsgo reports two rows — a false NEGATIVE
+traded for a false POSITIVE, with `fixedTupleLengthOfRestParam` as the lever; and the combined
+signature has no parameter at the destructured position, so that argument is never type-checked
+(tsgo's TS2345 is missing). `signatureDeclarationParameters` remains a near-duplicate of the new
+helper with a different kind set — a census says adding `GetAccessor`/`SetAccessor` to it is a
+no-op for all 7 of its readers, so the unification is safe in that direction and unmeasured in the
+other.
+
 ### Round (P18.163) — (CHK.73)(A)+(B): a module object's missing member is reported, and it renders as `typeof import("…")` (2026-09-21)
 
 **CLOSED the two residues (P18.159) named as its successor.** Suite **20,215 / 0 / 44** (+13 pins,
@@ -7930,7 +7997,25 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   firewall removed entirely, i.e. a FIFTH mechanism this round did not locate. (c) and (d) look
   independently closable and cheap; (a)/(b) are the expensive half.
 
-- [ ] **(CHK.33) A DESTRUCTURING PARAMETER BREAKS ARITY, AND THE MESSAGE PROVES IT: `Expected
+- [x] **(CHK.33) CLOSED 2026-09-21 ((P18.164) note) — `marked` 18 -> 10, corpus screen 0 of
+  8,725, grid 8x0, and the 10-case reference matrix now matches tsgo 7.0.2 on every code and
+  message it produces (before: 10 rows, every one wrong). Round 446's declaration-arity
+  recovery is now the SHARED `Checker.signatureDeclaredArity`; (CHK.97)'s union-callee reader
+  had reintroduced the split verbatim, and the axis is the UNION receiver — the same method on
+  a plain receiver was already correct, which is why a fixture without one is vacuous. TWO more
+  FP classes of the same root cause fixed with it: a REST parameter whose own name is a binding
+  pattern (read as ZERO-arity), and a member typed by a FUNCTION TYPE (an options-bag callback
+  property). The `Expected N-M` inversion is pinned as a MESSAGE invariant — the `require` the
+  item asked for is UNAVAILABLE, because every binding-pattern signature violates it by
+  construction. **SUCCESSOR, SIZED AND MEASURED: an OVERLOAD SET with a destructured overload**
+  picks the wrong overload and reports a confident TS2345 on legal code (`interface Ov { m({a}:
+  O): string; m(x: number, y: number): string }`), through overload SELECTION
+  (`resolveCallOverload` 129258-129269, `allArgumentsMatch` 163057) rather than a TS2554
+  emitter; a census counts ~55 readers of the same split, so it is its own round. Two stated
+  residues: the too-few rows anchor at the RECEIVER where tsgo anchors at the METHOD NAME, and
+  a tuple-typed rest is not expanded to a fixed arity (`fixedTupleLengthOfRestParam` is the
+  lever), so we are now silent where tsgo reports two rows — a false NEGATIVE traded for a
+  false POSITIVE. ORIGINAL: A DESTRUCTURING PARAMETER BREAKS ARITY, AND THE MESSAGE PROVES IT: `Expected
   1-0 arguments, but got 1` — 8 ROWS IN `marked`, ON A LIBRARY tsgo REPORTS ZERO ERRORS FOR.**
   `marked`'s renderer methods are all written `html({ text }: Tokens.HTML | Tokens.Tag):
   RendererOutput`, and every call `renderer.html(token)` is rejected. **This is round 921's

@@ -160557,8 +160557,20 @@ interface DataView {
         // `maxOf` against `parameters.size` rather than a replacement: a PASS-2 combined
         // signature's parameters are MINTED by [combineUnionParameters] (the extra rest
         // element) and may exceed the head declaration's own count, and taking the LARGER
-        // can only remove a too-many row — the false-positive-safe direction. Likewise
-        // `anyRest` only ever becomes MORE true, which only suppresses.
+        // can only remove a too-many row — the false-positive-safe direction.
+        //
+        // **MEASURED REDUNDANT, kept as a barrier** (ablation arm a4: `declared[it]?.maxParams
+        // ?: parameters.size` reads 0 RED on 17 pins and 0 of 8,725 corpus subtests). The
+        // mechanism says why it must be: `parameters.size` can only exceed the declared count
+        // through [combineUnionParameters]'s extra rest element, which it appends only when
+        // `eitherHasRest` — and then `anyRest` is true and the too-many branch is not reached
+        // at all. Recorded rather than deleted, per CLAUDE.md: an arm with no uniquely-its-own
+        // failure is a redundant GUARD, and saying so is the claim, not the pin.
+        //
+        // `anyRest`, by contrast, is load-bearing and arm a5 discriminates it (1 RED): a REST
+        // parameter whose own name is a binding pattern is dropped from [Signature.parameters]
+        // too, so [sigHasRestParameter] — which inspects that list's LAST entry — answers
+        // FALSE and a legal two-argument call is measured against a maximum of ZERO.
         val declared = sigs.map { signatureDeclaredArity(it) }
         val anyRest = sigs.indices.any { sigHasRestParameter(sigs[it]) || declared[it]?.hasRest == true }
         val maxParams = sigs.indices.maxOf { maxOf(sigs[it].parameters.size, declared[it]?.maxParams ?: 0) }

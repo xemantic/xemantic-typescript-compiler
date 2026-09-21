@@ -1,3 +1,81 @@
+**(P18.159) — (CHK.73): A FUNCTION MERGED WITH A NAMESPACE CARRIES ITS STATICS, AND THE `export =` FAMILY CLOSES, 20,195 / 0 / 44 (2026-09-21).**
+A merged `function f` + `namespace f` symbol's value type was its CALL SIGNATURE ALONE, so the namespace side was
+reachable only through the SYNTACTIC qualified-name path — which is the whole explanation of (P18.158)'s baffling
+split: a same-file merge and a NAMED import of one resolved `f.v`, while the same member through a MODULE OBJECT or
+an `export =` surface did not. The second is how DefinitelyTyped publishes a callable CommonJS package. 2 of 4 probe
+rows before, 4 of 4 after. **THE CONTAINMENT IS A MEASUREMENT AND THE SCREEN TOOK IT IN ONE RUN**: the unrestricted
+arm moved `mergedDeclarations3` (1 of 8,725), because this binder merges every same-named `namespace` block of one
+container into ONE `exports` table — unexported blocks included — so attaching it for a NESTED namespace makes
+`M.foo.x` legal where tsgo reports TS2339 and the syntactic path was already right. FILE-LEVEL only moves nothing;
+the over-merge is a BINDER defect, recorded rather than worked around. **AND THE ROUND'S OWN RESIDUE PIN WAS WRONG
+BEFORE IT WAS BLIND**: written as "we accept all three", measured as matching tsgo exactly, repaired into the
+containment's CONTROL — and it then read 0 RED under its arm because a PATH-shaped fixture resolves that shape down
+another route; the FLAT-named form reddens. **A fixture's file-name shape is part of what it measures, in both
+directions** — (P18.158) needed path-shaped names to see a specifier defect and this pin needs flat ones. Three
+countdown pins repaired, two of them this arc's own; the third keeps its subject and records a display divergence
+(`typeof zzzNs`) that predates both arms. Grid 8x0 with emit byte-identical; cost_gate PASS; huge_methods 0 over
+limit; two arms, each reddening exactly its own pins.
+
+**(P18.158) — (CHK.73)(i): `import x = require("./m")` RESOLVED NOTHING ON A PATH-SHAPED PROJECT, 20,190 / 0 / 44 (2026-09-21).**
+CLOSED (CHK.73)(i) plus the `export =` half of the namespace-import form. `resolveModuleSpecifier` matches a specifier
+against `fileResults` KEYS ((CHK.78)) — ABSOLUTE paths on a real project — and the `ImportEqualsDeclaration` arm had
+neither the directory-relative leg the `ImportDeclaration` arm has carried since round 512 nor (CHK.30)'s bare-package
+one, so the alias resolved to NOTHING and the binding typed `any`. **EVERY STANDING GATE IS STRUCTURALLY BLIND TO IT
+AND THE COUNT SAYS WHY**: flat corpus-style names let the bare resolver match `"./m"` by string alone, so all **183**
+active corpus case files using the form are VACUOUS for it, and the 8 profiles and both libraries contain **ZERO** of
+it — so the pins are PATH-SHAPED, which is the only thing that makes them able to fail. Second leg: an `export = X`
+module IS `X`, and tsc's `resolveExternalModuleSymbol` follows it for `import * as` exactly as for
+`import = require(...)`; ours built a module object over the target file's LOCALS, which carries no call signature.
+Measured on a five-shape probe against tsgo 7.0.2: **0 of 5 rows before, 3 of 5 after**. The two left are ONE named
+mechanism — a function/namespace MERGE's static side — pinned `residue -` with tsgo's answer beside it. The
+`export =` follow is deliberately NOT gated on `esModuleInterop`/node16 (TS2497 is unmodelled here, (P18.105)), said
+explicitly so the absent gate is not read as an oversight. Grid 8x0 with emit byte-identical; screen 0 of 8,725;
+cost_gate PASS (max +0.09%); huge_methods 0 over limit; two arms, each reddening exactly its own pins.
+
+**(P18.157) — (CHK.73): AN EXTERNAL MODULE SYMBOL HAS A VALUE TYPE, AND THE BLOCKER IT WAS REFUSED ON WAS ALREADY IN THE TREE, 20,183 / 0 / 44 (2026-09-21).**
+CLOSED (CHK.73)(ii)+(iii). `getTypeOfSymbolWorker` had no `SymbolFlags.Module` arm, so EVERY `import * as ns` typed
+`anyType` and every member read under it answered `any` — silently, because `any` is legal everywhere, which is why
+the grid and the corpus were both green about it for the whole arc. That reaches the Kotlin externals generator
+(renders from resolved types) and the KIR backend (picks its lowering from them), not only a diagnostic.
+**THE SUCCESSOR NOTE'S ONE ASK WAS THE WHOLE ROUND AND IT PAID**: the recorded refusal (21 baselines general, 4
+contained) was re-taken with a throwaway env-gated arm plus `corpus-screen.sh` — general **20**, contained **6**,
+general+class-ctor **14**, contained+class-ctor **0**, plus the ambient leg **0**. The entry named the class STATIC
+SIDE as the PREREQUISITE that made it unlandable; `getTypeOfSymbolForTypeQuery` has built that side all along, and
+all six of the contained arm's baselines are that one cause. **A refusal is a measurement taken in a REGIME, and one
+round's blocker can be another round's already-shipped helper** — read what a blocker NAMES, not only its number.
+Three legs: the value type (enumerated through `exportedSymbolsThroughStars`, its second non-test caller, so a star
+re-export contributes and a renaming specifier is keyed by the name the IMPORTER sees), the class ctor side, and
+B113's AMBIENT second chance for `import * as` — i.e. `declare module "fs"`, how `@types` publishes. Measured on a
+real `@types/node@20`: 0 -> 2 of tsgo's 4 rows. **A SHADOW GUARD SHIPPED THAT THE ROUND DID NOT SET OUT TO WRITE**:
+an `any`-annotated parameter is registered in no walk-scoped table, so the conventional ladder answers the FILE-LEVEL
+declaration — GENERAL and pre-existing (the parent reports the identical false row for a file-level `const`), and a
+module symbol had merely been masking it by also answering `any`. **And one pin was blind in its quietest costume**:
+`const x: number = rel.num` under `none { 2322 }` is satisfied by BOTH binaries because the wrongly resolved module
+answers a type that fits; only arm a6's 0 RED said so, and `string` discriminates. Second countdown pin in two
+rounds, and it was the PREVIOUS round's. Grid a REAL gate here, counted: 15-131 `import * as X from` sites per
+profile. 8x `added=0 removed=0 fullDiffLines=0`, emit byte-identical; screen 0 of 8,725; cronstrue 1, marked 18
+unchanged; cost_gate PASS (max +0.15%); huge_methods 0 over limit; six arms, every one discriminating.
+
+**(P18.156) — A NAMED IMPORT THROUGH AN `export =` SURFACE, CHOSEN AGAINST THE MISSION RATHER THAN OFF THE LEDGER, 20,170 / 0 / 44 (2026-09-21).**
+CLOSED NO LEDGER ROW deliberately. `import { x } from "./m"` where `m` is `export = <namespace-merged value>` — how the whole
+`@types` ecosystem publishes CommonJS — resolved to NOTHING here, so the binding typed `any`, silently. That reaches the Kotlin
+externals generator (it renders from resolved types) and the KIR backend (it picks its lowering from them, 33x for one wrong
+receiver at (KIR.LOWER.3)), not only a diagnostic. `computeImportedSymbolGeneral` consults the target's `locals` and `export *`
+barrels; an `export =` target's members are in the TARGET's own `exports`, which is neither — one missing leg, the file-bearing
+twin of `ambientModuleSurfaceMember` ((CHK.80)(a)), added there and never to the general `resolveAlias` (round 409's TS2315
+flood). **A FIVE-FORM FIXTURE IS WHAT SPLIT THE FAMILY**: a named import of an ORDINARY module already worked, the `export =`
+one did not, and `import * as` / `import ns = require(...)` fail for BOTH kinds — so the namespace half is (CHK.73)'s missing
+`SymbolFlags.Module` arm and a one-form probe would have merged two mechanisms. **THE GRID IS A CONTROL AND THE COUNT SAYS SO
+((CHK.124))**: the 8 profiles, cronstrue and marked hold **ZERO** `export =` modules, while the ACTIVE corpus carries **40**
+cases combining `export =` with a named import — that is what makes the screen the regression gate; 7 pins and an ablation
+(remove the leg -> exactly the 2 positives red) gate the new answer. **AND THE ROUND HIT (CHK.54) AGAIN ~30 MINUTES AFTER
+DOCUMENTING IT**: staging the grid's BEFORE arm rebuilds the class dir from the reverted source, and a re-measure without a
+rebuild read the un-fixed answer — an md5 of the class under test settled it in one command, which is now the entry's advice.
+Also: a copied grid script's identity check names `Checker.class`, which is BYTE-IDENTICAL across these arms (the change is in
+`NameResolver.kt`), so it would have refused a sound grid — `scripts/p18-156-grid.sh` names the class that moved. Successor:
+(CHK.73) is the largest typed-interop blocker left and its refusal rests on a baseline COUNT that predates the corpus re-pin;
+this session found such a count stale twice, so re-take it before inheriting it.
+
 **(P18.148) — (LEGACY.0b): THE SECOND CHAIN FOLD, AND A ROW THAT COULD NOT SHOW ITS OWN MECHANISM, 20,101 / 0 / 48 (2026-09-20).**
 
 **(P18.155) — (LEGACY.0b): TS7009 AT A NON-IDENTIFIER `new` CALLEE, AND TWO DEFENCES BUILT AGAINST A PHANTOM, 20,163 / 0 / 44 (2026-09-21).**

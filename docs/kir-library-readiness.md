@@ -366,6 +366,18 @@ correspondence rather than to an inspection, and they are queued as (CHK.31)-(CH
 3. **A destructuring parameter breaks arity**, printing the inverted `Expected 1-0 arguments,
    but got 1` — 8 rows in `marked`, and round 921's recorded `getParameterSymbols` hazard
    reaching a diagnostic for the first time.
+   **CLOSED 2026-09-21, (CHK.33)**: `Signature.parameters` drops a binding-pattern parameter
+   while `minArgumentCount` counts it, so a reader taking its MAXIMUM from one and its MINIMUM
+   from the other states an impossible range. Round 446's recovery is now the shared
+   `Checker.signatureDeclaredArity`, consulted by the union-callee reader as well. **`marked`
+   18 -> 10**, `cronstrue` 1 -> 1, corpus screen 0 of 8,725, grid 8x0. Two further FP classes
+   of the same root cause fell out and are fixed with it — a REST parameter whose own name is a
+   binding pattern (read as ZERO-arity, because `sigHasRestParameter` inspects the dropped
+   list's last entry), and a member typed by a FUNCTION TYPE (`{ m: ({ a }: O) => void }`, an
+   options-bag callback property). **The residue is an OVERLOAD SET with a destructured
+   overload**: it picks the wrong overload and reports a confident TS2345 on legal code,
+   through overload SELECTION rather than a TS2554 emitter, and a census counts ~55 readers of
+   the same split — its own round.
 4. **`isolatedDeclarations` over-reports** — 32 rows on `yaml`, which ships with the flag on
    and is clean under tsgo.
 5. **A function expression assigned through an index signature gets no contextual signature**
