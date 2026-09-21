@@ -25,6 +25,51 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.162) — (DOC.2) tranche 2: the last two gotcha sections, CLAUDE.md -36.8% cumulative (2026-09-21)
+
+**DOCS-ONLY, no compiled code.** `### Measured dead-ends` **97,878 -> 42,338 B**,
+`### Test assertion gotchas` **39,948 -> 30,949 B**; `CLAUDE.md` **484,016 -> 419,477 B**, i.e.
+**663,894 -> 419,477 (-36.8%, -244 KB)** across both tranches. Archive 1,040,138 -> 1,146,286 B,
+a PURE APPEND. Buckets: dead-ends 23 KEEP / 65 DISTIL / 25 ARCHIVE; assertions 27 KEEP /
+25 DISTIL / **0 ARCHIVE**.
+
+**BOTH SUB-TARGETS WERE MISSED DELIBERATELY AND THE REFUSAL IS ARITHMETIC, NOT TASTE.** The
+orchestrator set 30,000 / 22,000 B as estimates; they are unreachable without losing content the
+residency rule KEEPS. `### Measured dead-ends` is the file's *measured negative knowledge*, which
+that rule makes resident-eligible outright — unlike tranche 1's per-walker detail, 60% of which
+was archive-eligible — and a refusal's VALUE IS ITS NUMBER: archive the figure and the next agent
+re-runs the experiment. Its 23 do-not-distil KEEPs are already 13,864 B, so 30,000 B would leave
+~230 B per refusal including its grep key, below what a verdict-plus-number costs.
+`### Test assertion gotchas` is PRESCRIPTIVE — conventions consulted while WRITING code — so it
+was briefed to expect a HIGHER keep ratio, and it archived **nothing**: all 27 write-time
+conventions (the one-idiom `assert`/`have` rule and its translation table, the power-assert
+AST-subexpression hazard, the narrowing-probe fixture conventions, the countdown-pin rule, the
+results-dir traps) are byte-identical. A generic "distil everything" pass would have wrecked
+exactly the section whose entries are read before code is written.
+
+**THE SECTION'S OWN TITLE WAS ASPIRATIONAL, AND IS NOW TRUE FOR THE FIRST TIME.**
+`### Measured dead-ends` is titled *"full detail archived — do NOT re-attempt without reading the
+archive entry"*. Probed against the PRE-COMMIT archive, **four of five sampled dead-ends were
+ABSENT from it** — the file had been asserting a property of itself that did not hold, and an
+agent following that instruction would have found nothing and drawn the wrong conclusion. The
+tranche makes the claim true.
+
+**VERIFICATION, re-measured independently by the orchestrator** (same DISJUNCTION property
+(P18.161) established): **165 before-entries = 115 archived + 50 resident verbatim, 0 in neither,
+0 in both**; everything outside the two sections byte-identical; archive a pure append; **186
+`(archive: …)` keys across the whole file, 0 unresolved**; `git diff --numstat` carries no
+binary row.
+
+**ONE COSMETIC RESIDUE, DELIBERATELY NOT FIXED.** A KEEP entry now opens with a dangling "AND"
+because its predecessor was archived. Leading-`AND` bullets are PRE-EXISTING house style here
+(five more at lines 28/33/52/70/121), so editing this one alone would be inconsistent AND would
+break the byte-identical-KEEP receipt that makes re-verification cheap.
+
+**(DOC.2) IS NOW DECIDED-DOWN RATHER THAN EXHAUSTED.** The ~200 KB target in the item is not
+reachable by distillation of what remains: the residue is KEEP-class by the file's own rule. Any
+further cut is a change to the RULE (what deserves residency), which is an owner question, not an
+agent one.
+
 ### Round (P18.161) — (DOC.2) tranche 1: `### Checker walker gotchas` distilled, CLAUDE.md -27% (2026-09-21)
 
 **DOCS-ONLY ROUND, no compiled code touched.** `CLAUDE.md` **663,894 -> 484,016 B (-26.8%)**;
@@ -4241,7 +4286,15 @@ CLAUDE.md § "AI agent mission".
   check-spine cookbook **13.3 KB -> 1.7 KB**. Protected sections byte-identical (14,078 B,
   `cmp` clean).
 
-- [ ] **(DOC.2) TRANCHE 1 LANDED 2026-09-21 ((P18.161) note): `### Checker walker gotchas`
+- [x] **(DOC.2) TRANCHES 1+2 LANDED 2026-09-21 ((P18.161)/(P18.162) notes) — `CLAUDE.md`
+  **663,894 -> 419,477 B (-36.8%)**, archive a pure append, conservation verified as the
+  DISJUNCTION both times (tranche 1: 275+29=304; tranche 2: 115+50=165; 0 lost, 0 duplicated).
+  **CLOSED AS DECIDED-DOWN, NOT EXHAUSTED**: the ~200 KB target is unreachable by distillation
+  because the residue is KEEP-class by the file's own residency rule — `### Measured dead-ends`
+  is measured negative knowledge whose VALUE IS ITS NUMBER, and `### Test assertion gotchas` is
+  prescriptive (it archived NOTHING). Going further means changing the RULE, i.e. an owner
+  question. Tranche 2 also found the dead-ends section's title was ASPIRATIONAL — 4 of 5 probed
+  entries were absent from the archive it points at; that is now true. PREVIOUS: TRANCHE 1: `### Checker walker gotchas`
   **240,298 -> 59,928 B**, CLAUDE.md **663,894 -> 484,016 B (-26.8%)**, 304 entries -> 122
   (KEEP 29 / DISTIL 92 / ARCHIVE 183), archive a pure append, conservation verified as the
   DISJUNCTION (archived OR byte-identical resident): 275 + 29 = 304, 0 lost, 0 duplicated.
