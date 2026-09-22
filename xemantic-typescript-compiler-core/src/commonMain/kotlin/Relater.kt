@@ -586,6 +586,167 @@ internal class Relater(
     }
 
     /**
+     * (CHK.142)(b) tsgo's `typeRelatedToDiscriminatedType`
+     * (`internal/checker/relater.go:3989`), called from the TAIL of
+     * `structuredTypeRelatedTo` (`relater.go:3893`) — BELOW the ordinary union-target
+     * dispatch, which is why it is easy to miss and why this leg had no counterpart here.
+     *
+     * An object source whose DISCRIMINANT members are UNIONS of the target constituents'
+     * discriminants is assignable to a discriminated union target:
+     *
+     * ```ts
+     * interface Link  { type: 'link';  raw: string }
+     * interface Image { type: 'image'; raw: string }
+     * declare const src: { type: 'image' | 'link'; raw: string };
+     * const t: Link | Image = src;   // tsgo: CLEAN; here TS2322 before this leg
+     * ```
+     *
+     * A direct sibling of [intersectionSourceDistributes] in the same position and with
+     * the same character: consulted only AFTER the plain "relates to some constituent"
+     * rule has answered false, and it SPLITS THE SOURCE against THIS target — which is
+     * why the split cannot be hoisted anywhere else. It is meaningful only relative to
+     * the target whose discriminants decide which of the source's members are axes.
+     *
+     * ## The four parts, each of which is directly observable against tsgo
+     *
+     *  1. **The discriminant filter** is [Checker.isDiscriminantPropertyOfUnion], tsgo's
+     *    `isDiscriminantProperty` via `findDiscriminantProperties` (`relater.go:1077`):
+     *    NON-UNIFORM across the target's constituents AND at least one of them a literal
+     *    type, and non-generic. Measured: a `number`-vs-`string` difference does NOT
+     *    qualify (no literal) and a `true`/`false` one DOES. It is deliberately NOT
+     *    `getKeyPropertyName`, which additionally demands uniqueness and would admit only
+     *    one axis.
+     *  2. **The CARTESIAN PRODUCT** over ALL such source members, not a single-key split.
+     *    Measured: two literal discriminants with all four combinations covered is CLEAN
+     *    in tsgo and one combination uncovered is TS2322.
+     *  3. **The 25-combination cap** ([MAX_DISCRIMINANT_COMBINATIONS], `relater.go:4013`)
+     *    is directly observable: a fully covered 25-way union is clean and a fully covered
+     *    26-way one is TS2322. Its two guards run BEFORE any allocation, exactly as tsgo
+     *    orders them (`relater.go:4000-4013`), because this leg sits on the union-target
+     *    arm and is reached by every failed object-to-union comparison.
+     *  4. **[matchingTypes] collects EVERY constituent a combination matches**, and the
+     *    source's NON-discriminant members are then compared against ALL of them
+     *    (`relater.go:4077-4086`). That is what refutes the naive "each split relates to
+     *    SOME constituent" rule: for
+     *    `A{k:'a';x:number} | B{k:'b';x:number} | C{k:'b';x:string}` against
+     *    `{k:'a'|'b'; x:number}`, `'b'` matches both `B` and `C` and `C` rejects `x`, so
+     *    tsgo ERRORS — and so must this.
+     *
+     * ## What it deliberately does NOT do
+     *
+     *  - **No INTERSECTION source.** tsgo's gate is `Object|Intersection`; this takes a
+     *    [Type.Object] only, because an intersection has no single property table here
+     *    and [intersectionSourceDistributes] already owns the source-splitting leg for it.
+     *  - **No intersection or substitution TARGET constituent.** tsgo's `objectOnlyTarget`
+     *    keeps `Object|Intersection|Substitution`; [candidates] keeps [Type.Object] alone,
+     *    so a constituent this model cannot ask for a member is simply never matched —
+     *    the STRICTER direction, which can only refuse.
+     *  - **No error reporting.** tsgo passes `reportErrors = false` throughout for the
+     *    same reason: the elaboration the user sees is the one the ordinary per-constituent
+     *    comparison already produced.
+     *  - **No memo.** tsgo caches the per-property verdict on the synthetic symbol
+     *    (`CheckFlagsIsDiscriminantComputed`); there is no such symbol here, so the
+     *    verdict is recomputed — bounded by the [candidates] scan and paid only on an
+     *    already-failed comparison.
+     */
+    private fun typeRelatedToDiscriminatedType(
+        source: Type.Object,
+        target: Type.Union,
+        relation: Relation,
+    ): Boolean {
+        // tsgo `extractTypesOfKind(target, Object|Intersection|Substitution)`, then
+        // "is it still a union?" — a single object constituent is the plain rule's job.
+        val candidates = target.types.filter { it is Type.Object }
+        if (candidates.size < 2) return false
+        checker.resolveStructuredTypeMembers(source)
+        val sourceProperties = source.properties ?: return false
+        // 1. The discriminant members of `source` with respect to `target`.
+        var discriminants: MutableList<Symbol>? = null
+        for (p in sourceProperties) {
+            if (p.name.isEmpty()) continue
+            if (checker.isDiscriminantPropertyOfUnion(candidates, p.name)) {
+                (discriminants ?: mutableListOf<Symbol>().also { discriminants = it }).add(p)
+            }
+        }
+        val axes = discriminants ?: return false
+        // 1a. tsgo counts the combinations FIRST so the cap is enforced before any
+        //     allocation; `numCombinations == 0` is a `never`-typed axis.
+        var numCombinations = 1
+        for (p in axes) {
+            numCombinations *= discriminantTypeCount(checker.getPropertyTypeForRelation(source, p))
+            if (numCombinations > MAX_DISCRIMINANT_COMBINATIONS) return false
+            if (numCombinations == 0) return false
+        }
+        // 2. The cartesian product, in tsgo's own index order.
+        val axisTypes = axes.map { discriminantTypes(checker.getPropertyTypeForRelation(source, it)) }
+        // 3. Match each combination against the constituents, collecting EVERY match.
+        val matchingTypes = mutableListOf<Type.Object>()
+        for (i in 0 until numCombinations) {
+            val combination = arrayOfNulls<Type>(axisTypes.size)
+            var n = i
+            for (j in axisTypes.indices.reversed()) {
+                val sourceTypes = axisTypes[j]
+                combination[j] = sourceTypes[n % sourceTypes.size]
+                n /= sourceTypes.size
+            }
+            var hasMatch = false
+            outer@ for (candidate in candidates) {
+                val constituent = candidate as Type.Object
+                for (k in axes.indices) {
+                    val sourceProperty = axes[k]
+                    val targetProperty =
+                        checker.getPropertyOfType(constituent, sourceProperty.name) ?: continue@outer
+                    if (targetProperty === sourceProperty) continue
+                    // tsgo's `isPropertySymbolTypeRelated` compares against
+                    // `addOptionality(getNonMissingTypeOfSymbol(targetProp))`, i.e. an
+                    // OPTIONAL member's type carries `| undefined` under strictNullChecks;
+                    // this model puts that widening in its own helper, and the "source"
+                    // of this one comparison is the combination's value. Without it the
+                    // `undefined` axis of `{ color: 'blue' } | { color?: 'yellow' }`
+                    // matches nothing (`GH30170` in the canonical fixture).
+                    val combinationValue = combination[k]!!
+                    val targetPropertyType = checker.widenOptionalTargetPropType(
+                        checker.getPropertyTypeForRelation(constituent, targetProperty),
+                        targetProperty,
+                        combinationValue,
+                    )
+                    if (!checkTypeRelatedTo(combinationValue, targetPropertyType, relation)) continue@outer
+                }
+                if (matchingTypes.none { it === constituent }) matchingTypes.add(constituent)
+                hasMatch = true
+            }
+            // A combination the target cannot represent — `source` is not related.
+            if (!hasMatch) return false
+        }
+        // 4. Compare the remaining, NON-discriminant members of every match.
+        val excluded = HashSet<String>(axes.size)
+        for (p in axes) excluded.add(p.name)
+        for (m in matchingTypes) {
+            if (!objectTypeRelatedTo(source, m, relation, excluded)) return false
+        }
+        return true
+    }
+
+    /** (CHK.142)(b) tsgo's `countTypes` — allocation-free, so the cap is free. */
+    private fun discriminantTypeCount(t: Type): Int = when {
+        t is Type.Union -> t.types.size
+        t === booleanType -> 2
+        else -> 1
+    }
+
+    /**
+     * (CHK.142)(b) tsgo's `Type.Distributed()`. `boolean` is spelled out because it is a
+     * `Type.Intrinsic` here and a `true | false` union there — without it a
+     * `{ done: boolean }` source has a ONE-valued axis and the `IteratorResult` shape
+     * (the canonical fixture's `Example1`) is refused.
+     */
+    private fun discriminantTypes(t: Type): List<Type> = when {
+        t is Type.Union -> t.types
+        t === booleanType -> listOf(trueType, falseType)
+        else -> listOf(t)
+    }
+
+    /**
      * 4c. Core structural comparison — handles unions, intersections, and objects.
      */
     private fun structuredTypeRelatedTo(
@@ -608,15 +769,22 @@ internal class Relater(
             // contravariance — tsc's getContainingNodeArray family ×23). A genuine
             // member-recursion re-entry (recursiveTypeComparison's Observable
             // reached through needThisOne) has TWO distinct frames and still defers.
-            if (source is Type.Reference) {
+            val relatesToSomeConstituent = if (source is Type.Reference) {
                 relationSourceTargets.removeAt(relationSourceTargets.lastIndex)
                 try {
-                    return target.types.any { checkTypeRelatedTo(source, it, relation) }
+                    target.types.any { checkTypeRelatedTo(source, it, relation) }
                 } finally {
                     relationSourceTargets.add(source.target.id)
                 }
+            } else {
+                target.types.any { checkTypeRelatedTo(source, it, relation) }
             }
-            if (target.types.any { checkTypeRelatedTo(source, it, relation) }) return true
+            if (relatesToSomeConstituent) return true
+            // (CHK.142)(b): the DISCRIMINATED-union rule — see
+            // [typeRelatedToDiscriminatedType], tsgo's own tail of this same arm.
+            if (source is Type.Object && typeRelatedToDiscriminatedType(source, target, relation)) {
+                return true
+            }
             // Round 744: `A & (B | C)` vs `B | C` — see [intersectionSourceDistributes].
             return source is Type.Intersection &&
                 intersectionSourceDistributes(source, target, relation)
@@ -791,7 +959,7 @@ internal class Relater(
         }
         // Object types: structural comparison
         if (source is Type.Object && target is Type.Object) {
-            if (objectTypeRelatedTo(source, target, relation)) return true
+            if (objectTypeRelatedTo(source, target, relation, emptySet())) return true
             // (CHK.60) AN ENUM MEMBER IS A STRING OR NUMBER LITERAL IN tsc, SO IT MUST
             // REACH THE APPARENT-TYPE LEGS BELOW. tsc's `TypeFlags.StringLike` is
             // `String | StringLiteral | TemplateLiteral | StringMapping` and an enum
@@ -1007,11 +1175,18 @@ internal class Relater(
         source: Type.Object,
         target: Type.Object,
         relation: Relation,
+        /**
+         * (CHK.142)(b) tsgo's `excludedProperties` — TARGET member names the caller has
+         * already decided (`relater.go:4247`'s `excludeProperties`). Empty everywhere but
+         * [typeRelatedToDiscriminatedType], whose per-combination match has already
+         * compared exactly these.
+         */
+        excluded: Set<String>,
     ): Boolean {
         checker.resolveStructuredTypeMembers(source)
         checker.resolveStructuredTypeMembers(target)
         // Check properties
-        if (!propertiesRelatedTo(source, target, relation)) return false
+        if (!propertiesRelatedTo(source, target, relation, excluded)) return false
         // Check call signatures
         if (!signaturesRelatedTo(source, target, relation, isConstruct = false)) return false
         // Check construct signatures — skip for class/interface instance types where
@@ -1076,6 +1251,8 @@ internal class Relater(
         source: Type.Object,
         target: Type.Object,
         relation: Relation,
+        /** (CHK.142)(b) — see [objectTypeRelatedTo]. */
+        excluded: Set<String>,
     ): Boolean {
         val targetProps = target.properties ?: return true
         val sourceHasCallSigs = !source.callSignatures.isNullOrEmpty()
@@ -1087,6 +1264,8 @@ internal class Relater(
         val targetStatics = checker.getStaticMembersOfType(target)
         for (targetProp in targetProps) {
             val targetName = targetProp.name
+            // (CHK.142)(b) tsgo's `excludeProperties(properties, excludedProperties)`.
+            if (excluded.isNotEmpty() && targetName in excluded) continue
             if (targetStatics != null && targetStatics.containsKey(targetName)) continue
             // Inherited Object prototype members (constructor, toString, valueOf, …)
             // are never "missing" — every JS object has them via the prototype chain.
@@ -1553,5 +1732,15 @@ internal class Relater(
      */
     fun isTypeAssignableTo(source: Type, target: Type): Boolean {
         return checkTypeRelatedTo(source, target, assignableRelation)
+    }
+
+    private companion object {
+        /**
+         * (CHK.142)(b) tsgo's own literal 25 (`internal/checker/relater.go:4013`,
+         * "the comparison is too complex"). DIRECTLY OBSERVABLE, so it is a constant to
+         * carry and not a budget to choose: a fully covered 25-way discriminated union is
+         * clean under tsgo and a fully covered 26-way one is TS2322.
+         */
+        const val MAX_DISCRIMINANT_COMBINATIONS = 25
     }
 }

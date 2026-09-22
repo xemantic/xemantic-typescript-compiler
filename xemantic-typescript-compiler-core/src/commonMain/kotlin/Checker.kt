@@ -125163,6 +125163,85 @@ interface DataView {
         return if (filtered.isEmpty() || filtered.size == t.types.size) t else getUnionType(filtered)
     }
 
+    // --- (CHK.142)(b) the DISCRIMINANT PROPERTY predicate -----------------------------------
+
+    /**
+     * (CHK.142)(b) tsgo's `isDiscriminantProperty` (`internal/checker/relater.go:1087`),
+     * restated over an already-object-filtered list of union constituents — the input
+     * [Relater]'s `typeRelatedToDiscriminatedType` needs, and the one member this checker
+     * was missing for it.
+     *
+     * tsgo asks `getUnionOrIntersectionProperty(t, name)` for a SYNTHETIC property and
+     * then reads two of the flags `createUnionOrIntersectionProperty` computed while
+     * building it (`checker.go:21521-21524`):
+     *
+     *  - `CheckFlagsHasNonUniformType` — some constituent's type of that member differs
+     *    from the first one's, and
+     *  - `CheckFlagsHasLiteralType` — **at least one** constituent's type is a literal
+     *    type (`isLiteralType`, `checker.go:25301`: a unit type, `boolean`, an enum
+     *    literal, or a union whose every member is a unit type).
+     *
+     * plus `!isGenericType(getTypeOfSymbol(prop))`.
+     *
+     * Three restatements this model forces, each measured:
+     *
+     *  1. tsgo's non-uniformity is an IDENTITY compare (`t != firstType`) because it
+     *    interns a literal type by value. This model mints a fresh [Type.StringLiteral]
+     *    per site ((LEGACY.0b)'s `literalIdentityKey` KDoc), so identity here would call
+     *    every uniform literal member non-uniform — the compare goes through
+     *    [literalsEqualForDiscriminant], which is exactly tsgo's interning by value.
+     *  2. `boolean` is a `Type.Intrinsic` here and a `true | false` UNION in tsgo, so
+     *    `isLiteralType`'s `TypeFlagsBoolean` arm is spelled out.
+     *  3. tsgo's "the property must be SYNTHETIC" precondition is not restated: a
+     *    non-synthetic union property is one every constituent answers with the SAME
+     *    symbol, which answers the same type, which is uniform — so non-uniformity
+     *    already subsumes it.
+     *
+     * `undefined` and `null` ARE unit types in tsc (`TypeFlagsUnit` covers the nullables),
+     * which is load-bearing rather than incidental: `GH18421`'s
+     * `{ kind: "a" | "b", value: number } | { kind: "a", value: undefined } | …` has
+     * `value` as its SECOND discriminant, and without it that fixture's cartesian product
+     * collapses to the `kind` axis alone and the assignment is refused.
+     *
+     * A constituent that LACKS the member is SKIPPED rather than disqualifying: tsgo sets
+     * `CheckFlagsReadPartial` there and still builds the synthetic property, and the
+     * constituent is then dropped by the caller's own per-combination match (it can match
+     * no combination, because `getPropertyOfType` answers null for it).
+     */
+    internal fun isDiscriminantPropertyOfUnion(candidates: List<Type>, name: String): Boolean {
+        var first: Type? = null
+        var nonUniform = false
+        var hasLiteral = false
+        for (c in candidates) {
+            val obj = c as? Type.Object ?: continue
+            val sym = getPropertyOfType(obj, name) ?: continue
+            val t = getPropertyTypeForRelation(obj, sym)
+            // tsgo: `&& !c.isGenericType(c.getTypeOfSymbol(prop))`.
+            if (typeContainsUnresolvedTypeParam(t)) return false
+            val f = first
+            if (f == null) first = t else if (!sameTypeForDiscriminant(f, t)) nonUniform = true
+            if (!hasLiteral && isLiteralTypeForDiscriminant(t)) hasLiteral = true
+        }
+        return nonUniform && hasLiteral
+    }
+
+    /** (CHK.142)(b) tsgo's `t != firstType`, by VALUE for a literal — see restatement 1. */
+    private fun sameTypeForDiscriminant(a: Type, b: Type): Boolean =
+        a === b || literalsEqualForDiscriminant(a, b)
+
+    /** (CHK.142)(b) tsgo's `isLiteralType` (`checker.go:25301`) — see restatements 2 and 3. */
+    private fun isLiteralTypeForDiscriminant(t: Type): Boolean = when {
+        t === booleanType -> true
+        isLiteralKindForDiscriminant(t) -> true
+        t.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null) -> true
+        t is Type.Union -> t.types.isNotEmpty() && t.types.all { isUnitTypeForDiscriminant(it) }
+        else -> false
+    }
+
+    /** (CHK.142)(b) tsgo's `isUnitType` — `TypeFlagsUnit`, which covers the nullables. */
+    private fun isUnitTypeForDiscriminant(t: Type): Boolean =
+        isLiteralKindForDiscriminant(t) || t.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null)
+
     private fun isLiteralKindForDiscriminant(t: Type): Boolean =
         t is Type.StringLiteral || t is Type.NumberLiteral || t is Type.BigIntLiteral ||
             t === trueType || t === falseType
