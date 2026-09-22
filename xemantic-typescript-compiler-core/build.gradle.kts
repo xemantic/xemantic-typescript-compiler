@@ -789,10 +789,18 @@ data class TsgoPendingBaseline(
 
 /**
  * The live set. Two groups, in landing order: first the 17 ORDER rows (LEGACY.0a) left
- * behind (the `tsgo-port` sha's stable type ordering), then the 268 (LEGACY.0b) rows the
- * baseline-ROOT switch left — every one of which carries its FAMILY and tsgo's own LAYER
- * for the divergence, so a family round can select its work with a grep. The full first-run
- * classification is in the (LEGACY.0b) round note.
+ * behind (the `tsgo-port` sha's stable type ordering), then the (LEGACY.0b) rows the
+ * baseline-ROOT switch left. The full first-run classification is in the (LEGACY.0b) round note.
+ *
+ * **DO NOT SELECT WORK BY GREPPING THESE REASONS FOR A LAYER.** This KDoc used to claim every
+ * entry carried tsgo's layer; audited 2026-09-22 against tsgo's manifests, 8 of the then-19
+ * entries carried none, so that grep silently skipped them — and one entry that DID record
+ * `submoduleTriaged` was nonetheless filed as ordinary work. The layer is DERIVED during
+ * generation ([TsgoBaselineChoice.layer], read from tsgo's own `submodule*.txt` manifests) and
+ * emitted into each generated test as a `// TSGO BASELINE (LEGACY.0b), layer ...` comment: that
+ * comment is the authority, a reason string is prose. A `submoduleTriaged` row is now REFUSED by
+ * the build unless its reason says so (see the `triagedAsWork` check in the generator), because
+ * following tsgo there is a regression rather than progress.
  */
 val tsgoPendingBaselines = listOf(
     TsgoPendingBaseline(
@@ -868,10 +876,21 @@ val tsgoPendingBaselines = listOf(
     ),
     TsgoPendingBaseline(
         "exportAssignmentMembersVisibleInAugmentation.errors.txt",
-        "F6 top code differs (tsgo TS4060 / ours TS2304,TS2664); layer `submoduleTriaged`. " +
-        "tsgo: /a.ts(3,26): error TS4060: Return type of exported function has or is using " +
-        "private name 'T'. | ours: /a.ts(2,16): error TS2664: Invalid module name in " +
-        "augmentation, module 'foo' cannot be found."
+        "REFUSED 2026-09-22 -- NOT A tsgo-FOLLOWING ROW. Layer `submoduleTriaged`, tsgo's own " +
+        "known-defect list: the `.diff` sits in the group \"Corsa changes how module augmentation " +
+        "interacts with export-equals and exported name visibility\", tracking issue " +
+        "microsoft/typescript-go#3481, beside augmentExportEquals2.errors.txt. Per the owner " +
+        "directive of 2026-09-21 the target for such a row is the INTENDED answer, not tsgo's " +
+        "current output -- and the intended answer here is SILENCE: the submodule baseline this " +
+        "layer diverges from is `<no content>`, the case's own source marks the line `// OK`, and " +
+        "tsgo's TS4060 is the defect. **So the previous reason was actively misleading**: read as " +
+        "work it would have had a round IMPLEMENT TS4060, which is the regression rule (2) exists " +
+        "to prevent. What remains true and is OURS is a separate, real defect -- we emit TWO rows " +
+        "(/a.ts(2,16) TS2664 `Invalid module name in augmentation, module 'foo' cannot be found.` " +
+        "plus TS2304) where the intended answer emits none, i.e. an `export =` namespace's members " +
+        "are not visible to a `declare module` augmentation of it. That is a CHECKER item to file " +
+        "on its own terms against the intended answer; it is not gradeable against this baseline " +
+        "while tsgo's row stands, which is why the entry stays here, `@Ignore`d and counted."
     ),
     TsgoPendingBaseline(
         "expressionWithJSDocTypeArguments.errors.txt",
@@ -1931,15 +1950,23 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                 " — a row is either a decision not to follow tsgo or a row still to implement, never both."
         }
         val usedPending = mutableSetOf<String>()
+        // (LEGACY.0) OWNER DIRECTIVE 2026-09-21: a pending row whose divergence tsgo files
+        // under `submoduleTriaged` is one of tsgo's OWN known defects, so following it is a
+        // REGRESSION, not progress -- [TsgoBaselineChoice.layer]'s KDoc already says "no round
+        // may target such a family".  Until this collector existed that rule was enforced by
+        // nothing and one row had already been filed as ordinary work.  The layer is DERIVED
+        // (never transcribed), so a row that changes layer upstream is caught on the next build.
+        val pendingTriaged = mutableMapOf<String, TsgoPendingBaseline>()
 
         /**
          * Emits the divergence preamble when [baseline] is declared, and records the
          * declaration as used (an unused one fails the build below — a rotted ledger
          * is indistinguishable from a hidden regression).
          */
-        fun StringBuilder.appendDivergence(baseline: String) {
+        fun StringBuilder.appendDivergence(baseline: String, layer: String?) {
             pendingByBaseline[baseline]?.let { p ->
                 usedPending += baseline
+                if (layer == "submoduleTriaged") pendingTriaged[baseline] = p
                 appendLine("    // TSGO-PENDING (LEGACY.0): a TypeScript 7 row this compiler does not produce")
                 appendLine("    // yet. Declared in build.gradle.kts `tsgoPendingBaselines`; ledger in")
                 appendLine("    // docs/logical-parity.md.")
@@ -2051,7 +2078,7 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                     totalBareTests++
                     sb.appendLine()
                     sb.appendTsgoLayer(jsChoice)
-                    sb.appendDivergence("$name.js")
+                    sb.appendDivergence("$name.js", jsChoice.layer)
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts compiles to JavaScript matching ${id}_js`() {")
                     sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
@@ -2083,7 +2110,7 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                             .joinToString(", ") { "\"${it.key}\" to \"${it.value}\"" }
                         sb.appendLine()
                         sb.appendTsgoLayer(paramChoice)
-                        sb.appendDivergence(paramName)
+                        sb.appendDivergence(paramName, paramChoice.layer)
                         sb.appendLine("    @Test")
                         sb.appendLine("    fun `${id}_ts__${configId}__compiles to JavaScript matching baseline`() {")
                         sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
@@ -2102,7 +2129,7 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                     totalErrorTests++
                     sb.appendLine()
                     sb.appendTsgoLayer(errorsChoice)
-                    sb.appendDivergence("$name.errors.txt")
+                    sb.appendDivergence("$name.errors.txt", errorsChoice.layer)
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts has expected errors matching ${id}_errors_txt`() {")
                     sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
@@ -2125,7 +2152,7 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                             .joinToString(", ") { "\"${it.key}\" to \"${it.value}\"" }
                         sb.appendLine()
                         sb.appendTsgoLayer(paramErrorChoice)
-                        sb.appendDivergence(paramErrorName)
+                        sb.appendDivergence(paramErrorName, paramErrorChoice.layer)
                         sb.appendLine("    @Test")
                         sb.appendLine("    fun `${id}_ts__${configId}__has expected errors matching baseline`() {")
                         sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
@@ -2233,6 +2260,28 @@ val generateTypeScriptTests = tasks.register("generateTypeScriptTests") {
                 stalePending.joinToString("\n") { "  - ${it.baseline}" } +
                 "\nEither the baseline was renamed/removed, or its test is already skipped for " +
                 "another reason. Delete the entry or fix the baseline name."
+        }
+
+        // (LEGACY.0) OWNER DIRECTIVE 2026-09-21 -- the guard that makes the rule structural.
+        // `tsgoPendingBaselines` MEANS "implement it and it closes".  A baseline whose divergence
+        // tsgo files under `submoduleTriaged` can never close that way: the directive's rule (2)
+        // says the target there is the INTENDED answer (the submodule baseline the layer diverges
+        // from), never tsgo's current output, so a round that implements tsgo's row REGRESSES.
+        // Such an entry must therefore declare itself REFUSED in its own reason -- it stays in the
+        // list, still `@Ignore`d and still counted, but it is a record and not a work item.
+        // The layer is DERIVED from tsgo's manifests during generation, never transcribed, so this
+        // also catches a row that tsgo re-classifies upstream.
+        val triagedAsWork = pendingTriaged.values
+            .filter { !it.reason.contains("REFUSED") }
+            .sortedBy { it.baseline }
+        check(triagedAsWork.isEmpty()) {
+            "tsgoPendingBaselines files ${triagedAsWork.size} `submoduleTriaged` baseline(s) as work:\n" +
+                triagedAsWork.joinToString("\n") { "  - ${it.baseline}" } +
+                "\nThat layer is tsgo's own known-defect list (testdata/submoduleTriaged.txt, " +
+                "\"known diffs that we intend to fix\"), so implementing tsgo's row is a REGRESSION " +
+                "against the intended answer -- see the owner directive of 2026-09-21 in CLAUDE.md " +
+                "and TsgoBaselineChoice.layer's KDoc. State the refusal in the entry's reason " +
+                "(the word REFUSED), as the other triaged entries do."
         }
 
         // PARITY.1 — rewrite the ledger from the declarations so the doc cannot drift.
