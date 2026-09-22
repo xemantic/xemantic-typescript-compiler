@@ -25,6 +25,86 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.169) — a generic type ALIAS as a heritage base discarded its type arguments; `marked` 4 -> 3 (2026-09-22)
+
+**THE ROUND'S BRIEF WAS WRONG ABOUT THE MECHANISM AND A *WRITE PROBE* IS WHAT CAUGHT IT.** The
+item was sized as "the TS2353 excess-property check's known-property set does not follow a
+mapped-type heritage clause", on a recon that had measured a *read* of the inherited member as
+silent and concluded member resolution already saw it. Re-measured with a deliberate
+mis-assignment, `const p: string = d.a!` was **silent** on the old binary and TS2322 in tsgo, and
+`d.nope` was silent where tsgo reports TS2339 — the member was typed **`any`**, not resolved.
+Round 760's trap exactly: *a silence-asserting probe cannot tell "resolved" from `any`.* Had the
+brief been followed, the round would have widened a known-property set and left the type wrong.
+
+**THE REAL DEFECT.** `getTypeFromBaseTypeExpression` (`Checker.kt:115154`) honoured type
+arguments on a heritage base **only when the base's declared type was a `Type.Interface`**. For a
+generic type **ALIAS** it fell through to a bare `getDeclaredTypeOfSymbol(Omit)` with `<B,'b'>`
+**silently discarded**, so the un-instantiated alias body — a mapped type over an unbound `T` —
+contributed nothing at all to the derived interface's member table. The control that pins the
+axis is that the identical `Omit<B,'b'>` in **annotation** position has always resolved perfectly.
+
+**THREE MEASURED FACES, NOT ONE**, which is why the pins assert values rather than silence: a
+false TS2353 on legal code; the inherited member typed `any`; and a *genuinely* excess key
+**masked**, because B560 reports the FIRST excess key and returns — we reported `a` at col 18
+where tsgo reports `zz` at col 35. Seven heritage forms were affected (`Omit` / `Pick` /
+`Partial` / `Required` / `Readonly` / `Record` and any user-declared generic alias) and four were
+not (`extends B`, `extends B, C`, a generic INTERFACE base, a NON-generic alias), which is exactly
+the "declared is `Type.Interface`" / "has type arguments" split the guard keys on. The matrix went
+**17 ours-only rows -> 10, byte-identical to tsgo including columns.**
+
+**THE FIX ROUTES THROUGH THE ANNOTATION PATH RATHER THAN RE-DERIVING IT** — a parented synthetic
+`TypeReference` handed to `getTypeFromTypeNode`, which owns the builtin-utility materializers,
+B50.1 alias substitution and the constraint gates. Re-implementing any of that at the heritage
+site would have been a second, divergent copy. `parent` is not a constructor property, so it does
+not enter `TypeReference`'s data-class equality and the structural `nodeTypes` key stays per-site.
+
+**THE ABLATION'S a2 IS THE ROUND'S REAL FIND, AND THE *CORPUS* FOUND IT WHERE THE PINS COULD
+NOT.** Dropping the `SymbolFlags.TypeAlias` conjunct read **0 RED** on all pins — and broke
+`nestedRecursiveArraysOrObjectsError01` on the screen: routing a generic *interface* base through
+the annotation path hits `getTypeFromTypeReference`'s `"Array"` fast path and loses the
+`getOrInternReference` identity the recursive union needs. A pin reproducing it was added and a2
+now discriminates. A second blind pin was found the same way (a non-mapped alias body carries the
+right member NAME without substitution, so a name-only assertion passed either way) and given a
+type probe; a1 went 7 -> 8 RED. **Both unpinnable arms are recorded as redundant barriers rather
+than claimed**: a3 (the `parent` assignment) — every `.parent` reader reachable from
+`getTypeFromTypeReference` was traced and there is exactly one, `aliasGuardIsRecursionBrake`,
+which cannot discriminate because a heritage clause can never be lexically inside a type-alias
+body; the assignment makes that structural instead of argumentative. a4 (the
+`errorType`/`anyType` refusal) — kept because it keeps the arm strictly MONOTONE on a resolution
+failure.
+
+**A PIN THAT NAMES A LIB UTILITY IS VACUOUS IN THE `diagnose()` HARNESS.** The first pin set used
+`Omit`/`Pick`/`Partial`/`Record` and read **6 of 18 RED on a working binary**: the embedded lib
+that harness uses does not declare them, so the base resolves to `errorType` *before* the arm
+under test and the pin measures nothing in either direction. Rewritten with locally-declared
+aliases; the lib spellings stay covered by the tsgo-matched CLI matrix.
+
+**CALLER CENSUS, because the change is in a shared resolver.** `getTypeFromBaseTypeExpression` has
+three callers. The `implements` one (`:143360`, `as? Type.Reference`) is gated on
+`SymbolFlags.Class`, **disjoint from the new `SymbolFlags.TypeAlias` guard** — structurally
+unreachable, and confirmed empirically byte-identical before and after. `CaptureRecorder.kt:2127`
+is a **MISSION PAYOFF**: the language-service member collector now sees the members of
+`interface D extends Omit<…>`, so hover and completion improve on the embeddable-checker leg.
+(`collectTargetPropertyNames`, which the brief proposed widening, has FOUR callers — which is why
+it was not touched.)
+
+**Gates.** `marked` **4 -> 3** (`defaults.ts:8:5` TS2353 gone, no new row); `cronstrue` unchanged;
+suite **20,301 / 0 / 44** (+20 pins); corpus screen **0 of 8,725** over both channels; 8-profile
+grid **8x `added=0 removed=0`** — a potential GATE here rather than a control, since each profile
+carries 1-2 mapped-heritage sites and the change is to base-type resolution, not to TS2353;
+`cost_gate` PASS (max **+0.41%**, `output.errors` 46 unchanged — the increases are the alias bases
+now actually resolving); `huge_methods` 0 over; warning-clean with a non-empty log.
+
+**Separate defects found and NOT fixed** (all measured unmoved before and after): TS2339 missing
+for a member absent from an alias-heritage interface (the conservative "has base types" skip);
+TS2312 missing for a non-object heritage base (`extends Nullable<B>`); TS2420 missing for
+`class C implements <generic alias>`, and its chain line; and `Omit<B,"b">` rendering structurally
+in TS2339 where tsgo names it.
+
+**SIX SUCCESSORS FILED FROM THIS SESSION'S RECON, AND THE PATH TO ZERO ON `marked` IS NOW
+MAPPED**: (CHK.144) -> 2, (CHK.142) -> 1, (CHK.35b)+(CHK.35c) -> 0. See the orchestration
+addendum above the queue for the ordering and the measured 4 -> 6 trap that decides it.
+
 ### Round (P18.168) — (CHK.35a): a function expression assigned to a member gets its `this`; `marked` 8 -> 4 (2026-09-22)
 
 **THE RECON REFUSED THE ITEM AND THE REFUSAL IS THE ROUND'S MAIN PRODUCT.** (CHK.35) is 5 rows
@@ -616,59 +696,6 @@ consult), at which point the guard can narrow instead of silencing. Beside it, t
 sized at (P18.159) — `typeof <name>` for a namespace-merged function and `typeof import("<path>")`
 for a module object — both corpus-only-gated and priced by one screen run each.
 
-### Round (P18.159) — (CHK.73): a function merged with a namespace carries its statics, and the last `export =` gap closes (2026-09-21)
-
-**CLOSED the mechanism (P18.158) named as its successor.** Suite **20,195 / 0 / 44** (+5 pins);
-corpus screen **0 of 8,725** over both channels; 8-profile grid **8x `added=0 removed=0
-fullDiffLines=0`** with emit byte-identical; cronstrue 1 -> 1, marked 18 -> 18; `cost_gate` PASS
-(max +0.09%), `huge_methods` 0 over limit, warning gate clean with both compile tasks verified
-EXECUTED. `Checker.kt` +50.
-
-**THE MECHANISM.** A symbol merged from `function f` and `namespace f` had a value type that was
-its CALL SIGNATURE alone, so the namespace side was reachable only through the SYNTACTIC
-qualified-name path. That is the whole explanation of an otherwise baffling split measured at
-(P18.158): a same-file merge and a NAMED import of one already resolved `f.v`, while the same
-member through a MODULE OBJECT (`m.f.v`) or an `export =` surface
-(`import f = require("./m"); f.v`) did not. `attachMergedNamespaceMembers` sits beside
-`attachExpandoMembers`, which REFUSES a merged host by design — so the two are disjoint by
-construction, and the round-833 already-planted-table guard is what keeps them from disagreeing.
-Measured against tsgo 7.0.2 on a four-shape probe: **2 of 4 before, 4 of 4 after**.
-
-**THE CONTAINMENT IS A MEASUREMENT, AND THE SCREEN IS WHAT TOOK IT.** The first cut attached the
-table for ANY merged function and moved `mergedDeclarations3` — **1 mismatch of 8,725, found in
-one run**. Reading it explained the shape: this binder merges every same-named `namespace` block
-of one container into ONE `exports` table, unexported blocks included, so attaching it for a
-NESTED namespace makes `M.foo.x` legal where tsgo reports TS2339 and the syntactic path (which
-respects export-ness) was already right. Restricted to FILE-LEVEL merges — which is exactly where
-the `export = <callable>` shape lives — it moves nothing. **The over-merge is a BINDER defect and
-is recorded rather than worked around**; the `mergedDeclarations3` pair is pinned directly.
-
-**AND THE ROUND'S OWN 'RESIDUE' PIN WAS WRONG BEFORE IT WAS BLIND.** The containment pin was first
-written as a `residue -` asserting that we ACCEPT all three nested members. Measured: we match
-tsgo exactly (one TS2339, `M.foo.y` silent) — so the pin was repaired into the containment's
-CONTROL. It then read **0 RED** under the arm that drops the restriction, because a path-shaped
-`-project` fixture resolves the shape down another route; the FLAT-named `diagnose()` form
-reproduces the corpus baseline's own path and reddens. **A fixture's file-name SHAPE is part of
-what it measures, in both directions** — (P18.158) needed path-shaped names to see a specifier
-defect, and this pin needs flat ones to see a display/resolution one.
-
-**THREE COUNTDOWN PINS REPAIRED, TWO OF THEM THIS ARC'S OWN.** `ExportEqualsNamedImportTest`'s two
-`export =` residues (written at (P18.156), re-explained at (P18.157)) are closed and now assert
-tsgo's answers. The third, `ExpandoFunctionMemberModelTest`'s merged-host control, keeps its
-SUBJECT — the expando attachment still refuses a merged host, `tag` is absent from the rendering —
-and its expected TEXT moves from `() => void` to the structural form. **Neither arm matches tsgo,
-which renders `typeof zzzNs`**, and that was already recorded in the pin's own KDoc as
-pre-existing; the structural form is strictly more informative and is also what tsgo gives an
-EXPANDO-only host ((CHK.119)). The `zzzInNs: any` inside it is a SECOND artifact — `typeToString`
-reads `symbolTypes[id]` raw, while the member ACCESS types `number` correctly in the same compile.
-
-**SUCCESSOR.** Two display rows are now sized from measurement: a namespace-merged function value
-should render `typeof <name>` and a module object `typeof import("<path>")` where we render the
-structural type and the alias's local name. Both are corpus-only-gated ((PARITY.1)) and the screen
-prices either in one run. The bigger remaining one is the general shadow defect (P18.157) recorded:
-an `any`-annotated parameter shadowing ANY file-level binding resolves to the file-level one.
-
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1005,8 +1032,28 @@ constraint plainly: *"The blocker to compiling a bigger library is the FRONT END
 ... a checker that reports ~0.9 false positives per file cannot be lowered from at all — the
 backend's own rule is that it must refuse to emit a program the checker rejected."* That one
 constraint gates legs (2) embeddable checker, (3) externals and (4) KIR at once. The live number,
-carried unchanged through the whole (P18.156)-(P18.160) arc and through (P18.163), is
+carried unchanged through the whole (P18.156)-(P18.160) arc and through (P18.163), was
 **cronstrue 1, marked 18** — eighteen ours-only rows on a library **tsgo reports ZERO errors for**.
+
+**SCOREBOARD 2026-09-22 ((P18.169)) — `marked` 18 -> 3, and `cronstrue` IS ZERO.** The eighteen
+fell to (CHK.33) 18->10, (CHK.140) 10->8, (CHK.35a) 8->4 and (P18.169) 4->3. **`cronstrue`'s
+standing "1" is a SHARED CONFIG ROW, not a false positive** — its own tsconfig sets
+`"target": "ES5"` and BOTH compilers print the same TS5108; with the target removed both read
+**0 rows**, measured. So the live false-positive count is **marked 3, cronstrue 0**, and the
+three remaining rows each have a measured owner and a measured order:
+
+| `marked` row | owner | prize | direction |
+|---|---|---|---|
+| `Instance.ts:179` TS2578 (shadow of a missing TS2322 at 180) | **(CHK.144)** `inferReturnTypeFromBody` has no `Identifier` arm | **3 -> 2**, proved by simulation | ADDS rows — screen is the primary gate |
+| `Tokenizer.ts:19` TS2322 | **(CHK.142)** object literal against a UNION contextual type, (b) then (a) | **-> 1** | (b) removes, (a) adds |
+| `Instance.ts:96` TS7019 | **(CHK.35b)** + **(CHK.35c)** | **-> 0** | adds |
+
+**AND ONE ORDERING IS LOAD-BEARING, WITH ITS MECHANISM MEASURED**: (CHK.145) (statics leaking
+into `keyof`) must land **after** (CHK.144), never before or alone. Rows 229 and 242 fire only
+because the leaked `Set<any>` sits in a write slot's intersection, and they CONSUME the
+`@ts-expect-error` directives above them; removing the leak first silences both rows, orphans
+both directives and takes the library **4 -> 6**. That is the trap earlier recon recorded without
+a mechanism; it now has one.
 
 **13 of the 18 are already sized, in two OPEN items far down this queue:**
 - **(CHK.33) — 8 rows.** Every call to `marked`'s renderer methods is rejected with
@@ -1044,6 +1091,228 @@ carried unchanged through the whole (P18.156)-(P18.160) arc and through (P18.163
 shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: these REMOVE false
 positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
 positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
+
+- [ ] **(CHK.144) A BLOCK-BODIED UNANNOTATED FUNCTION RETURNING A BARE IDENTIFIER INFERS `any` —
+  `inferReturnTypeFromBody` HAS NO `Identifier` ARM — MEASURED 2026-09-22 ((P18.169) recon).**
+  `const b1: never = () => { return u; }` where `u: unknown` prints
+  `Type '() => any' is not assignable to type 'never'` here and `Type '() => unknown'` in tsgo;
+  the EXPRESSION-bodied twin `() => u` is correct on both. Measured across `unknown` / `string` /
+  `{q:number}` / `string|number`, arrow and `function`: every block body whose `return` is a bare
+  identifier widens. **THE PRIZE IS MEASURED BY SIMULATION, NOT ARGUED**: annotating that ONE
+  arrow in `marked` — changing nothing else — takes the library **4 -> 3** and removes a false
+  `TS2578 Unused '@ts-expect-error'`, because the arrow's `any` return silently satisfied an
+  intersection slot the directive was written for.
+  **SITE**: `Checker.kt:146687 inferReturnTypeFromBody`, a hand-written `when` over return-
+  expression KINDS whose `is Identifier ->` arm answers `booleanType` for the literals `true` and
+  `false` and **`null` for everything else**, which the caller turns into `anyType`. 20 call sites.
+  **SCOPE IS THE WHOLE RISK AND THE ARCHIVE REFUSES THE WIDE VERSION THREE TIMES** — "our
+  `inferReturnTypeFromBody` has no object-literal branch — DON'T add it, blast radius", and round
+  332 measured one narrow widening (`return this.<member>`) at EXACTLY net zero. So do NOT add a
+  general `getTypeOfExpression` fallback: add ONLY the `Identifier` arm, read `currentLocalTypes`,
+  and return a CONCRETE result (`takeIf { it !== anyType && it !== errorType }`) so the `?: anyType`
+  fallback is unchanged everywhere else — the same convention the existing `CallExpression` and
+  `AsExpression` arms already use.
+  **DIRECTION: THIS ADDS DIAGNOSTICS** (it removes a suppression), so the corpus screen is the
+  PRIMARY gate — the population is every unannotated block body in ~13k baselines — and the
+  8-profile grid is a real gate too (unannotated block bodies are pervasive in all 78 sources).
+  **LAND IT BEFORE (CHK.145)**, which is the other half of the same library rows.
+
+- [ ] **(CHK.145) STATICS LEAK INTO `keyof` OF AN INSTANCE TYPE — MEASURED 2026-09-22 ((P18.169)
+  recon) — AND IT MUST LAND *AFTER* (CHK.144) OR THE LIBRARY COUNT GOES UP.** For
+  `class C { static s: number; static sm(): void; p: string; m(): void }`, `keyof C` is
+  `"m" | "p" | "s" | "sm"` here and `"m" | "p"` in tsgo, which also reports TS2322 for
+  `const k3: keyof C = "s"`. **The instance member TABLE is right** — a member ACCESS already
+  refuses a static identically on both (`TS2576 … Did you mean to access the static member
+  'W.st' instead?`) — so the single wrong site is `getKeyofType` (`Checker.kt:175846`), which
+  maps every entry of `type.properties` to a literal with **no static filter anywhere**.
+  tsgo excludes them STRUCTURALLY rather than by a filter (`getIndexTypeEx` →
+  `getLiteralTypeFromProperties` runs over the INSTANCE type, whose `getPropertiesOfType` holds
+  instance members only; the static side is the constructor value's own type), and it
+  additionally drops non-public members — so copy the rule, not the filter.
+  **THE 4 -> 6 TRAP, NOW WITH ITS MECHANISM**: `marked`'s rows at `Instance.ts` 229 and 242 fire
+  ONLY because the leaked `Set<any>` sits in the write slot's intersection (a function is not
+  assignable to `Set<any>`), and those two rows CONSUME the `@ts-expect-error` directives above
+  them. Remove the leak on its own and both rows vanish, both directives go unused, and the
+  library reads **4 -> 6**. After (CHK.144) the arrows return `unknown` and those rows fire for
+  tsgo's own reason, so this change then only removes a spurious conjunct from two messages.
+  **DIRECTION IS MIXED**: for a READ it removes constituents (can ADD rows); for a WRITE it
+  shrinks the intersection (REMOVES rows). Grid is a REAL gate (99-137 `keyof` sites per
+  profile); the corpus is a NARROW one (162 reference `.errors.txt` mention `keyof`, only **8**
+  mention `keyof` and `static` together).
+  **NOT A DEFECT, MEASURED AND RECORDED SO IT IS NOT RE-OPENED**: the element-access WRITE fold
+  is NOT a union here — ours and tsgo produce byte-identical intersections across nine shapes
+  (explicit literal-union key, `keyof` key, `Exclude<keyof …>` key, plain and generic classes,
+  concrete and free type arguments). What made it look like a union is a DISPLAY artifact —
+  `typeToString` omits the parentheses around a union that is an INTERSECTION MEMBER, so
+  `A | A & Set<any> & B | B` READS as a top-level union. That is a (PARITY.1) display question of
+  its own and is the kind of thing only the suite can see. Duplicated union constituents in the
+  same rows could not be reproduced outside `marked` at all and are semantically inert
+  (`X | X` relates exactly as `X`).
+
+- [ ] **(CHK.142) AN OBJECT LITERAL AGAINST A *UNION* CONTEXTUAL TYPE GETS NO MEMBER CONTEXTUAL
+  TYPES WHEN NO SINGLE CONSTITUENT CAN BE SELECTED — THREE MECHANISMS, MEASURED 2026-09-22
+  ((P18.169) recon) OVER A 40-CELL MATRIX AGAINST tsgo 7.0.2, AND THE ITEM'S ORIGINAL SIZING WAS
+  WRONG THREE WAYS.** It is NOT ternary-specific (`||`, `??`, a NESTED ternary and an `as const`
+  branch all fail identically), the DISCRIMINANT axis decides it (a union whose discriminant is
+  some OTHER member is clean), and `??` fails at a SINGLE contextual target too, i.e. it is not
+  this family at all. This is `marked`'s `Tokenizer.ts:19` false positive
+  (`Type '{ type: string; … }' is not assignable to type 'Image | Link'`, tsgo silent).
+  **(a) THE UNION CONTEXTUAL TYPE IS DROPPED, NOT MIS-APPLIED.** `getTypeOfObjectLiteral`
+  (Checker.kt:127266, the `is Type.Union ->` arm ~127281) handles a union ONLY by SELECTING one
+  constituent — `singleOrNull` / `selectUnionMemberByObjLitDiscriminant` /
+  `selectUnionMemberByObjLitKeys` — and a context-dependent member value defeats all three, so
+  `ctxObj` is null and every member widens. tsgo treats selection as a REFINEMENT and the UNION
+  as the floor: `getTypeOfPropertyOfContextualTypeEx` maps over the union and unions the member
+  types, and `discriminateTypeByDiscriminableItems` is applied first only when it can decide
+  (`isPossiblyDiscriminantValue` deliberately excludes context-dependent expressions). Two
+  sibling readers have the same bug in cheaper forms: `cpaExprObjectLiteral` (:149588) drops a
+  union outright with `contextualType as? Type.Object`, and `lookupPropertyTypeForCtx` (:37817)
+  answers `firstNotNullOfOrNull` where tsgo unions. **This half ADDS diagnostics and MOVES
+  ANCHORS** (measured: tsgo anchors an illegal branch at the ternary, col 20, where we anchor the
+  whole literal at col 7), so it is the dangerous half.
+  **(b) A SOURCE WHOSE DISCRIMINANT IS A UNION OF THE TARGET'S DISCRIMINANTS IS REFUSED.**
+  Independent of freshness and of contextual typing: `{ type: 'image' | 'link'; raw: string }`
+  against `Link | Image` is TS2322 here and CLEAN in tsgo. One rule reproduces all five measured
+  cells — **split the source over its union-typed discriminant and require each split to relate
+  to SOME constituent** (adding a third tag, dropping a member, or a conflicting sibling member
+  all still fail in both). **This half only ACCEPTS more, so it can only REMOVE rows**, and it is
+  the safe one to land first — but CLAUDE.md's "an acceptance-only relation leg CAN add a
+  diagnostic, because the relation feeds narrowing" applies, so grid it anyway. **Its
+  implementation site in tsgo is UNLOCATED** (recon checked `typeRelatedToSomeType`,
+  `findMatchingDiscriminantType`, `discriminateTypeByDiscriminableItems` and none explains it);
+  the rule is characterised behaviourally, so fit it to the cells rather than porting a function.
+  **(c) `??` DOES NOT CONTEXTUALLY TYPE ITS RIGHT OPERAND** — `maybe ?? 'link'` types
+  `string | "image"` at EVERY target including a single object type, where `||` keeps
+  `"image" | "link"`. Independent, small, and removes rows.
+  **ORDER: (b) then (a); (c) any time.** (a) alone does not close `marked` — the literal would
+  then type `"image" | "link"` and die on (b). **INSTRUMENTS**: the 8-profile grid is a real GATE
+  for (a) (63-141 one-line ternary-valued object-literal members per profile, grid green today)
+  and a control for (b); the ACTIVE corpus population that DIRECTLY matches is small (a
+  trailing-comma one-line scan finds **7** of 9,056 reference `.errors.txt`, a floor not a
+  ceiling), so the pins plus the grid carry this, not the screen.
+
+- [ ] **(CHK.143) `instanceof` ON THE POSITIVE BRANCH *REPLACES* WHERE tsgo *INTERSECTS*, AND THE
+  POST-JOIN RESIDUE IS A FALSE POSITIVE ON ORDINARY TypeScript — MEASURED 2026-09-22 ((P18.169)
+  recon, re-verified by the orchestrator on the frozen binary).** `declare const v: P;
+  if (v instanceof Q) { … }` answers **`Q`** inside the guard where tsgo answers **`P & Q`**, and
+  the join with the fall-through then leaves **`P | Q`** where tsgo leaves `P` — which is how
+  `s.add(42)` after `if (s instanceof Promise)` becomes an ours-only
+  `TS2339 … on type 'Promise<any> | Set<number>'`. The union arm is the same defect with a
+  different empty-set handling: every constituent is dropped and `getUnionType` answers `never`,
+  giving both a false positive (`… on type 'never'`) and two MISSING rows.
+  **THE RULE IS ON THE BOX AND THE FIXTURE DOCUMENTS THE INTENDED ANSWER**: tsgo's
+  `getNarrowedTypeWorker` (`typescript-go-repo/internal/checker/flow.go`:846-949) ends
+  `narrowedType not never -> it; isTypeSubtypeOf(candidate,t) -> candidate;
+  isTypeAssignableTo(t,candidate) -> t; isTypeAssignableTo(candidate,t) -> candidate;
+  else getIntersectionType([t, candidate])`, and `controlFlowInstanceof.ts`'s own comment reads
+  `s; // Set<number> & Promise<any>`. Its `.diff` layer is **`submoduleAccepted`**, i.e. an
+  INTENDED TypeScript 7 divergence, so tsgo's answer is the target.
+  **OURS**: `narrowByInstanceOf` (Checker.kt:~124216). Non-union arm ~124291 `isMatch -> classType`
+  is the defect; union arm ~124257 needs the same tail when `filtered` is empty.
+  `getIntersectionType` already exists (`internal fun`, :176232). **This checker has NO subtype
+  relation** (`subtypeRelation` is declared with ZERO readers), so tsgo's leg 1 collapses into
+  leg 4 — `assignable(candidate,t) -> candidate; assignable(t,candidate) -> t; else intersection`,
+  which is also the CONSERVATIVE order because it keeps today's answer for every assignability-
+  related pair. Record the one divergent cell (both directions assignable, candidate not a
+  subtype) rather than hiding it.
+  **SCOPE — the negative branch must stay byte-identical**: the archive's load-bearing
+  `instanceofWithStructurallyIdenticalTypes` entry lives there and tsgo has no fallback on that
+  path either. Do NOT bundle the `emptyObjectType` question (`resolveInstanceOfRhsType` answering
+  null for an unresolvable RHS) — that is the baseline's OTHER two divergences (an ours-only
+  TS2721 and the missing `Property 'val' does not exist on type '{}'`), its blast radius is every
+  unresolvable RHS in the program, and round 838's in-source KDoc refused it deliberately. **So
+  this round does NOT close the pending baseline** — it removes the false-positive class; say so.
+  **WHY INTERSECTIONS ARE SAFE HERE, MEASURED**: our intersection member reads already resolve on
+  both halves and the display is already byte-right — on `P & Q` we are MISSING a TS2339 tsgo
+  emits, i.e. introducing intersections into flow types can only SILENCE rows at member-read
+  sites, never invent them. **INSTRUMENTS**: the CORPUS is the gate (22 `instanceof` cases carry
+  an `.errors.txt` baseline and all 22 are ACTIVE); the grid is a CONTROL (the profiles'
+  `instanceof` right-hand sides are overwhelmingly derived-shape receivers — `Array` 27,
+  `operator` 24, `Map` 16 — i.e. the cells that already agree); BOTH libraries are structurally
+  blind (`grep -c ' instanceof '` is **0** in each). Expect the union arm's `never` wash to ADD
+  rows tsgo also reports; those are corrections but they move baselines.
+
+- [ ] **(CHK.146) `typeToString` DOES NOT PARENTHESIZE AN *ANONYMOUS UNION* THAT IS AN
+  INTERSECTION MEMBER, SO THE MESSAGE NAMES A **DIFFERENT TYPE** — MEASURED 2026-09-22
+  ((P18.169) orchestration probe) AND IT IS NOT A FORM DIVERGENCE.** We print
+  `Type 'A | B & S'` where tsgo prints `Type '(A | B) & S'`, and
+  `Type 'string | number & { z: 1; }'` where tsgo prints `Type '(string | number) & { z: 1; }'`.
+  In TypeScript's own grammar `&` binds tighter than `|`, so `A | B & S` DENOTES `A | (B & S)` —
+  a different set of values from `(A | B) & S`. By `docs/logical-parity.md` § 2 that is a
+  MEANING-level difference ("a displayed type denoting a different set of values"), not the
+  "parenthesisation inside a displayed type" form row, so it may NOT be routed through
+  `LogicalParityDivergence`.
+  **THE FIX BELONGS BESIDE (P18.166)'s**, which added exactly this rule for the other direction
+  and recorded it: *"tsgo parenthesizes an intersection member by its RENDERED FORM, never by its
+  Type kind"* — `A & U` for an alias-named union, `A & (B | C)` for an anonymous one. The
+  anonymous case is evidently still unparenthesised; a FUNCTION-typed member is parenthesised
+  correctly (`((x: string) => A | B) & S` is byte-identical on both), so the gap is specific to a
+  union member.
+  **A SECOND, SEPARATE DIVERGENCE SHARES THE FIXTURE AND MUST NOT BE CONFLATED WITH IT**: once a
+  `type U = A | B` alias exists ANYWHERE in the file we render that interned union as `U` in
+  EVERY position, including where the source wrote it anonymously — `S & (A | B)` prints `S & U`
+  where tsgo prints `S & (A | B)`, while `S & U` prints `S & U` on both. That is the recorded
+  `aliasDisplayMap` first-wins behaviour, which the archive already measures as structurally
+  unreachable here (*"tsc's UNION-ALIAS DISPLAY IS IDENTITY PRESERVATION, NOT STRUCTURAL
+  MATCHING, AND INV.5(a) MAKES IT UNREACHABLE BY CONSTRUCTION"*); it needs a change of KEY, not a
+  renderer fix. **Do not try to fix both in one round, and write the parenthesisation fixture with
+  NO alias declared in it** — with an alias present the alias bug masks the parenthesisation bug
+  entirely, which is how this went unnoticed.
+  **INSTRUMENT**: (PARITY.1) — the 8-profile grid is structurally blind to every display change
+  (every row on every profile is `Cannot find name …`, so not one names a type), so the gate is
+  the ACTIVE `.errors.txt` corpus plus hand-written pins, and since the corpus is green a display
+  change can only turn one RED, never fix one.
+  **IT IS THE SIBLING OF (CHK.130), AND THE TWO SHOULD PROBABLY BE ONE ROUND**: that item is the
+  same rule failing in the other direction — a union member with exactly one call signature gets
+  an EXTRA pair of parens (`ZzzA | ZzzB | (ZzzS)`) — and its own text already guesses the general
+  rule, *"parenthesize a FUNCTION TYPE NODE, not a named type that resolves to one … the defect
+  is that the test is on the resolved SHAPE rather than on what was written"*. Together with
+  (P18.166)'s measured *"by RENDERED FORM, never by Type kind"*, all three are one question:
+  `typeToString` must decide parenthesisation from what it is ABOUT TO PRINT, not from the
+  operand's `Type` class. Fit the rule to all three shapes at once and pin each.
+
+- [ ] **(CHK.141) `this` IN A *VALUE* POSITION TYPES AS `any`, WHERE `this` AS A MEMBER-ACCESS
+  RECEIVER RESOLVES CORRECTLY — TWO MECHANISMS, MEASURED 2026-09-22 ((P18.169) orchestration
+  probe, ~25 cells against tsgo 7.0.2).** The receiver path is FINE and the controls prove it:
+  `this.nope` is `TS2339 Property 'nope' does not exist on type 'K'` byte-identically on both,
+  and `const probe: string = this.p` reports `Type 'number'` on both. What is broken is `this`
+  used as a VALUE.
+  **(i) `this` AS A VALUE IS `any`.** `const probe: string = this` inside a method is SILENT here
+  and `Type 'this' is not assignable to type 'string'` in tsgo. The consequence that bites real
+  code is the classic alias idiom: `const self = this; const probe: string = self.p` is SILENT
+  here and TS2322 in tsgo — `self` inherits the value type `any`, so every member off it is `any`
+  and every diagnostic inside is gone. It also produces an ours-only FALSE POSITIVE:
+  `const self = this; self.cb = function (t) { … }` draws
+  `TS7006 Parameter 't' implicitly has an 'any' type.` on legal code, because with `self.cb` at
+  `any` the function expression gets no contextual signature at all. **An ANNOTATED local
+  (`const self: K = this`) and a CAST (`(this as K).cb`) are both byte-identical to tsgo**, which
+  is what isolates the value position as the axis.
+  **(ii) THE CONTEXTUAL-SIGNATURE READER DOES NOT USE THE RECEIVER PATH.** `this.cb = function (t)
+  { … }` supplies the callback's ARITY but not its TYPE: TS7006 is correctly SUPPRESSED (so the
+  member WAS found — and the control says so, since a member that does not exist on `this`, and
+  one that exists but is not callable-typed, BOTH draw TS7006 here exactly as in tsgo), yet every
+  diagnostic inside the body is missing where tsgo reports. An ARROW right-hand side
+  (`this.cb = (t) => …`) is correct on both, so it is specific to a FunctionExpression.
+  **NOT the axis, each measured**: genericity (a generic function with a concrete callback type is
+  fine), chain depth (`outer.holder.cb` on a parameter is fine), the receiver's declared-type KIND
+  (class / interface / anonymous all pass at file level), and being inside a class body (a
+  file-level const, a method PARAMETER and a method LOCAL receiver are all fine inside one).
+  **THE QUEUE'S OWN RECORD IS STALE AND WAS ALMOST INHERITED**: (CHK.22)'s note says
+  *"`this` READS AS `any` HERE (no polymorphic `this` type)"*. Measured today that is true of the
+  VALUE position ONLY — the member-access receiver reads `K` — and reading it as a blanket claim
+  is what first mis-attributed this whole family to a contextual-typing gap. Whether (i) should
+  answer the polymorphic `this` TYPE or merely the class type is the design question: tsgo prints
+  `Type 'this'`, and `iteratorMethodThisReturn` already exists as a bounded declaration read that
+  answers the CARRIER, so check whether it generalises before building a `this`-type.
+  **REACH IS ZERO IN EVERY STANDING INSTRUMENT, WHICH IS THE POINT** — `this.x = function` and
+  `const self = this` are **0 / 0** across all eight dashboard profiles and **0 / 0** in both
+  library probes, so the grid and the libraries are CONTROLS here BY COUNT. The corpus is a WEAK
+  gate: 2 reference cases carry `this.x = function` (both with an `.errors.txt` baseline) and 16
+  carry `const self = this`. **So hand-written pins are the gate**, in both directions — the
+  TS7006 that must DISAPPEAR and the TS2322s that must APPEAR.
+  **DIRECTION**: (i) mostly ADDS diagnostics (every `self.`-rooted read that was silently `any`
+  starts reporting) and removes one FP class; (ii) purely ADDS. Both are the dangerous direction,
+  so the corpus screen must run with `--include` for any `@Ignore`d TS7006/TS2683 row.
 
 - [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-44 LANDED 2026-09-21 ((P18.85)-(P18.155) notes) — pending **19**,
   skipped 44, suite 20,163/0. **(P18.155) CLOSED NO ROW and is recorded for its MEASUREMENT**: it

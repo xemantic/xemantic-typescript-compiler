@@ -1,4 +1,23 @@
 
+
+**(P18.164) — (CHK.33): A DESTRUCTURING PARAMETER NO LONGER BREAKS ARITY; `marked` 18 -> 10, 20,232 / 0 / 44 (2026-09-21).**
+`Signature.parameters` drops a binding-pattern parameter while `minArgumentCount` counts it, so a reader taking its MAXIMUM
+from one and its MINIMUM from the other states an impossible range — `Expected 1-0 arguments, but got 1.` on legal code.
+Round 446 fixed that at the property-access reader; (CHK.97)'s union reader reintroduced it verbatim, and the axis is the
+UNION RECEIVER, which is why a fixture without one is vacuous and why it survived ~700 rounds. Round 446's recovery is now
+the shared `Checker.signatureDeclaredArity`. **On a 10-case matrix adjudicated against tsgo FIRST, ours went from 10 rows
+every one wrong to 6 rows with tsgo's own codes and messages.** TWO more FP classes of the same cause fixed with it: a REST
+parameter whose own name is a binding pattern (read as ZERO-arity — a shape neither standing instrument can see), and a
+member typed by a FUNCTION TYPE (an options-bag callback property). **THE CORPUS IS BLIND TO THE WHOLE FAMILY AND THE
+ABLATION MEASURED IT**: all six arms read 0 of 8,725 screen subtests and the grid is 8x0, while the pins move 7/1/15/0/1/4 —
+so `marked` plus the pins were the only gate, which is why the owner's 2026-09-21 directive makes the library probe the
+alignment stop-condition. Arm a4 is a measured REDUNDANT barrier (recorded, not claimed); arm a3 reddens round 446's own
+pins, the receipt that the extraction is faithful. The `require(min <= parameters.size)` the item asked for is UNAVAILABLE —
+every binding-pattern signature violates it by construction — so the inversion is pinned as a MESSAGE invariant.
+Screen 0 of 8,725; grid 8x0; cost_gate PASS (max +0.15%); huge_methods 0 over; cronstrue 1 -> 1. **SUCCESSOR SIZED**: an
+OVERLOAD SET with a destructured overload picks the wrong overload and reports a confident TS2345, through overload
+SELECTION rather than a TS2554 emitter; a census counts ~55 readers of the same split.
+
 **(P18.163) — (CHK.73)(A)+(B): A MODULE OBJECT'S MISSING MEMBER IS REPORTED AND IT RENDERS AS `typeof import("…")`, 20,215 / 0 / 44 (2026-09-21).**
 CLOSED the two residues (P18.159) named. Ours now answers **all SIX of tsgo's probe rows at tsgo's own codes and
 spans**, where before it answered one; `import * as ns from "./m"; ns.nope` and the ambient form were BOTH silent,

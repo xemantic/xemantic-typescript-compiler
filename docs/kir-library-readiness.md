@@ -331,10 +331,21 @@ tsconfig, diffed against tsgo 7.0.2 per `(file, line, code)`:
 | **cronstrue** | 52 | 8,812 | none | **0** | **0** | **0** | **2 (3%)** |
 | marked | 13 | 3,706 | none | 0 | 15 | 15 | 10 (76%) |
 | marked (2026-09-22, after (CHK.33)+(CHK.140)) | 13 | 3,706 | none | 0 | 8 | 8 | — |
-| marked (2026-09-22, after (CHK.35a)) | 13 | 3,706 | none | 0 | **4** | 4 | — |
+| marked (2026-09-22, after (CHK.35a)) | 13 | 3,706 | none | 0 | 4 | 4 | — |
+| marked (2026-09-22, after (P18.169) generic-alias heritage) | 13 | 3,706 | none | 0 | **3** | 3 | — |
 | jsonrepair | 10 | 2,746 | none | 1 | 16 | 16 | 9 (90%) |
 | fflate | 3 | 3,904 | none | 2 | 17 | 17 | 3 (100%) |
 | yaml | 78 | 10,878 | none | 0 | 78 | 78 | — |
+
+**CAVEAT MEASURED 2026-09-22 ((P18.169)):** `cronstrue`'s own `tsconfig.json` sets
+`"target": "ES5"`, which TypeScript 7 has REMOVED — so both compilers print the same TS5108 and
+round notes quoting "cronstrue 1 -> 1" are quoting a SHARED CONFIG ROW, not a false positive. It
+matters for more than arithmetic: per (LEGACY.1)(g) tsgo's CLI short-circuits after a config
+error and emits **no semantic diagnostics at all** for that project, so at its own config the
+probe cannot adjudicate any row we emit. With the `target` removed both read **0 rows** — that
+is where the agreement below is actually measured, and it is the configuration to use when
+quoting `cronstrue` as a reference gate. (Our own count still moves if we regress, because we do
+not short-circuit.)
 
 **`cronstrue` is the first library outside the corpus on which this checker agrees with tsgo
 exactly**, and its lowering runs to a first refusal rather than being blocked at the front
