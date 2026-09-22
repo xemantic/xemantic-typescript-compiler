@@ -5584,6 +5584,15 @@ class Checker(
     // non-Identifier receiver is never collected. Anchors:
     // PropertyAccessExpressions whose receiver Identifier is a candidate.
     // Fully syntactic — no ambient sandwich. Fields PRE-init.
+    /**
+     * (CHK.144) Re-entrancy bound for [returnIdentifierType]'s un-annotated-initializer
+     * leg. `const r = f(); return r` types `f()`, whose OWN return inference can reach
+     * a `return <id>` again; the other recursing arms of [inferReturnTypeFromBody] sit
+     * behind a resolver-level in-progress guard, this one is a plain expression read,
+     * so its bound lives here. Fields PRE-init.
+     */
+    private var returnIdentifierDepth = 0
+
     private var spineExActive = false
     /** The current file's expando candidates (uniquely-named top-level fns). */
     private var spineExCands: Set<String> = emptySet()
@@ -146694,6 +146703,214 @@ interface DataView {
         return node?.let { getTypeFromTypeNode(it) }?.takeIf { it !== anyType && it !== errorType }
     }
 
+    /**
+     * (CHK.144) The node that binds [name] among [stmts], or null when none does.
+     *
+     * Conservative in the direction that matters: it answers a node for EVERY
+     * value-space declaration form that can shadow, including the ones
+     * [returnIdentifierType] cannot type (a function, a class, an enum, a namespace,
+     * an import). Those STOP the walk and fall back to `anyType` rather than letting
+     * an outer same-named `const` answer for an inner `function` — a wrong type, and
+     * silent.
+     */
+    private fun statementBindingNode(stmts: List<Statement>, name: String): Node? {
+        for (s in stmts) {
+            when (s) {
+                is VariableStatement ->
+                    for (d in s.declarationList.declarations) {
+                        if ((d.name as? Identifier)?.text == name) return d
+                    }
+                is FunctionDeclaration -> if (s.name?.text == name) return s
+                is ClassDeclaration -> if (s.name?.text == name) return s
+                is EnumDeclaration -> if (s.name.text == name) return s
+                is ModuleDeclaration -> if ((s.name as? Identifier)?.text == name) return s
+                is ImportDeclaration -> {
+                    val clause = s.importClause
+                    if (clause != null) {
+                        if (clause.name?.text == name) return s
+                        when (val nb = clause.namedBindings) {
+                            is NamespaceImport -> if (nb.name.text == name) return s
+                            is NamedImports -> for (e in nb.elements) {
+                                if (e.name.text == name) return s
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+        return null
+    }
+
+    /**
+     * (CHK.144) The declaration a bare `return <id>` names, found LEXICALLY by walking
+     * [id]'s own parent chain — innermost scope first, so a shadowing binding wins.
+     *
+     * Deliberately NOT a `currentLocalTypes` probe. [inferReturnTypeFromBody] can run
+     * in the CALLER's scope (it is reached while checking a call site) and that map is
+     * a flat `String -> Type` carrying no declaration identity, so a caller's
+     * same-named local answers for the callee's. **That leak is REAL and was measured
+     * on the shipped binary before this change**, through the concise-body path's own
+     * `getTypeOfExpression`, which has no lexical guard: with the callee declared AFTER
+     * the caller,
+     * ```
+     * export function caller() { const v: number = 1; const p: never = callee; return v }
+     * const v: string = "s";
+     * const callee = () => v;
+     * ```
+     * reads `() => number` here against tsgo's `() => string`, and the identical fixture
+     * with the caller's local RENAMED reads `() => string` — i.e. it is a name collision
+     * through that map and nothing else. Resolving from the AST ancestry instead is a
+     * function of the PROGRAM, not of when the question is asked, so it cannot be
+     * shadowed wrong.
+     *
+     * Returns the binding node whatever its kind; [returnIdentifierType] types only the
+     * two kinds it can, and every other kind stops the walk on today's `?: anyType`.
+     */
+    private fun lexicalReturnIdentifierDecl(id: Identifier): Node? {
+        val name = id.text
+        var node: Node? = (id as NodeBase).parent
+        var hops = 0
+        while (node != null && hops++ < 128) {
+            val params = when (val n = node) {
+                is ArrowFunction -> n.parameters
+                is FunctionExpression -> n.parameters
+                is FunctionDeclaration -> n.parameters
+                is MethodDeclaration -> n.parameters
+                is Constructor -> n.parameters
+                is GetAccessor -> n.parameters
+                is SetAccessor -> n.parameters
+                else -> null
+            }
+            if (params != null) {
+                for (prm in params) if ((prm.name as? Identifier)?.text == name) return prm
+            }
+            // A function EXPRESSION's own name is in scope inside its body.
+            (node as? FunctionExpression)?.name?.let { if (it.text == name) return node }
+            val stmts = when (val n = node) {
+                is Block -> n.statements
+                is SourceFile -> n.statements
+                is ModuleBlock -> n.statements
+                is CaseClause -> n.statements
+                is DefaultClause -> n.statements
+                else -> null
+            }
+            if (stmts != null) statementBindingNode(stmts, name)?.let { return it }
+            val loopInit = when (val n = node) {
+                is ForStatement -> n.initializer
+                is ForInStatement -> n.initializer
+                is ForOfStatement -> n.initializer
+                else -> null
+            }
+            if (loopInit is VariableDeclarationList) {
+                for (d in loopInit.declarations) {
+                    if ((d.name as? Identifier)?.text == name) return d
+                }
+            }
+            (node as? CatchClause)?.variableDeclaration?.let { d ->
+                if ((d.name as? Identifier)?.text == name) return d
+            }
+            node = (node as? NodeBase)?.parent
+        }
+        return null
+    }
+
+    /**
+     * (CHK.144) The type of a bare `return <id>` in a BLOCK body.
+     *
+     * Before this, [inferReturnTypeFromBody]'s `is Identifier` arm answered nothing but
+     * `true`/`false`, so EVERY block-bodied un-annotated function returning a bare name
+     * inferred `any` — `() => { return u }` read `() => any` against tsgo's
+     * `() => unknown` for an `unknown`/`string`/object/union/type-parameter binding
+     * alike, arrow and `function` both, while the EXPRESSION body `() => u` was already
+     * right. It is a silent SUPPRESSION: on `marked` that `any` satisfied an
+     * intersection slot a `@ts-expect-error` was written for, so the directive read as
+     * unused (a false TS2578).
+     *
+     * Scope of the fix, and what it deliberately is NOT. The archive refuses the WIDE
+     * version three times — "our `inferReturnTypeFromBody` has no object-literal branch
+     * — DON'T add it, blast radius" (B482), "Adding it there is suite-wide blast radius"
+     * (the `inferReturnTypeFromFunctionExpressionBody` divergence note), and round 332
+     * measured the `return this.<member>` widening at exactly net zero. So this adds NO
+     * general `getTypeOfExpression` fallback: one node class, `Identifier`, resolved to
+     * a DECLARATION and typed only from that declaration's annotation or initializer.
+     * It stays strictly monotone — anything that does not resolve to a CONCRETE
+     * non-`any`/non-error type answers null and the caller's `?: anyType` is reached
+     * exactly as today, so no shape that worked can start failing.
+     *
+     * Measured against tsgo 7.0.2 over a 39-row CLI matrix (bare identifier x
+     * parameter / local `const`/`let`/`var` / module-level / imported / closure capture,
+     * declared `unknown` / `string` / object / union / type parameter / `any`, block vs
+     * expression body, arrow vs `function`).
+     *
+     * Known and deliberate residue, all of it today's answer: an IMPORTED binding and a
+     * binding-pattern leaf stop the walk untyped, and a declaration that binds the name
+     * in a form this cannot type (a function, class, enum, namespace) stops it too
+     * rather than reaching past the shadow.
+     */
+    private fun returnIdentifierType(id: Identifier, nonNullAsserted: Boolean): Type? {
+        // The un-annotated-initializer leg reads an expression whose own inference can
+        // come back here; bound it rather than relying on a caller's guard.
+        if (returnIdentifierDepth >= 3) return null
+        val t = when (val decl = lexicalReturnIdentifierDecl(id) ?: return null) {
+            // An UN-ANNOTATED parameter answers NOTHING, deliberately. The tempting
+            // leg is `currentLocalTypes[name]`, on the reasoning that
+            // `getTypeOfArrowFunction` pushes each parameter's contextual type into that
+            // map a few lines before calling us (B83.4f-c), so the read would be OUR
+            // push. It is not, and gating it on the owning function-like's identity does
+            // NOT save it: that push is itself conditional on the parameter's type being
+            // concrete, so exactly the un-annotated, un-contextual parameter this leg
+            // would serve is the one never pushed, and the read falls through to the
+            // AMBIENT layer, i.e. the caller's. Measured with that gate in place:
+            // `export function caller() { const r: number = 1; ... }` over a LATER
+            // `const cal = (r) => { return r; }` read `(r: any) => number` where tsgo
+            // reads `(r: any) => any`. So this resolver is LEXICAL AND NOTHING ELSE, and
+            // `any` is both the honest answer and tsgo's for a parameter with no
+            // contextual type.
+            is Parameter -> decl.type?.let { getTypeFromTypeNode(it) }
+            is VariableDeclaration ->
+                decl.type?.let { getTypeFromTypeNode(it) }
+                    ?: decl.initializer?.let { init ->
+                        returnIdentifierDepth++
+                        try {
+                            getTypeOfExpression(init)
+                        } finally {
+                            returnIdentifierDepth--
+                        }
+                    }
+            else -> null
+        } ?: return null
+        if (t === anyType || t === errorType) return null
+        // A NULLISH answer needs deciding rather than reporting, because a declaration's
+        // type is not what the RETURN sees - the reference is flow-narrowed there and
+        // this reader does not narrow ([getTypeOfExpression] never does; narrowing is
+        // opt-in per emission site). Measured on the 8-profile grid, ALL THREE false
+        // positives the first cut added were one spurious `| undefined`:
+        //
+        //  - `memoizeOne`'s `return value!` over `let value = map.get(key)` and
+        //    `fileNamePropertyReader.getScriptKind`'s `return result!` over
+        //    `let result: ScriptKind | undefined` — an EXPLICIT assertion, so the
+        //    stripped type is the right answer and is what tsgo reads;
+        //  - `programDiagnostics.getCombinedDiagnostics`'s bare `return computedDiagnostics`
+        //    over `let computedDiagnostics: DiagnosticCollection | undefined`, assigned
+        //    on every path to that return — only FLOW knows it is non-nullish, so the
+        //    honest answer here is the one from before this arm existed.
+        //
+        // Hence: strip when the source asserted it, refuse otherwise. Refusing is
+        // today's behaviour, so the rule stays monotone; a flow-narrowing consult at the
+        // return site (the round-465 nullish-STRIP shape, gated on `currentFlowGraph`)
+        // is the successor that would close the third case.
+        val nullish = t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) ||
+            (t is Type.Union && t.types.any { it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) })
+        if (nullish) {
+            if (!nonNullAsserted) return null
+            return narrowByExcludingNullUndefined(t)
+                .takeIf { it !== anyType && it !== errorType && it !== neverType }
+        }
+        return t
+    }
+
     private fun inferReturnTypeFromBody(body: Node): Type? {
         val block = body as? Block ?: return null
         for (stmt in block.statements) {
@@ -146704,10 +146921,15 @@ interface DataView {
                 // Note: `return x as T` is NOT unwrapped — the asserted type should
                 // be the return type (handled by getTypeOfExpression's AsExpression branch).
                 var expr = rawExpr
+                // (CHK.144) `!` is value-preserving for every arm BELOW that answers from
+                // the expression's own syntax, and is NOT value-preserving for the
+                // Identifier arm, whose answer is the binding's DECLARED type - stripping
+                // the nullish part is the whole point of writing `return value!`. Carry it.
+                var nonNullAsserted = false
                 while (true) {
                     expr = when (expr) {
                         is ParenthesizedExpression -> expr.expression
-                        is NonNullExpression -> expr.expression
+                        is NonNullExpression -> { nonNullAsserted = true; expr.expression }
                         is SatisfiesExpression -> expr.expression
                         else -> break
                     }
@@ -146717,9 +146939,13 @@ interface DataView {
                     is NoSubstitutionTemplateLiteralNode -> stringType
                     is NumericLiteralNode -> numberType
                     is BigIntLiteralNode -> bigintType
+                    // (CHK.144) `return <bareName>` — resolve the name LEXICALLY and
+                    // take its declared/initialized type. See [returnIdentifierType] for
+                    // why this is not a `currentLocalTypes` probe and why the arm is one
+                    // node class rather than a general getTypeOfExpression fallback.
                     is Identifier -> when (expr.text) {
                         "true", "false" -> booleanType
-                        else -> null
+                        else -> returnIdentifierType(expr, nonNullAsserted)
                     }
                     is PrefixUnaryExpression -> when (expr.operator) {
                         SyntaxKind.Exclamation -> booleanType
