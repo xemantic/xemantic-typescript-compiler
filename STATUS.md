@@ -1,7 +1,11 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,631** lines (**+79 at (P18.171)**, the discriminant-property
+extraction):** `Checker.kt` **198,792** lines (**+161 at (P18.172)**, the cross-union contextual
+member type, the literal-under-context rule, two context-install widenings and the union-aware
+firewall, with the KDoc recording the FIVE pieces and the two measured-redundant/blind ablation
+arms — a SEMANTIC parity change that takes `marked` to ONE row, not an extraction;
+**+79 at (P18.171)**, the discriminant-property
 predicate and its three helpers; the round's real weight is `Relater.kt` **1,557 -> 1,746**
 (**+189 net**), a PORT of tsgo's `typeRelatedToDiscriminatedType` plus the `excluded` property
 set threaded through the object relation — a SEMANTIC parity change taking a 25-cell matrix to
@@ -30,6 +34,26 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.172) — (CHK.142)(a): AN OBJECT LITERAL AGAINST A *UNION* CONTEXTUAL TYPE; `marked` 2 -> 1, 20,364 / 0 / 44 (2026-09-22).**
+**THE BRIEF'S DIAGNOSIS WAS WRONG AND ITS AUTHOR WAS THIS ROUND'S OWN PREDECESSOR.** (P18.171) sized (a) as one `else` on
+`getTypeOfObjectLiteral`'s union arm plus a helper; written exactly so, it built clean, was proved LIVE by a positive control,
+and was **completely inert**. The mechanism is **FIVE pieces, none of which moves a row alone**: the cross-union member type
+(tsgo's `getTypeOfPropertyOfContextualTypeEx`); a literal-under-context rule, because **this engine answers the BASE PRIMITIVE
+for every literal** so the contextual member type had no consumer; and — the actual blockers — the var-decl AND argument
+context installs, both gated `is Type.Object`, which refuse a UNION annotation outright; plus the FP firewall in
+`tryEmitObjectVsNamedUnionArg`, which asks each constituent INDIVIDUALLY and never the union, making (P18.171)'s split
+structurally unreachable from it. **FOUND BY PROBING, NOT READING, AFTER TWO INERT BUILDS** — a temporary
+`Diagnostic`-constructor hook named the real emitters, and **neither is either sibling reader the sizing named**; both were
+then measured out of scope and left untouched, with 46 of 46 cells agreeing. The probe was stripped and every number re-taken
+on the probe-free binary, reproduced exactly by `--rerun-tasks`. Two traps it cost: a stack frame reading `Checker.kt:33840`
+is the **+131,072** wrap (the file now exceeds 131,072 lines), and the message `'"image" | "link"' … to type 'string'` is a
+DISPLAY artefact of `getWidenedLiteralType` on both sides. **Seven ablation arms**: a7 read 0 RED and was a BLIND PIN (fixed);
+a4 read 0 RED with no cell delta and its COST was measured rather than assumed — 0 subtests, 0 profile rows, 0 pins, neither
+library, 21 of 631,317 `getTypeOfExpression` calls — redundant on both axes and KEPT, with the numbers in its KDoc. Screen 0
+of 8,725; grid 8x0 and a real GATE in the ADDING direction; cost_gate PASS (+0.80% max, `output.errors` 46); huge_methods 0.
+**The anchor divergence is real, unchanged and NOT introduced** (tsgo drills to the member, we report the whole literal, for a
+UNION target only).
 
 **(P18.171) — (CHK.142)(b): A DISCRIMINATED-UNION *SOURCE* IS SPLIT OVER ITS DISCRIMINANTS; 23 OF 25 CELLS MATCH tsgo, 20,351 / 0 / 44 (2026-09-22).**
 A port of tsgo's `typeRelatedToDiscriminatedType` (`relater.go:3989`) into the tail of our union-target arm, at exactly the
@@ -104,22 +128,3 @@ on both libraries, all 8 profiles and the corpus. **Both standing instruments ar
 (zero TS2683 on every profile; 2 of 50 TS2683 baselines carry the shape and neither has the row AT such a `this`).
 Ablation a1 2 RED, a2 1 RED; **a3's 0 RED is STRUCTURAL** — an IIFE's fn-expr parents to the CallExpression and
 cannot reach the arm — making `pp.right === parent` a measured-redundant barrier, kept and recorded as such.
-
-**(P18.167) — (CHK.140): A CLASS'S OWN TYPE PARAMETERS ARE IN SCOPE IN ITS MEMBERS' BODIES; 20,275 / 0 / 44 (2026-09-22).**
-`ctaFnBodyFrame` fed the enclosing class's type parameters to `fnTpDecls` (the AST map, which answers TS2302) and
-never to `fnTpScope` (the map that TYPES a name) — an asymmetry on adjacent lines. So a class type parameter failed
-to SHADOW a file-level type of the same name: `type Q = boolean; class Hg1<Q> { … }` answered **`boolean`** where
-tsgo answers `Q`. **A WRONG type, not a permissive one** — the `any` (P18.166) attributed to round 761's cached
-member type is only what this degrades to when no outer name exists, and the settling fixture contains no member
-access at all. The clincher: one parameter answering `P` through the ccet reader and `any` through the cta one in
-ONE method body. **THE STATIC GATE WAS BUILT, READ 0 RED UNDER ABLATION, AND WAS THEN MEASURED LOSSY** — TS2302 is
-decided by `fnTpDecls` and fires either way, so the gate never protected it; it degraded a static body's `P` to
-`any` where tsgo reports TS2302 AND types the reference as `P`. Removed, both rows pinned — (P18.165)'s law one
-reader over. **Also walked into (CHK.54)'s trap**: two shapes were written up as residues off a CLI probe taken
-after the ablation restored the SOURCE but before it rebuilt; the pins caught it and both in fact resolve. Corpus
-screen 0 of 8,725 is the real gate (281 case files carry the shape); grid 8x0 but a CONTROL on six arms (84 lines
-of generic-class body in the whole compiler profile). `marked` **10 -> 8**; cronstrue unchanged; cost_gate PASS
-(max +0.41%); huge_methods 0 over. Inverts (P18.166)'s countdown pin, which this closes byte-identically to tsgo.
-**Second deliverable, committed separately**: a build guard refusing a `submoduleTriaged` pending row as work —
-an audit of all 19 found 15 targetable, 3 triaged, 1 harness, and ONE triaged row filed as work whose intended
-answer is SILENCE (tsgo's TS4060 is the bug, microsoft/typescript-go#3481).

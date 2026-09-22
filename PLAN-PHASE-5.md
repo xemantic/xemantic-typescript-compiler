@@ -25,6 +25,71 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.172) — (CHK.142)(a): an object literal against a UNION contextual type; `marked` 2 -> 1 (2026-09-22)
+
+**THE BRIEF'S DIAGNOSIS WAS WRONG, AND IT WAS THIS ROUND'S OWN AUTHOR WHO WROTE IT ONE ROUND
+EARLIER.** (P18.171)'s report sized (a) as "one `else` on `getTypeOfObjectLiteral`'s union arm plus
+a helper". That change was written exactly as specified, built clean, was proved LIVE by a
+positive control — and was **completely inert**: `marked` 2, `canon3` 6, every cell unmoved. The
+real mechanism is **FIVE pieces, none of which moves a row alone**, and each was measured inert
+before the next was added:
+1. `contextualMemberTypeAcrossUnion` — tsgo's `getTypeOfPropertyOfContextualTypeEx`
+   (`checker.go:30312`): map the member over the constituents, drop nulls, union the rest. This is
+   the briefed piece, and it is live but not sufficient.
+2. `objLitLiteralUnderContext` — **this engine answers the BASE PRIMITIVE for every literal**
+   (`const x: never = 'image'` prints `string` where tsgo prints `"image"`), so the contextual
+   member type had no consumer at all. `literalTypeOfExpression` already unions a ternary's
+   branches; it only needed a caller.
+3. **The var-decl context install is gated `targetType is Type.Object`**, so a UNION annotation
+   was refused outright and pieces 1-2 were unreachable from `const t: Link | Image = {…}` —
+   `marked`'s exact shape. This was the actual blocker.
+4. `tryEmitObjectVsNamedUnionArg`'s false-positive firewall asks
+   `constituents.any { checkTypeRelatedTo(argType, c) }` — each constituent INDIVIDUALLY, never
+   the union — so (P18.171)'s discriminated split was **structurally unreachable** from it. Both
+   the fresh and the non-fresh branch had it.
+5. The argument context install carries the identical `paramType is Type.Object` gate.
+
+**IT WAS FOUND BY PROBING, NOT BY READING, AFTER TWO INERT BUILDS.** A temporary
+`Diagnostic`-constructor stack-trace hook named the real emitters — `tryEmitObjectVsNamedUnionArg`
+and `cvdaElaborateMismatch` — and **neither is either of the two sibling readers the brief
+named**. Both siblings were then measured OUT of scope and stay untouched: with them untouched,
+**46 of 46 cells agree with tsgo**, so no cell depends on either. The probe was stripped and every
+final number re-taken on the probe-free binary, whose md5 a `--rerun-tasks` recompile reproduced
+exactly. **Two traps it cost**: the stack frame read `Checker.kt:33840`, which is CLAUDE.md's
+wrap — the real line is **164912** (`+131072`, not `+65536`, because the file now exceeds 131,072
+lines); and `Type '"image" | "link"' is not assignable to type 'string'` was a **display
+artefact**, since that emitter prints `typeToString(getWidenedLiteralType(…))` on BOTH sides and
+the real comparison was against `'link'`.
+
+**Ablation, seven arms, one mistake each.** a1 (union never reaches the member lookup) 2 RED / +3
+cells; a2 (first-hit instead of the union — the sibling bug, injected into the new helper) 2 / +3;
+a3 (literal not kept under context) 2 / +3; a5 (var-decl install removed) 2 / +2; a6 (firewall
+narrowed back to constituents) 2 / +7. **a7 read 0 RED and was a BLIND PIN** — its cell moved
+while no pin did — so a pin was added and it now reddens. **a4 read 0 RED with NO cell delta, so
+its COST was measured instead of calling it redundant by default**: opening it moves 0 of 8,725
+subtests, 0 rows on all eight profiles, 0 pins, neither library, and **21 of 631,317
+`getTypeOfExpression` calls** with `typeNode.bypassed` byte-identical. Redundant on both axes,
+**kept** — it is the faithful statement of tsc's rule and narrowing the admitted population is the
+direction that cannot manufacture an acceptance — with the numbers written into its KDoc so nobody
+re-derives them. One caveat stated rather than hidden: the table was taken one behavioural change
+before the end, and re-running a6 now would correctly die on its anchor count.
+
+**Gates.** `marked` **2 -> 1** (`Tokenizer.ts:19` TS2322 gone; only the pre-existing TS7019 at
+`Instance.ts:96` remains, which is (CHK.35b)'s); `cronstrue` unchanged; suite **20,364 / 0 / 44**
+(+13 pins); corpus screen **0 of 8,725**; 8-profile grid **8x `added=0 removed=0`** — a real GATE
+in the ADDING direction over a 62-150-per-profile ternary-member population, and it added nothing;
+`cost_gate` PASS (`typeNode.bypassed` **+0.80%**, `output.errors` 46, `spine.nodes` ±0.00%);
+`huge_methods` 0 over; warning-clean. The reconstructed canonical fixture goes **6 -> 5** against
+tsgo's 4, as predicted.
+
+**The anchor divergence is REAL, UNCHANGED, and NOT introduced** — measured on a fixture built for
+it: tsgo drills to the offending member (col 55) where we report the whole literal (col 7) for a
+UNION target, while a SINGLE-constituent target drills correctly on both. An independent gap.
+
+**Separate defects named, not fixed**: that whole-literal-vs-member elaboration; a literal having
+no literal type outside a const context (`const x: never = 'image'` prints `string`); and the
+`getWidenedLiteralType`-on-both-sides display artefact above.
+
 ### Round (P18.171) — (CHK.142)(b): a discriminated-union SOURCE is split over its discriminants; 23 of 25 cells now match tsgo (2026-09-22)
 
 A port of tsgo's `typeRelatedToDiscriminatedType` (`relater.go:3989`), wired into the tail of our
@@ -684,51 +749,6 @@ and `export =` named-import resolution — none of it module-object work. Its re
 understates it by ~19 rows. `jsExportMemberMergedWithModuleAugmentation` is correctly parked; its
 reason is verbatim accurate.
 
-### Round (P18.162) — (DOC.2) tranche 2: the last two gotcha sections, CLAUDE.md -36.8% cumulative (2026-09-21)
-
-**DOCS-ONLY, no compiled code.** `### Measured dead-ends` **97,878 -> 42,338 B**,
-`### Test assertion gotchas` **39,948 -> 30,949 B**; `CLAUDE.md` **484,016 -> 419,477 B**, i.e.
-**663,894 -> 419,477 (-36.8%, -244 KB)** across both tranches. Archive 1,040,138 -> 1,146,286 B,
-a PURE APPEND. Buckets: dead-ends 23 KEEP / 65 DISTIL / 25 ARCHIVE; assertions 27 KEEP /
-25 DISTIL / **0 ARCHIVE**.
-
-**BOTH SUB-TARGETS WERE MISSED DELIBERATELY AND THE REFUSAL IS ARITHMETIC, NOT TASTE.** The
-orchestrator set 30,000 / 22,000 B as estimates; they are unreachable without losing content the
-residency rule KEEPS. `### Measured dead-ends` is the file's *measured negative knowledge*, which
-that rule makes resident-eligible outright — unlike tranche 1's per-walker detail, 60% of which
-was archive-eligible — and a refusal's VALUE IS ITS NUMBER: archive the figure and the next agent
-re-runs the experiment. Its 23 do-not-distil KEEPs are already 13,864 B, so 30,000 B would leave
-~230 B per refusal including its grep key, below what a verdict-plus-number costs.
-`### Test assertion gotchas` is PRESCRIPTIVE — conventions consulted while WRITING code — so it
-was briefed to expect a HIGHER keep ratio, and it archived **nothing**: all 27 write-time
-conventions (the one-idiom `assert`/`have` rule and its translation table, the power-assert
-AST-subexpression hazard, the narrowing-probe fixture conventions, the countdown-pin rule, the
-results-dir traps) are byte-identical. A generic "distil everything" pass would have wrecked
-exactly the section whose entries are read before code is written.
-
-**THE SECTION'S OWN TITLE WAS ASPIRATIONAL, AND IS NOW TRUE FOR THE FIRST TIME.**
-`### Measured dead-ends` is titled *"full detail archived — do NOT re-attempt without reading the
-archive entry"*. Probed against the PRE-COMMIT archive, **four of five sampled dead-ends were
-ABSENT from it** — the file had been asserting a property of itself that did not hold, and an
-agent following that instruction would have found nothing and drawn the wrong conclusion. The
-tranche makes the claim true.
-
-**VERIFICATION, re-measured independently by the orchestrator** (same DISJUNCTION property
-(P18.161) established): **165 before-entries = 115 archived + 50 resident verbatim, 0 in neither,
-0 in both**; everything outside the two sections byte-identical; archive a pure append; **186
-`(archive: …)` keys across the whole file, 0 unresolved**; `git diff --numstat` carries no
-binary row.
-
-**ONE COSMETIC RESIDUE, DELIBERATELY NOT FIXED.** A KEEP entry now opens with a dangling "AND"
-because its predecessor was archived. Leading-`AND` bullets are PRE-EXISTING house style here
-(five more at lines 28/33/52/70/121), so editing this one alone would be inconsistent AND would
-break the byte-identical-KEEP receipt that makes re-verification cheap.
-
-**(DOC.2) IS NOW DECIDED-DOWN RATHER THAN EXHAUSTED.** The ~200 KB target in the item is not
-reachable by distillation of what remains: the residue is KEEP-class by the file's own rule. Any
-further cut is a change to the RULE (what deserves residency), which is an owner question, not an
-agent one.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1078,10 +1098,11 @@ three remaining rows each have a measured owner and a measured order:
 | `marked` row | owner | prize | direction |
 |---|---|---|---|
 | ~~`Instance.ts:179` TS2578~~ | **(CHK.144)** — **LANDED (P18.170)** | **3 -> 2** ✔ | added rows; grid was the gate |
-| `Tokenizer.ts:19` TS2322 | **(CHK.142)** object literal against a UNION contextual type, (b) then (a) | **-> 1** | (b) removes, (a) adds |
+| ~~`Tokenizer.ts:19` TS2322~~ | **(CHK.142)** — **LANDED (P18.171)+(P18.172)** | **2 -> 1** ✔ | grid was a real adding-direction gate |
 | `Instance.ts:96` TS7019 | **(CHK.35b)** ALONE — the "inert until (c)" claim is measured FALSE | **-> 0** | only adds contextual types where there are none |
 
-**LIVE COUNT AFTER (P18.170): `marked` 2, `cronstrue` 0.** Two rows to zero, both owned above.
+**LIVE COUNT AFTER (P18.172): `marked` 1, `cronstrue` 0.** ONE row from zero, and it is owned by
+**(CHK.35b)** — measured to close it, and measured NOT to be blocked behind (CHK.35c).
 
 **AND ONE ORDERING IS LOAD-BEARING, WITH ITS MECHANISM MEASURED**: (CHK.145) (statics leaking
 into `keyof`) must land **after** (CHK.144), never before or alone. Rows 229 and 242 fire only
@@ -1265,7 +1286,13 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   same rows could not be reproduced outside `marked` at all and are semantically inert
   (`X | X` relates exactly as `X`).
 
-- [ ] **(CHK.142) AN OBJECT LITERAL AGAINST A *UNION* CONTEXTUAL TYPE GETS NO MEMBER CONTEXTUAL
+- [x] **(CHK.142) CLOSED 2026-09-22 — (b) at (P18.171), (a) at (P18.172); `marked` 2 -> 1, 46 of 46
+  cells agree with tsgo.** (a) was NOT the one-line change (P18.171) sized: it is FIVE pieces, and
+  the two that actually blocked it were the var-decl and argument CONTEXT INSTALLS, both gated
+  `is Type.Object` so a UNION annotation was refused outright. Found by a `Diagnostic`-constructor
+  probe after two inert builds; the two sibling readers the sizing named were measured OUT of
+  scope and stay untouched. (c) — `??` not contextually typing its right operand — was NOT worked
+  and remains open; file it if it still reproduces. ORIGINAL: AN OBJECT LITERAL AGAINST A *UNION* CONTEXTUAL TYPE GETS NO MEMBER CONTEXTUAL
   TYPES WHEN NO SINGLE CONSTITUENT CAN BE SELECTED — THREE MECHANISMS, MEASURED 2026-09-22
   ((P18.169) recon) OVER A 40-CELL MATRIX AGAINST tsgo 7.0.2, AND THE ITEM'S ORIGINAL SIZING WAS
   WRONG THREE WAYS.** It is NOT ternary-specific (`||`, `??`, a NESTED ternary and an `as const`

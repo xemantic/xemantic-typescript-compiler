@@ -1,5 +1,25 @@
 
 
+**(P18.167) — (CHK.140): A CLASS'S OWN TYPE PARAMETERS ARE IN SCOPE IN ITS MEMBERS' BODIES; 20,275 / 0 / 44 (2026-09-22).**
+`ctaFnBodyFrame` fed the enclosing class's type parameters to `fnTpDecls` (the AST map, which answers TS2302) and
+never to `fnTpScope` (the map that TYPES a name) — an asymmetry on adjacent lines. So a class type parameter failed
+to SHADOW a file-level type of the same name: `type Q = boolean; class Hg1<Q> { … }` answered **`boolean`** where
+tsgo answers `Q`. **A WRONG type, not a permissive one** — the `any` (P18.166) attributed to round 761's cached
+member type is only what this degrades to when no outer name exists, and the settling fixture contains no member
+access at all. The clincher: one parameter answering `P` through the ccet reader and `any` through the cta one in
+ONE method body. **THE STATIC GATE WAS BUILT, READ 0 RED UNDER ABLATION, AND WAS THEN MEASURED LOSSY** — TS2302 is
+decided by `fnTpDecls` and fires either way, so the gate never protected it; it degraded a static body's `P` to
+`any` where tsgo reports TS2302 AND types the reference as `P`. Removed, both rows pinned — (P18.165)'s law one
+reader over. **Also walked into (CHK.54)'s trap**: two shapes were written up as residues off a CLI probe taken
+after the ablation restored the SOURCE but before it rebuilt; the pins caught it and both in fact resolve. Corpus
+screen 0 of 8,725 is the real gate (281 case files carry the shape); grid 8x0 but a CONTROL on six arms (84 lines
+of generic-class body in the whole compiler profile). `marked` **10 -> 8**; cronstrue unchanged; cost_gate PASS
+(max +0.41%); huge_methods 0 over. Inverts (P18.166)'s countdown pin, which this closes byte-identically to tsgo.
+**Second deliverable, committed separately**: a build guard refusing a `submoduleTriaged` pending row as work —
+an audit of all 19 found 15 targetable, 3 triaged, 1 harness, and ONE triaged row filed as work whose intended
+answer is SILENCE (tsgo's TS4060 is the bug, microsoft/typescript-go#3481).
+
+
 **(P18.166) — (CHK.139): AN ELEMENT ACCESS WITH A LITERAL-TYPED KEY RESOLVES, READ AND WRITE; 20,265 / 0 / 44 (2026-09-21).**
 `mem[k]` where `k: keyof M` answered `anyType` — the shape real code reaches for most often. tsc's rule, fitted to 12
 tsgo 7.0.2 fixtures: distribute the KEY union with a UNION for a READ and an **INTERSECTION** for a WRITE, the receiver

@@ -333,7 +333,8 @@ tsconfig, diffed against tsgo 7.0.2 per `(file, line, code)`:
 | marked (2026-09-22, after (CHK.33)+(CHK.140)) | 13 | 3,706 | none | 0 | 8 | 8 | — |
 | marked (2026-09-22, after (CHK.35a)) | 13 | 3,706 | none | 0 | 4 | 4 | — |
 | marked (2026-09-22, after (P18.169) generic-alias heritage) | 13 | 3,706 | none | 0 | 3 | 3 | — |
-| marked (2026-09-22, after (P18.170) return-identifier inference) | 13 | 3,706 | none | 0 | **2** | 2 | — |
+| marked (2026-09-22, after (P18.170) return-identifier inference) | 13 | 3,706 | none | 0 | 2 | 2 | — |
+| marked (2026-09-22, after (P18.172) union contextual object literal) | 13 | 3,706 | none | 0 | **1** | 1 | — |
 | jsonrepair | 10 | 2,746 | none | 1 | 16 | 16 | 9 (90%) |
 | fflate | 3 | 3,904 | none | 2 | 17 | 17 | 3 (100%) |
 | yaml | 78 | 10,878 | none | 0 | 78 | 78 | — |
