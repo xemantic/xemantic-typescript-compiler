@@ -330,6 +330,7 @@ tsconfig, diffed against tsgo 7.0.2 per `(file, line, code)`:
 |---|---|---|---|---|---|---|---|
 | **cronstrue** | 52 | 8,812 | none | **0** | **0** | **0** | **2 (3%)** |
 | marked | 13 | 3,706 | none | 0 | 15 | 15 | 10 (76%) |
+| marked (2026-09-22, after (CHK.33)+(CHK.140)) | 13 | 3,706 | none | 0 | 8 | 8 | — |
 | jsonrepair | 10 | 2,746 | none | 1 | 16 | 16 | 9 (90%) |
 | fflate | 3 | 3,904 | none | 2 | 17 | 17 | 3 (100%) |
 | yaml | 78 | 10,878 | none | 0 | 78 | 78 | — |
@@ -420,6 +421,17 @@ correspondence rather than to an inspection, and they are queued as (CHK.31)-(CH
    before the write is considered. **The library's remaining front-end blocker is now ONE named
    mechanism rather than a family**: a member typed by its container's own type parameter must
    resolve to that parameter at an instantiation whose argument is itself unresolved.
+   **(CHK.140) LANDED 2026-09-22 and `marked` MOVED 10 -> 8.** The named mechanism was named
+   wrongly: it is not the member table and not round 761's cached type, it is SCOPE.
+   `ctaFnBodyFrame` fed the enclosing class's type parameters to `fnTpDecls` (the AST map,
+   which answers TS2302) and never to `fnTpScope` (the map that types a name), so inside a
+   class member's body a class type parameter resolved to an OUTER same-named type when one
+   existed and to `any` otherwise — a WRONG type, with the `any` only its degenerate case. The
+   settling fixture contains no member access, no element access and no instantiation at all.
+   Both `@ts-expect-error` shadows (`Instance.ts:206`, `:219`) closed with it. **The remaining
+   8 are led by (CHK.35)'s TS7019/TS2683 family at 5 rows** (a function expression assigned
+   through an element access gets no contextual signature); the `TS2578` at `Instance.ts:179`
+   is block-body return inference, measured separately and NOT this family.
 
 ~59 rows remain untriaged, led by TS2322×14 and TS2339×7. Stated rather than implied, because
 this page's own history is that a family attributed by inspection is a hypothesis.

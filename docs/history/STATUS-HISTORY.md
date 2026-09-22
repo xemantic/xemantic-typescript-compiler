@@ -1,4 +1,18 @@
 
+**(P18.162) — (DOC.2) TRANCHE 2 CLOSES THE ITEM: `CLAUDE.md` 663,894 -> 419,477 B (-36.8%) (2026-09-21).**
+DOCS-ONLY; suite/cost/JIT gates INAPPLICABLE rather than skipped. `### Measured dead-ends` 97,878 -> 42,338 B,
+`### Test assertion gotchas` 39,948 -> 30,949 B; archive 1,040,138 -> 1,146,286 B, a PURE APPEND. Buckets:
+dead-ends 23 KEEP / 65 DISTIL / 25 ARCHIVE; assertions 27 KEEP / 25 DISTIL / **0 ARCHIVE**. **BOTH SUB-TARGETS
+MISSED DELIBERATELY, ON ARITHMETIC**: a dead-end's VALUE IS ITS NUMBER (archive the figure and the next agent
+re-runs the experiment), and 23 do-not-distil KEEPs are already 13,864 B; the assertions section is
+PRESCRIPTIVE — read while WRITING code — so it archived nothing. **THE DEAD-ENDS TITLE WAS ASPIRATIONAL**:
+probed against the pre-commit archive, 4 of 5 sampled entries were ABSENT from the archive the title tells you
+to read — the file asserted a property of itself that did not hold, and it is now true. Conservation
+re-measured independently as the DISJUNCTION: **165 = 115 archived + 50 resident, 0 in neither, 0 in both**;
+isolation byte-identical; 186 grep keys, 0 unresolved. **(DOC.2) is CLOSED as DECIDED-DOWN, not exhausted** —
+the residue is KEEP-class by the file's own residency rule, so any further cut changes the RULE, which is an
+owner question.
+
 **(P18.161) — (DOC.2) TRANCHE 1: `CLAUDE.md` 663,894 -> 484,016 B (-26.8%), NOTHING DELETED (2026-09-21).**
 A DOCS-ONLY round; no compiled code, so the suite/cost/JIT gates are INAPPLICABLE rather than skipped.
 `### Checker walker gotchas` **240,298 -> 59,928 B**, resident entries **304 -> 122** (KEEP 29 / DISTIL 92 /

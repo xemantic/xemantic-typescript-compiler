@@ -1,5 +1,1015 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.157) — (CHK.73): an external module symbol has a value type, and the refusal that blocked it had dissolved (2026-09-21)
+
+**CLOSED (CHK.73)'s (ii)+(iii) and the class-static PREREQUISITE it was refused on.** Suite
+**20,183 / 0 / 44** (+13 pins); corpus screen **0 of 8,725** over both channels; 8-profile grid
+**8x `added=0 removed=0 fullDiffLines=0`** with emit byte-identical; cronstrue 1 -> 1, marked
+18 -> 18; `cost_gate` PASS (max +0.15%), `huge_methods` 0 over limit, warning gate clean with
+both compile tasks verified EXECUTED. `Checker.kt` +119, `NameResolver.kt` +29.
+
+**THE SUCCESSOR NOTE ASKED FOR ONE THING AND IT WAS THE WHOLE ROUND.** (P18.156) said (CHK.73)'s
+refusal rests on a baseline COUNT that predates the corpus re-pin, and that such a count had gone
+stale twice in one session. Re-taken with a throwaway env-gated arm and `corpus-screen.sh`:
+
+| arm | moved of 3,079 |
+|---|---|
+| control (arm off) | 0 |
+| general `SymbolFlags.Module` arm, class export = INSTANCE type | **20** |
+| import-alias targets only, class export = INSTANCE type | **6** |
+| general arm + class export = CONSTRUCTOR side | **14** |
+| import-alias targets + class export = CONSTRUCTOR side | **0** |
+| … + the AMBIENT leg for `import * as` | **0** |
+
+The item recorded 21 / 4 and named the class STATIC SIDE as the prerequisite that made it
+unlandable. **It is not a prerequisite — it is already in the tree**: `getTypeOfSymbolForTypeQuery`
+has built the constructor side of a class symbol all along, and consulting it for a class EXPORT
+is exactly what takes the contained arm from 6 to 0. All six are that one cause
+(`aliasUsageInObjectLiteral` and its family, whose fixture is literally
+`var b: { x: IHasVisualizationModel } = { x: moduleA }`). **A refusal in this repo is a
+measurement taken in a REGIME, and one round's blocker can be another round's already-shipped
+helper — re-read what the blocker NAMES before inheriting it, not only its number.**
+
+**WHY THIS AND NOT A LEDGER ROW.** Same reasoning as (P18.156), one mechanism over: a namespace
+import typing `any` is silent in every channel this repo gates on, and it reaches the Kotlin
+externals generator (which renders from resolved types) and the KIR backend (which picks its
+lowering from them) rather than only a diagnostic. Measured against a real `@types/node@20`:
+before, ours reported **0** of tsgo's 4 rows on a four-line probe; after, **2** — `fs.readFileSync`
+and `path.join(...)` now carry their declared types. The two still missing are a separate
+`Buffer` resolution gap, not this arm.
+
+**THREE LEGS, AND THE ENUMERATION IS THE SUBTLE ONE.** `createModuleSymbol` sets
+`moduleSymbol.exports` to the target file's **locals**, which (P18.125) measured wrong for an
+ENUMERATION three ways. `exportedSymbolsThroughStars` is the right question and had exactly one
+non-test caller; this is its second. Ablation arm a4 (use `exports` instead) reddens exactly the
+star-barrel and renaming-specifier pins — so the distinction is pinned, not merely argued.
+
+**AND THE ROUND SHIPPED A GUARD IT DID NOT SET OUT TO WRITE.** The full suite found a false TS2322
+on `function zsh(zns: any) { zns.ztake(...) }` — a parameter SHADOWING the import alias. Root
+cause is general and PRE-EXISTING, and the measurement is what says so: with a file-level `const`
+in place of the import, the parent binary reports the identical false row. An `any`-ANNOTATED
+parameter is registered in no walk-scoped table (`populateParameterLocalTypes` skips `any`
+deliberately), so the conventional ladder answers the FILE-LEVEL declaration — and a module symbol
+had merely been giving the right answer by accident, because it answered `any` too. Contained to
+this arm (`nameBoundByEnclosingScope`, the same predicate `namespaceQualifiedCalleeType` uses);
+**the general form is queued rather than widened**, because making every shadowed identifier
+syntactic changes how every shadowed read in the program resolves.
+
+**A PIN THAT ASSERTS A SILENCE CAN BE SATISFIED BY A TYPE THAT HAPPENS TO FIT.** The first shadow
+pin was `const x: number = rel.num` under `none { 2322 }` — green on BOTH binaries, because the
+wrongly resolved module answers `number`. Ablation arm a6 read 0 RED and said so. Written the
+other way (`const x: string = rel.num`) it discriminates. Round 902's dead-arm law in its
+quietest costume: the arm was live and the PIN could not see it.
+
+**SECOND COUNTDOWN PIN IN TWO ROUNDS, AND IT WAS THE PREVIOUS ROUND'S.**
+`ExportEqualsNamedImportTest`'s `residue - a namespace import of an ORDINARY module is also still
+any` was written by (P18.156) and is closed by this one. Re-pointed to tsgo's answer (measured),
+not weakened; its two `export =` siblings survive and now say WHY they are a different mechanism
+(the alias resolves to the export TARGET — a function merged with a namespace, whose static side
+is unmodelled).
+
+**GATE PROVENANCE, COUNTED ((CHK.124)).** The 8 profiles carry **15-131** `import * as X from`
+sites each (harness 131, server 64, services 54), so the grid is a REAL gate for the relative
+half; they carry **0-2** non-relative specifiers, so the AMBIENT half's gate is the corpus, the
+pins and the `@types/node` probe. `scripts/chk73-grid.sh` names BOTH moved classes in its identity
+check, since (P18.156) measured that the stock script's `Checker.class`-only test refuses a sound
+grid when the change lives in a collaborator.
+
+**SUCCESSOR.** Two mechanisms are now sized from measurement rather than from a hunch, both
+recorded as `residue -` pins: (1) an `any`-annotated parameter shadowing ANY file-level binding
+resolves to the file-level one — general, pre-existing, and one syntactic test away; (2) a
+function/namespace MERGE has no static side, which is what leaves `import * as ns` and
+`import ns = require(...)` of an `export =` module at `any`. (1) is the cheaper and its blast
+radius is exactly measurable with the same throwaway-arm-plus-screen recipe this round used.
+
+### Round (P18.156) — a named import through an `export =` surface, chosen against the MISSION rather than off the ledger (2026-09-21)
+
+**CLOSED NO LEDGER ROW and that was the point.** Suite **20,170 / 0 / 44** (+7 pins); corpus
+screen **0 of 8,725** over both channels; grid 8x `added=0 removed=0 fullDiffLines=0` with emit
+byte-identical; `cost_gate` PASS (max +0.07%), `huge_methods` PASS, warning gate clean with both
+compile tasks verified EXECUTED. `NameResolver.kt` +26; `Checker.kt` UNCHANGED.
+
+**WHY THIS AND NOT THE NEXT LEDGER ROW.** The WORK ORDER says a round that picks its own work
+should say so. The remaining 19 pending rows are mostly message/emit parity; this session's
+(P18.154) was worth more than its row number because the row was standing on a SILENT `any`. So
+the third round looked for the same shape and measured the CJS-interop family first: `import { x }
+from "./m"` where `m` is `export = <namespace-merged value>` — the way the whole `@types`
+ecosystem publishes CommonJS — resolved to NOTHING here, so the binding typed `any`. That reaches
+the Kotlin externals generator (which renders from resolved types) and the KIR backend (which
+picks its lowering from them, 33x for one wrong receiver at (KIR.LOWER.3)), not just a diagnostic.
+
+**THE MECHANISM IS ONE MISSING LEG, AND THE ISOLATION IS WHAT NAMED IT.** A five-form fixture
+measured against tsgo 7.0.2 split the family cleanly: a named import of an ORDINARY module already
+worked, a named import of an `export =` module did not, and `import * as` / `import ns =
+require(...)` fail for BOTH kinds. So the named-import gap is the export surface, and the
+namespace-import gap is (CHK.73)'s missing `SymbolFlags.Module` arm — two mechanisms that a
+one-form probe would have merged. `computeImportedSymbolGeneral` consults `locals` then `export *`
+barrels; an `export =` target's members are in the TARGET's own `exports`, which is neither.
+`exportEqualsSurfaceMember` is the file-bearing twin of `ambientModuleSurfaceMember` ((CHK.80)(a))
+and is added to that one function, never to the general `resolveAlias` (round 409's TS2315 flood).
+
+**THE GATE HAD TO BE COUNTED, AND THE GRID IS A CONTROL ((CHK.124)).** The 8 profiles, cronstrue
+and marked contain **ZERO** `export =` modules between them — `grep -rl '^export = '` — so 8x0 says
+nothing about this leg. The ACTIVE corpus carries **40** cases combining `export =` with a named
+import, which is what makes the screen a real regression gate; the pins are the gate for the new
+answer, and the ablation (remove the leg) reddens exactly the two positives.
+
+**AND THE ROUND WALKED INTO (CHK.54) A SECOND TIME, ~30 MINUTES AFTER DOCUMENTING IT.** Staging the
+grid's BEFORE arm rebuilds the class dir from the REVERTED source; I then re-measured the fixture
+without rebuilding and read the un-fixed answer, briefly concluding the leg had regressed. The
+entry (P18.155) added is therefore not a narrative but a live trap: **any measurement taken after a
+staging or ablation step must be preceded by a rebuild and an md5 of the class under test.** The
+md5 is what settled it in one command.
+
+**A GRID SCRIPT'S IDENTITY CHECK NAMES A CLASS, AND THE STOCK ONE NAMES `Checker.class`** — which
+is BYTE-IDENTICAL across this round's two arms, because the change is in `NameResolver.kt`. Copied
+unchanged it would have REFUSED a sound grid; worse, for a round that edits neither file it would
+pass a grid that had not been rebuilt at all. `scripts/p18-156-grid.sh` names the class that moved.
+
+**SUCCESSOR.** (CHK.73) is now the single largest typed-interop blocker and its refusal rests on a
+baseline COUNT (4 in MEANING for the `import * as` half, 21 for a general Module arm) that predates
+the corpus re-pin and ~70 parity rounds. This session found such a count stale twice
+((P18.151), and (P18.154)'s own retirement measurement moved 5 -> 11). **Re-take it before
+inheriting it** — one throwaway build plus `corpus-screen.sh`.
+
+### Round (P18.155) — (LEGACY.0b): TS7009 at a property-access callee, and two false positives the ablation found (2026-09-21)
+
+**CLOSED NO LEDGER ROW and is recorded for its MEASUREMENT — pending stays 19.** Suite
+**20,163 / 0 / 44** (+15 pins); corpus screen **0 of 8,725** over both channels; 8-profile grid
+**8x `added=0 removed=0 fullDiffLines=0`** with emit byte-identical; cronstrue 1 -> 1, marked
+18 -> 18; `cost_gate` PASS, `huge_methods` PASS, warning gate clean with both compile tasks
+verified EXECUTED. `Checker.kt` 197,342 -> 197,434 (**+92**).
+
+**THE GAP.** `commonjsAccessExports.errors.txt`'s residue is TS7009 for a PROPERTY-ACCESS callee,
+and the ledger reason already said the gap is GENERAL rather than JS-specific. Measured against
+tsgo 7.0.2 before any code: `new O.m()`, `new N.f()`, `new h.g()`, `new Base.make()` and
+`new arr[0]()` all report there and were ALL silent here; `new C.K()`, a construct-signature
+property and an `any` callee are silent on both. tsc's rule is about the RESOLVED SIGNATURE's
+declaration — not a constructor / construct signature / constructor type — and the sibling
+comment two lines below the new arm had already recorded it from the other side
+(*"under noImplicitAny tsc reports TS7009 instead"*) while implementing only the
+noImplicitAny-OFF half for one shape.
+
+**WHERE IT HAD TO LIVE.** `checkSingleNewExpressionTypes`, because that runs under the ccet FRAME
+ambient where a body-local receiver resolves; the existing identifier-callee emitter is on the
+`spineNa` anchor, which installs only `currentFileLocals` (round 911's trap). The identifier path
+is deliberately left alone — it reaches two shapes no type can (a named function expression's
+self-reference, B83.5, and `super`, which this parser makes an `Identifier`, whose `new super()`
+owns the TS2351 + TS17011 pair) — and a COUNT pin holds the no-double-emit.
+
+**ONE REAL REFUSAL, AND TWO DEFENCES BUILT AGAINST A PHANTOM — THE ROUND'S MOST USEFUL FINDING.**
+The REAL one came from the corpus screen, which reddened `constructorOverloads4`: a CLODULE
+(`declare namespace M { class Function; function Function }`) does not merge in this binder, so
+neither the callee type (an anonymous overload-set object with no symbol) nor
+`resolveQualifiedValueSymbol` sees the construct side — B511 documents exactly that and ships
+`findNamespaceMemberClassDecl`, which the refusal now consults, so the two answers about one
+`new M.C()` cannot disagree. **The other two were answers to a false positive that does not
+exist.** After ablation arm b3 read 0 RED I probed the shape through the CLI and saw TS7009 on a
+constructable callee — but the ablation driver restores the SOURCE and leaves the CLASS DIR
+holding the arm's binary (CLAUDE.md's (CHK.54) trap), so I was measuring the very binary that has
+the construct-signature conjunct REMOVED. On that reading I added a property-SYMBOL construct
+consult and EXCLUDED element-access callees, giving up a positive tsgo reports. **Both then passed
+the pins, the screen, the grid, both libraries and the full suite — because a redundant guard is
+invisible to every gate — and only re-measuring from a known binary found them.** Reverted: with
+neither defence the four shapes are byte-identical to tsgo, and `getCalleeType(both.f)` returns the
+SAME instance as `getTypeOfSymbol(<the property symbol>)` with `call=1 ctor=1`, so the KDoc claim
+that a member access loses construct signatures was simply false and is gone. **The lesson is the
+trap's new costume: it bites the measurement taken to JUSTIFY work, not just the one taken to grade
+it** — and its tell was there all along, an arm reading 0 RED for a guard I had just "proved"
+load-bearing by hand.
+
+**WHY THE ROW STILL DOES NOT CLOSE, NAMED SO THE NEXT ROUND STARTS FROM A MECHANISM.** The fixture
+needs these rows in a **`.js`** file, and `ccetSpineLeave` returns early on `spineIsJsLike`, so the
+whole ccet family — including this emitter's ambient — is off for JavaScript. The identifier-callee
+TS7009 fires in JS only because it lives on the other anchor. The two available routes are relaxing
+that file gate ((P18.130) measures that as its own hazard) or a JS-only path whose receiver
+resolution is shadow-safe; both are bigger than this round and neither is a display question.
+
+**ABLATION: FIVE ARMS, RE-RUN AGAINST THE CORRECTED CODE, AND EVERY CONJUNCT IS HELD.** b1 (the arm
+never fires) 6 RED; b2 (drop the refusal) 1 RED; b3 (drop the construct-signature conjunct) **2
+RED** — the two both-signature controls, which is exactly what the deleted consult had been
+masking when the same arm read 0 RED; b4 (drop the call-signature requirement) **0 RED until its
+shape was constructed** — a non-callable property callee, `new o.p()` with `p: number`, which tsgo
+answers with TS2351 — then 1 RED; b5 (drop the clodule leg) 1 RED. No redundant guard survives.
+
+**ONE RESIDUE PINNED AS A RESIDUE**: `new ctorOnly.f()` types as `any` where tsgo answers the
+instance type — `getReturnTypeOfNewExpression`'s property arm handles only a namespace-qualified
+CLASS. Unrelated to this rule, which reads the callee's SIGNATURES and gets them right.
+
+**SUCCESSOR.** The ledger is at 19. This round is the third in a row whose recorded reason named a
+symptom one layer above the mechanism, and the second whose false positives were found only by
+constructing the ablation's shape from the mechanism — the standing lesson is that an
+undiscriminated arm is a statement about the PIN POPULATION, never about the guard.
+
+### Round (P18.154) — (LEGACY.0b): an intersection of literal sets is a KEY SET, and a mapped type over one was `any` (2026-09-20)
+
+**Ledger 20 -> 19, `reverseMappedTypeIntersectionConstraint.errors.txt` CLOSED and ACTIVE.**
+Suite **20,148 / 0 / 44** (+20 pins, one baseline un-`@Ignore`d); corpus screen **0 of 8,725**
+over BOTH channels; `cost_gate` PASS (largest delta +0.15%); `huge_methods` PASS; warning gate
+clean with both compile tasks verified EXECUTED rather than up-to-date. `Checker.kt` 197,132 ->
+197,342 (**+210**).
+
+**THE ROW WAS LABELLED "PIN-SERVED, RE-TRANSCRIBE OR RETIRE" AND THERE WAS AN ENGINE DEFECT
+UNDER IT.** The recorded reason was right that a wipe-and-pin walker re-emits the whole file and
+that its four member orders are hardcoded — but the mechanism it named in passing (*tsgo reduces
+`keyof A & keyof B` to a SORTED literal union where we leave it unreduced*) had never been
+measured, and measuring it first is what turned a text edit into a fix. **A mapped type whose
+key source is an INTERSECTION produced NO TYPE AT ALL**: `getTypeFromMappedType` enumerates a
+`Type.StringLiteral` or a union of them and `else`-bails to `anyType`, so
+`{ [K in keyof T & keyof C]: T[K] }` — the reverse-mapped idiom — was a silent `any`. `any` is
+legal everywhere, so the corpus, the 8-profile grid and `cost_gate.py` are all green either way;
+only a reference shows it.
+
+**THE RULE IS ROUND 777'S EXACT COMPLEMENT, WHICH IS WHY IT DOES NOT RE-OPEN THAT REFUSAL.** That
+round refused distributing `X & (A | B)` at construction ("would change every intersection's
+identity, display and relation behaviour") and built `distributedNarrowingType` as an on-demand
+view **whose applicability test requires every operand to be OBJECT-capable**.
+`reducePrimitiveDomainIntersection` fires only when every constituent is a string / number /
+boolean / bigint literal, one of those four primitives, or a union of such — so the two can never
+both apply to one type, and the result is always a plain union of unit types rather than a union
+of intersections. Measured on 11 shapes against tsgo 7.0.2 before any code: 10 now byte-identical.
+
+**A SECOND, INDEPENDENT DEFECT FOUND ON THE WAY, AND IT IS THE ONE WITH THE WIDER REACH: LITERAL
+TYPES ARE NOT INTERNED IN THIS MODEL.** ~25 `Type.StringLiteral(...)` construction sites and no
+factory, so `getUnionType`'s id-keyed dedupe kept BOTH instances and `keyof Zed | keyof Wye`
+rendered `"alpha" | "alpha" | "beta" | "zoo"` where tsgo renders three members. Fixed by keying
+that dedupe on the literal's VALUE — the smaller of the two available fixes, because it removes
+the duplicate MEMBER without moving any literal type's own identity, so no relation cache,
+`aliasDisplayMap` entry or id-pair key changes. Interning the literals themselves (which would
+also make two separately-written `"a" | "b"` unions ONE interned union) is left unstarted and is
+the bigger change.
+
+**(CHK.50) FIRED ON SCHEDULE AND THE SCREEN CAUGHT IT IN ONE RUN — 1 MISMATCH OF 8,724.** With the
+key source reduced, the general excess-property path now fires where B218 already emitted, so
+`reverseMappedTypeLimitedConstraint` grew a DUPLICATE row. B218's own KDoc states the premise the
+reduction removed — *"getTypeFromMappedType bakes the param to anyType, so the standard
+excess-prop path skips the arg"* — so it is now a REPLACEMENT: it drops the general row, which is
+typed by the CONSTRAINT (`{ x: number; }`) where tsc infers from the literal (`{ x: 1; }`). Second
+B218 finding: it built its display in the OBJECT LITERAL's property order where the members are
+the mapped type's, so it now sorts by key. **That is what makes the four re-transcribed pin
+strings what the ENGINE computes rather than copied text** — a hand-written fixture is byte-
+identical to tsgo including `{ alpha: "a"; zoo: 1; }` for a literal written `{ zoo, alpha, extra }`.
+
+**WALKER RETIREMENT STAYS REFUSED, ON A RE-TAKEN MEASUREMENT.** PassLab-disabling
+`checkReverseMappedIntersectionConstraint` used to leave the engine emitting 5 of 13 rows; it now
+leaves **11**, but they are the wrong rows — member TYPES are the constraint's
+(`{ anotherField: string; field: number; }`), two land at positions the baseline does not carry,
+and both TS2322 subtype-constraint rows are still missing. Reverse-mapped INFERENCE, not this
+walker, is what would retire it.
+
+**ABLATION: SIX ARMS, ONE MISTAKE EACH, EVERY ARM PROVEN TO DIFFER FROM ITS OWN SNAPSHOT.**
+a1 literal dedupe -> id-only: **1 RED**. a2 reduction declines for a union constituent: **10 RED**.
+a3 literal-vs-primitive domain check dropped: **0 RED — the pin set was BLIND**, and the shape had
+to be constructed from the mechanism (`"a" & number`, which the 20 pins did not contain: they held
+literal-vs-literal and same-domain only). Pinned, re-run, **1 RED**. a4 `TypeParameter` admitted to
+the family: **0 RED and it is genuinely REDUNDANT** — the whole refusal list is subsumed by the
+positive domain test, because in THIS model an enum literal is a member-less `Type.Object`
+((REL.1)(b)) and carries no domain bit; kept as a barrier against widening `primitiveDomainOf`
+and recorded in its KDoc rather than claimed. a5 B218 sort dropped: **1 RED**. a6 B218 replacement
+dropped: **2 RED**.
+
+**THREE RESIDUES, MEASURED AND PINNED AS RESIDUES** so the next reader meets a decision: an enum
+member is outside the family (tsgo reduces `E.A & "x"` to `never`); `keyof T` over a FREE type
+parameter degrades to `string` here, so a generic DECLARATION renders the reduced key set instead
+of tsgo's mapped-type node — **the row it replaced was `any`, so neither text is tsgo's and the
+new one is the informative one**; and `(true | false) & boolean` elaborates one chain sub-line
+tsgo does not print. The parenthesization of a union member inside an intersection display
+(`("a" | "b") & Zed`) is (CHK.130)'s rule one container over and is left as a separate family.
+
+**SUCCESSOR, per the WORK ORDER note.** The (LEGACY.0b) ledger is at 19. The cheapest measured
+next row is still `augmentExportEquals2.js` (a HARNESS decision, (P18.153)); the one this round
+makes newly interesting is any row whose reason blames a DISPLAY where the type underneath is
+`any` — this round is the second in three where the recorded reason described the symptom and the
+mechanism was one layer down.
+
+### Round (P18.153) — (LEGACY.0b) recon: two ledger reasons re-measured, neither was its mechanism (2026-09-20)
+
+**NO LEDGER MOVEMENT — pending stays 20.** Suite **20,128 / 0 / 45**, no compiled code touched.
+A short recon round that applies this session's own finding to the two rows a next session would
+most likely reach for, because both had one-line reasons that read as cheap.
+
+**`augmentExportEquals2.js` IS A HARNESS QUESTION, NOT A COMPILER ONE.** Recorded reason:
+`tsgo: //// [file3.ts] | ours: //// [file1.js]` — the diff's first differing line again. Measured:
+the CASE FILE declares `// @filename: file3.ts` on two consecutive lines, and tsgo's harness
+renders that as an EMPTY `//// [file3.ts]` block followed by the real one, then emits ONLY
+`//// [file3.js]` containing `"use strict";` — no file1.js, no file2.js. We take the
+content-bearing declaration and emit all three with full bodies. So the emit path is innocent and
+the seam is `parseMultiFileSource` ((P18.139)'s); the open question is whether tsgo's
+duplicate-`@filename` behaviour is a harness defect worth copying, which should be DECIDED before
+anything is changed.
+
+**`jsdocImportTypeNodeNamespace` IS NOT A JSDoc QUESTION, AND ITS REAL OBSTACLE IS THAT NOTHING
+GATES IT.** The shape reproduces in a plain `.ts` file — `type A = import('./M').default` against
+`declare namespace _default { … } export default _default` is TS2694 in tsgo and SILENT here, so
+the JSDoc `@type` cast is only where the divergence surfaced. tsgo resolves an import-type
+QUALIFIER in TYPE space and `default` of an `export default <namespace>` is a VALUE export. **The
+reason it is not a cheap row is a COUNT: `import(` occurs ZERO times in the whole active generated
+corpus** (62 reference cases write one, none active), so a green screen there would be a statement
+about the corpus, not about the change — and real libraries use `import()` types heavily. The
+instrument is a library probe plus hand-written pins, not the screen. Sized and deliberately NOT
+started at the end of a session.
+
+**The reusable half**: four of the reasons examined this session described a SYMPTOM (a diff's
+first differing line) and were read as verdicts on the MECHANISM — three of them overstating the
+work, one understating it. Correcting a reason costs one screen run and no build.
+
+### Round (P18.152) — (LEGACY.0b): the import shape a user actually writes (2026-09-20)
+
+**Ledger 21 -> 20**, `esModuleInteropTslibHelpers.errors.txt` CLOSED and ACTIVE in the screen's
+3,078 / 0. Suite **20,128 / 0 / 45**.
+
+A DEFAULT IMPORT CLAUSE needs `__importDefault` exactly as `{ default as X }` does, so under
+`importHelpers` with no resolvable `tslib` it is TS2354. `checkImportHelpersWithoutTslib` only
+ever looked at `namedBindings` — it had arms for `import * as X` and for a `default` SPECIFIER —
+so `import path from "path"`, the shape a user is most likely to write, was the one shape it could
+not see.
+
+**THE LEDGER'S RECORDED REASON WAS WRONG FOR THE THIRD TIME THIS SESSION, AND THE MECHANISM IS
+ALWAYS THE SAME.** It read `ours: ==== file.ts (0 errors) ====`, which says we emit nothing for
+the baseline; we emitted THREE of its four rows correctly and the gap was one. A reason built from
+the FIRST DIFFERING LINE of a diff describes a symptom and then gets read as a verdict on the
+mechanism — the same shape as (P18.149)'s "nesting is entirely missing" and (P18.150)'s "reports
+no TS2416 at all". All three overstated the work.
+
+**Measured against tsgo cell by cell before writing anything**, and one cell decided the
+implementation: a clause carrying BOTH a default name and a `default as` specifier reports at the
+**SPECIFIER** (1:16), not at the statement (1:1). So the new arm is ordered AFTER the specifier
+arm and gated on the statement having emitted nothing; its ablation moves exactly that row.
+
+**Recorded and deliberately NOT followed**: tsgo also reports at (1,1) for a TYPE-ONLY default
+import. A type-only import emits nothing, so no helper can be required — it reads as a tsgo defect,
+following it would add a row to every `import type X from` in a project using `importHelpers`, and
+it is in NO baseline either way. Pinned `residue -` rather than argued about.
+
+**Gates, and one of them is vacuous ON A COUNT rather than on an argument**: corpus-screen 0 of
+8,723 (0 of 8,724 with the row included); cost_gate PASS and byte-identical to (P18.150) on every
+counter; huge_methods PASS. **The 8-profile grid is STRUCTURALLY VACUOUS and that was counted, not
+assumed — 0 of 8 profiles set `importHelpers`, so the walker returns on its first line for every
+one of them**, which is (CHK.124)'s law used to SKIP an eight-minute run honestly instead of
+reading eight zeros and calling them a gate. 5 pins, 2 arms, both red.
+
+### Round (P18.151) — (LEGACY.0b): a refusal that dissolved while nobody was looking (2026-09-20)
+
+**Ledger 22 -> 21**, `pathsValidation5.errors.txt` CLOSED and ACTIVE in the screen's 3,077 / 0.
+Suite **20,123 / 0 / 46**. One deleted rule, one pin, one arm.
+
+The whole divergence was where a `tsconfig.json` row sorts against a source file's in the summary:
+tsgo's `ast.CompareDiagnostics` compares the two PATHS as strings, so `src/main.ts` comes first,
+and `BaselineFormatter`'s comparator gave the config file a privileged position.
+
+**THE POINT IS THAT NOTHING WAS FIXED TO MAKE THIS POSSIBLE.** (LEGACY.0b) step 15 measured this
+exact deletion and REFUSED it — it moved SEVEN green baselines whose tsconfig rows tsgo keeps
+first, every one a baseUrl / node10 / rootDir case tsgo 7 does not run — and wrote the measurement
+into the comparator's own comment, which is why the refusal was checkable. Re-running the same
+deletion today reads **0 mismatches of 8,722**: (LEGACY.1) removed those option values, so the
+seven are no longer generated. **A refusal in this repo is a measurement taken in a REGIME, and a
+neighbouring arc can dissolve it without anyone noticing** — the same shape as (P18.149)'s
+`complexRecursiveCollections`, where (P18.148)'s fold had made a recorded blocker obsolete one
+round earlier. Cheap rule: when a pending row's reason names a COUNT of collateral baselines,
+re-take the count before reading the refusal.
+
+**Scope receipt**: the change is test-side only. Production carries no config-first diagnostic
+ordering rule, and `Checker.class` is byte-identical to (P18.150)'s landed binary — so `cost_gate`
+and `huge_methods` are INAPPLICABLE here rather than skipped, which is a different claim and worth
+writing down.
+
+**One observable, not two**: the arm restoring the rule reddens the new pin AND the corpus row.
+That is round 927's pair law and is recorded rather than counted twice.
+
+### Round (P18.150) — (LEGACY.0b): TS2416's chain drills into the failing member, at both tails (2026-09-20)
+
+**NO LEDGER MOVEMENT — pending stays 22.** Suite **20,122 / 0 / 47** (+10 pins). The sibling of
+(P18.149) one walker over, and the same law: the general elaboration is what knows how deep a
+mismatch is, so a chain that names two object types and stops is short by however far the cause
+actually lies.
+
+Two tails were truncated. A PROPERTY pair in `checkClassPropertyOverrides` added its
+`Type 'A' is not assignable to type 'B'.` line and had nothing more to say for a non-function
+pair. A method's RETURN pair in `addSignatureElaboration` had a drill only for a UNION source, so
+an OBJECT return pair stopped one line later. Three of six shapes went from truncated to
+byte-identical with tsgo 7.0.2; the other three were already right and are pinned as controls.
+
+**THE SIZING THIS ROUND INHERITED — MY OWN, WRITTEN ONE ROUND EARLIER — WAS WRONG, AND IN THE SAME
+DIRECTION AS THE ONE BEFORE IT.** (P18.148) and (P18.149) both recorded `class C implements B`
+whose method return drills deeper as reporting **no TS2416 at all**. Measured cell by cell first:
+all six shapes REPORT, in the `string`/`number` and the `number | undefined` spellings alike, and
+the gap is purely chain DEPTH. That is twice in one session that a recorded sizing said "missing"
+where the truth was "truncated" — the failure mode is reading a SHORT chain as an ABSENT row, and
+the cheap guard against it is that a sizing must quote the row it claims is missing.
+
+**AN UNDISCRIMINATED ARM WAS AN UNPINNED GUARD FOR THE SECOND TIME TODAY, AND THIS ONE WAS BLIND TO
+BOTH INSTRUMENTS.** Ablating the double-append guard (`chain.size == sizeBefore`) read **0 RED over
+8 pins AND 0 mismatch over 8,722 baselines**. (P18.149)'s a4 was found by the screen; this one the
+screen could not see either, so the shape had to be CONSTRUCTED from the mechanism — a member that
+is BOTH callable and carries a property, which is the only way `addSignatureElaboration` elaborates
+AND the property drill has something to drill. Without the guard that chain grows a contradictory
+DOUBLE tail (two sibling sub-chains at one indent) where tsgo prints exactly one. **So round 807's
+"a signal with no uniquely-its-own failure is a REDUNDANT guard" now has two measured
+counter-examples in one session**, and the escalation is: pins -> screen -> ask what shape the
+mechanism could bite on.
+
+**A PRE-EXISTING DIVERGENCE SURFACED AND IS RECORDED RATHER THAN CHASED**: for that same hybrid
+member tsgo elaborates the PROPERTY (`Types of property 'tag' are incompatible.`) and we elaborate
+the PARAMETER. It is a question of WHICH mechanism to elaborate, not of chain depth, so it is out
+of this round and pinned `residue -` with today's answer so the next reader meets a recorded
+decision instead of a guarantee.
+
+**Gates.** corpus-screen **0 of 8,722** both channels — the real instrument here, since 54 TS2416
+baselines are in the reference set; 8-profile grid 8x0 with emit 0 differing, where `added`/
+`removed` cannot move by construction (the round adds no diagnostic) and the profiles carry no
+chain line for `fullDiffLines` to see either, so that grid is a CONTROL and says so in its header;
+**`cost_gate` is BYTE-IDENTICAL to (P18.149)'s reading on every counter** — the receipt that the
+compiler profile carries none of this population and that no resolution moved; `huge_methods` PASS
+(0 over the limit, 17,965 methods). 10 pins, 3 arms, all red.
+
+### Round (P18.149) — (LEGACY.0b): TS2430's chain comes from the engine, and two shapes it could not see (2026-09-20)
+
+**Ledger 23 -> 22**, `complexRecursiveCollections.errors.txt` CLOSED and ACTIVE in the screen's
+3,076 / 0. Suite **20,112 / 0 / 47** (was 20,101 / 0 / 48 — 11 new pins, one skip closed).
+
+tsc compares the whole derived interface type against the base
+(`checkTypeAssignableTo(typeWithThis, baseWithThis, node.name, …)`), so a TS2430 carries exactly
+the chain the ordinary assignability path produces. `checkInterfaceExtendsClauses` was NAME-based
+instead — `typeNodeToSimpleName(annotation)` against `typeToString(baseMemberType)`, with a
+hardcoded two-line chain — so it truncated one level below wherever the mismatch really was, and
+could not compare a member with no simple name at all.
+
+**THE BRIEF THE PREVIOUS ROUND HANDED OVER WAS PARTLY WRONG, AND ONLY THE MATRIX SHOWED IT.**
+(P18.148) sized the successor as "nested, method-return and method-with-parameters are ENTIRELY
+MISSING". Measured against tsgo 7.0.2 over six shapes before any code was written: nesting was
+NOT missing — `interface D2 extends B2 { p: InnerBad }` reported, with the chain stopping at the
+whole-object line. What was missing is a METHOD whose return differs, one whose return drills
+deeper, one whose PARAMETER differs, and a property annotated with a TYPE LITERAL. The last is the
+one worth carrying: `typeNodeToSimpleName` answers null for a type literal, and that null gated the
+whole comparison — an undecidable *rendering* silencing a perfectly decidable *comparison*. (The
+previous round's own residue pin used the type-literal spelling for its "nested" case, which is why
+both readings were self-consistent and still disagreed.)
+
+**THE VERDICT HAS TO BE THE WHOLE-TYPE RELATION, AND THE ROUND'S OWN NEGATIVE CONTROL IS WHAT SAID
+SO.** The first cut asked `isTypeAssignableTo` of the two MEMBER types and reported
+`interface D extends B { m(a: number): number }` over `m(a: number | string): number | string` —
+legal TypeScript, silent in tsgo. `bivariantParams` reads BOTH declarations, which a bare pair of
+function types no longer carries. **The cheapest oracle for it was already on the same binary**:
+the identical pair written as a variable declaration goes through the whole-type relation and is
+silent, so one fixture separated "our relation is wrong" from "we asked it the wrong question".
+
+**ADDITIVE BY CONSTRUCTION, WHICH IS A PLACEMENT DECISION RATHER THAN AN ARGUMENT.** The structural
+arm runs AFTER the name-based loop declines — a member the old path fires on `return`s before ever
+reaching it — so no existing row can change verdict or chain. The engine chain is adopted only when
+its first line names the SAME member the walker fired on (the builder prefers a LEAF mismatch where
+the loop takes the first base property in table order, so they can choose differently, and a chain
+naming another member contradicts its own row).
+
+**THE CLOSED LEDGER ROW IS A RE-TRANSCRIPTION THAT THE ENGINE NOW JUSTIFIES.** tsgo's whole diff for
+`complexRecursiveCollections` is one word printed twice: `The types of 'map(...).size'` ->
+`The types returned by`. That is a stale copy rather than a divergence, because (P18.148)'s second
+fold makes the engine answer the same way — measured byte-identical to tsgo at a variable
+declaration AND, since this round, at a TS2430 site. **RETIREMENT of that walker stays refused, now
+on a measurement instead of an assumption**: PassLab-disabling the pass leaves ALL FOUR TS2430 rows
+missing, not one, because the other three compare a polymorphic `this` return type — (CHK.133)'s
+recorded `this: this` residue, a different mechanism. The ledger entry's own reason ("the engine's
+own path accumulation is still short for this fixture") was right about the outcome and wrong about
+the cause.
+
+**a4 WAS UNDISCRIMINATED BY EVERY PIN AND IS NOT A REDUNDANT GUARD.** Dropping the confinement gate
+reddened 0 of the hand-written pins and 1 corpus baseline:
+`inheritSameNamePropertiesWithDifferentOptionality`, where the structural arm reaches an INHERITED
+member and reports TS2430 for an `x?: number` / `x: number` conflict whose answer is TS2320 —
+`interface A extends C, C2` declares no `x` at all. Round 807 says a signal with no uniquely-its-own
+failure is a redundant guard; the step it does not name is **screening the arm before believing
+that**, and here the screen turned a "redundant" verdict into a missing pin (RED 0 -> 1 once added).
+
+**Gates.** corpus-screen **0 of 8,722** both channels; 8-profile grid **0 added / 0 removed /
+0 fullDiffLines**, emit 0 differing files — and the grid is a **REAL gate** here, not a (PARITY.1)
+control, because this rule can ADD rows and tsc's own sources are full of `interface X extends Y`
+whose members are methods; `cost_gate` PASS (max +0.15% on `typeOfExpr.distinct`, `output.errors` 46
+unchanged); `huge_methods` PASS (top 6,892; `getPropertyElaborationChain` unchanged at 6,480).
+11 pins, 4 arms, all four red.
+
+**Residue, unchanged and now the successor:** a `class C implements B` whose method return drills
+deeper reports no TS2416 at all — a different walker (`checkImplementsClauses`, 5,600 bytecodes),
+54 TS2416 baselines in the reference set.
+
+### Round (P18.148) — (LEGACY.0b): the SECOND chain fold, and a row that could not show its own mechanism (2026-09-20)
+
+**NO LEDGER MOVEMENT — pending stays 23**, and that is the point of the note. Suite **20,101 / 0 / 48**
+(+5 pins). A parity fix taken because the measurement was in hand, not because a row closed.
+
+**THE ROW THAT NAMES THE MECHANISM CANNOT SHOW IT.** `complexRecursiveCollections` is served by a
+wipe-and-pin walker, so no engine path reaches it and its hardcoded
+`The types of 'map(...).size'` line says nothing about what the engine computes — which is why the
+ledger could only classify it as a re-transcription. **What located the real gap was a PAIR of
+scratch fixtures differing in ONE ingredient**: the same `{ size: number | undefined }` against
+`{ size: number }` through a plain nested property was **already byte-identical to tsgo**
+(`The types of 'p.size'`), and only the CALL form diverged. That one-line difference is the whole
+diagnosis, and it took two 20-second runs after five minutes of reading had produced nothing.
+
+**tsgo FOLDS TWICE** (`reportRelationError`, `internal/checker/relater.go`). Fold 1 turns a property
+incompatibility followed by a call-signature return incompatibility into `The types returned by
+'m()'` / `'m(...)'`. Fold 2 then runs over THAT result, and its `switch` lists
+`The_types_returned_by_0_are_incompatible_between_these_types` **beside** the two property messages,
+converting the message to `The_types_of_0` only when it is still the property one. So a return type
+that drills deeper reads `The types returned by 'm().size'`. We stopped after fold 1 and printed the
+header over a whole-object mismatch line. The fix is confined to a single call signature on both
+sides — with overloads the return pair it drills is not necessarily the one the elaboration chose.
+
+**Price**: `corpus-screen.sh` **0 mismatches of 8,721**. A display change is corpus-gated only
+((PARITY.1)), so that zero IS the price — there is no second instrument to reach for.
+`getPropertyElaborationChain` **6,260 -> 6,480** bytecodes, 1,520 under the JIT limit (worth quoting
+because CLAUDE.md flags this family, and it is one of the larger methods left).
+
+**TWO RESIDUES MEASURED IN THE SAME MATRIX, NEITHER A CHAIN QUESTION AND BOTH BIGGER THAN THIS FIX**:
+`interface D extends B` reports TS2430 for a **DIRECT property mismatch only** — the nested, the
+method-return and the method-with-parameters shapes are **entirely missing**, all three of which tsgo
+reports — and a `class C implements B` whose method return drills deeper reports **no TS2416 at all**.
+The first is why `complexRecursiveCollections`' walker cannot be retired even with the chain fixed,
+and it is the honest reason that ledger row stays pending rather than being re-transcribed.
+
+**5 pins, 2 arms, both RED and RECORDED AS ONE OBSERVABLE** (round 927's pair): c1 drop fold 2 and c2
+keep the fold but lose the *returned by* carry-forward both redden the SAME two pins, because c1's
+damage subsumes c2's and the pins assert the WHOLE chain. No pin can separate them, and the full-chain
+assertion is still the right one — so the arms are reported as covering one observable rather than
+credited as two.
+
+### Round (P18.147) — (LEGACY.0b): TypeScript 7 gives a JS function no implicit `...any[]` rest (2026-09-20)
+
+Ledger **24 -> 23**, `argumentsReferenceInFunction1_Js.errors.txt` CLOSED and ACTIVE.
+Suite **20,096 / 0 / 48** (was 20,089 / 0 / 49).
+
+**THE ROW IS A tsc-6 TRANSCRIPTION IN A PIN WALKER, AND THE OBSERVATION THAT RETIRES IT IS NOT
+ABOUT DISPLAY AT ALL.** `strictBindCallApply` types `apply`'s second parameter as the receiver's
+parameter TUPLE; tsc 6 inferred an un-annotated JS function that referenced `arguments` as
+`[p?: any, …, ...any[]]`, and B230 hardcoded that tail. What decides it is the ARITY: measured
+against tsgo 7.0.2, `const f = function (a) {}` called `f(1,2,3)` is **`Expected 0-1 arguments`**
+with or without an `arguments` reference in the body — i.e. TypeScript 7 has no implicit JS rest to
+render, so the tail is not narrowable, it is **gone**. Our arity model already agreed (3 of 3 cells);
+only the display had the residue.
+
+**SO THE SURVIVING GATE CHANGED MEANING RATHER THAN BEING REMOVED.** `bodyMentionsArguments` used to
+select the shape that GOT the implicit rest. With no such rest it selects nothing semantic — it is
+now only a CONFINEMENT to the receivers whose tuple this hardcoded display renders exactly, and its
+substring imprecision (a body mentioning `arguments` only inside a STRING) is harmless under
+TypeScript 7 **because tsgo reports there too** — measured, and pinned as a control rather than
+asserted. A gate whose justification has evaporated is worth re-stating in place, not deleting: the
+KDoc now says what it confines and why.
+
+**THE ROW WAS THE SMALL HALF OF AN 8-OF-8 GAP, MEASURED AND DELIBERATELY NOT TAKEN.** tsgo types
+EVERY `f.apply(x, arguments)` from the receiver's real signature — 8 of 8 scratch cells report where
+these gates leave us silent for all but one — and it renders a REST receiver as `any[]`, which
+changes the **CODE** to TS2740; a defaulted parameter as `[a?: number | undefined]`; a JSDoc-tagged
+or TS-annotated one as `[a: number]`. That is the general `bindCallApplyType` path ((CHK.134)'s open
+item), not a transcription, so it is recorded with its cells rather than attempted here. **The
+JSDoc-tagged receiver is REFUSED rather than rendered wrong** — before this round it printed
+`[a?: any, ...any[]]` against tsgo's `[a: number]`, wrong in two ways; it is now one MISSING row,
+which is the conservative half of the same divergence and is pinned `residue -`.
+
+**Blast radius**: `corpus-screen.sh` **0 mismatches of 8,721** with the row `--include`d.
+`cost_gate.py` max **+0.15%** — and **byte-identical to (P18.146)'s reading on every counter**, which
+is the receipt that the drift is the stale baseline rather than either round; `huge_methods.py`
+**0 over limit / 878 classes**.
+
+**7 pins, 2 arms, both RED**: b1 restore the `...any[]` tail **4** (every positive pin), b2 drop the
+JSDoc-typed-receiver refusal **1** (the residue pin).
+
+### Round (P18.146) — (LEGACY.0b): the JSDoc `@param` check has TWO branches, and this compiler had one (2026-09-20)
+
+Ledger **25 -> 24**, `noParameterReassignmentIIFEAnnotated.errors.txt` CLOSED and ACTIVE.
+Suite **20,089 / 0 / 49** (was 20,068 / 0 / 50 — one pending row closed, 21 pins added).
+
+**THE ROW WAS ONE CELL OF A SIX-CELL FAMILY.** Its recorded reason was right about the mechanism —
+a VARIADIC `@param {...T}` tag IS an array type, so tsc's *It would match 'arguments' if it had an
+array type* rung must not fire — and wrong about the SIZE. tsgo's `checkUnmatchedJSDocParameters`
+(`internal/checker/jsdoc.go`) is **two branches chosen by whether the function reads `arguments`**,
+reporting different CODES over different TAGS, and `checkJSDocParamTags` here never asked the
+question at all. Measured against tsgo 7.0.2 over 19 scratch cells — **5 of the first 7 diverged**:
+
+| shape | tsgo | ours before |
+|---|---|---|
+| `{number}` + `arguments` | **TS8029** | TS8024 (wrong code AND message) |
+| `{...unknown}` / `{T[]}` / `Array<T>` / `ReadonlyArray<T>` + `arguments` | SILENT | TS8024 |
+| two unmatched tags + `arguments` | TS8029 on the **LAST** only | TS8024 on **both** |
+| last tag MATCHES a param + `arguments` | SILENT (the whole check returns) | TS8024 on the earlier one |
+| no type + `arguments` | SILENT | TS8024 |
+| `@param n {T}` / `@param n`, no `arguments` | SILENT (name-first) | TS8024 |
+| tag at a BINDING-PATTERN param's index | SILENT | TS8024 |
+
+**THE WALKER THAT OWNED THE LEDGER ROW WAS ANTI-CORRECT BY CONSTRUCTION.** B558
+(`iqaCheckJsDocParam`) was a corpus-unique TS8029 emitter whose regex was
+``@param\s+\{\.\.\.[^}]*\}\s+(name)`` — i.e. it matched **only the variadic form**, which is the one
+shape tsgo can never report. Every row it could produce was a false positive, so it is DELETED
+rather than narrowed. Reading a pin walker's *gate* rather than its message is what showed this in
+one minute; the ledger entry had described it as a missing variadic test.
+
+**THE SECOND DEFECT WAS MASKED BY THE FIRST, AND THAT IS THE ROUND'S REUSABLE FINDING.** With the
+TS8029 gone the baseline still mismatched — on a **duplicate TS2683** at the same position.
+`--passTiming`'s `emissions by pass` named both emitters in one run
+(`checkJsImportScriptsApplyArguments 2`, `checkSpine 1`): the B557 pin walker hardcodes an
+implicit-`this` row that the general rule ((LEGACY.0b) step 7) has emitted since, and it stayed
+invisible for as long as the baseline ALSO mismatched on the JSDoc row. **A pending row can hide a
+second defect behind the one its ledger entry names** — re-read the diff after closing the named
+mechanism instead of assuming the row goes green. The sibling `noParameterReassignmentJSIIFE` is the
+control that the general rule honours `noImplicitThis: false` by itself: it is ACTIVE, green, and
+its baseline carries no TS2683.
+
+**tsgo's `arguments` RULE IS NOT JAVASCRIPT'S, AND THAT HAD TO BE MEASURED.**
+`nodeStartsNewLexicalEnvironment` puts **`ArrowFunction`** on its list, so a tag on a function whose
+only `arguments` sits in a nested ARROW reports TS8024 — even though at run time that arrow's
+`arguments` IS the enclosing function's. The same matrix refuted a guess in the other direction: a
+qualified tag name is **TS8032**, not the TS8028 the round expected.
+
+**BLAST RADIUS MEASURED BEFORE ANY PIN WAS WRITTEN**: `corpus-screen.sh` over the built arm reads
+**0 mismatches of 8,719** (3,073 errors / 5,646 emit), and **0 of 8,720** with the pending row
+`--include`d — i.e. the change moves nothing that was green and closes the row it targeted.
+`cost_gate.py` max **+0.15%** (stale-baseline drift; the profile is all `.ts`, which this JS-only
+walker cannot reach), `huge_methods.py` **0 over limit / 878 classes**.
+
+**RESIDUES, each measured, each leaving the row it already had**: a type ALIAS resolving to an array
+(`@typedef {number[]} Nums`) reads as a non-array here, because JSDoc types are TEXT at this layer —
+that shape keeps an ours-only row with a different code; a tag attached to the enclosing
+`VariableStatement` rather than to the function expression it initializes is not seen by the walker
+at all (a MISSING row, unchanged by this round, and the reason the ledger-row pin discriminates only
+its TS2683 half); and TS8032 has no emitter in this compiler and is its own family.
+
+**21 pins, 8 arms, every arm RED and every mechanism uniquely covered**: a1 restore B558's answer
+(variadic is not an array) **2**, a2 never take the `arguments` branch **10**, a3 the `[]` test
+**1**, a4 drop the lexical-environment boundary **3**, a5 drop the name-first skip **2**, a6 drop
+the binding-pattern skip **1**, a7 restore B557's duplicate TS2683 **1**, a8 report every tag rather
+than the last **2**.
+
+**PROCESS COST WORTH RECORDING**: the round lost ~15 minutes to running the suite as a
+`run_in_background` `nohup … &` double-detach (CLAUDE.md names it) *and* through a `| grep | head`
+pipeline, so the log flushed nothing and a SECOND suite run started beside the first — two live
+`GradleWorkerMain`s, and a `rm -rf` of the results dir under the older one. `pgrep -fa
+'GradleWorkerMai[n]'` is what diagnosed it; the recovery is `./gradlew --stop`, verify `free -m`,
+then ONE foreground run redirected to a file.
+
+### Round (P18.145) — (LEGACY.0b): a static field's class alias is decided by `this`, not by `async` (2026-09-20)
+
+Ledger **26 -> 25**, `asyncArrowInClassES5(target=es2015).js` CLOSED and ACTIVE in the EMIT channel's 5,646 / 0.
+Suite **20,068 / 0 / 50** (+5 = exactly the new pins, skipped -1 = exactly the closed row). Warning gate clean,
+`huge_methods --fail-over 0` exit 0, cost gate exit 0 — **a control, and stated as one**: round 738's
+`skipEmitOutputs` gate means `--noEmit` never runs the transformer, so the 8-profile grid and every counter in
+this repo are STRUCTURALLY BLIND to an emit change. The gate is the corpus EMIT channel; the control beside it is
+an `--outDir` run over the compiler profile (78 files, no stray `var _a;` in any of them).
+
+**THE FIX IS A DELETED DISJUNCT, AND THE CODE'S OWN COMMENT NAMED IT.** Below ES2022 a static field initializer
+that reads `this` needs the class captured into a temp first. TypeScript 6 ALSO pre-emitted that capture for
+EVERY async-arrow initializer, defensively, because the downleveled `__awaiter` template is *conceptually*
+`this`-binding — producing a `var _a;` and an `_a = Cls;` the emitted program never reads. tsgo 7.0.2 does not.
+
+**THREE CELLS MEASURED BEFORE THE CHANGE, AND THE MIDDLE ONE IS THE ONE THAT MATTERS**: an async arrow with no
+`this` gets no capture; an async arrow reading the class BY NAME gets no capture (a name is not `this`, which is
+what separates "reads the class" from "reads `this`"); an async arrow reading `this` still captures, and there
+`_a` IS read. So the async case that genuinely needs an alias is exactly the one `containsThisInExpr` already
+answers — the disjunct only produced dead output.
+
+**A PRE-EXISTING DIVERGENCE THE ROUND EXPOSES AND DOES NOT CLOSE**, recorded in the pin rather than chased: in the
+third cell tsgo rewrites the arrow's `this` to `_a` where we emit the capture and leave `this` in the body. It was
+the same before this round, which is why the positive-control pin asserts the CAPTURE and not the body — a pin
+written on the body would have been a countdown asserting today's wrong answer.
+
+**Ablation**: restoring the TypeScript-6 disjunct reddens 2 of the 5 pins (the two no-capture cells) and leaves
+the three controls green. The pin helper names `// @target: es2015` explicitly — the capture only exists below
+ES2022, so at the default target every pin here would pass vacuously (round 945's law).
+
+### Round (P18.144) — (LEGACY.0b): a JSDoc `@param` makes its parameter required, and the LAST writer wins (2026-09-20)
+
+Ledger **27 -> 26**, `jsdocRestParameter` CLOSED and ACTIVE in the screen's 3,073 / 0. Suite **20,063 / 0 / 51**
+(+7 = exactly the new pins, skipped -1 = exactly the closed row). Corpus screen **0 of 8,718** with the row
+included, cost gate exit 0 and **byte-identical to the pre-change control**, all 8 profiles at their standing row
+counts, warning gate clean with the compile verified executed, `huge_methods --fail-over 0` exit 0.
+
+**THE RULE WAS ALREADY IMPLEMENTED AND WIRED TO ONE ARITY SITE OF FIVE.** `Checker.jsDocRequiredParamNames` and
+`paramInfo`'s `jsDocRequiredNames` are B434's; only the CROSS-FILE map passed them. So the identical two lines
+measured byte-identical to tsgo with the declaration and the call in two `.js` files and read `Expected 0-1` with
+them in one — a divergence no reference disagreed with us about, because tsgo answers the same for both spellings.
+
+**WHAT COST THE TIME IS THAT THE LAST WRITER WINS.** `collectFuncDecls` computed the correct entry and the
+nested-function OVERLAY in `spineArgCtxAt` then recomputed it WITHOUT the tag set and clobbered it. So wiring the
+obvious site changed nothing, which is indistinguishable from a refuted hypothesis. **Three readings of the code
+produced three wrong theories** — `isJsFile` false (refuted: `Expected 0-1` REQUIRES it true), `leadingComments`
+empty (refuted with no build at all: TS8024 fires on the same comments), and `collectFuncDecls` never called
+(**my own marker's fault** — printed in the TooFew emitter while the row comes from TooMany). The marker that
+worked went into the SHARED arity formatter, which both emitters reach: `[cfdBody js=true cm=1 req=y]` beside a
+`0-1` verdict says the set was right and something later overwrote it.
+
+**THE VARIADIC CELL IS A PARSER CHANGE AND IT RETIRED A WALKER.** `@param {...T}` was reparsed as a REST
+parameter (B437's `restNames`), which makes arity unbounded and suppressed the baseline's two TS2554 rows; the
+corpus-unique walker `checkJsRestParamArgTypes` then emitted a TS2345 tsgo does not produce. tsgo types the
+parameter `T[]` and leaves it an ordinary required parameter — **and ours already typed it `T[]`**, so only the
+rest marking was wrong. The walker plus its two private tree-walkers are DELETED (135 lines), PassLab-priced
+before removal at ONE mismatch (its own already-pending baseline) and 0 collateral.
+
+**ABLATION, AND ITS HONEST ROW.** Un-wiring the OVERLAY reads **4 RED**; un-wiring `collectFuncDecls` reads
+**0** and is recorded as UNDISCRIMINATED rather than claimed — the overlay writes last wherever it runs, which is
+the round's own finding, so no fixture here can separate them. It stays because every arity site now goes through
+one helper (a site added later cannot half-wire it the way B434 did) and because the overlay skips an entry
+already marked `isOverloaded`. Dropping the `{T=}` rule and typing a variadic tag `T` instead of `T[]` each redden
+exactly their own pin.
+
+**A DELETION THAT WENT WRONG ONCE AND IS WORTH THE WARNING.** The first attempt at removing the walker bounded
+its span by "the KDoc above the `fun`", and there were TWO stacked KDocs — an ORPHANED B431 one (its walker moved
+to the spine at round 644) sitting directly above B437's. The slice took the wrong one and left the two private
+helpers behind. Bound such a deletion by the DOC COMMENT'S OWN FIRST LINE matched on its text, not by "the
+nearest `/**` above", and delete the helpers in the same pass.
+
+### Round (P18.143) — (LEGACY.0b): the interned union order and its display had come apart (2026-09-20)
+
+Ledger **28 -> 27**, `namespaceDisambiguationInUnion` CLOSED and ACTIVE in the screen's 3,072 / 0 — that, not
+`--include`, is the closure receipt. Suite **20,056 / 0 / 52** (+3 = exactly the new pins, skipped -1 = exactly
+the closed row). Cost gate exit 0 and **byte-identical to the control taken before the change**, all 8 profiles at
+their standing row counts (46 x 7, 94 on harness), warning gate clean with the compile verified executed,
+`huge_methods --fail-over 0` exit 0. `Checker.kt` UNTOUCHED — the fix is nine lines of `StableTypeOrdering.kt`.
+
+**THE RECORDED REASON WAS WRONG TWICE, AND READING THE CODE WOULD NOT HAVE SHOWN IT.** The ledger said the
+var-decl chain "picks the first" and that it "does not go through `findBestUnionConstituent`, which already keeps
+the LAST on a tie". Both false: `cvdaElaborateMismatch`'s B50.3 branch has carried a dedicated
+same-simple-name COLLISION picker since the row was filed, and that picker takes `lastOrNull`. Reading it three
+times produced three wrong theories; one marker settled it:
+
+    [B50.3 pick=Foo.Yep order=Bar.Yep~Foo.Yep rel=false~false]
+
+**The picker was right all along and `Foo.Yep | Bar.Yep` had INTERNED as `[Bar.Yep, Foo.Yep]`** — the reverse of
+what it displays, with both constituents correctly failing the relation.
+
+**THE MECHANISM: A QUALIFIED DISPLAY STRING WAS BEING USED AS tsc's SYMBOL-NAME KEY.** tsc's `compareTypeNames`
+compares `symbolName(getTypeNameSymbol(t))`, which carries no namespace. `StableTypeOrdering.nameKeyOf` read
+`Checker.aliasDisplayMap`, whose string B86.4 QUALIFIES through the enclosing namespace chain — so the final
+compare ran `"Bar.Yep"` against `"Foo.Yep"` where tsc runs `"Yep"` against `"Yep"`, which is EQUAL and falls
+through to the declaration-position key. `NameKey` now carries both names: the qualified one still decides alias
+IDENTITY (two same-named aliases in two namespaces are two aliases, as tsc's symbol compare makes them), the
+unqualified tail is used for ORDERING only.
+
+**WHY IT WAS SILENT, AND WHY THAT IS THE GENERAL LESSON.** The order is a property of the TYPE; the head line
+names the union through the annotation NODE ((P18.140)). So the head printed `Foo.Yep | Bar.Yep` whatever the type
+held, and the ONLY observable was a consumer that reports against a union's LAST constituent — which then named
+the wrong one. A union's interning order is rendered nowhere: no diagnostic, no counter and no grid row moves when
+it is wrong, and the two halves can disagree indefinitely.
+
+**MEASURED AGAINST tsgo 7.0.2, FOUR CELLS, BYTE FOR BYTE**: the corpus fixture; the same declarations with the
+annotation written the other way round (SAME answer — it is the DECLARATION order, not the written one); the
+declarations swapped (the answer MOVES, which is what makes the first two a statement about declaration order
+rather than about writing); and two differently-named aliases. The third cell exists because without it the pin is
+satisfied by "keep the annotation's last member", a different rule that agrees on the corpus fixture (round 807).
+
+**AN OUT-OF-FAMILY DIVERGENCE FOUND IN THE FOURTH CELL, RECORDED IN THE PIN RATHER THAN CHASED**: tsgo renders
+`Zed.Alpha | Ack.Beta` as `Alpha | Beta`, because it qualifies an alias display only where qualification
+DISAMBIGUATES (it does qualify the `Yep` pair). Our B86.4 display qualifies unconditionally. The ORDER agrees; the
+qualification is a separate unclosed mechanism that no corpus baseline covers, and the pin's KDoc says so instead
+of letting the assertion read as a parity claim.
+
+**BLAST RADIUS WAS MEASURED BEFORE LANDING, WHICH IS WHAT MADE THE CHANGE AFFORDABLE.** `StableTypeOrdering` is
+wired into `getUnionType`, i.e. into every union in the program, and (PARITY.1) says the corpus is the only gate a
+display family has. The screen against a throwaway build read **0 of 8,716** — and 0 again with the pending row
+included. Ablating the one-word change back to the qualified compare reddens all three new pins.
+
+**PROCESS, AND IT COST MOST OF THE ROUND.** Two traps, both already in CLAUDE.md and both met anyway.
+`corpus-screen.sh` does NOT compile — its `Checker.class md5` line is the control that says so, and the first
+marker run printed the PRISTINE md5 and a pre-fix answer. And a `nohup ./gradlew ... &` launched from inside a
+tool call is reaped when the call returns: three builds died that way, one of them mid-write, leaving the class
+dir empty (round 851's signature). What worked every time was a plain foreground call left to auto-background.
+
+### Round (P18.142) — (INV.2b) commit 2: the position→node bridge, and the 28.5 % that justifies it (2026-09-20)
+
+**The second (INV.\*) round in a row, and the commit that makes commit 1 USABLE.** (P18.141) shipped
+`Project.typeOracle()` — an oracle addressed entirely by `Node` — while `Project.nodeAt` was `internal` and
+`NodeInfo` is a descriptor by design. A host holding an oracle therefore had exactly one supported move, which
+was to walk `TypeOracle.files` itself. `nodeAt` is now PUBLIC and ANCHORED on the oracle's own trees.
+`Checker.kt` is untouched (`git diff --name-only` confirms), so `cost_gate.py` is a control, and the 8-profile
+grid is structurally incapable of differing — the CLI never constructs a `Project`, a `SourceIndex` or an oracle.
+
+**GATES.** Suite **20,053 / 0 / 53** (+9 = exactly the new pins; skipped unchanged, which is right — this is
+not a parity round and no ledger row moved), re-run on the COMMITTED test source after a late assert-hygiene
+edit. Warning gate clean over `-project`'s `compileKotlinJvm` + `compileTestKotlinJvm` with `--rerun`, and with a
+LIVE positive control first (a throwaway `x as String` printed `No cast needed.`, then was deleted) — an empty
+log is not evidence of a clean gate. `huge_methods.py --fail-over 0` exit 0 on core (a CONTROL: core is
+untouched) and on the `-project` module, which is where this round's compiled code is — 52 classes, 536
+methods, 0 over the limit. `cost_gate.py` exit 0, max **+0.15 %**: a CONTROL by construction (no `Checker.kt`
+change can move a counter), so the residue is the recorded baseline being a few rounds old — round 776's
+"a recorded counter baseline is a claim about a BUILD, not about a commit" — and NOT this round.
+
+**THE PRIZE IS A MEASUREMENT, NOT AN ARGUMENT, AND IT WAS TAKEN BEFORE ANYTHING WAS WRITTEN.**
+`Inv2bBridgeProbeMain` over **669,350 offsets** in twelve of tsc's own compiler sources, every 7th character:
+
+| | |
+|---|---|
+| the obvious hand-rolled descent (`pos <= off < end`) names a DIFFERENT node | **190,820 (28.5 %)** |
+| …and at those the ORACLE's answer differs | **42,507 (6.4 % of all offsets)** |
+| …split: a different type / only ours answers / only the naive one does | 23,303 / 6,939 / 12,265 |
+| restricted to offsets that BEGIN an identifier — the realistic caret | 591 of 25,533 (2.3 %), **27** changing the type |
+
+The mechanism is round 910's: `Node.end` is the end of the token AFTER the node, so sibling spans OVERLAP and
+the naive descent claims offsets belonging to the parent. Every one of the probe's first six examples was the
+same shape — a caret on the comma of an import clause reading `Identifier` where the answer is `NamedImports`.
+That is now a value pin (`round 910 is honoured at the bridge`) with its own reached-the-mistake control.
+
+**AND THE ANCHOR FIXES NOTHING MEASURED, WHICH THE ROUND SAYS RATHER THAN IMPLIES.** The same probe asked
+whether the node `nodeAt` answered was a node of the oracle's own tree: **669,350 of 669,350, 0 from another
+tree, 0 nulls**, and every ordering that could break it self-heals (an index built before the build is
+re-pointed by `upgradeIfShareable`; a file the build never parsed has no store to be inconsistent with). So
+the anchor is not a repair — it turns a property that held by the cooperation of three caches into two lines.
+It is worth that because its violation is SILENT: `TypeOracle.storeOf` is keyed by the node's file NAME and
+reads `types[node.nodeId]` behind a bounds check alone, so a node of ANY equally-named tree is answered.
+
+**THE ONE CONFIGURATION IN WHICH IT DOES NOT SELF-HEAL, AND THE PIN IS BUILT ON IT.** `CrawlParseCache` is
+process-global, keyed by PATH with the content inside the value, and `store` REPLACES. So: project asks
+`nodeAt` before anything is built (a PRIVATE parse, since the compiler has never seen those bytes) → asks for
+an oracle → a SECOND project over the same absolute paths with different bytes builds → the cache entry is
+overwritten → `upgradeIfShareable` can no longer find those bytes and keeps the private tree. That is the
+fixture of `the bridge is anchored even when it was asked before the oracle existed`, and it is the only pin
+either anchor half reddens.
+
+**THE TWO HALVES ARE A ROUND-927 PAIR AND THE THIRD GUARD IS MEASURED REDUNDANT.** Ablated one mistake at a
+time, 21 tests per arm: dropping `oracleTreeOf`'s preference in `sourceIndexOf` (the MISS half) reads 1 RED;
+dropping `buildOracle`'s index drop (the HIT half) reads the SAME 1 RED; dropping the `isClosed` test reads
+**0 RED**; descending by `Node.end` reads 1 RED, on the round-910 pin and no other. The first two cover
+different halves of one path, so neither is redundant and no pin can separate them — recorded as one
+observable with each layer named. The third stays with its redundancy stated, because it is what makes
+`oracleTreeOf`'s contract a test rather than an assumption.
+
+**A DOC THAT HAD BECOME FALSE IN ADVANCE, AND ONE THAT WAS FALSE ALREADY.** `NodeInfo`'s KDoc listed as its
+third reason for existing that "whether the embedding API publishes `Node` at all is a DELIBERATELY OPEN
+question — the queue item after this one is where it gets decided". This is that item; it decided the other
+way, and the class's remaining two reasons (a node goes stale; a node is unsafe as a map key) are why it is
+still the right answer for a host that renders rather than asks. And `docs/type-oracle.md` § 1 already showed
+`project.nodeAt(file, offset)` in a host-facing code sample — a sample that could not compile, because the
+member was internal.
+
+**WHAT DID NOT WORK / WHAT WAS CORRECTED MID-ROUND.** The first cut of the index drop was a blunt
+`sourceIndexes.clear()`, with a comment claiming the rebuild is "a token scan, never a parse" — true for a
+file the oracle walked and FALSE for one outside the program, which has no anchor and re-parses. Scoped to the
+walked set, which makes the comment true and the cost real. The recon probe was also deleted as a scratch
+artifact and then restored: `docs/type-oracle.md` and the test class both cite its numbers, and a doc citing a
+script that does not exist is the frozen-instrument problem in its cheapest form.
+
+### Round (P18.141) — (INV.2b) commit 1: `Project.typeOracle()`, the capability without the decision (2026-09-20)
+
+**The first (INV.\*) round since 2026-09-10, and a MISSION-LEG deliverable rather than a parity row**: leg 2, "an
+embeddable whole-program checker", and the documented reason the JetBrains/WebStorm evaluation paused — their need
+was a post-hoc TYPE ORACLE and this checker could not serve one. (INV.1) and (INV.2) landed the store and the
+Stage-2 facade in September and were **core-only in the sense of having NO CONSUMER**; this gives them one.
+Suite **20,044 / 0 / 53** (+17 = exactly the new pins, skipped unchanged), `-project` module 937 / 0 / 0, warning
+gate clean with a live positive control, `huge_methods --fail-over 0` exit 0, `cost_gate.py` exit 0 and IDENTICAL
+to the previous round — **`Checker.kt` is untouched, which the item required and `git diff --name-only` confirms.**
+
+**THE HAZARD THAT MAKES CLOSING THE WHOLE MECHANISM, REPRODUCED BEFORE ANYTHING WAS BUILT.** A stale oracle answers
+a **WRONG `Type`, not null**: the store is keyed by file NAME and read by `nodeId` behind a bounds check alone, so
+a node of a re-parse indexes the previous build's array. Measured on one fixture, three edit shapes — text re-set
+UNCHANGED answers correctly everywhere (the parse cache is content-keyed, so the "fresh" tree IS the same tree); an
+annotation retyped IN PLACE answers **all 9 identifiers** and reads `number` for a file that now declares `string`
+(100% answer rate, no signal); an INSERTED statement gives 2 confidently wrong answers, 3 nulls past the old
+array's end, and the rest right by coincidence. **`docs/type-oracle.md` § 1 claimed a re-parse "answers nothing",
+which is wrong in BOTH directions**, and is replaced by that table.
+
+**THE INVALIDATION SET IS FOUR AND THE CODE SAID THREE.** `cached = null` occurs at `reloadFile`, `updateFile`,
+`deleteFile` and `close`, but the `captures` KDoc still said *"exactly three sites … There is no fourth path"* —
+stale since (INC.56) added `reloadFile`, and precisely the sentence an implementer reads when deciding where to
+close an oracle. Corrected, with a note telling the next reader to re-derive rather than trust it, and the
+`reloadFile` close carries its own pin so the claim costs a red test instead of a silent gap.
+
+**THE THREAD DECISION WAS TAKEN IN THIS COMMIT, AND THE OBVIOUS IMPLEMENTATION IS WRONG.** Ids are thread-local
+(INV.6(6c0)) and almost every oracle row can MINT, drawing from the **asking** thread's counter. **A guard on the
+BUILD THREAD'S IDENTITY would refuse every query of every oracle**, because the thread that ran the checker is
+`runWithDeepStack`'s `xtsc-deep-stack` thread and is `join()`ed — dead before any caller can ask. What that handoff
+does is WRITE THE ADVANCED COUNTERS BACK to the caller, so "the asking thread's sequences dominate the build's" IS
+the soundness condition: monotone, and it admits the caller, a thread that has built something else since, and a
+worker-rebased thread alike. **Measured**: seven representative rows mint NOTHING on either thread (which is why a
+naive probe reads a reassuring zero — the fixture's types are all already interned), while resolving a LIB type the
+program never mentions mints 7-82 types per row — at ids **612-806** on the building thread and **1-70** on a fresh
+one, where **`anyType.id` is 10**. A freshly minted type silently carrying the intrinsic `any`'s id is round 825's
+`--workers` race reached through a retained oracle. The type and symbol halves are ONE observable (each ablates to
+0 RED alone), recorded as a round-927 pair rather than claimed as two pins.
+
+**A RETENTION NUMBER THAT DID NOT EXIST.** `typeOracle()` over tsc's own 78 sources retains **146.9 / 146.3 MB** on
+top of a project that has already built, against a documented `-Xmx2g` floor and a measured 176.7 MB peak; an edit
+returns 146.6 / 146.1. Non-vacuity: **381,670 of 381,670 identifiers answered**. The (INC.36) ladder's existing
+`narrowed`+`recheck` row is an INERT CONTROL — its own source says *"which this arm never fills"* — so its 0.0 MB
+was never evidence that retaining a live checker is free, and that is now documented in place.
+
+**SCOPE HELD: THE CAPABILITY, NOT THE DECISION.** Whether `quickInfoAt`/`definitionsAt` may be SERVED from the
+oracle is commit 3 and needs an instrument that does not exist — `scripts/capture-equivalence.sh` varies the
+PARTITION at a fixed request and structurally cannot see an oracle-vs-capture difference — plus a hazard with no
+instrument at all: alias display is FIRST-WINS and (INC.41) measured that a RETAINING arm's divergence grows with
+session length (393 of 413 worse rows were accumulated alias names). An oracle is retaining by definition; a
+capture build is fresh per query. **The arithmetic for that decision, so it is informed when taken**: riding a
+whole-program build the host already pays costs the store alone (≈ +1.1 s on the compiler profile, ≈ +200 ms on
+the 2,401-file shape) and buys the FIRST hover per buffer (318-327 ms → a lookup) where later carets are already
+4-7 ms — break-even ≈ **3.6 distinct buffers hovered per edit cycle**, and `prepare(workingSet)` already collapses
+N first-hovers into one narrowed build.
+
+**WHAT DID NOT WORK.** The retention arm's first cut read **+0.0 MB** and looked like a free oracle: the reference
+must be held in a SLOT and nulled through it, because a local keeps the checker reachable and `local = null` is
+dead code to a warning-clean build. Also `"a" + "b".format(x)` binds `.format` to the second literal only. And a
+NON-NULL return type was refused on measurement rather than taste — four degenerate configurations (no sources, no
+`tsconfig.json`, malformed JSON, a TS7-removed option) all answer a usable oracle, so no measured path produces
+null, but asserting that across every `ProjectCompiler` error path is a negative I have not enumerated; the four
+cases became a pin and the KDoc states the measurement instead of inventing a reason.
+
+**No 8-profile grid this round, stated rather than skipped**: `Checker.kt` is untouched and `--listAll` never
+builds an oracle, so the two binaries cannot differ in any diagnostic — the grid would be a control that cannot
+fail. `cost_gate.py` is a control for the same reason and reads identical to (P18.140).
+
+### Round (P18.140) — two ORDER rows, and THREE of the brief's premises refuted by measurement (2026-09-20)
+
+Ledger **30 -> 28**, both rows CLOSED. Suite **20,027 / 0 / 53** (+9 = exactly the new pins, skipped 55 -> 53 =
+exactly the two rows). Errors screen 3,071 / 0 and emit 5,645 / 0 **with both rows ACTIVE in the compared count**
+(`@Ignore`d 52 -> 50) — the closure receipt. Cost gate +0.15% max, `huge_methods --fail-over 0` exit 0, warning
+gate clean, 8-profile grid 8 x 0/0 on both arms with emit 78 vs 78 byte-identical.
+
+**THE ROUND'S VALUE IS THAT IT REFUTED THE BRIEF THREE TIMES, AND THE BRIEF WAS MINE.**
+
+1. **"tsgo adds a chain line we do not emit — it may be a second mechanism."** FALSE. We always emitted
+   `'Top' could be instantiated with an arbitrary type…`; it simply carried the same wrong member order, so the
+   ONE ordering fix closed both lines of both occurrences and no second mechanism existed.
+2. **"`noInferUnionExcessPropertyCheck1` is an engine ORDER row."** FALSE. It is served by
+   `tryEmitNoInferUnionExcessPropTs2353` (`Checker.kt:177962`), a **dedicated B219 walker written for that one
+   fixture**, whose `display` joined `u.types` in WRITTEN order — so no engine path produces those rows at all.
+3. **"Rows 7/15 need the `Substitution` half"** (inherited from the ledger). FALSE. Every constituent already
+   rendered byte-correctly; all three rows were pure order swaps, and the baseline closes without it.
+
+**THE MECHANISM IS A PAIR WITH ONE ARM UNFIXED.** `resolveSimpleTypeName`'s `UnionType` arm joined the
+annotation's members VERBATIM while its sibling `formatTypeForDisplay`'s arm has sorted with
+`StableTypeOrdering.nodeComparator` since (LEGACY.0b) step 9 — two arms of one pair, over the same `UnionType`
+node, and only one carried the sort. `StableTypeOrdering.enclosingTypeParameterNamed` even carries a comment
+naming `typeParameterDiamond4`: **the comparator had been fixed for this shape and nothing consulted it.** Both
+arms now call one shared `stableUnionMemberNodes`. The site was found with a stack-trace probe in the `Diagnostic`
+constructor (round 947's positive control), whose frames read 44512/45123 — the mod-65536 and mod-131072 wraps.
+
+**THE SECOND ROW'S RULE IS tsc's `compareTypes`, TWO KEYS, AND THE DECISIVE PROBE IS NOT THE OBVIOUS ONE.** Key 1
+is FLAGS (a top-level `NoInfer<…>` is a `Substitution`, bit 24; a bare `() => …` is an anonymous `Object`, bit 20,
+so the unwrapped function sorts first regardless of writing); key 2, on equal flags, is `compareSymbols` — the
+declaration position of the type each constituent BOTTOMS OUT in, which for a bare `T` is the anchor argument's
+object literal, its only inference site. **What proves key 2 is a POSITION and not "the function comes first" is
+moving the CALL above the declaration**, which flips exactly the equal-flag cells in tsgo and leaves the
+flag-decided cell alone. 10 cells measured, all 7 post-fix cells byte-identical.
+
+**THE PIN SET WAS REPAIRED BY NOTICING WHAT IT COULD NOT SEE.** Ablating the position key alone read 1 RED and the
+flag key alone 2 RED — but only after a pin was ADDED for a call-before-declaration cell: with the signature above
+the call, flags and position AGREE, so every obvious cell is blind to the flag key and it would have shipped as an
+unpinned guard (round 807's law).
+
+**RECORDED, NOT CHASED.** An out-of-family divergence found in passing: `b: T | (() => T)` **without** `NoInfer`
+is SILENT in tsgo (it infers `T` from both arguments) where we emit TS2353 — two ours-only rows on a probe file,
+not in the corpus, so no gate here sees it. Two unmeasured edges are documented in the code rather than guessed: a
+nested `NoInfer<NoInfer<…>>` falls back to written order (stable sort), and a signature split across files would
+need tsc's file rank ahead of `pos`; neither occurs in the corpus.
+
+**PROCESS.** The round hit CLAUDE.md's (CHK.54) stale-class trap mid-flight — a probe build was still in the class
+dir and three walker probes read `0 errors`, which looks exactly like "the walker declined". It was caught only
+because the number was SURPRISING, not by any restore check; the entry already prescribes the fix (rebuild after
+the restore and print the class md5), so this is a reminder that the trap is live rather than a new invariant.
+
+### Round (P18.139) — three small ledger rows, and the one whose stated mechanism did not exist (2026-09-20)
+
+Ledger **33 -> 30**, skipped 58 -> 55, suite **20,018 / 0 / 55** (+16, exactly the new pins). Errors screen
+3,069 / 0 and emit 5,645 / 0 **with all three rows ACTIVE in the compared count** — the closure receipt. Cost gate
++0.15% max with `output.programFiles` FLAT at 78, `huge_methods --fail-over 0` exit 0, warning gate clean,
+8-profile grid 8 x 0/0 on both arms with emit 78 vs 78 byte-identical. No countdown pin moved, and a (CHK.126)
+disarm check confirmed no pre-existing pin was keyed on a spelling this round made unproducible.
+
+**(1) THE DOUBLED PATH SEPARATOR — THE BRIEF'S HYPOTHESIS WAS FALSIFIED, AND THAT IS THE ROUND'S BEST RESULT.** I
+briefed it as "a real path-joining defect… fix it AT THE JOIN". **There is no join.** The `//` is AUTHORED in the
+fixture: line 36 of `jsDeclarationEmitExportedClassWithExtends.ts` spells
+`@filename: node_modules/lit-element/development//lit-element.d.ts`, and tsgo's harness puts every unit name
+through `GetNormalizedAbsolutePath` before it becomes a program file name where ours carried the directive text
+verbatim. The fix is in `parseMultiFileSource`, i.e. the CORPUS HARNESS's directive path, not in `PathUtil`.
+**Four independent checks answered "does the same join produce `//` elsewhere", and they are what make that a
+finding rather than a guess**: no join can produce it (`PathUtil.normalize` drops empty segments, `join`'s root
+head is explicit, the three emit sites `trimEnd('/')` first); of 1,556 distinct `@Filename` values exactly ONE
+carries a `//`; across every baseline `^==== .*//` matches exactly one line and the `.js` header form matches
+ZERO; and the `-project` path cannot produce one because a real filesystem hands back no empty component.
+
+**AND THE NARROW FIX IS NARROW FOR A MEASURED REASON.** A full `PathUtil.normalize` there moves **22** baselines —
+19 leading-`./` names, 2 Windows paths, 1 `//` — because **tsgo's own diff machinery forgives half of its own
+normalization**: `DiffFixupOld` rewrites `==== ./` -> `==== ` in the OLD baseline before comparing, so a leading
+`./` never becomes a recorded divergence while a `//` does. Collapsing duplicate separators is exactly the part
+tsgo's diff records. The `./`-preserving and interior-`.`-preserving pins are the discriminators: a full normalize
+fails them.
+
+**TWO ROOT-ONLY `//` PRODUCERS WERE FOUND AND DELIBERATELY NOT CHANGED** (`resolveConfigPath`'s
+`"$p/tsconfig.json"` for `xtsc /`, and `effectiveTypeRoots`' `"$dir/node_modules/@types"` on the LAST iteration of
+EVERY build, since the walk always reaches `/`). Both are benign — Linux collapses a leading `//` and the type root
+is re-joined through `PathUtil.join` downstream — and **neither is pinnable today**, because `-project`'s
+`InMemoryVfs` normalizes on every lookup and is structurally blind to the spelling. Landing an unobservable path
+change with no gate that can see it is what (CFG.1) and round 902 forbid, so they are recorded with their
+reachability instead; the successor is a non-normalizing exact-key test `Vfs`.
+
+**(2) TS18042's `.<name>` TAIL.** tsgo appends it under ONE gate (`checker.go:6758`, `ast.IsImportSpecifier(node)`),
+and our B508 emitter is reached only for an `ImportClause` name — so it must never append. Measured per import
+form against tsgo: the default form now matches byte-for-byte; `import { N }` and `import { N as R }` are rows we
+do not emit at all (a separate, still-missing emitter, pinned `residue -`, and note tsgo names the PROPERTY in the
+renamed form); `import * as NS` is silent in both; `import X = require` never reaches TS18042 (TS8002 first).
+
+**(3) THE ANONYMOUS CLASS'S TYPE ARGUMENTS — A tsc-6 TRANSCRIPTION, NOT A MODEL GAP** ((P18.101)'s rule). The site
+is the hardcoded pin walker `checkMixinPrivateConflictReducedToNever`, whose own KDoc says it recomputes these
+strings because the types are not modelled; tsgo names an anonymous class by its declaration chain with NO type
+arguments at any level. **And the brief's question about the non-generic owner has a more interesting answer than
+"it already matches": tsgo does not produce this diagnostic there AT ALL** — with a concrete constructor base it
+reports TS2415 at the class and is silent at the member access, while our walker's `extendsParam` test is by NAME
+only and fires anyway. That is a **pre-existing ours-only row**, unchanged by this round and pinned `residue -`.
+**The walker was NOT narrowed**: that is a behaviour change whose only evidence is one hand-written probe, and a
+corpus-unique walker's proper successor is PassLab retirement, not tuning.
+
 Suite **19,935 / 0 / 60** (+8 pins, skipped 61 -> 60), errors screen 3,063 / 0 and emit 5,645 / 0, cost gate
 UNCHANGED from (P18.134) (+0.15% max — this rule runs only at error-elaboration time), `huge_methods --fail-over 0`
 exit 0 with `getPropertyElaborationChain` **SHRINKING** 6,271 -> 6,260, warning gate clean, 8-profile grid 8 x 0/0
