@@ -227,26 +227,20 @@ class ElementAccessUnionKeyTest {
     }
 
     @Test
-    fun `residue - an enclosing class TYPE PARAMETER in the receiver still blocks the write check`() {
-        // MEASURED, not chased, and RE-MEASURED once the first reading proved too narrow.
-        // Bisected over five variants: a non-generic receiver, a generic receiver instantiated
-        // with a concrete argument and a `||`-initialised local all work; only a receiver whose
-        // type argument is the ENCLOSING class's own type parameter fails.
+    fun `an enclosing class TYPE PARAMETER in the receiver no longer blocks the write check`() {
+        // CLOSED 2026-09-22 by (CHK.140), and this pin is the inverted countdown (P18.166)
+        // left behind. That round bisected the shape correctly — only a receiver whose type
+        // argument is the ENCLOSING class's own type parameter failed — but attributed it to
+        // round 761's globally-`any` cached member type. It was not the member table at all:
+        // `P` simply was not in scope inside a class member's body, because `ctaFnBodyFrame`
+        // fed the enclosing class's type parameters to `fnTpDecls` (the AST map) and never to
+        // `fnTpScope` (the map that types a name). With the name in scope the member resolves
+        // to `(s: string) => P`, the write is compared against it, and the row appears.
         //
-        // THE CAUSE IS *UPSTREAM OF THE KEY QUESTION*, and the control is what shows it: a read
-        // through a WRITTEN literal key (`t["a"]`, which never touches the union arm) answers
-        // `(s: string) => any` where tsgo answers `(s: string) => P`. So it is round 761's
-        // globally-`any` cached type for a type-parameter-typed member, NOT anything specific to
-        // this round's arm or to round 783's carrier read — that read is reached here and still
-        // answers `any`. The key itself resolves correctly: both compilers print it as `string`,
-        // which is the (PARITY.1) generalization of a literal union at a primitive target.
-        //
-        // The write then relates, because an `=> any` member accepts the arrow that `=> P` would
-        // reject — a false NEGATIVE, so tsgo is silent here for a different reason than we are.
-        //
-        // THIS IS WHY `marked` DOES NOT MOVE: its `tokenizer[tokenizerProp] = …` sits in a method
-        // of a generic class and indexes `_Tokenizer<ParserOutput, RendererOutput>`, so every
-        // member it could name is typed `any` before the write is ever considered.
+        // The previous comment also recorded that tsgo is SILENT here. Re-measured on tsgo
+        // 7.0.2, it REPORTS — and our message is now byte-identical to it, which is what this
+        // pin asserts. `marked`'s two `@ts-expect-error` shadows at Instance.ts:206 and :219
+        // are the same mechanism and closed with it.
         val d = diagnose(
             """
             type Excl3<T, U> = T extends U ? never : T;
@@ -260,7 +254,9 @@ class ElementAccessUnionKeyTest {
             }
             """.trimIndent()
         )
-        assert(d.none { it.code == 2322 })
+        assert(d.single { it.code == 2322 }.message ==
+            "Type '(...args: unknown[]) => number' is not assignable to type " +
+            "'((s: string) => P) & ((s: string) => number)'.")
     }
 
     @Test

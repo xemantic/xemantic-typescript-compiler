@@ -3613,10 +3613,33 @@ class Checker(
                     tps?.let { for (tp in it) decls[tp.name.text] = tp }
                     frame.fnTpDecls = decls
                 } else frame.fnTpDecls = base.fnTpDecls
-                val fnScope = if (!tps.isNullOrEmpty()) {
+                // (CHK.140): a class's OWN type parameters must be in scope inside its
+                // INSTANCE members' bodies -- exactly as `fnTpDecls` two lines above already
+                // accumulates them. Until this loop took `classTps`, `fnTpScope` (the map that
+                // actually TYPES a name, where `fnTpDecls` is only the AST map that answers
+                // TS2302) saw a member's OWN TPs alone, so in `class C<P> { m(x: P) { ... } }`
+                // the body read `x` as an outer same-named type when one existed and as `any`
+                // otherwise. A WRONG type, silent in every channel, and upstream of every
+                // member/instantiation symptom it was attributed to -- one parameter answered
+                // `P` through the ccet path and `any` through this one in the SAME method body.
+                // Class TPs go in FIRST so a member's own TP of the same name shadows them.
+                // STATIC members are NOT excluded, and that was measured rather than assumed.
+                // `ccetEnterClassDeclaration`'s sibling drops the class scope for statics
+                // (B74.5), so the obvious move is to mirror it -- and a gate on
+                // `inInstanceMember` was built, shipped through a whole ablation batch, and
+                // then REMOVED, because no arm could discriminate it and measuring its COST
+                // showed it was lossy. TS2302 `Static members cannot reference class type
+                // parameters` is decided by `fnTpDecls` above (the AST map) and fires either
+                // way, so the gate never protected it; what it did instead was degrade the
+                // static body's `P` to `any`. tsgo 7.0.2 reports TS2302 AND types the
+                // reference as `P` -- measured on `class C<P> { static s() { const x: P =
+                // null!; const probe: number = { v: x }; } }`, where it emits both rows and
+                // the gated arm printed `{ v: any; }` for the second.
+                val scopedClassTps = classTps.orEmpty()
+                val fnScope = if (!tps.isNullOrEmpty() || scopedClassTps.isNotEmpty()) {
                     val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
                     val newTps = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
-                    for (tp in tps) {
+                    for (tp in scopedClassTps + tps.orEmpty()) {
                         val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                             val p = Type.TypeParam()
                             p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
