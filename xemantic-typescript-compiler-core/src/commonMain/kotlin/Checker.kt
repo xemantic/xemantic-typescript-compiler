@@ -104934,6 +104934,21 @@ interface DataView {
         ) {
             contextualType = targetType
         }
+        // (CHK.148)(d): …and a UNION annotation is a context for an OBJECT LITERAL too.
+        // The gate above is `targetType is Type.Object`, so `const t: Link | Image = {…}`
+        // typed its members in a vacuum exactly as (CHK.32) describes for the non-union
+        // case — the discriminant widened to `string` and the literal then failed the
+        // union. tsgo installs the whole union and lets
+        // `getTypeOfPropertyOfContextualTypeEx` map the member over it, which is what
+        // [contextualMemberTypeAcrossUnion] answers. Gated by the SAME shape predicate,
+        // asked of the constituents: at least two object constituents, one of which wants
+        // the context, so the (CHK.32) `program.ts:1075` population stays out of it.
+        if (init is ObjectLiteralExpression && targetType is Type.Union &&
+            targetType.types.count { it is Type.Object } >= 2 &&
+            targetType.types.any { it is Type.Object && objLitTargetNeedsContext(it) }
+        ) {
+            contextualType = targetType
+        }
         // (CHK.93) stage 2: a const-asserted ARRAY literal reads the declared type as its
         // contextual type (a mutable array-like context keeps the tuple mutable — tsc's
         // `getContextualType` passes the outer context through a const assertion). A
@@ -127384,6 +127399,125 @@ interface DataView {
         }
     }
 
+    /**
+     * (CHK.148) tsgo's `getTypeOfPropertyOfContextualTypeEx` (`checker.go:30312`) for the
+     * one case this model had no answer for: a UNION contextual type out of which NO
+     * single constituent can be selected.
+     *
+     * tsgo does not select at all — it `mapTypeEx`es the member lookup over the union's
+     * constituents, DROPS the ones that have no such member, and unions what is left with
+     * `UnionReductionNone` (`checker.go:25473`). Discrimination is an optional REFINEMENT
+     * applied earlier, in `getApparentTypeOfContextualType`, which narrows the contextual
+     * type to a subset of constituents before any member is asked for; when it selects
+     * nothing the whole union survives into the map. Round 472's three selection paths in
+     * [getTypeOfObjectLiteral] are that refinement, and they are LEFT EXACTLY AS THEY ARE:
+     * this is consulted only where all three answered null, so every shape that had a
+     * per-member contextual type before still gets the same one.
+     *
+     * WHY THE HOLE WAS INVISIBLE. `isPossiblyDiscriminantValue` (tsgo) deliberately
+     * excludes context-dependent expressions, so a member written as a TERNARY —
+     * `type: cap[0].charAt(0) === '!' ? 'image' : 'link'` (`marked`'s
+     * `src/Tokenizer.ts:19`) — defeats discrimination in both compilers. There the
+     * selection is SUPPOSED to fail, and the union-of-members answer is the whole
+     * mechanism rather than a fallback: without it the member has no context, widens to
+     * `string`, and the literal never reaches `Image | Link`.
+     *
+     * WHAT IT DELIBERATELY DOES NOT DO:
+     *
+     *  - **No INTERSECTION constituent arm.** tsgo's map body has one (it intersects the
+     *    member across an intersection's parts); a constituent this model cannot ask for a
+     *    member is skipped, which can only make the answer NARROWER or absent — the
+     *    direction that cannot manufacture an acceptance.
+     *  - **No index-signature fallback.** tsgo's `getTypeFromIndexInfosOfContextualType`
+     *    runs when a constituent has no named member; here a constituent without the
+     *    member is simply dropped, exactly as tsgo drops a nil map result.
+     *  - **No mapped-type substitution** (`getIndexedMappedTypeSubstitutedTypeOfContextualType`).
+     *  - **It does not re-enter the selection.** The answer is a TYPE for one member, not a
+     *    constituent, so nothing downstream starts treating the union as an object.
+     *
+     * `errorType` is dropped rather than unioned: it is this model's "could not resolve",
+     * and unioning it would hand every member of such a literal a context that relates to
+     * nothing.
+     */
+    /**
+     * (CHK.148)(b) tsc CONTEXTUALLY TYPES an object-literal member's initializer, so a
+     * LITERAL written at a member whose contextual type wants that literal is never
+     * widened — `checkExpressionForMutableLocation` keeps it. This model has no such
+     * step: [getTypeOfExpression] answers the BASE PRIMITIVE for every literal (the
+     * (CHK.93)(b) note says so), and the literal type is read off the AST by
+     * [literalTypeOfExpression] at the two places that already needed it — a const
+     * context, and (CHK.91)'s enum-member rule. A plain `string`/`number` literal under a
+     * non-const context had neither, so `{ type: cond ? 'image' : 'link' }` recorded
+     * `type: string`.
+     *
+     * It only becomes REACHABLE with [contextualMemberTypeAcrossUnion]: before that, a
+     * union contextual type out of which nothing could be selected supplied no per-member
+     * context at all, so there was no [propCtx] to admit the literal. The two halves are
+     * one mechanism and neither moves a row alone.
+     *
+     * THE SUBSTITUTED TYPE RELATES TO THE CONTEXT BY CONSTRUCTION — that is the only gate,
+     * and round 462's "…and the RAW type must FAIL" companion is deliberately NOT used
+     * here: it was tried first and made the whole rule INERT, because this engine's
+     * relation is LENIENT for a PRIMITIVE source against a LITERAL target ((CHK.63)'s
+     * `canUseTypeEngine` refuses that pair), so `string` never "fails" `'a' | 'b'` at the
+     * member level even where the WHOLE literal then fails the union. Measured: with that
+     * gate the positive control recorded `k: string` and nothing moved.
+     *
+     * The perf gate is the ORDER instead: [literalTypeOfExpression] is a pure AST read
+     * that answers null for anything but a literal, a `-`-prefixed number or a conditional
+     * over them, so the single relation call is paid only by a member that really is one.
+     *
+     * DELIBERATELY NOT: no `registerConstContextLiteral` (this is a MUTABLE location, so
+     * the member stays widenable everywhere else), no array or object literal (their own
+     * rules own those, two arms below), and no reach into a call, an `as` or a bare
+     * identifier — [literalTypeOfExpression] answers null for all three, which is tsc's
+     * own `isFreshLiteralType` boundary.
+     */
+    private fun objLitLiteralUnderContext(init: Expression, propCtx: Type?, raw: Type): Type? {
+        val ctx = propCtx?.takeIf { it !== anyType && it !== errorType } ?: return null
+        if (raw === anyType || raw === errorType) return null
+        if (!ctxAdmitsALiteral(ctx)) return null
+        // The cheap AST read FIRST: it answers null for everything that is not a literal,
+        // a `-`-prefixed number or a conditional over them, so the relation below is paid
+        // only by a member that really is a literal under a literal-admitting context.
+        val lit = literalTypeOfExpression(init) ?: return null
+        if (lit === raw) return null
+        if (!checkTypeRelatedTo(lit, ctx, assignableRelation)) return null
+        return lit
+    }
+
+    /**
+     * (CHK.148)(b): does [ctx] want a literal — itself, or through a union constituent?
+     *
+     * MEASURED REDUNDANT on today's instruments and KEPT anyway, with the number stated so
+     * the next round does not have to re-derive it: opening this predicate to `true` moves
+     * **0 of 8,725** corpus subtests, **0 rows on all 8 profiles**, 0 of the 12 pins and
+     * neither library, and costs **21 of 631,317** `getTypeOfExpression` calls on the
+     * compiler profile (`typeNode.bypassed` byte-identical). So it is neither a correctness
+     * barrier nor a perf gate at this scale. It survives because it is the faithful
+     * statement of the rule — tsc keeps a literal at a MUTABLE location only where the
+     * CONTEXT asks for one — and because narrowing the population it admits is the
+     * direction that cannot manufacture an acceptance; the zero is a bound on how often
+     * those corpora contain the shape, never evidence that nothing does ((INC.73)).
+     */
+    private fun ctxAdmitsALiteral(ctx: Type): Boolean =
+        isLiteralKindForDiscriminant(ctx) ||
+            (ctx is Type.Union && ctx.types.any { isLiteralKindForDiscriminant(it) })
+
+    private fun contextualMemberTypeAcrossUnion(ctx: Type.Union, name: String): Type? {
+        var found: MutableList<Type>? = null
+        for (constituent in ctx.types) {
+            val obj = constituent as? Type.Object ?: continue
+            resolveStructuredTypeMembers(obj)
+            val sym = obj.members?.get(name) ?: continue
+            val t = getPropertyTypeForRelation(obj, sym)
+            if (t === errorType) continue
+            (found ?: mutableListOf<Type>().also { found = it }).add(t)
+        }
+        val types = found ?: return null
+        return if (types.size == 1) types[0] else getUnionType(types)
+    }
+
     private fun getTypeOfObjectLiteral(expr: ObjectLiteralExpression): Type {
         val members = symbolTable()
         val properties = mutableListOf<Symbol>()
@@ -127414,6 +127548,9 @@ interface DataView {
         }?.also {
             resolveStructuredTypeMembers(it)
         }
+        // (CHK.148): …and when NONE of the three could select a constituent, the
+        // contextual type STAYS THE UNION — see [contextualMemberTypeAcrossUnion].
+        val ctxUnion = if (ctxObj == null) contextualType as? Type.Union else null
         // (CHK.93)(b): tsc's `isConstContext`, computed ONCE per literal (checker.ts
         // `checkObjectLiteral`'s `inConstContext`) and threaded to every member.
         val inConstContext = objLitConstContextOf(expr)
@@ -127433,7 +127570,7 @@ interface DataView {
                     }
                     val propCtx = ctxObj?.members?.get(name)?.let { sym ->
                         getTypeOfSymbol(sym)
-                    }
+                    } ?: ctxUnion?.let { contextualMemberTypeAcrossUnion(it, name) }
                     val savedCtx = contextualType
                     // Round 472: a NESTED object-literal value inherits the property's
                     // contextual type (tsc distributes context through object literals) —
@@ -127528,9 +127665,12 @@ interface DataView {
                                 ctxUsable &&
                                 checkTypeRelatedTo(narrowed, propCtx, assignableRelation) &&
                                 !checkTypeRelatedTo(raw, propCtx, assignableRelation)
-                            if (objLitValueNullishStrip(raw, narrowed) ||
-                                ctxAcceptsNarrow ||
-                                enumNarrowIsOwnMemberSubset(raw, narrowed)) narrowed else raw
+                            // (CHK.148)(b): a LITERAL member under a contextual type that
+                            // wants it keeps its literal type — see the KDoc.
+                            objLitLiteralUnderContext(prop.initializer, propCtx, raw)
+                                ?: if (objLitValueNullishStrip(raw, narrowed) ||
+                                    ctxAcceptsNarrow ||
+                                    enumNarrowIsOwnMemberSubset(raw, narrowed)) narrowed else raw
                         }
                     } finally {
                         if (useCtx) contextualType = savedCtx
@@ -127577,6 +127717,7 @@ interface DataView {
                     // the round-438 shadowing hazard stays excluded because an over-narrow
                     // to `undefined` relates only where the raw would too).
                     val shCtx = ctxObj?.members?.get(name)?.let { getTypeOfSymbol(it) }
+                        ?: ctxUnion?.let { contextualMemberTypeAcrossUnion(it, name) }
                     val shCtxUsable = shCtx != null && shCtx !== anyType && shCtx !== errorType
                     val shCtxAcceptsNarrow = shNarrowed !== shRaw && shNarrowed !== neverType &&
                         shCtxUsable && shRaw !== anyType && shRaw !== errorType &&
@@ -164770,12 +164911,23 @@ interface DataView {
             val unionPropNames = collectTargetPropertyNames(paramType)
             val noUnionExcess = unionPropNames != null &&
                 (argType.properties?.all { it.name in unionPropNames } == true)
+            // (CHK.148)(c): …and the WHOLE union is a separate question from any single
+            // constituent. (CHK.142)(b)'s discriminated SOURCE SPLIT lives in the
+            // union-target arm of `structuredTypeRelatedTo`, so a `{ k: 'a' | 'b' }`
+            // literal that relates to `A | B` by splitting relates to NEITHER `A` nor `B`
+            // alone — this firewall asked only the constituents and so could never consult
+            // it, and reported a confident TS2322 on legal TypeScript.
             val structurallyAssignable = constituents.any { c ->
                 c is Type.Object && checkTypeRelatedTo(argType, c, assignableRelation)
-            }
+            } || checkTypeRelatedTo(argType, paramType, assignableRelation)
             if (noUnionExcess && structurallyAssignable) return false
         } else {
-            if (constituents.any { checkTypeRelatedTo(argType, it, assignableRelation) }) return false
+            // (CHK.148)(c), the NON-fresh branch: same question, same reason — the whole
+            // union is not any one constituent, and (CHK.142)(b)'s split lives only in the
+            // union-target arm.
+            if (constituents.any { checkTypeRelatedTo(argType, it, assignableRelation) } ||
+                checkTypeRelatedTo(argType, paramType, assignableRelation)
+            ) return false
         }
 
         // Union display: an alias annotation (`a: ExoticAnimal`) renders as the alias name;
@@ -166880,7 +167032,16 @@ interface DataView {
                     // (CHK.108): a PLAIN array literal argument reads a TUPLE parameter as
                     // its context — see the var-decl site for the gate's reason.
                     (arg is ArrayLiteralExpression && contextualTupleConstituent(paramType) != null))
-            if (useCtx) contextualType = paramType
+            // (CHK.148)(e): …and a UNION parameter is a context for an OBJECT LITERAL
+            // argument too — the SAME `is Type.Object` gate the var-decl site carried,
+            // one reader over, and the reason `take({ type: cond ? 'image' : 'link' })`
+            // stayed wrong after the var-decl form was fixed. Gated by the same shape
+            // predicate asked of the constituents.
+            val useUnionCtx = !useCtx && arg is ObjectLiteralExpression &&
+                paramType is Type.Union &&
+                paramType.types.count { it is Type.Object } >= 2 &&
+                paramType.types.any { it is Type.Object && objLitTargetNeedsContext(it) }
+            if (useCtx || useUnionCtx) contextualType = paramType
             // (CALL.6) the level-S classification. Taken INSIDE the already-open
             // L_ARGTYPE row, so it adds no boundary — every nanosecond it
             // attributes is a span the partition was already timing.
@@ -167099,7 +167260,7 @@ interface DataView {
                 ArgSections.close(ArgSections.N_ARM_CHAIN, chainT)
                 chainResult
             } finally {
-                if (useCtx) contextualType = savedContextual
+                if (useCtx || useUnionCtx) contextualType = savedContextual
             }
             ArgSections.at(ArgSections.L_PRE)
             if (argType === anyType || argType === errorType) continue
