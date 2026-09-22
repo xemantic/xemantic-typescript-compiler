@@ -1,5 +1,101 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.160) — an `any`-annotated parameter shadows its enclosing scope, and a first fix that was completely inert (2026-09-21)
+
+**CLOSED the general shadow defect (P18.157) recorded and sized.** Suite **20,202 / 0 / 44**
+(+7 pins); corpus screen **0 of 8,725** over both channels; 8-profile grid **8x `added=0
+removed=0 fullDiffLines=0`** with emit byte-identical; cronstrue 1 -> 1, marked 18 -> 18;
+`cost_gate` PASS (max +0.08%), `huge_methods` 0 over limit, warning gate clean with both compile
+tasks verified EXECUTED. `Checker.kt` +10.
+
+**THE MECHANISM IS (CHK.42)'s OWN, ONE CASE OVER.** `currentLocalTypes` is a FLAT COPY of the
+enclosing scope, so a parameter that nothing registers is not merely untyped — the outer
+same-named entry is still sitting there and every read inside the body resolves to IT. The
+(CHK.42) pre-pass fills that hole and is gated `if (param.type != null) continue`; the arm below
+it writes only when the annotation resolves to neither `anyType` nor `errorType`. An explicit
+`: any` satisfies neither, so it leaked. Measured against tsgo 7.0.2: **three false positives on
+legal code**, none of them involving an import or a module symbol.
+
+**THE ARCHIVE HAD ALREADY NAMED THE CLASS, AND CHECKING IT IS PART OF THE PROTOCOL.**
+`docs/history/CLAUDE-GOTCHAS-ARCHIVE.md`'s round-757 entry on `ctaTypeParamsIntoLocals` says
+it verbatim: a nested body INHERITS `currentLocalTypes`/`varTypes`, and omitting the parameter
+scope install means "an inner read of a parameter name resolves to a same-named outer/global
+binding — the `applyBodyLocalShadowing` FP class". That is this defect with the annotation axis
+removed, i.e. corroboration rather than contradiction; the grep was run late (after the fix) and
+should have been run first. The other two greps for what this arc touched
+(`getTypeOfSymbolWorker`, `mergedDeclarations3`) hit entries about UNRELATED mechanisms (B451's
+computed member NAMES, B463's nominal enum mismatches), so nothing constrains what landed.
+
+**IT WAS INVISIBLE FOR AS LONG AS A MODULE SYMBOL TYPED `any`** — the wrong resolution then had
+the right answer by accident, which is exactly why (CHK.73) had to ship a contained guard and why
+this is its general form. A defect that is masked by a SECOND defect is not rare here; it is what
+(CHK.50)'s law predicts every time a silent `any` becomes a real type.
+
+**THE FIRST FIX WAS COMPLETELY INERT AND IS NOT IN THE COMMIT.** It registered the name in round
+453's `currentParamBindingNames` side set — the mechanism whose own KDoc describes this exact
+job — rebuilt clean, screened clean, and produced **byte-identical rows before and after**. Per
+the standing rule (three "fixes" in rounds 700-704 were inert and were caught only because the
+probe was built to fail if the change worked), it was reverted rather than landed. What found the
+real site cost one command and no build: **`--passTiming`'s `emissions by pass` named `checkSpine`**,
+i.e. a spine handler under the cta frame rather than the legacy walk, and the cta frame's
+parameter seeder is `ctaTypeParamsIntoLocals` — where the pre-pass lives.
+
+**AND THE CONTAINED GUARD IS *NOT* REDUNDANT AFTERWARDS, WHICH HAD TO BE MEASURED.** With the
+general fix in, ablating (CHK.73)'s `nameBoundByEnclosingScope` guard left every existing pin
+GREEN — the textbook reading of "now redundant, delete it". A five-shape matrix says otherwise:
+the pre-pass covers PARAMETERS, the guard covers the wider binder population, and without it the
+module type leaks into a `catch` variable and a block-scoped `class`, ours reporting `Type 'zns'`
+where tsgo reports `unknown` and `typeof zns`. Both shapes are now pinned, so the guard has
+discriminating pins again. It is SUPPRESSION-only and costs one true row there (a block-scoped
+`function` shadowing the alias, which tsgo reports), recorded as a residue rather than widened.
+
+**SUCCESSOR.** The residue above is the honest next step and it is an (INV.0) step-10b question,
+not a suppression one: a shadowing name should resolve to its OWN declaration (the scope-space
+consult), at which point the guard can narrow instead of silencing. Beside it, two display rows
+sized at (P18.159) — `typeof <name>` for a namespace-merged function and `typeof import("<path>")`
+for a module object — both corpus-only-gated and priced by one screen run each.
+
+### Round (P18.161) — (DOC.2) tranche 1: `### Checker walker gotchas` distilled, CLAUDE.md -27% (2026-09-21)
+
+**DOCS-ONLY ROUND, no compiled code touched.** `CLAUDE.md` **663,894 -> 484,016 B (-26.8%)**;
+the section `### Checker walker gotchas` **240,298 -> 59,928 B (-75.1%)**, resident entries
+**304 -> 122**. Archive `docs/history/CLAUDE-GOTCHAS-ARCHIVE.md` 822,487 -> 1,040,138 B, a PURE
+APPEND. **Nothing was deleted.**
+
+**WHY THIS IS A QUEUE ITEM AND NOT HOUSEKEEPING.** CLAUDE.md is loaded into every agent
+session; at 664 KB it spent roughly 165k tokens of every context window before any work
+started. That is a tax on all 83 remaining open items, so the saving compounds in a way no
+single parity row does. The file's own residency rule is what licensed the cut: *"per-test/per-walker
+detail goes straight to the archive"* — and this section was post-(DOC.1) REGROWTH from the
+(CHK.*) arc, exactly the category the 2026-08-24 trim moved wholesale.
+
+**BUCKETS over the 304 entries:** KEEP 29 byte-identical (the Gradle/daemon/memory traps, the
+narrowing-probe fixture conventions whose loss silently produces VACUOUS pins, and the entries
+whose invariant IS its detail — the SOE/`catch` doctrine, the new-node-class checklist,
+`Node.end`, the INV.4 spine contracts, `Checker` field ordering); DISTIL 92 (full text archived,
+a 1-3 line resident form ending in `(archive: <key>)`); ARCHIVE 183 outright.
+
+**CONSERVATION WAS VERIFIED TWICE, AND THE FIRST CHECK ASKED THE WRONG QUESTION.** The literal
+form — *every* before-entry appears in the after-archive — FAILS by construction for the 29
+KEEPs, and satisfying it would mean duplicating 23 KB into the archive and creating grep
+duplicates for entries that are still resident. The property that is actually conservation is
+the DISJUNCTION: archived OR byte-identical resident. Measured independently by the
+orchestrator: **304 = 275 archived + 29 resident verbatim, 0 in neither, 0 in both.** Isolation:
+everything outside the section byte-identical. Archive: pure append. Grep keys: 93 stubs, 0
+unresolved. `git diff --numstat` carries no `-`/`-` row (the NUL-sentinel hazard).
+
+**ONE GAP FOUND AND CLOSED BY JUDGEMENT.** The tranche archived the Kotlin-externals /
+Kotlin-JS rendering rules with no resident stub. The lead paragraph names the family and gives
+the grep command, which is discoverable — but those rules are *compile-gate* facts for a LIVE
+mission leg (the externals generator), where a rule guessed from reading produces a declaration
+no Kotlin compiler accepts and the metadata gate cannot see it. One resident stub was added
+back; its key resolves.
+
+**SUCCESSOR for this lane:** the same treatment for `### Measured dead-ends` (113 entries,
+97,663 B, whose own title already says *"full detail archived"* while averaging 864 bytes) and
+`### Test assertion gotchas` (52 entries, 39,869 B). Together ~137 KB at the same risk profile.
+
+
 ### Round (P18.159) — (CHK.73): a function merged with a namespace carries its statics, and the last `export =` gap closes (2026-09-21)
 
 **CLOSED the mechanism (P18.158) named as its successor.** Suite **20,195 / 0 / 44** (+5 pins);

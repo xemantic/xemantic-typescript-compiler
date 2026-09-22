@@ -1,5 +1,23 @@
 
 
+**(P18.166) — (CHK.139): AN ELEMENT ACCESS WITH A LITERAL-TYPED KEY RESOLVES, READ AND WRITE; 20,265 / 0 / 44 (2026-09-21).**
+`mem[k]` where `k: keyof M` answered `anyType` — the shape real code reaches for most often. tsc's rule, fitted to 12
+tsgo 7.0.2 fixtures: distribute the KEY union with a UNION for a READ and an **INTERSECTION** for a WRITE, the receiver
+union with a UNION in both. **Four spellings, one rule, and their agreement is the pin** — `keyof T`, `"a" | "b"`, an
+alias and an `Exclude`-derived key are measured IDENTICAL. The read matrix now matches tsgo EXACTLY on all six rows,
+including two previously missing and their displays down to member order. **ALL-OR-NOTHING decided the
+implementation**: an absent key makes the WHOLE access `any`, so the arm delegates to `getIndexedAccessType` PER
+LITERAL — its own union arm `.filter`s `anyType` away, i.e. DROPS an absent key — which also inherits (CHK.96)'s
+optional `| undefined` for free. **A SINGLETON literal key is the same question and the first cut missed it**, found
+by bisecting a `marked`-shaped fixture one ingredient at a time. **THE DISPLAY CHANGE WAS WRONG THE FIRST TIME AND
+ONLY THE SUITE SAW IT**: tsgo parenthesizes an intersection member by its RENDERED FORM, not its Type kind (`A & U`
+for an alias, `A & (B | C)` for an anonymous union), and keying on `m is Type.Union` broke three display pins the
+corpus screen is structurally blind to — (PARITY.1) exactly. **`marked` stays at 10 and the reason is measured**: a
+five-variant bisect shows only an ENCLOSING class type parameter in the receiver fails, which is round 761/783's
+`any`-cached member, pinned `residue -`. Screen 0 of 8,725; grid 8x0 — notable for a (CHK.50) read-path change;
+cost_gate PASS (max +0.41%); huge_methods 0 over.
+
+
 **(P18.165) — (CHK.136): AN ASSIGNMENT THROUGH AN ELEMENT ACCESS IS TYPE-CHECKED AT LAST; 20,246 / 0 / 44 (2026-09-21).**
 `bag[key] = "not a function"` was accepted in SILENCE where the identical mismatch through a PROPERTY target
 reported TS2322 — a false-NEGATIVE class that surfaces as false POSITIVES wherever real code guards such a write

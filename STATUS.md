@@ -1,7 +1,11 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,552** lines (**+226 at (P18.170)**, the lexical return-identifier
+extraction):** `Checker.kt` **198,631** lines (**+79 at (P18.171)**, the discriminant-property
+predicate and its three helpers; the round's real weight is `Relater.kt` **1,557 -> 1,746**
+(**+189 net**), a PORT of tsgo's `typeRelatedToDiscriminatedType` plus the `excluded` property
+set threaded through the object relation — a SEMANTIC parity change taking a 25-cell matrix to
+23 agreeing with tsgo, not an extraction; **+226 at (P18.170)**, the lexical return-identifier
 resolver — a parent-chain walk, a shadow-stop and a typing helper — and the KDoc recording the
 `!`-policy the 8-profile grid forced, the scope-leaking leg that was built and REMOVED, and the
 one measured-redundant barrier; a SEMANTIC parity change that takes a 39-cell matrix from 15 to 36
@@ -26,6 +30,24 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.171) — (CHK.142)(b): A DISCRIMINATED-UNION *SOURCE* IS SPLIT OVER ITS DISCRIMINANTS; 23 OF 25 CELLS MATCH tsgo, 20,351 / 0 / 44 (2026-09-22).**
+A port of tsgo's `typeRelatedToDiscriminatedType` (`relater.go:3989`) into the tail of our union-target arm, at exactly the
+position tsgo calls it from, beside round 744's `intersectionSourceDistributes`. **`marked` is unchanged at 2 and that was
+PREDICTED** — (b) is the safe half and moves no library row alone; what it buys is that half (a) becomes landable at all,
+and the round measured why: without (b), (a) would produce the right member type and STILL report TS2322. **The port needed
+three restatements our type model forces** — tsgo's non-uniformity test is an IDENTITY compare because it interns literals
+by value while we mint one per site; `boolean` is an `Intrinsic` here and `true | false` there; and `undefined`/`null` being
+unit types is load-bearing, since without it one fixture's cartesian product collapses onto a single key. A fourth part was
+found by the fixture, not by reading: step 2 must compare against the OPTIONALITY-WIDENED target property.
+**"OURS 14 -> 3" WAS A LIE AND WHAT IT HID IS BIGGER THAN THIS ROUND**: the reference fixture declares `declare let s` in
+each of five namespaces, and **a namespace-local VALUE is not namespace-scoped here — the first declaration wins
+program-wide** — so every case was comparing the first namespace's types, in BOTH arms. One namespace per file gives the
+honest 14 -> 6 against tsgo's 4. Filed as (CHK.147); it corrupts measurement in the reassuring direction.
+**Seven ablation arms, one mistake each**: a1 8 RED, a2 3, a3 2, a4 1, a5 1, a6 7, a7 1 — and **a7 first read 0 RED as a
+BLIND PIN, not a redundant barrier**, caught by the cell matrix where no pin could see it; a pin was added and it now
+discriminates. Screen 0 of 8,725; grid 8x0 (a CONTROL for the acceptance by count — zero TS2322/TS2345 rows on any profile —
+and a GATE for the narrowing side-effect); cost_gate PASS (max +0.75%, `output.errors` 46); huge_methods 0 over.
 
 **(P18.170) — (CHK.144): A BLOCK BODY RETURNING A BARE IDENTIFIER NO LONGER INFERS `any`; `marked` 3 -> 2, 20,336 / 0 / 44 (2026-09-22).**
 `inferReturnTypeFromBody`'s `is Identifier ->` arm answered `booleanType` for `true`/`false` and `null` for everything
@@ -101,20 +123,3 @@ of generic-class body in the whole compiler profile). `marked` **10 -> 8**; cron
 **Second deliverable, committed separately**: a build guard refusing a `submoduleTriaged` pending row as work —
 an audit of all 19 found 15 targetable, 3 triaged, 1 harness, and ONE triaged row filed as work whose intended
 answer is SILENCE (tsgo's TS4060 is the bug, microsoft/typescript-go#3481).
-
-**(P18.166) — (CHK.139): AN ELEMENT ACCESS WITH A LITERAL-TYPED KEY RESOLVES, READ AND WRITE; 20,265 / 0 / 44 (2026-09-21).**
-`mem[k]` where `k: keyof M` answered `anyType` — the shape real code reaches for most often. tsc's rule, fitted to 12
-tsgo 7.0.2 fixtures: distribute the KEY union with a UNION for a READ and an **INTERSECTION** for a WRITE, the receiver
-union with a UNION in both. **Four spellings, one rule, and their agreement is the pin** — `keyof T`, `"a" | "b"`, an
-alias and an `Exclude`-derived key are measured IDENTICAL. The read matrix now matches tsgo EXACTLY on all six rows,
-including two previously missing and their displays down to member order. **ALL-OR-NOTHING decided the
-implementation**: an absent key makes the WHOLE access `any`, so the arm delegates to `getIndexedAccessType` PER
-LITERAL — its own union arm `.filter`s `anyType` away, i.e. DROPS an absent key — which also inherits (CHK.96)'s
-optional `| undefined` for free. **A SINGLETON literal key is the same question and the first cut missed it**, found
-by bisecting a `marked`-shaped fixture one ingredient at a time. **THE DISPLAY CHANGE WAS WRONG THE FIRST TIME AND
-ONLY THE SUITE SAW IT**: tsgo parenthesizes an intersection member by its RENDERED FORM, not its Type kind (`A & U`
-for an alias, `A & (B | C)` for an anonymous union), and keying on `m is Type.Union` broke three display pins the
-corpus screen is structurally blind to — (PARITY.1) exactly. **`marked` stays at 10 and the reason is measured**: a
-five-variant bisect shows only an ENCLOSING class type parameter in the receiver fails, which is round 761/783's
-`any`-cached member, pinned `residue -`. Screen 0 of 8,725; grid 8x0 — notable for a (CHK.50) read-path change;
-cost_gate PASS (max +0.41%); huge_methods 0 over.

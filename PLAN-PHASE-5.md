@@ -25,6 +25,70 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.171) — (CHK.142)(b): a discriminated-union SOURCE is split over its discriminants; 23 of 25 cells now match tsgo (2026-09-22)
+
+A port of tsgo's `typeRelatedToDiscriminatedType` (`relater.go:3989`), wired into the tail of our
+union-target arm at exactly the position tsgo calls it from (`relater.go:3893`) — below the plain
+"relates to some constituent" rule and beside round 744's `intersectionSourceDistributes`, which
+is already a source-SPLITTING leg in the same place. **`marked` is unchanged at 2 and that was
+predicted**: (b) is the SAFE half and moves no library row on its own; what it buys is that half
+(a) becomes landable at all.
+
+**THE PORT NEEDED THREE RESTATEMENTS, EACH MEASURED, BECAUSE OUR TYPE MODEL DIFFERS FROM tsgo's.**
+tsgo's non-uniformity test is an IDENTITY compare because it interns literals by value while we
+mint a fresh `Type.StringLiteral` per site, so ours goes through `literalsEqualForDiscriminant`;
+`boolean` is an `Intrinsic` here and a `true | false` union there; and `undefined`/`null` are
+`TypeFlagsUnit` upstream, which is **load-bearing** — without it `GH18421`'s cartesian product
+collapses onto `kind` alone and the assignment is refused. A fourth part was found by the
+canonical fixture rather than by reading: step 2 must compare against the OPTIONALITY-WIDENED
+target property (tsgo's `isPropertySymbolTypeRelated` uses `addOptionality(getNonMissingTypeOf…)`),
+or the `undefined` axis of `{color:'blue'} | {color?:'yellow'}` matches nothing.
+
+**"OURS 14 -> 3" WAS A LIE, AND WHAT IT HID IS A BIGGER DEFECT THAN THIS ROUND'S.** The canonical
+fixture `assignmentCompatWithDiscriminatedUnion` has no case file in this clone, so it was
+reconstructed from its `.errors.txt` (tsgo reproduces the baseline's 4 rows exactly, which is what
+makes the reconstruction sound). Read naively, ours went 14 -> 3. But all five of its `Example`
+namespaces declare `declare let s` / `declare let t`, and **namespace-local values are not
+namespace-scoped here — the FIRST declaration wins program-wide** — so every `t = s` site was
+comparing Example1's types, in both arms. Split one namespace per file, the honest reading is
+**tsgo 4, ours 14 -> 6**, with all four of tsgo's rows at the right positions. The residue is
+`GH30170` (half (a)) and `GH39357` (contextual tuple inference).
+
+**Ablation, one mistake per arm, seven arms, rebuilt each time** (pins RED of 15 / canonical
+fixture rows): a1 leg removed **8** / 14 — reproduces the BEFORE state exactly; a2 literal
+requirement dropped **3** / 6 — three cells wrongly ACCEPTED; a3 cartesian product reduced to a
+single key **2** / 8 — three cells wrongly REFUSED; a4 cap removed **1** / 5 — the 26- and 30-way
+unions wrongly accepted; a5 step 3 weakened to "some constituent" **1** / 6 — the `A|B|C` cell
+wrongly accepted; a6 excluded set emptied **7** / 14; a7 optional widening removed **1** / 6.
+**a7 first read 0 RED and was a BLIND PIN, not a redundant barrier** — the cell matrix caught it
+while no pin did, so a pin was added and the arm now discriminates. (a1's first attempt did not
+compile: `false && source is Type.Object` kills Kotlin's smart cast, so it was redone as a
+commented-out block — a build failure, not a dead arm.)
+
+**Gates.** Corpus screen **0 of 8,725**; 8-profile grid **8x `added=0 removed=0`** — a CONTROL for
+the acceptance by count (the eight profiles carry ZERO TS2322/TS2345 rows between them) and a GATE
+for the narrowing side-effect, which is the row it exists to catch; `cost_gate` PASS (max
+`typeNode.bypassed` **+0.75%**, `output.errors` 46, `spine.nodes` ±0.00%); `huge_methods` 0 over
+(880 classes); warning-clean with a non-empty log; suite **20,351 / 0 / 44** (+15 pins); `marked`
+2 -> 2 and `cronstrue` 1 -> 1, both as predicted.
+
+**Half (a) is now a SMALL follow-on, and (b) was its prerequisite — measured, not argued.**
+`getTypeOfObjectLiteral`'s union arm (`Checker.kt:127402`) selects exactly ONE constituent
+(`singleOrNull`, else the discriminant selector, else the key selector); when the discriminant is
+itself a union none can select, `ctxObj` is null and the member gets no contextual type at all.
+The change is one `else` on that arm plus a helper unioning the member's type across the
+object-ish constituents, leaving the three selection paths as the untouched fast path. **Without
+(b) it would have produced the right member type and STILL reported TS2322**, because the
+resulting `{ type: 'image'|'link'; raw: string }` needs exactly this leg to relate.
+
+**Separate defects found, named and not fixed.** (1) **Namespace-local values are not
+namespace-scoped** — `namespace A { declare let s: X }` then `namespace B { declare let s: Y }`
+resolves `B`'s `s` to `A`'s, first-wins and order-dependent; it silently collapsed five
+independent fixture cases into one, and a naive before/after reading of that file is
+uninterpretable because of it. (2) Type-alias display leaks the wrong namespace (`Example1.S` for
+`S`), same root. (3) Contextual TUPLE inference (`GH39357`). (4) `07_GH12052`: right row, right
+line, but anchored at column 11 on the whole object where tsgo anchors at 27 on the member.
+
 ### Round (P18.170) — (CHK.144): a block body returning a bare identifier no longer infers `any`; `marked` 3 -> 2 (2026-09-22)
 
 `inferReturnTypeFromBody` is a hand-written `when` over return-expression KINDS whose
@@ -665,101 +729,6 @@ reachable by distillation of what remains: the residue is KEEP-class by the file
 further cut is a change to the RULE (what deserves residency), which is an owner question, not an
 agent one.
 
-### Round (P18.161) — (DOC.2) tranche 1: `### Checker walker gotchas` distilled, CLAUDE.md -27% (2026-09-21)
-
-**DOCS-ONLY ROUND, no compiled code touched.** `CLAUDE.md` **663,894 -> 484,016 B (-26.8%)**;
-the section `### Checker walker gotchas` **240,298 -> 59,928 B (-75.1%)**, resident entries
-**304 -> 122**. Archive `docs/history/CLAUDE-GOTCHAS-ARCHIVE.md` 822,487 -> 1,040,138 B, a PURE
-APPEND. **Nothing was deleted.**
-
-**WHY THIS IS A QUEUE ITEM AND NOT HOUSEKEEPING.** CLAUDE.md is loaded into every agent
-session; at 664 KB it spent roughly 165k tokens of every context window before any work
-started. That is a tax on all 83 remaining open items, so the saving compounds in a way no
-single parity row does. The file's own residency rule is what licensed the cut: *"per-test/per-walker
-detail goes straight to the archive"* — and this section was post-(DOC.1) REGROWTH from the
-(CHK.*) arc, exactly the category the 2026-08-24 trim moved wholesale.
-
-**BUCKETS over the 304 entries:** KEEP 29 byte-identical (the Gradle/daemon/memory traps, the
-narrowing-probe fixture conventions whose loss silently produces VACUOUS pins, and the entries
-whose invariant IS its detail — the SOE/`catch` doctrine, the new-node-class checklist,
-`Node.end`, the INV.4 spine contracts, `Checker` field ordering); DISTIL 92 (full text archived,
-a 1-3 line resident form ending in `(archive: <key>)`); ARCHIVE 183 outright.
-
-**CONSERVATION WAS VERIFIED TWICE, AND THE FIRST CHECK ASKED THE WRONG QUESTION.** The literal
-form — *every* before-entry appears in the after-archive — FAILS by construction for the 29
-KEEPs, and satisfying it would mean duplicating 23 KB into the archive and creating grep
-duplicates for entries that are still resident. The property that is actually conservation is
-the DISJUNCTION: archived OR byte-identical resident. Measured independently by the
-orchestrator: **304 = 275 archived + 29 resident verbatim, 0 in neither, 0 in both.** Isolation:
-everything outside the section byte-identical. Archive: pure append. Grep keys: 93 stubs, 0
-unresolved. `git diff --numstat` carries no `-`/`-` row (the NUL-sentinel hazard).
-
-**ONE GAP FOUND AND CLOSED BY JUDGEMENT.** The tranche archived the Kotlin-externals /
-Kotlin-JS rendering rules with no resident stub. The lead paragraph names the family and gives
-the grep command, which is discoverable — but those rules are *compile-gate* facts for a LIVE
-mission leg (the externals generator), where a rule guessed from reading produces a declaration
-no Kotlin compiler accepts and the metadata gate cannot see it. One resident stub was added
-back; its key resolves.
-
-**SUCCESSOR for this lane:** the same treatment for `### Measured dead-ends` (113 entries,
-97,663 B, whose own title already says *"full detail archived"* while averaging 864 bytes) and
-`### Test assertion gotchas` (52 entries, 39,869 B). Together ~137 KB at the same risk profile.
-
-### Round (P18.160) — an `any`-annotated parameter shadows its enclosing scope, and a first fix that was completely inert (2026-09-21)
-
-**CLOSED the general shadow defect (P18.157) recorded and sized.** Suite **20,202 / 0 / 44**
-(+7 pins); corpus screen **0 of 8,725** over both channels; 8-profile grid **8x `added=0
-removed=0 fullDiffLines=0`** with emit byte-identical; cronstrue 1 -> 1, marked 18 -> 18;
-`cost_gate` PASS (max +0.08%), `huge_methods` 0 over limit, warning gate clean with both compile
-tasks verified EXECUTED. `Checker.kt` +10.
-
-**THE MECHANISM IS (CHK.42)'s OWN, ONE CASE OVER.** `currentLocalTypes` is a FLAT COPY of the
-enclosing scope, so a parameter that nothing registers is not merely untyped — the outer
-same-named entry is still sitting there and every read inside the body resolves to IT. The
-(CHK.42) pre-pass fills that hole and is gated `if (param.type != null) continue`; the arm below
-it writes only when the annotation resolves to neither `anyType` nor `errorType`. An explicit
-`: any` satisfies neither, so it leaked. Measured against tsgo 7.0.2: **three false positives on
-legal code**, none of them involving an import or a module symbol.
-
-**THE ARCHIVE HAD ALREADY NAMED THE CLASS, AND CHECKING IT IS PART OF THE PROTOCOL.**
-`docs/history/CLAUDE-GOTCHAS-ARCHIVE.md`'s round-757 entry on `ctaTypeParamsIntoLocals` says
-it verbatim: a nested body INHERITS `currentLocalTypes`/`varTypes`, and omitting the parameter
-scope install means "an inner read of a parameter name resolves to a same-named outer/global
-binding — the `applyBodyLocalShadowing` FP class". That is this defect with the annotation axis
-removed, i.e. corroboration rather than contradiction; the grep was run late (after the fix) and
-should have been run first. The other two greps for what this arc touched
-(`getTypeOfSymbolWorker`, `mergedDeclarations3`) hit entries about UNRELATED mechanisms (B451's
-computed member NAMES, B463's nominal enum mismatches), so nothing constrains what landed.
-
-**IT WAS INVISIBLE FOR AS LONG AS A MODULE SYMBOL TYPED `any`** — the wrong resolution then had
-the right answer by accident, which is exactly why (CHK.73) had to ship a contained guard and why
-this is its general form. A defect that is masked by a SECOND defect is not rare here; it is what
-(CHK.50)'s law predicts every time a silent `any` becomes a real type.
-
-**THE FIRST FIX WAS COMPLETELY INERT AND IS NOT IN THE COMMIT.** It registered the name in round
-453's `currentParamBindingNames` side set — the mechanism whose own KDoc describes this exact
-job — rebuilt clean, screened clean, and produced **byte-identical rows before and after**. Per
-the standing rule (three "fixes" in rounds 700-704 were inert and were caught only because the
-probe was built to fail if the change worked), it was reverted rather than landed. What found the
-real site cost one command and no build: **`--passTiming`'s `emissions by pass` named `checkSpine`**,
-i.e. a spine handler under the cta frame rather than the legacy walk, and the cta frame's
-parameter seeder is `ctaTypeParamsIntoLocals` — where the pre-pass lives.
-
-**AND THE CONTAINED GUARD IS *NOT* REDUNDANT AFTERWARDS, WHICH HAD TO BE MEASURED.** With the
-general fix in, ablating (CHK.73)'s `nameBoundByEnclosingScope` guard left every existing pin
-GREEN — the textbook reading of "now redundant, delete it". A five-shape matrix says otherwise:
-the pre-pass covers PARAMETERS, the guard covers the wider binder population, and without it the
-module type leaks into a `catch` variable and a block-scoped `class`, ours reporting `Type 'zns'`
-where tsgo reports `unknown` and `typeof zns`. Both shapes are now pinned, so the guard has
-discriminating pins again. It is SUPPRESSION-only and costs one true row there (a block-scoped
-`function` shadowing the alias, which tsgo reports), recorded as a residue rather than widened.
-
-**SUCCESSOR.** The residue above is the honest next step and it is an (INV.0) step-10b question,
-not a suppression one: a shadowing name should resolve to its OWN declaration (the scope-space
-consult), at which point the guard can narrow instead of silencing. Beside it, two display rows
-sized at (P18.159) — `typeof <name>` for a namespace-merged function and `typeof import("<path>")`
-for a module object — both corpus-only-gated and priced by one screen run each.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1182,6 +1151,27 @@ shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: t
 positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
 positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
 
+- [ ] **(CHK.147) A NAMESPACE-LOCAL *VALUE* IS NOT NAMESPACE-SCOPED — THE FIRST DECLARATION WINS
+  PROGRAM-WIDE, AND IT IS ORDER-DEPENDENT (measured 2026-09-22, (P18.171), found while
+  reconstructing a reference fixture).** `namespace A { declare let s: X }` followed by
+  `namespace B { declare let s: Y }` resolves `B`'s `s` to **`A`'s**; reverse the two and `B`'s
+  site reports `A`'s error twice. Repros: `build/scratch-p18171/cells/{ex23,ex32,nsclash}`.
+  **THE REASON IT MATTERS MORE THAN ITS SIZE SUGGESTS IS THAT IT CORRUPTS MEASUREMENT**: the
+  reference fixture `assignmentCompatWithDiscriminatedUnion` declares `declare let s` / `declare
+  let t` in EACH of five `Example` namespaces, so every one of its five independent cases was in
+  fact comparing the FIRST namespace's types — a naive before/after reading of that file said
+  "ours 14 -> 3" where the honest, one-namespace-per-file reading is **14 -> 6**. Any multi-case
+  fixture that reuses a name across namespaces is silently collapsed the same way, in BOTH arms,
+  so it fails in the reassuring direction. **Split such a fixture per namespace before reading
+  it.**
+  **A SECOND SYMPTOM SHARES THE ROOT**: a type alias's DISPLAY name leaks the wrong namespace —
+  we print `Example1.S` where tsgo prints `S`.
+  **Direction and instruments are unmeasured** — the fix is a scoping change in the binder or in
+  `NameResolver`, it can move a name resolution anywhere, and no census has been taken. Do the
+  census FIRST: how many active corpus baselines declare the same value name in two namespaces of
+  one file, and how many profile/library sites do. `(CHK.120)` (a `ModuleDeclaration` arm that
+  publishes no `exports`) is adjacent and should be read before starting.
+
 - [x] **(CHK.144) LANDED 2026-09-22 ((P18.170) note) — `marked` 3 -> 2, matrix 15/39 -> 36/39
   agreeing with tsgo, suite 20,336 / 0 / 44.** The arm is purely LEXICAL (a parent-chain walk
   with a SHADOW-STOP that halts at every value-space binder, including ones it cannot type) and
@@ -1312,6 +1302,16 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   **(c) `??` DOES NOT CONTEXTUALLY TYPE ITS RIGHT OPERAND** — `maybe ?? 'link'` types
   `string | "image"` at EVERY target including a single object type, where `||` keeps
   `"image" | "link"`. Independent, small, and removes rows.
+  **(b) LANDED 2026-09-22 ((P18.171) note)** — 23 of 25 cells now match tsgo, the canonical
+  fixture goes 14 -> 6 against tsgo's 4, `marked` unchanged at 2 as predicted, and half (a) is
+  now a SMALL follow-on that (b) was the prerequisite for. **The port needed three restatements
+  our type model forces** (literal interning, `boolean` as an Intrinsic, `undefined`/`null` as
+  unit types) plus a fourth found only by the fixture (compare against the OPTIONALITY-WIDENED
+  target property). **(a) REMAINS OPEN** and is one `else` on `getTypeOfObjectLiteral`'s union arm
+  (`Checker.kt:127402`) plus a helper unioning the member's type across the object-ish
+  constituents, leaving the three existing selection paths as the untouched fast path; its live
+  probes are the round's own `cells/ctx_a` and `cells/gh30170`, and the canonical fixture would go
+  6 -> 5.
   **ORDER: (b) then (a); (c) any time.** (a) alone does not close `marked` — the literal would
   then type `"image" | "link"` and die on (b). **INSTRUMENTS**: the 8-profile grid is a real GATE
   for (a) (63-141 one-line ternary-valued object-literal members per profile, grid green today)
