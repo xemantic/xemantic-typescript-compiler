@@ -71825,6 +71825,42 @@ interface DataView {
                             val idx = pp.arguments.indexOfFirst { it === parent }
                             idx >= 0 && callArgHasContextualThis(pp.expression, idx)
                         }
+                        // (CHK.35a): a function expression assigned DIRECTLY to a member
+                        // gets its `this` from the assignment, so TS2683 is wrong there —
+                        // measured over six shapes against tsgo 7.0.2, which is silent for
+                        // `o.m = function(){ this }` and `o['k'] = function(){ this }` and
+                        // reports for an Identifier LHS, an IIFE and a NESTED function
+                        // expression. Those three fall out of the conjuncts rather than
+                        // needing arms: an Identifier LHS is excluded here, an IIFE's `pp`
+                        // is the CallExpression above (so the arm before this one decides
+                        // it, and answers false for a CALLEE), and a nested fn-expr's `pp`
+                        // is its own enclosing statement.
+                        //
+                        // The test is SYNTACTIC on purpose. The previously-reverted attempt
+                        // keyed on the target type declaring a `this:` parameter, which is
+                        // tsgo's real model but is INERT on the library this serves: the
+                        // element-access target there resolves to `any` (a contextual
+                        // parameter type mentioning a free type parameter collapses — its
+                        // own item), so no type-keyed test can see the `this:` that target
+                        // does declare. A syntactic test is immune to that.
+                        //
+                        // SUPPRESSION ONLY, and the residue is deliberate: `this` stays
+                        // `any` rather than becoming the RECEIVER's type, so where a body
+                        // reads a MEMBER of `this` tsgo reports TS2339 and we stay silent —
+                        // a false NEGATIVE, the conservative direction, measured at ZERO
+                        // rows on both libraries, all eight profiles and the active corpus.
+                        // Typing `this` as the receiver without also implementing tsgo's
+                        // precedence rule (a contextual `this:` OUTRANKS the receiver) would
+                        // add a false POSITIVE wherever the body forwards `this` to a callee
+                        // that declares its own.
+                        // `pp.right === parent` is a MEASURED-REDUNDANT barrier, kept: an
+                        // assignment's LHS cannot BE the function expression once the LHS kind
+                        // is constrained to a member access below, so no arm can discriminate
+                        // it (a3 read 0 RED). It costs one reference compare and keeps the arm
+                        // correct if the LHS kind set is ever widened.
+                        pp is BinaryExpression && pp.operator == SyntaxKind.Equals &&
+                            pp.right === parent &&
+                            (pp.left is PropertyAccessExpression || pp.left is ElementAccessExpression) -> true
                         else -> false
                     }
                     val newTyped = hasThisParameter(parent.parameters) ||
