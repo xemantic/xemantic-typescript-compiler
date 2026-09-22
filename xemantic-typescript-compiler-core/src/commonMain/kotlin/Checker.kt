@@ -115151,6 +115151,91 @@ interface DataView {
                 ?: globals[baseExpr.name.text]
             else -> return errorType
         } ?: return errorType
+        // (P18.169) A HERITAGE BASE THAT IS A GENERIC TYPE **ALIAS** IS RESOLVED BY THE
+        // ANNOTATION PATH, NOT HERE — the arm below honours type arguments only for a
+        // `Type.Interface`, so `interface D extends Omit<B, 'b'>` fell through to the
+        // bare `getDeclaredTypeOfSymbol(Omit)` with `<B, 'b'>` SILENTLY DISCARDED and
+        // the un-instantiated alias body (a mapped type over an unbound `T`) contributed
+        // NOTHING to `D`'s member table.
+        //
+        // Measured against tsgo 7.0.2: the defect is not the excess-property check's
+        // known-property set but the BASE TYPE itself, and it shows up three ways at
+        // once — `const v: D = { a: true }` was a false TS2353 (`a` looked excess),
+        // `d.a` typed `any` where tsgo types `boolean`, and `d.nope` was SILENT where
+        // tsgo reports TS2339 (an unresolvable base pushes the member-access check into
+        // its conservative "has base types" skip). All of `Omit` / `Pick` / `Partial` /
+        // `Required` / `Readonly` / `Record` and every user-declared generic alias were
+        // affected; a plain `extends B`, a multi-base `extends B, C`, a generic
+        // INTERFACE base `extends G<string>` and a NON-generic alias base were not,
+        // which is exactly the "declared is Type.Interface" / "no type arguments" split.
+        //
+        // The fix ROUTES THROUGH THE ANNOTATION PATH rather than re-deriving it: the
+        // equivalent `TypeReference` node is handed to [getTypeFromTypeNode], which owns
+        // the builtin-utility materializers, B50.1 alias substitution, the constraint
+        // gates and the alias-display registration. Re-implementing any of that here
+        // would be a second, divergent copy.
+        //
+        // Three things this deliberately does NOT do. It does not touch a base whose
+        // declared type is a `Type.Interface` (that arm already applies its arguments,
+        // and interning a `Type.Reference` is the right answer there). It does not touch
+        // an argument-LESS base (a non-generic alias already resolves through
+        // `getDeclaredTypeOfSymbol`). And it does not handle a QUALIFIED alias base
+        // (`extends NS.Alias<X>`), which would need a PropertyAccessExpression →
+        // QualifiedName conversion; that shape keeps today's behaviour.
+        //
+        // THE SYNTHETIC NODE IS PARENTED, AND THAT IS LOAD-BEARING (INV.2(a): a node this
+        // code builds is not run through `indexSourceFile`, so its `nodeId` is -1 and its
+        // `parent` is null unless set). `typeName` and `typeArguments` are the REAL indexed
+        // nodes, which is what every per-file symbol consult in [getTypeFromTypeReference]
+        // reads — but ONE reachable helper walks the node's own ancestors,
+        // [aliasGuardIsRecursionBrake], which looks for an enclosing `TypeAliasDeclaration`
+        // to decide whether the (INC.42) constraint relaxation would remove a recursion
+        // brake. Off a null parent it answers from its first two legs alone, SILENTLY, and
+        // a wrong answer there is a name resolving in the wrong scope, which nothing in
+        // this repo prints. It happens to be the same answer — a heritage clause cannot be
+        // lexically inside a type-alias body, so that walk finds nothing either way — but
+        // parenting the stand-in to the node it stands in for makes every ancestor query
+        // (enclosing alias, enclosing namespace, owning source file) structurally correct
+        // instead of correct by argument, and costs one assignment.
+        //
+        // `parent` is not a constructor property, so it does not enter `TypeReference`'s
+        // data-class equality: two stand-ins for one heritage site still share the
+        // structural `nodeTypes` entry, and carrying `expr`'s `pos`/`end` keeps that key
+        // distinct per site.
+        if (baseExpr is Identifier && symbol.flags.hasAny(SymbolFlags.TypeAlias)) {
+            val aliasArgs = expr.typeArguments
+            if (!aliasArgs.isNullOrEmpty()) {
+                val asAnnotation = TypeReference(
+                    typeName = baseExpr,
+                    typeArguments = aliasArgs,
+                    pos = expr.pos,
+                    end = expr.end,
+                )
+                asAnnotation.parent = expr
+                val viaAnnotation = getTypeFromTypeNode(asAnnotation)
+                // An expansion that is not an OBJECT type needs no refusal here: it is
+                // `resolveInterfaceMembersCore`'s `if (baseType is Type.Object)` that
+                // decides what a base contributes, so a union (`type Nullable<T> = T |
+                // null`) or a primitive (`type Prim<T> = string`) contributes nothing,
+                // exactly as before — measured, along with self-referential
+                // (`type R<T> = { next: R<T> }`), self-REFERENCING (`interface D extends
+                // Wrap<D>`) and mutually recursive alias bases, none of which recurse.
+                // tsgo additionally reports TS2312 for the two non-object cases; we are
+                // silent there BEFORE and AFTER, i.e. that is a pre-existing gap and not
+                // this arm's to open.
+                //
+                // THE REFUSAL BELOW IS A MEASURED-REDUNDANT BARRIER, KEPT DELIBERATELY.
+                // Ablated (arm a4: adopt the annotation path's answer unconditionally) the
+                // 20 pins, the corpus screen's 8,725 subtests, the tsgo-matched CLI matrix
+                // and both library probes are ALL unmoved — no instrument here reaches a
+                // population where the instantiation answers `errorType`/`anyType`, because
+                // an arity mismatch and a non-object expansion both return a real type and
+                // the recursion guards measured as not firing. What it buys is that the arm
+                // stays strictly MONOTONE: on a resolution failure the base keeps exactly
+                // its pre-change answer instead of degrading to a rendered `any`.
+                if (viaAnnotation !== errorType && viaAnnotation !== anyType) return viaAnnotation
+            }
+        }
         val declared = getDeclaredTypeOfSymbol(symbol)
         // 16.0n: Honor type arguments on the base: `extends Foo<X>` → Type.Reference(Foo, [X]).
         // Type args are resolved with the enclosing interface's type params in scope.
