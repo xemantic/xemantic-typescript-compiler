@@ -1177,10 +1177,39 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   to SOME constituent** (adding a third tag, dropping a member, or a conflicting sibling member
   all still fail in both). **This half only ACCEPTS more, so it can only REMOVE rows**, and it is
   the safe one to land first — but CLAUDE.md's "an acceptance-only relation leg CAN add a
-  diagnostic, because the relation feeds narrowing" applies, so grid it anyway. **Its
-  implementation site in tsgo is UNLOCATED** (recon checked `typeRelatedToSomeType`,
-  `findMatchingDiscriminantType`, `discriminateTypeByDiscriminableItems` and none explains it);
-  the rule is characterised behaviourally, so fit it to the cells rather than porting a function.
+  diagnostic, because the relation feeds narrowing" applies, so grid it anyway.
+  **SITE FOUND 2026-09-22 (second recon) — IT IS NOT EMERGENT, IT IS ONE FUNCTION TO PORT**:
+  `relater.go:3989 typeRelatedToDiscriminatedType`, called from the TAIL of
+  `structuredTypeRelatedTo` (`relater.go:3893`), i.e. BELOW the union-target dispatch the first
+  recon audited — which is why it was missed. Ours refuses at `Relater.kt:615-618`, where the
+  `target.types.any { … }` fails and the only fallback is guarded `source is Type.Intersection`.
+  The natural fix is a new leg in that same arm, a direct sibling of `intersectionSourceDistributes`
+  (`Relater.kt:574-586`), which is already a source-SPLITTING leg in the same position. **A
+  pre-split elsewhere is wrong** — the split is only meaningful relative to THIS target and
+  step 3 must happen inside the relation.
+  **IT NEEDS ALL FOUR PARTS OR IT DIVERGES ON A MEASURED PROBE**: (1) the discriminant filter is
+  `isDiscriminantProperty` — NON-UNIFORM across the target's constituents AND every constituent's
+  type a unit/literal (so a `number`/`string` difference does NOT qualify, a `boolean` one DOES,
+  and a member uniform in the target is skipped); (2) the CARTESIAN PRODUCT over ALL such source
+  properties, not a single-key split; (3) the **25-combination cap** (`relater.go:4013`), which is
+  directly observable — a FULLY COVERED 26-way union is rejected by tsgo; (4) `matchingTypes`
+  collects EVERY constituent a combination matches and the non-discriminant properties are then
+  compared against **every** one of them. **Part (4) is what refutes the naive "each split relates
+  to SOME constituent" rule**: for target `A{k:'a';x:number} | B{k:'b';x:number} | C{k:'b';x:string}`
+  and source `{k:'a'|'b'; x:number}` tsgo ERRORS, because `'b'` matches both `B` and `C` and `C`
+  rejects `x`. We error there today, so that cell is a REGRESSION-RISK pin, not a gap.
+  **THE CANONICAL REFERENCE TEST IS ABSENT FROM OUR CORPUS**, which is the gating problem:
+  `assignmentCompatWithDiscriminatedUnion` — the fixture tsgo's own comment cites — has no case
+  file in this sparse clone and 0 mentions in the generated tree. Reconstructed from its baseline
+  and run through both: **tsgo 4 rows, ours 14**, i.e. 10 ours-only rows in ONE fixture, and that
+  is the best sizing available. Its 14 shapes are ready-made pins. Reusable here already:
+  `Checker.isLiteralKindForDiscriminant` (:125157), `literalsEqualForDiscriminant` (:125161),
+  `discriminantKeysOfMember` (:125939); MISSING is an `isDiscriminantProperty(targetUnion, name)`,
+  and `discriminantKindKeys` (:124204) is hardcoded to `"kind"` and is NOT reusable.
+  **COST**: bound the product by the 25 cap AND an early empty-discriminants exit before any
+  allocation, exactly as tsgo orders it — this sits in the hot union-target arm. And per
+  CLAUDE.md's recorded trap, do NOT use `getPropertyOfType`'s union arm for the per-constituent
+  lookups; ask each constituent directly.
   **(c) `??` DOES NOT CONTEXTUALLY TYPE ITS RIGHT OPERAND** — `maybe ?? 'link'` types
   `string | "image"` at EVERY target including a single object type, where `||` keeps
   `"image" | "link"`. Independent, small, and removes rows.
