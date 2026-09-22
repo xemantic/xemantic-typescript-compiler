@@ -1110,7 +1110,7 @@ three remaining rows each have a measured owner and a measured order:
 |---|---|---|---|
 | ~~`Instance.ts:179` TS2578~~ | **(CHK.144)** — **LANDED (P18.170)** | **3 -> 2** ✔ | added rows; grid was the gate |
 | `Tokenizer.ts:19` TS2322 | **(CHK.142)** object literal against a UNION contextual type, (b) then (a) | **-> 1** | (b) removes, (a) adds |
-| `Instance.ts:96` TS7019 | **(CHK.35b)** + **(CHK.35c)** | **-> 0** | adds |
+| `Instance.ts:96` TS7019 | **(CHK.35b)** ALONE — the "inert until (c)" claim is measured FALSE | **-> 0** | only adds contextual types where there are none |
 
 **LIVE COUNT AFTER (P18.170): `marked` 2, `cronstrue` 0.** Two rows to zero, both owned above.
 
@@ -1139,16 +1139,40 @@ a mechanism; it now has one.
   wrong (so is (P18.164)'s "`marked` declares no `this:` at all" — true of the `walkTokens`
   cluster only). **(a) DONE**: a function expression assigned DIRECTLY to a member gets its
   `this` from the assignment — a SYNTACTIC arm in `spineItEdge`, closing the 4 TS2683 rows.
-  **(b) OPEN, and INERT until (c)**: the two missing `ElementAccessExpression` arms in
-  `pullContextualTypeAt` (:150323) and `resolveAssignTargetCtxTypeForImplicitAny` (:37196) — the
-  recorded refusal *"getTypeOfExpression over an arbitrary LHS is not a bounded question"* does
-  NOT survive contact (the arm already calls it on an arbitrary PropertyAccess), but the target
-  resolves to `any` for (c)'s reason, so landing (b) alone is the correct-but-inert shape that
-  got the last attempt reverted. **(c) OPEN, the big one**: contextual parameter typing collapses
-  to `any` whenever the parameter type mentions a FREE TYPE PARAMETER — the class's or the
-  method's own — measured over a 7-cell matrix and NOT array/`forEach`/element-access specific.
-  Its fix ADDS diagnostics, so it is corpus-gated and its own arc; it is what closes `marked`'s
-  last TS7019. **(d) OPEN, lowest value**: the `this`-as-receiver MODEL (tsgo's real rule, a
+  **(b) OPEN — AND THE "INERT UNTIL (c)" CLAIM IS MEASURED **FALSE** (2026-09-22, (P18.171)
+  recon, 12-cell matrix). IT IS THE ROUND THAT CLOSES `marked`'s LAST ROW, AND IT IS THE SMALLEST
+  OF THE THREE.** It fails with a FULLY CONCRETE slot type and no type parameter anywhere:
+  `declare const bag: { [k: string]: (a: Tok) => void }; bag["x"] = function (t) { … }` is an
+  ours-only `TS7006` where tsgo types `t` as `Tok`. **(b) and (c) have OPPOSITE observable
+  signatures, which is why one read as blocking the other**: (b) finds NO contextual signature,
+  so no arity either, and the parameter is IMPLICITLY `any` — an ours-only TS7006/TS7019 we ADD;
+  (c) finds the signature AND the arity and collapses the parameter type to `any` — a row we
+  MISS, in silence. Every element-access form fails identically (literal key, computed key, index
+  signature, named property, arrow RHS, `||=`), so the key's shape is irrelevant. The two
+  predicates: `resolveAssignTargetCtxTypeForImplicitAny`'s `else -> null` at **:37275** (its arms
+  are `Identifier` / `PropertyAccessExpression` / `ParenthesizedExpression`), and
+  `pullContextualTypeAt`'s `BinaryExpression` arm at **:150670**, whose kind test is
+  `parent.left is Identifier || parent.left is PropertyAccessExpression` where tsgo's is a single
+  `ast.IsAccessExpression` covering both — `getContextualTypeForAssignmentExpression`,
+  `checker.go:29599`. **Why it closes `marked`**: that target is an index signature whose value
+  type is a generic alias instantiated with the class's own parameters; with (b) landed the
+  contextual type is found, (c) then collapses the REST parameter to `any`, and the TS7019 goes
+  SILENT with no new row — measured by proxy on the property-access twin of exactly that shape.
+  **(c) OPEN, the big one, and now located to ONE LINE**: `applyPulledContextualParamTypes` has
+  `if (typeContainsUnresolvedTypeParam(pType)) continue` at **two** sites (:150843 rest, :150858
+  identifier/pattern), whose predicate is `is Type.TypeParam -> true` (:129366) — it **cannot
+  distinguish an UN-INFERRED CALLEE type parameter (what round 569's KDoc actually meant) from a
+  FREE IN-SCOPE one declared by an enclosing function, method or class**. Measured over 12 cells
+  the axis is exactly "the contextual type mentions a free type parameter": which scope declares
+  it, whether it is CONSTRAINED, and whether it arrives through an alias all make no difference,
+  while genericity of the enclosing scope ALONE does not trigger it (a concrete slot inside a
+  generic function, a generic class, or a concretely-instantiated alias all AGREE with tsgo).
+  The collapse produces **`any`**, not the unsubstituted `R` — settled with write and argument
+  probes, since a read probe cannot tell the two apart. tsgo does NOT instantiate at all:
+  `assignContextualParameterTypes` (`checker.go:10325`) copies the context's type parameters onto
+  the inner signature and writes each parameter type VERBATIM, so a free `R` is just a type.
+  Its fix ADDS diagnostics, so it is corpus-gated and its own arc — and it is much easier to
+  GRADE once (b) has stopped element-access targets from masking it behind a TS7006. **(d) OPEN, lowest value**: the `this`-as-receiver MODEL (tsgo's real rule, a
   contextual `this:` OUTRANKING the receiver) — moves 0 further rows on `marked` and converts
   (a)'s deliberate false negative into a true positive. **(CHK.30) is closed and unrelated**,
   which answers the item's own standing question: one path does NOT serve both.
@@ -1417,6 +1441,17 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   **DIRECTION**: (i) mostly ADDS diagnostics (every `self.`-rooted read that was silently `any`
   starts reporting) and removes one FP class; (ii) purely ADDS. Both are the dangerous direction,
   so the corpus screen must run with `--include` for any `@Ignore`d TS7006/TS2683 row.
+  **THIS IS THE SAME FAMILY AS (CHK.35)(d) — MERGE THEM WHEN EITHER IS WORKED.** (P18.171)'s
+  recon reached it from the other side and added three measured cells plus the mechanism:
+  `(this).cb = fn`, `this.self.cb = fn` and `const s1 = this; s1.cb = fn` are ours-only **TS7006**
+  where the plain `this.cb = fn` is a SILENCE, and an explicitly `K`-annotated alias
+  (`const s2: K = this`) is byte-identical to tsgo. The root cause is visible in the source:
+  **B101 makes `getTypeOfExpression(this)` answer `anyType`**, and `pullContextualTypeAt`'s
+  `BinaryExpression` arm (:150670) then drops it through `takeIf { it !== anyType }`. It also
+  found a FOURTH, independent cell that (CHK.141) does not name: the contextual **`this`
+  PARAMETER** is dropped even for a fully CONCRETE type at a WORKING property-access target —
+  `contextualThisParamType(sig)` exists in `applyPulledContextualParamTypes` and does not reach
+  there. Recon ranks the whole family LAST of the three: it moves **0** further rows on `marked`.
 
 - [ ] **(LEGACY.0) (0a) + (0b) STEPS 1-44 LANDED 2026-09-21 ((P18.85)-(P18.155) notes) — pending **19**,
   skipped 44, suite 20,163/0. **(P18.155) CLOSED NO ROW and is recorded for its MEASUREMENT**: it
