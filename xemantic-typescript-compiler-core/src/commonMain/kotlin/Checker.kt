@@ -37272,8 +37272,81 @@ class Checker(
                 direct
             }
         }
+        // (CHK.35b) An ELEMENT-ACCESS target supplies its SLOT type, exactly as the
+        // property-access arm above supplies the member's. tsgo has ONE predicate for
+        // both — `getContextualTypeForAssignmentExpression` (checker.go:29599) gates on
+        // `ast.IsAccessExpression(left)`, i.e. property AND element access, and only the
+        // assignment-DECLARATION sub-case (`binary.Symbol != nil`) branches on the access
+        // KIND, and even there the element-access arm is served. Without this arm every
+        // element-access form drew a false TS7006 / TS7019 on legal code (`bag["x"] =
+        // function (t) {…}`, `arr[0] = …`, `nest.inner[k] = …`) where tsgo types the
+        // parameter and reports the real error, if any, INSIDE the body — the key's
+        // shape was irrelevant, measured across a literal key, a computed key, a
+        // literal-typed key variable and a numeric index alike.
+        //
+        // SHAPED AS THE PROPERTY-ACCESS ARM ABOVE AND NOT AS tsgo's BARE
+        // `getTypeOfExpression(left)`: tsgo can ask the whole access because its receiver
+        // resolution is ONE mechanism, where this checker's is TWO — a walk-scoped
+        // [implicitAnyScopes] stack, which alone carries a BODY-LOCAL's annotation, and
+        // [getTypeOfExpression]. Asking the whole access reaches only the second, so
+        // `const ext: Opts['extensions'] = …; ext.renderers[k] = fn` inside a function
+        // body stayed `any` — measured, and it is marked's own shape. Resolving the
+        // RECEIVER through the same `?:` ladder the property-access arm uses and then
+        // projecting the key with [elementAccessCtxSlotType] — the element twin of that
+        // arm's [lookupPropertyTypeForCtx] — reaches both, and keeps the key
+        // classification in ONE place rather than growing a second rule beside it.
+        //
+        // DELIBERATELY NOT DONE HERE, two adjacent families that must not be mixed in:
+        //  - the `typeContainsUnresolvedTypeParam` guard on [applyPulledContextualParamTypes]
+        //    stays (CHK.35c) — it still refuses everything generic, which is what keeps
+        //    this arm's blast radius to the concrete-slot shapes;
+        //  - the `it !== anyType` filter stays (CHK.141)/(CHK.35d), the `this`-receiver
+        //    family, whose cause is that B101 makes `getTypeOfExpression(this)` answer
+        //    `anyType` — so `this.bag["x"] = fn` is left exactly where `this.cb = fn`
+        //    already was, which is what makes the two ONE residue rather than two.
+        is ElementAccessExpression -> {
+            val recvT = resolveAssignTargetCtxTypeForImplicitAny(left.expression)
+                ?: getTypeOfExpression(left.expression).takeIf { it !== anyType && it !== errorType }
+            recvT?.let { elementAccessCtxSlotType(it, unwrapParensExpr(left.argumentExpression)) }
+        }
         is ParenthesizedExpression -> resolveAssignTargetCtxTypeForImplicitAny(left.expression)
         else -> null
+    }
+
+    /**
+     * (CHK.35b) The SLOT an element-access assignment TARGET names on [recvT] — the
+     * element twin of the property-access arm's [lookupPropertyTypeForCtx], used ONLY
+     * by [resolveAssignTargetCtxTypeForImplicitAny].
+     *
+     * [elementAccessResultType] is asked first and answers every key it can classify
+     * (a literal key resolves to that member, then through `applicableIndexTypeForName`;
+     * a `StringLike`/`NumberLike` key to the matching index signature).
+     *
+     * THE FALLBACK IS THE WHOLE REASON THIS IS NOT ONE CALL. That classification reads
+     * `getTypeOfExpression(indexExpr)`, and this predicate runs on the spineIany edge,
+     * where `currentLocalTypes` is not yet populated for the function-like being walked
+     * — so a key that is a PARAMETER of that function-like (`renderers[ext.name]`, where
+     * `ext` is the enclosing `forEach` arrow's parameter — marked's own shape) types
+     * `any`, misses the `StringLike` test and washes the access to `anyType`. Measured:
+     * a literal key and a FILE-LEVEL key both resolved, and only a key bound by the
+     * walk did not, which is why this reads as a nesting problem and is not one.
+     *
+     * An INDEX SIGNATURE has exactly ONE slot type whatever the key turns out to be, so
+     * consulting it when the key could not be classified is not a guess — it is the same
+     * answer tsc gives for `obj[anyKey]`, and it cannot fire where the key WAS classified
+     * (the call above returns first). A receiver with no index signature answers null,
+     * i.e. status quo.
+     */
+    private fun elementAccessCtxSlotType(recvT: Type, indexExpr: Expression): Type? {
+        val direct = elementAccessResultType(recvT, indexExpr)
+        if (direct !== anyType && direct !== errorType) return direct
+        val apparent = getApparentType(recvT)
+        if (apparent is Type.Object) {
+            resolveStructuredTypeMembers(apparent)
+            apparent.stringIndexInfo?.let { return it.type }
+            apparent.numberIndexInfo?.let { return it.type }
+        }
+        return null
     }
 
     /** Round 481: set by [resolveAssignTargetCtxTypeForImplicitAny] when the
@@ -150887,9 +150960,18 @@ interface DataView {
             // simple, cheap LHS shapes are asked, because the pull runs per
             // function-like and `getTypeOfExpression` over an arbitrary LHS is not a
             // bounded question.
+            // (CHK.35b) …and an ELEMENT ACCESS is the third such shape. tsgo does not
+            // distinguish it from a property access at all: its
+            // `getContextualTypeForAssignmentExpression` (checker.go:29599) gates the
+            // whole family on `ast.IsAccessExpression(left)` and answers
+            // `getTypeOfExpression(left)`. The cost argument the refusal above was
+            // written from does not separate the two — an `ElementAccessExpression` is
+            // the same one `getTypeOfExpression` call over the same bounded LHS as the
+            // `PropertyAccessExpression` already beside it.
             is BinaryExpression ->
                 if (parent.operator == SyntaxKind.Equals && parent.right === node &&
-                    (parent.left is Identifier || parent.left is PropertyAccessExpression))
+                    (parent.left is Identifier || parent.left is PropertyAccessExpression ||
+                        parent.left is ElementAccessExpression))
                     getTypeOfExpression(parent.left)
                         .takeIf { it !== anyType && it !== errorType } else null
             else -> null
