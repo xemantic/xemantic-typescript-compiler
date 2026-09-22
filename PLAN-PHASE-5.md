@@ -1151,27 +1151,54 @@ shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: t
 positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
 positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
 
-- [ ] **(CHK.147) A NAMESPACE-LOCAL *VALUE* IS NOT NAMESPACE-SCOPED — THE FIRST DECLARATION WINS
-  PROGRAM-WIDE, AND IT IS ORDER-DEPENDENT (measured 2026-09-22, (P18.171), found while
-  reconstructing a reference fixture).** `namespace A { declare let s: X }` followed by
-  `namespace B { declare let s: Y }` resolves `B`'s `s` to **`A`'s**; reverse the two and `B`'s
-  site reports `A`'s error twice. Repros: `build/scratch-p18171/cells/{ex23,ex32,nsclash}`.
-  **THE REASON IT MATTERS MORE THAN ITS SIZE SUGGESTS IS THAT IT CORRUPTS MEASUREMENT**: the
-  reference fixture `assignmentCompatWithDiscriminatedUnion` declares `declare let s` / `declare
-  let t` in EACH of five `Example` namespaces, so every one of its five independent cases was in
-  fact comparing the FIRST namespace's types — a naive before/after reading of that file said
-  "ours 14 -> 3" where the honest, one-namespace-per-file reading is **14 -> 6**. Any multi-case
-  fixture that reuses a name across namespaces is silently collapsed the same way, in BOTH arms,
-  so it fails in the reassuring direction. **Split such a fixture per namespace before reading
-  it.**
-  **A SECOND SYMPTOM SHARES THE ROOT**: a type alias's DISPLAY name leaks the wrong namespace —
-  we print `Example1.S` where tsgo prints `S`.
-  **Direction and instruments are unmeasured** — the fix is a scoping change in the binder or in
-  `NameResolver`, it can move a name resolution anywhere, and no census has been taken. Do the
-  census FIRST: how many active corpus baselines declare the same value name in two namespaces of
-  one file, and how many profile/library sites do. `(CHK.120)` (a `ModuleDeclaration` arm that
-  publishes no `exports`) is adjacent and should be read before starting.
-
+- [ ] **(CHK.147) A NAMESPACE-LOCAL `var`/`let`/`const` IS NOT NAMESPACE-SCOPED — THE FIRST
+  DECLARATION WINS PROGRAM-WIDE, ORDER-DEPENDENTLY, AND IT PRODUCES A **WRONG TYPE IN A ROW WE DO
+  EMIT**, not merely a silence (censused 2026-09-22, (P18.172) recon, 55 cells against tsgo).**
+  The sharp reproducer is three namespaces, not two:
+  `namespace A { const s: boolean = true } namespace B { const s: string = "x" }
+  namespace C { const s: number = 1; const bad: string = s }` — ours reports
+  `Type 'boolean' is not assignable to type 'string'` where tsgo reports `Type 'number'`, i.e.
+  `C`'s own `s` is typed as the FIRST namespace's, three namespaces away.
+  **THE AXIS IS THE `VariableStatement`, AND "values" WAS AN OVER-STATEMENT**: `function`, `class`,
+  `interface`, `type` and `enum` all agree with tsgo in both namespaces, including negative probes.
+  Only `let`/`const`/`var` diverge. **It is also not namespace-SPECIFIC** — a bare `{ }` block and
+  an `if` body open no scope either, while a FUNCTION body does; **so (CHK.147) and (CHK.118) are
+  ONE defect** reached through two arms, and **(CHK.118)'s recorded "a primitive-target probe reads
+  all 36 cells CLEAN" does not survive contact** (its own file-level-then-namespace shape diverges
+  with a `string` target). **(CHK.120) is a DIFFERENT defect**: the QUALIFIED path (`A.s`, `B.s`) is
+  already correct, and every cell's TS2304 matches tsgo — name RESOLUTION is fine, this is a checker
+  TYPE-TABLE defect, not a binder one.
+  **MECHANISM, LOCATED**: `ccetSpineEnter`'s `MODULE_DECLARATION` arm (`Checker.kt:1632-1648`) pushes
+  a frame sharing `top.localTypes` **by reference**, where `ccetEnterBlock` (`:1734`) pushes
+  `EpochMap(top.localTypes)` — an overlay — but only for function-like parents. The writer is
+  `ccetApplyDeclRecordings` (`:2063`), every arm guarded `currentLocalTypes[nm.text] == null`, i.e.
+  FIRST-WINS. tsgo instead gives each `ModuleDeclaration` its own `locals`
+  (`binder.go:378 declareModuleMember`) and walks the container chain innermost-first
+  (`checker.go:2449 resolveNameHelper`), sharing only a merged namespace's EXPORTED members.
+  **THE RISK THAT DECIDES THE ROUND**: the LEGITIMATE merge currently rides on the broken flat
+  table. `namespace Other { const s: number = 1 } namespace M { export const s: string = "x" }
+  namespace M { const bad: number = s }` is SILENT here and TS2322 in tsgo — remove `Other` and we
+  agree. So scoping the table alone turns working merges into TS2304: **the merge path must be
+  supplied in the same step** (`nsSymbol` is already on the frame).
+  **SMALLEST FIRST STEP, deliberately not the whole fix**: give the non-`declare`
+  `MODULE_DECLARATION` arm an `EpochMap(top.localTypes)` and nothing else — one line, the exact
+  shape `ccetEnterBlock` already uses — which closes the sibling half and leaves `Block`/`if`
+  ((CHK.118)) and the AMBIENT second writer separable. A `declare namespace` reproduces although its
+  frame is `dead = true`, so a second writer exists and is UNMEASURED; find it before calling the
+  family closed, and record the ambient residue rather than reading it as a new defect.
+  **CENSUS — the corpus is the GATE and it is large**: **96 case files declare the same
+  `var`/`let`/`const` name in two DIFFERENTLY-named namespace blocks, carrying 146 subtests, 51 of
+  them on the errors channel** (measured over the live generated tree, 8,721 subtests / 5,726 case
+  files, all resolved). The corpus is green today, so those 146 can only move RED. The 8-profile
+  grid is a CONTROL and the count says why: exactly ONE colliding file per profile
+  (`src/compiler/parser.ts`, sibling `Parser`/`IncrementalParser` sharing 61 names, nested
+  `JSDocParser` shadowing 9) — and it is the SAME file in all eight, so it is one site, not eight.
+  Both libraries are EMPTY of the shape (0 of 13 and 0 of 47 files; the globs matched, so the zero
+  is real). Direction: the fix BOTH adds rows (every divergent cell is missing or wrong) and removes
+  them (ours-only TS2322 leaking out of a namespace beside a correct TS2304).
+  **THE DISPLAY SYMPTOM IS A SEPARATE DEFECT — the "shared root" claim is REFUTED**: we print
+  `Type 'Example1.S'` where tsgo prints `Type 'S'`, and it reproduces with ONE namespace and no
+  collision at all. It is a namespace-qualification rule in `typeToString`; file and fix it apart.
 - [x] **(CHK.144) LANDED 2026-09-22 ((P18.170) note) — `marked` 3 -> 2, matrix 15/39 -> 36/39
   agreeing with tsgo, suite 20,336 / 0 / 44.** The arm is purely LEXICAL (a parent-chain walk
   with a SHADOW-STOP that halts at every value-space binder, including ones it cannot type) and
