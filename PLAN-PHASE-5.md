@@ -25,6 +25,71 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.168) — (CHK.35a): a function expression assigned to a member gets its `this`; `marked` 8 -> 4 (2026-09-22)
+
+**THE RECON REFUSED THE ITEM AND THE REFUSAL IS THE ROUND'S MAIN PRODUCT.** (CHK.35) is 5 rows
+on `marked`; sized read-only first, they are TWO clusters with DIFFERENT causes, and only one of
+them is a round. 4 rows fall to a purely SYNTACTIC arm in `spineItEdge`; the 5th (TS7019) is
+blocked by a general defect neither the item nor (P18.164) names — **contextual parameter typing
+collapses to `any` whenever the parameter type mentions a FREE TYPE PARAMETER** (the class's or
+the method's own, measured over a 7-cell matrix; not array-specific, not `forEach`-specific, not
+element-access-specific). That is queued as (CHK.35c) and is a corpus-gated arc of its own,
+because its fix ADDS diagnostics.
+
+**THE QUEUE'S OWN RECORD WAS CORRECTED.** (P18.164) reverted a type-keyed fix and recorded the
+reason as *"`marked` declares no `this:` at all"*. True of the `walkTokens` cluster ONLY — the
+other cluster's target, `RendererExtensionFunction<ParserOutput, RendererOutput>`, **does**
+declare one. The type-keyed test could not see it because that target resolves to `any` for the
+(CHK.35c) reason. So the previously-reverted fix was inert for a different reason than recorded,
+and a SYNTACTIC test is immune to it — which is why this one is syntactic rather than a second
+attempt at the model.
+
+**tsgo's RULE, MEASURED OVER SIX SHAPES** (not inferred): silent for a PropertyAccess or
+ElementAccess LHS; REPORTS for an Identifier LHS, an IIFE and a NESTED function expression. The
+last three need no arms — an Identifier LHS is excluded, an IIFE's parent is the `CallExpression`
+(the arm ABOVE decides it and answers false for a callee), and a nested fn-expr's parent is its
+own statement.
+
+**SHIPPED AS A SUPPRESSION, WITH THE RESIDUE PINNED.** `this` stays `any` rather than becoming
+the RECEIVER's type, so where a body reads a MEMBER of `this` tsgo reports TS2339 and we are
+silent — a false NEGATIVE, **and the same line drew a WRONG TS2683 before, so the divergence
+MOVED rather than appeared**. Zero rows on both libraries, all eight profiles and the active
+corpus. Typing `this` as the receiver WITHOUT tsgo's precedence rule (a contextual `this:`
+outranks the receiver) would add a false POSITIVE wherever the body forwards `this` to a callee
+declaring its own — exactly what `marked` does. That is (CHK.35d), and it moves 0 further rows.
+
+**BOTH STANDING INSTRUMENTS ARE CONTROLS HERE, AND THEY SAY SO BY COUNT.** All eight profiles
+carry **ZERO** TS2683 rows, so the grid cannot move. Of the 50 corpus baselines containing
+TS2683, exactly **two** also contain a member-assigned function expression and in NEITHER is the
+row at such a `this` — `thisBinding2` (ACTIVE) is an IIFE, i.e. the ablation target, and
+`classCanExtendConstructorFunction` is `checkJs`-gated. The six pins are the gate.
+
+**ABLATION — a3's ZERO IS STRUCTURAL, NOT A BLIND PIN.** a1 (arm removed): the 2 suppression pins
+RED. a2 (the realistic over-broad mistake — search ANY enclosing assignment instead of the
+IMMEDIATE parent): the NESTED pin RED. **The IIFE pin is green in BOTH and is not blind**: an
+IIFE's function expression has the `CallExpression` as its parent and never the
+`BinaryExpression`, so it cannot reach this arm however the arm is written — it guards a FUTURE
+ancestor-walking arm, which is what `thisBinding2` would catch. a3 (hoist the arm above the
+CallExpression arm AND drop `pp.right === parent`) read **0 RED**, which makes that conjunct a
+measured-REDUNDANT barrier: an assignment's LHS cannot BE the function expression once the LHS
+kind is constrained to a member access. Kept and recorded as redundant rather than claimed
+load-bearing. (a3 varied two things at once — a weaker arm than a1/a2, stated rather than
+glossed.)
+
+Gates: `marked` **8 -> 4**, `cronstrue` 1 -> 1 unchanged; corpus screen 0 of 8,725 over both
+channels; grid 8x `added=0 removed=0`; `cost_gate` PASS (`output.errors` 46 unchanged);
+`huge_methods` 0 over; warning-clean (log non-empty). Suite **20,281 / 0 / 44** (+6 pins).
+
+**SUCCESSORS, sized.** (CHK.35b) the two missing `ElementAccessExpression` arms in
+`pullContextualTypeAt` / `resolveAssignTargetCtxTypeForImplicitAny` — the recorded refusal
+(*"not a bounded question"*) does NOT survive contact, since the arm already calls
+`getTypeOfExpression` on an arbitrary PropertyAccess, but it is provably INERT until (CHK.35c)
+lands; (CHK.35c) the free-type-parameter collapse, which is what finally closes TS7019;
+(CHK.35d) the `this`-as-receiver model. Two side-findings recorded and not chased: an explicit
+`this:` parameter DEFEATS contextual parameter typing (a fresh TS7006 appears), and an
+indexed-access instantiation asymmetry where a non-generic class misses a row its generic
+sibling resolves.
+
 ### Round (P18.167) — (CHK.140): a class's own type parameters are in scope in its members' bodies; plus a build guard that refuses a tsgo-defect row (2026-09-22)
 
 **TWO DELIVERABLES, COMMITTED SEPARATELY.** `431473d121` is the (LEGACY.0) ledger guard;
@@ -603,43 +668,6 @@ structural type and the alias's local name. Both are corpus-only-gated ((PARITY.
 prices either in one run. The bigger remaining one is the general shadow defect (P18.157) recorded:
 an `any`-annotated parameter shadowing ANY file-level binding resolves to the file-level one.
 
-### Round (P18.158) — (CHK.73)(i): `import x = require("./m")` resolved nothing on a path-shaped project (2026-09-21)
-
-**CLOSED (CHK.73)(i) and the `export =` half of the namespace-import form.** Suite
-**20,190 / 0 / 44** (+7 pins); corpus screen **0 of 8,725** over both channels; 8-profile grid
-**8x `added=0 removed=0 fullDiffLines=0`** with emit byte-identical; cronstrue 1 -> 1, marked
-18 -> 18; `cost_gate` PASS (max +0.09%), `huge_methods` 0 over limit, warning gate clean with
-both compile tasks verified EXECUTED. `NameResolver.kt` +29; `Checker.kt` UNCHANGED.
-
-**THE GAP, AND WHY EVERY GATE IN THIS REPO IS BLIND TO IT.** `resolveModuleSpecifier` matches a
-specifier against `fileResults` KEYS ((CHK.78)), which on a real on-disk project are ABSOLUTE
-paths — so `import p = require("./plain")` matched nothing, the alias resolved to NOTHING and the
-binding typed `any`. The `ImportDeclaration` arm has carried a directory-relative leg since round
-512 and this arm never did; it also lacked (CHK.30)'s mandatory bare-package leg. **Flat
-corpus-style names make the bare resolver match `"./m"` by string alone**, so all **183** active
-corpus case files that use this import form are VACUOUS for it, and the 8 profiles and both
-library arms contain **ZERO** of the form — counted, per (CHK.124), rather than assumed. The pins
-are therefore PATH-SHAPED (`// @Filename: /proj/src/main.ts`), which is what makes them able to
-fail at all.
-
-**THE SECOND LEG IS ONE LINE OF tsc's OWN RULE.** An `export = X` module IS `X`, and
-`resolveExternalModuleSymbol` follows it for `import * as` exactly as for
-`import = require(...)`. Ours built a module object over the target file's LOCALS instead, which
-does not carry the target's call signature — so `import * as n from "./legacy"; n(1)` was silent
-where tsgo reports. Measured on a five-shape path-shaped probe: **0 of 5 rows before, 3 of 5
-after**.
-
-**WHAT IS LEFT IS ONE MECHANISM AND IT IS NAMED.** The two shapes still silent are both the
-function/namespace MERGE's STATIC side: `l.inner` where `legacy` is `function legacy` merged with
-`namespace legacy`, reached through `import =` or `import * as` of an `export =` module. A merged
-symbol's value type here is its call signature alone. Pinned `residue -` with tsgo's measured
-answer beside it; it is the last `export =` gap and the natural successor.
-
-**A NOTE ON WHAT THIS ROUND DID NOT DO.** The `export =` follow for `import * as` is NOT gated on
-`esModuleInterop`/`module: node16` (TS2497 is unmodelled here, as (P18.105) records for the whole
-option family), so this matches what tsgo answers under the configurations measured and nothing
-more. Said explicitly because the next agent will otherwise read the missing gate as an oversight.
-
 
 ## QUEUE
 
@@ -993,9 +1021,24 @@ carried unchanged through the whole (P18.156)-(P18.160) arc and through (P18.163
   annotation zip from `sig.declaration`'s own list, as `typeCaptureSignatureParameters` does.
   The second half is not optional: the same drop shifts the positional zip, so `f({a}: O, b: string)`
   types `b` as `O`. Pin BOTH.
-- **(CHK.35) — 5 rows.** A function expression assigned through an INDEX SIGNATURE gets no
-  contextual signature (TS7019 + TS2683x4 at `marked/Instance.ts:118`). Check whether one
-  contextual-signature path also serves (CHK.30) before writing either.
+- **(CHK.35) — DECOMPOSED 2026-09-22 ((P18.168)); (a) LANDED, `marked` 8 -> 4.** The 5 rows are
+  TWO clusters with different causes, and the item's "one contextual-signature path" framing is
+  wrong (so is (P18.164)'s "`marked` declares no `this:` at all" — true of the `walkTokens`
+  cluster only). **(a) DONE**: a function expression assigned DIRECTLY to a member gets its
+  `this` from the assignment — a SYNTACTIC arm in `spineItEdge`, closing the 4 TS2683 rows.
+  **(b) OPEN, and INERT until (c)**: the two missing `ElementAccessExpression` arms in
+  `pullContextualTypeAt` (:150323) and `resolveAssignTargetCtxTypeForImplicitAny` (:37196) — the
+  recorded refusal *"getTypeOfExpression over an arbitrary LHS is not a bounded question"* does
+  NOT survive contact (the arm already calls it on an arbitrary PropertyAccess), but the target
+  resolves to `any` for (c)'s reason, so landing (b) alone is the correct-but-inert shape that
+  got the last attempt reverted. **(c) OPEN, the big one**: contextual parameter typing collapses
+  to `any` whenever the parameter type mentions a FREE TYPE PARAMETER — the class's or the
+  method's own — measured over a 7-cell matrix and NOT array/`forEach`/element-access specific.
+  Its fix ADDS diagnostics, so it is corpus-gated and its own arc; it is what closes `marked`'s
+  last TS7019. **(d) OPEN, lowest value**: the `this`-as-receiver MODEL (tsgo's real rule, a
+  contextual `this:` OUTRANKING the receiver) — moves 0 further rows on `marked` and converts
+  (a)'s deliberate false negative into a true positive. **(CHK.30) is closed and unrelated**,
+  which answers the item's own standing question: one path does NOT serve both.
 
 **THE GATE FOR BOTH IS THE LIBRARY PROBE PLUS PINS, NOT THE SCREEN OR THE GRID** — `marked`'s
 shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: these REMOVE false

@@ -1,4 +1,21 @@
 
+**(P18.163) — (CHK.73)(A)+(B): A MODULE OBJECT'S MISSING MEMBER IS REPORTED AND IT RENDERS AS `typeof import("…")`, 20,215 / 0 / 44 (2026-09-21).**
+CLOSED the two residues (P18.159) named. Ours now answers **all SIX of tsgo's probe rows at tsgo's own codes and
+spans**, where before it answered one; `import * as ns from "./m"; ns.nope` and the ambient form were BOTH silent,
+and the same object rendered as a BARE NAME (`Type 'ns'` / `Type 'pkg'`). **THE LEDGER'S BLOCKER WAS FALSE IN BOTH
+HALVES AND THE FIRST CORRECTION WAS ALSO WRONG**: no star-following enumeration is needed (REFUSING suffices, and
+`ambientSurfaceIsEnumerableForImport` already existed — confirmed by ablation on a matched pair), but the proposed
+clause in `cmamAllMissingTrustedMember` is a measured DEAD ARM, because a PRE-EXISTING walker answers the bare
+`ExpressionStatement` form and the same access in a function body is silent. The real gate was a blanket
+`SymbolFlags.Alias` skip in `cmamCheckIdentSymbolValueGates`. **FOUR ABLATION ARMS READ 0 RED AND THE FOUR WERE NOT
+THE SAME THING**: three were BLIND PIN SETS (each given a constructed shape and a pin — one had been gated by a
+corpus baseline ALONE), and one, `syntheticModuleAmbientCarrier`, was genuinely INERT and is REMOVED, because the
+only shape reaching it is one tsgo calls TS2306. **THE (PARITY.1) RECEIPT IS NOW A MEASUREMENT**: the display arm
+reddens 2 pins and 0 of 8,725 screen subtests, and the dedupe arm is its exact mirror (0 pins, 2 screen) — which is
+why (B) could not be a standalone round. Screen 0 of 8,725; grid 8x0 with emit byte-identical; cost_gate PASS (max
++0.15%); huge_methods 0 over; cronstrue 1 -> 1, marked 18 -> 18. Stated divergence: the display uses the BASENAME
+where tsgo uses the full path — invisible to every gate here, real on a multi-directory project.
+
 **(P18.162) — (DOC.2) TRANCHE 2 CLOSES THE ITEM: `CLAUDE.md` 663,894 -> 419,477 B (-36.8%) (2026-09-21).**
 DOCS-ONLY; suite/cost/JIT gates INAPPLICABLE rather than skipped. `### Measured dead-ends` 97,878 -> 42,338 B,
 `### Test assertion gotchas` 39,948 -> 30,949 B; archive 1,040,138 -> 1,146,286 B, a PURE APPEND. Buckets:

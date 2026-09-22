@@ -331,6 +331,7 @@ tsconfig, diffed against tsgo 7.0.2 per `(file, line, code)`:
 | **cronstrue** | 52 | 8,812 | none | **0** | **0** | **0** | **2 (3%)** |
 | marked | 13 | 3,706 | none | 0 | 15 | 15 | 10 (76%) |
 | marked (2026-09-22, after (CHK.33)+(CHK.140)) | 13 | 3,706 | none | 0 | 8 | 8 | — |
+| marked (2026-09-22, after (CHK.35a)) | 13 | 3,706 | none | 0 | **4** | 4 | — |
 | jsonrepair | 10 | 2,746 | none | 1 | 16 | 16 | 9 (90%) |
 | fflate | 3 | 3,904 | none | 2 | 17 | 17 | 3 (100%) |
 | yaml | 78 | 10,878 | none | 0 | 78 | 78 | — |
@@ -390,6 +391,17 @@ correspondence rather than to an inspection, and they are queued as (CHK.31)-(CH
    `this`, while a variable annotation and a call argument supply none. A narrow fix keyed on the
    target declaring a `this:` parameter was built and REVERTED — 0 rows on `marked`, 0 on the
    corpus, 0 on the grid. See (CHK.35).
+   **(CHK.35a) LANDED 2026-09-22 — `marked` 8 -> 4, all four TS2683 rows.** A SYNTACTIC arm (a
+   function expression whose IMMEDIATE parent is `<member-access> =` takes its `this` from the
+   assignment), deliberately NOT the type-keyed model. **The recorded reason for the earlier
+   revert was wrong**: "`marked` declares no `this:`" is true of its `walkTokens` cluster only —
+   the other cluster's target (`RendererExtensionFunction<…>`) DOES declare one, and the
+   type-keyed test could not see it because that target resolves to `any`. **The remaining
+   TS7019 is blocked by a general defect**: contextual parameter typing collapses to `any`
+   whenever the parameter type mentions a FREE TYPE PARAMETER (the class's or the method's own),
+   which is (CHK.35c) — corpus-gated, because its fix ADDS diagnostics. Residue shipped
+   deliberately: `this` is SUPPRESSED, not typed, so a bad member on it is a false NEGATIVE, at
+   zero rows on every corpus here.
 6. **An assignment through an ELEMENT ACCESS is never type-checked at all** — `bag[key] =
    "not a function"` is accepted in silence where the same mismatch through a property target
    reports TS2322. A SOUNDNESS hole, and the root cause of `marked`'s three ours-only TS2578
