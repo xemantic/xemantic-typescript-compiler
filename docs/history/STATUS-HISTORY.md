@@ -1,5 +1,27 @@
 
 
+**(P18.165) — (CHK.136): AN ASSIGNMENT THROUGH AN ELEMENT ACCESS IS TYPE-CHECKED AT LAST; 20,246 / 0 / 44 (2026-09-21).**
+`bag[key] = "not a function"` was accepted in SILENCE where the identical mismatch through a PROPERTY target
+reported TS2322 — a false-NEGATIVE class that surfaces as false POSITIVES wherever real code guards such a write
+with `// @ts-expect-error`. **THE ITEM'S SIZING WAS CORRECTED BY A PROBE BEFORE ANY CODE WAS WRITTEN**: read-probing
+every target shape split the defect in two, and the half `marked` needs — an index whose TYPE is a union of literals,
+which resolves to `any` — is a READ-path gap promoted to (CHK.139) with its prize measured (marked 10 -> 7). So
+**`marked` stays at 10 and the round said so in advance.** Adjudicated against tsgo 7.0.2 first (63 fixtures): the
+anchor is the LHS at full width, a compound assignment is not this check. **THE GRID WAS A REAL GATE AND A CENSUS
+SAID SO BEFORE THE ARM EXISTED** (223-347 element-access assignments per profile); it caught one FP on all eight —
+an ARRAY LITERAL against a tuple slot, round 459's recorded finding one reader over. The screen then caught two more —
+a write type is the SETTER's parameter, and a DOUBLE EMISSION where a legacy walker had already decided the site.
+**THE ABLATION THEN OVERTURNED HALF OF THAT, AND IT IS THE ROUND'S MOST USEFUL RESULT**: a UNION-receiver refusal
+read 0 RED on the pins and 0 of 8,725 on the screen not because the pins were blind but because it was
+UNNECESSARY (`Two.prop3` is a get/set pair, so the ACCESSOR guard reaches every row in that fixture) — and
+measured one step further it was LOSSY, dropping two rows tsgo reports on a union receiver with no accessor at
+all. It was REMOVED and those two rows are now pins. A guard no arm can discriminate is as often unnecessary as
+it is unpinned; the only way to tell is to ask what it COSTS. **The mirror case landed in the same ablation**: the ACCESSOR guard read 0 RED through TWO pin attempts while the screen read 1 mismatch — there the guard was load-bearing and the PIN was blind, and only building the guard-off binary by hand and reading WHICH rows it loses produced a discriminator (a UNION receiver plus a value that fails the GETTER union while the SETTERS accept it). Final arm 1 pin RED, 1 screen. **The four display/anchor divergences the new rows inherit are
+PRE-EXISTING AT THE PROPERTY TARGET, proved on a twin fixture** — one shared (PARITY.1) family, fixed in both
+readers or neither. Screen 0 of 8,725; grid 8x0; cost_gate PASS (max +0.21%, `output.errors` 46); huge_methods 0
+over; warning-clean; cronstrue 1 -> 1.
+
+
 **(P18.164) — (CHK.33): A DESTRUCTURING PARAMETER NO LONGER BREAKS ARITY; `marked` 18 -> 10, 20,232 / 0 / 44 (2026-09-21).**
 `Signature.parameters` drops a binding-pattern parameter while `minArgumentCount` counts it, so a reader taking its MAXIMUM
 from one and its MINIMUM from the other states an impossible range — `Expected 1-0 arguments, but got 1.` on legal code.

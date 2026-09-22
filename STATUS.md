@@ -1,7 +1,11 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,326** lines (**+85 at (P18.169)**, one `if` routing a generic
+extraction):** `Checker.kt` **198,552** lines (**+226 at (P18.170)**, the lexical return-identifier
+resolver — a parent-chain walk, a shadow-stop and a typing helper — and the KDoc recording the
+`!`-policy the 8-profile grid forced, the scope-leaking leg that was built and REMOVED, and the
+one measured-redundant barrier; a SEMANTIC parity change that takes a 39-cell matrix from 15 to 36
+agreeing with tsgo, not an extraction; **+85 at (P18.169)**, one `if` routing a generic
 type-ALIAS heritage base through the annotation path, and its KDoc recording the three measured
 faces, the caller census and the two measured-redundant barriers — a SEMANTIC parity change that
 removes a FALSE-POSITIVE class and pays the language-service leg through `CaptureRecorder`, not an
@@ -22,6 +26,23 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.170) — (CHK.144): A BLOCK BODY RETURNING A BARE IDENTIFIER NO LONGER INFERS `any`; `marked` 3 -> 2, 20,336 / 0 / 44 (2026-09-22).**
+`inferReturnTypeFromBody`'s `is Identifier ->` arm answered `booleanType` for `true`/`false` and `null` for everything
+else, which the caller turns into `anyType` — so every BLOCK-bodied unannotated function returning a bare identifier
+widened, while the EXPRESSION-bodied twin was always right. Matrix vs tsgo **15 of 39 -> 36 of 39**, the three residues
+all the pre-change answer. **THE GRID WAS THE ONLY INSTRUMENT THAT SAW THE FIRST CUT'S FALSE POSITIVES**: it added 3
+ours-only rows to tsc's own sources while the corpus screen read 0 of 8,725 and all 28 pins were green on that binary —
+`!`-unwrapping is value-preserving for an arm answering from SYNTAX and wrong for one answering a DECLARED type, since
+stripping the nullish is the whole point of `return value!`. Both directions pinned, with an ablation arm each (a7/a8),
+each reproducing exactly one profile row. **The implementation's own first design LEAKED THE CALLER'S SCOPE** — a
+`currentLocalTypes` consult gated on owner identity, which the gate cannot save because the push it assumes is itself
+conditional; the leg was REMOVED and the resolver is purely lexical, with a SHADOW-STOP that halts at every value-space
+binder including ones it cannot type. **A blind pin was found by its own ablation twice**: the first shadow pin used a
+`function` callee (different path, 0 RED while every ARROW mistyped), and arm a5's anchor matched 11 times so that arm
+silently never ran. a5 is a measured REDUNDANT barrier with its cost measured — `errorType` renders as `any` (B58.1),
+so its blocked values are observationally identical to the fallback. Screen 0 of 8,725; grid 8x0 and a REAL gate
+(4,109-5,671 bare-identifier returns per profile); cost_gate PASS (max +0.51%, `output.errors` 46); huge_methods 0 over.
 
 **(P18.169) — A GENERIC TYPE *ALIAS* AS A HERITAGE BASE DISCARDED ITS TYPE ARGUMENTS; `marked` 4 -> 3, 20,301 / 0 / 44 (2026-09-22).**
 `interface D extends Omit<B,'b'>` contributed NOTHING: `getTypeFromBaseTypeExpression` honoured type arguments only
@@ -97,24 +118,3 @@ corpus screen is structurally blind to — (PARITY.1) exactly. **`marked` stays 
 five-variant bisect shows only an ENCLOSING class type parameter in the receiver fails, which is round 761/783's
 `any`-cached member, pinned `residue -`. Screen 0 of 8,725; grid 8x0 — notable for a (CHK.50) read-path change;
 cost_gate PASS (max +0.41%); huge_methods 0 over.
-
-**(P18.165) — (CHK.136): AN ASSIGNMENT THROUGH AN ELEMENT ACCESS IS TYPE-CHECKED AT LAST; 20,246 / 0 / 44 (2026-09-21).**
-`bag[key] = "not a function"` was accepted in SILENCE where the identical mismatch through a PROPERTY target
-reported TS2322 — a false-NEGATIVE class that surfaces as false POSITIVES wherever real code guards such a write
-with `// @ts-expect-error`. **THE ITEM'S SIZING WAS CORRECTED BY A PROBE BEFORE ANY CODE WAS WRITTEN**: read-probing
-every target shape split the defect in two, and the half `marked` needs — an index whose TYPE is a union of literals,
-which resolves to `any` — is a READ-path gap promoted to (CHK.139) with its prize measured (marked 10 -> 7). So
-**`marked` stays at 10 and the round said so in advance.** Adjudicated against tsgo 7.0.2 first (63 fixtures): the
-anchor is the LHS at full width, a compound assignment is not this check. **THE GRID WAS A REAL GATE AND A CENSUS
-SAID SO BEFORE THE ARM EXISTED** (223-347 element-access assignments per profile); it caught one FP on all eight —
-an ARRAY LITERAL against a tuple slot, round 459's recorded finding one reader over. The screen then caught two more —
-a write type is the SETTER's parameter, and a DOUBLE EMISSION where a legacy walker had already decided the site.
-**THE ABLATION THEN OVERTURNED HALF OF THAT, AND IT IS THE ROUND'S MOST USEFUL RESULT**: a UNION-receiver refusal
-read 0 RED on the pins and 0 of 8,725 on the screen not because the pins were blind but because it was
-UNNECESSARY (`Two.prop3` is a get/set pair, so the ACCESSOR guard reaches every row in that fixture) — and
-measured one step further it was LOSSY, dropping two rows tsgo reports on a union receiver with no accessor at
-all. It was REMOVED and those two rows are now pins. A guard no arm can discriminate is as often unnecessary as
-it is unpinned; the only way to tell is to ask what it COSTS. **The mirror case landed in the same ablation**: the ACCESSOR guard read 0 RED through TWO pin attempts while the screen read 1 mismatch — there the guard was load-bearing and the PIN was blind, and only building the guard-off binary by hand and reading WHICH rows it loses produced a discriminator (a UNION receiver plus a value that fails the GETTER union while the SETTERS accept it). Final arm 1 pin RED, 1 screen. **The four display/anchor divergences the new rows inherit are
-PRE-EXISTING AT THE PROPERTY TARGET, proved on a twin fixture** — one shared (PARITY.1) family, fixed in both
-readers or neither. Screen 0 of 8,725; grid 8x0; cost_gate PASS (max +0.21%, `output.errors` 46); huge_methods 0
-over; warning-clean; cronstrue 1 -> 1.
