@@ -1,5 +1,73 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.163) — (CHK.73)(A)+(B): a module object's missing member is reported, and it renders as `typeof import("…")` (2026-09-21)
+
+**CLOSED the two residues (P18.159) named as its successor.** Suite **20,215 / 0 / 44** (+13 pins,
+re-run and counted independently by the orchestrator after the agent's own run — the XMLs on disk
+were a later NARROWER run, and a shrunken population reads exactly like a clean one); corpus
+screen **0 of 8,725**; 8-profile grid **8x `added=0 removed=0 fullDiffLines=0`** with emit
+byte-identical over 78 files; `cost_gate` PASS (max +0.15%); `huge_methods` 0 over limit; warning
+gate clean with a POSITIVE CONTROL proving it live; cronstrue 1 -> 1, marked 18 -> 18 byte-identical.
+`Checker.kt` **+180**. Measured on the sizing probe, ours now answers **all SIX of tsgo's rows at
+tsgo's own codes and spans**, where before it answered one.
+
+**THE LEDGER'S RECORDED BLOCKER WAS FALSE IN BOTH HALVES, AND THE ORCHESTRATOR'S FIRST CORRECTION
+WAS ALSO WRONG.** The residue said the unblocker is *"a star-following enumeration for an ambient
+BLOCK, which does not exist"*. It is not: you do not FOLLOW the stars, you REFUSE when there are
+any ((CHK.45)), and `ambientSurfaceIsEnumerableForImport` (`Checker.kt:53664`, five lines) already
+does exactly that and already gates (CHK.81)'s TS2305 absence claim. **That half was confirmed by
+ABLATION on a matched pair** — a carrier with `export * from` refuses, the same carrier with the
+star removed answers byte-identically to tsgo. **But the SITE the orchestrator proposed —
+a clause in `cmamAllMissingTrustedMember` — is a measured DEAD ARM**: that function is never
+reached by this population. It looked like it worked, because a PRE-EXISTING walker
+(`Checker.kt:52509`) answers the bare `ExpressionStatement` form; moving the access into a
+function body made all three shapes silent again. Round 902's law, and the reason the arm was
+built before it was believed. The real blocker is two levels up: a blanket
+`if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return true` in `cmamCheckIdentSymbolValueGates`,
+true before `getTypeOfModuleSymbol` existed ((P18.157)) and never revisited.
+
+**TWO CLOSURES THE SIZING DID NOT ANTICIPATE.** `import * as path from "path"` — the IDIOM — was
+silent for a reason of its own: (CHK.80)'s merge makes `resolveAlias` answer the alias ITSELF. And
+a SHORTHAND `declare module "path";` is `any` in tsc, which the first cut broke
+(`esModuleInteropTslibHelpers`). All four refusals the recon predicted were needed, but two needed
+a different mechanism than predicted: `aliasOnMergedModuleInterface` needed an `export =` refusal
+rather than `ambientModuleSurfaceMember` (that helper cannot see a member living on an INTERFACE),
+and `exportAsNamespace_augment` needed a UMD-global refusal as well as the augmentation one.
+
+**FOUR ARMS READ 0 RED ON THE FIRST PASS AND THE FOUR WERE NOT THE SAME THING.** THREE were BLIND
+PIN SETS, resolved by constructing the shape the mechanism could bite on — a4's only instrument had
+been a corpus baseline (a refusal gated by a baseline alone is one regeneration from unguarded),
+a5's baseline is ALSO a UMD global so the sibling refusal closed it first, a11's shape is the
+`@types/node` local-re-export idiom. **ONE was genuinely INERT AND IS REMOVED**:
+`syntheticModuleAmbientCarrier`, because the only shape reaching its populating branch is one tsgo
+calls **TS2306 `File … is not a module`**. A first fix measured inert is reverted, not landed.
+
+**THE (PARITY.1) RECEIPT, MEASURED RATHER THAN ASSERTED.** Arm a2 (the display -> a bare name)
+reddens **2 pins and 0 of 8,725 screen subtests** — the corpus is structurally blind to type
+display and the pins are its only gate. Arm a9 (both dedupes) is its exact mirror: **0 pins, 2
+screen**. That pair is why (B) had to land WITH (A) and could not be a standalone round: measured
+beforehand, the (B) clause fires 6 times in 3 baselines with 0 reaching a compared row, and 0 times
+on the compiler profile.
+
+**RESIDUES, each measured.** The base is the BASENAME where tsgo prints the full path sans
+extension — the decided divergence, recorded in `moduleObjectTypeDisplay`'s KDoc, invisible to
+every gate here (the harness materialises no directory) and real on a multi-directory project where
+two `index` modules render identically; converting all twelve sites needs a `-project` pin and is
+its own round. The `.ts`/`.tsx` extension refusal is measured REDUNDANT with the `table.isEmpty()`
+test beside it and KEPT as a round-927 pair, said so in its KDoc, as the barrier against a future
+widening of `exportedSymbolsThroughStars` to `.js`. An ambient block whose `export * from` target
+does not resolve: tsgo reports, we refuse, pinned `residue -`. A `.d.ts` holding one
+`declare module` imported relatively is TS2306 in tsgo and a module object here — out of scope.
+
+**LEDGER CORRECTION (recon, not this round's code).** `es6ExportEqualsInterop.errors.txt` is
+mislabelled as a (CHK.73) row. It is a PIN-WALKER RETIREMENT: with
+`checkEs6ExportEqualsInteropPin` disabled via the PassLab the engine emits **6 rows against tsgo's
+22, three of them ours-only false positives**, blocked on TS2498, namespace-import-as-value TS2693
+and `export =` named-import resolution — none of it module-object work. Its recorded reason
+understates it by ~19 rows. `jsExportMemberMergedWithModuleAugmentation` is correctly parked; its
+reason is verbatim accurate.
+
+
 ### Round (P18.162) — (DOC.2) tranche 2: the last two gotcha sections, CLAUDE.md -36.8% cumulative (2026-09-21)
 
 **DOCS-ONLY, no compiled code.** `### Measured dead-ends` **97,878 -> 42,338 B**,

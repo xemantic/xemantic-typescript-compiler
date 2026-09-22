@@ -334,7 +334,29 @@ tsconfig, diffed against tsgo 7.0.2 per `(file, line, code)`:
 | marked (2026-09-22, after (CHK.35a)) | 13 | 3,706 | none | 0 | 4 | 4 | — |
 | marked (2026-09-22, after (P18.169) generic-alias heritage) | 13 | 3,706 | none | 0 | 3 | 3 | — |
 | marked (2026-09-22, after (P18.170) return-identifier inference) | 13 | 3,706 | none | 0 | 2 | 2 | — |
-| marked (2026-09-22, after (P18.172) union contextual object literal) | 13 | 3,706 | none | 0 | **1** | 1 | — |
+| marked (2026-09-22, after (P18.172) union contextual object literal) | 13 | 3,706 | none | 0 | 1 | 1 | — |
+| **marked (2026-09-22, after (P18.173) (CHK.35b))** | 13 | 3,706 | none | **0** | **0** | **0** | — |
+
+**2026-09-22 — `marked` JOINS `cronstrue` AT EXACT AGREEMENT WITH tsgo 7.0.2.** Both now report
+what the reference reports: `marked` nothing at all, `cronstrue` the one TS5108 config row BOTH
+compilers emit. The arc ran **18 -> 10 -> 8 -> 4 -> 3 -> 2 -> 1 -> 0** in seven rounds
+((CHK.33), (CHK.140), (CHK.35a), the generic-alias heritage base, (CHK.144), (CHK.142)(b)+(a),
+(CHK.35b)) — every one of them a defect the 13k-baseline corpus and all eight dashboard profiles
+were green on.
+
+**MEASUREMENT HYGIENE — TWO `marked` CHECKOUTS EXIST AND THEY DISAGREE.** Every number in this
+table is `build/bench/inc50-scratch-marked` (`src/Tokenizer.ts` is **958** lines). A second,
+NEWER checkout at `build/scratch-p18171/libs/marked` is **marked 18.0.14** (`Tokenizer.ts`
+**1,065** lines) and reads **2** where this one reads 0, with its rows at different LINES.
+Neither is wrong — they are different inputs — but quoting one series against the other is an
+error, and doing so once nearly produced a phantom regression report. **Name the directory with
+any `marked` number.**
+
+**THE NEXT LIBRARY IS `rxjs` 7.8.2** — the readiness candidates below (`jsonrepair`, `fflate`,
+`knip`) are NOT on this box and `yaml@2.9.0` is cached but ships dist only. `rxjs` (244 sources,
+`tslib` only) and `zod` 4.4.3 (116 sources, no deps) are both extractable offline from
+`~/.npm/_cacache`. Measured: `rxjs` tsgo 1 / ours 29, with four causes owning 22. See (LIB.5) in
+`PLAN-PHASE-5.md` for the cause groups and the recommended first round.
 | jsonrepair | 10 | 2,746 | none | 1 | 16 | 16 | 9 (90%) |
 | fflate | 3 | 3,904 | none | 2 | 17 | 17 | 3 (100%) |
 | yaml | 78 | 10,878 | none | 0 | 78 | 78 | — |

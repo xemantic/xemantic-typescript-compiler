@@ -1,5 +1,23 @@
 
 
+**(P18.168) — (CHK.35a): A FUNCTION EXPRESSION ASSIGNED TO A MEMBER GETS ITS `this`; `marked` 8 -> 4, 20,281 / 0 / 44 (2026-09-22).**
+`spineItEdge` knew two contextual-`this` carriers (a variable ANNOTATION and a call ARGUMENT) and let an ASSIGNMENT
+fall to `else -> false`, so `o.m = function () { this }` drew TS2683 where tsgo is silent. **THE RECON REFUSED THE
+ITEM AS A SINGLE ROUND AND THAT IS THE MAIN PRODUCT**: the 5 rows are TWO clusters, 4 fall to a purely SYNTACTIC arm,
+and the 5th is blocked by a general defect neither the item nor (P18.164) names — contextual parameter typing
+collapses to `any` whenever the parameter type mentions a FREE TYPE PARAMETER (7-cell matrix; not array-, `forEach`-
+or element-access-specific), now (CHK.35c). **The queue's own record was corrected**: (P18.164)'s reverted fix was
+recorded as inert because "`marked` declares no `this:`", true of ONE cluster only — the other's target does declare
+one, and the type-keyed test could not see it because that target resolves to `any`. A syntactic test is immune.
+tsgo's rule measured over six shapes; the Identifier-LHS, IIFE and NESTED cases need no arms, they fall out of the
+conjuncts. **Shipped as a SUPPRESSION with the residue pinned**: `this` stays `any`, so a bad member on it is a
+false NEGATIVE — and that line drew a WRONG TS2683 before, so the divergence MOVED rather than appeared; zero rows
+on both libraries, all 8 profiles and the corpus. **Both standing instruments are CONTROLS and say so by COUNT**
+(zero TS2683 on every profile; 2 of 50 TS2683 baselines carry the shape and neither has the row AT such a `this`).
+Ablation a1 2 RED, a2 1 RED; **a3's 0 RED is STRUCTURAL** — an IIFE's fn-expr parents to the CallExpression and
+cannot reach the arm — making `pp.right === parent` a measured-redundant barrier, kept and recorded as such.
+
+
 **(P18.167) — (CHK.140): A CLASS'S OWN TYPE PARAMETERS ARE IN SCOPE IN ITS MEMBERS' BODIES; 20,275 / 0 / 44 (2026-09-22).**
 `ctaFnBodyFrame` fed the enclosing class's type parameters to `fnTpDecls` (the AST map, which answers TS2302) and
 never to `fnTpScope` (the map that TYPES a name) — an asymmetry on adjacent lines. So a class type parameter failed

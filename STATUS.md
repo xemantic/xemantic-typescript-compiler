@@ -1,7 +1,10 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,792** lines (**+161 at (P18.172)**, the cross-union contextual
+extraction):** `Checker.kt` **198,874** lines (**+82 at (P18.173)**, the element-access arm, its
+slot-type helper and the widened kind test, with the KDoc recording why tsgo's literal shape is
+wrong here — a SEMANTIC parity change that takes the `marked` library to ZERO ours-only rows,
+not an extraction; **+161 at (P18.172)**, the cross-union contextual
 member type, the literal-under-context rule, two context-install widenings and the union-aware
 firewall, with the KDoc recording the FIVE pieces and the two measured-redundant/blind ablation
 arms — a SEMANTIC parity change that takes `marked` to ONE row, not an extraction;
@@ -34,6 +37,25 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.173) — (CHK.35b): AN ELEMENT-ACCESS ASSIGNMENT TARGET SUPPLIES A CONTEXTUAL TYPE; **`marked` REACHES ZERO**, 20,386 / 0 / 44 (2026-09-22).**
+**`marked` now reports what tsgo 7.0.2 reports: nothing.** With `cronstrue` already at zero (its standing "1" is a TS5108
+config row BOTH compilers emit), **two real libraries outside the corpus agree with the reference exactly** — the owner's
+2026-09-21 alignment stop-condition, met for both. The arc ran 18 -> 10 -> 8 -> 4 -> 3 -> 2 -> 1 -> 0 across (CHK.33),
+(CHK.140), (CHK.35a), (P18.169), (CHK.144), (CHK.142)(b)+(a) and this round. **The item said this was BLOCKED and a 12-cell
+matrix measured that false** — it fails with a fully concrete slot type and no type parameter anywhere; (b) and (c) have
+opposite signatures, (b) ADDING a TS7006/TS7019 where (c) MISSES a row in silence. 8 of 9 element-access cells now
+byte-match tsgo. **tsgo's LITERAL SHAPE WAS WRITTEN FIRST AND IS WRONG HERE, which is the transferable finding**: it asks
+`getTypeOfExpression(left)` for the whole access because its receiver resolution is ONE mechanism, where ours is TWO — the
+walk-scoped `implicitAnyScopes` stack, which alone carries a body-local's annotation, and `getTypeOfExpression`; the
+faithful port left `marked` at 1 and survives as ablation arm a4. Second measured correction: the key classifier runs on the
+spineIany edge where `currentLocalTypes` is not yet populated, so a key that is a PARAMETER of the function-like being
+walked types `any` and washes the access — exactly `marked`'s `renderers[ext.name]`. **A PIN THAT FAILED WAS MEASURED, NOT
+WEAKENED**: its TS2339 is absent for the already-working PROPERTY twin too, so it is (CHK.39)/(CHK.98) residue and was
+re-pointed to a parity invariant with a non-vacuous member. Four ablation arms, none at 0 RED, and a1/a2 have equal counts
+with DIFFERENT red sets — a1 owns the false positive (marked returns to 1), a2 owns the typing (marked stays 0). Screen 0 of
+8,725; grid 8x0 and a real gate by census; cost_gate PASS (+0.80% max); huge_methods 0; warning gate proved LIVE with an
+injected `USELESS_CAST` control.
 
 **(P18.172) — (CHK.142)(a): AN OBJECT LITERAL AGAINST A *UNION* CONTEXTUAL TYPE; `marked` 2 -> 1, 20,364 / 0 / 44 (2026-09-22).**
 **THE BRIEF'S DIAGNOSIS WAS WRONG AND ITS AUTHOR WAS THIS ROUND'S OWN PREDECESSOR.** (P18.171) sized (a) as one `else` on
@@ -111,20 +133,3 @@ the first pin set read 6 of 18 RED on a working binary. `CaptureRecorder` is a M
 now see such an interface's members. Screen 0 of 8,725; grid 8x0 (a GATE here, not a control); cost_gate PASS
 (max +0.41%, `output.errors` 46); huge_methods 0 over; warning-clean. **`cronstrue`'s standing "1" is a SHARED
 CONFIG ROW, measured — the live FP scoreboard is `marked` 3, `cronstrue` 0.**
-
-**(P18.168) — (CHK.35a): A FUNCTION EXPRESSION ASSIGNED TO A MEMBER GETS ITS `this`; `marked` 8 -> 4, 20,281 / 0 / 44 (2026-09-22).**
-`spineItEdge` knew two contextual-`this` carriers (a variable ANNOTATION and a call ARGUMENT) and let an ASSIGNMENT
-fall to `else -> false`, so `o.m = function () { this }` drew TS2683 where tsgo is silent. **THE RECON REFUSED THE
-ITEM AS A SINGLE ROUND AND THAT IS THE MAIN PRODUCT**: the 5 rows are TWO clusters, 4 fall to a purely SYNTACTIC arm,
-and the 5th is blocked by a general defect neither the item nor (P18.164) names — contextual parameter typing
-collapses to `any` whenever the parameter type mentions a FREE TYPE PARAMETER (7-cell matrix; not array-, `forEach`-
-or element-access-specific), now (CHK.35c). **The queue's own record was corrected**: (P18.164)'s reverted fix was
-recorded as inert because "`marked` declares no `this:`", true of ONE cluster only — the other's target does declare
-one, and the type-keyed test could not see it because that target resolves to `any`. A syntactic test is immune.
-tsgo's rule measured over six shapes; the Identifier-LHS, IIFE and NESTED cases need no arms, they fall out of the
-conjuncts. **Shipped as a SUPPRESSION with the residue pinned**: `this` stays `any`, so a bad member on it is a
-false NEGATIVE — and that line drew a WRONG TS2683 before, so the divergence MOVED rather than appeared; zero rows
-on both libraries, all 8 profiles and the corpus. **Both standing instruments are CONTROLS and say so by COUNT**
-(zero TS2683 on every profile; 2 of 50 TS2683 baselines carry the shape and neither has the row AT such a `this`).
-Ablation a1 2 RED, a2 1 RED; **a3's 0 RED is STRUCTURAL** — an IIFE's fn-expr parents to the CallExpression and
-cannot reach the arm — making `pp.right === parent` a measured-redundant barrier, kept and recorded as such.

@@ -25,6 +25,73 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.173) — (CHK.35b): an element-access assignment target supplies a contextual type; **`marked` reaches ZERO** (2026-09-22)
+
+**`marked` now reports the same diagnostics as tsgo 7.0.2: none.** With `cronstrue` already at
+zero (its standing "1" is a TS5108 config row BOTH compilers emit), **two real libraries outside
+the corpus are in exact agreement with the reference**. That is the owner's 2026-09-21 alignment
+stop-condition met for both, and it is what the `marked` arc has been for: 18 -> 10 -> 8 -> 4 -> 3
+-> 2 -> 1 -> **0** across (CHK.33), (CHK.140), (CHK.35a), (P18.169), (CHK.144), (CHK.142)(b)+(a)
+and this round.
+
+**The item said this was blocked and it was not.** The queue recorded (b) as "OPEN, and INERT
+until (c)", which is why a previous attempt was reverted; a 12-cell matrix measured that false —
+it fails with a fully CONCRETE slot type and no type parameter anywhere. (b) and (c) have OPPOSITE
+signatures: (b) finds no contextual signature at all, so the parameter is IMPLICITLY `any` and we
+ADD a TS7006/TS7019; (c) finds signature and arity and collapses the TYPE, so we MISS a row in
+silence. **8 of 9 element-access cells now byte-match tsgo** — same code, line, column and message.
+
+**tsgo's literal shape was written first, and it was WRONG HERE — that is the round's transferable
+finding.** tsgo gates one predicate on `ast.IsAccessExpression` and asks
+`getTypeOfExpression(left)` for the whole access, because its receiver resolution is ONE
+mechanism. **Ours is TWO**: the walk-scoped `implicitAnyScopes` stack, which alone carries a
+body-local's annotation, and `getTypeOfExpression`. The faithful port built, ran, and left
+`marked` at 1 with TS7006 standing on every body-local receiver; resolving the RECEIVER through
+the same `?:` ladder the property-access arm already uses reaches both. It survives as ablation
+arm a4 (4 RED, `marked` back to 1).
+
+**The second correction was measured, not guessed.** `elementAccessResultType` classifies the key
+through `getTypeOfExpression`, and this predicate runs on the spineIany edge where
+`currentLocalTypes` is not yet populated — so **a key that is a PARAMETER of the function-like
+being walked types `any`** and washes the access. That is exactly `marked`'s
+`renderers[ext.name]`. It was isolated by showing a literal key and a FILE-LEVEL key both resolve
+and only a walk-bound key does not, so the symptom reads as a nesting problem and is not one. An
+index signature has one slot whatever the key turns out to be, which is why the fallback cannot
+fire where the key WAS classified (arm a3, 3 RED).
+
+**A PIN THAT FAILED WAS MEASURED RATHER THAN WEAKENED.** `bag["x"] = function (t) { t.nope }`
+draws no TS2339 — but neither does the already-working PROPERTY-access twin, while the same body
+in a call ARGUMENT does. So it is (CHK.39)/(CHK.98)'s per-reader residue on the assignment
+position, not this family's; the pin was re-pointed to a PARITY invariant (`residue - …`) with the
+call-argument row as its non-vacuous member, so it reddens if the two target kinds ever diverge in
+either direction and still holds the day the residue closes.
+
+**Ablation, four arms, none reading 0 RED, and a1/a2 have equal counts with DIFFERENT red sets** —
+which is what separates the two halves: a1 (arm removed) owns the false positive, so `marked`
+returns to 1; a2 (kind test not widened in the pull) owns the TYPING, so `marked` stays 0 because
+its row is a TS7019. a3 ⊂ a4 by one pin, separating "the fallback" from "the ladder". Each arm was
+diffed against its OWN snapshot rather than `git diff --shortstat`, which is vacuous on a dirty
+tree.
+
+**Gates.** `marked` **1 -> 0** and tsgo 0; `cronstrue` 1 -> 1, the same row on both; suite
+**20,386 / 0 / 44** (+22 pins); corpus screen **0 of 8,725**; 8-profile grid **8x
+`added=0 removed=0`** — a real GATE by census (6-11 element-access-assigned-function sites per
+profile); `cost_gate` PASS (max +0.80%, `output.errors` 46, `spine.nodes` ±0.00%); `huge_methods`
+0 over; warning-clean, and the gate was proved LIVE with an injected `USELESS_CAST` positive
+control before the probe was deleted.
+
+**THE `this` RESIDUE IS NOW ONE FAMILY, NOT TWO**: `this.bag["x"] = fn` went TS7006 -> silent,
+which is exactly where `this.cb = fn` already sat, so both spellings answer identically and the
+whole of it belongs to (CHK.141)/(CHK.35d) — B101 makes `getTypeOfExpression(this)` answer
+`anyType`.
+
+**Separate defects named, not fixed**: compound assignment (`||=`, `&&=`, `??=`) supplies no
+contextual type for ANY LHS kind, on both binaries, where tsgo reports all three — tsgo shares one
+case label across `=` and the three (`checker.go:29566`), we gate on `SyntaxKind.Equals` alone; a
+class-property initializer with a function-expression value is silent here and TS2322 in tsgo; the
+TS2339 assignment-target residue above; an `any`-typed key losing the true row; and an ours-only
+TS2322 on a generic-`R` slot verified present on the BEFORE binary, i.e. (CHK.35c) territory.
+
 ### Round (P18.172) — (CHK.142)(a): an object literal against a UNION contextual type; `marked` 2 -> 1 (2026-09-22)
 
 **THE BRIEF'S DIAGNOSIS WAS WRONG, AND IT WAS THIS ROUND'S OWN AUTHOR WHO WROTE IT ONE ROUND
@@ -682,73 +749,6 @@ helper with a different kind set — a census says adding `GetAccessor`/`SetAcce
 no-op for all 7 of its readers, so the unification is safe in that direction and unmeasured in the
 other.
 
-### Round (P18.163) — (CHK.73)(A)+(B): a module object's missing member is reported, and it renders as `typeof import("…")` (2026-09-21)
-
-**CLOSED the two residues (P18.159) named as its successor.** Suite **20,215 / 0 / 44** (+13 pins,
-re-run and counted independently by the orchestrator after the agent's own run — the XMLs on disk
-were a later NARROWER run, and a shrunken population reads exactly like a clean one); corpus
-screen **0 of 8,725**; 8-profile grid **8x `added=0 removed=0 fullDiffLines=0`** with emit
-byte-identical over 78 files; `cost_gate` PASS (max +0.15%); `huge_methods` 0 over limit; warning
-gate clean with a POSITIVE CONTROL proving it live; cronstrue 1 -> 1, marked 18 -> 18 byte-identical.
-`Checker.kt` **+180**. Measured on the sizing probe, ours now answers **all SIX of tsgo's rows at
-tsgo's own codes and spans**, where before it answered one.
-
-**THE LEDGER'S RECORDED BLOCKER WAS FALSE IN BOTH HALVES, AND THE ORCHESTRATOR'S FIRST CORRECTION
-WAS ALSO WRONG.** The residue said the unblocker is *"a star-following enumeration for an ambient
-BLOCK, which does not exist"*. It is not: you do not FOLLOW the stars, you REFUSE when there are
-any ((CHK.45)), and `ambientSurfaceIsEnumerableForImport` (`Checker.kt:53664`, five lines) already
-does exactly that and already gates (CHK.81)'s TS2305 absence claim. **That half was confirmed by
-ABLATION on a matched pair** — a carrier with `export * from` refuses, the same carrier with the
-star removed answers byte-identically to tsgo. **But the SITE the orchestrator proposed —
-a clause in `cmamAllMissingTrustedMember` — is a measured DEAD ARM**: that function is never
-reached by this population. It looked like it worked, because a PRE-EXISTING walker
-(`Checker.kt:52509`) answers the bare `ExpressionStatement` form; moving the access into a
-function body made all three shapes silent again. Round 902's law, and the reason the arm was
-built before it was believed. The real blocker is two levels up: a blanket
-`if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return true` in `cmamCheckIdentSymbolValueGates`,
-true before `getTypeOfModuleSymbol` existed ((P18.157)) and never revisited.
-
-**TWO CLOSURES THE SIZING DID NOT ANTICIPATE.** `import * as path from "path"` — the IDIOM — was
-silent for a reason of its own: (CHK.80)'s merge makes `resolveAlias` answer the alias ITSELF. And
-a SHORTHAND `declare module "path";` is `any` in tsc, which the first cut broke
-(`esModuleInteropTslibHelpers`). All four refusals the recon predicted were needed, but two needed
-a different mechanism than predicted: `aliasOnMergedModuleInterface` needed an `export =` refusal
-rather than `ambientModuleSurfaceMember` (that helper cannot see a member living on an INTERFACE),
-and `exportAsNamespace_augment` needed a UMD-global refusal as well as the augmentation one.
-
-**FOUR ARMS READ 0 RED ON THE FIRST PASS AND THE FOUR WERE NOT THE SAME THING.** THREE were BLIND
-PIN SETS, resolved by constructing the shape the mechanism could bite on — a4's only instrument had
-been a corpus baseline (a refusal gated by a baseline alone is one regeneration from unguarded),
-a5's baseline is ALSO a UMD global so the sibling refusal closed it first, a11's shape is the
-`@types/node` local-re-export idiom. **ONE was genuinely INERT AND IS REMOVED**:
-`syntheticModuleAmbientCarrier`, because the only shape reaching its populating branch is one tsgo
-calls **TS2306 `File … is not a module`**. A first fix measured inert is reverted, not landed.
-
-**THE (PARITY.1) RECEIPT, MEASURED RATHER THAN ASSERTED.** Arm a2 (the display -> a bare name)
-reddens **2 pins and 0 of 8,725 screen subtests** — the corpus is structurally blind to type
-display and the pins are its only gate. Arm a9 (both dedupes) is its exact mirror: **0 pins, 2
-screen**. That pair is why (B) had to land WITH (A) and could not be a standalone round: measured
-beforehand, the (B) clause fires 6 times in 3 baselines with 0 reaching a compared row, and 0 times
-on the compiler profile.
-
-**RESIDUES, each measured.** The base is the BASENAME where tsgo prints the full path sans
-extension — the decided divergence, recorded in `moduleObjectTypeDisplay`'s KDoc, invisible to
-every gate here (the harness materialises no directory) and real on a multi-directory project where
-two `index` modules render identically; converting all twelve sites needs a `-project` pin and is
-its own round. The `.ts`/`.tsx` extension refusal is measured REDUNDANT with the `table.isEmpty()`
-test beside it and KEPT as a round-927 pair, said so in its KDoc, as the barrier against a future
-widening of `exportedSymbolsThroughStars` to `.js`. An ambient block whose `export * from` target
-does not resolve: tsgo reports, we refuse, pinned `residue -`. A `.d.ts` holding one
-`declare module` imported relatively is TS2306 in tsgo and a module object here — out of scope.
-
-**LEDGER CORRECTION (recon, not this round's code).** `es6ExportEqualsInterop.errors.txt` is
-mislabelled as a (CHK.73) row. It is a PIN-WALKER RETIREMENT: with
-`checkEs6ExportEqualsInteropPin` disabled via the PassLab the engine emits **6 rows against tsgo's
-22, three of them ours-only false positives**, blocked on TS2498, namespace-import-as-value TS2693
-and `export =` named-import resolution — none of it module-object work. Its recorded reason
-understates it by ~19 rows. `jsExportMemberMergedWithModuleAugmentation` is correctly parked; its
-reason is verbatim accurate.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1101,8 +1101,21 @@ three remaining rows each have a measured owner and a measured order:
 | ~~`Tokenizer.ts:19` TS2322~~ | **(CHK.142)** — **LANDED (P18.171)+(P18.172)** | **2 -> 1** ✔ | grid was a real adding-direction gate |
 | `Instance.ts:96` TS7019 | **(CHK.35b)** ALONE — the "inert until (c)" claim is measured FALSE | **-> 0** | only adds contextual types where there are none |
 
-**LIVE COUNT AFTER (P18.172): `marked` 1, `cronstrue` 0.** ONE row from zero, and it is owned by
-**(CHK.35b)** — measured to close it, and measured NOT to be blocked behind (CHK.35c).
+**LIVE COUNT AFTER (P18.173): `marked` **0**, `cronstrue` **0**. THE ADDENDUM'S TARGET IS MET.**
+Both libraries now report exactly what tsgo 7.0.2 reports — `marked` nothing at all, `cronstrue`
+the one TS5108 config row BOTH compilers emit. The arc ran 18 -> 10 -> 8 -> 4 -> 3 -> 2 -> 1 -> 0
+across (CHK.33), (CHK.140), (CHK.35a), (P18.169), (CHK.144), (CHK.142)(b)+(a) and (CHK.35b).
+**SO THIS ADDENDUM NO LONGER NAMES THE NEXT TARGET, AND THE NEXT LIBRARY DOES** — see (LIB.5)
+below, which censuses what is actually on the box and recommends `rxjs`.
+
+**MEASUREMENT HYGIENE, learned the hard way (2026-09-22): TWO `marked` CHECKOUTS EXIST ON THIS
+BOX AND THEY DISAGREE.** The whole series above is measured on
+`build/bench/inc50-scratch-marked` (its `src/Tokenizer.ts` is **958** lines); a second, NEWER
+checkout at `build/scratch-p18171/libs/marked` is **marked 18.0.14** (`Tokenizer.ts` **1,065**
+lines) and reads **2** where the canonical one reads 0, with its rows at different LINES
+(`Instance.ts:118`, `Tokenizer.ts:44`). Neither is wrong — they are different inputs. **Quoting
+one against the other is an error**, and it nearly produced a phantom regression report; name
+the directory with any `marked` number.
 
 **AND ONE ORDERING IS LOAD-BEARING, WITH ITS MECHANISM MEASURED**: (CHK.145) (statics leaking
 into `keyof`) must land **after** (CHK.144), never before or alone. Rows 229 and 242 fire only
@@ -1129,7 +1142,19 @@ a mechanism; it now has one.
   wrong (so is (P18.164)'s "`marked` declares no `this:` at all" — true of the `walkTokens`
   cluster only). **(a) DONE**: a function expression assigned DIRECTLY to a member gets its
   `this` from the assignment — a SYNTACTIC arm in `spineItEdge`, closing the 4 TS2683 rows.
-  **(b) OPEN — AND THE "INERT UNTIL (c)" CLAIM IS MEASURED **FALSE** (2026-09-22, (P18.171)
+  **(b) LANDED 2026-09-22 ((P18.173) note) — IT CLOSED `marked`'s LAST ROW AND TOOK THE LIBRARY TO
+  ZERO.** 8 of 9 element-access cells now byte-match tsgo. **tsgo's literal shape was written first
+  and is WRONG HERE**: it gates one predicate on `ast.IsAccessExpression` and asks
+  `getTypeOfExpression(left)` for the whole access because its receiver resolution is ONE
+  mechanism, where ours is TWO — the walk-scoped `implicitAnyScopes` stack (which alone carries a
+  body-local's annotation) and `getTypeOfExpression`; the faithful port left `marked` at 1 with
+  TS7006 standing on every body-local receiver, and survives as ablation arm a4. A second measured
+  correction: the key classifier runs on the spineIany edge where `currentLocalTypes` is not yet
+  populated, so a key that is a PARAMETER of the function-like being walked types `any` and washes
+  the access — which is exactly `marked`'s `renderers[ext.name]` — hence an index-signature
+  fallback that cannot fire where the key WAS classified. **The `this` residue is now ONE family**:
+  `this.bag["x"]` went TS7006 -> silent, joining `this.cb`, so all of it belongs to
+  (CHK.141)/(CHK.35d). ORIGINAL: **(b) OPEN — AND THE "INERT UNTIL (c)" CLAIM IS MEASURED **FALSE** (2026-09-22, (P18.171)
   recon, 12-cell matrix). IT IS THE ROUND THAT CLOSES `marked`'s LAST ROW, AND IT IS THE SMALLEST
   OF THE THREE.** It fails with a FULLY CONCRETE slot type and no type parameter anywhere:
   `declare const bag: { [k: string]: (a: Tok) => void }; bag["x"] = function (t) { … }` is an
@@ -1171,6 +1196,47 @@ a mechanism; it now has one.
 shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: these REMOVE false
 positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
 positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
+
+- [ ] **(LIB.5) THE NEXT LIBRARY IS `rxjs` 7.8.2, AND IT IS PROVISIONABLE OFFLINE FROM THE npm
+  CACHE — censused 2026-09-22 ((P18.173) recon) now that `marked` and `cronstrue` both agree with
+  tsgo exactly.** The readiness page's older candidates are **NOT ON THIS BOX**: `jsonrepair`,
+  `fflate` and `knip` are absent and uncached, and `yaml@2.9.0` IS cached but ships **zero
+  non-`.d.ts` `.ts` files** (dist only), so none is provisionable without network. What the local
+  cache DOES hold, with real TypeScript sources and no unmet dependencies: **`rxjs` 7.8.2 (244
+  sources, `tslib` only)** and **`zod` 4.4.3 (116 sources, none)**. `ajv` 8.20.0 is cached but its
+  four dependencies are absent, so everything degrades to `any` and it measures **tsgo 49 / ours
+  0** — a false-NEGATIVE story and not a usable probe in that state.
+  **MEASURED: `rxjs` tsgo 1, ours 29 — and FOUR causes own 22 of the 29.**
+  **(G1) A MODULE-LOCAL `class` WHOSE NAME COLLIDES WITH A DOM LIB GLOBAL LOSES TO THE LIB SYMBOL
+  FOR `this`-MEMBER RESOLUTION — 8 rows, NO QUEUE ITEM, and it reproduces in 12 lines with a clean
+  control.** `class Scheduler implements SchedulerLike` + `class Notification<T>` gives four
+  ours-only TS2339 where tsgo is clean, and **renaming to `SchedXyz`/`NotifXyz` gives 0** — that
+  rename IS the control. It also produces `TS2739 Type 'SchedulerLike' is missing … postTask,
+  yield`, which are the DOM `Scheduler`'s members, naming the mechanism outright. This is
+  CLAUDE.md's (CHK.49) lib-global-shadow family extended from `interface` to `class` + `this`.
+  **Note it exists BECAUSE `dom` is in the lib set, which is TypeScript's own default when `lib`
+  is unset** — so it is exactly the class of defect a corpus scoped to one codebase cannot show.
+  **(G2) 7 rows are (CHK.35c)** — `let prev: T; … (value) => { prev = value }` through a generic
+  helper — so a `rxjs` round does not duplicate that arc, and those 7 become a free receipt when
+  it lands. **(G3) 4 rows TS2302** `static create = <T>(…) => …`: the ARROW's own type parameter is
+  mis-attributed to the CLASS's. (CHK.140) is adjacent and is the OTHER direction, so this is not
+  covered. **(G4) 3 rows TS2683**: a contextual `this:` parameter (`work: (this: SchedulerAction<T>,
+  state?: T) => void`) is not applied to a function-expression ARGUMENT — adjacent to (CHK.141).
+  Plus 7 unrelated singletons, and ONE genuine row we MISS (`WebSocketSubject.ts:304` TS2345).
+  **RECOMMENDED FIRST ROUND: G1**, because it is the only one of the four owned by nothing, it has
+  the cheapest reproducer of anything in the report, and all eight dashboard profiles plus the
+  corpus are structurally blind to it (tsc's own sources declare no class named after a DOM
+  global). Gate it on the corpus — CLAUDE.md records that (CHK.49)'s merge is load-bearing on real
+  projects and that **seeding only half of it is WORSE than seeding both** — plus the 8-profile
+  grid and `rxjs` 29 -> 21.
+  **`zod` IS THE ROUND-AFTER TARGET, NOT THE FIRST**: 710 ours-only against tsgo 0, but 87% is two
+  DEEP causes — **TS7006 x355** (an arrow assigned through a property access on a GENERIC receiver
+  gets no contextual signature; the same (CHK.35c) family at ~50x `rxjs`'s count) and **TS2339
+  x266** (a `switch` on ENUM-MEMBER case labels does not narrow a discriminated union, which has
+  NO queue item). Provision: extract from `~/.npm/_cacache` (`rxjs/-/rxjs-7.8.2.tgz`), `target
+  ES2020`, `module ESNext`, `moduleResolution bundler`, `strict`, `lib ["ES2020","DOM"]`, include
+  `src/internal/**` — **the `lib` setting is load-bearing for G1 and must be recorded with any
+  number taken.**
 
 - [ ] **(CHK.147) A NAMESPACE-LOCAL `var`/`let`/`const` IS NOT NAMESPACE-SCOPED — THE FIRST
   DECLARATION WINS PROGRAM-WIDE, ORDER-DEPENDENTLY, AND IT PRODUCES A **WRONG TYPE IN A ROW WE DO
