@@ -1,5 +1,90 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.167) — (CHK.140): a class's own type parameters are in scope in its members' bodies; plus a build guard that refuses a tsgo-defect row (2026-09-22)
+
+**TWO DELIVERABLES, COMMITTED SEPARATELY.** `431473d121` is the (LEGACY.0) ledger guard;
+`633e3a7724` is the checker fix.
+
+**THE DEFECT WAS MIS-ATTRIBUTED BY ITS OWN PREDECESSOR, AND THE FIXTURE THAT SETTLES IT
+CONTAINS NO MEMBER ACCESS AT ALL.** (P18.166) named the successor as *"a member typed by its
+container's own TYPE PARAMETER must resolve to that parameter rather than to `any` at an
+instantiation whose argument is itself an unresolved parameter — round 761's globally-`any`
+cached type"*. It is not the member table, not `resolveGenericPropertyType`, and not
+INV.5(d1)'s budget. `ctaFnBodyFrame` fed the enclosing class's type parameters to
+`fnTpDecls` (the AST map, which is what answers TS2302) and never to `fnTpScope` (the map
+that TYPES a name) — an asymmetry on adjacent lines. `type Q = boolean; class Hg1<Q> { use()
+{ const x: Q = null!; const probe: number = { v: x }; } }` answered **`{ v: boolean; }`** where
+tsgo answers `{ v: Q; }`: a class type parameter failing to SHADOW a file-level alias, i.e. a
+WRONG type, not a permissive one. The `any` everyone chased is what this degrades to when no
+outer name exists. **The clincher is one parameter answering two types in one method body** —
+`take(x)` resolved `P` through the ccet reader while `{ v: x }` read `any` through the cta one.
+No cache produces that; a FRAME does.
+
+**THE STATIC GATE WAS BUILT, COULD NOT BE DISCRIMINATED, AND WAS THEN MEASURED LOSSY — THE
+ROUND'S MOST USEFUL RESULT.** The obvious move is to mirror `ccetEnterClassDeclaration`'s
+B74.5 exclusion of statics, on the reasoning that typing a static body's `P` would silence
+TS2302. Built it. **Ablation arm a2 read 0 RED on all 10 pins.** Rather than record a
+redundant barrier, its COST was measured: TS2302 is decided by `fnTpDecls` and fires in BOTH
+arms, so the gate never protected it — what it did instead was degrade the static body's `P`
+to `any`, where tsgo 7.0.2 reports TS2302 **and** types the reference as `P`
+(`class Hs1<P> { static s() { const x: P = null!; const probe: number = { v: x }; } }`:
+guard-ON `{ v: any; }`, guard-OFF and tsgo `{ v: P; }`). **Removed, not recorded**, and both
+rows are now pins. (P18.165)'s law one reader over: a guard no arm can discriminate is as
+often UNNECESSARY as it is unpinned, and only its cost separates the two. **Copying a
+neighbouring reader's rule without measuring whether it applies here is what produced it.**
+
+**I WALKED INTO (CHK.54)'s TRAP AND THE PINS CAUGHT IT.** A nested arrow inside a method body
+and a `this`-property read were first written up as RESIDUES, off a CLI probe taken after the
+ablation restored the SOURCE but before it rebuilt — so the class dir still held the BEFORE
+binary. Both in fact RESOLVE, so the fix reaches further than its sizing predicted. The
+receipt that settles such a reading is an `md5sum` of the class under test, never the probe.
+
+**THE PREDECESSOR'S COUNTDOWN WENT RED, ON SCHEDULE.** `ElementAccessUnionKeyTest`'s
+`residue - an enclosing class TYPE PARAMETER in the receiver still blocks the write check` is
+closed by this round; our row is now byte-identical to tsgo's and the pin is inverted. That
+pin also recorded tsgo as SILENT on its fixture — re-measured, **tsgo reports it**. Second
+time in two rounds that a recorded residue was wrong about the reference as well as the cause.
+
+**GATES, AND WHICH ONE IS REAL.** Corpus screen **0 of 8,725** over both channels is the gate:
+281 of its case files declare a generic class whose body references its own type-parameter
+name. The 8-profile grid is **8x `added=0 removed=0`** and is a CONTROL on six arms — a census
+counts **84 lines of generic-class body in the whole compiler profile** (3 generic classes in
+78 files) — and a gate only on `harness` (3,521 body lines) and `server` (3,268). `marked`
+**10 -> 8**, closing the two `@ts-expect-error` shadows at `Instance.ts:206` and `:219`;
+`cronstrue` unchanged at its byte-identical TS5108 config row. `cost_gate` PASS (max +0.41%;
+`mapped.keyed` +0.23%, expected — `currentTypeParamScope` feeds the INV.5(c) fingerprint, so
+keying is FINER, the sound direction); `huge_methods` 0 over; warning-clean (log non-empty,
+so the gate is live). Suite **20,275 / 0 / 44** (+10 pins). Ablation a1: **6 of 10 RED**, the
+3 greens being controls by construction (a generic function's own TP, a method's own TP, TS2302).
+
+**DELIVERABLE 1 — A BUILD GUARD THAT REFUSES A tsgo-DEFECT ROW.** All 19 `tsgoPendingBaselines`
+entries were audited against tsgo's own manifests, each layer derived from first principles
+(the `.diff`'s DIRECTORY, never the `submodule/` base baseline) and cross-checked against the
+generator's own verdict: **15 targetable, 3 `submoduleTriaged`, 1 harness question**. One
+triaged row was filed as ordinary work — `exportAssignmentMembersVisibleInAugmentation`, in
+tsgo's known-defect group *"Corsa changes how module augmentation interacts with export-equals
+and exported name visibility"* (microsoft/typescript-go#3481). **Reading its layer's own diff
+settles what the target is**: the baseline it diverges from is `<no content>` and the case
+marks the line `// OK`, so the intended answer is SILENCE and tsgo's TS4060 is the bug — the
+old reason, read as work, would have had a round IMPLEMENT a diagnostic that should not exist.
+`TsgoBaselineChoice.layer`'s KDoc already said *"no round may target such a family"*; nothing
+enforced it. Now a pending entry whose DERIVED layer is `submoduleTriaged` fails the build
+unless its reason says REFUSED. Positive control: stripping the token fails the build naming
+exactly that baseline. Also corrects the `tsgoPendingBaselines` KDoc, which claimed every entry
+carries its layer *"so a family round can select its work with a grep"* — false for **8 of 19**,
+and that grep is how the mis-filed row stayed invisible.
+
+**WHAT IS OURS AND STILL OPEN AT THAT BASELINE** (filed in the entry, not chased): we emit TWO
+rows where the intended answer emits none — an `export =` namespace's members are not visible
+to a `declare module` augmentation of it. Gradeable only against the intended answer, never
+against this baseline while tsgo's row stands.
+
+**SUCCESSOR.** `marked`'s remaining 8 are led by the (CHK.35) `TS7019`/`TS2683×4` family
+(a function expression assigned through an element access gets no contextual signature) at 5 of
+the 8; the `TS2578` at `Instance.ts:179` is block-body return inference, measured separately by
+(P18.166)'s recon and not this family.
+
+
 ### Round (P18.166) — (CHK.139): an element access with a literal-typed key resolves, read and write (2026-09-21)
 
 **THE SHAPE REAL CODE REACHES FOR MOST OFTEN ANSWERED `any`.** `mem[k]` where `k: keyof M` — and

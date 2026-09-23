@@ -151275,27 +151275,45 @@ interface DataView {
         // the binding element's parent type); [patternsOnly] is the ccet argument
         // reader's call, which types pattern parameters here and leaves its identifier
         // parameters to (CHK.98)(a).
-        if (parameters.none {
-                it.type == null &&
-                    (((it.name is Identifier && !patternsOnly) || it.name is ObjectBindingPattern ||
-                        it.name is ArrayBindingPattern) ||
-                        // (CHK.98)(c) a REST parameter is a population of its own — it was
-                        // skipped outright below, so `takeR((...xs) => …)` left `xs` as `any`.
-                        (it.dotDotDotToken && it.name is Identifier && !patternsOnly))
-            }) return
+        val hasPullableParams = parameters.any {
+            it.type == null &&
+                (((it.name is Identifier && !patternsOnly) || it.name is ObjectBindingPattern ||
+                    it.name is ArrayBindingPattern) ||
+                    // (CHK.98)(c) a REST parameter is a population of its own — it was
+                    // skipped outright below, so `takeR((...xs) => …)` left `xs` as `any`.
+                    (it.dotDotDotToken && it.name is Identifier && !patternsOnly))
+        }
+        // (CHK.141)(b) `this` IS ITS OWN POPULATION, and folding it into the parameter
+        // one above made the whole rule unreachable for the shape that needs it most:
+        // a function expression with NO parameters at all. tsgo's
+        // `assignContextualParameterTypes` (checker.go:10325) runs its `this` half
+        // BEFORE the parameter loop and gates it on `context.thisParameter` alone —
+        // `if context.thisParameter != nil { … }` — never on the inner signature's
+        // parameter list. Measured before this: `h.w = function () { this.tag }`, the
+        // same as a variable annotation, as a call ARGUMENT and as an object-literal
+        // property value were ALL silent where tsgo reports, because
+        // `parameters.none { … }` returned early one line above the `this` write.
+        //
+        // tsgo's skip condition is `parameter == nil || parameter.ValueDeclaration
+        // .Type() == nil`: the function expression's OWN annotated `this:` wins, an
+        // un-annotated one does not. An ARROW has no `this` of its own (it inherits
+        // the enclosing one), so only a function EXPRESSION may take it.
+        val ownThisParam = parameters.firstOrNull()?.takeIf { (it.name as? Identifier)?.text == "this" }
+        val wantsThis = !patternsOnly && fn is FunctionExpression &&
+            (ownThisParam == null || ownThisParam.type == null)
+        if (!hasPullableParams && !wantsThis) return
         val ctx = pullContextualTypeAt(fn) ?: return
         val sig = callableSignaturesForCtx(ctx, requiredParamPrefixCount(parameters))?.singleOrNull() ?: return
         // (CHK.98)(c) tsc's `getContextualThisParameterType` (checker.ts:31884): the
         // contextual signature's own `this` parameter types `this` inside the body.
-        // An ARROW has no `this` of its own (it inherits the enclosing one), so only a
-        // function EXPRESSION may take it — and the type is read off the signature's
-        // DECLARATION, because [getParameterSymbols] deliberately drops the `this`
-        // pseudo-parameter from `Signature.parameters` (which is also what keeps the
-        // positional zip below aligned).
-        if (!patternsOnly && fn is FunctionExpression &&
-            parameters.none { (it.name as? Identifier)?.text == "this" }) {
+        // The type is read off the signature's DECLARATION, because
+        // [getParameterSymbols] deliberately drops the `this` pseudo-parameter from
+        // `Signature.parameters` (which is also what keeps the positional zip below
+        // aligned).
+        if (wantsThis) {
             contextualThisParamType(sig)?.let { currentLocalTypes["this"] = it }
         }
+        if (!hasPullableParams) return
         for ((i, param) in parameters.withIndex()) {
             if (param.type != null) continue
             if (param.dotDotDotToken) {

@@ -1,5 +1,26 @@
 
 
+**(P18.172) — (CHK.142)(a): AN OBJECT LITERAL AGAINST A *UNION* CONTEXTUAL TYPE; `marked` 2 -> 1, 20,364 / 0 / 44 (2026-09-22).**
+**THE BRIEF'S DIAGNOSIS WAS WRONG AND ITS AUTHOR WAS THIS ROUND'S OWN PREDECESSOR.** (P18.171) sized (a) as one `else` on
+`getTypeOfObjectLiteral`'s union arm plus a helper; written exactly so, it built clean, was proved LIVE by a positive control,
+and was **completely inert**. The mechanism is **FIVE pieces, none of which moves a row alone**: the cross-union member type
+(tsgo's `getTypeOfPropertyOfContextualTypeEx`); a literal-under-context rule, because **this engine answers the BASE PRIMITIVE
+for every literal** so the contextual member type had no consumer; and — the actual blockers — the var-decl AND argument
+context installs, both gated `is Type.Object`, which refuse a UNION annotation outright; plus the FP firewall in
+`tryEmitObjectVsNamedUnionArg`, which asks each constituent INDIVIDUALLY and never the union, making (P18.171)'s split
+structurally unreachable from it. **FOUND BY PROBING, NOT READING, AFTER TWO INERT BUILDS** — a temporary
+`Diagnostic`-constructor hook named the real emitters, and **neither is either sibling reader the sizing named**; both were
+then measured out of scope and left untouched, with 46 of 46 cells agreeing. The probe was stripped and every number re-taken
+on the probe-free binary, reproduced exactly by `--rerun-tasks`. Two traps it cost: a stack frame reading `Checker.kt:33840`
+is the **+131,072** wrap (the file now exceeds 131,072 lines), and the message `'"image" | "link"' … to type 'string'` is a
+DISPLAY artefact of `getWidenedLiteralType` on both sides. **Seven ablation arms**: a7 read 0 RED and was a BLIND PIN (fixed);
+a4 read 0 RED with no cell delta and its COST was measured rather than assumed — 0 subtests, 0 profile rows, 0 pins, neither
+library, 21 of 631,317 `getTypeOfExpression` calls — redundant on both axes and KEPT, with the numbers in its KDoc. Screen 0
+of 8,725; grid 8x0 and a real GATE in the ADDING direction; cost_gate PASS (+0.80% max, `output.errors` 46); huge_methods 0.
+**The anchor divergence is real, unchanged and NOT introduced** (tsgo drills to the member, we report the whole literal, for a
+UNION target only).
+
+
 **(P18.171) — (CHK.142)(b): A DISCRIMINATED-UNION *SOURCE* IS SPLIT OVER ITS DISCRIMINANTS; 23 OF 25 CELLS MATCH tsgo, 20,351 / 0 / 44 (2026-09-22).**
 A port of tsgo's `typeRelatedToDiscriminatedType` (`relater.go:3989`) into the tail of our union-target arm, at exactly the
 position tsgo calls it from, beside round 744's `intersectionSourceDistributes`. **`marked` is unchanged at 2 and that was

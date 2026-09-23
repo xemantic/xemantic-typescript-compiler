@@ -25,6 +25,68 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.177) — (CHK.141)(b): a contextual `this:` parameter TYPES `this`; 1 of 5 positions -> 5 of 5, and the rxjs gate is NOT met (2026-09-23)
+
+**A contextual `this:` parameter was applied NOWHERE** — only an EXPLICIT `this:` on the function
+expression typed `this`. Four positions were silent false negatives (member assignment, variable
+annotation, call argument, object-literal property), **two of them (CHK.35a)'s deliberate ones**:
+that round suppressed TS2683 for a member-assigned function expression without typing anything and
+recorded the residue. The matrix goes **1 of 5 -> 5 of 5, exact agreement with tsgo including
+positions and message text.**
+
+**IT WAS NOT THE RULE, IT WAS THE GATE — AND ONLY A PROBE BINARY FOUND IT.**
+`applyPulledContextualParamTypes` opened with an early return computed over the PARAMETER
+population, and `this` had been folded into that population, so **a function expression with NO
+parameters — the shape that needs the rule most — returned one line above its own `this` write**.
+`contextualThisParamType` was correct all along. tsgo's own shape is the fix: its `this` half is
+gated on `context.thisParameter` alone and runs BEFORE the parameter loop, so the population is
+split in two. Its skip condition was adopted exactly — an ANNOTATED own `this:` wins, an
+un-annotated one does not, where ours refused both.
+
+**THE BRIEF'S PREMISE WAS FALSE AND THE ROUND PROVED IT RATHER THAN ASSUMING THE GATE.** I wrote
+*"with a contextual `this` type present, TS2683 cannot fire"*. It does: **typing and TS2683 live
+in different passes with different state.** TS2683 comes from `spineItEnterNode`, which runs under
+`spineItRestingLocals` and reads a bit folded by `spineItEdge`'s **purely syntactic** carrier
+edges; it never consults `currentLocalTypes["this"]`, which is where the fix writes. The proof is
+a miniature reproduction where **the typing outcome is identical and TS2683 differs by receiver
+kind alone** — a PARAMETER receiver keeps the row, a declared `const` receiver does not. So
+**`rxjs` stays at 17 and the stated gate is NOT met**; the round buys parity and no library row,
+exactly as (P18.176) did, and says so.
+**(CHK.35a)'s suppression arms are therefore NOT redundant and were not touched.** What closes
+rxjs is making `spineItEdge`'s arm TYPE-KEYED — an approach whose own KDoc records it as tried and
+reverted for being INERT because *"a contextual parameter type mentioning a free type parameter
+collapses"*. **(P18.176) removed that blocker last round**, so the reverted approach is now worth
+re-measuring, and that is the natural successor.
+
+**Ablation, four arms.** a1 (revert the hoist) **5 RED**; a2 (drop explicit-`this:` precedence) 1;
+a3 (let an ARROW take it) 1; a4 (drop the post-`this` early return) 0. **a3 WAS A BLIND PIN AND
+THE PIN WAS FIXED RATHER THAN THE GUARD RECORDED AS REDUNDANT**: the first arrow pin used an arrow
+inside a class METHOD, where `currentClassForThis` decides the case and the write is never
+consulted, so it read 0 RED. Measuring what the guard COSTS showed that dropping it grows a TS2322
+**tsgo does not emit** (tsgo gives TS7041 + TS7017 there), i.e. load-bearing; the pin moved to the
+module-top-level shape and the class-method assertion was kept and RENAMED to say it does not
+discriminate. **a4 is a measured-redundant COST barrier**, behaviour-neutral by construction, kept
+and labelled. **a1's fifth RED is explained, not incidental**: at the emission-owning invocation
+the with-parameters fixture's un-annotated parameter already reports `type != null`, so the
+pullable population is empty for ALL FIVE fixtures there — which is itself finding (2) below.
+
+**Gates.** suite **20,434 / 0 / 44** (+10 pins); corpus screen **0 of 8,725**; 8-profile grid **8x
+`added=0 removed=0`** — a GATE in the adding direction, and the census says it is reached (35-38
+`(this: ` parameters per profile); `rxjs` **17 -> 17**, `marked` **0**, `cronstrue` **1**, all held
+at exact agreement; `cost_gate` PASS, 18 counters +0.00% (largest `mapped.hits` +0.04%, the
+contextual pull now running for zero-parameter function expressions); `huge_methods` 0 over;
+warning-clean with the positive control proved live and then deleted.
+
+**Three separate defects named, not fixed, and the first is a WRONG TYPE**:
+`checkCallTypesInContextualFnExpr` zips against the annotation's RAW AST parameter list, which
+still contains the `this` pseudo-parameter, so `const b: (this: Act<number>, s: string) => void =
+function (s)` types **`s` as `Act<number>`** — we emit `Type 'Act<number>' is not assignable to
+type 'number'` where tsgo emits `Type 'string' …`; it is (CHK.133)(a)'s `resolveParameterTypesInScope`
+fix unapplied one reader over, and it is SILENT wherever the shifted type happens to fit. Second:
+the emission-owning `checkFunctionBody` invocation sees an un-annotated parameter as annotated
+while the spine frame does not (observable proved, producer not). Third: an arrow inside an
+OBJECT-LITERAL method does not get the method's `this`.
+
 ### Round (P18.176) — (CHK.35c): a contextual parameter type mentioning an IN-SCOPE type parameter is applied; the rxjs prize was MIS-ATTRIBUTED (2026-09-23)
 
 **THE HEADLINE IS THE REFUTATION, NOT THE FIX.** (CHK.35c) has been carried since (P18.168) as the
@@ -610,90 +672,6 @@ lands; (CHK.35c) the free-type-parameter collapse, which is what finally closes 
 indexed-access instantiation asymmetry where a non-generic class misses a row its generic
 sibling resolves.
 
-### Round (P18.167) — (CHK.140): a class's own type parameters are in scope in its members' bodies; plus a build guard that refuses a tsgo-defect row (2026-09-22)
-
-**TWO DELIVERABLES, COMMITTED SEPARATELY.** `431473d121` is the (LEGACY.0) ledger guard;
-`633e3a7724` is the checker fix.
-
-**THE DEFECT WAS MIS-ATTRIBUTED BY ITS OWN PREDECESSOR, AND THE FIXTURE THAT SETTLES IT
-CONTAINS NO MEMBER ACCESS AT ALL.** (P18.166) named the successor as *"a member typed by its
-container's own TYPE PARAMETER must resolve to that parameter rather than to `any` at an
-instantiation whose argument is itself an unresolved parameter — round 761's globally-`any`
-cached type"*. It is not the member table, not `resolveGenericPropertyType`, and not
-INV.5(d1)'s budget. `ctaFnBodyFrame` fed the enclosing class's type parameters to
-`fnTpDecls` (the AST map, which is what answers TS2302) and never to `fnTpScope` (the map
-that TYPES a name) — an asymmetry on adjacent lines. `type Q = boolean; class Hg1<Q> { use()
-{ const x: Q = null!; const probe: number = { v: x }; } }` answered **`{ v: boolean; }`** where
-tsgo answers `{ v: Q; }`: a class type parameter failing to SHADOW a file-level alias, i.e. a
-WRONG type, not a permissive one. The `any` everyone chased is what this degrades to when no
-outer name exists. **The clincher is one parameter answering two types in one method body** —
-`take(x)` resolved `P` through the ccet reader while `{ v: x }` read `any` through the cta one.
-No cache produces that; a FRAME does.
-
-**THE STATIC GATE WAS BUILT, COULD NOT BE DISCRIMINATED, AND WAS THEN MEASURED LOSSY — THE
-ROUND'S MOST USEFUL RESULT.** The obvious move is to mirror `ccetEnterClassDeclaration`'s
-B74.5 exclusion of statics, on the reasoning that typing a static body's `P` would silence
-TS2302. Built it. **Ablation arm a2 read 0 RED on all 10 pins.** Rather than record a
-redundant barrier, its COST was measured: TS2302 is decided by `fnTpDecls` and fires in BOTH
-arms, so the gate never protected it — what it did instead was degrade the static body's `P`
-to `any`, where tsgo 7.0.2 reports TS2302 **and** types the reference as `P`
-(`class Hs1<P> { static s() { const x: P = null!; const probe: number = { v: x }; } }`:
-guard-ON `{ v: any; }`, guard-OFF and tsgo `{ v: P; }`). **Removed, not recorded**, and both
-rows are now pins. (P18.165)'s law one reader over: a guard no arm can discriminate is as
-often UNNECESSARY as it is unpinned, and only its cost separates the two. **Copying a
-neighbouring reader's rule without measuring whether it applies here is what produced it.**
-
-**I WALKED INTO (CHK.54)'s TRAP AND THE PINS CAUGHT IT.** A nested arrow inside a method body
-and a `this`-property read were first written up as RESIDUES, off a CLI probe taken after the
-ablation restored the SOURCE but before it rebuilt — so the class dir still held the BEFORE
-binary. Both in fact RESOLVE, so the fix reaches further than its sizing predicted. The
-receipt that settles such a reading is an `md5sum` of the class under test, never the probe.
-
-**THE PREDECESSOR'S COUNTDOWN WENT RED, ON SCHEDULE.** `ElementAccessUnionKeyTest`'s
-`residue - an enclosing class TYPE PARAMETER in the receiver still blocks the write check` is
-closed by this round; our row is now byte-identical to tsgo's and the pin is inverted. That
-pin also recorded tsgo as SILENT on its fixture — re-measured, **tsgo reports it**. Second
-time in two rounds that a recorded residue was wrong about the reference as well as the cause.
-
-**GATES, AND WHICH ONE IS REAL.** Corpus screen **0 of 8,725** over both channels is the gate:
-281 of its case files declare a generic class whose body references its own type-parameter
-name. The 8-profile grid is **8x `added=0 removed=0`** and is a CONTROL on six arms — a census
-counts **84 lines of generic-class body in the whole compiler profile** (3 generic classes in
-78 files) — and a gate only on `harness` (3,521 body lines) and `server` (3,268). `marked`
-**10 -> 8**, closing the two `@ts-expect-error` shadows at `Instance.ts:206` and `:219`;
-`cronstrue` unchanged at its byte-identical TS5108 config row. `cost_gate` PASS (max +0.41%;
-`mapped.keyed` +0.23%, expected — `currentTypeParamScope` feeds the INV.5(c) fingerprint, so
-keying is FINER, the sound direction); `huge_methods` 0 over; warning-clean (log non-empty,
-so the gate is live). Suite **20,275 / 0 / 44** (+10 pins). Ablation a1: **6 of 10 RED**, the
-3 greens being controls by construction (a generic function's own TP, a method's own TP, TS2302).
-
-**DELIVERABLE 1 — A BUILD GUARD THAT REFUSES A tsgo-DEFECT ROW.** All 19 `tsgoPendingBaselines`
-entries were audited against tsgo's own manifests, each layer derived from first principles
-(the `.diff`'s DIRECTORY, never the `submodule/` base baseline) and cross-checked against the
-generator's own verdict: **15 targetable, 3 `submoduleTriaged`, 1 harness question**. One
-triaged row was filed as ordinary work — `exportAssignmentMembersVisibleInAugmentation`, in
-tsgo's known-defect group *"Corsa changes how module augmentation interacts with export-equals
-and exported name visibility"* (microsoft/typescript-go#3481). **Reading its layer's own diff
-settles what the target is**: the baseline it diverges from is `<no content>` and the case
-marks the line `// OK`, so the intended answer is SILENCE and tsgo's TS4060 is the bug — the
-old reason, read as work, would have had a round IMPLEMENT a diagnostic that should not exist.
-`TsgoBaselineChoice.layer`'s KDoc already said *"no round may target such a family"*; nothing
-enforced it. Now a pending entry whose DERIVED layer is `submoduleTriaged` fails the build
-unless its reason says REFUSED. Positive control: stripping the token fails the build naming
-exactly that baseline. Also corrects the `tsgoPendingBaselines` KDoc, which claimed every entry
-carries its layer *"so a family round can select its work with a grep"* — false for **8 of 19**,
-and that grep is how the mis-filed row stayed invisible.
-
-**WHAT IS OURS AND STILL OPEN AT THAT BASELINE** (filed in the entry, not chased): we emit TWO
-rows where the intended answer emits none — an `export =` namespace's members are not visible
-to a `declare module` augmentation of it. Gradeable only against the intended answer, never
-against this baseline while tsgo's row stands.
-
-**SUCCESSOR.** `marked`'s remaining 8 are led by the (CHK.35) `TS7019`/`TS2683×4` family
-(a function expression assigned through an element access gets no contextual signature) at 5 of
-the 8; the `TS2578` at `Instance.ts:179` is block-body return inference, measured separately by
-(P18.166)'s recon and not this family.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1151,7 +1129,31 @@ shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: t
 positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
 positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
 
-- [ ] **(CHK.148) A CALLEE TYPE PARAMETER INFERRED FROM THE CONTEXTUAL *RETURN* POSITION BINDS TO
+- [ ] **(CHK.148) RECONNED 2026-09-23 ((P18.177) recon) — ONE BOUNDED LEG, AND tsc's PRIORITY RULE
+  FALLS OUT FOR FREE.** tsgo's `inferTypeArguments` (`checker.go:9366`) opens by inferring from the
+  call's CONTEXTUAL type to the signature's RETURN type at `InferencePriorityReturnType` (1<<7),
+  and `inference.go:189` WIPES those candidates the moment a priority-0 argument candidate
+  arrives. Measured over three cells (argument says `string` and context `string|number`; argument
+  `number` and context `string`; argument `undefined` and context `Box<string>`): **an argument
+  candidate beats the contextual-return one outright, per TYPE PARAMETER** — so a simple "only for
+  type parameters no argument bound" rule reproduces it and **no `InferencePriority` notion needs
+  building**. **Ours has no such leg at all**: `ctxArgTypeMapper` (`Checker.kt:149810`) is never
+  passed the call's contextual type, and both existing helpers are argument-only by signature.
+  **The fallback already matches tsgo exactly** (unconstrained -> `unknown`, constrained -> the
+  constraint, measured on two cells), so `freeTypeParamMapper` must NOT be touched. Place the new
+  leg between `inferMapper` and `freeTypeParamMapper`; `pullContextualTypeAt` is the supplier.
+  **EVERY contextual source behaves identically** — argument, variable annotation, return,
+  property assignment, `satisfies`, `as`, `await`, a union context, an array element, a
+  callback-return, a ternary branch — all 13 measured cells fall back here and infer in tsgo.
+  **THE DIRECTION IS BOTH WAYS AND A ROUND EXPECTING REMOVAL ONLY WILL MISREAD ITS GRID**: it
+  removes the ours-only TS2322 writes (the 7 rxjs rows and 13 cells) and ADDS member-access rows
+  tsgo already reports (a member READ on our `unknown` parameter is silent today; only a WRITE
+  fires). **Blast radius**: ~64-128 active baselines by two proxies, 5 carrying the exact message;
+  the 8-profile grid is a CONTROL for TS2322 (zero such rows on any profile) but NOT purely one —
+  harness carries 3 TS7006 rows a contextual-parameter change can move, and the ADD direction can
+  surface there as new TS2339/TS2551. **Residue to expect**: a class-PROPERTY-INITIALIZER context
+  is not reached by our pull at all, so a first version will close most cells and leave that one.
+  ORIGINAL: **A CALLEE TYPE PARAMETER INFERRED FROM THE CONTEXTUAL *RETURN* POSITION BINDS TO
   `unknown` INSTEAD OF THE CONTEXT'S TYPE — 7 ROWS ON `rxjs`, AND IT IS WHAT (CHK.35c) WAS WRONGLY
   CREDITED WITH (measured 2026-09-23, (P18.176)).** Nine-line reducer
   (`build/scratch-p18176/rx/x.ts`):
@@ -1245,7 +1247,17 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   fix cannot move them; the grid is a CONTROL (0 sites on all 8 profiles). Ship the one fixture
   that fails in BOTH directions on one line: `class B4<T,S> { static create: any = <S>(x: S, y: T)
   => x }` — ours reports 2 rows where tsgo reports 1.
-  **G4 IS RE-SCOPED AND SHOULD NOT BE DONE AS A TS2683 SUPPRESSION.** A primitive probe showed a
+  **G4's TYPING HALF LANDED 2026-09-23 ((P18.177) note) AND THE 3 ROWS DID NOT MOVE.** A contextual
+  `this:` now TYPES `this` at all four positions (matrix 1 of 5 -> 5 of 5, exact tsgo agreement),
+  which closes (CHK.35a)'s recorded false negatives — but **`rxjs` stays at 17**, because typing
+  and TS2683 live in DIFFERENT PASSES with different state: TS2683 comes from `spineItEnterNode`
+  under `spineItRestingLocals`, reading a bit folded by `spineItEdge`'s purely SYNTACTIC carrier
+  edges, and it never consults `currentLocalTypes["this"]`. Proved on a miniature reproduction
+  where the typing outcome is IDENTICAL and TS2683 differs by receiver kind alone. **So what
+  closes these 3 rows is making `spineItEdge`'s arm TYPE-KEYED** — the approach its own KDoc
+  records as tried and reverted for being INERT, because a contextual parameter type mentioning a
+  free type parameter collapsed. **(P18.176) removed that blocker**, so the reverted approach is
+  now worth re-measuring and is the live successor. ORIGINAL: **G4 IS RE-SCOPED AND SHOULD NOT BE DONE AS A TS2683 SUPPRESSION.** A primitive probe showed a
   contextual `this:` is applied **NOWHERE** — not at an argument, not at a variable annotation, not
   at a member assignment, not at an object-literal property; only an EXPLICIT `this:` parameter
   types `this`, and (CHK.35a)'s suppression makes two of those positions silent WITHOUT typing
