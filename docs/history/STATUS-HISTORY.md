@@ -1,5 +1,15 @@
 
 
+**(P18.183) — (CHK.152) STEP 1: A NAMED-OBJECT ARGUMENT IS RELATED TO A NAMED-OBJECT PARAMETER; 24 OF 29 CENSUS MISSES REPORT WITH THE DECLARATION'S CHAIN, +0 ROWS EVERYWHERE AS PREDICTED, 20,544 / 0 / 44 (2026-09-23).**
+`z(q)` with a mismatched property used to be SILENT at an argument while `const s: S = q` reported. A new gate in
+`caasNonSimpleParamChecks` (arity, not-rest, no free type parameter; never a union or a literal) delegates to
+`canUseTypeEngine`, and the argument emitter builds the member chain for the pair — all 34 new rows print exactly the
+declaration reader's chain. All 22 silent controls stay silent; 17 pins; eleven ablation arms, three recorded as
+redundant guards. Screen 0 of 8,725 (blind — the census measured only 23 such rows, all matched); grid 8x0 over
+7,494/14,311 opened pairs; cost_gate PASS; huge_methods 0; rxjs 10, marked 0. **The read-only census predicted +0
+exactly by invoking the checker's own predicates at a debugger breakpoint on frozen classes** — committed as
+`scripts/census/JdiArgFirewallCensus.java`. A second census filed rxjs's ten rows as (CHK.153)-(CHK.161).
+
 **(P18.182) — (CHK.150) RUNG 3 + THE `Partial` LEAK: AN OVERLOAD'S CLEAR WINNER IS ADOPTED FOR THE ARGUMENT'S CONTEXT; `rxjs` 17 -> 10, (CHK.150) CLOSED, 20,527 / 0 / 44 (2026-09-23).**
 Rung 3 was a round-481 byte-parity guard DISCARDING `resolveCallOverload`'s arity-filtered clear winner; it protected
 no baseline (screens byte-identical, pending rows included). The `Partial<Observer<W>>` leak was a mapped bag sent

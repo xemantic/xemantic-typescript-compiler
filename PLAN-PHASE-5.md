@@ -25,6 +25,43 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.188) — (CHK.156): equality and `switch` narrowing split `boolean` into `true | false`; `rxjs` 5 -> 4 (2026-09-23)
+
+Orchestrated: one implementation subagent, plus a parallel read-only census of (CHK.159) (running at commit).
+**The item named one site; there were three**: `narrowUnionByLiteral`'s UNION branch (the census's),
+its NON-union branch (a bare `boolean` subject never split), `narrowBySwitchClause`'s default arm (never
+subtracted `case true`/`case false`), and the call-argument reader's M3.4 narrowing arm, which never admitted
+a bare `boolean` parameter — so `pt(on)` after `on === true` printed `'boolean'` where tsgo prints `'false'`,
+and an EXHAUSTED `boolean` passed to a `number` parameter was an ours-only false positive. Our `boolean` stays
+one intrinsic (tsgo's is `false | true`, checker.go ~1002); the helpers subtract a half without changing how
+a plain `boolean` displays. **Display did not move anywhere**: our stable ordering already prints tsgo's
+`string | false` / `false | (() => void)`, and a lone narrowed `false` still generalizes to `'boolean'` at a
+primitive target, as tsgo's does.
+
+**The change (`Checker.kt` +52/−2)**: `booleanMinusLiteral(s)` used by both `narrowUnionByLiteral` branches
+(tsgo `narrowTypeByEquality`, flow.go ~594: the negative branch filters unit types comparable to the value;
+`==`/`===` alike) and by `narrowBySwitchClause`'s default arm (a `boolean` member and a bare subject); the
+argument reader admits `ctxApplied === booleanType` to M3.4 and accepts a proven `never` for it as for enums.
+**`checkArgumentsAgainstSignatureCore` is now 7,629 of 8,000 bytecodes — 371 of headroom on a hot method**;
+the next round that grows it must split it.
+
+**Matrix, 18 cells**: `share2` (rxjs) 1 -> 0 differing rows, `s4b/c/d` 2 -> 0 each, `ops` (`=== !== == !=`)
+8 -> 0, `sw` 4 -> 0, `disp` 4 -> 0, `bare` 1 -> 0, `argb` 8 -> 0, `nev` 11 -> 2; controls held (`s4a`, `s4e`,
+a boolean DISCRIMINANT, `o.flag === false`, exhaustive). Residues filed as (CHK.164): truthiness narrowing
+(`narrowByTruthiness`) does not split `boolean` (`truth`: tsgo `string | false`, ours `string | boolean`), and
+an optional `on?: boolean` displays without `| undefined` (`undef`, pre-existing, not narrowing).
+
+**Pins**: `BooleanLiteralEqualityNarrowingTest`, 14 tests, tsgo text. Ablation, seven arms, all RED: union
+branch 7; non-union branch 3; switch member arm 1; switch bare arm 1; argument admission 3; argument `never`
+1; wrong literal removed 8. Restored md5 `99709138`.
+
+**Gates**: full suite **20,611 / 0 / 44** (+14); corpus screen 0 of 8,725, and `--include .` over all 41
+pending rows byte-identical on both arms; cost_gate PASS (identical); huge_methods 0; grid 8x
+`added=0 removed=0`; warning gate proved live by the agent's injected probe. **`rxjs` 5 -> 4**
+(`share.ts:266` TS2349); `marked` 0; tsc-project and harness identical.
+
+**Successor**: (CHK.157) (else-branch narrowing at the legacy assignment reader, rxjs `Subscriber:220`).
+
 ### Round (P18.187) — (CHK.155): a captured read of an outer variable follows tsgo's `isOuterVariable && !isNeverInitialized`; `rxjs` 6 -> 5, 16 -> 24 of 26 cells (2026-09-23)
 
 Orchestrated: one implementation subagent, plus the (CHK.160) read-only census finishing beside it
@@ -469,69 +506,6 @@ tsgo's `P2` — before the change it read `P2 | Q2`, also wrong and with a bogus
 new form is at least semantically equal); and a GENERIC right-hand side leaves its type parameter
 FREE where tsgo defaults it to `any`, which turns a wrong-type row into a missing one — root cause
 in `resolveInstanceOfRhsType`, and no gated corpus contains the shape.
-
-### Round (P18.178) — (CHK.148): a callee type parameter is inferred from the CONTEXTUAL RETURN; 13 of 14 sources match tsgo, and the rxjs sizing was WRONG (2026-09-23)
-
-`ctxArgTypeMapper` gained one leg between the argument-inference mapper and `freeTypeParamMapper`:
-`ctxReturnTypeParamMapper` pulls the CALL's own contextual type and matches it structurally
-against the signature's return type, contributing only for type parameters no argument bound.
-**13 of 14 contextual sources go from `unknown` to the context's type**, byte-identical to tsgo —
-call argument, variable annotation, return, property assignment, `satisfies`, `as`, async return,
-a nullish union, an array element, a ternary, `=`, a class property and a `new` argument — with
-the four controls (explicit `<T>`, priority, no context, constrained TP) unmoved.
-**The ADD direction was verified too**, 4 of 4 against tsgo including the two rows the fix adds
-(`TS2551 Property 'toFixed' does not exist on type 'string'`), which is what a round expecting
-removal only would have misread.
-
-**THE RECON'S SIZING WAS WRONG AND A LADDER PROVED IT — `rxjs` STAYS AT 17.** Its reducer gave
-`subscribe` a direct `Subscriber<T>` parameter; **rxjs's is OVERLOADED with a union**
-(`Partial<Observer<T>> | ((value: T) => void)`). A six-rung ladder from the reducer's shape to
-rxjs's shows only the reducer's rung works, and a second probe shows why: at every other rung an
-ARROW or OBJECT-LITERAL argument gets **no contextual type at all**, so `pullContextualTypeAt`
-answers null and there is nothing to infer from whatever matcher is written. **So the blocker is
-upstream of this leg** — a union-typed or overloaded parameter supplying no contextual type to its
-argument, filed as (CHK.150). Third round running that buys parity and no library row; the
-remaining rxjs rows are all behind that one family, and chipping at their symptoms will not move
-them.
-
-**THE RULE HAD TO BE DISCOVERED, NOT INHERITED, AND THE CORPUS CAUGHT THE FIRST CUT.** "Contribute
-only for type parameters no argument bound" is correct but incomplete: `typeParamBoundByArguments`
-**skips every function-like argument**, which is right for `freeTypeParamMapper` (tsc's first pass
-defers a context-sensitive argument) and **wrong for the priority question** (tsc's second pass
-types it and contributes a priority-0 candidate that wipes the return-type one). The split runs
-through the callback's OWN signature — `T` in its RETURN position is inferred from the lambda's
-body, `T` in a PARAMETER position is the thing being supplied. Without that distinction the first
-cut **DELETED a corpus row** (`subtypeReductionWithAnyFunctionType`, TS7006, where tsgo and
-pristine agree and there is no `.diff` layer).
-
-**Ablation, nine arms.** a1 (leg removed) **16 RED**; a6 (pull taken at the CALLEE, not the call)
-15; a9 (priority inverted at **all three** layers) 2; a2, a7, a8 exactly 1 each and each uniquely
-its own pin. **a3 WAS A BLIND PIN AND THE CORPUS WAS BLIND TOO** — dropping
-`typeParamBoundByArguments` read 0 RED *and* 0 of 8,725, so a discriminating cell had to be
-BUILT (a non-function-like argument at a union parameter our own argument inference cannot read);
-without the gate the leg invents **two ours-only TS2345 rows on code tsgo types correctly**. A
-23rd pin now covers it. **a5 is round 927's pair generalised to THREE layers**: no single-layer
-arm can move the priority pin because the `argBound` filter, `typeParamBoundByArguments` and the
-composition order all make the same decision — a9 defeats all three and it reddens, so they are
-recorded as ONE observable. **a4 is a measured redundant barrier** with `cost_gate` counters
-byte-identical to the shipped arm, kept because it states the priority where it is decided.
-
-**Gates.** suite **20,457 / 0 / 44** (+23 pins); corpus screen **0 of 8,725**; 8-profile grid **8x
-`added=0 removed=0`** with **harness's 3 TS7006 rows explicitly checked 3 -> 3, same rows**;
-`rxjs` **17 -> 17, 0 added 0 removed**; `marked` **0**, `cronstrue` **1**; `cost_gate` PASS
-(largest `mapped.hits` +0.04%, `typeOfExpr.calls` +8 of 631,317); `huge_methods` 0 over;
-warning-clean, proved live.
-
-**Deliberate refusals, recorded rather than pinned** (pinning today's wrong answer is a
-countdown): `ctxReturnInferInto` refuses a contextual type that is a UNION with two real members
-(tsc builds a candidate per constituent and picks a common supertype — a guess this file's style
-does not make) and any structural match between DIFFERENT object types. Both are in the class
-KDoc with tsgo's measured answer. The nullish-stripped singleton union IS handled and pinned.
-
-**Separate defects named, not fixed**: (CHK.150) above; `pullContextualTypeAt` has no
-expression-bodied-arrow arm, so a call inside `() => expr` sits at no contextual position; its
-`=` arm is blind for a BLOCK-SCOPED local (B83.5) while the file-level and member forms work; and
-an argument at a union parameter mentioning `T` is not inferred at all.
 
 ## QUEUE
 
@@ -1238,7 +1212,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   expressions and bare blocks already agree. Reducers `build/scratch-p18183-census/cells/da3` (f1, f2), `da1`; controls `da2`, `da3`
   (f3, f4). Size S, removal-only.
 
-- [ ] **(CHK.156) `narrowUnionByLiteral(keep = false)` NEVER SPLITS `boolean` INTO `true | false` — rxjs
+- [x] **(CHK.156) LANDED 2026-09-23 ((P18.188) note; rxjs 5 -> 4; three more sites than named). `narrowUnionByLiteral(keep = false)` NEVER SPLITS `boolean` INTO `true | false` — rxjs
   `share:266` (TS2349).** After `on === true` and `on === false`, `boolean | fn` stays uncallable
   (Checker.kt ~126966); `"a" | "b"` and a bare `true` member work. Reducers `build/scratch-p18183-census/cells/share2`, `share4` (b-d);
   controls `share4` (a, e). Size S; expect some `string | false` DISPLAY text to move.
@@ -1332,6 +1306,14 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   (c) a class EXPRESSION held in a `const` is never argument-checked (`classexpr`, `classexpr0`); (d) a
   constructor-less MIXIN base is not checked (`mixin`, `new E2(1)`); (e) only the `private` arm of tsgo's
   `propertyRelatedTo` visibility rule exists — the two `protected` arms are missing. All ADD rows.
+
+- [ ] **(CHK.164) TWO `boolean` RESIDUES FROM (P18.188), both measured against tsgo
+  (`build/scratch-p18188/cells`).** (a) TRUTHINESS narrowing (`narrowByTruthiness`) does not split `boolean`:
+  after `if (on) return`, `on: boolean | string` reads `string | boolean` where tsgo reads `string | false`
+  (`truth`) — COMMON in real code, so screen it and expect the grid to be a real gate; (b) an optional
+  parameter `on?: boolean` displays as `boolean` where tsgo shows `boolean | undefined` — no narrowing
+  involved, a plain `pn(on)` shows it (`undef`). Note `checkArgumentsAgainstSignatureCore` is at 7,629 of
+  8,000 bytecodes: split it before growing it.
 
 - [ ] **(CHK.151) RE-SCOPED BY ITS OWN CENSUS 2026-09-23 — THE RELATION DOES *NOT* READ THE MEMBER TABLE,
   AND THE DEFECT IS WIDER THAN FUNCTION MEMBERS.** `resolveReferenceMembers` (`MemberResolver.kt:762`)

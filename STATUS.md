@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,992** lines (**+28 at (P18.187)**, a function-wide definitely-assigned set installed
+extraction):** `Checker.kt` **200,042** lines (**+50 at (P18.188)**, two `boolean`-minus-literal helpers at three narrowing
+sites and the argument arm — a SEMANTIC parity change, `rxjs` 5 -> 4; **the file crossed 200,000 lines**;
+**+28 at (P18.187)**, a function-wide definitely-assigned set installed
 around the TS2454 walks — a SEMANTIC parity change removing a FALSE-POSITIVE class, `rxjs` 6 -> 5;
 **+23 at (P18.186)**, a private-visibility relation predicate and the
 inaccessible-constructor returns — a SEMANTIC parity change closing a false-NEGATIVE class; the rest is
@@ -74,6 +76,14 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.188) — (CHK.156): EQUALITY AND `switch` NARROWING SPLIT `boolean` INTO `true | false`; `rxjs` 5 -> 4, 20,611 / 0 / 44 (2026-09-23).**
+`on === true` / `=== false` / `case true:` never removed a half of `boolean` — in the union branch, the bare branch,
+the switch default, or the call-argument reader (where an exhausted `boolean` was an ours-only false positive). One
+helper pair now subtracts a half without changing how `boolean` displays. 18-cell matrix: every equality/switch cell
+matches tsgo; 14 pins, seven arms RED. Screen 0 (pending rows byte-identical); cost_gate identical; grid 8x0;
+huge_methods 0 — `checkArgumentsAgainstSignatureCore` at 7,629/8,000. **`rxjs` 5 -> 4.** Truthiness and the optional
+`boolean` display filed as (CHK.164). `Checker.kt` crossed 200,000 lines.
+
 **(P18.187) — (CHK.155): A CAPTURED READ OF AN OUTER VARIABLE FOLLOWS tsgo's `isOuterVariable && !isNeverInitialized`; `rxjs` 6 -> 5, 20,597 / 0 / 44 (2026-09-23).**
 An expression-bodied arrow's read subtracted only names assigned inside that same arrow, so an assignment in a SIBLING
 closure was invisible and TS2454 fired in every unchecked body and at file level. The walks now install tsgo's
@@ -106,14 +116,4 @@ treats a union callee as carrying `this:` when any constituent does, as tsgo doe
 six ablation arms RED. Screen 0 of 8,725; cost_gate counters identical to the previous round; grid 8x0; huge_methods
 0. **`rxjs` 10 -> 7**, the three TS2683 rows exactly. A parallel census sized (CHK.152) step 3's blocker (2 narrowing
 rows of one shape + a relation defect filed as (CHK.162)).
-
-**(P18.183) — (CHK.152) STEP 1: A NAMED-OBJECT ARGUMENT IS RELATED TO A NAMED-OBJECT PARAMETER; 24 OF 29 CENSUS MISSES REPORT WITH THE DECLARATION'S CHAIN, +0 ROWS EVERYWHERE AS PREDICTED, 20,544 / 0 / 44 (2026-09-23).**
-`z(q)` with a mismatched property used to be SILENT at an argument while `const s: S = q` reported. A new gate in
-`caasNonSimpleParamChecks` (arity, not-rest, no free type parameter; never a union or a literal) delegates to
-`canUseTypeEngine`, and the argument emitter builds the member chain for the pair — all 34 new rows print exactly the
-declaration reader's chain. All 22 silent controls stay silent; 17 pins; eleven ablation arms, three recorded as
-redundant guards. Screen 0 of 8,725 (blind — the census measured only 23 such rows, all matched); grid 8x0 over
-7,494/14,311 opened pairs; cost_gate PASS; huge_methods 0; rxjs 10, marked 0. **The read-only census predicted +0
-exactly by invoking the checker's own predicates at a debugger breakpoint on frozen classes** — committed as
-`scripts/census/JdiArgFirewallCensus.java`. A second census filed rxjs's ten rows as (CHK.153)-(CHK.161).
 
