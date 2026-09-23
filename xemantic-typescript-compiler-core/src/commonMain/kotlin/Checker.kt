@@ -162449,6 +162449,47 @@ interface DataView {
         }?.let { paramInfo(it) }
 
     /**
+     * (CHK.154) The MINIMUM argument count a signature demands when it is RELATED to another
+     * signature — tsgo's `getMinArgumentCount` (relater.go `getMinArgumentCountEx` with no
+     * flags): a trailing run of REQUIRED parameters whose type is `void`, or a union with a
+     * `void` constituent, is dropped, so `(value: void | PromiseLike<void>) => void` relates to
+     * `() => void`. Exactly the `TypeFlagsVoid` flag counts — `undefined`, `any`, `unknown`, a
+     * type parameter (even one constrained to `void`) and `never` do not — and the run stops at
+     * the first parameter that is not void-accepting, so a `void` in the MIDDLE is still
+     * required. `strictNullChecks` plays no part.
+     *
+     * Only the relation reads this. CALL arity (`g()` for `g(x: void)`) is a separate reader
+     * that tsgo decides through `hasCorrectArity`'s own `acceptsVoid` loop, and is not changed.
+     *
+     * Answers the raw [Signature.minArgumentCount] whenever the positions cannot be trusted:
+     * [getParameterSymbols] DROPS a binding-pattern parameter, so when the declaration's own
+     * list (less a `this` pseudo-parameter) is longer than [Signature.parameters] the symbol at
+     * index `i` is not the parameter at position `i`; and a REST parameter ends the run.
+     */
+    internal fun relationMinArgumentCount(sig: Signature): Int {
+        var min = sig.minArgumentCount
+        val params = sig.parameters
+        if (min <= 0 || min > params.size) return min
+        val declared = signatureDeclaredArity(sig)?.parameters
+        if (declared != null &&
+            declared.count { (it.name as? Identifier)?.text != "this" } != params.size
+        ) return min
+        for (i in min - 1 downTo 0) {
+            val p = params[i]
+            if ((p.valueDeclaration as? Parameter)?.dotDotDotToken == true) break
+            val t = getTypeOfSymbol(p)
+            val acceptsVoid = if (t is Type.Union) {
+                t.types.any { it.flags.hasAny(TypeFlags.Void) }
+            } else {
+                t.flags.hasAny(TypeFlags.Void)
+            }
+            if (!acceptsVoid) break
+            min = i
+        }
+        return min
+    }
+
+    /**
      * (CHK.97) TS2554 for a call whose argument count no COMBINED signature admits —
      * `Expected 1-2 arguments, but got 3.` across the whole combined list, exactly as
      * tsc reports it for a union callee (measured identical on tsgo 7.0.2 and pristine

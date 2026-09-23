@@ -1456,7 +1456,9 @@ internal class Relater(
         val targetParams = target.parameters
         val targetHasRestParam =
             (targetParams.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
-        if (!targetHasRestParam && source.minArgumentCount > targetParams.size) return false
+        // (CHK.154) tsgo relates by `getMinArgumentCount`, which drops a trailing run of
+        // `void`-accepting required parameters — see [Checker.relationMinArgumentCount].
+        if (!targetHasRestParam && checker.relationMinArgumentCount(source) > targetParams.size) return false
         // 17.10d: Light type-param inference for the SOURCE-generic, TARGET-non-generic
         // case. When source has type parameters and target doesn't, treat source's
         // TypeParam-typed param positions as "wildcards" pinned to the target's
