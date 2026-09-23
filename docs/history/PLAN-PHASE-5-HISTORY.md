@@ -1,5 +1,62 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.174) — (LIB.5) G1: a module-local name that collides with a lib global wins; `rxjs` 29 -> 21 (2026-09-23)
+
+The first round against the NEW library, chosen by (LIB.5)'s census because `marked` and
+`cronstrue` are both at exact agreement with tsgo. On `build/bench/lib-rxjs-7.8.2`
+(251 sources, `lib: ["ES2020","DOM"]` — load-bearing) tsgo reports **1** row and we reported
+**29**; this closes **exactly the 8** G1 rows, adding none.
+
+**THE FIRST QUESTION THE BRIEF ASKED WAS THE RIGHT ONE, AND ITS ANSWER MADE THIS A SMALL ROUND.**
+The existing (CHK.49) family already covers `class` in TYPE position — `p: Scheduler` as a
+parameter annotation resolves correctly today through `NameResolver`'s per-file view. What failed
+were two **raw `globals[name]` consults that bypass that view entirely**. So this was NOT a set
+change, and `mergeSharedKeepNames` / `nonModuleVisible` — whose recorded trap is that **seeding
+one alone is worse than seeding both**, at a cost of 969 errors — were never touched.
+
+**THE THREE TS2739 ROWS HAD A DIFFERENT CAUSE AND A DIFFERENT COLLIDING NAME, AND ONLY A
+PER-IDENTIFIER RENAME FOUND IT.** Renaming the TYPE `SchedulerLike` -> `ZzzLike` KEPT the defect;
+renaming the PARAMETER `scheduler` -> `zzzsched` killed it. `scheduler` is itself a DOM global
+(`declare var scheduler: Scheduler`), so an assignment TARGET named `scheduler` was taking the lib
+variable's annotation. That is CLAUDE.md's *"a shape that works only for a lib-colliding name is
+working by accident — rename the identifier before believing any repro"* used as a diagnostic
+instrument rather than as a warning.
+
+**Two sites, +58/-3.** `cpaResolveClassTypeCore` asks the binder for the class's own symbol
+(`nodeSymbolOf`) before the pre-existing `globals`/namespace ladder, which is kept verbatim as the
+fallback — that closes the 5 TS2339. `checkAssignmentExpressionCore` gains
+`caeLocalBindingShadowsLibGlobal`: a **purely lib-declared** `globals` symbol loses to any binding
+the current scope holds, where `currentShadowedNames` previously knew only about a body-local
+`var` — that closes the 3 TS2739. **A third edit at the obvious site (`ccetEnterClassDeclaration`,
+the identical bad shape) was built, measured FULLY INERT, and removed rather than shipped** —
+`cpaSpineLeave` owns the emission.
+
+**THE ABLATION FOUND TWO DEFECTIVE PINS, WHICH IS WHAT IT IS FOR.** a1 and a2 first read 1 and 3
+RED, and the shortfall was the pins, not the arms. One was **BLIND**: the assignability reader
+types `this.zzzOwn` correctly on BOTH binaries, so only the TS2339 EMITTER was wrong and the
+message alone cannot separate them — it now asserts the whole row list, and a1 reads 2. One was
+**VACUOUS**: it spelled the binding `performance2`, which collides with nothing. **a3 is
+load-bearing by a CORPUS measurement rather than by a pin** — widening the guard to drop the
+"purely lib" test moves one baseline (`assignmentCompatBug2` loses `k?(a: any): any`) while no pin
+sees it — and **a4 is a measured REDUNDANT barrier**, 0 pins and 0 of 8,725, kept for
+`nodeSymbolOf`'s (BIND.1) scan fallback.
+
+**The embedded lib the `diagnose()` harness uses is 809 lines and contains NONE of the DOM
+names**, so every pin is spelled with `Performance`/`performance`, which it does have — a
+`Scheduler` pin would have been vacuous in both directions, which is the (P18.169) lesson one
+lib over.
+
+**Gates.** `rxjs` **29 -> 21**; `marked` **0** and `cronstrue` **1**, both unchanged and both
+still exactly tsgo; suite **20,399 / 0 / 44** (+13 pins); corpus screen **0 of 8,725** — the real
+gate for this family; 8-profile grid **8x `added=0 removed=0`**, a CONTROL with ONE real site
+(`export class File` in harness, the G1 shape, reporting nothing before or after); `cost_gate` PASS
+(max **+0.79%**, `globals.lookups` +0.66% — the new consult, accounted for; `output.errors` 46);
+`huge_methods` 0 over; warning-clean, with the gate proved LIVE by an injected `USELESS_CAST`.
+
+**Separate defects named, not fixed**: `new <ClassNamedAfterLibGlobal>()` is an ours-only TS2351
+*"This expression is not constructable"* — the VALUE-position half of the same collision, in a
+THIRD reader, pre-existing and not among the rxjs 8; and a missing TS2588 where tsgo reports it.
+
 ### Round (P18.173) — (CHK.35b): an element-access assignment target supplies a contextual type; **`marked` reaches ZERO** (2026-09-22)
 
 **`marked` now reports the same diagnostics as tsgo 7.0.2: none.** With `cronstrue` already at

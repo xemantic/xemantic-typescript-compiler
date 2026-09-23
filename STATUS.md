@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,783** lines (**+83 at (P18.183)**, the named-object argument gate, its classifier
+extraction):** `Checker.kt` **199,900** lines (**+117 at (P18.184)**, a lexical callee-receiver resolver and binding
+typer for contextual `this` with their KDoc — a SEMANTIC parity change removing a FALSE-POSITIVE class,
+`rxjs` 10 -> 7; **+83 at (P18.183)**, the named-object argument gate, its classifier
 and the scoped chain relaxation with their KDoc — a SEMANTIC parity change closing a false-NEGATIVE class
 at call arguments, +0 rows on every profile and library; **+59 at (P18.182)**, a one-condition guard removal, a method-parameter
 property-bag instantiation arm and their KDoc — a SEMANTIC parity change that takes `rxjs` 17 -> 10;
@@ -66,6 +68,15 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.184) — (CHK.153): A CALLBACK'S CALLEE RECEIVER IS RESOLVED FROM THE PARENT CHAIN FOR CONTEXTUAL `this`; `rxjs` 10 -> 7, 9 -> 29 OF 29 CELLS, 20,565 / 0 / 44 (2026-09-23).**
+`callArgHasContextualThis` typed the callee under the file's resting locals, so every non-file-level receiver —
+parameters, body-locals, unions, optional chains, destructured and class-method parameters — kept an ours-only TS2683.
+It now resolves the receiver lexically (with a shadow-stop, a nullish strip and a per-constituent union fold) and
+treats a union callee as carrying `this:` when any constituent does, as tsgo does. 21 pins (7 keep-TS2683 controls),
+six ablation arms RED. Screen 0 of 8,725; cost_gate counters identical to the previous round; grid 8x0; huge_methods
+0. **`rxjs` 10 -> 7**, the three TS2683 rows exactly. A parallel census sized (CHK.152) step 3's blocker (2 narrowing
+rows of one shape + a relation defect filed as (CHK.162)).
+
 **(P18.183) — (CHK.152) STEP 1: A NAMED-OBJECT ARGUMENT IS RELATED TO A NAMED-OBJECT PARAMETER; 24 OF 29 CENSUS MISSES REPORT WITH THE DECLARATION'S CHAIN, +0 ROWS EVERYWHERE AS PREDICTED, 20,544 / 0 / 44 (2026-09-23).**
 `z(q)` with a mismatched property used to be SILENT at an argument while `const s: S = q` reported. A new gate in
 `caasNonSimpleParamChecks` (arity, not-rest, no free type parameter; never a union or a literal) delegates to
@@ -107,20 +118,4 @@ moved to agreement, 5 controls held**, X1/X3 unchanged by design. 19 pins; six a
 every gate. Screen 0 of 8,725 and BLIND to the change (the 38 pending rows byte-identical on both arms); cost_gate
 PASS; huge_methods 0; grid 8x0 (a control); `rxjs` 17 -> 17. **Filed (CHK.151)**: the same member-table defect on
 the RELATION side misses rows tsgo reports — a false-negative class, expected to ADD rows.
-
-**(P18.179) — (CHK.143): `instanceof` ON THE POSITIVE BRANCH INTERSECTS WHERE IT USED TO REPLACE, 20,470 / 0 / 44 (2026-09-23).**
-`narrowByInstanceOf` answered the CANDIDATE where tsgo answers the INTERSECTION, and the join then left `P | Q` where tsgo
-leaves `P` — which is how `s.add(42)` after `if (s instanceof Promise)` became an ours-only TS2339. tsc's missing tail is now
-one helper at two sites. **7 of 21 matrix cells moved to agreement, one ours-only row removed, one added, ZERO controls
-moved.** The fixture's own comment (`s; // Set<number> & Promise<any>`) and its `submoduleAccepted` layer make tsgo's answer
-the target. **IT DOES NOT CLOSE THE PENDING BASELINE AND SAYS SO WITH BOTH MEASUREMENTS**: 3 divergences -> 2, and the two
-left are the `emptyObjectType` refusal round 838 made deliberately. **a3 WAS A BLIND PIN THAT THE GRID AND THE WHOLE ERRORS
-CORPUS WERE ALSO BLIND TO** (0 RED, 0 of 3,079): dropping the guard that keeps the tail off the NEGATIVE branch both invents
-a TS2322 tsgo lacks and LOSES a `never` row — the discriminating shape had to be built, because structurally-identical
-classes reduce to a NON-union before the last negative step and never reach that arm. Five arms, none left at 0. **The
-library controls were re-censused rather than inherited and one is NOT a control**: `marked` and `cronstrue` carry 0
-`instanceof`, `rxjs` carries **130**, so it is a real GATE — and byte-identical. Screen 0 of 8,725, unmoved; grid 8x0, run
-twice; cost_gate PASS with `narrow.walks` +0.00% (the tail runs inside an existing walk); huge_methods 0. Four defects named,
-two PRE-EXISTING and proved so on the parent binary — including the intersection-member parenthesization, which this round
-only makes REACHABLE from narrowing.
 

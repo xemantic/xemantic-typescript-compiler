@@ -1,5 +1,21 @@
 
 
+**(P18.179) — (CHK.143): `instanceof` ON THE POSITIVE BRANCH INTERSECTS WHERE IT USED TO REPLACE, 20,470 / 0 / 44 (2026-09-23).**
+`narrowByInstanceOf` answered the CANDIDATE where tsgo answers the INTERSECTION, and the join then left `P | Q` where tsgo
+leaves `P` — which is how `s.add(42)` after `if (s instanceof Promise)` became an ours-only TS2339. tsc's missing tail is now
+one helper at two sites. **7 of 21 matrix cells moved to agreement, one ours-only row removed, one added, ZERO controls
+moved.** The fixture's own comment (`s; // Set<number> & Promise<any>`) and its `submoduleAccepted` layer make tsgo's answer
+the target. **IT DOES NOT CLOSE THE PENDING BASELINE AND SAYS SO WITH BOTH MEASUREMENTS**: 3 divergences -> 2, and the two
+left are the `emptyObjectType` refusal round 838 made deliberately. **a3 WAS A BLIND PIN THAT THE GRID AND THE WHOLE ERRORS
+CORPUS WERE ALSO BLIND TO** (0 RED, 0 of 3,079): dropping the guard that keeps the tail off the NEGATIVE branch both invents
+a TS2322 tsgo lacks and LOSES a `never` row — the discriminating shape had to be built, because structurally-identical
+classes reduce to a NON-union before the last negative step and never reach that arm. Five arms, none left at 0. **The
+library controls were re-censused rather than inherited and one is NOT a control**: `marked` and `cronstrue` carry 0
+`instanceof`, `rxjs` carries **130**, so it is a real GATE — and byte-identical. Screen 0 of 8,725, unmoved; grid 8x0, run
+twice; cost_gate PASS with `narrow.walks` +0.00% (the tail runs inside an existing walk); huge_methods 0. Four defects named,
+two PRE-EXISTING and proved so on the parent binary — including the intersection-member parenthesization, which this round
+only makes REACHABLE from narrowing.
+
 **(P18.178) — (CHK.148): A CALLEE TYPE PARAMETER IS INFERRED FROM THE CONTEXTUAL RETURN; 13 OF 14 SOURCES MATCH tsgo, AND THE rxjs SIZING WAS WRONG, 20,457 / 0 / 44 (2026-09-23).**
 One leg in `ctxArgTypeMapper` between argument inference and the fallback: pull the CALL's contextual type, match it
 structurally against the signature's return type, contribute only for type parameters no argument bound. **13 of 14

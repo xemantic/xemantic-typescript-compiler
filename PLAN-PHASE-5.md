@@ -25,6 +25,53 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.184) — (CHK.153): a callback's callee receiver is resolved from the identifier's PARENT CHAIN for contextual `this`; `rxjs` 10 -> 7, 9 -> 29 of 29 cells (2026-09-23)
+
+Orchestrated: one implementation subagent, plus a parallel read-only census that sized (CHK.152) step 3's
+blocker (recorded in that item; the third harness row became (CHK.162)). **The census's mechanism was
+right and the defect was wider than it said**: `callArgHasContextualThis` typed the callee under the
+file's RESTING locals, so any receiver that is not a file-level name never resolved — besides parameters
+and body-locals, a union receiver (`Sched | Sched2`, `Sched | Plain`, and one routed through
+`getPropertyOfType`'s one-constituent union arm), `s?.m` / `s!.m`, a destructured parameter, a class
+method's parameter and a function-typed parameter called directly all kept an ours-only TS2683.
+(CHK.141)/G4's plan to make `spineItEdge` type-keyed is NOT needed for this family.
+
+**The change (`Checker.kt` +131/−14)**: `callArgHasContextualThis` resolves the callee LEXICALLY first
+(new `lexicalCalleeType`: walks parentheses, `!` and member chains, strips `null`/`undefined` per receiver,
+folds a union receiver per constituent, leaves file-level names to the old path) and answers false — TS2683
+stays — when it finds a local binding it cannot type; a union callee has a contextual `this` when ANY
+constituent's parameter declares one (tsgo is silent on `Sched | Plain`). `lexicalBindingType` types a
+parameter/variable from annotation or initializer through object binding patterns; the two (CHK.144)
+helpers gain a defaulted `bindingPatterns` flag. tsgo's rule (`getContextualThisParameterType`,
+checker.go ~11990) takes `this` from the argument's resolved call's contextual signature, i.e. the callee's
+PARAMETER type decides, not the kind of binding the receiver is. **Found in passing**: the (CHK.144) return
+resolver matches only `Identifier` names, so a destructured binding is walked past and an outer same-named
+binding answers — the flag defaults off, so that leak is still OPEN there.
+
+**Matrix, 29 cells vs tsgo** (`build/scratch-p18184/cells`): **9 -> 29 agree** — fixed: this1, this1c,
+this5, destructured, reassigned `let`, nested, member chain, class method, plain function parameter,
+reverse shadow, two unions, optional chain, body-local initializer, member-type; the seven KEEP-TS2683
+controls held (no `this:` on the parameter, an arrow callback, block-scoped / destructured / parameter /
+function / class / defaulted-parameter shadows); `noImplicitThis` off stays silent.
+
+**Pins**: `CallbackReceiverContextualThisTest`, 21 tests (7 keep-TS2683 controls), run with every `*This*`
+/ TS2683 class in core and `-project` (396 tests, 0 failures after one pin was moved off a generic callee —
+the pre-existing `Action<any>` vs tsgo's `Action<unknown>` display). Ablation: lexical resolution removed
+14 RED; binding patterns off 2; shadow-stop removed 1 (read 0 until the defaulted-parameter shadow control
+was added); union receiver fold removed 1; nullish strip removed 2; union callee arm removed 1. Restored md5
+`a716bda6`, rebuilt.
+
+**Gates**: full suite **20,565 / 0 / 44** (+21); corpus screen 0 of 8,725 (no pending baseline mentions
+TS2683); cost_gate PASS with counters byte-identical to (P18.183)'s; huge_methods 0; grid 8x
+`added=0 removed=0`; no `w:` (agent's `--rerun-tasks`, and the suite compile). **`rxjs` 10 -> 7** — exactly
+`range.ts:78`, `timer.ts:178`, `scheduleArray.ts:22`; `marked` 0; harness 94 -> 94 identical.
+**Residues**: a union `let` narrowed by assignment to a constituent without `this:` would be wrongly
+silenced (no flow narrowing here, only the nullish strip); a contextually-typed un-annotated parameter
+still reports (deliberately, today's answer); array-pattern and rest bindings still report; the
+`Action<any>` display; the (CHK.144) binding-pattern leak.
+
+**Successor**: (CHK.154) (trailing-`void` parameter optional in the relation, rxjs `Observable:307`).
+
 ### Round (P18.183) — (CHK.152) step 1: a named-object argument is RELATED to a named-object parameter; 24 of 29 census misses report with the declaration's chain, +0 rows everywhere as PREDICTED (2026-09-23)
 
 Orchestrated: one implementation subagent built the gate the (CHK.152) census had specified; a parallel
@@ -548,63 +595,6 @@ before and after**: a type-parameter CONSTRAINT is never walked (`<U extends T>`
 constraint` and `.default` are visited by nothing); a nested `FunctionDeclaration` STATEMENT is
 never walked; and an arrow's or function expression's BLOCK body is never walked (only an
 expression body is). Each ADDS rows, so each needs its own round.
-
-### Round (P18.174) — (LIB.5) G1: a module-local name that collides with a lib global wins; `rxjs` 29 -> 21 (2026-09-23)
-
-The first round against the NEW library, chosen by (LIB.5)'s census because `marked` and
-`cronstrue` are both at exact agreement with tsgo. On `build/bench/lib-rxjs-7.8.2`
-(251 sources, `lib: ["ES2020","DOM"]` — load-bearing) tsgo reports **1** row and we reported
-**29**; this closes **exactly the 8** G1 rows, adding none.
-
-**THE FIRST QUESTION THE BRIEF ASKED WAS THE RIGHT ONE, AND ITS ANSWER MADE THIS A SMALL ROUND.**
-The existing (CHK.49) family already covers `class` in TYPE position — `p: Scheduler` as a
-parameter annotation resolves correctly today through `NameResolver`'s per-file view. What failed
-were two **raw `globals[name]` consults that bypass that view entirely**. So this was NOT a set
-change, and `mergeSharedKeepNames` / `nonModuleVisible` — whose recorded trap is that **seeding
-one alone is worse than seeding both**, at a cost of 969 errors — were never touched.
-
-**THE THREE TS2739 ROWS HAD A DIFFERENT CAUSE AND A DIFFERENT COLLIDING NAME, AND ONLY A
-PER-IDENTIFIER RENAME FOUND IT.** Renaming the TYPE `SchedulerLike` -> `ZzzLike` KEPT the defect;
-renaming the PARAMETER `scheduler` -> `zzzsched` killed it. `scheduler` is itself a DOM global
-(`declare var scheduler: Scheduler`), so an assignment TARGET named `scheduler` was taking the lib
-variable's annotation. That is CLAUDE.md's *"a shape that works only for a lib-colliding name is
-working by accident — rename the identifier before believing any repro"* used as a diagnostic
-instrument rather than as a warning.
-
-**Two sites, +58/-3.** `cpaResolveClassTypeCore` asks the binder for the class's own symbol
-(`nodeSymbolOf`) before the pre-existing `globals`/namespace ladder, which is kept verbatim as the
-fallback — that closes the 5 TS2339. `checkAssignmentExpressionCore` gains
-`caeLocalBindingShadowsLibGlobal`: a **purely lib-declared** `globals` symbol loses to any binding
-the current scope holds, where `currentShadowedNames` previously knew only about a body-local
-`var` — that closes the 3 TS2739. **A third edit at the obvious site (`ccetEnterClassDeclaration`,
-the identical bad shape) was built, measured FULLY INERT, and removed rather than shipped** —
-`cpaSpineLeave` owns the emission.
-
-**THE ABLATION FOUND TWO DEFECTIVE PINS, WHICH IS WHAT IT IS FOR.** a1 and a2 first read 1 and 3
-RED, and the shortfall was the pins, not the arms. One was **BLIND**: the assignability reader
-types `this.zzzOwn` correctly on BOTH binaries, so only the TS2339 EMITTER was wrong and the
-message alone cannot separate them — it now asserts the whole row list, and a1 reads 2. One was
-**VACUOUS**: it spelled the binding `performance2`, which collides with nothing. **a3 is
-load-bearing by a CORPUS measurement rather than by a pin** — widening the guard to drop the
-"purely lib" test moves one baseline (`assignmentCompatBug2` loses `k?(a: any): any`) while no pin
-sees it — and **a4 is a measured REDUNDANT barrier**, 0 pins and 0 of 8,725, kept for
-`nodeSymbolOf`'s (BIND.1) scan fallback.
-
-**The embedded lib the `diagnose()` harness uses is 809 lines and contains NONE of the DOM
-names**, so every pin is spelled with `Performance`/`performance`, which it does have — a
-`Scheduler` pin would have been vacuous in both directions, which is the (P18.169) lesson one
-lib over.
-
-**Gates.** `rxjs` **29 -> 21**; `marked` **0** and `cronstrue` **1**, both unchanged and both
-still exactly tsgo; suite **20,399 / 0 / 44** (+13 pins); corpus screen **0 of 8,725** — the real
-gate for this family; 8-profile grid **8x `added=0 removed=0`**, a CONTROL with ONE real site
-(`export class File` in harness, the G1 shape, reporting nothing before or after); `cost_gate` PASS
-(max **+0.79%**, `globals.lookups` +0.66% — the new consult, accounted for; `output.errors` 46);
-`huge_methods` 0 over; warning-clean, with the gate proved LIVE by an injected `USELESS_CAST`.
-
-**Separate defects named, not fixed**: `new <ClassNamedAfterLibGlobal>()` is an ours-only TS2351
-*"This expression is not constructable"* — the VALUE-position half of the same collision, in a
-THIRD reader, pre-existing and not among the rxjs 8; and a missing TS2588 where tsgo reports it.
 
 ## QUEUE
 
@@ -1208,7 +1198,30 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   an argument, with the declaration's chain; +0 rows on every profile and library, exactly as the census
   predicted. OPEN: steps 2 (rest element), 3 (union/nullable parameters — first needs member reads off a
   NARROWED receiver typed by the narrowing, which is what makes admitting union parameters add 3 harness
-  false positives) and 4 (union arguments). EARLIER: CENSUSED 2026-09-23 (read-only census, frozen (P18.181) classes,
+  false positives) and 4 (union arguments). **STEP 3's BLOCKER CENSUSED 2026-09-23 (read-only, frozen
+  (P18.183) classes, `build/scratch-p18184-census/`, 357+324-row matrix and a JDI census at
+  `caasWalkerArgChecks`)**: only **2 of the 3** harness rows are narrowing (`services/utilities.ts:1366`
+  `isImportClause(parent) && …(parent.parent)`; `completions.ts:3275`, which also needs two NEGATED guards
+  to narrow `parent.parent` itself), both the same shape — a type-PREDICATE call on a NON-union receiver
+  whose MEMBER type is a union; the third (`moveToFile.ts:486`) is an intersection->union RELATION defect,
+  filed as (CHK.162). Union-declared receivers already narrow everywhere (84 of 84 parameter/path cells
+  arrive narrowed at the gate). Mechanism: `computeRawTypeOfPropertyAccess` narrows the receiver only when
+  its raw type is a union (Checker.kt ~133678 and a second copy ~134292); the path walk's prefix arm in
+  `narrowByCallPredicateWorker` refuses a union member type on purpose (round 462, ~124103); `instanceof`
+  and `asserts` have NO prefix arm; only the return reader has round 784's `propertyTypeFromNarrowedReceiver`.
+  tsgo narrows the receiver always (`checkNonNullExpression` -> `getFlowTypeOfReferenceEx`, checker.go
+  ~11147) then the member path (`getFlowTypeOfAccessExpression` ~11361). Population: ~6,585-9,700
+  property-access arguments per profile, 59-86 whose narrowed member differs, **0 true positives gained**,
+  and **6-10 per profile where a re-read would be WIDER/WRONG** — so the re-read may only be a SECOND
+  CHANCE on a rejection, never a replacement. **PLAN**: Round A (unblocks step 3) — at the argument reader,
+  on a failing relation only: narrow the receiver, re-read the member, apply the member's own path
+  narrowing on top, adopt if it relates (refusing `never`/`any`), and use it for the message when both fail;
+  predicted with union parameters admitted: harness 3 -> 1 (the (CHK.162) row). Round B (parity) — the same
+  helper at the var-decl / object-literal / assignment / return readers plus `instanceof`/`asserts` prefix
+  arms, or a re-measured removal of round 462's gate (measured net +1 FP then). Side findings (separate
+  families): a body-local receiver's member argument is never checked at all (`probe1`); an object literal
+  argument `tm({ m: p.parent })` is silent even unguarded (`probe6` c1); a `typeof` `if`-block narrowing is
+  silent at var-decl/return/objlit/assignment (`probe6` c2). EARLIER: CENSUSED 2026-09-23 (read-only census, frozen (P18.181) classes,
   `build/scratch-p18182-census/`) — STEP 1 IS SPECIFIED AND PREDICTED +0 ROWS ON EVERY PROFILE AND
   LIBRARY.** A new instrument, `jdi/Census.java`, attaches a debugger to the snapshot compiler, breaks on
   `caasNonSimpleParamChecks` and asks the checker itself (`canUseTypeEngine`, `checkTypeRelatedTo`,
@@ -1259,7 +1272,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   `LogicalParityDivergence` only if a baseline moves in form alone. Cells:
   `build/scratch-p18181-census/cells/{i-*-arg,c-*-arg,*-arg-diffgen,ctl2-*}`, matrix in `matrix.tsv`.
 
-- [ ] **(CHK.153) `this` IN A CALLBACK: RESOLVE THE CALLEE'S RECEIVER FROM THE IDENTIFIER'S PARENT CHAIN IN
+- [x] **(CHK.153) LANDED 2026-09-23 ((P18.184) note; rxjs 10 -> 7). `this` IN A CALLBACK: RESOLVE THE CALLEE'S RECEIVER FROM THE IDENTIFIER'S PARENT CHAIN IN
   `callArgHasContextualThis` — rxjs `range:78`, `timer:178`, `scheduleArray:22` (TS2683 x3), measured
   2026-09-23 by a read-only census on the (P18.182) binary.** `callArgHasContextualThis` (Checker.kt
   ~72083) types the callee under the file's RESTING locals, so a receiver that is a PARAMETER or a
@@ -1338,6 +1351,14 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   the round-591 arm of `typeContainsForeignTypeParam` suppresses it — it misses `string | D` at a
   DECLARATION too (`ws5`, `ws6`), so (CHK.152)'s census correction is half right; the argument position
   additionally needs (CHK.152) steps 3-4. L, broad additions (Uint8Array-style defaults) — last.
+
+- [ ] **(CHK.162) AN INTERSECTION SOURCE AGAINST A UNION TARGET REPORTS A FALSE TS2741 — found 2026-09-23 by
+  the (CHK.152) step-3 census; blocks step 3 landing at +0.** `const b: VDI<Call> = v` with
+  `v: VD & { initializer: Call }` gives an ours-only `TS2741: Property 'kind' is missing in type 'VD & …'`
+  where tsgo is silent at BOTH declaration and argument positions (`build/scratch-p18184-census/probe5`);
+  the real site is `services/refactors/moveToFile.ts:486` on the harness profile. Relation-side (tsgo's
+  `someTypeRelatedToType` over the target union with the intersection source, and the intersection's
+  combined properties), so a declaration-position pin grades it. Direction: REMOVES a false positive.
 
 - [ ] **(CHK.151) RE-SCOPED BY ITS OWN CENSUS 2026-09-23 — THE RELATION DOES *NOT* READ THE MEMBER TABLE,
   AND THE DEFECT IS WIDER THAN FUNCTION MEMBERS.** `resolveReferenceMembers` (`MemberResolver.kt:762`)
