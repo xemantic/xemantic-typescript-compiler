@@ -1,5 +1,25 @@
 
 
+**(P18.176) — (CHK.35c): A CONTEXTUAL PARAMETER TYPE MENTIONING AN IN-SCOPE TYPE PARAMETER IS APPLIED; THE rxjs PRIZE WAS MIS-ATTRIBUTED, 20,424 / 0 / 44 (2026-09-23).**
+**THE HEADLINE IS THE REFUTATION.** (CHK.35c) has been carried since (P18.168) as the owner of `rxjs` G2's 7 rows and as
+"what finally closes `marked`'s TS7019". It is NEITHER: those rows read `Type 'unknown' is not assignable to type 'T'`, not
+`any`, and are IDENTICAL on both arms. The cause is callee type-parameter inference from the contextual RETURN position
+binding `T := unknown`, which is CONCRETE — so this guard was never true there. A separate defect, named and not fixed.
+**The fix is still real**: the guard at both `applyPulledContextualParamTypes` sites could not tell round 569's actual
+subject (an UN-INFERRED CALLEE type parameter) from a FREE IN-SCOPE one, and the argument-probe matrix goes **5 -> 13** of
+tsgo's 15, every added row byte-identical. **So the round buys parity and no library row, and the summary says both.**
+**"IN SCOPE" HAD TO BE MEASURED**: `Type.TypeParam.symbol.declarations` is EMPTY for every type parameter,
+`currentTypeParamScope` is null at 7 of 20 sites (both apply sites run OUTSIDE the function's own scope), and
+`typeParamInternCache` misses a class's or method's parameter because those are minted TWICE. The test walks ancestors and
+accepts on either IDENTITY, never a name — **a name match costs +7 rows on the compiler profile and +7 on harness**, measured.
+**Seven arms**; a2 (delete round 569's guard) takes the profiles 46 -> 93 and 94 -> 164, which is that guard's real receipt;
+a4 read 0 RED and was CLASSIFIED rather than defaulted (it answers 7 of 20 sites the scope leg cannot, but a sibling path
+registers them anyway — kept, because that is an accident of pass ordering, not an invariant). **TWO ARMS WERE DEAD AND THE
+md5 CAUGHT THEM, NOT THE DIFF**; the driver now asserts `(arm == "base") == (source unchanged)`. And the obvious probe is
+BLIND — `const p: number = t` is silent for an unconstrained TP on a working binary, so the first matrix read 8 of 8 missing
+for an unrelated reason. Screen 0 of 8,725; grid 8x0, a real gate in the adding direction; rxjs 17 -> 17 row for row, marked
+0, cronstrue 1; cost_gate every counter +0.00% against the freshly rebaselined file; huge_methods 0.
+
 **(P18.175) — (LIB.5) G3: A NESTED GENERIC CONTAINER'S OWN TYPE PARAMETERS ARE ITS OWN; `rxjs` 21 -> 17, 20,412 / 0 / 44 (2026-09-23).**
 A generic ARROW or FUNCTION EXPRESSION nested in a STATIC member kept the enclosing class's type-parameter names, so its own
 shadowing `<T>` was falsely flagged TS2302. `checkTS2302InClassMember`'s MethodDeclaration arm was the ONLY subtraction in the

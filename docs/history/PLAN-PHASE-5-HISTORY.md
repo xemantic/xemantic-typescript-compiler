@@ -1,5 +1,69 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.171) — (CHK.142)(b): a discriminated-union SOURCE is split over its discriminants; 23 of 25 cells now match tsgo (2026-09-22)
+
+A port of tsgo's `typeRelatedToDiscriminatedType` (`relater.go:3989`), wired into the tail of our
+union-target arm at exactly the position tsgo calls it from (`relater.go:3893`) — below the plain
+"relates to some constituent" rule and beside round 744's `intersectionSourceDistributes`, which
+is already a source-SPLITTING leg in the same place. **`marked` is unchanged at 2 and that was
+predicted**: (b) is the SAFE half and moves no library row on its own; what it buys is that half
+(a) becomes landable at all.
+
+**THE PORT NEEDED THREE RESTATEMENTS, EACH MEASURED, BECAUSE OUR TYPE MODEL DIFFERS FROM tsgo's.**
+tsgo's non-uniformity test is an IDENTITY compare because it interns literals by value while we
+mint a fresh `Type.StringLiteral` per site, so ours goes through `literalsEqualForDiscriminant`;
+`boolean` is an `Intrinsic` here and a `true | false` union there; and `undefined`/`null` are
+`TypeFlagsUnit` upstream, which is **load-bearing** — without it `GH18421`'s cartesian product
+collapses onto `kind` alone and the assignment is refused. A fourth part was found by the
+canonical fixture rather than by reading: step 2 must compare against the OPTIONALITY-WIDENED
+target property (tsgo's `isPropertySymbolTypeRelated` uses `addOptionality(getNonMissingTypeOf…)`),
+or the `undefined` axis of `{color:'blue'} | {color?:'yellow'}` matches nothing.
+
+**"OURS 14 -> 3" WAS A LIE, AND WHAT IT HID IS A BIGGER DEFECT THAN THIS ROUND'S.** The canonical
+fixture `assignmentCompatWithDiscriminatedUnion` has no case file in this clone, so it was
+reconstructed from its `.errors.txt` (tsgo reproduces the baseline's 4 rows exactly, which is what
+makes the reconstruction sound). Read naively, ours went 14 -> 3. But all five of its `Example`
+namespaces declare `declare let s` / `declare let t`, and **namespace-local values are not
+namespace-scoped here — the FIRST declaration wins program-wide** — so every `t = s` site was
+comparing Example1's types, in both arms. Split one namespace per file, the honest reading is
+**tsgo 4, ours 14 -> 6**, with all four of tsgo's rows at the right positions. The residue is
+`GH30170` (half (a)) and `GH39357` (contextual tuple inference).
+
+**Ablation, one mistake per arm, seven arms, rebuilt each time** (pins RED of 15 / canonical
+fixture rows): a1 leg removed **8** / 14 — reproduces the BEFORE state exactly; a2 literal
+requirement dropped **3** / 6 — three cells wrongly ACCEPTED; a3 cartesian product reduced to a
+single key **2** / 8 — three cells wrongly REFUSED; a4 cap removed **1** / 5 — the 26- and 30-way
+unions wrongly accepted; a5 step 3 weakened to "some constituent" **1** / 6 — the `A|B|C` cell
+wrongly accepted; a6 excluded set emptied **7** / 14; a7 optional widening removed **1** / 6.
+**a7 first read 0 RED and was a BLIND PIN, not a redundant barrier** — the cell matrix caught it
+while no pin did, so a pin was added and the arm now discriminates. (a1's first attempt did not
+compile: `false && source is Type.Object` kills Kotlin's smart cast, so it was redone as a
+commented-out block — a build failure, not a dead arm.)
+
+**Gates.** Corpus screen **0 of 8,725**; 8-profile grid **8x `added=0 removed=0`** — a CONTROL for
+the acceptance by count (the eight profiles carry ZERO TS2322/TS2345 rows between them) and a GATE
+for the narrowing side-effect, which is the row it exists to catch; `cost_gate` PASS (max
+`typeNode.bypassed` **+0.75%**, `output.errors` 46, `spine.nodes` ±0.00%); `huge_methods` 0 over
+(880 classes); warning-clean with a non-empty log; suite **20,351 / 0 / 44** (+15 pins); `marked`
+2 -> 2 and `cronstrue` 1 -> 1, both as predicted.
+
+**Half (a) is now a SMALL follow-on, and (b) was its prerequisite — measured, not argued.**
+`getTypeOfObjectLiteral`'s union arm (`Checker.kt:127402`) selects exactly ONE constituent
+(`singleOrNull`, else the discriminant selector, else the key selector); when the discriminant is
+itself a union none can select, `ctxObj` is null and the member gets no contextual type at all.
+The change is one `else` on that arm plus a helper unioning the member's type across the
+object-ish constituents, leaving the three selection paths as the untouched fast path. **Without
+(b) it would have produced the right member type and STILL reported TS2322**, because the
+resulting `{ type: 'image'|'link'; raw: string }` needs exactly this leg to relate.
+
+**Separate defects found, named and not fixed.** (1) **Namespace-local values are not
+namespace-scoped** — `namespace A { declare let s: X }` then `namespace B { declare let s: Y }`
+resolves `B`'s `s` to `A`'s, first-wins and order-dependent; it silently collapsed five
+independent fixture cases into one, and a naive before/after reading of that file is
+uninterpretable because of it. (2) Type-alias display leaks the wrong namespace (`Example1.S` for
+`S`), same root. (3) Contextual TUPLE inference (`GH39357`). (4) `07_GH12052`: right row, right
+line, but anchored at column 11 on the whole object where tsgo anchors at 27 on the member.
+
 ### Round (P18.170) — (CHK.144): a block body returning a bare identifier no longer infers `any`; `marked` 3 -> 2 (2026-09-22)
 
 `inferReturnTypeFromBody` is a hand-written `when` over return-expression KINDS whose

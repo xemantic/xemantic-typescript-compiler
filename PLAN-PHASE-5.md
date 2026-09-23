@@ -25,6 +25,58 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.181) — (CHK.150) rung 2: a UNION contextual type infers per member with tsgo's candidate combination; X3 matches tsgo, 2 -> 15 of 20 cells, `rxjs` flat as predicted (2026-09-23)
+
+Orchestrated: one implementation subagent, gates in this session, and — in parallel, against a FROZEN
+class snapshot and with no Gradle — a read-only census agent for (CHK.151), which re-scoped that item
+and surfaced (CHK.152) (see both). **The brief's guess was wrong in the useful direction**: there is no
+union-TARGET arm to add, because in this leg the CONTEXTUAL type is the inference SOURCE and the callee's
+return is the target. The contextual union DID reach `ctxReturnInferInto`; its `source is Type.Union`
+arm refused on purpose when two real members remained, with a KDoc calling tsgo's behaviour "a guess
+this leg does not make". tsgo infers from each source member in turn (`inference.go:290`) and, since
+return-type priority is in `PriorityImpliesCombination` (`checker.go:318`), combines several candidates
+into a subtype-reduced union (`getCovariantInference`, `inference.go:1421`). The mirror direction — a
+callee RETURNING a union — had no arm at all and was also `unknown`.
+
+**The change (`Checker.kt` +146/−3, all inside the contextual-return leg)**:
+`ctxReturnInferFromUnionSource` (per real member, candidates collected per type parameter),
+`ctxCombineCandidates` (union of candidates dropping one strictly assignable to another — a stand-in
+for subtype reduction, as `flowJoinReduceSubtypes` already is), and `ctxReturnInferToUnionTarget`, a
+port of tsgo's union-target head (`inference.go:102-129`) and the union half of `inferToMultipleTypes`:
+identical members matched away, same-generic references matched and inferred between, a naked type
+parameter bound only by what nothing else matched and never over an existing candidate. Recorded
+divergences: nullish members still stripped first, the combined union not widened, inference
+circularity not modelled, "matched" means "added a candidate".
+
+**Matrix, 20 cells vs tsgo** (`build/scratch-p18181/cells`): **2 -> 15 agree** — X3, one of two members
+matching, two members binding the same type, `string | T`, `string | number`, subtype reduction
+(`string`, not `string | "a"`), a null member beside a function, a bare `T` in the context, three
+members, a concrete union, a variable annotation, a callee returning `Subscriber<T> | undefined`,
+identical-member removal. Four more now agree on the callback's TYPE and lack only a relation row tsgo
+reports (d10/d12/d18/d19 — the (CHK.152) family). **d08, rxjs's own `Partial<Observer<T>> | fn`
+shape, is still `unknown`**: (P18.180)'s out-of-scope filter drops the `Partial` member's candidate
+because a generic class method's mapped parameter reaches the pull with `W` un-instantiated. The
+(P18.180) regression matrix went 17 -> 18 agree (only c18-x3 moved; X1 did not).
+
+**Pins**: `UnionContextualReturnInferenceTest`, 19 tests, full tsgo text, 3 controls. Ablation one
+mistake at a time: union-source arm removed 11 RED; first-candidate-wins 2; no subtype reduction 1;
+union-target arm removed 4; identical-member removal 0 until a d20 pin was added, then 1; bare type
+parameter bound before the structural match 1; **same-generic matching 0 — recorded as a REDUNDANT
+guard** (in this first-wins model step 4's recursion reaches the same inference), kept because it is
+tsgo's structure. The agent hit the known restored-source/stale-class trap once and rebuilt (restored
+md5 `5bdbd9f9`).
+
+**Gates**: full suite **20,508 / 0 / 44** (+19); corpus screen 0 of 8,725 and again BLIND (the 38
+pending rows byte-identical on both arms); cost_gate PASS (the same `mapped.*` movement as (P18.180),
+within tolerance); huge_methods 0; grid 8x `added=0 removed=0` (a control); no `w:` in the final
+builds (the only one was ablation arm a3's deliberately dead variable). `rxjs` 17 -> 17 byte-identical,
+`marked` 0.
+
+**Successor**: rung 3 (X1, overload selection: `ctxArgTypesFromSignatures`' homogeneity check and its
+unmapped `candidates[0]`) — **and the `Partial<Observer<W>>` leak, which the item now names as a fourth
+blocker, since rxjs's union-typed subscribe needs it even with rung 3.** (CHK.152), the named-object
+argument firewall, is the larger correctness family and is queued directly after (CHK.150).
+
 ### Round (P18.180) — (CHK.150) rung 1: a generic reference's members are read SUBSTITUTED, and the contextual-return leg infers between DIFFERENT object types; X2 matches tsgo, `rxjs` flat as predicted (2026-09-23)
 
 Orchestrated: one implementation subagent, gates in this session. **The queue item named the wrong
@@ -569,70 +621,6 @@ UNION target, while a SINGLE-constituent target drills correctly on both. An ind
 no literal type outside a const context (`const x: never = 'image'` prints `string`); and the
 `getWidenedLiteralType`-on-both-sides display artefact above.
 
-### Round (P18.171) — (CHK.142)(b): a discriminated-union SOURCE is split over its discriminants; 23 of 25 cells now match tsgo (2026-09-22)
-
-A port of tsgo's `typeRelatedToDiscriminatedType` (`relater.go:3989`), wired into the tail of our
-union-target arm at exactly the position tsgo calls it from (`relater.go:3893`) — below the plain
-"relates to some constituent" rule and beside round 744's `intersectionSourceDistributes`, which
-is already a source-SPLITTING leg in the same place. **`marked` is unchanged at 2 and that was
-predicted**: (b) is the SAFE half and moves no library row on its own; what it buys is that half
-(a) becomes landable at all.
-
-**THE PORT NEEDED THREE RESTATEMENTS, EACH MEASURED, BECAUSE OUR TYPE MODEL DIFFERS FROM tsgo's.**
-tsgo's non-uniformity test is an IDENTITY compare because it interns literals by value while we
-mint a fresh `Type.StringLiteral` per site, so ours goes through `literalsEqualForDiscriminant`;
-`boolean` is an `Intrinsic` here and a `true | false` union there; and `undefined`/`null` are
-`TypeFlagsUnit` upstream, which is **load-bearing** — without it `GH18421`'s cartesian product
-collapses onto `kind` alone and the assignment is refused. A fourth part was found by the
-canonical fixture rather than by reading: step 2 must compare against the OPTIONALITY-WIDENED
-target property (tsgo's `isPropertySymbolTypeRelated` uses `addOptionality(getNonMissingTypeOf…)`),
-or the `undefined` axis of `{color:'blue'} | {color?:'yellow'}` matches nothing.
-
-**"OURS 14 -> 3" WAS A LIE, AND WHAT IT HID IS A BIGGER DEFECT THAN THIS ROUND'S.** The canonical
-fixture `assignmentCompatWithDiscriminatedUnion` has no case file in this clone, so it was
-reconstructed from its `.errors.txt` (tsgo reproduces the baseline's 4 rows exactly, which is what
-makes the reconstruction sound). Read naively, ours went 14 -> 3. But all five of its `Example`
-namespaces declare `declare let s` / `declare let t`, and **namespace-local values are not
-namespace-scoped here — the FIRST declaration wins program-wide** — so every `t = s` site was
-comparing Example1's types, in both arms. Split one namespace per file, the honest reading is
-**tsgo 4, ours 14 -> 6**, with all four of tsgo's rows at the right positions. The residue is
-`GH30170` (half (a)) and `GH39357` (contextual tuple inference).
-
-**Ablation, one mistake per arm, seven arms, rebuilt each time** (pins RED of 15 / canonical
-fixture rows): a1 leg removed **8** / 14 — reproduces the BEFORE state exactly; a2 literal
-requirement dropped **3** / 6 — three cells wrongly ACCEPTED; a3 cartesian product reduced to a
-single key **2** / 8 — three cells wrongly REFUSED; a4 cap removed **1** / 5 — the 26- and 30-way
-unions wrongly accepted; a5 step 3 weakened to "some constituent" **1** / 6 — the `A|B|C` cell
-wrongly accepted; a6 excluded set emptied **7** / 14; a7 optional widening removed **1** / 6.
-**a7 first read 0 RED and was a BLIND PIN, not a redundant barrier** — the cell matrix caught it
-while no pin did, so a pin was added and the arm now discriminates. (a1's first attempt did not
-compile: `false && source is Type.Object` kills Kotlin's smart cast, so it was redone as a
-commented-out block — a build failure, not a dead arm.)
-
-**Gates.** Corpus screen **0 of 8,725**; 8-profile grid **8x `added=0 removed=0`** — a CONTROL for
-the acceptance by count (the eight profiles carry ZERO TS2322/TS2345 rows between them) and a GATE
-for the narrowing side-effect, which is the row it exists to catch; `cost_gate` PASS (max
-`typeNode.bypassed` **+0.75%**, `output.errors` 46, `spine.nodes` ±0.00%); `huge_methods` 0 over
-(880 classes); warning-clean with a non-empty log; suite **20,351 / 0 / 44** (+15 pins); `marked`
-2 -> 2 and `cronstrue` 1 -> 1, both as predicted.
-
-**Half (a) is now a SMALL follow-on, and (b) was its prerequisite — measured, not argued.**
-`getTypeOfObjectLiteral`'s union arm (`Checker.kt:127402`) selects exactly ONE constituent
-(`singleOrNull`, else the discriminant selector, else the key selector); when the discriminant is
-itself a union none can select, `ctxObj` is null and the member gets no contextual type at all.
-The change is one `else` on that arm plus a helper unioning the member's type across the
-object-ish constituents, leaving the three selection paths as the untouched fast path. **Without
-(b) it would have produced the right member type and STILL reported TS2322**, because the
-resulting `{ type: 'image'|'link'; raw: string }` needs exactly this leg to relate.
-
-**Separate defects found, named and not fixed.** (1) **Namespace-local values are not
-namespace-scoped** — `namespace A { declare let s: X }` then `namespace B { declare let s: Y }`
-resolves `B`'s `s` to `A`'s, first-wins and order-dependent; it silently collapsed five
-independent fixture cases into one, and a naive before/after reading of that file is
-uninterpretable because of it. (2) Type-alias display leaks the wrong namespace (`Example1.S` for
-`S`), same root. (3) Contextual TUPLE inference (`GH39357`). (4) `07_GH12052`: right row, right
-line, but anchored at column 11 on the whole object where tsgo anchors at 27 on the member.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1094,7 +1082,11 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   now read SUBSTITUTED for contextual typing (`ctxMemberTypeOf` -> `resolveGenericPropertyType`) and
   the contextual-return leg infers between DIFFERENT object types (tsgo `inferFromObjectTypes`); the
   object-literal half's real cause was the member TABLE, not `lookupPropertyTypeForCtx`'s fallback.
-  `rxjs` 17 -> 17 as predicted. **NEXT: rung 2 (X3, union parameter), then rung 3 (X1, overload).**
+  `rxjs` 17 -> 17 as predicted. **RUNG 2 (X3) LANDED 2026-09-23 ((P18.181) note)** — a union contextual
+  type now infers per member with tsgo's candidate combination (20-cell matrix 2 -> 15 agree), rxjs
+  still 17. **NEXT: rung 3 (X1, overload), then the `Partial<Observer<W>>` leak below — rxjs's
+  `Partial<Observer<T>> | fn` subscribe shape (cell `build/scratch-p18181/cells/d08`) stays `unknown`
+  until BOTH land.**
   Known residue: a mapped-type parameter of a generic class METHOD (`Partial<Observer<W>>`) reaches the
   pull with `W` un-instantiated — refused (stays `unknown`), and likely the blocker for rxjs's
   `Partial<Observer<T>>` half. EARLIER: CENSUSED 2026-09-23 ((P18.179) recon) — THE FRAMING WAS WRONG, THERE ARE **THREE

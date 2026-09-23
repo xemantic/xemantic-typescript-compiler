@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,496** lines (**+131 at (P18.180)**, one substituted-member helper, tsgo's
+extraction):** `Checker.kt` **199,641** lines (**+145 at (P18.181)**, three helpers porting tsgo's union-source
+inference and union-target head with their KDoc — a SEMANTIC parity change taking a 20-cell matrix from
+2 to 15 agreeing with tsgo and buying NO library row, which the note says; **+131 at (P18.180)**, one substituted-member helper, tsgo's
 `inferFromObjectTypes` tail as a structural leg of the contextual-return inference, an out-of-scope
 candidate filter and their KDoc — a SEMANTIC parity change taking 14 more contextual cells to
 agreement with tsgo and buying NO library row, which the note says; **+61 at (P18.179)**, tsc's missing `instanceof`
@@ -59,6 +61,17 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.181) — (CHK.150) RUNG 2: A UNION CONTEXTUAL TYPE INFERS PER MEMBER WITH tsgo's CANDIDATE COMBINATION; X3 MATCHES tsgo, `rxjs` FLAT AS PREDICTED, 20,508 / 0 / 44 (2026-09-23).**
+The contextual union reached the leg all along; its union-SOURCE arm refused two real members on purpose. It now
+infers per member and combines candidates into a subtype-reduced union (tsgo `inference.go:290/1421`), and a new
+union-TARGET arm ports tsgo's matching head for a callee returning a union. **20-cell matrix 2 -> 15 agree**, the
+(P18.180) matrix 17 -> 18. 19 pins; six ablation arms RED, same-generic matching 0 and recorded as redundant.
+Screen 0 of 8,725 and blind again; cost_gate PASS; huge_methods 0; grid 8x0. `rxjs` 17 -> 17: its
+`Partial<Observer<T>> | fn` shape still needs rung 3 AND the `Partial<Observer<W>>` leak. A parallel read-only
+census (frozen classes, no Gradle) **re-scoped (CHK.151) — the relation does NOT read the broken member table** —
+and **filed (CHK.152): a named-object argument is never related to a named-object parameter**, so `z(q)` with a
+mismatched property is silent where `const s: S = q` reports. That is the larger correctness family.
 
 **(P18.180) — (CHK.150) RUNG 1: A GENERIC REFERENCE'S MEMBERS ARE READ SUBSTITUTED AND THE CONTEXTUAL-RETURN LEG INFERS BETWEEN DIFFERENT OBJECT TYPES; X2 MATCHES tsgo, `rxjs` FLAT AS PREDICTED, 20,489 / 0 / 44 (2026-09-23).**
 The queue named `lookupPropertyTypeForCtx`'s fallback; the real cause is the MEMBER TABLE — `resolveReferenceMembers`
@@ -124,24 +137,4 @@ kept and labelled. Screen 0 of 8,725; grid 8x0, a gate reached by 35-38 `(this: 
 counters +0.00%; huge_methods 0; warning gate proved live. **Three defects named, the first a WRONG TYPE**: the contextual
 fn-expr call reader zips against a raw AST parameter list that still contains the `this` pseudo-parameter, so a parameter is
 typed as the `this` type — silent wherever the shifted type happens to fit.
-
-**(P18.176) — (CHK.35c): A CONTEXTUAL PARAMETER TYPE MENTIONING AN IN-SCOPE TYPE PARAMETER IS APPLIED; THE rxjs PRIZE WAS MIS-ATTRIBUTED, 20,424 / 0 / 44 (2026-09-23).**
-**THE HEADLINE IS THE REFUTATION.** (CHK.35c) has been carried since (P18.168) as the owner of `rxjs` G2's 7 rows and as
-"what finally closes `marked`'s TS7019". It is NEITHER: those rows read `Type 'unknown' is not assignable to type 'T'`, not
-`any`, and are IDENTICAL on both arms. The cause is callee type-parameter inference from the contextual RETURN position
-binding `T := unknown`, which is CONCRETE — so this guard was never true there. A separate defect, named and not fixed.
-**The fix is still real**: the guard at both `applyPulledContextualParamTypes` sites could not tell round 569's actual
-subject (an UN-INFERRED CALLEE type parameter) from a FREE IN-SCOPE one, and the argument-probe matrix goes **5 -> 13** of
-tsgo's 15, every added row byte-identical. **So the round buys parity and no library row, and the summary says both.**
-**"IN SCOPE" HAD TO BE MEASURED**: `Type.TypeParam.symbol.declarations` is EMPTY for every type parameter,
-`currentTypeParamScope` is null at 7 of 20 sites (both apply sites run OUTSIDE the function's own scope), and
-`typeParamInternCache` misses a class's or method's parameter because those are minted TWICE. The test walks ancestors and
-accepts on either IDENTITY, never a name — **a name match costs +7 rows on the compiler profile and +7 on harness**, measured.
-**Seven arms**; a2 (delete round 569's guard) takes the profiles 46 -> 93 and 94 -> 164, which is that guard's real receipt;
-a4 read 0 RED and was CLASSIFIED rather than defaulted (it answers 7 of 20 sites the scope leg cannot, but a sibling path
-registers them anyway — kept, because that is an accident of pass ordering, not an invariant). **TWO ARMS WERE DEAD AND THE
-md5 CAUGHT THEM, NOT THE DIFF**; the driver now asserts `(arm == "base") == (source unchanged)`. And the obvious probe is
-BLIND — `const p: number = t` is silent for an unconstrained TP on a working binary, so the first matrix read 8 of 8 missing
-for an unrelated reason. Screen 0 of 8,725; grid 8x0, a real gate in the adding direction; rxjs 17 -> 17 row for row, marked
-0, cronstrue 1; cost_gate every counter +0.00% against the freshly rebaselined file; huge_methods 0.
 
