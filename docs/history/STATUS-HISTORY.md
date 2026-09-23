@@ -1,5 +1,23 @@
 
 
+**(P18.174) — (LIB.5) G1: A MODULE-LOCAL NAME THAT COLLIDES WITH A LIB GLOBAL WINS; `rxjs` 29 -> 21, 20,399 / 0 / 44 (2026-09-23).**
+The first round against the NEW library, chosen by (LIB.5)'s census because `marked` and `cronstrue` are both at exact
+agreement with tsgo. On `build/bench/lib-rxjs-7.8.2` (251 sources, `lib: ["ES2020","DOM"]` — load-bearing) tsgo reports 1 row
+and we reported 29; this closes exactly the 8 G1 rows and adds none. **THE BRIEF'S FIRST QUESTION MADE IT A SMALL ROUND**:
+the existing (CHK.49) family already covers `class` in TYPE position, and what failed were two raw `globals[name]` consults
+that BYPASS the per-file view — so it is a two-site change and `mergeSharedKeepNames`/`nonModuleVisible`, whose recorded trap
+is that seeding one alone is worse than seeding both (969 errors), were never touched. **THE THREE TS2739 ROWS HAD A
+DIFFERENT CAUSE AND A DIFFERENT COLLIDING NAME**: renaming the TYPE `SchedulerLike` kept the defect, renaming the PARAMETER
+`scheduler` killed it — `scheduler` is itself a DOM global, so an assignment TARGET took the lib variable's annotation. That
+is CLAUDE.md's "a shape that works only for a lib-colliding name is working by accident" used as an instrument rather than a
+warning. A third edit at the OBVIOUS site was built, measured fully INERT and removed rather than shipped. **THE ABLATION
+FOUND TWO DEFECTIVE PINS**: one BLIND (the assignability reader is right on both binaries, so only the EMITTER was wrong and
+the message alone cannot separate them) and one VACUOUS (its binding name collided with nothing). a3 is load-bearing by a
+CORPUS measurement where no pin sees it; a4 is a measured redundant barrier, kept. The 809-line embedded lib contains NONE
+of the DOM names, so every pin is spelled with `Performance`/`performance`. Screen 0 of 8,725; grid 8x0, a CONTROL with one
+real site; cost_gate PASS (max +0.79%, `globals.lookups` +0.66% — the new consult, accounted for); huge_methods 0.
+
+
 **(P18.173) — (CHK.35b): AN ELEMENT-ACCESS ASSIGNMENT TARGET SUPPLIES A CONTEXTUAL TYPE; **`marked` REACHES ZERO**, 20,386 / 0 / 44 (2026-09-22).**
 **`marked` now reports what tsgo 7.0.2 reports: nothing.** With `cronstrue` already at zero (its standing "1" is a TS5108
 config row BOTH compilers emit), **two real libraries outside the corpus agree with the reference exactly** — the owner's

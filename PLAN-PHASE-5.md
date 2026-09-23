@@ -25,6 +25,53 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.179) — (CHK.143): `instanceof` on the positive branch INTERSECTS where it used to REPLACE (2026-09-23)
+
+`narrowByInstanceOf` answered the CANDIDATE where tsgo answers the INTERSECTION, and the join with
+the fall-through then left `P | Q` where tsgo leaves `P`. tsc's missing tail is now one helper at
+two sites: `assignable(candidate, t) -> candidate; assignable(t, candidate) -> t; else
+getIntersectionType(listOf(t, candidate))`. **7 of 21 matrix cells moved to agreement with tsgo,
+one ours-only row removed, one new row added, and ZERO controls moved.** The fixture's own comment
+(`s; // Set<number> & Promise<any>`) and its `submoduleAccepted` layer say tsgo's answer is the
+target.
+
+**IT DOES NOT CLOSE THE PENDING BASELINE, AND THE ROUND SAYS SO WITH BOTH MEASUREMENTS.**
+`controlFlowInstanceof.errors.txt` goes from **3 divergences to 2**: the narrowing one is gone; the
+remaining two — an ours-only TS2721 and a missing `Property 'val' does not exist on type '{}'` —
+are both the `resolveInstanceOfRhsType` -> `null` refusal (the `emptyObjectType` question) that
+round 838's in-source KDoc refused deliberately and that this round scoped out. The baseline stays
+`@Ignore`d.
+
+**a3 WAS A BLIND PIN AND ITS COST WAS MEASURED BEFORE ANYTHING WAS CONCLUDED.** Dropping the
+`isMatch &&` that keeps the tail off the NEGATIVE branch read 0 RED — **and the 8-profile grid and
+the whole errors channel of the corpus (0 of 3,079) are blind to it too**. Measured, it both
+INVENTS a TS2322 tsgo does not have and LOSES the `Property 'b' does not exist on type 'never'`
+that it does. The existing control missed the shape because structurally-identical classes reduce
+to a NON-union before the last negative step and never reach the union arm's tail; a new pin was
+built for exactly that shape and the arm now reddens. A fifth arm (the two assignability legs
+swapped) was likewise discriminated only by a pin written for it. Five arms, none left at 0.
+
+**THE LIBRARY CONTROLS WERE RE-CENSUSED RATHER THAN INHERITED, AND ONE OF THEM IS NOT A CONTROL**:
+`marked` and `cronstrue` carry **0** ` instanceof ` occurrences, but **`rxjs` carries 130** — so it
+is a real GATE for this change, and it is byte-identical before and after.
+
+**Gates.** suite **20,470 / 0 / 44** (+13 pins); corpus screen **0 of 8,725**, which did not move at
+all so there was nothing to adjudicate; 8-profile grid **8x `added=0 removed=0`** (run twice);
+`rxjs` **17**, rows byte-identical; `marked` **0**; `cronstrue` **1**; `cost_gate` PASS with
+`narrow.walks` **+0.00%** — the tail runs inside an existing walk; `huge_methods` 0 over;
+warning-clean, proved live.
+
+**Four separate defects named, not fixed, and two are PRE-EXISTING rather than introduced**:
+`typeToString` does not parenthesize a UNION member of an INTERSECTION (`C1 | Wide & Q` for
+tsgo's `(C1 | Wide) & Q`) — verified identical on the parent binary from a hand-written
+annotation, so this round only makes it REACHABLE from narrowing, and it is (CHK.146); a member
+read on an intersection-over-union is permissive here, a MISSING row and the direction the sizing
+predicted; a conditional expression's union gets no subtype reduction (`P2 | (P2 & Q2)` for
+tsgo's `P2` — before the change it read `P2 | Q2`, also wrong and with a bogus constituent, so the
+new form is at least semantically equal); and a GENERIC right-hand side leaves its type parameter
+FREE where tsgo defaults it to `any`, which turns a wrong-type row into a missing one — root cause
+in `resolveInstanceOfRhsType`, and no gated corpus contains the shape.
+
 ### Round (P18.178) — (CHK.148): a callee type parameter is inferred from the CONTEXTUAL RETURN; 13 of 14 sources match tsgo, and the rxjs sizing was WRONG (2026-09-23)
 
 `ctxArgTypeMapper` gained one leg between the argument-inference mapper and `freeTypeParamMapper`:
@@ -589,86 +636,6 @@ reads `number` against tsgo's `string | 1`); and a function-vs-function argument
 `take(callee)` is silent where tsgo emits TS2345. **Suggested successor**: a flow-narrowing
 consult at the return site (round 465's nullish-STRIP shape, gated on `currentFlowGraph`) closes
 the refused-nullish cell and the shipped leak together.
-
-### Round (P18.169) — a generic type ALIAS as a heritage base discarded its type arguments; `marked` 4 -> 3 (2026-09-22)
-
-**THE ROUND'S BRIEF WAS WRONG ABOUT THE MECHANISM AND A *WRITE PROBE* IS WHAT CAUGHT IT.** The
-item was sized as "the TS2353 excess-property check's known-property set does not follow a
-mapped-type heritage clause", on a recon that had measured a *read* of the inherited member as
-silent and concluded member resolution already saw it. Re-measured with a deliberate
-mis-assignment, `const p: string = d.a!` was **silent** on the old binary and TS2322 in tsgo, and
-`d.nope` was silent where tsgo reports TS2339 — the member was typed **`any`**, not resolved.
-Round 760's trap exactly: *a silence-asserting probe cannot tell "resolved" from `any`.* Had the
-brief been followed, the round would have widened a known-property set and left the type wrong.
-
-**THE REAL DEFECT.** `getTypeFromBaseTypeExpression` (`Checker.kt:115154`) honoured type
-arguments on a heritage base **only when the base's declared type was a `Type.Interface`**. For a
-generic type **ALIAS** it fell through to a bare `getDeclaredTypeOfSymbol(Omit)` with `<B,'b'>`
-**silently discarded**, so the un-instantiated alias body — a mapped type over an unbound `T` —
-contributed nothing at all to the derived interface's member table. The control that pins the
-axis is that the identical `Omit<B,'b'>` in **annotation** position has always resolved perfectly.
-
-**THREE MEASURED FACES, NOT ONE**, which is why the pins assert values rather than silence: a
-false TS2353 on legal code; the inherited member typed `any`; and a *genuinely* excess key
-**masked**, because B560 reports the FIRST excess key and returns — we reported `a` at col 18
-where tsgo reports `zz` at col 35. Seven heritage forms were affected (`Omit` / `Pick` /
-`Partial` / `Required` / `Readonly` / `Record` and any user-declared generic alias) and four were
-not (`extends B`, `extends B, C`, a generic INTERFACE base, a NON-generic alias), which is exactly
-the "declared is `Type.Interface`" / "has type arguments" split the guard keys on. The matrix went
-**17 ours-only rows -> 10, byte-identical to tsgo including columns.**
-
-**THE FIX ROUTES THROUGH THE ANNOTATION PATH RATHER THAN RE-DERIVING IT** — a parented synthetic
-`TypeReference` handed to `getTypeFromTypeNode`, which owns the builtin-utility materializers,
-B50.1 alias substitution and the constraint gates. Re-implementing any of that at the heritage
-site would have been a second, divergent copy. `parent` is not a constructor property, so it does
-not enter `TypeReference`'s data-class equality and the structural `nodeTypes` key stays per-site.
-
-**THE ABLATION'S a2 IS THE ROUND'S REAL FIND, AND THE *CORPUS* FOUND IT WHERE THE PINS COULD
-NOT.** Dropping the `SymbolFlags.TypeAlias` conjunct read **0 RED** on all pins — and broke
-`nestedRecursiveArraysOrObjectsError01` on the screen: routing a generic *interface* base through
-the annotation path hits `getTypeFromTypeReference`'s `"Array"` fast path and loses the
-`getOrInternReference` identity the recursive union needs. A pin reproducing it was added and a2
-now discriminates. A second blind pin was found the same way (a non-mapped alias body carries the
-right member NAME without substitution, so a name-only assertion passed either way) and given a
-type probe; a1 went 7 -> 8 RED. **Both unpinnable arms are recorded as redundant barriers rather
-than claimed**: a3 (the `parent` assignment) — every `.parent` reader reachable from
-`getTypeFromTypeReference` was traced and there is exactly one, `aliasGuardIsRecursionBrake`,
-which cannot discriminate because a heritage clause can never be lexically inside a type-alias
-body; the assignment makes that structural instead of argumentative. a4 (the
-`errorType`/`anyType` refusal) — kept because it keeps the arm strictly MONOTONE on a resolution
-failure.
-
-**A PIN THAT NAMES A LIB UTILITY IS VACUOUS IN THE `diagnose()` HARNESS.** The first pin set used
-`Omit`/`Pick`/`Partial`/`Record` and read **6 of 18 RED on a working binary**: the embedded lib
-that harness uses does not declare them, so the base resolves to `errorType` *before* the arm
-under test and the pin measures nothing in either direction. Rewritten with locally-declared
-aliases; the lib spellings stay covered by the tsgo-matched CLI matrix.
-
-**CALLER CENSUS, because the change is in a shared resolver.** `getTypeFromBaseTypeExpression` has
-three callers. The `implements` one (`:143360`, `as? Type.Reference`) is gated on
-`SymbolFlags.Class`, **disjoint from the new `SymbolFlags.TypeAlias` guard** — structurally
-unreachable, and confirmed empirically byte-identical before and after. `CaptureRecorder.kt:2127`
-is a **MISSION PAYOFF**: the language-service member collector now sees the members of
-`interface D extends Omit<…>`, so hover and completion improve on the embeddable-checker leg.
-(`collectTargetPropertyNames`, which the brief proposed widening, has FOUR callers — which is why
-it was not touched.)
-
-**Gates.** `marked` **4 -> 3** (`defaults.ts:8:5` TS2353 gone, no new row); `cronstrue` unchanged;
-suite **20,301 / 0 / 44** (+20 pins); corpus screen **0 of 8,725** over both channels; 8-profile
-grid **8x `added=0 removed=0`** — a potential GATE here rather than a control, since each profile
-carries 1-2 mapped-heritage sites and the change is to base-type resolution, not to TS2353;
-`cost_gate` PASS (max **+0.41%**, `output.errors` 46 unchanged — the increases are the alias bases
-now actually resolving); `huge_methods` 0 over; warning-clean with a non-empty log.
-
-**Separate defects found and NOT fixed** (all measured unmoved before and after): TS2339 missing
-for a member absent from an alias-heritage interface (the conservative "has base types" skip);
-TS2312 missing for a non-object heritage base (`extends Nullable<B>`); TS2420 missing for
-`class C implements <generic alias>`, and its chain line; and `Omit<B,"b">` rendering structurally
-in TS2339 where tsgo names it.
-
-**SIX SUCCESSORS FILED FROM THIS SESSION'S RECON, AND THE PATH TO ZERO ON `marked` IS NOW
-MAPPED**: (CHK.144) -> 2, (CHK.142) -> 1, (CHK.35b)+(CHK.35c) -> 0. See the orchestration
-addendum above the queue for the ordering and the measured 4 -> 6 trap that decides it.
 
 ## QUEUE
 
@@ -1569,7 +1536,15 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   trailing-comma one-line scan finds **7** of 9,056 reference `.errors.txt`, a floor not a
   ceiling), so the pins plus the grid carry this, not the screen.
 
-- [ ] **(CHK.143) `instanceof` ON THE POSITIVE BRANCH *REPLACES* WHERE tsgo *INTERSECTS*, AND THE
+- [x] **(CHK.143) LANDED 2026-09-23 ((P18.179) note) — 7 of 21 matrix cells moved to agreement, one
+  ours-only row removed, zero controls moved. It does NOT close the pending baseline** (3
+  divergences -> 2; the two left are the `emptyObjectType` refusal that was scoped out).
+  **The negative-branch guard was a BLIND PIN that the grid and the whole errors corpus were also
+  blind to** — measured, dropping it both invents a TS2322 and loses a `never` row, and the
+  discriminating shape had to be built because structurally-identical classes reduce to a
+  NON-union before the last negative step. **`rxjs` is a real GATE here (130 `instanceof`
+  occurrences) and is byte-identical**; `marked` and `cronstrue` have 0 and are genuine controls.
+  ORIGINAL: **`instanceof` ON THE POSITIVE BRANCH *REPLACES* WHERE tsgo *INTERSECTS*, AND THE
   POST-JOIN RESIDUE IS A FALSE POSITIVE ON ORDINARY TypeScript — MEASURED 2026-09-22 ((P18.169)
   recon, re-verified by the orchestrator on the frozen binary).** `declare const v: P;
   if (v instanceof Q) { … }` answers **`Q`** inside the guard where tsgo answers **`P & Q`**, and

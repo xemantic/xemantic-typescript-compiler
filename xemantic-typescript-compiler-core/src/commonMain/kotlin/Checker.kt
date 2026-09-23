@@ -124514,7 +124514,18 @@ interface DataView {
             } else {
                 t.types.filter { !isInstanceOfClass(it, classType) }
             }
-            return getUnionType(filtered)
+            val narrowed = getUnionType(filtered)
+            // (CHK.143) the union arm's own tail. When every constituent is dropped the
+            // filter answers `never`, which tsc never returns from a POSITIVE branch: it
+            // picks the most specific of the two and falls back to an INTERSECTION — see
+            // [narrowInstanceOfPositiveFallback]. The `isMatch &&` guard keeps the NEGATIVE
+            // branch byte-identical, which `instanceofWithStructurallyIdenticalTypes`
+            // depends on (it narrows `C1 | C2 | C3` to `never` there and tsc emits
+            // `Property 'x' does not exist on type 'never'`).
+            if (isMatch && narrowed.flags.hasAny(TypeFlags.Never)) {
+                return narrowInstanceOfPositiveFallback(t, classType)
+            }
+            return narrowed
         }
         // (NARROW.2)(b) round 838: `any` is assignable to EVERYTHING, so
         // [isInstanceOfClass]'s relation fallback answers `true` for it and the
@@ -124541,12 +124552,62 @@ interface DataView {
         val matches = isInstanceOfClass(t, classType)
         return when {
             matches == isMatch -> t
-            isMatch -> classType
+            // (CHK.143) this was `-> classType` UNCONDITIONALLY, which is the defect:
+            // `declare const v: P; if (v instanceof Q)` read `Q` where both references
+            // read `P & Q`. See [narrowInstanceOfPositiveFallback].
+            isMatch -> narrowInstanceOfPositiveFallback(t, classType)
             // matches=true, isMatch=false: source IS the class but we're in the
             // !instanceof branch — contradiction → narrow to never. Mirrors
             // narrowByTypeOfGuard's same-shape behavior for typeof tags.
             else -> neverType
         }
+    }
+
+    /**
+     * (CHK.143) The TAIL of tsc's `getNarrowedTypeWorker` — what it answers when the
+     * per-constituent filter of an `instanceof` POSITIVE branch produced `never`, i.e.
+     * when neither the reference [t] nor the candidate [candidate] derives from the
+     * other. `typescript-go-repo/internal/checker/flow.go`, verbatim:
+     *
+     * ```go
+     * switch {
+     * case narrowedType.flags&TypeFlagsNever == 0: return narrowedType
+     * case c.isTypeSubtypeOf(candidate, t):        return candidate
+     * case c.isTypeAssignableTo(t, candidate):     return t
+     * case c.isTypeAssignableTo(candidate, t):     return candidate
+     * }
+     * return c.getIntersectionType([]*Type{t, candidate})
+     * ```
+     *
+     * Ours answered `candidate` unconditionally, which is the whole of (CHK.143):
+     * `declare const v: P; if (v instanceof Q)` read `Q` where both references read
+     * `P & Q`, and the POST-JOIN read was then polluted to `P | Q` where tsc answers
+     * `P` — the intersection is a strict subtype of `P`, so [flowJoinUnion] reduces it
+     * away where the bare candidate survives beside the declaration. The ours-only
+     * `Property 'add' does not exist on type 'Promise<any> | Set<number>'` of the
+     * pending `controlFlowInstanceof` baseline is exactly that pollution.
+     *
+     * THE ONE ADAPTATION: this checker has no subtype relation ([subtypeRelation] is
+     * declared with zero readers), so tsgo's leg 1 is approximated by assignability,
+     * which COLLAPSES legs 1 and 4 into the first test below. That ordering is the
+     * conservative one — it keeps the previous `-> candidate` answer for every pair
+     * related by assignability in that direction, so only genuinely UNRELATED pairs
+     * change behaviour. It diverges from tsgo in exactly one cell: both directions
+     * assignable while [candidate] is not a *subtype* of [t], where tsgo answers [t]
+     * and this answers [candidate]. Nothing in the round's 16-cell matrix, the 22
+     * active `instanceof` corpus baselines or the 8 profiles exhibits it — [candidate]
+     * is always a class INSTANCE type here, and assignable-but-not-subtype pairs are
+     * the optionality / literal-widening ones a class instance does not produce.
+     *
+     * POSITIVE BRANCH ONLY, and deliberately so: tsgo has no such tail on the negative
+     * path either, and ours is load-bearing as it stands —
+     * `instanceofWithStructurallyIdenticalTypes` narrows `C1 | C2 | C3` to `never`
+     * there and tsc EMITS `Property 'x' does not exist on type 'never'` for it.
+     */
+    private fun narrowInstanceOfPositiveFallback(t: Type, candidate: Type): Type = when {
+        checkTypeRelatedTo(candidate, t, assignableRelation) -> candidate
+        checkTypeRelatedTo(t, candidate, assignableRelation) -> t
+        else -> getIntersectionType(listOf(t, candidate))
     }
 
     /**

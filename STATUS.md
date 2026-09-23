@@ -1,7 +1,10 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,304** lines (**+233 at (P18.178)**, the contextual-return
+extraction):** `Checker.kt` **199,365** lines (**+61 at (P18.179)**, tsc's missing `instanceof`
+positive-branch tail as one helper at two sites, with the KDoc recording the one leg-ordering cell
+where this checker's lack of a subtype relation diverges from tsgo — a SEMANTIC parity change
+removing a FALSE-POSITIVE class, not an extraction; **+233 at (P18.178)**, the contextual-return
 inference leg, its narrow `inferTypes`, two mention/bind gates, a re-entrancy counter and the
 KDoc recording two deliberate refusals with tsgo's measured answer — a SEMANTIC parity change
 taking 13 of 14 contextual sources to agreement, and buying NO library row, which the note
@@ -53,6 +56,22 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.179) — (CHK.143): `instanceof` ON THE POSITIVE BRANCH INTERSECTS WHERE IT USED TO REPLACE, 20,470 / 0 / 44 (2026-09-23).**
+`narrowByInstanceOf` answered the CANDIDATE where tsgo answers the INTERSECTION, and the join then left `P | Q` where tsgo
+leaves `P` — which is how `s.add(42)` after `if (s instanceof Promise)` became an ours-only TS2339. tsc's missing tail is now
+one helper at two sites. **7 of 21 matrix cells moved to agreement, one ours-only row removed, one added, ZERO controls
+moved.** The fixture's own comment (`s; // Set<number> & Promise<any>`) and its `submoduleAccepted` layer make tsgo's answer
+the target. **IT DOES NOT CLOSE THE PENDING BASELINE AND SAYS SO WITH BOTH MEASUREMENTS**: 3 divergences -> 2, and the two
+left are the `emptyObjectType` refusal round 838 made deliberately. **a3 WAS A BLIND PIN THAT THE GRID AND THE WHOLE ERRORS
+CORPUS WERE ALSO BLIND TO** (0 RED, 0 of 3,079): dropping the guard that keeps the tail off the NEGATIVE branch both invents
+a TS2322 tsgo lacks and LOSES a `never` row — the discriminating shape had to be built, because structurally-identical
+classes reduce to a NON-union before the last negative step and never reach that arm. Five arms, none left at 0. **The
+library controls were re-censused rather than inherited and one is NOT a control**: `marked` and `cronstrue` carry 0
+`instanceof`, `rxjs` carries **130**, so it is a real GATE — and byte-identical. Screen 0 of 8,725, unmoved; grid 8x0, run
+twice; cost_gate PASS with `narrow.walks` +0.00% (the tail runs inside an existing walk); huge_methods 0. Four defects named,
+two PRE-EXISTING and proved so on the parent binary — including the intersection-member parenthesization, which this round
+only makes REACHABLE from narrowing.
 
 **(P18.178) — (CHK.148): A CALLEE TYPE PARAMETER IS INFERRED FROM THE CONTEXTUAL RETURN; 13 OF 14 SOURCES MATCH tsgo, AND THE rxjs SIZING WAS WRONG, 20,457 / 0 / 44 (2026-09-23).**
 One leg in `ctxArgTypeMapper` between argument inference and the fallback: pull the CALL's contextual type, match it
@@ -129,20 +148,3 @@ deterministic counter is IDENTICAL between arms — the deltas were a baseline r
 rounds stale (round 776's law). **Rebaselined in this commit**, with `output.errors` 46 and `spine.nodes` 856,962 unchanged
 throughout. Screen 0 of 8,725 with each of the 7 TS2302 baselines re-checked live via `--include`; grid 8x0, a control with a
 measured ZERO sites; huge_methods 0; warning gate proved live by an injected `USELESS_CAST`.
-
-**(P18.174) — (LIB.5) G1: A MODULE-LOCAL NAME THAT COLLIDES WITH A LIB GLOBAL WINS; `rxjs` 29 -> 21, 20,399 / 0 / 44 (2026-09-23).**
-The first round against the NEW library, chosen by (LIB.5)'s census because `marked` and `cronstrue` are both at exact
-agreement with tsgo. On `build/bench/lib-rxjs-7.8.2` (251 sources, `lib: ["ES2020","DOM"]` — load-bearing) tsgo reports 1 row
-and we reported 29; this closes exactly the 8 G1 rows and adds none. **THE BRIEF'S FIRST QUESTION MADE IT A SMALL ROUND**:
-the existing (CHK.49) family already covers `class` in TYPE position, and what failed were two raw `globals[name]` consults
-that BYPASS the per-file view — so it is a two-site change and `mergeSharedKeepNames`/`nonModuleVisible`, whose recorded trap
-is that seeding one alone is worse than seeding both (969 errors), were never touched. **THE THREE TS2739 ROWS HAD A
-DIFFERENT CAUSE AND A DIFFERENT COLLIDING NAME**: renaming the TYPE `SchedulerLike` kept the defect, renaming the PARAMETER
-`scheduler` killed it — `scheduler` is itself a DOM global, so an assignment TARGET took the lib variable's annotation. That
-is CLAUDE.md's "a shape that works only for a lib-colliding name is working by accident" used as an instrument rather than a
-warning. A third edit at the OBVIOUS site was built, measured fully INERT and removed rather than shipped. **THE ABLATION
-FOUND TWO DEFECTIVE PINS**: one BLIND (the assignability reader is right on both binaries, so only the EMITTER was wrong and
-the message alone cannot separate them) and one VACUOUS (its binding name collided with nothing). a3 is load-bearing by a
-CORPUS measurement where no pin sees it; a4 is a measured redundant barrier, kept. The 809-line embedded lib contains NONE
-of the DOM names, so every pin is spelled with `Performance`/`performance`. Screen 0 of 8,725; grid 8x0, a CONTROL with one
-real site; cost_gate PASS (max +0.79%, `globals.lookups` +0.66% — the new consult, accounted for); huge_methods 0.

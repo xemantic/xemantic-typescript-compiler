@@ -1,5 +1,86 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.169) — a generic type ALIAS as a heritage base discarded its type arguments; `marked` 4 -> 3 (2026-09-22)
+
+**THE ROUND'S BRIEF WAS WRONG ABOUT THE MECHANISM AND A *WRITE PROBE* IS WHAT CAUGHT IT.** The
+item was sized as "the TS2353 excess-property check's known-property set does not follow a
+mapped-type heritage clause", on a recon that had measured a *read* of the inherited member as
+silent and concluded member resolution already saw it. Re-measured with a deliberate
+mis-assignment, `const p: string = d.a!` was **silent** on the old binary and TS2322 in tsgo, and
+`d.nope` was silent where tsgo reports TS2339 — the member was typed **`any`**, not resolved.
+Round 760's trap exactly: *a silence-asserting probe cannot tell "resolved" from `any`.* Had the
+brief been followed, the round would have widened a known-property set and left the type wrong.
+
+**THE REAL DEFECT.** `getTypeFromBaseTypeExpression` (`Checker.kt:115154`) honoured type
+arguments on a heritage base **only when the base's declared type was a `Type.Interface`**. For a
+generic type **ALIAS** it fell through to a bare `getDeclaredTypeOfSymbol(Omit)` with `<B,'b'>`
+**silently discarded**, so the un-instantiated alias body — a mapped type over an unbound `T` —
+contributed nothing at all to the derived interface's member table. The control that pins the
+axis is that the identical `Omit<B,'b'>` in **annotation** position has always resolved perfectly.
+
+**THREE MEASURED FACES, NOT ONE**, which is why the pins assert values rather than silence: a
+false TS2353 on legal code; the inherited member typed `any`; and a *genuinely* excess key
+**masked**, because B560 reports the FIRST excess key and returns — we reported `a` at col 18
+where tsgo reports `zz` at col 35. Seven heritage forms were affected (`Omit` / `Pick` /
+`Partial` / `Required` / `Readonly` / `Record` and any user-declared generic alias) and four were
+not (`extends B`, `extends B, C`, a generic INTERFACE base, a NON-generic alias), which is exactly
+the "declared is `Type.Interface`" / "has type arguments" split the guard keys on. The matrix went
+**17 ours-only rows -> 10, byte-identical to tsgo including columns.**
+
+**THE FIX ROUTES THROUGH THE ANNOTATION PATH RATHER THAN RE-DERIVING IT** — a parented synthetic
+`TypeReference` handed to `getTypeFromTypeNode`, which owns the builtin-utility materializers,
+B50.1 alias substitution and the constraint gates. Re-implementing any of that at the heritage
+site would have been a second, divergent copy. `parent` is not a constructor property, so it does
+not enter `TypeReference`'s data-class equality and the structural `nodeTypes` key stays per-site.
+
+**THE ABLATION'S a2 IS THE ROUND'S REAL FIND, AND THE *CORPUS* FOUND IT WHERE THE PINS COULD
+NOT.** Dropping the `SymbolFlags.TypeAlias` conjunct read **0 RED** on all pins — and broke
+`nestedRecursiveArraysOrObjectsError01` on the screen: routing a generic *interface* base through
+the annotation path hits `getTypeFromTypeReference`'s `"Array"` fast path and loses the
+`getOrInternReference` identity the recursive union needs. A pin reproducing it was added and a2
+now discriminates. A second blind pin was found the same way (a non-mapped alias body carries the
+right member NAME without substitution, so a name-only assertion passed either way) and given a
+type probe; a1 went 7 -> 8 RED. **Both unpinnable arms are recorded as redundant barriers rather
+than claimed**: a3 (the `parent` assignment) — every `.parent` reader reachable from
+`getTypeFromTypeReference` was traced and there is exactly one, `aliasGuardIsRecursionBrake`,
+which cannot discriminate because a heritage clause can never be lexically inside a type-alias
+body; the assignment makes that structural instead of argumentative. a4 (the
+`errorType`/`anyType` refusal) — kept because it keeps the arm strictly MONOTONE on a resolution
+failure.
+
+**A PIN THAT NAMES A LIB UTILITY IS VACUOUS IN THE `diagnose()` HARNESS.** The first pin set used
+`Omit`/`Pick`/`Partial`/`Record` and read **6 of 18 RED on a working binary**: the embedded lib
+that harness uses does not declare them, so the base resolves to `errorType` *before* the arm
+under test and the pin measures nothing in either direction. Rewritten with locally-declared
+aliases; the lib spellings stay covered by the tsgo-matched CLI matrix.
+
+**CALLER CENSUS, because the change is in a shared resolver.** `getTypeFromBaseTypeExpression` has
+three callers. The `implements` one (`:143360`, `as? Type.Reference`) is gated on
+`SymbolFlags.Class`, **disjoint from the new `SymbolFlags.TypeAlias` guard** — structurally
+unreachable, and confirmed empirically byte-identical before and after. `CaptureRecorder.kt:2127`
+is a **MISSION PAYOFF**: the language-service member collector now sees the members of
+`interface D extends Omit<…>`, so hover and completion improve on the embeddable-checker leg.
+(`collectTargetPropertyNames`, which the brief proposed widening, has FOUR callers — which is why
+it was not touched.)
+
+**Gates.** `marked` **4 -> 3** (`defaults.ts:8:5` TS2353 gone, no new row); `cronstrue` unchanged;
+suite **20,301 / 0 / 44** (+20 pins); corpus screen **0 of 8,725** over both channels; 8-profile
+grid **8x `added=0 removed=0`** — a potential GATE here rather than a control, since each profile
+carries 1-2 mapped-heritage sites and the change is to base-type resolution, not to TS2353;
+`cost_gate` PASS (max **+0.41%**, `output.errors` 46 unchanged — the increases are the alias bases
+now actually resolving); `huge_methods` 0 over; warning-clean with a non-empty log.
+
+**Separate defects found and NOT fixed** (all measured unmoved before and after): TS2339 missing
+for a member absent from an alias-heritage interface (the conservative "has base types" skip);
+TS2312 missing for a non-object heritage base (`extends Nullable<B>`); TS2420 missing for
+`class C implements <generic alias>`, and its chain line; and `Omit<B,"b">` rendering structurally
+in TS2339 where tsgo names it.
+
+**SIX SUCCESSORS FILED FROM THIS SESSION'S RECON, AND THE PATH TO ZERO ON `marked` IS NOW
+MAPPED**: (CHK.144) -> 2, (CHK.142) -> 1, (CHK.35b)+(CHK.35c) -> 0. See the orchestration
+addendum above the queue for the ordering and the measured 4 -> 6 trap that decides it.
+
+
 ### Round (P18.168) — (CHK.35a): a function expression assigned to a member gets its `this`; `marked` 8 -> 4 (2026-09-22)
 
 **THE RECON REFUSED THE ITEM AND THE REFUSAL IS THE ROUND'S MAIN PRODUCT.** (CHK.35) is 5 rows
