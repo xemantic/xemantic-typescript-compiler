@@ -7563,6 +7563,15 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val canonicalEnumSymCache = HashMap<Int, Symbol>()
 
+    /** (CHK.155): the names of the flow-TS2454 walk's CURRENT function (or file) that have a
+     *  DEFINITE assignment anywhere in its body, nested closures included — tsgo's
+     *  `isSymbolAssignedDefinitely`. A read captured by an expression-bodied arrow is an
+     *  outer-variable read and is assumed initialized unless the name is absent from this set
+     *  (`isOuterVariable && !isNeverInitialized`, checker.go `checkIdentifier`). Installed and
+     *  restored by [runFlowTS2454OnFunction]/[runFlowTS2454OnTopLevel]; declared before `init`
+     *  per the init-order trap. */
+    private var flowTs2454AssignedAnywhere: Set<String> = emptySet()
+
     /**
      * (CHK.148) Re-entrancy budget for [ctxReturnTypeParamMapper]'s pull.
      *
@@ -22781,8 +22790,27 @@ class Checker(
         val uninitialized = mutableSetOf<String>()
         collectAllUninitVarsInFunction(statements, uninitialized, emptySet(), fileLocals)
         if (uninitialized.isEmpty()) return
-        for (s in statements) {
-            walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody = false)
+        withFlowTs2454AssignedAnywhere(statements, uninitialized) {
+            for (s in statements) {
+                walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody = false)
+            }
+        }
+    }
+
+    /** (CHK.155): run [block] with [flowTs2454AssignedAnywhere] holding the [candidates]
+     *  definitely assigned anywhere in [statements] (nested closures included), restoring the
+     *  enclosing function's set afterwards — a nested function's own pass runs inside [block]. */
+    private inline fun withFlowTs2454AssignedAnywhere(
+        statements: List<Statement>, candidates: Set<String>, block: () -> Unit,
+    ) {
+        val assigned = mutableSetOf<String>()
+        for (s in statements) collectAllAssignmentsAnywhere(s, candidates, assigned)
+        val saved = flowTs2454AssignedAnywhere
+        flowTs2454AssignedAnywhere = assigned
+        try {
+            block()
+        } finally {
+            flowTs2454AssignedAnywhere = saved
         }
     }
 
@@ -22872,8 +22900,10 @@ class Checker(
             uninitialized.removeAll(closureAssigned)
         }
         if (uninitialized.isNotEmpty()) {
-            for (s in body.statements) {
-                walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody = false)
+            withFlowTs2454AssignedAnywhere(body.statements, uninitialized) {
+                for (s in body.statements) {
+                    walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody = false)
+                }
             }
         }
         // Recurse into nested function-likes (their own scope, fresh uninit set)
@@ -23603,18 +23633,16 @@ class Checker(
                     // for the body recursion (the inner param is the binding in scope).
                     var maskedUninit = if (innerPreInit.isEmpty()) uninitialized
                         else uninitialized - innerPreInit
-                    // Round 427: a read inside the arrow is a CAPTURED read (a
-                    // different flow container) — tsc assumes it initialized unless
-                    // the symbol is NEVER definitely assigned anywhere
-                    // (isNeverInitialized/isSymbolAssignedDefinitely). A definite
-                    // assignment (`=`/`??=`/`||=`/`&&=`) within this very arrow body
-                    // is the common shape (tsc checker.ts getSignaturesOfType's
-                    // `t => … && (!memberName ? (memberName = X, true) : …)`) — mask
-                    // those names out via the anywhere-scan's expression walker.
-                    if (maskedUninit.isNotEmpty()) {
-                        val definitelyAssigned = mutableSetOf<String>()
-                        collectAssignmentsInExpr(body, maskedUninit, definitelyAssigned)
-                        if (definitelyAssigned.isNotEmpty()) maskedUninit = maskedUninit - definitelyAssigned
+                    // Round 427 / (CHK.155): a read inside the arrow is a CAPTURED read
+                    // (a different flow container) — tsgo assumes it initialized unless
+                    // the symbol is NEVER definitely assigned anywhere in its declaring
+                    // function (`isOuterVariable && !isNeverInitialized`, checker.go
+                    // `checkIdentifier`; `isSymbolAssignedDefinitely` counts `=`/`??=`/
+                    // `||=`/`&&=` in ANY nested closure, not only this arrow). Round 427
+                    // masked only this arrow's own assignments, so `s` assigned in a
+                    // SIBLING closure and read here under an `if` drew an ours-only row.
+                    if (maskedUninit.isNotEmpty() && flowTs2454AssignedAnywhere.isNotEmpty()) {
+                        maskedUninit = maskedUninit - flowTs2454AssignedAnywhere
                     }
                     if (maskedUninit.isNotEmpty()) {
                         walkExprForFlowTS2454(body, maskedUninit, source, fileName, emitted, inUncheckedBody)
