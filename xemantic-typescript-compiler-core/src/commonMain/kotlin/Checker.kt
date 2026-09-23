@@ -139971,6 +139971,34 @@ interface DataView {
         }
     }
 
+    /**
+     * (LIB.5) G3 — subtract a nested function-like container's OWN type parameters before
+     * descending into it, because they SHADOW the enclosing class's.
+     *
+     * tsgo has no TS2302 walker at all: the code is a name-RESOLUTION outcome in
+     * `internal/binder/nameresolver.go:170-186`, where the resolver walks containers
+     * OUTWARD and a generic arrow / function expression / function type is itself a
+     * container whose own type parameters are found FIRST — so the class arm is never
+     * reached and shadowing is excluded STRUCTURALLY rather than by a rule.  This walker
+     * carries a flat name set instead, so the exclusion has to be spelled at every
+     * boundary: `ArrowFunction`, `FunctionExpression`, `FunctionType`, `ConstructorType`
+     * and a `MethodDeclaration` inside a `TypeLiteral`.  A `MethodDeclaration` CLASS
+     * MEMBER has always had it, inline, in `checkTS2302InClassMember`.
+     *
+     * Measured against tsgo on `build/bench/lib-rxjs-7.8.2` (4 ours-only rows, all of them
+     * `static create: (...args: any[]) => any = <T>(...) => {...}` inside a `class X<T>`).
+     * The decisive fixture is `class B4<T, S> { static create: any = <S>(x: S, y: T) => x }`,
+     * which fails in BOTH directions on one line: the arrow's own `S` must NOT report and
+     * the class's `T` must.
+     *
+     * Subtraction only ever REMOVES rows; a non-generic container has a null/empty list and
+     * so is handed the caller's set unchanged (`genericClassWithStaticsUsingTypeArguments`'s
+     * `static a = (n: T) => {}` and `static e = function (x: T) {...}` are exactly that, and
+     * are the corpus's own controls for it).
+     */
+    private fun shadowedTypeParamNames(own: List<TypeParameter>?, outer: Set<String>): Set<String> =
+        if (own.isNullOrEmpty()) outer else outer - own.map { it.name.text }.toSet()
+
     /** Walk a type node tree to find references to class type parameters. */
     private fun findTypeParamRefsInType(typeNode: TypeNode, typeParamNames: Set<String>, source: String, fileName: String) {
         when (typeNode) {
@@ -139986,20 +140014,29 @@ interface DataView {
             is IntersectionType -> typeNode.types.forEach { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
             is ParenthesizedType -> findTypeParamRefsInType(typeNode.type, typeParamNames, source, fileName)
             is FunctionType -> {
-                typeNode.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) } }
-                findTypeParamRefsInType(typeNode.type, typeParamNames, source, fileName)
+                val names = shadowedTypeParamNames(typeNode.typeParameters, typeParamNames)
+                if (names.isNotEmpty()) {
+                    typeNode.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, names, source, fileName) } }
+                    findTypeParamRefsInType(typeNode.type, names, source, fileName)
+                }
             }
             is ConstructorType -> {
-                typeNode.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) } }
-                findTypeParamRefsInType(typeNode.type, typeParamNames, source, fileName)
+                val names = shadowedTypeParamNames(typeNode.typeParameters, typeParamNames)
+                if (names.isNotEmpty()) {
+                    typeNode.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, names, source, fileName) } }
+                    findTypeParamRefsInType(typeNode.type, names, source, fileName)
+                }
             }
             is TypeLiteral -> {
                 for (m in typeNode.members) {
                     when (m) {
                         is PropertyDeclaration -> m.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
                         is MethodDeclaration -> {
-                            m.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) } }
-                            m.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                            val names = shadowedTypeParamNames(m.typeParameters, typeParamNames)
+                            if (names.isNotEmpty()) {
+                                m.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, names, source, fileName) } }
+                                m.type?.let { findTypeParamRefsInType(it, names, source, fileName) }
+                            }
                         }
                         is IndexSignature -> m.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
                         else -> {}
@@ -140101,16 +140138,22 @@ interface DataView {
     private fun findTypeParamRefsInExpr(expr: Expression, typeParamNames: Set<String>, source: String, fileName: String) {
         when (expr) {
             is ArrowFunction -> {
-                expr.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) } }
-                expr.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
-                when (val body = expr.body) {
-                    is Expression -> findTypeParamRefsInExpr(body, typeParamNames, source, fileName)
-                    else -> {}
+                val names = shadowedTypeParamNames(expr.typeParameters, typeParamNames)
+                if (names.isNotEmpty()) {
+                    expr.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, names, source, fileName) } }
+                    expr.type?.let { findTypeParamRefsInType(it, names, source, fileName) }
+                    when (val body = expr.body) {
+                        is Expression -> findTypeParamRefsInExpr(body, names, source, fileName)
+                        else -> {}
+                    }
                 }
             }
             is FunctionExpression -> {
-                expr.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) } }
-                expr.type?.let { findTypeParamRefsInType(it, typeParamNames, source, fileName) }
+                val names = shadowedTypeParamNames(expr.typeParameters, typeParamNames)
+                if (names.isNotEmpty()) {
+                    expr.parameters.forEach { p -> p.type?.let { findTypeParamRefsInType(it, names, source, fileName) } }
+                    expr.type?.let { findTypeParamRefsInType(it, names, source, fileName) }
+                }
             }
             is ParenthesizedExpression -> findTypeParamRefsInExpr(expr.expression, typeParamNames, source, fileName)
             is BinaryExpression -> {

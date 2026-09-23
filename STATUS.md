@@ -1,7 +1,10 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,929** lines (**+55 at (P18.174)**, a binder-symbol consult at the
+extraction):** `Checker.kt` **198,972** lines (**+43 at (P18.175)**, one
+`shadowedTypeParamNames` helper threaded through SIX nested-container boundaries of the TS2302
+walker, net of the inline subtraction it replaces — a SEMANTIC parity change that only REMOVES
+rows, not an extraction; **+55 at (P18.174)**, a binder-symbol consult at the
 class-type reader and a lib-global shadow guard at the assignment reader, with the KDoc carrying
 the corpus receipt that makes one of them load-bearing and the measurement that makes the other
 redundant — a SEMANTIC parity change opening the `rxjs` arc, not an extraction;
@@ -41,6 +44,24 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.175) — (LIB.5) G3: A NESTED GENERIC CONTAINER'S OWN TYPE PARAMETERS ARE ITS OWN; `rxjs` 21 -> 17, 20,412 / 0 / 44 (2026-09-23).**
+A generic ARROW or FUNCTION EXPRESSION nested in a STATIC member kept the enclosing class's type-parameter names, so its own
+shadowing `<T>` was falsely flagged TS2302. `checkTS2302InClassMember`'s MethodDeclaration arm was the ONLY subtraction in the
+file. **tsgo has no walker at all** — TS2302 is a name-RESOLUTION outcome whose resolver walks containers OUTWARD, so a
+generic arrow is a container found FIRST and shadowing is excluded structurally; that is precisely why a flat-set walker must
+spell it at each boundary. **THE FAMILY IS WIDER THAN THE SIZING AND THE ROUND WIDENED IT ON A MEASUREMENT**: a
+`FunctionType`, a `TypeLiteral` method signature and a `ConstructorType` are the same mechanism with the same measured tsgo
+silence, so one helper went to SIX boundaries; arm a4 exists to show that half is load-bearing and it cost nothing. Matrix
+ours 11 / tsgo 3 -> **ours 3 / tsgo 3**, same three positions. **THE CORPUS IS A LIVE GATE AND THE ABLATION PROVED IT**: the
+arm that subtracts the WRONG set takes the screen 0 -> 1 and names `genericClassWithStaticsUsingTypeArguments`, which loses
+exactly its two ARROW rows. Four arms, none at 0 RED; the decisive `B4` pin reddens in BOTH the under- and the
+over-suppression arm, which is why it asserts the row LIST and not a silence. **THE COST GATE'S NON-ZERO COLUMN WAS NOT THIS
+ROUND'S**: an AST-only walker cannot move `typeOfExpr.calls`, so `--passTiming` was run on BOTH class dirs and every
+deterministic counter is IDENTICAL between arms — the deltas were a baseline recorded 2026-09-13, ten days and six semantic
+rounds stale (round 776's law). **Rebaselined in this commit**, with `output.errors` 46 and `spine.nodes` 856,962 unchanged
+throughout. Screen 0 of 8,725 with each of the 7 TS2302 baselines re-checked live via `--include`; grid 8x0, a control with a
+measured ZERO sites; huge_methods 0; warning gate proved live by an injected `USELESS_CAST`.
 
 **(P18.174) — (LIB.5) G1: A MODULE-LOCAL NAME THAT COLLIDES WITH A LIB GLOBAL WINS; `rxjs` 29 -> 21, 20,399 / 0 / 44 (2026-09-23).**
 The first round against the NEW library, chosen by (LIB.5)'s census because `marked` and `cronstrue` are both at exact
@@ -115,20 +136,3 @@ honest 14 -> 6 against tsgo's 4. Filed as (CHK.147); it corrupts measurement in 
 BLIND PIN, not a redundant barrier**, caught by the cell matrix where no pin could see it; a pin was added and it now
 discriminates. Screen 0 of 8,725; grid 8x0 (a CONTROL for the acceptance by count — zero TS2322/TS2345 rows on any profile —
 and a GATE for the narrowing side-effect); cost_gate PASS (max +0.75%, `output.errors` 46); huge_methods 0 over.
-
-**(P18.170) — (CHK.144): A BLOCK BODY RETURNING A BARE IDENTIFIER NO LONGER INFERS `any`; `marked` 3 -> 2, 20,336 / 0 / 44 (2026-09-22).**
-`inferReturnTypeFromBody`'s `is Identifier ->` arm answered `booleanType` for `true`/`false` and `null` for everything
-else, which the caller turns into `anyType` — so every BLOCK-bodied unannotated function returning a bare identifier
-widened, while the EXPRESSION-bodied twin was always right. Matrix vs tsgo **15 of 39 -> 36 of 39**, the three residues
-all the pre-change answer. **THE GRID WAS THE ONLY INSTRUMENT THAT SAW THE FIRST CUT'S FALSE POSITIVES**: it added 3
-ours-only rows to tsc's own sources while the corpus screen read 0 of 8,725 and all 28 pins were green on that binary —
-`!`-unwrapping is value-preserving for an arm answering from SYNTAX and wrong for one answering a DECLARED type, since
-stripping the nullish is the whole point of `return value!`. Both directions pinned, with an ablation arm each (a7/a8),
-each reproducing exactly one profile row. **The implementation's own first design LEAKED THE CALLER'S SCOPE** — a
-`currentLocalTypes` consult gated on owner identity, which the gate cannot save because the push it assumes is itself
-conditional; the leg was REMOVED and the resolver is purely lexical, with a SHADOW-STOP that halts at every value-space
-binder including ones it cannot type. **A blind pin was found by its own ablation twice**: the first shadow pin used a
-`function` callee (different path, 0 RED while every ARROW mistyped), and arm a5's anchor matched 11 times so that arm
-silently never ran. a5 is a measured REDUNDANT barrier with its cost measured — `errorType` renders as `any` (B58.1),
-so its blocked values are observationally identical to the fallback. Screen 0 of 8,725; grid 8x0 and a REAL gate
-(4,109-5,671 bare-identifier returns per profile); cost_gate PASS (max +0.51%, `output.errors` 46); huge_methods 0 over.

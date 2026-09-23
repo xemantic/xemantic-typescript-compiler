@@ -25,6 +25,61 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.175) — (LIB.5) G3: a nested generic container's own type parameters are its own; `rxjs` 21 -> 17 (2026-09-23)
+
+A generic ARROW or FUNCTION EXPRESSION nested in a STATIC member kept the enclosing class's
+type-parameter names, so its OWN shadowing `<T>` was falsely flagged TS2302 *"Static members
+cannot reference class type parameters."* `checkTS2302InClassMember`'s `MethodDeclaration` arm was
+the ONLY subtraction in the file; `findTypeParamRefsInExpr`/`…InType` carried the flat set
+unchanged into every nested container. **tsgo has no walker for this at all** — TS2302 is a
+name-RESOLUTION outcome (`nameresolver.go:170-186`) where the resolver walks containers OUTWARD
+and a generic arrow is itself a container found first, so shadowing is excluded STRUCTURALLY.
+That is exactly why a flat-set walker has to spell it at each boundary.
+
+**THE FAMILY IS WIDER THAN THE BRIEF SCOPED IT, AND THE ROUND WIDENED IT ON A MEASUREMENT.** The
+brief scoped the fix to `ArrowFunction`/`FunctionExpression`, which covers all 4 rxjs rows and 5 of
+the 8 matrix false positives. But a `FunctionType` (`static f: <T>(x: T) => void`), a `TypeLiteral`
+method signature (`static g: { m<T>(a: T): void }`) and a `ConstructorType` (`static h: new <T>(x:
+T) => void`) are the SAME mechanism with the same measured tsgo silence, and leaving 3 of 8
+standing would have been arbitrary. One helper at six boundaries; **arm a4 exists to show that
+half is load-bearing and separately pinned**, and it cost nothing — grid 0/0, corpus 0, counters
+identical. The reproduction matrix went **ours 11 / tsgo 3 -> ours 3 / tsgo 3**, exact agreement
+at the same three positions.
+
+**THE CORPUS IS A LIVE GATE HERE AND THE ABLATION PROVED IT RATHER THAN ASSERTING IT.** The brief
+called the 7 active TS2302 baselines an OVER-SUPPRESSION gate. On arm a3 (subtract the WRONG set —
+the class's names instead of the function's, i.e. whole-subtree suppression) the screen goes
+**0 -> 1** and names it: `genericClassWithStaticsUsingTypeArguments` loses exactly its two ARROW
+rows while keeping its four non-arrow ones. **Four arms, none reading 0 RED**: a1 (subtraction
+dropped) 7 RED; a2 (arrow but not function expression) 1, exactly the function-expression pin;
+a3 3, all three true-positives-must-survive; a4 (expression half kept, TYPE half dropped) 3,
+exactly the `FunctionType`/`TypeLiteral`/`ConstructorType` pins. **The decisive `B4` pin goes RED
+in BOTH a1 and a3** — under-suppression and over-suppression — which is the whole point of
+asserting the row LIST rather than a silence.
+
+**THE COST GATE'S NON-ZERO COLUMN WAS NOT THIS ROUND'S, AND THE ROUND PROVED IT.** An AST-only
+walker cannot move `typeOfExpr.calls`, so `--passTiming` was run on BOTH class dirs and each fed
+to `cost_gate.py --from-log`: **every deterministic counter is identical between arms**. The
+deltas were a stale `docs/perf/cost-counters.txt` — recorded **2026-09-13**, ten days and six
+semantic rounds ago — which is round 776's *"a recorded counter baseline is a claim about a BUILD,
+not about a commit"*. **The baseline is rebaselined in this round's commit** with the accounting:
+`output.errors` 46 and `spine.nodes` 856,962 are UNCHANGED throughout, and the movement is the
+resolution work rounds (P18.169)-(P18.174) each justified in their own note — a generic alias
+heritage base that now resolves, a return-identifier arm, a discriminated-union relation leg, two
+contextual-type installs, an element-access contextual type and a binder-symbol consult.
+
+**Gates.** `rxjs` **21 -> 17**, exactly the 4 rows, 0 added; `marked` **0** and `cronstrue` **1**,
+both still exactly tsgo; suite **20,412 / 0 / 44** (+13 pins); corpus screen **0 of 8,725**, and
+each of the 7 TS2302 baselines re-checked LIVE via `--include` (none is `@Ignore`d); 8-profile grid
+**8x `added=0 removed=0`**, a CONTROL with a measured count of ZERO sites; `huge_methods` 0 over;
+warning-clean, **proved live** by an injected `USELESS_CAST` that printed its `w:` line.
+
+**Three separate defects found, all MISSING rows, all pre-existing and measured byte-identical
+before and after**: a type-parameter CONSTRAINT is never walked (`<U extends T>` — `TypeParameter.
+constraint` and `.default` are visited by nothing); a nested `FunctionDeclaration` STATEMENT is
+never walked; and an arrow's or function expression's BLOCK body is never walked (only an
+expression body is). Each ADDS rows, so each needs its own round.
+
 ### Round (P18.174) — (LIB.5) G1: a module-local name that collides with a lib global wins; `rxjs` 29 -> 21 (2026-09-23)
 
 The first round against the NEW library, chosen by (LIB.5)'s census because `marked` and
@@ -623,103 +678,6 @@ Gates, both halves: suite **20,265 / 0 failed / 44 skipped** (+19 pins); corpus 
 over both channels; 8-profile grid **8x `added=0 removed=0`** — notable for a (CHK.50) read-path
 change; `cost_gate` PASS (max +0.41%, `output.errors` 46 unchanged); `huge_methods` 0 over limit.
 
-### Round (P18.165) — (CHK.136): an assignment through an element access is type-checked at last (2026-09-21)
-
-**A SOUNDNESS HOLE CLOSED, AND THE ITEM'S OWN SIZING CORRECTED BEFORE ANY CODE WAS WRITTEN.**
-`bag[key] = "not a function"` was accepted in SILENCE while the identical mismatch through a
-PROPERTY target reported TS2322 — the element-access arm dispatched to four narrowly-gated walkers
-and then simply stopped. `cheaGeneralElementWrite` is the general reader; its slot is
-`getTypeOfElementAccess`, and that function's `anyType` answer **is** the firewall, so an undecided
-slot is silence and never a diagnostic.
-
-**THE ITEM SAID "WHAT IS MISSING IS THE ADMISSION, NOT THE TYPE". THAT IS TRUE OF ITS OWN REPRO AND
-FALSE OF `marked`, AND ONE PROBE SEPARATED THEM.** Read-probing every target shape on the shipped
-binary split the defect in two: for an index SIGNATURE, an ARRAY element, a numeric index signature
-and a TUPLE the read type already resolved and only the write was missing (D1, this round); for an
-index whose TYPE is a union of literals (`mem[k]`, `k: keyof Members`) the READ resolves to `any`
-(D2) — and D2 is the shape `marked` actually uses. **So `marked` is unchanged at 10, exactly as
-predicted before the fix was built**, and the successor is sized from a measurement rather than a
-hope.
-
-**EVERY EXPECTATION WAS ADJUDICATED AGAINST tsgo 7.0.2 FIRST** — 63 fixtures over five scratch
-projects. Two of its rules the matrix established and the pins now encode: the ANCHOR is the LHS
-node at full width (`bag[key]` spans 8, not the whole assignment), and a COMPOUND assignment is NOT
-this check (`arr[i] += 123` on a `string[]` is legal, because `string + number` is `string`).
-
-**THE GRID WAS A REAL GATE AND IT CAUGHT ONE FALSE POSITIVE ON ALL EIGHT PROFILES.** A census of
-element-access assignments (a length-preserving comment/string/regex mask plus a bracket-matching
-scanner, 25/25 audited) reads 223 on the smallest arm and 347 on the largest, so (CHK.124)'s question
-was answered with a count before the arm was written. The row was tsc's own `builder.ts:1423`,
-`root[root.length - 2] = [lastButOne, fileId]` against a tuple-bearing slot — **round 459's recorded
-finding one reader over: this engine cannot decide an ARRAY LITERAL against a TUPLE target.** The
-Identifier site needs an AST-side helper and a declaration TYPE NODE this reader has not got, so the
-pair is REFUSED: a missing row, never a wrong one.
-
-**THE CORPUS SCREEN THEN CAUGHT TWO MORE, AND THEY WERE DIFFERENT DEFECTS.** `divergentAccessorsTypes8`
-is a WRITE-TYPE question — a member's write type is its SETTER's parameter, not the getter return the
-read path resolves. `widenedTypes` is not a false positive at all but a DOUBLE EMISSION: a legacy
-walker had already decided `t[3] = ""` under `strict: false` and read the widened `number` where this
-reader's un-widened `number | null` became a second row at the same squiggle. One row per assignment
-site; the legacy walker owns a site it has already decided.
-
-**AND THEN THE ABLATION OVERTURNED HALF OF THAT, WHICH IS THE ROUND'S MOST USEFUL RESULT.** The first
-cut answered `divergentAccessorsTypes8` with TWO refusals — an ACCESSOR one and a UNION-RECEIVER one —
-on the reading that the fixture exercised both halves separably. **Arm a3 read 0 RED on the pins AND 0
-of 8,725 on the screen, and the reason was not a blind pin: the union refusal was UNNECESSARY.**
-`Two.prop3` is a `get`/`set` pair even though `One.prop3` is a plain field, so every row in that
-fixture is reached by the accessor guard alone and the two were never the separable pair the sizing
-claimed. Measured one step further, the refusal was also **LOSSY** — on a union receiver with no
-accessor anywhere it dropped two rows tsgo 7.0.2 reports (`ab[key] = 42` on two string-indexed
-interfaces, and `cd[key] = true` on `string`- and `number`-indexed ones, whose target tsgo renders
-exactly as our read union does). tsc distributes a receiver union with a UNION in BOTH modes, so read
-and write coincide for every non-accessor member. **It was REMOVED, not recorded as a redundant
-barrier**, and the two rows it had been dropping are now pins. A guard that no arm can discriminate is
-as often unnecessary as it is unpinned, and the only way to tell is to ask what it COSTS.
-
-**THE FOUR DIVERGENCES THE NEW ROWS INHERIT ARE PRE-EXISTING AT THE PROPERTY TARGET, AND A TWIN
-FIXTURE IS WHAT PROVED IT** rather than an argument. tsgo re-anchors at the RHS with *Did you mean to
-call this expression?* when the RHS is callable and its RETURN relates; it drills INTO a
-zero-parameter arrow's expression body; it widens the literal SOURCE (`'boolean'` where we print
-`'true'`); and it contextually types the RHS parameter (`(t: { type: string; })` where we print
-`(t: any)`). Running the same four shapes through `holder.m = …` shows the shipped property reader
-doing exactly what the new arm does — so they are ONE shared display family, to be fixed in both
-readers or neither, and this round neither introduces nor fixes them. The VERDICT is tsgo's in every
-case; only the anchor and the display differ, which is a (PARITY.1) question.
-
-**THE EXTRACTION, NOT A FOURTH COPY.** B85.1d's `this`-rooted index write moved VERBATIM into
-`cheaThisRootedIndexWrite` so the general arm is a fallback behind it — it resolves its receiver
-through the STRING-keyed `varTypes` map and therefore serves shapes the type engine answers nothing
-for. One line changed inside it: a relation PASS is a DECISION, so it now claims the site rather than
-letting the general arm re-decide it with a differently-resolved slot.
-
-**ABLATION, one mistake at a time, six arms then five.** a1 (the general arm never runs) 8 of 14 pins
-RED, screen 0 — the arm is load-bearing and the corpus is a CONTROL for it, exactly as the census
-said. a2 (the array-literal/TUPLE refusal removed) 1 pin RED plus the grid row on all eight profiles.
-a3 REMOVED THE GUARD INSTEAD (above). **a4 (the ACCESSOR refusal removed) took THREE runs and a
-hand-built binary, and that is the second lesson**: it read 0 RED on the pins while the screen read 1
-mismatch — the guard was load-bearing and the PIN was blind, twice over. The first cell used
-`box['value'] = true`, which B243 (`checkElementAccessSetterWrite`) claims one walker earlier; the
-second used an unrelated getter/setter pair on a NON-union receiver, which nothing reaches. What
-settled it was building the guard-off binary by hand and reading WHICH rows it loses — they are
-`divergentAccessorsTypes8`'s UNION-receiver rows (65/68/73/75/77) — so the discriminator needs a UNION
-receiver AND a value that fails the union of the GETTER types while the SETTERS accept it
-(`pq['v'] = 42` against getters `string`, setters `string | number`; tsgo silent, guard-off binary
-TS2322). Final arm: **1 pin RED, 1 screen**. Both dead cells are kept as `residue -` pins named for
-what they actually test. a5 (the one-row-per-site dedupe removed) 1 screen mismatch,
-`widenedTypes`. a6 (the extracted narrow walker stops claiming a site whose relation PASSED) 0 RED: a
-measured REDUNDANT guard, recorded and kept as a barrier, not claimed as coverage. The restore
-rebuild returns `Checker.class` to the gated md5.
-
-Gates: suite **20,246 / 0 failed / 44 skipped** before the a3 removal and re-run after it; corpus
-screen 0 of 8,725 over both channels; 8-profile grid 8x `added=0 removed=0`; `cost_gate` PASS with max
-+0.21% and `output.errors` 46 unchanged; `huge_methods` 0 over limit; warning-clean over a non-empty
-log; `marked` 10 -> 10 (predicted) and `cronstrue` 1 -> 1.
-
-Residues stated, not chased: the four anchor/display divergences above; TS7052 for a receiver with no
-index signature and TS2542 for a readonly one, both of which tsgo reports and we do not; and a
-COMPOUND assignment, which never reaches this reader at all — a future arm for it must compute the
-OPERATOR's result type, because `arr[i] += 123` on a `string[]` is legal.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1200,7 +1158,18 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   **The three TS2739 rows had a DIFFERENT cause and a different colliding name** — the PARAMETER
   `scheduler` collides with the DOM `declare var scheduler`, found by renaming one identifier at a
   time. **G3 AND G4 ARE NOW RECONNED ((P18.174) recon) AND G4 IS RE-SCOPED.**
-  **G3 is the next round and it is bounded**: TS2302 is answered by
+  **G3 LANDED 2026-09-23 ((P18.175) note) — `rxjs` 21 -> 17.** The family proved WIDER than the
+  sizing: besides an arrow and a function expression, a `FunctionType`, a `TypeLiteral` method
+  signature and a `ConstructorType` are the same mechanism with the same measured tsgo silence —
+  one helper at SIX boundaries, and the type half is separately pinned by its own ablation arm.
+  The corpus turned out to be a LIVE gate, proved by the arm that subtracts the WRONG set (the
+  screen goes 0 -> 1 and names `genericClassWithStaticsUsingTypeArguments`, which loses exactly
+  its two ARROW rows). **Three adjacent MISSING-row defects were found and NOT fixed**, each
+  needing its own round because each ADDS rows: a type-parameter CONSTRAINT is never walked, a
+  nested `FunctionDeclaration` statement is never walked, and an arrow's or function expression's
+  BLOCK body is never walked. **`rxjs` is now 17 vs tsgo's 1, with G2 (7 rows, (CHK.35c)) and G4
+  (3 rows, re-scoped under (CHK.141)) still owned and 7 unrelated singletons left.**
+  ORIGINAL SIZING: **G3 is bounded**: TS2302 is answered by
   `checkStaticMembersReferenceTypeParams` (registered :10007, body :139810), whose name set is
   computed ONCE per class and narrowed at exactly ONE place — the `MethodDeclaration` arm's
   `effectiveNames`. A nested generic ARROW or FUNCTION EXPRESSION in a static initializer keeps the

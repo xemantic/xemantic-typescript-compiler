@@ -1,5 +1,23 @@
 
 
+**(P18.170) — (CHK.144): A BLOCK BODY RETURNING A BARE IDENTIFIER NO LONGER INFERS `any`; `marked` 3 -> 2, 20,336 / 0 / 44 (2026-09-22).**
+`inferReturnTypeFromBody`'s `is Identifier ->` arm answered `booleanType` for `true`/`false` and `null` for everything
+else, which the caller turns into `anyType` — so every BLOCK-bodied unannotated function returning a bare identifier
+widened, while the EXPRESSION-bodied twin was always right. Matrix vs tsgo **15 of 39 -> 36 of 39**, the three residues
+all the pre-change answer. **THE GRID WAS THE ONLY INSTRUMENT THAT SAW THE FIRST CUT'S FALSE POSITIVES**: it added 3
+ours-only rows to tsc's own sources while the corpus screen read 0 of 8,725 and all 28 pins were green on that binary —
+`!`-unwrapping is value-preserving for an arm answering from SYNTAX and wrong for one answering a DECLARED type, since
+stripping the nullish is the whole point of `return value!`. Both directions pinned, with an ablation arm each (a7/a8),
+each reproducing exactly one profile row. **The implementation's own first design LEAKED THE CALLER'S SCOPE** — a
+`currentLocalTypes` consult gated on owner identity, which the gate cannot save because the push it assumes is itself
+conditional; the leg was REMOVED and the resolver is purely lexical, with a SHADOW-STOP that halts at every value-space
+binder including ones it cannot type. **A blind pin was found by its own ablation twice**: the first shadow pin used a
+`function` callee (different path, 0 RED while every ARROW mistyped), and arm a5's anchor matched 11 times so that arm
+silently never ran. a5 is a measured REDUNDANT barrier with its cost measured — `errorType` renders as `any` (B58.1),
+so its blocked values are observationally identical to the fallback. Screen 0 of 8,725; grid 8x0 and a REAL gate
+(4,109-5,671 bare-identifier returns per profile); cost_gate PASS (max +0.51%, `output.errors` 46); huge_methods 0 over.
+
+
 **(P18.169) — A GENERIC TYPE *ALIAS* AS A HERITAGE BASE DISCARDED ITS TYPE ARGUMENTS; `marked` 4 -> 3, 20,301 / 0 / 44 (2026-09-22).**
 `interface D extends Omit<B,'b'>` contributed NOTHING: `getTypeFromBaseTypeExpression` honoured type arguments only
 when the base's declared type was a `Type.Interface`, so a generic ALIAS fell through to a bare
