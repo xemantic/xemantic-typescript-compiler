@@ -1151,6 +1151,39 @@ shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: t
 positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
 positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
 
+- [ ] **(CHK.148) A CALLEE TYPE PARAMETER INFERRED FROM THE CONTEXTUAL *RETURN* POSITION BINDS TO
+  `unknown` INSTEAD OF THE CONTEXT'S TYPE — 7 ROWS ON `rxjs`, AND IT IS WHAT (CHK.35c) WAS WRONGLY
+  CREDITED WITH (measured 2026-09-23, (P18.176)).** Nine-line reducer
+  (`build/scratch-p18176/rx/x.ts`):
+  `declare function createOp<T>(dest: Sub<any>, onNext?: (value: T) => void): Sub<T>;` then inside
+  `function audit<T>(source: Obs<T>)`, `source.subscribe(createOp(null as any, (value) => { last =
+  value }))` reports an ours-only `TS2322 Type 'unknown' is not assignable to type 'T'` where tsgo
+  is clean. **`unknown` is CONCRETE, which is why (CHK.35c)'s free-type-parameter guard was never
+  true here and why that round moved this family by ZERO** — the rows are byte-identical on both
+  its arms. **Two controls pin the axis**: with an explicit `<T>` at the call, and with `T`
+  inferable from an ARGUMENT rather than from the contextual return, we are silent. So the gap is
+  that the callee's `T` is not inferred from the CONTEXTUAL RETURN POSITION (`subscribe`'s
+  parameter type supplies `Sub<T>`), and it falls back to `unknown`.
+  **The rxjs rows are `audit`, `pairwise`, `sample`, `single`, `skipLast` (x2) and `throttle` —
+  7 of the library's remaining 17, the single largest cause left.** Direction: closing it REMOVES
+  rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
+  naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
+
+- [ ] **(CHK.149) THREE MISSING-ROW GAPS IN THE TS2302 WALKER, each ADDING rows and each needing
+  its own round (found 2026-09-23 by (P18.175), measured byte-identical before and after it).**
+  (a) **A type-parameter CONSTRAINT is never walked** — `class H1<T> { static a: any = <U extends
+  T>(x: U) => x }` is reported by tsgo at the `T` in `extends T` and silent here;
+  `findTypeParamRefsIn*` visits neither `TypeParameter.constraint` nor `.default` at all.
+  (b) **A nested `FunctionDeclaration` STATEMENT is never walked** — `static m() { function
+  inner(x: T) {…} }`; `findTypeParamRefsInStatement` has no `FunctionDeclaration` arm.
+  (c) **An arrow's or function expression's BLOCK body is never walked** — `static a: any = <U>(x:
+  U) => { const y: T = null! }`; the `ArrowFunction` arm descends only into an EXPRESSION body and
+  `FunctionExpression.body` is not descended at all.
+  All three are the same walker (P18.175) just corrected, so the shadow-subtraction helper is
+  already in place and each is a descent to add, not a rule to design. **Gate them on the 7 active
+  TS2302 baselines plus the `B4` both-directions pin**, and note the grid is a CONTROL by a
+  measured count of ZERO sites on all eight profiles.
+
 - [ ] **(LIB.5) THE NEXT LIBRARY IS `rxjs` 7.8.2, AND IT IS PROVISIONABLE OFFLINE FROM THE npm
   CACHE — censused 2026-09-22 ((P18.173) recon) now that `marked` and `cronstrue` both agree with
   tsgo exactly.** The readiness page's older candidates are **NOT ON THIS BOX**: `jsonrepair`,
