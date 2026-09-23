@@ -3855,19 +3855,6 @@ class Checker(
     }
 
     private fun ctaSpineEnter(node: Node) {
-        // (cta-m3i): compute the legacy IfStatement arms' narrowing verdict at
-        // the If's enter under the frame maps (exact, incl. nested ifs).
-        if (node is IfStatement && !spineIsDts) {
-            val thenId = (node.thenStatement as NodeBase).nodeId
-            if (thenId >= 0) {
-                // (CHK.64) a LIST, so an `&&` condition narrows every operand.
-                var narrowed: List<Pair<String, Type>> = emptyList()
-                withCtaFrameLocals(ctaFrames.last()) {
-                    narrowed = extractNarrowingsFromCondition(node.expression)
-                }
-                if (narrowed.isNotEmpty()) ctaM3NarrowThen[thenId] = narrowed
-            }
-        }
         // (CHK.29) a `for…of` BINDING's element type, scoped to the loop body by
         // exactly the mechanism a narrowing `if` uses one arm up: register
         // (name, type) against the body's nodeId and let the frame push below
@@ -3949,6 +3936,28 @@ class Checker(
                     narrowedDeclared = nd,
                     varScoped = narrowVarScoped,
                     localScoped = true))
+            }
+        }
+        // (cta-m3i): compute the legacy IfStatement arms' narrowing verdict at
+        // the If's enter under the frame maps (exact, incl. nested ifs).
+        // (CHK.157) AFTER this node's own frame push, so an If that is itself a
+        // narrowed branch (`else if`, a bare then-`if`) reads its enclosing branch's
+        // narrowing — the legacy arm dispatches it under the narrowed map, so the
+        // two compound there, and must compound here.
+        if (node is IfStatement && !spineIsDts) {
+            val thenId = (node.thenStatement as NodeBase).nodeId
+            val elseId = (node.elseStatement as NodeBase?)?.nodeId ?: -1
+            if (thenId >= 0 || elseId >= 0) {
+                // (CHK.64) a LIST, so an `&&` condition narrows every operand.
+                var narrowed: List<Pair<String, Type>> = emptyList()
+                var elseNarrowed: List<Pair<String, Type>> = emptyList()
+                withCtaFrameLocals(ctaFrames.last()) {
+                    if (thenId >= 0) narrowed = extractNarrowingsFromCondition(node.expression)
+                    // (CHK.157) the else branch, by the NEGATED condition.
+                    if (elseId >= 0) elseNarrowed = extractElseNarrowings(node.expression)
+                }
+                if (narrowed.isNotEmpty()) ctaM3NarrowThen[thenId] = narrowed
+                if (elseNarrowed.isNotEmpty()) ctaM3NarrowThen[elseId] = elseNarrowed
             }
         }
         val parent = (node as NodeBase).parent
@@ -100235,6 +100244,9 @@ interface DataView {
                     // level narrows currentLocalTypes["match"] for the block walk.
                     // (CHK.64) a LIST, so an `&&` condition narrows every operand.
                     val narrowedNN = extractNarrowingsFromCondition(stmt.expression)
+                    // (CHK.157) the ELSE branch's narrowings, computed BEFORE the then-branch runs
+                    // (as the spine does at the If's enter) so a then-branch write cannot reach them.
+                    val elseNarrowed = if (stmt.elseStatement != null) extractElseNarrowings(stmt.expression) else emptyList()
                     if (narrowedNN.isNotEmpty()) {
                         val savedLocalTypesNN = currentLocalTypes
                         currentLocalTypes = EpochMap(currentLocalTypes)
@@ -100258,7 +100270,11 @@ interface DataView {
                     } else {
                         checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                     }
-                    stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
+                    stmt.elseStatement?.let { els ->
+                        withLegacyBranchNarrowings(elseNarrowed) {
+                            checkTypeAssignabilityInStmt(els, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                        }
+                    }
                 }
                 is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                 is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
@@ -102334,6 +102350,9 @@ interface DataView {
                 // Apply control flow narrowing in then-branch
                 // (CHK.64) a LIST, so an `&&` condition narrows every operand.
                 val narrowed = extractNarrowingsFromCondition(stmt.expression)
+                // (CHK.157) the ELSE branch's narrowings, computed BEFORE the then-branch runs
+                // (as the spine does at the If's enter) so a then-branch write cannot reach them.
+                val elseNarrowed = if (stmt.elseStatement != null) extractElseNarrowings(stmt.expression) else emptyList()
                 if (narrowed.isNotEmpty()) {
                     val savedLocalTypes = currentLocalTypes
                     currentLocalTypes = EpochMap(currentLocalTypes)
@@ -102357,7 +102376,11 @@ interface DataView {
                 } else {
                     checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                 }
-                stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
+                stmt.elseStatement?.let { els ->
+                    withLegacyBranchNarrowings(elseNarrowed) {
+                        checkTypeAssignabilityInStmt(els, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
+                    }
+                }
             }
             is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
@@ -102395,16 +102418,21 @@ interface DataView {
         // Handle `x !== null`, `x != null`, `x !== undefined`, `x != undefined`
         if (expr is BinaryExpression) {
             val op = expr.operator
-            if (op == SyntaxKind.ExclamationEquals || op == SyntaxKind.ExclamationEqualsEquals) {
+            // (CHK.157) a `!==` that is not against `null`/`undefined` FALLS THROUGH to the
+            // `typeof` arm below — it used to `return null` here, so `typeof x !== "string"`
+            // narrowed nothing at all (then-branch included), which the else branch of
+            // `typeof x === "string"` (negated to exactly that) made visible.
+            val nullSide = (op == SyntaxKind.ExclamationEquals || op == SyntaxKind.ExclamationEqualsEquals) &&
+                ((expr.right is Identifier && ((expr.right).text == "null" || (expr.right).text == "undefined")) ||
+                    (expr.left is Identifier && ((expr.left).text == "null" || (expr.left).text == "undefined")))
+            if (nullSide) {
                 val (varExpr, nullExpr) = when {
                     expr.right is Identifier && ((expr.right).text == "null" || (expr.right).text == "undefined") ->
                         expr.left to expr.right
-                    expr.left is Identifier && ((expr.left).text == "null" || (expr.left).text == "undefined") ->
-                        expr.right to expr.left
-                    else -> return null
+                    else -> expr.right to expr.left
                 }
                 val varName = (varExpr as? Identifier)?.text ?: return null
-                val nullName = (nullExpr).text
+                val nullName = (nullExpr as Identifier).text
                 val varType = currentLocalTypes[varName] ?: return null
                 if (varType !is Type.Union) return null
                 // Remove null and/or undefined from the union
@@ -102555,6 +102583,135 @@ interface DataView {
             out.add(n)
         }
         return out
+    }
+
+    /**
+     * (CHK.157) The narrowings an `if`'s ELSE branch receives: the condition asked the
+     * other way round. Before this only the THEN branch was narrowed at the readers that
+     * consult [currentLocalTypes] (the ASSIGNMENT and RETURN readers under round 784's
+     * gate), so `if (!o) {} else { p = o }` still carried `null` — while a declaration,
+     * an argument and a member access in the same else branch were right, because they
+     * ask the flow walk. tsgo narrows the false branch of every condition it narrows the
+     * true branch of (`narrowTypeByTruthiness`/`narrowTypeByTypeof`/`narrowTypeByEquality`
+     * and `narrowTypeByCallExpression`, each taking `assumeTrue`), and the false branch of
+     * `a || b` is "`a` false, THEN `b` false" (`narrowTypeByBinaryExpression`'s `||` arm
+     * with `assumeTrue = false` narrows the right operand by the left one's false type).
+     *
+     * So a `||` spine is flattened ITERATIVELY (a long chain is a deep left spine) and the
+     * negated disjuncts are applied IN ORDER, each reading the previous one's result — the
+     * chaining the `&&` path of [extractNarrowingsFromCondition] deliberately refuses, and
+     * which is sound here because it is exactly tsgo's evaluation order. A disjunct is
+     * negated by [negateCondition] (a `!`, `===`/`!==`, `==`/`!=`), or — a type-guard CALL,
+     * which [negateCondition] cannot express syntactically — by asking
+     * [narrowByCallPredicate] for its FALSE branch directly. `&&` contributes nothing (its
+     * negation is a disjunction, which narrows to a union this helper cannot build).
+     *
+     * An answer of `any` (a `typeof … === "object"` guard) or `never` is REFUSED: the first
+     * is a widening, and the second relates to everything, so installing it would delete
+     * a true positive rather than narrow ([typeofTypeGuardToType], CLAUDE.md).
+     */
+    private fun extractElseNarrowings(cond: Expression): List<Pair<String, Type>> {
+        val disjuncts = ArrayList<Expression>()
+        var cur: Expression = cond
+        while (cur is BinaryExpression && cur.operator == SyntaxKind.BarBar) {
+            disjuncts.add(cur.right)
+            cur = cur.left
+        }
+        disjuncts.add(cur)
+        disjuncts.reverse()
+        val saved = currentLocalTypes
+        var out: LinkedHashMap<String, Type>? = null
+        try {
+            for ((i, d) in disjuncts.withIndex()) {
+                val n = negatedDisjunctNarrowing(d) ?: continue
+                if (n.second === anyType || n.second.flags.hasAny(TypeFlags.Never)) continue
+                if (out == null) out = LinkedHashMap()
+                out[n.first] = n.second
+                if (i < disjuncts.size - 1) {
+                    // The next disjunct reads this one's result — installed into a COPY,
+                    // so the caller's map is untouched however the loop exits.
+                    if (currentLocalTypes === saved) currentLocalTypes = EpochMap(saved)
+                    currentLocalTypes[n.first] = n.second
+                }
+            }
+        } finally {
+            currentLocalTypes = saved
+        }
+        return out?.toList() ?: emptyList()
+    }
+
+    /** (CHK.157) One disjunct of [extractElseNarrowings], asked for its FALSE branch. */
+    private fun negatedDisjunctNarrowing(d: Expression): Pair<String, Type>? {
+        if (d is CallExpression) {
+            if (!NARROW1_CALL_PREDICATE) return null
+            for (arg in d.arguments) {
+                val varName = (arg as? Identifier)?.text ?: continue
+                val varType = currentLocalTypes[varName] ?: continue
+                val narrowed = narrowByCallPredicate(varType, d, false, varName)
+                if (narrowed !== varType) return varName to narrowed
+            }
+            return null
+        }
+        val neg = negateCondition(d) ?: return null
+        return nullishEqualityNarrowing(neg) ?: extractNullNarrowing(neg)
+    }
+
+    /**
+     * (CHK.157) `x === null` / `x === undefined` / `x == null` (and the mirrored operand
+     * order) narrow `x` to its NULLISH constituents — tsgo's `narrowTypeByEquality` with
+     * `assumeTrue`. [extractNullNarrowing] has no such arm (it only removes nullish), so the
+     * else branch of `x !== undefined` / `x != null` — negated to exactly these — needs it.
+     * Kept OUT of [extractNullNarrowing] so the then-branch and early-exit readers keep their
+     * measured behaviour; an answer with no nullish constituent is refused (it would be
+     * `never`).
+     */
+    private fun nullishEqualityNarrowing(expr: Expression): Pair<String, Type>? {
+        if (expr !is BinaryExpression) return null
+        val loose = expr.operator == SyntaxKind.EqualsEquals
+        if (!loose && expr.operator != SyntaxKind.EqualsEqualsEquals) return null
+        fun nullName(e: Expression): String? =
+            (e as? Identifier)?.text?.takeIf { it == "null" || it == "undefined" }
+        val (varExpr, nn) = nullName(expr.right)?.let { expr.left to it }
+            ?: nullName(expr.left)?.let { expr.right to it } ?: return null
+        val varName = (varExpr as? Identifier)?.text ?: return null
+        val varType = currentLocalTypes[varName] as? Type.Union ?: return null
+        val keep = when {
+            loose -> TypeFlags.Null or TypeFlags.Undefined
+            nn == "null" -> TypeFlags.Null
+            else -> TypeFlags.Undefined
+        }
+        val filtered = varType.types.filter { it.flags.hasAny(keep) }
+        return when {
+            filtered.isEmpty() -> null
+            filtered.size == 1 -> varName to filtered[0]
+            else -> varName to getUnionType(filtered)
+        }
+    }
+
+    /**
+     * (CHK.157) Check [body] with [narrowed] installed into [currentLocalTypes] — the
+     * legacy if-arms' then-branch install, shared by their else branches. The DECLARED
+     * type is recorded FIRST-WINS so an assignment TARGET inside the branch checks
+     * against it (M1.9, (CHK.64)).
+     */
+    private inline fun withLegacyBranchNarrowings(narrowed: List<Pair<String, Type>>, body: () -> Unit) {
+        if (narrowed.isEmpty()) { body(); return }
+        val savedLocalTypes = currentLocalTypes
+        currentLocalTypes = EpochMap(currentLocalTypes)
+        val savedDeclared = narrowedDeclaredTypes
+        narrowedDeclaredTypes = narrowedDeclaredTypes.toMutableMap()
+        for ((varName, narrowedType) in narrowed) {
+            if (!narrowedDeclaredTypes.containsKey(varName)) {
+                currentLocalTypes[varName]?.let { narrowedDeclaredTypes[varName] = it }
+            }
+            currentLocalTypes[varName] = narrowedType
+        }
+        try {
+            body()
+        } finally {
+            currentLocalTypes = savedLocalTypes
+            narrowedDeclaredTypes = savedDeclared
+        }
     }
 
     /** Map typeof type guard string to the corresponding Type. */
