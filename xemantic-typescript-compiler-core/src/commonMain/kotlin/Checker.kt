@@ -111650,7 +111650,55 @@ interface DataView {
             val mapped = raw.types.map { instantiateMethodParamType(it, mapper) }
             if (mapped.indices.all { mapped[it] === raw.types[it] }) raw else getUnionType(mapped)
         }
+        raw is Type.Object && raw !is Type.Reference && raw !is Type.Interface && raw.symbol == null &&
+            raw.tupleElementTypes == null && raw.callSignatures.isNullOrEmpty() &&
+            raw.constructSignatures.isNullOrEmpty() && raw.stringIndexInfo == null &&
+            raw.numberIndexInfo == null && !raw.members.isNullOrEmpty() ->
+            instantiateMethodParamPropertyBag(raw, mapper)
         else -> instantiateType(raw, mapper)
+    }
+
+    /**
+     * (CHK.150) [instantiateMethodParamType] over an anonymous PROPERTY BAG — the resolved
+     * form of `Partial<Observer<T>>`, whose members are `((value: T) => void) |
+     * undefined`. [instantiateType]'s own member walk maps each member with the plain
+     * rule, which no-ops a function-shaped constituent, so a method of `X<T>` taking
+     * `Partial<Observer<T>>` read through `X<string>` kept the declaration's raw `T` in
+     * every callback member — the leak rxjs's `Observable.subscribe(observerOrNext?:
+     * Partial<Observer<T>> | ((value: T) => void))` hits: the contextual callback went
+     * `unknown` (the pull's out-of-scope filter refused the candidate), and a mismatched
+     * callback member was never related (`{ next: (w: number) => … }` against
+     * `X<string>` is TS2322 in tsgo and was silent). Each member takes the rule the whole
+     * parameter takes; the bag is rebuilt only when a member moved. Index signatures are
+     * left to [instantiateType] (the gate refuses a bag carrying one). MINTS, never
+     * mutates ((CHK.102)).
+     */
+    private fun instantiateMethodParamPropertyBag(raw: Type.Object, mapper: TypeMapper): Type {
+        val origMembers = raw.members ?: return raw
+        var anyChanged = false
+        val newMembers: SymbolTable = mutableMapOf()
+        val newProps = mutableListOf<Symbol>()
+        for ((name, memberSym) in origMembers) {
+            val memberType = getTypeOfSymbol(memberSym)
+            val inst = instantiateMethodParamType(memberType, mapper)
+            if (inst === memberType) {
+                newMembers[name] = memberSym
+                newProps.add(memberSym)
+            } else {
+                anyChanged = true
+                val newSym = Symbol(memberSym.flags, memberSym.name)
+                newSym.declarations.addAll(memberSym.declarations)
+                newSym.valueDeclaration = memberSym.valueDeclaration
+                symbolTypes[newSym.id] = inst
+                newMembers[name] = newSym
+                newProps.add(newSym)
+            }
+        }
+        if (!anyChanged) return raw
+        return Type.Object().also { o ->
+            o.members = newMembers
+            o.properties = newProps
+        }
     }
 
     private fun resolveGenericPropertyTypeWorker(ref: Type.Reference, propSym: Symbol): Type? {
@@ -149796,11 +149844,22 @@ interface DataView {
      * with `strictSelect` yields only a DEFINITIVE winner (Array.reduce's `(cb,
      * initialValue: T)` overload must lose to `<U>(cb, initialValue: U)` when the initial
      * value is not a T — documentsUtil's `.reduce((meta, key) => meta.set(…), new Map())`
-     * typed `meta` as string). On the CALL side a first-overload win keeps the legacy
-     * every-overload-callable heuristic byte-identical; the CONSTRUCT side has no legacy
-     * to keep and adopts any definitive winner — `new O((p) => …)` against
-     * `constructor(cb)` / `constructor(n, cb)` is decided by arity alone, exactly as tsc's
-     * `hasCorrectArity` filter decides it before any type is compared.
+     * typed `meta` as string). Any definitive winner is adopted, on both sides, and its
+     * parameter types go through [ctxArgTypeMapper] exactly as a single signature's do —
+     * tsgo's `chooseOverload` (`checker.go`) filters by `hasCorrectArity` and then checks
+     * each surviving candidate with the arguments contextually typed BY THAT CANDIDATE,
+     * instantiated through ITS inference context. `new O((p) => …)` against
+     * `constructor(cb)` / `constructor(n, cb)` is decided by arity alone.
+     *
+     * (CHK.150) rung 3: the CALL side used to adopt a winner only when it was NOT the
+     * first overload — a round-481 guard that kept the every-overload-callable fallback
+     * below byte-identical. That fallback answers only for a position where EVERY
+     * overload is function-shaped, and with NO mapper, so a first-overload win lost the
+     * contextual type outright for an object-typed parameter (`subscribe(s:
+     * Subscriber<T>)` beside `subscribe(s, extra)`: the callback read `unknown` where tsgo
+     * reads the receiver's `T`), for a mixed function/object overload set, and for a
+     * GENERIC first overload, whose own `U` was handed on un-substituted. The fallback now
+     * serves only the call where no overload is a definitive winner.
      */
     private fun ctxArgTypesFromSignatures(
         sigs: List<Signature>,
@@ -149823,7 +149882,7 @@ interface DataView {
             return args.mapIndexed { i, _ -> ctxArgTypeAt(raw, i, mapper) }
         }
         val chosen = resolveCallOverload(sigs, args, strictSelect = true)
-        if (chosen != null && (construct || chosen !== sigs[0])) {
+        if (chosen != null) {
             val raw = ctxParamTypesOf(chosen, classScope)
             val mapper =
                 ctxArgTypeMapper(chosen, raw, args, typeArguments, classTypeParams, literalOverride = false, callNode)

@@ -51,12 +51,11 @@ import kotlin.test.Test
  * The probe is an ARGUMENT at a `number` parameter (or an assignment to `boolean` where
  * the answer is a union of primitives), whose message NAMES the callback parameter's type.
  *
- * NOT PINNED (the answer is wrong today; pinning it is a countdown): the rxjs
- * `Partial<Observer<T>> | fn` shape (still `unknown` — (P18.180)'s mapped-type leak),
- * the overload pair X1 (rung 3), and three relation rows tsgo reports and we miss
+ * NOT PINNED (the answer is wrong today; pinning it is a countdown): three relation rows tsgo reports and we miss
  * (`Subscriber<string>` against the union parameter, `T | Subscriber<T>` against
  * `Subscriber<T>`, and a union return against a class) — which is why the value pins
- * below filter to the probe's own parameter type.
+ * below filter to the probe's own parameter type. The rxjs `Partial<Observer<T>> | fn`
+ * shape and the overload pair X1 are pinned by `OverloadContextualArgumentTest`.
  */
 class UnionContextualReturnInferenceTest {
 

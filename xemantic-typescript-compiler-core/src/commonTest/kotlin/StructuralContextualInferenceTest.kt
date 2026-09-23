@@ -52,11 +52,8 @@ import kotlin.test.Test
  * and every pin asserts a VALUE: the probe is an ARGUMENT at a `number` parameter, whose
  * TS2345 NAMES the type the callback parameter was given.
  *
- * NOT PINNED, because the answer today is wrong and pinning it is a countdown: rung 2
- * (a UNION parameter, X3) and rung 3 (an OVERLOAD pair, X1) still answer `unknown`; a
- * mapped-type parameter of a generic class method (`LPartial<Observer<W>>`) reaches the
- * pull with the class's `W` un-instantiated, which this round only REFUSES (the
- * no-silence pin below); and the relation-side rows (`Subscriber<number>` against
+ * NOT PINNED, because the answer today is wrong and pinning it is a countdown: the
+ * relation-side rows (`Subscriber<number>` against
  * `Observer<string>`, an object literal's `(value: number) => void` against `next`) are
  * missing for the same member-table reason in the RELATION engine, which is a separate
  * change.
@@ -278,9 +275,11 @@ class StructuralContextualInferenceTest {
 
     @Test
     fun `an un-instantiated contextual type parameter is refused rather than leaking`() {
-        // The class's `W` survives in the contextual `LPartial<Observer<W>>`; handed on,
-        // the callback parameter would read `any` and the probe would go SILENT. tsgo
-        // reports the row naming `T`, so the COUNT is the invariant pinned here.
+        // The class's `W` used to survive in the contextual `LPartial<Observer<W>>`;
+        // handed on, the callback parameter would read `any` and the probe would go
+        // SILENT. (P18.182) instantiates the bag's callback members (the row now names
+        // `T`, pinned by `OverloadContextualArgumentTest`), so the out-of-scope refusal
+        // is a backstop here and the COUNT stays the invariant pinned.
         val rows = argRows("""
             type LPartial<T> = { [K in keyof T]?: T[K] };
             declare class X<W> { subscribe(s: LPartial<Observer<W>>): Subscription; }
