@@ -1,5 +1,73 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.176) — (CHK.35c): a contextual parameter type mentioning an IN-SCOPE type parameter is applied; the rxjs prize was MIS-ATTRIBUTED (2026-09-23)
+
+**THE HEADLINE IS THE REFUTATION, NOT THE FIX.** (CHK.35c) has been carried since (P18.168) as the
+owner of `rxjs` G2's 7 operator rows and as "what finally closes `marked`'s TS7019". **It is
+neither.** Those 7 rows read `Type 'unknown' is not assignable to type 'T'`, not `any`, and are
+**identical on both arms of this round**. Reduced to nine lines: the callee's `T` is inferred from
+the contextual RETURN position and bound to `unknown`, which is CONCRETE — so
+`typeContainsUnresolvedTypeParam` was never true there and this guard was never the blocker. With
+an explicit `<T>`, or with `T` inferable from an ARGUMENT, we are silent. That is a **separate
+defect** (callee type-parameter inference from a contextual return), now named and not fixed.
+
+**The fix is still real and still lands.** The guard at both `applyPulledContextualParamTypes`
+sites was `typeContainsUnresolvedTypeParam`, i.e. `is Type.TypeParam -> true`, which cannot tell
+round 569's actual subject — an UN-INFERRED CALLEE type parameter — from a FREE IN-SCOPE one
+declared by an enclosing function, method or class. It becomes
+`typeContainsOutOfScopeTypeParam(pType, fn)`. On a 15-cell matrix adjudicated against tsgo the
+argument-probe rows go **5 -> 13**, every added row byte-identical to tsgo's, six concrete controls
+unmoved. **So the round buys parity and buys no library row, and the honest summary is both.**
+
+**"IN SCOPE" HAD TO BE MEASURED — NEITHER OBVIOUS SIGNAL ANSWERS, AND THE SYMBOL ANSWERS
+NOTHING.** Probed at all 20 refusal sites first: `Type.TypeParam.symbol.declarations` is **EMPTY**
+for every type parameter, so the exact-by-construction route does not exist;
+`currentTypeParamScope` is **null at 7 of 20** sites, because both apply sites deliberately run
+OUTSIDE the function's own `withInternedTpScope`; and `typeParamInternCache` misses a generic
+CLASS's or METHOD's parameter, because **those are minted TWICE** and the object that arrives is
+not the one the cache holds for its declaration node. The shipped test therefore walks the
+function's ancestors and accepts on EITHER identity test, never on a name.
+
+**THE NAME-MATCH SHORTCUT IS REFUTED BY A NUMBER**: arm a7 replaces both identity legs with
+`tp.symbol?.name == d.name.text` and costs **+7 rows on the compiler profile (46 -> 53) and +7 on
+harness (94 -> 101)** — the callee-`T`-inside-a-user-`T` collision, made concrete rather than
+argued.
+
+**Ablation, seven arms.** a1 (restore the blanket predicate at the identifier site) 7 RED; a2
+(delete round 569's guard entirely) 2 RED **and the profiles explode 46 -> 93 and 94 -> 164**,
+which is that guard's real receipt; a3 (drop the scope leg) 1; a5 (blanket at the rest site) 1;
+a6 (no ancestor ascent) 8; a7 as above. **a4 (drop the intern-cache leg) read 0 RED and was
+classified rather than defaulted**: the leg genuinely answers 7 of 20 refusal SITES the scope leg
+cannot, but at those sites a sibling apply path registers the parameter anyway, so the ANSWER is
+unchanged on every corpus here — kept, because that coverage is an accident of pass ordering
+rather than an invariant, and recorded in the KDoc.
+
+**TWO ARMS WERE DEAD ON THE FIRST ATTEMPT AND THE `md5` CAUGHT THEM, NOT THE DIFF** — an ambiguous
+10-match anchor and a shell-mangled heredoc both printed `0 RED` with an **UNCHANGED class md5**.
+The rewritten driver now asserts `(arm == "base") == (source unchanged)` and dies otherwise. That
+is round 855/922's law with a sharper instrument: a real diff is not proof an arm landed, and the
+binary's digest is.
+
+**THE PROBE SHAPE MATTERED AND THE OBVIOUS ONE IS BLIND.** `const p: number = t` is silent on a
+WORKING binary for an unconstrained type parameter — our var-decl reader accepts one as a source
+where the argument and member readers report — so the first matrix read 8 of 8 missing for a
+reason that had nothing to do with the change. Re-taken with argument probes.
+
+**Gates.** suite **20,424 / 0 / 44** (+12 pins); corpus screen **0 of 8,725**; 8-profile grid
+**8x `added=0 removed=0`** — a real GATE in the adding direction here; `rxjs` **17 -> 17** row for
+row, `marked` **0**, `cronstrue` **1**, all unchanged; `cost_gate` PASS with **every counter
++0.00%** against the freshly rebaselined file (largest absolute movement: `typeOfExpr.calls` +2);
+`huge_methods` 0 over; warning-clean, with a positive control run FIRST.
+
+**Separate defects named, not fixed** — five, and the first two blind whole probe families: a
+var-decl reader that accepts an unconstrained type parameter as a source (so every var-decl-shaped
+assignability probe on an unconstrained TP is vacuous); a generic METHOD's own type parameter not
+typed in its body at the argument reader, **with an explicit annotation**, so contextual typing is
+not involved; `pullContextualTypeAt` answering null for a generic alias with a CONSTRAINED
+parameter instantiated by a free TP; the double-mint above; and the sibling
+`refuseTpFnTypes`/`isTpReferencingFnTypeOrUnion` gate, deliberately left because its stated reason
+is a different concern.
+
 ### Round (P18.175) — (LIB.5) G3: a nested generic container's own type parameters are its own; `rxjs` 21 -> 17 (2026-09-23)
 
 A generic ARROW or FUNCTION EXPRESSION nested in a STATIC member kept the enclosing class's

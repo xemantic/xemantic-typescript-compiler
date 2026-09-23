@@ -25,6 +25,53 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.186) — (CHK.154)(b): a class with its own constructor has ONLY its own construct signatures; the fix exposed an rxjs OOM and two relation defects, all closed; +0 rows on every profile and library (2026-09-23)
+
+Orchestrated: one implementation subagent (the (CHK.160) read-only census still running beside it). **The
+first cut — keeping only a class's own construct signatures, tsgo `resolveDeclaredMembers` (checker.go
+~20624: `getSignaturesOfSymbol(Members[__constructor])`, falling back to `getDefaultConstructSignatures`
+only when empty) — made `rxjs` RUN OUT OF A 6 GB HEAP building an error message.** A generic class instance
+(`Box<string>`) is a `Type.Reference`, and `Relater.objectTypeRelatedTo` skipped construct-signature
+comparison only for `Type.Interface` targets; once a derived class stopped carrying its base's constructor,
+`SafeSubscriber<T>` no longer related to `Subscriber<T>`, and an override check elaborated that mismatch
+until the heap was gone. Skipping construct signatures on class-targeted references (tsgo: instance types
+carry none) then turned `assignmentCompatability40` RED — a baseline passing BY ACCIDENT, because the
+interface source had no constructor and the construct-signature comparison rejected it while the relation
+has no private-vs-public rule; tsgo `propertyRelatedTo`'s first arm is now ported.
+
+**The change (+48/−3, three files)**: `MemberResolver.resolveInterfaceMembersCore` keeps only a class's
+own construct signatures when it declares a constructor (declaration or expression; no constructor still
+inherits; interfaces still concatenate); `Relater.objectTypeRelatedTo` also skips construct signatures for
+a `Type.Reference` whose target is a class; `Checker.isPropPrivateVisibilityMismatch` + one line in
+`Relater.propertiesRelatedTo` (exactly one side `private`, differing declarations -> unrelated, full tsgo
+chains); `checkSingleNewExpressionTypes` returns after TS2674 (protected) and silently for a private
+constructor used outside its class (tsgo's `resolveErrorCall` after `isConstructorAccessible`) — without it
+the source fix added ours-only TS2345 on inaccessible constructors.
+
+**Matrix, 26 cells** (`build/scratch-p18186/cells`): every after-row is a tsgo row; ADDED (all tsgo):
+`ctor1`, ambient, abstract base, generic base with own constructor, grandchild, overloads, `privrel` +2;
+REMOVED (all ours-only): `arity`'s extra TS2345 against the base signature, `privctor2`'s two TS2345 on
+inaccessible constructors; eight controls unchanged (inherited constructor, `super(...)` arguments,
+`typeof` assignment, interface inheritance, contextual callbacks, generic derived/instance).
+
+**Pins**: `DerivedClassConstructSignaturesTest`, 13 tests (5 controls). Ablation, seven arms: base kept
+beside own 5 RED; rule applied to interfaces 1; private `return` removed 1; protected `return` removed 1;
+private return ignoring in-class access 1; Reference construct-signature skip removed 1; private
+visibility rule removed 1. Restored and rebuilt.
+
+**Gates**: full suite **20,586 / 0 / 44** (+13); corpus screen 0 of 8,725 (+ `--include` over four pending
+class/constructor baselines, no constructor rows moved); cost_gate PASS (counters identical to
+(P18.185)'s); huge_methods 0 (`checkSingleNewExpressionTypes` 6,758); grid 8x `added=0 removed=0` — a real
+gate here (tsc's sources inherit heavily); KIR module 313/0 (its `CheckedFacts` reads construct
+signatures); `rxjs` 6 -> 6 byte-identical (the (P18.185) note's "second ingredient" was already moot);
+`marked` 0. **Residues, filed as (CHK.163)**: TS2673 is emitted nowhere; `class D extends B<string> {}`
+does not check `new D(1)` against the inherited instantiated signature (probably a class constructor
+parameter typed by the class's type parameter resolving to `error`, `genbase0` — missing before too); a
+class expression held in a `const` is never argument-checked; a constructor-less mixin base; the two
+`protected` arms of `propertyRelatedTo`.
+
+**Successor**: (CHK.155) (TS2454 on a captured read in an expression-bodied arrow; S, removal-only).
+
 ### Round (P18.185) — (CHK.154)(a): a trailing `void`-accepting parameter is OPTIONAL in signature relation; `rxjs` 7 -> 6 (2026-09-23)
 
 Orchestrated: one implementation subagent, plus a parallel read-only census of (CHK.160) (still running at
@@ -510,74 +557,6 @@ fix unapplied one reader over, and it is SILENT wherever the shifted type happen
 the emission-owning `checkFunctionBody` invocation sees an un-annotated parameter as annotated
 while the spine frame does not (observable proved, producer not). Third: an arrow inside an
 OBJECT-LITERAL method does not get the method's `this`.
-
-### Round (P18.176) — (CHK.35c): a contextual parameter type mentioning an IN-SCOPE type parameter is applied; the rxjs prize was MIS-ATTRIBUTED (2026-09-23)
-
-**THE HEADLINE IS THE REFUTATION, NOT THE FIX.** (CHK.35c) has been carried since (P18.168) as the
-owner of `rxjs` G2's 7 operator rows and as "what finally closes `marked`'s TS7019". **It is
-neither.** Those 7 rows read `Type 'unknown' is not assignable to type 'T'`, not `any`, and are
-**identical on both arms of this round**. Reduced to nine lines: the callee's `T` is inferred from
-the contextual RETURN position and bound to `unknown`, which is CONCRETE — so
-`typeContainsUnresolvedTypeParam` was never true there and this guard was never the blocker. With
-an explicit `<T>`, or with `T` inferable from an ARGUMENT, we are silent. That is a **separate
-defect** (callee type-parameter inference from a contextual return), now named and not fixed.
-
-**The fix is still real and still lands.** The guard at both `applyPulledContextualParamTypes`
-sites was `typeContainsUnresolvedTypeParam`, i.e. `is Type.TypeParam -> true`, which cannot tell
-round 569's actual subject — an UN-INFERRED CALLEE type parameter — from a FREE IN-SCOPE one
-declared by an enclosing function, method or class. It becomes
-`typeContainsOutOfScopeTypeParam(pType, fn)`. On a 15-cell matrix adjudicated against tsgo the
-argument-probe rows go **5 -> 13**, every added row byte-identical to tsgo's, six concrete controls
-unmoved. **So the round buys parity and buys no library row, and the honest summary is both.**
-
-**"IN SCOPE" HAD TO BE MEASURED — NEITHER OBVIOUS SIGNAL ANSWERS, AND THE SYMBOL ANSWERS
-NOTHING.** Probed at all 20 refusal sites first: `Type.TypeParam.symbol.declarations` is **EMPTY**
-for every type parameter, so the exact-by-construction route does not exist;
-`currentTypeParamScope` is **null at 7 of 20** sites, because both apply sites deliberately run
-OUTSIDE the function's own `withInternedTpScope`; and `typeParamInternCache` misses a generic
-CLASS's or METHOD's parameter, because **those are minted TWICE** and the object that arrives is
-not the one the cache holds for its declaration node. The shipped test therefore walks the
-function's ancestors and accepts on EITHER identity test, never on a name.
-
-**THE NAME-MATCH SHORTCUT IS REFUTED BY A NUMBER**: arm a7 replaces both identity legs with
-`tp.symbol?.name == d.name.text` and costs **+7 rows on the compiler profile (46 -> 53) and +7 on
-harness (94 -> 101)** — the callee-`T`-inside-a-user-`T` collision, made concrete rather than
-argued.
-
-**Ablation, seven arms.** a1 (restore the blanket predicate at the identifier site) 7 RED; a2
-(delete round 569's guard entirely) 2 RED **and the profiles explode 46 -> 93 and 94 -> 164**,
-which is that guard's real receipt; a3 (drop the scope leg) 1; a5 (blanket at the rest site) 1;
-a6 (no ancestor ascent) 8; a7 as above. **a4 (drop the intern-cache leg) read 0 RED and was
-classified rather than defaulted**: the leg genuinely answers 7 of 20 refusal SITES the scope leg
-cannot, but at those sites a sibling apply path registers the parameter anyway, so the ANSWER is
-unchanged on every corpus here — kept, because that coverage is an accident of pass ordering
-rather than an invariant, and recorded in the KDoc.
-
-**TWO ARMS WERE DEAD ON THE FIRST ATTEMPT AND THE `md5` CAUGHT THEM, NOT THE DIFF** — an ambiguous
-10-match anchor and a shell-mangled heredoc both printed `0 RED` with an **UNCHANGED class md5**.
-The rewritten driver now asserts `(arm == "base") == (source unchanged)` and dies otherwise. That
-is round 855/922's law with a sharper instrument: a real diff is not proof an arm landed, and the
-binary's digest is.
-
-**THE PROBE SHAPE MATTERED AND THE OBVIOUS ONE IS BLIND.** `const p: number = t` is silent on a
-WORKING binary for an unconstrained type parameter — our var-decl reader accepts one as a source
-where the argument and member readers report — so the first matrix read 8 of 8 missing for a
-reason that had nothing to do with the change. Re-taken with argument probes.
-
-**Gates.** suite **20,424 / 0 / 44** (+12 pins); corpus screen **0 of 8,725**; 8-profile grid
-**8x `added=0 removed=0`** — a real GATE in the adding direction here; `rxjs` **17 -> 17** row for
-row, `marked` **0**, `cronstrue` **1**, all unchanged; `cost_gate` PASS with **every counter
-+0.00%** against the freshly rebaselined file (largest absolute movement: `typeOfExpr.calls` +2);
-`huge_methods` 0 over; warning-clean, with a positive control run FIRST.
-
-**Separate defects named, not fixed** — five, and the first two blind whole probe families: a
-var-decl reader that accepts an unconstrained type parameter as a source (so every var-decl-shaped
-assignability probe on an unconstrained TP is vacuous); a generic METHOD's own type parameter not
-typed in its body at the argument reader, **with an explicit annotation**, so contextual typing is
-not involved; `pullContextualTypeAt` answering null for a generic alias with a CONSTRAINED
-parameter instantiated by a free TP; the double-mint above; and the sibling
-`refuseTpFnTypes`/`isTpReferencingFnTypeOrUnion` gate, deliberately left because its stated reason
-is a different concern.
 
 ## QUEUE
 
@@ -1265,7 +1244,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   CORRECTS (CHK.141)/G4's planned fix**: the edge need not become type-keyed — resolve the receiver from
   the parent chain as (CHK.144)/(P18.170) does. Size S, removal-only.
 
-- [ ] **(CHK.154) (a) LANDED 2026-09-23 ((P18.185) note; rxjs 7 -> 6) — OPEN: (b), the derived-class constructor. A TRAILING PARAMETER ACCEPTING `void` IS OPTIONAL IN SIGNATURE RELATION — rxjs
+- [x] **(CHK.154) CLOSED 2026-09-23 — (a) ((P18.185) note; rxjs 7 -> 6) and (b) ((P18.186) note: own construct signatures only, plus the two relation defects it exposed; residues in (CHK.163)). A TRAILING PARAMETER ACCEPTING `void` IS OPTIONAL IN SIGNATURE RELATION — rxjs
   `Observable:307` (TS2769), with a SECOND ingredient that is itself a false negative.** (a)
   `Relater.signatureRelatedTo` (Relater.kt ~1459) compares raw `minArgumentCount`; tsgo's
   `getMinArgumentCountEx` (relater.go ~1737) treats a trailing `void`-accepting parameter as optional, so
@@ -1342,6 +1321,17 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   the real site is `services/refactors/moveToFile.ts:486` on the harness profile. Relation-side (tsgo's
   `someTypeRelatedToType` over the target union with the intersection source, and the intersection's
   combined properties), so a declaration-position pin grades it. Direction: REMOVES a false positive.
+
+- [ ] **(CHK.163) CONSTRUCTOR RESIDUES FROM (P18.186), all measured as MISSING rows against tsgo
+  (`build/scratch-p18186/cells`).** (a) TS2673 (`Constructor of class 'C' is private and only accessible
+  within the class declaration`) is emitted NOWHERE — (P18.186) made such a `new` silent (tsgo's error-call)
+  instead of wrong; (b) `class D extends B<string> {}` does not check `new D(1)` against the inherited
+  INSTANTIATED signature — likely a class constructor parameter typed by the class's type parameter
+  resolving to `error` (`genbase0`: `new D(1)` missing even on a non-derived shape); cf. the rxjs census's
+  `sub10` (`constructor(o: Partial<Obs<T>>)` displays `Partial<Obs<any>>`), probably the same mechanism;
+  (c) a class EXPRESSION held in a `const` is never argument-checked (`classexpr`, `classexpr0`); (d) a
+  constructor-less MIXIN base is not checked (`mixin`, `new E2(1)`); (e) only the `private` arm of tsgo's
+  `propertyRelatedTo` visibility rule exists — the two `protected` arms are missing. All ADD rows.
 
 - [ ] **(CHK.151) RE-SCOPED BY ITS OWN CENSUS 2026-09-23 — THE RELATION DOES *NOT* READ THE MEMBER TABLE,
   AND THE DEFECT IS WIDER THAN FUNCTION MEMBERS.** `resolveReferenceMembers` (`MemberResolver.kt:762`)

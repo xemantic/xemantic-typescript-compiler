@@ -1,5 +1,16 @@
 
 
+**(P18.181) — (CHK.150) RUNG 2: A UNION CONTEXTUAL TYPE INFERS PER MEMBER WITH tsgo's CANDIDATE COMBINATION; X3 MATCHES tsgo, `rxjs` FLAT AS PREDICTED, 20,508 / 0 / 44 (2026-09-23).**
+The contextual union reached the leg all along; its union-SOURCE arm refused two real members on purpose. It now
+infers per member and combines candidates into a subtype-reduced union (tsgo `inference.go:290/1421`), and a new
+union-TARGET arm ports tsgo's matching head for a callee returning a union. **20-cell matrix 2 -> 15 agree**, the
+(P18.180) matrix 17 -> 18. 19 pins; six ablation arms RED, same-generic matching 0 and recorded as redundant.
+Screen 0 of 8,725 and blind again; cost_gate PASS; huge_methods 0; grid 8x0. `rxjs` 17 -> 17: its
+`Partial<Observer<T>> | fn` shape still needs rung 3 AND the `Partial<Observer<W>>` leak. A parallel read-only
+census (frozen classes, no Gradle) **re-scoped (CHK.151) — the relation does NOT read the broken member table** —
+and **filed (CHK.152): a named-object argument is never related to a named-object parameter**, so `z(q)` with a
+mismatched property is silent where `const s: S = q` reports. That is the larger correctness family.
+
 **(P18.180) — (CHK.150) RUNG 1: A GENERIC REFERENCE'S MEMBERS ARE READ SUBSTITUTED AND THE CONTEXTUAL-RETURN LEG INFERS BETWEEN DIFFERENT OBJECT TYPES; X2 MATCHES tsgo, `rxjs` FLAT AS PREDICTED, 20,489 / 0 / 44 (2026-09-23).**
 The queue named `lookupPropertyTypeForCtx`'s fallback; the real cause is the MEMBER TABLE — `resolveReferenceMembers`
 resolves an interface member with its own type parameters out of scope, so a function-typed member's `T` is `error`

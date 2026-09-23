@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,941** lines (**+41 at (P18.185)**, tsgo's `getMinArgumentCountEx` as one helper the
+extraction):** `Checker.kt` **199,964** lines (**+23 at (P18.186)**, a private-visibility relation predicate and the
+inaccessible-constructor returns — a SEMANTIC parity change closing a false-NEGATIVE class; the rest is
+`MemberResolver.kt` 834 -> 840 and `Relater.kt` 1,748 -> 1,758; **+41 at (P18.185)**, tsgo's `getMinArgumentCountEx` as one helper the
 relation reads, with its KDoc — a SEMANTIC parity change removing a FALSE-POSITIVE class, `rxjs` 7 -> 6;
 `Relater.kt` 1,746 -> 1,748; **+117 at (P18.184)**, a lexical callee-receiver resolver and binding
 typer for contextual `this` with their KDoc — a SEMANTIC parity change removing a FALSE-POSITIVE class,
@@ -70,6 +72,15 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.186) — (CHK.154)(b): A CLASS WITH ITS OWN CONSTRUCTOR HAS ONLY ITS OWN CONSTRUCT SIGNATURES; THE FIX EXPOSED AN rxjs OOM AND TWO RELATION DEFECTS, ALL CLOSED, 20,586 / 0 / 44 (2026-09-23).**
+`new Sub("x")` against `constructor(o?: number)` was ACCEPTED because the base constructor rode along. Fixing that at
+the source made `SafeSubscriber<T>` stop relating to `Subscriber<T>` (construct signatures were only skipped for
+`Type.Interface` targets, and a generic instance is a `Type.Reference`) and an override check then exhausted a 6 GB
+heap elaborating it; skipping them for class references exposed a baseline passing by accident, closed by porting
+tsgo's private-vs-public property rule; inaccessible constructors now return as tsgo's error call does. 26-cell matrix:
+every added row a tsgo row, every removed row ours-only. 13 pins, seven arms RED. Screen 0; grid 8x0 (a real gate);
+KIR 313/0; rxjs 6, marked 0. Residues filed as (CHK.163).
+
 **(P18.185) — (CHK.154)(a): A TRAILING `void`-ACCEPTING PARAMETER IS OPTIONAL IN SIGNATURE RELATION; `rxjs` 7 -> 6, 20,573 / 0 / 44 (2026-09-23).**
 `Relater.signatureRelatedTo` compared raw `minArgumentCount`; tsgo's `getMinArgumentCountEx` drops a trailing run of
 source parameters whose type has the `Void` flag (directly or on a union constituent — not `undefined`/`any`/`unknown`/
@@ -105,15 +116,4 @@ member through the method-param rule. Matrices: this round 8 -> 20 of 21, (P18.1
 `typeNode.bypassed` +2.35% — new contextual types at overloaded calls, rebaselined in the commit.** **`rxjs` 17 -> 10**,
 the seven `'unknown' … 'T'` rows exactly; ten ours-only rows remain, all separate families. Successor: (CHK.152) step
 1, fully specified by a parallel read-only census and predicted +0 rows on every profile and library.
-
-**(P18.181) — (CHK.150) RUNG 2: A UNION CONTEXTUAL TYPE INFERS PER MEMBER WITH tsgo's CANDIDATE COMBINATION; X3 MATCHES tsgo, `rxjs` FLAT AS PREDICTED, 20,508 / 0 / 44 (2026-09-23).**
-The contextual union reached the leg all along; its union-SOURCE arm refused two real members on purpose. It now
-infers per member and combines candidates into a subtype-reduced union (tsgo `inference.go:290/1421`), and a new
-union-TARGET arm ports tsgo's matching head for a callee returning a union. **20-cell matrix 2 -> 15 agree**, the
-(P18.180) matrix 17 -> 18. 19 pins; six ablation arms RED, same-generic matching 0 and recorded as redundant.
-Screen 0 of 8,725 and blind again; cost_gate PASS; huge_methods 0; grid 8x0. `rxjs` 17 -> 17: its
-`Partial<Observer<T>> | fn` shape still needs rung 3 AND the `Partial<Observer<W>>` leak. A parallel read-only
-census (frozen classes, no Gradle) **re-scoped (CHK.151) — the relation does NOT read the broken member table** —
-and **filed (CHK.152): a named-object argument is never related to a named-object parameter**, so `z(q)` with a
-mismatched property is silent where `const s: S = q` reports. That is the larger correctness family.
 
