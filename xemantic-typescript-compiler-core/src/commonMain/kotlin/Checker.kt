@@ -122403,6 +122403,9 @@ interface DataView {
             // the conservative null.
             if (t !is Type.Union) {
                 if (matchesDirectly) {
+                    // (CHK.156) a DIRECT `boolean` subject: reaching `default:` excludes each
+                    // cased boolean literal, so `case true:` leaves `false` and both leave never.
+                    booleanMinusLiterals(t, litTypes)?.let { return it }
                     // Round 460b: a DIRECT enum-typed subject (`switch (kind)` where
                     // kind's type is a bare enum) exhausted by enum-member cases
                     // covering EVERY member narrows to never — `default:
@@ -122471,6 +122474,14 @@ interface DataView {
                     if (isLiteralKindForDiscriminant(m) &&
                         litTypes.any { lit -> literalsEqualForDiscriminant(m, lit) }
                     ) { subtracted = true; continue }
+                    // (CHK.156) a `boolean` constituent is `false | true` to tsgo, so the
+                    // cased halves are subtracted from it like any other literal member.
+                    val boolRest = booleanMinusLiterals(m, litTypes)
+                    if (boolRest != null) {
+                        subtracted = true
+                        if (boolRest !== neverType) filtered.add(boolRest)
+                        continue
+                    }
                     // (REL.4) round 780: a NULLISH constituent covered by `case undefined:` /
                     // `case null:`. Those cases DO resolve — [literalTypeOfExpression] answers
                     // `undefinedType`/`nullType` for the bare identifiers — but
@@ -127138,6 +127149,8 @@ interface DataView {
             // This is `filterType` in tsc, where the union and non-union cases are one
             // function; here they are two branches and only the union one subtracted.
             if (!keep && areLiteralTypesEquivalent(t, literalType)) return neverType
+            // (CHK.156) a bare `boolean` minus one boolean literal is the OTHER literal.
+            if (!keep) booleanMinusLiteral(t, literalType)?.let { return it }
             return t
         }
         return if (keep) {
@@ -127156,8 +127169,41 @@ interface DataView {
             }
             if (kept.isEmpty()) t else getUnionType(kept)
         } else {
-            getUnionType(t.types.filter { !areLiteralTypesEquivalent(it, literalType) })
+            getUnionType(t.types.mapNotNull { member ->
+                when {
+                    areLiteralTypesEquivalent(member, literalType) -> null
+                    else -> booleanMinusLiteral(member, literalType) ?: member
+                }
+            })
         }
+    }
+
+    /**
+     * (CHK.156) `boolean` MINUS a `true`/`false` literal is the other literal, or null when
+     * [member] is not `boolean` or [literal] is not a boolean literal. tsgo's `boolean` IS the
+     * union `false | true` (`checker.go:1002`, `c.booleanType = c.getUnionType([regularFalseType,
+     * regularTrueType])`), so the NEGATIVE arm of `narrowTypeByEquality` (`flow.go`, `filterType(t,
+     * !(isUnitLikeType(t) && areTypesComparable(t, valueType)))`) removes one half of it; ours is
+     * one intrinsic, so without this the filter kept the whole `boolean` and `on === true ||
+     * on === false` never exhausted it (rxjs `share.ts:266`, an ours-only TS2349).
+     */
+    private fun booleanMinusLiterals(member: Type, literals: List<Type>): Type? {
+        if (member !== booleanType) return null
+        val noTrue = literals.any { it === trueType }
+        val noFalse = literals.any { it === falseType }
+        return when {
+            noTrue && noFalse -> neverType
+            noTrue -> falseType
+            noFalse -> trueType
+            else -> null
+        }
+    }
+
+    private fun booleanMinusLiteral(member: Type, literal: Type): Type? = when {
+        member !== booleanType -> null
+        literal === trueType -> falseType
+        literal === falseType -> trueType
+        else -> null
     }
 
     /**
@@ -168285,6 +168331,9 @@ interface DataView {
                 } else if (argIsNarrowableRef &&
                     (ctxApplied is Type.Interface || ctxApplied === unknownType ||
                         ctxApplied === stringType || ctxApplied === numberType ||
+                        // (CHK.156): a bare `boolean` is the finite domain `false | true`
+                        // to tsgo, so `=== true` / `=== false` refine it like an enum.
+                        ctxApplied === booleanType ||
                         // (REL.2)(C) round 763: an ENUM's own type. tsc models a literal
                         // enum as the UNION of its members, so every narrowability gate
                         // in this file admits it via `is Type.Union`; ours mints a
@@ -168349,7 +168398,8 @@ interface DataView {
                     // assignable to everything, so it can only ever SUPPRESS, and keeping the
                     // exclusion would make the round-746 subtraction chain answer the WHOLE
                     // enum at its last step (measured — strictly worse than before the chain).
-                    val provenNever = n === neverType && isEnumFlavoredObjectType(ctxApplied)
+                    val provenNever = n === neverType &&
+                        (isEnumFlavoredObjectType(ctxApplied) || ctxApplied === booleanType)
                     val refined = n !== ctxApplied && (provenNever || (n !== neverType &&
                         (checkTypeRelatedTo(n, ctxApplied, assignableRelation) ||
                             checkTypeRelatedTo(n, paramType, assignableRelation))))
