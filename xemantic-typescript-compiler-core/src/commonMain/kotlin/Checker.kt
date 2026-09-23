@@ -150131,14 +150131,17 @@ interface DataView {
             out[target] = source
             return
         }
+        if (target is Type.Union) {
+            ctxReturnInferToUnionTarget(source, target, tps, out, depth)
+            return
+        }
         if (source is Type.Union && target !is Type.Union) {
             // A NULLISH union is the ordinary optional annotation (`const s: Sub<T> | null
             // = …`), and stripping `null`/`undefined` leaves the one type the position
-            // really names. A union with two REAL members names two, and tsc would build
-            // a candidate from each and pick a common supertype — a guess this leg does
-            // not make, so it refuses and the parameter keeps today's `unknown`.
+            // really names.
             val real = source.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
             if (real.size == 1) ctxReturnInferInto(real[0], target, tps, out, depth + 1)
+            else if (real.size > 1) ctxReturnInferFromUnionSource(real, target, tps, out, depth)
             return
         }
         if (target is Type.Interface && source is Type.Reference && source.target === target) {
@@ -150165,6 +150168,146 @@ interface DataView {
         if (target is Type.Object && target !is Type.Interface && source is Type.Object) {
             ctxReturnInferFromMembers(source, target, tps, out, depth)
         }
+    }
+
+    /**
+     * (CHK.150) rung 2: a contextual type that is a UNION of two or more real members —
+     * `subscribe(s: Subscriber<T> | ((value: T) => void))` receiving
+     * `createOp<T>(…): Subscriber<T>`. tsgo's `inferFromTypes` (`inference.go:290`,
+     * `case source.flags&TypeFlagsUnion != 0`) infers from EACH source constituent into
+     * the target; a constituent that shares nothing with the target (the function type
+     * against `Subscriber<T>`) contributes no candidate, so the `Subscriber<T_outer>`
+     * member alone binds `T`.
+     *
+     * Several constituents may each bind the same parameter (`Subscriber<T> |
+     * Subscriber<string>`). These are return-type candidates, and
+     * `InferencePriorityReturnType` is in `PriorityImpliesCombination`
+     * (`checker.go:318`), so tsgo's `getCovariantInference` (`inference.go:1421`) answers
+     * their UNION with subtype reduction — measured `string | T` and `string | number`.
+     * [ctxCombineCandidates] is that union; the within-constituent rule stays first-wins.
+     *
+     * Divergences, recorded: a `null`/`undefined` constituent is stripped before the
+     * walk (the arm above has always done so; tsgo would offer it as a candidate only to
+     * a NAKED type-parameter target), and the combined union is not widened
+     * (`getWidenedType`) — a contextual type carries no fresh literal to widen.
+     */
+    private fun ctxReturnInferFromUnionSource(
+        members: List<Type>,
+        target: Type,
+        tps: Set<Type.TypeParam>,
+        out: HashMap<Type.TypeParam, Type>,
+        depth: Int,
+    ) {
+        val per = LinkedHashMap<Type.TypeParam, MutableList<Type>>()
+        for (m in members) {
+            val one = HashMap<Type.TypeParam, Type>()
+            ctxReturnInferInto(m, target, tps, one, depth + 1)
+            for ((tp, c) in one) {
+                val list = per.getOrPut(tp) { ArrayList(2) }
+                if (list.none { it.id == c.id }) list.add(c)
+            }
+        }
+        for ((tp, cands) in per) {
+            if (out.containsKey(tp)) continue
+            out[tp] = ctxCombineCandidates(cands)
+        }
+    }
+
+    /**
+     * (CHK.150) rung 2, the other direction: the callee RETURNS a union —
+     * `createOpU<T>(…): Subscriber<T> | undefined`, or `T | Subscriber<T>`. tsgo's
+     * `inferFromTypes` union-target head (`inference.go:102-129`) then
+     * `inferToMultipleTypes` (`inference.go`, the union half):
+     *
+     *  1. constituents IDENTICAL on both sides are matched and removed
+     *     (`inferFromMatchingTypes(…, isTypeOrBaseIdenticalTo)`) — `undefined` against
+     *     `undefined`;
+     *  2. constituents that are references to ONE generic are matched, inferred between
+     *     and removed (`isTypeCloselyMatchedBy`) — `Subscriber<T_outer>` against
+     *     `Subscriber<T>`;
+     *  3. with no source left, the full source goes to the remaining target at
+     *     `InferencePriorityNakedTypeVariable` — a WEAKER priority than the return-type
+     *     one, so it only binds a parameter nothing else bound (modelled as: only where
+     *     [out] has no entry yet, which is first-wins in this leg anyway);
+     *  4. otherwise each remaining source is inferred into each remaining NON-naked
+     *     target; a single naked type-parameter target receives the union of the sources
+     *     that produced no inference there, and every naked target finally receives the
+     *     whole source at the weaker priority.
+     *
+     * "Produced an inference" is read as "added an entry to [out]", the stand-in this
+     * leg has for tsgo's `inferencePriority == priority` test; inference circularity is
+     * not modelled.
+     */
+    private fun ctxReturnInferToUnionTarget(
+        source: Type,
+        target: Type.Union,
+        tps: Set<Type.TypeParam>,
+        out: HashMap<Type.TypeParam, Type>,
+        depth: Int,
+    ) {
+        val sources = ((source as? Type.Union)?.types ?: listOf(source)).toMutableList()
+        val targets = target.types.toMutableList()
+        // 1. identical constituents.
+        run {
+            val si = sources.iterator()
+            while (si.hasNext()) {
+                val s = si.next()
+                val ti = targets.indexOfFirst { it.id == s.id }
+                if (ti >= 0) { targets.removeAt(ti); si.remove() }
+            }
+        }
+        // 2. references to one generic.
+        run {
+            val si = sources.iterator()
+            while (si.hasNext()) {
+                val s = si.next() as? Type.Reference ?: continue
+                val ti = targets.indexOfFirst { it is Type.Reference && it.target === s.target }
+                if (ti < 0) continue
+                ctxReturnInferInto(s, targets[ti], tps, out, depth + 1)
+                targets.removeAt(ti)
+                si.remove()
+            }
+        }
+        if (targets.isEmpty()) return
+        val naked = targets.filter { it is Type.TypeParam && it in tps }
+        // 3. nothing left to infer from: the whole source, at the weaker priority.
+        if (sources.isEmpty()) {
+            for (t in naked) ctxReturnInferInto(source, t, tps, out, depth + 1)
+            return
+        }
+        // 4. inferToMultipleTypes over what remains.
+        val matched = BooleanArray(sources.size)
+        for (t in targets) {
+            if (t in naked) continue
+            for (i in sources.indices) {
+                val before = out.size
+                ctxReturnInferInto(sources[i], t, tps, out, depth + 1)
+                if (out.size > before) matched[i] = true
+            }
+        }
+        if (naked.isEmpty()) return
+        if (naked.size == 1) {
+            val unmatched = sources.filterIndexed { i, _ -> !matched[i] }
+            if (unmatched.isNotEmpty()) {
+                ctxReturnInferInto(getUnionType(unmatched), naked[0], tps, out, depth + 1)
+                return
+            }
+        }
+        for (t in naked) ctxReturnInferInto(source, t, tps, out, depth + 1)
+    }
+
+    /** (CHK.150) rung 2: tsgo's `getUnionTypeEx(candidates, UnionReductionSubtype)` for
+     *  [ctxReturnInferFromUnionSource] — a candidate STRICTLY assignable to another
+     *  (assignable one way and not the other; this repo has no subtype relation, the same
+     *  stand-in [flowJoinReduceSubtypes] uses) adds nothing to their union and is dropped. */
+    private fun ctxCombineCandidates(cands: List<Type>): Type {
+        if (cands.size == 1) return cands[0]
+        val kept = cands.filterIndexed { i, m ->
+            cands.indices.none { j ->
+                j != i && isTypeAssignableTo(m, cands[j]) && !isTypeAssignableTo(cands[j], m)
+            }
+        }
+        return getUnionType(kept.ifEmpty { cands })
     }
 
     /**
