@@ -25,6 +25,43 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.187) — (CHK.155): a captured read of an outer variable follows tsgo's `isOuterVariable && !isNeverInitialized`; `rxjs` 6 -> 5, 16 -> 24 of 26 cells (2026-09-23)
+
+Orchestrated: one implementation subagent, plus the (CHK.160) read-only census finishing beside it
+(recorded in that item). **The census's mechanism was right and its scope too narrow**: the ours-only
+TS2454 fired inside EVERY `inUncheckedBody` context (`if`, `while`, `do`, `for`, `for-in`/`of`, `switch`,
+`try`, `with`) and at file level, not only in if/while bodies. The block-arrow and function-expression arms
+apply no rule of their own (they start a fresh uninitialized set). The real cause: round 427's mask
+subtracted only names assigned inside THAT SAME expression-bodied arrow, where tsgo's `isNeverInitialized`
+is `isSymbolAssignedDefinitely` over the whole declaring function including nested closures — so
+`s = mk()` in a SIBLING closure passed as an argument was invisible (round 469's closure scan sees only
+statement-level functions).
+
+**The change (`Checker.kt` +44/−16)**: `flowTs2454AssignedAnywhere` (declared before `init`) installed by
+`withFlowTs2454AssignedAnywhere` around `runFlowTS2454OnFunction` / `runFlowTS2454OnTopLevel` (collected
+with the existing `collectAllAssignmentsAnywhere`, the same `=`/`??=`/`||=`/`&&=` rule as tsgo), restored in
+`finally`; the arrow arm subtracts that set. Only rows go away. **The agent overwrote an existing
+`CapturedReadDefiniteAssignmentTest.kt` (round 460) by a name collision, restored it with `git checkout` and
+moved its pins; verified: the file is unmodified and its 3 tests ran green in the suite.**
+
+**Matrix, 26 cells**: fixed (ours-only -> silent, as tsgo): f1, f2, da1, for, switch, try, after, afterif,
+var, nested, numok, file1, restore, restore2; must-still-report controls report in all three compilers
+(f5, fornever, topnever, filenever, samefn, directif, compound `+=` x2); silent controls held (da2, f3, f4,
+param, inarrowblock, strictNullChecks off). Residues, pre-existing: `inarrowblocknever` (the outer walk exits
+before reaching expression closures when the outer function has no uninitialized names) and `samefnif` (an
+assignment in any branch is treated as definite).
+
+**Pins**: `OuterVariableCapturedReadTest`, 11 tests, tsgo text, six red on the before binary. Ablation:
+per-arrow mask restored 6 RED; set not restored after a nested pass 1; file-level runner without the set 1;
+arm skipping captured reads entirely 1 (only the file-level pin — the set-based pass already reports the
+function-scoped never-assigned read, so this walker is redundant there; recorded). Restored md5 `22fd3944`.
+
+**Gates**: full suite **20,597 / 0 / 44** (+11); corpus screen 0 of 8,725 (no pending baseline carries
+TS2454/TS2448); cost_gate PASS (identical to (P18.186)); huge_methods 0; grid 8x `added=0 removed=0`;
+warning gate 0 `w:` on a non-empty log. **`rxjs` 6 -> 5** (`TestScheduler.ts:158`); `marked` 0.
+
+**Successor**: (CHK.156) (`narrowUnionByLiteral` never splits `boolean`; rxjs `share:266`).
+
 ### Round (P18.186) — (CHK.154)(b): a class with its own constructor has ONLY its own construct signatures; the fix exposed an rxjs OOM and two relation defects, all closed; +0 rows on every profile and library (2026-09-23)
 
 Orchestrated: one implementation subagent (the (CHK.160) read-only census still running beside it). **The
@@ -495,68 +532,6 @@ KDoc with tsgo's measured answer. The nullish-stripped singleton union IS handle
 expression-bodied-arrow arm, so a call inside `() => expr` sits at no contextual position; its
 `=` arm is blind for a BLOCK-SCOPED local (B83.5) while the file-level and member forms work; and
 an argument at a union parameter mentioning `T` is not inferred at all.
-
-### Round (P18.177) — (CHK.141)(b): a contextual `this:` parameter TYPES `this`; 1 of 5 positions -> 5 of 5, and the rxjs gate is NOT met (2026-09-23)
-
-**A contextual `this:` parameter was applied NOWHERE** — only an EXPLICIT `this:` on the function
-expression typed `this`. Four positions were silent false negatives (member assignment, variable
-annotation, call argument, object-literal property), **two of them (CHK.35a)'s deliberate ones**:
-that round suppressed TS2683 for a member-assigned function expression without typing anything and
-recorded the residue. The matrix goes **1 of 5 -> 5 of 5, exact agreement with tsgo including
-positions and message text.**
-
-**IT WAS NOT THE RULE, IT WAS THE GATE — AND ONLY A PROBE BINARY FOUND IT.**
-`applyPulledContextualParamTypes` opened with an early return computed over the PARAMETER
-population, and `this` had been folded into that population, so **a function expression with NO
-parameters — the shape that needs the rule most — returned one line above its own `this` write**.
-`contextualThisParamType` was correct all along. tsgo's own shape is the fix: its `this` half is
-gated on `context.thisParameter` alone and runs BEFORE the parameter loop, so the population is
-split in two. Its skip condition was adopted exactly — an ANNOTATED own `this:` wins, an
-un-annotated one does not, where ours refused both.
-
-**THE BRIEF'S PREMISE WAS FALSE AND THE ROUND PROVED IT RATHER THAN ASSUMING THE GATE.** I wrote
-*"with a contextual `this` type present, TS2683 cannot fire"*. It does: **typing and TS2683 live
-in different passes with different state.** TS2683 comes from `spineItEnterNode`, which runs under
-`spineItRestingLocals` and reads a bit folded by `spineItEdge`'s **purely syntactic** carrier
-edges; it never consults `currentLocalTypes["this"]`, which is where the fix writes. The proof is
-a miniature reproduction where **the typing outcome is identical and TS2683 differs by receiver
-kind alone** — a PARAMETER receiver keeps the row, a declared `const` receiver does not. So
-**`rxjs` stays at 17 and the stated gate is NOT met**; the round buys parity and no library row,
-exactly as (P18.176) did, and says so.
-**(CHK.35a)'s suppression arms are therefore NOT redundant and were not touched.** What closes
-rxjs is making `spineItEdge`'s arm TYPE-KEYED — an approach whose own KDoc records it as tried and
-reverted for being INERT because *"a contextual parameter type mentioning a free type parameter
-collapses"*. **(P18.176) removed that blocker last round**, so the reverted approach is now worth
-re-measuring, and that is the natural successor.
-
-**Ablation, four arms.** a1 (revert the hoist) **5 RED**; a2 (drop explicit-`this:` precedence) 1;
-a3 (let an ARROW take it) 1; a4 (drop the post-`this` early return) 0. **a3 WAS A BLIND PIN AND
-THE PIN WAS FIXED RATHER THAN THE GUARD RECORDED AS REDUNDANT**: the first arrow pin used an arrow
-inside a class METHOD, where `currentClassForThis` decides the case and the write is never
-consulted, so it read 0 RED. Measuring what the guard COSTS showed that dropping it grows a TS2322
-**tsgo does not emit** (tsgo gives TS7041 + TS7017 there), i.e. load-bearing; the pin moved to the
-module-top-level shape and the class-method assertion was kept and RENAMED to say it does not
-discriminate. **a4 is a measured-redundant COST barrier**, behaviour-neutral by construction, kept
-and labelled. **a1's fifth RED is explained, not incidental**: at the emission-owning invocation
-the with-parameters fixture's un-annotated parameter already reports `type != null`, so the
-pullable population is empty for ALL FIVE fixtures there — which is itself finding (2) below.
-
-**Gates.** suite **20,434 / 0 / 44** (+10 pins); corpus screen **0 of 8,725**; 8-profile grid **8x
-`added=0 removed=0`** — a GATE in the adding direction, and the census says it is reached (35-38
-`(this: ` parameters per profile); `rxjs` **17 -> 17**, `marked` **0**, `cronstrue` **1**, all held
-at exact agreement; `cost_gate` PASS, 18 counters +0.00% (largest `mapped.hits` +0.04%, the
-contextual pull now running for zero-parameter function expressions); `huge_methods` 0 over;
-warning-clean with the positive control proved live and then deleted.
-
-**Three separate defects named, not fixed, and the first is a WRONG TYPE**:
-`checkCallTypesInContextualFnExpr` zips against the annotation's RAW AST parameter list, which
-still contains the `this` pseudo-parameter, so `const b: (this: Act<number>, s: string) => void =
-function (s)` types **`s` as `Act<number>`** — we emit `Type 'Act<number>' is not assignable to
-type 'number'` where tsgo emits `Type 'string' …`; it is (CHK.133)(a)'s `resolveParameterTypesInScope`
-fix unapplied one reader over, and it is SILENT wherever the shifted type happens to fit. Second:
-the emission-owning `checkFunctionBody` invocation sees an un-annotated parameter as annotated
-while the spine frame does not (observable proved, producer not). Third: an arrow inside an
-OBJECT-LITERAL method does not get the method's `this`.
 
 ## QUEUE
 
@@ -1255,7 +1230,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   reducer `ctor1`). Size S-M, ADDS rows. The call-arity half (`g()` for `g(x: void)` reports TS2554 here,
   `void11`, ~20 emitters) is separate.
 
-- [ ] **(CHK.155) A CAPTURED READ IN AN EXPRESSION-BODIED ARROW IS CHECKED AGAINST THE OUTER UNINITIALIZED
+- [x] **(CHK.155) LANDED 2026-09-23 ((P18.187) note; rxjs 6 -> 5). A CAPTURED READ IN AN EXPRESSION-BODIED ARROW IS CHECKED AGAINST THE OUTER UNINITIALIZED
   SET — rxjs `TestScheduler:158` (TS2454), sibling of (CHK.116).** `walkExprForFlowTS2454`'s
   expression-bodied arrow arm masks only assignments inside that arrow and fires only inside if/while
   bodies; tsgo assumes a captured read is initialized unless the variable is never assigned
@@ -1293,7 +1268,32 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   `race10`, `race11`, `grp8`. Size L, ADDS rows; a name-collision stopgap in
   `typeContainsForeignTypeParam` would remove the two rows but keep the false negatives — refuse it.
 
-- [ ] **(CHK.160) PLAIN `instantiateType` LEAVES AN ANONYMOUS FUNCTION-SHAPED OBJECT UNCHANGED
+- [ ] **(CHK.160) CENSUSED 2026-09-23 (read-only, frozen (P18.184) classes, `build/scratch-p18185-census/`) — THE
+  SKIP WAS NEVER A MEASURED GUARD, AND THE FIRST STEP IS THE *RETURN* SLOT.** B52.3 (`e33aadd59a9`) added the
+  bag member walk and kept function-shaped objects out "to avoid broad regressions" — a guess; no regression,
+  cost or interning reason is recorded anywhere. **The fn-aware path has its own hole**:
+  `instantiateSignatureFnAware` keeps an inner signature's own type parameters WITHOUT substituting their
+  constraints (`(x: T) => <U extends T>(u: U) => U`, cell `g1`), so bare delegation is wrong — use
+  `substituteOuterTypeArgsInSignature`'s semantics (new objects, cloned inner type parameters, identity kept
+  when nothing maps). **grp7 is not about aliases**: a generic CALL's return is the defect (a literal
+  function type fails identically; alias annotations already work). 38-cell matrix: 10 agree, **16 missed
+  because of the skip** (generic call returns explicit or inferred `a1 a2 f1-f6 u2 r5 r8`; union/bag
+  property members `i7 i8`; a function in a `Partial` bag `m4`; `r2 r7`), one ours-only FALSE POSITIVE from
+  it (`r3` line 5, `Relater.signatureRelatedTo` ~1638 leaving `T` raw in a function-shaped return). JDI
+  census (`jdi/FnSkipCensus.java`, breaking on the two skip returns and asking `instantiateTypeFnAware`):
+  55,749-84,323 skip hits per profile, **>99% no-ops** (member-table `T`s that are not the target's type
+  parameter — (CHK.151)), 154-312 that would change (callback parameters in
+  `checkArgumentsAgainstSignatureCore` 118-206; `getReturnTypeOfCallExpressionCore` 24-81, all PARAMETER
+  slots on the profiles; `resolveGenericPropertyTypeWorker` 11; `compareSignaturesIdentical` 0-9); rxjs 43.
+  Predicted by `FnSkipPredict.java` for the callback half: **+1 TS2345 per profile**
+  (`moduleNameResolver.ts:2258`, an existing generic-source relation FP, `p2`). **PLAN**: (1) make the RETURN
+  slot function-aware — `instantiateSignature`'s `newReturnType`, `getReturnTypeOfCallExpressionCore`'s
+  `instantiateType(rt, …)` (~129889/129956/130083) and the Relater pin-mapper return (~1638): predicted +0 on
+  all 8 profiles, fixes `a1 a2 f1-f6 u2 r5 r8`, removes the `r3` FP; gate with pins, screen, grid, rxjs and a
+  BENCH arm (a pure walk over 55-84k hits is invisible to `cost_gate.py`); (2) callback parameters, after the
+  `p2` relation FP; (3) unions/bags in `resolveGenericPropertyTypeWorker` (`i7 i8 m4`), then fold
+  `instantiateMethodParamType`/`instantiateMethodParamPropertyBag` into the general path. Side finding: a
+  call of a call (`h()(1)`) returns an untyped result even without generics (`zz_callcall`). ORIGINAL: PLAIN `instantiateType` LEAVES AN ANONYMOUS FUNCTION-SHAPED OBJECT UNCHANGED
   (`TypeInstantiator.kt` ~127) — THE ROOT CAUSE THREE ROUNDS IN A ROW WORKED AROUND LOCALLY.** (P18.180)'s
   a5 finding (a function-shaped union member stays un-instantiated in `resolveGenericPropertyType`),
   (P18.182)'s `Partial<Observer<W>>` leak (fixed by a local method-param bag arm) and the rxjs census's

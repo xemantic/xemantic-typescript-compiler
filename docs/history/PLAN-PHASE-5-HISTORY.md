@@ -1,5 +1,67 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.177) — (CHK.141)(b): a contextual `this:` parameter TYPES `this`; 1 of 5 positions -> 5 of 5, and the rxjs gate is NOT met (2026-09-23)
+
+**A contextual `this:` parameter was applied NOWHERE** — only an EXPLICIT `this:` on the function
+expression typed `this`. Four positions were silent false negatives (member assignment, variable
+annotation, call argument, object-literal property), **two of them (CHK.35a)'s deliberate ones**:
+that round suppressed TS2683 for a member-assigned function expression without typing anything and
+recorded the residue. The matrix goes **1 of 5 -> 5 of 5, exact agreement with tsgo including
+positions and message text.**
+
+**IT WAS NOT THE RULE, IT WAS THE GATE — AND ONLY A PROBE BINARY FOUND IT.**
+`applyPulledContextualParamTypes` opened with an early return computed over the PARAMETER
+population, and `this` had been folded into that population, so **a function expression with NO
+parameters — the shape that needs the rule most — returned one line above its own `this` write**.
+`contextualThisParamType` was correct all along. tsgo's own shape is the fix: its `this` half is
+gated on `context.thisParameter` alone and runs BEFORE the parameter loop, so the population is
+split in two. Its skip condition was adopted exactly — an ANNOTATED own `this:` wins, an
+un-annotated one does not, where ours refused both.
+
+**THE BRIEF'S PREMISE WAS FALSE AND THE ROUND PROVED IT RATHER THAN ASSUMING THE GATE.** I wrote
+*"with a contextual `this` type present, TS2683 cannot fire"*. It does: **typing and TS2683 live
+in different passes with different state.** TS2683 comes from `spineItEnterNode`, which runs under
+`spineItRestingLocals` and reads a bit folded by `spineItEdge`'s **purely syntactic** carrier
+edges; it never consults `currentLocalTypes["this"]`, which is where the fix writes. The proof is
+a miniature reproduction where **the typing outcome is identical and TS2683 differs by receiver
+kind alone** — a PARAMETER receiver keeps the row, a declared `const` receiver does not. So
+**`rxjs` stays at 17 and the stated gate is NOT met**; the round buys parity and no library row,
+exactly as (P18.176) did, and says so.
+**(CHK.35a)'s suppression arms are therefore NOT redundant and were not touched.** What closes
+rxjs is making `spineItEdge`'s arm TYPE-KEYED — an approach whose own KDoc records it as tried and
+reverted for being INERT because *"a contextual parameter type mentioning a free type parameter
+collapses"*. **(P18.176) removed that blocker last round**, so the reverted approach is now worth
+re-measuring, and that is the natural successor.
+
+**Ablation, four arms.** a1 (revert the hoist) **5 RED**; a2 (drop explicit-`this:` precedence) 1;
+a3 (let an ARROW take it) 1; a4 (drop the post-`this` early return) 0. **a3 WAS A BLIND PIN AND
+THE PIN WAS FIXED RATHER THAN THE GUARD RECORDED AS REDUNDANT**: the first arrow pin used an arrow
+inside a class METHOD, where `currentClassForThis` decides the case and the write is never
+consulted, so it read 0 RED. Measuring what the guard COSTS showed that dropping it grows a TS2322
+**tsgo does not emit** (tsgo gives TS7041 + TS7017 there), i.e. load-bearing; the pin moved to the
+module-top-level shape and the class-method assertion was kept and RENAMED to say it does not
+discriminate. **a4 is a measured-redundant COST barrier**, behaviour-neutral by construction, kept
+and labelled. **a1's fifth RED is explained, not incidental**: at the emission-owning invocation
+the with-parameters fixture's un-annotated parameter already reports `type != null`, so the
+pullable population is empty for ALL FIVE fixtures there — which is itself finding (2) below.
+
+**Gates.** suite **20,434 / 0 / 44** (+10 pins); corpus screen **0 of 8,725**; 8-profile grid **8x
+`added=0 removed=0`** — a GATE in the adding direction, and the census says it is reached (35-38
+`(this: ` parameters per profile); `rxjs` **17 -> 17**, `marked` **0**, `cronstrue` **1**, all held
+at exact agreement; `cost_gate` PASS, 18 counters +0.00% (largest `mapped.hits` +0.04%, the
+contextual pull now running for zero-parameter function expressions); `huge_methods` 0 over;
+warning-clean with the positive control proved live and then deleted.
+
+**Three separate defects named, not fixed, and the first is a WRONG TYPE**:
+`checkCallTypesInContextualFnExpr` zips against the annotation's RAW AST parameter list, which
+still contains the `this` pseudo-parameter, so `const b: (this: Act<number>, s: string) => void =
+function (s)` types **`s` as `Act<number>`** — we emit `Type 'Act<number>' is not assignable to
+type 'number'` where tsgo emits `Type 'string' …`; it is (CHK.133)(a)'s `resolveParameterTypesInScope`
+fix unapplied one reader over, and it is SILENT wherever the shifted type happens to fit. Second:
+the emission-owning `checkFunctionBody` invocation sees an un-annotated parameter as annotated
+while the spine frame does not (observable proved, producer not). Third: an arrow inside an
+OBJECT-LITERAL method does not get the method's `this`.
+
 ### Round (P18.176) — (CHK.35c): a contextual parameter type mentioning an IN-SCOPE type parameter is applied; the rxjs prize was MIS-ATTRIBUTED (2026-09-23)
 
 **THE HEADLINE IS THE REFUTATION, NOT THE FIX.** (CHK.35c) has been carried since (P18.168) as the

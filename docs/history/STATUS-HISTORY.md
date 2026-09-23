@@ -1,5 +1,15 @@
 
 
+**(P18.182) — (CHK.150) RUNG 3 + THE `Partial` LEAK: AN OVERLOAD'S CLEAR WINNER IS ADOPTED FOR THE ARGUMENT'S CONTEXT; `rxjs` 17 -> 10, (CHK.150) CLOSED, 20,527 / 0 / 44 (2026-09-23).**
+Rung 3 was a round-481 byte-parity guard DISCARDING `resolveCallOverload`'s arity-filtered clear winner; it protected
+no baseline (screens byte-identical, pending rows included). The `Partial<Observer<W>>` leak was a mapped bag sent
+through plain `instantiateType`, which skips function-typed union members; a method-param bag arm now mints each
+member through the method-param rule. Matrices: this round 8 -> 20 of 21, (P18.180) 18 -> 21, (P18.181) 15 -> 16.
+19 pins, four ablation arms RED. Screen 0 of 8,725 and blind a third time; grid 8x0; huge_methods 0; **cost_gate
+`typeNode.bypassed` +2.35% — new contextual types at overloaded calls, rebaselined in the commit.** **`rxjs` 17 -> 10**,
+the seven `'unknown' … 'T'` rows exactly; ten ours-only rows remain, all separate families. Successor: (CHK.152) step
+1, fully specified by a parallel read-only census and predicted +0 rows on every profile and library.
+
 **(P18.181) — (CHK.150) RUNG 2: A UNION CONTEXTUAL TYPE INFERS PER MEMBER WITH tsgo's CANDIDATE COMBINATION; X3 MATCHES tsgo, `rxjs` FLAT AS PREDICTED, 20,508 / 0 / 44 (2026-09-23).**
 The contextual union reached the leg all along; its union-SOURCE arm refused two real members on purpose. It now
 infers per member and combines candidates into a subtype-reduced union (tsgo `inference.go:290/1421`), and a new

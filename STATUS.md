@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,964** lines (**+23 at (P18.186)**, a private-visibility relation predicate and the
+extraction):** `Checker.kt` **199,992** lines (**+28 at (P18.187)**, a function-wide definitely-assigned set installed
+around the TS2454 walks — a SEMANTIC parity change removing a FALSE-POSITIVE class, `rxjs` 6 -> 5;
+**+23 at (P18.186)**, a private-visibility relation predicate and the
 inaccessible-constructor returns — a SEMANTIC parity change closing a false-NEGATIVE class; the rest is
 `MemberResolver.kt` 834 -> 840 and `Relater.kt` 1,748 -> 1,758; **+41 at (P18.185)**, tsgo's `getMinArgumentCountEx` as one helper the
 relation reads, with its KDoc — a SEMANTIC parity change removing a FALSE-POSITIVE class, `rxjs` 7 -> 6;
@@ -72,6 +74,14 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.187) — (CHK.155): A CAPTURED READ OF AN OUTER VARIABLE FOLLOWS tsgo's `isOuterVariable && !isNeverInitialized`; `rxjs` 6 -> 5, 20,597 / 0 / 44 (2026-09-23).**
+An expression-bodied arrow's read subtracted only names assigned inside that same arrow, so an assignment in a SIBLING
+closure was invisible and TS2454 fired in every unchecked body and at file level. The walks now install tsgo's
+function-wide definitely-assigned set. 26-cell matrix 16 -> 24 agree, all must-still-report controls held; 11 pins,
+four arms RED. Screen 0; cost_gate identical; grid 8x0; huge_methods 0. **`rxjs` 6 -> 5.** The parallel (CHK.160) census
+found the `instantiateType` function-shape skip was never a measured guard and specified a return-slot first step
+(+0 predicted on all profiles, 11 matrix cells fixed, one false positive removed).
+
 **(P18.186) — (CHK.154)(b): A CLASS WITH ITS OWN CONSTRUCTOR HAS ONLY ITS OWN CONSTRUCT SIGNATURES; THE FIX EXPOSED AN rxjs OOM AND TWO RELATION DEFECTS, ALL CLOSED, 20,586 / 0 / 44 (2026-09-23).**
 `new Sub("x")` against `constructor(o?: number)` was ACCEPTED because the base constructor rode along. Fixing that at
 the source made `SafeSubscriber<T>` stop relating to `Subscriber<T>` (construct signatures were only skipped for
@@ -106,14 +116,4 @@ redundant guards. Screen 0 of 8,725 (blind — the census measured only 23 such 
 7,494/14,311 opened pairs; cost_gate PASS; huge_methods 0; rxjs 10, marked 0. **The read-only census predicted +0
 exactly by invoking the checker's own predicates at a debugger breakpoint on frozen classes** — committed as
 `scripts/census/JdiArgFirewallCensus.java`. A second census filed rxjs's ten rows as (CHK.153)-(CHK.161).
-
-**(P18.182) — (CHK.150) RUNG 3 + THE `Partial` LEAK: AN OVERLOAD'S CLEAR WINNER IS ADOPTED FOR THE ARGUMENT'S CONTEXT; `rxjs` 17 -> 10, (CHK.150) CLOSED, 20,527 / 0 / 44 (2026-09-23).**
-Rung 3 was a round-481 byte-parity guard DISCARDING `resolveCallOverload`'s arity-filtered clear winner; it protected
-no baseline (screens byte-identical, pending rows included). The `Partial<Observer<W>>` leak was a mapped bag sent
-through plain `instantiateType`, which skips function-typed union members; a method-param bag arm now mints each
-member through the method-param rule. Matrices: this round 8 -> 20 of 21, (P18.180) 18 -> 21, (P18.181) 15 -> 16.
-19 pins, four ablation arms RED. Screen 0 of 8,725 and blind a third time; grid 8x0; huge_methods 0; **cost_gate
-`typeNode.bypassed` +2.35% — new contextual types at overloaded calls, rebaselined in the commit.** **`rxjs` 17 -> 10**,
-the seven `'unknown' … 'T'` rows exactly; ten ours-only rows remain, all separate families. Successor: (CHK.152) step
-1, fully specified by a parallel read-only census and predicted +0 rows on every profile and library.
 
