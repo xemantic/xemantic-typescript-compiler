@@ -1,5 +1,14 @@
 
 
+**(P18.184) — (CHK.153): A CALLBACK'S CALLEE RECEIVER IS RESOLVED FROM THE PARENT CHAIN FOR CONTEXTUAL `this`; `rxjs` 10 -> 7, 9 -> 29 OF 29 CELLS, 20,565 / 0 / 44 (2026-09-23).**
+`callArgHasContextualThis` typed the callee under the file's resting locals, so every non-file-level receiver —
+parameters, body-locals, unions, optional chains, destructured and class-method parameters — kept an ours-only TS2683.
+It now resolves the receiver lexically (with a shadow-stop, a nullish strip and a per-constituent union fold) and
+treats a union callee as carrying `this:` when any constituent does, as tsgo does. 21 pins (7 keep-TS2683 controls),
+six ablation arms RED. Screen 0 of 8,725; cost_gate counters identical to the previous round; grid 8x0; huge_methods
+0. **`rxjs` 10 -> 7**, the three TS2683 rows exactly. A parallel census sized (CHK.152) step 3's blocker (2 narrowing
+rows of one shape + a relation defect filed as (CHK.162)).
+
 **(P18.183) — (CHK.152) STEP 1: A NAMED-OBJECT ARGUMENT IS RELATED TO A NAMED-OBJECT PARAMETER; 24 OF 29 CENSUS MISSES REPORT WITH THE DECLARATION'S CHAIN, +0 ROWS EVERYWHERE AS PREDICTED, 20,544 / 0 / 44 (2026-09-23).**
 `z(q)` with a mismatched property used to be SILENT at an argument while `const s: S = q` reported. A new gate in
 `caasNonSimpleParamChecks` (arity, not-rest, no free type parameter; never a union or a literal) delegates to

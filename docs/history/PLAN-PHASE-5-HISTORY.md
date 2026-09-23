@@ -1,5 +1,52 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.179) — (CHK.143): `instanceof` on the positive branch INTERSECTS where it used to REPLACE (2026-09-23)
+
+`narrowByInstanceOf` answered the CANDIDATE where tsgo answers the INTERSECTION, and the join with
+the fall-through then left `P | Q` where tsgo leaves `P`. tsc's missing tail is now one helper at
+two sites: `assignable(candidate, t) -> candidate; assignable(t, candidate) -> t; else
+getIntersectionType(listOf(t, candidate))`. **7 of 21 matrix cells moved to agreement with tsgo,
+one ours-only row removed, one new row added, and ZERO controls moved.** The fixture's own comment
+(`s; // Set<number> & Promise<any>`) and its `submoduleAccepted` layer say tsgo's answer is the
+target.
+
+**IT DOES NOT CLOSE THE PENDING BASELINE, AND THE ROUND SAYS SO WITH BOTH MEASUREMENTS.**
+`controlFlowInstanceof.errors.txt` goes from **3 divergences to 2**: the narrowing one is gone; the
+remaining two — an ours-only TS2721 and a missing `Property 'val' does not exist on type '{}'` —
+are both the `resolveInstanceOfRhsType` -> `null` refusal (the `emptyObjectType` question) that
+round 838's in-source KDoc refused deliberately and that this round scoped out. The baseline stays
+`@Ignore`d.
+
+**a3 WAS A BLIND PIN AND ITS COST WAS MEASURED BEFORE ANYTHING WAS CONCLUDED.** Dropping the
+`isMatch &&` that keeps the tail off the NEGATIVE branch read 0 RED — **and the 8-profile grid and
+the whole errors channel of the corpus (0 of 3,079) are blind to it too**. Measured, it both
+INVENTS a TS2322 tsgo does not have and LOSES the `Property 'b' does not exist on type 'never'`
+that it does. The existing control missed the shape because structurally-identical classes reduce
+to a NON-union before the last negative step and never reach the union arm's tail; a new pin was
+built for exactly that shape and the arm now reddens. A fifth arm (the two assignability legs
+swapped) was likewise discriminated only by a pin written for it. Five arms, none left at 0.
+
+**THE LIBRARY CONTROLS WERE RE-CENSUSED RATHER THAN INHERITED, AND ONE OF THEM IS NOT A CONTROL**:
+`marked` and `cronstrue` carry **0** ` instanceof ` occurrences, but **`rxjs` carries 130** — so it
+is a real GATE for this change, and it is byte-identical before and after.
+
+**Gates.** suite **20,470 / 0 / 44** (+13 pins); corpus screen **0 of 8,725**, which did not move at
+all so there was nothing to adjudicate; 8-profile grid **8x `added=0 removed=0`** (run twice);
+`rxjs` **17**, rows byte-identical; `marked` **0**; `cronstrue` **1**; `cost_gate` PASS with
+`narrow.walks` **+0.00%** — the tail runs inside an existing walk; `huge_methods` 0 over;
+warning-clean, proved live.
+
+**Four separate defects named, not fixed, and two are PRE-EXISTING rather than introduced**:
+`typeToString` does not parenthesize a UNION member of an INTERSECTION (`C1 | Wide & Q` for
+tsgo's `(C1 | Wide) & Q`) — verified identical on the parent binary from a hand-written
+annotation, so this round only makes it REACHABLE from narrowing, and it is (CHK.146); a member
+read on an intersection-over-union is permissive here, a MISSING row and the direction the sizing
+predicted; a conditional expression's union gets no subtype reduction (`P2 | (P2 & Q2)` for
+tsgo's `P2` — before the change it read `P2 | Q2`, also wrong and with a bogus constituent, so the
+new form is at least semantically equal); and a GENERIC right-hand side leaves its type parameter
+FREE where tsgo defaults it to `any`, which turns a wrong-type row into a missing one — root cause
+in `resolveInstanceOfRhsType`, and no gated corpus contains the shape.
+
 ### Round (P18.178) — (CHK.148): a callee type parameter is inferred from the CONTEXTUAL RETURN; 13 of 14 sources match tsgo, and the rxjs sizing was WRONG (2026-09-23)
 
 `ctxArgTypeMapper` gained one leg between the argument-inference mapper and `freeTypeParamMapper`:

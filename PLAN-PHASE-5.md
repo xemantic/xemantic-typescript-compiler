@@ -25,6 +25,48 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.189) — (CHK.157): the ELSE branch of an `if` narrows at the assignment and return readers — in the spine AND both legacy walks; `rxjs` 4 -> 3, 12 -> 45 agreeing rows (2026-09-23)
+
+Orchestrated: one implementation subagent, plus the (CHK.159) census landing into its item and a (CHK.164)
+census launched beside it. **The census named the wrong emitter**: for a function-DECLARATION body the rows
+come from the SPINE (`ctaSpineEnter`'s `ctaM3NarrowThen` registration), not the legacy
+`checkTypeAssignabilityInStmt` arm — ablating both legacy arms read 0 RED on every function-declaration
+fixture; the legacy arms emit only for arrow / function-expression / object-method bodies, so the fix is in
+all three. Also wider than stated: the RETURN and object-literal member readers were wrong too (declarations,
+arguments and property paths ask the flow walk and were right). **Two pre-existing bugs surfaced and were
+fixed**: `typeof x !== "…"` narrowed NOTHING even in a then-branch (`extractNullNarrowing`'s `!==` arm
+returned null before reaching the typeof arm — the else of `typeof x === "s"` negates into exactly that);
+and `else if` did not compound in the spine (the If's narrowing was registered before its own frame push).
+
+**The change (`Checker.kt` +197/−21)**: `extractElseNarrowings` flattens a `||` spine iteratively and negates
+each disjunct in order, each reading the previous result through a throwaway `EpochMap` copy (tsgo
+`narrowTypeByBinaryExpression` with `assumeTrue = false`); `negatedDisjunctNarrowing` (`negateCondition` for
+syntactic guards; `narrowByCallPredicate(…, isMatch = false)` for a type-guard call);
+`nullishEqualityNarrowing` (else of `x === undefined` / `x == null` narrows TO the nullish constituents);
+`any`/`never` answers refused; `withLegacyBranchNarrowings` reused for the else in both legacy If arms (else
+narrowings computed before the then-branch runs, matching the spine); `ctaSpineEnter` registers the else
+node's narrowing and registers the If's after its frame push; the `!==` fall-through. Spine closure audit
+clean (46 handlers, 40 audited); `cpaSpineLeave` untouched at 7,898.
+
+**Matrix, 22 cells**: agree 12 -> **45**, ours-only 40 -> 5, missing 37 -> 4; the arrow-body cell 0 -> 6 of
+6; NO shape added a row. Residues, all pre-existing: the else of an `&&` condition; the statement list after
+an `if` whose then EXITS and which HAS an else (the early-exit install handles only `elseStatement == null`);
+`typeof a && typeof b` in a then-branch (does not chain, by design); the object-literal elaboration display;
+`o: string` with `o !== undefined` — tsgo narrows the else to `never` and is silent, we report `string`.
+
+**Pins**: `ElseBranchNarrowingTest`, 20 tests, tsgo text (`Partial` declared locally). Ablation, ten arms:
+statement-list legacy install 3 RED (the arrow pins); nested legacy install 1; spine else registration 14;
+If registration before the frame push 1 (else-if chain); no `||` chaining 2; negated guard-call arm 2;
+`typeof !==` fall-through reverted 5; narrow-to-nullish 3; declared-type recording 1; **`never` refusal 0**
+— no reachable shape found, kept as a conservative barrier and recorded, not claimed.
+
+**Gates**: full suite **20,631 / 0 / 44** (+20); corpus screen 0 of 8,725 (+ `--include
+controlFlowInstanceof`, byte-identical on both arms); cost_gate PASS (`typeNode.bypassed` −0.49%, the rest
+within ±0.24%); huge_methods 0; spine closure audit clean; grid 8x `added=0 removed=0`; no `w:`.
+**`rxjs` 4 -> 3** (`Subscriber.ts:220`); `marked` 0.
+
+**Successor**: (CHK.158) (a type-guard predicate reached through a variable; rxjs `argsArgArrayOrObject:14`).
+
 ### Round (P18.188) — (CHK.156): equality and `switch` narrowing split `boolean` into `true | false`; `rxjs` 5 -> 4 (2026-09-23)
 
 Orchestrated: one implementation subagent, plus a parallel read-only census of (CHK.159) (running at commit).
@@ -459,53 +501,6 @@ deliberately did not touch: `Subscriber<number>` against `Observer<string>` and 
 `(value: number) => void` against `next` are rows tsgo reports and we MISS, for the same
 error-typed-member reason — a false-NEGATIVE class, broader than contextual typing, expected to ADD
 rows and to need its own grid.
-
-### Round (P18.179) — (CHK.143): `instanceof` on the positive branch INTERSECTS where it used to REPLACE (2026-09-23)
-
-`narrowByInstanceOf` answered the CANDIDATE where tsgo answers the INTERSECTION, and the join with
-the fall-through then left `P | Q` where tsgo leaves `P`. tsc's missing tail is now one helper at
-two sites: `assignable(candidate, t) -> candidate; assignable(t, candidate) -> t; else
-getIntersectionType(listOf(t, candidate))`. **7 of 21 matrix cells moved to agreement with tsgo,
-one ours-only row removed, one new row added, and ZERO controls moved.** The fixture's own comment
-(`s; // Set<number> & Promise<any>`) and its `submoduleAccepted` layer say tsgo's answer is the
-target.
-
-**IT DOES NOT CLOSE THE PENDING BASELINE, AND THE ROUND SAYS SO WITH BOTH MEASUREMENTS.**
-`controlFlowInstanceof.errors.txt` goes from **3 divergences to 2**: the narrowing one is gone; the
-remaining two — an ours-only TS2721 and a missing `Property 'val' does not exist on type '{}'` —
-are both the `resolveInstanceOfRhsType` -> `null` refusal (the `emptyObjectType` question) that
-round 838's in-source KDoc refused deliberately and that this round scoped out. The baseline stays
-`@Ignore`d.
-
-**a3 WAS A BLIND PIN AND ITS COST WAS MEASURED BEFORE ANYTHING WAS CONCLUDED.** Dropping the
-`isMatch &&` that keeps the tail off the NEGATIVE branch read 0 RED — **and the 8-profile grid and
-the whole errors channel of the corpus (0 of 3,079) are blind to it too**. Measured, it both
-INVENTS a TS2322 tsgo does not have and LOSES the `Property 'b' does not exist on type 'never'`
-that it does. The existing control missed the shape because structurally-identical classes reduce
-to a NON-union before the last negative step and never reach the union arm's tail; a new pin was
-built for exactly that shape and the arm now reddens. A fifth arm (the two assignability legs
-swapped) was likewise discriminated only by a pin written for it. Five arms, none left at 0.
-
-**THE LIBRARY CONTROLS WERE RE-CENSUSED RATHER THAN INHERITED, AND ONE OF THEM IS NOT A CONTROL**:
-`marked` and `cronstrue` carry **0** ` instanceof ` occurrences, but **`rxjs` carries 130** — so it
-is a real GATE for this change, and it is byte-identical before and after.
-
-**Gates.** suite **20,470 / 0 / 44** (+13 pins); corpus screen **0 of 8,725**, which did not move at
-all so there was nothing to adjudicate; 8-profile grid **8x `added=0 removed=0`** (run twice);
-`rxjs` **17**, rows byte-identical; `marked` **0**; `cronstrue` **1**; `cost_gate` PASS with
-`narrow.walks` **+0.00%** — the tail runs inside an existing walk; `huge_methods` 0 over;
-warning-clean, proved live.
-
-**Four separate defects named, not fixed, and two are PRE-EXISTING rather than introduced**:
-`typeToString` does not parenthesize a UNION member of an INTERSECTION (`C1 | Wide & Q` for
-tsgo's `(C1 | Wide) & Q`) — verified identical on the parent binary from a hand-written
-annotation, so this round only makes it REACHABLE from narrowing, and it is (CHK.146); a member
-read on an intersection-over-union is permissive here, a MISSING row and the direction the sizing
-predicted; a conditional expression's union gets no subtype reduction (`P2 | (P2 & Q2)` for
-tsgo's `P2` — before the change it read `P2 | Q2`, also wrong and with a bogus constituent, so the
-new form is at least semantically equal); and a GENERIC right-hand side leaves its type parameter
-FREE where tsgo defaults it to `any`, which turns a wrong-type row into a missing one — root cause
-in `resolveInstanceOfRhsType`, and no gated corpus contains the shape.
 
 ## QUEUE
 
@@ -1217,7 +1212,10 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   (Checker.kt ~126966); `"a" | "b"` and a bare `true` member work. Reducers `build/scratch-p18183-census/cells/share2`, `share4` (b-d);
   controls `share4` (a, e). Size S; expect some `string | false` DISPLAY text to move.
 
-- [ ] **(CHK.157) ELSE-BRANCH NARROWING IS MISSING AT THE LEGACY ASSIGNMENT READER — rxjs `Subscriber:220`
+- [x] **(CHK.157) LANDED 2026-09-23 ((P18.189) note; rxjs 4 -> 3; emitter was the SPINE, not the named legacy arm).
+  RESIDUES, all pre-existing and measured: the else of an `&&` condition; the statement list after an `if` whose
+  then exits AND which has an else; `o: string` + `o !== undefined` else is `never` in tsgo (silent), `string`
+  here. ELSE-BRANCH NARROWING IS MISSING AT THE LEGACY ASSIGNMENT READER — rxjs `Subscriber:220`
   (TS2322).** `checkTypeAssignabilityInStmt`'s `IfStatement` arm (Checker.kt ~102197) narrows the THEN
   branch only; the else branch of `if (!o)`, `if (o === null)`, `if (isFunction(o) || !o)` gets nothing
   at `p = o`, while declarations, arguments and the then-branch are right. Apply `negateCondition` (as the
@@ -1231,7 +1229,36 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   from the callee's DECLARATION, and a variable declaration carries none; read it from the callee's
   SIGNATURE instead. Reducer `build/scratch-p18183-census/cells/aaoo2` (c2, c3); controls (c1, c4, c5). Size M.
 
-- [ ] **(CHK.159) UNINFERRED CALLEE TYPE PARAMETERS LEAK AND COLLIDE BY NAME WITH THE CALLER'S — rxjs
+- [ ] **(CHK.159) CENSUSED 2026-09-23 (read-only, frozen (P18.187) classes, `build/scratch-p18188-census/`) —
+  FIRST STEP SPECIFIED: AN ARGUMENT-INFERENCE LEG IN `getReturnTypeOfCallExpressionCore` REUSING
+  `ctxReturnInferInto`; THE NAME-COLLISION STOPGAP IS REFUSED ON EVIDENCE.** The call's RESULT type is inferred
+  in exactly one place — `tryInferSingleTypeParamFromArgs(forReturnType=true)` (single ~129914, overloads
+  ~129983), all-or-nothing and shape-gated; on null the RAW `sig.resolvedReturnType` is returned — while the
+  better structural inference (`ctxReturnInferInto`, already tsgo's `inferToMultipleTypes`) reaches only
+  contextual typing. The raw type is then masked by `typeContainsForeignTypeParam`, which compares by NAME
+  when the type parameter has no declaration: a false positive when names collide with different shapes
+  (race1), a FALSE NEGATIVE when they collide with the same shape (c19/c26/c40 accept the callee's `T[]` as the
+  caller's), and argument sites pass `emptySet()` so every raw TP hides there (race10). 47-cell matrix: 18
+  silent where tsgo reports (unions with a naked TP, callbacks, generic references, mapped types, no-candidate
+  `unknown`, nested). JDI census (`jdi/UninfCensus.java`, modes census/force/infer/inferC): 1,284-2,010 distinct
+  uninferred sites per profile (441-462 name-colliding), rxjs 244; forcing raw TPs to `unknown` adds 298-539
+  rows, ALL false positives — so the unmasked-`unknown` approach is refused. **Predictor arm "infer"**
+  (`ctxReturnInferInto(widened argument, parameter)` per non-context-sensitive argument, substituting only
+  what it finds): 30 of 47 cells match tsgo exactly, including race1/race10/race11 and the collision cells;
+  forced live, it costs **+2 rows on compiler/services** (`checker.ts:50978`: identical-constituent matching
+  misses a literal `"skip"`; `parser.ts:4147`: no constraint check, tsgo rejects that overload) and on rxjs
+  removes `race.ts:52` and adds `zip.ts:71/113` (`map(() => false)` gives `U = false`, tsgo widens to
+  `boolean`); "inferC" (plus the `ctxReturnTypeParamMapper` fallback) also removes `groupBy.ts:147`. **STEP 1**:
+  run only when the legacy path returns null; per non-context-sensitive argument (skip spreads, rest, arrows
+  with any un-annotated parameter); REFUSE a candidate `typeContainsOutOfScopeTypeParam` flags (c10); CHECK
+  THE CONSTRAINT and let a failure fall through to the next generic overload; WIDEN literal candidates; match
+  identical literal constituents BY VALUE; substitute only what it finds. Predicted: `race.ts:52` closes,
+  profiles +0, cells c01-c08, c11, c19-c27, c32, c33, c36, c37 flip. Gates: pins (c38/c39 as true-caller-`T`
+  controls), the grid (a REAL gate — the arm fires ~572 times per profile), `cost_gate.py`, screen, libraries.
+  **Later**: the `ctxReturnTypeParamMapper` fallback (groupBy, `operate`/`createOperatorSubscriber`);
+  base-type/index-signature inference (`Iterable` from Array/Set, `Object.entries`); reverse-mapped
+  `Partial`/`Record`; second-pass inference from context-sensitive lambda bodies; `unknown` for
+  no-candidate TPs only once everything else resolves. EARLIER TEXT: UNINFERRED CALLEE TYPE PARAMETERS LEAK AND COLLIDE BY NAME WITH THE CALLER'S — rxjs
   `race:52` and `groupBy:147` (TS2322), and a FALSE-NEGATIVE class behind them.** The shape-gated
   inference `tryInferSingleTypeParamFromArgs` (Checker.kt ~130468) bails on a `T | T[]` parameter, and
   `operate<T, R>`'s parameters are inferred neither from callback parameters typed `Obs<T>`/`Sub<R>` nor
@@ -1314,6 +1341,13 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   parameter `on?: boolean` displays as `boolean` where tsgo shows `boolean | undefined` — no narrowing
   involved, a plain `pn(on)` shows it (`undef`). Note `checkArgumentsAgainstSignatureCore` is at 7,629 of
   8,000 bytecodes: split it before growing it.
+
+- [ ] **(CHK.165) TWO SMALL FAMILIES FROM THE (CHK.159) CENSUS, each a measured tsgo divergence
+  (`build/scratch-p18188-census/cells`).** (a) an INFERRED result keeps a literal where tsgo widens
+  (`true` not widened to `boolean`: c15, `grp6`, `grp7`; rxjs `zip.ts` once inference reaches it) — tsgo's
+  `getCovariantInference` widens literal candidates unless the type parameter's constraint is literal-ish;
+  (b) a function-typed ALIAS as the SOURCE of an argument check is silent even with explicit type arguments
+  (`grp6`/`grp7` line 7); plus (c) `null!` is not typed `never` (the census saw `Type 'null'` wording).
 
 - [ ] **(CHK.151) RE-SCOPED BY ITS OWN CENSUS 2026-09-23 — THE RELATION DOES *NOT* READ THE MEMBER TABLE,
   AND THE DEFECT IS WIDER THAN FUNCTION MEMBERS.** `resolveReferenceMembers` (`MemberResolver.kt:762`)

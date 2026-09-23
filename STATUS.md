@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **200,042** lines (**+50 at (P18.188)**, two `boolean`-minus-literal helpers at three narrowing
+extraction):** `Checker.kt` **200,199** lines (**+157 at (P18.189)**, else-branch narrowing at the spine and both legacy
+If arms with its `||`-negation, nullish-equality and guard-call helpers — a SEMANTIC parity change, `rxjs` 4 ->
+3; **+50 at (P18.188)**, two `boolean`-minus-literal helpers at three narrowing
 sites and the argument arm — a SEMANTIC parity change, `rxjs` 5 -> 4; **the file crossed 200,000 lines**;
 **+28 at (P18.187)**, a function-wide definitely-assigned set installed
 around the TS2454 walks — a SEMANTIC parity change removing a FALSE-POSITIVE class, `rxjs` 6 -> 5;
@@ -76,6 +78,14 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.189) — (CHK.157): THE ELSE BRANCH OF AN `if` NARROWS AT THE ASSIGNMENT AND RETURN READERS; `rxjs` 4 -> 3, 12 -> 45 AGREEING ROWS, 20,631 / 0 / 44 (2026-09-23).**
+The census named a legacy arm; the emitter for function-declaration bodies is the SPINE, so the fix is in the spine
+and both legacy walks: each `||` disjunct negated in order (tsgo's false branch), negated type-guard calls,
+narrow-to-nullish, and `else if` compounding. Two pre-existing bugs fell out: `typeof x !== "…"` narrowed nothing,
+and the spine registered an If's narrowing before its own frame. 22-cell matrix: agree 12 -> 45, ours-only 40 -> 5,
+no row added. 20 pins, nine of ten arms RED (the `never` refusal recorded as unreachable). Screen 0; cost_gate PASS;
+spine audit clean; grid 8x0; huge_methods 0. **`rxjs` 4 -> 3.**
+
 **(P18.188) — (CHK.156): EQUALITY AND `switch` NARROWING SPLIT `boolean` INTO `true | false`; `rxjs` 5 -> 4, 20,611 / 0 / 44 (2026-09-23).**
 `on === true` / `=== false` / `case true:` never removed a half of `boolean` — in the union branch, the bare branch,
 the switch default, or the call-argument reader (where an exhausted `boolean` was an ours-only false positive). One
@@ -107,13 +117,4 @@ source parameters whose type has the `Void` flag (directly or on a union constit
 a type parameter). One helper now answers it. Matrix: every removed row is one tsgo lacks, none added; 8 pins, six
 ablation arms RED and one recorded as redundant. Screen 0 of 8,725; cost_gate PASS; grid 8x0; huge_methods 0;
 **`rxjs` 7 -> 6** (`Observable.ts:307`). Next: (b), a derived class's `new` checked against the BASE constructor too.
-
-**(P18.184) — (CHK.153): A CALLBACK'S CALLEE RECEIVER IS RESOLVED FROM THE PARENT CHAIN FOR CONTEXTUAL `this`; `rxjs` 10 -> 7, 9 -> 29 OF 29 CELLS, 20,565 / 0 / 44 (2026-09-23).**
-`callArgHasContextualThis` typed the callee under the file's resting locals, so every non-file-level receiver —
-parameters, body-locals, unions, optional chains, destructured and class-method parameters — kept an ours-only TS2683.
-It now resolves the receiver lexically (with a shadow-stop, a nullish strip and a per-constituent union fold) and
-treats a union callee as carrying `this:` when any constituent does, as tsgo does. 21 pins (7 keep-TS2683 controls),
-six ablation arms RED. Screen 0 of 8,725; cost_gate counters identical to the previous round; grid 8x0; huge_methods
-0. **`rxjs` 10 -> 7**, the three TS2683 rows exactly. A parallel census sized (CHK.152) step 3's blocker (2 narrowing
-rows of one shape + a relation defect filed as (CHK.162)).
 
