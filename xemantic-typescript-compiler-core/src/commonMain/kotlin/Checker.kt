@@ -129709,6 +129709,77 @@ interface DataView {
         return chosenRt
     }
 
+    /**
+     * (CHK.35c) [typeContainsUnresolvedTypeParam] restricted to the type parameters
+     * that are NOT in lexical scope at [at] — i.e. round 569's actual subject, an
+     * un-inferred CALLEE type parameter, and not a FREE one the enclosing function,
+     * method or class declares.
+     *
+     * Measured (round P18.176, 20 refusals over the free-TP matrix): NEITHER of the
+     * two obvious signals answers alone, and the type parameter's own SYMBOL answers
+     * nothing at all — `Type.TypeParam.symbol` carries a bare name with an EMPTY
+     * `declarations` list, so there is no declaration to compare against. What is
+     * used instead is TWO identity tests over the declarations that lexically enclose
+     * [at], never a name match (so a callee `T` inside a user `T` stays refused):
+     *
+     *  - [typeParamInternCache] keyed by [internKey] of the enclosing declaration's
+     *    own AST [TypeParameter] node. Exact, and the probe never MINTS — a miss
+     *    means this type cannot have come from that node.
+     *  - [currentTypeParamScope] at the declaration's own NAME, compared by IDENTITY.
+     *
+     * Both are needed. The scope map is **null** at 7 of the 20 sites (both
+     * contextual-apply sites deliberately run OUTSIDE the function's own
+     * `withInternedTpScope`), where only the cache answers; and a generic CLASS's or
+     * generic METHOD's type parameter is minted TWICE — the object that reaches here
+     * is a different instance from the one the cache holds for its declaration node —
+     * where only the scope answers. That duplicate mint is a pre-existing defect of
+     * its own; this predicate is written to be correct in spite of it rather than to
+     * depend on it.
+     */
+    private fun typeContainsOutOfScopeTypeParam(type: Type, at: Node, depth: Int = 0): Boolean {
+        if (depth > 6) return false
+        return when (type) {
+            is Type.TypeParam -> !typeParamIsLexicallyInScope(type, at)
+            is Type.Reference ->
+                type.resolvedTypeArguments?.any { typeContainsOutOfScopeTypeParam(it, at, depth + 1) } ?: false
+            is Type.Union -> type.types.any { typeContainsOutOfScopeTypeParam(it, at, depth + 1) }
+            is Type.Intersection -> type.types.any { typeContainsOutOfScopeTypeParam(it, at, depth + 1) }
+            else -> false
+        }
+    }
+
+    /**
+     * (CHK.35c) Is [tp] declared by a declaration that lexically encloses [at]?
+     * Identity against [typeParamInternCache], keyed by the declaring AST node — see
+     * [typeContainsOutOfScopeTypeParam] for why the two obvious alternatives cannot
+     * answer. A STATIC member is deliberately NOT a barrier: (CHK.140) measured that
+     * tsgo reports TS2302 for a static reference to a class type parameter AND still
+     * types the reference as that parameter, so excluding statics here would be lossy
+     * and would protect nothing.
+     */
+    private fun typeParamIsLexicallyInScope(tp: Type.TypeParam, at: Node): Boolean {
+        var cur: Node? = at
+        while (cur != null) {
+            val decls: List<TypeParameter>? = when (val c = cur) {
+                is FunctionDeclaration -> c.typeParameters
+                is FunctionExpression -> c.typeParameters
+                is ArrowFunction -> c.typeParameters
+                is MethodDeclaration -> c.typeParameters
+                is ClassDeclaration -> c.typeParameters
+                is ClassExpression -> c.typeParameters
+                else -> null
+            }
+            if (decls != null) {
+                for (d in decls) {
+                    if (typeParamInternCache[internKey(d)] === tp) return true
+                    if (currentTypeParamScope?.get(d.name.text) === tp) return true
+                }
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
     /** Does [type] contain a type parameter that is not bound to a concrete type
      *  (i.e. an un-inferred `S`/`U`)? Shallow walk over the common shapes. */
     internal fun typeContainsUnresolvedTypeParam(type: Type, depth: Int = 0): Boolean {
@@ -151241,7 +151312,7 @@ interface DataView {
                 if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken != true) continue
                 val rt = getTypeOfSymbol(sp)
                 if (rt === anyType || rt === errorType) continue
-                if (typeContainsUnresolvedTypeParam(rt)) continue
+                if (typeContainsOutOfScopeTypeParam(rt, fn)) continue
                 if (refuseTpFnTypes && isTpReferencingFnTypeOrUnion(rt)) continue
                 currentLocalTypes[rn] = rt
                 continue
@@ -151257,7 +151328,17 @@ interface DataView {
             // means OUR inference failed where tsc would have bound it —
             // registering the bare TP turns downstream uncertainty-bails into
             // constraint-based verdicts. Skip (the param stays `any`).
-            if (typeContainsUnresolvedTypeParam(pType)) continue
+            //
+            // (CHK.35c) …but ONLY a type parameter that is not IN SCOPE here.
+            // `typeContainsUnresolvedTypeParam` cannot tell round 569's subject
+            // from a FREE type parameter declared by an enclosing function,
+            // method or class — and the blanket skip collapsed every such
+            // contextual parameter to `any`. tsgo does not instantiate at all
+            // (`assignContextualParameterTypes`, checker.go:10325, copies
+            // `context.typeParameters` onto the inner signature and writes each
+            // parameter type VERBATIM), so an in-scope `R` is an ordinary type
+            // and must be registered as one. [typeContainsOutOfScopeTypeParam].
+            if (typeContainsOutOfScopeTypeParam(pType, fn)) continue
             // (CHK.98)(a) B516's gate for the IDENTIFIER path, opt-in because it belongs
             // to the ccet ARGUMENT reader and to no other caller: a contextual parameter
             // whose own type is a FUNCTION carrying an unresolved type parameter INSIDE

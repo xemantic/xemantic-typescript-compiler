@@ -25,6 +25,74 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.176) — (CHK.35c): a contextual parameter type mentioning an IN-SCOPE type parameter is applied; the rxjs prize was MIS-ATTRIBUTED (2026-09-23)
+
+**THE HEADLINE IS THE REFUTATION, NOT THE FIX.** (CHK.35c) has been carried since (P18.168) as the
+owner of `rxjs` G2's 7 operator rows and as "what finally closes `marked`'s TS7019". **It is
+neither.** Those 7 rows read `Type 'unknown' is not assignable to type 'T'`, not `any`, and are
+**identical on both arms of this round**. Reduced to nine lines: the callee's `T` is inferred from
+the contextual RETURN position and bound to `unknown`, which is CONCRETE — so
+`typeContainsUnresolvedTypeParam` was never true there and this guard was never the blocker. With
+an explicit `<T>`, or with `T` inferable from an ARGUMENT, we are silent. That is a **separate
+defect** (callee type-parameter inference from a contextual return), now named and not fixed.
+
+**The fix is still real and still lands.** The guard at both `applyPulledContextualParamTypes`
+sites was `typeContainsUnresolvedTypeParam`, i.e. `is Type.TypeParam -> true`, which cannot tell
+round 569's actual subject — an UN-INFERRED CALLEE type parameter — from a FREE IN-SCOPE one
+declared by an enclosing function, method or class. It becomes
+`typeContainsOutOfScopeTypeParam(pType, fn)`. On a 15-cell matrix adjudicated against tsgo the
+argument-probe rows go **5 -> 13**, every added row byte-identical to tsgo's, six concrete controls
+unmoved. **So the round buys parity and buys no library row, and the honest summary is both.**
+
+**"IN SCOPE" HAD TO BE MEASURED — NEITHER OBVIOUS SIGNAL ANSWERS, AND THE SYMBOL ANSWERS
+NOTHING.** Probed at all 20 refusal sites first: `Type.TypeParam.symbol.declarations` is **EMPTY**
+for every type parameter, so the exact-by-construction route does not exist;
+`currentTypeParamScope` is **null at 7 of 20** sites, because both apply sites deliberately run
+OUTSIDE the function's own `withInternedTpScope`; and `typeParamInternCache` misses a generic
+CLASS's or METHOD's parameter, because **those are minted TWICE** and the object that arrives is
+not the one the cache holds for its declaration node. The shipped test therefore walks the
+function's ancestors and accepts on EITHER identity test, never on a name.
+
+**THE NAME-MATCH SHORTCUT IS REFUTED BY A NUMBER**: arm a7 replaces both identity legs with
+`tp.symbol?.name == d.name.text` and costs **+7 rows on the compiler profile (46 -> 53) and +7 on
+harness (94 -> 101)** — the callee-`T`-inside-a-user-`T` collision, made concrete rather than
+argued.
+
+**Ablation, seven arms.** a1 (restore the blanket predicate at the identifier site) 7 RED; a2
+(delete round 569's guard entirely) 2 RED **and the profiles explode 46 -> 93 and 94 -> 164**,
+which is that guard's real receipt; a3 (drop the scope leg) 1; a5 (blanket at the rest site) 1;
+a6 (no ancestor ascent) 8; a7 as above. **a4 (drop the intern-cache leg) read 0 RED and was
+classified rather than defaulted**: the leg genuinely answers 7 of 20 refusal SITES the scope leg
+cannot, but at those sites a sibling apply path registers the parameter anyway, so the ANSWER is
+unchanged on every corpus here — kept, because that coverage is an accident of pass ordering
+rather than an invariant, and recorded in the KDoc.
+
+**TWO ARMS WERE DEAD ON THE FIRST ATTEMPT AND THE `md5` CAUGHT THEM, NOT THE DIFF** — an ambiguous
+10-match anchor and a shell-mangled heredoc both printed `0 RED` with an **UNCHANGED class md5**.
+The rewritten driver now asserts `(arm == "base") == (source unchanged)` and dies otherwise. That
+is round 855/922's law with a sharper instrument: a real diff is not proof an arm landed, and the
+binary's digest is.
+
+**THE PROBE SHAPE MATTERED AND THE OBVIOUS ONE IS BLIND.** `const p: number = t` is silent on a
+WORKING binary for an unconstrained type parameter — our var-decl reader accepts one as a source
+where the argument and member readers report — so the first matrix read 8 of 8 missing for a
+reason that had nothing to do with the change. Re-taken with argument probes.
+
+**Gates.** suite **20,424 / 0 / 44** (+12 pins); corpus screen **0 of 8,725**; 8-profile grid
+**8x `added=0 removed=0`** — a real GATE in the adding direction here; `rxjs` **17 -> 17** row for
+row, `marked` **0**, `cronstrue` **1**, all unchanged; `cost_gate` PASS with **every counter
++0.00%** against the freshly rebaselined file (largest absolute movement: `typeOfExpr.calls` +2);
+`huge_methods` 0 over; warning-clean, with a positive control run FIRST.
+
+**Separate defects named, not fixed** — five, and the first two blind whole probe families: a
+var-decl reader that accepts an unconstrained type parameter as a source (so every var-decl-shaped
+assignability probe on an unconstrained TP is vacuous); a generic METHOD's own type parameter not
+typed in its body at the argument reader, **with an explicit annotation**, so contextual typing is
+not involved; `pullContextualTypeAt` answering null for a generic alias with a CONSTRAINED
+parameter instantiated by a free TP; the double-mint above; and the sibling
+`refuseTpFnTypes`/`isTpReferencingFnTypeOrUnion` gate, deliberately left because its stated reason
+is a different concern.
+
 ### Round (P18.175) — (LIB.5) G3: a nested generic container's own type parameters are its own; `rxjs` 21 -> 17 (2026-09-23)
 
 A generic ARROW or FUNCTION EXPRESSION nested in a STATIC member kept the enclosing class's
@@ -626,58 +694,6 @@ against this baseline while tsgo's row stands.
 the 8; the `TS2578` at `Instance.ts:179` is block-body return inference, measured separately by
 (P18.166)'s recon and not this family.
 
-### Round (P18.166) — (CHK.139): an element access with a literal-typed key resolves, read and write (2026-09-21)
-
-**THE SHAPE REAL CODE REACHES FOR MOST OFTEN ANSWERED `any`.** `mem[k]` where `k: keyof M` — and
-every spelling of it — resolved to `anyType` in `elementAccessResultType`, because every branch
-there tests the index EXPRESSION's syntax or the index type's String/Number-LIKE flags, and a
-`Type.Union` carries neither. tsc's rule, fitted to 12 tsgo 7.0.2 fixtures and re-adjudicated cell
-by cell here: distribute over the KEY union with a UNION for a READ and an **INTERSECTION** for a
-WRITE, the receiver union with a UNION in both modes.
-
-**FOUR SPELLINGS, ONE RULE, AND THE AGREEMENT IS THE PIN.** `keyof T`, `"a" | "b"`, a literal-union
-ALIAS and an `Exclude`-derived key are measured IDENTICAL — the rule keys on the index TYPE and
-never on the syntax. The read matrix now agrees with tsgo EXACTLY on all six rows, including two
-that were previously missing and their displays down to member order
-(`number | ((x: number) => string)` for a class receiver), the optional member's `| undefined`, and
-`keyof` of a type WITH a string index signature, which is `string | number` — NOT a literal union —
-and so correctly does not take the new arm at all.
-
-**ALL-OR-NOTHING IS THE BINDING CONSTRAINT AND IT DECIDED THE IMPLEMENTATION.** For a key union with
-a member the receiver does not declare, tsgo answers `any` for the WHOLE access; answering "the union
-of the keys that DO exist" is strictly narrower and so a false-positive generator. That is why the
-arm delegates to `getIndexedAccessType` PER LITERAL instead of once with the union: its own union arm
-is `.filter { it !== anyType }`, i.e. it DROPS an absent key. Delegating per literal also inherits
-(CHK.96)'s optional `| undefined` and round 783's carrier read for free — both measured, not assumed.
-
-**A SINGLETON LITERAL KEY IS THE SAME QUESTION, AND THE FIRST CUT MISSED IT.** Found by bisecting a
-`marked`-shaped fixture one ingredient at a time: `Exclude<keyof Tok, 'options'>` on a class with one
-remaining member is `"space"` — a bare literal, not a union — so a union-only guard left exactly that
-shape at `anyType`. `cheaKeyLiterals` is now the one reader for both, shared by the read arm, the
-write slot and the accessor refusal (which a union key must also consult, since it names several
-members at once).
-
-**THE DISPLAY CHANGE WAS WRONG THE FIRST TIME AND ONLY THE SUITE SAW IT.** An intersection member
-that renders as a bare function type is parenthesized, as the union arm already does and as tsgo
-prints it. The first version ALSO parenthesized a union member — and tsgo's rule is about the
-RENDERED FORM, not the Type kind: it prints `A & U` for an alias-named union and `A & (B | C)` only
-for an anonymous one. Keying on `m is Type.Union` produced `A & (U)` and broke three standing display
-pins whose operands are union ALIASES. **The corpus screen was clean for all three**, which is
-(PARITY.1) exactly: the screen cannot see a display change no baseline renders, and the suite can.
-
-**`marked` STAYS AT 10, AND THE REASON IS NOW MEASURED RATHER THAN GUESSED.** A five-variant bisect:
-a non-generic receiver, a generic receiver instantiated with a concrete argument, and a
-`||`-initialised local ALL work; only a receiver whose type argument is the ENCLOSING class's own
-type parameter fails — because a type-parameter-typed member's cached type is globally `any`
-(round 761) and round 783's carrier read does not reach that instantiation. That is `marked`'s exact
-shape (`tokenizer[tokenizerProp]` inside a method of a generic class, indexing
-`_Tokenizer<ParserOutput, RendererOutput>`), and it is pinned as `residue -` rather than chased: it
-is round 761/783's area, not this one's.
-
-Gates, both halves: suite **20,265 / 0 failed / 44 skipped** (+19 pins); corpus screen 0 of 8,725
-over both channels; 8-profile grid **8x `added=0 removed=0`** — notable for a (CHK.50) read-path
-change; `cost_gate` PASS (max +0.41%, `output.errors` 46 unchanged); `huge_methods` 0 over limit.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1102,7 +1118,16 @@ a mechanism; it now has one.
   type is a generic alias instantiated with the class's own parameters; with (b) landed the
   contextual type is found, (c) then collapses the REST parameter to `any`, and the TS7019 goes
   SILENT with no new row — measured by proxy on the property-access twin of exactly that shape.
-  **(c) OPEN, the big one, and now located to ONE LINE**: `applyPulledContextualParamTypes` has
+  **(c) LANDED 2026-09-23 ((P18.176) note) — AND ITS RECORDED PRIZE WAS MIS-ATTRIBUTED.** The
+  guard is now `typeContainsOutOfScopeTypeParam`, the argument-probe matrix goes 5 -> 13 of tsgo's
+  15, and every added row is byte-identical to tsgo's. **But it moves NO library row**: `marked`'s
+  TS7019 had already closed at (CHK.35b), and `rxjs` G2's 7 rows are a DIFFERENT mechanism
+  (callee type-parameter inference from the contextual RETURN position binding `T := unknown`,
+  which is concrete, so this guard was never true there). **"In scope" had to be MEASURED**: the
+  type parameter's `symbol.declarations` is EMPTY, `currentTypeParamScope` is null at 7 of 20
+  sites, and `typeParamInternCache` misses a class's or method's parameter because those are
+  minted TWICE — so the test walks ancestors and accepts on either identity, never on a NAME
+  (a name match costs +7 rows on two profiles, measured). ORIGINAL SIZING: **(c) located to ONE LINE**: `applyPulledContextualParamTypes` has
   `if (typeContainsUnresolvedTypeParam(pType)) continue` at **two** sites (:150843 rest, :150858
   identifier/pattern), whose predicate is `is Type.TypeParam -> true` (:129366) — it **cannot
   distinguish an UN-INFERRED CALLEE type parameter (what round 569's KDoc actually meant) from a
@@ -1145,7 +1170,12 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   CLAUDE.md's (CHK.49) lib-global-shadow family extended from `interface` to `class` + `this`.
   **Note it exists BECAUSE `dom` is in the lib set, which is TypeScript's own default when `lib`
   is unset** — so it is exactly the class of defect a corpus scoped to one codebase cannot show.
-  **(G2) 7 rows are (CHK.35c)** — `let prev: T; … (value) => { prev = value }` through a generic
+  **(G2) 7 rows were attributed to (CHK.35c) and that is MEASURED WRONG ((P18.176)) — they read
+  `Type 'unknown' is not assignable to type 'T'`, not `any`, and are identical on both arms of
+  that round. The cause is CALLEE TYPE-PARAMETER INFERENCE FROM THE CONTEXTUAL RETURN POSITION:
+  `T` binds to `unknown`, which is CONCRETE, so (CHK.35c)'s guard was never the blocker. With an
+  explicit `<T>`, or with `T` inferable from an ARGUMENT, we are silent. Its own item, unfiled.**
+  ORIGINAL (wrong): 7 rows are (CHK.35c) — `let prev: T; … (value) => { prev = value }` through a generic
   helper — so a `rxjs` round does not duplicate that arc, and those 7 become a free receipt when
   it lands. **(G3) 4 rows TS2302** `static create = <T>(…) => …`: the ARROW's own type parameter is
   mis-attributed to the CLASS's. (CHK.140) is adjacent and is the OTHER direction, so this is not

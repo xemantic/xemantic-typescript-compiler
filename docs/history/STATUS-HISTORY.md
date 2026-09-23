@@ -1,5 +1,24 @@
 
 
+**(P18.171) — (CHK.142)(b): A DISCRIMINATED-UNION *SOURCE* IS SPLIT OVER ITS DISCRIMINANTS; 23 OF 25 CELLS MATCH tsgo, 20,351 / 0 / 44 (2026-09-22).**
+A port of tsgo's `typeRelatedToDiscriminatedType` (`relater.go:3989`) into the tail of our union-target arm, at exactly the
+position tsgo calls it from, beside round 744's `intersectionSourceDistributes`. **`marked` is unchanged at 2 and that was
+PREDICTED** — (b) is the safe half and moves no library row alone; what it buys is that half (a) becomes landable at all,
+and the round measured why: without (b), (a) would produce the right member type and STILL report TS2322. **The port needed
+three restatements our type model forces** — tsgo's non-uniformity test is an IDENTITY compare because it interns literals
+by value while we mint one per site; `boolean` is an `Intrinsic` here and `true | false` there; and `undefined`/`null` being
+unit types is load-bearing, since without it one fixture's cartesian product collapses onto a single key. A fourth part was
+found by the fixture, not by reading: step 2 must compare against the OPTIONALITY-WIDENED target property.
+**"OURS 14 -> 3" WAS A LIE AND WHAT IT HID IS BIGGER THAN THIS ROUND**: the reference fixture declares `declare let s` in
+each of five namespaces, and **a namespace-local VALUE is not namespace-scoped here — the first declaration wins
+program-wide** — so every case was comparing the first namespace's types, in BOTH arms. One namespace per file gives the
+honest 14 -> 6 against tsgo's 4. Filed as (CHK.147); it corrupts measurement in the reassuring direction.
+**Seven ablation arms, one mistake each**: a1 8 RED, a2 3, a3 2, a4 1, a5 1, a6 7, a7 1 — and **a7 first read 0 RED as a
+BLIND PIN, not a redundant barrier**, caught by the cell matrix where no pin could see it; a pin was added and it now
+discriminates. Screen 0 of 8,725; grid 8x0 (a CONTROL for the acceptance by count — zero TS2322/TS2345 rows on any profile —
+and a GATE for the narrowing side-effect); cost_gate PASS (max +0.75%, `output.errors` 46); huge_methods 0 over.
+
+
 **(P18.170) — (CHK.144): A BLOCK BODY RETURNING A BARE IDENTIFIER NO LONGER INFERS `any`; `marked` 3 -> 2, 20,336 / 0 / 44 (2026-09-22).**
 `inferReturnTypeFromBody`'s `is Identifier ->` arm answered `booleanType` for `true`/`false` and `null` for everything
 else, which the caller turns into `anyType` — so every BLOCK-bodied unannotated function returning a bare identifier

@@ -1,5 +1,58 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.166) — (CHK.139): an element access with a literal-typed key resolves, read and write (2026-09-21)
+
+**THE SHAPE REAL CODE REACHES FOR MOST OFTEN ANSWERED `any`.** `mem[k]` where `k: keyof M` — and
+every spelling of it — resolved to `anyType` in `elementAccessResultType`, because every branch
+there tests the index EXPRESSION's syntax or the index type's String/Number-LIKE flags, and a
+`Type.Union` carries neither. tsc's rule, fitted to 12 tsgo 7.0.2 fixtures and re-adjudicated cell
+by cell here: distribute over the KEY union with a UNION for a READ and an **INTERSECTION** for a
+WRITE, the receiver union with a UNION in both modes.
+
+**FOUR SPELLINGS, ONE RULE, AND THE AGREEMENT IS THE PIN.** `keyof T`, `"a" | "b"`, a literal-union
+ALIAS and an `Exclude`-derived key are measured IDENTICAL — the rule keys on the index TYPE and
+never on the syntax. The read matrix now agrees with tsgo EXACTLY on all six rows, including two
+that were previously missing and their displays down to member order
+(`number | ((x: number) => string)` for a class receiver), the optional member's `| undefined`, and
+`keyof` of a type WITH a string index signature, which is `string | number` — NOT a literal union —
+and so correctly does not take the new arm at all.
+
+**ALL-OR-NOTHING IS THE BINDING CONSTRAINT AND IT DECIDED THE IMPLEMENTATION.** For a key union with
+a member the receiver does not declare, tsgo answers `any` for the WHOLE access; answering "the union
+of the keys that DO exist" is strictly narrower and so a false-positive generator. That is why the
+arm delegates to `getIndexedAccessType` PER LITERAL instead of once with the union: its own union arm
+is `.filter { it !== anyType }`, i.e. it DROPS an absent key. Delegating per literal also inherits
+(CHK.96)'s optional `| undefined` and round 783's carrier read for free — both measured, not assumed.
+
+**A SINGLETON LITERAL KEY IS THE SAME QUESTION, AND THE FIRST CUT MISSED IT.** Found by bisecting a
+`marked`-shaped fixture one ingredient at a time: `Exclude<keyof Tok, 'options'>` on a class with one
+remaining member is `"space"` — a bare literal, not a union — so a union-only guard left exactly that
+shape at `anyType`. `cheaKeyLiterals` is now the one reader for both, shared by the read arm, the
+write slot and the accessor refusal (which a union key must also consult, since it names several
+members at once).
+
+**THE DISPLAY CHANGE WAS WRONG THE FIRST TIME AND ONLY THE SUITE SAW IT.** An intersection member
+that renders as a bare function type is parenthesized, as the union arm already does and as tsgo
+prints it. The first version ALSO parenthesized a union member — and tsgo's rule is about the
+RENDERED FORM, not the Type kind: it prints `A & U` for an alias-named union and `A & (B | C)` only
+for an anonymous one. Keying on `m is Type.Union` produced `A & (U)` and broke three standing display
+pins whose operands are union ALIASES. **The corpus screen was clean for all three**, which is
+(PARITY.1) exactly: the screen cannot see a display change no baseline renders, and the suite can.
+
+**`marked` STAYS AT 10, AND THE REASON IS NOW MEASURED RATHER THAN GUESSED.** A five-variant bisect:
+a non-generic receiver, a generic receiver instantiated with a concrete argument, and a
+`||`-initialised local ALL work; only a receiver whose type argument is the ENCLOSING class's own
+type parameter fails — because a type-parameter-typed member's cached type is globally `any`
+(round 761) and round 783's carrier read does not reach that instantiation. That is `marked`'s exact
+shape (`tokenizer[tokenizerProp]` inside a method of a generic class, indexing
+`_Tokenizer<ParserOutput, RendererOutput>`), and it is pinned as `residue -` rather than chased: it
+is round 761/783's area, not this one's.
+
+Gates, both halves: suite **20,265 / 0 failed / 44 skipped** (+19 pins); corpus screen 0 of 8,725
+over both channels; 8-profile grid **8x `added=0 removed=0`** — notable for a (CHK.50) read-path
+change; `cost_gate` PASS (max +0.41%, `output.errors` 46 unchanged); `huge_methods` 0 over limit.
+
+
 ### Round (P18.165) — (CHK.136): an assignment through an element access is type-checked at last (2026-09-21)
 
 **A SOUNDNESS HOLE CLOSED, AND THE ITEM'S OWN SIZING CORRECTED BEFORE ANY CODE WAS WRITTEN.**

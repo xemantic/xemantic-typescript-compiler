@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,972** lines (**+43 at (P18.175)**, one
+extraction):** `Checker.kt` **199,053** lines (**+81 at (P18.176)**, the in-scope type-parameter
+predicate and the KDoc recording which three candidate signals were measured and REJECTED — a
+SEMANTIC parity change that buys parity and NO library row, and says so; **+43 at (P18.175)**, one
 `shadowedTypeParamNames` helper threaded through SIX nested-container boundaries of the TS2302
 walker, net of the inline subtraction it replaces — a SEMANTIC parity change that only REMOVES
 rows, not an extraction; **+55 at (P18.174)**, a binder-symbol consult at the
@@ -44,6 +46,26 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.176) — (CHK.35c): A CONTEXTUAL PARAMETER TYPE MENTIONING AN IN-SCOPE TYPE PARAMETER IS APPLIED; THE rxjs PRIZE WAS MIS-ATTRIBUTED, 20,424 / 0 / 44 (2026-09-23).**
+**THE HEADLINE IS THE REFUTATION.** (CHK.35c) has been carried since (P18.168) as the owner of `rxjs` G2's 7 rows and as
+"what finally closes `marked`'s TS7019". It is NEITHER: those rows read `Type 'unknown' is not assignable to type 'T'`, not
+`any`, and are IDENTICAL on both arms. The cause is callee type-parameter inference from the contextual RETURN position
+binding `T := unknown`, which is CONCRETE — so this guard was never true there. A separate defect, named and not fixed.
+**The fix is still real**: the guard at both `applyPulledContextualParamTypes` sites could not tell round 569's actual
+subject (an UN-INFERRED CALLEE type parameter) from a FREE IN-SCOPE one, and the argument-probe matrix goes **5 -> 13** of
+tsgo's 15, every added row byte-identical. **So the round buys parity and no library row, and the summary says both.**
+**"IN SCOPE" HAD TO BE MEASURED**: `Type.TypeParam.symbol.declarations` is EMPTY for every type parameter,
+`currentTypeParamScope` is null at 7 of 20 sites (both apply sites run OUTSIDE the function's own scope), and
+`typeParamInternCache` misses a class's or method's parameter because those are minted TWICE. The test walks ancestors and
+accepts on either IDENTITY, never a name — **a name match costs +7 rows on the compiler profile and +7 on harness**, measured.
+**Seven arms**; a2 (delete round 569's guard) takes the profiles 46 -> 93 and 94 -> 164, which is that guard's real receipt;
+a4 read 0 RED and was CLASSIFIED rather than defaulted (it answers 7 of 20 sites the scope leg cannot, but a sibling path
+registers them anyway — kept, because that is an accident of pass ordering, not an invariant). **TWO ARMS WERE DEAD AND THE
+md5 CAUGHT THEM, NOT THE DIFF**; the driver now asserts `(arm == "base") == (source unchanged)`. And the obvious probe is
+BLIND — `const p: number = t` is silent for an unconstrained TP on a working binary, so the first matrix read 8 of 8 missing
+for an unrelated reason. Screen 0 of 8,725; grid 8x0, a real gate in the adding direction; rxjs 17 -> 17 row for row, marked
+0, cronstrue 1; cost_gate every counter +0.00% against the freshly rebaselined file; huge_methods 0.
 
 **(P18.175) — (LIB.5) G3: A NESTED GENERIC CONTAINER'S OWN TYPE PARAMETERS ARE ITS OWN; `rxjs` 21 -> 17, 20,412 / 0 / 44 (2026-09-23).**
 A generic ARROW or FUNCTION EXPRESSION nested in a STATIC member kept the enclosing class's type-parameter names, so its own
@@ -118,21 +140,3 @@ library, 21 of 631,317 `getTypeOfExpression` calls — redundant on both axes an
 of 8,725; grid 8x0 and a real GATE in the ADDING direction; cost_gate PASS (+0.80% max, `output.errors` 46); huge_methods 0.
 **The anchor divergence is real, unchanged and NOT introduced** (tsgo drills to the member, we report the whole literal, for a
 UNION target only).
-
-**(P18.171) — (CHK.142)(b): A DISCRIMINATED-UNION *SOURCE* IS SPLIT OVER ITS DISCRIMINANTS; 23 OF 25 CELLS MATCH tsgo, 20,351 / 0 / 44 (2026-09-22).**
-A port of tsgo's `typeRelatedToDiscriminatedType` (`relater.go:3989`) into the tail of our union-target arm, at exactly the
-position tsgo calls it from, beside round 744's `intersectionSourceDistributes`. **`marked` is unchanged at 2 and that was
-PREDICTED** — (b) is the safe half and moves no library row alone; what it buys is that half (a) becomes landable at all,
-and the round measured why: without (b), (a) would produce the right member type and STILL report TS2322. **The port needed
-three restatements our type model forces** — tsgo's non-uniformity test is an IDENTITY compare because it interns literals
-by value while we mint one per site; `boolean` is an `Intrinsic` here and `true | false` there; and `undefined`/`null` being
-unit types is load-bearing, since without it one fixture's cartesian product collapses onto a single key. A fourth part was
-found by the fixture, not by reading: step 2 must compare against the OPTIONALITY-WIDENED target property.
-**"OURS 14 -> 3" WAS A LIE AND WHAT IT HID IS BIGGER THAN THIS ROUND**: the reference fixture declares `declare let s` in
-each of five namespaces, and **a namespace-local VALUE is not namespace-scoped here — the first declaration wins
-program-wide** — so every case was comparing the first namespace's types, in BOTH arms. One namespace per file gives the
-honest 14 -> 6 against tsgo's 4. Filed as (CHK.147); it corrupts measurement in the reassuring direction.
-**Seven ablation arms, one mistake each**: a1 8 RED, a2 3, a3 2, a4 1, a5 1, a6 7, a7 1 — and **a7 first read 0 RED as a
-BLIND PIN, not a redundant barrier**, caught by the cell matrix where no pin could see it; a pin was added and it now
-discriminates. Screen 0 of 8,725; grid 8x0 (a CONTROL for the acceptance by count — zero TS2322/TS2345 rows on any profile —
-and a GATE for the narrowing side-effect); cost_gate PASS (max +0.75%, `output.errors` 46); huge_methods 0 over.
