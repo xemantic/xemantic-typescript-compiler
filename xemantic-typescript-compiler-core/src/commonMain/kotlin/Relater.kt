@@ -1191,8 +1191,17 @@ internal class Relater(
         if (!signaturesRelatedTo(source, target, relation, isConstruct = false)) return false
         // Check construct signatures — skip for class/interface instance types where
         // construct signatures come from the class constructor (static side), not the instance.
-        val isClassInstance = target is Type.Interface && target.symbol != null &&
-            target.symbol!!.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)
+        //
+        // (CHK.154)(b): a generic CLASS instance (`Box<string>`) is a `Type.Reference`,
+        // not a `Type.Interface`, and it too is an instance type whose construct
+        // signatures are the (CHK.73) artifact of the class value typing as its
+        // instance. Once a derived class stopped carrying its base's constructor beside
+        // its own, comparing those lists made `SafeSubscriber<T>` unrelated to
+        // `Subscriber<T>` (rxjs: an override check exhausted the heap elaborating it).
+        // tsgo's instance types carry no construct signatures at all.
+        val isClassInstance = (target is Type.Interface && target.symbol != null &&
+            target.symbol!!.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface)) ||
+            (target is Type.Reference && target.target.symbol?.flags?.hasAny(SymbolFlags.Class) == true)
         if (!isClassInstance) {
             if (!signaturesRelatedTo(source, target, relation, isConstruct = true)) return false
         }
@@ -1348,6 +1357,7 @@ internal class Relater(
                 lastPrivateBrandMismatchName = targetName
                 return false
             }
+            if (checker.isPropPrivateVisibilityMismatch(sourceProp, targetProp)) return false
             // Compare property types
             val sourcePropType = checker.getPropertyTypeForRelation(source, sourceProp)
             val effectiveSource = checker.widenOptionalSourcePropType(sourcePropType, sourceProp, targetProp)

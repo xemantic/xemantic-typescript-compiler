@@ -163749,6 +163749,14 @@ interface DataView {
             val classSym = globals[ident.text]
             if (classSym != null && classSym.declarations.any { it is ClassDeclaration }) {
                 val ctorInfo = findEffectiveConstructorVisibility(classSym)
+                // (CHK.154)(b): tsgo `resolveNewExpression` returns `resolveErrorCall` when
+                // `isConstructorAccessible` fails, so an inaccessible constructor's
+                // ARGUMENTS are never checked. A PRIVATE one used outside its class stops
+                // here silently — its TS2673 is not modelled yet — rather than reaching
+                // the argument check below with a row tsgo never produces.
+                if (ctorInfo != null && ctorInfo.first == ModifierFlag.Private &&
+                    callWalkerClassStack.none { it === ctorInfo.second }
+                ) return
                 if (ctorInfo != null && ctorInfo.first == ModifierFlag.Protected) {
                     val declaringClass = ctorInfo.second
                     val accessible = callWalkerClassStack.any { enclosing ->
@@ -163767,6 +163775,7 @@ interface DataView {
                             start = expr.pos,
                             length = length,
                         ))
+                        return
                     }
                 }
             }
@@ -170805,6 +170814,20 @@ interface DataView {
         val sParent = findParentClassOrInterface(sDecl)
         val tParent = findParentClassOrInterface(tDecl)
         return sParent != null && tParent != null && sParent !== tParent
+    }
+
+    /**
+     * (CHK.154)(b) tsgo `propertyRelatedTo`'s first arm (relater.go): when EXACTLY ONE of
+     * the two properties is `private` and they are not the same declaration, the types are
+     * unrelated ("Property 'x' is private in type 'A' but not in type 'B'."). The
+     * both-private case is [isPropPrivateBrandMismatch]'s. An instantiated member keeps its
+     * declaration, so `CP<number>`'s `one` and `CP<string>`'s are one declaration.
+     */
+    internal fun isPropPrivateVisibilityMismatch(sourceProp: Symbol, targetProp: Symbol): Boolean {
+        val sDecl = sourceProp.valueDeclaration ?: sourceProp.declarations.firstOrNull() ?: return false
+        val tDecl = targetProp.valueDeclaration ?: targetProp.declarations.firstOrNull() ?: return false
+        if (sDecl === tDecl) return false
+        return isMemberPrivate(sDecl) != isMemberPrivate(tDecl)
     }
 
     private fun findParentClassOrInterface(node: Node): Node? {

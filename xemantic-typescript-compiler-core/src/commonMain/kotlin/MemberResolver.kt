@@ -751,7 +751,19 @@ internal class MemberResolver(
         } else {
             ctorOverloads + ctorImpls
         }
-        val constructSignatures = inheritedConstructSignatures + visibleCtorSigs + nonCtorConstructSigs
+        // (CHK.154)(b): a CLASS that declares a constructor has exactly its OWN construct
+        // signatures; only a class WITHOUT one inherits the base's (instantiated through the
+        // heritage type arguments, which the base Reference's own resolution already did).
+        // tsgo `getSignaturesOfSymbol(symbol.Members[InternalSymbolNameConstructor])`, falling
+        // back to `getDefaultConstructSignatures` (base constructor type) only when that is
+        // empty. Keeping the base signatures beside the own ones let `new Sub("x")` against
+        // `constructor(o?: number)` be accepted by the base's `(d?: string)`. An INTERFACE
+        // still concatenates its bases' construct signatures, as tsc's
+        // `resolveObjectTypeMembers` does.
+        val inheritedCtorVisible = if (visibleCtorSigs.isNotEmpty() &&
+            symbol.declarations.any { it is ClassDeclaration || it is ClassExpression }
+        ) emptyList() else inheritedConstructSignatures
+        val constructSignatures = inheritedCtorVisible + visibleCtorSigs + nonCtorConstructSigs
         type.callSignatures = callSignatures.ifEmpty { null }
         type.constructSignatures = constructSignatures.ifEmpty { null }
         type.stringIndexInfo = stringIndexInfo
