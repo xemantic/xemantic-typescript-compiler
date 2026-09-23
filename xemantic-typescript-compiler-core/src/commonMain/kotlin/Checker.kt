@@ -72081,18 +72081,123 @@ interface DataView {
      * failure returns false, so TS2683 still fires (never a false suppression).
      */
     private fun callArgHasContextualThis(callee: Expression, argIndex: Int): Boolean {
-        val calleeType = when (callee) {
+        // (CHK.153): this runs on the TS2683 spine under the file's RESTING locals, so
+        // `getTypeOfIdentifier` cannot see a PARAMETER or BODY-LOCAL receiver
+        // (`function f(s: Sched) { s.schedule(function () { this }) }`) and answered
+        // nothing — the `this:`-carrying parameter was never seen and TS2683 fired where
+        // tsgo, whose contextual signature (`getContextualThisParameterType`,
+        // checker.go:11990) comes from the argument's resolved call, is silent. Resolve
+        // the callee LEXICALLY first; `null` means "not a local name" and keeps today's
+        // file-level path, `errorType` means "a local binding we cannot type" and refuses
+        // (the conservative answer: TS2683 stays).
+        val lexical = lexicalCalleeType(callee, 0)
+        if (lexical === errorType) return false
+        val calleeType = lexical ?: when (callee) {
             is Identifier -> getTypeOfIdentifier(callee)
             is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
             else -> return false
         }
-        if (calleeType !is Type.Object) return false
-        resolveStructuredTypeMembers(calleeType)
-        val sigs = calleeType.callSignatures ?: return false
-        return sigs.any { sig ->
-            argIndex < sig.parameters.size &&
-                typeIsFunctionWithThisParam(getTypeOfSymbol(sig.parameters[argIndex]))
+        // A UNION callee (`s: A | B`, `s.m(...)`): tsgo combines the constituents'
+        // signatures, so the argument's contextual type carries every constituent's
+        // parameter type and a `this:` on ANY of them is contextual (measured: silent for
+        // `Sched | Plain` as well as `Sched | Sched2`).
+        val parts = if (calleeType is Type.Union) calleeType.types else listOf(calleeType)
+        return parts.any { part ->
+            if (part !is Type.Object) return@any false
+            resolveStructuredTypeMembers(part)
+            val sigs = part.callSignatures ?: return@any false
+            sigs.any { sig ->
+                argIndex < sig.parameters.size &&
+                    typeIsFunctionWithThisParam(getTypeOfSymbol(sig.parameters[argIndex]))
+            }
         }
+    }
+
+    /**
+     * (CHK.153) The type of a callee expression built from LOCAL names, resolved from the
+     * AST ancestry ([lexicalReturnIdentifierDecl], innermost scope first, so a shadowing
+     * binding wins) rather than from walk-scoped state. Answers:
+     *  - `null` when the root name is not bound in any enclosing function or block (a
+     *    file-level or global name: the caller's resting-locals path answers those, and
+     *    always has);
+     *  - [errorType] when a local binding is found that this cannot type — an
+     *    un-annotated parameter, a function/class/enum/import binding, an array pattern —
+     *    which must STOP the walk rather than let an outer same-named binding answer;
+     *  - otherwise the type, with `null`/`undefined` stripped from a receiver (a member
+     *    call on it is `s?.m(...)` / `s!.m(...)` or already an error).
+     */
+    private fun lexicalCalleeType(expr: Expression, depth: Int): Type? {
+        if (depth > 8) return errorType
+        return when (expr) {
+            is ParenthesizedExpression -> lexicalCalleeType(expr.expression, depth + 1)
+            is NonNullExpression -> lexicalCalleeType(expr.expression, depth + 1)
+            is Identifier -> {
+                val decl = lexicalReturnIdentifierDecl(expr, bindingPatterns = true) ?: return null
+                // A binding at FILE level is the resting-locals path's to answer.
+                val scope = (decl as NodeBase).parent
+                if (scope is SourceFile ||
+                    (scope is VariableDeclarationList && (scope as NodeBase).parent?.let {
+                        (it as NodeBase).parent
+                    } is SourceFile)
+                ) return null
+                lexicalBindingType(decl, expr.text) ?: errorType
+            }
+            is PropertyAccessExpression -> {
+                val recv = lexicalCalleeType(expr.expression, depth + 1) ?: return null
+                if (recv === errorType) return errorType
+                val nonNull = narrowByExcludingNullUndefined(recv)
+                if (nonNull === neverType || nonNull === anyType) return errorType
+                // A UNION receiver is folded per constituent HERE: `resolveMemberPropertyType`
+                // reaches `getPropertyOfType`, whose union arm answers ONE constituent's
+                // symbol, so `(Sched | Plain).schedule` read as `Plain`'s method alone and
+                // lost the `this:` tsgo sees through the combined signature.
+                if (nonNull is Type.Union) {
+                    val parts = nonNull.types.map {
+                        resolveMemberPropertyType(it, expr.name.text) ?: return errorType
+                    }
+                    return if (parts.size == 1) parts[0] else getUnionType(parts)
+                }
+                resolveMemberPropertyType(nonNull, expr.name.text) ?: errorType
+            }
+            else -> null
+        }
+    }
+
+    /** (CHK.153) The declared type of [name] as bound by [decl] (a parameter or variable
+     *  declaration, possibly through an object binding pattern), or null when it cannot be
+     *  typed from the declaration alone. */
+    private fun lexicalBindingType(decl: Node, name: String): Type? {
+        val (nameNode, declared) = when (decl) {
+            is Parameter -> decl.name to decl.type?.let { getTypeFromTypeNode(it) }
+            is VariableDeclaration -> decl.name to (
+                decl.type?.let { getTypeFromTypeNode(it) }
+                    ?: decl.initializer?.let { init ->
+                        if (returnIdentifierDepth >= 3) return null
+                        returnIdentifierDepth++
+                        try {
+                            getTypeOfExpression(init)
+                        } finally {
+                            returnIdentifierDepth--
+                        }
+                    }
+                )
+            else -> return null
+        }
+        var t: Type = declared ?: return null
+        var pattern: Expression = nameNode
+        while (pattern !is Identifier) {
+            val obj = pattern as? ObjectBindingPattern ?: return null
+            val element = obj.elements.firstOrNull { name in bindingPatternNames(it.name) } ?: return null
+            if (element.dotDotDotToken) return null
+            val key = when (val pn = element.propertyName) {
+                null -> (element.name as? Identifier)?.text
+                is Identifier -> pn.text
+                else -> null
+            } ?: return null
+            t = resolveMemberPropertyType(narrowByExcludingNullUndefined(t), key) ?: return null
+            pattern = element.name
+        }
+        return t.takeIf { it !== anyType && it !== errorType }
     }
 
     /** True when [type] is a function type whose call signature declares a `this:` parameter. */
@@ -147321,12 +147426,14 @@ interface DataView {
      * an outer same-named `const` answer for an inner `function` — a wrong type, and
      * silent.
      */
-    private fun statementBindingNode(stmts: List<Statement>, name: String): Node? {
+    private fun statementBindingNode(
+        stmts: List<Statement>, name: String, bindingPatterns: Boolean = false,
+    ): Node? {
         for (s in stmts) {
             when (s) {
                 is VariableStatement ->
                     for (d in s.declarationList.declarations) {
-                        if ((d.name as? Identifier)?.text == name) return d
+                        if (bindsName(d.name, name, bindingPatterns)) return d
                     }
                 is FunctionDeclaration -> if (s.name?.text == name) return s
                 is ClassDeclaration -> if (s.name?.text == name) return s
@@ -147376,7 +147483,7 @@ interface DataView {
      * Returns the binding node whatever its kind; [returnIdentifierType] types only the
      * two kinds it can, and every other kind stops the walk on today's `?: anyType`.
      */
-    private fun lexicalReturnIdentifierDecl(id: Identifier): Node? {
+    private fun lexicalReturnIdentifierDecl(id: Identifier, bindingPatterns: Boolean = false): Node? {
         val name = id.text
         var node: Node? = (id as NodeBase).parent
         var hops = 0
@@ -147392,7 +147499,7 @@ interface DataView {
                 else -> null
             }
             if (params != null) {
-                for (prm in params) if ((prm.name as? Identifier)?.text == name) return prm
+                for (prm in params) if (bindsName(prm.name, name, bindingPatterns)) return prm
             }
             // A function EXPRESSION's own name is in scope inside its body.
             (node as? FunctionExpression)?.name?.let { if (it.text == name) return node }
@@ -147404,7 +147511,7 @@ interface DataView {
                 is DefaultClause -> n.statements
                 else -> null
             }
-            if (stmts != null) statementBindingNode(stmts, name)?.let { return it }
+            if (stmts != null) statementBindingNode(stmts, name, bindingPatterns)?.let { return it }
             val loopInit = when (val n = node) {
                 is ForStatement -> n.initializer
                 is ForInStatement -> n.initializer
@@ -147413,16 +147520,26 @@ interface DataView {
             }
             if (loopInit is VariableDeclarationList) {
                 for (d in loopInit.declarations) {
-                    if ((d.name as? Identifier)?.text == name) return d
+                    if (bindsName(d.name, name, bindingPatterns)) return d
                 }
             }
             (node as? CatchClause)?.variableDeclaration?.let { d ->
-                if ((d.name as? Identifier)?.text == name) return d
+                if (bindsName(d.name, name, bindingPatterns)) return d
             }
             node = (node as? NodeBase)?.parent
         }
         return null
     }
+
+    /**
+     * Whether a declaration [nameNode] binds [name]: an `Identifier` always; a binding
+     * pattern's leaves only when [bindingPatterns] is set. (CHK.153) needs the leaves so a
+     * destructured parameter STOPS the lexical walk instead of letting an outer same-named
+     * binding answer for it; the (CHK.144) return path keeps its measured behaviour.
+     */
+    private fun bindsName(nameNode: Expression, name: String, bindingPatterns: Boolean): Boolean =
+        (nameNode as? Identifier)?.text == name ||
+            (bindingPatterns && nameNode !is Identifier && name in bindingPatternNames(nameNode))
 
     /**
      * (CHK.144) The type of a bare `return <id>` in a BLOCK body.
