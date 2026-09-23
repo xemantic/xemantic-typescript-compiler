@@ -37923,9 +37923,13 @@ class Checker(
     /**
      * Look up the type of property [name] in the contextual type [type], walking
      * Union constituents and returning the first match. Soft (returns null on
-     * StackOverflow or missing), used only by the TS7006 suppression walker.
-     * Differs from [getPropertyOfType] which requires the property on EVERY
-     * union constituent — this helper is heuristic and picks first hit.
+     * StackOverflow or missing). Differs from [getPropertyOfType] which requires
+     * the property on EVERY union constituent — this helper is heuristic and picks
+     * first hit.
+     *
+     * (CHK.150) It is no longer an arity-only helper: since (CHK.39)/(CHK.98)
+     * [pullContextualTypeAt]'s object-literal arms read the TYPE it answers, so a
+     * member of a generic REFERENCE goes through [ctxMemberTypeOf].
      */
     private fun lookupPropertyTypeForCtx(type: Type, name: String, depth: Int = 0): Type? {
         if (depth > 8) return null // cyclic extends chains survive parse recovery
@@ -37934,8 +37938,8 @@ class Checker(
                 resolveStructuredTypeMembers(type)
                 var sym = type.members?.get(name)
                 // M3.2 (round 431b): a Type.Reference's own members can stay lazy —
-                // fall back to the target's (un-substituted member types are fine for
-                // the arity-only consumers this helper serves).
+                // fall back to the target's; [ctxMemberTypeOf] below substitutes the
+                // reference's arguments into it.
                 if (sym == null && type is Type.Reference) {
                     resolveStructuredTypeMembers(type.target)
                     sym = type.target.members?.get(name)
@@ -37949,7 +37953,7 @@ class Checker(
                         if (t != null) return t
                     }
                 }
-                if (sym != null) getTypeOfSymbol(sym)
+                if (sym != null) ctxMemberTypeOf(type, sym)
                 else {
                     // Fall back to index signature when no named property matches:
                     // numeric-looking name → numberIndexInfo (with stringIndexInfo fallback),
@@ -37970,6 +37974,26 @@ class Checker(
             else -> null
         }
     }
+
+    /**
+     * (CHK.150) The type of member [sym] of the object type [owner], with a generic
+     * REFERENCE's type arguments substituted.
+     *
+     * A reference's member TABLE ([resolveReferenceMembers]) instantiates
+     * `getTypeOfSymbol(prop)` — and an interface/class PROPERTY or METHOD symbol is
+     * resolved there with the declaration's own type parameters NOT in scope, so
+     * every `T` in `next: (value: T) => void` answers `errorType` and the
+     * instantiation has nothing to substitute (measured: `Observer<string>`'s `next`
+     * read `(value: T) => void` whose parameter was the `error` intrinsic, for a
+     * property AND a method member alike). [resolveGenericPropertyType] is the
+     * resolver the property-access path has always used — the target's parameters
+     * installed, then the reference's mapper applied, the base chain walked for an
+     * inherited member — so it is asked first. Null from it (not a generic
+     * reference, or an `any`/`error` declared type) keeps the table's answer, which
+     * is this helper's old behaviour exactly.
+     */
+    private fun ctxMemberTypeOf(owner: Type.Object, sym: Symbol): Type =
+        (owner as? Type.Reference)?.let { resolveGenericPropertyType(it, sym) } ?: getTypeOfSymbol(sym)
 
     /**
      * B224: TS7006 for parameters BEYOND the contextual signature's arity.
@@ -149990,6 +150014,16 @@ interface DataView {
         if (found.isEmpty()) return null
         for (tp in open) {
             val cand = found[tp] ?: continue
+            // (CHK.150) A candidate naming a type parameter no declaration around the
+            // call binds is a LEAK from an un-instantiated contextual type (measured:
+            // a method of `X<W>` whose parameter is `Partial<Observer<W>>` reaches the
+            // pull with `W` still in it, at a receiver typed `X<T>`). Handed on, the
+            // apply site's own out-of-scope gate refuses it and the callback parameter
+            // reads `any` — silent, where the refusal here keeps today's `unknown`.
+            if (typeContainsOutOfScopeTypeParam(cand, callNode)) {
+                found.remove(tp)
+                continue
+            }
             val constraint = tp.constraint
             if (constraint != null && constraint !== errorType &&
                 !checkTypeRelatedTo(cand, constraint, assignableRelation)
@@ -150121,7 +150155,106 @@ interface DataView {
             val sa = source.resolvedTypeArguments ?: return
             if (ta.size != sa.size) return
             for (i in ta.indices) ctxReturnInferInto(sa[i], ta[i], tps, out, depth + 1)
+            return
         }
+        // (CHK.150) DIFFERENT object types: tsgo's `inferFromObjectTypes` tail
+        // (`inference.go:665`) — properties, then call signatures. A generic class
+        // standing in for itself ([ctxReturnTypeMentions]' `Type.Interface` shape) is
+        // not read structurally: its members are its OWN parameters' and would need
+        // the constructor's instantiation, which this leg does not model.
+        if (target is Type.Object && target !is Type.Interface && source is Type.Object) {
+            ctxReturnInferFromMembers(source, target, tps, out, depth)
+        }
+    }
+
+    /**
+     * (CHK.150) tsgo's `inferFromProperties` + `inferFromSignatures(…, Call)`
+     * (`inference.go:794`/`:804`) for [ctxReturnInferInto]: `createOp<T>(…):
+     * Subscriber<T>` at a position typed `Observer<T_outer>` binds `T` through the
+     * shared member `next` — `(value: T_outer) => void` against `next(value: T):
+     * void` — even though the two types are not references to one generic.
+     *
+     * The member types come from [ctxMemberTypeOf], i.e. with each REFERENCE's
+     * arguments substituted; the member TABLE's own types are `errorType`-laden for
+     * a generic interface and would bind nothing.
+     *
+     * Guards, each tsgo's: `typesDefinitelyUnrelated` (each side has a REQUIRED
+     * property the other lacks — `Box<T>`'s `get` against `{ next }` infers
+     * nothing, and tsgo prints `Box<unknown>`), the optional member's `undefined`
+     * removed on both sides (`removeMissingType`, which `Partial<Observer<T>>`
+     * needs), and signatures matched from the BOTTOM up with a shorter source list
+     * re-using its first signature. Parameters pair up to the shorter non-rest
+     * count. NOT modelled, and recorded: the discriminant-property clause of
+     * `typesDefinitelyUnrelated` (a shared literal-typed member whose values differ
+     * makes tsgo refuse where this infers), and tsgo's covariant-over-contravariant
+     * candidate preference — like every inference helper here, the FIRST candidate
+     * wins, in the target's member order.
+     */
+    private fun ctxReturnInferFromMembers(
+        source: Type.Object,
+        target: Type.Object,
+        tps: Set<Type.TypeParam>,
+        out: HashMap<Type.TypeParam, Type>,
+        depth: Int,
+    ) {
+        resolveStructuredTypeMembers(source)
+        resolveStructuredTypeMembers(target)
+        val tProps = target.properties.orEmpty().filter { it.name.isNotEmpty() }
+        val sProps = source.properties.orEmpty().filter { it.name.isNotEmpty() }
+        val sMembers = source.members
+        val tMembers = target.members
+        if (tProps.any { !isOptionalProperty(it) && sMembers?.get(it.name) == null } &&
+            sProps.any { !isOptionalProperty(it) && tMembers?.get(it.name) == null }
+        ) return
+        for (tp in tProps) {
+            val sp = sMembers?.get(tp.name) ?: continue
+            ctxReturnInferInto(
+                ctxStripMissing(ctxMemberTypeOf(source, sp)),
+                ctxStripMissing(ctxMemberTypeOf(target, tp)),
+                tps, out, depth + 1,
+            )
+        }
+        val ss = source.callSignatures
+        val ts = target.callSignatures
+        if (ss.isNullOrEmpty() || ts.isNullOrEmpty()) return
+        // tsgo `inferFromSignatures`: the last min(|S|, |T|) of each list, paired from the end.
+        val len = minOf(ss.size, ts.size)
+        for (i in 0 until len) {
+            val s = ss[ss.size - len + i]
+            val t = ts[ts.size - len + i]
+            val count = minOf(ctxNonRestParamCount(s), ctxNonRestParamCount(t))
+            for (pi in 0 until count) {
+                ctxReturnInferInto(
+                    getTypeOfSymbol(s.parameters[pi]), getTypeOfSymbol(t.parameters[pi]),
+                    tps, out, depth + 1,
+                )
+            }
+            val sr = s.resolvedReturnType ?: continue
+            val tr = t.resolvedReturnType ?: continue
+            ctxReturnInferInto(sr, tr, tps, out, depth + 1)
+        }
+    }
+
+    /** (CHK.150) tsgo's `removeMissingType` for [ctxReturnInferFromMembers]: an optional
+     *  member's `T | undefined` reads as `T`. Only a union with ONE real member is
+     *  unwrapped; anything else is handed on unchanged. MEASURED UNREACHABLE TODAY
+     *  (ablation a5, 0 RED over a `next?:` and an explicit `| undefined` target member):
+     *  a declared `?` member's type carries no `undefined` here, and an explicit union
+     *  member reaches this leg with its function constituent UN-instantiated
+     *  ([resolveGenericPropertyType]'s `instantiateType` skips a function-shaped union
+     *  member), so it binds the class's own parameter and not the callee's. Kept
+     *  because it is tsgo's rule and costs one type test. */
+    private fun ctxStripMissing(t: Type): Type {
+        val u = t as? Type.Union ?: return t
+        val real = u.types.filter { !it.flags.hasAny(TypeFlags.Undefined) }
+        return if (real.size == 1) real[0] else t
+    }
+
+    /** (CHK.150) A signature's parameter count without a trailing rest parameter. */
+    private fun ctxNonRestParamCount(sig: Signature): Int {
+        val last = sig.parameters.lastOrNull() ?: return 0
+        return if ((last.valueDeclaration as? Parameter)?.dotDotDotToken == true) sig.parameters.size - 1
+        else sig.parameters.size
     }
 
     /**
