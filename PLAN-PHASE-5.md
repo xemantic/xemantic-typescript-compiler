@@ -1223,22 +1223,53 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.151) A GENERIC REFERENCE'S MEMBER TABLE HOLDS `error`-TYPED FUNCTION MEMBERS, SO THE
-  RELATION MISSES ROWS tsgo REPORTS (found 2026-09-23 by (P18.180), NOT fixed there).**
-  `resolveReferenceMembers` instantiates `getTypeOfSymbol(prop)`, which resolves an interface/class
-  member with the declaration's own type parameters out of scope: every `T` inside a function-typed
-  member becomes the `error` intrinsic and survives instantiation — while PRINTING as `T`. (P18.180)
-  routed only CONTEXTUAL typing around it (`ctxMemberTypeOf`). Rows tsgo reports and we miss, all in
-  `build/scratch-p18180/cells`: `Subscriber<number>` against `Observer<string>` (c08/c23), an object
-  literal's `(value: number) => void` against `next` (c20/c21/c27), `SubS<unknown>` vs `ObsM<number>`,
-  the TS2741 rows (c09/c22). **Direction: ADDS rows** (a false-NEGATIVE class), so every added row
-  must be measured against tsgo; the fix is either to build the table through
-  `resolveGenericPropertyType` or to resolve member symbols with the declaration's type parameters in
-  scope. Blast radius unmeasured and plausibly large — take the corpus census first (active baselines
-  whose relation reads a generic interface's function-typed member), and expect the grid to be a REAL
-  gate (tsc's own sources relate generic interface instantiations everywhere). Related:
-  `resolveGenericPropertyType`'s `instantiateType` skips a function-shaped UNION member (P18.180's
-  a5 finding).
+- [ ] **(CHK.152) A NAMED-OBJECT ARGUMENT IS NEVER RELATED TO A NAMED-OBJECT PARAMETER — `caasNonSimpleParamChecks`'
+  FP FIREWALL EXITS `CAAS_CONTINUE` BEFORE THE RELATION, SO `z(q)` WITH `q: Q`, `p: S` AND A MISMATCHED
+  PROPERTY IS **SILENT** WHERE `const s: S = q` REPORTS (measured 2026-09-23 by the (CHK.151) census, 133
+  cells, and re-probed by the orchestrator on the (P18.180) binary).** tsgo 1 row / ours 0 for: interface
+  const argument (script AND module file), a `type S = {…}` alias parameter, a PARAMETER source, two
+  classes; ours already matches for a MISSING property (TS2345 fires) and an object literal. **Generic or
+  not** — ~24 of the census's 57 misses are this, including every cell (CHK.151) originally cited
+  (c08/c09/c21/c22/c23/c27), and rxjs's one tsgo row (`WebSocketSubject.ts:304`). It is the single largest
+  missing-row family the census found, and for the "embeddable checker" leg it is the most visible one: an
+  ordinary call with a wrong argument type reports nothing. **PRECEDENT AND LICENCE**: (CHK.103) stage 2
+  opened this same firewall for ARRAYS by delegating the decidability question to `canUseTypeEngine` for
+  the pair (archive: "A MISSING *ARGUMENT-POSITION* DIAGNOSTIC IS USUALLY `caasNonSimpleParamChecks`' FP
+  FIREWALL"), with DECLARATION position — which already matches tsgo row for row — as the licence; the
+  nullish-union half was (CHK.99). **Direction: ADDS rows**, so the 8-profile grid is a REAL false-positive
+  gate here (tsc's sources pass interface-typed arguments everywhere; every added row must be a tsgo row),
+  and the corpus screen can only turn baselines red. Take the census first: how many active baselines carry
+  a TS2345 whose source and target are both named object types, and how many profile call sites would the
+  opened gate reach. Expect display divergences on the chain (the census saw tsgo's contravariant-variance
+  elaboration `'string'->'number'` where we print the covariant direction, in 7 cells) — FORM, route via
+  `LogicalParityDivergence` only if a baseline moves in form alone. Cells:
+  `build/scratch-p18181-census/cells/{i-*-arg,c-*-arg,*-arg-diffgen,ctl2-*}`, matrix in `matrix.tsv`.
+
+- [ ] **(CHK.151) RE-SCOPED BY ITS OWN CENSUS 2026-09-23 — THE RELATION DOES *NOT* READ THE MEMBER TABLE,
+  AND THE DEFECT IS WIDER THAN FUNCTION MEMBERS.** `resolveReferenceMembers` (`MemberResolver.kt:762`)
+  resolves every `T`-mentioning member (plain `T`, `T[]`, `Box<T>`, method returns, function members) with
+  the declaration's type parameters out of scope, so they read `errorType`/`any` — `{ ...g }` of a
+  `G<string>` prints `{ v: any; a: any[]; f: (x: T) => void; … }` where tsgo prints the substituted types.
+  **But `Relater.propertiesRelatedTo` reads members through `getPropertyTypeForRelation` ->
+  `resolveGenericPropertyType`, which is right**: every declaration/return/assignment/nested-literal cell
+  agrees with tsgo (133-cell matrix, `build/scratch-p18181-census/matrix.tsv`); the table is consulted
+  only after the 2,000-computation budget runs out. The misses the item originally cited are (CHK.152).
+  **The table's REAL readers that miss rows**: object-literal ARGUMENTS
+  (`caasObjLitPerPropertyMismatch` reads `getTypeOfSymbol(paramType.members[name])` — `take({ v: 1 })`
+  against `G<string>` is silent where a non-generic interface reports; 4 cells) and SPREAD (`rd-spread`);
+  ~62 other `getTypeOfSymbol` readers of `.members`/`.properties` (heuristic grep) would all change under a
+  table fix. **Fix shape proposed by the census**: lazy instantiated member symbols in
+  `resolveReferenceMembers` (tsc's `instantiateSymbol`), answering
+  `resolveGenericPropertyType(ref, original) ?: getTypeOfSymbol(original)` — lazy because the function is
+  hot (`Array<T>`, `Map<K,V>` per instantiation); take its answer only when the declaration mentions a
+  target type parameter (an un-annotated method answers `anyType` there); route a function-shaped UNION
+  member through `instantiateMethodParamType` (today a raw `T` there would be a false-positive source, and
+  it also closes `rel-union-fn`). REFUSED alternative: putting the type parameters in scope — function
+  members would then carry a raw `T` because `instantiateType` skips them. Blast radius UNMEASURED
+  (needs a throwaway build): 338 of 3,076 active errors subtests declare a generic with a `T`-typed member
+  (upper bound), 13 have an object-literal argument beside it. Grid: a pure false-positive gate (all 46 of
+  our compiler-profile rows are shared with tsgo). Smaller first step than the whole table: fix the
+  object-literal-argument reader alone through `ctxMemberTypeOf`-style routing.
 
 - [ ] **(CHK.149) THREE MISSING-ROW GAPS IN THE TS2302 WALKER, each ADDING rows and each needing
   its own round (found 2026-09-23 by (P18.175), measured byte-identical before and after it).**
