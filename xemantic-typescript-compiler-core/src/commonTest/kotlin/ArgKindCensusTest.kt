@@ -65,12 +65,17 @@ class ArgKindCensusTest {
         function takesIdent(i: Ident): number { return i.text.length }
         function takesNumber(n: number): number { return n }
         function takesNode(n: Node): number { return n.kind }
+        function takesMaybeNode(n: Node | undefined): number { return n ? n.kind : 0 }
         function apply(f: (x: number) => number, v: number): number { return f(v) }
         function main(n: Node, o: Node, s: string): number {
             let total = 0
             total += apply((x) => x + 1, 2)
             total += takesNumber(s.length)
             total += takesNode(o)
+            // (CHK.152) step 1: a NAMED argument against a NAMED parameter (`takesNode(o)`
+            // above) is related since round P18.183 and no longer leaves at the
+            // not-simple exit; an identifier against a UNION parameter still does.
+            total += takesMaybeNode(o)
             total += takesNumber(takesNode(n))
             total += takesNumber(1 + 2)
             total += takesNode({ kind: 7 })

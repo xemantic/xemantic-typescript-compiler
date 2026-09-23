@@ -169670,7 +169670,25 @@ interface DataView {
                 !typeContainsForeignTypeParam(argType, emptySet()) &&
                 argArrayLikeVsArrayLikeCheckable(argType, paramType) &&
                 !argArrayLikeNarrowsToRelated(arg, argType, paramType)
-            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj && !allowCombinedUnionParam && !allowArrayLikeVsArrayLike) return CAAS_CONTINUE
+            // (CHK.152) step 1: a NAMED-OBJECT argument against a NAMED-OBJECT parameter —
+            // the classification and the licence are in [argNamedObjectVsNamedObjectCheckable].
+            // The same three guards as the array-like gate above, measured one at a time: a
+            // call whose ARITY is wrong reports TS2554 alone in tsgo (`z(q, 1)`); a FREE type
+            // parameter in the PARAMETER is an un-inferred instantiation (`z("x", gn)` against
+            // `<T>(a: T, p: G<T>)` would report `G<number>` against `G<T>`); one in the
+            // ARGUMENT needs the relation's type-parameter-to-concrete rule this engine does
+            // not have (`G<T extends string>` against `G<string>` is legal). The REST guard is
+            // redundant today — a rest parameter's type is an array, which the classifier
+            // refuses — and is kept for the same trap (`Q` compared against `S[]`).
+            // No narrowing second chance is needed: the argument's type arrives here already
+            // flow-narrowed for every guard shape tried (early return, `&&`, ternary, block,
+            // `asserts`, loop), and an ablation of one read 0 rows on the matrix and the grid.
+            val allowNamedObjectVsNamedObject = arityOk &&
+                (params[i].valueDeclaration as? Parameter)?.dotDotDotToken != true &&
+                !typeContainsForeignTypeParam(paramType, emptySet()) &&
+                !typeContainsForeignTypeParam(argType, emptySet()) &&
+                argNamedObjectVsNamedObjectCheckable(arg, argType, paramType)
+            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !allowPrimitiveVsCompositeParam && !allowReadonlyToMutable && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj && !allowCombinedUnionParam && !allowArrayLikeVsArrayLike && !allowNamedObjectVsNamedObject) return CAAS_CONTINUE
             // Round 79l (orchestrated — Agent A plan): for a contextually-typed
             // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
             // body-return type (allowFuncReturnMismatch), TypeScript reports a
@@ -169988,10 +170006,21 @@ interface DataView {
             // B50.4: Object→Object property-elaboration chain. When the B50.4 gate
             // above allowed the structural compare to fire AND a per-property
             // mismatch exists, get the chain from `getPropertyElaborationChain`.
-            if (chain.isEmpty() && argType is Type.Object && paramType is Type.Object &&
-                argType !is Type.Interface && argType !is Type.Reference &&
-                paramType !is Type.Interface && paramType !is Type.Reference &&
-                !paramType.properties.isNullOrEmpty()
+            // (CHK.152) step 1: a NAMED pair elaborates too — the declaration reader's
+            // Object->Object branch takes the same helper with no Interface/Reference
+            // exclusion (and admits an INTERSECTION source, 17.42), and tsgo prints the
+            // member chain at both positions. Only for the pair
+            // [isNamedObjectForArgCheck] classifies: an ARRAY or tuple `Type.Reference` is
+            // excluded, because the helper answers a missing-members line for
+            // `[number, string]` against `string[]` and the row then collapses to a TS2740
+            // where both references print the TS2345 head alone.
+            val namedPair = isNamedObjectForArgCheck(argType, allowAliasedObject = false) &&
+                isNamedObjectForArgCheck(paramType, allowAliasedObject = true)
+            if (chain.isEmpty() && paramType is Type.Object &&
+                !paramType.properties.isNullOrEmpty() && (namedPair ||
+                    argType is Type.Object && argType !is Type.Interface &&
+                    argType !is Type.Reference && paramType !is Type.Interface &&
+                    paramType !is Type.Reference)
             ) {
                 val propChain = getPropertyElaborationChain(argType, paramType)
                 if (propChain != null) chain.addAll(propChain)
@@ -170437,6 +170466,60 @@ interface DataView {
         val argElem = arrayLikeElementForArgCheck(argType) ?: return false
         val paramElem = arrayLikeElementForArgCheck(paramType) ?: return false
         return canUseTypeEngine(argElem, paramElem)
+    }
+
+    /**
+     * (CHK.152) step 1: is a NAMED-OBJECT ARGUMENT decidable against a NAMED-OBJECT
+     * PARAMETER? `z(q)` with `q: Q` against `(p: S)`, where `Q`'s `vv: number` meets `S`'s
+     * `vv: string`, is TS2345 in tsgo 7.0.2 with the member chain (`Types of property 'vv'
+     * are incompatible.`) and was SILENT here, while `const s: S = q` reported — no gate of
+     * [caasNonSimpleParamChecks]' firewall claimed the pair.
+     *
+     * The LICENCE is the DECLARATION position, as for (CHK.103)'s array-like gate: the
+     * identical pairs go through [canUseTypeEngine]'s Object-vs-Object branch there, and the
+     * decidability question is asked of [canUseTypeEngine] itself so the two positions cannot
+     * drift. tsgo has ONE relation for both (`checkApplicableSignature` ->
+     * `checkTypeRelatedToAndOptionallyElaborate`, the same as a variable initializer).
+     *
+     * The classification is deliberately NARROW. A UNION PARAMETER is the measured
+     * false-positive source: admitting it adds 3 ours-only rows on the harness profile,
+     * all a named argument whose receiver this reader does not narrow
+     * (`isE(p) && zab(p.parent)` with `E`'s `parent: A | B` reads `p.parent` as the
+     * declared `N`). A UNION ARGUMENT is refused by [canUseTypeEngine] itself (Union ->
+     * Object target). An ARRAY or tuple is the array-like gate's population, and a
+     * literal / function-expression ARGUMENT owns its own readers (freshness,
+     * per-property elaboration, contextual return checks) — its type is anonymous, so the
+     * classifier would refuse it anyway.
+     */
+    private fun argNamedObjectVsNamedObjectCheckable(
+        arg: Expression, argType: Type, paramType: Type,
+    ): Boolean {
+        if (arg is ObjectLiteralExpression || arg is ArrayLiteralExpression ||
+            arg is ArrowFunction || arg is FunctionExpression
+        ) return false
+        if (!isNamedObjectForArgCheck(argType, allowAliasedObject = false)) return false
+        if (!isNamedObjectForArgCheck(paramType, allowAliasedObject = true)) return false
+        return canUseTypeEngine(argType, paramType)
+    }
+
+    /**
+     * (CHK.152) step 1: the per-side classifier of [argNamedObjectVsNamedObjectCheckable] —
+     * a named interface or class instance, a non-array generic instantiation, an
+     * intersection of object types, and (PARAMETER side only) an aliased anonymous object type
+     * (`type S = { vv: string }`). Never a union, an array/tuple or an enum-flavoured type.
+     */
+    private fun isNamedObjectForArgCheck(t: Type, allowAliasedObject: Boolean): Boolean = when (t) {
+        // An intersection of OBJECT types only: a branded primitive (`string & { __b: 1 }`)
+        // reports through the apparent `String` (tsgo: `Property 'vv' is missing in type
+        // 'String & { __b: 1; }'`), which this reader renders as a bare TS2741 — refused.
+        is Type.Intersection -> t.types.all { it is Type.Object }
+        is Type.Object -> t.tupleElementTypes == null && !isArrayLikeReference(t) &&
+            !isEnumFlavoredObjectType(t) && when (t) {
+                is Type.Interface -> t.symbol != null
+                is Type.Reference -> true
+                else -> allowAliasedObject && t.id in aliasDisplayMap
+            }
+        else -> false
     }
 
     /**

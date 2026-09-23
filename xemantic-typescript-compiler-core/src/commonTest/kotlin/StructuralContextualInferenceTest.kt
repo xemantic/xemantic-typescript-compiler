@@ -270,7 +270,11 @@ class StructuralContextualInferenceTest {
             declare function takeO(o: Observer<string>): void;
             takeO(createS(1, (v) => { ps(v); }));
         """.trimIndent())
-        assert(rows == listOf(named("number", "string")))
+        // The OUTER row is tsgo 7.0.2's too (its chain names `next`'s parameters): the
+        // instantiated `Subscriber<number>` does not relate to `Observer<string>`. It was
+        // silent here until (CHK.152) step 1 related a named-object argument to a
+        // named-object parameter (round P18.183).
+        assert(rows == listOf(named("number", "string"), named("Subscriber<number>", "Observer<string>")))
     }
 
     @Test
