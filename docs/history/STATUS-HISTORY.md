@@ -1,5 +1,28 @@
 
 
+**(P18.169) — A GENERIC TYPE *ALIAS* AS A HERITAGE BASE DISCARDED ITS TYPE ARGUMENTS; `marked` 4 -> 3, 20,301 / 0 / 44 (2026-09-22).**
+`interface D extends Omit<B,'b'>` contributed NOTHING: `getTypeFromBaseTypeExpression` honoured type arguments only
+when the base's declared type was a `Type.Interface`, so a generic ALIAS fell through to a bare
+`getDeclaredTypeOfSymbol` with `<B,'b'>` silently discarded and the un-instantiated mapped body added no members.
+**THE ITEM'S SIZING WAS WRONG AND A WRITE PROBE CAUGHT IT**: it was filed as "the TS2353 known-property set does not
+follow a mapped heritage clause", on a recon that read the inherited member as resolving — re-measured with a
+deliberate mis-assignment the member was typed **`any`**, which is round 760's trap (a silence cannot tell "resolved"
+from `any`) and would have had the round widen a set and leave the type wrong. **Three faces, so the pins assert
+VALUES**: a false TS2353, the member typed `any`, and a genuinely-excess key MASKED because B560 reports the first
+excess key and returns (we said `a` at col 18 where tsgo says `zz` at col 35). Matrix **17 ours-only rows -> 10**,
+byte-identical to tsgo including columns; seven heritage forms affected, four provably not, which is the guard.
+**THE ABLATION'S a2 IS THE FIND, AND THE CORPUS SAW WHAT THE PINS COULD NOT**: dropping the `TypeAlias` conjunct read
+0 RED on every pin and broke `nestedRecursiveArraysOrObjectsError01` on the screen (a generic INTERFACE base routed
+through the annotation path hits the `"Array"` fast path and loses the `getOrInternReference` identity a recursive
+union needs); a pin was added and a2 now discriminates, and a second BLIND pin was found the same way. Both
+unpinnable arms are recorded as redundant barriers with their cost measured, not claimed. **A pin naming a LIB
+utility is vacuous in the `diagnose()` harness** — the embedded lib declares no `Omit`/`Pick`/`Partial`/`Record`, so
+the first pin set read 6 of 18 RED on a working binary. `CaptureRecorder` is a MISSION payoff: hover and completion
+now see such an interface's members. Screen 0 of 8,725; grid 8x0 (a GATE here, not a control); cost_gate PASS
+(max +0.41%, `output.errors` 46); huge_methods 0 over; warning-clean. **`cronstrue`'s standing "1" is a SHARED
+CONFIG ROW, measured — the live FP scoreboard is `marked` 3, `cronstrue` 0.**
+
+
 **(P18.168) — (CHK.35a): A FUNCTION EXPRESSION ASSIGNED TO A MEMBER GETS ITS `this`; `marked` 8 -> 4, 20,281 / 0 / 44 (2026-09-22).**
 `spineItEdge` knew two contextual-`this` carriers (a variable ANNOTATION and a call ARGUMENT) and let an ASSIGNMENT
 fall to `else -> false`, so `o.m = function () { this }` drew TS2683 where tsgo is silent. **THE RECON REFUSED THE

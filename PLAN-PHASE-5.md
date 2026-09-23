@@ -25,6 +25,63 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.174) — (LIB.5) G1: a module-local name that collides with a lib global wins; `rxjs` 29 -> 21 (2026-09-23)
+
+The first round against the NEW library, chosen by (LIB.5)'s census because `marked` and
+`cronstrue` are both at exact agreement with tsgo. On `build/bench/lib-rxjs-7.8.2`
+(251 sources, `lib: ["ES2020","DOM"]` — load-bearing) tsgo reports **1** row and we reported
+**29**; this closes **exactly the 8** G1 rows, adding none.
+
+**THE FIRST QUESTION THE BRIEF ASKED WAS THE RIGHT ONE, AND ITS ANSWER MADE THIS A SMALL ROUND.**
+The existing (CHK.49) family already covers `class` in TYPE position — `p: Scheduler` as a
+parameter annotation resolves correctly today through `NameResolver`'s per-file view. What failed
+were two **raw `globals[name]` consults that bypass that view entirely**. So this was NOT a set
+change, and `mergeSharedKeepNames` / `nonModuleVisible` — whose recorded trap is that **seeding
+one alone is worse than seeding both**, at a cost of 969 errors — were never touched.
+
+**THE THREE TS2739 ROWS HAD A DIFFERENT CAUSE AND A DIFFERENT COLLIDING NAME, AND ONLY A
+PER-IDENTIFIER RENAME FOUND IT.** Renaming the TYPE `SchedulerLike` -> `ZzzLike` KEPT the defect;
+renaming the PARAMETER `scheduler` -> `zzzsched` killed it. `scheduler` is itself a DOM global
+(`declare var scheduler: Scheduler`), so an assignment TARGET named `scheduler` was taking the lib
+variable's annotation. That is CLAUDE.md's *"a shape that works only for a lib-colliding name is
+working by accident — rename the identifier before believing any repro"* used as a diagnostic
+instrument rather than as a warning.
+
+**Two sites, +58/-3.** `cpaResolveClassTypeCore` asks the binder for the class's own symbol
+(`nodeSymbolOf`) before the pre-existing `globals`/namespace ladder, which is kept verbatim as the
+fallback — that closes the 5 TS2339. `checkAssignmentExpressionCore` gains
+`caeLocalBindingShadowsLibGlobal`: a **purely lib-declared** `globals` symbol loses to any binding
+the current scope holds, where `currentShadowedNames` previously knew only about a body-local
+`var` — that closes the 3 TS2739. **A third edit at the obvious site (`ccetEnterClassDeclaration`,
+the identical bad shape) was built, measured FULLY INERT, and removed rather than shipped** —
+`cpaSpineLeave` owns the emission.
+
+**THE ABLATION FOUND TWO DEFECTIVE PINS, WHICH IS WHAT IT IS FOR.** a1 and a2 first read 1 and 3
+RED, and the shortfall was the pins, not the arms. One was **BLIND**: the assignability reader
+types `this.zzzOwn` correctly on BOTH binaries, so only the TS2339 EMITTER was wrong and the
+message alone cannot separate them — it now asserts the whole row list, and a1 reads 2. One was
+**VACUOUS**: it spelled the binding `performance2`, which collides with nothing. **a3 is
+load-bearing by a CORPUS measurement rather than by a pin** — widening the guard to drop the
+"purely lib" test moves one baseline (`assignmentCompatBug2` loses `k?(a: any): any`) while no pin
+sees it — and **a4 is a measured REDUNDANT barrier**, 0 pins and 0 of 8,725, kept for
+`nodeSymbolOf`'s (BIND.1) scan fallback.
+
+**The embedded lib the `diagnose()` harness uses is 809 lines and contains NONE of the DOM
+names**, so every pin is spelled with `Performance`/`performance`, which it does have — a
+`Scheduler` pin would have been vacuous in both directions, which is the (P18.169) lesson one
+lib over.
+
+**Gates.** `rxjs` **29 -> 21**; `marked` **0** and `cronstrue` **1**, both unchanged and both
+still exactly tsgo; suite **20,399 / 0 / 44** (+13 pins); corpus screen **0 of 8,725** — the real
+gate for this family; 8-profile grid **8x `added=0 removed=0`**, a CONTROL with ONE real site
+(`export class File` in harness, the G1 shape, reporting nothing before or after); `cost_gate` PASS
+(max **+0.79%**, `globals.lookups` +0.66% — the new consult, accounted for; `output.errors` 46);
+`huge_methods` 0 over; warning-clean, with the gate proved LIVE by an injected `USELESS_CAST`.
+
+**Separate defects named, not fixed**: `new <ClassNamedAfterLibGlobal>()` is an ours-only TS2351
+*"This expression is not constructable"* — the VALUE-position half of the same collision, in a
+THIRD reader, pre-existing and not among the rxjs 8; and a missing TS2588 where tsgo reports it.
+
 ### Round (P18.173) — (CHK.35b): an element-access assignment target supplies a contextual type; **`marked` reaches ZERO** (2026-09-22)
 
 **`marked` now reports the same diagnostics as tsgo 7.0.2: none.** With `cronstrue` already at
@@ -663,92 +720,6 @@ index signature and TS2542 for a readonly one, both of which tsgo reports and we
 COMPOUND assignment, which never reaches this reader at all — a future arm for it must compute the
 OPERATOR's result type, because `arr[i] += 123` on a `string[]` is legal.
 
-### Round (P18.164) — (CHK.33): a destructuring parameter no longer breaks arity; `marked` 18 -> 10 (2026-09-21)
-
-**THE ITEM'S 8 ROWS WERE THE PRIZE AND THREE MORE FALSE-POSITIVE CLASSES FELL OUT OF THE SAME ROOT
-CAUSE.** `Signature.parameters` drops every binding-pattern parameter (`getParameterSymbols`) while
-`minArgumentCount` counts it (`requiredParameterCount`), so a reader taking its MAXIMUM from one and
-its MINIMUM from the other states an impossible range. Round 446 fixed that at the property-access
-reader; (CHK.97)'s later union-callee reader reintroduced it verbatim. The fix is round 446's own
-recovery EXTRACTED into `Checker.signatureDeclaredArity` and shared — not a fourth copy of the
-declaration-to-parameters map, of which the file already had three.
-
-**THE AXIS IS THE UNION RECEIVER, AND A FIXTURE WITHOUT ONE IS VACUOUS.** The same method called on
-a plain receiver was already correct, which is why the defect survived round 446 by ~700 rounds and
-why the obvious repro reads clean. In `marked` it is
-`parseInline(tokens, renderer: _Renderer<..> | _TextRenderer<..>)`.
-
-**EVERY EXPECTATION WAS ADJUDICATED AGAINST tsgo 7.0.2 BEFORE ANY CODE WAS WRITTEN.** On a 10-case
-union-arity matrix tsgo reports 7 rows and is silent on 4; we reported **10, every one wrong** — 4
-false positives on legal code, 5 with an inverted range, one with the wrong CODE. After: 6 rows,
-**codes and messages identical to tsgo**.
-
-**THE OTHER THREE CLASSES, ALL MEASURED; TWO FIXED, ONE SIZED.**
- * A REST parameter whose own name is a binding pattern (`...[a, b]: [string, number]`) is dropped
-   too, so `sigHasRestParameter` — which reads the list's LAST entry — answered FALSE and a legal
-   two-argument call was measured against a maximum of ZERO. FIXED by consulting the declaration's
-   own `hasRest`. **Neither standing instrument can see this shape**; it had to be constructed from
-   the mechanism, and arm a5 is what proves the guard load-bearing.
- * A member typed by a FUNCTION TYPE (`declare const host: { m: ({ a }: O) => void }`) — an
-   options-bag callback property, one of the commonest shapes in real TypeScript — reported the same
-   impossible range. FIXED by two arms round 446's kind list lacked. It is decided by the ROUND-446
-   reader, not the union one, which is the receipt that the extracted helper serves BOTH.
- * An OVERLOAD SET with a destructured overload picks the WRONG overload and reports a confident
-   TS2345 on legal code. **NOT FIXED**: it surfaces through overload SELECTION (`resolveCallOverload`
-   129258-129269, `allArgumentsMatch` 163057), not a TS2554 emitter, and a subagent census counts
-   **~55 readers** of the same split. Its own round.
-
-**THE FREE ASSERTION THE ITEM ASKED FOR IS UNAVAILABLE AS WRITTEN, AND SAYING SO IS PART OF THE
-FIX.** `require(minArgumentCount <= parameters.size)` at `Signature` construction would fire on
-EVERY binding-pattern signature — the `forSignatureDisplay` opt-in is the only builder that mints a
-placeholder — so the inversion is pinned instead as a MESSAGE invariant over a whole diagnostic
-list, which fails for any future reader that mixes the two lists again.
-
-**THE CORPUS IS BLIND TO THIS ENTIRE FAMILY, AND THE ABLATION MEASURED IT RATHER THAN ASSUMING IT.**
-All six arms read **0 mismatches of 8,725** screen subtests, and the 8-profile grid is 8x0 — while
-the pins move 7 / 1 / 15 / 0 / 1 / 4. So the screen and the grid are CONTROLS here and `marked` plus
-the pins were the only gate, which is (CHK.124)'s law and the reason the owner's 2026-09-21 directive
-makes the real-library probe the alignment stop-condition rather than corpus completeness.
-**Arm a4 read 0 RED and the `maxOf` barrier is genuinely REDUNDANT** — `parameters.size` can exceed
-the declared count only through the combiner's extra rest element, which it appends only when
-`eitherHasRest`, and then `anyRest` suppresses the branch anyway. Recorded in its KDoc and kept as a
-barrier, not claimed as coverage. **Arm a3 reddens round 446's OWN `DestructuredParamArityTest`**,
-which is what makes the extraction faithful rather than a second copy.
-
-**TAIL — (CHK.35) RE-MEASURED AND ITS FIRST FIX REVERTED ON ITS OWN MEASUREMENT.** With
-(CHK.33) landed, the next `marked` cluster was opened and the item's framing is wrong twice: it
-is TWO mechanisms, not one, and the `this` half is a MODEL GAP rather than the missing
-contextual signature the item names. A VALUE-probed matrix (a deliberate mis-assignment off
-`this` AND off the parameter, which must report TS2322 when the contextual type really arrived)
-separates them: an ELEMENT-ACCESS target supplies nothing — 2 FPs and 2 MISSING true rows — while
-a PROPERTY-ACCESS target types the parameters correctly and fires TS2683 anyway, a case the item
-never mentions. **tsgo's actual rule, measured over 6 positions: a function expression assigned
-to a MEMBER gets the RECEIVER's type as `this`** (`o.m = function(){}` → `this` is `typeof o`,
-with tsgo reporting TS2339 for a bad member on it), while a variable ANNOTATION and a CALL
-ARGUMENT supply no `this` at all. **A narrow fix keyed on the target type declaring a `this:`
-parameter was built, measured and REVERTED**: it is correct where it applies and moves 0 rows on
-`marked`, 0 on the corpus and 0 on the grid, because `marked`'s own `walkTokens` declares no
-`this:`. Shipping it would have been a fix with no measured effect. The two halves must move
-together — suppressing TS2683 without typing `this` trades a loud wrong answer for a silent one —
-and the item now carries the three sites, the value-probe recipe and the recorded refusal
-(`pullContextualTypeAt`'s *"not a bounded question"*) to re-derive. **(CHK.30) is closed and
-unrelated**, which answers the item's own standing question: one path does NOT serve both.
-
-Gates: `marked` 18 -> 10, `cronstrue` 1 -> 1; corpus screen 0 of 8,725 over both channels; grid 8x0;
-suite **20,232 / 0 failed / 44 skipped** (+17, this round's pins); `cost_gate` PASS with max +0.15%
-and `output.errors` 46 unchanged; `huge_methods` 0 over. The ablation's restore rebuild returns
-`Checker.class` to md5 `806cf77c…`, byte-identical to the gated binary.
-
-Residues stated, not chased: the too-few rows anchor at the RECEIVER where tsgo anchors at the
-METHOD NAME (the round-446 sibling already uses `callee.name.pos`); a tuple-typed rest is not
-expanded to a fixed arity, so we are now silent where tsgo reports two rows — a false NEGATIVE
-traded for a false POSITIVE, with `fixedTupleLengthOfRestParam` as the lever; and the combined
-signature has no parameter at the destructured position, so that argument is never type-checked
-(tsgo's TS2345 is missing). `signatureDeclarationParameters` remains a near-duplicate of the new
-helper with a different kind set — a census says adding `GetAccessor`/`SetAccessor` to it is a
-no-op for all 7 of its readers, so the unification is safe in that direction and unmeasured in the
-other.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1223,7 +1194,40 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   covered. **(G4) 3 rows TS2683**: a contextual `this:` parameter (`work: (this: SchedulerAction<T>,
   state?: T) => void`) is not applied to a function-expression ARGUMENT — adjacent to (CHK.141).
   Plus 7 unrelated singletons, and ONE genuine row we MISS (`WebSocketSubject.ts:304` TS2345).
-  **RECOMMENDED FIRST ROUND: G1**, because it is the only one of the four owned by nothing, it has
+  **G1 LANDED 2026-09-23 ((P18.174) note) — `rxjs` 29 -> 21, exactly the 8 rows, 0 added.** It was
+  a TWO-SITE change, not a set change: the existing (CHK.49) family already covers `class` in TYPE
+  position, and what failed were two raw `globals[name]` consults that bypass the per-file view.
+  **The three TS2739 rows had a DIFFERENT cause and a different colliding name** — the PARAMETER
+  `scheduler` collides with the DOM `declare var scheduler`, found by renaming one identifier at a
+  time. **G3 AND G4 ARE NOW RECONNED ((P18.174) recon) AND G4 IS RE-SCOPED.**
+  **G3 is the next round and it is bounded**: TS2302 is answered by
+  `checkStaticMembersReferenceTypeParams` (registered :10007, body :139810), whose name set is
+  computed ONCE per class and narrowed at exactly ONE place — the `MethodDeclaration` arm's
+  `effectiveNames`. A nested generic ARROW or FUNCTION EXPRESSION in a static initializer keeps the
+  class's names, so its OWN shadowing `<T>` is falsely flagged; tsgo excludes it STRUCTURALLY
+  (`nameresolver.go:170-186` walks containers outward and finds the arrow's own parameters first,
+  so the class arm is never reached). The fix threads the set through the expression/statement
+  walkers and subtracts each function-like's own `typeParameters` on descent. It **only REMOVES**
+  rows. Its gate is the **7 active TS2302 baselines**, and they are a pure OVER-SUPPRESSION gate —
+  measured, **none of the 7 contains a generic arrow or generic function expression**, so a correct
+  fix cannot move them; the grid is a CONTROL (0 sites on all 8 profiles). Ship the one fixture
+  that fails in BOTH directions on one line: `class B4<T,S> { static create: any = <S>(x: S, y: T)
+  => x }` — ours reports 2 rows where tsgo reports 1.
+  **G4 IS RE-SCOPED AND SHOULD NOT BE DONE AS A TS2683 SUPPRESSION.** A primitive probe showed a
+  contextual `this:` is applied **NOWHERE** — not at an argument, not at a variable annotation, not
+  at a member assignment, not at an object-literal property; only an EXPLICIT `this:` parameter
+  types `this`, and (CHK.35a)'s suppression makes two of those positions silent WITHOUT typing
+  anything. So the 3 rxjs rows are just the one position where the suppression is also missing
+  (`callArgHasContextualThis` runs under `spineItRestingLocals`, the file's RESTING locals, so a
+  PARAMETER or BODY-LOCAL receiver is unresolvable there — CLAUDE.md's "a per-node hook on the
+  spine sees NONE of the checking ambient"). The right change is tsgo's
+  `assignContextualParameterTypes` copying `context.thisParameter` onto the signature
+  (`checker.go:10325`), which TYPES `this` at all four positions, makes the suppression fall out,
+  subsumes (CHK.35a)'s recorded false negative and closes part of (CHK.141) — it ADDS diagnostics,
+  so it belongs under (CHK.141) and is gated by the **19 active TS2683 baselines**. A
+  suppression-only patch would be a third syntactic arm on a `when` whose KDoc already documents
+  two, and would leave those false negatives standing.
+  ORIGINAL RECOMMENDATION: **G1**, because it is the only one of the four owned by nothing, it has
   the cheapest reproducer of anything in the report, and all eight dashboard profiles plus the
   corpus are structurally blind to it (tsc's own sources declare no class named after a DOM
   global). Gate it on the corpus — CLAUDE.md records that (CHK.49)'s merge is load-bearing on real

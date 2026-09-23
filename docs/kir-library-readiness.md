@@ -357,6 +357,15 @@ any `marked` number.**
 `tslib` only) and `zod` 4.4.3 (116 sources, no deps) are both extractable offline from
 `~/.npm/_cacache`. Measured: `rxjs` tsgo 1 / ours 29, with four causes owning 22. See (LIB.5) in
 `PLAN-PHASE-5.md` for the cause groups and the recommended first round.
+
+| library | files | tsgo | xtsc | ours-only | note |
+|---|---|---|---|---|---|
+| `rxjs` 7.8.2 (2026-09-23, baseline) | 251 | 1 | 29 | 28 | `build/bench/lib-rxjs-7.8.2`, `lib: ["ES2020","DOM"]` — the lib setting is load-bearing for G1 |
+| **`rxjs` 7.8.2 (2026-09-23, after (P18.174) G1)** | 251 | 1 | **21** | 20 | the 8 lib-global-collision rows closed, 0 added |
+
+The one tsgo row (`observable/dom/WebSocketSubject.ts(304,28)` TS2345) is a genuine row we MISS,
+not an environmental one. **Record the `lib` setting with any `rxjs` number**: G1 exists only
+because `dom` is in the lib set, which is TypeScript's own default when `lib` is unset.
 | jsonrepair | 10 | 2,746 | none | 1 | 16 | 16 | 9 (90%) |
 | fflate | 3 | 3,904 | none | 2 | 17 | 17 | 3 (100%) |
 | yaml | 78 | 10,878 | none | 0 | 78 | 78 | — |

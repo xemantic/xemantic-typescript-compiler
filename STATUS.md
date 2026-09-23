@@ -1,7 +1,11 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **198,874** lines (**+82 at (P18.173)**, the element-access arm, its
+extraction):** `Checker.kt` **198,929** lines (**+55 at (P18.174)**, a binder-symbol consult at the
+class-type reader and a lib-global shadow guard at the assignment reader, with the KDoc carrying
+the corpus receipt that makes one of them load-bearing and the measurement that makes the other
+redundant — a SEMANTIC parity change opening the `rxjs` arc, not an extraction;
+**+82 at (P18.173)**, the element-access arm, its
 slot-type helper and the widened kind test, with the KDoc recording why tsgo's literal shape is
 wrong here — a SEMANTIC parity change that takes the `marked` library to ZERO ours-only rows,
 not an extraction; **+161 at (P18.172)**, the cross-union contextual
@@ -37,6 +41,23 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.174) — (LIB.5) G1: A MODULE-LOCAL NAME THAT COLLIDES WITH A LIB GLOBAL WINS; `rxjs` 29 -> 21, 20,399 / 0 / 44 (2026-09-23).**
+The first round against the NEW library, chosen by (LIB.5)'s census because `marked` and `cronstrue` are both at exact
+agreement with tsgo. On `build/bench/lib-rxjs-7.8.2` (251 sources, `lib: ["ES2020","DOM"]` — load-bearing) tsgo reports 1 row
+and we reported 29; this closes exactly the 8 G1 rows and adds none. **THE BRIEF'S FIRST QUESTION MADE IT A SMALL ROUND**:
+the existing (CHK.49) family already covers `class` in TYPE position, and what failed were two raw `globals[name]` consults
+that BYPASS the per-file view — so it is a two-site change and `mergeSharedKeepNames`/`nonModuleVisible`, whose recorded trap
+is that seeding one alone is worse than seeding both (969 errors), were never touched. **THE THREE TS2739 ROWS HAD A
+DIFFERENT CAUSE AND A DIFFERENT COLLIDING NAME**: renaming the TYPE `SchedulerLike` kept the defect, renaming the PARAMETER
+`scheduler` killed it — `scheduler` is itself a DOM global, so an assignment TARGET took the lib variable's annotation. That
+is CLAUDE.md's "a shape that works only for a lib-colliding name is working by accident" used as an instrument rather than a
+warning. A third edit at the OBVIOUS site was built, measured fully INERT and removed rather than shipped. **THE ABLATION
+FOUND TWO DEFECTIVE PINS**: one BLIND (the assignability reader is right on both binaries, so only the EMITTER was wrong and
+the message alone cannot separate them) and one VACUOUS (its binding name collided with nothing). a3 is load-bearing by a
+CORPUS measurement where no pin sees it; a4 is a measured redundant barrier, kept. The 809-line embedded lib contains NONE
+of the DOM names, so every pin is spelled with `Performance`/`performance`. Screen 0 of 8,725; grid 8x0, a CONTROL with one
+real site; cost_gate PASS (max +0.79%, `globals.lookups` +0.66% — the new consult, accounted for); huge_methods 0.
 
 **(P18.173) — (CHK.35b): AN ELEMENT-ACCESS ASSIGNMENT TARGET SUPPLIES A CONTEXTUAL TYPE; **`marked` REACHES ZERO**, 20,386 / 0 / 44 (2026-09-22).**
 **`marked` now reports what tsgo 7.0.2 reports: nothing.** With `cronstrue` already at zero (its standing "1" is a TS5108
@@ -111,25 +132,3 @@ binder including ones it cannot type. **A blind pin was found by its own ablatio
 silently never ran. a5 is a measured REDUNDANT barrier with its cost measured — `errorType` renders as `any` (B58.1),
 so its blocked values are observationally identical to the fallback. Screen 0 of 8,725; grid 8x0 and a REAL gate
 (4,109-5,671 bare-identifier returns per profile); cost_gate PASS (max +0.51%, `output.errors` 46); huge_methods 0 over.
-
-**(P18.169) — A GENERIC TYPE *ALIAS* AS A HERITAGE BASE DISCARDED ITS TYPE ARGUMENTS; `marked` 4 -> 3, 20,301 / 0 / 44 (2026-09-22).**
-`interface D extends Omit<B,'b'>` contributed NOTHING: `getTypeFromBaseTypeExpression` honoured type arguments only
-when the base's declared type was a `Type.Interface`, so a generic ALIAS fell through to a bare
-`getDeclaredTypeOfSymbol` with `<B,'b'>` silently discarded and the un-instantiated mapped body added no members.
-**THE ITEM'S SIZING WAS WRONG AND A WRITE PROBE CAUGHT IT**: it was filed as "the TS2353 known-property set does not
-follow a mapped heritage clause", on a recon that read the inherited member as resolving — re-measured with a
-deliberate mis-assignment the member was typed **`any`**, which is round 760's trap (a silence cannot tell "resolved"
-from `any`) and would have had the round widen a set and leave the type wrong. **Three faces, so the pins assert
-VALUES**: a false TS2353, the member typed `any`, and a genuinely-excess key MASKED because B560 reports the first
-excess key and returns (we said `a` at col 18 where tsgo says `zz` at col 35). Matrix **17 ours-only rows -> 10**,
-byte-identical to tsgo including columns; seven heritage forms affected, four provably not, which is the guard.
-**THE ABLATION'S a2 IS THE FIND, AND THE CORPUS SAW WHAT THE PINS COULD NOT**: dropping the `TypeAlias` conjunct read
-0 RED on every pin and broke `nestedRecursiveArraysOrObjectsError01` on the screen (a generic INTERFACE base routed
-through the annotation path hits the `"Array"` fast path and loses the `getOrInternReference` identity a recursive
-union needs); a pin was added and a2 now discriminates, and a second BLIND pin was found the same way. Both
-unpinnable arms are recorded as redundant barriers with their cost measured, not claimed. **A pin naming a LIB
-utility is vacuous in the `diagnose()` harness** — the embedded lib declares no `Omit`/`Pick`/`Partial`/`Record`, so
-the first pin set read 6 of 18 RED on a working binary. `CaptureRecorder` is a MISSION payoff: hover and completion
-now see such an interface's members. Screen 0 of 8,725; grid 8x0 (a GATE here, not a control); cost_gate PASS
-(max +0.41%, `output.errors` 46); huge_methods 0 over; warning-clean. **`cronstrue`'s standing "1" is a SHARED
-CONFIG ROW, measured — the live FP scoreboard is `marked` 3, `cronstrue` 0.**
