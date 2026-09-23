@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,641** lines (**+145 at (P18.181)**, three helpers porting tsgo's union-source
+extraction):** `Checker.kt` **199,700** lines (**+59 at (P18.182)**, a one-condition guard removal, a method-parameter
+property-bag instantiation arm and their KDoc — a SEMANTIC parity change that takes `rxjs` 17 -> 10;
+**+145 at (P18.181)**, three helpers porting tsgo's union-source
 inference and union-target head with their KDoc — a SEMANTIC parity change taking a 20-cell matrix from
 2 to 15 agreeing with tsgo and buying NO library row, which the note says; **+131 at (P18.180)**, one substituted-member helper, tsgo's
 `inferFromObjectTypes` tail as a structural leg of the contextual-return inference, an out-of-scope
@@ -62,6 +64,16 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.182) — (CHK.150) RUNG 3 + THE `Partial` LEAK: AN OVERLOAD'S CLEAR WINNER IS ADOPTED FOR THE ARGUMENT'S CONTEXT; `rxjs` 17 -> 10, (CHK.150) CLOSED, 20,527 / 0 / 44 (2026-09-23).**
+Rung 3 was a round-481 byte-parity guard DISCARDING `resolveCallOverload`'s arity-filtered clear winner; it protected
+no baseline (screens byte-identical, pending rows included). The `Partial<Observer<W>>` leak was a mapped bag sent
+through plain `instantiateType`, which skips function-typed union members; a method-param bag arm now mints each
+member through the method-param rule. Matrices: this round 8 -> 20 of 21, (P18.180) 18 -> 21, (P18.181) 15 -> 16.
+19 pins, four ablation arms RED. Screen 0 of 8,725 and blind a third time; grid 8x0; huge_methods 0; **cost_gate
+`typeNode.bypassed` +2.35% — new contextual types at overloaded calls, rebaselined in the commit.** **`rxjs` 17 -> 10**,
+the seven `'unknown' … 'T'` rows exactly; ten ours-only rows remain, all separate families. Successor: (CHK.152) step
+1, fully specified by a parallel read-only census and predicted +0 rows on every profile and library.
+
 **(P18.181) — (CHK.150) RUNG 2: A UNION CONTEXTUAL TYPE INFERS PER MEMBER WITH tsgo's CANDIDATE COMBINATION; X3 MATCHES tsgo, `rxjs` FLAT AS PREDICTED, 20,508 / 0 / 44 (2026-09-23).**
 The contextual union reached the leg all along; its union-SOURCE arm refused two real members on purpose. It now
 infers per member and combines candidates into a subtype-reduced union (tsgo `inference.go:290/1421`), and a new
@@ -117,24 +129,4 @@ uniquely their own. **a3 was a blind pin AND the corpus was blind too** — 0 RE
 had to be BUILT; without the gate the leg invents two ours-only TS2345 rows. **a5 is round 927's pair at THREE layers**: no
 single-layer arm moves the priority pin, a9 defeats all three, recorded as ONE observable. Screen 0 of 8,725; grid 8x0 with
 harness's 3 TS7006 checked 3 -> 3, same rows; cost_gate PASS; huge_methods 0.
-
-**(P18.177) — (CHK.141)(b): A CONTEXTUAL `this:` PARAMETER TYPES `this`; 1 OF 5 POSITIONS -> 5 OF 5, AND THE rxjs GATE IS NOT MET, 20,434 / 0 / 44 (2026-09-23).**
-A contextual `this:` was applied NOWHERE — only an EXPLICIT one typed `this` — so four positions were silent false
-negatives, two of them (CHK.35a)'s deliberate ones. **IT WAS NOT THE RULE, IT WAS THE GATE, AND ONLY A PROBE BINARY FOUND
-IT**: `applyPulledContextualParamTypes` opened with an early return computed over the PARAMETER population, and `this` had
-been folded into it, so a function expression with NO parameters — the shape that needs the rule most — returned one line
-above its own `this` write. tsgo's own shape is the fix (its `this` half is gated on `context.thisParameter` alone and runs
-BEFORE the parameter loop), and its skip condition was adopted exactly: an ANNOTATED own `this:` wins, an un-annotated one
-does not, where ours refused both. **THE BRIEF'S PREMISE WAS FALSE AND THE ROUND PROVED IT**: "with a contextual `this` type
-present, TS2683 cannot fire" is wrong — typing and TS2683 live in DIFFERENT PASSES with different state, shown by a
-miniature reproduction where the typing outcome is IDENTICAL and TS2683 differs by receiver kind alone. So `rxjs` stays at
-17, the stated gate is NOT met, and the round buys parity and no library row. **(CHK.35a)'s suppression arms are therefore
-NOT redundant**; what closes rxjs is a TYPE-KEYED `spineItEdge` arm, an approach reverted once as INERT for a blocker
-(P18.176) has since removed — the live successor. Four arms: a1 5 RED, a2 1, a3 1, a4 0. **a3 WAS A BLIND PIN AND THE PIN
-WAS FIXED**, not the guard excused: its first form used an arrow in a class METHOD where a different mechanism decides, and
-measuring the guard's COST showed dropping it grows a TS2322 tsgo does not emit. a4 is a measured-redundant COST barrier,
-kept and labelled. Screen 0 of 8,725; grid 8x0, a gate reached by 35-38 `(this: ` parameters per profile; cost_gate 18
-counters +0.00%; huge_methods 0; warning gate proved live. **Three defects named, the first a WRONG TYPE**: the contextual
-fn-expr call reader zips against a raw AST parameter list that still contains the `this` pseudo-parameter, so a parameter is
-typed as the `this` type — silent wherever the shifted type happens to fit.
 

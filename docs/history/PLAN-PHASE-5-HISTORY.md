@@ -1,5 +1,70 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.172) — (CHK.142)(a): an object literal against a UNION contextual type; `marked` 2 -> 1 (2026-09-22)
+
+**THE BRIEF'S DIAGNOSIS WAS WRONG, AND IT WAS THIS ROUND'S OWN AUTHOR WHO WROTE IT ONE ROUND
+EARLIER.** (P18.171)'s report sized (a) as "one `else` on `getTypeOfObjectLiteral`'s union arm plus
+a helper". That change was written exactly as specified, built clean, was proved LIVE by a
+positive control — and was **completely inert**: `marked` 2, `canon3` 6, every cell unmoved. The
+real mechanism is **FIVE pieces, none of which moves a row alone**, and each was measured inert
+before the next was added:
+1. `contextualMemberTypeAcrossUnion` — tsgo's `getTypeOfPropertyOfContextualTypeEx`
+   (`checker.go:30312`): map the member over the constituents, drop nulls, union the rest. This is
+   the briefed piece, and it is live but not sufficient.
+2. `objLitLiteralUnderContext` — **this engine answers the BASE PRIMITIVE for every literal**
+   (`const x: never = 'image'` prints `string` where tsgo prints `"image"`), so the contextual
+   member type had no consumer at all. `literalTypeOfExpression` already unions a ternary's
+   branches; it only needed a caller.
+3. **The var-decl context install is gated `targetType is Type.Object`**, so a UNION annotation
+   was refused outright and pieces 1-2 were unreachable from `const t: Link | Image = {…}` —
+   `marked`'s exact shape. This was the actual blocker.
+4. `tryEmitObjectVsNamedUnionArg`'s false-positive firewall asks
+   `constituents.any { checkTypeRelatedTo(argType, c) }` — each constituent INDIVIDUALLY, never
+   the union — so (P18.171)'s discriminated split was **structurally unreachable** from it. Both
+   the fresh and the non-fresh branch had it.
+5. The argument context install carries the identical `paramType is Type.Object` gate.
+
+**IT WAS FOUND BY PROBING, NOT BY READING, AFTER TWO INERT BUILDS.** A temporary
+`Diagnostic`-constructor stack-trace hook named the real emitters — `tryEmitObjectVsNamedUnionArg`
+and `cvdaElaborateMismatch` — and **neither is either of the two sibling readers the brief
+named**. Both siblings were then measured OUT of scope and stay untouched: with them untouched,
+**46 of 46 cells agree with tsgo**, so no cell depends on either. The probe was stripped and every
+final number re-taken on the probe-free binary, whose md5 a `--rerun-tasks` recompile reproduced
+exactly. **Two traps it cost**: the stack frame read `Checker.kt:33840`, which is CLAUDE.md's
+wrap — the real line is **164912** (`+131072`, not `+65536`, because the file now exceeds 131,072
+lines); and `Type '"image" | "link"' is not assignable to type 'string'` was a **display
+artefact**, since that emitter prints `typeToString(getWidenedLiteralType(…))` on BOTH sides and
+the real comparison was against `'link'`.
+
+**Ablation, seven arms, one mistake each.** a1 (union never reaches the member lookup) 2 RED / +3
+cells; a2 (first-hit instead of the union — the sibling bug, injected into the new helper) 2 / +3;
+a3 (literal not kept under context) 2 / +3; a5 (var-decl install removed) 2 / +2; a6 (firewall
+narrowed back to constituents) 2 / +7. **a7 read 0 RED and was a BLIND PIN** — its cell moved
+while no pin did — so a pin was added and it now reddens. **a4 read 0 RED with NO cell delta, so
+its COST was measured instead of calling it redundant by default**: opening it moves 0 of 8,725
+subtests, 0 rows on all eight profiles, 0 pins, neither library, and **21 of 631,317
+`getTypeOfExpression` calls** with `typeNode.bypassed` byte-identical. Redundant on both axes,
+**kept** — it is the faithful statement of tsc's rule and narrowing the admitted population is the
+direction that cannot manufacture an acceptance — with the numbers written into its KDoc so nobody
+re-derives them. One caveat stated rather than hidden: the table was taken one behavioural change
+before the end, and re-running a6 now would correctly die on its anchor count.
+
+**Gates.** `marked` **2 -> 1** (`Tokenizer.ts:19` TS2322 gone; only the pre-existing TS7019 at
+`Instance.ts:96` remains, which is (CHK.35b)'s); `cronstrue` unchanged; suite **20,364 / 0 / 44**
+(+13 pins); corpus screen **0 of 8,725**; 8-profile grid **8x `added=0 removed=0`** — a real GATE
+in the ADDING direction over a 62-150-per-profile ternary-member population, and it added nothing;
+`cost_gate` PASS (`typeNode.bypassed` **+0.80%**, `output.errors` 46, `spine.nodes` ±0.00%);
+`huge_methods` 0 over; warning-clean. The reconstructed canonical fixture goes **6 -> 5** against
+tsgo's 4, as predicted.
+
+**The anchor divergence is REAL, UNCHANGED, and NOT introduced** — measured on a fixture built for
+it: tsgo drills to the offending member (col 55) where we report the whole literal (col 7) for a
+UNION target, while a SINGLE-constituent target drills correctly on both. An independent gap.
+
+**Separate defects named, not fixed**: that whole-literal-vs-member elaboration; a literal having
+no literal type outside a const context (`const x: never = 'image'` prints `string`); and the
+`getWidenedLiteralType`-on-both-sides display artefact above.
+
 ### Round (P18.171) — (CHK.142)(b): a discriminated-union SOURCE is split over its discriminants; 23 of 25 cells now match tsgo (2026-09-22)
 
 A port of tsgo's `typeRelatedToDiscriminatedType` (`relater.go:3989`), wired into the tail of our

@@ -25,6 +25,63 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.182) — (CHK.150) rung 3 + the `Partial` leak: an overload's clear winner is ADOPTED for the argument's contextual type; `rxjs` 17 -> 10, the predicted seven rows exactly; (CHK.150) CLOSED (2026-09-23)
+
+Orchestrated: one implementation subagent plus, in parallel on frozen (P18.181) classes, a read-only
+census that fully specified (CHK.152)'s first step (see that item). **The overload half was the
+byte-parity guard, and nothing else**: `resolveCallOverload(strictSelect = true)` already filters by arity
+first as tsgo's `chooseOverload` does, and for X1 returned `sigs[0]` as a clear winner — which the call
+side then DISCARDED on `chosen !== sigs[0]` (a round-481-era "keep the legacy every-overload-callable
+heuristic byte-identical" veto) and fell into a fallback that answers only when every overload's
+parameter is function-typed. `Subscriber<T>` is not, so the context was null. The receipt that it was
+the guard: the same pair declared in the OTHER order already agreed. **The `Partial<Observer<W>>` leak was
+not in the pull either** — `instantiateMethodParamType` sent the resolved `Partial<…>` bag through plain
+`instantiateType`, which skips a function-typed union member, so `next` kept the class's raw `W`. The same
+leak hid a relation row (`{ next: (w: number) => … }` against `X<string>` is TS2322 in tsgo; now agrees).
+
+**The change (`Checker.kt` +65/−6)**: `ctxArgTypesFromSignatures` adopts ANY clear winner
+(`if (chosen != null)`), instantiated through `ctxArgTypeMapper`; the fallback now serves only calls with
+no clear winner. **The guard protected NO baseline** — `--include "" --diff 100` screens byte-identical
+before and after, pending rows included. New `instantiateMethodParamPropertyBag` + one arm in
+`instantiateMethodParamType`: a member-only anonymous object has each member instantiated through the
+method-param rule, MINTING a new object ((CHK.102)'s never-mutate rule). (P18.180)'s out-of-scope
+candidate filter is now a BACKSTOP for that shape (its count pin still passes; its old ablation arm
+would presumably read 0).
+
+**Matrices vs tsgo**: this round's 21 cells **8 -> 20** agree; the (P18.180) matrix 18 -> **21** (X1, and
+the two `Partial` leak cells); the (P18.181) matrix 15 -> **16** (d08, rxjs's own shape; the 4 left are
+(CHK.152)). Controls held: reversed arity, X4, function-only overloads, first candidate failing on
+another argument, a method with its own `<U>`, the two TS7006 cases. **Residue e17**, pre-existing and
+unpinned: `r(cb: (x: string) => string)` beside `r(cb: (x: number) => number)` called with
+`(x) => { ps(x); return 1; }` — tsgo FIXES the arrow's parameter from the first candidate and reports
+TS2769; we pick the second overload and report its body.
+
+**Pins**: `OverloadContextualArgumentTest`, 19 tests (8 controls), tsc's own `Partial` in the prelude
+(the harness lib lacks it). Ablation: guard restored 8 RED; bag arm removed 7; bag members through plain
+`instantiateType` 7 (the SAME set — one observable, round 927's pair); winner adopted with no mapper 2
+(the generic-overload pins). Restored md5 `427bcc1c`, rebuilt.
+
+**Gates**: full suite **20,527 / 0 / 44** (+19); corpus screen 0 of 8,725, the 41 pending rows
+byte-identical — **blind a third time**; huge_methods 0; grid 8x `added=0 removed=0` — and harness is
+94 -> 94 with an identical row set: its 3 TS7006 rows at `harnessGlobals.ts:23` come from an
+ASSIGNMENT (`assert.deepEqual = (a, b, msg) => …`), not an overloaded call, which the (CHK.150) census
+had mis-attributed; warning gate proved live by the agent's injected probe, 0 `w:` in the suite compile.
+**cost_gate FAILED on one counter and was rebaselined in this commit**: `typeNode.bypassed` 151,082 ->
+154,638 (**+2.35%**), with `typeOfExpr.calls` +0.31% and `narrow.memoServed` +0.35% beside it, output
+46 = 46 and `spine.nodes` identical — the accounting is that overloaded calls which used to get a NULL
+contextual type now resolve and instantiate the winner's parameter types (and the bag arm instantiates
+members): real new work, and small; not attributed arm-by-arm. **Libraries: `rxjs` 17 -> 10** — the seven
+removed rows are exactly (CHK.148)'s fingerprint `Type 'unknown' is not assignable to type 'T'`
+(`audit:82`, `pairwise:55`, `sample:54`, `single:107`, `skipLast:71/80`, `throttle:133`); `marked` 0.
+
+**What is left between rxjs and tsgo's 1 row — ten ours-only rows in separate families**: TS2683 x3
+(`range:78`, `timer:178`, `scheduleArray:22`, the `this` family), TS2322 x4 (`race:52`, `groupBy:147`,
+`argsArgArrayOrObject:14`, and `Subscriber:220` — `Partial<Observer<any>> | fn | null` against
+`Partial<Observer<any>>`, a narrowing gap), TS2769 `Observable:307`, TS2349 `share:266`, TS2454
+`TestScheduler:158` — plus tsgo's own row we MISS (`WebSocketSubject:304`, an
+`ArrayBufferView<ArrayBufferLike>` relation gap, NOT (CHK.152) per its census). **Successor: (CHK.152)
+step 1**, which is fully specified and predicted +0 rows on every profile and library.
+
 ### Round (P18.181) — (CHK.150) rung 2: a UNION contextual type infers per member with tsgo's candidate combination; X3 matches tsgo, 2 -> 15 of 20 cells, `rxjs` flat as predicted (2026-09-23)
 
 Orchestrated: one implementation subagent, gates in this session, and — in parallel, against a FROZEN
@@ -556,71 +613,6 @@ class-property initializer with a function-expression value is silent here and T
 TS2339 assignment-target residue above; an `any`-typed key losing the true row; and an ours-only
 TS2322 on a generic-`R` slot verified present on the BEFORE binary, i.e. (CHK.35c) territory.
 
-### Round (P18.172) — (CHK.142)(a): an object literal against a UNION contextual type; `marked` 2 -> 1 (2026-09-22)
-
-**THE BRIEF'S DIAGNOSIS WAS WRONG, AND IT WAS THIS ROUND'S OWN AUTHOR WHO WROTE IT ONE ROUND
-EARLIER.** (P18.171)'s report sized (a) as "one `else` on `getTypeOfObjectLiteral`'s union arm plus
-a helper". That change was written exactly as specified, built clean, was proved LIVE by a
-positive control — and was **completely inert**: `marked` 2, `canon3` 6, every cell unmoved. The
-real mechanism is **FIVE pieces, none of which moves a row alone**, and each was measured inert
-before the next was added:
-1. `contextualMemberTypeAcrossUnion` — tsgo's `getTypeOfPropertyOfContextualTypeEx`
-   (`checker.go:30312`): map the member over the constituents, drop nulls, union the rest. This is
-   the briefed piece, and it is live but not sufficient.
-2. `objLitLiteralUnderContext` — **this engine answers the BASE PRIMITIVE for every literal**
-   (`const x: never = 'image'` prints `string` where tsgo prints `"image"`), so the contextual
-   member type had no consumer at all. `literalTypeOfExpression` already unions a ternary's
-   branches; it only needed a caller.
-3. **The var-decl context install is gated `targetType is Type.Object`**, so a UNION annotation
-   was refused outright and pieces 1-2 were unreachable from `const t: Link | Image = {…}` —
-   `marked`'s exact shape. This was the actual blocker.
-4. `tryEmitObjectVsNamedUnionArg`'s false-positive firewall asks
-   `constituents.any { checkTypeRelatedTo(argType, c) }` — each constituent INDIVIDUALLY, never
-   the union — so (P18.171)'s discriminated split was **structurally unreachable** from it. Both
-   the fresh and the non-fresh branch had it.
-5. The argument context install carries the identical `paramType is Type.Object` gate.
-
-**IT WAS FOUND BY PROBING, NOT BY READING, AFTER TWO INERT BUILDS.** A temporary
-`Diagnostic`-constructor stack-trace hook named the real emitters — `tryEmitObjectVsNamedUnionArg`
-and `cvdaElaborateMismatch` — and **neither is either of the two sibling readers the brief
-named**. Both siblings were then measured OUT of scope and stay untouched: with them untouched,
-**46 of 46 cells agree with tsgo**, so no cell depends on either. The probe was stripped and every
-final number re-taken on the probe-free binary, whose md5 a `--rerun-tasks` recompile reproduced
-exactly. **Two traps it cost**: the stack frame read `Checker.kt:33840`, which is CLAUDE.md's
-wrap — the real line is **164912** (`+131072`, not `+65536`, because the file now exceeds 131,072
-lines); and `Type '"image" | "link"' is not assignable to type 'string'` was a **display
-artefact**, since that emitter prints `typeToString(getWidenedLiteralType(…))` on BOTH sides and
-the real comparison was against `'link'`.
-
-**Ablation, seven arms, one mistake each.** a1 (union never reaches the member lookup) 2 RED / +3
-cells; a2 (first-hit instead of the union — the sibling bug, injected into the new helper) 2 / +3;
-a3 (literal not kept under context) 2 / +3; a5 (var-decl install removed) 2 / +2; a6 (firewall
-narrowed back to constituents) 2 / +7. **a7 read 0 RED and was a BLIND PIN** — its cell moved
-while no pin did — so a pin was added and it now reddens. **a4 read 0 RED with NO cell delta, so
-its COST was measured instead of calling it redundant by default**: opening it moves 0 of 8,725
-subtests, 0 rows on all eight profiles, 0 pins, neither library, and **21 of 631,317
-`getTypeOfExpression` calls** with `typeNode.bypassed` byte-identical. Redundant on both axes,
-**kept** — it is the faithful statement of tsc's rule and narrowing the admitted population is the
-direction that cannot manufacture an acceptance — with the numbers written into its KDoc so nobody
-re-derives them. One caveat stated rather than hidden: the table was taken one behavioural change
-before the end, and re-running a6 now would correctly die on its anchor count.
-
-**Gates.** `marked` **2 -> 1** (`Tokenizer.ts:19` TS2322 gone; only the pre-existing TS7019 at
-`Instance.ts:96` remains, which is (CHK.35b)'s); `cronstrue` unchanged; suite **20,364 / 0 / 44**
-(+13 pins); corpus screen **0 of 8,725**; 8-profile grid **8x `added=0 removed=0`** — a real GATE
-in the ADDING direction over a 62-150-per-profile ternary-member population, and it added nothing;
-`cost_gate` PASS (`typeNode.bypassed` **+0.80%**, `output.errors` 46, `spine.nodes` ±0.00%);
-`huge_methods` 0 over; warning-clean. The reconstructed canonical fixture goes **6 -> 5** against
-tsgo's 4, as predicted.
-
-**The anchor divergence is REAL, UNCHANGED, and NOT introduced** — measured on a fixture built for
-it: tsgo drills to the offending member (col 55) where we report the whole literal (col 7) for a
-UNION target, while a SINGLE-constituent target drills correctly on both. An independent gap.
-
-**Separate defects named, not fixed**: that whole-literal-vs-member elaboration; a literal having
-no literal type outside a const context (`const x: never = 'image'` prints `string`); and the
-`getWidenedLiteralType`-on-both-sides display artefact above.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1078,7 +1070,11 @@ shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: t
 positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
 positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
 
-- [ ] **(CHK.150) RUNG 1 (X2) LANDED 2026-09-23 ((P18.180) note) — a generic reference's members are
+- [x] **(CHK.150) CLOSED 2026-09-23 ((P18.182) note) — rung 3 (X1) was the byte-parity guard discarding
+  an overload's clear winner, and the `Partial<Observer<W>>` leak was `instantiateMethodParamType` pushing
+  a mapped bag through plain `instantiateType`; both fixed, **`rxjs` 17 -> 10**, the predicted seven rows
+  exactly. Residue e17 (tsgo fixes a callback parameter from the FIRST overload and reports TS2769) left
+  unpinned; rxjs's remaining ten rows are separate families listed in the note. RUNG 1 (X2) LANDED 2026-09-23 ((P18.180) note) — a generic reference's members are
   now read SUBSTITUTED for contextual typing (`ctxMemberTypeOf` -> `resolveGenericPropertyType`) and
   the contextual-return leg infers between DIFFERENT object types (tsgo `inferFromObjectTypes`); the
   object-literal half's real cause was the member TABLE, not `lookupPropertyTypeForCtx`'s fallback.
@@ -1215,7 +1211,36 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.152) A NAMED-OBJECT ARGUMENT IS NEVER RELATED TO A NAMED-OBJECT PARAMETER — `caasNonSimpleParamChecks`'
+- [ ] **(CHK.152) CENSUSED 2026-09-23 (read-only census, frozen (P18.181) classes,
+  `build/scratch-p18182-census/`) — STEP 1 IS SPECIFIED AND PREDICTED +0 ROWS ON EVERY PROFILE AND
+  LIBRARY.** A new instrument, `jdi/Census.java`, attaches a debugger to the snapshot compiler, breaks on
+  `caasNonSimpleParamChecks` and asks the checker itself (`canUseTypeEngine`, `checkTypeRelatedTo`,
+  foreign-type-parameter, rest, arity) for every `CAAS_CONTINUE` exit — so a prediction is exactly the set
+  of sites an opening would reach with a failing relation (diagnostic counts unchanged under the debugger:
+  the control). **STEP 1 = `allowNamedObjectVsNamedObject`**: argument `Type.Interface` / non-array
+  `Type.Reference` / `Type.Intersection` (never a literal, arrow or function expression); parameter
+  `Type.Interface` / non-array `Type.Reference` / aliased `Type.Object` / `Type.Intersection` (**NEVER a
+  union**); the three (CHK.103) guards (rest position, `arityOk`, no foreign type parameter either side —
+  precedent commit `4e0079c2`, `allowArrayLikeVsArrayLike`); decision `canUseTypeEngine(argType,
+  paramType)`, whose Object↔Object branch is what declaration position already uses. **AND THE CHAIN, which
+  the item did not name**: `caasTailGatesAndRelation`'s `getPropertyElaborationChain` call excludes
+  `Type.Interface`/`Type.Reference`, so an opening alone prints the head with NO chain — relax it or reuse
+  `cvdaElaborateMismatch`, pinned against the declaration chain (24 of 28 already equal tsgo; expect the
+  known `strictFunctionTypes` function-property form divergence). **Predicted**: 27 of 32 argument misses in
+  a 47-cell matrix close (`matrix-cells.tsv`); profiles 0 (tsc-project: 7,494 narrow pairs, 35 relation
+  failures, all removed by the rest/foreign-TP guards; harness 14,311 / 50 / 0); rxjs 191 pairs 0, marked
+  0, cronstrue 0; a 154-fixture corpus sample 0 added / 0 FP / 0 duplicates (thin — 31 admitted pairs — so
+  the corpus screen still gates duplicates against pin walkers). **Traps measured**: `ctl-arity-wrong`
+  reaches the relation (without `arityOk` a TS2345 lands beside tsgo's lone TS2554); `pos-rest` compares
+  `Q` against `S[]`. **A WIDER OPENING IS A FALSE-POSITIVE SOURCE ON REAL CODE**: union arguments with an
+  un-narrowed `undefined`, named argument vs union parameter, array literals vs union, `ReadonlyArray`
+  targets — 7 sites on tsc-project, 38 on harness; function-typed arguments add 23 FPs in the corpus sample
+  (`() => void` vs `Function`). **Later steps, each its own census**: (2) rest-element object path; (3)
+  union / nullable parameters after a narrowing second chance like `argArrayLikeNarrowsToRelated`; (4)
+  union arguments. **Corrections**: rxjs's `WebSocketSubject.ts:304` is NOT this family (it misses at
+  declaration too — an `ArrayBufferView<ArrayBufferLike>` relation gap); the corpus population is tiny (23
+  named→named TS2345 rows in 19 baselines, 11 active and matched), so pins + the cell matrix are the gate.
+  ORIGINAL: **A NAMED-OBJECT ARGUMENT IS NEVER RELATED TO A NAMED-OBJECT PARAMETER — `caasNonSimpleParamChecks`'
   FP FIREWALL EXITS `CAAS_CONTINUE` BEFORE THE RELATION, SO `z(q)` WITH `q: Q`, `p: S` AND A MISMATCHED
   PROPERTY IS **SILENT** WHERE `const s: S = q` REPORTS (measured 2026-09-23 by the (CHK.151) census, 133
   cells, and re-probed by the orchestrator on the (P18.180) binary).** tsgo 1 row / ours 0 for: interface

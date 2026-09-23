@@ -1,5 +1,25 @@
 
 
+**(P18.177) — (CHK.141)(b): A CONTEXTUAL `this:` PARAMETER TYPES `this`; 1 OF 5 POSITIONS -> 5 OF 5, AND THE rxjs GATE IS NOT MET, 20,434 / 0 / 44 (2026-09-23).**
+A contextual `this:` was applied NOWHERE — only an EXPLICIT one typed `this` — so four positions were silent false
+negatives, two of them (CHK.35a)'s deliberate ones. **IT WAS NOT THE RULE, IT WAS THE GATE, AND ONLY A PROBE BINARY FOUND
+IT**: `applyPulledContextualParamTypes` opened with an early return computed over the PARAMETER population, and `this` had
+been folded into it, so a function expression with NO parameters — the shape that needs the rule most — returned one line
+above its own `this` write. tsgo's own shape is the fix (its `this` half is gated on `context.thisParameter` alone and runs
+BEFORE the parameter loop), and its skip condition was adopted exactly: an ANNOTATED own `this:` wins, an un-annotated one
+does not, where ours refused both. **THE BRIEF'S PREMISE WAS FALSE AND THE ROUND PROVED IT**: "with a contextual `this` type
+present, TS2683 cannot fire" is wrong — typing and TS2683 live in DIFFERENT PASSES with different state, shown by a
+miniature reproduction where the typing outcome is IDENTICAL and TS2683 differs by receiver kind alone. So `rxjs` stays at
+17, the stated gate is NOT met, and the round buys parity and no library row. **(CHK.35a)'s suppression arms are therefore
+NOT redundant**; what closes rxjs is a TYPE-KEYED `spineItEdge` arm, an approach reverted once as INERT for a blocker
+(P18.176) has since removed — the live successor. Four arms: a1 5 RED, a2 1, a3 1, a4 0. **a3 WAS A BLIND PIN AND THE PIN
+WAS FIXED**, not the guard excused: its first form used an arrow in a class METHOD where a different mechanism decides, and
+measuring the guard's COST showed dropping it grows a TS2322 tsgo does not emit. a4 is a measured-redundant COST barrier,
+kept and labelled. Screen 0 of 8,725; grid 8x0, a gate reached by 35-38 `(this: ` parameters per profile; cost_gate 18
+counters +0.00%; huge_methods 0; warning gate proved live. **Three defects named, the first a WRONG TYPE**: the contextual
+fn-expr call reader zips against a raw AST parameter list that still contains the `this` pseudo-parameter, so a parameter is
+typed as the `this` type — silent wherever the shifted type happens to fit.
+
 **(P18.176) — (CHK.35c): A CONTEXTUAL PARAMETER TYPE MENTIONING AN IN-SCOPE TYPE PARAMETER IS APPLIED; THE rxjs PRIZE WAS MIS-ATTRIBUTED, 20,424 / 0 / 44 (2026-09-23).**
 **THE HEADLINE IS THE REFUTATION.** (CHK.35c) has been carried since (P18.168) as the owner of `rxjs` G2's 7 rows and as
 "what finally closes `marked`'s TS7019". It is NEITHER: those rows read `Type 'unknown' is not assignable to type 'T'`, not
