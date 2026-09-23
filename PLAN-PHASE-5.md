@@ -25,6 +25,69 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.178) — (CHK.148): a callee type parameter is inferred from the CONTEXTUAL RETURN; 13 of 14 sources match tsgo, and the rxjs sizing was WRONG (2026-09-23)
+
+`ctxArgTypeMapper` gained one leg between the argument-inference mapper and `freeTypeParamMapper`:
+`ctxReturnTypeParamMapper` pulls the CALL's own contextual type and matches it structurally
+against the signature's return type, contributing only for type parameters no argument bound.
+**13 of 14 contextual sources go from `unknown` to the context's type**, byte-identical to tsgo —
+call argument, variable annotation, return, property assignment, `satisfies`, `as`, async return,
+a nullish union, an array element, a ternary, `=`, a class property and a `new` argument — with
+the four controls (explicit `<T>`, priority, no context, constrained TP) unmoved.
+**The ADD direction was verified too**, 4 of 4 against tsgo including the two rows the fix adds
+(`TS2551 Property 'toFixed' does not exist on type 'string'`), which is what a round expecting
+removal only would have misread.
+
+**THE RECON'S SIZING WAS WRONG AND A LADDER PROVED IT — `rxjs` STAYS AT 17.** Its reducer gave
+`subscribe` a direct `Subscriber<T>` parameter; **rxjs's is OVERLOADED with a union**
+(`Partial<Observer<T>> | ((value: T) => void)`). A six-rung ladder from the reducer's shape to
+rxjs's shows only the reducer's rung works, and a second probe shows why: at every other rung an
+ARROW or OBJECT-LITERAL argument gets **no contextual type at all**, so `pullContextualTypeAt`
+answers null and there is nothing to infer from whatever matcher is written. **So the blocker is
+upstream of this leg** — a union-typed or overloaded parameter supplying no contextual type to its
+argument, filed as (CHK.150). Third round running that buys parity and no library row; the
+remaining rxjs rows are all behind that one family, and chipping at their symptoms will not move
+them.
+
+**THE RULE HAD TO BE DISCOVERED, NOT INHERITED, AND THE CORPUS CAUGHT THE FIRST CUT.** "Contribute
+only for type parameters no argument bound" is correct but incomplete: `typeParamBoundByArguments`
+**skips every function-like argument**, which is right for `freeTypeParamMapper` (tsc's first pass
+defers a context-sensitive argument) and **wrong for the priority question** (tsc's second pass
+types it and contributes a priority-0 candidate that wipes the return-type one). The split runs
+through the callback's OWN signature — `T` in its RETURN position is inferred from the lambda's
+body, `T` in a PARAMETER position is the thing being supplied. Without that distinction the first
+cut **DELETED a corpus row** (`subtypeReductionWithAnyFunctionType`, TS7006, where tsgo and
+pristine agree and there is no `.diff` layer).
+
+**Ablation, nine arms.** a1 (leg removed) **16 RED**; a6 (pull taken at the CALLEE, not the call)
+15; a9 (priority inverted at **all three** layers) 2; a2, a7, a8 exactly 1 each and each uniquely
+its own pin. **a3 WAS A BLIND PIN AND THE CORPUS WAS BLIND TOO** — dropping
+`typeParamBoundByArguments` read 0 RED *and* 0 of 8,725, so a discriminating cell had to be
+BUILT (a non-function-like argument at a union parameter our own argument inference cannot read);
+without the gate the leg invents **two ours-only TS2345 rows on code tsgo types correctly**. A
+23rd pin now covers it. **a5 is round 927's pair generalised to THREE layers**: no single-layer
+arm can move the priority pin because the `argBound` filter, `typeParamBoundByArguments` and the
+composition order all make the same decision — a9 defeats all three and it reddens, so they are
+recorded as ONE observable. **a4 is a measured redundant barrier** with `cost_gate` counters
+byte-identical to the shipped arm, kept because it states the priority where it is decided.
+
+**Gates.** suite **20,457 / 0 / 44** (+23 pins); corpus screen **0 of 8,725**; 8-profile grid **8x
+`added=0 removed=0`** with **harness's 3 TS7006 rows explicitly checked 3 -> 3, same rows**;
+`rxjs` **17 -> 17, 0 added 0 removed**; `marked` **0**, `cronstrue` **1**; `cost_gate` PASS
+(largest `mapped.hits` +0.04%, `typeOfExpr.calls` +8 of 631,317); `huge_methods` 0 over;
+warning-clean, proved live.
+
+**Deliberate refusals, recorded rather than pinned** (pinning today's wrong answer is a
+countdown): `ctxReturnInferInto` refuses a contextual type that is a UNION with two real members
+(tsc builds a candidate per constituent and picks a common supertype — a guess this file's style
+does not make) and any structural match between DIFFERENT object types. Both are in the class
+KDoc with tsgo's measured answer. The nullish-stripped singleton union IS handled and pinned.
+
+**Separate defects named, not fixed**: (CHK.150) above; `pullContextualTypeAt` has no
+expression-bodied-arrow arm, so a call inside `() => expr` sits at no contextual position; its
+`=` arm is blind for a BLOCK-SCOPED local (B83.5) while the file-level and member forms work; and
+an argument at a union parameter mentioning `T` is not inferred at all.
+
 ### Round (P18.177) — (CHK.141)(b): a contextual `this:` parameter TYPES `this`; 1 of 5 positions -> 5 of 5, and the rxjs gate is NOT met (2026-09-23)
 
 **A contextual `this:` parameter was applied NOWHERE** — only an EXPLICIT `this:` on the function
@@ -607,71 +670,6 @@ in TS2339 where tsgo names it.
 MAPPED**: (CHK.144) -> 2, (CHK.142) -> 1, (CHK.35b)+(CHK.35c) -> 0. See the orchestration
 addendum above the queue for the ordering and the measured 4 -> 6 trap that decides it.
 
-### Round (P18.168) — (CHK.35a): a function expression assigned to a member gets its `this`; `marked` 8 -> 4 (2026-09-22)
-
-**THE RECON REFUSED THE ITEM AND THE REFUSAL IS THE ROUND'S MAIN PRODUCT.** (CHK.35) is 5 rows
-on `marked`; sized read-only first, they are TWO clusters with DIFFERENT causes, and only one of
-them is a round. 4 rows fall to a purely SYNTACTIC arm in `spineItEdge`; the 5th (TS7019) is
-blocked by a general defect neither the item nor (P18.164) names — **contextual parameter typing
-collapses to `any` whenever the parameter type mentions a FREE TYPE PARAMETER** (the class's or
-the method's own, measured over a 7-cell matrix; not array-specific, not `forEach`-specific, not
-element-access-specific). That is queued as (CHK.35c) and is a corpus-gated arc of its own,
-because its fix ADDS diagnostics.
-
-**THE QUEUE'S OWN RECORD WAS CORRECTED.** (P18.164) reverted a type-keyed fix and recorded the
-reason as *"`marked` declares no `this:` at all"*. True of the `walkTokens` cluster ONLY — the
-other cluster's target, `RendererExtensionFunction<ParserOutput, RendererOutput>`, **does**
-declare one. The type-keyed test could not see it because that target resolves to `any` for the
-(CHK.35c) reason. So the previously-reverted fix was inert for a different reason than recorded,
-and a SYNTACTIC test is immune to it — which is why this one is syntactic rather than a second
-attempt at the model.
-
-**tsgo's RULE, MEASURED OVER SIX SHAPES** (not inferred): silent for a PropertyAccess or
-ElementAccess LHS; REPORTS for an Identifier LHS, an IIFE and a NESTED function expression. The
-last three need no arms — an Identifier LHS is excluded, an IIFE's parent is the `CallExpression`
-(the arm ABOVE decides it and answers false for a callee), and a nested fn-expr's parent is its
-own statement.
-
-**SHIPPED AS A SUPPRESSION, WITH THE RESIDUE PINNED.** `this` stays `any` rather than becoming
-the RECEIVER's type, so where a body reads a MEMBER of `this` tsgo reports TS2339 and we are
-silent — a false NEGATIVE, **and the same line drew a WRONG TS2683 before, so the divergence
-MOVED rather than appeared**. Zero rows on both libraries, all eight profiles and the active
-corpus. Typing `this` as the receiver WITHOUT tsgo's precedence rule (a contextual `this:`
-outranks the receiver) would add a false POSITIVE wherever the body forwards `this` to a callee
-declaring its own — exactly what `marked` does. That is (CHK.35d), and it moves 0 further rows.
-
-**BOTH STANDING INSTRUMENTS ARE CONTROLS HERE, AND THEY SAY SO BY COUNT.** All eight profiles
-carry **ZERO** TS2683 rows, so the grid cannot move. Of the 50 corpus baselines containing
-TS2683, exactly **two** also contain a member-assigned function expression and in NEITHER is the
-row at such a `this` — `thisBinding2` (ACTIVE) is an IIFE, i.e. the ablation target, and
-`classCanExtendConstructorFunction` is `checkJs`-gated. The six pins are the gate.
-
-**ABLATION — a3's ZERO IS STRUCTURAL, NOT A BLIND PIN.** a1 (arm removed): the 2 suppression pins
-RED. a2 (the realistic over-broad mistake — search ANY enclosing assignment instead of the
-IMMEDIATE parent): the NESTED pin RED. **The IIFE pin is green in BOTH and is not blind**: an
-IIFE's function expression has the `CallExpression` as its parent and never the
-`BinaryExpression`, so it cannot reach this arm however the arm is written — it guards a FUTURE
-ancestor-walking arm, which is what `thisBinding2` would catch. a3 (hoist the arm above the
-CallExpression arm AND drop `pp.right === parent`) read **0 RED**, which makes that conjunct a
-measured-REDUNDANT barrier: an assignment's LHS cannot BE the function expression once the LHS
-kind is constrained to a member access. Kept and recorded as redundant rather than claimed
-load-bearing. (a3 varied two things at once — a weaker arm than a1/a2, stated rather than
-glossed.)
-
-Gates: `marked` **8 -> 4**, `cronstrue` 1 -> 1 unchanged; corpus screen 0 of 8,725 over both
-channels; grid 8x `added=0 removed=0`; `cost_gate` PASS (`output.errors` 46 unchanged);
-`huge_methods` 0 over; warning-clean (log non-empty). Suite **20,281 / 0 / 44** (+6 pins).
-
-**SUCCESSORS, sized.** (CHK.35b) the two missing `ElementAccessExpression` arms in
-`pullContextualTypeAt` / `resolveAssignTargetCtxTypeForImplicitAny` — the recorded refusal
-(*"not a bounded question"*) does NOT survive contact, since the arm already calls
-`getTypeOfExpression` on an arbitrary PropertyAccess, but it is provably INERT until (CHK.35c)
-lands; (CHK.35c) the free-type-parameter collapse, which is what finally closes TS7019;
-(CHK.35d) the `this`-as-receiver model. Two side-findings recorded and not chased: an explicit
-`this:` parameter DEFEATS contextual parameter typing (a fresh TS7006 appears), and an
-indexed-access instantiation asymmetry where a non-generic class misses a row its generic
-sibling resolves.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1129,7 +1127,37 @@ shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: t
 positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
 positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
 
-- [ ] **(CHK.148) RECONNED 2026-09-23 ((P18.177) recon) — ONE BOUNDED LEG, AND tsc's PRIORITY RULE
+- [ ] **(CHK.150) A UNION-TYPED OR OVERLOADED PARAMETER SUPPLIES *NO* CONTEXTUAL TYPE TO ITS
+  ARGUMENT — AND IT IS THE ONE FAMILY BLOCKING EVERY REMAINING `rxjs` ROW (measured 2026-09-23,
+  (P18.178), by a six-rung ladder).** Rung by rung from a reducer's shape to `rxjs`'s real one:
+  a parameter typed `Subscriber<T>` works; `Partial<Observer<T>> | ((value: T) => void)`,
+  `Subscriber<T> | ((value: T) => void)`, rxjs's actual OVERLOAD PAIR, `Partial<Observer<T>>` and
+  `Observer<T>` all answer **`unknown`** where tsgo answers `T`. A second probe names the cause:
+  at every failing rung an ARROW or OBJECT-LITERAL argument gets **no contextual type at all**
+  (its parameter reads `any`, 0 rows against tsgo's 6), so `pullContextualTypeAt` answers NULL and
+  there is nothing downstream to infer from — which is why (CHK.148)'s leg, correct on 13 of 14
+  contextual sources, moves `rxjs` by zero.
+  **TWO MECHANISMS, BOTH NAMED**: `ctxArgTypesFromSignatures`' multi-signature fallback requires
+  EVERY candidate to be function-shaped, and its first-overload win is deliberately discarded on
+  the call side by a legacy guard; and property-wise structural inference between DIFFERENT object
+  types does not exist (`ctxReturnInferInto` refuses it deliberately, and so does the argument
+  path). It is (CHK.97)-adjacent — read that item before starting.
+  **THIS IS THE ITEM THAT DECIDES WHETHER `rxjs` CLOSES.** Three consecutive rounds ((P18.176),
+  (P18.177), (P18.178)) each fixed a real parity defect and moved the library by ZERO, because
+  every remaining row is behind this one family. **Do not chip at their symptoms** — the next
+  `rxjs` round is this, or it is nothing. Direction and blast radius unmeasured: take the census
+  first (how many active baselines pass a function or object literal to a union/overloaded
+  parameter), and expect it to ADD rows, since supplying a contextual type makes bodies checkable
+  that are silently `any` today.
+
+- [x] **(CHK.148) LANDED 2026-09-23 ((P18.178) note) — 13 of 14 contextual sources now match tsgo,
+  and the rxjs sizing it was filed with is MEASURED WRONG (the recon's reducer gave `subscribe` a
+  direct `Subscriber<T>` parameter where rxjs's is OVERLOADED with a union; a six-rung ladder shows
+  only the reducer's rung works, and the real blocker is upstream — filed as (CHK.150)).** The rule
+  needed one thing the sizing did not name: `typeParamBoundByArguments` SKIPS every function-like
+  argument, which is right for the fallback and WRONG for the priority question, and without that
+  distinction the first cut DELETED a corpus row. The residue is a callback-RETURN context, and two
+  refusals are recorded in the class KDoc rather than pinned. ORIGINAL: **ONE BOUNDED LEG, AND tsc's PRIORITY RULE
   FALLS OUT FOR FREE.** tsgo's `inferTypeArguments` (`checker.go:9366`) opens by inferring from the
   call's CONTEXTUAL type to the signature's RETURN type at `InferencePriorityReturnType` (1<<7),
   and `inference.go:189` WIPES those candidates the moment a priority-0 argument candidate

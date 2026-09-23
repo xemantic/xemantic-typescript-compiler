@@ -7564,6 +7564,19 @@ class Checker(
     private val canonicalEnumSymCache = HashMap<Int, Symbol>()
 
     /**
+     * (CHK.148) Re-entrancy budget for [ctxReturnTypeParamMapper]'s pull.
+     *
+     * The leg asks [pullContextualTypeAt] for the CALL's own contextual type, and that
+     * pull's `CallExpression` / `NewExpression` arms re-enter [ctxArgTypesFromSignatures]
+     * for the ENCLOSING call — so the two are mutually recursive. The recursion walks
+     * strictly UP the parent chain and therefore terminates, but a chain of nested
+     * generic calls would re-ask each level once per level; the counter bounds that at a
+     * depth no measured shape needs more than 1 of. Declared before `init` per the
+     * init-order trap.
+     */
+    private var ctxReturnInferDepth = 0
+
+    /**
      * (CHK.73) The SYNTHETIC module symbols [createModuleSymbol] mints, mapped to the
      * file each one stands for — or to `null` when the symbol borrowed a `.d.ts`'s single
      * ambient block's exports, where the FILE's own exports are the wrong enumeration.
@@ -149624,7 +149637,9 @@ interface DataView {
                 else -> return@run null
             }
             if (sigs.isNullOrEmpty()) return@run null
-            ctxArgTypesFromSignatures(sigs, expr.arguments, expr.typeArguments, null, construct = false)
+            ctxArgTypesFromSignatures(
+                sigs, expr.arguments, expr.typeArguments, null, construct = false, callNode = expr,
+            )
         }
     }
 
@@ -149646,7 +149661,7 @@ interface DataView {
         if (args.isNullOrEmpty()) return null
         if (args.any { it is SpreadElement }) return null
         val (sigs, classTps) = constructSignaturesForNewCtx(expr) ?: return null
-        return ctxArgTypesFromSignatures(sigs, args, expr.typeArguments, classTps, construct = true)
+        return ctxArgTypesFromSignatures(sigs, args, expr.typeArguments, classTps, construct = true, callNode = expr)
     }
 
     /**
@@ -149708,6 +149723,7 @@ interface DataView {
         typeArguments: List<TypeNode>?,
         classTypeParams: List<Type.TypeParam>?,
         construct: Boolean,
+        callNode: Node?,
     ): List<Type?> {
         val classScope = classTypeParams?.takeIf { it.isNotEmpty() }?.let { tps ->
             val scope = HashMap<String, Type.TypeParam>(tps.size * 2)
@@ -149717,13 +149733,15 @@ interface DataView {
         if (sigs.size == 1) {
             val sig = sigs[0]
             val raw = ctxParamTypesOf(sig, classScope)
-            val mapper = ctxArgTypeMapper(sig, raw, args, typeArguments, classTypeParams, literalOverride = true)
+            val mapper =
+                ctxArgTypeMapper(sig, raw, args, typeArguments, classTypeParams, literalOverride = true, callNode)
             return args.mapIndexed { i, _ -> ctxArgTypeAt(raw, i, mapper) }
         }
         val chosen = resolveCallOverload(sigs, args, strictSelect = true)
         if (chosen != null && (construct || chosen !== sigs[0])) {
             val raw = ctxParamTypesOf(chosen, classScope)
-            val mapper = ctxArgTypeMapper(chosen, raw, args, typeArguments, classTypeParams, literalOverride = false)
+            val mapper =
+                ctxArgTypeMapper(chosen, raw, args, typeArguments, classTypeParams, literalOverride = false, callNode)
             return args.mapIndexed { i, _ -> ctxArgTypeAt(raw, i, mapper) }
         }
         return args.mapIndexed { i, _ ->
@@ -149800,9 +149818,17 @@ interface DataView {
      * callback param `a` is contextually `""`) composes over it, literal first — on the
      * single-signature path only, as before.
      *
-     * Last, [freeTypeParamMapper]: a type parameter no argument can bind is what tsc's
-     * first inference pass has NO candidates for, and its contextual answer is the
-     * declared default, else `unknown`.
+     * Then (CHK.148) [ctxReturnTypeParamMapper]: tsc's FIRST act in `inferTypeArguments`
+     * is to infer from the call's own CONTEXTUAL type to the signature's RETURN type, at
+     * `InferencePriorityReturnType`. It runs only for type parameters the arguments bind
+     * nothing for, which is exactly the priority rule — an argument candidate arrives at
+     * priority 0 and `inference.go`'s `n.priority < inference.priority` WIPES the
+     * return-type candidates outright (measured on three cells: an argument's type beats
+     * the contextual one in every one).
+     *
+     * Last, [freeTypeParamMapper]: a type parameter neither the arguments nor the
+     * contextual return position can bind is what tsc's inference has NO candidates for,
+     * and its contextual answer is the declared default, else `unknown`.
      */
     private fun ctxArgTypeMapper(
         sig: Signature,
@@ -149811,6 +149837,7 @@ interface DataView {
         typeArguments: List<TypeNode>?,
         classTypeParams: List<Type.TypeParam>?,
         literalOverride: Boolean,
+        callNode: Node?,
     ): TypeMapper? {
         val sigTps = sig.typeParameters?.takeIf { it.isNotEmpty() }
         val tps = sigTps ?: classTypeParams?.takeIf { it.isNotEmpty() } ?: return null
@@ -149821,13 +149848,219 @@ interface DataView {
         } else classTypeArgumentMapper(sig, tps, args)
         val litMapper: TypeMapper? =
             if (literalOverride && sigTps != null) computeFixedConflictLiteralMapper(sig, args) else null
-        val bound: TypeMapper? = when {
+        val argBound: TypeMapper? = when {
             litMapper == null -> inferMapper
             inferMapper == null -> litMapper
             else -> TypeMapper { tp -> litMapper.map(tp) ?: inferMapper.map(tp) }
         }
+        val ctxRet = ctxReturnTypeParamMapper(sig, raw, tps, args, argBound, callNode)
+        val bound: TypeMapper? = when {
+            ctxRet == null -> argBound
+            argBound == null -> ctxRet
+            else -> TypeMapper { tp -> argBound.map(tp) ?: ctxRet.map(tp) }
+        }
         val free = freeTypeParamMapper(sig, raw, tps, args, bound) ?: return bound
         return if (bound == null) free else TypeMapper { tp -> bound.map(tp) ?: free.map(tp) }
+    }
+
+    /**
+     * (CHK.148) tsc's RETURN-TYPE inference: the head of `inferTypeArguments`
+     * (`checker.go:9366`) infers from the call's own CONTEXTUAL type to the signature's
+     * return type, so a type parameter that occurs ONLY in the return position — and in
+     * a callback PARAMETER, which contributes no first-pass candidate — is bound by where
+     * the call SITS rather than falling to `unknown`.
+     *
+     * `createOperatorSubscriber<T>(destination, onNext?: (value: T) => void):
+     * Subscriber<T>` called inside `source.subscribe(…)` is the shape: the contextual
+     * `Subscriber<T_outer>` binds `T`, and `value` is the outer `T` instead of `unknown`
+     * — 7 of rxjs's ours-only rows, every one an `unknown` written to a `T`.
+     *
+     * THE PRIORITY RULE, AND WHY IT NEEDS NO `InferencePriority` MACHINERY: a return-type
+     * candidate arrives at `InferencePriorityReturnType` (`1 << 7`) and an ARGUMENT one at
+     * `InferencePriorityNone` (0), and `inference.go:189`'s `if n.priority <
+     * inference.priority { inference.candidates = nil … }` WIPES the weaker set outright.
+     * So an argument candidate beats a contextual one per TYPE PARAMETER, with no merge —
+     * measured on three cells (argument `string` vs context `string | number`; argument
+     * `number` vs context `string`; argument `undefined` vs context `Box<string>`: tsgo
+     * takes the argument in all three). Contributing only where the arguments bind
+     * NOTHING reproduces that exactly. [typeParamBoundByArguments] is the same test
+     * [freeTypeParamMapper] refuses to guess on, so the two agree by construction.
+     *
+     * Null — i.e. today's `unknown` — whenever the pull says nothing, the return type
+     * mentions none of the free parameters, or a candidate fails the parameter's
+     * constraint: the refusal leaves [freeTypeParamMapper]'s measured-correct fallback
+     * standing, which is what makes this leg strictly additive.
+     */
+    private fun ctxReturnTypeParamMapper(
+        sig: Signature,
+        raw: List<Type>,
+        tps: List<Type.TypeParam>,
+        args: List<Expression>,
+        argBound: TypeMapper?,
+        callNode: Node?,
+    ): TypeMapper? {
+        if (callNode == null) return null
+        // PRE-GATE, in ascending cost: the leg may only speak for a type parameter the
+        // arguments bind nothing for — i.e. exactly the population `freeTypeParamMapper`
+        // is about to answer `unknown`/the constraint for. Everything below (the return
+        // type, the pull, the match) runs only when that population is non-empty, so an
+        // ordinary call pays one `map` per type parameter and nothing else.
+        val open = tps.filter {
+            argBound?.map(it) == null &&
+                !typeParamBoundByArguments(sig, raw, args, it) &&
+                !ctxReturnCallbackArgBinds(sig, raw, args, it)
+        }
+        if (open.isEmpty()) return null
+        val ret = sig.resolvedReturnType ?: return null
+        if (ret === anyType || ret === errorType) return null
+        val openSet = open.toSet()
+        if (open.none { ctxReturnTypeMentions(ret, it) }) return null
+        if (ctxReturnInferDepth >= 3) return null
+        ctxReturnInferDepth++
+        val pulled: Type? = try {
+            pullContextualTypeAt(callNode)
+        } finally {
+            ctxReturnInferDepth--
+        }
+        val ctx = pulled ?: return null
+        if (ctx === anyType || ctx === errorType) return null
+        val found = HashMap<Type.TypeParam, Type>()
+        ctxReturnInferInto(ctx, ret, openSet, found, 0)
+        if (found.isEmpty()) return null
+        for (tp in open) {
+            val cand = found[tp] ?: continue
+            val constraint = tp.constraint
+            if (constraint != null && constraint !== errorType &&
+                !checkTypeRelatedTo(cand, constraint, assignableRelation)
+            ) found.remove(tp)
+        }
+        if (found.isEmpty()) return null
+        return TypeMapper { tp -> found[tp] }
+    }
+
+    /**
+     * (CHK.148) Does a FUNCTION-LIKE argument bind [tp] after all?
+     *
+     * [typeParamBoundByArguments] skips every function-like argument, and it is right to:
+     * tsc's FIRST inference pass defers a context-sensitive argument, which is exactly why
+     * [freeTypeParamMapper]'s contextual `unknown` is the right first-pass answer. But the
+     * SECOND pass types that argument and DOES contribute a candidate — at priority 0,
+     * which wipes the return-type one — and the split runs through the callback's own
+     * signature: a `tp` in its RETURN position is inferred from the lambda's body, while a
+     * `tp` in a PARAMETER position is the very thing being supplied and contributes
+     * nothing.
+     *
+     * `useMemo<T>(func: () => T): T` at `const p: (input: string) => boolean = useMemo(()
+     * => {…})` is the corpus case that measures it (`subtypeReductionWithAnyFunctionType`,
+     * tsgo and pristine agree): the lambda's own returns bind `T`, so the contextual
+     * `(input: string) => boolean` must NOT, and the inner `x => x.length > 0` keeps its
+     * TS7006. `createOperatorSubscriber<T>(dest, onNext?: (value: T) => void)` is the
+     * mirror — `void` return, `T` only in a parameter — and there the contextual type is
+     * the only candidate there is.
+     *
+     * A parameter type that is NOT function-shaped is refused outright where it mentions
+     * [tp]: with no signature to read, a parameter position cannot be told from a return
+     * one, and the refusal is today's behaviour.
+     */
+    private fun ctxReturnCallbackArgBinds(
+        sig: Signature,
+        raw: List<Type>,
+        args: List<Expression>,
+        tp: Type.TypeParam,
+    ): Boolean {
+        for ((i, arg) in args.withIndex()) {
+            var a: Expression = arg
+            while (a is ParenthesizedExpression) a = a.expression
+            if (a !is ArrowFunction && a !is FunctionExpression) continue
+            // [typeParamBoundByArguments]' own rule over the raw list: the parameter at
+            // the position, else the trailing REST parameter.
+            val paramType = raw.getOrNull(i)
+                ?: raw.lastOrNull()?.takeIf {
+                    (sig.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+                } ?: continue
+            if (paramType === anyType || paramType === errorType) continue
+            val fnSigs = (paramType as? Type.Object)?.let { pt ->
+                resolveStructuredTypeMembers(pt)
+                (pt.callSignatures ?: emptyList()) + (pt.constructSignatures ?: emptyList())
+            }
+            if (fnSigs.isNullOrEmpty()) {
+                if (typeMayMentionTypeParam(paramType, tp, 0)) return true
+                continue
+            }
+            for (s in fnSigs) {
+                val rt = s.resolvedReturnType ?: continue
+                if (typeMayMentionTypeParam(rt, tp, 0)) return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * (CHK.148) Does the signature's RETURN type mention [tp] for the purposes of this
+     * leg? [typeMayMentionTypeParam] plus the one shape it deliberately answers `false`
+     * for: a CLASS CONSTRUCTOR's return type is the class's UNINSTANTIATED
+     * `Type.Interface` (`MemberResolver`: `resolvedReturnType = type`), which stands in
+     * for `C<T…>` over the class's own parameters — so `new Box(cb)` at a `Box<string>`
+     * position would otherwise be refused before the match ever ran, and the `new` arm
+     * would silently not share the rule its own KDoc says it shares with the call arm.
+     */
+    private fun ctxReturnTypeMentions(ret: Type, tp: Type.TypeParam): Boolean =
+        typeMayMentionTypeParam(ret, tp, 0) ||
+            (ret is Type.Interface && ret.typeParameters?.any { it === tp } == true)
+
+    /**
+     * (CHK.148) tsc's `inferTypes` over the ONE direction this leg needs — a structural
+     * walk of [target] (the signature's return type, in its OWN type parameters) beside
+     * [source] (the call's contextual type), recording a candidate wherever the target is
+     * one of [tps]. FIRST candidate wins, as every other inference helper here does.
+     *
+     * DELIBERATELY NARROW, and the refusals are the point: a shape it cannot read
+     * contributes nothing and the parameter falls to [freeTypeParamMapper]'s `unknown`,
+     * which is today's answer. A `null`/`undefined`/`void`/`never`/`any` source is never
+     * a candidate — tsc's own non-inferrable set — because substituting one is a WRONG
+     * contextual parameter type where our refusal is merely the old one.
+     */
+    private fun ctxReturnInferInto(
+        source: Type,
+        target: Type,
+        tps: Set<Type.TypeParam>,
+        out: HashMap<Type.TypeParam, Type>,
+        depth: Int,
+    ) {
+        if (depth > 4) return
+        if (target is Type.TypeParam) {
+            if (target !in tps || out.containsKey(target)) return
+            if (source === anyType || source === errorType || source === neverType) return
+            if (source is Type.TypeParam && source === target) return
+            if (source.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+            out[target] = source
+            return
+        }
+        if (source is Type.Union && target !is Type.Union) {
+            // A NULLISH union is the ordinary optional annotation (`const s: Sub<T> | null
+            // = …`), and stripping `null`/`undefined` leaves the one type the position
+            // really names. A union with two REAL members names two, and tsc would build
+            // a candidate from each and pick a common supertype — a guess this leg does
+            // not make, so it refuses and the parameter keeps today's `unknown`.
+            val real = source.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+            if (real.size == 1) ctxReturnInferInto(real[0], target, tps, out, depth + 1)
+            return
+        }
+        if (target is Type.Interface && source is Type.Reference && source.target === target) {
+            // [ctxReturnTypeMentions]' shape: an uninstantiated generic class standing in
+            // for `C<T…>`, matched against an instantiation of that very class.
+            val ownTps = target.typeParameters ?: return
+            val sa = source.resolvedTypeArguments ?: return
+            if (ownTps.size != sa.size) return
+            for (i in ownTps.indices) ctxReturnInferInto(sa[i], ownTps[i], tps, out, depth + 1)
+            return
+        }
+        if (target is Type.Reference && source is Type.Reference && target.target === source.target) {
+            val ta = target.resolvedTypeArguments ?: return
+            val sa = source.resolvedTypeArguments ?: return
+            if (ta.size != sa.size) return
+            for (i in ta.indices) ctxReturnInferInto(sa[i], ta[i], tps, out, depth + 1)
+        }
     }
 
     /**

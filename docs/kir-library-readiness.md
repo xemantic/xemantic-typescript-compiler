@@ -363,6 +363,18 @@ any `marked` number.**
 | `rxjs` 7.8.2 (2026-09-23, baseline) | 251 | 1 | 29 | 28 | `build/bench/lib-rxjs-7.8.2`, `lib: ["ES2020","DOM"]` — the lib setting is load-bearing for G1 |
 | `rxjs` 7.8.2 (2026-09-23, after (P18.174) G1) | 251 | 1 | 21 | 20 | the 8 lib-global-collision rows closed, 0 added |
 | **`rxjs` 7.8.2 (2026-09-23, after (P18.175) G3)** | 251 | 1 | **17** | 16 | the 4 static-generic-shadow rows closed, 0 added |
+| `rxjs` 7.8.2 (2026-09-23, after (P18.176)/(P18.177)/(P18.178)) | 251 | 1 | 17 | 16 | **three parity rounds, ZERO library movement — see below** |
+
+**EVERY REMAINING `rxjs` ROW IS BEHIND ONE FAMILY, measured 2026-09-23.** Three consecutive
+rounds each closed a real parity defect and moved this library by zero: (P18.176) the
+free-type-parameter contextual collapse, (P18.177) the contextual `this:` parameter, (P18.178)
+contextual-return type-parameter inference. The blocker is **(CHK.150) — a union-typed or
+OVERLOADED parameter supplies no contextual type to its argument at all**, proved by a six-rung
+ladder from a reducer's shape to `rxjs`'s real `subscribe` overload pair: at every rung but the
+reducer's, an arrow or object-literal argument's parameter reads `any` and
+`pullContextualTypeAt` answers NULL, so there is nothing downstream to infer from whatever
+matcher is written. **The next `rxjs` round is (CHK.150) or it is nothing** — chipping at the
+symptoms has now been tried three times with the count unchanged.
 
 The one tsgo row (`observable/dom/WebSocketSubject.ts(304,28)` TS2345) is a genuine row we MISS,
 not an environmental one. **Record the `lib` setting with any `rxjs` number**: G1 exists only

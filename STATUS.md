@@ -1,7 +1,11 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,071** lines (**+18 at (P18.177)**, the contextual-`this` gate
+extraction):** `Checker.kt` **199,304** lines (**+233 at (P18.178)**, the contextual-return
+inference leg, its narrow `inferTypes`, two mention/bind gates, a re-entrancy counter and the
+KDoc recording two deliberate refusals with tsgo's measured answer — a SEMANTIC parity change
+taking 13 of 14 contextual sources to agreement, and buying NO library row, which the note
+says; **+18 at (P18.177)**, the contextual-`this` gate
 split in two and tsgo's exact skip condition, net of the fold it replaces — a SEMANTIC parity
 change taking a 5-position matrix from 1 to 5 agreeing with tsgo, and buying NO library row,
 which the note says; **+81 at (P18.176)**, the in-scope type-parameter
@@ -49,6 +53,24 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.178) — (CHK.148): A CALLEE TYPE PARAMETER IS INFERRED FROM THE CONTEXTUAL RETURN; 13 OF 14 SOURCES MATCH tsgo, AND THE rxjs SIZING WAS WRONG, 20,457 / 0 / 44 (2026-09-23).**
+One leg in `ctxArgTypeMapper` between argument inference and the fallback: pull the CALL's contextual type, match it
+structurally against the signature's return type, contribute only for type parameters no argument bound. **13 of 14
+contextual sources go `unknown` -> the context's type, byte-identical to tsgo** (argument, annotation, return, property
+assignment, `satisfies`, `as`, async return, nullish union, array element, ternary, `=`, class property, `new` argument),
+four controls unmoved, and **the ADD direction verified 4 of 4** including the two `TS2551` rows the fix adds — which a
+round expecting removal only would misread. **THE RECON'S SIZING WAS WRONG AND A LADDER PROVED IT**: its reducer gave
+`subscribe` a direct `Subscriber<T>` parameter where rxjs's is OVERLOADED with a union, and six rungs show only the
+reducer's rung works — at every other rung an ARROW or OBJECT-LITERAL argument gets NO contextual type at all, so the pull
+answers null and there is nothing to infer from. Filed as (CHK.150); **third round running that buys parity and no library
+row, and every remaining rxjs row is behind that one family.** **THE RULE HAD TO BE DISCOVERED AND THE CORPUS CAUGHT THE
+FIRST CUT**: `typeParamBoundByArguments` SKIPS every function-like argument, right for the fallback and wrong for priority,
+and without that distinction the first cut DELETED a corpus row. **Nine arms**: a1 16 RED, a6 15, a9 2, three at exactly 1
+uniquely their own. **a3 was a blind pin AND the corpus was blind too** — 0 RED and 0 of 8,725 — so a discriminating cell
+had to be BUILT; without the gate the leg invents two ours-only TS2345 rows. **a5 is round 927's pair at THREE layers**: no
+single-layer arm moves the priority pin, a9 defeats all three, recorded as ONE observable. Screen 0 of 8,725; grid 8x0 with
+harness's 3 TS7006 checked 3 -> 3, same rows; cost_gate PASS; huge_methods 0.
 
 **(P18.177) — (CHK.141)(b): A CONTEXTUAL `this:` PARAMETER TYPES `this`; 1 OF 5 POSITIONS -> 5 OF 5, AND THE rxjs GATE IS NOT MET, 20,434 / 0 / 44 (2026-09-23).**
 A contextual `this:` was applied NOWHERE — only an EXPLICIT one typed `this` — so four positions were silent false
@@ -124,22 +146,3 @@ the message alone cannot separate them) and one VACUOUS (its binding name collid
 CORPUS measurement where no pin sees it; a4 is a measured redundant barrier, kept. The 809-line embedded lib contains NONE
 of the DOM names, so every pin is spelled with `Performance`/`performance`. Screen 0 of 8,725; grid 8x0, a CONTROL with one
 real site; cost_gate PASS (max +0.79%, `globals.lookups` +0.66% — the new consult, accounted for); huge_methods 0.
-
-**(P18.173) — (CHK.35b): AN ELEMENT-ACCESS ASSIGNMENT TARGET SUPPLIES A CONTEXTUAL TYPE; **`marked` REACHES ZERO**, 20,386 / 0 / 44 (2026-09-22).**
-**`marked` now reports what tsgo 7.0.2 reports: nothing.** With `cronstrue` already at zero (its standing "1" is a TS5108
-config row BOTH compilers emit), **two real libraries outside the corpus agree with the reference exactly** — the owner's
-2026-09-21 alignment stop-condition, met for both. The arc ran 18 -> 10 -> 8 -> 4 -> 3 -> 2 -> 1 -> 0 across (CHK.33),
-(CHK.140), (CHK.35a), (P18.169), (CHK.144), (CHK.142)(b)+(a) and this round. **The item said this was BLOCKED and a 12-cell
-matrix measured that false** — it fails with a fully concrete slot type and no type parameter anywhere; (b) and (c) have
-opposite signatures, (b) ADDING a TS7006/TS7019 where (c) MISSES a row in silence. 8 of 9 element-access cells now
-byte-match tsgo. **tsgo's LITERAL SHAPE WAS WRITTEN FIRST AND IS WRONG HERE, which is the transferable finding**: it asks
-`getTypeOfExpression(left)` for the whole access because its receiver resolution is ONE mechanism, where ours is TWO — the
-walk-scoped `implicitAnyScopes` stack, which alone carries a body-local's annotation, and `getTypeOfExpression`; the
-faithful port left `marked` at 1 and survives as ablation arm a4. Second measured correction: the key classifier runs on the
-spineIany edge where `currentLocalTypes` is not yet populated, so a key that is a PARAMETER of the function-like being
-walked types `any` and washes the access — exactly `marked`'s `renderers[ext.name]`. **A PIN THAT FAILED WAS MEASURED, NOT
-WEAKENED**: its TS2339 is absent for the already-working PROPERTY twin too, so it is (CHK.39)/(CHK.98) residue and was
-re-pointed to a parity invariant with a non-vacuous member. Four ablation arms, none at 0 RED, and a1/a2 have equal counts
-with DIFFERENT red sets — a1 owns the false positive (marked returns to 1), a2 owns the typing (marked stays 0). Screen 0 of
-8,725; grid 8x0 and a real gate by census; cost_gate PASS (+0.80% max); huge_methods 0; warning gate proved LIVE with an
-injected `USELESS_CAST` control.

@@ -1,5 +1,25 @@
 
 
+**(P18.173) — (CHK.35b): AN ELEMENT-ACCESS ASSIGNMENT TARGET SUPPLIES A CONTEXTUAL TYPE; **`marked` REACHES ZERO**, 20,386 / 0 / 44 (2026-09-22).**
+**`marked` now reports what tsgo 7.0.2 reports: nothing.** With `cronstrue` already at zero (its standing "1" is a TS5108
+config row BOTH compilers emit), **two real libraries outside the corpus agree with the reference exactly** — the owner's
+2026-09-21 alignment stop-condition, met for both. The arc ran 18 -> 10 -> 8 -> 4 -> 3 -> 2 -> 1 -> 0 across (CHK.33),
+(CHK.140), (CHK.35a), (P18.169), (CHK.144), (CHK.142)(b)+(a) and this round. **The item said this was BLOCKED and a 12-cell
+matrix measured that false** — it fails with a fully concrete slot type and no type parameter anywhere; (b) and (c) have
+opposite signatures, (b) ADDING a TS7006/TS7019 where (c) MISSES a row in silence. 8 of 9 element-access cells now
+byte-match tsgo. **tsgo's LITERAL SHAPE WAS WRITTEN FIRST AND IS WRONG HERE, which is the transferable finding**: it asks
+`getTypeOfExpression(left)` for the whole access because its receiver resolution is ONE mechanism, where ours is TWO — the
+walk-scoped `implicitAnyScopes` stack, which alone carries a body-local's annotation, and `getTypeOfExpression`; the
+faithful port left `marked` at 1 and survives as ablation arm a4. Second measured correction: the key classifier runs on the
+spineIany edge where `currentLocalTypes` is not yet populated, so a key that is a PARAMETER of the function-like being
+walked types `any` and washes the access — exactly `marked`'s `renderers[ext.name]`. **A PIN THAT FAILED WAS MEASURED, NOT
+WEAKENED**: its TS2339 is absent for the already-working PROPERTY twin too, so it is (CHK.39)/(CHK.98) residue and was
+re-pointed to a parity invariant with a non-vacuous member. Four ablation arms, none at 0 RED, and a1/a2 have equal counts
+with DIFFERENT red sets — a1 owns the false positive (marked returns to 1), a2 owns the typing (marked stays 0). Screen 0 of
+8,725; grid 8x0 and a real gate by census; cost_gate PASS (+0.80% max); huge_methods 0; warning gate proved LIVE with an
+injected `USELESS_CAST` control.
+
+
 **(P18.172) — (CHK.142)(a): AN OBJECT LITERAL AGAINST A *UNION* CONTEXTUAL TYPE; `marked` 2 -> 1, 20,364 / 0 / 44 (2026-09-22).**
 **THE BRIEF'S DIAGNOSIS WAS WRONG AND ITS AUTHOR WAS THIS ROUND'S OWN PREDECESSOR.** (P18.171) sized (a) as one `else` on
 `getTypeOfObjectLiteral`'s union arm plus a helper; written exactly so, it built clean, was proved LIVE by a positive control,
