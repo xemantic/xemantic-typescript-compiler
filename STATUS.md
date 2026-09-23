@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,900** lines (**+117 at (P18.184)**, a lexical callee-receiver resolver and binding
+extraction):** `Checker.kt` **199,941** lines (**+41 at (P18.185)**, tsgo's `getMinArgumentCountEx` as one helper the
+relation reads, with its KDoc — a SEMANTIC parity change removing a FALSE-POSITIVE class, `rxjs` 7 -> 6;
+`Relater.kt` 1,746 -> 1,748; **+117 at (P18.184)**, a lexical callee-receiver resolver and binding
 typer for contextual `this` with their KDoc — a SEMANTIC parity change removing a FALSE-POSITIVE class,
 `rxjs` 10 -> 7; **+83 at (P18.183)**, the named-object argument gate, its classifier
 and the scoped chain relaxation with their KDoc — a SEMANTIC parity change closing a false-NEGATIVE class
@@ -68,6 +70,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.185) — (CHK.154)(a): A TRAILING `void`-ACCEPTING PARAMETER IS OPTIONAL IN SIGNATURE RELATION; `rxjs` 7 -> 6, 20,573 / 0 / 44 (2026-09-23).**
+`Relater.signatureRelatedTo` compared raw `minArgumentCount`; tsgo's `getMinArgumentCountEx` drops a trailing run of
+source parameters whose type has the `Void` flag (directly or on a union constituent — not `undefined`/`any`/`unknown`/
+a type parameter). One helper now answers it. Matrix: every removed row is one tsgo lacks, none added; 8 pins, six
+ablation arms RED and one recorded as redundant. Screen 0 of 8,725; cost_gate PASS; grid 8x0; huge_methods 0;
+**`rxjs` 7 -> 6** (`Observable.ts:307`). Next: (b), a derived class's `new` checked against the BASE constructor too.
+
 **(P18.184) — (CHK.153): A CALLBACK'S CALLEE RECEIVER IS RESOLVED FROM THE PARENT CHAIN FOR CONTEXTUAL `this`; `rxjs` 10 -> 7, 9 -> 29 OF 29 CELLS, 20,565 / 0 / 44 (2026-09-23).**
 `callArgHasContextualThis` typed the callee under the file's resting locals, so every non-file-level receiver —
 parameters, body-locals, unions, optional chains, destructured and class-method parameters — kept an ours-only TS2683.
@@ -107,15 +116,4 @@ Screen 0 of 8,725 and blind again; cost_gate PASS; huge_methods 0; grid 8x0. `rx
 census (frozen classes, no Gradle) **re-scoped (CHK.151) — the relation does NOT read the broken member table** —
 and **filed (CHK.152): a named-object argument is never related to a named-object parameter**, so `z(q)` with a
 mismatched property is silent where `const s: S = q` reports. That is the larger correctness family.
-
-**(P18.180) — (CHK.150) RUNG 1: A GENERIC REFERENCE'S MEMBERS ARE READ SUBSTITUTED AND THE CONTEXTUAL-RETURN LEG INFERS BETWEEN DIFFERENT OBJECT TYPES; X2 MATCHES tsgo, `rxjs` FLAT AS PREDICTED, 20,489 / 0 / 44 (2026-09-23).**
-The queue named `lookupPropertyTypeForCtx`'s fallback; the real cause is the MEMBER TABLE — `resolveReferenceMembers`
-resolves an interface member with its own type parameters out of scope, so a function-typed member's `T` is `error`
-and survives instantiation while still printing as `T`. Contextual typing now routes a reference's member through
-`resolveGenericPropertyType`, and a new structural leg ports tsgo's `inferFromObjectTypes`. **14 of 28 matrix cells
-moved to agreement, 5 controls held**, X1/X3 unchanged by design. 19 pins; six ablation arms RED, `removeMissingType`
-0 and recorded as unreachable today. The orchestrator's review fixed two tsgo-fidelity slips before commit and re-ran
-every gate. Screen 0 of 8,725 and BLIND to the change (the 38 pending rows byte-identical on both arms); cost_gate
-PASS; huge_methods 0; grid 8x0 (a control); `rxjs` 17 -> 17. **Filed (CHK.151)**: the same member-table defect on
-the RELATION side misses rows tsgo reports — a false-negative class, expected to ADD rows.
 

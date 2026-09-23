@@ -1,5 +1,60 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.175) — (LIB.5) G3: a nested generic container's own type parameters are its own; `rxjs` 21 -> 17 (2026-09-23)
+
+A generic ARROW or FUNCTION EXPRESSION nested in a STATIC member kept the enclosing class's
+type-parameter names, so its OWN shadowing `<T>` was falsely flagged TS2302 *"Static members
+cannot reference class type parameters."* `checkTS2302InClassMember`'s `MethodDeclaration` arm was
+the ONLY subtraction in the file; `findTypeParamRefsInExpr`/`…InType` carried the flat set
+unchanged into every nested container. **tsgo has no walker for this at all** — TS2302 is a
+name-RESOLUTION outcome (`nameresolver.go:170-186`) where the resolver walks containers OUTWARD
+and a generic arrow is itself a container found first, so shadowing is excluded STRUCTURALLY.
+That is exactly why a flat-set walker has to spell it at each boundary.
+
+**THE FAMILY IS WIDER THAN THE BRIEF SCOPED IT, AND THE ROUND WIDENED IT ON A MEASUREMENT.** The
+brief scoped the fix to `ArrowFunction`/`FunctionExpression`, which covers all 4 rxjs rows and 5 of
+the 8 matrix false positives. But a `FunctionType` (`static f: <T>(x: T) => void`), a `TypeLiteral`
+method signature (`static g: { m<T>(a: T): void }`) and a `ConstructorType` (`static h: new <T>(x:
+T) => void`) are the SAME mechanism with the same measured tsgo silence, and leaving 3 of 8
+standing would have been arbitrary. One helper at six boundaries; **arm a4 exists to show that
+half is load-bearing and separately pinned**, and it cost nothing — grid 0/0, corpus 0, counters
+identical. The reproduction matrix went **ours 11 / tsgo 3 -> ours 3 / tsgo 3**, exact agreement
+at the same three positions.
+
+**THE CORPUS IS A LIVE GATE HERE AND THE ABLATION PROVED IT RATHER THAN ASSERTING IT.** The brief
+called the 7 active TS2302 baselines an OVER-SUPPRESSION gate. On arm a3 (subtract the WRONG set —
+the class's names instead of the function's, i.e. whole-subtree suppression) the screen goes
+**0 -> 1** and names it: `genericClassWithStaticsUsingTypeArguments` loses exactly its two ARROW
+rows while keeping its four non-arrow ones. **Four arms, none reading 0 RED**: a1 (subtraction
+dropped) 7 RED; a2 (arrow but not function expression) 1, exactly the function-expression pin;
+a3 3, all three true-positives-must-survive; a4 (expression half kept, TYPE half dropped) 3,
+exactly the `FunctionType`/`TypeLiteral`/`ConstructorType` pins. **The decisive `B4` pin goes RED
+in BOTH a1 and a3** — under-suppression and over-suppression — which is the whole point of
+asserting the row LIST rather than a silence.
+
+**THE COST GATE'S NON-ZERO COLUMN WAS NOT THIS ROUND'S, AND THE ROUND PROVED IT.** An AST-only
+walker cannot move `typeOfExpr.calls`, so `--passTiming` was run on BOTH class dirs and each fed
+to `cost_gate.py --from-log`: **every deterministic counter is identical between arms**. The
+deltas were a stale `docs/perf/cost-counters.txt` — recorded **2026-09-13**, ten days and six
+semantic rounds ago — which is round 776's *"a recorded counter baseline is a claim about a BUILD,
+not about a commit"*. **The baseline is rebaselined in this round's commit** with the accounting:
+`output.errors` 46 and `spine.nodes` 856,962 are UNCHANGED throughout, and the movement is the
+resolution work rounds (P18.169)-(P18.174) each justified in their own note — a generic alias
+heritage base that now resolves, a return-identifier arm, a discriminated-union relation leg, two
+contextual-type installs, an element-access contextual type and a binder-symbol consult.
+
+**Gates.** `rxjs` **21 -> 17**, exactly the 4 rows, 0 added; `marked` **0** and `cronstrue` **1**,
+both still exactly tsgo; suite **20,412 / 0 / 44** (+13 pins); corpus screen **0 of 8,725**, and
+each of the 7 TS2302 baselines re-checked LIVE via `--include` (none is `@Ignore`d); 8-profile grid
+**8x `added=0 removed=0`**, a CONTROL with a measured count of ZERO sites; `huge_methods` 0 over;
+warning-clean, **proved live** by an injected `USELESS_CAST` that printed its `w:` line.
+
+**Three separate defects found, all MISSING rows, all pre-existing and measured byte-identical
+before and after**: a type-parameter CONSTRAINT is never walked (`<U extends T>` — `TypeParameter.
+constraint` and `.default` are visited by nothing); a nested `FunctionDeclaration` STATEMENT is
+never walked; and an arrow's or function expression's BLOCK body is never walked (only an
+expression body is). Each ADDS rows, so each needs its own round.
+
 ### Round (P18.174) — (LIB.5) G1: a module-local name that collides with a lib global wins; `rxjs` 29 -> 21 (2026-09-23)
 
 The first round against the NEW library, chosen by (LIB.5)'s census because `marked` and

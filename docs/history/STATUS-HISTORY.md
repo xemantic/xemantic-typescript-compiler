@@ -1,5 +1,16 @@
 
 
+**(P18.180) — (CHK.150) RUNG 1: A GENERIC REFERENCE'S MEMBERS ARE READ SUBSTITUTED AND THE CONTEXTUAL-RETURN LEG INFERS BETWEEN DIFFERENT OBJECT TYPES; X2 MATCHES tsgo, `rxjs` FLAT AS PREDICTED, 20,489 / 0 / 44 (2026-09-23).**
+The queue named `lookupPropertyTypeForCtx`'s fallback; the real cause is the MEMBER TABLE — `resolveReferenceMembers`
+resolves an interface member with its own type parameters out of scope, so a function-typed member's `T` is `error`
+and survives instantiation while still printing as `T`. Contextual typing now routes a reference's member through
+`resolveGenericPropertyType`, and a new structural leg ports tsgo's `inferFromObjectTypes`. **14 of 28 matrix cells
+moved to agreement, 5 controls held**, X1/X3 unchanged by design. 19 pins; six ablation arms RED, `removeMissingType`
+0 and recorded as unreachable today. The orchestrator's review fixed two tsgo-fidelity slips before commit and re-ran
+every gate. Screen 0 of 8,725 and BLIND to the change (the 38 pending rows byte-identical on both arms); cost_gate
+PASS; huge_methods 0; grid 8x0 (a control); `rxjs` 17 -> 17. **Filed (CHK.151)**: the same member-table defect on
+the RELATION side misses rows tsgo reports — a false-negative class, expected to ADD rows.
+
 **(P18.179) — (CHK.143): `instanceof` ON THE POSITIVE BRANCH INTERSECTS WHERE IT USED TO REPLACE, 20,470 / 0 / 44 (2026-09-23).**
 `narrowByInstanceOf` answered the CANDIDATE where tsgo answers the INTERSECTION, and the join then left `P | Q` where tsgo
 leaves `P` — which is how `s.add(42)` after `if (s instanceof Promise)` became an ours-only TS2339. tsc's missing tail is now

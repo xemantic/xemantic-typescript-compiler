@@ -25,6 +25,44 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.185) — (CHK.154)(a): a trailing `void`-accepting parameter is OPTIONAL in signature relation; `rxjs` 7 -> 6 (2026-09-23)
+
+Orchestrated: one implementation subagent, plus a parallel read-only census of (CHK.160) (still running at
+commit). **tsgo's exact rule**, read from `relater.go` `getMinArgumentCountEx` (no flags) and
+`compareSignaturesRelated` (`getMinArgumentCount(source) > targetCount`): SOURCE signature only; walk back
+from the last required parameter dropping each whose type has the `Void` flag directly or on a union
+constituent (`someType`), stopping at the first that does not; `undefined`, `any`, `unknown`, `never` and a
+type parameter (even `T extends void`) do NOT count; a `void` in the middle stays required; an optional or
+rest parameter after the run is fine; `strictNullChecks` is irrelevant; call arity is a separate path
+(`hasCorrectArity`'s `acceptsVoid`) and was not touched. **The census's `void9c` is not a reducer** (0 rows
+everywhere — it goes through call arity), and `diagnose()` could not reproduce `void9` until the pin
+declared `Partial` locally (the harness lib lacks it — the known trap, which made the first pin vacuous).
+
+**The change (+44/−1)**: `Checker.relationMinArgumentCount(sig)` (next to `signatureDeclaredArity`), used by
+`Relater.signatureRelatedTo` for its arity check; it falls back to the raw count when the declared
+parameter list is longer than `sig.parameters` (binding patterns are dropped from it) and stops at a rest
+parameter. **Matrix, 15 cells** (`build/scratch-p18185/cells`): every removed row is one tsgo does not
+report, NONE added — kinds 10 -> 6 (tsgo 6), run 9 -> 3 (3), void2 3 -> 0 (0), void9 1 -> 0, void10 1 -> 0,
+methods 2 -> 1 (1); controls `ctor1` (part (b)) and `void11` (call arity) byte-identical. Pre-existing gaps
+seen, not touched: an optional `(() => void) | null` argument parameter skips the arity check (`void1`
+`take(r3)`); no minimum through a tuple rest (`restt`); `mk<number>()`'s missing row and `Cb<string>`
+displayed expanded; an object-literal member error anchored on the whole literal; a binding-pattern
+signature (`guards` line 9) stays ours-only BECAUSE of the fallback — positional annotation zipping
+happens to line up with tsgo there, but a `this` parameter breaks that alignment, so dropping the fallback
+is a separate decision.
+
+**Pins**: `TrailingVoidParameterRelationTest`, 8 tests, full tsgo text. Ablation: raw
+`minArgumentCount` 7 RED; union constituents ignored 4; `this` counted 1; `continue` past the first
+non-void 1; `undefined`/`any` accepted 2; type parameter accepted 1; binding-pattern fallback removed **0**
+(it only keeps one ours-only row — recorded, not claimed). Restored md5 `8d174cfa`.
+
+**Gates**: full suite **20,573 / 0 / 44** (+8); corpus screen 0 of 8,725; cost_gate PASS (counters within
+0.11% of (P18.184)'s); huge_methods 0; grid 8x `added=0 removed=0`; warning gate 0 `w:` (non-empty log).
+**`rxjs` 7 -> 6** — only `Observable.ts:307` TS2769; `marked` 0; harness identical.
+
+**Successor**: (CHK.154)(b) — a derived class's `constructSignatures` carry the base constructor first, so
+`new Sub("x")` against `constructor(o?: number)` is ACCEPTED (a false negative, `ctor1`).
+
 ### Round (P18.184) — (CHK.153): a callback's callee receiver is resolved from the identifier's PARENT CHAIN for contextual `this`; `rxjs` 10 -> 7, 9 -> 29 of 29 cells (2026-09-23)
 
 Orchestrated: one implementation subagent, plus a parallel read-only census that sized (CHK.152) step 3's
@@ -540,61 +578,6 @@ not involved; `pullContextualTypeAt` answering null for a generic alias with a C
 parameter instantiated by a free TP; the double-mint above; and the sibling
 `refuseTpFnTypes`/`isTpReferencingFnTypeOrUnion` gate, deliberately left because its stated reason
 is a different concern.
-
-### Round (P18.175) — (LIB.5) G3: a nested generic container's own type parameters are its own; `rxjs` 21 -> 17 (2026-09-23)
-
-A generic ARROW or FUNCTION EXPRESSION nested in a STATIC member kept the enclosing class's
-type-parameter names, so its OWN shadowing `<T>` was falsely flagged TS2302 *"Static members
-cannot reference class type parameters."* `checkTS2302InClassMember`'s `MethodDeclaration` arm was
-the ONLY subtraction in the file; `findTypeParamRefsInExpr`/`…InType` carried the flat set
-unchanged into every nested container. **tsgo has no walker for this at all** — TS2302 is a
-name-RESOLUTION outcome (`nameresolver.go:170-186`) where the resolver walks containers OUTWARD
-and a generic arrow is itself a container found first, so shadowing is excluded STRUCTURALLY.
-That is exactly why a flat-set walker has to spell it at each boundary.
-
-**THE FAMILY IS WIDER THAN THE BRIEF SCOPED IT, AND THE ROUND WIDENED IT ON A MEASUREMENT.** The
-brief scoped the fix to `ArrowFunction`/`FunctionExpression`, which covers all 4 rxjs rows and 5 of
-the 8 matrix false positives. But a `FunctionType` (`static f: <T>(x: T) => void`), a `TypeLiteral`
-method signature (`static g: { m<T>(a: T): void }`) and a `ConstructorType` (`static h: new <T>(x:
-T) => void`) are the SAME mechanism with the same measured tsgo silence, and leaving 3 of 8
-standing would have been arbitrary. One helper at six boundaries; **arm a4 exists to show that
-half is load-bearing and separately pinned**, and it cost nothing — grid 0/0, corpus 0, counters
-identical. The reproduction matrix went **ours 11 / tsgo 3 -> ours 3 / tsgo 3**, exact agreement
-at the same three positions.
-
-**THE CORPUS IS A LIVE GATE HERE AND THE ABLATION PROVED IT RATHER THAN ASSERTING IT.** The brief
-called the 7 active TS2302 baselines an OVER-SUPPRESSION gate. On arm a3 (subtract the WRONG set —
-the class's names instead of the function's, i.e. whole-subtree suppression) the screen goes
-**0 -> 1** and names it: `genericClassWithStaticsUsingTypeArguments` loses exactly its two ARROW
-rows while keeping its four non-arrow ones. **Four arms, none reading 0 RED**: a1 (subtraction
-dropped) 7 RED; a2 (arrow but not function expression) 1, exactly the function-expression pin;
-a3 3, all three true-positives-must-survive; a4 (expression half kept, TYPE half dropped) 3,
-exactly the `FunctionType`/`TypeLiteral`/`ConstructorType` pins. **The decisive `B4` pin goes RED
-in BOTH a1 and a3** — under-suppression and over-suppression — which is the whole point of
-asserting the row LIST rather than a silence.
-
-**THE COST GATE'S NON-ZERO COLUMN WAS NOT THIS ROUND'S, AND THE ROUND PROVED IT.** An AST-only
-walker cannot move `typeOfExpr.calls`, so `--passTiming` was run on BOTH class dirs and each fed
-to `cost_gate.py --from-log`: **every deterministic counter is identical between arms**. The
-deltas were a stale `docs/perf/cost-counters.txt` — recorded **2026-09-13**, ten days and six
-semantic rounds ago — which is round 776's *"a recorded counter baseline is a claim about a BUILD,
-not about a commit"*. **The baseline is rebaselined in this round's commit** with the accounting:
-`output.errors` 46 and `spine.nodes` 856,962 are UNCHANGED throughout, and the movement is the
-resolution work rounds (P18.169)-(P18.174) each justified in their own note — a generic alias
-heritage base that now resolves, a return-identifier arm, a discriminated-union relation leg, two
-contextual-type installs, an element-access contextual type and a binder-symbol consult.
-
-**Gates.** `rxjs` **21 -> 17**, exactly the 4 rows, 0 added; `marked` **0** and `cronstrue` **1**,
-both still exactly tsgo; suite **20,412 / 0 / 44** (+13 pins); corpus screen **0 of 8,725**, and
-each of the 7 TS2302 baselines re-checked LIVE via `--include` (none is `@Ignore`d); 8-profile grid
-**8x `added=0 removed=0`**, a CONTROL with a measured count of ZERO sites; `huge_methods` 0 over;
-warning-clean, **proved live** by an injected `USELESS_CAST` that printed its `w:` line.
-
-**Three separate defects found, all MISSING rows, all pre-existing and measured byte-identical
-before and after**: a type-parameter CONSTRAINT is never walked (`<U extends T>` — `TypeParameter.
-constraint` and `.default` are visited by nothing); a nested `FunctionDeclaration` STATEMENT is
-never walked; and an arrow's or function expression's BLOCK body is never walked (only an
-expression body is). Each ADDS rows, so each needs its own round.
 
 ## QUEUE
 
@@ -1282,7 +1265,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   CORRECTS (CHK.141)/G4's planned fix**: the edge need not become type-keyed — resolve the receiver from
   the parent chain as (CHK.144)/(P18.170) does. Size S, removal-only.
 
-- [ ] **(CHK.154) A TRAILING PARAMETER ACCEPTING `void` IS OPTIONAL IN SIGNATURE RELATION — rxjs
+- [ ] **(CHK.154) (a) LANDED 2026-09-23 ((P18.185) note; rxjs 7 -> 6) — OPEN: (b), the derived-class constructor. A TRAILING PARAMETER ACCEPTING `void` IS OPTIONAL IN SIGNATURE RELATION — rxjs
   `Observable:307` (TS2769), with a SECOND ingredient that is itself a false negative.** (a)
   `Relater.signatureRelatedTo` (Relater.kt ~1459) compares raw `minArgumentCount`; tsgo's
   `getMinArgumentCountEx` (relater.go ~1737) treats a trailing `void`-accepting parameter as optional, so
