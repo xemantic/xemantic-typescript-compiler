@@ -2523,8 +2523,26 @@ class Checker(
 
     private fun cpaResolveClassTypeCore(cls: ClassDeclaration): Type? {
         val name = cls.name ?: return null
-        var symbol: Symbol? = null
-        for (f in cpaFrames.asReversed()) {
+        // (LIB.5) G1 — the class's OWN symbol, asked of the binder table of the file
+        // that OWNS this declaration node. It must come FIRST, above the `globals`
+        // consult below: INV.3(d) keeps a MODULE file's locals out of `globals`, so a
+        // class whose name collides with a lib global (`Scheduler`, `Notification`,
+        // `File`, ... under `lib: dom`) resolved to the LIB symbol and every
+        // `this.<own member>` in its own body became a TS2339 naming the lib's type.
+        // The binder's answer is exact and cannot be fooled by a collision; an UNBOUND
+        // block-scoped class (B83.5) answers null and the pre-existing ladder below is
+        // kept VERBATIM as the fallback. The ordinary SCRIPT-file case is unchanged
+        // because `mergeSingleSymbol` ADOPTS — `globals[name]` IS the binder's object
+        // there (round 884) — so both reads name one Symbol.
+        //
+        // The `Class` flag test is a MEASURED REDUNDANT BARRIER — dropping it reads 0 RED
+        // on this round's pins AND 0 of 8,725 on the corpus screen, because the binder's
+        // record for a bound `ClassDeclaration` always carries the flag. It is kept for
+        // the ONE case that is not: [nodeSymbolOf]'s scan fallback for an UNINDEXED node,
+        // which answers by `nodeKey` alone and so can name another file's symbol at
+        // coincident offsets ((BIND.1)). It refuses that, and nothing else.
+        var symbol: Symbol? = nodeSymbolOf(cls)?.takeIf { it.flags.hasAny(SymbolFlags.Class) }
+        if (symbol == null) for (f in cpaFrames.asReversed()) {
             val ns = f.nsSymbol ?: continue
             symbol = ns.exports?.get(name.text)
             if (symbol != null) break
@@ -109026,6 +109044,31 @@ interface DataView {
         }
     }
 
+    /**
+     * (LIB.5) G1(b) — does the current scope hold a binding for [name] that shadows a
+     * PURELY lib-declared global of that name?
+     *
+     * The order is the cost contract: the walk-scoped maps are string-keyed probes and
+     * decide it for every ordinary program, so the AST-node set membership (round 471:
+     * a node-keyed set hashes a subtree, sound here only because a lib declaration's
+     * subtree is tiny) is reached only for a name that is BOTH locally bound and present
+     * in `globals` — i.e. the collision this exists to find.
+     *
+     * The PURELY-lib restriction on the last line is LOAD-BEARING and was measured, not
+     * argued: widening it to "any `globals` symbol loses to any local binding" leaves
+     * every pin in `LibGlobalNameCollisionTest` green and costs ONE corpus baseline —
+     * `assignmentCompatBug2`, whose SCRIPT-file target is then resolved from
+     * `currentLocalTypes` instead, losing an optional method's `?` and rendering
+     * `k?(a: any): any` as `k(a: any): any` in three TS2741 rows.
+     */
+    private fun caeLocalBindingShadowsLibGlobal(name: String): Boolean {
+        val local = narrowedDeclaredTypes[name] ?: currentLocalTypes[name] ?: return false
+        if (local === anyType || local === errorType) return false
+        val sym = globals[name] ?: return false
+        if (sym.declarations.isEmpty()) return false
+        return sym.declarations.none { it !in builtinLibDecls && it !in realLibDeclFile }
+    }
+
     private fun checkAssignmentExpressionCore(expr: Expression, source: String, fileName: String, varTypes: MutableMap<String, String>, typeParams: Set<String>) {
         // B572: this assignment is owned by checkTemplateUnionIntersectionComplexity (TS2859) — skip.
         if (expr is BinaryExpression && expr.pos in relationComplexityHandled) return
@@ -109154,7 +109197,19 @@ interface DataView {
                 // currentShadowedNames) shadows the outer/global binding of the same
                 // name — prefer the LOCAL type, do NOT consult globals (which would
                 // resolve the outer declaration).
-                val isShadowed = target.text in currentShadowedNames
+                // (LIB.5) G1(b) — a LIB global loses to ANY binding the current scope
+                // holds for the same name. `currentShadowedNames` knew only about a
+                // body-local `var`, so a PARAMETER (`scheduler?: SchedulerLike`) and a
+                // MODULE file's own file-level `let`/`const` both lost to the DOM
+                // `declare var scheduler: Scheduler` — INV.3(d) keeps a module's locals
+                // out of `globals`, so nothing below could see the collision, and every
+                // assignment to such a binding became a TS2739 naming the LIB type's
+                // members (`postTask`, `yield`). The test demands the `globals` symbol be
+                // PURELY lib-declared: a SCRIPT file's own file-level binding is MERGED
+                // into that symbol (`mergeSingleSymbol` adopts, round 884), so it carries
+                // a non-lib declaration and this guard cannot fire for it.
+                val isShadowed = target.text in currentShadowedNames ||
+                    caeLocalBindingShadowsLibGlobal(target.text)
                 if (!isShadowed) {
                     val symbol = globals[target.text]
                     if (symbol != null) {
