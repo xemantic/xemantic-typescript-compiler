@@ -1,7 +1,10 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,365** lines (**+61 at (P18.179)**, tsc's missing `instanceof`
+extraction):** `Checker.kt` **199,496** lines (**+131 at (P18.180)**, one substituted-member helper, tsgo's
+`inferFromObjectTypes` tail as a structural leg of the contextual-return inference, an out-of-scope
+candidate filter and their KDoc — a SEMANTIC parity change taking 14 more contextual cells to
+agreement with tsgo and buying NO library row, which the note says; **+61 at (P18.179)**, tsc's missing `instanceof`
 positive-branch tail as one helper at two sites, with the KDoc recording the one leg-ordering cell
 where this checker's lack of a subtype relation diverges from tsgo — a SEMANTIC parity change
 removing a FALSE-POSITIVE class, not an extraction; **+233 at (P18.178)**, the contextual-return
@@ -56,6 +59,17 @@ passes, whose candidate collaborators census at 59-97 ambient reads (`cae*`: 97 
 declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 50k lines (one file),
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
+
+**(P18.180) — (CHK.150) RUNG 1: A GENERIC REFERENCE'S MEMBERS ARE READ SUBSTITUTED AND THE CONTEXTUAL-RETURN LEG INFERS BETWEEN DIFFERENT OBJECT TYPES; X2 MATCHES tsgo, `rxjs` FLAT AS PREDICTED, 20,489 / 0 / 44 (2026-09-23).**
+The queue named `lookupPropertyTypeForCtx`'s fallback; the real cause is the MEMBER TABLE — `resolveReferenceMembers`
+resolves an interface member with its own type parameters out of scope, so a function-typed member's `T` is `error`
+and survives instantiation while still printing as `T`. Contextual typing now routes a reference's member through
+`resolveGenericPropertyType`, and a new structural leg ports tsgo's `inferFromObjectTypes`. **14 of 28 matrix cells
+moved to agreement, 5 controls held**, X1/X3 unchanged by design. 19 pins; six ablation arms RED, `removeMissingType`
+0 and recorded as unreachable today. The orchestrator's review fixed two tsgo-fidelity slips before commit and re-ran
+every gate. Screen 0 of 8,725 and BLIND to the change (the 38 pending rows byte-identical on both arms); cost_gate
+PASS; huge_methods 0; grid 8x0 (a control); `rxjs` 17 -> 17. **Filed (CHK.151)**: the same member-table defect on
+the RELATION side misses rows tsgo reports — a false-negative class, expected to ADD rows.
 
 **(P18.179) — (CHK.143): `instanceof` ON THE POSITIVE BRANCH INTERSECTS WHERE IT USED TO REPLACE, 20,470 / 0 / 44 (2026-09-23).**
 `narrowByInstanceOf` answered the CANDIDATE where tsgo answers the INTERSECTION, and the join then left `P | Q` where tsgo
@@ -131,20 +145,3 @@ BLIND — `const p: number = t` is silent for an unconstrained TP on a working b
 for an unrelated reason. Screen 0 of 8,725; grid 8x0, a real gate in the adding direction; rxjs 17 -> 17 row for row, marked
 0, cronstrue 1; cost_gate every counter +0.00% against the freshly rebaselined file; huge_methods 0.
 
-**(P18.175) — (LIB.5) G3: A NESTED GENERIC CONTAINER'S OWN TYPE PARAMETERS ARE ITS OWN; `rxjs` 21 -> 17, 20,412 / 0 / 44 (2026-09-23).**
-A generic ARROW or FUNCTION EXPRESSION nested in a STATIC member kept the enclosing class's type-parameter names, so its own
-shadowing `<T>` was falsely flagged TS2302. `checkTS2302InClassMember`'s MethodDeclaration arm was the ONLY subtraction in the
-file. **tsgo has no walker at all** — TS2302 is a name-RESOLUTION outcome whose resolver walks containers OUTWARD, so a
-generic arrow is a container found FIRST and shadowing is excluded structurally; that is precisely why a flat-set walker must
-spell it at each boundary. **THE FAMILY IS WIDER THAN THE SIZING AND THE ROUND WIDENED IT ON A MEASUREMENT**: a
-`FunctionType`, a `TypeLiteral` method signature and a `ConstructorType` are the same mechanism with the same measured tsgo
-silence, so one helper went to SIX boundaries; arm a4 exists to show that half is load-bearing and it cost nothing. Matrix
-ours 11 / tsgo 3 -> **ours 3 / tsgo 3**, same three positions. **THE CORPUS IS A LIVE GATE AND THE ABLATION PROVED IT**: the
-arm that subtracts the WRONG set takes the screen 0 -> 1 and names `genericClassWithStaticsUsingTypeArguments`, which loses
-exactly its two ARROW rows. Four arms, none at 0 RED; the decisive `B4` pin reddens in BOTH the under- and the
-over-suppression arm, which is why it asserts the row LIST and not a silence. **THE COST GATE'S NON-ZERO COLUMN WAS NOT THIS
-ROUND'S**: an AST-only walker cannot move `typeOfExpr.calls`, so `--passTiming` was run on BOTH class dirs and every
-deterministic counter is IDENTICAL between arms — the deltas were a baseline recorded 2026-09-13, ten days and six semantic
-rounds stale (round 776's law). **Rebaselined in this commit**, with `output.errors` 46 and `spine.nodes` 856,962 unchanged
-throughout. Screen 0 of 8,725 with each of the 7 TS2302 baselines re-checked live via `--include`; grid 8x0, a control with a
-measured ZERO sites; huge_methods 0; warning gate proved live by an injected `USELESS_CAST`.

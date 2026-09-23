@@ -1,5 +1,23 @@
 
 
+**(P18.175) — (LIB.5) G3: A NESTED GENERIC CONTAINER'S OWN TYPE PARAMETERS ARE ITS OWN; `rxjs` 21 -> 17, 20,412 / 0 / 44 (2026-09-23).**
+A generic ARROW or FUNCTION EXPRESSION nested in a STATIC member kept the enclosing class's type-parameter names, so its own
+shadowing `<T>` was falsely flagged TS2302. `checkTS2302InClassMember`'s MethodDeclaration arm was the ONLY subtraction in the
+file. **tsgo has no walker at all** — TS2302 is a name-RESOLUTION outcome whose resolver walks containers OUTWARD, so a
+generic arrow is a container found FIRST and shadowing is excluded structurally; that is precisely why a flat-set walker must
+spell it at each boundary. **THE FAMILY IS WIDER THAN THE SIZING AND THE ROUND WIDENED IT ON A MEASUREMENT**: a
+`FunctionType`, a `TypeLiteral` method signature and a `ConstructorType` are the same mechanism with the same measured tsgo
+silence, so one helper went to SIX boundaries; arm a4 exists to show that half is load-bearing and it cost nothing. Matrix
+ours 11 / tsgo 3 -> **ours 3 / tsgo 3**, same three positions. **THE CORPUS IS A LIVE GATE AND THE ABLATION PROVED IT**: the
+arm that subtracts the WRONG set takes the screen 0 -> 1 and names `genericClassWithStaticsUsingTypeArguments`, which loses
+exactly its two ARROW rows. Four arms, none at 0 RED; the decisive `B4` pin reddens in BOTH the under- and the
+over-suppression arm, which is why it asserts the row LIST and not a silence. **THE COST GATE'S NON-ZERO COLUMN WAS NOT THIS
+ROUND'S**: an AST-only walker cannot move `typeOfExpr.calls`, so `--passTiming` was run on BOTH class dirs and every
+deterministic counter is IDENTICAL between arms — the deltas were a baseline recorded 2026-09-13, ten days and six semantic
+rounds stale (round 776's law). **Rebaselined in this commit**, with `output.errors` 46 and `spine.nodes` 856,962 unchanged
+throughout. Screen 0 of 8,725 with each of the 7 TS2302 baselines re-checked live via `--include`; grid 8x0, a control with a
+measured ZERO sites; huge_methods 0; warning gate proved live by an injected `USELESS_CAST`.
+
 **(P18.174) — (LIB.5) G1: A MODULE-LOCAL NAME THAT COLLIDES WITH A LIB GLOBAL WINS; `rxjs` 29 -> 21, 20,399 / 0 / 44 (2026-09-23).**
 The first round against the NEW library, chosen by (LIB.5)'s census because `marked` and `cronstrue` are both at exact
 agreement with tsgo. On `build/bench/lib-rxjs-7.8.2` (251 sources, `lib: ["ES2020","DOM"]` — load-bearing) tsgo reports 1 row

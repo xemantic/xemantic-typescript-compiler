@@ -25,6 +25,66 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.180) — (CHK.150) rung 1: a generic reference's members are read SUBSTITUTED, and the contextual-return leg infers between DIFFERENT object types; X2 matches tsgo, `rxjs` flat as predicted (2026-09-23)
+
+Orchestrated: one implementation subagent, gates in this session. **The queue item named the wrong
+mechanism for the object-literal half, and the real one is broader than this round.**
+`lookupPropertyTypeForCtx`'s target fallback was never reached — the lookup on `Observer<string>`
+finds the reference's OWN `next`. The defect is in the member TABLE: `resolveReferenceMembers`
+instantiates `getTypeOfSymbol(prop)`, which resolves an interface/class member with the
+declaration's own type parameters OUT of scope, so every `T` inside a function-typed member is the
+`error` intrinsic and the instantiation has nothing to substitute — while the type still PRINTS as
+`(value: T) => void`, which is how it hid. The resolver that does it right already existed:
+`resolveGenericPropertyType`, used by the property-access path. **One "working" control was working
+by accident**: `Observer<T>` inside `f<T>` agreed only because the outer `T` had Observer's name;
+renamed to `U` it failed like the rest.
+
+**The change (`Checker.kt` +137/−6)**: `ctxMemberTypeOf(owner, sym)` routes a `Type.Reference`'s
+member through `resolveGenericPropertyType` (falling back to the old answer when it is null), used by
+`lookupPropertyTypeForCtx` and the new structural leg; `ctxReturnInferInto` gains an arm for two
+DIFFERENT object types, `ctxReturnInferFromMembers`, a port of tsgo's `inferFromObjectTypes` →
+`inferFromProperties` + `inferFromSignatures` (`inference.go:665/794/804`) with the
+`typesDefinitelyUnrelated` guard (minus its discriminant clause) and `removeMissingType`; and
+`ctxReturnTypeParamMapper` drops a candidate naming a type parameter no enclosing declaration binds
+(a method of `X<W>` taking `Partial<Observer<W>>` leaks `W` into the pull — without the filter the
+callback parameter goes `unknown` -> `any`, i.e. silent). **The orchestrator's review corrected two
+fidelity slips before commit**: the strip also removed `null` (tsgo's `removeMissingType` drops only
+`undefined`), and the signature pairing clamped to index 0 when the target had more signatures (tsgo
+pairs the last `min(|S|,|T|)` from the end). Both are unreachable by the matrix (unchanged, 17 agree)
+and the pins; the corpus screen, suite, cost gate and grid were re-run on the corrected binary.
+
+**Matrix, 28 cells vs tsgo** (`build/scratch-p18180/cells`): 14 moved to agreement — X2, a concrete
+receiver, a variable annotation, context METHOD vs return function-typed PROPERTY, inheritance depth
+2, an object literal against `Observer<string>` (property and method forms), the renamed enclosing
+parameter, an interface at depth 2, an optional context member, a nested callback member; 5 controls
+stayed agreeing (alias, inline, `Partial` object literal, X4). **Unchanged by design**: X1 and X3
+(rungs 3 and 2), c07/c25 (the `Partial<Observer<W>>` leak, refused so still `unknown`), and seven
+cells whose only remaining diff is a MISSING relation row (see (CHK.151)).
+
+**Pins**: `StructuralContextualInferenceTest`, 19 tests, full tsgo message text. Ablation one
+mistake at a time: object-literal site back to `getTypeOfSymbol` 4 RED; structural arm removed 8;
+member-table types inside the arm 8; unrelated guard removed 1; out-of-scope filter removed 1;
+signature parameters not inferred 9; **`removeMissingType` 0 — recorded, not claimed**: a `?` member
+carries no `undefined` here and an explicit `| undefined` member arrives with its function
+constituent un-instantiated (`resolveGenericPropertyType`'s `instantiateType` skips function-shaped
+union members), so the rule is kept as tsgo's and its KDoc says it is unreachable today.
+
+**Gates**: full suite **20,489 / 0 / 44** (+19), run twice (before and after the fidelity fix);
+corpus screen 0 of 8,725 — and with `--include ""` both arms show the same 38 pending mismatches
+byte-identically, so **the corpus is BLIND to this change** (a control, not a gate); cost_gate PASS
+(`mapped.hits` +1.05%, `mapped.keyed` +0.28%, `typeNode.bypassed` +0.08% — the substituted member
+resolutions, all within tolerance); huge_methods 0; 8-profile grid 8x `added=0 removed=0` (a control:
+the census found no value-half site on the profiles); warning gate proved live by an injected
+`USELESS_CAST` probe (the only `w:` line). **Libraries: `rxjs` 17 -> 17, rows byte-identical — as the
+item predicted, it needs rungs 2 and 3 too**; `marked` 0, `cronstrue` unchanged.
+
+**Successor**: (CHK.150) rung 2 (X3, a union parameter) — structural inference now exists beneath
+it. **Filed (CHK.151)** for the member-table defect on the RELATION side, which this round found and
+deliberately did not touch: `Subscriber<number>` against `Observer<string>` and an object literal's
+`(value: number) => void` against `next` are rows tsgo reports and we MISS, for the same
+error-typed-member reason — a false-NEGATIVE class, broader than contextual typing, expected to ADD
+rows and to need its own grid.
+
 ### Round (P18.179) — (CHK.143): `instanceof` on the positive branch INTERSECTS where it used to REPLACE (2026-09-23)
 
 `narrowByInstanceOf` answered the CANDIDATE where tsgo answers the INTERSECTION, and the join with
@@ -573,70 +633,6 @@ uninterpretable because of it. (2) Type-alias display leaks the wrong namespace 
 `S`), same root. (3) Contextual TUPLE inference (`GH39357`). (4) `07_GH12052`: right row, right
 line, but anchored at column 11 on the whole object where tsgo anchors at 27 on the member.
 
-### Round (P18.170) — (CHK.144): a block body returning a bare identifier no longer infers `any`; `marked` 3 -> 2 (2026-09-22)
-
-`inferReturnTypeFromBody` is a hand-written `when` over return-expression KINDS whose
-`is Identifier ->` arm answered `booleanType` for the literals `true`/`false` and **`null` for
-everything else**, which the caller turns into `anyType`. So every BLOCK-bodied unannotated
-function whose `return` is a bare identifier inferred `any` — while the EXPRESSION-bodied twin
-was always correct. Matrix against tsgo **15 of 39 cells agreeing -> 36 of 39**; the three
-residues are all the pre-change answer, i.e. the arm is strictly monotone.
-
-**THE GRID WAS THE ONLY INSTRUMENT THAT SAW THE FIRST CUT'S FALSE POSITIVES, AND THAT IS THE
-ROUND'S MOST USEFUL RESULT.** The first implementation added **3 ours-only rows to tsc's own
-sources** while the corpus screen read 0 of 8,725 and all 28 pins of the day were green on that
-same binary. Cause: `inferReturnTypeFromBody` unwraps `!` as "value-preserving", which is true of
-every arm that answers from SYNTAX and false for one that answers a DECLARED type — for
-`return value!` stripping the nullish is the entire point. Two of the three were that
-(`memoizeOne`, `getScriptKind`); the third (`getCombinedDiagnostics`) is a flow-narrowed `let`
-that only FLOW can prove non-nullish, and is refused. Both directions are now pinned, and the
-policy has its own two ablation arms (a7/a8), each of which reproduces exactly one of those
-profile rows.
-
-**THE IMPLEMENTATION'S OWN FIRST DESIGN LEAKED THE CALLER'S SCOPE.** A `currentLocalTypes`
-consult for un-annotated parameters was gated on owner identity — and the gate does not save it,
-because `getTypeOfArrowFunction`'s push is ITSELF conditional on the type being concrete, so
-exactly the parameter that leg would serve is the one never pushed (measured `(r: any) => number`
-against tsgo's `any`). **The leg was removed**: the resolver is now purely lexical —
-`lexicalReturnIdentifierDecl` walks the identifier's own parent chain innermost-first, and
-`statementBindingNode` is a SHADOW-STOP that answers a node for every value-space binder
-including ones it cannot type (function / class / enum / namespace / import), so the walk HALTS
-rather than reaching past a shadow. `returnIdentifierType` then types only a `Parameter`
-annotation and a `VariableDeclaration` (annotation, else initializer, depth-bounded), refuses
-`any`/`errorType`, and refuses a bare nullish answer unless `!` was written.
-
-**A BLIND PIN WAS FOUND BY ITS OWN ABLATION, TWICE OVER.** The first shadow-safety pin used a
-`function` callee, which resolves through a different path — arm a2 read 0 RED on it while the
-binary mistyped every ARROW; replaced with three measured arrow shapes, a2 now reads 6 RED. And
-arm a5's anchor matched **11 times**, so that arm silently never ran until it was re-anchored.
-
-**Ablation, one mistake per arm, rebuilt each time** (RED of 35 / `marked` / profile rows):
-a1 whole arm off **23** / 3 / 0; a2 naive `currentLocalTypes` probe **6** / 2 / 0 — and the grid
-is BLIND to it; a3 shadow-stop off **1**; a4 initializer leg off **5** / **3**; a5 concreteness
-guard off **0**; a7 don't refuse a bare nullish **3** / 2 / **+1**; a8 don't strip on `!`
-**3** / 2 / **+1**. **a5 is a measured REDUNDANT barrier rather than a blind pin, and its cost
-was measured rather than assumed**: `errorType` renders as `any` (B58.1) and `anyType` reaches
-the same `?: anyType`, so its two blocked values are observationally identical to the fallback.
-Kept only because five sibling arms carry the identical `takeIf`.
-
-**Gates.** `marked` **3 -> 2** (the false `TS2578 Unused '@ts-expect-error'` gone, no new row);
-`cronstrue` unchanged; suite **20,336 / 0 / 44** (+35 pins); corpus screen **0 of 8,725**;
-8-profile grid **8x `added=0 removed=0`** — a real GATE here, and by the largest margin this
-family has had (a census counts **4,109-5,671** bare-identifier returns per profile);
-`cost_gate` PASS (max **+0.51%**, `output.errors` 46 unchanged); `huge_methods` 0 over;
-warning-clean with a non-empty log.
-
-**Separate defects found and NOT fixed** — one is live on the SHIPPED pre-change binary: a
-concise-body `getTypeOfExpression` has no lexical guard, so with a callee declared AFTER a
-shadowing caller it reads `() => number` against tsgo's `string` (a name collision through
-`currentLocalTypes`; renaming the caller's local fixes it). Also `return m.get("k")!` reads
-`number | undefined` where tsgo reads `number` (the `!` strip does not reach the `CallExpression`
-arm, confirmed pre-existing); multiple returns are not unioned (`if (b) { return s } return 1`
-reads `number` against tsgo's `string | 1`); and a function-vs-function argument mismatch at
-`take(callee)` is silent where tsgo emits TS2345. **Suggested successor**: a flow-narrowing
-consult at the return site (round 465's nullish-STRIP shape, gated on `currentFlowGraph`) closes
-the refused-nullish cell and the shipped leak together.
-
 ## QUEUE
 
 ### WORK ORDER (owner directive 2026-09-01) — PHASE 18: TypeScript for the JVM and Kotlin
@@ -1094,7 +1090,14 @@ shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: t
 positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
 positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
 
-- [ ] **(CHK.150) CENSUSED 2026-09-23 ((P18.179) recon) — THE FRAMING WAS WRONG, THERE ARE **THREE
+- [ ] **(CHK.150) RUNG 1 (X2) LANDED 2026-09-23 ((P18.180) note) — a generic reference's members are
+  now read SUBSTITUTED for contextual typing (`ctxMemberTypeOf` -> `resolveGenericPropertyType`) and
+  the contextual-return leg infers between DIFFERENT object types (tsgo `inferFromObjectTypes`); the
+  object-literal half's real cause was the member TABLE, not `lookupPropertyTypeForCtx`'s fallback.
+  `rxjs` 17 -> 17 as predicted. **NEXT: rung 2 (X3, union parameter), then rung 3 (X1, overload).**
+  Known residue: a mapped-type parameter of a generic class METHOD (`Partial<Observer<W>>`) reaches the
+  pull with `W` un-instantiated — refused (stays `unknown`), and likely the blocker for rxjs's
+  `Partial<Observer<T>>` half. EARLIER: CENSUSED 2026-09-23 ((P18.179) recon) — THE FRAMING WAS WRONG, THERE ARE **THREE
   INDEPENDENT BLOCKERS**, AND **NO SMALLEST FIRST STEP MOVES `rxjs`**. That last is the plain
   answer the item asked for and it changes what the next session should do.** Four cells isolate
   them, each provable alone (`build/scratch-recon-j/order`):
@@ -1219,6 +1222,23 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   7 of the library's remaining 17, the single largest cause left.** Direction: closing it REMOVES
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
+
+- [ ] **(CHK.151) A GENERIC REFERENCE'S MEMBER TABLE HOLDS `error`-TYPED FUNCTION MEMBERS, SO THE
+  RELATION MISSES ROWS tsgo REPORTS (found 2026-09-23 by (P18.180), NOT fixed there).**
+  `resolveReferenceMembers` instantiates `getTypeOfSymbol(prop)`, which resolves an interface/class
+  member with the declaration's own type parameters out of scope: every `T` inside a function-typed
+  member becomes the `error` intrinsic and survives instantiation — while PRINTING as `T`. (P18.180)
+  routed only CONTEXTUAL typing around it (`ctxMemberTypeOf`). Rows tsgo reports and we miss, all in
+  `build/scratch-p18180/cells`: `Subscriber<number>` against `Observer<string>` (c08/c23), an object
+  literal's `(value: number) => void` against `next` (c20/c21/c27), `SubS<unknown>` vs `ObsM<number>`,
+  the TS2741 rows (c09/c22). **Direction: ADDS rows** (a false-NEGATIVE class), so every added row
+  must be measured against tsgo; the fix is either to build the table through
+  `resolveGenericPropertyType` or to resolve member symbols with the declaration's type parameters in
+  scope. Blast radius unmeasured and plausibly large — take the corpus census first (active baselines
+  whose relation reads a generic interface's function-typed member), and expect the grid to be a REAL
+  gate (tsc's own sources relate generic interface instantiations everywhere). Related:
+  `resolveGenericPropertyType`'s `instantiateType` skips a function-shaped UNION member (P18.180's
+  a5 finding).
 
 - [ ] **(CHK.149) THREE MISSING-ROW GAPS IN THE TS2302 WALKER, each ADDING rows and each needing
   its own round (found 2026-09-23 by (P18.175), measured byte-identical before and after it).**

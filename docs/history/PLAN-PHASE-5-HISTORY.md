@@ -1,5 +1,69 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.170) — (CHK.144): a block body returning a bare identifier no longer infers `any`; `marked` 3 -> 2 (2026-09-22)
+
+`inferReturnTypeFromBody` is a hand-written `when` over return-expression KINDS whose
+`is Identifier ->` arm answered `booleanType` for the literals `true`/`false` and **`null` for
+everything else**, which the caller turns into `anyType`. So every BLOCK-bodied unannotated
+function whose `return` is a bare identifier inferred `any` — while the EXPRESSION-bodied twin
+was always correct. Matrix against tsgo **15 of 39 cells agreeing -> 36 of 39**; the three
+residues are all the pre-change answer, i.e. the arm is strictly monotone.
+
+**THE GRID WAS THE ONLY INSTRUMENT THAT SAW THE FIRST CUT'S FALSE POSITIVES, AND THAT IS THE
+ROUND'S MOST USEFUL RESULT.** The first implementation added **3 ours-only rows to tsc's own
+sources** while the corpus screen read 0 of 8,725 and all 28 pins of the day were green on that
+same binary. Cause: `inferReturnTypeFromBody` unwraps `!` as "value-preserving", which is true of
+every arm that answers from SYNTAX and false for one that answers a DECLARED type — for
+`return value!` stripping the nullish is the entire point. Two of the three were that
+(`memoizeOne`, `getScriptKind`); the third (`getCombinedDiagnostics`) is a flow-narrowed `let`
+that only FLOW can prove non-nullish, and is refused. Both directions are now pinned, and the
+policy has its own two ablation arms (a7/a8), each of which reproduces exactly one of those
+profile rows.
+
+**THE IMPLEMENTATION'S OWN FIRST DESIGN LEAKED THE CALLER'S SCOPE.** A `currentLocalTypes`
+consult for un-annotated parameters was gated on owner identity — and the gate does not save it,
+because `getTypeOfArrowFunction`'s push is ITSELF conditional on the type being concrete, so
+exactly the parameter that leg would serve is the one never pushed (measured `(r: any) => number`
+against tsgo's `any`). **The leg was removed**: the resolver is now purely lexical —
+`lexicalReturnIdentifierDecl` walks the identifier's own parent chain innermost-first, and
+`statementBindingNode` is a SHADOW-STOP that answers a node for every value-space binder
+including ones it cannot type (function / class / enum / namespace / import), so the walk HALTS
+rather than reaching past a shadow. `returnIdentifierType` then types only a `Parameter`
+annotation and a `VariableDeclaration` (annotation, else initializer, depth-bounded), refuses
+`any`/`errorType`, and refuses a bare nullish answer unless `!` was written.
+
+**A BLIND PIN WAS FOUND BY ITS OWN ABLATION, TWICE OVER.** The first shadow-safety pin used a
+`function` callee, which resolves through a different path — arm a2 read 0 RED on it while the
+binary mistyped every ARROW; replaced with three measured arrow shapes, a2 now reads 6 RED. And
+arm a5's anchor matched **11 times**, so that arm silently never ran until it was re-anchored.
+
+**Ablation, one mistake per arm, rebuilt each time** (RED of 35 / `marked` / profile rows):
+a1 whole arm off **23** / 3 / 0; a2 naive `currentLocalTypes` probe **6** / 2 / 0 — and the grid
+is BLIND to it; a3 shadow-stop off **1**; a4 initializer leg off **5** / **3**; a5 concreteness
+guard off **0**; a7 don't refuse a bare nullish **3** / 2 / **+1**; a8 don't strip on `!`
+**3** / 2 / **+1**. **a5 is a measured REDUNDANT barrier rather than a blind pin, and its cost
+was measured rather than assumed**: `errorType` renders as `any` (B58.1) and `anyType` reaches
+the same `?: anyType`, so its two blocked values are observationally identical to the fallback.
+Kept only because five sibling arms carry the identical `takeIf`.
+
+**Gates.** `marked` **3 -> 2** (the false `TS2578 Unused '@ts-expect-error'` gone, no new row);
+`cronstrue` unchanged; suite **20,336 / 0 / 44** (+35 pins); corpus screen **0 of 8,725**;
+8-profile grid **8x `added=0 removed=0`** — a real GATE here, and by the largest margin this
+family has had (a census counts **4,109-5,671** bare-identifier returns per profile);
+`cost_gate` PASS (max **+0.51%**, `output.errors` 46 unchanged); `huge_methods` 0 over;
+warning-clean with a non-empty log.
+
+**Separate defects found and NOT fixed** — one is live on the SHIPPED pre-change binary: a
+concise-body `getTypeOfExpression` has no lexical guard, so with a callee declared AFTER a
+shadowing caller it reads `() => number` against tsgo's `string` (a name collision through
+`currentLocalTypes`; renaming the caller's local fixes it). Also `return m.get("k")!` reads
+`number | undefined` where tsgo reads `number` (the `!` strip does not reach the `CallExpression`
+arm, confirmed pre-existing); multiple returns are not unioned (`if (b) { return s } return 1`
+reads `number` against tsgo's `string | 1`); and a function-vs-function argument mismatch at
+`take(callee)` is silent where tsgo emits TS2345. **Suggested successor**: a flow-narrowing
+consult at the return site (round 465's nullish-STRIP shape, gated on `currentFlowGraph`) closes
+the refused-nullish cell and the shipped leak together.
+
 ### Round (P18.169) — a generic type ALIAS as a heritage base discarded its type arguments; `marked` 4 -> 3 (2026-09-22)
 
 **THE ROUND'S BRIEF WAS WRONG ABOUT THE MECHANISM AND A *WRITE PROBE* IS WHAT CAUGHT IT.** The
