@@ -1,5 +1,23 @@
 
 
+**(P18.178) — (CHK.148): A CALLEE TYPE PARAMETER IS INFERRED FROM THE CONTEXTUAL RETURN; 13 OF 14 SOURCES MATCH tsgo, AND THE rxjs SIZING WAS WRONG, 20,457 / 0 / 44 (2026-09-23).**
+One leg in `ctxArgTypeMapper` between argument inference and the fallback: pull the CALL's contextual type, match it
+structurally against the signature's return type, contribute only for type parameters no argument bound. **13 of 14
+contextual sources go `unknown` -> the context's type, byte-identical to tsgo** (argument, annotation, return, property
+assignment, `satisfies`, `as`, async return, nullish union, array element, ternary, `=`, class property, `new` argument),
+four controls unmoved, and **the ADD direction verified 4 of 4** including the two `TS2551` rows the fix adds — which a
+round expecting removal only would misread. **THE RECON'S SIZING WAS WRONG AND A LADDER PROVED IT**: its reducer gave
+`subscribe` a direct `Subscriber<T>` parameter where rxjs's is OVERLOADED with a union, and six rungs show only the
+reducer's rung works — at every other rung an ARROW or OBJECT-LITERAL argument gets NO contextual type at all, so the pull
+answers null and there is nothing to infer from. Filed as (CHK.150); **third round running that buys parity and no library
+row, and every remaining rxjs row is behind that one family.** **THE RULE HAD TO BE DISCOVERED AND THE CORPUS CAUGHT THE
+FIRST CUT**: `typeParamBoundByArguments` SKIPS every function-like argument, right for the fallback and wrong for priority,
+and without that distinction the first cut DELETED a corpus row. **Nine arms**: a1 16 RED, a6 15, a9 2, three at exactly 1
+uniquely their own. **a3 was a blind pin AND the corpus was blind too** — 0 RED and 0 of 8,725 — so a discriminating cell
+had to be BUILT; without the gate the leg invents two ours-only TS2345 rows. **a5 is round 927's pair at THREE layers**: no
+single-layer arm moves the priority pin, a9 defeats all three, recorded as ONE observable. Screen 0 of 8,725; grid 8x0 with
+harness's 3 TS7006 checked 3 -> 3, same rows; cost_gate PASS; huge_methods 0.
+
 **(P18.177) — (CHK.141)(b): A CONTEXTUAL `this:` PARAMETER TYPES `this`; 1 OF 5 POSITIONS -> 5 OF 5, AND THE rxjs GATE IS NOT MET, 20,434 / 0 / 44 (2026-09-23).**
 A contextual `this:` was applied NOWHERE — only an EXPLICIT one typed `this` — so four positions were silent false
 negatives, two of them (CHK.35a)'s deliberate ones. **IT WAS NOT THE RULE, IT WAS THE GATE, AND ONLY A PROBE BINARY FOUND

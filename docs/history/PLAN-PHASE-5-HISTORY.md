@@ -1,5 +1,72 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.173) — (CHK.35b): an element-access assignment target supplies a contextual type; **`marked` reaches ZERO** (2026-09-22)
+
+**`marked` now reports the same diagnostics as tsgo 7.0.2: none.** With `cronstrue` already at
+zero (its standing "1" is a TS5108 config row BOTH compilers emit), **two real libraries outside
+the corpus are in exact agreement with the reference**. That is the owner's 2026-09-21 alignment
+stop-condition met for both, and it is what the `marked` arc has been for: 18 -> 10 -> 8 -> 4 -> 3
+-> 2 -> 1 -> **0** across (CHK.33), (CHK.140), (CHK.35a), (P18.169), (CHK.144), (CHK.142)(b)+(a)
+and this round.
+
+**The item said this was blocked and it was not.** The queue recorded (b) as "OPEN, and INERT
+until (c)", which is why a previous attempt was reverted; a 12-cell matrix measured that false —
+it fails with a fully CONCRETE slot type and no type parameter anywhere. (b) and (c) have OPPOSITE
+signatures: (b) finds no contextual signature at all, so the parameter is IMPLICITLY `any` and we
+ADD a TS7006/TS7019; (c) finds signature and arity and collapses the TYPE, so we MISS a row in
+silence. **8 of 9 element-access cells now byte-match tsgo** — same code, line, column and message.
+
+**tsgo's literal shape was written first, and it was WRONG HERE — that is the round's transferable
+finding.** tsgo gates one predicate on `ast.IsAccessExpression` and asks
+`getTypeOfExpression(left)` for the whole access, because its receiver resolution is ONE
+mechanism. **Ours is TWO**: the walk-scoped `implicitAnyScopes` stack, which alone carries a
+body-local's annotation, and `getTypeOfExpression`. The faithful port built, ran, and left
+`marked` at 1 with TS7006 standing on every body-local receiver; resolving the RECEIVER through
+the same `?:` ladder the property-access arm already uses reaches both. It survives as ablation
+arm a4 (4 RED, `marked` back to 1).
+
+**The second correction was measured, not guessed.** `elementAccessResultType` classifies the key
+through `getTypeOfExpression`, and this predicate runs on the spineIany edge where
+`currentLocalTypes` is not yet populated — so **a key that is a PARAMETER of the function-like
+being walked types `any`** and washes the access. That is exactly `marked`'s
+`renderers[ext.name]`. It was isolated by showing a literal key and a FILE-LEVEL key both resolve
+and only a walk-bound key does not, so the symptom reads as a nesting problem and is not one. An
+index signature has one slot whatever the key turns out to be, which is why the fallback cannot
+fire where the key WAS classified (arm a3, 3 RED).
+
+**A PIN THAT FAILED WAS MEASURED RATHER THAN WEAKENED.** `bag["x"] = function (t) { t.nope }`
+draws no TS2339 — but neither does the already-working PROPERTY-access twin, while the same body
+in a call ARGUMENT does. So it is (CHK.39)/(CHK.98)'s per-reader residue on the assignment
+position, not this family's; the pin was re-pointed to a PARITY invariant (`residue - …`) with the
+call-argument row as its non-vacuous member, so it reddens if the two target kinds ever diverge in
+either direction and still holds the day the residue closes.
+
+**Ablation, four arms, none reading 0 RED, and a1/a2 have equal counts with DIFFERENT red sets** —
+which is what separates the two halves: a1 (arm removed) owns the false positive, so `marked`
+returns to 1; a2 (kind test not widened in the pull) owns the TYPING, so `marked` stays 0 because
+its row is a TS7019. a3 ⊂ a4 by one pin, separating "the fallback" from "the ladder". Each arm was
+diffed against its OWN snapshot rather than `git diff --shortstat`, which is vacuous on a dirty
+tree.
+
+**Gates.** `marked` **1 -> 0** and tsgo 0; `cronstrue` 1 -> 1, the same row on both; suite
+**20,386 / 0 / 44** (+22 pins); corpus screen **0 of 8,725**; 8-profile grid **8x
+`added=0 removed=0`** — a real GATE by census (6-11 element-access-assigned-function sites per
+profile); `cost_gate` PASS (max +0.80%, `output.errors` 46, `spine.nodes` ±0.00%); `huge_methods`
+0 over; warning-clean, and the gate was proved LIVE with an injected `USELESS_CAST` positive
+control before the probe was deleted.
+
+**THE `this` RESIDUE IS NOW ONE FAMILY, NOT TWO**: `this.bag["x"] = fn` went TS7006 -> silent,
+which is exactly where `this.cb = fn` already sat, so both spellings answer identically and the
+whole of it belongs to (CHK.141)/(CHK.35d) — B101 makes `getTypeOfExpression(this)` answer
+`anyType`.
+
+**Separate defects named, not fixed**: compound assignment (`||=`, `&&=`, `??=`) supplies no
+contextual type for ANY LHS kind, on both binaries, where tsgo reports all three — tsgo shares one
+case label across `=` and the three (`checker.go:29566`), we gate on `SyntaxKind.Equals` alone; a
+class-property initializer with a function-expression value is silent here and TS2322 in tsgo; the
+TS2339 assignment-target residue above; an `any`-typed key losing the true row; and an ours-only
+TS2322 on a generic-`R` slot verified present on the BEFORE binary, i.e. (CHK.35c) territory.
+
 ### Round (P18.172) — (CHK.142)(a): an object literal against a UNION contextual type; `marked` 2 -> 1 (2026-09-22)
 
 **THE BRIEF'S DIAGNOSIS WAS WRONG, AND IT WAS THIS ROUND'S OWN AUTHOR WHO WROTE IT ONE ROUND

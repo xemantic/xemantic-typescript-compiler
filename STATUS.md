@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **199,700** lines (**+59 at (P18.182)**, a one-condition guard removal, a method-parameter
+extraction):** `Checker.kt` **199,783** lines (**+83 at (P18.183)**, the named-object argument gate, its classifier
+and the scoped chain relaxation with their KDoc — a SEMANTIC parity change closing a false-NEGATIVE class
+at call arguments, +0 rows on every profile and library; **+59 at (P18.182)**, a one-condition guard removal, a method-parameter
 property-bag instantiation arm and their KDoc — a SEMANTIC parity change that takes `rxjs` 17 -> 10;
 **+145 at (P18.181)**, three helpers porting tsgo's union-source
 inference and union-target head with their KDoc — a SEMANTIC parity change taking a 20-cell matrix from
@@ -64,6 +66,16 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.183) — (CHK.152) STEP 1: A NAMED-OBJECT ARGUMENT IS RELATED TO A NAMED-OBJECT PARAMETER; 24 OF 29 CENSUS MISSES REPORT WITH THE DECLARATION'S CHAIN, +0 ROWS EVERYWHERE AS PREDICTED, 20,544 / 0 / 44 (2026-09-23).**
+`z(q)` with a mismatched property used to be SILENT at an argument while `const s: S = q` reported. A new gate in
+`caasNonSimpleParamChecks` (arity, not-rest, no free type parameter; never a union or a literal) delegates to
+`canUseTypeEngine`, and the argument emitter builds the member chain for the pair — all 34 new rows print exactly the
+declaration reader's chain. All 22 silent controls stay silent; 17 pins; eleven ablation arms, three recorded as
+redundant guards. Screen 0 of 8,725 (blind — the census measured only 23 such rows, all matched); grid 8x0 over
+7,494/14,311 opened pairs; cost_gate PASS; huge_methods 0; rxjs 10, marked 0. **The read-only census predicted +0
+exactly by invoking the checker's own predicates at a debugger breakpoint on frozen classes** — committed as
+`scripts/census/JdiArgFirewallCensus.java`. A second census filed rxjs's ten rows as (CHK.153)-(CHK.161).
+
 **(P18.182) — (CHK.150) RUNG 3 + THE `Partial` LEAK: AN OVERLOAD'S CLEAR WINNER IS ADOPTED FOR THE ARGUMENT'S CONTEXT; `rxjs` 17 -> 10, (CHK.150) CLOSED, 20,527 / 0 / 44 (2026-09-23).**
 Rung 3 was a round-481 byte-parity guard DISCARDING `resolveCallOverload`'s arity-filtered clear winner; it protected
 no baseline (screens byte-identical, pending rows included). The `Partial<Observer<W>>` leak was a mapped bag sent
@@ -111,22 +123,4 @@ library controls were re-censused rather than inherited and one is NOT a control
 twice; cost_gate PASS with `narrow.walks` +0.00% (the tail runs inside an existing walk); huge_methods 0. Four defects named,
 two PRE-EXISTING and proved so on the parent binary — including the intersection-member parenthesization, which this round
 only makes REACHABLE from narrowing.
-
-**(P18.178) — (CHK.148): A CALLEE TYPE PARAMETER IS INFERRED FROM THE CONTEXTUAL RETURN; 13 OF 14 SOURCES MATCH tsgo, AND THE rxjs SIZING WAS WRONG, 20,457 / 0 / 44 (2026-09-23).**
-One leg in `ctxArgTypeMapper` between argument inference and the fallback: pull the CALL's contextual type, match it
-structurally against the signature's return type, contribute only for type parameters no argument bound. **13 of 14
-contextual sources go `unknown` -> the context's type, byte-identical to tsgo** (argument, annotation, return, property
-assignment, `satisfies`, `as`, async return, nullish union, array element, ternary, `=`, class property, `new` argument),
-four controls unmoved, and **the ADD direction verified 4 of 4** including the two `TS2551` rows the fix adds — which a
-round expecting removal only would misread. **THE RECON'S SIZING WAS WRONG AND A LADDER PROVED IT**: its reducer gave
-`subscribe` a direct `Subscriber<T>` parameter where rxjs's is OVERLOADED with a union, and six rungs show only the
-reducer's rung works — at every other rung an ARROW or OBJECT-LITERAL argument gets NO contextual type at all, so the pull
-answers null and there is nothing to infer from. Filed as (CHK.150); **third round running that buys parity and no library
-row, and every remaining rxjs row is behind that one family.** **THE RULE HAD TO BE DISCOVERED AND THE CORPUS CAUGHT THE
-FIRST CUT**: `typeParamBoundByArguments` SKIPS every function-like argument, right for the fallback and wrong for priority,
-and without that distinction the first cut DELETED a corpus row. **Nine arms**: a1 16 RED, a6 15, a9 2, three at exactly 1
-uniquely their own. **a3 was a blind pin AND the corpus was blind too** — 0 RED and 0 of 8,725 — so a discriminating cell
-had to be BUILT; without the gate the leg invents two ours-only TS2345 rows. **a5 is round 927's pair at THREE layers**: no
-single-layer arm moves the priority pin, a9 defeats all three, recorded as ONE observable. Screen 0 of 8,725; grid 8x0 with
-harness's 3 TS7006 checked 3 -> 3, same rows; cost_gate PASS; huge_methods 0.
 
