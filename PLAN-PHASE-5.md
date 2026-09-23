@@ -1127,7 +1127,61 @@ shapes are in neither ((CHK.124)'s count applies). Rationale for the ordering: t
 positives on real code, which is what unblocks lowering, where the (CHK.73) residues ADD a true
 positive and fix a display. Both are worth doing; the FP removal is the one on the critical path.
 
-- [ ] **(CHK.150) A UNION-TYPED OR OVERLOADED PARAMETER SUPPLIES *NO* CONTEXTUAL TYPE TO ITS
+- [ ] **(CHK.150) CENSUSED 2026-09-23 ((P18.179) recon) — THE FRAMING WAS WRONG, THERE ARE **THREE
+  INDEPENDENT BLOCKERS**, AND **NO SMALLEST FIRST STEP MOVES `rxjs`**. That last is the plain
+  answer the item asked for and it changes what the next session should do.** Four cells isolate
+  them, each provable alone (`build/scratch-recon-j/order`):
+  **X4** a single signature taking `Subscriber<T>` — control, `'T'` on both.
+  **X2** a single signature taking `Observer<T>` — ours `'unknown'`, tsgo `'T'`: **structural
+  inference between DIFFERENT object types**.
+  **X3** a single signature taking `Subscriber<T> | fn` — ours `'unknown'`: **union contextual
+  return**.
+  **X1** an OVERLOAD PAIR whose parameters are both exactly `Subscriber<T>` — ours `'unknown'`:
+  **overload selection ALONE loses it, with no union and no structural mismatch.**
+  `rxjs`'s `Observable.subscribe` is overloaded **and** union-typed **and** structural, so L4 needs
+  all three cleared; any single round leaves it at `unknown`. **That explains the three prior
+  rounds exactly** — each fixed a real defect and moved the library by zero.
+  **A PLAIN UNION IS NOT BROKEN AND A PLAIN OVERLOAD SET IS NOT BROKEN** (both-fn-shaped overloads
+  work; `callableSignaturesForCtx` has had a union arm since (CHK.97)), and the free-type-parameter
+  axis is CLOSED by (CHK.35c) — four cells confirm it. What fails is narrower: an OBJECT LITERAL
+  only when the contextual object type is a `Type.Reference` (a generic-interface instantiation —
+  inline and aliased object types work), and an ARROW only through overload resolution (mixed-shape
+  candidates, or a generic callee).
+  **A STALE RECORDED REFUSAL IS THE LIKELY FIX FOR X2, AND IT IS THE ROUND'S MOST VALUABLE FIND**:
+  `lookupPropertyTypeForCtx` (`Checker.kt:~37950`) falls back to a `Type.Reference`'s TARGET members
+  with the KDoc *"un-substituted member types are fine for the arity-only consumers this helper
+  serves … used only by the TS7006 suppression walker."* **That premise no longer holds** — since
+  (CHK.39)/(CHK.98) it feeds `pullContextualTypeAt`'s object-literal arms, which supply TYPES — so
+  `One<string>` yields the target's `(value: T) => void` with `T` UNSUBSTITUTED, which the apply
+  site then refuses at `typeContainsOutOfScopeTypeParam`, leaving the parameter `any`.
+  For X1 the two sites are `ctxArgTypesFromSignatures`' `candidates.all { … }` homogeneity
+  heuristic (no KDoc reason; it also returns `candidates[0]` with NO mapper, so a generic overload's
+  `T` is handed on un-substituted) and a byte-parity guard whose own KDoc says it exists *"to keep
+  the legacy every-overload-callable heuristic byte-identical"* — **a round-481-era veto that the
+  2026-07-26 logical-parity directive turns into a lead**.
+  **THE DIRECTION IS INVERTED FROM THIS ITEM'S ORIGINAL TEXT — IT *REMOVES* ROWS.** Measured: 7 of
+  `rxjs`'s 29 ours-only rows are literally this defect's fingerprint (`Type 'unknown' is not
+  assignable to type 'T'` at `audit`, `pairwise`, `sample`, `single`, `skipLast` x2, `throttle`),
+  with up to 4 more in the `this` half — **7 certain, up to 11 of 29**. The rest are other families
+  and will not move.
+  **CENSUS**: **233 active subtests / 159 fixtures** match a union-or-overload-with-callback
+  heuristic — a real **GATE**. The 8 profiles are a **weak gate** (a live instance exists at
+  `harness/src/harness/harnessGlobals.ts:23`, an overloaded `assert.deepEqual`, carrying all 3 of
+  their TS7006 rows — but with ZERO TS2322/TS2345 they cannot see the value half). `marked` and
+  `cronstrue` have **0** such sites: CONTROLS.
+  **ORDER — three rounds, each gradeable by its own cell even though `rxjs` stays flat until the
+  third**: (1) X2 structural, the deepest and what every other rung needs; (2) X3 union, which may
+  be small since the union arm exists; (3) X1 overload, and **only then does `rxjs` move**.
+  **A FOURTH, SEPARABLE AND UNBLOCKED ROUND** is the `TS2302 x4` cluster (a generic ARROW's own
+  type parameter mis-identified as the enclosing class's) — the largest single share of `rxjs`'s
+  remaining rows and dependent on none of the above.
+  **PROBE-VALIDITY FINDING THAT INVALIDATES EARLIER CELLS, AND MUST BE READ BEFORE MEASURING THIS
+  FAMILY**: `const q: number = v` is **blind whenever `v` should be a bare type parameter** — our
+  engine does not report a bare `T` against `number` in assignment position at all (tsgo reports 5
+  cells where we report 1) — and `v.nope` is blind for a non-union receiver in a nested body. Cells
+  measured single-probe disagreed with dual-probe on **4 of 10** shapes. Use an ARGUMENT probe, or
+  carry both and require them to agree.
+  ORIGINAL FRAMING (superseded): **A UNION-TYPED OR OVERLOADED PARAMETER SUPPLIES *NO* CONTEXTUAL TYPE TO ITS
   ARGUMENT — AND IT IS THE ONE FAMILY BLOCKING EVERY REMAINING `rxjs` ROW (measured 2026-09-23,
   (P18.178), by a six-rung ladder).** Rung by rung from a reducer's shape to `rxjs`'s real one:
   a parameter typed `Subscriber<T>` works; `Partial<Observer<T>> | ((value: T) => void)`,
