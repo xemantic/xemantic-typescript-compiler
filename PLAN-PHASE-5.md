@@ -1069,7 +1069,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   `populateParameterLocalTypes` ~153381), annotated/destructured body locals (`cpaApplyDeclRecordings` ~2609 types them
   `any`), `this.x`, a `T extends string | null` parameter, `in` RHS / for-of / spread TS2488, `o.p.length` on a
   non-optional nullable member. **ORDER**: G2 -> G5 -> G1 -> G3/G4/G6 (each its own round, each pinnable by its cell and
-  a real-code site), then Round A (the arm + G7 skip + dedupe) at +0; Round B (optional parameters and body locals typed
+  a real-code site), then Round A (the arm + G7 skip + dedupe) at +0; **G2's own census was STOPPED unfinished at the
+  2026-09-24 session end — its partial cells, JDI arms and population runs are in `build/scratch-p18202-census/`
+  (`cells/`, `jdi/`, `pop/`, `corpus/`, `fixrun.sh`); re-read before re-running;** Round B (optional parameters and body locals typed
   in the cpa frame — re-census first, it exposes new gaps) and a `this.x`/`o.p` arm after. ORIGINAL: A PROPERTY ACCESS OR METHOD CALL ON A NULLABLE *IDENTIFIER* NEVER REPORTS TS18047 / TS18048 ("'x' is
   possibly 'null' / 'undefined'") — THE MOST COMMON strictNullChecks ERROR (found by the (CHK.172) census, re-probed
   2026-09-24 by the orchestrator, `build/scratch-orch-18048`, script AND module files).** tsgo reports, ours is silent,
@@ -1084,7 +1086,15 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   corpus (surprisingly green on this — find out which pin walkers carry TS18047/TS18048 baselines). Direction: ADDS
   rows; the grid is likely a REAL gate.
 
-- [ ] **(CHK.172) CENSUSED 2026-09-24 (read-only, frozen (P18.200) classes, `build/scratch-p18201-census/`, README.txt) —
+- [ ] **(CHK.172) IN PROGRESS — SESSION ENDED MID-ROUND 2026-09-24: an UNGATED work-in-progress patch is saved at
+  `build/wip/p18203-chk172/` (`tracked.patch`, +171/−620 over `Checker.kt`, `TypeScriptCompiler.kt` and five test files —
+  the normal-pipeline switch and the `declarationOnly` machinery deletion — plus `untracked/` copies of the new
+  `EmitDeclarationOnlyChecksTest`, the `-project` `EmitDeclarationOnlyProjectTest` (unfinished) and the round's grid
+  driver). It re-applies cleanly on `3f236da6`+docs (`git apply --check` verified); `build/` is gitignored, so it is lost
+  on a `clean` — a copy is in that session's scratchpad too. NOTHING of it is verified: no suite, no corpus screen, no
+  ablation; treat it as a head start, re-run every gate, and re-read the census below before trusting any part of it.
+  The before-arm snapshot is `build/bench/p18203/classes-before` (md5 749a21d5 = the (P18.202) landed binary).
+  CENSUSED 2026-09-24 (read-only, frozen (P18.200) classes, `build/scratch-p18201-census/`, README.txt) —
   THE FIX IS "RUN THE NORMAL PIPELINE, DISCARD ONLY THE JS OUTPUT", AND `noCheck` MUST LAND WITH IT.** `TypeScriptCompiler.kt`
   early-returns in both branches (single ~1212, multi ~1378) with `Checker(..., declarationOnly = true)`; `Checker`
   runs `initDeclarationOnlyPasses()` instead of `initCheckPasses1..8` (and the replay path ~8220 likewise), so
