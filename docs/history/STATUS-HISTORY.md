@@ -1,5 +1,12 @@
 
 
+**(P18.185) — (CHK.154)(a): A TRAILING `void`-ACCEPTING PARAMETER IS OPTIONAL IN SIGNATURE RELATION; `rxjs` 7 -> 6, 20,573 / 0 / 44 (2026-09-23).**
+`Relater.signatureRelatedTo` compared raw `minArgumentCount`; tsgo's `getMinArgumentCountEx` drops a trailing run of
+source parameters whose type has the `Void` flag (directly or on a union constituent — not `undefined`/`any`/`unknown`/
+a type parameter). One helper now answers it. Matrix: every removed row is one tsgo lacks, none added; 8 pins, six
+ablation arms RED and one recorded as redundant. Screen 0 of 8,725; cost_gate PASS; grid 8x0; huge_methods 0;
+**`rxjs` 7 -> 6** (`Observable.ts:307`). Next: (b), a derived class's `new` checked against the BASE constructor too.
+
 **(P18.184) — (CHK.153): A CALLBACK'S CALLEE RECEIVER IS RESOLVED FROM THE PARENT CHAIN FOR CONTEXTUAL `this`; `rxjs` 10 -> 7, 9 -> 29 OF 29 CELLS, 20,565 / 0 / 44 (2026-09-23).**
 `callArgHasContextualThis` typed the callee under the file's resting locals, so every non-file-level receiver —
 parameters, body-locals, unions, optional chains, destructured and class-method parameters — kept an ours-only TS2683.

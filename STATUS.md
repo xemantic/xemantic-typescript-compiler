@@ -1,7 +1,8 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **200,199** lines (**+157 at (P18.189)**, else-branch narrowing at the spine and both legacy
+extraction):** `Checker.kt` **200,293** lines (**+94 at (P18.190)**, the callee-signature predicate fallback and its
+declaration-typing helpers — a SEMANTIC parity change, `rxjs` 3 -> 2; **+157 at (P18.189)**, else-branch narrowing at the spine and both legacy
 If arms with its `||`-negation, nullish-equality and guard-call helpers — a SEMANTIC parity change, `rxjs` 4 ->
 3; **+50 at (P18.188)**, two `boolean`-minus-literal helpers at three narrowing
 sites and the argument arm — a SEMANTIC parity change, `rxjs` 5 -> 4; **the file crossed 200,000 lines**;
@@ -78,6 +79,15 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.190) — (CHK.158): A TYPE GUARD REACHED THROUGH A VALUE NARROWS — THE PREDICATE IS READ FROM THE CALLEE'S SIGNATURE; `rxjs` 3 -> 2, 20,650 / 0 / 44 (2026-09-24).**
+`const isArr = Array.isArray`, a destructured `isArray`, a guard in an object property, a guard-typed annotation and
+an overloaded guard (wrong even when called directly) now narrow, with tsgo's `getEffectsSignature` rule. Four matrix
+groups exact; 19 pins, eight arms RED. Screen 0; grid 8x0; huge_methods 0; cost_gate rebaselined (`typeNode.bypassed`
+−2.03%, a decrease). **`rxjs` 3 -> 2** — both remaining rows are (CHK.159) inference. The builder's blind control led to
+**(CHK.167), promoted to the top: a union source against an object/array target is SILENT at declaration and
+argument positions** (`number[] | string` -> `number[]`, `K | number` -> `K`) — the largest false-negative class found
+this session.
+
 **(P18.189) — (CHK.157): THE ELSE BRANCH OF AN `if` NARROWS AT THE ASSIGNMENT AND RETURN READERS; `rxjs` 4 -> 3, 12 -> 45 AGREEING ROWS, 20,631 / 0 / 44 (2026-09-23).**
 The census named a legacy arm; the emitter for function-declaration bodies is the SPINE, so the fix is in the spine
 and both legacy walks: each `||` disjunct negated in order (tsgo's false branch), negated type-guard calls,
@@ -110,11 +120,4 @@ heap elaborating it; skipping them for class references exposed a baseline passi
 tsgo's private-vs-public property rule; inaccessible constructors now return as tsgo's error call does. 26-cell matrix:
 every added row a tsgo row, every removed row ours-only. 13 pins, seven arms RED. Screen 0; grid 8x0 (a real gate);
 KIR 313/0; rxjs 6, marked 0. Residues filed as (CHK.163).
-
-**(P18.185) — (CHK.154)(a): A TRAILING `void`-ACCEPTING PARAMETER IS OPTIONAL IN SIGNATURE RELATION; `rxjs` 7 -> 6, 20,573 / 0 / 44 (2026-09-23).**
-`Relater.signatureRelatedTo` compared raw `minArgumentCount`; tsgo's `getMinArgumentCountEx` drops a trailing run of
-source parameters whose type has the `Void` flag (directly or on a union constituent — not `undefined`/`any`/`unknown`/
-a type parameter). One helper now answers it. Matrix: every removed row is one tsgo lacks, none added; 8 pins, six
-ablation arms RED and one recorded as redundant. Screen 0 of 8,725; cost_gate PASS; grid 8x0; huge_methods 0;
-**`rxjs` 7 -> 6** (`Observable.ts:307`). Next: (b), a derived class's `new` checked against the BASE constructor too.
 

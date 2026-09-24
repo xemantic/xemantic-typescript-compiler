@@ -1,5 +1,65 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.180) — (CHK.150) rung 1: a generic reference's members are read SUBSTITUTED, and the contextual-return leg infers between DIFFERENT object types; X2 matches tsgo, `rxjs` flat as predicted (2026-09-23)
+
+Orchestrated: one implementation subagent, gates in this session. **The queue item named the wrong
+mechanism for the object-literal half, and the real one is broader than this round.**
+`lookupPropertyTypeForCtx`'s target fallback was never reached — the lookup on `Observer<string>`
+finds the reference's OWN `next`. The defect is in the member TABLE: `resolveReferenceMembers`
+instantiates `getTypeOfSymbol(prop)`, which resolves an interface/class member with the
+declaration's own type parameters OUT of scope, so every `T` inside a function-typed member is the
+`error` intrinsic and the instantiation has nothing to substitute — while the type still PRINTS as
+`(value: T) => void`, which is how it hid. The resolver that does it right already existed:
+`resolveGenericPropertyType`, used by the property-access path. **One "working" control was working
+by accident**: `Observer<T>` inside `f<T>` agreed only because the outer `T` had Observer's name;
+renamed to `U` it failed like the rest.
+
+**The change (`Checker.kt` +137/−6)**: `ctxMemberTypeOf(owner, sym)` routes a `Type.Reference`'s
+member through `resolveGenericPropertyType` (falling back to the old answer when it is null), used by
+`lookupPropertyTypeForCtx` and the new structural leg; `ctxReturnInferInto` gains an arm for two
+DIFFERENT object types, `ctxReturnInferFromMembers`, a port of tsgo's `inferFromObjectTypes` →
+`inferFromProperties` + `inferFromSignatures` (`inference.go:665/794/804`) with the
+`typesDefinitelyUnrelated` guard (minus its discriminant clause) and `removeMissingType`; and
+`ctxReturnTypeParamMapper` drops a candidate naming a type parameter no enclosing declaration binds
+(a method of `X<W>` taking `Partial<Observer<W>>` leaks `W` into the pull — without the filter the
+callback parameter goes `unknown` -> `any`, i.e. silent). **The orchestrator's review corrected two
+fidelity slips before commit**: the strip also removed `null` (tsgo's `removeMissingType` drops only
+`undefined`), and the signature pairing clamped to index 0 when the target had more signatures (tsgo
+pairs the last `min(|S|,|T|)` from the end). Both are unreachable by the matrix (unchanged, 17 agree)
+and the pins; the corpus screen, suite, cost gate and grid were re-run on the corrected binary.
+
+**Matrix, 28 cells vs tsgo** (`build/scratch-p18180/cells`): 14 moved to agreement — X2, a concrete
+receiver, a variable annotation, context METHOD vs return function-typed PROPERTY, inheritance depth
+2, an object literal against `Observer<string>` (property and method forms), the renamed enclosing
+parameter, an interface at depth 2, an optional context member, a nested callback member; 5 controls
+stayed agreeing (alias, inline, `Partial` object literal, X4). **Unchanged by design**: X1 and X3
+(rungs 3 and 2), c07/c25 (the `Partial<Observer<W>>` leak, refused so still `unknown`), and seven
+cells whose only remaining diff is a MISSING relation row (see (CHK.151)).
+
+**Pins**: `StructuralContextualInferenceTest`, 19 tests, full tsgo message text. Ablation one
+mistake at a time: object-literal site back to `getTypeOfSymbol` 4 RED; structural arm removed 8;
+member-table types inside the arm 8; unrelated guard removed 1; out-of-scope filter removed 1;
+signature parameters not inferred 9; **`removeMissingType` 0 — recorded, not claimed**: a `?` member
+carries no `undefined` here and an explicit `| undefined` member arrives with its function
+constituent un-instantiated (`resolveGenericPropertyType`'s `instantiateType` skips function-shaped
+union members), so the rule is kept as tsgo's and its KDoc says it is unreachable today.
+
+**Gates**: full suite **20,489 / 0 / 44** (+19), run twice (before and after the fidelity fix);
+corpus screen 0 of 8,725 — and with `--include ""` both arms show the same 38 pending mismatches
+byte-identically, so **the corpus is BLIND to this change** (a control, not a gate); cost_gate PASS
+(`mapped.hits` +1.05%, `mapped.keyed` +0.28%, `typeNode.bypassed` +0.08% — the substituted member
+resolutions, all within tolerance); huge_methods 0; 8-profile grid 8x `added=0 removed=0` (a control:
+the census found no value-half site on the profiles); warning gate proved live by an injected
+`USELESS_CAST` probe (the only `w:` line). **Libraries: `rxjs` 17 -> 17, rows byte-identical — as the
+item predicted, it needs rungs 2 and 3 too**; `marked` 0, `cronstrue` unchanged.
+
+**Successor**: (CHK.150) rung 2 (X3, a union parameter) — structural inference now exists beneath
+it. **Filed (CHK.151)** for the member-table defect on the RELATION side, which this round found and
+deliberately did not touch: `Subscriber<number>` against `Observer<string>` and an object literal's
+`(value: number) => void` against `next` are rows tsgo reports and we MISS, for the same
+error-typed-member reason — a false-NEGATIVE class, broader than contextual typing, expected to ADD
+rows and to need its own grid.
+
 ### Round (P18.179) — (CHK.143): `instanceof` on the positive branch INTERSECTS where it used to REPLACE (2026-09-23)
 
 `narrowByInstanceOf` answered the CANDIDATE where tsgo answers the INTERSECTION, and the join with

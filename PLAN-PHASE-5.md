@@ -25,6 +25,51 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.190) — (CHK.158): a type guard reached through a VALUE narrows — the predicate is read from the callee's signature; `rxjs` 3 -> 2 (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.164) census folding into its item beside it.
+**The census's control was blind**: `c5` (`const r: number[] = x` after the guard) "worked" only because no
+reader reports `number[] | string` -> `number[]` at all — and that turned out to be a much larger defect,
+re-probed by the orchestrator on the landed binary and filed as (CHK.167). `Array.isArray(x)` works through a
+hard-coded round-459 special case, not the predicate. "Read the predicate from the signature" alone was not
+enough: a destructured function member types `any` at the value readers (round 464b refuses function
+members) and a body-local `const g = isNum` is unbound; both needed handling. And an OVERLOADED guard was
+wrong on the DIRECT call too (the flow resolver and B378's `resolveUserTypeGuardNarrowing` both took the first
+predicate-bearing overload — a false positive and a missing row).
+
+**The change (`Checker.kt` +100/−4, flow-only — it can only narrow)**: `narrowByCallPredicateWorker` falls back
+to `predicateDeclFromCalleeSignature` when the resolved declaration is not function-like or is a body-less
+overload: the callee's call signatures, one used directly, several resolved with
+`resolveCallOverload(strictSelect = true)` if any carries a predicate (tsgo `getEffectsSignature`, flow.go
+~2026; a resolved overload without a predicate narrows nothing). When the callee types `any` the type comes
+from the declaration (`destructuredCalleeType` reusing `bindingElementType` minus the function-member refusal;
+a variable's annotation or initializer; a body local through the owning file's lexical scope tables). The
+predicate triple gains a `FunctionType` arm (guard-typed annotations and aliases); B378 resolves an overload
+set the same way.
+
+**Matrix**: guard aliases / annotated / alias type / object property / parameter / else branch 8 rows off ->
+exact; destructured 4 -> exact; body-local at 9 readers 12 -> exact; overloads 4 -> exact; the rxjs reducer's
+c2/c3/c9/c10 fixed. Residues, pre-existing: `asserts x is T` through an annotated variable/parameter/property
+(the gate `flowCalleeMayHaveAssertEffects` reads declarations only and runs on every flow call — left alone
+for cost; TS2775 for an un-annotated assertion alias is never emitted); a generic guard whose type parameter
+is inferred from another argument; a `this is T` method on a union declaring it per member
+(`typePredicatesInUnion3`); a destructured function member / body-local function alias still `any` at the
+VALUE readers (the fix is flow-only).
+
+**Pins**: `GuardThroughValueNarrowingTest`, 19 tests (2 controls), probes print the narrowed type. Ablation,
+eight arms, all RED (signature fallback 16; overload trigger 2; binding-element type 4; body-local lookup 3;
+`FunctionType` arm 3; B378 overload arm 2; predicate-only overload answer 1; variable-declaration type 2).
+
+**Gates**: full suite **20,650 / 0 / 44** (+19); corpus screen 0 of 8,725; huge_methods 0; grid 8x
+`added=0 removed=0`; no `w:`. **cost_gate passed with one marker, rebaselined in this commit**:
+`typeNode.bypassed` 154,638 -> 151,499 (−2.03% against the recorded baseline, −0.49% of it from (P18.189) and
+−1.55% from this round — a DECREASE), `typeOfExpr.calls` +0.70% (the signature fallback typing callees), all
+else within ±0.25%, output 46 = 46. **`rxjs` 3 -> 2** (`argsArgArrayOrObject.ts:14`; left: `race.ts:52`,
+`groupBy.ts:147`, both (CHK.159)); `marked` 0.
+
+**Successor**: (CHK.167) — promoted to the top of the queue as the largest false-negative class found this
+session; census first.
+
 ### Round (P18.189) — (CHK.157): the ELSE branch of an `if` narrows at the assignment and return readers — in the spine AND both legacy walks; `rxjs` 4 -> 3, 12 -> 45 agreeing rows (2026-09-23)
 
 Orchestrated: one implementation subagent, plus the (CHK.159) census landing into its item and a (CHK.164)
@@ -441,66 +486,6 @@ builds (the only one was ablation arm a3's deliberately dead variable). `rxjs` 1
 unmapped `candidates[0]`) — **and the `Partial<Observer<W>>` leak, which the item now names as a fourth
 blocker, since rxjs's union-typed subscribe needs it even with rung 3.** (CHK.152), the named-object
 argument firewall, is the larger correctness family and is queued directly after (CHK.150).
-
-### Round (P18.180) — (CHK.150) rung 1: a generic reference's members are read SUBSTITUTED, and the contextual-return leg infers between DIFFERENT object types; X2 matches tsgo, `rxjs` flat as predicted (2026-09-23)
-
-Orchestrated: one implementation subagent, gates in this session. **The queue item named the wrong
-mechanism for the object-literal half, and the real one is broader than this round.**
-`lookupPropertyTypeForCtx`'s target fallback was never reached — the lookup on `Observer<string>`
-finds the reference's OWN `next`. The defect is in the member TABLE: `resolveReferenceMembers`
-instantiates `getTypeOfSymbol(prop)`, which resolves an interface/class member with the
-declaration's own type parameters OUT of scope, so every `T` inside a function-typed member is the
-`error` intrinsic and the instantiation has nothing to substitute — while the type still PRINTS as
-`(value: T) => void`, which is how it hid. The resolver that does it right already existed:
-`resolveGenericPropertyType`, used by the property-access path. **One "working" control was working
-by accident**: `Observer<T>` inside `f<T>` agreed only because the outer `T` had Observer's name;
-renamed to `U` it failed like the rest.
-
-**The change (`Checker.kt` +137/−6)**: `ctxMemberTypeOf(owner, sym)` routes a `Type.Reference`'s
-member through `resolveGenericPropertyType` (falling back to the old answer when it is null), used by
-`lookupPropertyTypeForCtx` and the new structural leg; `ctxReturnInferInto` gains an arm for two
-DIFFERENT object types, `ctxReturnInferFromMembers`, a port of tsgo's `inferFromObjectTypes` →
-`inferFromProperties` + `inferFromSignatures` (`inference.go:665/794/804`) with the
-`typesDefinitelyUnrelated` guard (minus its discriminant clause) and `removeMissingType`; and
-`ctxReturnTypeParamMapper` drops a candidate naming a type parameter no enclosing declaration binds
-(a method of `X<W>` taking `Partial<Observer<W>>` leaks `W` into the pull — without the filter the
-callback parameter goes `unknown` -> `any`, i.e. silent). **The orchestrator's review corrected two
-fidelity slips before commit**: the strip also removed `null` (tsgo's `removeMissingType` drops only
-`undefined`), and the signature pairing clamped to index 0 when the target had more signatures (tsgo
-pairs the last `min(|S|,|T|)` from the end). Both are unreachable by the matrix (unchanged, 17 agree)
-and the pins; the corpus screen, suite, cost gate and grid were re-run on the corrected binary.
-
-**Matrix, 28 cells vs tsgo** (`build/scratch-p18180/cells`): 14 moved to agreement — X2, a concrete
-receiver, a variable annotation, context METHOD vs return function-typed PROPERTY, inheritance depth
-2, an object literal against `Observer<string>` (property and method forms), the renamed enclosing
-parameter, an interface at depth 2, an optional context member, a nested callback member; 5 controls
-stayed agreeing (alias, inline, `Partial` object literal, X4). **Unchanged by design**: X1 and X3
-(rungs 3 and 2), c07/c25 (the `Partial<Observer<W>>` leak, refused so still `unknown`), and seven
-cells whose only remaining diff is a MISSING relation row (see (CHK.151)).
-
-**Pins**: `StructuralContextualInferenceTest`, 19 tests, full tsgo message text. Ablation one
-mistake at a time: object-literal site back to `getTypeOfSymbol` 4 RED; structural arm removed 8;
-member-table types inside the arm 8; unrelated guard removed 1; out-of-scope filter removed 1;
-signature parameters not inferred 9; **`removeMissingType` 0 — recorded, not claimed**: a `?` member
-carries no `undefined` here and an explicit `| undefined` member arrives with its function
-constituent un-instantiated (`resolveGenericPropertyType`'s `instantiateType` skips function-shaped
-union members), so the rule is kept as tsgo's and its KDoc says it is unreachable today.
-
-**Gates**: full suite **20,489 / 0 / 44** (+19), run twice (before and after the fidelity fix);
-corpus screen 0 of 8,725 — and with `--include ""` both arms show the same 38 pending mismatches
-byte-identically, so **the corpus is BLIND to this change** (a control, not a gate); cost_gate PASS
-(`mapped.hits` +1.05%, `mapped.keyed` +0.28%, `typeNode.bypassed` +0.08% — the substituted member
-resolutions, all within tolerance); huge_methods 0; 8-profile grid 8x `added=0 removed=0` (a control:
-the census found no value-half site on the profiles); warning gate proved live by an injected
-`USELESS_CAST` probe (the only `w:` line). **Libraries: `rxjs` 17 -> 17, rows byte-identical — as the
-item predicted, it needs rungs 2 and 3 too**; `marked` 0, `cronstrue` unchanged.
-
-**Successor**: (CHK.150) rung 2 (X3, a union parameter) — structural inference now exists beneath
-it. **Filed (CHK.151)** for the member-table defect on the RELATION side, which this round found and
-deliberately did not touch: `Subscriber<number>` against `Observer<string>` and an object literal's
-`(value: number) => void` against `next` are rows tsgo reports and we MISS, for the same
-error-typed-member reason — a false-NEGATIVE class, broader than contextual typing, expected to ADD
-rows and to need its own grid.
 
 ## QUEUE
 
@@ -1100,6 +1085,21 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
+- [ ] **(CHK.167) A UNION SOURCE AGAINST AN OBJECT OR ARRAY TARGET IS SILENT AT DECLARATION AND ARGUMENT
+  POSITIONS — the largest false-negative class found this session (surfaced by (P18.190)'s builder, re-probed
+  2026-09-24 by the orchestrator on the landed binary, `build/scratch-orch-p190`).** tsgo 1 row / ours 0:
+  `declare const x: number[] | string; const r: number[] = x`; `number[] | boolean`; `string[] | number[]` ->
+  `number[]`; `interface K { k: 1 }` with `K | number` -> `K`; the same as a call ARGUMENT. `number | string` ->
+  `number` DOES report, so the gap is a union SOURCE whose target is an object/array type — very likely
+  `canUseTypeEngine` refusing the pair (compare (CHK.63), which is the nullish-union-against-primitive twin and
+  was opened together with the narrowing it depended on). For an embeddable checker this is the most visible
+  kind of miss: an ordinary wrong assignment reports nothing. **Census first** (read-only, frozen classes, a
+  JDI arm predicting the rows an opening adds — `scripts/census/JdiArgFirewallCensus.java` is the template):
+  which gate refuses, which readers (declaration / assignment / argument / return / object-literal member),
+  the population on the 8 profiles and libraries, and whether an opening needs flow narrowing first (the
+  risk (CHK.63) recorded: a union source that is NARROWED at the site must not be reported by its declared
+  type). Direction: ADDS rows; every added row must be a tsgo row, and the grid is likely a REAL gate.
+
 - [ ] **(CHK.152) STEP 1 LANDED 2026-09-23 ((P18.183) note) — named object vs named object is related at
   an argument, with the declaration's chain; +0 rows on every profile and library, exactly as the census
   predicted. OPEN: steps 2 (rest element), 3 (union/nullable parameters — first needs member reads off a
@@ -1223,7 +1223,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   early-exit case. Reducers `build/scratch-p18183-census/cells/sub9` (a, f), `sub5` (h); controls `sub9` (b, c), `sub8`. Size S-M,
   screen for added rows.
 
-- [ ] **(CHK.158) A TYPE-GUARD PREDICATE REACHED THROUGH A VARIABLE (`const { isArray } = Array`,
+- [x] **(CHK.158) LANDED 2026-09-24 ((P18.190) note; rxjs 3 -> 2). A TYPE-GUARD PREDICATE REACHED THROUGH A VARIABLE (`const { isArray } = Array`,
   `const isArr = Array.isArray`) DOES NOT NARROW AT THE OBJECT-LITERAL MEMBER READER — rxjs
   `argsArgArrayOrObject:14` (TS2322).** `resolveFlowCalleeDecl` (Checker.kt ~122969) reads the predicate
   from the callee's DECLARATION, and a variable declaration carries none; read it from the callee's
@@ -1334,7 +1334,28 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   constructor-less MIXIN base is not checked (`mixin`, `new E2(1)`); (e) only the `private` arm of tsgo's
   `propertyRelatedTo` visibility rule exists — the two `protected` arms are missing. All ADD rows.
 
-- [ ] **(CHK.164) TWO `boolean` RESIDUES FROM (P18.188), both measured against tsgo
+- [ ] **(CHK.164) CENSUSED 2026-09-23 (read-only, frozen (P18.189) classes, `build/scratch-p18189-census/`, JDI
+  patch arms `jdi/TruthCensus.java`, `LegacyPatch.java`, `OptPatch.java`).** (a) TWO truthiness sites, neither
+  splits `boolean`: the FLOW site `narrowByTruthiness` (HEAD ~122098, filters `isDefinitelyFalsyMember`/
+  `isDefinitelyTruthyMember`) read by declaration / argument (union) / member (union) / union-target return;
+  and the LEGACY arm of `extractNullNarrowing` (~102461) feeding `currentLocalTypes`, read by assignment and
+  non-union return — which removes only null/undefined and does NO falsy narrowing after `if (x) return;` or in
+  an `else` (`negateCondition` ~4175 returns null for a bare Identifier). Population: flow site 12,483
+  truthiness narrowings on compiler, 73 with `boolean` (harness 146/19,649, rxjs 0/271); legacy 1,188-1,642
+  per profile, rxjs 80. **Both patched live: +0/−0 rows on all 8 profiles and rxjs — the grid is a CONTROL,
+  the cells and the corpus screen are the gate.** **STEP 1**: split `boolean` in `narrowByTruthiness` (reuse
+  `booleanMinusLiteral`'s shape): cells `decl` 25 -> 1 differing, `ctl` c19/c20 FPs closed, `misc` m9/m11
+  closed. **STEP 2**: move the legacy arm onto `narrowByTruthiness` and teach `negateCondition` a bare-Identifier
+  negation: `assign` 35 -> 14 -> ~0. **Probe caveat**: a bare `boolean` at a `never` ARGUMENT probe and at the
+  member reader reads un-narrowed even when flow is right (`paramType === neverType` excluded from M3.4 ~168351)
+  — grade at the declaration reader (`const d: never = x`). **(b) IS NOT FORM-ONLY**: `| undefined` is dropped
+  in the DECLARATION TYPE `populateParameterLocalTypes` registers (~152345; `ctaTypeParamsIntoLocals` B85.1a
+  adds it, which is why declaration/assignment/return agree), so `(x?: string) => ps(x)` MISSES TS2345 (cells
+  `opt2` v1-v6, v9, v12, v13) and o6 misses TS18048. **The one-line fix adds +25 FALSE POSITIVES per profile**
+  (20 in `scanner.ts` where an inner `let start` does not shadow the `start?` parameter; `??=`,
+  `if (length === undefined) length = …`, `start === undefined || start < 0 ? 0 : start` narrowing missing in
+  those readers) plus 2 TS2351 on rxjs — BLOCKED until those readers honour inner shadowing and assignment /
+  `===undefined` / `||`-ternary narrowing. ORIGINAL: TWO `boolean` RESIDUES FROM (P18.188), both measured against tsgo
   (`build/scratch-p18188/cells`).** (a) TRUTHINESS narrowing (`narrowByTruthiness`) does not split `boolean`:
   after `if (on) return`, `on: boolean | string` reads `string | boolean` where tsgo reads `string | false`
   (`truth`) — COMMON in real code, so screen it and expect the grid to be a real gate; (b) an optional
@@ -1348,6 +1369,18 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   `getCovariantInference` widens literal candidates unless the type parameter's constraint is literal-ish;
   (b) a function-typed ALIAS as the SOURCE of an argument check is silent even with explicit type arguments
   (`grp6`/`grp7` line 7); plus (c) `null!` is not typed `never` (the census saw `Type 'null'` wording).
+
+- [ ] **(CHK.166) TRUTHINESS SIBLING DEFECTS FROM THE (CHK.164) CENSUS, each measured against tsgo
+  (`build/scratch-p18189-census/cells`).** (a) **an ENUM is washed to `never` in the FALSY branch** — a
+  member-less `Type.Object` counts as definitely truthy (`isDefinitelyTruthyMember` ~122141), so
+  `if (!k) { const s: string = k }` is SILENT where tsgo reports TS2322 (tsgo splits an enum by member value;
+  cells `en_ifF`, `en_retT`, `en_or`, `en_terF`, `en_else`, m3, m4) — a false-NEGATIVE class, highest value of
+  the five; (b) `Boolean(x)` narrows here and NOT in tsgo (~121801), losing rows (m1 TS2345, m2 TS18048);
+  (c) a falsy `object` constituent is not removed (`ou_*`, m6); (d) truthy `unknown` is not narrowed to `{}`
+  (m7); (e) `T extends boolean | string` is not narrowed through its constraint (`tp_*`). Also seen: a union
+  containing `bigint` against `never` is silent with no narrowing at all (c3, c4); the argument reader
+  elaborates the wrong constituent when two or more fail (tsgo names the first in type-id order); a literal
+  right operand of `x || true` is widened (m10).
 
 - [ ] **(CHK.151) RE-SCOPED BY ITS OWN CENSUS 2026-09-23 — THE RELATION DOES *NOT* READ THE MEMBER TABLE,
   AND THE DEFECT IS WIDER THAN FUNCTION MEMBERS.** `resolveReferenceMembers` (`MemberResolver.kt:762`)
