@@ -1,7 +1,8 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,278** lines (**+152 at (P18.198)**, a narrowed-receiver re-read, a union-parameter admission and
+extraction):** `Checker.kt` **201,310** lines (**+32 at (P18.199)**, a type-facts nullish test and two early returns — a SEMANTIC
+parity change removing a FALSE-POSITIVE class; **+152 at (P18.198)**, a narrowed-receiver re-read, a union-parameter admission and
 its chain — net of a verbatim split taking `checkArgumentsAgainstSignatureCore` 7,629 -> 4,297 bytecodes; **+26 at
 (P18.197)**, instantiated member reads in the intersection relation and
 its elaboration — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+42 at (P18.196)**, the `boolean` truthiness split and the join-time rejoin —
@@ -91,6 +92,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.199) — (CHK.170): `a ?? b` TYPES AS THE LEFT TYPE WHEN THE LEFT CANNOT BE NULLISH; +0 EVERYWHERE, 20,780 / 0 / 44 (2026-09-24).**
+`x ?? y` with a non-nullable `x` was typed `X | Y`, producing false positives (3 in the census cell, and the one row
+blocking (CHK.169)). A type-facts test mirroring tsgo's `EQUndefinedOrNull` (a type parameter answers through its
+constraint, an intersection only if every member can be nullish) now returns the left type for `??` and `??=`. 14-cell
+matrix: every row where the left cannot be nullish now matches tsgo; 8 pins. Screen 0; grid 8x0; cost_gate PASS;
+huge_methods 0. Next: (CHK.169), the module-class `this` false negatives.
+
 **(P18.198) — (CHK.152) STEP 3: A NARROWED-RECEIVER SECOND CHANCE AT THE ARGUMENT READER, THEN UNION / NULLABLE PARAMETERS; +0 EVERYWHERE, 20,772 / 0 / 44 (2026-09-24).**
 A named-object argument against a UNION parameter was never related. After a verbatim split of the argument checker
 (7,629 -> 4,297 bytecodes), a failing relation now re-reads a guard-narrowed receiver's member (never a replacement),
@@ -119,11 +127,4 @@ truthy branch kept `K.Zero`. `EnumSemantics.enumTruthiness` now classifies by me
 either) and `narrowByTruthiness` decomposes a whole enum only when a branch removes a proper subset. Exactly the
 census's prediction; two false positives on legal code closed; the naive shape (98 FPs) pinned out. 9 pins, five arms
 RED. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
-
-**(P18.194) — (CHK.168) ROUND 1: AN ANNOTATED ARROW'S EXPRESSION BODY IS RETURN-CHECKED; 28 CELLS FIXED, 0 FALSE POSITIVES, +0 EVERYWHERE, 20,742 / 0 / 44 (2026-09-24).**
-`const f = (x: string): number => x` was silent: the concise-body check ran on the spine, where the arrow's
-parameters were out of scope. The scoped walker now routes the body through the block-body return path (anchor +
-width as parameters; the spine check deleted). Getting harness to +0 fixed two pre-existing false-positive shapes
-(qualified `keyof typeof`, async ternaries related to `Promise<T>`). 20 pins, eight arms RED. Screen 0; grid 8x0;
-cost_gate PASS; huge_methods 0; spine audit clean. Class-property/`static`/default-export arrows are round 2.
 

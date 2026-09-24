@@ -25,6 +25,35 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.199) — (CHK.170): `a ?? b` / `a ??= b` type as the LEFT type when the left cannot be nullish; x05's 3 FPs gone, +0 everywhere (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.171) census running beside it. `mayBeNullishByTypeFacts`
+mirrors tsgo's `hasTypeFacts(t, TypeFactsEQUndefinedOrNull)` under strictNullChecks (`any` / `unknown` / error: yes;
+null / undefined / void: yes; union: any member; intersection: EVERY member — the fact is in tsgo's AND mask; type
+parameter: its CONSTRAINT decides, unconstrained yes; everything else no), and `combineBinaryTypes`' `??` and `??=`
+arms return the left type when it cannot be nullish (tsgo checker.go ~12484: `resultType := leftType`, union only if
+`hasTypeFacts(…)`); without strictNullChecks nothing changes (every type carries the fact there). **The queue item's
+rule was slightly too broad**: a type parameter answers through its constraint (`U extends string` -> `U ?? s` is `U`),
+`never` is not nullish. No other site types `??` (the other 36 `QuestionQuestion` sites are narrowing / contextual /
+walk code). A brand filter was built, measured REDUNDANT (a7 0 RED) and slightly worse than tsgo for
+`undefined & {…}`, and removed.
+
+**Matrix, 14 cells** (ours-only rows): x05 3 -> **0**, primitive left 2 -> 0, object left 2 -> 0, union left 1 -> 0,
+optional property 1 -> 0, `??=` 3 -> 1, the `session.ts:2158` shape 1 -> 0, literal left 3 -> 1, type parameter 3 -> 2;
+controls (nullable, void, non-strict) 0; every remaining ours-only row is WORDING where the left CAN be nullish, except
+c14's two pre-existing rows (the operand not narrowed to `never` at the argument reader after two `typeof … return`
+guards). Residues (display): `unknown ?? s` prints `unknown | string` (tsgo `{}`), `T ?? s` prints `T` (tsgo
+`NonNullable<T>`), no subtype reduction / literal generalization on a nullable left (`string | "a"` vs `string`).
+
+**Pins**: `NullishCoalescingLeftTypeTest`, 8 tests. Ablation: `??` return 4 RED; `??=` return 1; strictNullChecks gate
+1; type parameter always nullish 1; union any->all 1; any/unknown arm 0 (display-only, `any` absorbs either way).
+
+**Gates**: full suite **20,780 / 0 / 44** (+8); corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x `added=0 removed=0`;
+warning-clean. rxjs 0, marked 0, cronstrue 0 at its target-free config. Housekeeping: a stale paragraph copied from the
+(P18.180) grid driver into every later `scripts/p18-18x/19x-grid.sh` header was removed (19 files; comment-only).
+
+**Successor**: (CHK.169) — this was its prerequisite; its census predicts +0 everywhere with the class AND base lookups.
+
 ### Round (P18.198) — (CHK.152) step 3: a narrowed-receiver second chance at the argument reader, then UNION / nullable parameters admitted; harness +0, all 8 profiles byte-identical (2026-09-24)
 
 Orchestrated: one implementation subagent, with two read-only censuses finishing beside it — rxjs's last missed row
@@ -396,48 +425,6 @@ else within ±0.25%, output 46 = 46. **`rxjs` 3 -> 2** (`argsArgArrayOrObject.ts
 
 **Successor**: (CHK.167) — promoted to the top of the queue as the largest false-negative class found this
 session; census first.
-
-### Round (P18.189) — (CHK.157): the ELSE branch of an `if` narrows at the assignment and return readers — in the spine AND both legacy walks; `rxjs` 4 -> 3, 12 -> 45 agreeing rows (2026-09-23)
-
-Orchestrated: one implementation subagent, plus the (CHK.159) census landing into its item and a (CHK.164)
-census launched beside it. **The census named the wrong emitter**: for a function-DECLARATION body the rows
-come from the SPINE (`ctaSpineEnter`'s `ctaM3NarrowThen` registration), not the legacy
-`checkTypeAssignabilityInStmt` arm — ablating both legacy arms read 0 RED on every function-declaration
-fixture; the legacy arms emit only for arrow / function-expression / object-method bodies, so the fix is in
-all three. Also wider than stated: the RETURN and object-literal member readers were wrong too (declarations,
-arguments and property paths ask the flow walk and were right). **Two pre-existing bugs surfaced and were
-fixed**: `typeof x !== "…"` narrowed NOTHING even in a then-branch (`extractNullNarrowing`'s `!==` arm
-returned null before reaching the typeof arm — the else of `typeof x === "s"` negates into exactly that);
-and `else if` did not compound in the spine (the If's narrowing was registered before its own frame push).
-
-**The change (`Checker.kt` +197/−21)**: `extractElseNarrowings` flattens a `||` spine iteratively and negates
-each disjunct in order, each reading the previous result through a throwaway `EpochMap` copy (tsgo
-`narrowTypeByBinaryExpression` with `assumeTrue = false`); `negatedDisjunctNarrowing` (`negateCondition` for
-syntactic guards; `narrowByCallPredicate(…, isMatch = false)` for a type-guard call);
-`nullishEqualityNarrowing` (else of `x === undefined` / `x == null` narrows TO the nullish constituents);
-`any`/`never` answers refused; `withLegacyBranchNarrowings` reused for the else in both legacy If arms (else
-narrowings computed before the then-branch runs, matching the spine); `ctaSpineEnter` registers the else
-node's narrowing and registers the If's after its frame push; the `!==` fall-through. Spine closure audit
-clean (46 handlers, 40 audited); `cpaSpineLeave` untouched at 7,898.
-
-**Matrix, 22 cells**: agree 12 -> **45**, ours-only 40 -> 5, missing 37 -> 4; the arrow-body cell 0 -> 6 of
-6; NO shape added a row. Residues, all pre-existing: the else of an `&&` condition; the statement list after
-an `if` whose then EXITS and which HAS an else (the early-exit install handles only `elseStatement == null`);
-`typeof a && typeof b` in a then-branch (does not chain, by design); the object-literal elaboration display;
-`o: string` with `o !== undefined` — tsgo narrows the else to `never` and is silent, we report `string`.
-
-**Pins**: `ElseBranchNarrowingTest`, 20 tests, tsgo text (`Partial` declared locally). Ablation, ten arms:
-statement-list legacy install 3 RED (the arrow pins); nested legacy install 1; spine else registration 14;
-If registration before the frame push 1 (else-if chain); no `||` chaining 2; negated guard-call arm 2;
-`typeof !==` fall-through reverted 5; narrow-to-nullish 3; declared-type recording 1; **`never` refusal 0**
-— no reachable shape found, kept as a conservative barrier and recorded, not claimed.
-
-**Gates**: full suite **20,631 / 0 / 44** (+20); corpus screen 0 of 8,725 (+ `--include
-controlFlowInstanceof`, byte-identical on both arms); cost_gate PASS (`typeNode.bypassed` −0.49%, the rest
-within ±0.24%); huge_methods 0; spine closure audit clean; grid 8x `added=0 removed=0`; no `w:`.
-**`rxjs` 4 -> 3** (`Subscriber.ts:220`); `marked` 0.
-
-**Successor**: (CHK.158) (a type-guard predicate reached through a variable; rxjs `argsArgArrayOrObject:14`).
 
 ## QUEUE
 
@@ -1084,7 +1071,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   risk (CHK.63) recorded: a union source that is NARROWED at the site must not be reported by its declared
   type). Direction: ADDS rows; every added row must be a tsgo row, and the grid is likely a REAL gate.
 
-- [ ] **(CHK.170) `a ?? b` IS TYPED AS THE UNION WITH THE RIGHT SIDE EVEN WHEN THE LEFT CANNOT BE NULLISH — tsgo types
+- [x] **(CHK.170) LANDED 2026-09-24 ((P18.199) note; a type parameter answers through its constraint). `a ?? b` IS TYPED AS THE UNION WITH THE RIGHT SIDE EVEN WHEN THE LEFT CANNOT BE NULLISH — tsgo types
   it as the LEFT type (checker.go ~12484); ours unions in `b` (`combineBinaryTypes` ~135345). Ours-only rows today on
   parameters (cell `build/scratch-p18198-census/cells/x05`, 3 rows), and it is the one row blocking (CHK.169) at +0
   (`session.ts:2158` on harness/server). Fix: under `strictNullChecks`, when no member of the left type is null /

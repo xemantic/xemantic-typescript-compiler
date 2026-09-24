@@ -1,5 +1,12 @@
 
 
+**(P18.194) — (CHK.168) ROUND 1: AN ANNOTATED ARROW'S EXPRESSION BODY IS RETURN-CHECKED; 28 CELLS FIXED, 0 FALSE POSITIVES, +0 EVERYWHERE, 20,742 / 0 / 44 (2026-09-24).**
+`const f = (x: string): number => x` was silent: the concise-body check ran on the spine, where the arrow's
+parameters were out of scope. The scoped walker now routes the body through the block-body return path (anchor +
+width as parameters; the spine check deleted). Getting harness to +0 fixed two pre-existing false-positive shapes
+(qualified `keyof typeof`, async ternaries related to `Promise<T>`). 20 pins, eight arms RED. Screen 0; grid 8x0;
+cost_gate PASS; huge_methods 0; spine audit clean. Class-property/`static`/default-export arrows are round 2.
+
 **(P18.193) — (CHK.159) STEP 2: THE CONTEXTUAL-RETURN FALLBACK FOR A CALL'S RESULT TYPE; `rxjs` READS 0 OURS-ONLY ROWS FOR THE FIRST TIME, 20,722 / 0 / 44 (2026-09-24).**
 Type parameters left open by argument inference are now filled from the call's contextual type (argument first, as
 tsgo's priority rule), all-or-nothing and constraint-checked. The census's "optional" cost safeguard proved mandatory:

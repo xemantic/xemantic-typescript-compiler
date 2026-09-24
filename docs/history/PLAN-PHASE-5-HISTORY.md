@@ -1,5 +1,47 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.189) — (CHK.157): the ELSE branch of an `if` narrows at the assignment and return readers — in the spine AND both legacy walks; `rxjs` 4 -> 3, 12 -> 45 agreeing rows (2026-09-23)
+
+Orchestrated: one implementation subagent, plus the (CHK.159) census landing into its item and a (CHK.164)
+census launched beside it. **The census named the wrong emitter**: for a function-DECLARATION body the rows
+come from the SPINE (`ctaSpineEnter`'s `ctaM3NarrowThen` registration), not the legacy
+`checkTypeAssignabilityInStmt` arm — ablating both legacy arms read 0 RED on every function-declaration
+fixture; the legacy arms emit only for arrow / function-expression / object-method bodies, so the fix is in
+all three. Also wider than stated: the RETURN and object-literal member readers were wrong too (declarations,
+arguments and property paths ask the flow walk and were right). **Two pre-existing bugs surfaced and were
+fixed**: `typeof x !== "…"` narrowed NOTHING even in a then-branch (`extractNullNarrowing`'s `!==` arm
+returned null before reaching the typeof arm — the else of `typeof x === "s"` negates into exactly that);
+and `else if` did not compound in the spine (the If's narrowing was registered before its own frame push).
+
+**The change (`Checker.kt` +197/−21)**: `extractElseNarrowings` flattens a `||` spine iteratively and negates
+each disjunct in order, each reading the previous result through a throwaway `EpochMap` copy (tsgo
+`narrowTypeByBinaryExpression` with `assumeTrue = false`); `negatedDisjunctNarrowing` (`negateCondition` for
+syntactic guards; `narrowByCallPredicate(…, isMatch = false)` for a type-guard call);
+`nullishEqualityNarrowing` (else of `x === undefined` / `x == null` narrows TO the nullish constituents);
+`any`/`never` answers refused; `withLegacyBranchNarrowings` reused for the else in both legacy If arms (else
+narrowings computed before the then-branch runs, matching the spine); `ctaSpineEnter` registers the else
+node's narrowing and registers the If's after its frame push; the `!==` fall-through. Spine closure audit
+clean (46 handlers, 40 audited); `cpaSpineLeave` untouched at 7,898.
+
+**Matrix, 22 cells**: agree 12 -> **45**, ours-only 40 -> 5, missing 37 -> 4; the arrow-body cell 0 -> 6 of
+6; NO shape added a row. Residues, all pre-existing: the else of an `&&` condition; the statement list after
+an `if` whose then EXITS and which HAS an else (the early-exit install handles only `elseStatement == null`);
+`typeof a && typeof b` in a then-branch (does not chain, by design); the object-literal elaboration display;
+`o: string` with `o !== undefined` — tsgo narrows the else to `never` and is silent, we report `string`.
+
+**Pins**: `ElseBranchNarrowingTest`, 20 tests, tsgo text (`Partial` declared locally). Ablation, ten arms:
+statement-list legacy install 3 RED (the arrow pins); nested legacy install 1; spine else registration 14;
+If registration before the frame push 1 (else-if chain); no `||` chaining 2; negated guard-call arm 2;
+`typeof !==` fall-through reverted 5; narrow-to-nullish 3; declared-type recording 1; **`never` refusal 0**
+— no reachable shape found, kept as a conservative barrier and recorded, not claimed.
+
+**Gates**: full suite **20,631 / 0 / 44** (+20); corpus screen 0 of 8,725 (+ `--include
+controlFlowInstanceof`, byte-identical on both arms); cost_gate PASS (`typeNode.bypassed` −0.49%, the rest
+within ±0.24%); huge_methods 0; spine closure audit clean; grid 8x `added=0 removed=0`; no `w:`.
+**`rxjs` 4 -> 3** (`Subscriber.ts:220`); `marked` 0.
+
+**Successor**: (CHK.158) (a type-guard predicate reached through a variable; rxjs `argsArgArrayOrObject:14`).
+
 ### Round (P18.188) — (CHK.156): equality and `switch` narrowing split `boolean` into `true | false`; `rxjs` 5 -> 4 (2026-09-23)
 
 Orchestrated: one implementation subagent, plus a parallel read-only census of (CHK.159) (running at commit).
