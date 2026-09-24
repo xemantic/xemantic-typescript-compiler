@@ -1,5 +1,63 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.191) — (CHK.159) step 1: an ARGUMENT-inference leg for a call's RESULT type; `rxjs` 2 -> 1, profiles +0 — and a +10% cost-counter blowup attributed and removed before commit (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.167) and (CHK.168) read-only censuses running beside
+it (both now specify their first rounds in their items). **The census's "+2 rows per profile" was not what
+building it gave**: following tsgo (substitute the constraint when a single-signature constraint check fails)
+read **+14/+15 rows on every profile** — 13 from checking a candidate that is the CALLER's own type parameter
+(`setTextRange(range, …)` inside `<T extends TextRange>`: our relation fails `T -> constraint` where tsgo
+accepts) and one (CHK.162) intersection-vs-union row — so a single-signature constraint failure keeps today's
+raw return (tsgo substitutes; recorded divergence, pin `s06`). "Substitute only what it finds" was UNSAFE: a
+raw type parameter left behind collided by name with the caller's (rxjs `combineLatest.ts:30`), so the leg
+is ALL-OR-NOTHING over the type parameters the return type mentions. `parser.ts:4147` needed a pre-existing
+`NonNullable<U> = U & {}` over a union to reduce (`reduceUnionAndEmptyObjectIntersection` from
+`getIntersectionType`, a false-positive family reachable with no inference at all), which exposed the id-keyed
+first-wins alias display renaming every `Nd` program-wide — guarded too. `ctxReturnInferInto`'s depth cap of 4
+is too shallow for arguments (`Promise<string>` vs `T | PromiseLike<T>` needs 5): the argument leg uses 6.
+tsgo's widening, measured: widen only when every inference was top-level; keep a literal when the call's
+contextual type makes it literal-ish.
+
+**THE COST GATE CAUGHT A REAL BLOWUP AND IT WAS FIXED, NOT REBASELINED**: the first binary read
+`typeNode.bypassed` **+10.22%** (+15,488). Attributed arm by arm (the builder, resumed): leg off -> +27;
+`NonNullable` reduction +27; alias guard 0; depth 0 — ~17,974 bypassed resolutions inside the leg's
+`ctxReturnInferInto`, from pairs like `NodeArray<X>` / `readonly T[]` / `Statement[]` against `T[]` falling
+through to MEMBER-BY-MEMBER matching (~30 array methods re-resolved on both sides under an instantiation
+context, the uncacheable path). tsgo's `inferFromTypes` pairs two array types by ELEMENT directly; the walk
+now does too (a subclass's element through `arrayElementTypeOfSubclass`), gated to the argument leg by
+`argInferWalk` so the contextual leg is byte-identical. A per-pair memo was tried and saved nothing (all cost
+was first-time pairs). Final: **+0.15%**; warm BenchMain before/final 7,290/7,249 vs 7,092/7,208 ms — no
+measurable cost.
+
+**The change (`Checker.kt` +317/−4 net of the fix)**: `argInferResultTypeArguments` / `argInferResultType` /
+`argInferOverloadResultType` (a constraint failure moves to the next generic overload) and small helpers
+(context-sensitivity skip, literal-keep, top-level test, primitive-constraint test, widening);
+`ctxSameLiteral` (identical literal constituents matched by value, `checker.ts:50978`); `ctxInferMaxDepth`;
+the element-pairing shortcut; the `NonNullable` reduction; the alias-display guard.
+`getReturnTypeOfCallExpressionCore` 2,593 -> 2,641 bytecodes.
+
+**Matrix, 47 census cells**: match 3 -> 10, match-but-`.nope` 10 -> 25 (the `(f(n)).nope` blindness is
+separate), differ 34 -> 12; flipped as predicted c01-c08, c11, c19, c20, c22-c24, c26, c27, c32, c33, c36,
+c37, c40, race1/10/11; safeguard cells s02-s04, s08-s10 exact. Residues: tsgo's `unknown` for an unbound TP /
+a generic function argument (c10, c16, c18); no second pass for context-sensitive arguments (s07, p17);
+single-signature constraint substitution (s06); `NonNullable` reduced only for the two-part shape; later
+steps (base-type/index-signature inference c29/c30/c34/c35; the `ctxReturnTypeParamMapper` fallback for
+`groupBy.ts:147`). **A countdown pin exists**: `InferredIntersectionTpConstraintTest`'s "only a SATISFYING
+constraint makes the inference bind" asserts silence where tsgo reports `NodeArrayX<NodeX>` — green only
+because of the no-substitution choice.
+
+**Pins**: `ArgumentResultInferenceTest`, 15 tests (4 controls). Ablation: widening 2 RED; literal-by-value 1;
+overload fall-through 1; all-or-nothing 1; depth 4 1; `NonNullable` 2; alias guard 1; contextual literal-keep
+1; whole leg 10; the out-of-scope refusal halves, the bare-TP constraint skip and the context-sensitive skip
+**0** — redundant with all-or-nothing / the kept raw return on these fixtures, recorded.
+
+**Gates** (final binary `7769c37a`): full suite **20,665 / 0 / 44** (+15), run on both binaries; corpus screen
+0 of 8,725 (5 inference pending baselines byte-identical); cost_gate PASS (+0.15% / +0.72% typeOfExpr);
+huge_methods 0; grid 8x `added=0 removed=0` — a real gate here; no `w:`. **`rxjs` 2 -> 1**
+(`race.ts:52`; left: `groupBy.ts:147`, step 2); `marked` 0.
+
+**Successor**: (CHK.167) round 1 (union source vs object target, specified, +0 predicted).
+
 ### Round (P18.190) — (CHK.158): a type guard reached through a VALUE narrows — the predicate is read from the callee's signature; `rxjs` 3 -> 2 (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.164) census folding into its item beside it.

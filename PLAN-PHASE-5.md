@@ -25,6 +25,42 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.201) — (CHK.171) R1: constructor / setter frames and nested-function frames keep the type-parameter scope; 13 rows closed, +0 everywhere (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.172) census (recorded in its item) and the (CHK.173) census
+running beside it. `ctaFnBodyFrame` reads `outerTpScope = ctaEnclosingTpScope()` before pushing the frame; the Block
+branch starts from it (was `currentTypeParamScope`), and the constructor/setter branch builds a scope from it plus the
+class type parameters, sets `fnTpScope`/`fnTpDecls`, and runs the (unchanged) seeds under it. New helpers
+`ctaEnclosingTpScope` (nearest enclosing `fnTpScope`, stopping at a namespace body or the file), `ctaBuildTpScope`
+(the Block branch's inline code, shared; class TPs first, own after, so inner names win), `ctaCtorSetterSeeds`. tsgo
+has no frames — `resolveNameHelper` walks the parent chain and takes the innermost declaring container, which the
+chain + shadowing order reproduce. **Where the census/brief was wrong**: the nested-function seed must WALK outward to
+the nearest frame with a scope (block/clause/narrowing frames carry none until R4, so reading `ctaFrames.last()` alone
+would leave a function nested in an `if` as blind as before); `fnTpDecls` is set only on ctor/setter frames (the
+census's B14 run had copied it everywhere); **"0 rows everywhere" does not hold on hand-written shapes** — two
+pre-existing FP kinds now also fire inside ctor / setter / nested bodies (none on any profile or library): a type
+parameter constrained to a primitive rejected against that primitive at the declaration/return readers — **a false
+positive on HEAD at a function's top level too, re-probed by the orchestrator and filed as (CHK.174)** — and static
+setters reporting TS2322 for a class TP where tsgo reports only TS2302 (as static methods already did).
+
+**Matrix, 55 cells**: 69 agree / 215 missing -> **82 / 202** — exactly the 13 predicted closures (`ctor_top` x3,
+`set_top` x3, `cm_nestedfn` x3, `f_nestedfn` x2, `nest_own_tp`, `nest_class_in_fn`), nothing else moved; extra pin cells
+24 agree vs 8 before.
+
+**Pins**: `CtaFrameTypeParamScopeTest`, 23 tests (16 red on the before binary; one renamed `control -` — a nested
+generic arrow already saw the outer TPs). Ablation: ctor/setter scope not built 10 RED; seeds not under it 5; nested
+from the resting scope 6; own TPs before class TPs 1; outer layered over own 3 (the shadowing pins).
+
+**Gates**: full suite **20,814 / 0 / 44** (+23); corpus screen 0 of 8,725; huge_methods 0 (`cpaSpineLeave` 7,898
+unchanged); grid 8x `added=0 removed=0` (a control — no counter proves the change fires there); warning-clean.
+**cost_gate FAILED on one counter and was rebaselined in this commit**: `mapped.hits` +5.17% vs the recorded baseline
+(+3.1%, 7,253 -> 7,481, vs the rebuilt before-arm; `mapped.keyed` +1.1%) — constructor / setter / nested bodies now
+resolve type annotations with a scope in place, served from the mapped cache (HITS, the cheap path). rxjs 0, marked 0,
+cronstrue 1. Residues: (CHK.174); the static-setter TS2322; ctor/setter ARGUMENT probes still miss (accessors push no
+argument-reader frame); member reads on a type parameter never report TS2339; R2-R4.
+
+**Successor**: (CHK.174) (small FP), then (CHK.173) once its census lands.
+
 ### Round (P18.200) — (CHK.169): a MODULE-file class is resolved through its own symbol (and its base through the per-file view) at the argument reader, so `this` is typed; 25 cells, 0 FPs, +0 everywhere (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.171) census landing beside it (recorded in its item).
@@ -355,64 +391,6 @@ warning-clean after fixing one `w:` the orchestrator's own re-pin introduced. `r
 `cronstrue` 0.
 
 **Successor**: (CHK.159) step 2 (specified; rxjs predicted 1 -> 0 ours-only, +0 elsewhere).
-
-### Round (P18.191) — (CHK.159) step 1: an ARGUMENT-inference leg for a call's RESULT type; `rxjs` 2 -> 1, profiles +0 — and a +10% cost-counter blowup attributed and removed before commit (2026-09-24)
-
-Orchestrated: one implementation subagent, with the (CHK.167) and (CHK.168) read-only censuses running beside
-it (both now specify their first rounds in their items). **The census's "+2 rows per profile" was not what
-building it gave**: following tsgo (substitute the constraint when a single-signature constraint check fails)
-read **+14/+15 rows on every profile** — 13 from checking a candidate that is the CALLER's own type parameter
-(`setTextRange(range, …)` inside `<T extends TextRange>`: our relation fails `T -> constraint` where tsgo
-accepts) and one (CHK.162) intersection-vs-union row — so a single-signature constraint failure keeps today's
-raw return (tsgo substitutes; recorded divergence, pin `s06`). "Substitute only what it finds" was UNSAFE: a
-raw type parameter left behind collided by name with the caller's (rxjs `combineLatest.ts:30`), so the leg
-is ALL-OR-NOTHING over the type parameters the return type mentions. `parser.ts:4147` needed a pre-existing
-`NonNullable<U> = U & {}` over a union to reduce (`reduceUnionAndEmptyObjectIntersection` from
-`getIntersectionType`, a false-positive family reachable with no inference at all), which exposed the id-keyed
-first-wins alias display renaming every `Nd` program-wide — guarded too. `ctxReturnInferInto`'s depth cap of 4
-is too shallow for arguments (`Promise<string>` vs `T | PromiseLike<T>` needs 5): the argument leg uses 6.
-tsgo's widening, measured: widen only when every inference was top-level; keep a literal when the call's
-contextual type makes it literal-ish.
-
-**THE COST GATE CAUGHT A REAL BLOWUP AND IT WAS FIXED, NOT REBASELINED**: the first binary read
-`typeNode.bypassed` **+10.22%** (+15,488). Attributed arm by arm (the builder, resumed): leg off -> +27;
-`NonNullable` reduction +27; alias guard 0; depth 0 — ~17,974 bypassed resolutions inside the leg's
-`ctxReturnInferInto`, from pairs like `NodeArray<X>` / `readonly T[]` / `Statement[]` against `T[]` falling
-through to MEMBER-BY-MEMBER matching (~30 array methods re-resolved on both sides under an instantiation
-context, the uncacheable path). tsgo's `inferFromTypes` pairs two array types by ELEMENT directly; the walk
-now does too (a subclass's element through `arrayElementTypeOfSubclass`), gated to the argument leg by
-`argInferWalk` so the contextual leg is byte-identical. A per-pair memo was tried and saved nothing (all cost
-was first-time pairs). Final: **+0.15%**; warm BenchMain before/final 7,290/7,249 vs 7,092/7,208 ms — no
-measurable cost.
-
-**The change (`Checker.kt` +317/−4 net of the fix)**: `argInferResultTypeArguments` / `argInferResultType` /
-`argInferOverloadResultType` (a constraint failure moves to the next generic overload) and small helpers
-(context-sensitivity skip, literal-keep, top-level test, primitive-constraint test, widening);
-`ctxSameLiteral` (identical literal constituents matched by value, `checker.ts:50978`); `ctxInferMaxDepth`;
-the element-pairing shortcut; the `NonNullable` reduction; the alias-display guard.
-`getReturnTypeOfCallExpressionCore` 2,593 -> 2,641 bytecodes.
-
-**Matrix, 47 census cells**: match 3 -> 10, match-but-`.nope` 10 -> 25 (the `(f(n)).nope` blindness is
-separate), differ 34 -> 12; flipped as predicted c01-c08, c11, c19, c20, c22-c24, c26, c27, c32, c33, c36,
-c37, c40, race1/10/11; safeguard cells s02-s04, s08-s10 exact. Residues: tsgo's `unknown` for an unbound TP /
-a generic function argument (c10, c16, c18); no second pass for context-sensitive arguments (s07, p17);
-single-signature constraint substitution (s06); `NonNullable` reduced only for the two-part shape; later
-steps (base-type/index-signature inference c29/c30/c34/c35; the `ctxReturnTypeParamMapper` fallback for
-`groupBy.ts:147`). **A countdown pin exists**: `InferredIntersectionTpConstraintTest`'s "only a SATISFYING
-constraint makes the inference bind" asserts silence where tsgo reports `NodeArrayX<NodeX>` — green only
-because of the no-substitution choice.
-
-**Pins**: `ArgumentResultInferenceTest`, 15 tests (4 controls). Ablation: widening 2 RED; literal-by-value 1;
-overload fall-through 1; all-or-nothing 1; depth 4 1; `NonNullable` 2; alias guard 1; contextual literal-keep
-1; whole leg 10; the out-of-scope refusal halves, the bare-TP constraint skip and the context-sensitive skip
-**0** — redundant with all-or-nothing / the kept raw return on these fixtures, recorded.
-
-**Gates** (final binary `7769c37a`): full suite **20,665 / 0 / 44** (+15), run on both binaries; corpus screen
-0 of 8,725 (5 inference pending baselines byte-identical); cost_gate PASS (+0.15% / +0.72% typeOfExpr);
-huge_methods 0; grid 8x `added=0 removed=0` — a real gate here; no `w:`. **`rxjs` 2 -> 1**
-(`race.ts:52`; left: `groupBy.ts:147`, step 2); `marked` 0.
-
-**Successor**: (CHK.167) round 1 (union source vs object target, specified, +0 predicted).
 
 ## QUEUE
 
@@ -1059,7 +1037,58 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   risk (CHK.63) recorded: a union source that is NARROWED at the site must not be reported by its declared
   type). Direction: ADDS rows; every added row must be a tsgo row, and the grid is likely a REAL gate.
 
-- [ ] **(CHK.172) UNDER `emitDeclarationOnly` THE COMPILER REPORTS NO DIAGNOSTICS AT ALL — found by (P18.200)'s builder
+- [ ] **(CHK.174) A TYPE PARAMETER CONSTRAINED TO A PRIMITIVE IS REJECTED AGAINST THAT PRIMITIVE AT THE DECLARATION AND
+  RETURN READERS — A FALSE POSITIVE ON LEGAL GENERIC CODE, ON HEAD (found by (P18.201)'s builder, re-probed 2026-09-24
+  by the orchestrator, `build/scratch-orch-18048`).** `function g<T extends number>(k: T) { const n: number = k }` and
+  `function g<T extends number>(k: T): number { return k }` report `TS2322: Type 'T' is not assignable to type
+  'number'.` where tsgo is silent; the ASSIGNMENT reader (`s = k` with `T extends string`) and an OBJECT constraint are
+  fine, and the argument reader is fine. So the declaration / return readers' primitive-target path does not consult a
+  type parameter's constraint (tsgo relates a type parameter source through its constraint, `structuredTypeRelatedTo` /
+  `getConstraintOfType`). Not on the profiles (no such shape) but common in real generic code; (P18.201)'s (CHK.171)
+  R1 made it reachable in constructor / setter / nested bodies too. Direction: REMOVES rows. Small — find the reader
+  gate, measure, pin both readers plus a genuinely-mismatched constraint control (`T extends string` -> `number` must
+  still report).
+
+- [ ] **(CHK.173) A PROPERTY ACCESS OR METHOD CALL ON A NULLABLE *IDENTIFIER* NEVER REPORTS TS18047 / TS18048 ("'x' is
+  possibly 'null' / 'undefined'") — THE MOST COMMON strictNullChecks ERROR (found by the (CHK.172) census, re-probed
+  2026-09-24 by the orchestrator, `build/scratch-orch-18048`, script AND module files).** tsgo reports, ours is silent,
+  for `function f(x: string | null) { return x.length }`, `x.toUpperCase()`, an optional parameter `x?: string`,
+  `string | undefined`, a `declare const`, a body-local; ours DOES report for a member path (`o.p.q` with optional
+  `p`), an element access (`x[0]`) and a call of a nullable (TS2722). So the identifier-receiver arm of the
+  property-access nullability check is missing or gated off. **For an embeddable checker this is the single most visible
+  false negative found**. Census first: which reader emits TS18048 for `o.p.q` and why an identifier receiver does not
+  reach it; the flow-narrowing interplay (a narrowed `x` after `if (x)` / `x!` / `x?.` must stay silent — (CHK.164)'s
+  truthiness split and (P18.189)'s else-branch narrowing are the relevant machinery); population on the 8 profiles and
+  libraries with a JDI force arm (expect FPs wherever our narrowing is still incomplete — each is its own gap); the
+  corpus (surprisingly green on this — find out which pin walkers carry TS18047/TS18048 baselines). Direction: ADDS
+  rows; the grid is likely a REAL gate.
+
+- [ ] **(CHK.172) CENSUSED 2026-09-24 (read-only, frozen (P18.200) classes, `build/scratch-p18201-census/`, README.txt) —
+  THE FIX IS "RUN THE NORMAL PIPELINE, DISCARD ONLY THE JS OUTPUT", AND `noCheck` MUST LAND WITH IT.** `TypeScriptCompiler.kt`
+  early-returns in both branches (single ~1212, multi ~1378) with `Checker(..., declarationOnly = true)`; `Checker`
+  runs `initDeclarationOnlyPasses()` instead of `initCheckPasses1..8` (and the replay path ~8220 likewise), so
+  `checkSpine` never runs and all assignability / argument / property / arity / flow / unused checks are skipped. The
+  multi-file branch additionally drops `.d.ts` files from the program, parses `.json` (incl. `package.json`) as
+  TypeScript (TS1005 FPs), and passes no `moduleResolutions` / `allInputFileNames` / `jsonModuleContents`. History:
+  `01d90061` (2026-03-27) "targeted checks without full diagnostic suite to avoid FPs like TS6131" — a workaround for an
+  immature checker, not perf or harness; later rounds each added one check back. tsgo's checker never reads
+  `EmitDeclarationOnly` (`program.go` option check + output paths only). Matrix 28 cells: tsgo plain == edo in all 28;
+  ours loses every plain row in 20; **the arm (normal pipeline, emit restricted) matches ours-plain in all 28 and all 8
+  profiles** (harness 84 -> 94 = plain). Corpus: 77 active `@emitDeclarationOnly` invocations, 14 with an errors
+  baseline; the arm moves **1 of 3,079** — `reuseTypeAnnotationImportTypeInGlobalThisTypeArgument` gains a `.d.ts`
+  TS2305, a PLAIN-mode FP (named import of a JSDoc `@typedef` from a `.js` module; `side/typedef`, tsgo silent) — fix it
+  first or file it pending. The 63 baseline-less invocations (driven by `driver/EdoDrive`): 4 improve
+  (TS2304 / TS2552 / 6 and 13 `package.json` TS1005 FPs removed), 3 worsen (TS8010 in
+  `jsDeclarationEmitDoesNotRenameImport` — a plain-mode bug; 4 TS2300 in `declarationEmitHigherOrderRetainedGenerics`;
+  TS2322 in `noCheckDoesNotReportError`). **`noCheck` is parsed (`CompilerOptions.kt` ~1144) and NEVER READ** — it
+  already reports in plain mode; tsgo skips type checking under it (`program.go` ~691 `SkipTypeChecking`): suppress the
+  checker's semantic diagnostics, keep parser/option ones. Cost: ~5 s -> 28-43 s per profile under edo (correct — tsgo
+  pays the full check). Countdown pins: `CtorSplitTest` "GUARD seam" (asserts no TS6133 under edo; tsgo reports it),
+  `CtorSplitTest`'s other declarationOnly pin and `Inv4SpineBatch16Test`'s edo pin; should stay green:
+  `Ts2683InJsFilesTest`, `TsgoStep16OursOnlyTest` M2, `JsCommonJsExportModelTest`. Then DELETE `declarationOnly`,
+  `initDeclarationOnlyPasses`, `checkDeclarationOnlySpineFamilies`, `spineUResOnly`/`spineDeclOnlyFamilies`, the replay
+  branch. Side findings: TS2365 / TS2367 missing (c18, c25); c13's extra TS2391/TS7010/TS2300/TS2842; TS9039 vs TS9007
+  under isolatedDeclarations (c23); **and (CHK.173)**. EARLIER: UNDER `emitDeclarationOnly` THE COMPILER REPORTS NO DIAGNOSTICS AT ALL — found by (P18.200)'s builder
   (argument checks), re-probed 2026-09-24 by the orchestrator (`build/scratch-orch-edo`): `pn("x")` and
   `const n: number = "s"` with `declaration` + `emitDeclarationOnly` are TS2345 + TS2322 in tsgo and **0** here.**
   CLAUDE.md records the mechanism's outline: `emitDeclarationOnly` takes the `declarationOnly` WHITELIST path where
@@ -1079,7 +1108,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   undefined / void / any / unknown / a type parameter, answer the left type. Predicted: removes x05's FPs, 0 elsewhere
   (not yet run alone). Small; land it immediately before (CHK.169).
 
-- [ ] **(CHK.171) CENSUSED 2026-09-24 (read-only, frozen (P18.198) classes, `build/scratch-p18199-census/`,
+- [ ] **(CHK.171) R1 LANDED 2026-09-24 ((P18.201) note; 13 rows, +0). OPEN: R2 (P1), R3 (P2), R4 (block/clause/narrowing frames). CENSUSED 2026-09-24 (read-only, frozen (P18.198) classes, `build/scratch-p18199-census/`,
   README.txt, `jdi/Arms5.java`) — THE READING IS CONFIRMED; FOUR ROUNDS, R1 LANDS AT +0 NOW.** The statement anchor
   installs `frame.fnTpScope ?: sTpScope` (~3341) and `sTpScope` was NULL at all 58,581 anchors on the project
   profile, so any frame without its own `fnTpScope` resolves `T` to `any`; `fnTpScope` is set in ONE place (the

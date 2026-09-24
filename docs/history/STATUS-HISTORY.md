@@ -1,5 +1,12 @@
 
 
+**(P18.196) — (CHK.164) STEP 1: TRUTHINESS NARROWING SPLITS `boolean`, AND A FLOW JOIN REJOINS `true | false`; 8 FALSE POSITIVES GONE, 20,756 / 0 / 44 (2026-09-24).**
+After `if (x) return`, `x: boolean | string` now reads `string | false` as in tsgo, closing false positives such as
+`const r: string | false = x`. The census's patch alone would have added a tsgo divergence (a joined `false | true`
+elaborated member by member); a rejoin at flow joins where the declared type holds `boolean` fixes it, plus one
+pre-existing case. Declaration matrix 25 -> 0 differing; 5 pins, five arms RED. Screen 0; grid 8x0 (full output
+byte-identical); cost_gate PASS; huge_methods 0.
+
 **(P18.195) — (CHK.166)(a) STEP 1: VALUE-AWARE ENUM TRUTHINESS — AN ENUM IS NO LONGER WASHED TO `never`; 193 -> 639 OF 660 CELLS, BYTE-IDENTICAL ON EVERY INSTRUMENT, 20,751 / 0 / 44 (2026-09-24).**
 Every enum type counted as definitely truthy, so `if (!k)` washed `k` to `never` and silenced real errors, while the
 truthy branch kept `K.Zero`. `EnumSemantics.enumTruthiness` now classifies by member value (0/NaN/"" falsy, opaque

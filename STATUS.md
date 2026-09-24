@@ -1,7 +1,8 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,347** lines (**+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
+extraction):** `Checker.kt` **201,424** lines (**+77 at (P18.201)**, an enclosing-scope walk and a shared scope builder for
+constructor / setter / nested frames — a SEMANTIC parity change closing a silent-`any` class; **+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
 at the argument reader — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.199)**, a type-facts nullish test and two early returns — a SEMANTIC
 parity change removing a FALSE-POSITIVE class; **+152 at (P18.198)**, a narrowed-receiver re-read, a union-parameter admission and
 its chain — net of a verbatim split taking `checkArgumentsAgainstSignatureCore` 7,629 -> 4,297 bytecodes; **+26 at
@@ -93,6 +94,14 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.201) — (CHK.171) R1: CONSTRUCTOR / SETTER AND NESTED-FUNCTION FRAMES KEEP THE TYPE-PARAMETER SCOPE; 13 ROWS CLOSED, +0 EVERYWHERE, 20,814 / 0 / 44 (2026-09-24).**
+A class's type parameters were out of scope in its constructor and setters, and an outer function's in a nested
+function, so `T[]` read `any[]` and silently hid errors. Frames now build their scope from the nearest enclosing one
+plus the class's type parameters, inner names shadowing. Matrix 69 -> 82 agree, exactly the predicted 13; 23 pins.
+Screen 0; grid 8x0; huge_methods 0; cost_gate `mapped.hits` +3.1% (cache hits), rebaselined. Found and filed: **(CHK.174),
+`T extends number` rejected against `number` at the declaration/return readers — a false positive on HEAD**; and **(CHK.173),
+`x.length` on a nullable identifier never reports "possibly null"**, the most common strict-mode error.
+
 **(P18.200) — (CHK.169): INSIDE A MODULE-FILE CLASS, `this` IS TYPED AT THE ARGUMENT READER; 25 CELLS CLOSED, +0 EVERYWHERE, 20,791 / 0 / 44 (2026-09-24).**
 `export class C { s = "x"; m() { pn(this.s); } }` was silent — the class was looked up only in `globals`, which never
 holds a module file's declarations (and `export class Map` got the lib `Map`). The class now resolves through its own
@@ -121,11 +130,4 @@ generic target's members raw (`T` as errorType), and the elaboration named a mem
 Both now read `getPropertyTypeForRelation`; a union constituent makes the contradiction check undecidable. 14 cells
 closed, 9 must-report controls held; 7 pins, seven arms RED. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
 Unblocks (CHK.152) step 3's third harness row.
-
-**(P18.196) — (CHK.164) STEP 1: TRUTHINESS NARROWING SPLITS `boolean`, AND A FLOW JOIN REJOINS `true | false`; 8 FALSE POSITIVES GONE, 20,756 / 0 / 44 (2026-09-24).**
-After `if (x) return`, `x: boolean | string` now reads `string | false` as in tsgo, closing false positives such as
-`const r: string | false = x`. The census's patch alone would have added a tsgo divergence (a joined `false | true`
-elaborated member by member); a rejoin at flow joins where the declared type holds `boolean` fixes it, plus one
-pre-existing case. Declaration matrix 25 -> 0 differing; 5 pins, five arms RED. Screen 0; grid 8x0 (full output
-byte-identical); cost_gate PASS; huge_methods 0.
 
