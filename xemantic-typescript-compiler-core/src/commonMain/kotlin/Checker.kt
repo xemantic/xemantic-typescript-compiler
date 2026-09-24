@@ -3617,6 +3617,9 @@ class Checker(
         // at every one of the eight call sites, so the scope opens exactly where
         // the copy used to be taken; the caller pushes the returned frame
         // immediately, which is what keeps push and pop paired.
+        // (CHK.171) R1 — the ENCLOSING type-parameter scope, read before this frame
+        // exists: see [ctaEnclosingTpScope].
+        val outerTpScope = ctaEnclosingTpScope()
         FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, 0)
         ctaVarScope.push()
         // (WARM.18b) round 892 — the localTypes family likewise. The three
@@ -3698,29 +3701,8 @@ class Checker(
                 // the gated arm printed `{ v: any; }` for the second.
                 val scopedClassTps = classTps.orEmpty()
                 val fnScope = if (!tps.isNullOrEmpty() || scopedClassTps.isNotEmpty()) {
-                    val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
-                    val newTps = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
-                    for (tp in scopedClassTps + tps.orEmpty()) {
-                        val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
-                            val p = Type.TypeParam()
-                            p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                            p
-                        }
-                        scope[tp.name.text] = typeParam
-                        newTps.add(tp to typeParam)
-                    }
-                    withInstantiationContext(scopeMapper(scope)) {
-                        for ((tp, typeParam) in newTps) {
-                            if (typeParam.constraint == null) {
-                                tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
-                            }
-                            if (typeParam.default == null) {
-                                tp.default?.let { typeParam.default = getTypeFromTypeNode(it) }
-                            }
-                        }
-                    }
-                    scope
-                } else currentTypeParamScope
+                    ctaBuildTpScope(outerTpScope, scopedClassTps + tps.orEmpty())
+                } else outerTpScope
                 frame.fnTpScope = fnScope
                 withInstantiationContext(scopeMapper(fnScope)) {
                     // (cta-m3m): the checkFunctionBody param-loop EMISSION
@@ -3771,29 +3753,124 @@ class Checker(
                 repeat(sandwichNsPushed) { inferenceNamespaceStack.removeLast() }
             }
         } else {
-            for (param in parameters) {
-                val pt = param.type ?: paramTypeFallback ?: continue
-                val pn = param.name as? Identifier ?: continue
-                if (param.dotDotDotToken && nonArrayKeywordText(pt) != null) continue
-                resolveSimpleTypeName(pt)?.let { inner[pn.text] = it }
+            // (CHK.171) R1 (d) — a constructor / setter frame is built WITHOUT
+            // checkFunctionBody, and until this round it built no type-parameter scope at
+            // all: the statement anchor then installed the null resting scope, so a class
+            // TP read `any` in the body, and the `this.$prop` / parameter seeds below were
+            // resolved with no scope either (`this.v: T[]` seeded as `any[]`, which relates
+            // to nearly everything — (CHK.161)(a)). The scope is the Block branch's, built
+            // the same way: the enclosing scope, then the class TPs. tsgo has no frames —
+            // `resolveNameHelper` walks `location.Parent` and a class's TPs are found from
+            // any member body (`binder/nameresolver.go`, the ClassDeclaration arm), which
+            // is exactly what this reproduces for the two member kinds that lacked it.
+            val ctorScope = if (!classTps.isNullOrEmpty()) ctaBuildTpScope(outerTpScope, classTps)
+                else outerTpScope
+            frame.fnTpScope = ctorScope
+            frame.fnTpDecls = if (!classTps.isNullOrEmpty()) {
+                val decls = base.fnTpDecls?.toMutableMap() ?: mutableMapOf()
+                for (tp in classTps) decls[tp.name.text] = tp
+                decls
+            } else base.fnTpDecls
+            withInstantiationContext(scopeMapper(ctorScope)) { ctaCtorSetterSeeds(
+                frame, inner, parameters, seedClass, paramTypeFallback) }
+        }
+        return frame
+    }
+
+    /** (CHK.171) R1 — the constructor / setter frame's legacy seeds, run by the caller
+     *  UNDER the frame's type-parameter scope. Verbatim from the pre-R1 else-branch. */
+    private fun ctaCtorSetterSeeds(
+        frame: CtaFrame, inner: MutableMap<String, String>, parameters: List<Parameter>,
+        seedClass: ClassDeclaration?, paramTypeFallback: TypeNode?,
+    ) {
+        for (param in parameters) {
+            val pt = param.type ?: paramTypeFallback ?: continue
+            val pn = param.name as? Identifier ?: continue
+            if (param.dotDotDotToken && nonArrayKeywordText(pt) != null) continue
+            resolveSimpleTypeName(pt)?.let { inner[pn.text] = it }
+        }
+        if (seedClass != null) {
+            for (m in seedClass.members) {
+                if (m !is PropertyDeclaration) continue
+                val propName = (m.name as? Identifier)?.text ?: continue
+                val ann = m.type ?: continue
+                val rt = getTypeFromTypeNode(ann)
+                if (rt !== anyType && rt !== errorType) frame.localTypes["this.$propName"] = rt
             }
-            if (seedClass != null) {
-                for (m in seedClass.members) {
-                    if (m !is PropertyDeclaration) continue
-                    val propName = (m.name as? Identifier)?.text ?: continue
-                    val ann = m.type ?: continue
-                    val rt = getTypeFromTypeNode(ann)
-                    if (rt !== anyType && rt !== errorType) frame.localTypes["this.$propName"] = rt
+            for (p in parameters) {
+                val pName = (p.name as? Identifier)?.text ?: continue
+                val ept = p.type ?: paramTypeFallback ?: continue
+                val rt = getTypeFromTypeNode(ept)
+                if (rt !== anyType && rt !== errorType) frame.localTypes[pName] = rt
+            }
+        }
+    }
+
+    /**
+     * (CHK.171) R1 (e) — the type-parameter scope a function-like frame opens INSIDE:
+     * the nearest enclosing cta frame's `fnTpScope`, stopping at a namespace body or the
+     * file (a `ModuleBlock` frame deliberately resets it — a namespace cannot sit inside a
+     * function), layered under the live ambient when one is installed.
+     *
+     * The frame builder used to read the AMBIENT `currentTypeParamScope` here, and at
+     * frame-build time that is the RESTING scope, which the (CHK.171) census found null at
+     * every one of 58,581 statement anchors on the project profile. So a nested function
+     * WITH its own TPs lost every enclosing one (`function o<T>() { function i<U>(v: T) }`
+     * typed `v` as `any`), a nested function WITHOUT own TPs got no scope at all, and a
+     * class declared in a generic function saw its own TPs but not the function's. The
+     * scope a frame owns is what a CHILD must start from, which is what tsgo's lexical
+     * parent walk amounts to (`binder/nameresolver.go`, `resolveNameHelper`).
+     *
+     * It walks PAST frames with no scope of their own (a block, a clause, a narrowing
+     * frame) rather than stopping at `ctaFrames.last()`, because those frames do not
+     * carry the scope yet ((CHK.171) R4); stopping there would leave a function nested in
+     * an `if` exactly as blind as before.
+     */
+    private fun ctaEnclosingTpScope(): Map<String, Type.TypeParam>? {
+        var enclosing: Map<String, Type.TypeParam>? = null
+        for (i in ctaFrames.indices.reversed()) {
+            val f = ctaFrames[i]
+            val own = f.fnTpScope
+            if (own != null) { enclosing = own; break }
+            if (f.owner is ModuleBlock || f.owner is SourceFile) break
+        }
+        val ambient = currentTypeParamScope
+        return when {
+            enclosing == null -> ambient
+            ambient == null -> enclosing
+            else -> enclosing + ambient
+        }
+    }
+
+    /** (CHK.171) R1 — [outer] extended with [tps] (interned, in order, so a later name
+     *  SHADOWS an earlier one and an own TP shadows a class TP or an enclosing one), with
+     *  each new parameter's constraint and default resolved under the extended scope. The
+     *  Block branch's former inline body, shared with the constructor / setter frame. */
+    private fun ctaBuildTpScope(
+        outer: Map<String, Type.TypeParam>?, tps: List<TypeParameter>,
+    ): Map<String, Type.TypeParam> {
+        val scope = (outer?.toMutableMap() ?: mutableMapOf())
+        val newTps = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
+        for (tp in tps) {
+            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
+                val p = Type.TypeParam()
+                p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                p
+            }
+            scope[tp.name.text] = typeParam
+            newTps.add(tp to typeParam)
+        }
+        withInstantiationContext(scopeMapper(scope)) {
+            for ((tp, typeParam) in newTps) {
+                if (typeParam.constraint == null) {
+                    tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
                 }
-                for (p in parameters) {
-                    val pName = (p.name as? Identifier)?.text ?: continue
-                    val ept = p.type ?: paramTypeFallback ?: continue
-                    val rt = getTypeFromTypeNode(ept)
-                    if (rt !== anyType && rt !== errorType) frame.localTypes[pName] = rt
+                if (typeParam.default == null) {
+                    tp.default?.let { typeParam.default = getTypeFromTypeNode(it) }
                 }
             }
         }
-        return frame
+        return scope
     }
 
     /**
