@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,424** lines (**+77 at (P18.201)**, an enclosing-scope walk and a shared scope builder for
+extraction):** `Checker.kt` **201,456** lines (**+32 at (P18.202)**, the alias-guard relation and the TS2344 constraint chain — the
+relation rule itself is `Relater.kt` 1,758 -> 1,809; a SEMANTIC parity change removing a FALSE-POSITIVE class;
+**+77 at (P18.201)**, an enclosing-scope walk and a shared scope builder for
 constructor / setter / nested frames — a SEMANTIC parity change closing a silent-`any` class; **+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
 at the argument reader — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.199)**, a type-facts nullish test and two early returns — a SEMANTIC
 parity change removing a FALSE-POSITIVE class; **+152 at (P18.198)**, a narrowed-receiver re-read, a union-parameter admission and
@@ -94,6 +96,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.202) — (CHK.174) / (INC.30): THE RELATION RELATES A TYPE PARAMETER THROUGH ITS CONSTRAINT; 17 FALSE POSITIVES -> 0, +0 EVERYWHERE, 20,834 / 0 / 44 (2026-09-24).**
+`function g<T extends number>(k: T) { const n: number = k }` reported a false TS2322 — the relation had no
+"type parameter via its constraint" rule, the long-open (INC.30). It now does, with both hazards that item recorded
+handled: circular constraints answer null, and the B57.1b alias guard (a recursion brake) runs on its own relation with
+the rule off. The TS2344 row now carries tsgo's exact head. 34-cell matrix ours-only 17 -> 0; 20 pins, six arms RED; one
+stale divergence control re-pinned to tsgo's head. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
+
 **(P18.201) — (CHK.171) R1: CONSTRUCTOR / SETTER AND NESTED-FUNCTION FRAMES KEEP THE TYPE-PARAMETER SCOPE; 13 ROWS CLOSED, +0 EVERYWHERE, 20,814 / 0 / 44 (2026-09-24).**
 A class's type parameters were out of scope in its constructor and setters, and an outer function's in a nested
 function, so `T[]` read `any[]` and silently hid errors. Frames now build their scope from the nearest enclosing one
@@ -123,11 +132,4 @@ and union/nullable parameters are admitted with tsgo's chain order. Matrix agree
 pins. Screen 0; grid 8x0 byte-identical; cost_gate PASS; huge_methods 0. Two censuses landed beside it: rxjs's last row
 needs five fixes (filed in (CHK.161)), and **(CHK.169) — `this` is untyped at the argument reader inside every
 module-file class** — is specified to land at +0 after a small `??` fix ((CHK.170)).
-
-**(P18.197) — (CHK.162): AN INTERSECTION SOURCE RELATES TO A GENERIC TARGET THROUGH INSTANTIATED MEMBER TYPES; 25 OF 25 CELLS MATCH tsgo, 20,763 / 0 / 44 (2026-09-24).**
-`VD & { initializer: Call }` against `VDI<Call>` reported a false TS2741 because the intersection relation read a
-generic target's members raw (`T` as errorType), and the elaboration named a member another constituent supplies.
-Both now read `getPropertyTypeForRelation`; a union constituent makes the contradiction check undecidable. 14 cells
-closed, 9 must-report controls held; 7 pins, seven arms RED. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
-Unblocks (CHK.152) step 3's third harness row.
 

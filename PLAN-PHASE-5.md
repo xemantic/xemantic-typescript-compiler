@@ -25,6 +25,49 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.202) — (CHK.174): the relation relates a type-parameter source THROUGH ITS CONSTRAINT — (INC.30)'s rule, landed with both of its known hazards handled; 17 FPs -> 0, +0 everywhere (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.173) G2 census running beside it (and the (CHK.173) census
+recorded in its item). **The readers were not the problem**: `canUseTypeEngine`'s B60.8 rule already admits a constrained
+type parameter against a primitive target, and `Relater.structuredTypeRelatedTo` then had no rule that could accept the
+pair; the assignment and argument readers only looked fine because each has its own bail through the constraint
+(`bareTpConstraintRelatesTo`, the round-442 bail). The same defect hit object-literal members and union targets with an
+object constraint. **This is (INC.30)'s rule**, and its first build reddened exactly the two corpus baselines that
+record its known hazards — the B57.1b alias type-argument guard uses the relation as a RECURSION BRAKE
+(`excessPropertyCheckIntersectionWithRecursiveType` gained a TS2322), and a CIRCULAR constraint (`T extends T`) reached
+the cycle break and related to everything (`typeParameterHasSelfAsConstraint`).
+
+**The change (`Relater.kt` +51, `Checker.kt` +42/−5)**: `Relater.typeParamRelatedThroughConstraint` at the tail of
+`structuredTypeRelatedTo` and in the union-target arm after no single member accepts (tsgo `structuredTypeRelatedToWorker`:
+`constraint := getConstraintOfType(source)`, `isRelatedTo(constraint, target)`, after union decomposition); no / `any` /
+unresolved / CIRCULAR constraint answers null so the old verdict stands (tsgo's `getConstraintOfTypeParameter` is nil for
+a circular constraint; an `any` constraint relates as `{}`); a new `CheckerState.aliasGuardRelation` — a separate relation
+instance with its own cache — is used ONLY by B57.1b's first pass, with the rule off, so (INC.30) still owns that guard;
+at the call type-argument site the missing member is computed directly from the constraint (the cached verdict skips the
+side effect that recorded it), giving tsgo's exact TS2344 `Type 'T' does not satisfy the constraint 'Base'.` + chain
+`Property 'b' is missing…` where we printed a TS2741 head. **The full suite fired one control in
+`ExplicitCallTypeArgIntersectionTest`** that had recorded the TS2741 head as a divergence; the orchestrator re-measured it
+against tsgo (TS2344 head `Type 'U & { m: 1; }' does not satisfy the constraint 'NodeX'.` + a constraint-substituted
+chain line) and re-pinned the head, with the missing chain as a residue.
+
+**Matrix, 34 cells**: agree 13 -> 14, **ours-only 17 -> 0**, missing 4 -> 3, text-diff 3 -> 3. Residues (pre-existing):
+the declaration/return readers print no chain line; for a union/literal-union constraint tsgo's head names the
+constraint (`getNarrowableTypeForReference`); a bare unconstrained `T` / `T extends any` vs `number` still silent; two
+TS2313 rows naming `T`/`U` swapped in a mutual cycle.
+
+**Pins**: `TypeParamConstraintRelationTest`, 20 tests (12 silent legal shapes, 8 reporting controls incl. self and mutual
+circularity, `unknown` and `any` constraints). Ablation: tail rule 9 RED; union-arm fallback 1; circular check 2 +
+corpus `typeParameterHasSelfAsConstraint`; guard on the ordinary relation 1 + corpus
+`excessPropertyCheckIntersectionWithRecursiveType`; TS2344 direct computation 1; `any` constraint usable 1 (after a pin
+was added).
+
+**Gates**: full suite 20,834 with ONE failure — the control above, re-pinned; its class and the pin class then 25/0
+(no other file changed); corpus screen 0 of 8,725; cost_gate PASS (`typeOfExpr.calls` −71, `narrow.walks` −8 — the rule
+fires on the profile); huge_methods 0; grid 8x `added=0 removed=0` (full text byte-identical — a control); warning gate
+proved live. rxjs 0, marked 0, cronstrue 0.
+
+**Successor**: (CHK.173)'s prerequisite G2 (census running), then G5 / G1.
+
 ### Round (P18.201) — (CHK.171) R1: constructor / setter frames and nested-function frames keep the type-parameter scope; 13 rows closed, +0 everywhere (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.172) census (recorded in its item) and the (CHK.173) census
@@ -343,54 +386,6 @@ The library now reports NOTHING we invent; tsgo's one row (`WebSocketSubject.ts:
 
 **Successor**: (CHK.168) round 1 (annotated arrow expression bodies, specified, +0 predicted) or (CHK.166)(a)
 (enum `never` wash, specified, +0 predicted); both are false-negative classes.
-
-### Round (P18.192) — (CHK.167) round 1: a non-nullish UNION source is related to an object-family target at three readers; 100 missing rows now report, +0 on every profile and library (2026-09-24)
-
-Orchestrated: one implementation subagent, with the (CHK.159) step-2 census landing beside it (recorded in
-that item). **The gate could not live inside `canUseTypeEngine`** (it never sees the source expression or
-the caller), so it is a separate check, `canUseTypeEngineReferenceUnionLift`, called only from the
-declaration, assignment (on `expr.right`, so a chained `y = z = a` stays refused) and property-assignment
-readers: the source is an identifier or property access, no constituent is null/undefined, and every
-constituent is individually admitted by the existing gate (array->tuple stays refused) — tsgo's
-`eachTypeRelatedToType`. **The census's two narrowing gaps were not the only ones**: `let v: K | number = 1;
-v = kk; const r: K = v` became a new FP in the first build — after `v = kk` the flow type stayed `number` —
-fixed via `assignmentReduceBase` reducing the DECLARED union when the value does not relate to the current
-narrowed type (tsc `getAssignmentReducedType`). Both census gaps were FIXED, not refused: (a)
-`declarationInitializerReducedType` narrows a declaration to its annotation's members the initializer fits
-(tsc `getInitialOrAssignedType`); (b) `objectValueEqualityNarrow` for `x === kk` / `x == kk` (tsgo narrows
-`==` the same), dropping only primitives that cannot relate, keeping `object` and any primitive the object
-type accepts. Two pre-existing FPs fell out (`n_eq_obj` at the object-literal member reader; `let v: object |
-number = {…}`), and the anonymous-object narrowing clause (PARITY.1(c)) now covers object-carrying unions
-(the four `nt_aoo` FPs).
-
-**The change (`Checker.kt` +169/−9)**. **A stale "negative control" in `TypeDisplayParityTest` was a
-countdown** (tsgo reports the row) and now asserts tsgo's text; the full suite then fired one `residue -` pin
-in `SignatureThisRelationTest` (a union of function types as the source): tsgo reports line 5 with a 3-line
-chain, we report the same head with only its first chain line — the orchestrator re-measured it against tsgo
-and re-pinned it as the head row plus that line, with the depth residue in the comment (and fixed the class
-KDoc that still called it silent).
-
-**Matrices vs tsgo**: `cells` 100 missing rows now reported — 48 exact, 52 right line/col/code with a
-different chain (20 property-assignment rows print no chain, 32 declaration/assignment chains differ);
-`cells-n` all 226 clean; `cells-x` l1/l3/l4/l6 now exact; **no cell moved away from tsgo**. Remaining:
-return/argument readers (round 2), nullish unions (round 3), array->tuple (by design), weak type `W`,
-call/conditional/`||`/chained sources (refused), element-access narrowing (`l5`), a generic `T | K` source;
-display: a failing OBJECT member prints `Type 'L' is not assignable to type 'K'.` where tsgo prints `Property
-'k' is missing…`, and a narrowed-but-failing source shows its declared type.
-
-**Pins**: `ReferenceUnionLiftTest`, 31 tests (narrowed-at-site controls; `residue -` countdowns for call /
-conditional / `||` / chained / nullish / return / argument / tuple with tsgo's row in a comment). Ablation,
-eleven arms, all RED (every-member 1; no-nullish 2; return reader opened 1; source kind 4; narrowing clause
-2; initializer arm 3; equality 5; stale-antecedent reduction 2; equality over-drop 1; object-literal
-initializer 2; `object` keyword 1).
-
-**Gates**: full suite **20,696 / 0 / 44** (+31), after the countdown re-pin; corpus screen 0 of 8,725 (the
-38 pending mismatches' diffs identical before/after); cost_gate PASS (max `mapped.hits` +1.84%); huge_methods
-0; grid 8x `added=0 removed=0` — a real gate (the shape fires 15-27 times per profile, all relating);
-warning-clean after fixing one `w:` the orchestrator's own re-pin introduced. `rxjs` 1 -> 1, `marked` 0,
-`cronstrue` 0.
-
-**Successor**: (CHK.159) step 2 (specified; rxjs predicted 1 -> 0 ours-only, +0 elsewhere).
 
 ## QUEUE
 
@@ -1037,7 +1032,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   risk (CHK.63) recorded: a union source that is NARROWED at the site must not be reported by its declared
   type). Direction: ADDS rows; every added row must be a tsgo row, and the grid is likely a REAL gate.
 
-- [ ] **(CHK.174) A TYPE PARAMETER CONSTRAINED TO A PRIMITIVE IS REJECTED AGAINST THAT PRIMITIVE AT THE DECLARATION AND
+- [x] **(CHK.174) LANDED 2026-09-24 ((P18.202) note; the fix is (INC.30)'s relation rule). A TYPE PARAMETER CONSTRAINED TO A PRIMITIVE IS REJECTED AGAINST THAT PRIMITIVE AT THE DECLARATION AND
   RETURN READERS — A FALSE POSITIVE ON LEGAL GENERIC CODE, ON HEAD (found by (P18.201)'s builder, re-probed 2026-09-24
   by the orchestrator, `build/scratch-orch-18048`).** `function g<T extends number>(k: T) { const n: number = k }` and
   `function g<T extends number>(k: T): number { return k }` report `TS2322: Type 'T' is not assignable to type
@@ -1049,7 +1044,33 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   gate, measure, pin both readers plus a genuinely-mismatched constraint control (`T extends string` -> `number` must
   still report).
 
-- [ ] **(CHK.173) A PROPERTY ACCESS OR METHOD CALL ON A NULLABLE *IDENTIFIER* NEVER REPORTS TS18047 / TS18048 ("'x' is
+- [ ] **(CHK.173) CENSUSED 2026-09-24 (read-only, frozen (P18.200) classes, `build/scratch-p18201-census2/`, README.txt;
+  113 cells; a JDI arm mirroring the element-access arm) — THE NAIVE ARM ADDS +23..+32 FPs PER PROFILE, ALL FROM SEVEN
+  NAMED NARROWING GAPS; CLOSE THEM FIRST.** `checkSinglePropertyAccess` (~153776) has only two TS18048 arms — B81.1c
+  (`emitTs18048ForOptionalPropertyAccessReceiver`, a receiver that is itself an optional member access, hence `o.p.q`)
+  and B464 (`emitTs18048ForClosureCapturedUndefinedReceiver`, closure-captured identifiers, `undefined` only, a
+  DELIBERATE firewall: "our narrowing has gaps outside closures"); the element twin
+  `emitTs1804xForNullishElementAccessReceiver` (B98.r124) covers `x[i]` for any identifier; the property mirror was
+  queued and never landed. tsgo runs `checkNonNullExpression` (checker.go ~7382) on every property/element receiver,
+  callee, for-of/in and `in` RHS. **All 50 must-stay-silent narrowing cells stay silent under the arm**; 1,168 of 1,191
+  nullable-identifier accesses on the project profile (98.1%) are already narrowed correctly. The 32 distinct FP sites
+  (tsgo reports none): **G2** (14) assigning a value the flow reader types `any` keeps the declared union
+  (`checker.ts` `lateSymbol` x7 / `indexSymbol` x3 — `createSymbol(...)` types `any` there; `fourslashImpl`
+  `expectedRange` x4); **G5** (6) a local we do not type that SHADOWS an outer same-named binding resolves to the OUTER
+  one (`const { performance } = p` -> the file-level `declare const performance: … | undefined`; cells f6d/f6e — a
+  correctness bug for other readers too); **G1** (4) an optional-chain comparison does not narrow the chain root
+  (`d?.p !== undefined ? d.p`, `n === m?.f`, `if (d?.a?.length !== 1) return`, `t?.[t.length-1]`; f2/f8/f12/f11);
+  **G3** (2) `x ??= <non-literal>` does not narrow (f1b); **G4** (2) reference equality `r === nodes` does not narrow
+  (f5); **G6** (2) inferred type predicates (`filter(x => x !== undefined)`, `!!x`; f7); **G7** (2) a closure guarded by
+  `root?.a().forEach(...)` — arm design, skip receivers `closureGuardedByOptionalChainRoot` declines. rxjs / marked /
+  cronstrue-strict 0. Corpus 1 red (`controlFlowAliasedDiscriminants` — the corpus-unique walker
+  `checkControlFlowAliasedDiscriminants` already emits those rows; dedupe or retire it); `checkInferTypePredicates`
+  swallows 3 arm rows. Still missing under the arm: optional parameter (the cpa frame types `x?: string` as `string`,
+  `populateParameterLocalTypes` ~153381), annotated/destructured body locals (`cpaApplyDeclRecordings` ~2609 types them
+  `any`), `this.x`, a `T extends string | null` parameter, `in` RHS / for-of / spread TS2488, `o.p.length` on a
+  non-optional nullable member. **ORDER**: G2 -> G5 -> G1 -> G3/G4/G6 (each its own round, each pinnable by its cell and
+  a real-code site), then Round A (the arm + G7 skip + dedupe) at +0; Round B (optional parameters and body locals typed
+  in the cpa frame — re-census first, it exposes new gaps) and a `this.x`/`o.p` arm after. ORIGINAL: A PROPERTY ACCESS OR METHOD CALL ON A NULLABLE *IDENTIFIER* NEVER REPORTS TS18047 / TS18048 ("'x' is
   possibly 'null' / 'undefined'") — THE MOST COMMON strictNullChecks ERROR (found by the (CHK.172) census, re-probed
   2026-09-24 by the orchestrator, `build/scratch-orch-18048`, script AND module files).** tsgo reports, ours is silent,
   for `function f(x: string | null) { return x.length }`, `x.toUpperCase()`, an optional parameter `x?: string`,
@@ -5509,7 +5530,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   `8385940838610938556`, narrow `306524840298287433` -> `-7423700524621287041`.
   **173 of the 298 rows REMAIN and need the RELATION, not the display** — see (INC.30).
 
-- [ ] **(INC.30) THE RELATION HAS NO "TYPE PARAMETER VIA ITS CONSTRAINT" RULE, AND THAT
+- [ ] **(INC.30) THE RULE LANDED 2026-09-24 ((P18.202), `Relater.typeParamRelatedThroughConstraint`, circular / `any` constraints answer null) — OPEN ONLY for the B57.1b alias type-argument guard, which runs on a separate `CheckerState.aliasGuardRelation` with the rule OFF because it uses the relation as a recursion brake (`excessPropertyCheckIntersectionWithRecursiveType`). THE RELATION HAS NO "TYPE PARAMETER VIA ITS CONSTRAINT" RULE, AND THAT
   REFUSAL IS LOAD-BEARING AS A RECURSION BRAKE.** (INC.28) measured it: judging a
   `Type.TypeParam` alias argument by its APPARENT type in the B57.1b guard renders
   `Visitor` exactly as tsc 7.0.2 does and closes **173 of its 298 rows** — and costs a

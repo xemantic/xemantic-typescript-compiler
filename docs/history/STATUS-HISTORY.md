@@ -1,5 +1,12 @@
 
 
+**(P18.197) — (CHK.162): AN INTERSECTION SOURCE RELATES TO A GENERIC TARGET THROUGH INSTANTIATED MEMBER TYPES; 25 OF 25 CELLS MATCH tsgo, 20,763 / 0 / 44 (2026-09-24).**
+`VD & { initializer: Call }` against `VDI<Call>` reported a false TS2741 because the intersection relation read a
+generic target's members raw (`T` as errorType), and the elaboration named a member another constituent supplies.
+Both now read `getPropertyTypeForRelation`; a union constituent makes the contradiction check undecidable. 14 cells
+closed, 9 must-report controls held; 7 pins, seven arms RED. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
+Unblocks (CHK.152) step 3's third harness row.
+
 **(P18.196) — (CHK.164) STEP 1: TRUTHINESS NARROWING SPLITS `boolean`, AND A FLOW JOIN REJOINS `true | false`; 8 FALSE POSITIVES GONE, 20,756 / 0 / 44 (2026-09-24).**
 After `if (x) return`, `x: boolean | string` now reads `string | false` as in tsgo, closing false positives such as
 `const r: string | false = x`. The census's patch alone would have added a tsgo divergence (a joined `false | true`

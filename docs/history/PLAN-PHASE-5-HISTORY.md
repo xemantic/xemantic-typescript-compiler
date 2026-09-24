@@ -1,5 +1,53 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.192) — (CHK.167) round 1: a non-nullish UNION source is related to an object-family target at three readers; 100 missing rows now report, +0 on every profile and library (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.159) step-2 census landing beside it (recorded in
+that item). **The gate could not live inside `canUseTypeEngine`** (it never sees the source expression or
+the caller), so it is a separate check, `canUseTypeEngineReferenceUnionLift`, called only from the
+declaration, assignment (on `expr.right`, so a chained `y = z = a` stays refused) and property-assignment
+readers: the source is an identifier or property access, no constituent is null/undefined, and every
+constituent is individually admitted by the existing gate (array->tuple stays refused) — tsgo's
+`eachTypeRelatedToType`. **The census's two narrowing gaps were not the only ones**: `let v: K | number = 1;
+v = kk; const r: K = v` became a new FP in the first build — after `v = kk` the flow type stayed `number` —
+fixed via `assignmentReduceBase` reducing the DECLARED union when the value does not relate to the current
+narrowed type (tsc `getAssignmentReducedType`). Both census gaps were FIXED, not refused: (a)
+`declarationInitializerReducedType` narrows a declaration to its annotation's members the initializer fits
+(tsc `getInitialOrAssignedType`); (b) `objectValueEqualityNarrow` for `x === kk` / `x == kk` (tsgo narrows
+`==` the same), dropping only primitives that cannot relate, keeping `object` and any primitive the object
+type accepts. Two pre-existing FPs fell out (`n_eq_obj` at the object-literal member reader; `let v: object |
+number = {…}`), and the anonymous-object narrowing clause (PARITY.1(c)) now covers object-carrying unions
+(the four `nt_aoo` FPs).
+
+**The change (`Checker.kt` +169/−9)**. **A stale "negative control" in `TypeDisplayParityTest` was a
+countdown** (tsgo reports the row) and now asserts tsgo's text; the full suite then fired one `residue -` pin
+in `SignatureThisRelationTest` (a union of function types as the source): tsgo reports line 5 with a 3-line
+chain, we report the same head with only its first chain line — the orchestrator re-measured it against tsgo
+and re-pinned it as the head row plus that line, with the depth residue in the comment (and fixed the class
+KDoc that still called it silent).
+
+**Matrices vs tsgo**: `cells` 100 missing rows now reported — 48 exact, 52 right line/col/code with a
+different chain (20 property-assignment rows print no chain, 32 declaration/assignment chains differ);
+`cells-n` all 226 clean; `cells-x` l1/l3/l4/l6 now exact; **no cell moved away from tsgo**. Remaining:
+return/argument readers (round 2), nullish unions (round 3), array->tuple (by design), weak type `W`,
+call/conditional/`||`/chained sources (refused), element-access narrowing (`l5`), a generic `T | K` source;
+display: a failing OBJECT member prints `Type 'L' is not assignable to type 'K'.` where tsgo prints `Property
+'k' is missing…`, and a narrowed-but-failing source shows its declared type.
+
+**Pins**: `ReferenceUnionLiftTest`, 31 tests (narrowed-at-site controls; `residue -` countdowns for call /
+conditional / `||` / chained / nullish / return / argument / tuple with tsgo's row in a comment). Ablation,
+eleven arms, all RED (every-member 1; no-nullish 2; return reader opened 1; source kind 4; narrowing clause
+2; initializer arm 3; equality 5; stale-antecedent reduction 2; equality over-drop 1; object-literal
+initializer 2; `object` keyword 1).
+
+**Gates**: full suite **20,696 / 0 / 44** (+31), after the countdown re-pin; corpus screen 0 of 8,725 (the
+38 pending mismatches' diffs identical before/after); cost_gate PASS (max `mapped.hits` +1.84%); huge_methods
+0; grid 8x `added=0 removed=0` — a real gate (the shape fires 15-27 times per profile, all relating);
+warning-clean after fixing one `w:` the orchestrator's own re-pin introduced. `rxjs` 1 -> 1, `marked` 0,
+`cronstrue` 0.
+
+**Successor**: (CHK.159) step 2 (specified; rxjs predicted 1 -> 0 ours-only, +0 elsewhere).
+
 ### Round (P18.191) — (CHK.159) step 1: an ARGUMENT-inference leg for a call's RESULT type; `rxjs` 2 -> 1, profiles +0 — and a +10% cost-counter blowup attributed and removed before commit (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.167) and (CHK.168) read-only censuses running beside
