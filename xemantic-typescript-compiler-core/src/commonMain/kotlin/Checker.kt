@@ -151137,20 +151137,22 @@ interface DataView {
      *    overload as tsgo's `chooseOverload` does; the single-signature path keeps the
      *    raw return (see the body for why not tsgo's constraint substitution).
      *
-     * Answers an empty map where nothing was inferred.
+     * (CHK.159) step 2: the answer is an [ArgInferOutcome] rather than a bare map, so
+     * the PARTIAL map an all-or-nothing failure (or a call with no arguments) leaves
+     * behind reaches [argInferContextFallback], together with the two verdicts that
+     * must keep it away: a REFUSED leak and a failed constraint.
      */
     private fun argInferResultTypeArguments(
         sig: Signature,
         args: List<Expression>,
         callNode: Node,
-        overload: Boolean,
-    ): HashMap<Type.TypeParam, Type>? {
+    ): ArgInferOutcome {
         val found = HashMap<Type.TypeParam, Type>()
-        val tps = sig.typeParameters ?: return found
-        if (tps.isEmpty() || args.isEmpty()) return found
-        val ret = sig.resolvedReturnType ?: return found
-        if (ret === anyType || ret === errorType) return found
-        if (tps.none { ctxReturnTypeMentions(ret, it) }) return found
+        val tps = sig.typeParameters ?: return ArgInferOutcome(found, ARG_INFER_PARTIAL)
+        if (tps.isEmpty() || args.isEmpty()) return ArgInferOutcome(found, ARG_INFER_PARTIAL)
+        val ret = sig.resolvedReturnType ?: return ArgInferOutcome(found, ARG_INFER_PARTIAL)
+        if (ret === anyType || ret === errorType) return ArgInferOutcome(found, ARG_INFER_PARTIAL)
+        if (tps.none { ctxReturnTypeMentions(ret, it) }) return ArgInferOutcome(found, ARG_INFER_PARTIAL)
         val tpSet = tps.toSet()
         val params = sig.parameters
         val notTopLevel = HashSet<Type.TypeParam>()
@@ -151170,7 +151172,7 @@ interface DataView {
             // An argument whose own type carries an un-inferred type parameter of some
             // OTHER call (a nested call this leg could not resolve either) is a leak;
             // anything inferred from it would be.
-            if (typeContainsOutOfScopeTypeParam(at, callNode)) return HashMap()
+            if (typeContainsOutOfScopeTypeParam(at, callNode)) return ArgInferOutcome(HashMap(), ARG_INFER_REFUSED)
             val one = HashMap<Type.TypeParam, Type>()
             val savedMax = ctxInferMaxDepth
             val savedWalk = argInferWalk
@@ -151189,10 +151191,10 @@ interface DataView {
                 if (a is ArrowFunction || a is FunctionExpression) fromFnReturn.add(tp)
             }
         }
-        if (found.isEmpty()) return found
+        if (found.isEmpty()) return ArgInferOutcome(found, ARG_INFER_PARTIAL)
         for (tp in tps) {
             val cand = found[tp] ?: continue
-            if (typeContainsOutOfScopeTypeParam(cand, callNode)) return HashMap()
+            if (typeContainsOutOfScopeTypeParam(cand, callNode)) return ArgInferOutcome(HashMap(), ARG_INFER_REFUSED)
             val primitive = argInferHasPrimitiveConstraint(tp)
             val widen = !primitive && (
                 tp in fromFnReturn ||
@@ -151213,9 +151215,24 @@ interface DataView {
         // so a partial substitution turns a raw callee `T` that collides with the
         // caller's `T` into a false positive — measured on rxjs `combineLatest.ts:30`,
         // `pipe(combineLatest(...args), …)` binding `B` and leaving pipe's `T`.
-        if (tps.any { it !in found && ctxReturnTypeMentions(ret, it) }) return HashMap()
+        if (tps.any { it !in found && ctxReturnTypeMentions(ret, it) }) return ArgInferOutcome(found, ARG_INFER_PARTIAL)
+        // tsgo substitutes the instantiated constraint on the single-signature path
+        // (`getInferredType`); a failure here keeps today's raw return instead (and moves
+        // an overload on to its next candidate), because a failure is as often a gap of
+        // this relation (an intersection source against a union constraint, (CHK.162))
+        // as a genuinely bad argument.
+        if (argInferConstraintFails(tps, found)) return ArgInferOutcome(HashMap(), ARG_INFER_CONSTRAINT_FAILED)
+        return ArgInferOutcome(found, ARG_INFER_COMPLETE)
+    }
+
+    /** (CHK.159) Does any candidate in [found] fail its type parameter's constraint,
+     *  instantiated with [found]? A constraint mentioning a type parameter [found] has
+     *  no candidate for is not checked. */
+    private fun argInferConstraintFails(
+        tps: List<Type.TypeParam>,
+        found: Map<Type.TypeParam, Type>,
+    ): Boolean {
         val mapper = TypeMapper { tp -> found[tp] }
-        val failed = ArrayList<Type.TypeParam>(0)
         for (tp in tps) {
             val cand = found[tp] ?: continue
             val constraint = tp.constraint ?: continue
@@ -151228,39 +151245,155 @@ interface DataView {
             // `<T extends TextRange>` caller failed, +13 rows per profile), and tsgo
             // accepts those calls. A composite one (`U & { m: 1 }`) is checked.
             if (cand is Type.TypeParam) continue
-            if (!checkTypeRelatedTo(cand, inst, assignableRelation)) failed.add(tp)
+            if (!checkTypeRelatedTo(cand, inst, assignableRelation)) return true
         }
-        if (failed.isEmpty()) return found
-        // tsgo substitutes the instantiated constraint on the single-signature path
-        // (`getInferredType`); this leg keeps today's raw return instead, because a
-        // failure here is as often a gap of this relation (an intersection source
-        // against a union constraint, (CHK.162)) as a genuinely bad argument.
-        return if (overload) null else HashMap()
+        return false
     }
 
     /** (CHK.159) [argInferResultTypeArguments] on a single signature: the instantiated
-     *  return, or null where nothing was inferred. */
+     *  return; else, for a PARTIAL answer, step 2's [argInferContextFallback]; else null. */
     private fun argInferResultType(sig: Signature, expr: CallExpression): Type? {
-        val found = argInferResultTypeArguments(sig, expr.arguments, expr, overload = false)
-        if (found.isNullOrEmpty()) return null
-        val rt = sig.resolvedReturnType ?: return null
-        return instantiateType(rt, TypeMapper { tp -> found[tp] })
+        val o = argInferResultTypeArguments(sig, expr.arguments, expr)
+        return when (o.verdict) {
+            ARG_INFER_COMPLETE -> {
+                val rt = sig.resolvedReturnType ?: return null
+                instantiateType(rt, TypeMapper { tp -> o.found[tp] })
+            }
+            ARG_INFER_PARTIAL -> argInferContextFallback(sig, expr, o.found)
+            else -> null
+        }
     }
 
     /** (CHK.159) [argInferResultTypeArguments] over the generic overload candidates in
      *  order: a constraint failure moves on to the next one (tsgo's `chooseOverload`
      *  rejects that candidate — tsc's `parseDelimitedList(…, () => … | undefined)`
      *  fails `T extends Node` and resolves to the `T extends Node | undefined` overload),
-     *  an inference that finds nothing stops with today's raw return. */
+     *  an inference that finds nothing stops with today's raw return — or, for a
+     *  PARTIAL answer, with step 2's [argInferContextFallback] on that candidate. */
     private fun argInferOverloadResultType(cands: List<Signature>, expr: CallExpression): Type? {
         for (s in cands) {
             if (s.typeParameters.isNullOrEmpty()) continue
-            val found = argInferResultTypeArguments(s, expr.arguments, expr, overload = true) ?: continue
-            if (found.isEmpty()) return null
-            val rt = s.resolvedReturnType ?: return null
-            return instantiateType(rt, TypeMapper { tp -> found[tp] })
+            val o = argInferResultTypeArguments(s, expr.arguments, expr)
+            return when (o.verdict) {
+                ARG_INFER_CONSTRAINT_FAILED -> continue
+                ARG_INFER_COMPLETE -> {
+                    val rt = s.resolvedReturnType ?: return null
+                    instantiateType(rt, TypeMapper { tp -> o.found[tp] })
+                }
+                ARG_INFER_PARTIAL -> argInferContextFallback(s, expr, o.found)
+                else -> null
+            }
         }
         return null
+    }
+
+    /**
+     * (CHK.159) step 2 — the call's CONTEXTUAL type inferred into its return type fills
+     * the type parameters the ARGUMENTS left open, for the call's RESULT type.
+     *
+     * tsgo's `inferTypeArguments` (`checker.go` ~9366) FIRST infers from the call's
+     * contextual type to the signature's return type at `InferencePriorityReturnType`,
+     * and an argument candidate arriving later at priority 0 WIPES those candidates per
+     * type parameter (`inference.go` ~189). So per type parameter the argument candidate
+     * ([partial], step 1's map, already widened and leak-checked) wins and the contextual
+     * one ([ctxReturnTypeParamMapper], the (CHK.148) leg, which already speaks only for
+     * the type parameters the arguments bind nothing for) fills what is left. Before this
+     * a call whose type parameter occurs only in the return and in a callback PARAMETER
+     * — rxjs's `operate((source, subscriber) => …)` inside
+     * `groupBy<T, K, R>(…): OperatorFunction<T, GroupedObservable<K, R>>` — returned the
+     * RAW `OperatorFunction<T, R>`, whose callee `T`/`R` collided by NAME with the
+     * caller's and read as a false TS2322 (`groupBy.ts:147`).
+     *
+     * Safeguards, each measured: nothing happens unless the contextual leg contributes
+     * at least one type parameter (otherwise step 1 declined for its own reason); the
+     * result is ALL-OR-NOTHING over the type parameters the return type mentions, for
+     * step 1's reason (a raw `T` left behind collides by name); the combined map is
+     * checked against the constraints step 1 checks; and a type parameter an ANNOTATED
+     * parameter of a context-sensitive callback mentions counts as argument-bound
+     * ([argInferAnnotatedCallbackTypeParams]) — tsgo's second pass binds it from the
+     * annotation, which this leg does not model, and letting the context fill it binds
+     * the WRONG type silently (`operate((source: Obs<string>, sub) => …)`). A call that
+     * is itself an argument is refused for COST, not correctness (see the body).
+     */
+    private fun argInferContextFallback(
+        sig: Signature,
+        expr: CallExpression,
+        partial: HashMap<Type.TypeParam, Type>,
+    ): Type? {
+        val tps = sig.typeParameters?.takeIf { it.isNotEmpty() } ?: return null
+        val ret = sig.resolvedReturnType ?: return null
+        if (ret === anyType || ret === errorType) return null
+        val mentioned = tps.filter { ctxReturnTypeMentions(ret, it) }
+        if (mentioned.isEmpty() || mentioned.all { it in partial }) return null
+        // A call that is itself an ARGUMENT pulls its context by re-resolving the outer
+        // call, which is where this leg's whole cost was (measured: `typeNode.bypassed`
+        // +36.6% on the compiler profile with it, the outer call's parameter types
+        // re-resolved under an instantiation context) — and no row needs it.
+        if (argInferCallIsArgument(expr)) return null
+        val blocked = argInferAnnotatedCallbackTypeParams(sig, expr.arguments, tps)
+        if (mentioned.any { it !in partial && it in blocked }) return null
+        val raw = sig.parameters.map { getTypeOfSymbol(it) }
+        val argBound = TypeMapper { tp -> partial[tp] ?: if (tp in blocked) unknownType else null }
+        val ctx = ctxReturnTypeParamMapper(sig, raw, tps, expr.arguments, argBound, expr) ?: return null
+        val combined = HashMap(partial)
+        var fromContext = 0
+        for (tp in tps) {
+            if (tp in combined || tp in blocked) continue
+            val cand = ctx.map(tp) ?: continue
+            combined[tp] = cand
+            fromContext++
+        }
+        if (fromContext == 0) return null
+        if (mentioned.any { it !in combined }) return null
+        if (argInferConstraintFails(tps, combined)) return null
+        return instantiateType(ret, TypeMapper { tp -> combined[tp] })
+    }
+
+    /** (CHK.159) Is [call] (through parentheses) an argument of a call or `new`? Its
+     *  contextual type is then pulled by re-resolving the outer call. */
+    private fun argInferCallIsArgument(call: Node): Boolean {
+        var up: Node? = (call as? NodeBase)?.parent
+        while (up is ParenthesizedExpression) up = up.parent
+        return up is CallExpression || up is NewExpression
+    }
+
+    /** (CHK.159) step 2's safeguard: the type parameters an ANNOTATED parameter of a
+     *  context-sensitive function-expression argument mentions, through the matching
+     *  parameter of the callee parameter's call signature. Step 1 skips such an argument
+     *  whole; tsgo's second pass binds from its annotations. */
+    private fun argInferAnnotatedCallbackTypeParams(
+        sig: Signature,
+        args: List<Expression>,
+        tps: List<Type.TypeParam>,
+    ): Set<Type.TypeParam> {
+        var out: HashSet<Type.TypeParam>? = null
+        val params = sig.parameters
+        for (i in 0 until minOf(params.size, args.size)) {
+            var a: Expression = args[i]
+            while (a is ParenthesizedExpression) a = a.expression
+            val fnParams = when (a) {
+                is ArrowFunction -> a.parameters
+                is FunctionExpression -> a.parameters
+                else -> continue
+            }
+            if (fnParams.none { it.type != null }) continue
+            val pt = getTypeOfSymbol(params[i]) as? Type.Object ?: continue
+            resolveStructuredTypeMembers(pt)
+            val cbSigs = pt.callSignatures ?: continue
+            for ((j, fp) in fnParams.withIndex()) {
+                if (fp.type == null) continue
+                for (cs in cbSigs) {
+                    val cp = cs.parameters.getOrNull(j) ?: continue
+                    val cpt = getTypeOfSymbol(cp)
+                    for (tp in tps) {
+                        if (typeMayMentionTypeParam(cpt, tp, 0)) {
+                            (out ?: HashSet<Type.TypeParam>().also { out = it }).add(tp)
+                        }
+                    }
+                }
+            }
+        }
+        return out ?: emptySet()
     }
 
     /** (CHK.159) Does the call's contextual type, inferred to [ret], give [tp] a
@@ -200328,6 +200461,17 @@ internal const val LATE_BIND_ALIAS_HOPS = 8
 private const val CAAS_CONTINUE = 1
 private const val CAAS_BREAK = 2
 private const val CAAS_RETURN = 3
+
+/** (CHK.159) the verdict of `Checker.argInferResultTypeArguments`: [found] is the full
+ *  answer ([ARG_INFER_COMPLETE]), the partial one step 2 may complete from the call's
+ *  context ([ARG_INFER_PARTIAL], also for a call with no arguments), or empty with a
+ *  verdict that keeps step 2 away ([ARG_INFER_REFUSED], [ARG_INFER_CONSTRAINT_FAILED]). */
+private class ArgInferOutcome(val found: HashMap<Type.TypeParam, Type>, val verdict: Int)
+
+private const val ARG_INFER_COMPLETE = 0
+private const val ARG_INFER_PARTIAL = 1
+private const val ARG_INFER_REFUSED = 2
+private const val ARG_INFER_CONSTRAINT_FAILED = 3
 
 /**
  * (CHK.70)(a) [Checker.loopBodyEffectOnName]'s verdict: what the back edges of a loop
