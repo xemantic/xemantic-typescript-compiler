@@ -25,6 +25,39 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.196) — (CHK.164) step 1: truthiness narrowing splits `boolean`, and a flow join rejoins `true | false` into `boolean`; `decl` 25 -> 0 differing, 8 FPs gone (2026-09-24)
+
+Orchestrated: one implementation subagent, beside the still-running census of rxjs's last missed row.
+`splitBooleanForTruthiness` (after (P18.195)'s `splitEnumsForTruthiness` in `narrowByTruthiness`) turns a bare
+`boolean` or a `boolean` union member into the half the branch allows — tsgo's `boolean` IS
+`false | true` (checker.go ~1002) filtered member-wise by `getAdjustedTypeWithFacts`. **The census's patch arm was
+INCOMPLETE and would have introduced a new tsgo divergence**: after `if (x) {}`, the two branches join as
+`false | true`, which prints `boolean` but is elaborated MEMBER BY MEMBER — `const d: never = x` grew a chain line
+tsgo does not print (tsgo's `boolean` is a primitive there). The grid compares head lines only, so only the new
+chain-aware pins saw it. Fixed by `rejoinBooleanHalves` in `flowJoinUnion`: when the DECLARED type contains
+`boolean` and a join holds both halves, it rejoins them — which also fixes a pre-existing chain divergence after
+(P18.188)'s `if (x === true) {}`. `||=`/`&&=` result types (tsgo `removeDefinitelyFalsyTypes` /
+`extractDefinitelyFalsyTypes`) now agree too. Three census cells lacked a `tsconfig.json` (their `ours` output
+covered 0 files).
+
+**Matrix**: `decl` 15 agree / 25 diff -> **40 / 0**; `ctl` ours-only 2 -> 0 (c19/c20 FPs gone); `misc` ours-only 3
+-> 1 (m9/m11 gone; m10 is the `||` result type); `member` 6 -> 14 agree; `argnever` 57 -> 62; `argnum`, `assign`,
+`ret`, `opt*` unchanged. 70 rows changed: 39 now agree, 8 FPs on legal code gone, 23 text-diffs with the head now
+right (the argument reader names `boolean` or the wrong member in the chain). No row got worse.
+
+**Pins**: `BooleanTruthinessNarrowingTest`, 5 tests at the declaration reader (both branches, bare and union,
+`boolean | undefined`, silent legal code, no-removal controls, the join). Ablation: no split 5 RED; bare only 3;
+union only 4; no rejoin 2; truthy branch only 4.
+
+**Gates**: full suite **20,756 / 0 / 44** (+5); corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x
+`added=0 removed=0` and a FULL-output diff (chains included) 0 changes on all 8 profiles and the three libraries —
+a control, as predicted; no `w:`. Residues: `const z = x ? true : false` still gets the extra chain line (no flow
+join — a general fix would make `getUnionType` merge `false | true`, pre-existing); the argument reader's chain;
+m10 (`x || true`) and m1/m2 (`Boolean(x)`, (CHK.166)(b)); step 2 (the legacy truthiness arm) and (b).
+
+**Successor**: (CHK.162) (intersection source vs union target false TS2741) or (CHK.163)/(CHK.160) — or the rxjs
+last-row round once its census lands.
+
 ### Round (P18.195) — (CHK.166)(a) step 1: VALUE-AWARE enum truthiness — an enum is no longer washed to `never`; 193 -> 639 of 660 cells, byte-identical on every instrument (2026-09-24)
 
 Orchestrated: one implementation subagent, with the census of rxjs's last missed row running beside it.
@@ -403,53 +436,6 @@ TS2454/TS2448); cost_gate PASS (identical to (P18.186)); huge_methods 0; grid 8x
 warning gate 0 `w:` on a non-empty log. **`rxjs` 6 -> 5** (`TestScheduler.ts:158`); `marked` 0.
 
 **Successor**: (CHK.156) (`narrowUnionByLiteral` never splits `boolean`; rxjs `share:266`).
-
-### Round (P18.186) — (CHK.154)(b): a class with its own constructor has ONLY its own construct signatures; the fix exposed an rxjs OOM and two relation defects, all closed; +0 rows on every profile and library (2026-09-23)
-
-Orchestrated: one implementation subagent (the (CHK.160) read-only census still running beside it). **The
-first cut — keeping only a class's own construct signatures, tsgo `resolveDeclaredMembers` (checker.go
-~20624: `getSignaturesOfSymbol(Members[__constructor])`, falling back to `getDefaultConstructSignatures`
-only when empty) — made `rxjs` RUN OUT OF A 6 GB HEAP building an error message.** A generic class instance
-(`Box<string>`) is a `Type.Reference`, and `Relater.objectTypeRelatedTo` skipped construct-signature
-comparison only for `Type.Interface` targets; once a derived class stopped carrying its base's constructor,
-`SafeSubscriber<T>` no longer related to `Subscriber<T>`, and an override check elaborated that mismatch
-until the heap was gone. Skipping construct signatures on class-targeted references (tsgo: instance types
-carry none) then turned `assignmentCompatability40` RED — a baseline passing BY ACCIDENT, because the
-interface source had no constructor and the construct-signature comparison rejected it while the relation
-has no private-vs-public rule; tsgo `propertyRelatedTo`'s first arm is now ported.
-
-**The change (+48/−3, three files)**: `MemberResolver.resolveInterfaceMembersCore` keeps only a class's
-own construct signatures when it declares a constructor (declaration or expression; no constructor still
-inherits; interfaces still concatenate); `Relater.objectTypeRelatedTo` also skips construct signatures for
-a `Type.Reference` whose target is a class; `Checker.isPropPrivateVisibilityMismatch` + one line in
-`Relater.propertiesRelatedTo` (exactly one side `private`, differing declarations -> unrelated, full tsgo
-chains); `checkSingleNewExpressionTypes` returns after TS2674 (protected) and silently for a private
-constructor used outside its class (tsgo's `resolveErrorCall` after `isConstructorAccessible`) — without it
-the source fix added ours-only TS2345 on inaccessible constructors.
-
-**Matrix, 26 cells** (`build/scratch-p18186/cells`): every after-row is a tsgo row; ADDED (all tsgo):
-`ctor1`, ambient, abstract base, generic base with own constructor, grandchild, overloads, `privrel` +2;
-REMOVED (all ours-only): `arity`'s extra TS2345 against the base signature, `privctor2`'s two TS2345 on
-inaccessible constructors; eight controls unchanged (inherited constructor, `super(...)` arguments,
-`typeof` assignment, interface inheritance, contextual callbacks, generic derived/instance).
-
-**Pins**: `DerivedClassConstructSignaturesTest`, 13 tests (5 controls). Ablation, seven arms: base kept
-beside own 5 RED; rule applied to interfaces 1; private `return` removed 1; protected `return` removed 1;
-private return ignoring in-class access 1; Reference construct-signature skip removed 1; private
-visibility rule removed 1. Restored and rebuilt.
-
-**Gates**: full suite **20,586 / 0 / 44** (+13); corpus screen 0 of 8,725 (+ `--include` over four pending
-class/constructor baselines, no constructor rows moved); cost_gate PASS (counters identical to
-(P18.185)'s); huge_methods 0 (`checkSingleNewExpressionTypes` 6,758); grid 8x `added=0 removed=0` — a real
-gate here (tsc's sources inherit heavily); KIR module 313/0 (its `CheckedFacts` reads construct
-signatures); `rxjs` 6 -> 6 byte-identical (the (P18.185) note's "second ingredient" was already moot);
-`marked` 0. **Residues, filed as (CHK.163)**: TS2673 is emitted nowhere; `class D extends B<string> {}`
-does not check `new D(1)` against the inherited instantiated signature (probably a class constructor
-parameter typed by the class's type parameter resolving to `error`, `genbase0` — missing before too); a
-class expression held in a `const` is never argument-checked; a constructor-less mixin base; the two
-`protected` arms of `propertyRelatedTo`.
-
-**Successor**: (CHK.155) (TS2454 on a captured read in an expression-bodied arrow; S, removal-only).
 
 ## QUEUE
 
@@ -1392,7 +1378,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   constructor-less MIXIN base is not checked (`mixin`, `new E2(1)`); (e) only the `private` arm of tsgo's
   `propertyRelatedTo` visibility rule exists — the two `protected` arms are missing. All ADD rows.
 
-- [ ] **(CHK.164) CENSUSED 2026-09-23 (read-only, frozen (P18.189) classes, `build/scratch-p18189-census/`, JDI
+- [ ] **(CHK.164) STEP 1 LANDED 2026-09-24 ((P18.196) note). OPEN: step 2 (the legacy truthiness arm + bare-Identifier `negateCondition`) and (b) (blocked). CENSUSED 2026-09-23 (read-only, frozen (P18.189) classes, `build/scratch-p18189-census/`, JDI
   patch arms `jdi/TruthCensus.java`, `LegacyPatch.java`, `OptPatch.java`).** (a) TWO truthiness sites, neither
   splits `boolean`: the FLOW site `narrowByTruthiness` (HEAD ~122098, filters `isDefinitelyFalsyMember`/
   `isDefinitelyTruthyMember`) read by declaration / argument (union) / member (union) / union-target return;

@@ -1,5 +1,52 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.186) — (CHK.154)(b): a class with its own constructor has ONLY its own construct signatures; the fix exposed an rxjs OOM and two relation defects, all closed; +0 rows on every profile and library (2026-09-23)
+
+Orchestrated: one implementation subagent (the (CHK.160) read-only census still running beside it). **The
+first cut — keeping only a class's own construct signatures, tsgo `resolveDeclaredMembers` (checker.go
+~20624: `getSignaturesOfSymbol(Members[__constructor])`, falling back to `getDefaultConstructSignatures`
+only when empty) — made `rxjs` RUN OUT OF A 6 GB HEAP building an error message.** A generic class instance
+(`Box<string>`) is a `Type.Reference`, and `Relater.objectTypeRelatedTo` skipped construct-signature
+comparison only for `Type.Interface` targets; once a derived class stopped carrying its base's constructor,
+`SafeSubscriber<T>` no longer related to `Subscriber<T>`, and an override check elaborated that mismatch
+until the heap was gone. Skipping construct signatures on class-targeted references (tsgo: instance types
+carry none) then turned `assignmentCompatability40` RED — a baseline passing BY ACCIDENT, because the
+interface source had no constructor and the construct-signature comparison rejected it while the relation
+has no private-vs-public rule; tsgo `propertyRelatedTo`'s first arm is now ported.
+
+**The change (+48/−3, three files)**: `MemberResolver.resolveInterfaceMembersCore` keeps only a class's
+own construct signatures when it declares a constructor (declaration or expression; no constructor still
+inherits; interfaces still concatenate); `Relater.objectTypeRelatedTo` also skips construct signatures for
+a `Type.Reference` whose target is a class; `Checker.isPropPrivateVisibilityMismatch` + one line in
+`Relater.propertiesRelatedTo` (exactly one side `private`, differing declarations -> unrelated, full tsgo
+chains); `checkSingleNewExpressionTypes` returns after TS2674 (protected) and silently for a private
+constructor used outside its class (tsgo's `resolveErrorCall` after `isConstructorAccessible`) — without it
+the source fix added ours-only TS2345 on inaccessible constructors.
+
+**Matrix, 26 cells** (`build/scratch-p18186/cells`): every after-row is a tsgo row; ADDED (all tsgo):
+`ctor1`, ambient, abstract base, generic base with own constructor, grandchild, overloads, `privrel` +2;
+REMOVED (all ours-only): `arity`'s extra TS2345 against the base signature, `privctor2`'s two TS2345 on
+inaccessible constructors; eight controls unchanged (inherited constructor, `super(...)` arguments,
+`typeof` assignment, interface inheritance, contextual callbacks, generic derived/instance).
+
+**Pins**: `DerivedClassConstructSignaturesTest`, 13 tests (5 controls). Ablation, seven arms: base kept
+beside own 5 RED; rule applied to interfaces 1; private `return` removed 1; protected `return` removed 1;
+private return ignoring in-class access 1; Reference construct-signature skip removed 1; private
+visibility rule removed 1. Restored and rebuilt.
+
+**Gates**: full suite **20,586 / 0 / 44** (+13); corpus screen 0 of 8,725 (+ `--include` over four pending
+class/constructor baselines, no constructor rows moved); cost_gate PASS (counters identical to
+(P18.185)'s); huge_methods 0 (`checkSingleNewExpressionTypes` 6,758); grid 8x `added=0 removed=0` — a real
+gate here (tsc's sources inherit heavily); KIR module 313/0 (its `CheckedFacts` reads construct
+signatures); `rxjs` 6 -> 6 byte-identical (the (P18.185) note's "second ingredient" was already moot);
+`marked` 0. **Residues, filed as (CHK.163)**: TS2673 is emitted nowhere; `class D extends B<string> {}`
+does not check `new D(1)` against the inherited instantiated signature (probably a class constructor
+parameter typed by the class's type parameter resolving to `error`, `genbase0` — missing before too); a
+class expression held in a `const` is never argument-checked; a constructor-less mixin base; the two
+`protected` arms of `propertyRelatedTo`.
+
+**Successor**: (CHK.155) (TS2454 on a captured read in an expression-bodied arrow; S, removal-only).
+
 ### Round (P18.185) — (CHK.154)(a): a trailing `void`-accepting parameter is OPTIONAL in signature relation; `rxjs` 7 -> 6 (2026-09-23)
 
 Orchestrated: one implementation subagent, plus a parallel read-only census of (CHK.160) (still running at

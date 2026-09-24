@@ -1,7 +1,8 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,058** lines (**+27 at (P18.195)**, the enum truthiness arms and the proper-subset split — the
+extraction):** `Checker.kt` **201,100** lines (**+42 at (P18.196)**, the `boolean` truthiness split and the join-time rejoin —
+a SEMANTIC parity change; **+27 at (P18.195)**, the enum truthiness arms and the proper-subset split — the
 value-aware classifier lives in `EnumSemantics.kt` 1,138 -> 1,234; a SEMANTIC parity change closing a false-NEGATIVE
 class; **+99 at (P18.194)**, the concise-body return check routed through the block
 path (net of the deleted spine check and 13 retired hardcoded anchors) — a SEMANTIC parity change closing a
@@ -87,6 +88,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.196) — (CHK.164) STEP 1: TRUTHINESS NARROWING SPLITS `boolean`, AND A FLOW JOIN REJOINS `true | false`; 8 FALSE POSITIVES GONE, 20,756 / 0 / 44 (2026-09-24).**
+After `if (x) return`, `x: boolean | string` now reads `string | false` as in tsgo, closing false positives such as
+`const r: string | false = x`. The census's patch alone would have added a tsgo divergence (a joined `false | true`
+elaborated member by member); a rejoin at flow joins where the declared type holds `boolean` fixes it, plus one
+pre-existing case. Declaration matrix 25 -> 0 differing; 5 pins, five arms RED. Screen 0; grid 8x0 (full output
+byte-identical); cost_gate PASS; huge_methods 0.
+
 **(P18.195) — (CHK.166)(a) STEP 1: VALUE-AWARE ENUM TRUTHINESS — AN ENUM IS NO LONGER WASHED TO `never`; 193 -> 639 OF 660 CELLS, BYTE-IDENTICAL ON EVERY INSTRUMENT, 20,751 / 0 / 44 (2026-09-24).**
 Every enum type counted as definitely truthy, so `if (!k)` washed `k` to `never` and silenced real errors, while the
 truthy branch kept `K.Zero`. `EnumSemantics.enumTruthiness` now classifies by member value (0/NaN/"" falsy, opaque
@@ -117,14 +125,4 @@ three narrowing fixes it needed (initializer narrowing, object-equality narrowin
 closed pre-existing false positives. 100 cells fixed, none moved away from tsgo; 31 pins, eleven arms RED; a stale
 control and a fired countdown re-pinned against tsgo. Screen 0; grid 8x0 (a real gate); cost_gate PASS; huge_methods 0.
 Return/argument readers and nullish unions are rounds 2 and 3. (CHK.159) step 2 is specified: rxjs to 0 ours-only.
-
-**(P18.191) — (CHK.159) STEP 1: AN ARGUMENT-INFERENCE LEG FOR A CALL'S RESULT TYPE; `rxjs` 2 -> 1, PROFILES +0, 20,665 / 0 / 44 (2026-09-24).**
-A generic call whose legacy shape-gated inference bailed returned its RAW return type, hidden only by a name-keyed
-foreign-TP test (false positives on collision, false negatives otherwise). A new leg infers from each
-non-context-sensitive argument with the existing structural walker — all-or-nothing, constraint-checked with overload
-fall-through, literals widened as tsgo does. Building it surfaced +14 rows per profile (refused: tsgo's constraint
-substitution) and a **+10.22% `typeNode.bypassed` blowup the cost gate caught** — attributed to member-by-member
-array matching and fixed with tsgo's element pairing (+0.15%, no wall cost). 47-cell matrix: 13 -> 35 match; 15 pins.
-Screen 0; grid 8x0; huge_methods 0. **`rxjs` 2 -> 1** (`groupBy.ts:147` is step 2). (CHK.167) and (CHK.168) — a
-silent union-source class and a silent arrow expression body — were censused beside it, both +0 predicted.
 

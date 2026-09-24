@@ -1,5 +1,15 @@
 
 
+**(P18.191) — (CHK.159) STEP 1: AN ARGUMENT-INFERENCE LEG FOR A CALL'S RESULT TYPE; `rxjs` 2 -> 1, PROFILES +0, 20,665 / 0 / 44 (2026-09-24).**
+A generic call whose legacy shape-gated inference bailed returned its RAW return type, hidden only by a name-keyed
+foreign-TP test (false positives on collision, false negatives otherwise). A new leg infers from each
+non-context-sensitive argument with the existing structural walker — all-or-nothing, constraint-checked with overload
+fall-through, literals widened as tsgo does. Building it surfaced +14 rows per profile (refused: tsgo's constraint
+substitution) and a **+10.22% `typeNode.bypassed` blowup the cost gate caught** — attributed to member-by-member
+array matching and fixed with tsgo's element pairing (+0.15%, no wall cost). 47-cell matrix: 13 -> 35 match; 15 pins.
+Screen 0; grid 8x0; huge_methods 0. **`rxjs` 2 -> 1** (`groupBy.ts:147` is step 2). (CHK.167) and (CHK.168) — a
+silent union-source class and a silent arrow expression body — were censused beside it, both +0 predicted.
+
 **(P18.190) — (CHK.158): A TYPE GUARD REACHED THROUGH A VALUE NARROWS — THE PREDICATE IS READ FROM THE CALLEE'S SIGNATURE; `rxjs` 3 -> 2, 20,650 / 0 / 44 (2026-09-24).**
 `const isArr = Array.isArray`, a destructured `isArray`, a guard in an object property, a guard-typed annotation and
 an overloaded guard (wrong even when called directly) now narrow, with tsgo's `getEffectsSignature` rule. Four matrix
