@@ -1,5 +1,14 @@
 
 
+**(P18.192) — (CHK.167) ROUND 1: A NON-NULLISH UNION SOURCE IS RELATED TO AN OBJECT-FAMILY TARGET; 100 MISSING ROWS NOW REPORT, +0 ON EVERY PROFILE AND LIBRARY, 20,696 / 0 / 44 (2026-09-24).**
+`const r: number[] = x` with `x: number[] | string` (and `K | number` -> `K`) was SILENT because `canUseTypeEngine`
+refused every union source against an object target. A per-member lift now admits it at the declaration,
+assignment and property-assignment readers for identifier/property-access sources with no nullish member — with
+three narrowing fixes it needed (initializer narrowing, object-equality narrowing, assignment reduction), which also
+closed pre-existing false positives. 100 cells fixed, none moved away from tsgo; 31 pins, eleven arms RED; a stale
+control and a fired countdown re-pinned against tsgo. Screen 0; grid 8x0 (a real gate); cost_gate PASS; huge_methods 0.
+Return/argument readers and nullish unions are rounds 2 and 3. (CHK.159) step 2 is specified: rxjs to 0 ours-only.
+
 **(P18.191) — (CHK.159) STEP 1: AN ARGUMENT-INFERENCE LEG FOR A CALL'S RESULT TYPE; `rxjs` 2 -> 1, PROFILES +0, 20,665 / 0 / 44 (2026-09-24).**
 A generic call whose legacy shape-gated inference bailed returned its RAW return type, hidden only by a name-keyed
 foreign-TP test (false positives on collision, false negatives otherwise). A new leg infers from each

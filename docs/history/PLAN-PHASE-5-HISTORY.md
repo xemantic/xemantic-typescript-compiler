@@ -1,5 +1,42 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.187) — (CHK.155): a captured read of an outer variable follows tsgo's `isOuterVariable && !isNeverInitialized`; `rxjs` 6 -> 5, 16 -> 24 of 26 cells (2026-09-23)
+
+Orchestrated: one implementation subagent, plus the (CHK.160) read-only census finishing beside it
+(recorded in that item). **The census's mechanism was right and its scope too narrow**: the ours-only
+TS2454 fired inside EVERY `inUncheckedBody` context (`if`, `while`, `do`, `for`, `for-in`/`of`, `switch`,
+`try`, `with`) and at file level, not only in if/while bodies. The block-arrow and function-expression arms
+apply no rule of their own (they start a fresh uninitialized set). The real cause: round 427's mask
+subtracted only names assigned inside THAT SAME expression-bodied arrow, where tsgo's `isNeverInitialized`
+is `isSymbolAssignedDefinitely` over the whole declaring function including nested closures — so
+`s = mk()` in a SIBLING closure passed as an argument was invisible (round 469's closure scan sees only
+statement-level functions).
+
+**The change (`Checker.kt` +44/−16)**: `flowTs2454AssignedAnywhere` (declared before `init`) installed by
+`withFlowTs2454AssignedAnywhere` around `runFlowTS2454OnFunction` / `runFlowTS2454OnTopLevel` (collected
+with the existing `collectAllAssignmentsAnywhere`, the same `=`/`??=`/`||=`/`&&=` rule as tsgo), restored in
+`finally`; the arrow arm subtracts that set. Only rows go away. **The agent overwrote an existing
+`CapturedReadDefiniteAssignmentTest.kt` (round 460) by a name collision, restored it with `git checkout` and
+moved its pins; verified: the file is unmodified and its 3 tests ran green in the suite.**
+
+**Matrix, 26 cells**: fixed (ours-only -> silent, as tsgo): f1, f2, da1, for, switch, try, after, afterif,
+var, nested, numok, file1, restore, restore2; must-still-report controls report in all three compilers
+(f5, fornever, topnever, filenever, samefn, directif, compound `+=` x2); silent controls held (da2, f3, f4,
+param, inarrowblock, strictNullChecks off). Residues, pre-existing: `inarrowblocknever` (the outer walk exits
+before reaching expression closures when the outer function has no uninitialized names) and `samefnif` (an
+assignment in any branch is treated as definite).
+
+**Pins**: `OuterVariableCapturedReadTest`, 11 tests, tsgo text, six red on the before binary. Ablation:
+per-arrow mask restored 6 RED; set not restored after a nested pass 1; file-level runner without the set 1;
+arm skipping captured reads entirely 1 (only the file-level pin — the set-based pass already reports the
+function-scoped never-assigned read, so this walker is redundant there; recorded). Restored md5 `22fd3944`.
+
+**Gates**: full suite **20,597 / 0 / 44** (+11); corpus screen 0 of 8,725 (no pending baseline carries
+TS2454/TS2448); cost_gate PASS (identical to (P18.186)); huge_methods 0; grid 8x `added=0 removed=0`;
+warning gate 0 `w:` on a non-empty log. **`rxjs` 6 -> 5** (`TestScheduler.ts:158`); `marked` 0.
+
+**Successor**: (CHK.156) (`narrowUnionByLiteral` never splits `boolean`; rxjs `share:266`).
+
 ### Round (P18.186) — (CHK.154)(b): a class with its own constructor has ONLY its own construct signatures; the fix exposed an rxjs OOM and two relation defects, all closed; +0 rows on every profile and library (2026-09-23)
 
 Orchestrated: one implementation subagent (the (CHK.160) read-only census still running beside it). **The

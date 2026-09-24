@@ -25,6 +25,44 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.197) — (CHK.162): an intersection source relates to a generic target through the INSTANTIATED member types; 14 -> 0 cells off tsgo (2026-09-24)
+
+Orchestrated: one implementation subagent. **The item's axis was wrong**: the union target is not the cause — it
+fails only because its `VDI<Call>` member fails; the combined property table (VD's `kind` was in it), the inherited
+members and the `readonly initializer: T` override were all fine. The fault was ONE read:
+`intersectionMergedSatisfiesTarget` read each target member with `getTypeOfSymbol`, which for a generic reference's
+own declaration answers the raw `T` (errorType — the same family (P18.180)'s CLAUDE.md entry records), so it gave up
+on `initializer`. And the `'kind' is missing` TEXT never came from the relation: the intersection elaboration named
+the first constituent's missing member without checking whether another constituent supplies it. The trigger is a
+generic target whose members depend on `T` (a generic target without `extends` also failed; non-generic and
+no-override variants already agreed); the argument form was already silent.
+
+**The change (`Checker.kt` +42/−16, three functions)**: `intersectionMergedSatisfiesTarget` reads source and target
+members through `getPropertyTypeForRelation(owner, prop)` (the instantiated type the structural relation compares —
+the acceptance half of tsgo's `structuredTypeRelatedTo` -> `propertiesRelatedTo` over an intersection's combined
+properties); `intersectionMergedContradictsTarget` takes the same read and answers UNDECIDABLE when any constituent is
+a union (without it the corrected read made `VD & ({initializer: Call} | …)` a false contradiction), letting the
+distribution fallback decide; `getIntersectionPropertyElaborationChain` takes the same read, never names a member
+another constituent supplies, and falls back to the first required member missing from the WHOLE intersection
+(`{ b: 1 } & { a: Call }` vs `T3<Call>` now says `'c'`, as tsgo).
+
+**Matrix, 25 cells** (reducer at four positions, union declaration/argument/parameter, each suspect isolated, 9
+must-report controls): 14 off tsgo -> **25 of 25 agree**, every control still reports with the right code.
+
+**Pins**: `IntersectionSourceGenericTargetTest`, 7 tests. Ablation, seven arms, all RED (satisfies target read 4;
+satisfies source read 1; union guard 1; supplied-elsewhere filter 1; whole-intersection fallback 1; contradicts
+target read 1; elaboration target read 1).
+
+**Gates**: full suite **20,763 / 0 / 44** (+7); corpus screen 0 of 8,725 (four relation pending baselines identical
+under `--include`); cost_gate PASS (a before-binary `--passTiming` run reads identical counters — the change moves
+none); huge_methods 0; grid 8x `added=0 removed=0` with full `--listAll` text byte-identical — a control, since the
+real `moveToFile.ts:486` site needs (CHK.152) step 3; warning gate proved live by an injected probe. rxjs 0, marked
+0, cronstrue 1. Residues (pre-existing): one-level-shallow elaboration for a wrong-typed member; a union target's
+wrong member prints no chain; an intersection-with-union-member display without tsgo's parentheses.
+
+**Unblocks**: (CHK.152) step 3's third harness row, and (P18.191)'s refused tsgo constraint substitution
+(`checker.ts:6604` was this family) — both worth re-measuring.
+
 ### Round (P18.196) — (CHK.164) step 1: truthiness narrowing splits `boolean`, and a flow join rejoins `true | false` into `boolean`; `decl` 25 -> 0 differing, 8 FPs gone (2026-09-24)
 
 Orchestrated: one implementation subagent, beside the still-running census of rxjs's last missed row.
@@ -399,43 +437,6 @@ pending rows byte-identical on both arms; cost_gate PASS (identical); huge_metho
 (`share.ts:266` TS2349); `marked` 0; tsc-project and harness identical.
 
 **Successor**: (CHK.157) (else-branch narrowing at the legacy assignment reader, rxjs `Subscriber:220`).
-
-### Round (P18.187) — (CHK.155): a captured read of an outer variable follows tsgo's `isOuterVariable && !isNeverInitialized`; `rxjs` 6 -> 5, 16 -> 24 of 26 cells (2026-09-23)
-
-Orchestrated: one implementation subagent, plus the (CHK.160) read-only census finishing beside it
-(recorded in that item). **The census's mechanism was right and its scope too narrow**: the ours-only
-TS2454 fired inside EVERY `inUncheckedBody` context (`if`, `while`, `do`, `for`, `for-in`/`of`, `switch`,
-`try`, `with`) and at file level, not only in if/while bodies. The block-arrow and function-expression arms
-apply no rule of their own (they start a fresh uninitialized set). The real cause: round 427's mask
-subtracted only names assigned inside THAT SAME expression-bodied arrow, where tsgo's `isNeverInitialized`
-is `isSymbolAssignedDefinitely` over the whole declaring function including nested closures — so
-`s = mk()` in a SIBLING closure passed as an argument was invisible (round 469's closure scan sees only
-statement-level functions).
-
-**The change (`Checker.kt` +44/−16)**: `flowTs2454AssignedAnywhere` (declared before `init`) installed by
-`withFlowTs2454AssignedAnywhere` around `runFlowTS2454OnFunction` / `runFlowTS2454OnTopLevel` (collected
-with the existing `collectAllAssignmentsAnywhere`, the same `=`/`??=`/`||=`/`&&=` rule as tsgo), restored in
-`finally`; the arrow arm subtracts that set. Only rows go away. **The agent overwrote an existing
-`CapturedReadDefiniteAssignmentTest.kt` (round 460) by a name collision, restored it with `git checkout` and
-moved its pins; verified: the file is unmodified and its 3 tests ran green in the suite.**
-
-**Matrix, 26 cells**: fixed (ours-only -> silent, as tsgo): f1, f2, da1, for, switch, try, after, afterif,
-var, nested, numok, file1, restore, restore2; must-still-report controls report in all three compilers
-(f5, fornever, topnever, filenever, samefn, directif, compound `+=` x2); silent controls held (da2, f3, f4,
-param, inarrowblock, strictNullChecks off). Residues, pre-existing: `inarrowblocknever` (the outer walk exits
-before reaching expression closures when the outer function has no uninitialized names) and `samefnif` (an
-assignment in any branch is treated as definite).
-
-**Pins**: `OuterVariableCapturedReadTest`, 11 tests, tsgo text, six red on the before binary. Ablation:
-per-arrow mask restored 6 RED; set not restored after a nested pass 1; file-level runner without the set 1;
-arm skipping captured reads entirely 1 (only the file-level pin — the set-based pass already reports the
-function-scoped never-assigned read, so this walker is redundant there; recorded). Restored md5 `22fd3944`.
-
-**Gates**: full suite **20,597 / 0 / 44** (+11); corpus screen 0 of 8,725 (no pending baseline carries
-TS2454/TS2448); cost_gate PASS (identical to (P18.186)); huge_methods 0; grid 8x `added=0 removed=0`;
-warning gate 0 `w:` on a non-empty log. **`rxjs` 6 -> 5** (`TestScheduler.ts:158`); `marked` 0.
-
-**Successor**: (CHK.156) (`narrowUnionByLiteral` never splits `boolean`; rxjs `share:266`).
 
 ## QUEUE
 
@@ -1359,7 +1360,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   DECLARATION too (`ws5`, `ws6`), so (CHK.152)'s census correction is half right; the argument position
   additionally needs (CHK.152) steps 3-4. L, broad additions (Uint8Array-style defaults) — last.
 
-- [ ] **(CHK.162) AN INTERSECTION SOURCE AGAINST A UNION TARGET REPORTS A FALSE TS2741 — found 2026-09-23 by
+- [x] **(CHK.162) LANDED 2026-09-24 ((P18.197) note; the cause was a raw `getTypeOfSymbol` read of a generic target member, not the union). AN INTERSECTION SOURCE AGAINST A UNION TARGET REPORTS A FALSE TS2741 — found 2026-09-23 by
   the (CHK.152) step-3 census; blocks step 3 landing at +0.** `const b: VDI<Call> = v` with
   `v: VD & { initializer: Call }` gives an ours-only `TS2741: Property 'kind' is missing in type 'VD & …'`
   where tsgo is silent at BOTH declaration and argument positions (`build/scratch-p18184-census/probe5`);

@@ -1,7 +1,8 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,100** lines (**+42 at (P18.196)**, the `boolean` truthiness split and the join-time rejoin —
+extraction):** `Checker.kt` **201,126** lines (**+26 at (P18.197)**, instantiated member reads in the intersection relation and
+its elaboration — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+42 at (P18.196)**, the `boolean` truthiness split and the join-time rejoin —
 a SEMANTIC parity change; **+27 at (P18.195)**, the enum truthiness arms and the proper-subset split — the
 value-aware classifier lives in `EnumSemantics.kt` 1,138 -> 1,234; a SEMANTIC parity change closing a false-NEGATIVE
 class; **+99 at (P18.194)**, the concise-body return check routed through the block
@@ -88,6 +89,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.197) — (CHK.162): AN INTERSECTION SOURCE RELATES TO A GENERIC TARGET THROUGH INSTANTIATED MEMBER TYPES; 25 OF 25 CELLS MATCH tsgo, 20,763 / 0 / 44 (2026-09-24).**
+`VD & { initializer: Call }` against `VDI<Call>` reported a false TS2741 because the intersection relation read a
+generic target's members raw (`T` as errorType), and the elaboration named a member another constituent supplies.
+Both now read `getPropertyTypeForRelation`; a union constituent makes the contradiction check undecidable. 14 cells
+closed, 9 must-report controls held; 7 pins, seven arms RED. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
+Unblocks (CHK.152) step 3's third harness row.
+
 **(P18.196) — (CHK.164) STEP 1: TRUTHINESS NARROWING SPLITS `boolean`, AND A FLOW JOIN REJOINS `true | false`; 8 FALSE POSITIVES GONE, 20,756 / 0 / 44 (2026-09-24).**
 After `if (x) return`, `x: boolean | string` now reads `string | false` as in tsgo, closing false positives such as
 `const r: string | false = x`. The census's patch alone would have added a tsgo divergence (a joined `false | true`
@@ -116,13 +124,4 @@ without refusing pulls through a call/`new` parent `typeNode.bypassed` read +36.
 results. Matrix 11 -> 25 of 44; 26 pins. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0. **`rxjs` 7.8.2: 29 ours-only
 rows at (P18.173) -> 0 today, in 14 rounds** — tsgo's single row (`WebSocketSubject.ts:304`) is the one we still MISS
 ((CHK.161)(c)). A parallel census specified (CHK.166)(a), the enum `never` wash (193 -> 639 of 660 cells, +0 rows).
-
-**(P18.192) — (CHK.167) ROUND 1: A NON-NULLISH UNION SOURCE IS RELATED TO AN OBJECT-FAMILY TARGET; 100 MISSING ROWS NOW REPORT, +0 ON EVERY PROFILE AND LIBRARY, 20,696 / 0 / 44 (2026-09-24).**
-`const r: number[] = x` with `x: number[] | string` (and `K | number` -> `K`) was SILENT because `canUseTypeEngine`
-refused every union source against an object target. A per-member lift now admits it at the declaration,
-assignment and property-assignment readers for identifier/property-access sources with no nullish member — with
-three narrowing fixes it needed (initializer narrowing, object-equality narrowing, assignment reduction), which also
-closed pre-existing false positives. 100 cells fixed, none moved away from tsgo; 31 pins, eleven arms RED; a stale
-control and a fired countdown re-pinned against tsgo. Screen 0; grid 8x0 (a real gate); cost_gate PASS; huge_methods 0.
-Return/argument readers and nullish unions are rounds 2 and 3. (CHK.159) step 2 is specified: rxjs to 0 ours-only.
 
