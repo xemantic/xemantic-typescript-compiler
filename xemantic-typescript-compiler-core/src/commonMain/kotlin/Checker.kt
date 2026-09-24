@@ -56835,6 +56835,11 @@ class Checker(
          */
         private const val EXPORT_FINGERPRINT_NODE_BUDGET = 2_000_000
 
+        /** (CHK.168) the width of the `return` keyword — the error span of a return
+         *  statement's relation error (tsc squiggles `~~~~~~`). An arrow's EXPRESSION body
+         *  anchors at the body instead; see the anchored `checkReturnAssignability`. */
+        private const val RETURN_KEYWORD_WIDTH = 6
+
         /** (LEGACY.0b) Ascent bound for [owningSourceFileName]. A real parent chain is
          *  a few dozen links; the cap only stops a malformed one from spinning. */
         private const val OWNING_FILE_ASCENT_CAP = 4096
@@ -97445,10 +97450,8 @@ interface DataView {
         val bodyNode = expr.body
         // 16.0: Concise body (single expression) — check it against return type annotation.
         // E.g., `(arg): number => 'foo'` should emit TS2322 at 'foo'.
-        if (bodyNode is Expression && expr.type != null) {
-            checkArrowConciseBodyReturnType(expr, bodyNode, source, fileName)
-            return
-        }
+        // (CHK.168) a concise body is return-checked by [checkArrowExpressionBodyReturn]
+        // from the scoped walk, which has the parameters in scope; the spine does not.
         if (bodyNode !is Block) return
         val retType = expr.type
         val isAsync = ModifierFlag.Async in expr.modifiers
@@ -97490,59 +97493,6 @@ interface DataView {
         } finally {
             currentFunctionParams = savedParams
         }
-    }
-
-    /**
-     * 16.0: Check arrow function concise body expression against the declared
-     * return type annotation. Catches `(arg): number => 'foo'` style errors.
-     */
-    private fun checkArrowConciseBodyReturnType(
-        arrow: ArrowFunction, body: Expression, source: String, fileName: String
-    ) {
-        val retTypeNode = arrow.type ?: return
-        val targetType = getTypeFromTypeNode(retTypeNode)
-        if (targetType === anyType || targetType === errorType) return
-        // B69.1: Per-branch conditional return-expression checking. Mirrors
-        // TypeScript's behavior of checking each branch of `cond ? a : b`
-        // against the declared return type independently, so each side gets
-        // its own TS2322 diagnostic at its own position.
-        if (checkConditionalReturnBranches(body, targetType, retTypeNode, source, fileName) != 0) return
-        // (CHK.30) 17.70's contextual literal retention, which this path never
-        // had: `getTypeOfExpression` answers the BASE primitive for a literal
-        // NODE, so `(): T => 'a'` compared `string` against the literal union
-        // and FP'd — while the same arrow written with a BLOCK body went
-        // through `checkReturnAssignability`, which does retain it. The two
-        // spellings of one function must not disagree.
-        val bodyType = if (propTypeContainsLiteral(targetType)) {
-            literalTypeOfExpression(body, isArrayLikeReference(targetType))
-                ?: getTypeOfExpression(body)
-        } else enumTargetLiteralSource(body, targetType) ?: getTypeOfExpression(body) // (CHK.83)
-        if (bodyType === anyType || bodyType === errorType) return
-        // Skip null/undefined sources — strictNullChecks mismatch with TypeScript test defaults.
-        if (bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
-        if (!canUseTypeEngine(bodyType, targetType)) return
-        if (checkTypeRelatedTo(bodyType, targetType, assignableRelation)) return
-        // Object literal — emit TS2353 if excess props instead
-        if (body is ObjectLiteralExpression) {
-            val displayTarget = formatTypeForDisplay(retTypeNode) ?: typeToString(targetType)
-            if (checkExcessProperties(body, bodyType, targetType, displayTarget, source, fileName)) return
-        }
-        val displaySource = typeToString(bodyType)
-        val displayTarget = formatTypeForDisplay(retTypeNode) ?: typeToString(targetType)
-        val start = body.pos
-        val length = expressionTrueEnd(body) - start
-        if (length <= 0) return
-        val (line, character) = getLineAndCharacterOfPosition(source, start)
-        diagnostics.add(Diagnostic(
-            message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
-            category = DiagnosticCategory.Error,
-            code = 2322,
-            fileName = fileName,
-            line = line,
-            character = character,
-            start = start,
-            length = length,
-        ))
     }
 
     /**
@@ -97594,6 +97544,38 @@ interface DataView {
         return getArrayType(elem)
     }
 
+    /**
+     * (CHK.168) the per-branch conditional check as a RETURN sees it: inside an async
+     * function each branch is related to the PROMISED type — tsgo
+     * `checkReturnExpression` recurses into both branches with the unwrapped return
+     * type (`unwrapReturnType`) and `checkAwaitedType`s each branch — so `async
+     * (): Promise<number> => c ? 1 : 2` is legal and `c ? 1 : s` names `'number'`.
+     * Before this the branches were related to `Promise<number>` itself: an
+     * ours-only row on every literal arm of an async function's returned ternary,
+     * block body and concise body alike. Only the one-argument `Promise<T>`
+     * annotation is unwrapped, the shape whose promised type is its argument; any
+     * other annotation keeps the old comparison.
+     */
+    private fun craConditionalBranches(
+        expr: Expression?, targetType: Type, returnTypeNode: TypeNode,
+        source: String, fileName: String, typeParams: Set<String>,
+    ): Int {
+        if (inAsyncFunctionBody && targetType is Type.Reference &&
+            targetType.target.symbol?.name == "Promise") {
+            val arg = targetType.resolvedTypeArguments?.singleOrNull()
+            val argNode = (returnTypeNode as? TypeReference)
+                ?.takeIf { (it.typeName as? Identifier)?.text == "Promise" }
+                ?.typeArguments?.singleOrNull()
+            if (arg != null && argNode != null) {
+                if (arg === anyType || arg === errorType) return 0
+                return checkConditionalReturnBranches(
+                    expr, arg, argNode, source, fileName, typeParams, awaitBranches = true,
+                )
+            }
+        }
+        return checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName, typeParams)
+    }
+
     private fun checkConditionalReturnBranches(
         expr: Expression?,
         targetType: Type,
@@ -97602,6 +97584,8 @@ interface DataView {
         fileName: String,
         // round 431e: the enclosing fn's own TP names for the foreign-TP gate.
         typeParams: Set<String> = emptySet(),
+        // (CHK.168) an async function's branch is AWAITED before it is related.
+        awaitBranches: Boolean = false,
     ): Int {
         if (expr == null) return 0
         val unwrapped = unwrapParens(expr)
@@ -97613,16 +97597,20 @@ interface DataView {
             // Recurse into nested conditionals: `cond ? (a ? b : c) : d` — each leaf
             // branch should be checked individually.
             if (inner is ConditionalExpression) {
-                when (checkConditionalReturnBranches(inner, targetType, targetNode, source, fileName, typeParams)) {
+                when (checkConditionalReturnBranches(inner, targetType, targetNode, source, fileName, typeParams, awaitBranches)) {
                     2 -> emitted = true
                     0 -> allVerified = false
                 }
                 continue
             }
             // Compute branch type with literal preservation when target contains literals.
-            val branchType = if (propTypeContainsLiteral(targetType)) {
+            val branchTypeRaw = if (propTypeContainsLiteral(targetType)) {
                 literalTypeOfExpression(inner) ?: getTypeOfExpression(inner)
             } else getTypeOfExpression(inner)
+            val branchType = if (awaitBranches && branchTypeRaw is Type.Reference &&
+                branchTypeRaw.target.symbol?.name == "Promise")
+                branchTypeRaw.resolvedTypeArguments?.singleOrNull() ?: branchTypeRaw
+            else branchTypeRaw
             if (branchType === anyType || branchType === errorType) { allVerified = false; continue }
             if (branchType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
                 // A nullish arm is VERIFIED only when the target genuinely accepts it —
@@ -102067,6 +102055,102 @@ interface DataView {
         return formatTypeForDisplay(valueNode)
     }
 
+    /**
+     * (FN.1) round 757 / (CHK.168): the SCOPED half of [walkFunctionBodiesInExpr]'s
+     * expression-bodied-arrow arm — install the arrow's parameters (and, for an
+     * annotated arrow, the contextual pull), walk the body, and return-check it
+     * against the annotation. Out of line so the walker stays under HotSpot's
+     * 8,000-byte `HugeMethodLimit` (it was 7,800 before (CHK.168)).
+     */
+    private fun walkArrowExpressionBodyScoped(
+        expr: ArrowFunction, bodyExpr: Expression, source: String, fileName: String,
+        varTypes: MutableMap<String, String>, typeParams: Set<String>,
+    ) {
+        val fnTps = expr.typeParameters
+        CtaSections.atD(CtaSections.D_ARROW_EXPR_SCOPE)
+        val innerTypes = varTypes.toMutableMap()
+        val savedLocalTypes = currentLocalTypes
+        val savedTypeParamDecls = currentTypeParamDecls
+        currentLocalTypes = EpochMap(currentLocalTypes)
+        try {
+            if (!fnTps.isNullOrEmpty()) {
+                val merged = savedTypeParamDecls.toMutableMap()
+                for (tp in fnTps) merged[tp.name.text] = tp
+                currentTypeParamDecls = merged
+            }
+            withInternedTpScope(fnTps, withAst = false, withDefaults = true) {
+                ctaTypeParamsIntoLocals(expr.parameters, innerTypes)
+            }
+            // (CHK.168) the contextual half, as `checkFunctionBody` does
+            // it for a block body (there reached through `block.parent`):
+            // `take((x): number => x)` types `x` from `take`'s parameter.
+            // Outside the TP scope for the same reason as there.
+            val retAnn = expr.type
+            if (retAnn != null) applyPulledContextualParamTypes(expr, expr.parameters)
+            CtaSections.atD(CtaSections.D_DISPATCH)
+            val innerTps = typeParams + collectTypeParamNames(fnTps)
+            walkFunctionBodiesInExpr(bodyExpr, source, fileName, innerTypes, innerTps)
+            if (retAnn != null) {
+                checkArrowExpressionBodyReturn(expr, bodyExpr, retAnn, source, fileName, innerTypes, innerTps)
+            }
+        } finally {
+            currentLocalTypes = savedLocalTypes
+            currentTypeParamDecls = savedTypeParamDecls
+        }
+    }
+
+    /**
+     * (CHK.168) an annotated arrow's EXPRESSION body is return-checked by the SAME
+     * machinery as a block body's `return e` — tsgo
+     * `checkFunctionExpressionOrObjectLiteralMethodDeferred` hands a concise body to
+     * `checkReturnExpression` with `node = body`, so the relation, the async unwrap
+     * (`unwrapReturnType`), the per-branch conditional check and every elaboration are
+     * those of a `return`; only the ERROR NODE differs: not the statement (there is
+     * none) but the effective expression (`getEffectiveCheckNode`: parentheses and
+     * `satisfies` skipped), spanning that expression.
+     *
+     * Runs from [walkFunctionBodiesInExpr] because that walk is the one that has the
+     * arrow's parameters in scope; the spine's old concise check did not
+     * ("a per-node hook on the spine sees none of the checking ambient"), so it could
+     * only ever report a scope-free literal body. The flags are `checkFunctionBody`'s
+     * (an arrow is never a generator).
+     */
+    private fun checkArrowExpressionBodyReturn(
+        arrow: ArrowFunction, body: Expression, returnTypeNode: TypeNode,
+        source: String, fileName: String,
+        varTypes: Map<String, String>, typeParams: Set<String>,
+    ) {
+        // The CHECKED expression is the body with its parentheses stripped, as a
+        // `return`'s is: the return machinery reads its contextual type from the
+        // expression's own node kind (an object literal, an array literal, a literal),
+        // and `=> ({ … })` — the only way to write an object-literal concise body —
+        // would otherwise lose the context and widen `k: "exact"` to `string`.
+        val checked = unwrapParens(body)
+        var eff = checked
+        while (true) {
+            eff = when (eff) {
+                is ParenthesizedExpression -> eff.expression
+                is SatisfiesExpression -> eff.expression
+                else -> break
+            }
+        }
+        val anchorLen = expressionTrueEnd(eff) - eff.pos
+        if (anchorLen <= 0) return
+        val savedAsync = inAsyncFunctionBody
+        val savedGenerator = inGeneratorFunctionBody
+        inAsyncFunctionBody = ModifierFlag.Async in arrow.modifiers
+        inGeneratorFunctionBody = false
+        try {
+            checkReturnAssignability(
+                checked, eff.pos, anchorLen, resolveSimpleTypeName(returnTypeNode) ?: "",
+                source, fileName, varTypes, typeParams, returnTypeNode,
+            )
+        } finally {
+            inAsyncFunctionBody = savedAsync
+            inGeneratorFunctionBody = savedGenerator
+        }
+    }
+
     private fun walkFunctionBodiesInExpr(
         expr: Expression, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -102113,32 +102197,14 @@ interface DataView {
                     val bodyExpr = expr.body as? Expression
                     if (bodyExpr != null) {
                         val fnTps = expr.typeParameters
-                        if (expr.parameters.isEmpty() && fnTps.isNullOrEmpty()) {
+                        // (CHK.168) an ANNOTATED arrow always takes the scoped branch:
+                        // its body is return-checked below, under a scope of its own.
+                        if (expr.parameters.isEmpty() && fnTps.isNullOrEmpty() && expr.type == null) {
                             // `() => e`: nothing to scope, so skip the install
                             // entirely rather than copy two maps per arrow.
                             walkFunctionBodiesInExpr(bodyExpr, source, fileName, varTypes, typeParams)
                         } else {
-                            CtaSections.atD(CtaSections.D_ARROW_EXPR_SCOPE)
-                            val innerTypes = varTypes.toMutableMap()
-                            val savedLocalTypes = currentLocalTypes
-                            val savedTypeParamDecls = currentTypeParamDecls
-                            currentLocalTypes = EpochMap(currentLocalTypes)
-                            try {
-                                if (!fnTps.isNullOrEmpty()) {
-                                    val merged = savedTypeParamDecls.toMutableMap()
-                                    for (tp in fnTps) merged[tp.name.text] = tp
-                                    currentTypeParamDecls = merged
-                                }
-                                withInternedTpScope(fnTps, withAst = false, withDefaults = true) {
-                                    ctaTypeParamsIntoLocals(expr.parameters, innerTypes)
-                                }
-                                CtaSections.atD(CtaSections.D_DISPATCH)
-                                walkFunctionBodiesInExpr(bodyExpr, source, fileName, innerTypes,
-                                    typeParams + collectTypeParamNames(fnTps))
-                            } finally {
-                                currentLocalTypes = savedLocalTypes
-                                currentTypeParamDecls = savedTypeParamDecls
-                            }
+                            walkArrowExpressionBodyScoped(expr, bodyExpr, source, fileName, varTypes, typeParams)
                         }
                     }
                 } else {
@@ -108345,10 +108411,31 @@ interface DataView {
         varTypes: Map<String, String>, typeParams: Set<String>,
         returnTypeNode: TypeNode? = null,
         generatorReturnUnwrapped: Boolean = false,
+    ) = checkReturnAssignability(
+        stmt.expression, stmt.pos, RETURN_KEYWORD_WIDTH, returnType, source, fileName,
+        varTypes, typeParams, returnTypeNode, generatorReturnUnwrapped,
+    )
+
+    /**
+     * (CHK.168) the return check keyed by its EXPRESSION and its ERROR ANCHOR rather
+     * than by a [ReturnStatement]: a `return e` anchors at the `return` keyword
+     * ([RETURN_KEYWORD_WIDTH] characters, tsc's `getErrorSpanForNode` of a return
+     * statement), while an arrow's EXPRESSION body anchors at the paren-stripped body
+     * itself — tsgo `checkReturnExpression`'s `errorNode` is the statement only when
+     * `inReturnStatement`, else the effective expression. Everything else about the
+     * two checks is the same machinery, which is the point: tsgo runs ONE
+     * `checkReturnExpression` for both spellings of a function.
+     */
+    private fun checkReturnAssignability(
+        expr: Expression?, anchorPos: Int, anchorLen: Int,
+        returnType: String, source: String, fileName: String,
+        varTypes: Map<String, String>, typeParams: Set<String>,
+        returnTypeNode: TypeNode? = null,
+        generatorReturnUnwrapped: Boolean = false,
     ) {
         if (CtaSections.mode == CtaSections.OFF) {
             checkReturnAssignabilityCore(
-                stmt, returnType, source, fileName, varTypes, typeParams,
+                expr, anchorPos, anchorLen, returnType, source, fileName, varTypes, typeParams,
                 returnTypeNode, generatorReturnUnwrapped,
             )
             return
@@ -108356,7 +108443,7 @@ interface DataView {
         CtaSections.beginC()
         try {
             checkReturnAssignabilityCore(
-                stmt, returnType, source, fileName, varTypes, typeParams,
+                expr, anchorPos, anchorLen, returnType, source, fileName, varTypes, typeParams,
                 returnTypeNode, generatorReturnUnwrapped,
             )
         } finally {
@@ -108365,12 +108452,12 @@ interface DataView {
     }
 
     private fun checkReturnAssignabilityCore(
-        stmt: ReturnStatement, returnType: String, source: String, fileName: String,
+        expr: Expression?, anchorPos: Int, anchorLen: Int,
+        returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>,
         returnTypeNode: TypeNode? = null,
         generatorReturnUnwrapped: Boolean = false,
     ) {
-        val expr = stmt.expression
         CtaSections.atC(CtaSections.C_GEN)
 
         // Round 435: a GENERATOR's `return expr` checks against the annotation's
@@ -108392,7 +108479,7 @@ interface DataView {
                 tArgs[1] else null
             if (treturn == null) return
             checkReturnAssignability(
-                stmt, resolveSimpleTypeName(treturn) ?: "", source, fileName,
+                expr, anchorPos, anchorLen, resolveSimpleTypeName(treturn) ?: "", source, fileName,
                 varTypes, typeParams, treturn, generatorReturnUnwrapped = true,
             )
             return
@@ -108469,7 +108556,7 @@ interface DataView {
             // +2.9% `typeNode.cacheable` / +11.2% `mapped.hits` on the compiler profile
             // for output that is byte-identical either way.
             if (expr != null &&
-                tryEmitWeakValuePosition(expr, targetType, stmt.pos, 6, source, fileName)) {
+                tryEmitWeakValuePosition(expr, targetType, anchorPos, anchorLen, source, fileName)) {
                 return
             }
             // B69.1: Per-branch conditional return-expression checking. Must run
@@ -108477,7 +108564,7 @@ interface DataView {
             // instead of one outer error.
             CtaSections.atC(CtaSections.C_CONDBR)
             if (targetType !== anyType && targetType !== errorType &&
-                checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName, typeParams) != 0) {
+                craConditionalBranches(expr, targetType, returnTypeNode, source, fileName, typeParams) != 0) {
                 return
             }
             // 16.0: contextual typing — set return type as context for arrow/function
@@ -108679,7 +108766,7 @@ interface DataView {
             if (sourceNarrowVerified) return
             CtaSections.atC(CtaSections.C_WALKERS)
             if (craGuardWalkers(
-                    stmt, expr, sourceType, targetType, returnTypeNode, source, fileName,
+                    anchorPos, anchorLen, expr, sourceType, targetType, returnTypeNode, source, fileName,
                     typeParams,
                 )) return
             CtaSections.atC(CtaSections.C_RELATION)
@@ -108731,9 +108818,9 @@ interface DataView {
             if (canUseForReturn && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 CtaSections.atC(CtaSections.C_ELAB)
                 // (CHK.93) stage 2: TS4104 at the `return` keyword, in place of the chain.
-                if (emitTs4104IfReadonlyToMutable(sourceType, targetType, stmt.pos, 6, source, fileName)) return
+                if (emitTs4104IfReadonlyToMutable(sourceType, targetType, anchorPos, anchorLen, source, fileName)) return
                 craElaborateReturnMismatch(
-                    stmt, sourceType, targetType, returnTypeNode, source, fileName, typeParams,
+                    expr, anchorPos, anchorLen, sourceType, targetType, returnTypeNode, source, fileName, typeParams,
                 )
                 return
             }
@@ -108761,9 +108848,8 @@ interface DataView {
         if ((exprType == "undefined" || exprType == "null") &&
             aliasUnionContainsNullishKeyword(returnTypeNode, exprType)) return
         if (!isAssignableTo(exprType, returnType, typeParams)) {
-            val returnKeywordLength = 6
             val isLiteral = expr == null || isSimpleLiteral(expr)
-            emitTS2322(stmt.pos, returnKeywordLength, exprType, returnType, source, fileName, hasElaboration = !isLiteral, typeParams = typeParams)
+            emitTS2322(anchorPos, anchorLen, exprType, returnType, source, fileName, hasElaboration = !isLiteral, typeParams = typeParams)
         }
     }
 
@@ -108779,7 +108865,8 @@ interface DataView {
      * `if (…) return`.
      */
     private fun craGuardWalkers(
-        stmt: ReturnStatement,
+        anchorPos: Int,
+        anchorLen: Int,
         expr: Expression?,
         sourceType: Type,
         targetType: Type,
@@ -108816,7 +108903,7 @@ interface DataView {
             if (tpMembers.any { (it as Type.TypeParam).constraint != null }) return@run
             val srcDisplay = (nonTp.map { typeToString(it) } +
                 tpMembers.map { "Awaited<${typeToString(it)}>" }).joinToString(" | ")
-            val (bl, bc) = getLineAndCharacterOfPosition(source, stmt.pos)
+            val (bl, bc) = getLineAndCharacterOfPosition(source, anchorPos)
             diagnostics.add(Diagnostic(
                 message = "Type '$srcDisplay' is not assignable to type '$tpName'.",
                 category = DiagnosticCategory.Error,
@@ -108824,8 +108911,8 @@ interface DataView {
                 fileName = fileName,
                 line = bl,
                 character = bc,
-                start = stmt.pos,
-                length = 6,
+                start = anchorPos,
+                length = anchorLen,
                 messageChain = listOf(
                     "  '$tpName' could be instantiated with an arbitrary type which could be unrelated to '$srcDisplay'."
                 ),
@@ -108954,7 +109041,7 @@ interface DataView {
                     else -> typeToString(m)
                 }
             }
-            val (fLine, fChar) = getLineAndCharacterOfPosition(source, stmt.pos)
+            val (fLine, fChar) = getLineAndCharacterOfPosition(source, anchorPos)
             diagnostics.add(Diagnostic(
                 message = "Type '$falsyDisplay | ${typeToString(rightT)}' " +
                     "is not assignable to type '${typeToString(targetType)}'.",
@@ -108963,8 +109050,8 @@ interface DataView {
                 fileName = fileName,
                 line = fLine,
                 character = fChar,
-                start = stmt.pos,
-                length = 6,
+                start = anchorPos,
+                length = anchorLen,
             ))
             return true
         }
@@ -109012,14 +109099,14 @@ interface DataView {
             if (missing.isNotEmpty()) {
                 val displaySource = typeToString(sourceType)
                 val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
-                val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                val (line, character) = getLineAndCharacterOfPosition(source, anchorPos)
                 if (missing.size >= 2) {
                     diagnostics.add(Diagnostic(
                         message = formatTs2740Message(displaySource, displayTarget, missing),
                         category = DiagnosticCategory.Error,
                         code = if (missing.size <= 4) 2739 else 2740,
                         fileName = fileName, line = line, character = character,
-                        start = stmt.pos, length = 6,
+                        start = anchorPos, length = anchorLen,
                     ))
                 } else {
                     val mpName = missing[0]
@@ -109030,7 +109117,7 @@ interface DataView {
                         message = "Property '$mpName' is missing in type '$displaySource' but required in type '$declaringDisplay'.",
                         category = DiagnosticCategory.Error, code = 2741,
                         fileName = fileName, line = line, character = character,
-                        start = stmt.pos, length = 6,
+                        start = anchorPos, length = anchorLen,
                         relatedInformation = listOfNotNull(relatedInfo),
                     ))
                 }
@@ -109042,7 +109129,7 @@ interface DataView {
         // requires them, so TS2322 never fires for
         // `function f(): { new(): T } { return function(){} }`. Mirror the
         // assignment-path construct-sig-mismatch branch (~57866) into the return
-        // path. Squiggle = the `return` keyword (stmt.pos, length 6). FP-safe:
+        // path. Squiggle = the `return` keyword (anchorPos, anchorLen). FP-safe:
         // getNonConstructibleElaboration is non-null only for a genuine mismatch.
         if (expr != null && targetType is Type.Object && !targetType.constructSignatures.isNullOrEmpty() &&
             !isClassOrInterfaceInstanceType(targetType) &&
@@ -109058,12 +109145,12 @@ interface DataView {
                     targetType.symbol?.flags?.hasAny(SymbolFlags.Function) == true)
                     typeToString(targetType) // B198: tsc unfolds `typeof <fn>` to its signature form
                 else formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
-                val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+                val (line, character) = getLineAndCharacterOfPosition(source, anchorPos)
                 diagnostics.add(Diagnostic(
                     message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
                     category = DiagnosticCategory.Error, code = 2322,
                     fileName = fileName, line = line, character = character,
-                    start = stmt.pos, length = 6,
+                    start = anchorPos, length = anchorLen,
                     messageChain = srcCtorElab,
                 ))
                 return true
@@ -109083,7 +109170,9 @@ interface DataView {
      * site returns unconditionally after it.
      */
     private fun craElaborateReturnMismatch(
-        stmt: ReturnStatement,
+        expr: Expression?,
+        anchorPos: Int,
+        anchorLen: Int,
         sourceType: Type,
         targetType: Type,
         returnTypeNode: TypeNode,
@@ -109117,7 +109206,7 @@ interface DataView {
                     awaited.tupleElementTypes != null
                 ) {
                     val n = awaited.tupleElementTypes!!.size
-                    val (tl, tc) = getLineAndCharacterOfPosition(source, stmt.pos)
+                    val (tl, tc) = getLineAndCharacterOfPosition(source, anchorPos)
                     diagnostics.add(Diagnostic(
                         message = "Type '${typeToString(sourceType)}' is not assignable to type '${typeToString(awaited)}'.",
                         category = DiagnosticCategory.Error,
@@ -109125,8 +109214,8 @@ interface DataView {
                         fileName = fileName,
                         line = tl,
                         character = tc,
-                        start = stmt.pos,
-                        length = 6,
+                        start = anchorPos,
+                        length = anchorLen,
                         messageChain = listOf("  Target allows only $n element(s) but source may have more."),
                     ))
                     return
@@ -109155,7 +109244,7 @@ interface DataView {
             targetType, sourceType, optionalDeclaration = false, targetAnnotation = returnTypeNode,
         )
         val displaySourceType = relationErrorSourceDisplayType(
-            relationErrorSourceLiteral(stmt.expression, sourceType, nullStrippedReturn), nullStrippedReturn,
+            relationErrorSourceLiteral(expr, sourceType, nullStrippedReturn), nullStrippedReturn,
         )
         val displaySource = relationErrorSourceRender(displaySourceType, nullStrippedReturn)
         val displayTarget = if (nullStrippedReturn !== targetType) typeToString(nullStrippedReturn)
@@ -109171,8 +109260,7 @@ interface DataView {
             // `EnumLiteral`. Answers null for every other shape, so nothing else moves.
             else oneMemberEnumCollapsedDisplay(targetType)
             ?: formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
-        val returnKeywordLength = 6
-        val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
+        val (line, character) = getLineAndCharacterOfPosition(source, anchorPos)
         // B49.3: TS2739/TS2740 missing-properties emission for return-statement
         // assignability, mirroring the var-decl/assignment paths. When the source
         // is missing 2+ properties of the target, emit TS2739 (no truncation, all
@@ -109230,8 +109318,8 @@ interface DataView {
                     fileName = fileName,
                     line = line,
                     character = character,
-                    start = stmt.pos,
-                    length = returnKeywordLength,
+                    start = anchorPos,
+                    length = anchorLen,
                 ))
                 return
             }
@@ -109323,8 +109411,8 @@ interface DataView {
             fileName = fileName,
             line = line,
             character = character,
-            start = stmt.pos,
-            length = returnKeywordLength,
+            start = anchorPos,
+            length = anchorLen,
             messageChain = chain,
             relatedInformation = if (relatedInfo.isEmpty()) emptyList() else relatedInfo.toList(),
         )
@@ -178390,8 +178478,19 @@ interface DataView {
      */
     private fun keyofTypeQueryEnumMemberNames(operand: TypeNode): Type? {
         val tq = operand as? TypeQuery ?: return null
-        val name = (tq.exprName as? Identifier)?.text ?: return null
-        var sym = currentFileLocals?.get(name) ?: globals[name] ?: return null
+        // (CHK.168) the QUALIFIED spelling `keyof typeof ts.PatternMatchKind` — how tsc's
+        // own harness reaches the enum through its `_namespaces` barrel
+        // (fourslashInterfaceImpl.ts:1927) — resolves through the same qualified-name
+        // chain `typeof A.B` does, and then takes this function's enum rule unchanged.
+        // It answered `string` (or `never`) before, so a value typed by it failed
+        // against the literal union the same key set spells directly.
+        val exprName = tq.exprName
+        var sym = if (exprName is QualifiedName) {
+            resolveQualifiedName(exprName) ?: return null
+        } else {
+            val name = (exprName as? Identifier)?.text ?: return null
+            currentFileLocals?.get(name) ?: globals[name] ?: return null
+        }
         if (!sym.flags.hasAny(SymbolFlags.Enum) && sym.flags.hasAny(SymbolFlags.Alias)) {
             sym = resolveImportedEnumSymbol(sym, mutableSetOf()) ?: return null
         }
