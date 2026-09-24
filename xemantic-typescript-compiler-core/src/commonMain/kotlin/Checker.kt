@@ -122485,37 +122485,62 @@ interface DataView {
         // truthy `unknown` is `{}`, which "may represent a primitive"). Off by
         // default so all other narrowing keeps `unknown` unchanged.
         if (t === unknownType && truthy && narrowUnknownToEmptyObject) return truthyUnknownType
+        val src = splitEnumsForTruthiness(t, truthy)
         return if (truthy) {
             when {
-                isDefinitelyFalsyMember(t) -> neverType
-                t is Type.Union -> {
-                    val kept = t.types.filter { !isDefinitelyFalsyMember(it) }
+                isDefinitelyFalsyMember(src) -> neverType
+                src is Type.Union -> {
+                    val kept = src.types.filter { !isDefinitelyFalsyMember(it) }
                     when {
                         kept.isEmpty() -> neverType
-                        kept.size == t.types.size -> t
+                        kept.size == src.types.size -> src
                         else -> getUnionType(kept)
                     }
                 }
-                else -> t
+                else -> src
             }
         } else {
             when {
-                isDefinitelyTruthyMember(t) -> neverType
-                t is Type.Union -> {
-                    val kept = t.types.filter { !isDefinitelyTruthyMember(it) }
+                isDefinitelyTruthyMember(src) -> neverType
+                src is Type.Union -> {
+                    val kept = src.types.filter { !isDefinitelyTruthyMember(it) }
                     when {
                         kept.isEmpty() -> neverType
-                        kept.size == t.types.size -> t
+                        kept.size == src.types.size -> src
                         else -> getUnionType(kept)
                     }
                 }
-                else -> t
+                else -> src
             }
         }
     }
 
+    /**
+     * (CHK.166)(a): replace each whole-enum constituent of [t] by its member types when a
+     * truthiness narrow in the [truthy] branch removes a PROPER subset of them
+     * ([EnumSemantics.enumTruthinessSplit]) — tsgo's union-enum filtering. Returns [t]
+     * itself whenever no constituent splits, so an enum nothing is removed from keeps
+     * displaying as `K`.
+     */
+    private fun splitEnumsForTruthiness(t: Type, truthy: Boolean): Type {
+        val members = if (t is Type.Union) t.types else listOf(t)
+        var out: MutableList<Type>? = null
+        for ((i, m) in members.withIndex()) {
+            val parts = enumSemantics.enumTruthinessSplit(m, truthy)
+            if (parts == null) {
+                out?.add(m)
+                continue
+            }
+            val acc = out ?: members.subList(0, i).toMutableList().also { out = it }
+            acc.addAll(parts)
+        }
+        return out?.let { getUnionType(it) } ?: t
+    }
+
     private fun isDefinitelyFalsyMember(t: Type): Boolean = when {
         t === undefinedType || t === nullType || t === voidType || t === falseType -> true
+        t is Type.Object && t.flags.hasAny(TypeFlags.Enum or TypeFlags.EnumLiteral) ->
+            enumSemantics.enumTruthiness(t) == EnumTruthiness.FALSY
         t is Type.StringLiteral -> t.value.isEmpty()
         t is Type.NumberLiteral -> t.value == 0.0
         t is Type.BigIntLiteral -> isZeroBigIntLiteral(t.value)
@@ -122523,6 +122548,8 @@ interface DataView {
     }
 
     private fun isDefinitelyTruthyMember(t: Type): Boolean = when {
+        t is Type.Object && t.flags.hasAny(TypeFlags.Enum or TypeFlags.EnumLiteral) ->
+            enumSemantics.enumTruthiness(t) == EnumTruthiness.TRUTHY
         t is Type.Object || t is Type.Interface || t is Type.Reference -> true
         t === trueType -> true
         t is Type.StringLiteral -> t.value.isNotEmpty()

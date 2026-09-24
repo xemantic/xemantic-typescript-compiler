@@ -112,6 +112,15 @@ internal class EnumSemantics(
      *  init-order trap. */
     private val enumTypesRelationCache = HashMap<Long, EnumRelFailure?>()
 
+    /** (CHK.166)(a): memo for [enumTruthiness]'s MEMBER table, keyed by the owning enum
+     *  symbol id — member name to its truthiness. Declared before `init` per the
+     *  init-order trap. */
+    private val enumMemberTruthinessCache = HashMap<Int, Map<String, EnumTruthiness>?>()
+
+    /** (CHK.166)(a): memo for [enumTruthiness] of an enum's OWN type, keyed by that
+     *  type's enum symbol id. Declared before `init` per the init-order trap. */
+    private val enumWholeTruthinessCache = HashMap<Int, EnumTruthiness>()
+
     /** (REL.1)(c) round 747: tsc's `TypeFormatFlags.UseFullyQualifiedType`, restricted to
      *  ENUM names — while set, [typeToString] renders an enum (or enum-member) type with its
      *  namespace path, at ANY nesting depth, so a colliding pair inside a rendered function
@@ -1134,4 +1143,92 @@ internal class EnumSemantics(
         val member = checker.getDeclaredTypeOfEnumMember(memberSym)
         return if (member === anyType) null else member
     }
+
+    /**
+     * (CHK.166)(a): the TRUTHINESS of an enum-flavored value — an enum's own type or one
+     * of its member types — or `null` when [type] is not enum-flavored.
+     *
+     * tsgo models a literal enum as the UNION of its member literal types
+     * (`getDeclaredTypeOfEnum`), so `getTypeFactsWorker` classifies each member by its
+     * VALUE: `0`, `NaN` and `""` are falsy, every other known value truthy, and a
+     * member whose value is opaque (computed, or an ambient non-const member with no
+     * initializer — `createComputedEnumType`) is an `Enum`-flagged type that may be
+     * either. This checker mints one member-LESS `Type.Object` for the whole enum, so
+     * the truthiness predicates read it as an OBJECT, i.e. always truthy — which washed
+     * a falsy branch to `never` and kept `K.Zero` in a truthy one.
+     *
+     * A member: [EnumTruthiness.FALSY] for `0` / `NaN` / `""`, [EnumTruthiness.TRUTHY]
+     * for any other known value, [EnumTruthiness.EITHER] when opaque or unkeyed. A whole
+     * enum: TRUTHY only if every member is, FALSY only if every member is (a one-member
+     * `enum O { Only }` is therefore FALSY, as tsgo's reduction to `O.Only` = `0` is),
+     * EITHER otherwise and whenever it cannot be decomposed ([enumMemberTypesOf]).
+     */
+    fun enumTruthiness(type: Type): EnumTruthiness? {
+        val obj = type as? Type.Object ?: return null
+        return when {
+            obj.flags.hasAny(TypeFlags.Enum) -> {
+                val sym = obj.symbol ?: return EnumTruthiness.EITHER
+                enumWholeTruthinessCache.getOrPut(sym.id) {
+                    val members = enumMemberTypesOf(obj) ?: return@getOrPut EnumTruthiness.EITHER
+                    var truthy = 0
+                    var falsy = 0
+                    for (m in members) {
+                        when (enumTruthiness(m)) {
+                            EnumTruthiness.TRUTHY -> truthy++
+                            EnumTruthiness.FALSY -> falsy++
+                            else -> {}
+                        }
+                    }
+                    when (members.size) {
+                        truthy -> EnumTruthiness.TRUTHY
+                        falsy -> EnumTruthiness.FALSY
+                        else -> EnumTruthiness.EITHER
+                    }
+                }
+            }
+            obj.flags.hasAny(TypeFlags.EnumLiteral) -> {
+                val owner = enumOfMemberTypeSymbol(obj) ?: return EnumTruthiness.EITHER
+                val name = obj.symbol?.name ?: return EnumTruthiness.EITHER
+                enumMemberTruthinessTable(owner)?.get(name) ?: EnumTruthiness.EITHER
+            }
+            else -> null
+        }
+    }
+
+    private fun enumMemberTruthinessTable(enumSym: Symbol): Map<String, EnumTruthiness>? =
+        enumMemberTruthinessCache.getOrPut(enumSym.id) {
+            val entries = enumMemberEntries(enumSym) ?: return@getOrPut null
+            val out = HashMap<String, EnumTruthiness>()
+            for ((name, value) in entries) {
+                out[name] = when (value) {
+                    is ConstantValue.NumberValue ->
+                        if (value.value == 0.0 || value.value.isNaN()) EnumTruthiness.FALSY else EnumTruthiness.TRUTHY
+                    is ConstantValue.StringValue ->
+                        if (value.value.isEmpty()) EnumTruthiness.FALSY else EnumTruthiness.TRUTHY
+                    null -> EnumTruthiness.EITHER
+                }
+            }
+            out
+        }
+
+    /**
+     * (CHK.166)(a): the member types to put in place of a whole-enum constituent before a
+     * truthiness narrow, or `null` to keep the enum as it is.
+     *
+     * Non-null ONLY when the branch removes a PROPER subset of the members — the truthy
+     * branch drops the FALSY ones, the falsy branch the TRUTHY ones — which is exactly
+     * when tsgo's union filter yields a different union. Where nothing is removed (every
+     * member survives) or everything is (the predicates remove the whole enum), the enum
+     * stays whole, which keeps the `K` display.
+     */
+    fun enumTruthinessSplit(type: Type, truthy: Boolean): List<Type>? {
+        if (type !is Type.Object || type.flags.hasNone(TypeFlags.Enum)) return null
+        if (enumTruthiness(type) != EnumTruthiness.EITHER) return null
+        val members = enumMemberTypesOf(type) ?: return null
+        val removed = if (truthy) EnumTruthiness.FALSY else EnumTruthiness.TRUTHY
+        return if (members.any { enumTruthiness(it) == removed }) members else null
+    }
 }
+
+/** (CHK.166)(a): the truthiness of an enum-flavored value; see [EnumSemantics.enumTruthiness]. */
+internal enum class EnumTruthiness { TRUTHY, FALSY, EITHER }
