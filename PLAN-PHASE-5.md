@@ -25,6 +25,47 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.193) — (CHK.159) step 2: the contextual-return FALLBACK for a call's result type; **`rxjs` reads 0 ours-only rows for the first time** (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.166)(a) enum census landing beside it (recorded in
+that item). `argInferResultTypeArguments` now returns an `ArgInferOutcome` (found map + COMPLETE / PARTIAL —
+also for calls with NO arguments — / REFUSED / CONSTRAINT_FAILED; the constraint check extracted to
+`argInferConstraintFails`), and on PARTIAL `argInferResultType` / `argInferOverloadResultType` call
+`argInferContextFallback`: `argBound` from the partial map into `ctxReturnTypeParamMapper`, argument candidate
+first per type parameter (tsgo `inferTypeArguments`, checker.go ~9366; inference.go ~189), all-or-nothing over
+the TPs the return mentions, the combined map constraint-checked (a failure still moves to the next overload).
+**The census's safeguard (6) is MANDATORY, not optional**: without refusing calls whose parent is a call or
+`new`, `typeNode.bypassed` read **+36.6%** (151,752 -> 207,262) and `typeOfExpr.calls` +3.4% against a
+rebuilt before-arm — the contextual pull re-enters checking of the outer call; with the refusal +0.14% / +7
+calls and every cell/row result identical (the one collision the all-or-nothing rule exists for,
+`combineLatest`'s `pipe(...)`, is a call argument, so the refusal covers it too). Safeguard (5) cannot reach
+`b03` (a one-TP callee answers from the OLD single-TP path before step 1 runs; a literal-keep was tried and
+reverted). Safeguards (1)'s refusal half and (3) are REDUNDANT by construction (0 RED, recorded).
+`argInferAnnotatedCallbackTypeParams` (safeguard 4, `r03`) and `argInferCallIsArgument` (safeguard 6) are
+new. `getReturnTypeOfCallExpressionCore` still 2,641 bytecodes.
+
+**Matrix**: census 44 cells **11 -> 25** match tsgo — exactly the census's 14 (a01 a02 a04 a10 a11 a12 a16
+a23 a24 b02 b05 grp8-orig r01 r07); the step-1 matrix unchanged (no row moved in any cell). Residues: tsgo's
+second pass over context-sensitive callbacks (`r03`, `s4`, `s2b`, `x2`, `a13`); `unknown` for a nested call's
+never-inferred TP (`s1r`); constraint substitution (`a14`, `s1c2`); `b03`'s literal (old single-TP path); the
+call-as-source reader gap (`a05`/`a08`/`a22`) and base-type/index-signature cells.
+
+**Pins**: `ContextualResultInferenceTest`, 26 tests (the 14 flipped cells, controls, 8 `residue -` pins; four
+assert the head line only, for pre-existing chain/display gaps). Ablation: all-or-nothing 1 RED (0 before
+the `x2` pin was added); combined constraint check 1; safeguard (4) 1; whole fallback 15; REFUSED ->
+fallback **0**; "context must contribute" **0**; CONSTRAINT_FAILED -> fallback **0**; call/`new`-parent
+refusal **0 pins but +36.8% bypassed** — a cost guard no pin can see, recorded as such.
+
+**Gates**: full suite **20,722 / 0 / 44** (+26); corpus screen 0 of 8,725 (five inference pending baselines
+byte-identical); cost_gate PASS (`typeNode.bypassed` +0.31% vs the recorded baseline); huge_methods 0; grid
+8x `added=0 removed=0`; no `w:`. **`rxjs`: 1 -> 0 — `diagnostics: 0 error(s)` on the orchestrator's own run.
+The library now reports NOTHING we invent; tsgo's one row (`WebSocketSubject.ts:304`, TS2345 against
+`string | Blob | BufferSource`) is still MISSED — (CHK.161)(c).** From 29 ours-only rows at (P18.173) to 0 in
+14 rounds. `marked` 0, `cronstrue` 1 (its known config row).
+
+**Successor**: (CHK.168) round 1 (annotated arrow expression bodies, specified, +0 predicted) or (CHK.166)(a)
+(enum `never` wash, specified, +0 predicted); both are false-negative classes.
+
 ### Round (P18.192) — (CHK.167) round 1: a non-nullish UNION source is related to an object-family target at three readers; 100 missing rows now report, +0 on every profile and library (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.159) step-2 census landing beside it (recorded in
@@ -423,66 +464,6 @@ still reports (deliberately, today's answer); array-pattern and rest bindings st
 `Action<any>` display; the (CHK.144) binding-pattern leak.
 
 **Successor**: (CHK.154) (trailing-`void` parameter optional in the relation, rxjs `Observable:307`).
-
-### Round (P18.183) — (CHK.152) step 1: a named-object argument is RELATED to a named-object parameter; 24 of 29 census misses report with the declaration's chain, +0 rows everywhere as PREDICTED (2026-09-23)
-
-Orchestrated: one implementation subagent built the gate the (CHK.152) census had specified; a parallel
-read-only census reduced `rxjs`'s ten remaining rows to seven families, filed as (CHK.153)-(CHK.161).
-**The census's prediction was EXACT** — it attached a debugger to a frozen compiler, broke on
-`caasNonSimpleParamChecks` and asked the checker's own predicates for every `CAAS_CONTINUE` exit, and said
-+0 rows on all 8 profiles and every library. That instrument is now committed as a reference
-(`scripts/census/JdiArgFirewallCensus.java` + driver), because it priced a gate opening with no build.
-
-**The change (`Checker.kt` +93/−6)**: `allowNamedObjectVsNamedObject` in `caasNonSimpleParamChecks`,
-guarded by `arityOk`, not-rest and no free type parameter on either side;
-`argNamedObjectVsNamedObjectCheckable` refuses literal / arrow / function-expression arguments, classifies
-both sides through `isNamedObjectForArgCheck` (interface or class instance; a non-array/tuple generic
-instantiation; an intersection whose members are ALL object types; an aliased object on the PARAMETER
-side only; never a union or an enum-flavoured type), then asks `canUseTypeEngine`; and
-`caasTailGatesAndRelation` builds the member chain for the classified pair. tsgo uses one relation and one
-elaboration for both positions (`checkApplicableSignature` -> `checkTypeRelatedToAndOptionallyElaborate`),
-and **all 34 newly reported argument rows print exactly the chain our declaration reader prints**.
-
-**Where the specification was wrong**: the REST guard is redundant (a rest parameter's type is an array,
-which the classifier refuses — a3 0 RED, kept and documented); excluding union ARGUMENTS is redundant
-(`canUseTypeEngine` refuses them — a9 0 RED); excluding union PARAMETERS is load-bearing but for a
-different reason than the census gave — admitting them adds 3 ours-only rows on harness because a member
-read off a NARROWED receiver is typed by its declaration (`isE(p) && zab(p.parent)` reads `p.parent` as
-`N`); relaxing the chain for EVERY pair broke `ArrayLikeArgumentAssignabilityTest` (a tuple argument
-collapsed to TS2740), so the relaxation is scoped to the classified pair; a branded primitive
-(`string & {…}`) is refused (admitted, this reader prints a bare TS2741 where tsgo prints TS2345); and no
-narrowing second chance is needed — the argument arrives already narrowed for every guard shape tried.
-**Two existing pins asserted wrong absences** and now assert tsgo's rows: `StructuralContextualInferenceTest`'s
-`takeO(createS(1, …))` outer row (byte-identical to tsgo, 4-line chain), and `ArgKindCensusTest` got a
-union-parameter call so its not-simple exit keeps a member.
-
-**Matrix vs tsgo** (47 census cells + 28 new): census argument rows 6 agree / 29 missing -> **27 agree**,
-3 chain-differs, 5 missing; new cells 1 agree -> 8, 3 chain-differs; **all 22 silent controls stay silent**
-(extra property on a non-fresh source, method bivariance, required->optional, structurally compatible
-classes, weak types, `Date` against a shape, narrowing controls). Every chain-differs argument row has the
-SAME divergence at declaration position — pre-existing: the `strictFunctionTypes` extra line, a missing
-"Index signature … is missing" line, no chain for an intersection parameter, the covariant (not
-contravariant) elaboration direction for a generic, a long `every` chain for `readonly string[]`.
-
-**Pins**: `NamedObjectArgumentAssignabilityTest`, 17 tests, full head + chain. Ablation, eleven arms:
-gate off 10 RED; no `arityOk` 1; no rest guard **0 (redundant)**; no free-TP guard on the parameter 1, on
-the argument 1; chain relaxation off 9; union parameters admitted 1; union arguments admitted **0**
-(refused downstream); literal exclusions dropped **0** (anonymous types refused anyway); primitive-bearing
-intersections admitted 1; aliased-object parameter off 1. Restored md5 `da3efb53`, rebuilt.
-
-**Gates**: full suite **20,544 / 0 / 44** (+17, the new class);
-corpus screen 0 of 8,725 — **the corpus does NOT see this change either**, contrary to the brief (the
-census had measured the population at 23 named->named TS2345 rows, all already matched); cost_gate PASS
-(`typeNode.bypassed` +0.14%); huge_methods 0; grid 8x `added=0 removed=0` — a REAL false-positive gate
-this time (7,494 narrow pairs on tsc-project, 14,311 on harness reach the opened gate); `rxjs` 10 -> 10,
-`marked` 0; no `w:` in the suite compile. **Residues**: step 2 (`pos-rest`), step 3 (`nullable-param` —
-blocked by the narrowed-receiver member read), step 4 (`src-union`, missing at declaration too); relation
-gaps at both positions (`c-private`, `p-index-alias`); inference (`pos-constraint`,
-`generic-callee-inferred`); `generic-arg-tp` (needs a type-parameter->concrete rule — the a5 arm gets it
-right but adds `T extends string` false positives); a function declaration against a callable interface;
-a named argument against an array parameter; the branded primitive.
-
-**Successor**: (CHK.153), the smallest rxjs family (S, removal-only, 3 rows).
 
 ## QUEUE
 
@@ -1293,7 +1274,8 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   from the callee's DECLARATION, and a variable declaration carries none; read it from the callee's
   SIGNATURE instead. Reducer `build/scratch-p18183-census/cells/aaoo2` (c2, c3); controls (c1, c4, c5). Size M.
 
-- [ ] **(CHK.159) STEP 2 CENSUSED 2026-09-24 (read-only, frozen (P18.191) classes, `build/scratch-p18192-census/`,
+- [ ] **(CHK.159) STEPS 1-2 LANDED ((P18.191), (P18.193): rxjs 2 -> 0 ours-only). OPEN: the later steps below
+  (second pass over context-sensitive callbacks first). STEP 2 CENSUSED 2026-09-24 (read-only, frozen (P18.191) classes, `build/scratch-p18192-census/`,
   README.txt, `jdi/Ctx2Census.java`) — SPECIFIED, rxjs PREDICTED 1 -> 0 OURS-ONLY, +0 EVERYWHERE ELSE.** tsgo
   (`inferTypeArguments`, checker.go ~9366) infers the call's contextual type into the return at
   `InferencePriorityReturnType` and WIPES those candidates per TP when a priority-0 argument candidate arrives
@@ -1458,7 +1440,30 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   (b) a function-typed ALIAS as the SOURCE of an argument check is silent even with explicit type arguments
   (`grp6`/`grp7` line 7); plus (c) `null!` is not typed `never` (the census saw `Type 'null'` wording).
 
-- [ ] **(CHK.166) TRUTHINESS SIBLING DEFECTS FROM THE (CHK.164) CENSUS, each measured against tsgo
+- [ ] **(CHK.166) (a) CENSUSED 2026-09-24 (read-only, frozen (P18.192) classes, `build/scratch-p18193-census/`,
+  README.txt) — STEP 1 SPECIFIED: VALUE-AWARE ENUM TRUTHINESS IN `narrowByTruthiness`; 193 -> 639 of 660 CELLS,
+  +0 ROWS ON EVERY INSTRUMENT, SO THE PINS ARE THE ONLY GATE.** An enum type here is one member-less
+  `Type.Object` flagged `Enum` (members `EnumLiteral`); `EnumSemantics` already decomposes (`enumMemberTypesOf`
+  ~147, `enumMemberEntries` ~545 with `null` = opaque value, `enumOfMemberTypeSymbol` ~897).
+  `isDefinitelyTruthyMember` answers true for EVERY `Type.Object`, so the falsy branch removes `K.Zero`/`S.Empty`
+  (a bare `K` becomes `never`) and the truthy branch keeps `K.Zero` and an un-split `K`; also read by the `&&`
+  / `||` / `||=` / `&&=` result types and the object-literal `&&` arm. tsgo: an enum is the union of its member
+  literal types (`getDeclaredTypeOfEnum` ~23783; opaque members `createComputedEnumType`), `0`/`NaN`/`""` falsy,
+  an `Enum`-flagged opaque type either way, a single-member enum reduces to its member. 740 probes x 10 enum
+  kinds: today 193 agree / 192 missing / 225 diff / 50 ours-only; **naive (never definitely truthy/falsy)
+  WORSE — 98 FPs** (N1/S1/O where `never` is right); value-aware predicate without decomposition 411; **value-
+  aware with decomposition 639, 0 ours-only**, the 21 left all `S | string` (tsgo's union literal reduction,
+  separate; 6 of them agreed today only because the wash hid `S.Empty`). Hand cells: today's FPs on legal
+  code x16/x17 close; missed rows x19/x20/x22/x23/x08-x11/x13 land. Population 102-117 enum truthiness
+  narrowings per profile, 88-92 changed, **0 rows on all 8 profiles, rxjs, marked, cronstrue, corpus 0 of
+  3,079** (full diagnostic text byte-identical on the four big profiles). **STEP 1**: `enumTruthiness(type)` in
+  `EnumSemantics`, memoised per enum symbol (member: falsy for 0/NaN/"", truthy for other known values, either
+  when opaque; whole enum by its members); used by both predicates for enum-flavored objects; in
+  `narrowByTruthiness` replace a whole-enum constituent by its members ONLY when the branch removes a proper
+  subset (keeps the `K` display otherwise). Pin both directions — N1/S1/O `never` (what the naive shape
+  breaks), `declare enum`, a computed member. **STEP 2**: decompose in the `&&`/`||`/`&&=`/`||=` result types
+  and the object-literal arm (x01-x05, x15); switch-case comparability (x07); the legacy return reader belongs
+  with (CHK.164) step 2. TRUTHINESS SIBLING DEFECTS FROM THE (CHK.164) CENSUS, each measured against tsgo
   (`build/scratch-p18189-census/cells`).** (a) **an ENUM is washed to `never` in the FALSY branch** — a
   member-less `Type.Object` counts as definitely truthy (`isDefinitelyTruthyMember` ~122141), so
   `if (!k) { const s: string = k }` is SILENT where tsgo reports TS2322 (tsgo splits an enum by member value;
@@ -1511,7 +1516,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   TS2302 baselines plus the `B4` both-directions pin**, and note the grid is a CONTROL by a
   measured count of ZERO sites on all eight profiles.
 
-- [ ] **(LIB.5) THE NEXT LIBRARY IS `rxjs` 7.8.2, AND IT IS PROVISIONABLE OFFLINE FROM THE npm
+- [ ] **(LIB.5) 2026-09-24 ((P18.193)): `rxjs` reads 0 OURS-ONLY ROWS (29 at (P18.173)); ONE tsgo row is still
+  MISSED — `WebSocketSubject.ts:304`, (CHK.161)(c) — so exact agreement is one false negative away.
+  THE NEXT LIBRARY IS `rxjs` 7.8.2, AND IT IS PROVISIONABLE OFFLINE FROM THE npm
   CACHE — censused 2026-09-22 ((P18.173) recon) now that `marked` and `cronstrue` both agree with
   tsgo exactly.** The readiness page's older candidates are **NOT ON THIS BOX**: `jsonrepair`,
   `fflate` and `knip` are absent and uncached, and `yaml@2.9.0` IS cached but ships **zero

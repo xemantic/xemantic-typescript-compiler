@@ -1,7 +1,8 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **200,788** lines (**+157 at (P18.192)**, a union-source relation lift at three readers plus three
+extraction):** `Checker.kt` **200,932** lines (**+144 at (P18.193)**, the inference-outcome refactor and the contextual-return
+fallback with its safeguards — a SEMANTIC parity change taking `rxjs` to 0 ours-only rows; **+157 at (P18.192)**, a union-source relation lift at three readers plus three
 narrowing fixes it depended on — a SEMANTIC parity change closing a false-NEGATIVE class; **+338 at (P18.191)**, an argument-inference leg for a call's result type with
 its safeguards, array element pairing, a `NonNullable` union reduction and an alias-display guard — a SEMANTIC
 parity change, `rxjs` 2 -> 1; **+94 at (P18.190)**, the callee-signature predicate fallback and its
@@ -82,6 +83,14 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.193) — (CHK.159) STEP 2: THE CONTEXTUAL-RETURN FALLBACK FOR A CALL'S RESULT TYPE; `rxjs` READS 0 OURS-ONLY ROWS FOR THE FIRST TIME, 20,722 / 0 / 44 (2026-09-24).**
+Type parameters left open by argument inference are now filled from the call's contextual type (argument first, as
+tsgo's priority rule), all-or-nothing and constraint-checked. The census's "optional" cost safeguard proved mandatory:
+without refusing pulls through a call/`new` parent `typeNode.bypassed` read +36.6%; with it +0.14% and identical
+results. Matrix 11 -> 25 of 44; 26 pins. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0. **`rxjs` 7.8.2: 29 ours-only
+rows at (P18.173) -> 0 today, in 14 rounds** — tsgo's single row (`WebSocketSubject.ts:304`) is the one we still MISS
+((CHK.161)(c)). A parallel census specified (CHK.166)(a), the enum `never` wash (193 -> 639 of 660 cells, +0 rows).
+
 **(P18.192) — (CHK.167) ROUND 1: A NON-NULLISH UNION SOURCE IS RELATED TO AN OBJECT-FAMILY TARGET; 100 MISSING ROWS NOW REPORT, +0 ON EVERY PROFILE AND LIBRARY, 20,696 / 0 / 44 (2026-09-24).**
 `const r: number[] = x` with `x: number[] | string` (and `K | number` -> `K`) was SILENT because `canUseTypeEngine`
 refused every union source against an object target. A per-member lift now admits it at the declaration,
@@ -117,12 +126,4 @@ narrow-to-nullish, and `else if` compounding. Two pre-existing bugs fell out: `t
 and the spine registered an If's narrowing before its own frame. 22-cell matrix: agree 12 -> 45, ours-only 40 -> 5,
 no row added. 20 pins, nine of ten arms RED (the `never` refusal recorded as unreachable). Screen 0; cost_gate PASS;
 spine audit clean; grid 8x0; huge_methods 0. **`rxjs` 4 -> 3.**
-
-**(P18.188) — (CHK.156): EQUALITY AND `switch` NARROWING SPLIT `boolean` INTO `true | false`; `rxjs` 5 -> 4, 20,611 / 0 / 44 (2026-09-23).**
-`on === true` / `=== false` / `case true:` never removed a half of `boolean` — in the union branch, the bare branch,
-the switch default, or the call-argument reader (where an exhausted `boolean` was an ours-only false positive). One
-helper pair now subtracts a half without changing how `boolean` displays. 18-cell matrix: every equality/switch cell
-matches tsgo; 14 pins, seven arms RED. Screen 0 (pending rows byte-identical); cost_gate identical; grid 8x0;
-huge_methods 0 — `checkArgumentsAgainstSignatureCore` at 7,629/8,000. **`rxjs` 5 -> 4.** Truthiness and the optional
-`boolean` display filed as (CHK.164). `Checker.kt` crossed 200,000 lines.
 

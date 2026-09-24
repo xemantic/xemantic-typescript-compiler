@@ -1,5 +1,65 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.183) — (CHK.152) step 1: a named-object argument is RELATED to a named-object parameter; 24 of 29 census misses report with the declaration's chain, +0 rows everywhere as PREDICTED (2026-09-23)
+
+Orchestrated: one implementation subagent built the gate the (CHK.152) census had specified; a parallel
+read-only census reduced `rxjs`'s ten remaining rows to seven families, filed as (CHK.153)-(CHK.161).
+**The census's prediction was EXACT** — it attached a debugger to a frozen compiler, broke on
+`caasNonSimpleParamChecks` and asked the checker's own predicates for every `CAAS_CONTINUE` exit, and said
++0 rows on all 8 profiles and every library. That instrument is now committed as a reference
+(`scripts/census/JdiArgFirewallCensus.java` + driver), because it priced a gate opening with no build.
+
+**The change (`Checker.kt` +93/−6)**: `allowNamedObjectVsNamedObject` in `caasNonSimpleParamChecks`,
+guarded by `arityOk`, not-rest and no free type parameter on either side;
+`argNamedObjectVsNamedObjectCheckable` refuses literal / arrow / function-expression arguments, classifies
+both sides through `isNamedObjectForArgCheck` (interface or class instance; a non-array/tuple generic
+instantiation; an intersection whose members are ALL object types; an aliased object on the PARAMETER
+side only; never a union or an enum-flavoured type), then asks `canUseTypeEngine`; and
+`caasTailGatesAndRelation` builds the member chain for the classified pair. tsgo uses one relation and one
+elaboration for both positions (`checkApplicableSignature` -> `checkTypeRelatedToAndOptionallyElaborate`),
+and **all 34 newly reported argument rows print exactly the chain our declaration reader prints**.
+
+**Where the specification was wrong**: the REST guard is redundant (a rest parameter's type is an array,
+which the classifier refuses — a3 0 RED, kept and documented); excluding union ARGUMENTS is redundant
+(`canUseTypeEngine` refuses them — a9 0 RED); excluding union PARAMETERS is load-bearing but for a
+different reason than the census gave — admitting them adds 3 ours-only rows on harness because a member
+read off a NARROWED receiver is typed by its declaration (`isE(p) && zab(p.parent)` reads `p.parent` as
+`N`); relaxing the chain for EVERY pair broke `ArrayLikeArgumentAssignabilityTest` (a tuple argument
+collapsed to TS2740), so the relaxation is scoped to the classified pair; a branded primitive
+(`string & {…}`) is refused (admitted, this reader prints a bare TS2741 where tsgo prints TS2345); and no
+narrowing second chance is needed — the argument arrives already narrowed for every guard shape tried.
+**Two existing pins asserted wrong absences** and now assert tsgo's rows: `StructuralContextualInferenceTest`'s
+`takeO(createS(1, …))` outer row (byte-identical to tsgo, 4-line chain), and `ArgKindCensusTest` got a
+union-parameter call so its not-simple exit keeps a member.
+
+**Matrix vs tsgo** (47 census cells + 28 new): census argument rows 6 agree / 29 missing -> **27 agree**,
+3 chain-differs, 5 missing; new cells 1 agree -> 8, 3 chain-differs; **all 22 silent controls stay silent**
+(extra property on a non-fresh source, method bivariance, required->optional, structurally compatible
+classes, weak types, `Date` against a shape, narrowing controls). Every chain-differs argument row has the
+SAME divergence at declaration position — pre-existing: the `strictFunctionTypes` extra line, a missing
+"Index signature … is missing" line, no chain for an intersection parameter, the covariant (not
+contravariant) elaboration direction for a generic, a long `every` chain for `readonly string[]`.
+
+**Pins**: `NamedObjectArgumentAssignabilityTest`, 17 tests, full head + chain. Ablation, eleven arms:
+gate off 10 RED; no `arityOk` 1; no rest guard **0 (redundant)**; no free-TP guard on the parameter 1, on
+the argument 1; chain relaxation off 9; union parameters admitted 1; union arguments admitted **0**
+(refused downstream); literal exclusions dropped **0** (anonymous types refused anyway); primitive-bearing
+intersections admitted 1; aliased-object parameter off 1. Restored md5 `da3efb53`, rebuilt.
+
+**Gates**: full suite **20,544 / 0 / 44** (+17, the new class);
+corpus screen 0 of 8,725 — **the corpus does NOT see this change either**, contrary to the brief (the
+census had measured the population at 23 named->named TS2345 rows, all already matched); cost_gate PASS
+(`typeNode.bypassed` +0.14%); huge_methods 0; grid 8x `added=0 removed=0` — a REAL false-positive gate
+this time (7,494 narrow pairs on tsc-project, 14,311 on harness reach the opened gate); `rxjs` 10 -> 10,
+`marked` 0; no `w:` in the suite compile. **Residues**: step 2 (`pos-rest`), step 3 (`nullable-param` —
+blocked by the narrowed-receiver member read), step 4 (`src-union`, missing at declaration too); relation
+gaps at both positions (`c-private`, `p-index-alias`); inference (`pos-constraint`,
+`generic-callee-inferred`); `generic-arg-tp` (needs a type-parameter->concrete rule — the a5 arm gets it
+right but adds `T extends string` false positives); a function declaration against a callable interface;
+a named argument against an array parameter; the branded primitive.
+
+**Successor**: (CHK.153), the smallest rxjs family (S, removal-only, 3 rows).
+
 ### Round (P18.182) — (CHK.150) rung 3 + the `Partial` leak: an overload's clear winner is ADOPTED for the argument's contextual type; `rxjs` 17 -> 10, the predicted seven rows exactly; (CHK.150) CLOSED (2026-09-23)
 
 Orchestrated: one implementation subagent plus, in parallel on frozen (P18.181) classes, a read-only

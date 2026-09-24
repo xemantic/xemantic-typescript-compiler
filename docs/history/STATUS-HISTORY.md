@@ -1,5 +1,13 @@
 
 
+**(P18.188) — (CHK.156): EQUALITY AND `switch` NARROWING SPLIT `boolean` INTO `true | false`; `rxjs` 5 -> 4, 20,611 / 0 / 44 (2026-09-23).**
+`on === true` / `=== false` / `case true:` never removed a half of `boolean` — in the union branch, the bare branch,
+the switch default, or the call-argument reader (where an exhausted `boolean` was an ours-only false positive). One
+helper pair now subtracts a half without changing how `boolean` displays. 18-cell matrix: every equality/switch cell
+matches tsgo; 14 pins, seven arms RED. Screen 0 (pending rows byte-identical); cost_gate identical; grid 8x0;
+huge_methods 0 — `checkArgumentsAgainstSignatureCore` at 7,629/8,000. **`rxjs` 5 -> 4.** Truthiness and the optional
+`boolean` display filed as (CHK.164). `Checker.kt` crossed 200,000 lines.
+
 **(P18.187) — (CHK.155): A CAPTURED READ OF AN OUTER VARIABLE FOLLOWS tsgo's `isOuterVariable && !isNeverInitialized`; `rxjs` 6 -> 5, 20,597 / 0 / 44 (2026-09-23).**
 An expression-bodied arrow's read subtracted only names assigned inside that same arrow, so an assignment in a SIBLING
 closure was invisible and TS2454 fired in every unchecked body and at file level. The walks now install tsgo's
