@@ -1,5 +1,52 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.184) — (CHK.153): a callback's callee receiver is resolved from the identifier's PARENT CHAIN for contextual `this`; `rxjs` 10 -> 7, 9 -> 29 of 29 cells (2026-09-23)
+
+Orchestrated: one implementation subagent, plus a parallel read-only census that sized (CHK.152) step 3's
+blocker (recorded in that item; the third harness row became (CHK.162)). **The census's mechanism was
+right and the defect was wider than it said**: `callArgHasContextualThis` typed the callee under the
+file's RESTING locals, so any receiver that is not a file-level name never resolved — besides parameters
+and body-locals, a union receiver (`Sched | Sched2`, `Sched | Plain`, and one routed through
+`getPropertyOfType`'s one-constituent union arm), `s?.m` / `s!.m`, a destructured parameter, a class
+method's parameter and a function-typed parameter called directly all kept an ours-only TS2683.
+(CHK.141)/G4's plan to make `spineItEdge` type-keyed is NOT needed for this family.
+
+**The change (`Checker.kt` +131/−14)**: `callArgHasContextualThis` resolves the callee LEXICALLY first
+(new `lexicalCalleeType`: walks parentheses, `!` and member chains, strips `null`/`undefined` per receiver,
+folds a union receiver per constituent, leaves file-level names to the old path) and answers false — TS2683
+stays — when it finds a local binding it cannot type; a union callee has a contextual `this` when ANY
+constituent's parameter declares one (tsgo is silent on `Sched | Plain`). `lexicalBindingType` types a
+parameter/variable from annotation or initializer through object binding patterns; the two (CHK.144)
+helpers gain a defaulted `bindingPatterns` flag. tsgo's rule (`getContextualThisParameterType`,
+checker.go ~11990) takes `this` from the argument's resolved call's contextual signature, i.e. the callee's
+PARAMETER type decides, not the kind of binding the receiver is. **Found in passing**: the (CHK.144) return
+resolver matches only `Identifier` names, so a destructured binding is walked past and an outer same-named
+binding answers — the flag defaults off, so that leak is still OPEN there.
+
+**Matrix, 29 cells vs tsgo** (`build/scratch-p18184/cells`): **9 -> 29 agree** — fixed: this1, this1c,
+this5, destructured, reassigned `let`, nested, member chain, class method, plain function parameter,
+reverse shadow, two unions, optional chain, body-local initializer, member-type; the seven KEEP-TS2683
+controls held (no `this:` on the parameter, an arrow callback, block-scoped / destructured / parameter /
+function / class / defaulted-parameter shadows); `noImplicitThis` off stays silent.
+
+**Pins**: `CallbackReceiverContextualThisTest`, 21 tests (7 keep-TS2683 controls), run with every `*This*`
+/ TS2683 class in core and `-project` (396 tests, 0 failures after one pin was moved off a generic callee —
+the pre-existing `Action<any>` vs tsgo's `Action<unknown>` display). Ablation: lexical resolution removed
+14 RED; binding patterns off 2; shadow-stop removed 1 (read 0 until the defaulted-parameter shadow control
+was added); union receiver fold removed 1; nullish strip removed 2; union callee arm removed 1. Restored md5
+`a716bda6`, rebuilt.
+
+**Gates**: full suite **20,565 / 0 / 44** (+21); corpus screen 0 of 8,725 (no pending baseline mentions
+TS2683); cost_gate PASS with counters byte-identical to (P18.183)'s; huge_methods 0; grid 8x
+`added=0 removed=0`; no `w:` (agent's `--rerun-tasks`, and the suite compile). **`rxjs` 10 -> 7** — exactly
+`range.ts:78`, `timer.ts:178`, `scheduleArray.ts:22`; `marked` 0; harness 94 -> 94 identical.
+**Residues**: a union `let` narrowed by assignment to a constituent without `this:` would be wrongly
+silenced (no flow narrowing here, only the nullish strip); a contextually-typed un-annotated parameter
+still reports (deliberately, today's answer); array-pattern and rest bindings still report; the
+`Action<any>` display; the (CHK.144) binding-pattern leak.
+
+**Successor**: (CHK.154) (trailing-`void` parameter optional in the relation, rxjs `Observable:307`).
+
 ### Round (P18.183) — (CHK.152) step 1: a named-object argument is RELATED to a named-object parameter; 24 of 29 census misses report with the declaration's chain, +0 rows everywhere as PREDICTED (2026-09-23)
 
 Orchestrated: one implementation subagent built the gate the (CHK.152) census had specified; a parallel

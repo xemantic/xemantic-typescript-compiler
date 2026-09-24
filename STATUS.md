@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **200,932** lines (**+144 at (P18.193)**, the inference-outcome refactor and the contextual-return
+extraction):** `Checker.kt` **201,031** lines (**+99 at (P18.194)**, the concise-body return check routed through the block
+path (net of the deleted spine check and 13 retired hardcoded anchors) — a SEMANTIC parity change closing a
+false-NEGATIVE class; **+144 at (P18.193)**, the inference-outcome refactor and the contextual-return
 fallback with its safeguards — a SEMANTIC parity change taking `rxjs` to 0 ours-only rows; **+157 at (P18.192)**, a union-source relation lift at three readers plus three
 narrowing fixes it depended on — a SEMANTIC parity change closing a false-NEGATIVE class; **+338 at (P18.191)**, an argument-inference leg for a call's result type with
 its safeguards, array element pairing, a `NonNullable` union reduction and an alias-display guard — a SEMANTIC
@@ -83,6 +85,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.194) — (CHK.168) ROUND 1: AN ANNOTATED ARROW'S EXPRESSION BODY IS RETURN-CHECKED; 28 CELLS FIXED, 0 FALSE POSITIVES, +0 EVERYWHERE, 20,742 / 0 / 44 (2026-09-24).**
+`const f = (x: string): number => x` was silent: the concise-body check ran on the spine, where the arrow's
+parameters were out of scope. The scoped walker now routes the body through the block-body return path (anchor +
+width as parameters; the spine check deleted). Getting harness to +0 fixed two pre-existing false-positive shapes
+(qualified `keyof typeof`, async ternaries related to `Promise<T>`). 20 pins, eight arms RED. Screen 0; grid 8x0;
+cost_gate PASS; huge_methods 0; spine audit clean. Class-property/`static`/default-export arrows are round 2.
+
 **(P18.193) — (CHK.159) STEP 2: THE CONTEXTUAL-RETURN FALLBACK FOR A CALL'S RESULT TYPE; `rxjs` READS 0 OURS-ONLY ROWS FOR THE FIRST TIME, 20,722 / 0 / 44 (2026-09-24).**
 Type parameters left open by argument inference are now filled from the call's contextual type (argument first, as
 tsgo's priority rule), all-or-nothing and constraint-checked. The census's "optional" cost safeguard proved mandatory:
@@ -118,12 +127,4 @@ groups exact; 19 pins, eight arms RED. Screen 0; grid 8x0; huge_methods 0; cost_
 **(CHK.167), promoted to the top: a union source against an object/array target is SILENT at declaration and
 argument positions** (`number[] | string` -> `number[]`, `K | number` -> `K`) — the largest false-negative class found
 this session.
-
-**(P18.189) — (CHK.157): THE ELSE BRANCH OF AN `if` NARROWS AT THE ASSIGNMENT AND RETURN READERS; `rxjs` 4 -> 3, 12 -> 45 AGREEING ROWS, 20,631 / 0 / 44 (2026-09-23).**
-The census named a legacy arm; the emitter for function-declaration bodies is the SPINE, so the fix is in the spine
-and both legacy walks: each `||` disjunct negated in order (tsgo's false branch), negated type-guard calls,
-narrow-to-nullish, and `else if` compounding. Two pre-existing bugs fell out: `typeof x !== "…"` narrowed nothing,
-and the spine registered an If's narrowing before its own frame. 22-cell matrix: agree 12 -> 45, ours-only 40 -> 5,
-no row added. 20 pins, nine of ten arms RED (the `never` refusal recorded as unreachable). Screen 0; cost_gate PASS;
-spine audit clean; grid 8x0; huge_methods 0. **`rxjs` 4 -> 3.**
 

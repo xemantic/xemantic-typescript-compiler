@@ -25,6 +25,43 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.194) — (CHK.168) round 1: an annotated arrow's EXPRESSION body is return-checked through the block-body path; 28 cells fixed, 0 FPs, +0 everywhere (2026-09-24)
+
+Orchestrated: one implementation subagent, with a census of rxjs's last missed row running beside it.
+`walkArrowExpressionBodyScoped` (extracted from `walkFunctionBodiesInExpr`, 7,800 -> 6,767 bytecodes) runs, for an
+annotated arrow, the contextual pull and `checkArrowExpressionBodyReturn` (async flag from the arrow, generator off,
+anchored at the body with parentheses and `satisfies` skipped — tsgo `checkFunctionExpressionOrObjectLiteralMethodDeferred`
+-> `checkReturnExpression` -> `getEffectiveCheckNode`); the return check is keyed by expression + anchor
+(`checkReturnAssignability(expr, anchorPos, anchorLen, …)`, the `ReturnStatement` overload passing
+`RETURN_KEYWORD_WIDTH` — 13 hardcoded `stmt.pos, 6` sites retired); the spine's `checkArrowConciseBodyReturnType`
+is DELETED. **Where the census was wrong**: no dedupe was needed (its 3x emission was an artifact of the JDI-forced
+arm; keeping the spine call is absorbed by `init:tpTargetReturnDedup` except for conditional branches — the a5
+arm shows it); **"+0 on harness" was false as specified** — 1 ours-only row at `fourslashImpl.ts:3886` from two
+causes, both fixed: the body must be checked PAREN-STRIPPED (else `=> ({ … })` loses the object-literal contextual
+type and `"exact"` widens), and `keyof typeof ts.PatternMatchKind` (a QUALIFIED name) answered `string`/`never` —
+`keyofTypeQueryEnumMemberNames` now resolves qualified names, which also removes 3 FPs the block path already had.
+Parameterless annotated arrows never entered the scoped branch (gate fixed). **Async ternaries were a pre-existing
+FP in the block path** (each branch related to `Promise<number>`); branches are now related to the promised type
+(tsgo's recursion with the unwrapped type) — without that the new route would have added more.
+
+**Matrix**: census cells 24 MISS -> AGREE, 6 now on the right row with the block path's own text/span residue
+(`k_arr`, `k_nested`, `k_nc`, `k_or`, `k_async_id`, `k_await`), 9 still missing (round-2 hosts,
+`<T>(x: string): T => x`, `t_unionsrc_obj`), **0 FPs, all 54 clean controls clean** (the three mode-1 traps
+included), `B*` block twins unchanged; `hostb` 4 fixed (`ctx_annot`, `paren`, `ro`, `weak`).
+
+**Pins**: `ArrowExpressionBodyReturnTest`, 20 tests. Ablation, eight arms, all RED (async flag 2; contextual pull
+1; unstripped anchor 2; unstripped checked expression 1; spine call kept 3 incl. the return5 duplicate; async
+branch unwrap 2; parameterless scoping 1; qualified `keyof typeof` 1).
+
+**Gates**: full suite **20,742 / 0 / 44** (+20); corpus screen 0 of 8,725 (the 41 pending diffs byte-identical);
+cost_gate PASS (`typeOfExpr.calls` +0.75% — concise bodies are now typed); huge_methods 0 (`cpaSpineLeave` 7,898
+unchanged); spine closure audit clean; grid 8x `added=0 removed=0`; no `w:`. `rxjs` 0, `marked` 0, `cronstrue` 0.
+Residues: round 2 (class-property / `static` / default-export arrows reached by NOTHING); the shared display family
+(`string | 1` printed `string | number`, async mismatches naming `Promise<number>`, no member drill);
+`expressionTrueEnd` ignores internal whitespace (`x.trim( )` spans 8 where tsgo spans 9).
+
+**Successor**: (CHK.166)(a) step 1 (value-aware enum truthiness, specified, +0 predicted).
+
 ### Round (P18.193) — (CHK.159) step 2: the contextual-return FALLBACK for a call's result type; **`rxjs` reads 0 ours-only rows for the first time** (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.166)(a) enum census landing beside it (recorded in
@@ -417,53 +454,6 @@ non-void 1; `undefined`/`any` accepted 2; type parameter accepted 1; binding-pat
 
 **Successor**: (CHK.154)(b) — a derived class's `constructSignatures` carry the base constructor first, so
 `new Sub("x")` against `constructor(o?: number)` is ACCEPTED (a false negative, `ctor1`).
-
-### Round (P18.184) — (CHK.153): a callback's callee receiver is resolved from the identifier's PARENT CHAIN for contextual `this`; `rxjs` 10 -> 7, 9 -> 29 of 29 cells (2026-09-23)
-
-Orchestrated: one implementation subagent, plus a parallel read-only census that sized (CHK.152) step 3's
-blocker (recorded in that item; the third harness row became (CHK.162)). **The census's mechanism was
-right and the defect was wider than it said**: `callArgHasContextualThis` typed the callee under the
-file's RESTING locals, so any receiver that is not a file-level name never resolved — besides parameters
-and body-locals, a union receiver (`Sched | Sched2`, `Sched | Plain`, and one routed through
-`getPropertyOfType`'s one-constituent union arm), `s?.m` / `s!.m`, a destructured parameter, a class
-method's parameter and a function-typed parameter called directly all kept an ours-only TS2683.
-(CHK.141)/G4's plan to make `spineItEdge` type-keyed is NOT needed for this family.
-
-**The change (`Checker.kt` +131/−14)**: `callArgHasContextualThis` resolves the callee LEXICALLY first
-(new `lexicalCalleeType`: walks parentheses, `!` and member chains, strips `null`/`undefined` per receiver,
-folds a union receiver per constituent, leaves file-level names to the old path) and answers false — TS2683
-stays — when it finds a local binding it cannot type; a union callee has a contextual `this` when ANY
-constituent's parameter declares one (tsgo is silent on `Sched | Plain`). `lexicalBindingType` types a
-parameter/variable from annotation or initializer through object binding patterns; the two (CHK.144)
-helpers gain a defaulted `bindingPatterns` flag. tsgo's rule (`getContextualThisParameterType`,
-checker.go ~11990) takes `this` from the argument's resolved call's contextual signature, i.e. the callee's
-PARAMETER type decides, not the kind of binding the receiver is. **Found in passing**: the (CHK.144) return
-resolver matches only `Identifier` names, so a destructured binding is walked past and an outer same-named
-binding answers — the flag defaults off, so that leak is still OPEN there.
-
-**Matrix, 29 cells vs tsgo** (`build/scratch-p18184/cells`): **9 -> 29 agree** — fixed: this1, this1c,
-this5, destructured, reassigned `let`, nested, member chain, class method, plain function parameter,
-reverse shadow, two unions, optional chain, body-local initializer, member-type; the seven KEEP-TS2683
-controls held (no `this:` on the parameter, an arrow callback, block-scoped / destructured / parameter /
-function / class / defaulted-parameter shadows); `noImplicitThis` off stays silent.
-
-**Pins**: `CallbackReceiverContextualThisTest`, 21 tests (7 keep-TS2683 controls), run with every `*This*`
-/ TS2683 class in core and `-project` (396 tests, 0 failures after one pin was moved off a generic callee —
-the pre-existing `Action<any>` vs tsgo's `Action<unknown>` display). Ablation: lexical resolution removed
-14 RED; binding patterns off 2; shadow-stop removed 1 (read 0 until the defaulted-parameter shadow control
-was added); union receiver fold removed 1; nullish strip removed 2; union callee arm removed 1. Restored md5
-`a716bda6`, rebuilt.
-
-**Gates**: full suite **20,565 / 0 / 44** (+21); corpus screen 0 of 8,725 (no pending baseline mentions
-TS2683); cost_gate PASS with counters byte-identical to (P18.183)'s; huge_methods 0; grid 8x
-`added=0 removed=0`; no `w:` (agent's `--rerun-tasks`, and the suite compile). **`rxjs` 10 -> 7** — exactly
-`range.ts:78`, `timer.ts:178`, `scheduleArray.ts:22`; `marked` 0; harness 94 -> 94 identical.
-**Residues**: a union `let` narrowed by assignment to a constituent without `this:` would be wrongly
-silenced (no flow narrowing here, only the nullish strip); a contextually-typed un-annotated parameter
-still reports (deliberately, today's answer); array-pattern and rest bindings still report; the
-`Action<any>` display; the (CHK.144) binding-pattern leak.
-
-**Successor**: (CHK.154) (trailing-`void` parameter optional in the relation, rxjs `Observable:307`).
 
 ## QUEUE
 
@@ -1110,7 +1100,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   risk (CHK.63) recorded: a union source that is NARROWED at the site must not be reported by its declared
   type). Direction: ADDS rows; every added row must be a tsgo row, and the grid is likely a REAL gate.
 
-- [ ] **(CHK.168) CENSUSED 2026-09-24 (read-only, frozen (P18.190) classes, `build/scratch-p18191-census2/`,
+- [ ] **(CHK.168) ROUND 1 LANDED 2026-09-24 ((P18.194) note; 28 cells, 0 FPs, +0 everywhere). OPEN: round 2
+  (class-property / `static` / default-export arrow initializers — walked by nothing, block bodies too) and
+  round 3 (display). EARLIER: CENSUSED 2026-09-24 (read-only, frozen (P18.190) classes, `build/scratch-p18191-census2/`,
   README.txt) — ROUND 1 SPECIFIED, PREDICTED +0 ON EVERY PROFILE AND LIBRARY.** The check DOES fire —
   `checkArrowConciseBodyReturnType` (HEAD ~97485, via `checkArrowForImplicitReturn` from `spineIrLeaveNode`) —
   but on the SPINE, where the arrow's parameters are out of scope: JDI showed `getTypeOfExpression(x)`

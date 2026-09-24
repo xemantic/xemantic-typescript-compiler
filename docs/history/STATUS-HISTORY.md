@@ -1,5 +1,13 @@
 
 
+**(P18.189) — (CHK.157): THE ELSE BRANCH OF AN `if` NARROWS AT THE ASSIGNMENT AND RETURN READERS; `rxjs` 4 -> 3, 12 -> 45 AGREEING ROWS, 20,631 / 0 / 44 (2026-09-23).**
+The census named a legacy arm; the emitter for function-declaration bodies is the SPINE, so the fix is in the spine
+and both legacy walks: each `||` disjunct negated in order (tsgo's false branch), negated type-guard calls,
+narrow-to-nullish, and `else if` compounding. Two pre-existing bugs fell out: `typeof x !== "…"` narrowed nothing,
+and the spine registered an If's narrowing before its own frame. 22-cell matrix: agree 12 -> 45, ours-only 40 -> 5,
+no row added. 20 pins, nine of ten arms RED (the `never` refusal recorded as unreachable). Screen 0; cost_gate PASS;
+spine audit clean; grid 8x0; huge_methods 0. **`rxjs` 4 -> 3.**
+
 **(P18.188) — (CHK.156): EQUALITY AND `switch` NARROWING SPLIT `boolean` INTO `true | false`; `rxjs` 5 -> 4, 20,611 / 0 / 44 (2026-09-23).**
 `on === true` / `=== false` / `case true:` never removed a half of `boolean` — in the union branch, the bare branch,
 the switch default, or the call-argument reader (where an exhausted `boolean` was an ours-only false positive). One
