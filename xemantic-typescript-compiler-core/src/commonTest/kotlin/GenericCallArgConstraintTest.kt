@@ -73,14 +73,11 @@ class GenericCallArgConstraintTest {
         // Negative control: `Other` is unrelated to `Base`, so the constraint chain does not
         // satisfy — the skip must not fire and the diagnostic must be emitted.
         //
-        // (LEGACY.0b) F6a, and a RECORDED divergence: TypeScript 7 keeps the TS2344 head
-        // here because its chain line names the CONSTRAINT — `Property 'b' is missing in
-        // type 'Other' but required in type 'Base'.` — where ours names the PARAMETER, so
-        // tsgo's head and chain displays differ and ours agree. The gap is the chain's
-        // source display (a separate family), not the suppression; measured against
-        // tools/tsgo-7.0.2 2026-09-13. The sibling pin below — an UNCONSTRAINED `T`, whose
-        // chain names the apparent type `{}` — still keeps its TS2344 head, which is what
-        // makes the two a pair rather than a blanket change.
+        // (LEGACY.0b) F6a: TypeScript 7 keeps the TS2344 head here because its chain line
+        // names the CONSTRAINT — `Property 'b' is missing in type 'Other' but required in type
+        // 'Base'.` — so the head and chain displays differ. Ours named the PARAMETER (a recorded
+        // divergence, which collapsed the pair to a TS2741 head) until (CHK.174) related a type
+        // parameter through its constraint; the row is now tsgo 7.0.2's own, head and chain.
         diagnose(
             """
             interface Base { b: number; }
@@ -91,8 +88,9 @@ class GenericCallArgConstraintTest {
             directives = "",
         ) should {
             have(any {
-                it.code == 2741 &&
-                    it.message == "Property 'b' is missing in type 'T' but required in type 'Base'."
+                it.code == 2344 &&
+                    it.message == "Type 'T' does not satisfy the constraint 'Base'." &&
+                    it.messageChain == listOf("  Property 'b' is missing in type 'Other' but required in type 'Base'.")
             })
         }
     }

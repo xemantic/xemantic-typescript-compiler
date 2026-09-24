@@ -140,6 +140,12 @@ internal class Relater(
     private val assignableRelation: Relation,
     private val identityRelation: Relation,
     /**
+     * (CHK.174) `CheckerState.aliasGuardRelation` — compared by IDENTITY in
+     * [typeParamRelatedThroughConstraint], which answers `null` (the pre-(CHK.174)
+     * verdict) under it.
+     */
+    private val aliasGuardRelation: Relation,
+    /**
      * `CheckerState.relationComparisonStack` — handed in as the OBJECT, so the
      * (source.id, target.id) pairs pushed here are the same pairs every other
      * reader of that field sees. `CheckerState` keeps owning it.
@@ -780,6 +786,15 @@ internal class Relater(
                 target.types.any { checkTypeRelatedTo(source, it, relation) }
             }
             if (relatesToSomeConstituent) return true
+            // (CHK.174): a constrained TYPE PARAMETER source is related to the WHOLE union
+            // through its constraint once no single constituent took it — tsgo's
+            // `structuredTypeRelatedToWorker` falls through from the union decomposition
+            // to the type-variable leg for an instantiable source ("Source is
+            // instantiable (e.g. source has union or intersection constraint)"), so
+            // `T extends number | string` relates to `number | string`.
+            if (source is Type.TypeParam) {
+                typeParamRelatedThroughConstraint(source, target, relation)?.let { if (it) return true }
+            }
             // (CHK.142)(b): the DISCRIMINATED-union rule — see
             // [typeRelatedToDiscriminatedType], tsgo's own tail of this same arm.
             if (source is Type.Object && typeRelatedToDiscriminatedType(source, target, relation)) {
@@ -1162,7 +1177,43 @@ internal class Relater(
             if (constraint === errorType) return false
             return checkTypeRelatedTo(constraint, target, relation)
         }
+        // (CHK.174): every OTHER target — a primitive, a literal, a union's constituent —
+        // is decided by the constraint too, as tsgo's type-variable leg does
+        // (`relater.go` `structuredTypeRelatedToWorker`: `constraint :=
+        // r.c.getConstraintOfType(source)` … `r.isRelatedTo(constraint, target, …)`).
+        // Without it `function g<T extends number>(k: T): number { return k }` was
+        // rejected: [Checker.canUseTypeEngine]'s B60.8 rule admits exactly this pair
+        // and nothing here could accept it. An UNCONSTRAINED `T` stays unrelated.
+        if (source is Type.TypeParam) {
+            return typeParamRelatedThroughConstraint(source, target, relation) ?: false
+        }
         return false
+    }
+
+    /**
+     * (CHK.174): relate a type-parameter [source] to [target] through its constraint.
+     * `null` when the parameter has no usable constraint (none, `any`, or unresolved) —
+     * tsgo treats an `any`-constrained type parameter as unconstrained, which relates
+     * as `{}` and is refused here as before.
+     */
+    private fun typeParamRelatedThroughConstraint(
+        source: Type.TypeParam, target: Type, relation: Relation,
+    ): Boolean? {
+        if (relation === aliasGuardRelation) return null
+        val constraint = source.constraint ?: return null
+        if (constraint === errorType || constraint === anyType) return null
+        // A CIRCULAR constraint (`T extends T`, `T extends U, U extends T` — TS2313) is no
+        // constraint at all (tsgo's `getConstraintOfTypeParameter` answers nil for one);
+        // followed, it would reach the comparison stack's cycle break and relate `T` to
+        // everything.
+        var link: Type = constraint
+        val seen = HashSet<Int>()
+        seen.add(source.id)
+        while (link is Type.TypeParam) {
+            if (!seen.add(link.id)) return null
+            link = link.constraint ?: break
+        }
+        return checkTypeRelatedTo(constraint, target, relation)
     }
 
     /**

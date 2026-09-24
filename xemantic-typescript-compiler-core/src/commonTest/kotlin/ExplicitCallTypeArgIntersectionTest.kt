@@ -103,17 +103,17 @@ class ExplicitCallTypeArgIntersectionTest {
                 }
             """,
         )
-        // (LEGACY.0b) F6a, and a RECORDED divergence: TypeScript 7 keeps the TS2344
-        // head here because its own chain line substitutes the type parameter's
-        // constraint — `Property 'kind' is missing in type 'Other & { m: 1; }' but
-        // required in type 'NodeX'.` — so the head's two displays and the chain's do
-        // NOT match. Ours names the parameter in both, they match, and the head is
-        // suppressed. The gap is in the CHAIN's source display (a separate family),
-        // not in the suppression; measured against tools/tsgo-7.0.2 2026-09-13.
+        // (LEGACY.0b) F6a. tsgo 7.0.2 reports the TS2344 head `Type 'U & { m: 1; }' does not
+        // satisfy the constraint 'NodeX'.` with the chain line `Property 'kind' is missing in type
+        // 'Other & { m: 1; }' but required in type 'NodeX'.` (its chain substitutes the type
+        // parameter's constraint). Until (CHK.174) (P18.202) ours printed a TS2741 head naming
+        // `U & { m: 1; }`; since the relation relates a type parameter through its constraint, ours
+        // prints tsgo's HEAD exactly. RESIDUE: no chain line yet (re-measured 2026-09-24).
         assert(diagnostics.any {
-            it.code == 2741 &&
-                it.message == "Property 'kind' is missing in type 'U & { m: 1; }' but required in type 'NodeX'."
+            it.code == 2344 &&
+                it.message == "Type 'U & { m: 1; }' does not satisfy the constraint 'NodeX'."
         })
+        assert(diagnostics.none { it.code == 2741 })
     }
 
     @Test

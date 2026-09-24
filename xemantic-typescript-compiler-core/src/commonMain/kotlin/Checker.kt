@@ -324,6 +324,11 @@ class Checker(
         val assignableRelation = Relation()
         val comparableRelation = Relation()
         val identityRelation = Relation()
+        /** (CHK.174): the assignable relation WITHOUT the type-parameter-via-constraint
+         *  rule, for B57.1b's alias type-argument guard alone — its own instance, so its
+         *  verdicts never share a cache with [assignableRelation]'s. See
+         *  `Relater.typeParamRelatedThroughConstraint`. */
+        val aliasGuardRelation = Relation()
         // Recursion depth counters
         var relationDepth = 0
         /** Tracks (source.id, target.id) pairs currently being compared to detect recursive types.
@@ -426,7 +431,7 @@ class Checker(
     private val relater =
         Relater(
             this, enumSemantics, state.assignableRelation, state.identityRelation,
-            state.relationComparisonStack, state.relationSourceTargets, state.relationTargetTargets,
+            state.aliasGuardRelation, state.relationComparisonStack, state.relationSourceTargets, state.relationTargetTargets,
         )
 
     /** (INV.0) step 6a — the MEMBER-RESOLUTION collaborator; see `MemberResolver.kt`. */
@@ -114746,8 +114751,18 @@ interface DataView {
                                         //    corpus's `excessPropertyCheckIntersectionWith-
                                         //    RecursiveType` is what measures it.
                                         val arg = resolvedArgs[i]
+                                        //
+                                        // (CHK.174) the relation now HAS that rule, so this
+                                        // first-pass verdict asks [CheckerState.aliasGuardRelation]
+                                        // — the assignable relation with the rule switched OFF —
+                                        // which keeps this guard's decisions exactly what they
+                                        // were: with the rule on, `Prepend<any, I>` inside
+                                        // `BuildTree` stops degrading and the corpus's
+                                        // `excessPropertyCheckIntersectionWithRecursiveType`
+                                        // gains a TS2322 tsgo does not report. (INC.30) stays
+                                        // the owner of this guard.
                                         var argSatisfies =
-                                            checkTypeRelatedTo(arg, constraintType, assignableRelation)
+                                            checkTypeRelatedTo(arg, constraintType, state.aliasGuardRelation)
                                         if (!argSatisfies && aliasBodyDisplayDepth > 0 &&
                                             arg is Type.TypeParam &&
                                             !aliasGuardIsRecursionBrake(symbol, decl, node)
@@ -171689,11 +171704,28 @@ interface DataView {
                 if (length <= 0) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 val chain = mutableListOf<String>()
-                val missingProp = lastMissingPropertyName
-                val missingPropSym = lastMissingPropertySymbol
+                var missingProp = lastMissingPropertyName
+                var missingPropSym = lastMissingPropertySymbol
+                var missingSourceDisplay = argDisplay
+                // (CHK.174): a type-parameter argument is related through its CONSTRAINT, so
+                // the missing member is the constraint's — tsgo's chain reads `Property 'b'
+                // is missing in type 'Other'` for `T extends Other`. Computed directly: the
+                // relation above has usually been answered from the cache (the call's own
+                // resolution asked the same pair), which skips the `lastMissing…` write.
+                if (argType is Type.TypeParam) {
+                    val cnst = argType.constraint
+                    if (cnst is Type.Object && instantiatedConstraint is Type.Object) {
+                        val m = collectMissingProperties(cnst, instantiatedConstraint).firstOrNull()
+                        if (m != null) {
+                            missingProp = m
+                            missingPropSym = getPropertyOfType(instantiatedConstraint, m)
+                            missingSourceDisplay = typeToString(cnst)
+                        }
+                    }
+                }
                 val relatedInfo = mutableListOf<Diagnostic>()
                 if (missingProp != null) {
-                    chain.add("  Property '$missingProp' is missing in type '$argDisplay' but required in type '$constraintDisplay'.")
+                    chain.add("  Property '$missingProp' is missing in type '$missingSourceDisplay' but required in type '$constraintDisplay'.")
                     missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { relatedInfo.add(it) }
                 } else if (argType is Type.Object && instantiatedConstraint is Type.Object) {
                     // 16.4gb: Property-type-mismatch elaboration. When both sides have the
