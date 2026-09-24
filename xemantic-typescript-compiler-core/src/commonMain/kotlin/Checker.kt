@@ -135144,6 +135144,29 @@ interface DataView {
         return getTypeOfExpression(right)
     }
 
+    /**
+     * (CHK.170): tsgo's `hasTypeFacts(t, TypeFactsEQUndefinedOrNull)` under `strictNullChecks`
+     * (checker.go `getTypeFactsWorker`) — can a value of [t] be `null`/`undefined`? `any`,
+     * `unknown` and the error type can; `null`/`undefined`/`void` can; a union can when ANY
+     * member can; an intersection only when EVERY member can (the fact is in tsgo's AND mask;
+     * tsgo also drops object brands beside a primitive, which only matters for a nullish
+     * primitive — an intersection tsgo reduces to `never` at construction, so it is not
+     * modelled); a type parameter answers for its constraint, and an unconstrained one is
+     * `unknown`. Every other type — primitives, literals, objects, `{}`, `never` — cannot.
+     * Only meaningful under `strictNullChecks`; outside it every non-`never` type carries
+     * the fact.
+     */
+    private fun mayBeNullishByTypeFacts(t: Type, depth: Int = 0): Boolean {
+        if (depth > 32) return true
+        return when {
+            t.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown) -> true
+            t is Type.Union -> t.types.any { mayBeNullishByTypeFacts(it, depth + 1) }
+            t is Type.Intersection -> t.types.all { mayBeNullishByTypeFacts(it, depth + 1) }
+            t is Type.TypeParam -> t.constraint?.let { mayBeNullishByTypeFacts(it, depth + 1) } ?: true
+            else -> t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+        }
+    }
+
     /** Result type of `<leftType> <operator> <right>` — the per-operator rules
      *  from [getTypeOfBinaryExpression], extracted so a chain can be folded
      *  iteratively. [leftType] is the already-resolved type of the left operand;
@@ -135222,6 +135245,10 @@ interface DataView {
             SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.BarBarEquals,
             SyntaxKind.QuestionQuestionEquals -> {
                 val rightT = contextualAssignmentRhsType(leftType, right)
+                // (CHK.170): tsgo's `??=` shares the `??` rule below — a left that cannot be
+                // nullish is the whole answer, the right side never contributes.
+                if (operator == SyntaxKind.QuestionQuestionEquals && strictNullChecks &&
+                    !mayBeNullishByTypeFacts(leftType)) return leftType
                 val keptLeft = when (operator) {
                     SyntaxKind.QuestionQuestionEquals -> narrowByExcludingNullUndefined(leftType)
                     SyntaxKind.BarBarEquals -> narrowByTruthiness(leftType, truthy = true)
@@ -135322,6 +135349,11 @@ interface DataView {
             }
             SyntaxKind.QuestionQuestion -> {
                 val rightT = getTypeOfExpression(right)
+                // (CHK.170): tsgo (`checkBinaryLikeExpressionWorker`, the `??` arm) answers the
+                // LEFT type unchanged unless it `hasTypeFacts(leftType, EQUndefinedOrNull)` — only
+                // a left that CAN be nullish unions in the right side. Before this, `a.f ?? a.p`
+                // with `f: string` read `string | undefined` and reported on legal code.
+                if (strictNullChecks && !mayBeNullishByTypeFacts(leftType)) return leftType
                 // tsc: `a ?? b` is `NonNullable<a> | b` — the left operand's null/undefined/void
                 // members route to the right and must be stripped (`verbosityLevel ?? -1` where
                 // `verbosityLevel: number | undefined` → `number`, NOT `number | undefined`;
