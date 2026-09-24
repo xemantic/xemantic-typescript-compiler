@@ -25,6 +25,64 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.191) — (CHK.159) step 1: an ARGUMENT-inference leg for a call's RESULT type; `rxjs` 2 -> 1, profiles +0 — and a +10% cost-counter blowup attributed and removed before commit (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.167) and (CHK.168) read-only censuses running beside
+it (both now specify their first rounds in their items). **The census's "+2 rows per profile" was not what
+building it gave**: following tsgo (substitute the constraint when a single-signature constraint check fails)
+read **+14/+15 rows on every profile** — 13 from checking a candidate that is the CALLER's own type parameter
+(`setTextRange(range, …)` inside `<T extends TextRange>`: our relation fails `T -> constraint` where tsgo
+accepts) and one (CHK.162) intersection-vs-union row — so a single-signature constraint failure keeps today's
+raw return (tsgo substitutes; recorded divergence, pin `s06`). "Substitute only what it finds" was UNSAFE: a
+raw type parameter left behind collided by name with the caller's (rxjs `combineLatest.ts:30`), so the leg
+is ALL-OR-NOTHING over the type parameters the return type mentions. `parser.ts:4147` needed a pre-existing
+`NonNullable<U> = U & {}` over a union to reduce (`reduceUnionAndEmptyObjectIntersection` from
+`getIntersectionType`, a false-positive family reachable with no inference at all), which exposed the id-keyed
+first-wins alias display renaming every `Nd` program-wide — guarded too. `ctxReturnInferInto`'s depth cap of 4
+is too shallow for arguments (`Promise<string>` vs `T | PromiseLike<T>` needs 5): the argument leg uses 6.
+tsgo's widening, measured: widen only when every inference was top-level; keep a literal when the call's
+contextual type makes it literal-ish.
+
+**THE COST GATE CAUGHT A REAL BLOWUP AND IT WAS FIXED, NOT REBASELINED**: the first binary read
+`typeNode.bypassed` **+10.22%** (+15,488). Attributed arm by arm (the builder, resumed): leg off -> +27;
+`NonNullable` reduction +27; alias guard 0; depth 0 — ~17,974 bypassed resolutions inside the leg's
+`ctxReturnInferInto`, from pairs like `NodeArray<X>` / `readonly T[]` / `Statement[]` against `T[]` falling
+through to MEMBER-BY-MEMBER matching (~30 array methods re-resolved on both sides under an instantiation
+context, the uncacheable path). tsgo's `inferFromTypes` pairs two array types by ELEMENT directly; the walk
+now does too (a subclass's element through `arrayElementTypeOfSubclass`), gated to the argument leg by
+`argInferWalk` so the contextual leg is byte-identical. A per-pair memo was tried and saved nothing (all cost
+was first-time pairs). Final: **+0.15%**; warm BenchMain before/final 7,290/7,249 vs 7,092/7,208 ms — no
+measurable cost.
+
+**The change (`Checker.kt` +317/−4 net of the fix)**: `argInferResultTypeArguments` / `argInferResultType` /
+`argInferOverloadResultType` (a constraint failure moves to the next generic overload) and small helpers
+(context-sensitivity skip, literal-keep, top-level test, primitive-constraint test, widening);
+`ctxSameLiteral` (identical literal constituents matched by value, `checker.ts:50978`); `ctxInferMaxDepth`;
+the element-pairing shortcut; the `NonNullable` reduction; the alias-display guard.
+`getReturnTypeOfCallExpressionCore` 2,593 -> 2,641 bytecodes.
+
+**Matrix, 47 census cells**: match 3 -> 10, match-but-`.nope` 10 -> 25 (the `(f(n)).nope` blindness is
+separate), differ 34 -> 12; flipped as predicted c01-c08, c11, c19, c20, c22-c24, c26, c27, c32, c33, c36,
+c37, c40, race1/10/11; safeguard cells s02-s04, s08-s10 exact. Residues: tsgo's `unknown` for an unbound TP /
+a generic function argument (c10, c16, c18); no second pass for context-sensitive arguments (s07, p17);
+single-signature constraint substitution (s06); `NonNullable` reduced only for the two-part shape; later
+steps (base-type/index-signature inference c29/c30/c34/c35; the `ctxReturnTypeParamMapper` fallback for
+`groupBy.ts:147`). **A countdown pin exists**: `InferredIntersectionTpConstraintTest`'s "only a SATISFYING
+constraint makes the inference bind" asserts silence where tsgo reports `NodeArrayX<NodeX>` — green only
+because of the no-substitution choice.
+
+**Pins**: `ArgumentResultInferenceTest`, 15 tests (4 controls). Ablation: widening 2 RED; literal-by-value 1;
+overload fall-through 1; all-or-nothing 1; depth 4 1; `NonNullable` 2; alias guard 1; contextual literal-keep
+1; whole leg 10; the out-of-scope refusal halves, the bare-TP constraint skip and the context-sensitive skip
+**0** — redundant with all-or-nothing / the kept raw return on these fixtures, recorded.
+
+**Gates** (final binary `7769c37a`): full suite **20,665 / 0 / 44** (+15), run on both binaries; corpus screen
+0 of 8,725 (5 inference pending baselines byte-identical); cost_gate PASS (+0.15% / +0.72% typeOfExpr);
+huge_methods 0; grid 8x `added=0 removed=0` — a real gate here; no `w:`. **`rxjs` 2 -> 1**
+(`race.ts:52`; left: `groupBy.ts:147`, step 2); `marked` 0.
+
+**Successor**: (CHK.167) round 1 (union source vs object target, specified, +0 predicted).
+
 ### Round (P18.190) — (CHK.158): a type guard reached through a VALUE narrows — the predicate is read from the callee's signature; `rxjs` 3 -> 2 (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.164) census folding into its item beside it.
@@ -434,58 +492,6 @@ removed rows are exactly (CHK.148)'s fingerprint `Type 'unknown' is not assignab
 `TestScheduler:158` — plus tsgo's own row we MISS (`WebSocketSubject:304`, an
 `ArrayBufferView<ArrayBufferLike>` relation gap, NOT (CHK.152) per its census). **Successor: (CHK.152)
 step 1**, which is fully specified and predicted +0 rows on every profile and library.
-
-### Round (P18.181) — (CHK.150) rung 2: a UNION contextual type infers per member with tsgo's candidate combination; X3 matches tsgo, 2 -> 15 of 20 cells, `rxjs` flat as predicted (2026-09-23)
-
-Orchestrated: one implementation subagent, gates in this session, and — in parallel, against a FROZEN
-class snapshot and with no Gradle — a read-only census agent for (CHK.151), which re-scoped that item
-and surfaced (CHK.152) (see both). **The brief's guess was wrong in the useful direction**: there is no
-union-TARGET arm to add, because in this leg the CONTEXTUAL type is the inference SOURCE and the callee's
-return is the target. The contextual union DID reach `ctxReturnInferInto`; its `source is Type.Union`
-arm refused on purpose when two real members remained, with a KDoc calling tsgo's behaviour "a guess
-this leg does not make". tsgo infers from each source member in turn (`inference.go:290`) and, since
-return-type priority is in `PriorityImpliesCombination` (`checker.go:318`), combines several candidates
-into a subtype-reduced union (`getCovariantInference`, `inference.go:1421`). The mirror direction — a
-callee RETURNING a union — had no arm at all and was also `unknown`.
-
-**The change (`Checker.kt` +146/−3, all inside the contextual-return leg)**:
-`ctxReturnInferFromUnionSource` (per real member, candidates collected per type parameter),
-`ctxCombineCandidates` (union of candidates dropping one strictly assignable to another — a stand-in
-for subtype reduction, as `flowJoinReduceSubtypes` already is), and `ctxReturnInferToUnionTarget`, a
-port of tsgo's union-target head (`inference.go:102-129`) and the union half of `inferToMultipleTypes`:
-identical members matched away, same-generic references matched and inferred between, a naked type
-parameter bound only by what nothing else matched and never over an existing candidate. Recorded
-divergences: nullish members still stripped first, the combined union not widened, inference
-circularity not modelled, "matched" means "added a candidate".
-
-**Matrix, 20 cells vs tsgo** (`build/scratch-p18181/cells`): **2 -> 15 agree** — X3, one of two members
-matching, two members binding the same type, `string | T`, `string | number`, subtype reduction
-(`string`, not `string | "a"`), a null member beside a function, a bare `T` in the context, three
-members, a concrete union, a variable annotation, a callee returning `Subscriber<T> | undefined`,
-identical-member removal. Four more now agree on the callback's TYPE and lack only a relation row tsgo
-reports (d10/d12/d18/d19 — the (CHK.152) family). **d08, rxjs's own `Partial<Observer<T>> | fn`
-shape, is still `unknown`**: (P18.180)'s out-of-scope filter drops the `Partial` member's candidate
-because a generic class method's mapped parameter reaches the pull with `W` un-instantiated. The
-(P18.180) regression matrix went 17 -> 18 agree (only c18-x3 moved; X1 did not).
-
-**Pins**: `UnionContextualReturnInferenceTest`, 19 tests, full tsgo text, 3 controls. Ablation one
-mistake at a time: union-source arm removed 11 RED; first-candidate-wins 2; no subtype reduction 1;
-union-target arm removed 4; identical-member removal 0 until a d20 pin was added, then 1; bare type
-parameter bound before the structural match 1; **same-generic matching 0 — recorded as a REDUNDANT
-guard** (in this first-wins model step 4's recursion reaches the same inference), kept because it is
-tsgo's structure. The agent hit the known restored-source/stale-class trap once and rebuilt (restored
-md5 `5bdbd9f9`).
-
-**Gates**: full suite **20,508 / 0 / 44** (+19); corpus screen 0 of 8,725 and again BLIND (the 38
-pending rows byte-identical on both arms); cost_gate PASS (the same `mapped.*` movement as (P18.180),
-within tolerance); huge_methods 0; grid 8x `added=0 removed=0` (a control); no `w:` in the final
-builds (the only one was ablation arm a3's deliberately dead variable). `rxjs` 17 -> 17 byte-identical,
-`marked` 0.
-
-**Successor**: rung 3 (X1, overload selection: `ctxArgTypesFromSignatures`' homogeneity check and its
-unmapped `candidates[0]`) — **and the `Partial<Observer<W>>` leak, which the item now names as a fourth
-blocker, since rxjs's union-typed subscribe needs it even with rung 3.** (CHK.152), the named-object
-argument firewall, is the larger correctness family and is queued directly after (CHK.150).
 
 ## QUEUE
 
@@ -1085,7 +1091,37 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   rows. Instruments unmeasured — take the census first (how many active baselines carry a TS2322
   naming `unknown`, and how many profile sites infer a callee TP from a contextual return).
 
-- [ ] **(CHK.167) A UNION SOURCE AGAINST AN OBJECT OR ARRAY TARGET IS SILENT AT DECLARATION AND ARGUMENT
+- [ ] **(CHK.167) CENSUSED 2026-09-24 (read-only, frozen (P18.190) classes, `build/scratch-p18191-census/`,
+  README.txt; a JDI arm FORCED the gate open with `forceEarlyReturn`, so every "opened" number is what the
+  compiler printed) — ROUND 1 SPECIFIED, PREDICTED +0 ROWS EVERYWHERE; A NAIVE OPENING ADDS 36 ROWS AND NONE IS
+  A tsgo ROW.** Gate: `canUseTypeEngine` (~99750) — a union source against a Type.Object/Interface/Reference
+  target matches no rule and returns false ("often need narrowing we don't implement", 1c7db1bd3, 2026-04-06,
+  pre-dating suppression-only narrowing; no measured FP family recorded) — refusing declaration, assignment,
+  return and property-assignment; the ARGUMENT reader has a second firewall (`caasNonSimpleParamChecks`, no
+  `allow*` claims a union argument); object-literal members already report; nullish unions at assignment already
+  report (B86.7d). Matrix 35 source x target x 11 readers + 15 narrowing families: with a per-member "lift"
+  opening ~98% of rows land with tsgo's exact line/col/code (differences: chain depth; property assignment prints
+  no chain); array->tuple stays refused by design; weak type `W` relates wrongly (separate). Narrowed-at-site
+  cells stay clean EXCEPT four gaps that become FPs: (a) `let v: U = init` — the initializer does not narrow the
+  declared type; (b) equality against an object constant `x === kk`; (c) element-access narrowing `a[0]`;
+  (d) discriminant narrowing of anonymous-object unions at decl/assignment (PARITY.1(c)'s all-primitive clause).
+  **Real code** (8 profiles, rxjs, marked, cronstrue): naive all-readers+argument +28-35 per profile, 36 distinct
+  rows, **0 tsgo-matching** (24 nullish — `x.p ??= v; return x.p`, lets assigned on every branch, `return
+  result!`; 12 non-nullish — conditional/`||`/call sources and reference-source narrowing gaps: typeof on
+  branded-string intersections `checker.ts:3274`, a never-returning `Debug.fail` ending a branch
+  `fourslashImpl.ts:1248`, an aliased condition `const isO = guard(x)`, a generic guard inside a ternary);
+  non-nullish-only 6-11 per profile; **the round-1 shape 0 everywhere**; corpus under JDI 2 / 1 / 0 mismatches
+  for the three arms. **ROUND 1**: open `canUseTypeEngine` for a union source vs an object-family target when
+  EVERY member is individually admitted (keeps array->tuple refused) and NO member is null/undefined; readers
+  declaration, assignment, property assignment ONLY; source an identifier or property access. In the same
+  commit extend the anonymous-object narrowing clause to object-carrying unions (the four `nt_aoo` FPs) and
+  fix or refuse (a) and (b); pin all three. Predicted ~20 cells x 5 readers fixed, +0 everywhere. **ROUND 2**:
+  return + argument readers (argument arm needs rest/arity refusal — `push(x)` on a union-alias element was an
+  FP), after the four reference-source narrowing gaps and the generic-assertion one (`assert(pred(foo))`,
+  `strictSubtypeAndNarrowing:204/209`); keep call/conditional/`||` sources refused. **ROUND 3**: nullish unions
+  ((CHK.63) territory, 24 rows; needs `??=` narrowing, every-branch let joins, `!` in the return reader).
+  Side findings: (CHK.168) filed; array-literal elements against `T[]` miss even for primitive unions; weak-type
+  check missing for union sources (`oo_W`/`po_W`). EARLIER: A UNION SOURCE AGAINST AN OBJECT OR ARRAY TARGET IS SILENT AT DECLARATION AND ARGUMENT
   POSITIONS — the largest false-negative class found this session (surfaced by (P18.190)'s builder, re-probed
   2026-09-24 by the orchestrator on the landed binary, `build/scratch-orch-p190`).** tsgo 1 row / ours 0:
   `declare const x: number[] | string; const r: number[] = x`; `number[] | boolean`; `string[] | number[]` ->
@@ -1099,6 +1135,41 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   the population on the 8 profiles and libraries, and whether an opening needs flow narrowing first (the
   risk (CHK.63) recorded: a union source that is NARROWED at the site must not be reported by its declared
   type). Direction: ADDS rows; every added row must be a tsgo row, and the grid is likely a REAL gate.
+
+- [ ] **(CHK.168) CENSUSED 2026-09-24 (read-only, frozen (P18.190) classes, `build/scratch-p18191-census2/`,
+  README.txt) — ROUND 1 SPECIFIED, PREDICTED +0 ON EVERY PROFILE AND LIBRARY.** The check DOES fire —
+  `checkArrowConciseBodyReturnType` (HEAD ~97485, via `checkArrowForImplicitReturn` from `spineIrLeaveNode`) —
+  but on the SPINE, where the arrow's parameters are out of scope: JDI showed `getTypeOfExpression(x)`
+  answering `any`, so it exits at `bodyType === anyType`; a literal reports only because its type is
+  scope-free (CLAUDE.md's "a per-node hook on the spine sees none of the checking ambient"). The scoped walker
+  `walkFunctionBodiesInExpr`'s expression-arrow branch (~102033) installs the parameters but never
+  return-checks. tsgo runs the SAME `checkReturnExpression` for an expression body
+  (`checkFunctionExpressionOrObjectLiteralMethodDeferred`, checker.go ~10182; async-unwrapped, error node the
+  paren-stripped expression, conditional branches separately). 131-cell matrix with two JDI-forced arms: mode 1
+  (re-run the concise check in the walk) fixes 25 but adds 3 FPs (no async unwrap, no un-inferred-TP guard);
+  **mode 2 (hand the body to the block-body `return` path inside the walk) fixes 25, 28 of 28 clean controls
+  stay clean (every (CHK.167) narrowing risk included), +0 rows on all 8 profiles, rxjs, marked, cronstrue**;
+  corpus 1 mismatch — a DUPLICATE (`conditionalReturnExpression:19` emitted 3x: the spine once, the walk twice,
+  because the walk runs twice per top-level statement from `ctaM3StmtAnchorCore` ~3459 and
+  `checkConditionalReturnBranches` adds rows directly). **ROUND 1**: in the expression-arrow branch, when the
+  arrow has a return annotation, route the body through the block-body return machinery with
+  `checkFunctionBody`'s flags (`inAsyncFunctionBody` from the arrow, generator off), the contextual parameter
+  pull `applyPulledContextualParamTypes(arrow, parameters)` (what makes `take((x): number => x)` report), the
+  anchor at the paren-stripped body passed into `checkReturnAssignabilityCore` (which hardcodes `stmt.pos, 6`
+  — the `return` keyword width — at ~10 sites), single emission (dedupe `checkConditionalReturnBranches` or gate
+  it on the record-only pass), and RETIRE the spine call. Pins: `k_cond`, the mode-1 traps `k_async_ok` /
+  `ok_promise_nonasync` / `ok_arr_map`, `paren`, `weak`, the clean controls. **ROUND 2**: class-property,
+  `static` and default-export arrow initializers are walked by NOTHING (block bodies silent there too).
+  ROUND 3: the member-drill display (3 cells, shared with the block path). Separate: `<T>(x: string): T => x`
+  missed by the block path too (foreign-TP gate). EARLIER: AN ANNOTATED ARROW'S *EXPRESSION* BODY IS NEVER RETURN-CHECKED FOR A NON-LITERAL
+  EXPRESSION — `export const f = (x: string): number => x` is SILENT where tsgo reports TS2322 (found by the
+  (CHK.167) census, re-probed 2026-09-24 by the orchestrator, `build/scratch-orch-p190`).** A block body
+  (`=> { return x; }`), a function declaration, a function expression and a LITERAL expression body
+  (`(): number => "s"`) all report; a class-property arrow with an expression body is silent too. Plausibly the
+  return reader handles `ReturnStatement` and the arrow-expression-body arm only covers literals. A visible
+  false negative in the most common modern function form — census the reach (tsc's sources and rxjs are full
+  of expression-bodied arrows, so the grid will be a REAL gate: every added row must be a tsgo row, and the
+  (CHK.167)/(CHK.64) narrowing-gap classes will surface as FPs through it).
 
 - [ ] **(CHK.152) STEP 1 LANDED 2026-09-23 ((P18.183) note) — named object vs named object is related at
   an argument, with the declaration's chain; +0 rows on every profile and library, exactly as the census
@@ -1229,7 +1300,10 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   from the callee's DECLARATION, and a variable declaration carries none; read it from the callee's
   SIGNATURE instead. Reducer `build/scratch-p18183-census/cells/aaoo2` (c2, c3); controls (c1, c4, c5). Size M.
 
-- [ ] **(CHK.159) CENSUSED 2026-09-23 (read-only, frozen (P18.187) classes, `build/scratch-p18188-census/`) —
+- [ ] **(CHK.159) STEP 1 LANDED 2026-09-24 ((P18.191) note; rxjs 2 -> 1, profiles +0, a +10% counter blowup
+  fixed by tsgo's array element pairing). OPEN: step 2 (`ctxReturnTypeParamMapper` fallback -> `groupBy.ts:147`,
+  rxjs to 0 ours-only) and the later steps; a countdown pin sits in `InferredIntersectionTpConstraintTest`.
+  EARLIER: CENSUSED 2026-09-23 (read-only, frozen (P18.187) classes, `build/scratch-p18188-census/`) —
   FIRST STEP SPECIFIED: AN ARGUMENT-INFERENCE LEG IN `getReturnTypeOfCallExpressionCore` REUSING
   `ctxReturnInferInto`; THE NAME-COLLISION STOPGAP IS REFUSED ON EVIDENCE.** The call's RESULT type is inferred
   in exactly one place — `tryInferSingleTypeParamFromArgs(forReturnType=true)` (single ~129914, overloads

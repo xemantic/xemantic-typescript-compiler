@@ -1,5 +1,14 @@
 
 
+**(P18.186) — (CHK.154)(b): A CLASS WITH ITS OWN CONSTRUCTOR HAS ONLY ITS OWN CONSTRUCT SIGNATURES; THE FIX EXPOSED AN rxjs OOM AND TWO RELATION DEFECTS, ALL CLOSED, 20,586 / 0 / 44 (2026-09-23).**
+`new Sub("x")` against `constructor(o?: number)` was ACCEPTED because the base constructor rode along. Fixing that at
+the source made `SafeSubscriber<T>` stop relating to `Subscriber<T>` (construct signatures were only skipped for
+`Type.Interface` targets, and a generic instance is a `Type.Reference`) and an override check then exhausted a 6 GB
+heap elaborating it; skipping them for class references exposed a baseline passing by accident, closed by porting
+tsgo's private-vs-public property rule; inaccessible constructors now return as tsgo's error call does. 26-cell matrix:
+every added row a tsgo row, every removed row ours-only. 13 pins, seven arms RED. Screen 0; grid 8x0 (a real gate);
+KIR 313/0; rxjs 6, marked 0. Residues filed as (CHK.163).
+
 **(P18.185) — (CHK.154)(a): A TRAILING `void`-ACCEPTING PARAMETER IS OPTIONAL IN SIGNATURE RELATION; `rxjs` 7 -> 6, 20,573 / 0 / 44 (2026-09-23).**
 `Relater.signatureRelatedTo` compared raw `minArgumentCount`; tsgo's `getMinArgumentCountEx` drops a trailing run of
 source parameters whose type has the `Void` flag (directly or on a union constituent — not `undefined`/`any`/`unknown`/

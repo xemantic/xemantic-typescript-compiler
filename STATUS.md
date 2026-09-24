@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **200,293** lines (**+94 at (P18.190)**, the callee-signature predicate fallback and its
+extraction):** `Checker.kt` **200,631** lines (**+338 at (P18.191)**, an argument-inference leg for a call's result type with
+its safeguards, array element pairing, a `NonNullable` union reduction and an alias-display guard — a SEMANTIC
+parity change, `rxjs` 2 -> 1; **+94 at (P18.190)**, the callee-signature predicate fallback and its
 declaration-typing helpers — a SEMANTIC parity change, `rxjs` 3 -> 2; **+157 at (P18.189)**, else-branch narrowing at the spine and both legacy
 If arms with its `||`-negation, nullish-equality and guard-call helpers — a SEMANTIC parity change, `rxjs` 4 ->
 3; **+50 at (P18.188)**, two `boolean`-minus-literal helpers at three narrowing
@@ -79,6 +81,16 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.191) — (CHK.159) STEP 1: AN ARGUMENT-INFERENCE LEG FOR A CALL'S RESULT TYPE; `rxjs` 2 -> 1, PROFILES +0, 20,665 / 0 / 44 (2026-09-24).**
+A generic call whose legacy shape-gated inference bailed returned its RAW return type, hidden only by a name-keyed
+foreign-TP test (false positives on collision, false negatives otherwise). A new leg infers from each
+non-context-sensitive argument with the existing structural walker — all-or-nothing, constraint-checked with overload
+fall-through, literals widened as tsgo does. Building it surfaced +14 rows per profile (refused: tsgo's constraint
+substitution) and a **+10.22% `typeNode.bypassed` blowup the cost gate caught** — attributed to member-by-member
+array matching and fixed with tsgo's element pairing (+0.15%, no wall cost). 47-cell matrix: 13 -> 35 match; 15 pins.
+Screen 0; grid 8x0; huge_methods 0. **`rxjs` 2 -> 1** (`groupBy.ts:147` is step 2). (CHK.167) and (CHK.168) — a
+silent union-source class and a silent arrow expression body — were censused beside it, both +0 predicted.
+
 **(P18.190) — (CHK.158): A TYPE GUARD REACHED THROUGH A VALUE NARROWS — THE PREDICATE IS READ FROM THE CALLEE'S SIGNATURE; `rxjs` 3 -> 2, 20,650 / 0 / 44 (2026-09-24).**
 `const isArr = Array.isArray`, a destructured `isArray`, a guard in an object property, a guard-typed annotation and
 an overloaded guard (wrong even when called directly) now narrow, with tsgo's `getEffectsSignature` rule. Four matrix
@@ -111,13 +123,4 @@ function-wide definitely-assigned set. 26-cell matrix 16 -> 24 agree, all must-s
 four arms RED. Screen 0; cost_gate identical; grid 8x0; huge_methods 0. **`rxjs` 6 -> 5.** The parallel (CHK.160) census
 found the `instantiateType` function-shape skip was never a measured guard and specified a return-slot first step
 (+0 predicted on all profiles, 11 matrix cells fixed, one false positive removed).
-
-**(P18.186) — (CHK.154)(b): A CLASS WITH ITS OWN CONSTRUCTOR HAS ONLY ITS OWN CONSTRUCT SIGNATURES; THE FIX EXPOSED AN rxjs OOM AND TWO RELATION DEFECTS, ALL CLOSED, 20,586 / 0 / 44 (2026-09-23).**
-`new Sub("x")` against `constructor(o?: number)` was ACCEPTED because the base constructor rode along. Fixing that at
-the source made `SafeSubscriber<T>` stop relating to `Subscriber<T>` (construct signatures were only skipped for
-`Type.Interface` targets, and a generic instance is a `Type.Reference`) and an override check then exhausted a 6 GB
-heap elaborating it; skipping them for class references exposed a baseline passing by accident, closed by porting
-tsgo's private-vs-public property rule; inaccessible constructors now return as tsgo's error call does. 26-cell matrix:
-every added row a tsgo row, every removed row ours-only. 13 pins, seven arms RED. Screen 0; grid 8x0 (a real gate);
-KIR 313/0; rxjs 6, marked 0. Residues filed as (CHK.163).
 

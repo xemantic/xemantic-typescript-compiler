@@ -1,5 +1,57 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.181) — (CHK.150) rung 2: a UNION contextual type infers per member with tsgo's candidate combination; X3 matches tsgo, 2 -> 15 of 20 cells, `rxjs` flat as predicted (2026-09-23)
+
+Orchestrated: one implementation subagent, gates in this session, and — in parallel, against a FROZEN
+class snapshot and with no Gradle — a read-only census agent for (CHK.151), which re-scoped that item
+and surfaced (CHK.152) (see both). **The brief's guess was wrong in the useful direction**: there is no
+union-TARGET arm to add, because in this leg the CONTEXTUAL type is the inference SOURCE and the callee's
+return is the target. The contextual union DID reach `ctxReturnInferInto`; its `source is Type.Union`
+arm refused on purpose when two real members remained, with a KDoc calling tsgo's behaviour "a guess
+this leg does not make". tsgo infers from each source member in turn (`inference.go:290`) and, since
+return-type priority is in `PriorityImpliesCombination` (`checker.go:318`), combines several candidates
+into a subtype-reduced union (`getCovariantInference`, `inference.go:1421`). The mirror direction — a
+callee RETURNING a union — had no arm at all and was also `unknown`.
+
+**The change (`Checker.kt` +146/−3, all inside the contextual-return leg)**:
+`ctxReturnInferFromUnionSource` (per real member, candidates collected per type parameter),
+`ctxCombineCandidates` (union of candidates dropping one strictly assignable to another — a stand-in
+for subtype reduction, as `flowJoinReduceSubtypes` already is), and `ctxReturnInferToUnionTarget`, a
+port of tsgo's union-target head (`inference.go:102-129`) and the union half of `inferToMultipleTypes`:
+identical members matched away, same-generic references matched and inferred between, a naked type
+parameter bound only by what nothing else matched and never over an existing candidate. Recorded
+divergences: nullish members still stripped first, the combined union not widened, inference
+circularity not modelled, "matched" means "added a candidate".
+
+**Matrix, 20 cells vs tsgo** (`build/scratch-p18181/cells`): **2 -> 15 agree** — X3, one of two members
+matching, two members binding the same type, `string | T`, `string | number`, subtype reduction
+(`string`, not `string | "a"`), a null member beside a function, a bare `T` in the context, three
+members, a concrete union, a variable annotation, a callee returning `Subscriber<T> | undefined`,
+identical-member removal. Four more now agree on the callback's TYPE and lack only a relation row tsgo
+reports (d10/d12/d18/d19 — the (CHK.152) family). **d08, rxjs's own `Partial<Observer<T>> | fn`
+shape, is still `unknown`**: (P18.180)'s out-of-scope filter drops the `Partial` member's candidate
+because a generic class method's mapped parameter reaches the pull with `W` un-instantiated. The
+(P18.180) regression matrix went 17 -> 18 agree (only c18-x3 moved; X1 did not).
+
+**Pins**: `UnionContextualReturnInferenceTest`, 19 tests, full tsgo text, 3 controls. Ablation one
+mistake at a time: union-source arm removed 11 RED; first-candidate-wins 2; no subtype reduction 1;
+union-target arm removed 4; identical-member removal 0 until a d20 pin was added, then 1; bare type
+parameter bound before the structural match 1; **same-generic matching 0 — recorded as a REDUNDANT
+guard** (in this first-wins model step 4's recursion reaches the same inference), kept because it is
+tsgo's structure. The agent hit the known restored-source/stale-class trap once and rebuilt (restored
+md5 `5bdbd9f9`).
+
+**Gates**: full suite **20,508 / 0 / 44** (+19); corpus screen 0 of 8,725 and again BLIND (the 38
+pending rows byte-identical on both arms); cost_gate PASS (the same `mapped.*` movement as (P18.180),
+within tolerance); huge_methods 0; grid 8x `added=0 removed=0` (a control); no `w:` in the final
+builds (the only one was ablation arm a3's deliberately dead variable). `rxjs` 17 -> 17 byte-identical,
+`marked` 0.
+
+**Successor**: rung 3 (X1, overload selection: `ctxArgTypesFromSignatures`' homogeneity check and its
+unmapped `candidates[0]`) — **and the `Partial<Observer<W>>` leak, which the item now names as a fourth
+blocker, since rxjs's union-typed subscribe needs it even with rung 3.** (CHK.152), the named-object
+argument firewall, is the larger correctness family and is queued directly after (CHK.150).
+
 ### Round (P18.180) — (CHK.150) rung 1: a generic reference's members are read SUBSTITUTED, and the contextual-return leg infers between DIFFERENT object types; X2 matches tsgo, `rxjs` flat as predicted (2026-09-23)
 
 Orchestrated: one implementation subagent, gates in this session. **The queue item named the wrong
