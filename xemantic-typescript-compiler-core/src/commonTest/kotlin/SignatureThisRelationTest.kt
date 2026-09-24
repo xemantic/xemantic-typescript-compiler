@@ -57,9 +57,9 @@ import kotlin.test.Test
  * `strictFunctionTypes: false` is not modelled by the parameter leg either (`CompilerOptions`
  * carries no such field; `(x: ZzzA & ZzzC) => void` against `(x: ZzzA) => void` reports
  * here and not in pristine under that flag); a UNION of function types as the SOURCE of a
- * declaration is refused by `canUseTypeEngine`'s object-carrying-union skip, so
- * `((this: ZzzA) => void) | ((this: ZzzC) => void)` against `(this: ZzzB) => void` is silent
- * where both references report; and an object-literal METHOD against a holder's member is
+ * declaration was refused by `canUseTypeEngine`'s object-carrying-union skip until (CHK.167)
+ * round 1 (P18.192) — it now reports tsgo's head row, with a chain one level short; and an
+ * object-literal METHOD against a holder's member is
  * anchored at the declaration's NAME with the whole-object elaboration where tsc's
  * `elaborateObjectLiteral` anchors at the property with the member's own form — the
  * parameter-mismatch twin of that shape does exactly the same on the parent binary.
@@ -450,14 +450,20 @@ class SignatureThisRelationTest {
     // ---------------------------------------------------------------------- residues
 
     @Test
-    fun `residue - a union of function types as the source is not related at all`() {
-        // Both references report TS2322 at line 5 (`Type '((this: ZzzA, x: number) => void) |
-        // ((this: ZzzC, x: number) => void)' is not assignable to type '(this: ZzzB, x:
-        // number) => void'.` with the first member's this chain); `canUseTypeEngine` refuses
-        // an object-carrying union source against an object target ((PARITY.1)(c)), so the
-        // leg is never asked. Pre-existing, not this item.
+    fun `a union of function types as the source reports tsgo's head row - chain depth is a residue`() {
+        // tsgo 7.0.2 reports TS2322 at line 5 only (line 6's `this: ZzzA & ZzzC` accepts both members):
+        // `Type '((this: ZzzA, x: number) => void) | ((this: ZzzC, x: number) => void)' is not assignable to
+        // type '(this: ZzzB, x: number) => void'.` with the chain `Type '(this: ZzzA, x: number) => void' is not
+        // assignable to type '(this: ZzzB, x: number) => void'.` / `The 'this' types of each signature are
+        // incompatible.` / `Property 'a' is missing in type 'ZzzB' but required in type 'ZzzA'.` Until (CHK.167)
+        // round 1 (P18.192) `canUseTypeEngine` refused an object-carrying union source against an object target
+        // and this was silent. RESIDUE: our chain stops after its FIRST line (a known form divergence of the
+        // union-source elaboration), so only the head and that line are pinned.
         val d = diagnose(prelude + "\ndeclare const zzzU: ((this: ZzzA, x: number) => void) | ((this: ZzzC, x: number) => void);\nconst zzzDst: (this: ZzzB, x: number) => void = zzzU;\nconst zzzDst2: (this: ZzzA & ZzzC, x: number) => void = zzzU;\nexport {};")
-        assert(d.isEmpty())
+        val rows = d.map { "${it.line}:${it.code}:${it.message}" }
+        assert(rows == listOf("5:2322:Type '((this: ZzzA, x: number) => void) | ((this: ZzzC, x: number) => void)' is not assignable to type '(this: ZzzB, x: number) => void'."))
+        val chain = d.single().messageChain.map { it.trim() }
+        assert(chain.firstOrNull() == "Type '(this: ZzzA, x: number) => void' is not assignable to type '(this: ZzzB, x: number) => void'.")
     }
 
     @Test

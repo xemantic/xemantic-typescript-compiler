@@ -198,16 +198,25 @@ class TypeDisplayParityTest {
         assert(d.none { it.code == 2322 })
     }
 
+    /**
+     * Was `negative control - … keeps the round-461 skip`, asserting a SILENCE: that skip is gone for a
+     * non-nullish reference source since (CHK.167) round 1 (`canUseTypeEngineReferenceUnionLift`), and
+     * this is tsgo 7.0.2's own row, byte for byte (head and chain).
+     */
     @Test
-    fun `negative control - a union carrying an object constituent keeps the round-461 skip`() {
+    fun `a union carrying an object constituent is related to an object target`() {
         val d = diagnose(
             """
             declare const v: string | { y: number };
             const t: { x: number } = v;
             export { t };
             """
-        )
-        assert(d.none { it.code == 2322 })
+        ).filter { it.code == 2322 }
+        val rendered = d.map { "${it.line}:${it.character} ${it.message}" + it.messageChain.joinToString("") { c -> " / " + c.trim() } }
+        assert(rendered == listOf(
+            "2:7 Type 'string | { y: number; }' is not assignable to type '{ x: number; }'. / " +
+                "Type 'string' is not assignable to type '{ x: number; }'."
+        ))
     }
 
     @Test

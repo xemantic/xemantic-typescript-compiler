@@ -99761,6 +99761,58 @@ interface DataView {
             t is Type.NumberLiteral || t is Type.BigIntLiteral
     }
 
+    /**
+     * (CHK.167) round 1: the UNION LIFT of [canUseTypeEngine] for an OBJECT-carrying union
+     * source against an object-family target (anonymous object, interface, class instance,
+     * generic reference, array), at the three readers that call it — declaration,
+     * assignment and property assignment. [canUseTypeEngine] itself refuses such a pair
+     * ("Skip Union → Object/Interface targets since those often need narrowing we don't
+     * implement", 1c7db1bd3), so `declare const x: number[] | string; const r: number[] = x`
+     * and `const r: K = kOrL` were silent where tsgo 7.0.2 reports TS2322 — the largest
+     * false-negative class found by the (CHK.167) census. tsgo has no such gate: its
+     * `checkTypeRelatedTo` relates a union source by requiring EVERY constituent to relate
+     * (`unionOrIntersectionRelatedTo` → `eachTypeRelatedToType`, relater.go).
+     *
+     * Admitted ONLY when all of these hold, each a measured condition of the census's +0
+     * arm (m4a0: +0 rows on all 8 profiles, rxjs, marked, cronstrue, 0 of 3,079 corpus
+     * errors subtests):
+     * - EVERY constituent is individually admitted by [canUseTypeEngine] against the same
+     *   target, so the union adds no decision the engine does not already make one member
+     *   at a time — and an array->tuple pair stays refused, because its member is;
+     * - NO constituent is `null`/`undefined`: a nullish union is (CHK.63) territory and
+     *   needs `??=` narrowing, every-branch `let` joins and `!` in the readers first;
+     * - the source EXPRESSION is a reference ([sourceExpr] an `Identifier` or a
+     *   `PropertyAccessExpression`) — the only shapes the readers' suppression-only flow
+     *   narrowing reaches, so a union the flow HAS narrowed at the site relates by its
+     *   narrowed type first; a call / conditional / `||` source keeps the refusal.
+     *
+     * Return and argument readers are NOT routed here (round 2).
+     */
+    private fun canUseTypeEngineReferenceUnionLift(
+        sourceType: Type, targetType: Type, sourceExpr: Expression?,
+    ): Boolean {
+        if (sourceExpr !is Identifier && sourceExpr !is PropertyAccessExpression) return false
+        if (sourceType !is Type.Union || targetType !is Type.Object) return false
+        if (sourceType.types.any { it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }) return false
+        return sourceType.types.all { canUseTypeEngine(it, targetType) }
+    }
+
+    /**
+     * (CHK.167): a constituent whose every VALUE is a JavaScript primitive — `string`,
+     * `number`, `boolean`, `bigint`, `symbol` and their literals. Unlike
+     * [isPrimitiveLikeType] it refuses the `object` keyword (an `Intrinsic` carrying
+     * `NonPrimitive`, whose values are objects), `unknown`, `never` and the nullish
+     * intrinsics, so a filter that drops these can never drop a member an object value
+     * belongs to.
+     */
+    private fun isValuePrimitiveConstituent(t: Type): Boolean {
+        if (t is Type.StringLiteral || t is Type.NumberLiteral || t is Type.BigIntLiteral) return true
+        return t.flags.hasAny(
+            TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt or
+                TypeFlags.ESSymbolLike or TypeFlags.BooleanLiteral
+        )
+    }
+
     private fun canUseTypeEngine(sourceType: Type, targetType: Type): Boolean {
         // Never compare when either side is unresolved
         if (sourceType === anyType || sourceType === errorType) return false
@@ -105456,7 +105508,10 @@ interface DataView {
                 // DECLARED union and false-positive. Confined to the newly-admitted source
                 // shape, so no other Object-target comparison changes.
                 (targetType is Type.Object && rawSourceType is Type.Union &&
-                    rawSourceType.types.all { isPrimitiveLikeType(it) })) {
+                    (rawSourceType.types.all { isPrimitiveLikeType(it) } ||
+                        // (CHK.167): and for the object-carrying union the reference
+                        // lift now admits — the same suppression-only narrowing.
+                        canUseTypeEngineReferenceUnionLift(rawSourceType, targetType, init)))) {
                 val t0 = CtaSections.t()
                 val narrowed = getNarrowedTypeForReference(rawSourceType, init)
                 CtaSections.closeNarrow(t0, narrowed !== rawSourceType)
@@ -105481,7 +105536,8 @@ interface DataView {
         // PropertyAccess/Identifier sources still take the gated path so missing
         // narrowing on `obj.prop` doesn't FP under the same shape.
         val ctaC0 = CtaSections.t()
-        val canUseRaw = canUseTypeEngine(sourceType, targetType)
+        val canUseRaw = canUseTypeEngine(sourceType, targetType) ||
+            canUseTypeEngineReferenceUnionLift(sourceType, targetType, init)
         CtaSections.close(CtaSections.N_CANUSE, ctaC0)
         val callBypass = !canUseRaw && init is CallExpression && sourceType is Type.Union &&
             strictNullChecks &&
@@ -109679,7 +109735,9 @@ interface DataView {
                             // target now reaches the relation for a primitive-only union
                             // source, so it needs the same suppression-only narrowing.
                             (tt is Type.Object && sourceTypeRaw is Type.Union &&
-                                sourceTypeRaw.types.all { isPrimitiveLikeType(it) }))) {
+                                (sourceTypeRaw.types.all { isPrimitiveLikeType(it) } ||
+                                    // (CHK.167): the reference lift's twin, as at the var-decl site.
+                                    canUseTypeEngineReferenceUnionLift(sourceTypeRaw, tt, narrowRef))))) {
                         val narrowed = getNarrowedTypeForReference(sourceTypeRaw, narrowRef)
                         if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, tt, assignableRelation)) narrowed
                         else sourceTypeRaw
@@ -109705,7 +109763,8 @@ interface DataView {
                     // nullish member missing from the (non-nullable) target.
                     if (caeUnionAndMissingPropertyGuards(expr, target, tt, sourceType, typeAnnotation, source, fileName)) return
                     CtaSections.atE(CtaSections.E_RELATION)
-                    val canUse = canUseTypeEngine(sourceType, tt)
+                    val canUse = canUseTypeEngine(sourceType, tt) ||
+                        canUseTypeEngineReferenceUnionLift(sourceType, tt, expr.right)
                     val isAssignable = canUse && (bareNewMatchesTarget(expr.right, tt) ||
                         withFreshObjLitSource(expr.right) {
                             checkTypeRelatedTo(sourceType, tt, assignableRelation)
@@ -112608,7 +112667,8 @@ interface DataView {
         val ptForRel = if (targetPropSym != null && !typeIncludesUndefined(ptForRel0) &&
             objLitMemberValueWasOptionalRead(targetPropSym)
         ) getUnionType(listOf(ptForRel0, undefinedType)) else ptForRel0
-        if (!canUseTypeEngine(valueType, ptForRel)) return
+        if (!canUseTypeEngine(valueType, ptForRel) &&
+            !canUseTypeEngineReferenceUnionLift(valueType, ptForRel, value)) return
         lastMissingIndexSigKind = null
         if (checkTypeRelatedTo(valueType, ptForRel, assignableRelation)) return
         // (CHK.93)(e): a LITERAL right-hand side gets a second chance by its LITERAL
@@ -120264,6 +120324,48 @@ interface DataView {
     }
 
     /**
+     * (CHK.167): tsc's `getInitialOrAssignedType` for a DECLARATION — `let v: U = init`
+     * narrows `v` to the constituents of its OWN annotation the initializer can be
+     * assigned to (`getAssignmentReducedType(declaredType, initialType)`, the same
+     * reduction an `=` gets). Every reducing arm of [narrowByAssignmentRhs] for a
+     * non-literal right-hand side was gated on a `BinaryExpression`, so a declaration's
+     * initializer reduced nothing and the non-nullish overwrite answered the whole
+     * union: `let v: number[] | string = []; const r: number[] = v` then read
+     * `string | number[]` — a false positive the moment the (CHK.167) reference lift
+     * admits that union against an object target (census cell `n_let`).
+     *
+     * Reduced against the declaration's OWN annotation, never the reader's flat-map
+     * `declaredType` (the M1.12 rule below: that map may belong to an outer shadowed
+     * binding). The assigned type comes only from the right-hand sides the `=` arms
+     * already classify — an object literal (drops primitive and nullish members), an
+     * array literal (keeps array-like members), and a NON-UNION identifier or property
+     * read (keeps the members it relates to; the round-463 lenient-member-relation
+     * lesson refuses a union). Anything else, or a reduction that keeps nothing or
+     * everything, answers null and the caller's older arms decide as before.
+     */
+    private fun declarationInitializerReducedType(node: VariableDeclaration, rhs: Expression): Type? {
+        val own = getTypeFromTypeNode(node.type ?: return null) as? Type.Union ?: return null
+        val kept: List<Type> = when (rhs) {
+            is ObjectLiteralExpression -> own.types.filter { m ->
+                !(isNullishConstituent(m) || isValuePrimitiveConstituent(m))
+            }
+            is ArrayLiteralExpression -> own.types.filter { m ->
+                (m is Type.Reference && m.target.symbol?.name.let { it == "Array" || it == "ReadonlyArray" }) ||
+                    (m is Type.Object && m.tupleElementTypes != null)
+            }
+            is Identifier, is PropertyAccessExpression -> {
+                if (rhs is PropertyAccessExpression && rhs.questionDotToken) return null
+                val t = if (rhs is Identifier) getTypeOfIdentifier(rhs) else getTypeOfPropertyAccess(rhs as PropertyAccessExpression)
+                if (t === anyType || t === errorType || t === unknownType || t is Type.Union) return null
+                own.types.filter { m -> checkTypeRelatedTo(t, m, assignableRelation) }
+            }
+            else -> return null
+        }
+        if (kept.isEmpty() || kept.size >= own.types.size) return null
+        return if (kept.size == 1) kept[0] else getUnionType(kept)
+    }
+
+    /**
      * M1.4-prep (round 386): the full assignment-effect narrowing applied at a
      * [FlowAssignment] node, shared by BOTH walker mirrors. Two layers:
      *
@@ -120546,6 +120648,9 @@ interface DataView {
                     }
                 }
             }
+        }
+        if (node is VariableDeclaration && rhs != null) {
+            declarationInitializerReducedType(node, rhs)?.let { return it }
         }
         if (rhs != null && rhsIsDefinitelyNonNullish(rhs)) {
             // Round 416: an assignment OVERWRITES the reference, so its post-state is the
@@ -121659,7 +121764,20 @@ interface DataView {
         } else {
             isNullishConstituent(antecedent)
         }
-        if (!antecedentIsNullishOnly) return antecedent
+        if (!antecedentIsNullishOnly) {
+            // (CHK.167): an assignment OVERWRITES the reference, so an antecedent the
+            // assigned value does not even relate to is STALE (tsc reduces the DECLARED
+            // type, `getAssignmentReducedType`). `let v: K | number = 1; v = kk` reduced
+            // the antecedent `number` by `K`, got nothing back and kept `number` — a
+            // wrong flow type (`const r: K = v` then read the declared union, a false
+            // positive once the reference lift admits it). Only the stale case moves;
+            // an antecedent the value relates to keeps the older, tighter base.
+            if (antecedent !== anyType && antecedent !== errorType &&
+                declaredType is Type.Union &&
+                !checkTypeRelatedTo(assigned, antecedent, assignableRelation)
+            ) return declaredType
+            return antecedent
+        }
         return declaredType
     }
 
@@ -125507,6 +125625,7 @@ interface DataView {
             ?: enumMemberTypeOfExpr(other)
         if (literalType == null) {
             enumImpossibleEqualityNarrow(t, other, equal)?.let { return it }
+            if (equal) objectValueEqualityNarrow(t, other)?.let { return it }
             return t
         }
         // (CHK.101)(A1): LOOSE equality against a nullish KEYWORD tests BOTH nullish
@@ -125534,6 +125653,44 @@ interface DataView {
             (literalType === nullType || literalType === undefinedType)
         ) return narrowByLooseNullishEquality(t, keep = equal)
         return narrowUnionByLiteral(t, literalType, keep = equal)
+    }
+
+    /**
+     * (CHK.167): `x === kk` (or `x == kk`, which tsgo narrows identically — measured)
+     * where `kk` is a reference to an OBJECT-typed value narrows a
+     * union `x` by dropping the primitive (and, under strictNullChecks, nullish)
+     * constituents that cannot be strictly equal to it — tsc's `narrowTypeByEquality`
+     * keeps the constituents COMPARABLE to the other operand's type
+     * (`filterType(type, t => areTypesComparable(t, valueType))`). Without it
+     * `function f(x: K | number) { if (x === kk) { const r: K = x } }` read `number | K`,
+     * a false positive once the (CHK.167) reference lift admits that union against an
+     * object target (census cell `n_eq`), and already one at an object-literal member.
+     *
+     * Deliberately the conservative half of comparability: an OBJECT constituent is always
+     * kept (only a primitive or nullish one is ever dropped), and a primitive one is kept
+     * whenever it relates to the other type (a string against `{ length: number }` or
+     * `{}`), so the filter can only remove a member no value of `kk`'s type can equal. The
+     * other operand's type is resolved ONLY after the cheap shape test that [t] mixes a
+     * primitive-or-nullish member with an object one, since this runs inside the walk.
+     * A filter that keeps nothing or everything answers null.
+     */
+    private fun objectValueEqualityNarrow(t: Type, other: Expression): Type? {
+        if (t !is Type.Union) return null
+        if (other !is Identifier && other !is PropertyAccessExpression) return null
+        if (other is PropertyAccessExpression && other.questionDotToken) return null
+        if (t.types.none { isValuePrimitiveConstituent(it) || isNullishConstituent(it) }) return null
+        if (t.types.none { !isValuePrimitiveConstituent(it) && !isNullishConstituent(it) }) return null
+        val ot = getTypeOfExpression(other)
+        if (ot !is Type.Object) return null
+        val kept = t.types.filter { m ->
+            when {
+                isNullishConstituent(m) -> !strictNullChecks
+                isValuePrimitiveConstituent(m) -> checkTypeRelatedTo(m, ot, assignableRelation)
+                else -> true
+            }
+        }
+        if (kept.isEmpty() || kept.size >= t.types.size) return null
+        return if (kept.size == 1) kept[0] else getUnionType(kept)
     }
 
     /**
