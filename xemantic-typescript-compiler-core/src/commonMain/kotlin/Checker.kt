@@ -7594,6 +7594,20 @@ class Checker(
      */
     private var ctxReturnInferDepth = 0
 
+    /** (CHK.159) [ctxReturnInferInto]'s recursion cap. The contextual-return leg keeps
+     *  its measured 4; the argument leg raises it to 6 for its own walk, because an
+     *  argument reaches a callback parameter of a method of the source one level
+     *  deeper than a contextual type does — `Promise<number>` against
+     *  `T | PromiseLike<T>` bottoms out at `then`'s `onfulfilled` parameter's own
+     *  parameter at depth 5, and a failed structural match hands the WHOLE source to
+     *  the naked `T` (tsgo's `inferToMultipleTypes` unmatched-source rule), i.e. a
+     *  wrong `T = Promise<number>`. */
+    private var ctxInferMaxDepth = 4
+
+    /** (CHK.159) True while [ctxReturnInferInto] runs for the ARGUMENT leg; enables its
+     *  array-element shortcut, which the contextual-return leg keeps off. */
+    private var argInferWalk = false
+
     /**
      * (CHK.73) The SYNTHETIC module symbols [createModuleSymbol] mints, mapped to the
      * file each one stands for — or to `null` when the symbol borrowed a `.d.ts`'s single
@@ -114579,7 +114593,14 @@ interface DataView {
                                 //    "kind">>` — an unbound `T` in a hover — because
                                 //    `classThis.ts` and `namedEvaluation.ts` declare overloads
                                 //    returning `Extract<ClassLikeDeclaration, Pick<T, "kind">>`.
-                                val returnsArgumentUnchanged = resolvedArgs.any { it === result }
+                                //    (CHK.159) Likewise a MEMBER of an argument union:
+                                //    `NonNullable<Nd | undefined>` reduces to the existing
+                                //    `Nd`, and tsgo prints that as `Nd` (it attaches an alias
+                                //    only to a type the instantiation CREATED) — registering
+                                //    it would rename every `Nd` program-wide.
+                                val returnsArgumentUnchanged = resolvedArgs.any {
+                                    it === result || (it is Type.Union && it.types.any { m -> m === result })
+                                }
                                 if (AliasDisplayCensus.on && returnsArgumentUnchanged) {
                                     AliasDisplayCensus.noteArgIdentity(symbol.name)
                                 }
@@ -130205,6 +130226,7 @@ interface DataView {
                     val rt = sig.resolvedReturnType ?: return anyType
                     return instantiateType(rt, mapper)
                 }
+                argInferResultType(sig, expr)?.let { return it }
             }
             return sig.resolvedReturnType ?: anyType
         }
@@ -130272,6 +130294,7 @@ interface DataView {
                     val mapper = tryInferSingleTypeParamFromArgs(s, expr.arguments, forReturnType = true)
                     if (mapper != null) return instantiateType(rt, mapper)
                 }
+                argInferOverloadResultType(inferCandidates, expr)?.let { return it }
             }
         }
         return chosenRt
@@ -150615,7 +150638,7 @@ interface DataView {
         out: HashMap<Type.TypeParam, Type>,
         depth: Int,
     ) {
-        if (depth > 4) return
+        if (depth > ctxInferMaxDepth) return
         if (target is Type.TypeParam) {
             if (target !in tps || out.containsKey(target)) return
             if (source === anyType || source === errorType || source === neverType) return
@@ -150652,6 +150675,26 @@ interface DataView {
             if (ta.size != sa.size) return
             for (i in ta.indices) ctxReturnInferInto(sa[i], ta[i], tps, out, depth + 1)
             return
+        }
+        // (CHK.159) tsgo `inferFromTypes`: two ARRAY types (`isArrayType` — `Array` and
+        // `ReadonlyArray` alike) infer from their element types directly. A source whose
+        // interface extends one (`NodeArray<X> extends ReadonlyArray<X>`) reaches the same
+        // element through its base; tsgo gets it there through `inferFromIndexTypes`
+        // after walking every member. Walking ~30 array methods per argument re-resolved
+        // each member type under an instantiation context (the uncacheable bypassed
+        // path): +15k `typeNode.bypassed` on the compiler profile for identical answers.
+        if (argInferWalk && target is Type.Reference &&
+            (target.target === globalArrayType || target.target === globalReadonlyArrayType) &&
+            source is Type.Reference
+        ) {
+            val te = target.resolvedTypeArguments?.singleOrNull()
+            val se = if (source.target === globalArrayType || source.target === globalReadonlyArrayType)
+                source.resolvedTypeArguments?.singleOrNull()
+            else arrayElementTypeOfSubclass(source)
+            if (te != null && se != null) {
+                ctxReturnInferInto(se, te, tps, out, depth + 1)
+                return
+            }
         }
         // (CHK.150) DIFFERENT object types: tsgo's `inferFromObjectTypes` tail
         // (`inference.go:665`) — properties, then call signatures. A generic class
@@ -150745,7 +150788,7 @@ interface DataView {
             val si = sources.iterator()
             while (si.hasNext()) {
                 val s = si.next()
-                val ti = targets.indexOfFirst { it.id == s.id }
+                val ti = targets.indexOfFirst { it.id == s.id || ctxSameLiteral(it, s) }
                 if (ti >= 0) { targets.removeAt(ti); si.remove() }
             }
         }
@@ -150787,6 +150830,20 @@ interface DataView {
             }
         }
         for (t in naked) ctxReturnInferInto(source, t, tps, out, depth + 1)
+    }
+
+    /** (CHK.159) Two literal types of one VALUE. tsgo interns literal types, so its
+     *  identical-constituent match (`inferFromMatchingTypes`) is identity; here a
+     *  literal is minted per occurrence, so `"skip" | T | undefined` against
+     *  `"skip" | U | undefined` left both `"skip"`s unmatched and bound `U` to
+     *  `T | "skip"` (tsc's `checker.ts` `forEachNodeRecursively`). */
+    private fun ctxSameLiteral(a: Type, b: Type): Boolean = when {
+        a is Type.StringLiteral && b is Type.StringLiteral -> a.value == b.value
+        a is Type.NumberLiteral && b is Type.NumberLiteral -> a.value == b.value
+        a is Type.BigIntLiteral && b is Type.BigIntLiteral -> a.value == b.value
+        a is Type.Intrinsic && b is Type.Intrinsic && a.flags.hasAny(TypeFlags.BooleanLiteral) &&
+            b.flags.hasAny(TypeFlags.BooleanLiteral) -> a.intrinsicName == b.intrinsicName
+        else -> false
     }
 
     /** (CHK.150) rung 2: tsgo's `getUnionTypeEx(candidates, UnionReductionSubtype)` for
@@ -150891,6 +150948,256 @@ interface DataView {
         val last = sig.parameters.lastOrNull() ?: return 0
         return if ((last.valueDeclaration as? Parameter)?.dotDotDotToken == true) sig.parameters.size - 1
         else sig.parameters.size
+    }
+
+    /**
+     * (CHK.159) step 1 — tsgo's `inferTypeArguments` from the ARGUMENTS, for the call's
+     * RESULT type, where the shape-gated [tryInferSingleTypeParamFromArgs] answered
+     * nothing. Before this a call whose parameter was `T | T[]`, a callback, a generic
+     * reference or a nested union returned the RAW `sig.resolvedReturnType`, which
+     * [typeContainsForeignTypeParam] then hid by NAME: silent where the names differ,
+     * a false positive where they collide with different shapes, a false negative
+     * where they collide with the same shape.
+     *
+     * Each argument that is not context-sensitive (tsgo's `isContextSensitive`, see
+     * [argIsContextSensitiveForInference]) is inferred into its parameter with the same
+     * structural walk the contextual-return leg uses ([ctxReturnInferInto], tsgo's
+     * `inferFromTypes`/`inferToMultipleTypes`). The result is ALL-OR-NOTHING over the
+     * type parameters the return type mentions (see the body). Then, per candidate:
+     *
+     *  - REFUSED — and the whole inference with it — when it names a type parameter no
+     *    declaration around the call binds ([typeContainsOutOfScopeTypeParam]): a
+     *    generic function argument's own `U`, or a nested call's un-inferred one.
+     *  - WIDENED by tsgo's `getCovariantInference` rule: when every inference was to a
+     *    top-level occurrence, the type parameter has no primitive constraint and it
+     *    does not occur at top level in the return type. A candidate from a function
+     *    expression's RETURN is widened too: tsgo widens a function expression's
+     *    inferred return literal when its contextual return type is not literal-ish
+     *    (`isLiteralOfContextualType`), which is the same primitive-constraint test —
+     *    so `map(() => false)` binds `boolean`, as tsgo does.
+     *  - CHECKED against its constraint (instantiated with what was found). A failure
+     *    answers `null`, so the overload path can fall through to the next generic
+     *    overload as tsgo's `chooseOverload` does; the single-signature path keeps the
+     *    raw return (see the body for why not tsgo's constraint substitution).
+     *
+     * Answers an empty map where nothing was inferred.
+     */
+    private fun argInferResultTypeArguments(
+        sig: Signature,
+        args: List<Expression>,
+        callNode: Node,
+        overload: Boolean,
+    ): HashMap<Type.TypeParam, Type>? {
+        val found = HashMap<Type.TypeParam, Type>()
+        val tps = sig.typeParameters ?: return found
+        if (tps.isEmpty() || args.isEmpty()) return found
+        val ret = sig.resolvedReturnType ?: return found
+        if (ret === anyType || ret === errorType) return found
+        if (tps.none { ctxReturnTypeMentions(ret, it) }) return found
+        val tpSet = tps.toSet()
+        val params = sig.parameters
+        val notTopLevel = HashSet<Type.TypeParam>()
+        val fromFnReturn = HashSet<Type.TypeParam>()
+        for (i in 0 until minOf(params.size, args.size)) {
+            val p = params[i]
+            if ((p.valueDeclaration as? Parameter)?.dotDotDotToken == true) break
+            var a: Expression = args[i]
+            while (a is ParenthesizedExpression) a = a.expression
+            if (a is SpreadElement) break
+            if (argIsContextSensitiveForInference(a)) continue
+            val pt = getTypeOfSymbol(p)
+            if (pt === anyType || pt === errorType) continue
+            if (tps.none { typeMayMentionTypeParam(pt, it, 0) }) continue
+            val at = getTypeOfExpression(args[i])
+            if (at === anyType || at === errorType) continue
+            // An argument whose own type carries an un-inferred type parameter of some
+            // OTHER call (a nested call this leg could not resolve either) is a leak;
+            // anything inferred from it would be.
+            if (typeContainsOutOfScopeTypeParam(at, callNode)) return HashMap()
+            val one = HashMap<Type.TypeParam, Type>()
+            val savedMax = ctxInferMaxDepth
+            val savedWalk = argInferWalk
+            ctxInferMaxDepth = 6
+            argInferWalk = true
+            try {
+                ctxReturnInferInto(at, pt, tpSet, one, 0)
+            } finally {
+                ctxInferMaxDepth = savedMax
+                argInferWalk = savedWalk
+            }
+            for ((tp, cand) in one) {
+                if (!argInferTypeParamAtTopLevel(pt, tp)) notTopLevel.add(tp)
+                if (found.containsKey(tp)) continue
+                found[tp] = cand
+                if (a is ArrowFunction || a is FunctionExpression) fromFnReturn.add(tp)
+            }
+        }
+        if (found.isEmpty()) return found
+        for (tp in tps) {
+            val cand = found[tp] ?: continue
+            if (typeContainsOutOfScopeTypeParam(cand, callNode)) return HashMap()
+            val primitive = argInferHasPrimitiveConstraint(tp)
+            val widen = !primitive && (
+                tp in fromFnReturn ||
+                    (tp !in notTopLevel && !argInferTypeParamAtTopLevel(ret, tp))
+                )
+            if (!widen) continue
+            val wide = argInferWidenLiterals(cand)
+            if (wide === cand) continue
+            // A function expression's return literal is kept by tsgo when its contextual
+            // return type is literal-ish, and during inference that context includes the
+            // call's own contextual type inferred to the return (priority ReturnType):
+            // `const z: Op<number, true> = mp((v: number) => true)` binds `true`.
+            if (tp in fromFnReturn && argInferContextKeepsLiteral(ret, tp, callNode)) continue
+            found[tp] = wide
+        }
+        // ALL-OR-NOTHING over the type parameters the return type mentions: one left
+        // raw is hidden downstream only by its NAME ([typeContainsForeignTypeParam]),
+        // so a partial substitution turns a raw callee `T` that collides with the
+        // caller's `T` into a false positive — measured on rxjs `combineLatest.ts:30`,
+        // `pipe(combineLatest(...args), …)` binding `B` and leaving pipe's `T`.
+        if (tps.any { it !in found && ctxReturnTypeMentions(ret, it) }) return HashMap()
+        val mapper = TypeMapper { tp -> found[tp] }
+        val failed = ArrayList<Type.TypeParam>(0)
+        for (tp in tps) {
+            val cand = found[tp] ?: continue
+            val constraint = tp.constraint ?: continue
+            if (constraint === errorType || constraint === anyType || constraint === unknownType) continue
+            val inst = instantiateType(constraint, mapper)
+            if (tps.any { it !in found && typeMayMentionTypeParam(inst, it, 0) }) continue
+            // A candidate that IS a bare type parameter (the caller's own) is not
+            // checked: this relation does not reliably relate a type parameter through
+            // its constraint (measured: every `setTextRange(range, …)` inside a
+            // `<T extends TextRange>` caller failed, +13 rows per profile), and tsgo
+            // accepts those calls. A composite one (`U & { m: 1 }`) is checked.
+            if (cand is Type.TypeParam) continue
+            if (!checkTypeRelatedTo(cand, inst, assignableRelation)) failed.add(tp)
+        }
+        if (failed.isEmpty()) return found
+        // tsgo substitutes the instantiated constraint on the single-signature path
+        // (`getInferredType`); this leg keeps today's raw return instead, because a
+        // failure here is as often a gap of this relation (an intersection source
+        // against a union constraint, (CHK.162)) as a genuinely bad argument.
+        return if (overload) null else HashMap()
+    }
+
+    /** (CHK.159) [argInferResultTypeArguments] on a single signature: the instantiated
+     *  return, or null where nothing was inferred. */
+    private fun argInferResultType(sig: Signature, expr: CallExpression): Type? {
+        val found = argInferResultTypeArguments(sig, expr.arguments, expr, overload = false)
+        if (found.isNullOrEmpty()) return null
+        val rt = sig.resolvedReturnType ?: return null
+        return instantiateType(rt, TypeMapper { tp -> found[tp] })
+    }
+
+    /** (CHK.159) [argInferResultTypeArguments] over the generic overload candidates in
+     *  order: a constraint failure moves on to the next one (tsgo's `chooseOverload`
+     *  rejects that candidate — tsc's `parseDelimitedList(…, () => … | undefined)`
+     *  fails `T extends Node` and resolves to the `T extends Node | undefined` overload),
+     *  an inference that finds nothing stops with today's raw return. */
+    private fun argInferOverloadResultType(cands: List<Signature>, expr: CallExpression): Type? {
+        for (s in cands) {
+            if (s.typeParameters.isNullOrEmpty()) continue
+            val found = argInferResultTypeArguments(s, expr.arguments, expr, overload = true) ?: continue
+            if (found.isEmpty()) return null
+            val rt = s.resolvedReturnType ?: return null
+            return instantiateType(rt, TypeMapper { tp -> found[tp] })
+        }
+        return null
+    }
+
+    /** (CHK.159) Does the call's contextual type, inferred to [ret], give [tp] a
+     *  literal candidate? Pulled only for a literal a function expression returned,
+     *  under [ctxReturnTypeParamMapper]'s own re-entry guard. */
+    private fun argInferContextKeepsLiteral(ret: Type, tp: Type.TypeParam, callNode: Node): Boolean {
+        if (ctxReturnInferDepth >= 3) return false
+        ctxReturnInferDepth++
+        val ctx = try {
+            pullContextualTypeAt(callNode)
+        } finally {
+            ctxReturnInferDepth--
+        } ?: return false
+        if (ctx === anyType || ctx === errorType) return false
+        val out = HashMap<Type.TypeParam, Type>()
+        ctxReturnInferInto(ctx, ret, setOf(tp), out, 0)
+        val c = out[tp] ?: return false
+        return argInferWidenLiterals(c) !== c
+    }
+
+    /** (CHK.159) tsgo `isTypeParameterAtTopLevel`: [tp] is [t] itself or a member of a
+     *  top-level union / intersection of it. */
+    private fun argInferTypeParamAtTopLevel(t: Type, tp: Type.TypeParam, depth: Int = 0): Boolean {
+        if (t === tp) return true
+        if (depth > 3) return false
+        return when (t) {
+            is Type.Union -> t.types.any { argInferTypeParamAtTopLevel(it, tp, depth + 1) }
+            is Type.Intersection -> t.types.any { argInferTypeParamAtTopLevel(it, tp, depth + 1) }
+            else -> false
+        }
+    }
+
+    /** (CHK.159) tsgo `hasPrimitiveConstraint`: the constraint admits a primitive or a
+     *  literal, so an inferred literal is kept (`<T extends string>(x: T | T[])` with
+     *  `"a"` binds `"a"`, as tsgo does). */
+    private fun argInferHasPrimitiveConstraint(tp: Type.TypeParam): Boolean {
+        val c = tp.constraint ?: return false
+        if (c === errorType || c === anyType || c === unknownType) return false
+        val members = (c as? Type.Union)?.types ?: listOf(c)
+        return members.any {
+            it is Type.StringLiteral || it is Type.NumberLiteral || it is Type.BigIntLiteral ||
+                it.flags.hasAny(
+                    TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt or
+                        TypeFlags.BooleanLiteral or TypeFlags.ESSymbol,
+                )
+        }
+    }
+
+    /** (CHK.159) [getWidenedLiteralType] through a union's members. */
+    private fun argInferWidenLiterals(t: Type): Type {
+        if (t !is Type.Union) return getWidenedLiteralType(t)
+        var changed = false
+        val out = t.types.map { m -> getWidenedLiteralType(m).also { if (it !== m) changed = true } }
+        return if (changed) getUnionType(out) else t
+    }
+
+    /**
+     * (CHK.159) tsgo `isContextSensitive` over the argument shapes that reach
+     * [argInferResultTypeArguments]: a function expression or arrow with an
+     * un-annotated parameter (or an arrow whose expression body is itself
+     * context-sensitive), an object literal with such a member, an array literal
+     * with such an element, a conditional with such a branch and `||`/`??` with such
+     * an operand. Such an argument is typed only through the inferred context in
+     * tsgo's second pass, which this leg does not model — so it contributes nothing.
+     */
+    private fun argIsContextSensitiveForInference(e: Expression, depth: Int = 0): Boolean {
+        if (depth > 8) return true
+        var a: Expression = e
+        while (a is ParenthesizedExpression) a = a.expression
+        return when (a) {
+            is ArrowFunction -> a.typeParameters.isNullOrEmpty() && (
+                a.parameters.any { !it.isCommentPlaceholder && it.type == null } ||
+                    (a.body is Expression && argIsContextSensitiveForInference(a.body, depth + 1))
+                )
+            is FunctionExpression ->
+                a.typeParameters.isNullOrEmpty() && a.parameters.any { !it.isCommentPlaceholder && it.type == null }
+            is ObjectLiteralExpression -> a.properties.any { m ->
+                when (m) {
+                    is PropertyAssignment -> argIsContextSensitiveForInference(m.initializer, depth + 1)
+                    is MethodDeclaration ->
+                        m.typeParameters.isNullOrEmpty() && m.parameters.any { !it.isCommentPlaceholder && it.type == null }
+                    else -> false
+                }
+            }
+            is ArrayLiteralExpression -> a.elements.any { argIsContextSensitiveForInference(it, depth + 1) }
+            is ConditionalExpression ->
+                argIsContextSensitiveForInference(a.whenTrue, depth + 1) ||
+                    argIsContextSensitiveForInference(a.whenFalse, depth + 1)
+            is BinaryExpression ->
+                (a.operator == SyntaxKind.BarBar || a.operator == SyntaxKind.QuestionQuestion) &&
+                    (argIsContextSensitiveForInference(a.left, depth + 1) ||
+                        argIsContextSensitiveForInference(a.right, depth + 1))
+            else -> false
+        }
     }
 
     /**
@@ -178337,6 +178644,7 @@ interface DataView {
         // what keeps round 777's refusal (no distribution of OBJECT intersections at
         // construction) intact: that view's operands and this one's are complements.
         reducePrimitiveDomainIntersection(filtered)?.let { return it }
+        reduceUnionAndEmptyObjectIntersection(filtered)?.let { return it }
         // B8.1: reduce `A & B` to `never` when a property name appears in 2+
         // class constituents and is `private` in at least one. The reduction
         // reason (display string + conflicting prop name) is captured by
@@ -178345,6 +178653,36 @@ interface DataView {
         // "The intersection 'A & B' was reduced to 'never' ..." chain line.
         if (findConflictingPrivateInIntersection(filtered) != null) return neverType
         return state.interner.intersection(filtered)
+    }
+
+    /**
+     * (CHK.159) `U & {}` for a UNION `U` — the lib's `NonNullable<T> = T & {}` once `T`
+     * is instantiated with a union. tsgo's `getIntersectionType` distributes the union
+     * and reduces each `M & {}`: a nullish member is `never` and drops out, any other
+     * member absorbs the `{}` (measured: `NonNullable<Nd | undefined>` and
+     * `NonNullable<string | undefined>` both print as the bare member). A type
+     * parameter member keeps its `& {}`. Before this the intersection was kept whole,
+     * so `NA<NonNullable<Nd | undefined>>` was not assignable to `NA<Nd>` — a false
+     * positive the (CHK.159) argument leg made reachable at tsc's
+     * `parser.ts:4147` (`parseDelimitedList`'s second overload). Only the exact
+     * two-constituent shape is reduced; round 777's refusal of distributing OBJECT
+     * intersections at construction is untouched.
+     */
+    private fun reduceUnionAndEmptyObjectIntersection(types: List<Type>): Type? {
+        if (types.size != 2) return null
+        val union = types.firstOrNull { it is Type.Union } as? Type.Union ?: return null
+        val other = if (types[0] === union) types[1] else types[0]
+        if (!isEmptyObjectTypeLiteral(other)) return null
+        val out = ArrayList<Type>(union.types.size)
+        for (m in union.types) {
+            when {
+                m.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void) -> {}
+                m is Type.TypeParam -> out.add(state.interner.intersection(listOf(m, other)))
+                else -> out.add(m)
+            }
+        }
+        if (out.isEmpty()) return neverType
+        return getUnionType(out)
     }
 
     /**
