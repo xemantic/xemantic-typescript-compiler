@@ -274,11 +274,13 @@ class NamedObjectArgumentAssignabilityTest {
     }
 
     @Test
-    fun `negative control - a union parameter stays outside the gate`() {
+    fun `negative control - a union parameter against a narrowed receiver's member stays silent`() {
         // tsgo is silent: `p.parent` is `A | B` once `p` is narrowed to `E`. This reader
-        // types the member off the DECLARED `N`, so admitting a union parameter reports
+        // types the member off the DECLARED `N`, so admitting a union parameter alone reported
         // `Argument of type 'N' is not assignable to parameter of type 'A | B'` three times
-        // (the shape of the 3 ours-only rows it adds on tsc's harness sources).
+        // (the shape of the 3 ours-only rows it added on tsc's harness sources). Since (CHK.152)
+        // step 3 (P18.198) the parameter IS admitted and the narrowed-receiver re-read
+        // (`Checker.argMemberRereadFromNarrowedReceiver`) is what keeps these legal.
         val rows = rows("""
             interface N { k: number; parent: N }
             interface A extends N { a: 1 }

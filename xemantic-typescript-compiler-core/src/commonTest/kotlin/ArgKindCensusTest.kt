@@ -66,6 +66,7 @@ class ArgKindCensusTest {
         function takesNumber(n: number): number { return n }
         function takesNode(n: Node): number { return n.kind }
         function takesMaybeNode(n: Node | undefined): number { return n ? n.kind : 0 }
+        function takesNodeOrText(n: Node | string): number { return 0 }
         function apply(f: (x: number) => number, v: number): number { return f(v) }
         function main(n: Node, o: Node, s: string): number {
             let total = 0
@@ -74,8 +75,11 @@ class ArgKindCensusTest {
             total += takesNode(o)
             // (CHK.152) step 1: a NAMED argument against a NAMED parameter (`takesNode(o)`
             // above) is related since round P18.183 and no longer leaves at the
-            // not-simple exit; an identifier against a UNION parameter still does.
+            // not-simple exit, and since step 3 (P18.198) neither does one against a
+            // union / nullable parameter of named objects (`takesMaybeNode(o)`); an
+            // identifier against a union holding a PRIMITIVE still does.
             total += takesMaybeNode(o)
+            total += takesNodeOrText(o)
             total += takesNumber(takesNode(n))
             total += takesNumber(1 + 2)
             total += takesNode({ kind: 7 })

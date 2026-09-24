@@ -169168,258 +169168,7 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = getTypeOfSymbol(params[i])
             if (paramType === anyType || paramType === errorType) continue
-            // 16.0b: contextual typing — set param type as context so arrow/function
-            // arguments get their parameters typed from the expected signature.
-            // B83.4g: also propagate the param type for ObjectLiteralExpression args
-            // so getTypeOfObjectLiteral's per-property contextual push (B52.4) fires —
-            // e.g. `f2({ toString: (s) => s })` against param `I { toString: (t: string)
-            // => string }` types `s` as `string`, so the TS2345 source displays
-            // `{ toString: (s: string) => string }` (not `(s: any) => any`).
-            ArgSections.at(ArgSections.L_ARGTYPE)
-            val savedContextual = contextualType
-            val useCtx = paramType is Type.Object &&
-                (arg is ArrowFunction || arg is FunctionExpression || arg is ObjectLiteralExpression ||
-                    // (CHK.93) stage 2: a const-asserted ARRAY or OBJECT literal reads the
-                    // parameter as its contextual type — a mutable array-like keeps the
-                    // tuple mutable (tsc passes the outer context through the assertion).
-                    constAssertedArrayLiteralOf(arg) != null || constAssertedObjectLiteralOf(arg) != null ||
-                    // (CHK.108): a PLAIN array literal argument reads a TUPLE parameter as
-                    // its context — see the var-decl site for the gate's reason.
-                    (arg is ArrayLiteralExpression && contextualTupleConstituent(paramType) != null))
-            // (CHK.148)(e): …and a UNION parameter is a context for an OBJECT LITERAL
-            // argument too — the SAME `is Type.Object` gate the var-decl site carried,
-            // one reader over, and the reason `take({ type: cond ? 'image' : 'link' })`
-            // stayed wrong after the var-decl form was fixed. Gated by the same shape
-            // predicate asked of the constituents.
-            val useUnionCtx = !useCtx && arg is ObjectLiteralExpression &&
-                paramType is Type.Union &&
-                paramType.types.count { it is Type.Object } >= 2 &&
-                paramType.types.any { it is Type.Object && objLitTargetNeedsContext(it) }
-            if (useCtx || useUnionCtx) contextualType = paramType
-            // (CALL.6) the level-S classification. Taken INSIDE the already-open
-            // L_ARGTYPE row, so it adds no boundary — every nanosecond it
-            // attributes is a span the partition was already timing.
-            if (ArgSections.mode == ArgSections.ON) {
-                ArgSections.noteArgKind(argSectionKindOf(arg), useCtx)
-            }
-            // 17.67: contextual literal preservation for call args (extends 17.66's
-            // var-decl init / assignment-RHS pattern). When the param's type contains
-            // literal types and the arg is a literal expression, preserve the literal
-            // type instead of widening to the primitive — matches TypeScript's
-            // bidirectional contextual-typing rule for TS2345 source display.
-            // (REL.4) round 780: an ELEMENT ACCESS with a literal index is a narrowable
-            // REFERENCE — tsc's `isMatchingReference` accepts it and round 461 already
-            // encodes it in [getReferencePath] (`a[0]`), the binder already records a flow
-            // node at it (Flow.kt's ElementAccessExpression arm), and the flow walk is
-            // path-string-based so it needs nothing else. Only THIS gate excluded it: every
-            // flow-reading arm below tested `arg is Identifier || arg is
-            // PropertyAccessExpression`, so `Debug.assertNever(allowedEndings[0])` after an
-            // exhaustive `switch (allowedEndings[0])` read the DECLARED type (tsc:
-            // moduleSpecifiers.ts:1411). The path gate is what keeps a non-pure chain
-            // (a call, a computed index) out — those answer null and stay on the raw type.
-            val argIsNarrowableRef = arg is Identifier || arg is PropertyAccessExpression ||
-                (REL4_ELEM_UNION_GATE && arg is ElementAccessExpression && getReferencePath(arg) != null)
-            val argType = try {
-                val gtoeT = ArgSections.t()
-                val raw = getTypeOfExpression(arg)
-                ArgSections.close(ArgSections.N_GET_TYPE_OF_EXPR, gtoeT)
-                // voidArrayLit: a zero-arg IIFE of a parameterless, no-return,
-                // un-annotated arrow/fn-expr returns `void`. `getReturnTypeOfCallExpression`
-                // yields `anyType` for an arrow/fn-expr callee, so detect the shape here and
-                // override to voidType ONLY at this arg-check site — NEVER in the global
-                // call-return path, which would cascade `void` into currentLocalTypes /
-                // var-init inference (the `isFromCall` rule).
-                val widened = if (raw === anyType) (voidIifeArgType(arg) ?: raw) else raw
-                val litT = ArgSections.t()
-                // (CHK.83): the declaration rule at the ARGUMENT gate. `fEnum(3)` with no
-                // member valued 3 is `TS2345` on both references and was silent here,
-                // because the literal arrived as `number` and `number` relates to every
-                // numeric enum; `fEnum(-1)` reported all along only because a negated
-                // literal is typed as its literal by `getTypeOfExpression`.
-                // (CHK.97) `never` joins the literal-keeping targets: tsc's
-                // `reportRelationError` keeps a literal source against a `never` target
-                // ("we really want the original type displayed for use-cases like
-                // 'assertNever'", CLAUDE.md's (PARITY.1)(b) rule), and B516's retired
-                // union branch had exactly this clause as its `showLiteral`. Both
-                // references print `'"x"'` where the widened source prints `'string'`;
-                // the VERDICT is unchanged (a literal and its base primitive both fail
-                // against `never`), only the display.
-                val ctxAppliedRaw = if (propTypeContainsLiteral(paramType) || paramType === neverType) {
-                    literalTypeOfExpression(arg) ?: widened
-                } else enumTargetLiteralSource(arg, paramType) ?: widened
-                ArgSections.close(ArgSections.N_LITERAL, litT)
-                // M3.1 (round 429c): a non-null-asserted arg (`readFile(path)!`) types
-                // as its nullish-stripped union (tsc NonNullable) — LOCAL strip only.
-                val ctxApplied = stripNullishForNonNullArg(arg, ctxAppliedRaw)
-                // (CALL.6) round 797: the whole arm chain as ONE sub-measure, so
-                // the argType row is gtoe + literal + chain + a named residue.
-                val chainT = ArgSections.t()
-                // B469: narrow a reference argument by the flow graph. PropertyAccess
-                // args already narrow inside getTypeOfPropertyAccess, but bare Identifier
-                // args do not (getTypeOfIdentifier never consults narrowing), so narrow
-                // them explicitly here. Only Union types can be refined.
-                val chainResult = if (argIsNarrowableRef && ctxApplied is Type.Union) {
-                    // (CALL.5)(b) round 796: the already-relates pre-gate — see
-                    // [ArgNarrowGate]. Round 764 gave this shape to the enum arm
-                    // below and declined to generalise; the debt is re-tested here.
-                    val gateRelT = ArgSections.t()
-                    val gateRefuses = ArgNarrowGate.mode != ArgNarrowGate.OFF &&
-                        checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
-                    ArgSections.close(ArgSections.N_GATE_REL, gateRelT)
-                    if (gateRefuses && ArgNarrowGate.mode == ArgNarrowGate.ON) {
-                        ArgNarrowGate.note(ArgNarrowGate.UNION, true, false)
-                        ctxApplied
-                    } else {
-                        val nwT = ArgSections.t()
-                        val nw = getNarrowedTypeForReference(ctxApplied, arg)
-                        ArgSections.closeNarrow(ArgSections.N_NARROW_UNION, nwT, nw !== ctxApplied)
-                        if (ArgNarrowGate.mode != ArgNarrowGate.OFF) {
-                            ArgNarrowGate.note(ArgNarrowGate.UNION, gateRefuses, nw !== ctxApplied)
-                        }
-                        nw
-                    }
-                } else if (argIsNarrowableRef &&
-                    paramType === neverType && ctxApplied !is Type.Union) {
-                    // Round 441: `assertNever(x)` / `assertType<never>(x)` whose arg has a
-                    // NON-union declared type (a `Debug.type<SomeUnion>(node)` assert casts
-                    // `node` to a union earlier, then an EXHAUSTIVE switch narrows it to
-                    // `never` — utilities.ts's isDeclarationWithTypeParameterChildren family).
-                    // Narrow and use the result ONLY when it PROVES `never` — a partial
-                    // union (non-exhaustive switch) is NOT used (keeps the declared type →
-                    // the SAME TS2345 the pre-narrow path emitted, so no manufactured FP;
-                    // this is the FP-safe subset of the exclusion the comment below warns
-                    // about, now that the exhaustive default narrows to `never`).
-                    val nwT = ArgSections.t()
-                    val n = getNarrowedTypeForReference(ctxApplied, arg)
-                    ArgSections.closeNarrow(ArgSections.N_NARROW_NEVER, nwT, n !== ctxApplied)
-                    // (REL.2) round 766: a bare ENUM subject is the one shape whose PARTIAL
-                    // refinement is safe to keep, so it gets an exception to the discard
-                    // above. `default: Debug.assertNever(k)` in a partially-covered switch
-                    // (and the same shape after `if (k === K.A) return;` guards) narrows to
-                    // the UNCOVERED members — tsc's answer — where we displayed the whole
-                    // enum. It cannot manufacture the FP the comment above warns about: the
-                    // substituted type is a NON-EMPTY union of enum members, and nothing
-                    // non-`never` is assignable to `never`, so the TS2345 that already fired
-                    // still fires and only its DISPLAY changes. Gated by the round-746 owner
-                    // rule ([enumTargetsAreOwnMembers], shared with the subtractive and
-                    // assert directions), so a narrow to anything that is not a member of
-                    // THIS enum keeps the conservative declared type.
-                    val enumSubset = n !== ctxApplied && n !== neverType &&
-                        isEnumFlavoredObjectType(ctxApplied) &&
-                        enumTargetsAreOwnMembers(
-                            ctxApplied, if (n is Type.Union) n.types else listOf(n))
-                    if (n === neverType || enumSubset) n else ctxApplied
-                } else if (argIsNarrowableRef &&
-                    isEnumFlavoredObjectType(ctxApplied) && paramType !== neverType &&
-                    checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
-                ) {
-                    // (REL.2)(C) round 764: the enum arm below is a SECOND CHANCE — it pays
-                    // for a flow walk only on the REJECTING path. Round 763 opened the gate
-                    // unconditionally and that cost 3,406 extra walks (`narrow.walks`
-                    // 71,323 -> 74,729, +4.78%), because in tsc's own sources an enum-typed
-                    // argument overwhelmingly goes to a parameter of that same enum, where
-                    // the raw type already relates and no narrowing can change any verdict.
-                    //
-                    // Soundness: this arm fires ONLY when the DECLARED type already
-                    // satisfies the parameter, so the narrowed type could only have made an
-                    // already-passing relation pass again. Skipping is therefore
-                    // acceptance-preserving in the round-743 sense — a second chance can
-                    // turn a rejection into an acceptance, never the reverse. It does give
-                    // up the narrower DISPLAY in the (unobserved) case where some OTHER
-                    // check downstream would have keyed on it; the 8-arm grid is the gate.
-                    //
-                    // Deliberately enum-ONLY: the Interface/`unknown`/`string`/`number`
-                    // arms below are corpus-pinned (round 428b/429c/438) and walk
-                    // unconditionally, and one of them — the `n <: ctxApplied` leg — exists
-                    // precisely to substitute a refinement that is NOT relation-driven.
-                    ctxApplied
-                } else if (argIsNarrowableRef &&
-                    (ctxApplied is Type.Interface || ctxApplied === unknownType ||
-                        ctxApplied === stringType || ctxApplied === numberType ||
-                        // (CHK.156): a bare `boolean` is the finite domain `false | true`
-                        // to tsgo, so `=== true` / `=== false` refine it like an enum.
-                        ctxApplied === booleanType ||
-                        // (REL.2)(C) round 763: an ENUM's own type. tsc models a literal
-                        // enum as the UNION of its members, so every narrowability gate
-                        // in this file admits it via `is Type.Union`; ours mints a
-                        // member-LESS `Type.Object`, which is neither a Union nor a
-                        // Type.Interface — so it fell through EVERY gate and a reference
-                        // declared as the bare enum was never narrowed at an argument
-                        // position, whatever narrowed it. Measured: `isTemplateLiteralKind(kind)`
-                        // narrowed `kind` correctly in an `if` BLOCK (which types the body
-                        // from `currentLocalTypes`) and not in a ternary, an `&&`, or after
-                        // an early-return guard (all of which need this flow read) —
-                        // tsc parser.ts:2629/3762. NOT a decomposition into `K.A | K.B | …`:
-                        // [narrowByCallPredicate]'s single-type arm already answers
-                        // correctly once it is reached.
-                        isEnumFlavoredObjectType(ctxApplied)) &&
-                    paramType !== neverType) {
-                    // M3.4 (round 428b, generalized round 429c/438): an Identifier or
-                    // PROPERTY-ACCESS arg whose NON-union interface type is narrowed DOWN by
-                    // a type guard (`isSourceFile(x) && isExternalOrCommonJsModule(x)` — Node
-                    // narrows to SourceFile; `getExports(node.left)` inside
-                    // `if (isIdentifier(node.left))` — Expression narrows to Identifier, tsc's
-                    // module/system transformers). A PropertyAccess's built-in narrowing only
-                    // refines UNION receivers, not a non-union interface DOWN to a subtype, so
-                    // it needs the same explicit narrow as a bare Identifier. Relation-gated:
-                    // substitute only a genuine refinement, so this can only suppress. The
-                    // `never`-PARAM exclusion
-                    // is load-bearing: `assertType<never>(node)` in an exhaustive-switch
-                    // default needs exhaustiveness narrowing we don't model — a partial
-                    // refinement (a union of case-matched members) would take the
-                    // union-arg emission path and manufacture an FP where the declared
-                    // interface previously stayed silent.
-                    // (CALL.5)(b) round 796: the already-relates pre-gate, the
-                    // generalisation of the enum arm's round-764 second chance
-                    // to this arm. See [ArgNarrowGate] for why it is
-                    // acceptance-preserving and what the census measures.
-                    val gateRelT = ArgSections.t()
-                    val gateRefuses = ArgNarrowGate.mode != ArgNarrowGate.OFF &&
-                        checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
-                    ArgSections.close(ArgSections.N_GATE_REL, gateRelT)
-                    if (gateRefuses && ArgNarrowGate.mode == ArgNarrowGate.ON) {
-                        ArgNarrowGate.note(ArgNarrowGate.M34, true, false)
-                        ctxApplied
-                    } else {
-                    val nwT = ArgSections.t()
-                    val n = getNarrowedTypeForReference(ctxApplied, arg)
-                    ArgSections.closeNarrow(ArgSections.N_NARROW_M34, nwT, n !== ctxApplied)
-                    // Round 462: the refinement gate `n <: declared` under-accepts —
-                    // tsc's getNarrowedType(assumeTrue) legitimately narrows to a guard
-                    // target that is NOT a declared-type subtype (isPropertyNameLiteral's
-                    // PropertyNameLiteral union contains JsxNamespacedName, which does not
-                    // extend Expression), so a genuine narrow was rejected and the wide
-                    // declared type FP'd (utilities.ts:4066 isSameEntityName). Also accept
-                    // the narrowed type when it makes the PARAM relation pass — the same
-                    // substitute-only-when-the-relation-passes monotone rule the
-                    // assignment/return/var-decl gates use (pure suppression).
-                    val agrT = ArgSections.t()
-                    // (REL.4) round 768: the `n !== neverType` exclusion is what round 765
-                    // recorded as "the narrowed `never` is discarded somewhere between the
-                    // flow walk and the argument check" — it is here. An exhaustive enum
-                    // switch's `default:` (round 460b) and a chain of `===` guards that peels
-                    // every member both PROVE the position unreachable, and tsc types the
-                    // reference `never` there. Accepted for an enum subject only: `never` is
-                    // assignable to everything, so it can only ever SUPPRESS, and keeping the
-                    // exclusion would make the round-746 subtraction chain answer the WHOLE
-                    // enum at its last step (measured — strictly worse than before the chain).
-                    val provenNever = n === neverType &&
-                        (isEnumFlavoredObjectType(ctxApplied) || ctxApplied === booleanType)
-                    val refined = n !== ctxApplied && (provenNever || (n !== neverType &&
-                        (checkTypeRelatedTo(n, ctxApplied, assignableRelation) ||
-                            checkTypeRelatedTo(n, paramType, assignableRelation))))
-                    ArgSections.close(ArgSections.N_ARGTYPE_REL, agrT)
-                    if (ArgNarrowGate.mode != ArgNarrowGate.OFF) {
-                        ArgNarrowGate.note(ArgNarrowGate.M34, gateRefuses, refined)
-                    }
-                    if (refined) n else ctxApplied
-                    }
-                } else ctxApplied
-                ArgSections.close(ArgSections.N_ARM_CHAIN, chainT)
-                chainResult
-            } finally {
-                if (useCtx || useUnionCtx) contextualType = savedContextual
-            }
+            val argType = caasArgTypeFor(arg, paramType)
             ArgSections.at(ArgSections.L_PRE)
             if (argType === anyType || argType === errorType) continue
             // Round 468 (M3.1): a CALL-EXPRESSION arg whose type carries an un-inferred
@@ -169539,6 +169288,269 @@ interface DataView {
         if (diagnostics.size == initialDiagCount) {
             checkRestArgsAgainstArrayElementType(sig, args, source, fileName)
         }
+    }
+
+    /**
+     * The ARGUMENT TYPE of one call argument against its parameter [paramType] — split out of
+     * `checkArgumentsAgainstSignatureCore` verbatim ((P18.198), which was at 7,629 of the 8,000-
+     * bytecode JIT limit). It installs the parameter as the contextual type for the argument kinds
+     * that read one and RESTORES it before returning, applies the literal / enum / non-null
+     * source rules, and runs the whole reference-narrowing arm chain; the caller's `L_PRE` row
+     * starts where this returns. Pure: no diagnostic is emitted here.
+     */
+    private fun caasArgTypeFor(arg: Expression, paramType: Type): Type {
+    // 16.0b: contextual typing — set param type as context so arrow/function
+    // arguments get their parameters typed from the expected signature.
+    // B83.4g: also propagate the param type for ObjectLiteralExpression args
+    // so getTypeOfObjectLiteral's per-property contextual push (B52.4) fires —
+    // e.g. `f2({ toString: (s) => s })` against param `I { toString: (t: string)
+    // => string }` types `s` as `string`, so the TS2345 source displays
+    // `{ toString: (s: string) => string }` (not `(s: any) => any`).
+    ArgSections.at(ArgSections.L_ARGTYPE)
+    val savedContextual = contextualType
+    val useCtx = paramType is Type.Object &&
+        (arg is ArrowFunction || arg is FunctionExpression || arg is ObjectLiteralExpression ||
+            // (CHK.93) stage 2: a const-asserted ARRAY or OBJECT literal reads the
+            // parameter as its contextual type — a mutable array-like keeps the
+            // tuple mutable (tsc passes the outer context through the assertion).
+            constAssertedArrayLiteralOf(arg) != null || constAssertedObjectLiteralOf(arg) != null ||
+            // (CHK.108): a PLAIN array literal argument reads a TUPLE parameter as
+            // its context — see the var-decl site for the gate's reason.
+            (arg is ArrayLiteralExpression && contextualTupleConstituent(paramType) != null))
+    // (CHK.148)(e): …and a UNION parameter is a context for an OBJECT LITERAL
+    // argument too — the SAME `is Type.Object` gate the var-decl site carried,
+    // one reader over, and the reason `take({ type: cond ? 'image' : 'link' })`
+    // stayed wrong after the var-decl form was fixed. Gated by the same shape
+    // predicate asked of the constituents.
+    val useUnionCtx = !useCtx && arg is ObjectLiteralExpression &&
+        paramType is Type.Union &&
+        paramType.types.count { it is Type.Object } >= 2 &&
+        paramType.types.any { it is Type.Object && objLitTargetNeedsContext(it) }
+    if (useCtx || useUnionCtx) contextualType = paramType
+    // (CALL.6) the level-S classification. Taken INSIDE the already-open
+    // L_ARGTYPE row, so it adds no boundary — every nanosecond it
+    // attributes is a span the partition was already timing.
+    if (ArgSections.mode == ArgSections.ON) {
+        ArgSections.noteArgKind(argSectionKindOf(arg), useCtx)
+    }
+    // 17.67: contextual literal preservation for call args (extends 17.66's
+    // var-decl init / assignment-RHS pattern). When the param's type contains
+    // literal types and the arg is a literal expression, preserve the literal
+    // type instead of widening to the primitive — matches TypeScript's
+    // bidirectional contextual-typing rule for TS2345 source display.
+    // (REL.4) round 780: an ELEMENT ACCESS with a literal index is a narrowable
+    // REFERENCE — tsc's `isMatchingReference` accepts it and round 461 already
+    // encodes it in [getReferencePath] (`a[0]`), the binder already records a flow
+    // node at it (Flow.kt's ElementAccessExpression arm), and the flow walk is
+    // path-string-based so it needs nothing else. Only THIS gate excluded it: every
+    // flow-reading arm below tested `arg is Identifier || arg is
+    // PropertyAccessExpression`, so `Debug.assertNever(allowedEndings[0])` after an
+    // exhaustive `switch (allowedEndings[0])` read the DECLARED type (tsc:
+    // moduleSpecifiers.ts:1411). The path gate is what keeps a non-pure chain
+    // (a call, a computed index) out — those answer null and stay on the raw type.
+    val argIsNarrowableRef = arg is Identifier || arg is PropertyAccessExpression ||
+        (REL4_ELEM_UNION_GATE && arg is ElementAccessExpression && getReferencePath(arg) != null)
+    return try {
+        val gtoeT = ArgSections.t()
+        val raw = getTypeOfExpression(arg)
+        ArgSections.close(ArgSections.N_GET_TYPE_OF_EXPR, gtoeT)
+        // voidArrayLit: a zero-arg IIFE of a parameterless, no-return,
+        // un-annotated arrow/fn-expr returns `void`. `getReturnTypeOfCallExpression`
+        // yields `anyType` for an arrow/fn-expr callee, so detect the shape here and
+        // override to voidType ONLY at this arg-check site — NEVER in the global
+        // call-return path, which would cascade `void` into currentLocalTypes /
+        // var-init inference (the `isFromCall` rule).
+        val widened = if (raw === anyType) (voidIifeArgType(arg) ?: raw) else raw
+        val litT = ArgSections.t()
+        // (CHK.83): the declaration rule at the ARGUMENT gate. `fEnum(3)` with no
+        // member valued 3 is `TS2345` on both references and was silent here,
+        // because the literal arrived as `number` and `number` relates to every
+        // numeric enum; `fEnum(-1)` reported all along only because a negated
+        // literal is typed as its literal by `getTypeOfExpression`.
+        // (CHK.97) `never` joins the literal-keeping targets: tsc's
+        // `reportRelationError` keeps a literal source against a `never` target
+        // ("we really want the original type displayed for use-cases like
+        // 'assertNever'", CLAUDE.md's (PARITY.1)(b) rule), and B516's retired
+        // union branch had exactly this clause as its `showLiteral`. Both
+        // references print `'"x"'` where the widened source prints `'string'`;
+        // the VERDICT is unchanged (a literal and its base primitive both fail
+        // against `never`), only the display.
+        val ctxAppliedRaw = if (propTypeContainsLiteral(paramType) || paramType === neverType) {
+            literalTypeOfExpression(arg) ?: widened
+        } else enumTargetLiteralSource(arg, paramType) ?: widened
+        ArgSections.close(ArgSections.N_LITERAL, litT)
+        // M3.1 (round 429c): a non-null-asserted arg (`readFile(path)!`) types
+        // as its nullish-stripped union (tsc NonNullable) — LOCAL strip only.
+        val ctxApplied = stripNullishForNonNullArg(arg, ctxAppliedRaw)
+        // (CALL.6) round 797: the whole arm chain as ONE sub-measure, so
+        // the argType row is gtoe + literal + chain + a named residue.
+        val chainT = ArgSections.t()
+        // B469: narrow a reference argument by the flow graph. PropertyAccess
+        // args already narrow inside getTypeOfPropertyAccess, but bare Identifier
+        // args do not (getTypeOfIdentifier never consults narrowing), so narrow
+        // them explicitly here. Only Union types can be refined.
+        val chainResult = if (argIsNarrowableRef && ctxApplied is Type.Union) {
+            // (CALL.5)(b) round 796: the already-relates pre-gate — see
+            // [ArgNarrowGate]. Round 764 gave this shape to the enum arm
+            // below and declined to generalise; the debt is re-tested here.
+            val gateRelT = ArgSections.t()
+            val gateRefuses = ArgNarrowGate.mode != ArgNarrowGate.OFF &&
+                checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
+            ArgSections.close(ArgSections.N_GATE_REL, gateRelT)
+            if (gateRefuses && ArgNarrowGate.mode == ArgNarrowGate.ON) {
+                ArgNarrowGate.note(ArgNarrowGate.UNION, true, false)
+                ctxApplied
+            } else {
+                val nwT = ArgSections.t()
+                val nw = getNarrowedTypeForReference(ctxApplied, arg)
+                ArgSections.closeNarrow(ArgSections.N_NARROW_UNION, nwT, nw !== ctxApplied)
+                if (ArgNarrowGate.mode != ArgNarrowGate.OFF) {
+                    ArgNarrowGate.note(ArgNarrowGate.UNION, gateRefuses, nw !== ctxApplied)
+                }
+                nw
+            }
+        } else if (argIsNarrowableRef &&
+            paramType === neverType && ctxApplied !is Type.Union) {
+            // Round 441: `assertNever(x)` / `assertType<never>(x)` whose arg has a
+            // NON-union declared type (a `Debug.type<SomeUnion>(node)` assert casts
+            // `node` to a union earlier, then an EXHAUSTIVE switch narrows it to
+            // `never` — utilities.ts's isDeclarationWithTypeParameterChildren family).
+            // Narrow and use the result ONLY when it PROVES `never` — a partial
+            // union (non-exhaustive switch) is NOT used (keeps the declared type →
+            // the SAME TS2345 the pre-narrow path emitted, so no manufactured FP;
+            // this is the FP-safe subset of the exclusion the comment below warns
+            // about, now that the exhaustive default narrows to `never`).
+            val nwT = ArgSections.t()
+            val n = getNarrowedTypeForReference(ctxApplied, arg)
+            ArgSections.closeNarrow(ArgSections.N_NARROW_NEVER, nwT, n !== ctxApplied)
+            // (REL.2) round 766: a bare ENUM subject is the one shape whose PARTIAL
+            // refinement is safe to keep, so it gets an exception to the discard
+            // above. `default: Debug.assertNever(k)` in a partially-covered switch
+            // (and the same shape after `if (k === K.A) return;` guards) narrows to
+            // the UNCOVERED members — tsc's answer — where we displayed the whole
+            // enum. It cannot manufacture the FP the comment above warns about: the
+            // substituted type is a NON-EMPTY union of enum members, and nothing
+            // non-`never` is assignable to `never`, so the TS2345 that already fired
+            // still fires and only its DISPLAY changes. Gated by the round-746 owner
+            // rule ([enumTargetsAreOwnMembers], shared with the subtractive and
+            // assert directions), so a narrow to anything that is not a member of
+            // THIS enum keeps the conservative declared type.
+            val enumSubset = n !== ctxApplied && n !== neverType &&
+                isEnumFlavoredObjectType(ctxApplied) &&
+                enumTargetsAreOwnMembers(
+                    ctxApplied, if (n is Type.Union) n.types else listOf(n))
+            if (n === neverType || enumSubset) n else ctxApplied
+        } else if (argIsNarrowableRef &&
+            isEnumFlavoredObjectType(ctxApplied) && paramType !== neverType &&
+            checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
+        ) {
+            // (REL.2)(C) round 764: the enum arm below is a SECOND CHANCE — it pays
+            // for a flow walk only on the REJECTING path. Round 763 opened the gate
+            // unconditionally and that cost 3,406 extra walks (`narrow.walks`
+            // 71,323 -> 74,729, +4.78%), because in tsc's own sources an enum-typed
+            // argument overwhelmingly goes to a parameter of that same enum, where
+            // the raw type already relates and no narrowing can change any verdict.
+            //
+            // Soundness: this arm fires ONLY when the DECLARED type already
+            // satisfies the parameter, so the narrowed type could only have made an
+            // already-passing relation pass again. Skipping is therefore
+            // acceptance-preserving in the round-743 sense — a second chance can
+            // turn a rejection into an acceptance, never the reverse. It does give
+            // up the narrower DISPLAY in the (unobserved) case where some OTHER
+            // check downstream would have keyed on it; the 8-arm grid is the gate.
+            //
+            // Deliberately enum-ONLY: the Interface/`unknown`/`string`/`number`
+            // arms below are corpus-pinned (round 428b/429c/438) and walk
+            // unconditionally, and one of them — the `n <: ctxApplied` leg — exists
+            // precisely to substitute a refinement that is NOT relation-driven.
+            ctxApplied
+        } else if (argIsNarrowableRef &&
+            (ctxApplied is Type.Interface || ctxApplied === unknownType ||
+                ctxApplied === stringType || ctxApplied === numberType ||
+                // (CHK.156): a bare `boolean` is the finite domain `false | true`
+                // to tsgo, so `=== true` / `=== false` refine it like an enum.
+                ctxApplied === booleanType ||
+                // (REL.2)(C) round 763: an ENUM's own type. tsc models a literal
+                // enum as the UNION of its members, so every narrowability gate
+                // in this file admits it via `is Type.Union`; ours mints a
+                // member-LESS `Type.Object`, which is neither a Union nor a
+                // Type.Interface — so it fell through EVERY gate and a reference
+                // declared as the bare enum was never narrowed at an argument
+                // position, whatever narrowed it. Measured: `isTemplateLiteralKind(kind)`
+                // narrowed `kind` correctly in an `if` BLOCK (which types the body
+                // from `currentLocalTypes`) and not in a ternary, an `&&`, or after
+                // an early-return guard (all of which need this flow read) —
+                // tsc parser.ts:2629/3762. NOT a decomposition into `K.A | K.B | …`:
+                // [narrowByCallPredicate]'s single-type arm already answers
+                // correctly once it is reached.
+                isEnumFlavoredObjectType(ctxApplied)) &&
+            paramType !== neverType) {
+            // M3.4 (round 428b, generalized round 429c/438): an Identifier or
+            // PROPERTY-ACCESS arg whose NON-union interface type is narrowed DOWN by
+            // a type guard (`isSourceFile(x) && isExternalOrCommonJsModule(x)` — Node
+            // narrows to SourceFile; `getExports(node.left)` inside
+            // `if (isIdentifier(node.left))` — Expression narrows to Identifier, tsc's
+            // module/system transformers). A PropertyAccess's built-in narrowing only
+            // refines UNION receivers, not a non-union interface DOWN to a subtype, so
+            // it needs the same explicit narrow as a bare Identifier. Relation-gated:
+            // substitute only a genuine refinement, so this can only suppress. The
+            // `never`-PARAM exclusion
+            // is load-bearing: `assertType<never>(node)` in an exhaustive-switch
+            // default needs exhaustiveness narrowing we don't model — a partial
+            // refinement (a union of case-matched members) would take the
+            // union-arg emission path and manufacture an FP where the declared
+            // interface previously stayed silent.
+            // (CALL.5)(b) round 796: the already-relates pre-gate, the
+            // generalisation of the enum arm's round-764 second chance
+            // to this arm. See [ArgNarrowGate] for why it is
+            // acceptance-preserving and what the census measures.
+            val gateRelT = ArgSections.t()
+            val gateRefuses = ArgNarrowGate.mode != ArgNarrowGate.OFF &&
+                checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
+            ArgSections.close(ArgSections.N_GATE_REL, gateRelT)
+            if (gateRefuses && ArgNarrowGate.mode == ArgNarrowGate.ON) {
+                ArgNarrowGate.note(ArgNarrowGate.M34, true, false)
+                ctxApplied
+            } else {
+            val nwT = ArgSections.t()
+            val n = getNarrowedTypeForReference(ctxApplied, arg)
+            ArgSections.closeNarrow(ArgSections.N_NARROW_M34, nwT, n !== ctxApplied)
+            // Round 462: the refinement gate `n <: declared` under-accepts —
+            // tsc's getNarrowedType(assumeTrue) legitimately narrows to a guard
+            // target that is NOT a declared-type subtype (isPropertyNameLiteral's
+            // PropertyNameLiteral union contains JsxNamespacedName, which does not
+            // extend Expression), so a genuine narrow was rejected and the wide
+            // declared type FP'd (utilities.ts:4066 isSameEntityName). Also accept
+            // the narrowed type when it makes the PARAM relation pass — the same
+            // substitute-only-when-the-relation-passes monotone rule the
+            // assignment/return/var-decl gates use (pure suppression).
+            val agrT = ArgSections.t()
+            // (REL.4) round 768: the `n !== neverType` exclusion is what round 765
+            // recorded as "the narrowed `never` is discarded somewhere between the
+            // flow walk and the argument check" — it is here. An exhaustive enum
+            // switch's `default:` (round 460b) and a chain of `===` guards that peels
+            // every member both PROVE the position unreachable, and tsc types the
+            // reference `never` there. Accepted for an enum subject only: `never` is
+            // assignable to everything, so it can only ever SUPPRESS, and keeping the
+            // exclusion would make the round-746 subtraction chain answer the WHOLE
+            // enum at its last step (measured — strictly worse than before the chain).
+            val provenNever = n === neverType &&
+                (isEnumFlavoredObjectType(ctxApplied) || ctxApplied === booleanType)
+            val refined = n !== ctxApplied && (provenNever || (n !== neverType &&
+                (checkTypeRelatedTo(n, ctxApplied, assignableRelation) ||
+                    checkTypeRelatedTo(n, paramType, assignableRelation))))
+            ArgSections.close(ArgSections.N_ARGTYPE_REL, agrT)
+            if (ArgNarrowGate.mode != ArgNarrowGate.OFF) {
+                ArgNarrowGate.note(ArgNarrowGate.M34, gateRefuses, refined)
+            }
+            if (refined) n else ctxApplied
+            }
+        } else ctxApplied
+        ArgSections.close(ArgSections.N_ARM_CHAIN, chainT)
+        chainResult
+    } finally {
+        if (useCtx || useUnionCtx) contextualType = savedContextual
+    }
     }
 
     private fun caasPrologueWalkers(
@@ -171075,221 +171087,258 @@ interface DataView {
                 argType.types.any { !it.flags.hasAny(TypeFlags.BigIntLiteral or TypeFlags.BigInt) }) {
                 return CAAS_CONTINUE
             }
-            // Emit TS2345
-            // (PARITY.1)(b-residue): tsc's `reportRelationError` source generalization,
-            // the SAME rule the declaration and assignment displays take — see
-            // [relationErrorSourceDisplayType]. It SUBSUMES both halves of the rule that
-            // stood here, and each of the two baselines they were written for is served
-            // by the transcribed rule instead: `deepKeysIndexing`'s `f(x: 123)` called
-            // `f(true)` keeps `'true'` because the PARAM is a literal
-            // ([propTypeContainsLiteral]), and `exhaustiveSwitchCheckCircularity`'s
-            // `isNever(foo)` keeps `'"bbb"'` because the param is `never` (tsc's explicit
-            // never guard — "we really want the original type to be displayed for
-            // use-cases like 'assertNever'").
-            //
-            // What it FIXES is the freshness half, which tsc does not have: a REFERENCE
-            // argument whose type is a literal or a literal union printed un-generalized,
-            // so `argNum(sU)` with `sU: "a" | "b"` read `Argument of type '"a" | "b"'`
-            // where tsgo 7.0.2 and pristine `typescript@6.0.3` both read `'string'`, and a
-            // single-literal reference read `'"a"'` for their `'string'`. `f(true)` — the
-            // fresh case the old rule DID widen — is unchanged.
-            // (CHK.92)(c): the PARAMETER display takes tsc's nullable-target strip, which
-            // runs in `isRelatedTo` BEFORE the report — so it is computed first and the
-            // SOURCE display is then generalized against the STRIPPED target, exactly as
-            // `reportRelationError` sees it.
-            // (CHK.114) stage 0: the alias guard is DELIBERATELY NOT passed here — see
-            // [targetSpelledByName]. This head renders the target from the TYPE
-            // ([relationErrorTargetDisplay]), so refusing the strip for an aliased target
-            // buys `'string | undefined'` where both references print the alias NAME, i.e.
-            // it trades one wrong string for another. Keeping the strip leaves the
-            // pre-existing `'string'`, which is at least what tsc prints for the
-            // alias-FREE spelling of the same target. Measured, both arms.
-            val paramDisplayType = nullableTargetDisplay(
-                paramType, argType, isOptionalParameterSymbol(params.getOrNull(i)),
-            )
-            val argTypeStr = relationErrorSourceDisplay(
-                relationErrorSourceLiteral(arg, argType, paramDisplayType), paramDisplayType,
-            )
-            val paramTypeStr = relationErrorTargetDisplay(paramDisplayType)
-            val start = arg.pos
-            // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
-            // end of source line containing the body's `{`. TypeScript clips at the
-            // body open brace line only when the body spans multiple source lines;
-            // single-line bodies like `() => {}` keep the full arrow span. End-of-line
-            // includes any trailing same-line whitespace after `{` (e.g. `{ \n` keeps
-            // the trailing space in the squiggle, matching baseline 8-char span).
-            val length = if (arg is ArrowFunction && arg.body is Block) {
-                val body = arg.body
-                val fullEnd = expressionTrueEnd(arg)
-                val isMultiLine = body.pos in 0..<source.length &&
-                    body.pos < fullEnd &&
-                    source.substring(body.pos, fullEnd.coerceAtMost(source.length)).contains('\n')
-                if (isMultiLine) {
-                    // Find `=>` between arg.pos and body.pos. If `=>` is on a separate line
-                    // from `{` (rare: `() =>\n // comment \n {`), clip at end-of-line-of-`=>`
-                    // so the squiggle covers only `() =>` (matching TypeScript's narrow span).
-                    // Otherwise clip at end-of-line-of-`{` (the common multi-line-body case).
-                    val arrowMarkerPos = srcLastIndexOf(source, "=>", (body.pos - 1).coerceAtLeast(0))
-                    val anchorPos = if (arrowMarkerPos in start..<body.pos) {
-                        // Use the `=>` position to find its line's end-of-line.
-                        val arrowEolPos = source.indexOf('\n', arrowMarkerPos).let { if (it < 0) source.length else it }
-                        val braceEolPos = source.indexOf('\n', body.pos).let { if (it < 0) source.length else it }
-                        // If `=>` and `{` are on different lines, prefer `=>`'s EOL (narrower).
-                        if (arrowEolPos < body.pos) arrowEolPos else braceEolPos
-                    } else {
-                        source.indexOf('\n', body.pos).let { if (it < 0) fullEnd else it }
-                    }
-                    (anchorPos.coerceAtMost(fullEnd) - start).coerceAtLeast(1)
-                } else {
-                    fullEnd - start
-                }
-            } else {
-                expressionTrueEnd(arg) - start
+            // (CHK.152) step 3, Round A ((P18.198)): the SECOND CHANCE — see
+            // [argMemberRereadFromNarrowedReceiver]. Asked only here, on a relation that has
+            // already FAILED, so a passing argument pays nothing; an answer that relates makes
+            // the argument legal, and one that does not is what the message names.
+            val reread = if (forceVoidUndefinedFail) null
+            else argMemberRereadFromNarrowedReceiver(arg, argType)
+            if (reread != null && checkTypeRelatedTo(reread, paramType, assignableRelation)) {
+                return CAAS_CONTINUE
             }
-            if (length <= 0) return CAAS_CONTINUE
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
-            // TS6213: If the argument type has construct signatures but no call signatures,
-            // suggest "Did you mean to use 'new' with this expression?". TS6212 mirrors
-            // this for call signatures whose return type would satisfy the parameter —
-            // "Did you mean to call this expression?".
-            val relatedInfo: MutableList<Diagnostic> = mutableListOf()
-            if (argType is Type.Object) {
-                val constructSigs = getConstructSignaturesOfType(argType)
-                val callSigs = getCallSignaturesOfType(argType)
-                if (constructSigs.isNotEmpty() && callSigs.isEmpty()) {
+            return caasEmitArgRelationError(
+                arg, paramType, reread ?: argType, params, i, sigIn, args, source, fileName,
+                implementationRelated, deferImplementationRelated,
+            )
+        }
+        return CAAS_NONE
+    }
+
+    /**
+     * The TS2345 emission of [caasTailGatesAndRelation], split out of it by (P18.198) so the
+     * narrowed-receiver second chance can hand it a DIFFERENT argument type: [argType] is the
+     * type the message names — the reader's own, or the member re-read off the narrowed receiver
+     * when that re-read is a refinement which still fails. Moved verbatim otherwise.
+     */
+    private fun caasEmitArgRelationError(
+        arg: Expression,
+        paramType: Type,
+        argType: Type,
+        params: List<Symbol>,
+        i: Int,
+        sigIn: Signature,
+        args: List<Expression>,
+        source: String,
+        fileName: String,
+        implementationRelated: Diagnostic?,
+        deferImplementationRelated: Boolean,
+    ): Int {
+        // Emit TS2345
+        // (PARITY.1)(b-residue): tsc's `reportRelationError` source generalization,
+        // the SAME rule the declaration and assignment displays take — see
+        // [relationErrorSourceDisplayType]. It SUBSUMES both halves of the rule that
+        // stood here, and each of the two baselines they were written for is served
+        // by the transcribed rule instead: `deepKeysIndexing`'s `f(x: 123)` called
+        // `f(true)` keeps `'true'` because the PARAM is a literal
+        // ([propTypeContainsLiteral]), and `exhaustiveSwitchCheckCircularity`'s
+        // `isNever(foo)` keeps `'"bbb"'` because the param is `never` (tsc's explicit
+        // never guard — "we really want the original type to be displayed for
+        // use-cases like 'assertNever'").
+        //
+        // What it FIXES is the freshness half, which tsc does not have: a REFERENCE
+        // argument whose type is a literal or a literal union printed un-generalized,
+        // so `argNum(sU)` with `sU: "a" | "b"` read `Argument of type '"a" | "b"'`
+        // where tsgo 7.0.2 and pristine `typescript@6.0.3` both read `'string'`, and a
+        // single-literal reference read `'"a"'` for their `'string'`. `f(true)` — the
+        // fresh case the old rule DID widen — is unchanged.
+        // (CHK.92)(c): the PARAMETER display takes tsc's nullable-target strip, which
+        // runs in `isRelatedTo` BEFORE the report — so it is computed first and the
+        // SOURCE display is then generalized against the STRIPPED target, exactly as
+        // `reportRelationError` sees it.
+        // (CHK.114) stage 0: the alias guard is DELIBERATELY NOT passed here — see
+        // [targetSpelledByName]. This head renders the target from the TYPE
+        // ([relationErrorTargetDisplay]), so refusing the strip for an aliased target
+        // buys `'string | undefined'` where both references print the alias NAME, i.e.
+        // it trades one wrong string for another. Keeping the strip leaves the
+        // pre-existing `'string'`, which is at least what tsc prints for the
+        // alias-FREE spelling of the same target. Measured, both arms.
+        val paramDisplayType = nullableTargetDisplay(
+            paramType, argType, isOptionalParameterSymbol(params.getOrNull(i)),
+        )
+        val argTypeStr = relationErrorSourceDisplay(
+            relationErrorSourceLiteral(arg, argType, paramDisplayType), paramDisplayType,
+        )
+        val paramTypeStr = relationErrorTargetDisplay(paramDisplayType)
+        val start = arg.pos
+        // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
+        // end of source line containing the body's `{`. TypeScript clips at the
+        // body open brace line only when the body spans multiple source lines;
+        // single-line bodies like `() => {}` keep the full arrow span. End-of-line
+        // includes any trailing same-line whitespace after `{` (e.g. `{ \n` keeps
+        // the trailing space in the squiggle, matching baseline 8-char span).
+        val length = if (arg is ArrowFunction && arg.body is Block) {
+            val body = arg.body
+            val fullEnd = expressionTrueEnd(arg)
+            val isMultiLine = body.pos in 0..<source.length &&
+                body.pos < fullEnd &&
+                source.substring(body.pos, fullEnd.coerceAtMost(source.length)).contains('\n')
+            if (isMultiLine) {
+                // Find `=>` between arg.pos and body.pos. If `=>` is on a separate line
+                // from `{` (rare: `() =>\n // comment \n {`), clip at end-of-line-of-`=>`
+                // so the squiggle covers only `() =>` (matching TypeScript's narrow span).
+                // Otherwise clip at end-of-line-of-`{` (the common multi-line-body case).
+                val arrowMarkerPos = srcLastIndexOf(source, "=>", (body.pos - 1).coerceAtLeast(0))
+                val anchorPos = if (arrowMarkerPos in start..<body.pos) {
+                    // Use the `=>` position to find its line's end-of-line.
+                    val arrowEolPos = source.indexOf('\n', arrowMarkerPos).let { if (it < 0) source.length else it }
+                    val braceEolPos = source.indexOf('\n', body.pos).let { if (it < 0) source.length else it }
+                    // If `=>` and `{` are on different lines, prefer `=>`'s EOL (narrower).
+                    if (arrowEolPos < body.pos) arrowEolPos else braceEolPos
+                } else {
+                    source.indexOf('\n', body.pos).let { if (it < 0) fullEnd else it }
+                }
+                (anchorPos.coerceAtMost(fullEnd) - start).coerceAtLeast(1)
+            } else {
+                fullEnd - start
+            }
+        } else {
+            expressionTrueEnd(arg) - start
+        }
+        if (length <= 0) return CAAS_CONTINUE
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        // TS6213: If the argument type has construct signatures but no call signatures,
+        // suggest "Did you mean to use 'new' with this expression?". TS6212 mirrors
+        // this for call signatures whose return type would satisfy the parameter —
+        // "Did you mean to call this expression?".
+        val relatedInfo: MutableList<Diagnostic> = mutableListOf()
+        if (argType is Type.Object) {
+            val constructSigs = getConstructSignaturesOfType(argType)
+            val callSigs = getCallSignaturesOfType(argType)
+            if (constructSigs.isNotEmpty() && callSigs.isEmpty()) {
+                relatedInfo.add(Diagnostic(
+                    message = "Did you mean to use 'new' with this expression?",
+                    category = DiagnosticCategory.Message,
+                    code = 6213,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            } else if (callSigs.isNotEmpty() && arg !is ArrowFunction && arg !is FunctionExpression) {
+                val callingHelpsArg = callSigs.any { sig ->
+                    val rt = sig.resolvedReturnType ?: return@any false
+                    checkTypeRelatedTo(rt, paramType, assignableRelation)
+                }
+                if (callingHelpsArg) {
                     relatedInfo.add(Diagnostic(
-                        message = "Did you mean to use 'new' with this expression?",
+                        message = "Did you mean to call this expression?",
                         category = DiagnosticCategory.Message,
-                        code = 6213,
+                        code = 6212,
                         fileName = fileName,
                         line = line,
                         character = character,
                         start = start,
                         length = length,
                     ))
-                } else if (callSigs.isNotEmpty() && arg !is ArrowFunction && arg !is FunctionExpression) {
-                    val callingHelpsArg = callSigs.any { sig ->
-                        val rt = sig.resolvedReturnType ?: return@any false
-                        checkTypeRelatedTo(rt, paramType, assignableRelation)
-                    }
-                    if (callingHelpsArg) {
-                        relatedInfo.add(Diagnostic(
-                            message = "Did you mean to call this expression?",
-                            category = DiagnosticCategory.Message,
-                            code = 6212,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    }
                 }
             }
-            // TS2793: overload implementation would have matched.
-            // (ENGINE.2h) round 795: THIS is the probe's only reader, so this
-            // is where it is computed. The forcing is inside the very
-            // invocation the caller deferred it from — nothing was stored, so
-            // round 788's lazy-thunk failure mode (a value forced in a
-            // different dynamic scope, needing every save/restore site to
-            // cooperate) has nothing to bite on; and the argument loop's own
-            // `contextualType` install is already restored by here.
-            // The loop `break`s right after emitting, so this runs at most
-            // once per invocation and needs no memo.
-            val implRelated: Diagnostic? = if (!deferImplementationRelated)
-                implementationRelated
-            else {
-                val implT = CallSections.t()
-                val deferred = overloadImplementationRelated(
-                    args, sigIn, source, fileName,
-                    bogus = CallSections.verifyImplRelatedBogus,
-                )
-                CallSections.close(CallSections.N_IMPL_RELATED, implT)
-                if (CallSections.verifyImplRelated) {
-                    // Honour the EAGER verdict; only COUNT the disagreement.
-                    CallSections.noteImplRelatedVerified(deferred != implementationRelated)
-                    implementationRelated
-                } else deferred
-            }
-            if (implRelated != null) {
-                relatedInfo.add(implRelated)
-            }
-            // Union elaboration: find the failing constituent and add as message chain
-            val chain = mutableListOf<String>()
-            // (CHK.93) stage 2: a readonly array-like against a mutable array or tuple
-            // parameter elaborates with the TS4104 line and nothing else (pristine 6.0.3;
-            // tsgo 7.0.2 prints a bare TS4104 at the argument instead — the corpus's
-            // oracle is pristine, `readonlyTupleAndArrayElaboration`).
-            if (readonlyToMutableArrayLike(argType, paramType)) {
-                chain.add("  " + ts4104Message(argType, paramType))
-            }
-            if (argType is Type.Union) {
-                // Find the last failing constituent (matches TypeScript's behavior)
-                var lastFailing: Type? = null
-                for (constituent in argType.types) {
-                    if (!checkTypeRelatedTo(constituent, paramType, assignableRelation)) {
-                        lastFailing = constituent
-                    }
-                }
-                if (lastFailing != null) {
-                    // (CHK.83) the constituent takes the same generalization the outer line does.
-                    val constStr = relationErrorConstituentDisplay(lastFailing, paramType)
-                    chain.add("  Type '$constStr' is not assignable to type '$paramTypeStr'.")
-                }
-            }
-            // Private-brand elaboration: "Types have separate declarations of a private property 'X'."
-            if (argType is Type.Object && paramType is Type.Object) {
-                val mismatchName = findPrivateBrandMismatchName(argType, paramType)
-                if (mismatchName != null) {
-                    chain.add("  Types have separate declarations of a private property '$mismatchName'.")
-                }
-            }
-            // 16.4dw: Function-to-function elaboration chain — for function-typed
-            // argument vs function-typed parameter mismatches. Emits param-mismatch
-            // or return-type-mismatch lines, matching the TS2322 elaboration used in
-            // assignment contexts.
-            if (chain.isEmpty() && argType is Type.Object && paramType is Type.Object &&
-                !argType.callSignatures.isNullOrEmpty() && !paramType.callSignatures.isNullOrEmpty()
-            ) {
-                chain.addAll(getFunctionMismatchElaboration(argType, paramType))
-            }
-            // B50.4: Object→Object property-elaboration chain. When the B50.4 gate
-            // above allowed the structural compare to fire AND a per-property
-            // mismatch exists, get the chain from `getPropertyElaborationChain`.
-            // (CHK.152) step 1: a NAMED pair elaborates too — the declaration reader's
-            // Object->Object branch takes the same helper with no Interface/Reference
-            // exclusion (and admits an INTERSECTION source, 17.42), and tsgo prints the
-            // member chain at both positions. Only for the pair
-            // [isNamedObjectForArgCheck] classifies: an ARRAY or tuple `Type.Reference` is
-            // excluded, because the helper answers a missing-members line for
-            // `[number, string]` against `string[]` and the row then collapses to a TS2740
-            // where both references print the TS2345 head alone.
-            val namedPair = isNamedObjectForArgCheck(argType, allowAliasedObject = false) &&
-                isNamedObjectForArgCheck(paramType, allowAliasedObject = true)
-            if (chain.isEmpty() && paramType is Type.Object &&
-                !paramType.properties.isNullOrEmpty() && (namedPair ||
-                    argType is Type.Object && argType !is Type.Interface &&
-                    argType !is Type.Reference && paramType !is Type.Interface &&
-                    paramType !is Type.Reference)
-            ) {
-                val propChain = getPropertyElaborationChain(argType, paramType)
-                if (propChain != null) chain.addAll(propChain)
-            }
-            diagnostics.add(Diagnostic(
-                message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
-                category = DiagnosticCategory.Error,
-                code = 2345,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = start,
-                length = length,
-                messageChain = chain,
-                relatedInformation = relatedInfo,
-            ))
-            return CAAS_BREAK // TypeScript reports only the first failing argument per call
         }
-        return CAAS_NONE
+        // TS2793: overload implementation would have matched.
+        // (ENGINE.2h) round 795: THIS is the probe's only reader, so this
+        // is where it is computed. The forcing is inside the very
+        // invocation the caller deferred it from — nothing was stored, so
+        // round 788's lazy-thunk failure mode (a value forced in a
+        // different dynamic scope, needing every save/restore site to
+        // cooperate) has nothing to bite on; and the argument loop's own
+        // `contextualType` install is already restored by here.
+        // The loop `break`s right after emitting, so this runs at most
+        // once per invocation and needs no memo.
+        val implRelated: Diagnostic? = if (!deferImplementationRelated)
+            implementationRelated
+        else {
+            val implT = CallSections.t()
+            val deferred = overloadImplementationRelated(
+                args, sigIn, source, fileName,
+                bogus = CallSections.verifyImplRelatedBogus,
+            )
+            CallSections.close(CallSections.N_IMPL_RELATED, implT)
+            if (CallSections.verifyImplRelated) {
+                // Honour the EAGER verdict; only COUNT the disagreement.
+                CallSections.noteImplRelatedVerified(deferred != implementationRelated)
+                implementationRelated
+            } else deferred
+        }
+        if (implRelated != null) {
+            relatedInfo.add(implRelated)
+        }
+        // Union elaboration: find the failing constituent and add as message chain
+        val chain = mutableListOf<String>()
+        // (CHK.93) stage 2: a readonly array-like against a mutable array or tuple
+        // parameter elaborates with the TS4104 line and nothing else (pristine 6.0.3;
+        // tsgo 7.0.2 prints a bare TS4104 at the argument instead — the corpus's
+        // oracle is pristine, `readonlyTupleAndArrayElaboration`).
+        if (readonlyToMutableArrayLike(argType, paramType)) {
+            chain.add("  " + ts4104Message(argType, paramType))
+        }
+        if (argType is Type.Union) {
+            // Find the last failing constituent (matches TypeScript's behavior)
+            var lastFailing: Type? = null
+            for (constituent in argType.types) {
+                if (!checkTypeRelatedTo(constituent, paramType, assignableRelation)) {
+                    lastFailing = constituent
+                }
+            }
+            if (lastFailing != null) {
+                // (CHK.83) the constituent takes the same generalization the outer line does.
+                val constStr = relationErrorConstituentDisplay(lastFailing, paramType)
+                chain.add("  Type '$constStr' is not assignable to type '$paramTypeStr'.")
+            }
+        }
+        // Private-brand elaboration: "Types have separate declarations of a private property 'X'."
+        if (argType is Type.Object && paramType is Type.Object) {
+            val mismatchName = findPrivateBrandMismatchName(argType, paramType)
+            if (mismatchName != null) {
+                chain.add("  Types have separate declarations of a private property '$mismatchName'.")
+            }
+        }
+        // 16.4dw: Function-to-function elaboration chain — for function-typed
+        // argument vs function-typed parameter mismatches. Emits param-mismatch
+        // or return-type-mismatch lines, matching the TS2322 elaboration used in
+        // assignment contexts.
+        if (chain.isEmpty() && argType is Type.Object && paramType is Type.Object &&
+            !argType.callSignatures.isNullOrEmpty() && !paramType.callSignatures.isNullOrEmpty()
+        ) {
+            chain.addAll(getFunctionMismatchElaboration(argType, paramType))
+        }
+        // B50.4: Object→Object property-elaboration chain. When the B50.4 gate
+        // above allowed the structural compare to fire AND a per-property
+        // mismatch exists, get the chain from `getPropertyElaborationChain`.
+        // (CHK.152) step 1: a NAMED pair elaborates too — the declaration reader's
+        // Object->Object branch takes the same helper with no Interface/Reference
+        // exclusion (and admits an INTERSECTION source, 17.42), and tsgo prints the
+        // member chain at both positions. Only for the pair
+        // [isNamedObjectForArgCheck] classifies: an ARRAY or tuple `Type.Reference` is
+        // excluded, because the helper answers a missing-members line for
+        // `[number, string]` against `string[]` and the row then collapses to a TS2740
+        // where both references print the TS2345 head alone.
+        val namedPair = isNamedObjectForArgCheck(argType, allowAliasedObject = false) &&
+            isNamedObjectForArgCheck(paramType, allowAliasedObject = true, allowUnion = true)
+        if (chain.isEmpty() && paramType is Type.Object &&
+            !paramType.properties.isNullOrEmpty() && (namedPair ||
+                argType is Type.Object && argType !is Type.Interface &&
+                argType !is Type.Reference && paramType !is Type.Interface &&
+                paramType !is Type.Reference)
+        ) {
+            val propChain = getPropertyElaborationChain(argType, paramType)
+            if (propChain != null) chain.addAll(propChain)
+        }
+        if (chain.isEmpty() && namedPair && paramType is Type.Union) {
+            argNamedVsUnionParamChain(argType, paramType)?.let { chain.addAll(it) }
+        }
+        diagnostics.add(Diagnostic(
+            message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+            category = DiagnosticCategory.Error,
+            code = 2345,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+            messageChain = chain,
+            relatedInformation = relatedInfo,
+        ))
+        return CAAS_BREAK // TypeScript reports only the first failing argument per call
     }
 
 
@@ -171748,7 +171797,7 @@ interface DataView {
             arg is ArrowFunction || arg is FunctionExpression
         ) return false
         if (!isNamedObjectForArgCheck(argType, allowAliasedObject = false)) return false
-        if (!isNamedObjectForArgCheck(paramType, allowAliasedObject = true)) return false
+        if (!isNamedObjectForArgCheck(paramType, allowAliasedObject = true, allowUnion = true)) return false
         return canUseTypeEngine(argType, paramType)
     }
 
@@ -171758,7 +171807,20 @@ interface DataView {
      * intersection of object types, and (PARAMETER side only) an aliased anonymous object type
      * (`type S = { vv: string }`). Never a union, an array/tuple or an enum-flavoured type.
      */
-    private fun isNamedObjectForArgCheck(t: Type, allowAliasedObject: Boolean): Boolean = when (t) {
+    private fun isNamedObjectForArgCheck(
+        t: Type, allowAliasedObject: Boolean, allowUnion: Boolean = false,
+    ): Boolean = when (t) {
+        // (CHK.152) step 3 ((P18.198)), PARAMETER side only: a union of such named objects,
+        // optionally with `null` / `undefined` (`n: ImportDeclaration | JSDocImportTag`,
+        // `p: S | undefined`, and an optional parameter's `S | undefined`). Never a primitive,
+        // an array or an anonymous member — those are other gates' populations — and never a
+        // union ARGUMENT (step 4). Admitting it added three ours-only rows on harness at
+        // (P18.183); two were a member read off a narrowed receiver typed by its declaration,
+        // which [argMemberRereadFromNarrowedReceiver] now answers, and the third was (CHK.162).
+        is Type.Union -> allowUnion && t.types.any { it is Type.Object } && t.types.all {
+            (it is Type.Intrinsic && it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) ||
+                (it !is Type.Union && isNamedObjectForArgCheck(it, allowAliasedObject))
+        }
         // An intersection of OBJECT types only: a branded primitive (`string & { __b: 1 }`)
         // reports through the apparent `String` (tsgo: `Property 'vv' is missing in type
         // 'String & { __b: 1; }'`), which this reader renders as a bare TS2741 — refused.
@@ -171792,6 +171854,96 @@ interface DataView {
      * unconditional form at +4.78% `narrow.walks`. It can only turn a rejection into
      * silence, so no shape that was accepted before can start failing.
      */
+    /**
+     * (CHK.152) step 3, Round A ((P18.198)): the argument reader's SECOND CHANCE for a
+     * PROPERTY-ACCESS argument whose relation has already FAILED — the member re-read off the
+     * FLOW-NARROWED receiver, with the member's own path narrowing applied on top; `null` when
+     * the receiver does not narrow, the member does not resolve, or the answer is not usable.
+     *
+     * tsgo types `parent.parent` after `isImportClause(parent)` by narrowing the RECEIVER
+     * first (`checkPropertyAccessExpressionOrQualifiedName` reads `leftType` through
+     * `checkNonNullExpression`, which is flow-narrowed) and then the member PATH
+     * (`getFlowTypeOfAccessExpression` -> `getFlowTypeOfReference`, checker.go ~11361). This
+     * checker narrows a receiver only when its raw type is already a union, so the member was
+     * read off `Node`'s declaration (`Node`) where tsgo reads `ImportClause`'s
+     * (`ImportDeclaration | JSDocImportTag`) — harness `services/utilities.ts:1366`. The PATH
+     * step is what `completions.ts:3275` needs besides: two NEGATED guards
+     * (`!isJsxElement(parent.parent) && !isJsxFragment(parent.parent)`) narrow the re-read
+     * union down to `JsxAttributeLike`, which the declared `Node` could never express.
+     *
+     * A second chance and never a replacement: the census that specified it
+     * (`build/scratch-p18184-census/`) measured 6-10 arguments per profile where a re-read
+     * answers a WIDER or a WRONG type, so it is asked only on the rejecting path and its answer
+     * must be a REFINEMENT of the reader's own (assignable to it) — a re-read that is not can
+     * neither silence a diagnostic nor change what one names. `never` is refused (an
+     * unreachable position relates to everything, so adopting it would delete a diagnostic —
+     * CLAUDE.md's suppression rule), and so are `any` / the error type.
+     */
+    /**
+     * (CHK.152) step 3 ((P18.198)): the chain of a NAMED argument against a UNION parameter of
+     * named objects, optionally nullable — the pair [isNamedObjectForArgCheck] admits.
+     *
+     * tsgo relates it through `isRelatedTo`, which first strips `null`/`undefined` from the
+     * target (so `p: S | undefined` is elaborated, and displayed, as `S`), then for a
+     * remaining union picks the best-matching constituent and elaborates against it
+     * (`typeRelatedToSomeType` with `reportErrors`). Inside either comparison
+     * `propertiesRelatedTo` reports an UNMATCHED required property before any member type
+     * (`getUnmatchedProperty`), and `reportRelationError` drops a level's own "not assignable"
+     * line when its leaf is the missing-property message about the same two types — so a
+     * missing member is ONE line (and, against a single object, becomes the bare TS2741 via
+     * [RelationHeadSuppression]), while a member-type mismatch keeps the constituent line and
+     * the member chain below it. The union's own "not assignable to the union" line is the
+     * argument head itself and is not repeated.
+     */
+    private fun argNamedVsUnionParamChain(argType: Type, paramType: Type.Union): List<String>? {
+        val kept = paramType.types.filter {
+            !(it is Type.Intrinsic && it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined))
+        }
+        if (kept.isEmpty()) return null
+        val src = typeToString(argType)
+        val single = kept.size == 1
+        val best = if (single) kept[0] else {
+            if (argType !is Type.Object) return null
+            findBestUnionConstituent(argType, getUnionType(kept) as? Type.Union ?: return null)
+                ?: return null
+        }
+        val tgt = typeToString(best)
+        val missing = collectMissingProperties(argType, best)
+        if (missing.isNotEmpty()) {
+            return listOf(
+                if (missing.size == 1) "  Property '${missing[0]}' is missing in type '$src' but required in type '$tgt'."
+                else "  " + formatTs2740Message(src, tgt, missing),
+            )
+        }
+        val deeper = getPropertyElaborationChain(argType, best) ?: emptyList()
+        return if (single) deeper
+        else listOf("  Type '$src' is not assignable to type '$tgt'.") + deeper.map { "  $it" }
+    }
+
+    private fun argMemberRereadFromNarrowedReceiver(arg: Expression, argType: Type): Type? {
+        if (arg !is PropertyAccessExpression) return null
+        val via = propertyTypeFromNarrowedReceiver(arg) ?: return null
+        // The member's own path narrowing, with the re-read as its DECLARED type — which is
+        // what tsgo's walk starts from, so it can only narrow: a guard on a PREFIX of the path
+        // resets the reference to that declared type (`containsMatchingReference`). Ours
+        // resets through the prefix arm instead, which reads the tail off the GUARD's target
+        // (`Node` for `isClassDeclaration(parent)`), so a join can come back WIDER than the
+        // re-read — harness `services/utilities.ts:1366` measured
+        // `ImportDeclaration | JSDocImportTag | Node`. Such an answer is that artefact, and the
+        // re-read itself is kept instead.
+        val reread = if (via is Type.Union && getReferencePath(arg) != null) {
+            val pathNarrowed = getNarrowedTypeForReference(via, arg)
+            if (pathNarrowed === via || checkTypeRelatedTo(pathNarrowed, via, assignableRelation)) {
+                pathNarrowed
+            } else via
+        } else via
+        if (reread === argType || reread === neverType || reread === anyType ||
+            reread === errorType
+        ) return null
+        if (!checkTypeRelatedTo(reread, argType, assignableRelation)) return null
+        return reread
+    }
+
     private fun argArrayLikeNarrowsToRelated(arg: Expression, argType: Type, paramType: Type): Boolean {
         if (arg !is Identifier && arg !is PropertyAccessExpression) return false
         if (checkTypeRelatedTo(argType, paramType, assignableRelation)) return false
