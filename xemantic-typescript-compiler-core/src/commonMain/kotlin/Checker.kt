@@ -121763,7 +121763,7 @@ interface DataView {
      * the shape is what a later filter reads.
      */
     private fun flowJoinUnion(branchTypes: List<Type>, declaredType: Type): Type {
-        val joined = getUnionType(enumMembersInDeclarationOrder(branchTypes))
+        val joined = rejoinBooleanHalves(getUnionType(enumMembersInDeclarationOrder(branchTypes)), declaredType)
         val members = (joined as? Type.Union)?.types ?: return joined
         if (members.size < 2) return joined
         val declared = (declaredType as? Type.Union)?.types
@@ -121779,6 +121779,27 @@ interface DataView {
         val reduced = flowJoinReduceSubtypes(joined, members, declared, declaredType)
         flowJoinReduceCache.put(cacheKey, reduced)
         return reduced
+    }
+
+    /**
+     * (CHK.164) step 1: a join whose arms hold BOTH halves of a `boolean` the declaration
+     * carries — the truthiness narrow ([splitBooleanForTruthiness]) and the equality narrow
+     * ([booleanMinusLiteral]) each leave one — is that `boolean` again. tsgo's `boolean` IS
+     * `false | true` (`checker.go:1002`), so its join unions the two literals back into the
+     * one boolean type; ours is an intrinsic, and a `false | true` union, though it DISPLAYS
+     * as `boolean`, is elaborated constituent by constituent where tsgo's boolean is a
+     * primitive and is not (`Type 'boolean' is not assignable to type 'never'.` grew a
+     * `Type 'false' …` chain line after `if (x) {}`). Confined to a declaration that holds
+     * `boolean`, i.e. to re-assembling a split this walk made; any other union is returned
+     * unchanged.
+     */
+    private fun rejoinBooleanHalves(joined: Type, declaredType: Type): Type {
+        if (joined !is Type.Union) return joined
+        if (!(declaredType === booleanType ||
+                (declaredType is Type.Union && declaredType.types.any { it === booleanType }))) return joined
+        val members = joined.types
+        if (!members.any { it === trueType } || !members.any { it === falseType }) return joined
+        return getUnionType(members.filter { it !== trueType && it !== falseType } + booleanType)
     }
 
     /**
@@ -122485,7 +122506,7 @@ interface DataView {
         // truthy `unknown` is `{}`, which "may represent a primitive"). Off by
         // default so all other narrowing keeps `unknown` unchanged.
         if (t === unknownType && truthy && narrowUnknownToEmptyObject) return truthyUnknownType
-        val src = splitEnumsForTruthiness(t, truthy)
+        val src = splitBooleanForTruthiness(splitEnumsForTruthiness(t, truthy), truthy)
         return if (truthy) {
             when {
                 isDefinitelyFalsyMember(src) -> neverType
@@ -122535,6 +122556,27 @@ interface DataView {
             acc.addAll(parts)
         }
         return out?.let { getUnionType(it) } ?: t
+    }
+
+    /**
+     * (CHK.164) step 1: a `boolean` constituent of [t] keeps only the half that survives a
+     * truthiness narrow in the [truthy] branch — `true` in the truthy branch, `false` in the
+     * falsy one; a bare `boolean` becomes that literal. tsgo's `boolean` IS the union
+     * `false | true` (`checker.go:1002`), so `narrowTypeByTruthiness` (`flow.go`,
+     * `getAdjustedTypeWithFacts(type, TypeFacts.Truthy / Falsy)`) filters it member by member
+     * like any other union; ours is one intrinsic, so without this `if (on) return` left
+     * `on: boolean | string` reading `string | boolean` where tsgo reads `string | false`.
+     * The same shape as [booleanMinusLiteral] (the equality arm). Returns [t] itself when it
+     * holds no `boolean`.
+     */
+    private fun splitBooleanForTruthiness(t: Type, truthy: Boolean): Type {
+        val half = if (truthy) trueType else falseType
+        return when {
+            t === booleanType -> half
+            t is Type.Union && t.types.any { it === booleanType } ->
+                getUnionType(t.types.map { if (it === booleanType) half else it })
+            else -> t
+        }
     }
 
     private fun isDefinitelyFalsyMember(t: Type): Boolean = when {
