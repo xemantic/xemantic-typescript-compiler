@@ -1,5 +1,43 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.185) — (CHK.154)(a): a trailing `void`-accepting parameter is OPTIONAL in signature relation; `rxjs` 7 -> 6 (2026-09-23)
+
+Orchestrated: one implementation subagent, plus a parallel read-only census of (CHK.160) (still running at
+commit). **tsgo's exact rule**, read from `relater.go` `getMinArgumentCountEx` (no flags) and
+`compareSignaturesRelated` (`getMinArgumentCount(source) > targetCount`): SOURCE signature only; walk back
+from the last required parameter dropping each whose type has the `Void` flag directly or on a union
+constituent (`someType`), stopping at the first that does not; `undefined`, `any`, `unknown`, `never` and a
+type parameter (even `T extends void`) do NOT count; a `void` in the middle stays required; an optional or
+rest parameter after the run is fine; `strictNullChecks` is irrelevant; call arity is a separate path
+(`hasCorrectArity`'s `acceptsVoid`) and was not touched. **The census's `void9c` is not a reducer** (0 rows
+everywhere — it goes through call arity), and `diagnose()` could not reproduce `void9` until the pin
+declared `Partial` locally (the harness lib lacks it — the known trap, which made the first pin vacuous).
+
+**The change (+44/−1)**: `Checker.relationMinArgumentCount(sig)` (next to `signatureDeclaredArity`), used by
+`Relater.signatureRelatedTo` for its arity check; it falls back to the raw count when the declared
+parameter list is longer than `sig.parameters` (binding patterns are dropped from it) and stops at a rest
+parameter. **Matrix, 15 cells** (`build/scratch-p18185/cells`): every removed row is one tsgo does not
+report, NONE added — kinds 10 -> 6 (tsgo 6), run 9 -> 3 (3), void2 3 -> 0 (0), void9 1 -> 0, void10 1 -> 0,
+methods 2 -> 1 (1); controls `ctor1` (part (b)) and `void11` (call arity) byte-identical. Pre-existing gaps
+seen, not touched: an optional `(() => void) | null` argument parameter skips the arity check (`void1`
+`take(r3)`); no minimum through a tuple rest (`restt`); `mk<number>()`'s missing row and `Cb<string>`
+displayed expanded; an object-literal member error anchored on the whole literal; a binding-pattern
+signature (`guards` line 9) stays ours-only BECAUSE of the fallback — positional annotation zipping
+happens to line up with tsgo there, but a `this` parameter breaks that alignment, so dropping the fallback
+is a separate decision.
+
+**Pins**: `TrailingVoidParameterRelationTest`, 8 tests, full tsgo text. Ablation: raw
+`minArgumentCount` 7 RED; union constituents ignored 4; `this` counted 1; `continue` past the first
+non-void 1; `undefined`/`any` accepted 2; type parameter accepted 1; binding-pattern fallback removed **0**
+(it only keeps one ours-only row — recorded, not claimed). Restored md5 `8d174cfa`.
+
+**Gates**: full suite **20,573 / 0 / 44** (+8); corpus screen 0 of 8,725; cost_gate PASS (counters within
+0.11% of (P18.184)'s); huge_methods 0; grid 8x `added=0 removed=0`; warning gate 0 `w:` (non-empty log).
+**`rxjs` 7 -> 6** — only `Observable.ts:307` TS2769; `marked` 0; harness identical.
+
+**Successor**: (CHK.154)(b) — a derived class's `constructSignatures` carry the base constructor first, so
+`new Sub("x")` against `constructor(o?: number)` is ACCEPTED (a false negative, `ctor1`).
+
 ### Round (P18.184) — (CHK.153): a callback's callee receiver is resolved from the identifier's PARENT CHAIN for contextual `this`; `rxjs` 10 -> 7, 9 -> 29 of 29 cells (2026-09-23)
 
 Orchestrated: one implementation subagent, plus a parallel read-only census that sized (CHK.152) step 3's

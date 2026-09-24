@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,031** lines (**+99 at (P18.194)**, the concise-body return check routed through the block
+extraction):** `Checker.kt` **201,058** lines (**+27 at (P18.195)**, the enum truthiness arms and the proper-subset split — the
+value-aware classifier lives in `EnumSemantics.kt` 1,138 -> 1,234; a SEMANTIC parity change closing a false-NEGATIVE
+class; **+99 at (P18.194)**, the concise-body return check routed through the block
 path (net of the deleted spine check and 13 retired hardcoded anchors) — a SEMANTIC parity change closing a
 false-NEGATIVE class; **+144 at (P18.193)**, the inference-outcome refactor and the contextual-return
 fallback with its safeguards — a SEMANTIC parity change taking `rxjs` to 0 ours-only rows; **+157 at (P18.192)**, a union-source relation lift at three readers plus three
@@ -85,6 +87,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.195) — (CHK.166)(a) STEP 1: VALUE-AWARE ENUM TRUTHINESS — AN ENUM IS NO LONGER WASHED TO `never`; 193 -> 639 OF 660 CELLS, BYTE-IDENTICAL ON EVERY INSTRUMENT, 20,751 / 0 / 44 (2026-09-24).**
+Every enum type counted as definitely truthy, so `if (!k)` washed `k` to `never` and silenced real errors, while the
+truthy branch kept `K.Zero`. `EnumSemantics.enumTruthiness` now classifies by member value (0/NaN/"" falsy, opaque
+either) and `narrowByTruthiness` decomposes a whole enum only when a branch removes a proper subset. Exactly the
+census's prediction; two false positives on legal code closed; the naive shape (98 FPs) pinned out. 9 pins, five arms
+RED. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
+
 **(P18.194) — (CHK.168) ROUND 1: AN ANNOTATED ARROW'S EXPRESSION BODY IS RETURN-CHECKED; 28 CELLS FIXED, 0 FALSE POSITIVES, +0 EVERYWHERE, 20,742 / 0 / 44 (2026-09-24).**
 `const f = (x: string): number => x` was silent: the concise-body check ran on the spine, where the arrow's
 parameters were out of scope. The scoped walker now routes the body through the block-body return path (anchor +
@@ -118,13 +127,4 @@ substitution) and a **+10.22% `typeNode.bypassed` blowup the cost gate caught** 
 array matching and fixed with tsgo's element pairing (+0.15%, no wall cost). 47-cell matrix: 13 -> 35 match; 15 pins.
 Screen 0; grid 8x0; huge_methods 0. **`rxjs` 2 -> 1** (`groupBy.ts:147` is step 2). (CHK.167) and (CHK.168) — a
 silent union-source class and a silent arrow expression body — were censused beside it, both +0 predicted.
-
-**(P18.190) — (CHK.158): A TYPE GUARD REACHED THROUGH A VALUE NARROWS — THE PREDICATE IS READ FROM THE CALLEE'S SIGNATURE; `rxjs` 3 -> 2, 20,650 / 0 / 44 (2026-09-24).**
-`const isArr = Array.isArray`, a destructured `isArray`, a guard in an object property, a guard-typed annotation and
-an overloaded guard (wrong even when called directly) now narrow, with tsgo's `getEffectsSignature` rule. Four matrix
-groups exact; 19 pins, eight arms RED. Screen 0; grid 8x0; huge_methods 0; cost_gate rebaselined (`typeNode.bypassed`
-−2.03%, a decrease). **`rxjs` 3 -> 2** — both remaining rows are (CHK.159) inference. The builder's blind control led to
-**(CHK.167), promoted to the top: a union source against an object/array target is SILENT at declaration and
-argument positions** (`number[] | string` -> `number[]`, `K | number` -> `K`) — the largest false-negative class found
-this session.
 

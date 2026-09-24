@@ -1,5 +1,14 @@
 
 
+**(P18.190) — (CHK.158): A TYPE GUARD REACHED THROUGH A VALUE NARROWS — THE PREDICATE IS READ FROM THE CALLEE'S SIGNATURE; `rxjs` 3 -> 2, 20,650 / 0 / 44 (2026-09-24).**
+`const isArr = Array.isArray`, a destructured `isArray`, a guard in an object property, a guard-typed annotation and
+an overloaded guard (wrong even when called directly) now narrow, with tsgo's `getEffectsSignature` rule. Four matrix
+groups exact; 19 pins, eight arms RED. Screen 0; grid 8x0; huge_methods 0; cost_gate rebaselined (`typeNode.bypassed`
+−2.03%, a decrease). **`rxjs` 3 -> 2** — both remaining rows are (CHK.159) inference. The builder's blind control led to
+**(CHK.167), promoted to the top: a union source against an object/array target is SILENT at declaration and
+argument positions** (`number[] | string` -> `number[]`, `K | number` -> `K`) — the largest false-negative class found
+this session.
+
 **(P18.189) — (CHK.157): THE ELSE BRANCH OF AN `if` NARROWS AT THE ASSIGNMENT AND RETURN READERS; `rxjs` 4 -> 3, 12 -> 45 AGREEING ROWS, 20,631 / 0 / 44 (2026-09-23).**
 The census named a legacy arm; the emitter for function-declaration bodies is the SPINE, so the fix is in the spine
 and both legacy walks: each `||` disjunct negated in order (tsgo's false branch), negated type-guard calls,
