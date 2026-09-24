@@ -124146,6 +124146,76 @@ interface DataView {
         return narrowByCallPredicateWorker(t, expr, isMatch, name)
     }
 
+    /** (CHK.158) The four declaration kinds [narrowByCallPredicateWorker] reads a predicate triple off directly. */
+    private fun isFlowFunctionLike(decl: Node?): Boolean =
+        decl is FunctionDeclaration || decl is MethodDeclaration ||
+            decl is ArrowFunction || decl is FunctionExpression
+
+    /**
+     * (CHK.158) The declaration of the type-predicate SIGNATURE a call resolves to,
+     * read from the callee's TYPE — tsgo `getEffectsSignature` (flow.go): the single
+     * call signature, or, when several exist and some carries a predicate, the
+     * RESOLVED one ([resolveCallOverload], strict, so a guessed overload never
+     * narrows). A declaration without a predicate is answered as-is and the caller
+     * then narrows nothing, exactly as for a non-guard function.
+     */
+    private fun predicateDeclFromCalleeSignature(
+        expr: CallExpression, callee: Expression, resolvedDecl: Node?,
+    ): Node? {
+        var calleeType = getTypeOfExpression(callee)
+        if (calleeType === anyType || calleeType === errorType) {
+            // `const { isArray } = Array`: a destructured FUNCTION member is refused at
+            // the value readers (round 464b, [bindingElementType]'s `refuseFnMembers`), so
+            // the name types `any` there; so does a body-local `const g = isNum` (B83.5,
+            // unbound) at the readers that run outside its body's ambient. Read the
+            // declaration itself for this flow-only question — a resolution here can
+            // only narrow.
+            // A body local resolves to no declaration there at all; its declaration is
+            // in the OWNING file's INV.2(c) tables (the [destructuredDiscriminantCarry]
+            // consult — flow readers run with `currentLexicalScopes` unset).
+            val typeDecl = resolvedDecl ?: (callee as? Identifier)?.let { id ->
+                lexicalResolver.scopesOfOwningFile(id)
+                    ?.let { lexicalResolver.symbolAt(id, id.text, it, startAtParent = true, hopCap = 0) }
+                    ?.valueDeclaration
+            }
+            calleeType = when (typeDecl) {
+                is BindingElement -> destructuredCalleeType(typeDecl)
+                is VariableDeclaration -> typeDecl.type?.let { getTypeFromTypeNode(it) }
+                    ?: typeDecl.initializer?.let { getTypeOfExpression(it) }
+                else -> null
+            } ?: return null
+        }
+        if (calleeType === anyType || calleeType === errorType) return null
+        val sigs = getCallSignaturesOfType(getApparentType(calleeType))
+        val sig = when {
+            sigs.size == 1 -> sigs[0]
+            sigs.any { predicateReturnNodeOf(it.declaration) != null } ->
+                resolveCallOverload(sigs, expr.arguments, strictSelect = true)
+            else -> null
+        } ?: return null
+        // The resolved signature's declaration even when IT carries no predicate: an
+        // overload set whose selected member is not a guard does not narrow.
+        return sig.declaration
+    }
+
+    /** (CHK.158) The type of a one-level destructured `const { f } = init` element, or null. */
+    private fun destructuredCalleeType(elem: BindingElement): Type? {
+        val pattern = (elem as NodeBase).parent as? ObjectBindingPattern ?: return null
+        val owner = (pattern as NodeBase).parent as? VariableDeclaration ?: return null
+        if (owner.name !== pattern) return null
+        val init = owner.initializer ?: return null
+        return bindingElementType(elem, getTypeOfExpression(init), isConst = true)
+    }
+
+    private fun predicateReturnNodeOf(decl: Node?): TypePredicate? = when (decl) {
+        is FunctionDeclaration -> decl.type
+        is MethodDeclaration -> decl.type
+        is ArrowFunction -> decl.type
+        is FunctionExpression -> decl.type
+        is FunctionType -> decl.type
+        else -> null
+    } as? TypePredicate
+
     private fun narrowByCallPredicateWorker(
         t: Type, expr: CallExpression, isMatch: Boolean, name: String,
     ): Type {
@@ -124178,20 +124248,36 @@ interface DataView {
         if (expr.arguments.none { pathMatches(getReferencePath(it)) } && !pathMatches(calleeReceiverPath)) return t
         // round 43 iter9: PropertyAccess callee — `obj.isMethod(x)` where
         // `obj`'s type has a method `isMethod` with `x is T` return type.
-        val decl: Node? = resolveFlowCalleeDecl(expr, callee)
+        val resolvedDecl: Node? = resolveFlowCalleeDecl(expr, callee)
         // A guard can also be a PARAMETER — tsc's `getOriginalNode<T extends Node>(node,
         // nodeTest: (node: Node) => node is T)` narrows with `nodeTest(node) ? node :
         // undefined`. There is no declaration to resolve then: the signature lives on the
         // parameter's own FunctionType annotation, which supplies exactly the same triple.
-        val paramGuardType: FunctionType? = if (decl == null) {
+        val paramGuardType: FunctionType? = if (resolvedDecl == null) {
             (callee as? Identifier)?.let { id -> parameterGuardFunctionType(id) }
         } else null
+        // (CHK.158) A guard REACHED THROUGH A VALUE — `const isArr = Array.isArray`,
+        // `const { isArray } = Array`, `const u = { isNum }; u.isNum(x)`, a parameter
+        // typed by a guard ALIAS — resolves to a declaration that is not function-like
+        // and carries no predicate. tsgo takes the predicate from the call's effects
+        // SIGNATURE (flow.go `getEffectsSignature`), i.e. from the callee's TYPE; do
+        // the same here wherever the declaration path found no function-like.
+        // An OVERLOAD declaration (a body-less `function`) is the other case: the
+        // declaration path answers the FIRST overload's predicate, where tsgo reads the
+        // RESOLVED signature's.
+        val decl: Node? = if (paramGuardType == null &&
+            (!isFlowFunctionLike(resolvedDecl) || (resolvedDecl is FunctionDeclaration && resolvedDecl.body == null))
+        ) {
+            predicateDeclFromCalleeSignature(expr, callee, resolvedDecl) ?: resolvedDecl
+        } else resolvedDecl
         val (params, returnTypeNode, typeParams) = when {
             decl is FunctionDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
             decl is MethodDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
             // (CHK.31) the same triple, from a guard written as a const arrow.
             decl is ArrowFunction -> Triple(decl.parameters, decl.type, decl.typeParameters)
             decl is FunctionExpression -> Triple(decl.parameters, decl.type, decl.typeParameters)
+            // (CHK.158) a signature read off a guard-typed annotation.
+            decl is FunctionType -> Triple(decl.parameters, decl.type, decl.typeParameters)
             paramGuardType != null ->
                 Triple(paramGuardType.parameters, paramGuardType.type, paramGuardType.typeParameters)
             else -> return t
@@ -159914,7 +160000,15 @@ interface DataView {
         val sym = currentFileLocals?.get(calleeName) ?: globals[calleeName] ?: return null
         var predicate: TypePredicate? = null
         var params: List<Parameter>? = null
-        for (d in sym.declarations) {
+        // (CHK.158) An OVERLOAD set narrows by its RESOLVED member's predicate (tsgo
+        // `getEffectsSignature`), never by the first predicate-bearing declaration.
+        if (sym.declarations.count { it is FunctionDeclaration } > 1) {
+            val resolved = predicateDeclFromCalleeSignature(call, unwrapParensExpr(call.expression), null)
+                as? FunctionDeclaration ?: return null
+            predicate = resolved.type as? TypePredicate ?: return null
+            params = resolved.parameters
+        }
+        if (predicate == null) for (d in sym.declarations) {
             when (d) {
                 is FunctionDeclaration -> (d.type as? TypePredicate)?.let { predicate = it; params = d.parameters }
                 is VariableDeclaration -> {
