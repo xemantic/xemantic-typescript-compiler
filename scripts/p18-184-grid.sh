@@ -3,12 +3,6 @@
 # contextual `this` resolved from the identifier's parent chain. Removal-only by design; any ADDED row
 # is a regression.
 #
-# THE GRID IS A WEAK GATE HERE: the queue item's census found one live instance on the profiles
-# (`harness/src/harness/harnessGlobals.ts:23`, an overloaded `assert.deepEqual`, carrying all 3 of
-# harness's TS7006 rows) and no TS2322/TS2345 that could show the value half. The corpus (233
-# active subtests / 159 fixtures matching the union-or-overload-with-callback heuristic) is the
-# real gate; a green grid here is a control that nothing else moved.
-#
 # BEFORE is the orchestrator's snapshot of the (P18.183) landed binary (Checker.class md5 da3efb53,
 # the binary the green suite ran on); AFTER is the built tree.
 # REFUSES when the arms' Checker.class are byte-identical, when a capture is empty or TRUNCATED,

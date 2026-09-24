@@ -3,12 +3,6 @@
 # `narrowByTruthiness`. A CONTROL: the census's patch arm changed 88-92 narrowings per profile and moved 0
 # rows (full text byte-identical); the pins are the gate.
 #
-# THE GRID IS A WEAK GATE HERE: the queue item's census found one live instance on the profiles
-# (`harness/src/harness/harnessGlobals.ts:23`, an overloaded `assert.deepEqual`, carrying all 3 of
-# harness's TS7006 rows) and no TS2322/TS2345 that could show the value half. The corpus (233
-# active subtests / 159 fixtures matching the union-or-overload-with-callback heuristic) is the
-# real gate; a green grid here is a control that nothing else moved.
-#
 # BEFORE is the orchestrator's snapshot of the (P18.194) landed binary (Checker.class md5 70f3a226,
 # the binary the green suite ran on); AFTER is the built tree.
 # REFUSES when the arms' Checker.class are byte-identical, when a capture is empty or TRUNCATED,

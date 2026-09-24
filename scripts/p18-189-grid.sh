@@ -2,12 +2,6 @@
 # (P18.189) the 8-profile BEFORE/AFTER binary grid for (CHK.157) — the ELSE branch of an `if` narrows at
 # the legacy assignment reader (`negateCondition`). Mostly removal; any added row must be a tsgo row.
 #
-# THE GRID IS A WEAK GATE HERE: the queue item's census found one live instance on the profiles
-# (`harness/src/harness/harnessGlobals.ts:23`, an overloaded `assert.deepEqual`, carrying all 3 of
-# harness's TS7006 rows) and no TS2322/TS2345 that could show the value half. The corpus (233
-# active subtests / 159 fixtures matching the union-or-overload-with-callback heuristic) is the
-# real gate; a green grid here is a control that nothing else moved.
-#
 # BEFORE is the orchestrator's snapshot of the (P18.188) landed binary (Checker.class md5 99709138,
 # the binary the green suite ran on); AFTER is the built tree.
 # REFUSES when the arms' Checker.class are byte-identical, when a capture is empty or TRUNCATED,
