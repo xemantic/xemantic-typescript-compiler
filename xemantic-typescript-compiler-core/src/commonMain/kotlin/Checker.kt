@@ -176659,12 +176659,12 @@ interface DataView {
         source: Type.Intersection, target: Type.Object, relation: Relation,
     ): Boolean {
         if (source.types.any { it !is Type.Object }) return false
-        val mergedMembers = mutableMapOf<String, MutableList<Symbol>>()
+        val mergedMembers = mutableMapOf<String, MutableList<Pair<Type.Object, Symbol>>>()
         for (c in source.types) {
             if (c is Type.Object) {
                 resolveStructuredTypeMembers(c)
                 val m = c.members ?: return false
-                m.forEach { (n, sy) -> mergedMembers.getOrPut(n) { mutableListOf() }.add(sy) }
+                m.forEach { (n, sy) -> mergedMembers.getOrPut(n) { mutableListOf() }.add(c to sy) }
                 if (!c.callSignatures.isNullOrEmpty() || !c.constructSignatures.isNullOrEmpty()) return false
             }
         }
@@ -176682,7 +176682,7 @@ interface DataView {
                 return false
             }
             var ok = false
-            for (sourceProp in sourceProps) {
+            for ((owner, sourceProp) in sourceProps) {
                 // The DECLARATION's own type, with the `?` SPELLED OUT. Without it the
                 // rule is unsound in this direction: `FunctionExpression & { name:
                 // undefined; … }` was accepted against `{ name: Identifier }` because
@@ -176691,11 +176691,15 @@ interface DataView {
                 // picked it, where the real intersected member is `undefined`. Widened
                 // LOCALLY: this is a suppression rule, so being pessimistic about a
                 // source member can only decline to suppress.
-                var srcType = getTypeOfSymbol(sourceProp)
+                // (CHK.162): both sides through [getPropertyTypeForRelation], the member
+                // type the structural relation itself compares — a GENERIC reference's
+                // own declaration symbol answers its raw `T` (errorType out of scope), so
+                // `VD & { initializer: Call }` against `VDI<Call>` bailed here.
+                var srcType = getPropertyTypeForRelation(owner, sourceProp)
                 if (isOptionalProperty(sourceProp) && !typeIncludesUndefined(srcType)) {
                     srcType = getUnionType(listOf(srcType, undefinedType))
                 }
-                val tgtType = widenOptionalTargetPropType(getTypeOfSymbol(targetProp), targetProp, srcType)
+                val tgtType = widenOptionalTargetPropType(getPropertyTypeForRelation(target, targetProp), targetProp, srcType)
                 if (srcType === errorType || tgtType === errorType) return false
                 if (srcType === anyType || tgtType === anyType ||
                     checkTypeRelatedTo(srcType, tgtType, relation)) { ok = true; break }
@@ -176718,11 +176722,16 @@ interface DataView {
         // { left: GeneratedIdentifier }` against its own annotation (factory/
         // utilities.ts:1688, parser.ts:9581) — the interface's WIDE `left` shadowed
         // the TypeLiteral's refinement.
-        val mergedMembers = mutableMapOf<String, MutableList<Symbol>>()
+        // (CHK.162): a UNION constituent supplies members this merge cannot see, so a
+        // declaration found here may not be the only one — `VD & ({ initializer: Call } |
+        // { … })` read VD's `initializer?: Ex` alone as a contradiction. Undecidable; the
+        // distribution fallback ([Relater.intersectionSourceDistributes]) decides it.
+        if (source.types.any { it is Type.Union }) return false
+        val mergedMembers = mutableMapOf<String, MutableList<Pair<Type.Object, Symbol>>>()
         for (c in source.types) {
             if (c is Type.Object) {
                 resolveStructuredTypeMembers(c)
-                c.members?.forEach { (n, s) -> mergedMembers.getOrPut(n) { mutableListOf() }.add(s) }
+                c.members?.forEach { (n, s) -> mergedMembers.getOrPut(n) { mutableListOf() }.add(c to s) }
             }
         }
         if (mergedMembers.isEmpty()) return false
@@ -176732,9 +176741,10 @@ interface DataView {
             if (targetProp.name.isEmpty() || targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
             val sourceProps = mergedMembers[targetProp.name] ?: continue // missing → not a contradiction here
             var anyRelatesOrUncertain = false
-            for (sourceProp in sourceProps) {
-                val srcType = getTypeOfSymbol(sourceProp)
-                val tgtType = widenOptionalTargetPropType(getTypeOfSymbol(targetProp), targetProp, srcType)
+            for ((owner, sourceProp) in sourceProps) {
+                // (CHK.162): the relation's own member types — see [intersectionMergedSatisfiesTarget].
+                val srcType = getPropertyTypeForRelation(owner, sourceProp)
+                val tgtType = widenOptionalTargetPropType(getPropertyTypeForRelation(target, targetProp), targetProp, srcType)
                 if (srcType === errorType || tgtType === errorType || srcType === anyType || tgtType === anyType) {
                     anyRelatesOrUncertain = true
                     break
@@ -176767,11 +176777,11 @@ interface DataView {
             // Merge object-like constituent members. Reference / Interface / anonymous
             // Object all contribute. Later constituents override earlier on conflict
             // (matches TS's intersection-member resolution for our scope).
-            val mergedMembers = mutableMapOf<String, Symbol>()
+            val mergedMembers = mutableMapOf<String, Pair<Type.Object, Symbol>>()
             for (c in source.types) {
                 if (c is Type.Object) {
                     resolveStructuredTypeMembers(c)
-                    c.members?.forEach { (n, s) -> mergedMembers[n] = s }
+                    c.members?.forEach { (n, s) -> mergedMembers[n] = c to s }
                 }
             }
             if (mergedMembers.isEmpty()) return null
@@ -176779,10 +176789,11 @@ interface DataView {
             val targetProps = target.properties ?: return null
             // First incompatible property emits the chain
             for (targetProp in targetProps) {
-                val sourceProp = mergedMembers[targetProp.name] ?: continue
+                val (owner, sourceProp) = mergedMembers[targetProp.name] ?: continue
                 if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
-                val srcType = getTypeOfSymbol(sourceProp)
-                val tgtType = widenOptionalTargetPropType(getTypeOfSymbol(targetProp), targetProp, srcType)
+                // (CHK.162): the relation's own member types — see [intersectionMergedSatisfiesTarget].
+                val srcType = getPropertyTypeForRelation(owner, sourceProp)
+                val tgtType = widenOptionalTargetPropType(getPropertyTypeForRelation(target, targetProp), targetProp, srcType)
                 if (srcType === errorType || tgtType === errorType) continue
                 if (!checkTypeRelatedTo(srcType, tgtType, assignableRelation)) {
                     val propPath = if (path.isEmpty()) targetProp.name else "$path.${targetProp.name}"
@@ -176807,12 +176818,27 @@ interface DataView {
                 if (c is Type.Object) {
                     resolveStructuredTypeMembers(c)
                     val missing = getMissingRequiredPropertySymbol(c, target)
-                    if (missing != null) {
+                    // (CHK.162): a member ANOTHER constituent supplies is not missing from
+                    // the intersection — `VD & { initializer: Call }` read `'kind' is missing`.
+                    if (missing != null && missing.name !in mergedMembers) {
                         return listOf(
                             "  Property '${missing.name}' is missing in type '${typeToString(source)}' but required in type '${typeToString(target)}'."
                         )
                     }
                 }
+            }
+            // (CHK.162): every constituent's FIRST missing member may be one another
+            // constituent supplies (`{ b: 1 } & { a: Call }` against `{ a; b; c }`) — the
+            // member missing from the WHOLE intersection is then the first required target
+            // property no constituent declares.
+            val wholeMissing = targetProps.firstOrNull {
+                it.name.isNotEmpty() && it.name !in mergedMembers &&
+                    it.name !in OBJECT_PROTOTYPE_PROPERTIES && !isOptionalProperty(it) && !isRestTupleMember(it)
+            }
+            if (wholeMissing != null && source.types.all { it is Type.Object }) {
+                return listOf(
+                    "  Property '${wholeMissing.name}' is missing in type '${typeToString(source)}' but required in type '${typeToString(target)}'."
+                )
             }
             return null
         } finally {
