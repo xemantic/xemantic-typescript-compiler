@@ -25,6 +25,39 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.200) — (CHK.169): a MODULE-file class is resolved through its own symbol (and its base through the per-file view) at the argument reader, so `this` is typed; 25 cells, 0 FPs, +0 everywhere (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.171) census landing beside it (recorded in its item).
+`callWalkClassSymbol` returns `globals[name]` only if it DECLARES the node, else `nodeSymbolOf(node)` if it declares it,
+else namespace exports (tsgo `tryGetThisTypeAtEx`, checker.go ~12135, types `this` from the class's own declared
+symbol); `ccetInstallClassThis` types `this` in method AND constructor bodies; the base is
+`lookupPerFileForNode(baseIdent, …)` (tsgo resolves it as an ordinary expression). **Where the census/brief was
+wrong**: the "legacy mirror" `checkCallTypesInStatement(s)` is NOT the declarationOnly path — it is reached only for a
+function-expression body inside a destructuring computed key and only ever sees B83.5 nested classes, so its update is
+unobservable (a4 0 RED, updated for parity); "26 module cells" is 22 by the census's own table (+ m07/s07 +
+`x09_try_ccet_m`); `rxmin/` did not reproduce the no-base FP as left — re-reduced from rxjs (the ingredients are a
+PRIVATE PARAMETER PROPERTY on the root class `Subscription` with the `super.schedule` subclass checked first; the
+mechanism itself is not isolated). **Found in passing and filed as (CHK.172): under `emitDeclarationOnly` the compiler
+reports NO diagnostics at all** — the orchestrator re-probed it: `pn("x")` and `const n: number = "s"` are 2 rows in
+tsgo and 0 here.
+
+**Matrix, 94 cells**: agree 64 -> **89**, missing 43 -> 18, ours-only 0 -> 0 (closed m01 m02 m04 m05 m07 m11-m14 m16
+m20-m23 m27 m29-m32 m34 m36-m38 s07 x09_m; still missing: accessor / arrow-property / initializer / static-block
+`this`, class expressions, anonymous default class, B83.5 nested classes, y01/y04/y08, x11 — mostly missing in script
+files too). Imported bases resolve to an alias symbol that `buildBaseConstructorSignatureForSuper` rejects, so a
+cross-file `super(...)` is still unchecked (inert).
+
+**Pins**: `ModuleClassThisArgumentTest`, 11 tests (module/script pairs; m11; m29 lib shadow; negative control m28;
+m31 two-file same-name with colliding offsets; the rxjs-shaped `super.schedule` guard). Ablation: no base lookup 3 RED
+(incl. the rx guard); keep a non-owning `globals` answer 1 (m29); no constructor `this` 1; legacy mirror **0**
+(unreachable); `nodeSymbolOf` not declaration-checked **0** (redundant — `owningBinderResult` already makes m31 right).
+
+**Gates**: full suite **20,791 / 0 / 44** (+11); corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x
+`added=0 removed=0` — a live gate (the no-base arm adds rxjs `AsyncAction.ts:119`); orchestrator re-probe:
+`export class C { s = "x"; m() { pn(this.s); } }` now reports TS2345 as tsgo does. rxjs 0, marked 0, cronstrue 0.
+
+**Successor**: (CHK.172) (`emitDeclarationOnly` reports nothing) — census first; it may be large.
+
 ### Round (P18.199) — (CHK.170): `a ?? b` / `a ??= b` type as the LEFT type when the left cannot be nullish; x05's 3 FPs gone, +0 everywhere (2026-09-24)
 
 Orchestrated: one implementation subagent, with the (CHK.171) census running beside it. `mayBeNullishByTypeFacts`
@@ -380,51 +413,6 @@ huge_methods 0; grid 8x `added=0 removed=0` — a real gate here; no `w:`. **`rx
 (`race.ts:52`; left: `groupBy.ts:147`, step 2); `marked` 0.
 
 **Successor**: (CHK.167) round 1 (union source vs object target, specified, +0 predicted).
-
-### Round (P18.190) — (CHK.158): a type guard reached through a VALUE narrows — the predicate is read from the callee's signature; `rxjs` 3 -> 2 (2026-09-24)
-
-Orchestrated: one implementation subagent, with the (CHK.164) census folding into its item beside it.
-**The census's control was blind**: `c5` (`const r: number[] = x` after the guard) "worked" only because no
-reader reports `number[] | string` -> `number[]` at all — and that turned out to be a much larger defect,
-re-probed by the orchestrator on the landed binary and filed as (CHK.167). `Array.isArray(x)` works through a
-hard-coded round-459 special case, not the predicate. "Read the predicate from the signature" alone was not
-enough: a destructured function member types `any` at the value readers (round 464b refuses function
-members) and a body-local `const g = isNum` is unbound; both needed handling. And an OVERLOADED guard was
-wrong on the DIRECT call too (the flow resolver and B378's `resolveUserTypeGuardNarrowing` both took the first
-predicate-bearing overload — a false positive and a missing row).
-
-**The change (`Checker.kt` +100/−4, flow-only — it can only narrow)**: `narrowByCallPredicateWorker` falls back
-to `predicateDeclFromCalleeSignature` when the resolved declaration is not function-like or is a body-less
-overload: the callee's call signatures, one used directly, several resolved with
-`resolveCallOverload(strictSelect = true)` if any carries a predicate (tsgo `getEffectsSignature`, flow.go
-~2026; a resolved overload without a predicate narrows nothing). When the callee types `any` the type comes
-from the declaration (`destructuredCalleeType` reusing `bindingElementType` minus the function-member refusal;
-a variable's annotation or initializer; a body local through the owning file's lexical scope tables). The
-predicate triple gains a `FunctionType` arm (guard-typed annotations and aliases); B378 resolves an overload
-set the same way.
-
-**Matrix**: guard aliases / annotated / alias type / object property / parameter / else branch 8 rows off ->
-exact; destructured 4 -> exact; body-local at 9 readers 12 -> exact; overloads 4 -> exact; the rxjs reducer's
-c2/c3/c9/c10 fixed. Residues, pre-existing: `asserts x is T` through an annotated variable/parameter/property
-(the gate `flowCalleeMayHaveAssertEffects` reads declarations only and runs on every flow call — left alone
-for cost; TS2775 for an un-annotated assertion alias is never emitted); a generic guard whose type parameter
-is inferred from another argument; a `this is T` method on a union declaring it per member
-(`typePredicatesInUnion3`); a destructured function member / body-local function alias still `any` at the
-VALUE readers (the fix is flow-only).
-
-**Pins**: `GuardThroughValueNarrowingTest`, 19 tests (2 controls), probes print the narrowed type. Ablation,
-eight arms, all RED (signature fallback 16; overload trigger 2; binding-element type 4; body-local lookup 3;
-`FunctionType` arm 3; B378 overload arm 2; predicate-only overload answer 1; variable-declaration type 2).
-
-**Gates**: full suite **20,650 / 0 / 44** (+19); corpus screen 0 of 8,725; huge_methods 0; grid 8x
-`added=0 removed=0`; no `w:`. **cost_gate passed with one marker, rebaselined in this commit**:
-`typeNode.bypassed` 154,638 -> 151,499 (−2.03% against the recorded baseline, −0.49% of it from (P18.189) and
-−1.55% from this round — a DECREASE), `typeOfExpr.calls` +0.70% (the signature fallback typing callees), all
-else within ±0.25%, output 46 = 46. **`rxjs` 3 -> 2** (`argsArgArrayOrObject.ts:14`; left: `race.ts:52`,
-`groupBy.ts:147`, both (CHK.159)); `marked` 0.
-
-**Successor**: (CHK.167) — promoted to the top of the queue as the largest false-negative class found this
-session; census first.
 
 ## QUEUE
 
@@ -1071,6 +1059,19 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   risk (CHK.63) recorded: a union source that is NARROWED at the site must not be reported by its declared
   type). Direction: ADDS rows; every added row must be a tsgo row, and the grid is likely a REAL gate.
 
+- [ ] **(CHK.172) UNDER `emitDeclarationOnly` THE COMPILER REPORTS NO DIAGNOSTICS AT ALL — found by (P18.200)'s builder
+  (argument checks), re-probed 2026-09-24 by the orchestrator (`build/scratch-orch-edo`): `pn("x")` and
+  `const n: number = "s"` with `declaration` + `emitDeclarationOnly` are TS2345 + TS2322 in tsgo and **0** here.**
+  CLAUDE.md records the mechanism's outline: `emitDeclarationOnly` takes the `declarationOnly` WHITELIST path where
+  `checkSpine` never runs, and `checkDeclarationOnlySpineFamilies` drives only a subset — so every rule living on the
+  spine (and apparently the whole assignability family) is silent there. tsgo type-checks fully under
+  `emitDeclarationOnly`; only EMIT is restricted. A library that bundles with esbuild/rollup and uses tsc/tsgo only for
+  `.d.ts` output is exactly this configuration, so for such a project xtsc is currently a no-op checker. **Census
+  first**: why the whitelist exists (a perf decision? the corpus's `@emitDeclarationOnly` baselines?), what the corpus
+  pins under it (it may be carrying many baselines on the whitelist's exact output), which families are missing, and
+  whether the fix is "run the normal checker and restrict only emit" (likely) — measure the corpus and the 8 profiles
+  with `emitDeclarationOnly` forced on. Direction: ADDS rows (restores ALL of them) — the corpus screen is the gate.
+
 - [x] **(CHK.170) LANDED 2026-09-24 ((P18.199) note; a type parameter answers through its constraint). `a ?? b` IS TYPED AS THE UNION WITH THE RIGHT SIDE EVEN WHEN THE LEFT CANNOT BE NULLISH — tsgo types
   it as the LEFT type (checker.go ~12484); ours unions in `b` (`combineBinaryTypes` ~135345). Ours-only rows today on
   parameters (cell `build/scratch-p18198-census/cells/x05`, 3 rows), and it is the one row blocking (CHK.169) at +0
@@ -1078,7 +1079,30 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   undefined / void / any / unknown / a type parameter, answer the left type. Predicted: removes x05's FPs, 0 elsewhere
   (not yet run alone). Small; land it immediately before (CHK.169).
 
-- [ ] **(CHK.171) A CLASS / FUNCTION TYPE-PARAMETER SCOPE IS LOST AT THE TOP OF A CONSTRUCTOR AND INSIDE ANY NESTED
+- [ ] **(CHK.171) CENSUSED 2026-09-24 (read-only, frozen (P18.198) classes, `build/scratch-p18199-census/`,
+  README.txt, `jdi/Arms5.java`) — THE READING IS CONFIRMED; FOUR ROUNDS, R1 LANDS AT +0 NOW.** The statement anchor
+  installs `frame.fnTpScope ?: sTpScope` (~3341) and `sTpScope` was NULL at all 58,581 anchors on the project
+  profile, so any frame without its own `fnTpScope` resolves `T` to `any`; `fnTpScope` is set in ONE place (the
+  `viaCheckFunctionBody && body is Block` branch of `ctaFnBodyFrame`, ~3681). Frames that lose it: (a) plain block
+  frames (`ctaSpineEnter`'s `else ->` ~4063: if/else/for/for-in/of/while/do/try/catch/finally/labeled/bare), (b)
+  case/default clauses (~4107), (c) narrowing frames (~3929), (d) constructor/setter frames (~3730-3751 — no scope
+  built, seeds resolved with a null scope: this is (CHK.161)(a)), (e) nested function frames (~3657 — start from the
+  null resting scope, not `base.fnTpScope`). 2,071 anchors lose scope on the project profile (if 1,133, nested
+  functions 404, for 144, for-of 125, while 95, clauses 71). The ModuleBlock reset (~4096) is correct — keep it. tsgo
+  has no frames (parent-chain resolution, `binder/nameresolver.go`). 55-cell matrix: today 64 agree / 6 ours-only /
+  219 missing (108 from lost scope); full fix 172 / 8 / 111 (0 from lost scope) — shadowing right (`sh2_fn_if`,
+  `sh2_method_if`); block copy closes 90, ctor/setter 15, nested 3. **Full fix costs +1 FP per profile
+  (`utilities.ts:12338`, `NonNullable<T>` vs `Node` in an `else {}`) and +1 on rxjs (`delayWhen.ts:98`)** — both fire
+  TODAY at a function's top level: **P1** `const a: Node = node as T & {}` with `T extends Node` (intersection-source
+  arm, `Relater.kt` ~805-817; `cells/fp_nonnullable2`) and **P2** `concat<T extends readonly unknown[]>(...inputs:
+  [...InTuple<T>]): Obs<T[number]>` inferring `Obs<unknown>` (mapped type over a variadic tuple; `cells/fp_concat`).
+  marked/cronstrue 0, corpus 0. **ROUNDS**: **R1** — build the constructor/setter scope from the class TPs and run the
+  seeds under it; seed nested-function scopes from `base.fnTpScope` (~3657 and the `else currentTypeParamScope` leg
+  ~3679): predicted 0 rows everywhere, 13 matrix rows; **R2** — P1; **R3** — P2; **R4** — copy
+  `fnTpScope`/`fnTpDecls` into block / clause / narrowing frames (inherit, not merge): 0 added after R2+R3, 90 more
+  rows. Pins: `sh2_fn_if`, `sh2_method_if`, `nest_own_tp`, `nest_class_in_fn`; probes `T[]`-shaped or argument-based.
+  Side finding (separate): the ARGUMENT reader drops a method's or arrow's OWN type parameters (`mm_*`/`atp_*` print
+  `any[]`; ~1760-1776, ~1881). EARLIER: A CLASS / FUNCTION TYPE-PARAMETER SCOPE IS LOST AT THE TOP OF A CONSTRUCTOR AND INSIDE ANY NESTED
   BLOCK / `if` / `for` / `try` AT THE DECLARATION READER — `this.v: T[]` and `const y: T[] = v` inside an `if` read
   `any[]`, which relates to almost everything and SILENTLY HIDES ERRORS (the broadened (CHK.161)(a); found by the
   (CHK.169) census, cells `build/scratch-p18198-census/cells/x01,x02,x08,x10,x11`; SCRIPT files too).** Likely cause
@@ -1087,7 +1111,9 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   install (~3341) falls back to the resting scope. Independent of (CHK.169) as long as that ships WITH the base lookup.
   ADDS rows — census first.
 
-- [ ] **(CHK.169) CENSUSED 2026-09-24 (read-only, frozen (P18.197) classes, `build/scratch-p18198-census/`, README.txt,
+- [x] **(CHK.169) LANDED 2026-09-24 ((P18.200) note; 25 cells, 0 FPs, +0 everywhere). Residues listed in the note
+  (accessor / initializer / static-block `this`, class expressions, TS2348 / TS2339 module-base sites, cross-file
+  `super(...)`). CENSUSED 2026-09-24 (read-only, frozen (P18.197) classes, `build/scratch-p18198-census/`, README.txt,
   `matrix-summary.txt`, 94 cells, `rxmin/`) — LANDS AT +0 ON EVERY INSTRUMENT, BUT ONLY AS A COMBINED FIX.** Class
   lookup: `ccetEnterClassDeclaration` (~1835) is `globals[name] ?: <namespace exports>` — a module class is never in
   `globals`, so `classSym` is null: `this` untyped in methods and the class TPs out of scope; worse, `export class Map`

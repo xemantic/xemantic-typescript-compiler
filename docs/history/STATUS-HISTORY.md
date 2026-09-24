@@ -1,5 +1,12 @@
 
 
+**(P18.195) — (CHK.166)(a) STEP 1: VALUE-AWARE ENUM TRUTHINESS — AN ENUM IS NO LONGER WASHED TO `never`; 193 -> 639 OF 660 CELLS, BYTE-IDENTICAL ON EVERY INSTRUMENT, 20,751 / 0 / 44 (2026-09-24).**
+Every enum type counted as definitely truthy, so `if (!k)` washed `k` to `never` and silenced real errors, while the
+truthy branch kept `K.Zero`. `EnumSemantics.enumTruthiness` now classifies by member value (0/NaN/"" falsy, opaque
+either) and `narrowByTruthiness` decomposes a whole enum only when a branch removes a proper subset. Exactly the
+census's prediction; two false positives on legal code closed; the naive shape (98 FPs) pinned out. 9 pins, five arms
+RED. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
+
 **(P18.194) — (CHK.168) ROUND 1: AN ANNOTATED ARROW'S EXPRESSION BODY IS RETURN-CHECKED; 28 CELLS FIXED, 0 FALSE POSITIVES, +0 EVERYWHERE, 20,742 / 0 / 44 (2026-09-24).**
 `const f = (x: string): number => x` was silent: the concise-body check ran on the spine, where the arrow's
 parameters were out of scope. The scoped walker now routes the body through the block-body return path (anchor +

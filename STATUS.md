@@ -1,7 +1,8 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,310** lines (**+32 at (P18.199)**, a type-facts nullish test and two early returns — a SEMANTIC
+extraction):** `Checker.kt` **201,347** lines (**+37 at (P18.200)**, an owning-declaration class lookup and a per-file base lookup
+at the argument reader — a SEMANTIC parity change closing a false-NEGATIVE class; **+32 at (P18.199)**, a type-facts nullish test and two early returns — a SEMANTIC
 parity change removing a FALSE-POSITIVE class; **+152 at (P18.198)**, a narrowed-receiver re-read, a union-parameter admission and
 its chain — net of a verbatim split taking `checkArgumentsAgainstSignatureCore` 7,629 -> 4,297 bytecodes; **+26 at
 (P18.197)**, instantiated member reads in the intersection relation and
@@ -92,6 +93,13 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.200) — (CHK.169): INSIDE A MODULE-FILE CLASS, `this` IS TYPED AT THE ARGUMENT READER; 25 CELLS CLOSED, +0 EVERYWHERE, 20,791 / 0 / 44 (2026-09-24).**
+`export class C { s = "x"; m() { pn(this.s); } }` was silent — the class was looked up only in `globals`, which never
+holds a module file's declarations (and `export class Map` got the lib `Map`). The class now resolves through its own
+declared symbol and its base through the per-file view (mandatory: the class lookup alone produced an rxjs false
+positive). Matrix agree 64 -> 89, 0 ours-only; 11 pins. Screen 0; grid 8x0 (a live gate); cost_gate PASS;
+huge_methods 0. **Filed (CHK.172): under `emitDeclarationOnly` xtsc reports NO diagnostics at all** (tsgo checks fully).
+
 **(P18.199) — (CHK.170): `a ?? b` TYPES AS THE LEFT TYPE WHEN THE LEFT CANNOT BE NULLISH; +0 EVERYWHERE, 20,780 / 0 / 44 (2026-09-24).**
 `x ?? y` with a non-nullable `x` was typed `X | Y`, producing false positives (3 in the census cell, and the one row
 blocking (CHK.169)). A type-facts test mirroring tsgo's `EQUndefinedOrNull` (a type parameter answers through its
@@ -120,11 +128,4 @@ After `if (x) return`, `x: boolean | string` now reads `string | false` as in ts
 elaborated member by member); a rejoin at flow joins where the declared type holds `boolean` fixes it, plus one
 pre-existing case. Declaration matrix 25 -> 0 differing; 5 pins, five arms RED. Screen 0; grid 8x0 (full output
 byte-identical); cost_gate PASS; huge_methods 0.
-
-**(P18.195) — (CHK.166)(a) STEP 1: VALUE-AWARE ENUM TRUTHINESS — AN ENUM IS NO LONGER WASHED TO `never`; 193 -> 639 OF 660 CELLS, BYTE-IDENTICAL ON EVERY INSTRUMENT, 20,751 / 0 / 44 (2026-09-24).**
-Every enum type counted as definitely truthy, so `if (!k)` washed `k` to `never` and silenced real errors, while the
-truthy branch kept `K.Zero`. `EnumSemantics.enumTruthiness` now classifies by member value (0/NaN/"" falsy, opaque
-either) and `narrowByTruthiness` decomposes a whole enum only when a branch removes a proper subset. Exactly the
-census's prediction; two false positives on legal code closed; the naive shape (98 FPs) pinned out. 9 pins, five arms
-RED. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0.
 

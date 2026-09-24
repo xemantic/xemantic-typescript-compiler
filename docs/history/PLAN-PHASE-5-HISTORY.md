@@ -1,5 +1,50 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.190) — (CHK.158): a type guard reached through a VALUE narrows — the predicate is read from the callee's signature; `rxjs` 3 -> 2 (2026-09-24)
+
+Orchestrated: one implementation subagent, with the (CHK.164) census folding into its item beside it.
+**The census's control was blind**: `c5` (`const r: number[] = x` after the guard) "worked" only because no
+reader reports `number[] | string` -> `number[]` at all — and that turned out to be a much larger defect,
+re-probed by the orchestrator on the landed binary and filed as (CHK.167). `Array.isArray(x)` works through a
+hard-coded round-459 special case, not the predicate. "Read the predicate from the signature" alone was not
+enough: a destructured function member types `any` at the value readers (round 464b refuses function
+members) and a body-local `const g = isNum` is unbound; both needed handling. And an OVERLOADED guard was
+wrong on the DIRECT call too (the flow resolver and B378's `resolveUserTypeGuardNarrowing` both took the first
+predicate-bearing overload — a false positive and a missing row).
+
+**The change (`Checker.kt` +100/−4, flow-only — it can only narrow)**: `narrowByCallPredicateWorker` falls back
+to `predicateDeclFromCalleeSignature` when the resolved declaration is not function-like or is a body-less
+overload: the callee's call signatures, one used directly, several resolved with
+`resolveCallOverload(strictSelect = true)` if any carries a predicate (tsgo `getEffectsSignature`, flow.go
+~2026; a resolved overload without a predicate narrows nothing). When the callee types `any` the type comes
+from the declaration (`destructuredCalleeType` reusing `bindingElementType` minus the function-member refusal;
+a variable's annotation or initializer; a body local through the owning file's lexical scope tables). The
+predicate triple gains a `FunctionType` arm (guard-typed annotations and aliases); B378 resolves an overload
+set the same way.
+
+**Matrix**: guard aliases / annotated / alias type / object property / parameter / else branch 8 rows off ->
+exact; destructured 4 -> exact; body-local at 9 readers 12 -> exact; overloads 4 -> exact; the rxjs reducer's
+c2/c3/c9/c10 fixed. Residues, pre-existing: `asserts x is T` through an annotated variable/parameter/property
+(the gate `flowCalleeMayHaveAssertEffects` reads declarations only and runs on every flow call — left alone
+for cost; TS2775 for an un-annotated assertion alias is never emitted); a generic guard whose type parameter
+is inferred from another argument; a `this is T` method on a union declaring it per member
+(`typePredicatesInUnion3`); a destructured function member / body-local function alias still `any` at the
+VALUE readers (the fix is flow-only).
+
+**Pins**: `GuardThroughValueNarrowingTest`, 19 tests (2 controls), probes print the narrowed type. Ablation,
+eight arms, all RED (signature fallback 16; overload trigger 2; binding-element type 4; body-local lookup 3;
+`FunctionType` arm 3; B378 overload arm 2; predicate-only overload answer 1; variable-declaration type 2).
+
+**Gates**: full suite **20,650 / 0 / 44** (+19); corpus screen 0 of 8,725; huge_methods 0; grid 8x
+`added=0 removed=0`; no `w:`. **cost_gate passed with one marker, rebaselined in this commit**:
+`typeNode.bypassed` 154,638 -> 151,499 (−2.03% against the recorded baseline, −0.49% of it from (P18.189) and
+−1.55% from this round — a DECREASE), `typeOfExpr.calls` +0.70% (the signature fallback typing callees), all
+else within ±0.25%, output 46 = 46. **`rxjs` 3 -> 2** (`argsArgArrayOrObject.ts:14`; left: `race.ts:52`,
+`groupBy.ts:147`, both (CHK.159)); `marked` 0.
+
+**Successor**: (CHK.167) — promoted to the top of the queue as the largest false-negative class found this
+session; census first.
+
 ### Round (P18.189) — (CHK.157): the ELSE branch of an `if` narrows at the assignment and return readers — in the spine AND both legacy walks; `rxjs` 4 -> 3, 12 -> 45 agreeing rows (2026-09-23)
 
 Orchestrated: one implementation subagent, plus the (CHK.159) census landing into its item and a (CHK.164)
