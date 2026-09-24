@@ -1,5 +1,42 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.188) — (CHK.156): equality and `switch` narrowing split `boolean` into `true | false`; `rxjs` 5 -> 4 (2026-09-23)
+
+Orchestrated: one implementation subagent, plus a parallel read-only census of (CHK.159) (running at commit).
+**The item named one site; there were three**: `narrowUnionByLiteral`'s UNION branch (the census's),
+its NON-union branch (a bare `boolean` subject never split), `narrowBySwitchClause`'s default arm (never
+subtracted `case true`/`case false`), and the call-argument reader's M3.4 narrowing arm, which never admitted
+a bare `boolean` parameter — so `pt(on)` after `on === true` printed `'boolean'` where tsgo prints `'false'`,
+and an EXHAUSTED `boolean` passed to a `number` parameter was an ours-only false positive. Our `boolean` stays
+one intrinsic (tsgo's is `false | true`, checker.go ~1002); the helpers subtract a half without changing how
+a plain `boolean` displays. **Display did not move anywhere**: our stable ordering already prints tsgo's
+`string | false` / `false | (() => void)`, and a lone narrowed `false` still generalizes to `'boolean'` at a
+primitive target, as tsgo's does.
+
+**The change (`Checker.kt` +52/−2)**: `booleanMinusLiteral(s)` used by both `narrowUnionByLiteral` branches
+(tsgo `narrowTypeByEquality`, flow.go ~594: the negative branch filters unit types comparable to the value;
+`==`/`===` alike) and by `narrowBySwitchClause`'s default arm (a `boolean` member and a bare subject); the
+argument reader admits `ctxApplied === booleanType` to M3.4 and accepts a proven `never` for it as for enums.
+**`checkArgumentsAgainstSignatureCore` is now 7,629 of 8,000 bytecodes — 371 of headroom on a hot method**;
+the next round that grows it must split it.
+
+**Matrix, 18 cells**: `share2` (rxjs) 1 -> 0 differing rows, `s4b/c/d` 2 -> 0 each, `ops` (`=== !== == !=`)
+8 -> 0, `sw` 4 -> 0, `disp` 4 -> 0, `bare` 1 -> 0, `argb` 8 -> 0, `nev` 11 -> 2; controls held (`s4a`, `s4e`,
+a boolean DISCRIMINANT, `o.flag === false`, exhaustive). Residues filed as (CHK.164): truthiness narrowing
+(`narrowByTruthiness`) does not split `boolean` (`truth`: tsgo `string | false`, ours `string | boolean`), and
+an optional `on?: boolean` displays without `| undefined` (`undef`, pre-existing, not narrowing).
+
+**Pins**: `BooleanLiteralEqualityNarrowingTest`, 14 tests, tsgo text. Ablation, seven arms, all RED: union
+branch 7; non-union branch 3; switch member arm 1; switch bare arm 1; argument admission 3; argument `never`
+1; wrong literal removed 8. Restored md5 `99709138`.
+
+**Gates**: full suite **20,611 / 0 / 44** (+14); corpus screen 0 of 8,725, and `--include .` over all 41
+pending rows byte-identical on both arms; cost_gate PASS (identical); huge_methods 0; grid 8x
+`added=0 removed=0`; warning gate proved live by the agent's injected probe. **`rxjs` 5 -> 4**
+(`share.ts:266` TS2349); `marked` 0; tsc-project and harness identical.
+
+**Successor**: (CHK.157) (else-branch narrowing at the legacy assignment reader, rxjs `Subscriber:220`).
+
 ### Round (P18.187) — (CHK.155): a captured read of an outer variable follows tsgo's `isOuterVariable && !isNeverInitialized`; `rxjs` 6 -> 5, 16 -> 24 of 26 cells (2026-09-23)
 
 Orchestrated: one implementation subagent, plus the (CHK.160) read-only census finishing beside it

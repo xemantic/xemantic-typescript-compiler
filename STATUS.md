@@ -1,7 +1,9 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **201,126** lines (**+26 at (P18.197)**, instantiated member reads in the intersection relation and
+extraction):** `Checker.kt` **201,278** lines (**+152 at (P18.198)**, a narrowed-receiver re-read, a union-parameter admission and
+its chain — net of a verbatim split taking `checkArgumentsAgainstSignatureCore` 7,629 -> 4,297 bytecodes; **+26 at
+(P18.197)**, instantiated member reads in the intersection relation and
 its elaboration — a SEMANTIC parity change removing a FALSE-POSITIVE class; **+42 at (P18.196)**, the `boolean` truthiness split and the join-time rejoin —
 a SEMANTIC parity change; **+27 at (P18.195)**, the enum truthiness arms and the proper-subset split — the
 value-aware classifier lives in `EnumSemantics.kt` 1,138 -> 1,234; a SEMANTIC parity change closing a false-NEGATIVE
@@ -89,6 +91,14 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.198) — (CHK.152) STEP 3: A NARROWED-RECEIVER SECOND CHANCE AT THE ARGUMENT READER, THEN UNION / NULLABLE PARAMETERS; +0 EVERYWHERE, 20,772 / 0 / 44 (2026-09-24).**
+A named-object argument against a UNION parameter was never related. After a verbatim split of the argument checker
+(7,629 -> 4,297 bytecodes), a failing relation now re-reads a guard-narrowed receiver's member (never a replacement),
+and union/nullable parameters are admitted with tsgo's chain order. Matrix agree 11 -> 20, no new false positive; 9
+pins. Screen 0; grid 8x0 byte-identical; cost_gate PASS; huge_methods 0. Two censuses landed beside it: rxjs's last row
+needs five fixes (filed in (CHK.161)), and **(CHK.169) — `this` is untyped at the argument reader inside every
+module-file class** — is specified to land at +0 after a small `??` fix ((CHK.170)).
+
 **(P18.197) — (CHK.162): AN INTERSECTION SOURCE RELATES TO A GENERIC TARGET THROUGH INSTANTIATED MEMBER TYPES; 25 OF 25 CELLS MATCH tsgo, 20,763 / 0 / 44 (2026-09-24).**
 `VD & { initializer: Call }` against `VDI<Call>` reported a false TS2741 because the intersection relation read a
 generic target's members raw (`T` as errorType), and the elaboration named a member another constituent supplies.
@@ -116,12 +126,4 @@ parameters were out of scope. The scoped walker now routes the body through the 
 width as parameters; the spine check deleted). Getting harness to +0 fixed two pre-existing false-positive shapes
 (qualified `keyof typeof`, async ternaries related to `Promise<T>`). 20 pins, eight arms RED. Screen 0; grid 8x0;
 cost_gate PASS; huge_methods 0; spine audit clean. Class-property/`static`/default-export arrows are round 2.
-
-**(P18.193) — (CHK.159) STEP 2: THE CONTEXTUAL-RETURN FALLBACK FOR A CALL'S RESULT TYPE; `rxjs` READS 0 OURS-ONLY ROWS FOR THE FIRST TIME, 20,722 / 0 / 44 (2026-09-24).**
-Type parameters left open by argument inference are now filled from the call's contextual type (argument first, as
-tsgo's priority rule), all-or-nothing and constraint-checked. The census's "optional" cost safeguard proved mandatory:
-without refusing pulls through a call/`new` parent `typeNode.bypassed` read +36.6%; with it +0.14% and identical
-results. Matrix 11 -> 25 of 44; 26 pins. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0. **`rxjs` 7.8.2: 29 ours-only
-rows at (P18.173) -> 0 today, in 14 rounds** — tsgo's single row (`WebSocketSubject.ts:304`) is the one we still MISS
-((CHK.161)(c)). A parallel census specified (CHK.166)(a), the enum `never` wash (193 -> 639 of 660 cells, +0 rows).
 

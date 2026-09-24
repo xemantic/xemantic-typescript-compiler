@@ -1,5 +1,13 @@
 
 
+**(P18.193) — (CHK.159) STEP 2: THE CONTEXTUAL-RETURN FALLBACK FOR A CALL'S RESULT TYPE; `rxjs` READS 0 OURS-ONLY ROWS FOR THE FIRST TIME, 20,722 / 0 / 44 (2026-09-24).**
+Type parameters left open by argument inference are now filled from the call's contextual type (argument first, as
+tsgo's priority rule), all-or-nothing and constraint-checked. The census's "optional" cost safeguard proved mandatory:
+without refusing pulls through a call/`new` parent `typeNode.bypassed` read +36.6%; with it +0.14% and identical
+results. Matrix 11 -> 25 of 44; 26 pins. Screen 0; grid 8x0; cost_gate PASS; huge_methods 0. **`rxjs` 7.8.2: 29 ours-only
+rows at (P18.173) -> 0 today, in 14 rounds** — tsgo's single row (`WebSocketSubject.ts:304`) is the one we still MISS
+((CHK.161)(c)). A parallel census specified (CHK.166)(a), the enum `never` wash (193 -> 639 of 660 cells, +0 rows).
+
 **(P18.192) — (CHK.167) ROUND 1: A NON-NULLISH UNION SOURCE IS RELATED TO AN OBJECT-FAMILY TARGET; 100 MISSING ROWS NOW REPORT, +0 ON EVERY PROFILE AND LIBRARY, 20,696 / 0 / 44 (2026-09-24).**
 `const r: number[] = x` with `x: number[] | string` (and `K | number` -> `K`) was SILENT because `canUseTypeEngine`
 refused every union source against an object target. A per-member lift now admits it at the declaration,

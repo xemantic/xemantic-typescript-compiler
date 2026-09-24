@@ -25,6 +25,44 @@ it is the live Phase 18 queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+### Round (P18.198) — (CHK.152) step 3: a narrowed-receiver second chance at the argument reader, then UNION / nullable parameters admitted; harness +0, all 8 profiles byte-identical (2026-09-24)
+
+Orchestrated: one implementation subagent, with two read-only censuses finishing beside it — rxjs's last missed row
+((CHK.161)(c): FIVE fixes, not two) and (CHK.169) (module-class `this`; both recorded in their items, with (CHK.170)
+and (CHK.171) split out). **Split first, verbatim**: `caasArgTypeFor` and `caasEmitArgRelationError` out of
+`checkArgumentsAgainstSignatureCore` (**7,629 -> 4,297 bytecodes**; 184 at-risk classes green on the split alone).
+**Round A alone was NOT enough for harness**: `utilities.ts:1366` came back as `ImportDeclaration | JSDocImportTag |
+Node` — earlier guards on `parent` reset `parent.parent` through the path walk's prefix arm to the guard target's
+declared `parent` (`Node`), so the join was WIDER than the re-read, where tsgo resets to the re-read; a path-narrowing
+answer is now kept only if it is assignable to the re-read. `argMemberRereadFromNarrowedReceiver` runs ONLY after the
+relation failed (builds on round 784's `propertyTypeFromNarrowedReceiver`, applies the member's path narrowing, refuses
+`never`/`any`/error and any non-refinement; legal if it relates, else it names the message — tsgo narrows the receiver
+then the member path, checker.go ~11361). `isNamedObjectForArgCheck(…, allowUnion)` admits a union of named objects,
+optionally nullish, on the PARAMETER side only (union arguments stay step 4). **The step-1 chain helper is wrong for a
+union parameter**: tsgo strips null/undefined, drills into the best constituent and reports a missing member before a
+member-type mismatch (a lone missing member becomes a bare TS2741) — `argNamedVsUnionParamChain` does that at the
+argument position (the declaration position has the same order divergence, untouched).
+
+**Matrix, 19 files**: agree 11 -> **20**, missing 28 -> 16, text-diff 17 -> 8, head-only-chain 11 -> 23 (former
+text-diffs whose head is now right); ours-only 4 -> 4, the SAME four pre-existing FPs. Both census harness shapes are
+silent as in tsgo; unguarded and nullable cases agree exactly.
+
+**Pins**: `NarrowedReceiverArgumentTest`, 9 tests. Ablation: replacement instead of second chance 1 RED; no member path
+narrowing 1; union params without Round A 4; no union chain 2; path-narrowing refinement guard 1; union params refused
+2; re-read not used in the message 1; member type before missing member 2; `never`/`any` refusal **0** and re-read
+refinement guard **0** — redundant (the helper and the relation already cover them), recorded. `ArgKindCensusTest`
+gained a union-parameter call; `NamedObjectArgumentAssignabilityTest`'s "union parameter stays outside the gate"
+control is renamed — the parameter is now INSIDE the gate and kept silent by Round A.
+
+**Gates**: full suite **20,772 / 0 / 44** (+9); corpus screen 0 of 8,725; cost_gate PASS; huge_methods 0; grid 8x
+`added=0 removed=0` (harness the gate) with full text byte-identical; warning gate proved live. rxjs 0, marked 0,
+cronstrue 1. Residues: step 4 (union arguments — also where an `if`-block argument arrives already narrowed to a union);
+Round B (declaration / object-literal / assignment / return readers, `instanceof`/`asserts` prefix arms); union
+parameters with primitive or array members; chain-order divergences; four pre-existing FPs (`k1` exhaustive negated
+guards, `w1`/`x1` non-subtype guard targets, `probe3` g3 object-literal reader).
+
+**Successor**: (CHK.170) (`??` typing), then (CHK.169) — the module-class `this` false-negative class.
+
 ### Round (P18.197) — (CHK.162): an intersection source relates to a generic target through the INSTANTIATED member types; 14 -> 0 cells off tsgo (2026-09-24)
 
 Orchestrated: one implementation subagent. **The item's axis was wrong**: the union target is not the cause — it
@@ -400,43 +438,6 @@ within ±0.24%); huge_methods 0; spine closure audit clean; grid 8x `added=0 rem
 **`rxjs` 4 -> 3** (`Subscriber.ts:220`); `marked` 0.
 
 **Successor**: (CHK.158) (a type-guard predicate reached through a variable; rxjs `argsArgArrayOrObject:14`).
-
-### Round (P18.188) — (CHK.156): equality and `switch` narrowing split `boolean` into `true | false`; `rxjs` 5 -> 4 (2026-09-23)
-
-Orchestrated: one implementation subagent, plus a parallel read-only census of (CHK.159) (running at commit).
-**The item named one site; there were three**: `narrowUnionByLiteral`'s UNION branch (the census's),
-its NON-union branch (a bare `boolean` subject never split), `narrowBySwitchClause`'s default arm (never
-subtracted `case true`/`case false`), and the call-argument reader's M3.4 narrowing arm, which never admitted
-a bare `boolean` parameter — so `pt(on)` after `on === true` printed `'boolean'` where tsgo prints `'false'`,
-and an EXHAUSTED `boolean` passed to a `number` parameter was an ours-only false positive. Our `boolean` stays
-one intrinsic (tsgo's is `false | true`, checker.go ~1002); the helpers subtract a half without changing how
-a plain `boolean` displays. **Display did not move anywhere**: our stable ordering already prints tsgo's
-`string | false` / `false | (() => void)`, and a lone narrowed `false` still generalizes to `'boolean'` at a
-primitive target, as tsgo's does.
-
-**The change (`Checker.kt` +52/−2)**: `booleanMinusLiteral(s)` used by both `narrowUnionByLiteral` branches
-(tsgo `narrowTypeByEquality`, flow.go ~594: the negative branch filters unit types comparable to the value;
-`==`/`===` alike) and by `narrowBySwitchClause`'s default arm (a `boolean` member and a bare subject); the
-argument reader admits `ctxApplied === booleanType` to M3.4 and accepts a proven `never` for it as for enums.
-**`checkArgumentsAgainstSignatureCore` is now 7,629 of 8,000 bytecodes — 371 of headroom on a hot method**;
-the next round that grows it must split it.
-
-**Matrix, 18 cells**: `share2` (rxjs) 1 -> 0 differing rows, `s4b/c/d` 2 -> 0 each, `ops` (`=== !== == !=`)
-8 -> 0, `sw` 4 -> 0, `disp` 4 -> 0, `bare` 1 -> 0, `argb` 8 -> 0, `nev` 11 -> 2; controls held (`s4a`, `s4e`,
-a boolean DISCRIMINANT, `o.flag === false`, exhaustive). Residues filed as (CHK.164): truthiness narrowing
-(`narrowByTruthiness`) does not split `boolean` (`truth`: tsgo `string | false`, ours `string | boolean`), and
-an optional `on?: boolean` displays without `| undefined` (`undef`, pre-existing, not narrowing).
-
-**Pins**: `BooleanLiteralEqualityNarrowingTest`, 14 tests, tsgo text. Ablation, seven arms, all RED: union
-branch 7; non-union branch 3; switch member arm 1; switch bare arm 1; argument admission 3; argument `never`
-1; wrong literal removed 8. Restored md5 `99709138`.
-
-**Gates**: full suite **20,611 / 0 / 44** (+14); corpus screen 0 of 8,725, and `--include .` over all 41
-pending rows byte-identical on both arms; cost_gate PASS (identical); huge_methods 0; grid 8x
-`added=0 removed=0`; warning gate proved live by the agent's injected probe. **`rxjs` 5 -> 4**
-(`share.ts:266` TS2349); `marked` 0; tsc-project and harness identical.
-
-**Successor**: (CHK.157) (else-branch narrowing at the legacy assignment reader, rxjs `Subscriber:220`).
 
 ## QUEUE
 
@@ -1083,6 +1084,56 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   risk (CHK.63) recorded: a union source that is NARROWED at the site must not be reported by its declared
   type). Direction: ADDS rows; every added row must be a tsgo row, and the grid is likely a REAL gate.
 
+- [ ] **(CHK.170) `a ?? b` IS TYPED AS THE UNION WITH THE RIGHT SIDE EVEN WHEN THE LEFT CANNOT BE NULLISH — tsgo types
+  it as the LEFT type (checker.go ~12484); ours unions in `b` (`combineBinaryTypes` ~135345). Ours-only rows today on
+  parameters (cell `build/scratch-p18198-census/cells/x05`, 3 rows), and it is the one row blocking (CHK.169) at +0
+  (`session.ts:2158` on harness/server). Fix: under `strictNullChecks`, when no member of the left type is null /
+  undefined / void / any / unknown / a type parameter, answer the left type. Predicted: removes x05's FPs, 0 elsewhere
+  (not yet run alone). Small; land it immediately before (CHK.169).
+
+- [ ] **(CHK.171) A CLASS / FUNCTION TYPE-PARAMETER SCOPE IS LOST AT THE TOP OF A CONSTRUCTOR AND INSIDE ANY NESTED
+  BLOCK / `if` / `for` / `try` AT THE DECLARATION READER — `this.v: T[]` and `const y: T[] = v` inside an `if` read
+  `any[]`, which relates to almost everything and SILENTLY HIDES ERRORS (the broadened (CHK.161)(a); found by the
+  (CHK.169) census, cells `build/scratch-p18198-census/cells/x01,x02,x08,x10,x11`; SCRIPT files too).** Likely cause
+  (read, not proven): the constructor/setter seed branch (~3737) resolves parameter types with no class TP scope and
+  never sets `fnTpScope`; block and switch-clause frames (~4071, ~4110) do not copy `fnTpScope`/`fnTpDecls`, so the
+  install (~3341) falls back to the resting scope. Independent of (CHK.169) as long as that ships WITH the base lookup.
+  ADDS rows — census first.
+
+- [ ] **(CHK.169) CENSUSED 2026-09-24 (read-only, frozen (P18.197) classes, `build/scratch-p18198-census/`, README.txt,
+  `matrix-summary.txt`, 94 cells, `rxmin/`) — LANDS AT +0 ON EVERY INSTRUMENT, BUT ONLY AS A COMBINED FIX.** Class
+  lookup: `ccetEnterClassDeclaration` (~1835) is `globals[name] ?: <namespace exports>` — a module class is never in
+  `globals`, so `classSym` is null: `this` untyped in methods and the class TPs out of scope; worse, `export class Map`
+  gets the LIB `Map` (m29/m30). Base lookup: ~1860 `baseSym = globals[baseName]` — `super(...)` / `super.m(...)`
+  arguments unchecked for a module or imported base (m21/m22). The legacy mirror `checkCallTypesInStatement`
+  (~161024/~161053, the declarationOnly path) has both. **Fix**: class = the `globals` answer only if it DECLARES
+  `node`, else `nodeSymbolOf(node)` (declaration-checked), else namespace exports; base = `lookupPerFileForNode`.
+  **The base lookup is MANDATORY** — the class lookup alone gives an rxjs FP (`AsyncAction.ts:119` TS2684; reduced in
+  `rxmin/`, a `super.schedule` subclass). Matrix: 37 missed module cells before; class lookup closes 20, class TPs 4,
+  base 2 — **26 closed, 0 ours-only**; optional constructor-frame `this` closes m07/s07. Population: class+base+ctor
+  arm **harness +1, server +1** — both `session.ts:2158` `args.file ?? args.projectFileName`, a PRE-EXISTING `??`
+  bug the fix exposes (filed (CHK.170)); with the `??` fix **0 everywhere, corpus 0 of 3,079**. The fix picks a
+  different class symbol 7-91x per profile, so the grid is a REAL gate. B83.5 nested classes stay out (no binder
+  symbol; missing in script files too). **ROUNDS**: (A) (CHK.170); (B) this item in BOTH readers, pins: module/script
+  pairs, m29 lib shadow, the rxmin `super.schedule` guard, negative control m28, two-file same-name m31; ablations:
+  no base lookup (rxmin red), globals answer kept when it does not own the node (m29 red). **Other globals-only
+  class sites missing module classes** (separate): TS2348 calling a class without `new` (`ccetNoCallSignatureDiagnostics`
+  ~163712, y01); TS2339/TS2551 on `this.x` with a module base (`lookupInstanceMemberInResolvableChain`,
+  `emitClassChainTs2551Suggestion` ~160358, y04/y08); `this` in getters / setters / arrow properties / property
+  initializers / static blocks and class expressions (missing in SCRIPT files too). EARLIER: INSIDE A CLASS DECLARED IN A *MODULE* FILE, `this` IS UNTYPED AT THE ARGUMENT READER — `pn(this.s)`
+  WITH A WRONGLY-TYPED MEMBER IS SILENT (found as B6 by the (CHK.161)(c) census; re-probed 2026-09-24 by the
+  orchestrator, `build/scratch-orch-b6`).** tsgo 1 / ours 0 for `export class C { s = "x"; m() { pn(this.s); } }`
+  (and a generic class's `this.v`); the SAME class in a SCRIPT file reports, and a declaration
+  `const n: number = this.s` reports. Cause per the census: `ccetEnterClassDeclaration` (~1835) looks the class up
+  only in `globals`, and INV.3(d) keeps a module file's locals out of `globals`, so `this` and the class's type
+  parameters are untyped inside every module-file class at the ccet (argument) reader. **Nearly every real project
+  is ES modules, so this silences argument checks on `this`-members in essentially all class code** — one of the
+  most visible false negatives found. Fix: resolve the class through the file's own locals (the per-file view).
+  **Prerequisite measured**: B6 exposes (CHK.161)(a) (a class type parameter in a CONSTRUCTOR parameter types as
+  `any` — `AsyncAction.ts:119` TS2684 on rxjs), so land or guard that first. Direction: ADDS rows; census first
+  (JDI arm on the 8 profiles, rxjs, marked, cronstrue, corpus — `build/scratch-p18194-census/jdi/Arms.java` has a
+  B6 arm to start from); expect the grid to be a REAL gate (tsc's sources are modules full of classes).
+
 - [ ] **(CHK.168) ROUND 1 LANDED 2026-09-24 ((P18.194) note; 28 cells, 0 FPs, +0 everywhere). OPEN: round 2
   (class-property / `static` / default-export arrow initializers — walked by nothing, block bodies too) and
   round 3 (display). EARLIER: CENSUSED 2026-09-24 (read-only, frozen (P18.190) classes, `build/scratch-p18191-census2/`,
@@ -1120,7 +1171,7 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   of expression-bodied arrows, so the grid will be a REAL gate: every added row must be a tsgo row, and the
   (CHK.167)/(CHK.64) narrowing-gap classes will surface as FPs through it).
 
-- [ ] **(CHK.152) STEP 1 LANDED 2026-09-23 ((P18.183) note) — named object vs named object is related at
+- [ ] **(CHK.152) STEP 3 LANDED 2026-09-24 ((P18.198) note: narrowed-receiver second chance + union/nullable parameters, +0 everywhere). OPEN: step 2 (rest element), step 4 (union arguments — (CHK.161)(c)'s U4 arm is the measured shape), Round B. STEP 1 LANDED 2026-09-23 ((P18.183) note) — named object vs named object is related at
   an argument, with the declaration's chain; +0 rows on every profile and library, exactly as the census
   predicted. OPEN: steps 2 (rest element), 3 (union/nullable parameters — first needs member reads off a
   NARROWED receiver typed by the narrowing, which is what makes admitting union parameters add 3 harness
@@ -1350,7 +1401,41 @@ positive and fix a display. Both are worth doing; the FP removal is the one on t
   scope WITHOUT this produces broad false positives from raw `T`). Related displays in `grp6`/`grp7`: an
   object alias instantiated but printed expanded, and a literal kept where tsgo widens.
 
-- [ ] **(CHK.161) SMALL UNFILED FINDINGS FROM THE rxjs CENSUS (2026-09-23), each needing its own
+- [ ] **(CHK.161)(c) CENSUSED 2026-09-24 — THE LAST rxjs ROW NEEDS *FIVE* FIXES, NOT TWO, AND TWO OF THE NEW ONES
+  ARE BROAD FALSE-NEGATIVE CLASSES (read-only, frozen (P18.193) classes, `build/scratch-p18194-census/`, README.txt,
+  `jdi/Arms.java` one arm per candidate, `pop/`, `corpus/`, `cells/`; `rxc/` is a PROBED copy — never a baseline).**
+  tsgo's row: `WebSocketSubject.ts(304,28) TS2345 Argument of type 'WebSocketMessage' is not assignable to
+  parameter of type 'string | Blob | BufferSource'` with a 7-line chain ending in `'"SharedArrayBuffer"' is not
+  assignable to type '"ArrayBuffer"'`. **ROUND 1 (+0 everywhere, corpus 0 — arm G)**: **F** — a bare generic whose
+  parameters are ALL defaulted stays a raw `Type.Interface` (defaults filled only at the relation boundary,
+  round 754, `Relater.kt` ~373) and the round-591 arm of `typeContainsForeignTypeParam` (~107953) reads it as
+  un-inferred and suppresses: exempt an interface whose every TP has a resolved default — closes 17 of 25 missed
+  rows in 33 cells (property, array, nested generic, return, assignment, generic class — not only unions), fires
+  10-28x per profile, the feared `Uint8Array`-default flood did NOT appear; plus **U4** — union argument vs union
+  parameter in `caasNonSimpleParamChecks` (~170784) admitted when `canUseTypeEngine` agrees, with step 1's guards,
+  a narrowing second chance, and a REFUSAL for an argument with a null/undefined member (without it harness +2
+  FPs: `checker.ts:52723`, `vfsUtil.ts:1033`); closes c06/c14-16/c29/c33/c34 and r3-r9. Negative controls
+  c09/c12/c26. (Adding step 3's named-arg-vs-union-param brings back the 3 harness FPs — see (CHK.152).) **The rxjs
+  row still does NOT appear after round 1** — `serializer!(x!)` is `any` at the argument reader because of:
+  **B6** — `ccetEnterClassDeclaration` (~1835) looks a class up only in `globals`, and a MODULE-FILE class is never
+  there, so `this` and the class's type parameters are untyped inside it at the argument reader — **every class in
+  rxjs, and every class in any ES-module project** (cells b5 vs b1); **R4** — `ccetApplyDeclRecordings` (~2063)
+  drops destructured FUNCTION members (`refuseFnMembers = true`), so `const { serializer } = this._config` is
+  `any`; **R3** — the same function records an annotated body-local only for primitives / literal unions /
+  callables, so `let socket: WebSocket | null` is `any` — broad: in `r4n` 4 of 6 annotated body-local arguments are
+  missed (`string | boolean`, `A`, `string | A`, inferred); **Q** — `TypeInterner.reference` leaves trailing type
+  arguments UNFILLED (`E<number>` vs `E<P, Q = string>`, c21; needed because R4 exposes `timeout.ts:347` otherwise).
+  With F+U4+R4+B6+a narrowed R3 (arm S) the target row appears at 304:28 plus 4 rxjs FPs (TS2351 on
+  `new WebSocketCtor!(…)` x2 — a construct-through-`!` gap; `timeout.ts:347` — Q removes it; `AsyncAction.ts:119`
+  TS2684 — B6 exposes (a) below) and +3-5 profile FPs from the narrowed R3 (body-local `X | undefined` read without
+  `??=` / assignment-in-condition / closure narrowing: `checker.ts:15788`, `:40762`, `classFields.ts:2055`,
+  `session.ts:2158`, `textChanges.ts:1122`); broad R3 costs corpus 2 and +7/+8. **ORDER**: (1) F + U4; (2) Q;
+  (3) B6, after (a); (4) R4 + R3, after a construct-through-`!` fix and narrowed body-local nullish reads ((CHK.64)
+  / (CHK.167) family) — this round produces the row. **Even then the TEXT differs**: we print
+  `'string | ArrayBuffer | ArrayBufferView<ArrayBufferLike> | Blob'` for tsgo's `'WebSocketMessage'` (a union alias
+  with primitive members is never displayed — the union-alias identity limitation, c36/c37) and a 2-line chain vs
+  7. Side finding B5: `this._config = {...DEFAULT}` in a constructor leaks into other methods (`<any>` where tsgo
+  says `<T>`, b3). ORIGINAL: SMALL UNFILED FINDINGS FROM THE rxjs CENSUS (2026-09-23), each needing its own
   measurement.** (a) a class type parameter in a CONSTRUCTOR parameter types as `any`
   (`constructor(o: Partial<Obs<T>>)` shows `Partial<Obs<any>>`; the same in a method shows `T`;
   `build/scratch-p18183-census/cells/sub10`) — may hide errors; (b) a function assigned to an all-optional (weak) interface is silent
