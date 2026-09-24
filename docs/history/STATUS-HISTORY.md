@@ -1,5 +1,13 @@
 
 
+**(P18.187) — (CHK.155): A CAPTURED READ OF AN OUTER VARIABLE FOLLOWS tsgo's `isOuterVariable && !isNeverInitialized`; `rxjs` 6 -> 5, 20,597 / 0 / 44 (2026-09-23).**
+An expression-bodied arrow's read subtracted only names assigned inside that same arrow, so an assignment in a SIBLING
+closure was invisible and TS2454 fired in every unchecked body and at file level. The walks now install tsgo's
+function-wide definitely-assigned set. 26-cell matrix 16 -> 24 agree, all must-still-report controls held; 11 pins,
+four arms RED. Screen 0; cost_gate identical; grid 8x0; huge_methods 0. **`rxjs` 6 -> 5.** The parallel (CHK.160) census
+found the `instantiateType` function-shape skip was never a measured guard and specified a return-slot first step
+(+0 predicted on all profiles, 11 matrix cells fixed, one false positive removed).
+
 **(P18.186) — (CHK.154)(b): A CLASS WITH ITS OWN CONSTRUCTOR HAS ONLY ITS OWN CONSTRUCT SIGNATURES; THE FIX EXPOSED AN rxjs OOM AND TWO RELATION DEFECTS, ALL CLOSED, 20,586 / 0 / 44 (2026-09-23).**
 `new Sub("x")` against `constructor(o?: number)` was ACCEPTED because the base constructor rode along. Fixing that at
 the source made `SafeSubscriber<T>` stop relating to `Subscriber<T>` (construct signatures were only skipped for

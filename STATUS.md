@@ -1,7 +1,8 @@
 # Status
 
 **Inversion shrinkage dashboard ((INV.0) owner metric, 2026-09-02 — update on every core
-extraction):** `Checker.kt` **200,631** lines (**+338 at (P18.191)**, an argument-inference leg for a call's result type with
+extraction):** `Checker.kt` **200,788** lines (**+157 at (P18.192)**, a union-source relation lift at three readers plus three
+narrowing fixes it depended on — a SEMANTIC parity change closing a false-NEGATIVE class; **+338 at (P18.191)**, an argument-inference leg for a call's result type with
 its safeguards, array element pairing, a `NonNullable` union reduction and an alias-display guard — a SEMANTIC
 parity change, `rxjs` 2 -> 1; **+94 at (P18.190)**, the callee-signature predicate fallback and its
 declaration-typing helpers — a SEMANTIC parity change, `rxjs` 3 -> 2; **+157 at (P18.189)**, else-branch narrowing at the spine and both legacy
@@ -81,6 +82,15 @@ declarations) — and turned the arc toward Stage 3. Reference points: tsc ≈ 5
 tsgo 60,479 across 25 files. Contract: `docs/INVERSION-DESIGN.md` § 10; ledger:
 `docs/inversion-ambient-ledger.md`.
 
+**(P18.192) — (CHK.167) ROUND 1: A NON-NULLISH UNION SOURCE IS RELATED TO AN OBJECT-FAMILY TARGET; 100 MISSING ROWS NOW REPORT, +0 ON EVERY PROFILE AND LIBRARY, 20,696 / 0 / 44 (2026-09-24).**
+`const r: number[] = x` with `x: number[] | string` (and `K | number` -> `K`) was SILENT because `canUseTypeEngine`
+refused every union source against an object target. A per-member lift now admits it at the declaration,
+assignment and property-assignment readers for identifier/property-access sources with no nullish member — with
+three narrowing fixes it needed (initializer narrowing, object-equality narrowing, assignment reduction), which also
+closed pre-existing false positives. 100 cells fixed, none moved away from tsgo; 31 pins, eleven arms RED; a stale
+control and a fired countdown re-pinned against tsgo. Screen 0; grid 8x0 (a real gate); cost_gate PASS; huge_methods 0.
+Return/argument readers and nullish unions are rounds 2 and 3. (CHK.159) step 2 is specified: rxjs to 0 ours-only.
+
 **(P18.191) — (CHK.159) STEP 1: AN ARGUMENT-INFERENCE LEG FOR A CALL'S RESULT TYPE; `rxjs` 2 -> 1, PROFILES +0, 20,665 / 0 / 44 (2026-09-24).**
 A generic call whose legacy shape-gated inference bailed returned its RAW return type, hidden only by a name-keyed
 foreign-TP test (false positives on collision, false negatives otherwise). A new leg infers from each
@@ -115,12 +125,4 @@ helper pair now subtracts a half without changing how `boolean` displays. 18-cel
 matches tsgo; 14 pins, seven arms RED. Screen 0 (pending rows byte-identical); cost_gate identical; grid 8x0;
 huge_methods 0 — `checkArgumentsAgainstSignatureCore` at 7,629/8,000. **`rxjs` 5 -> 4.** Truthiness and the optional
 `boolean` display filed as (CHK.164). `Checker.kt` crossed 200,000 lines.
-
-**(P18.187) — (CHK.155): A CAPTURED READ OF AN OUTER VARIABLE FOLLOWS tsgo's `isOuterVariable && !isNeverInitialized`; `rxjs` 6 -> 5, 20,597 / 0 / 44 (2026-09-23).**
-An expression-bodied arrow's read subtracted only names assigned inside that same arrow, so an assignment in a SIBLING
-closure was invisible and TS2454 fired in every unchecked body and at file level. The walks now install tsgo's
-function-wide definitely-assigned set. 26-cell matrix 16 -> 24 agree, all must-still-report controls held; 11 pins,
-four arms RED. Screen 0; cost_gate identical; grid 8x0; huge_methods 0. **`rxjs` 6 -> 5.** The parallel (CHK.160) census
-found the `instantiateType` function-shape skip was never a measured guard and specified a return-slot first step
-(+0 predicted on all profiles, 11 matrix cells fixed, one false positive removed).
 

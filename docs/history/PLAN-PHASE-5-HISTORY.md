@@ -1,5 +1,62 @@
 ### Round (P18.135) — the nested-generic chain header: a correct engine rule that closed NO row, beside a pin re-transcription that closed one (2026-09-19)
 
+### Round (P18.182) — (CHK.150) rung 3 + the `Partial` leak: an overload's clear winner is ADOPTED for the argument's contextual type; `rxjs` 17 -> 10, the predicted seven rows exactly; (CHK.150) CLOSED (2026-09-23)
+
+Orchestrated: one implementation subagent plus, in parallel on frozen (P18.181) classes, a read-only
+census that fully specified (CHK.152)'s first step (see that item). **The overload half was the
+byte-parity guard, and nothing else**: `resolveCallOverload(strictSelect = true)` already filters by arity
+first as tsgo's `chooseOverload` does, and for X1 returned `sigs[0]` as a clear winner — which the call
+side then DISCARDED on `chosen !== sigs[0]` (a round-481-era "keep the legacy every-overload-callable
+heuristic byte-identical" veto) and fell into a fallback that answers only when every overload's
+parameter is function-typed. `Subscriber<T>` is not, so the context was null. The receipt that it was
+the guard: the same pair declared in the OTHER order already agreed. **The `Partial<Observer<W>>` leak was
+not in the pull either** — `instantiateMethodParamType` sent the resolved `Partial<…>` bag through plain
+`instantiateType`, which skips a function-typed union member, so `next` kept the class's raw `W`. The same
+leak hid a relation row (`{ next: (w: number) => … }` against `X<string>` is TS2322 in tsgo; now agrees).
+
+**The change (`Checker.kt` +65/−6)**: `ctxArgTypesFromSignatures` adopts ANY clear winner
+(`if (chosen != null)`), instantiated through `ctxArgTypeMapper`; the fallback now serves only calls with
+no clear winner. **The guard protected NO baseline** — `--include "" --diff 100` screens byte-identical
+before and after, pending rows included. New `instantiateMethodParamPropertyBag` + one arm in
+`instantiateMethodParamType`: a member-only anonymous object has each member instantiated through the
+method-param rule, MINTING a new object ((CHK.102)'s never-mutate rule). (P18.180)'s out-of-scope
+candidate filter is now a BACKSTOP for that shape (its count pin still passes; its old ablation arm
+would presumably read 0).
+
+**Matrices vs tsgo**: this round's 21 cells **8 -> 20** agree; the (P18.180) matrix 18 -> **21** (X1, and
+the two `Partial` leak cells); the (P18.181) matrix 15 -> **16** (d08, rxjs's own shape; the 4 left are
+(CHK.152)). Controls held: reversed arity, X4, function-only overloads, first candidate failing on
+another argument, a method with its own `<U>`, the two TS7006 cases. **Residue e17**, pre-existing and
+unpinned: `r(cb: (x: string) => string)` beside `r(cb: (x: number) => number)` called with
+`(x) => { ps(x); return 1; }` — tsgo FIXES the arrow's parameter from the first candidate and reports
+TS2769; we pick the second overload and report its body.
+
+**Pins**: `OverloadContextualArgumentTest`, 19 tests (8 controls), tsc's own `Partial` in the prelude
+(the harness lib lacks it). Ablation: guard restored 8 RED; bag arm removed 7; bag members through plain
+`instantiateType` 7 (the SAME set — one observable, round 927's pair); winner adopted with no mapper 2
+(the generic-overload pins). Restored md5 `427bcc1c`, rebuilt.
+
+**Gates**: full suite **20,527 / 0 / 44** (+19); corpus screen 0 of 8,725, the 41 pending rows
+byte-identical — **blind a third time**; huge_methods 0; grid 8x `added=0 removed=0` — and harness is
+94 -> 94 with an identical row set: its 3 TS7006 rows at `harnessGlobals.ts:23` come from an
+ASSIGNMENT (`assert.deepEqual = (a, b, msg) => …`), not an overloaded call, which the (CHK.150) census
+had mis-attributed; warning gate proved live by the agent's injected probe, 0 `w:` in the suite compile.
+**cost_gate FAILED on one counter and was rebaselined in this commit**: `typeNode.bypassed` 151,082 ->
+154,638 (**+2.35%**), with `typeOfExpr.calls` +0.31% and `narrow.memoServed` +0.35% beside it, output
+46 = 46 and `spine.nodes` identical — the accounting is that overloaded calls which used to get a NULL
+contextual type now resolve and instantiate the winner's parameter types (and the bag arm instantiates
+members): real new work, and small; not attributed arm-by-arm. **Libraries: `rxjs` 17 -> 10** — the seven
+removed rows are exactly (CHK.148)'s fingerprint `Type 'unknown' is not assignable to type 'T'`
+(`audit:82`, `pairwise:55`, `sample:54`, `single:107`, `skipLast:71/80`, `throttle:133`); `marked` 0.
+
+**What is left between rxjs and tsgo's 1 row — ten ours-only rows in separate families**: TS2683 x3
+(`range:78`, `timer:178`, `scheduleArray:22`, the `this` family), TS2322 x4 (`race:52`, `groupBy:147`,
+`argsArgArrayOrObject:14`, and `Subscriber:220` — `Partial<Observer<any>> | fn | null` against
+`Partial<Observer<any>>`, a narrowing gap), TS2769 `Observable:307`, TS2349 `share:266`, TS2454
+`TestScheduler:158` — plus tsgo's own row we MISS (`WebSocketSubject:304`, an
+`ArrayBufferView<ArrayBufferLike>` relation gap, NOT (CHK.152) per its census). **Successor: (CHK.152)
+step 1**, which is fully specified and predicted +0 rows on every profile and library.
+
 ### Round (P18.181) — (CHK.150) rung 2: a UNION contextual type infers per member with tsgo's candidate combination; X3 matches tsgo, 2 -> 15 of 20 cells, `rxjs` flat as predicted (2026-09-23)
 
 Orchestrated: one implementation subagent, gates in this session, and — in parallel, against a FROZEN
