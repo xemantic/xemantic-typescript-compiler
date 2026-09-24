@@ -1776,12 +1776,7 @@ class Checker(
                     withCcetFrameAmbient(frame) {
                         populateParameterLocalTypes(parent.parameters)
                         applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
-                        if (!isStatic && classFrame.classSym != null) {
-                            val instType = getDeclaredTypeOfSymbol(classFrame.classSym)
-                            if (instType !== anyType && instType !== errorType) {
-                                currentLocalTypes["this"] = instType
-                            }
-                        }
+                        if (!isStatic) ccetInstallClassThis(classFrame.classSym)
                     }
                 } else if (node === parent.body) {
                     // Objlit methods: the withObjThis this-typed copy.
@@ -1800,6 +1795,9 @@ class Checker(
                     withCcetFrameAmbient(frame) {
                         populateParameterLocalTypes(parent.parameters)
                         applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
+                        // (CHK.169) `this` in a constructor body is the instance, as in
+                        // a method (tsgo's `tryGetThisTypeAtEx` makes no distinction).
+                        ccetInstallClassThis(classFrame.classSym)
                     }
                 }
             }
@@ -1820,6 +1818,45 @@ class Checker(
         }
     }
 
+    /** (CHK.169) Types `this` as [classSym]'s instance type in the current ambient
+     *  (a method or constructor body of the call-argument walkers). */
+    private fun ccetInstallClassThis(classSym: Symbol?) {
+        if (classSym == null) return
+        val instType = getDeclaredTypeOfSymbol(classSym)
+        if (instType !== anyType && instType !== errorType) currentLocalTypes["this"] = instType
+    }
+
+    /**
+     * (CHK.169) The symbol of the class a call-argument walker is inside — the
+     * one `this` and the class type parameters are typed from, in BOTH readers
+     * (the spine's [ccetEnterClassDeclaration] and the legacy mirror in
+     * [checkCallTypesInStatement], which is now reached only from [checkCallTypesInExpr] and so
+     * only for a class nested in a function-expression body — kept in parity, unpinnable).
+     *
+     * `globals[name]` alone was wrong twice over. INV.3(d) keeps a MODULE file's
+     * locals out of `globals`, so a module class answered null — `this` untyped in
+     * every method of essentially every real project's classes, and the class's
+     * type parameters out of scope — and where the name collides with a LIB global
+     * (`export class Map`) it answered the LIB symbol. tsgo types `this` from the
+     * class's own symbol (`tryGetThisTypeAtEx`, checker.go ~12135:
+     * `getDeclaredTypeOfSymbol(getSymbolOfDeclaration(container.Parent)).thisType`),
+     * which is what [nodeSymbolOf] is here.
+     *
+     * Every answer must DECLARE `node` (identity): a `globals` hit that does not is
+     * a same-named symbol from elsewhere and is refused, and so is a [nodeSymbolOf]
+     * hit that does not ((BIND.1): `nodeKey` carries no file). A namespace member is
+     * the last resort, as before. The globals answer is kept when it owns `node` —
+     * for a script class it is the MERGED symbol, which [nodeSymbolOf] may not be.
+     */
+    private fun callWalkClassSymbol(node: ClassDeclaration, nsExports: SymbolTable?): Symbol? {
+        val name = node.name?.text ?: return null
+        val fromGlobals = globals[name]
+        if (fromGlobals != null && fromGlobals.declarations.any { it === node }) return fromGlobals
+        val own = nodeSymbolOf(node)
+        if (own != null && own.declarations.any { it === node }) return own
+        return nsExports?.get(name)
+    }
+
     /**
      * (JIT.1)(d) round 806 — the `ClassDeclaration` arm of [ccetSpineEnter]: the
      * class-level frame carrying the class type-parameter scope, the class
@@ -1832,10 +1869,8 @@ class Checker(
     private fun ccetEnterClassDeclaration(node: ClassDeclaration, top: CcetFrame) {
         // The class-level frame: class TP scope + classSym + the
         // baseResolution pair, maps SHARED with the enclosing frame.
-        val classSym = node.name?.let { name ->
-            globals[name.text] ?: ccetFrames.lastOrNull { it.nsSymbol != null }
-                ?.nsSymbol?.exports?.get(name.text)
-        }
+        val classSym = callWalkClassSymbol(node,
+            ccetFrames.lastOrNull { it.nsSymbol != null }?.nsSymbol?.exports)
         val classTps: List<Type.TypeParam> = if (classSym != null) {
             var tps: List<Type.TypeParam> = emptyList()
             withCcetFrameAmbient(top) {
@@ -1856,8 +1891,16 @@ class Checker(
         withCcetFrameAmbient(scopedFrame) {
             val extClause = node.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
             val baseExpr = extClause?.types?.firstOrNull()
-            val baseName = (baseExpr?.expression as? Identifier)?.text
-            val baseSym = baseName?.let { globals[it] }
+            val baseIdent = baseExpr?.expression as? Identifier
+            // (CHK.169) the base is resolved in the CLASS's file, not in `globals`:
+            // INV.3(d) keeps a module file's locals out of `globals`, so a base
+            // declared in a module read as absent and every `super(...)` /
+            // `super.m(...)` argument went unchecked. tsgo resolves it as an
+            // ordinary expression in the class's scope (`getBaseConstructorTypeOfClass`
+            // -> `checkExpression(baseTypeNode.Expression())`). MANDATORY beside the
+            // class lookup above: with `this` typed and the base still absent, rxjs's
+            // `AsyncAction` (a `super.schedule` subclass) grows a false TS2684.
+            val baseSym = baseIdent?.let { lookupPerFileForNode(it, it.text) }
             if (baseExpr != null && baseSym != null) {
                 val typeArgs = baseExpr.typeArguments?.mapNotNull { tn ->
                     getTypeFromTypeNode(tn).takeIf { it !== errorType }
@@ -161053,9 +161096,9 @@ interface DataView {
                 // the class symbol is in the enclosing namespace's `exports`, not in
                 // `globals` — fall back to that lookup so e.g. a class declared in
                 // `namespace Editor { class List<T> {} }` still gets its TypeParam scope.
-                val classSym = stmt.name?.let { name ->
-                    globals[name.text] ?: inferenceNamespaceStack.lastOrNull()?.exports?.get(name.text)
-                }
+                // (CHK.169) the spine's [ccetEnterClassDeclaration] and this mirror
+                // resolve the class the same way — see [callWalkClassSymbol].
+                val classSym = callWalkClassSymbol(stmt, inferenceNamespaceStack.lastOrNull()?.exports)
                 val classTypeParams: List<Type.TypeParam> = if (classSym != null) {
                     (getDeclaredTypeOfSymbol(classSym) as? Type.Interface)?.typeParameters.orEmpty()
                 } else emptyList()
@@ -161079,11 +161122,9 @@ interface DataView {
                         val extClause = stmt.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
                             ?: return@run null to null
                         val baseExpr = extClause.types.firstOrNull() ?: return@run null to null
-                        val baseName = when (val bn = baseExpr.expression) {
-                            is Identifier -> bn.text
-                            else -> return@run null to null
-                        }
-                        val baseSym = globals[baseName] ?: return@run null to null
+                        val baseIdent = baseExpr.expression as? Identifier ?: return@run null to null
+                        // (CHK.169) as in [ccetEnterClassDeclaration]: the class's file, not `globals`.
+                        val baseSym = lookupPerFileForNode(baseIdent, baseIdent.text) ?: return@run null to null
                         val typeArgs = baseExpr.typeArguments?.mapNotNull { tn ->
                             getTypeFromTypeNode(tn).takeIf { it !== errorType }
                         }.orEmpty()
@@ -161150,12 +161191,7 @@ interface DataView {
                                         // non-static method body reach argument-type checking
                                         // (TS2345/TS2769). Confined to this call-arg walker
                                         // (currentLocalTypes is saved/restored per walker subtree).
-                                        if (!isStatic && classSym != null) {
-                                            val instType = getDeclaredTypeOfSymbol(classSym)
-                                            if (instType !== anyType && instType !== errorType) {
-                                                currentLocalTypes["this"] = instType
-                                            }
-                                        }
+                                        if (!isStatic) ccetInstallClassThis(classSym)
                                         checkCallTypesInStatements(body.statements, source, fileName)
                                         }
                                     } finally {
@@ -161181,6 +161217,7 @@ interface DataView {
                                     try {
                                         populateParameterLocalTypes(member.parameters)
                                         applyCallTypesBodyLocalShadowing(body.statements, member.parameters)
+                                        ccetInstallClassThis(classSym)
                                         checkCallTypesInStatements(body.statements, source, fileName)
                                     } finally {
                                         currentLocalTypes = savedLocalTypes
